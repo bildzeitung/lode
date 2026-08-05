@@ -148,6 +148,7 @@ from lode.progress import op_progress
 
 if TYPE_CHECKING:
     from lode.embedding import Embedder
+    from lode.vectorstore import VectorStore
 
 log = logging.getLogger(__name__)
 
@@ -1068,6 +1069,7 @@ def drain(
     _batch_client: object | None = None,
     outcomes: list[str] | None = None,
     embedder: Embedder | None = None,
+    store: VectorStore | None = None,
 ) -> int:
     """Claim+run all ready pending jobs until none remain.
 
@@ -1136,6 +1138,12 @@ def drain(
     reaches a terminal state without a human. See
     :func:`_batch_collect_enrich`.
 
+    **One shared VectorStore per call too (lode-2brb), same shape.** ``store``
+    if given, else one constructed here, is threaded into every ``embed`` job
+    the same way ``embedder`` is, so a drain's jobs share one opened LanceDB
+    table instead of each job reopening it
+    (:meth:`~lode.vectorstore.VectorStore._open_or_create_table`).
+
     ``_registry`` is injectable for tests; production callers omit it and the
     module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
     tests (an ``LLMProvider``, passed through to the batch pre-steps).
@@ -1196,8 +1204,15 @@ def drain(
         reset_probe = getattr(embedder, "reset_revision_probe", None)
         if reset_probe is not None:
             reset_probe()
+        # Same hoist for the VectorStore (lode-2brb) -- see the docstring above.
+        if store is None:
+            from lode.vectorstore import VectorStore
+
+            store = VectorStore(_lance_dir(db_path), settings)
         run_registry = dict(registry)
-        run_registry["embed"] = functools.partial(_embed_handler, embedder=embedder)
+        run_registry["embed"] = functools.partial(
+            _embed_handler, embedder=embedder, store=store
+        )
 
     # Batch pre-steps: collect in-flight batches, then submit pending enrich jobs.
     #
@@ -1315,6 +1330,7 @@ def _embed_handler(
     settings: Settings,
     *,
     embedder: Embedder | None = None,
+    store: VectorStore | None = None,
 ) -> str | None:
     """Embed handler: vector leg only (lode-x6r.5, lode-xyb).
 
@@ -1357,6 +1373,10 @@ def _embed_handler(
     share one instance across a whole drain; see its docstring for why. ``None``
     (the default) preserves the per-call construction, so a caller that invokes
     this handler directly is unaffected.
+
+    ``store`` is threaded straight through to :func:`lode.embedding.embed`'s
+    own ``store=`` seam (lode-2brb), bound by :func:`drain` the same way it
+    binds ``embedder``. ``None`` preserves the per-call construction.
     """
     from lode.embedding import embed
     from lode.externals import gate_reenrich
@@ -1368,6 +1388,7 @@ def _embed_handler(
         lance_dir=_lance_dir(db_path),
         settings=settings,
         embedder=embedder,
+        store=store,
     )
     outcome = f"embedded {short_version_id(target_version)}: {count} passages"
 

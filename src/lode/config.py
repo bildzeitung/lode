@@ -234,6 +234,15 @@ class Settings(BaseModel):
     retry_max_attempts: int = _knob(
         5, Kind.RUNTIME, "Max attempts before dead-lettering a job.", ge=1
     )
+    vectorstore_optimize_interval: int = _knob(
+        200,
+        Kind.RUNTIME,
+        "How many replace_vectors() calls a shared VectorStore makes before "
+        "pruning its held Table's version history, which bounds that Table's "
+        "memory growth over a long-running process (lode-2brb; "
+        "docs/configuration.md).",
+        gt=0,
+    )
     stale_running_timeout_s: int = _knob(
         900,
         Kind.RUNTIME,

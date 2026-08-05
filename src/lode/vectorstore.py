@@ -27,6 +27,7 @@ implies a full re-embed (lode-txh.6). sqlite-vec is the documented fallback-down
 """
 
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 
 import pyarrow as pa
@@ -70,12 +71,18 @@ class VectorStore:
     ``Settings`` that pin the vector width and embedding model. The same instance
     serves the write side (:meth:`replace_vectors`) and the read side
     (:meth:`search`); both go through one schema, so the table is created once with
-    the pinned shape and reused.
+    the pinned shape and reused. A caller that shares one instance across many
+    calls gets the opened-table caching described in
+    :meth:`_open_or_create_table`.
     """
 
     def __init__(self, lance_dir: str | Path, settings: Settings | None = None) -> None:
         self._lance_dir = lance_dir
         self._settings = settings or Settings()
+        # The opened Table (None until first use) and the writes since it was
+        # last pruned -- see _open_or_create_table and replace_vectors.
+        self._table = None
+        self._writes_since_optimize = 0
 
     def _schema(self) -> pa.Schema:
         """The table schema: a fixed-width vector plus the passage metadata.
@@ -126,8 +133,26 @@ class VectorStore:
         ``embed()``/``search()`` call, same as any cold cache) repopulate it.
         No flag, no separate rebuild command: this is the single place LanceDB
         is touched, so healing it here covers every call path uniformly.
+
+        **Caches the opened Table across calls on this instance (lode-2brb),**
+        so a shared ``VectorStore`` pays ``list_tables`` + ``open_table`` +
+        the schema compare on its *first* call only instead of on every embed
+        job. LanceDB tables are snapshot-versioned, so a held handle would
+        otherwise read a stale version; ``checkout_latest()`` on every reuse
+        is what makes holding it safe, and ``tests/test_vectorstore.py``'s
+        held-table staleness gate pins that. Note the consequence for the
+        schema self-heal above: it too is first-call-only per instance, which
+        is sound because ``Settings`` (and so the pinned schema) is fixed for
+        an instance's lifetime.
+
+        Why the Table and not the ``lancedb.connect()`` handle, and the
+        measurements behind that: ``docs/decisions.md`` (lode-2brb).
         """
         import lancedb
+
+        if self._table is not None:
+            self._table.checkout_latest()
+            return self._table
 
         db = lancedb.connect(self._lance_dir)
         schema = self._schema()
@@ -135,9 +160,11 @@ class VectorStore:
             table = db.open_table(_VECTOR_TABLE)
             if table.schema != schema:
                 db.drop_table(_VECTOR_TABLE)
-                return db.create_table(_VECTOR_TABLE, schema=schema)
-            return table
-        return db.create_table(_VECTOR_TABLE, schema=schema, exist_ok=True)
+                table = db.create_table(_VECTOR_TABLE, schema=schema)
+        else:
+            table = db.create_table(_VECTOR_TABLE, schema=schema, exist_ok=True)
+        self._table = table
+        return table
 
     def replace_vectors(
         self, target_version: str, rows: list[dict[str, object]]
@@ -153,11 +180,29 @@ class VectorStore:
         ``target_version``, ``vector``, ``model``); ``model_revision`` is optional
         per row (a missing key converts to ``NULL``, same as an explicit ``None``)
         — an empty list just clears the version.
+
+        **Periodically prunes the held Table's version history (lode-2brb).**
+        Each call is a delete + add = 2 new LanceDB versions, and a Table held
+        across many calls accumulates that history in memory. Every
+        ``settings.vectorstore_optimize_interval`` calls this prunes all but
+        the latest version -- safe because this store's vectors are a
+        regenerable cache (module docstring), so nothing here needs history.
+
+        Deliberately does **not** pass ``delete_unverified=True``: it would
+        lift LanceDB's protection for young files that may belong to *another
+        process's* in-progress transaction (its own docs warn that "the
+        dataset could be put into a corrupted state"), and it was measured to
+        buy nothing here. Measurements: ``docs/decisions.md`` (lode-2brb).
         """
         table = self._open_or_create_table()
         table.delete(f"target_version = '{target_version}'")
         if rows:
             table.add(rows)
+        self._writes_since_optimize += 1
+        if self._writes_since_optimize >= self._settings.vectorstore_optimize_interval:
+            table.optimize(cleanup_older_than=timedelta(0))
+            table.checkout_latest()
+            self._writes_since_optimize = 0
 
     def vectors_for(self, target_version: str) -> list[list[float]]:
         """Return every passage vector persisted for ``target_version``, unordered.

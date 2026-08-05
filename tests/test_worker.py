@@ -2680,6 +2680,70 @@ def test_drain_shares_one_embedder_across_all_embed_jobs_in_the_loop(
     assert statuses == ["done"] * 3
 
 
+def test_drain_shares_one_vectorstore_across_all_embed_jobs_in_the_loop(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A drain of N queued embed jobs constructs ONE VectorStore, not N (lode-2brb).
+
+    Same shape as ``test_drain_shares_one_embedder_across_all_embed_jobs_in_
+    the_loop`` (lode-j5r2), for the ``VectorStore`` a fresh-per-job
+    construction paid a full ``lancedb.connect()`` + ``list_tables()`` +
+    ``open_table()`` + schema compare on every job. ``drain()`` hoists ONE
+    instance across its main loop (the real, un-overridden module-level
+    registry) and threads it into every ``embed`` job through the handler's
+    own ``store=`` seam.
+
+    Patches the name in ``lode.embedding`` as well as in ``lode.vectorstore``,
+    and that is load-bearing: ``embedding.py`` binds ``VectorStore`` at import
+    time, so patching only ``lode.vectorstore`` leaves ``embed()``'s fallback
+    construction resolving to the *real* class -- uncounted. Under that
+    single-patch form this test still passed with ``store=store`` deleted from
+    ``drain``'s ``functools.partial`` outright, i.e. it could not see the very
+    threading it exists to pin (found on technical review). With both names
+    patched, that sabotage yields 4 constructions, not 1.
+    """
+    from conftest import _OfflineQueryEmbedder
+
+    import lode.embedding as embedding_mod
+    import lode.vectorstore as vectorstore_mod
+
+    monkeypatch.setattr(embedding_mod, "FastEmbedEmbedder", _OfflineQueryEmbedder)
+
+    real_vectorstore = vectorstore_mod.VectorStore
+
+    class _CountingVectorStore(real_vectorstore):
+        constructions = 0
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, **kwargs)
+            _CountingVectorStore.constructions += 1
+
+    monkeypatch.setattr(vectorstore_mod, "VectorStore", _CountingVectorStore)
+    monkeypatch.setattr(embedding_mod, "VectorStore", _CountingVectorStore)
+
+    for i in range(3):
+        _insert_note_worker(
+            conn, note_id=f"note-{i}", version_id=f"ver-{i}", body=f"body {i}"
+        )
+        enqueue_derive_jobs(conn, f"ver-{i}", types=("embed",))
+
+    n = drain(conn, db_path, settings)  # real _REGISTRY -- no _registry= override
+
+    assert n == 3
+    assert _CountingVectorStore.constructions == 1, (
+        "expected exactly one VectorStore construction across the drain, "
+        f"got {_CountingVectorStore.constructions}"
+    )
+    statuses = [
+        r[0]
+        for r in conn.execute("SELECT status FROM jobs WHERE type = 'embed'").fetchall()
+    ]
+    assert statuses == ["done"] * 3
+
+
 def test_drain_retries_a_failed_revision_probe_on_the_next_call(
     conn: sqlite3.Connection,
     db_path: Path,

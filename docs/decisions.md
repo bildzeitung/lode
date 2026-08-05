@@ -3415,6 +3415,87 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     clear. Until then this is not re-raised as a defect each time a new paragraph lands in the header.
   - No code or test changes: `scripts/gate-lib.sh` and `tests/test_gate_lib.py` are unchanged by this
     ticket.
+- **2026-08-05 (lode-2brb) — RESOLVED: `VectorStore` caches its opened Table across calls, with a
+  periodic `optimize()` to bound the growth that caching alone was measured to cost.** Filed against
+  the same "rebuilt per job instead of hoisted across the drain" shape lode-j5r2 fixed for the
+  embedder: `embedding.embed()` built a fresh `VectorStore` (full `lancedb.connect()` +
+  `list_tables()` + `open_table()` + schema compare) on every embed job, ~4.5-7.3ms/job against a warm
+  table.
+  - **First attempt (rejected on technical review, superseded by this entry): cache only the
+    `lancedb.connect()` connection**, still reopening the table every call. Safe (holding the whole
+    opened `Table` was proven unsafe then — a held handle does not see a write committed via a
+    different connection, sabotage-proved by two tests going red when the Table was cached naively),
+    but the review measured the connection-only cache's actual cost/benefit on the workload this
+    ticket exists to serve (a large drain, or `lode work --loop` for hours): the saving was a FIXED
+    ~1ms/call that does not scale with drain size, while RSS grew unboundedly and *accelerating* --
+    +155 MB over 600 `replace_vectors` calls, 55/67/90 MB per 150-write increment. Rejected: a fixed,
+    small saving against unbounded, accelerating growth on exactly the workload that motivated the
+    ticket.
+  - **Taken: cache the opened `Table`, call `table.checkout_latest()` on every use.**
+    `checkout_latest()` is what makes holding the Table safe — verified directly: a second,
+    independent `VectorStore` (its own connection) writes a version; the first instance's *cached*
+    Table sees it immediately after `checkout_latest()` (`tests/test_vectorstore.py`'s
+    `test_a_second_connection_writing_is_still_visible_through_the_first`, and the pre-existing
+    `test_model_revisions_scopes_to_the_requested_model`, both pinned unmodified). This drops
+    `list_tables` + `open_table` + the schema compare to first-call-only per instance -- the win the
+    connection-only design left on the table.
+  - **Measured growth, corrected methodology.** The connection-only design's own measurement (and this
+    ticket's first pass at re-measuring it) used `resource.getrusage(...).ru_maxrss` -- **peak**, not
+    current, RSS, which cannot fall and so cannot distinguish a real leak from memory that was freed
+    and simply not returned to the OS. Re-measured with live `/proc/self/status` `VmRSS` instead:
+    holding the Table with no mitigation still grows, but *linearly*, not accelerating -- roughly
+    +19-20 MB per 300 `replace_vectors` calls, indefinitely (a fresh-store-per-call baseline stays flat
+    at ~188-193 MB over 3000 calls in the same script). Linear-but-indefinite is still an unbounded
+    cost over an hours-long `lode work --loop` process, so a bound was still needed, not just a
+    smaller leak.
+  - **The bound: periodic `table.optimize(cleanup_older_than=timedelta(0))`.**
+    Each `replace_vectors` call is a delete + add = 2 new LanceDB versions; the held Table's
+    version-history-linked in-memory state is what grows with call count.  `optimize()` prunes all but
+    the latest version. Measured (same live-RSS methodology, 3000 calls, `optimize()` every 100 calls):
+    RSS grows once to an initial plateau (~385 MB, the cost of holding index/manifest structures for an
+    actively-optimized table) then stays flat -- +11 MB total over the next 2700 calls, vs. +170 MB for
+    the same span with no mitigation. Wired as `settings.vectorstore_optimize_interval` (default
+    `200`, `docs/configuration.md`) rather than hardcoded, so the interval is tunable without a code
+    change if a different workload needs it.
+  - **`delete_unverified=True` was dropped on technical review — it bought nothing and carried a
+    documented corruption risk.** The build first passed it, reasoning that `WorkerLock` makes it safe
+    because only one `lode-work` process embeds at a time. The review declined that trade on two
+    grounds. First, it is not measurably load-bearing: re-running the growth experiment with the flag
+    on versus off is indistinguishable (194 MB vs 193 MB at 900 single-row calls; 200 MB vs 199 MB at
+    1200 twenty-row calls), which is what the flag's own semantics predict -- it only collects files
+    left behind by *failed* transactions, and a clean run leaves none. Second, LanceDB's own
+    `optimize()` docs carry an explicit warning that it "should only be set to True if you can
+    guarantee that no other process is currently working on this dataset. Otherwise the dataset could
+    be put into a corrupted state" -- and `WorkerLock` guarantees only that one `lode work` process
+    runs, not that nothing else touches the LanceDB directory (`embedding.py`'s indexer seam,
+    `retrieval.py`, `tui/services/related.py` and `cli.py`'s non-`work` commands all open the same
+    store from other processes). Paying a corruption risk on the user's real vector store for no
+    measured benefit is the wrong side of that trade; `cleanup_older_than=timedelta(0)` alone is what
+    prunes the version history the bound actually needs.
+  - **The periodic-prune path had no test at all** (default interval `200`, so no existing test ever
+    reached it) -- an unexercised branch that runs a destructive `optimize()` against the live store.
+    The review added `tests/test_vectorstore.py`'s
+    `test_periodic_optimize_prunes_history_without_losing_current_rows`, which drives a small
+    `vectorstore_optimize_interval` across the boundary and pins that the current rows survive, the
+    old versions are actually pruned, and the counter re-arms.
+  - **The `store=` seam itself is not where the win is.** `VectorStore.__init__` does no I/O, so a
+    caller passing `store=` versus letting `embed()` construct its own costs nothing extra on its own
+    -- mirrored from `embedding.embed()`'s own `embedder=` seam (lode-j5r2) purely so
+    `lode.worker.drain()` can share one instance across a drain's jobs, exactly as it already does for
+    the embedder. The counting AC (`tests/test_worker.py`'s
+    `test_drain_shares_one_vectorstore_across_all_embed_jobs_in_the_loop`, mirroring lode-j5r2's own
+    embedder-counting test) pins one `VectorStore` construction per drain call; the caching inside that
+    one instance is what does the work.
+  - **Scope respected:** discarded the connection-cache branch's design outright rather than amending
+    it (a NEW design per the escalation's own framing); the two staleness-gate tests were written fresh
+    against this design, not carried over; the ~70 lines of docstring prose `/simplify` had converged on
+    for the rejected design (restating the same rationale across seven sites, including a
+    reverted-experiment diary citing hardcoded test node ids) was not carried forward -- this entry and
+    the code's own (shorter) comments are the rationale now.
+  - `lance_dir(db_path)`'s `VectorStore` is now also held for the whole `lode work` process
+    (`cli.py`'s `work` command), same as the pre-existing `FastEmbedEmbedder` hoist (lode-j5r2) --
+    threaded into every `drain()` call across the polling loop.
+
 - **2026-08-05 (lode-2nw5) — the `git restore --staged .beads/issues.jsonl` cluster: ONE site
   canonicalized (fixing a real symmetry gap), THREE sites kept as WONTFIX literals.** Filed while
   technically reviewing `lode-do3q` (entry above), which deliberately scoped out this second,
