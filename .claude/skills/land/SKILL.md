@@ -1889,7 +1889,7 @@ scripts/bd-dolt-push.sh
 (A **stale-escalation sweep** — **surfacing**, not GC'ing, a `land-escalated` branch that has sat
 unresolved unusually long — is a deferred refinement in `docs/decisions.md`, not part of v1. `/sweep`
 already surfaces every open `land-escalated` item every pass regardless of age; a `land-escalated`
-branch is never touched by an automated sweep — only the three human-driven resolution exits below
+branch is never touched by an automated sweep — only the human-driven resolution exits below
 remove the label and let the branch go.)
 
 ## Resolving a `land-escalated` branch
@@ -1897,7 +1897,7 @@ remove the label and let the branch go.)
 `land-escalated` is **not terminal** — a human resolves it, and every resolution **removes the
 label**, so `bd list --label land-escalated` can reach empty. Resolution is a human action taken
 outside a `/land` pass — typically at `bd show <id>` time; `/land` only ever *sets* the label
-(above), never clears it. There are exactly three exits:
+(above), never clears it. There are exactly four exits:
 
 ### (a) Land as-is — materialize the decision first, then re-enter the queue
 
@@ -1972,34 +1972,87 @@ git push origin --delete "land/<id>"     # GC the branch — nothing will land i
 scripts/bd-dolt-push.sh
 ```
 
-All three end the same way: **`land-escalated` is gone**, so a surfacer's queue — the forthcoming
+### (d) Amend and re-gate — fix the already-landed defect, keep the branch and ticket (`lode-wp2r`)
+
+This exit applies **only** when the escalation was raised by `/land`'s **combined re-gate** (Section 3
+of this skill), not by `land-review` or a producer gate, and all of the following hold:
+
+- `land-review` **accepted** this branch (no semantic objection — the escalation happened *after*
+  review, at re-gate time).
+- The merge precheck (2b) was clean — the branch merges onto `trunk` without conflict.
+- The re-gate failure is traceable to code **already on `trunk`**, not to anything this branch
+  introduces — i.e. the branch would have gated green before whatever landed the defect, and gates red
+  now only because it is the first thing to exercise the defective landed code.
+
+Under those conditions, neither of the other exits fits: "land as-is" is defined for a branch that
+needs no change, and this one does; "rebuild" discards a branch that `land-review` already judged
+sound, which is the wrong instrument for a defect that isn't the branch's fault. So the human amends
+the branch itself — a small, scoped fix to the landed defect — and sends it back through the pipeline
+**one gate earlier than a normal "land as-is,"** at `ready-for-code-review` rather than
+`ready-for-land`: the amendment is new, ungated content that `land-review`'s original accept never
+saw, so it needs its own technical review (`code-reviewer`) before a semantic re-review is worth
+spending. Its row is in [Re-entry per escalating
+source](#re-entry-per-escalating-source--re-enter-at-the-gate-that-escalated), alongside exit (a)'s.
+
+**Write the added scope into the ticket's acceptance criteria, not only into a note** — exit (a)'s
+"materialize the decision first" rule, for the same reason. The re-entered branch still has to clear
+`ready-for-land`, where `/land`'s next pass re-runs `land-review`, which reads `acceptance_criteria`
+as the contract; an amendment recorded only in the notes reads to that re-review as scope creep on a
+branch it already accepted.
+
+```bash
+bd update <id> --acceptance="<original criteria + what the amendment must satisfy>"
+bd update <id> --remove-label land-escalated --add-label ready-for-code-review \
+  --append-notes "RESOLVED (human, amend-and-re-gate): <the landed defect + the fix>"
+scripts/bd-dolt-push.sh
+# The human may amend land/<id> before the swap, or leave it to the code-reviewer that /code's
+# stranded-review sweep dispatches. Either way it re-gates and re-pushes land/<id>.
+```
+
+First observed and resolved this way in `lode-pcee` (2026-07-28): `land-review` had accepted the
+branch and the 2b precheck was clean, but the combined re-gate failed on a whole-file substring
+predicate bug in `tests/test_gate_lib.py::_consumers()` that had landed separately (`lode-bss5`). The
+human's resolution tightened that predicate directly on `land/lode-pcee`, re-entered at
+`ready-for-code-review`, and the branch landed from there — the precedent this exit formalizes.
+
+Every exit ends the same way: **`land-escalated` is gone**, so a surfacer's queue — the forthcoming
 `/sweep` (`lode-nps.1`) — can actually drain rather than growing monotonically.
 
-**Scope.** The three exits above resolve the label as **`/land`** sets it (semantic-review escalation,
-exit (a) re-entry = `ready-for-land`, as shown above). `/code`'s producers set the *same* label from
+**Scope.** The exits above resolve the label as **`/land`** sets it — from `land-review`'s
+semantic-review escalation (exit (a) re-entry = `ready-for-land`, as shown above) and, for exit (d),
+from `/land`'s own combined re-gate. `/code`'s producers set the *same* label from
 three other places — a `coding` build-time clarifying decision, a `code-reviewer` technical-review
-escalation, and a `coding` rebase-pickup conflict. Exits **(b)** rebuild and **(c)** drop apply to all
-four sources unchanged — they only close the ticket and GC the branch, and neither cares which gate
+escalation, and a `coding` rebase-pickup conflict. Exits **(b)** rebuild and **(c)** drop apply to
+every source unchanged — they only close the ticket and GC the branch, and neither cares which gate
 escalated. Exit **(a)** does **not** generalize to a single label: a build-time escalation never
 reached `ready-for-code-review` (it never had its technical review), and a rebase-conflict escalation
 still does not merge onto `trunk` — re-entering either blindly at `ready-for-land` would skip a gate
-that has never actually run.
+that has never actually run. Exit **(d)** does not apply to those three producer sources either — not
+because a producer's gate can never go red on a defect inherited from `trunk` (it can), but because a
+producer-side branch still has a live `coding` or `code-reviewer` agent free to fix what it finds
+in-band. Exit (d) is for the one position where no agent is left holding the branch.
 
-### Exit (a) per source — re-enter at the gate that escalated
+### Re-entry per escalating source — re-enter at the gate that escalated
 
 DECISION (human, 2026-07-08, `lode-08g`): whichever gate could not resolve the ambiguity is the gate
 that re-runs once the ambiguity is resolved — the same gate, against the now-unambiguous ticket, never
 a later gate taking the resolution on faith.
 
-| escalated by                             | exit (a) re-entry label |
-|------------------------------------------|-------------------------|
-| `/land` semantic review (`land-review`)  | `ready-for-land`        |
-| `code-reviewer` technical review         | `ready-for-code-review` |
-| `coding` rebase-pickup conflict          | `needs-rebase`          |
-| `coding` build-time clarification        | `ready-for-code-review` |
+| escalated by                                         | exit | re-entry label          |
+|------------------------------------------------------|------|-------------------------|
+| `/land` semantic review (`land-review`)              | (a)  | `ready-for-land`        |
+| `code-reviewer` technical review                     | (a)  | `ready-for-code-review` |
+| `coding` rebase-pickup conflict                      | (a)  | `needs-rebase`          |
+| `coding` build-time clarification                    | (a)  | `ready-for-code-review` |
+| `/land` combined re-gate (defect already on `trunk`) | (d)  | `ready-for-code-review` |
 
-The first row is exit (a) as defined above; the other three follow the same shape — write the decision
-into the ticket first, then swap `land-escalated` for the row's label and publish:
+The exit column names which resolution applies (`lode-08g` for the exit (a) rows, `lode-wp2r` for the
+exit (d) one). What separates the combined-re-gate row from the rest is its escalating *source*, not
+anything about the branch: `land-review` did not object there, it accepted. (Branch-immutability
+would not separate them — a `needs-rebase` pickup merges `trunk` in, and a build-time re-entry hands
+a deliberately unfinished branch to `code-reviewer`, so exit (a) rows change the branch too.) Every
+row follows the same mechanical shape — write the decision into the ticket first, then swap
+`land-escalated` for the row's label and publish:
 
 ```bash
 bd update <id> --append-notes "RESOLVED (human): <the decision>"

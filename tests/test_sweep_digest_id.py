@@ -168,11 +168,13 @@ def test_both_sweep_call_sites_use_the_script_not_an_inline_query() -> None:
     count.
 
     Fence-partitioning itself is `conftest.bash_fence_blocks` (lode-kjei), not a
-    private state machine here (lode-oqqw) -- see that helper's docstring, and
-    `fence_scan`'s behind it, for the rules. Deliberately NOT re-listed here:
-    `bash_fence_blocks` states outright that the rule set is "stated once,
-    there, not duplicated here", and a fourth copy is one more place to go
-    stale when a fence rule changes."""
+    private state machine here -- and lode-k5qb makes that a mechanical gate
+    (tests/test_no_private_fence_state_machine.py) rather than a claim asserted
+    only in this prose. See that helper's docstring, and `fence_scan`'s behind
+    it, for the rules. Deliberately NOT re-listed here: `bash_fence_blocks`
+    states outright that the rule set is "stated once, there, not duplicated
+    here", and a fourth copy is one more place to go stale when a fence rule
+    changes."""
     skill = REPO_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
 

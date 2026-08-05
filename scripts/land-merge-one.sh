@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 #
 # Merge a single accepted `land/<id>` branch onto the current checkout with its
-# pre-computed commit message, retrying once past a re-staged
-# `.beads/issues.jsonl` (a passive export -- import.auto: false, lode-6ra --
-# never real work). Extracted per lode-sfnb: `/land`'s Section 3 merge loop
+# pre-computed commit message, retrying once past a re-staged passive beads
+# export -- see `scripts/beads-passive-exports.txt` for the canonical list of
+# such exports (import.auto: false, lode-6ra -- never real work). Extracted
+# per lode-sfnb: `/land`'s Section 3 merge loop
 # used to define this as an inline bash FUNCTION (`merge_one()`) and read a
 # bash ASSOCIATIVE ARRAY (`MSG`) populated by a separate, earlier fenced code
 # block in .claude/skills/land/SKILL.md. Those are two different Bash tool
@@ -179,10 +180,33 @@ err="$(git merge --no-ff "origin/land/$id" -m "$msg" 2>&1)" && exit 0
 if [[ "$err" == *"would be overwritten by merge"* ]] \
    && [ -z "$(git ls-files -u)" ]; then
   # Passive-export trap, not a conflict (see docs/decisions.md, lode-6ra /
-  # lode-bns3): `.beads/issues.jsonl` got (re-)staged by something other than
-  # this merge. Restore it -- it is by invariant never real work -- and retry
-  # the SAME merge once.
-  git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true
+  # lode-bns3 / lode-2nw5): a passive beads export got (re-)staged by
+  # something other than this merge. Restore every entry on the canonical
+  # list (scripts/beads-passive-exports.txt, lode-do3q) rather than one
+  # hardcoded relpath, then retry the SAME merge once.
+  #
+  # ONE `git restore` PER ENTRY, deliberately -- NOT one call listing them
+  # all. `git restore` is atomic over its pathspecs: if any single one is
+  # unknown to git in this repo state (an export that exists on the list but
+  # has never been committed here), it errors and restores NOTHING, silently
+  # via the `2>/dev/null || true` below. Per entry, an unknown path is a
+  # harmless no-op and the others still restore. VERIFIED by experiment.
+  #
+  # FAIL LOUD if the list is unreadable or empty, the same way
+  # scripts/worktree-gc-classify.sh's gate does: restoring nothing here would
+  # otherwise surface as the generic "merge failed, no unmerged paths" exit 2
+  # below, naming the wrong cause.
+  exports_list="$(dirname "$0")/beads-passive-exports.txt"
+  [ -r "$exports_list" ] || gate_could_not_run \
+    "cannot read the canonical passive-export list at '$exports_list'." \
+    "The merge retry cannot know which paths to unstage without it."
+  mapfile -t exports < "$exports_list"
+  [ "${#exports[@]}" -gt 0 ] || gate_could_not_run \
+    "the canonical passive-export list at '$exports_list' has no entries."
+  for export_path in "${exports[@]}"; do
+    [ -n "$export_path" ] || continue
+    git restore --staged --worktree "$export_path" 2>/dev/null || true
+  done
   err="$(git merge --no-ff "origin/land/$id" -m "$msg" 2>&1)" && exit 0
 fi
 

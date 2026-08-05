@@ -199,7 +199,7 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   blending into the routine digest. This is deliberately a refinement of surfacing, not a deletion
   mechanism: `/sweep` (lode-nps.1, [agents-workflow.md](agents-workflow.md#running-the-loop-family-unattended--epic-audit-sweep))
   already surfaces every open `land-escalated` item every pass regardless of age; a `land-escalated`
-  branch is otherwise never touched by an automated sweep — only the three human-driven resolution
+  branch is otherwise never touched by an automated sweep — only the human-driven resolution
   exits ([agents-workflow.md](agents-workflow.md#the-lander--land-drained-by-a-self-paced-loop))
   remove the label and let the branch go.
 - **`bd dolt push` retry-on-reject: a backoff wrapper, not a Dolt server-mode migration (lode-83d).**
@@ -3268,7 +3268,7 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
 - **The three hand-written liveness pins stay separate, hand-written mechanisms —
   decided, rejected extraction (2026-08-04, maintainer decision, lode-7zap).** By the time
   lode-7zap closed the gap, three tests each pinned "does every allowlist/known-set entry still
-  correspond to a real, live thing in a real corpus": `tests/test_assert_main_checkout.py`'s
+  correspond to a real, live thing in a real corpus": `tests/test_land_skill_guard_coverage.py`'s
   `_dead_allowlist_entries` (exact command TEXT, keyed on a bare string, against `land/SKILL.md`'s
   fenced-bash corpus), `tests/test_skill_bash_state.py`'s `_dead_allowlist_keys` (a `(file, var)`
   tuple, matched by an unfiltered violation scan over the shipped skill/agent corpus), and
@@ -3296,14 +3296,15 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   and (b) a non-vacuity sabotage proof for that pin, holding one key constant and varying only the
   fixture's *content* between the live and dead assertions (never two differently-named fixtures —
   that shape passes on a name mismatch and proves nothing, lode-e49j's own measured finding, repeated
-  independently for `test_assert_main_checkout.py`'s pin by lode-7zap since it had shipped without a
+  independently for the `land/SKILL.md` guard-coverage pin by lode-7zap since it had shipped without a
   sabotage counterpart at all). This entry — not a shared module — is what codifies that discipline
   for the next allowlist a future ticket adds. Full sabotage-proof rationale for the *existing* two
   precedents:
   `tests/test_skill_bash_state.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`
   (lode-e49j) and its `_KNOWN_ENV_VARS` sibling (lode-rscn); the third,
-  `tests/test_assert_main_checkout.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`,
-  is lode-7zap's own addition.
+  `tests/test_land_skill_guard_coverage.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`,
+  is lode-7zap's own addition (it lived in `tests/test_assert_main_checkout.py` until lode-2thl
+  split that module's text-gate half out).
 
 - **The beads passive-export relpath list (`.beads/issues.jsonl`,
   `.beads/interactions.jsonl`) is canonicalized into a plain text file, not
@@ -3374,3 +3375,116 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   pins the whole chain — the list is non-empty and well-formed, the `Stop` hook
   still names an existing executable script, both bash consumers still read the
   canonical file, and no consumer has re-inlined a literal copy.
+- **2026-08-05 (lode-k4as) — KEPT: `scripts/gate-lib.sh`'s header narrative (history + rejected
+  alternatives) stays in the header, not moved to `docs/agents-workflow.md`.** Filed while
+  technically reviewing `lode-nwqb` (its entry is above; search `lode-nwqb`), which had just added
+  18 more comment lines to an already-long header. Measured at this entry's date (no line numbers
+  cited — they rot, `lode-pxyt`): roughly 170 lines of header comment sit above the first executable
+  line, for roughly 50 lines of code. Each increment was individually justified; the concern is the
+  aggregate — a reader tracing what the positional arguments do wades through two mechanisms that no
+  longer exist (the retired ordering convention, the rejected `lode-nwqb` prefix-binding
+  alternative) before reaching the one that does.
+  - **What this has to answer for**: `lode-ysr6`'s entry (above, just before `lode-nwqb`'s) declared
+    the `GATE_ADVISORY` section the *operative* record of the contract, corrected in place, precisely
+    so the contract could not drift from the code it governs. Moving the narrative out from under
+    that declaration would reverse it, so this decision reckons with it explicitly rather than
+    silently — see reason 1.
+  - **Decided: no move.** Three reasons:
+    1. **The split introduces exactly the divergence risk the operative-record declaration exists to
+       prevent, with no mechanism proposed to replace it.** `lode-ysr6`'s discipline is "the header IS
+       the contract, correct it in place" — a scheme with nothing to keep in sync. Moving the
+       "WEIGHED AND REJECTED" and "THIS USED TO BE AN ORDERING CONVENTION" paragraphs to
+       `docs/agents-workflow.md` creates two documents that must be edited together every time the
+       mechanism changes again, and nothing mechanical (no test, no lint) would catch the header and
+       the doc drifting apart — the exact failure class `lode-ysr6` was written to close, reopened one
+       level up.
+    2. **The rejected-alternative paragraphs are not incidental history — they are what stops the
+       mechanism being re-litigated at the point someone would reach for the shortcut.** The
+       `lode-nwqb` entry says so directly — it was recorded both here and in the header "so this is
+       not rediscovered a third time." That purpose is served by sitting next to the code a future
+       editor is about to change, not by living a `grep` away in a different file a reader has to
+       know to check before "simplifying" `gate-lib.sh`.
+    3. **Length is not itself a defect.** The ticket that raised this said so explicitly, and nothing
+       in this decision found a concrete cost the length imposes beyond "it reads as long" — no test
+       failure, no maintenance incident, no reader confusion beyond the hypothetical traced above.
+       "Long but correct and load-bearing" does not clear the bar for moving an operative record.
+  - **Not a permanent bar on ever splitting this file.** If a future increment pushes the header
+    materially past this size, or a concrete reading-cost incident turns up (not merely "it's long"),
+    that is grounds to revisit — but the revisit has to name the specific cost and the specific
+    anti-drift mechanism the split would use, the same bar this entry just failed to find a reason to
+    clear. Until then this is not re-raised as a defect each time a new paragraph lands in the header.
+  - No code or test changes: `scripts/gate-lib.sh` and `tests/test_gate_lib.py` are unchanged by this
+    ticket.
+- **2026-08-05 (lode-2nw5) — the `git restore --staged .beads/issues.jsonl` cluster: ONE site
+  canonicalized (fixing a real symmetry gap), THREE sites kept as WONTFIX literals.** Filed while
+  technically reviewing `lode-do3q` (entry above), which deliberately scoped out this second,
+  distinct cluster: `git restore --staged [--worktree] .beads/issues.jsonl` at four sites —
+  `scripts/land-merge-one.sh`, an executable bash fence in `.claude/skills/land/SKILL.md`, one bash
+  block in `.claude/skills/release/SKILL.md`, and a command-string allowlist entry in
+  `tests/test_land_skill_guard_coverage.py` (the ticket's own text named
+  `tests/test_assert_main_checkout.py` for the fourth site; that file exists but has no such
+  reference — the allowlist actually lives in `test_land_skill_guard_coverage.py`, confirmed by
+  `grep` during this ticket; and the ticket claimed *two* executable bash blocks in
+  `.claude/skills/land/SKILL.md`, where `grep -n 'restore --staged'` returns one — the file's other
+  mentions of the export are prose. Noted so the record doesn't carry the ticket's stale pointers
+  forward).
+
+  **Investigated first: does the pre-commit hook ever stage `.beads/interactions.jsonl` too, or only
+  `.beads/issues.jsonl`?** The ticket's own guidance offered a WONTFIX-shaped out if the answer were
+  "never." It isn't: `git log --oneline -- .beads/interactions.jsonl` and the matching commits for
+  `.beads/issues.jsonl` show both files changing together in the same "bd: export ... — passive
+  jsonl" commits (e.g. `fd09398`, `.beads/interactions.jsonl | 1 +` alongside
+  `.beads/issues.jsonl | 2 +-`) — the same pre-commit hook regenerates and restages both on every
+  commit with bd activity, not `issues.jsonl` alone. So the asymmetry in
+  `scripts/land-merge-one.sh` (which restored only `issues.jsonl`) was not provably safe by the
+  ticket's own "never staged" test, and the retry-loop's "would be overwritten by merge" trap could
+  in principle be tripped by either file, since both are regenerated by the identical mechanism.
+
+  **Decided: fix the one cheap, real-script site; leave the three markdown/test sites as WONTFIX.**
+  - `scripts/land-merge-one.sh` now reads `scripts/beads-passive-exports.txt` (the canonical list
+    `lode-do3q` established) and loops `git restore --staged --worktree` over every entry, instead of
+    hardcoding `.beads/issues.jsonl` alone. This closes the symmetry gap (both files are now
+    protected against the trap, not just one) and removes the one literal copy that was cheap to
+    remove — a real script can source a data file as easily as `worktree-gc-classify.sh` already
+    does. `restore` on a path that isn't staged is a harmless no-op (`2>/dev/null || true`), so this
+    changes nothing on the common one-file case and only helps on the rarer case where
+    `interactions.jsonl` is the one caught mid-trap.
+  - The `.claude/skills/land/SKILL.md` bash fence, the one `.claude/skills/release/SKILL.md`
+    bash block, and the `tests/test_land_skill_guard_coverage.py` allowlist entry are left as literal
+    copies — WONTFIX, not simply missed. A markdown fence cannot read a data file the way a script
+    can (no `$(dirname "$0")` to resolve against), so canonicalizing one would mean adding a *second*
+    literal — moving the cluster backwards. The test allowlist is a hand-authored sabotage-sweep key
+    matched on exact command text and reads no files at runtime; canonicalizing it would mean
+    redesigning the sweep to accept a family of equivalent strings. **The two skill fences are
+    WONTFIX for different reasons, and the distinction matters to whoever revisits this:**
+    - `.claude/skills/land/SKILL.md`'s fence is an *unconditional* `git restore --staged --worktree
+      … || true` run before the merge loop. Widening it to the second export would be exactly as
+      harmless as the widening made in `scripts/land-merge-one.sh` above — it is left alone purely
+      on the cost above, not because widening is risky.
+    - `.claude/skills/release/SKILL.md`'s block is a genuine *conditional pre-check*: "when the
+      **only** dirty path is `.beads/issues.jsonl`, discard it and proceed; if anything else is
+      dirty, stop and surface it." Widening that one changes what counts as a clean tree for a
+      release — a real scope decision this ticket does not make unilaterally.
+
+    A future editor who wants both exports covered in either place should reach for a script, the
+    way `lode-sfnb` already moved the retry logic out of a fence.
+  - **No behavior change to the release path** (untouched), and none to `/land`'s merge path beyond
+    the one deliberate widening above: the retry-once shape, the real-conflict detection
+    (`git ls-files -u`), and the exit-code contract are all unchanged; only the *set of paths* the
+    retry restores grew.
+  - The RENAME cost `lode-do3q`'s entry cites is unchanged: the WONTFIX sites still hardcode the
+    string, and the canonicalized site now reads a list keyed on it, so a rename still touches the
+    same set of files.
+  - **Pinned in two layers.** Textually, `scripts/land-merge-one.sh` is registered as a consumer in
+    `tests/test_beads_passive_exports.py` — the existing module that already loops over the list's
+    consumers — rather than in a parallel module of its own: no literal relpath survives in the
+    script, and it still names the canonical list by filename. Behaviourally,
+    `tests/test_land_merge_one.py::test_staged_interactions_jsonl_trap_is_retried_and_succeeds`
+    springs the real trap with the *second* export and runs the real script, because a text
+    assertion cannot tell whether the restore actually reaches that path.
+  - **One `git restore` per entry, never one call listing them all.** `git restore` is atomic over
+    its pathspecs: if any single one is unknown to git in that repo state — an export on the list
+    that was never committed to this repo — it errors and restores **nothing**, silently, behind the
+    `2>/dev/null || true`. The merge then fails again and the script exits 2 blaming an "unexpected
+    git failure." Found and reproduced during this ticket's review, when the batched form was tried
+    as a simplification; the per-entry loop is load-bearing, not stylistic.

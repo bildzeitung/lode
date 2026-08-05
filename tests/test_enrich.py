@@ -21,7 +21,15 @@ import sqlite3
 from pathlib import Path
 from unittest import mock
 
+import httpx
 import pytest
+from _anthropic_rig import (
+    _jsonl,
+    _payload_without,
+    _real_anthropic_client,
+    _results_handler,
+    _succeeded_payload,
+)
 from pydantic import ValidationError
 
 from lode.config import Settings
@@ -421,14 +429,14 @@ def test_enrich_version_returns_result(
 def test_enrich_version_passes_anthropic_call_timeout_to_create(
     conn: sqlite3.Connection,
 ) -> None:
-    """The immediate Haiku call is bounded by Settings.llm_call_timeout_s
+    """The immediate Haiku call is bounded by Settings.enrich_call_timeout_s
     (lode-olmi.15) -- this call is reachable from 'lode work's drain loop (a
     residual enrich job claimed by the main claim/run loop), so with no
     client-side timeout it could otherwise hang the drain forever.
     """
     _insert_note(conn)
     result = EnrichmentResult(tags=["design"], entities=[], inferred_edges=[])
-    settings = Settings(llm_call_timeout_s=42.0)
+    settings = Settings(enrich_call_timeout_s=42.0)
     client = _fake_client(result)
     enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
 
@@ -1286,14 +1294,14 @@ def test_submit_enrich_batch_returns_batch_id(
 def test_submit_enrich_batch_passes_anthropic_call_timeout_to_create(
     conn: sqlite3.Connection,
 ) -> None:
-    """create() is bounded by Settings.llm_call_timeout_s (lode-olmi.15) --
+    """create() is bounded by Settings.enrich_call_timeout_s (lode-olmi.15) --
     the network call that commits the spend must not be able to hang forever
     with no client-side timeout at all.
     """
     _insert_note(conn)
     job_id = _insert_enrich_job(conn)
 
-    settings = Settings(llm_call_timeout_s=42.0)
+    settings = Settings(enrich_call_timeout_s=42.0)
     client = _fake_batch_client(batch_id="batch-xyz")
     submit_enrich_batch(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
@@ -1608,7 +1616,7 @@ def test_collect_enrich_batch_returns_false_when_in_progress(
 def test_collect_enrich_batch_passes_anthropic_call_timeout_to_retrieve_and_results(
     conn: sqlite3.Connection,
 ) -> None:
-    """retrieve()/results() are bounded by Settings.llm_call_timeout_s
+    """retrieve()/results() are bounded by Settings.enrich_call_timeout_s
     (lode-olmi.15) -- with no client-side timeout either call could otherwise
     hang forever with no signal back to 'lode work'.
     """
@@ -1618,7 +1626,7 @@ def test_collect_enrich_batch_passes_anthropic_call_timeout_to_retrieve_and_resu
         conn.execute(
             "UPDATE jobs SET batch_handle = 'batch-done' WHERE id = ?", (job_id,)
         )
-    settings = Settings(llm_call_timeout_s=42.0)
+    settings = Settings(enrich_call_timeout_s=42.0)
     client = _fake_batch_client(results=[])
     collect_enrich_batch(
         conn, "batch-done", settings, provider=AnthropicProvider(client)
@@ -1712,29 +1720,14 @@ def test_collect_enrich_batch_marks_failed_on_errored_result(
 
 def _line_without_custom_id() -> bytes:
     """A fully well-formed ``succeeded`` results line minus only ``custom_id``."""
-    payload = {
-        "result": {
-            "type": "succeeded",
-            "message": {
-                "id": "msg_1",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-haiku-4-5",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": "tu_1",
-                        "name": "emit",
-                        "input": {"tags": [], "entities": [], "inferred_edges": []},
-                    }
-                ],
-                "stop_reason": "tool_use",
-                "stop_sequence": None,
-                "usage": {"input_tokens": 1, "output_tokens": 1},
-            },
-        },
-    }
-    return (json.dumps(payload) + "\n").encode()
+    return _jsonl(
+        _payload_without(
+            _succeeded_payload(
+                tool_input={"tags": [], "entities": [], "inferred_edges": []}
+            ),
+            "custom_id",
+        )
+    )
 
 
 @pytest.mark.network
@@ -1774,8 +1767,6 @@ def test_collect_enrich_batch_survives_a_results_line_with_no_usable_custom_id(
     for both: a ``None`` custom_id makes that bare ``version_id[:12]`` slice
     raise a raw ``TypeError`` right here.
     """
-    import anthropic
-
     _insert_note(conn)
     job_id = _insert_enrich_job(conn, "ver-1", status="running")
     with conn:
@@ -1783,38 +1774,8 @@ def test_collect_enrich_batch_survives_a_results_line_with_no_usable_custom_id(
             "UPDATE jobs SET batch_handle = 'batch-nonobj' WHERE id = ?", (job_id,)
         )
 
-    def handler(request: object) -> httpx.Response:
-        import httpx
-
-        if request.url.path.endswith("/results"):  # type: ignore[attr-defined]
-            return httpx.Response(200, content=line)
-        return httpx.Response(
-            200,
-            json={
-                "id": "batch-nonobj",
-                "type": "message_batch",
-                "processing_status": "ended",
-                "results_url": (
-                    "https://api.anthropic.com/v1/messages/batches/batch-nonobj/results"
-                ),
-                "created_at": "2026-01-01T00:00:00Z",
-                "expires_at": "2026-01-02T00:00:00Z",
-                "request_counts": {
-                    "canceled": 0,
-                    "errored": 0,
-                    "expired": 0,
-                    "processing": 0,
-                    "succeeded": 1,
-                },
-            },
-        )
-
-    import httpx
-
-    client = anthropic.Anthropic(
-        api_key="test-key",
-        max_retries=0,
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    client = _real_anthropic_client(
+        _results_handler("batch-nonobj", lambda: httpx.Response(200, content=line))
     )
 
     ended = collect_enrich_batch(
