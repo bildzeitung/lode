@@ -33,8 +33,9 @@ its shell script -- this module's fake `bd` serves only `bd show
 whole point of the regression guard above); test_epic_children_closed.py's
 serves only `bd list --parent`; test_epic_completion_check.py's dispatches
 both `show` and `list`. A shared builder would have to be parameterized
-over three different fake-CLI validation rules for ~25 lines x3 -- added
-complexity, not a clean extraction like `_git` (tests/_gitrepo.py). Do not
+over all three validation rules, and over the differing fixture-dict
+arities each takes -- added complexity, not a clean extraction like `_git`
+(tests/_gitrepo.py). Do not
 re-litigate this without a concrete shape that beats that trade.
 """
 
