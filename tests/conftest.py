@@ -1187,31 +1187,35 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 
 # --- Fenced ```bash/```sh block parsing (lode-ovgs, lode-p4qb) --------------
 #
-# THE ONE parser for "which bash does an agent actually execute", for the four
-# gates listed below, after four private copies of it drifted apart. NOT the
-# only such state machine left in the repo: a fifth, hand-rolled inline, is in
-# tests/test_sweep_digest_id.py -- measured byte-identical on sweep/SKILL.md
-# today, and filed as lode-jm4a rather than absorbed here.
+# THE ONE parser for "which bash does an agent actually execute", for the five
+# gates listed below, after five private copies of it drifted apart -- no
+# private fence state machine survives under tests/ any more.
 #
 # The bug that forced the unification is worth keeping, because it is the shape
 # any re-implementation reinvents: tests/test_land_lock.py matched the fence
 # marker with `line.startswith("```")`, so a fence INDENTED under a markdown
 # list item (e.g. `.claude/skills/land/SKILL.md`'s Section 3 isolation-replay
 # merge loop) never opened at all -- 4 of that file's 24 bash fences were
-# invisible to it, and every fence in `.claude/skills/code/SKILL.md` was. Three
+# invisible to it, and every fence in `.claude/skills/code/SKILL.md` was. Four
 # other modules each rediscovered and re-fixed that independently before
-# lode-ovgs unified them here and lode-p4qb folded in the fourth
-# (tests/test_assert_main_checkout.py).
+# lode-ovgs unified three of them here, lode-p4qb folded in the fourth
+# (tests/test_assert_main_checkout.py), and lode-jm4a folded in the fifth
+# (tests/test_sweep_digest_id.py).
 #
 # Consumers of the FUNCTION: tests/test_land_lock.py,
 # tests/test_land_conflicts_state.py, tests/test_skill_bash_state.py,
-# tests/test_assert_main_checkout.py. tests/test_bd_list_limit_gate.py's
-# inline-span scan (`inline_violations`) is a fifth consumer -- of
-# `fence_scan` directly, since lode-kjei collapsed its own open/close loop onto
-# the same generator `bash_fence_blocks` is now built on (see `fence_scan`
-# below). A change to the rules stated in `fence_scan`'s docstring changes what
-# all five gates consider "executed"/"fenced", so the rules are stated ONCE
-# there and nowhere else.
+# tests/test_assert_main_checkout.py, tests/test_sweep_digest_id.py.
+# tests/test_bd_list_limit_gate.py's inline-span scan (`inline_violations`) is
+# a sixth consumer -- of `fence_scan` directly, since lode-kjei collapsed its
+# own open/close loop onto the same generator `bash_fence_blocks` is now built
+# on (see `fence_scan` below). A change to the rules stated in `fence_scan`'s
+# docstring changes what all six gates consider "executed"/"fenced", so the
+# rules are stated ONCE there and nowhere else -- on the TEST side.
+# `scripts/check_links.py`'s `_content_lines` makes the same "single home of
+# the fence rule" claim for its own two consumers (the heading and link
+# scanners) -- deliberately a SEPARATE single home, not a competing one: it is
+# production code and cannot import anything under `tests/` (lode-jm4a). Two
+# homes, each sole owner of its own side of the import boundary.
 
 
 # A markdown blockquote marker: optional leading whitespace, one `>`, one

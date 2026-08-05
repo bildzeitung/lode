@@ -224,7 +224,13 @@ def _content_lines(text: str) -> Iterator[tuple[int, str]]:
     the single home of the fence rule, shared by the heading and link scanners
     so they can never disagree about what counts as code (a shell comment like
     ``# run tests`` inside a ```bash``` fence must never read as a heading, nor
-    a literal ``[text](url)`` example inside a fence as a real link)."""
+    a literal ``[text](url)`` example inside a fence as a real link).
+
+    A SEPARATE single home from ``tests/conftest.py``'s ``fence_scan`` -- not a
+    competing claim. This is production code and cannot import anything under
+    ``tests/``, so the test-side gates (fenced-bash execution, inline-backtick
+    scanning) have their own sole owner of the fence rule on that side of the
+    import boundary (lode-jm4a)."""
     in_fence = False
     for line_no, line in enumerate(text.splitlines(), start=1):
         if _FENCE_RE.match(line):

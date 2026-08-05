@@ -23,6 +23,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from conftest import bash_fence_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "sweep-digest-id.sh"
@@ -164,23 +165,26 @@ def test_both_sweep_call_sites_use_the_script_not_an_inline_query() -> None:
     and so re-derives it the same sanctioned way. The "both" in this test's name
     predates that third site; the property under test -- every fenced-bash
     selection of the digest goes through the script -- is unchanged by the
-    count."""
+    count.
+
+    Fence-partitioning itself is `conftest.bash_fence_blocks` (lode-kjei), not a
+    private state machine here (lode-oqqw) -- see that helper's docstring, and
+    `fence_scan`'s behind it, for the rules. Deliberately NOT re-listed here:
+    `bash_fence_blocks` states outright that the rule set is "stated once,
+    there, not duplicated here", and a fourth copy is one more place to go
+    stale when a fence rule changes."""
     skill = REPO_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
 
-    executed = []
-    in_block = False
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            in_block = False if in_block else stripped in {"```bash", "```sh"}
-            continue
-        # Comments are not executed, and these blocks deliberately EXPLAIN the
-        # `.[0].id` guess they no longer make -- scanning that prose would make
-        # this pin fire on its own rationale.
-        if in_block and not stripped.startswith("#"):
-            executed.append(line)
-    body = "\n".join(executed)
+    # Comments are not executed, and these blocks deliberately EXPLAIN the
+    # `.[0].id` guess they no longer make -- scanning that prose would make
+    # this pin fire on its own rationale.
+    body = "\n".join(
+        line
+        for block in bash_fence_blocks(text)
+        for line in block.splitlines()
+        if not line.strip().startswith("#")
+    )
 
     assert body.count("scripts/sweep-digest-id.sh") == 3, (
         "expected exactly the three call sites (§5 read, §6 write, §7 notify)"
@@ -189,3 +193,26 @@ def test_both_sweep_call_sites_use_the_script_not_an_inline_query() -> None:
         "a fenced bash block selects the digest with `.[0].id` again -- that is the "
         "guess scripts/sweep-digest-id.sh exists to refuse (§4's N>1 anomaly)"
     )
+
+
+def test_sweep_gate_still_sees_a_blockquoted_fence() -> None:
+    """The capability the lode-jm4a rewrite actually buys, pinned directly rather
+    than left silent: `.claude/skills/sweep/SKILL.md` carries zero blockquoted
+    fences today (measured), so the pin above cannot exercise this on the real
+    file -- a private, hand-rolled state machine here (the pre-lode-jm4a shape,
+    which only matched `stripped.startswith("```")`) would still pass it, and
+    would then silently go blind to a blockquoted fence the moment one is
+    added. `bash_fence_blocks` strips the leading `> ` blockquote marker
+    (`conftest._BLOCKQUOTE_MARKER`, lode-wroz) before matching either the fence
+    delimiter or its content, so a fence nested inside a blockquote is an
+    ordinary fence to it. Sabotage-verified: reverting `bash_fence_blocks` to a
+    bare `line.strip().startswith("```")` toggle (this test's old shape)
+    reddens this test."""
+    markdown = textwrap.dedent(
+        """\
+        > ```bash
+        > echo hello
+        > ```
+        """
+    )
+    assert bash_fence_blocks(markdown) == ["echo hello"]
