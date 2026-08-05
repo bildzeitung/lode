@@ -13,24 +13,14 @@ split out of it (lode-2thl).
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-from conftest import _fenced_bash, bash_fence_blocks
+from conftest import LAND_SKILL, _fenced_bash, bash_fence_blocks
 
 # Share lode-x495's quote-aware comment stripper rather than adding a second,
 # competing implementation -- the same reuse `tests/test_bd_list_limit_gate.py`
 # was told to make, for the same reason: "what does an agent actually execute"
 # parsing is identical across these gates even when the assertions differ.
 from test_skill_bash_state import _strip_comment
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-# ---------------------------------------------------------------------------
-# Call-site pin against the SHIPPED SKILL.md (the fence is where the bug was)
-# ---------------------------------------------------------------------------
-
-LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
-
 
 # The ```bash fence parser is `tests/conftest.py::bash_fence_blocks` and lives
 # there alone; its rules and blind spots are stated next to it and deliberately
