@@ -3230,3 +3230,43 @@ while erasing it here would lose the record of what was believed, and when.
   the record of what was believed and when, and erasing them is exactly what its preamble forbids.
   `.claude/agents/` and `.claude/skills/` were swept in the same pass and were already clean; the
   passive `.beads/issues.jsonl` export is a historical snapshot and is never hand-edited (lode-6ra).
+
+- **The three hand-written liveness pins stay separate, hand-written mechanisms —
+  decided, rejected extraction (2026-08-04, maintainer decision, lode-7zap).** By the time
+  lode-7zap closed the gap, three tests each pinned "does every allowlist/known-set entry still
+  correspond to a real, live thing in a real corpus": `tests/test_assert_main_checkout.py`'s
+  `_dead_allowlist_entries` (exact command TEXT, keyed on a bare string, against `land/SKILL.md`'s
+  fenced-bash corpus), `tests/test_skill_bash_state.py`'s `_dead_allowlist_keys` (a `(file, var)`
+  tuple, matched by an unfiltered violation scan over the shipped skill/agent corpus), and
+  that same module's `_dead_known_env_vars` (a bare name, matched by a used-but-unassigned scan
+  with the known-set emptied, over the same corpus). The scan primitives each site uses are
+  described here by what they compute, not by which function supplies them, because that plumbing
+  is itself in motion — lode-dutt reworks how the two `test_skill_bash_state.py` pins obtain their
+  unfiltered scan. That is compatible with, not a counterexample to, the decision below: sharing a
+  genuine scan primitive between two pins that need the same scan is not the generic pin
+  abstraction being rejected here. lode-e49j's own review had already argued both
+  sides of extracting them into one shared helper and reached no verdict on purpose, leaving the
+  question open across all three call sites; this ticket's acceptance criteria required deciding it
+  in writing rather than leaving it open a fourth time — a fourth allowlist, whenever one appears,
+  would otherwise face the identical unresolved question with three unexplained precedents behind it.
+
+  **Decision: no extraction.** The three key shapes genuinely differ — a raw command string matched
+  by exact text, a `(file, var)` tuple derived by a bash-fence/comment parser, and a bare name
+  derived by a used-but-unassigned scan — and a shared helper that covers all three collapses to
+  `assert set(known) <= live_set_from(arbitrary_compute_callable)`, an abstraction that carries the
+  parameter-threading cost of genericity but no logic of its own; each site's real work (the parser,
+  the filtering rule, the corpus) stays exactly as bespoke as it is today, just relocated behind an
+  extra indirection. The value that actually generalizes across the three is not code, it's
+  **discipline**: every hand-written allowlist/known-set in this repo gets (a) a liveness pin
+  (`assert dead == []`, computed by re-running the site's own live-detection primitive unfiltered)
+  and (b) a non-vacuity sabotage proof for that pin, holding one key constant and varying only the
+  fixture's *content* between the live and dead assertions (never two differently-named fixtures —
+  that shape passes on a name mismatch and proves nothing, lode-e49j's own measured finding, repeated
+  independently for `test_assert_main_checkout.py`'s pin by lode-7zap since it had shipped without a
+  sabotage counterpart at all). This entry — not a shared module — is what codifies that discipline
+  for the next allowlist a future ticket adds. Full sabotage-proof rationale for the *existing* two
+  precedents:
+  `tests/test_skill_bash_state.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`
+  (lode-e49j) and its `_KNOWN_ENV_VARS` sibling (lode-rscn); the third,
+  `tests/test_assert_main_checkout.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`,
+  is lode-7zap's own addition.
