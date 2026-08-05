@@ -580,6 +580,14 @@ def _restore_root_logger_state():
             handler.close()
 
 
+#: Set ONLY by ``tests/test_conftest_jobs_clock_anchor.py``'s own nested-subprocess repro, to
+#: measure this fixture's own effect on demand (lode-up8x) -- never set in a real test run, and
+#: never read anywhere else. Prefixed and namespaced defensively precisely because it disables a
+#: safety fixture: an accidental ambient hit would silently re-open the class of bug lode-x10m
+#: exists to close.
+_DISABLE_JOBS_CLOCK_ANCHOR_RESET_ENV_VAR = "_LODE_TEST_DISABLE_JOBS_CLOCK_ANCHOR_RESET"
+
+
 @pytest.fixture(autouse=True)
 def _reset_jobs_clock_anchor() -> None:
     """Reset ``lode.jobs``'s process-global clock anchor before every test (lode-x10m).
@@ -653,7 +661,16 @@ def _reset_jobs_clock_anchor() -> None:
       one that does would still see the poison for its own duration, and only
       this fixture stops that outliving it. The two are complementary, not
       alternatives.
+
+    ESCAPE HATCH (lode-up8x): returns early, doing nothing, when
+    ``_DISABLE_JOBS_CLOCK_ANCHOR_RESET_ENV_VAR`` is set in the environment. This exists solely so
+    ``tests/test_conftest_jobs_clock_anchor.py`` can measure this fixture's own effect on demand,
+    from a nested subprocess it controls -- see that file's NON-VACUITY section for what it drives
+    and why lode-e8lo left this fixture with no live poisoner to prove it against otherwise. Never
+    set this in a real test run; nothing else reads it.
     """
+    if os.environ.get(_DISABLE_JOBS_CLOCK_ANCHOR_RESET_ENV_VAR):
+        return
     jobs._now_epoch = datetime.min.replace(tzinfo=UTC)
 
 
