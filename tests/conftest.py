@@ -1388,12 +1388,9 @@ def _fenced_bash(markdown: str) -> str:
     is how more than one bug here survived unnoticed until someone read the
     file by hand.
 
-    Thin wrapper over :func:`bash_fence_blocks`. Used to carry independent
-    column-0-anchored copies in ``tests/test_land_lock.py`` and
-    ``tests/test_assert_main_checkout.py`` (lode-ovgs, lode-0mkv); moved here
-    so there is one copy of both the implementation and this rationale,
-    following the same no-second-copy rule ``bash_fence_blocks`` itself
-    documents.
+    ``tests/test_land_lock.py`` and ``tests/test_assert_main_checkout.py``
+    each carried their own copy of this until lode-0mkv; the parser's rules
+    and blind spots live next to :func:`bash_fence_blocks`, not here.
     """
     return "\n".join(bash_fence_blocks(markdown))
 

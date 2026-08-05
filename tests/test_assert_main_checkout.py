@@ -506,6 +506,12 @@ def test_land_skill_guard_covers_every_known_mutating_fence() -> None:
     Zero violations means every mutating command in the file is either
     guarded or a recorded, reasoned exemption -- across every fence in the
     file, not just a hand-picked few.
+
+    This also subsumes the Section 1 existence pin lode-pcee added and
+    lode-0mkv deleted ("does SKILL.md call the guard at all"): measured,
+    dropping Section 1's guard line leaves that pin GREEN -- the string still
+    appears in three other fences -- while this sweep reports 4 named
+    violations. Do not re-add a per-section duplicate.
     """
     violations = _unguarded_mutations(
         LAND_SKILL.read_text(encoding="utf-8"),
