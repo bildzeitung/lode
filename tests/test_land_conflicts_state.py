@@ -38,12 +38,7 @@ scaffolding and the cross-block-ordering precedent already are.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from conftest import bash_fence_blocks
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
+from conftest import LAND_SKILL, bash_fence_blocks
 
 
 def _skill_blocks() -> list[str]:

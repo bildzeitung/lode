@@ -106,7 +106,7 @@ import time
 from pathlib import Path
 
 from _gitrepo import _git
-from conftest import _fenced_bash, bash_fence_blocks
+from conftest import LAND_SKILL, _fenced_bash, bash_fence_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-lock.sh"
@@ -120,8 +120,8 @@ def _init_repo(tmp_path: Path) -> Path:
     `git worktree add` requires a ref to branch from) fails outright with
     `fatal: empty ident name` on a machine with no ambient global git identity
     -- a fresh clone or a CI container (measured: exit 128). Setting it here
-    rather than in those tests matches the seven sibling script-test modules
-    that all configure it inside their own `_init_repo`, and keeps this file
+    rather than in those tests matches its sibling script-test modules that
+    all configure it inside their own `_init_repo`, and keeps this file
     from passing only on machines that happen to have a global identity
     configured.
     """
@@ -1259,8 +1259,6 @@ def test_uncreatable_lock_reports_a_machine_fault_not_another_lander(
 # ---------------------------------------------------------------------------
 # Call-site pins against the SHIPPED SKILL.md (the fence is where the bug was)
 # ---------------------------------------------------------------------------
-
-LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
 
 def test_land_skill_acquires_and_releases_through_this_script() -> None:
