@@ -74,6 +74,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -314,6 +315,13 @@ ALLOWED = [
     'bd update lode-x --notes "mentions (gh issue create|gh pr comment) both denied"',
     'git commit -m "(gh issue create) is forbidden"',
     'grep -E "(gh issue create)" docs/',
+    # -- lode-vrhu: "gh" as a substring of an ordinary word, no `gh` invocation anywhere. This is
+    #    the false-positive class the tightened command-position pre-filter exists to reject
+    #    BEFORE the O(n^2) _split_unquoted split/scan ever runs, not merely a case the full scan
+    #    happens to allow -- see test_fast_path_rejects_gh_inside_an_ordinary_word below, which
+    #    pins the performance property directly.
+    "git commit -m 'walking through the design once more, straight to the point'",
+    'bd update lode-x --notes "brought this to light -- highlight the eight open threads tonight"',
     # -- legitimate internal bd usage, unaffected --
     "bd create --title x --description y --type=task",
     "bd update lode-1 --add-label ready-for-code-review",
@@ -496,6 +504,44 @@ def test_quote_aware_real_invocation_wrapped_in_quotes_stays_the_same_accepted_r
     explicitly out of scope (docs/agents-workflow.md says closing it would false-deny this
     repo's own prose about the rule)."""
     assert _run('sh -c "gh issue create --title x"') is None
+
+
+# --- lode-vrhu: the *gh* substring pre-filter was too loose to gate _split_unquoted's O(n^2)
+# char loop (lode-obox) -- a long command merely containing "gh" inside an ordinary word
+# (through/highlight/night/eight/brought/high/light/straight) reached the split anyway.
+# Tightened to a command-position test; the correctness regression pins live in ALLOWED above,
+# but a functional pass/fail alone would not catch a future edit that loosens or drops the
+# pre-filter back to a bare substring test -- that regression only SHOWS UP as a slow session,
+# which no functional assertion notices. The test below pins the performance property directly.
+
+
+def test_fast_path_rejects_gh_inside_an_ordinary_word_without_scanning() -> None:
+    """The pre-filter must reject a "gh"-inside-an-ordinary-word command BEFORE the O(n^2)
+    _split_unquoted split/scan ever runs, not merely allow it (correctly) after paying that cost.
+
+    Measured on this ticket's own machine (bash 5.x, LANG=C.UTF-8): the OLD `*gh*` substring
+    pre-filter let an 8 KB such command through to the split, taking ~469ms; a 24.6 KB one ~3.5s.
+    The tightened command-position pre-filter exits before the split ever runs, so this completes
+    in a small, size-independent budget. The ceiling below is generous -- well under the OLD
+    guard's own smallest measured regression (469ms @ 8 KB) but comfortably above ordinary
+    process-spawn + bash-parse overhead -- so a REVERT of the pre-filter (back to `*gh*`, or
+    dropped outright) fails this test long before anyone notices a slow session.
+    """
+    # ~25 KB of prose containing "through" repeatedly, no real `gh` invocation anywhere.
+    command = "git commit -m '" + ("walking through the design once more. " * 650) + "'"
+    assert len(command) > 24_000, (
+        "test fixture must reproduce the measured 24.6 KB regression"
+    )
+    start = time.monotonic()
+    decision = _script_decision(command)
+    elapsed = time.monotonic() - start
+    assert decision is None, (
+        f"guard wrongly denied a gh-free command: {command[:80]}..."
+    )
+    assert elapsed < 0.25, (
+        f"guard took {elapsed:.3f}s on a gh-free ~25 KB command -- the O(n^2) split/scan ran; "
+        "the command-position pre-filter regressed (lode-vrhu)"
+    )
 
 
 def _script_decision(command: str) -> str | None:
