@@ -1576,6 +1576,13 @@ just written:
   above) is unchanged and pinned by its own test: a `gh` phrase *inside* a quoted string was never
   at a segment start under the old splitter either, unless a control character happened to precede
   it *inside* the quotes — which is exactly the class this fix closes, not a new gap it opens.
+- **One accepted fail-open residual, named rather than glossed:** an **unbalanced** quote leaves the
+  rest of the command "inside" a quote, so nothing after it splits — and fewer segments is the
+  *permissive* direction here, not the conservative one. Verified: `echo x " y ; gh issue create
+  --title z` is **allowed**, where the old blind `tr` split denied it. It is accepted rather than
+  fixed because the only alternative is guessing which quote the author meant, and a wrong guess
+  re-manufactures the very false segment start this fix removes; the input is a command the shell is
+  about to run, so an unbalanced quote is overwhelmingly a typo that will not parse anyway.
 - The hook now **fails closed** if `scripts/gh-write-guard.sh` cannot be resolved (missing, not
   executable, or no repo root) — a new failure mode introduced by extracting the logic into an
   external script at all. This deliberately does **not** copy `lode-fpmi`'s own wrapper, which

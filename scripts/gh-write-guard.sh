@@ -34,8 +34,8 @@
 # one of the synthetic fragments, the guard evaluated that fragment as if it
 # were a real invocation. Confirmed live against the shipped (pre-fix) hook:
 #   git commit -m "See \`gh release create\` for context (lode-w35h)"   -> denied
-#   rtk grep -E "(gh issue create)" docs/                               -> denied
-#   rtk bd update lode-x --notes "mentions (gh issue create|gh pr comment) both denied" -> denied
+#   grep -E "(gh issue create)" docs/                                   -> denied
+#   bd update lode-x --notes "mentions (gh issue create|gh pr comment) both denied" -> denied
 # all pure prose/search text with NO actual `gh` invocation anywhere on the
 # line. `_split_unquoted` below walks the string tracking single-/double-quote
 # state (and a backslash escaping the very next character, in or out of
@@ -166,10 +166,12 @@ esac
 # Emit $1 with every UNQUOTED occurrence of ; & | ( ) { } ` replaced by a
 # newline; occurrences inside '...' or "..." (and any backslash-escaped
 # character, in or out of quotes) are left untouched -- EXCEPT `$(` and a bare
-# backtick inside "...", which the shell really does execute. Unbalanced quotes at
-# end-of-string leave the tail "inside" a quote (no further splits) rather
-# than guessing -- the conservative direction, since fewer splits means fewer
-# segments are ever offered to the `gh` matcher at all.
+# backtick inside "...", which the shell really does execute.
+#
+# RESIDUAL (fail-OPEN, accepted): an UNBALANCED quote leaves the tail "inside" a
+# quote, so nothing after it splits -- which is the PERMISSIVE direction, not the
+# conservative one. Accepted rather than fixed; rationale with the other residuals
+# in docs/agents-workflow.md.
 _split_unquoted() {
   local s="$1" out="" c state=none i=0 len
   len=${#s}
@@ -215,10 +217,20 @@ _split_unquoted() {
 }
 
 SEG=$(_split_unquoted "$CMD_SANITIZED")
-P='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((if|then|else|do|env|command|sudo|nohup|time|xargs|rtk)[[:space:]]+)*([^[:space:]]*/)?gh([[:space:]]+(-R|--repo|--hostname)([[:space:]]+|=)[^[:space:]]+)*[[:space:]]+'
+
+# `gh` at a command position: through a leading VAR=x assignment, a fixed wrapper
+# list, an absolute/relative path to the binary, and gh's global -R/--repo/
+# --hostname flags inserted before the subcommand.
+P='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((if|then|else|do|env|command|sudo|nohup|time|xargs)[[:space:]]+)*([^[:space:]]*/)?gh([[:space:]]+(-R|--repo|--hostname)([[:space:]]+|=)[^[:space:]]+)*[[:space:]]+'
 API='api\b'
+# The read-only allowlist: everything NOT matching this is presumed a write.
 R='(issue[[:space:]]+(view|list|status)\b|pr[[:space:]]+(view|list|checks|diff)\b|run[[:space:]]+(list|view)\b|release[[:space:]]+(list|view)\b|repo[[:space:]]+view\b|label[[:space:]]+list\b|workflow[[:space:]]+(list|view)\b|secret[[:space:]]+list\b|variable[[:space:]]+list\b|ssh-key[[:space:]]+list\b|gpg-key[[:space:]]+list\b|cache[[:space:]]+list\b)'
+# `gh api` is judged separately: field flags trigger an IMPLICIT POST with no -X
+# on the line at all, which is gh's documented default and NOT a way around this.
 APIWRITE='api[[:space:]]+(.*[[:space:]])?(-[fF]|(--field|--raw-field|--input)([[:space:]]|=)|(-X[[:space:]]*|--method[[:space:]=]+)[A-Za-z])'
+# ...but fields on an EXPLICIT GET are query params, not a body -- gh documents
+# this as the way to send a GET query string. Scoped to the SAME segment, so a
+# read-then-write chain cannot let the read half exempt the write half.
 APIGET='api[[:space:]]+(.*[[:space:]])?(-X[[:space:]]*|--method[[:space:]=]+)GET\b'
 
 GH=$(printf '%s' "$SEG" | grep -iE "$P" || true)

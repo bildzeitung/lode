@@ -80,8 +80,7 @@ import pytest
 from _hookharness import SH, pretooluse_hook, run_hook
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-GH_WRITE_GUARD_SCRIPT = REPO_ROOT / "scripts" / "gh-write-guard.sh"
-SCRIPT = GH_WRITE_GUARD_SCRIPT
+SCRIPT = REPO_ROOT / "scripts" / "gh-write-guard.sh"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the hook shells out to jq"
@@ -297,9 +296,6 @@ ALLOWED = [
     'bd update lode-x --notes "denies gh issue create writes"',
     'bd update lode-x --notes "also gh pr comment posts publicly"',
     'grep "gh issue create" docs/',
-    'rtk bd update lode-x --notes "denies gh issue create writes"',
-    'rtk bd update lode-x --notes "also gh pr comment posts publicly"',
-    'rtk grep "gh issue create" docs/',
     # -- lode-obox: prose quoting the pattern, but with a shell control-operator character
     #    (`(){}\`|`) SITTING INSIDE the quotes. Confirmed false-denies under the pre-fix guard
     #    (quoting-unaware `tr` split): a control char inside a quoted string argument still
@@ -315,9 +311,9 @@ ALLOWED = [
     "git commit -m 'note: `gh release create` publishes'",
     'git commit -m "note: \\`gh release create\\` publishes"',
     "echo 'the guard denies `gh issue create`'",
-    'rtk bd update lode-x --notes "mentions (gh issue create|gh pr comment) both denied"',
+    'bd update lode-x --notes "mentions (gh issue create|gh pr comment) both denied"',
     'git commit -m "(gh issue create) is forbidden"',
-    'rtk grep -E "(gh issue create)" docs/',
+    'grep -E "(gh issue create)" docs/',
     # -- legitimate internal bd usage, unaffected --
     "bd create --title x --description y --type=task",
     "bd update lode-1 --add-label ready-for-code-review",
@@ -471,7 +467,7 @@ def test_live_command_substitution_inside_double_quotes_is_still_denied() -> Non
     assert _run('echo "the guard denies `gh issue create --title x`"') == "deny"
     # ...and the discrimination is real: a bare paren inside double quotes stays literal, so the
     # quoted-alternation false positive is still fixed rather than traded away for the line above.
-    assert _run('rtk grep -E "(gh issue create)" docs/') is None
+    assert _run('grep -E "(gh issue create)" docs/') is None
     # An allowlisted READ inside a live substitution is still allowed -- this denies writes, not
     # command substitution as such.
     assert _run('echo "$(gh issue view 123)"') is None
@@ -502,6 +498,22 @@ def test_quote_aware_real_invocation_wrapped_in_quotes_stays_the_same_accepted_r
     assert _run('sh -c "gh issue create --title x"') is None
 
 
+def _script_decision(command: str) -> str | None:
+    """Run the extracted script against `command`; return its decision, or None if allowed."""
+    proc = subprocess.run(
+        ["bash", str(SCRIPT), command],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 0, f"script exited {proc.returncode}: {proc.stderr}"
+    if not proc.stdout.strip():
+        return None
+    return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
+
+
 class TestGhWriteGuardScriptDirectly:
     """SCRIPT-level tests driving scripts/gh-write-guard.sh directly (never a reimplementation),
     mirroring tests/test_sha_fabrication_guard.py's two-layer pattern (lode-fpmi): fast,
@@ -509,42 +521,24 @@ class TestGhWriteGuardScriptDirectly:
     HOOK-level coverage above that proves the settings.json wrapper actually delegates to it.
     """
 
-    @staticmethod
-    def _run_script(command: str) -> str | None:
-        proc = subprocess.run(
-            ["bash", str(GH_WRITE_GUARD_SCRIPT), command],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        assert proc.returncode == 0, f"script exited {proc.returncode}: {proc.stderr}"
-        if not proc.stdout.strip():
-            return None
-        return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
-
     # (No `bash -n` parse test here: `nox -s shellcheck` already lints every tracked shell
     # script at --severity=warning, in the default session list, and picks up new scripts
     # automatically -- a per-file parse test would be a second, weaker copy of that gate.)
 
-    def test_script_denies_every_case_in_denied_table(self) -> None:
-        for command in DENIED:
-            assert self._run_script(command) == "deny", (
-                f"guard failed to deny: {command}"
-            )
+    @pytest.mark.parametrize("command", DENIED)
+    def test_script_denies_every_case_in_denied_table(self, command: str) -> None:
+        assert _script_decision(command) == "deny", f"guard failed to deny: {command}"
 
-    def test_script_allows_every_case_in_allowed_table(self) -> None:
-        for command in ALLOWED + NEVER_AUTO_APPROVED:
-            assert self._run_script(command) is None, (
-                f"guard wrongly decided: {command}"
-            )
+    @pytest.mark.parametrize("command", ALLOWED + NEVER_AUTO_APPROVED)
+    def test_script_allows_every_case_in_allowed_table(self, command: str) -> None:
+        assert _script_decision(command) is None, f"guard wrongly decided: {command}"
 
     def test_script_never_emits_an_allow_decision(self) -> None:
-        assert '"allow"' not in GH_WRITE_GUARD_SCRIPT.read_text()
+        assert '"allow"' not in SCRIPT.read_text()
 
     def test_script_always_exits_zero_even_when_denying(self) -> None:
         proc = subprocess.run(
-            ["bash", str(GH_WRITE_GUARD_SCRIPT), "gh issue create --title x"],
+            ["bash", str(SCRIPT), "gh issue create --title x"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -553,7 +547,7 @@ class TestGhWriteGuardScriptDirectly:
         assert proc.returncode == 0
 
     def test_empty_command_is_a_noop(self) -> None:
-        assert self._run_script("") is None
+        assert _script_decision("") is None
 
 
 # --- lode-obox: the hook now FAILS CLOSED if scripts/gh-write-guard.sh cannot be resolved -----
@@ -739,22 +733,6 @@ def test_heredoc_lookalike_does_not_hide_a_live_gh_write(command: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _script_decision(command: str) -> str | None:
-    """Run the extracted script against `command`; return its decision, or None if allowed."""
-    proc = subprocess.run(
-        ["bash", str(SCRIPT), command],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert proc.returncode == 0, f"script exited {proc.returncode}: {proc.stderr}"
-    if not proc.stdout.strip():
-        return None
-    return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
-
-
 # (DENIED/ALLOWED at the script level are already covered by
 # TestGhWriteGuardScriptDirectly above -- these add the heredoc-specific cases
 # that class does not have, on top of the same `_script_decision` mechanism.)
@@ -782,8 +760,10 @@ def test_script_denies_heredoc_lookalikes(command: str) -> None:
 
 
 def test_script_is_executable_so_the_wrapper_can_resolve_it() -> None:
-    """The wrapper gates on `[ -x "$SCRIPT" ]` and fails OPEN if it is not executable, so a
-    lost exec bit would silently disable this guard with every test above still green."""
+    """The wrapper gates on `[ -x "$SCRIPT" ]`. A lost exec bit is therefore not silent: since
+    lode-obox the wrapper FAILS CLOSED there (see test_hook_fails_closed_when_guard_script_is_not_
+    executable), so every `gh`-bearing call would start being denied. This test keeps that from
+    being how anyone finds out, by naming the lost exec bit directly."""
     assert os.access(SCRIPT, os.X_OK), f"{SCRIPT} is not executable"
 
 
