@@ -50,9 +50,8 @@
 # `rm -rf "$CFG"` then fails (its parent went read-only, say) exits with THAT
 # command's status under `-e` -- 1, this script's CONTENT verdict -- rewriting
 # the status of EVERY exit already decided below it, a guard's correct 2
-# included. No `||`
-# guard on a body command can reach this: the trap fires after the body is
-# done. This is the single strongest argument FOR dropping `-e` (no per-site
+# included. No `||` guard on a body command can reach this: the trap fires
+# after the body is done. This is the single strongest argument FOR dropping `-e` (no per-site
 # guard closes it), and it is why the trap itself carries `|| :` below --
 # without `-e` that failure can no longer rewrite anything, but the `|| :`
 # stays so a broken cleanup is never mistaken for a verdict either way.
@@ -132,11 +131,20 @@
 #     - the `trap '...' EXIT` REGISTRATION statement -- registering a trap on
 #       a literal, always-valid signal spec cannot fail; only the trap BODY
 #       (guarded above with `|| :`) can.
-#     - the `[ ... ]` TEST conditions of every `if` in this file -- the
-#       tested condition of an `if` is always exempt from `-e` by bash's own
-#       rules (that's what makes an `if` an `if`), unlike the *body* of that
-#       same `if`, which -e does still govern absent a trailing `exit`
-#       (see the echo entries below).
+#     - the TESTED CONDITION of every `if` in this file -- always exempt from
+#       `-e` by bash's own rules (that's what makes an `if` an `if`), unlike
+#       the *body* of that same `if`, which -e does still govern absent a
+#       trailing `exit` (see the echo entries below). Enumerated rather than
+#       gestured at, since most of them are COMMANDS, not `[ ... ]` tests, and
+#       a reader scanning for unguarded external commands will otherwise trip
+#       over them: `. gate-lib.sh` (under `if !`), `docker info` (under
+#       `if !`), `command -v docker`, `grep -q`, `docker run`, and the two
+#       `[ ... ]` tests on `$found` / `$fail`.
+#     - the `gate_could_not_run` and `escalate_unless_content` call sites --
+#       neither can hand `-e` a nonzero status. Why is gate-lib.sh's contract
+#       to state, not this file's: see those functions' own headers there
+#       (that `escalate_unless_content` returns 0 on the content path is a
+#       contract guarantee, not an accident of this caller).
 #
 #   ALL SEVEN `echo` STATEMENTS in this file (enumerated mechanically --
 #   `grep -n '^[[:space:]]*echo' scripts/validate-mermaid.sh` -- rather than
