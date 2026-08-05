@@ -383,6 +383,24 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 # (rejected extraction, in favor of shared discipline instead) in
 # docs/decisions.md, search "The three hand-written liveness pins stay separate"
 # (lode-7zap). Do not re-litigate here.
+#
+# DECISION (lode-eu04): `_dead_allowlist_entries`' live set also ignored
+# `_unguarded_mutations`' BLOCK-level guard state (a key reachable only inside
+# an already-guarded block, or only on the `_GUARD`-carrying line itself, read
+# as live while excusing nothing). Two options were on the table:
+#   (a) thread the block-level guard state into a SECOND pass tailored to
+#       `_dead_allowlist_entries`, mirroring `_unguarded_mutations`' loop; or
+#   (b) factor `_unguarded_mutations`' own loop into a shared primitive
+#       (`_unguarded_candidates`) returning every unguarded, mutating command
+#       regardless of allowlist, and define "live" as membership in that set --
+#       i.e. what the sweep would flag with an emptied allowlist.
+# Chose (b). Rejected (a) because it is a second, independently-maintained
+# copy of the exact block-state machine `_unguarded_mutations` already owns --
+# two loops that must be kept in lockstep by hand is exactly how this class of
+# gap (lode-dkak, now this ticket) keeps recurring one level at a time. (b)
+# makes drift structurally impossible: `_dead_allowlist_entries` and
+# `_unguarded_mutations` now both read the SAME single candidate list, so
+# "live" cannot silently diverge from what the sweep actually excuses again.
 # ---------------------------------------------------------------------------
 
 # Every command shape that mutates cwd's repo. Not git-only, deliberately:
@@ -489,10 +507,18 @@ def _is_mutating(cmd: str) -> bool:
     return bool(cmd) and bool(_MUTATING_CMD_RE.search(cmd))
 
 
-def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[str]:
-    """Every fenced ```bash block's mutating command that is neither
-    allowlisted nor preceded, in its OWN block, by `scripts/assert-main-
-    checkout.sh`. Empty means full coverage.
+def _unguarded_candidates(markdown: str) -> list[tuple[int, str]]:
+    """Every fenced ```bash block's mutating command that is not preceded, in
+    its OWN block, by `scripts/assert-main-checkout.sh` -- i.e. exactly the
+    set `_unguarded_mutations` would flag as a violation if `allowlist` were
+    empty, paired with its block index. `_unguarded_mutations` and
+    `_dead_allowlist_entries` both build on this: a key only excuses anything
+    in the sweep if it names a command reachable at THIS point (unguarded
+    position, mutating verb) -- not merely present anywhere in the file. That
+    is the "live" this module means everywhere below (lode-eu04, one block
+    level up from the per-line gap lode-dkak fixed: a key present only inside
+    an already-guarded block, or only on the `_GUARD`-carrying line itself,
+    must not read as live -- it excuses nothing in the real sweep).
 
     Block boundaries are load-bearing, not tidiness: per land/SKILL.md's
     governing rule (lode-sfnb) each fence is its own Bash invocation, so a
@@ -502,7 +528,7 @@ def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[st
     lines in one block carry identical text. See the module comment above for
     the regex/allowlist design and its known limitations.
     """
-    violations: list[str] = []
+    candidates: list[tuple[int, str]] = []
     for block_index, block in enumerate(bash_fence_blocks(markdown)):
         guarded = False
         for raw_line in block.splitlines():
@@ -514,15 +540,24 @@ def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[st
                 continue
             if not _is_mutating(cmd):
                 continue
-            if guarded or cmd in allowlist:
+            if guarded:
                 continue
-            violations.append(
-                f"block {block_index}: {cmd!r} is a mutating command with "
-                f"no preceding {_GUARD} in its own fenced block, and is not "
-                "in the allowlist -- either guard it or record a reasoned "
-                "allowlist entry"
-            )
-    return violations
+            candidates.append((block_index, cmd))
+    return candidates
+
+
+def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[str]:
+    """Every unguarded candidate (see `_unguarded_candidates`) not excused by
+    `allowlist`. Empty means full coverage.
+    """
+    return [
+        f"block {block_index}: {cmd!r} is a mutating command with "
+        f"no preceding {_GUARD} in its own fenced block, and is not "
+        "in the allowlist -- either guard it or record a reasoned "
+        "allowlist entry"
+        for block_index, cmd in _unguarded_candidates(markdown)
+        if cmd not in allowlist
+    ]
 
 
 def test_land_skill_guard_covers_every_known_mutating_fence() -> None:
@@ -545,17 +580,21 @@ def test_land_skill_guard_covers_every_known_mutating_fence() -> None:
 
 
 def _dead_allowlist_entries(markdown: str, *, allowlist: dict[str, str]) -> list[str]:
-    """Allowlist keys in `allowlist` that no longer match any real MUTATING command
-    line in `markdown`'s fenced ```bash blocks. The live set is built from the SAME
-    two primitives `_unguarded_mutations` applies before a line is even a mutation
-    candidate -- `_normalized_line` then `_is_mutating` -- so this pin's notion of
-    "live" cannot drift from what the sweep actually excuses (lode-dkak; before that
-    fix the live set was every comment-stripped line, UNFILTERED, so a key present
-    only as a non-mutating line read as live while excusing nothing). A key
-    returned here is dead: it currently excuses nothing, but stays in the allowlist
-    regardless, ready to silently re-excuse a brand-new command that happens to
-    share its exact text. Argument order deliberately matches `_unguarded_mutations`
-    above -- same two inputs, same shape.
+    """Allowlist keys in `allowlist` that would excuse nothing in the real sweep
+    over `markdown` -- i.e. that do not name any `_unguarded_candidates(markdown)`
+    entry. The live set is `_unguarded_mutations`' OWN block-level state machine
+    (guard-in-block, precedes-the-mutation), not merely "is a mutating line
+    somewhere in the file" -- so this pin's notion of "live" cannot drift from
+    what the sweep actually excuses. Before lode-dkak the live set was every
+    comment-stripped line, UNFILTERED (a non-mutating line read as live); before
+    lode-eu04 it was filtered by `_is_mutating` alone but still blind to block
+    state, so a key reachable ONLY inside an already-guarded block, or only on
+    the `_GUARD`-carrying line itself, still read as live while excusing nothing
+    -- the same dead-entry class one level up. A key returned here is dead: it
+    currently excuses nothing, but stays in the allowlist regardless, ready to
+    silently re-excuse a brand-new command that happens to share its exact text.
+    Argument order deliberately matches `_unguarded_mutations` above -- same two
+    inputs, same shape.
 
     The parameterized-helper-plus-sabotage shape here is lode-e49j's, whose
     `test_skill_bash_state.py::_dead_allowlist_keys` modeled its own pin on THIS
@@ -567,12 +606,7 @@ def _dead_allowlist_entries(markdown: str, *, allowlist: dict[str, str]) -> list
     can exercise this exact primitive -- the same one the real pin calls -- against
     a synthetic fixture, without mutating the real `land/SKILL.md` on disk.
     """
-    live = {
-        cmd
-        for block in bash_fence_blocks(markdown)
-        for raw in block.splitlines()
-        if _is_mutating(cmd := _normalized_line(raw))
-    }
+    live = {cmd for _, cmd in _unguarded_candidates(markdown)}
     return sorted(set(allowlist) - live)
 
 
@@ -694,6 +728,70 @@ def test_dead_allowlist_entries_requires_a_mutating_line_not_mere_presence() -> 
         "a key present only as a non-mutating line must be reported dead -- "
         "mere textual presence does not make an allowlist entry live"
     )
+
+
+def test_dead_allowlist_entries_requires_unguarded_position_not_just_a_mutating_line() -> (
+    None
+):
+    """Non-vacuity proof for THIS ticket's fix (lode-eu04): before it,
+    `_dead_allowlist_entries`' live set was every `_is_mutating` line in the
+    corpus, blind to `_unguarded_mutations`' own block-level guard state. So a
+    key present in the corpus ONLY inside an already-guarded block still read
+    as live, even though `_unguarded_mutations` never reaches its allowlist
+    check for such a line (the `if guarded or cmd in allowlist: continue`
+    short-circuit) -- excusing nothing, yet reported live.
+
+    Sabotage recipe for this ticket's own future maintenance, per its
+    acceptance criteria: hold ONE key constant and vary only the fixture's
+    guard placement -- present before the mutating line (excuses nothing,
+    must read dead) vs absent from the block entirely (the mutating line is
+    reachable, must read live). Restoring the pre-fix live-set computation
+    (every `_is_mutating` line, unfiltered by block guard state -- reproduced
+    inline below, not imported, since the fixed `_dead_allowlist_entries` no
+    longer computes it) must flip the guarded-block assertion from dead to
+    live, proving the sabotage is not vacuous.
+    """
+    key = "git push origin trunk"
+
+    # The block's ONLY mutating line is guarded -- `_unguarded_mutations`
+    # never reaches its allowlist check here, so this key excuses nothing.
+    markdown_guarded = f"```bash\n{_GUARD}\n{key}\n```\n"
+    # Same key, same command text, but in a block with NO guard at all --
+    # the mutating line is reachable and the key would excuse a real
+    # violation.
+    markdown_unguarded = f"```bash\n{key}\n```\n"
+
+    # Reproduce the PRE-FIX live-set computation (every `_is_mutating` line,
+    # blind to block guard state) to prove this exact key/fixture pair would
+    # have read as live before lode-eu04 -- i.e. that the sabotage is not
+    # vacuous.
+    pre_fix_live = {
+        cmd
+        for block in bash_fence_blocks(markdown_guarded)
+        for raw in block.splitlines()
+        if _is_mutating(cmd := _normalized_line(raw))
+    }
+    assert key in pre_fix_live, (
+        "fixture assumption broken: before lode-eu04's fix this key would not "
+        "actually have read as live even in the guarded fixture, so the "
+        "sabotage proves nothing"
+    )
+
+    # The fix: a key reachable only inside a guarded block excuses nothing
+    # and must be reported dead.
+    assert _dead_allowlist_entries(markdown_guarded, allowlist={key: "fixture"}) == [
+        key
+    ], (
+        "a key present only inside an already-guarded block must be reported "
+        "dead -- it excuses nothing in the real sweep"
+    )
+
+    # Same key, unguarded block: the SAME key must now read live, proving the
+    # guarded-block assertion above is driven by guard placement, not by the
+    # key's text.
+    assert (
+        _dead_allowlist_entries(markdown_unguarded, allowlist={key: "fixture"}) == []
+    ), "the same key in an unguarded block must read live -- fixture assumption broken"
 
 
 def test_sweep_catches_a_brand_new_unguarded_mutation() -> None:
