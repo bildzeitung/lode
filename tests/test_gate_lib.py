@@ -1,10 +1,12 @@
 """Tests for scripts/gate-lib.sh (lode-090f).
 
-Why the shared `gate_could_not_run()` helper was extracted, and what the
-GATE_ADVISORY contract is: see that script's own header. It owns the live
-contract for both -- not restated here. (docs/decisions.md carries a dated
-snapshot of the lode-ysr6 decision, which is a log entry, not a second
-source: the header is what gets corrected when the contract changes.)
+Why the shared helpers there -- `gate_could_not_run()` and, built on it,
+`escalate_unless_content()` (lode-1mea) -- were extracted, and what the
+GATE_ADVISORY contract is: see that script's own header. It is the single
+source for all of it -- not restated here. (docs/decisions.md carries a
+dated snapshot of the lode-ysr6 decision, which is a log entry, not a
+second source: the header is what gets corrected when the contract
+changes.)
 
 The tests in the first half exercise the library directly, under `bash -c
 '...'` sourcing it the same way every real caller does
@@ -187,12 +189,21 @@ def _guard_match(text: str) -> re.Match[str]:
 
 
 def _run(
-    script_body: str, *source_args: str, prelude: str = ""
+    script_body: str,
+    *source_args: str,
+    prelude: str = "",
+    flags: str = "-uo pipefail",
 ) -> subprocess.CompletedProcess:
-    """Run `script_body` under `bash -uo pipefail -c`, after sourcing
-    gate-lib.sh with `source_args` on the source line -- `-u` (nounset)
-    matches how merge-precheck.sh/release-bump.sh actually run, and is the
-    regime the unbound-array bug below only reproduces under.
+    """Run `script_body` under `bash <flags> -c`, after sourcing
+    gate-lib.sh with `source_args` on the source line -- the default `-uo
+    pipefail` (nounset) matches how merge-precheck.sh/release-bump.sh actually
+    run, and is the regime the unbound-array bug below only reproduces under.
+
+    `flags` exists because the consumer set is NOT one regime:
+    validate-mermaid.sh ships `#!/bin/bash -e`, and `-e` is the flag under
+    which a helper that merely declines to escalate -- rather than returning
+    0 -- kills its caller. Pass `flags="-euo pipefail"` to test in that
+    regime; see the `-e` case below.
 
     `prelude` is emitted ABOVE the source line, which is the only way to give
     the sourcing shell its own positional parameters (`set -- ...`) before
@@ -207,8 +218,7 @@ def _run(
     return subprocess.run(
         [
             "bash",
-            "-uo",
-            "pipefail",
+            *flags.split(),
             "-c",
             f'{prelude}. "{GATE_LIB}"{args}\n{script_body}',
         ],
@@ -352,6 +362,67 @@ def test_positional_params_restored_after_source_with_advisory_args():
 
     assert result.returncode == 0
     assert result.stdout.strip() == "own-arg1 own-arg2 2"
+
+
+# ---------------------------------------------------------------------------
+# escalate_unless_content() -- lode-1mea. Direct unit tests of the shared
+# "rc=$? ; [ -ne 1 ] -> gate_could_not_run" partition, independent of any real
+# consumer script; each consumer's own regression tests double as this
+# helper's integration coverage, the same division of labour the module
+# docstring above describes for gate_could_not_run.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("rc", [0, 2, 127, 137])
+def test_escalate_unless_content_exits_2_with_the_banner_on_anything_else(rc: int):
+    """Any rc other than 1 -- including 0, which a caller's own `if` already
+    routes to its success arm and would never itself pass here, but is worth
+    pinning as still escalating rather than being special-cased -- is a
+    machine fault: gate_could_not_run's exit-2 banner contract, with the
+    caller's cause lines passed through untouched."""
+    result = _run(
+        f'escalate_unless_content {rc} "cause one" "cause two"; echo unreached'
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert _stderr_lines(result) == [
+        "GATE COULD NOT RUN: cause one",
+        "cause two",
+    ]
+
+
+@pytest.mark.parametrize("flags", ["-uo pipefail", "-euo pipefail"])
+def test_escalate_unless_content_returns_0_on_rc_1_in_both_consumer_regimes(
+    flags: str,
+):
+    """rc 1 is grep's own "no match" -- a content answer, not a fault -- so the
+    caller's own no-match arm must be reached: this must RETURN 0, not merely
+    decline to escalate, and not exit. `-e` is the regime that tells returning
+    0 and "not escalating" apart, which is why both are driven here.
+
+    scripts/validate-mermaid.sh ships `#!/bin/bash -e`, and its docker call
+    site has real statements (`echo FAIL`; `fail=1`) after the escalate call,
+    reached only on the content path. A body that left the caller with a
+    nonzero status there -- e.g. `[ "$rc" -ne 1 ] && gate_could_not_run "$@"`,
+    the shape all six call sites open-coded before lode-1mea, and behaviourally
+    identical in every other respect -- aborts that gate mid-loop with exit 1,
+    which in THAT script means "invalid mermaid": a fabricated content verdict
+    on a clean run, the lode-9i2p inversion the partition exists to prevent.
+
+    Verified discriminating: swapping the helper for that body leaves the
+    `-uo pipefail` case passing and fails only this one's `-e` half."""
+    result = _run(
+        'escalate_unless_content 1 "should never be printed"; echo reached',
+        flags=flags,
+    )
+
+    assert result.returncode == 0, (
+        f"content path did not return 0 under `bash {flags}`\n"
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert result.stdout.strip() == "reached"
+    assert result.stderr == ""
 
 
 def test_the_consumer_sweep_discovers_something():

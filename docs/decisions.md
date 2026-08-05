@@ -2172,67 +2172,102 @@ while erasing it here would lose the record of what was believed, and when.
   prevent. Documented in
   [`coding.md`](../.claude/agents/coding.md), [`code-reviewer.md`](../.claude/agents/code-reviewer.md),
   and [agents-workflow.md — Isolation guard](agents-workflow.md#isolation-guard-lode-ska2--lode-jk44).
+- **Confirmed and dropped for `coding` and `code-reviewer` (lode-09td, 2026-07-28/29) — the
+  frontmatter-vs-call-site confound `lode-ojsr` could not reach is now resolved, the same way
+  `lode-p2vi` resolved it for `land-review`.** Two dispatches, run on separate days, both from the
+  **top-level orchestrating session** (main checkout, on `trunk`) — not nested inside any dispatched
+  subagent's worktree, which is the vantage point `lode-ojsr`'s own probe could not achieve. Both
+  dispatches in each run were issued in the same message (concurrent, identical conditions), neither
+  carried a call-site `isolation` option, and the precondition (`isolation: worktree` live in the
+  target agent's frontmatter on `trunk`) was re-verified with `git show` before each run rather than
+  assumed.
+
+  **Probe 1 (2026-07-28), `coding` vs a `claude` control:** `coding` landed in a linked worktree
+  (`git rev-parse --show-toplevel` differed from the main checkout, `--git-common-dir` confirmed a
+  linked worktree, branch `worktree-agent-<hash>`, `HEAD ==` the dispatching session's local `trunk`).
+  The `claude` control —
+  carrying **no** isolation frontmatter key at all — landed unisolated in the main checkout on
+  `trunk`. **Probe 2 (2026-07-29), `code-reviewer` vs a `claude` control:** identical design, identical
+  result — `code-reviewer` isolated, the control did not. `code-reviewer` is the role with the actual
+  failure history (`lode-ska2` was 6-of-6 `code-reviewer` dispatches failing to isolate), so this
+  closes the more consequential half of the question, not merely the cheaper one.
+
+  **Conclusion:** since the only difference between control and test case in each run was the
+  presence of the frontmatter key, the frontmatter key — not nested-dispatch inheritance of a parent
+  cwd, which is what made `lode-ojsr`'s own probe invalid — is what provisions the worktree, for both
+  roles. Three roles (`land-review` via `lode-p2vi`, `coding` and `code-reviewer` via `lode-09td`) now
+  measure frontmatter alone as sufficient, against a keyless control that does not isolate.
+
+  **What this does NOT establish — this entry owns the full text; a citing site must carry at least
+  the gist of both limits, and link here rather than re-narrate the probes:**
+  (1) each probe contrasts the target role's *whole* agent definition (system prompt, model, tools)
+  against `claude`'s, not a single-variable ablation of the isolation key on one fixed definition —
+  the key is the only isolation-*relevant* difference, but the probe design does not isolate it in the
+  strict sense. (2) **each probe was a single two-dispatch run — one test role, one control, issued
+  concurrently — never a fan-out.** They
+  establish the mechanism works under light load; they say **nothing** about concurrency pressure, and
+  do **not** refute the harness-side race/resource-pressure hypothesis in
+  [agents-workflow.md — Isolation guard](agents-workflow.md#isolation-guard-lode-ska2--lode-jk44)'s
+  root-cause section. The sharp edge cuts both ways: `lode-ska2`'s 6 failures happened *with* the
+  call-site option present, so that option demonstrably did not prevent them either — dropping it is
+  not claimed to reduce fan-out risk, only to remove a mechanism with no measured protective effect
+  against the one incident it was added for.
+
+  **Decision (human, 2026-07-29): drop `code/SKILL.md`'s call-site `isolation: "worktree"` option for
+  `coding` and `code-reviewer`.** Frontmatter is now the sole enforcement point for all three roles —
+  `land-review`, `coding`, `code-reviewer` — exactly the same rule everywhere. Reasoning: the call-site
+  option was added *for* `lode-ska2` and had zero demonstrated protective value against it; frontmatter
+  travels with the role, so every dispatch site benefits, not just `/code`'s; the call site only
+  protects the sites that remember to ask for it. Every `code/SKILL.md` dispatch site was updated to
+  match, as was `land/SKILL.md`'s then-stale "no top-level probe confirming frontmatter alone
+  suffices for them" sentence. This does not touch the open fan-out question above — see limit (2).
+
+  **What makes a single enforcement point acceptable here** (the question a reader should ask, since
+  the failure mode — a builder or reviewer writing the main checkout on `trunk` — is unrecoverable):
+  the surviving point is *gated* and the dropped one never was, so this removes the ungated mechanism
+  and keeps the gated one — the reverse of how "belt and braces" is usually worth defending.
+  `tests/test_isolation_guard.py::test_every_agent_definition_pins_isolation_in_frontmatter` fails if
+  any `.claude/agents/*.md` loses the key (parsing the frontmatter block, not the whole file — see its
+  helper's docstring for why a substring check is not enough), and `scripts/isolation-guard.sh` still
+  hard-stops any dispatch that arrives unisolated regardless of *why*. Nothing ever failed on a
+  deleted call-site option.
 - **Update (lode-nt98, lode-qv5t, 2026-07-20) — the "qualifies by construction" / "no dedicated
   cleanup" claim above is falsified; lode-qv5t closes the gap it left open.** Everything above this
   entry reasoned about `land-review`'s scratch worktree correctly on the axis it was checking
   (correctness — a non-isolated dispatch could dirty the lander's tree) but rested the *worktree-GC*
-  claim ("HEAD never diverges … qualifies by construction") on an assumption lode-nt98 falsified
-  after this entry was written: the harness's `isolation: "worktree"` hand-off does not reliably
-  start a dispatched agent at `origin/trunk`
-  HEAD — it has handed a builder and a `code-reviewer` a **recycled** worktree still checked out on a
-  *previous* ticket's build branch. `land-review` gets the identical dispatch mechanism, so a recycled
-  worktree handed to it starts with `HEAD` already diverged from `origin/trunk`, before `land-review` ever
-  runs — "never commits" only proves no *further* divergence, not a clean start. The existing
-  worktree-GC backstop's ancestor predicate (lode-h1vn / lode-amif) therefore fails for it, and it
-  leaks past every pass, indefinitely — the same symptom class lode-nt98 fixed for the builder and the
-  reviewer, but lode-nt98 explicitly scoped `land-review` **out** (its correctness exposure is nil, so
-  it read as no exposure at all — that conflation is exactly what lode-qv5t was filed to unpick).
+  claim ("HEAD never diverges … qualifies by construction") on an assumption lode-nt98 falsified after
+  this entry was written: the harness's `isolation: "worktree"` hand-off does not reliably start a
+  dispatched agent at `origin/trunk` HEAD, and `land-review` shares that dispatch mechanism, so a
+  recycled worktree handed to it starts already diverged before `land-review` ever runs and leaks past
+  the existing worktree-GC backstop indefinitely — even though `land-review`'s **correctness** exposure
+  stays nil throughout (it only ever fetches and diffs by ref; this is purely a worktree-leak fix, kept
+  distinct from the correctness question in the canonical account).
+
   **Fix, mirroring lode-nt98 exactly:** `land-review.md`'s frontmatter role now carries the identical
-  guard (`git merge-base --is-ancestor HEAD origin/trunk`, never bare local `trunk` — lode-isl3,
-  asserted before any fetch/diff work; on failure,
-  tag a `rescue/recycled-<sha>` branch — the rewound ref belongs to another ticket — then `git reset
-  --hard origin/trunk && git clean -fd`, only ever inside `.claude/worktrees/`). Once that guard has run, the
-  worktree's `HEAD` **is** an ancestor of `trunk` either way, so the existing backstop sweep reclaims
-  it under its unmodified predicate — Section 4 itself needed no change, and neither did the
-  worktree-GC backstop's predicate; the fix lives entirely at the dispatch-time guard, same layer as
-  lode-nt98's fix for the other two roles. **This closes the ancestry axis only, and knowingly so.**
-  The guard cannot detect a worktree recycled onto a `land/<other-id>` that has since landed (its HEAD
-  is already an ancestor of `origin/trunk` — tracked as lode-3v1p; observed live during lode-nt98's and
-  lode-qv5t's own reviews). On the ancestry axis that is
-  self-cancelling: what the guard misses already satisfies the sweep's reclaim predicate. On the
-  **dirt** axis it is not — the skipped remediation means `git clean -fd` never runs, the recycled
-  worktree's untracked leftovers survive, and the lode-9hgu dirty-tree guard keeps the worktree, so it
-  leaks for a different reason. Left open as **lode-3v1p** rather than absorbed here, because the fix
-  is a genuine choice (clean unconditionally / have the sweep judge recycling-dirt / assert clean after
-  the guard) and picking one belongs on its own ticket. **The two halves stay distinct, deliberately:**
-  `land-review`'s correctness exposure to a recycled worktree was, and remains, nil — it never reads
-  anything from the checked-out state, recycled or not, because it only ever fetches and diffs by ref.
-  This is purely a worktree-leak fix. Documented in
-  [`land-review.md`](../.claude/agents/land-review.md),
-  [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate), and
-  [agents-workflow.md — Recycled-worktree guard](agents-workflow.md#recycled-worktree-guard-lode-nt98)
-  / [Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
+  guard the builder and reviewer already carry, closing the **ancestry** axis only. Why lode-nt98 had
+  not already covered it: it explicitly scoped `land-review` **out** — that same nil exposure read, at
+  the time, as *no* exposure at all, and unpicking that conflation is what lode-qv5t was filed for.
+  Left open on the
+  **dirt** axis — a worktree recycled onto an already-landed `land/<other-id>` still slips past
+  undetected — tracked separately as **lode-3v1p**, below.
+
+  Guard predicate, remediation, and full mechanism are canonical in [agents-workflow.md —
+  Recycled-worktree guard](agents-workflow.md#recycled-worktree-guard-lode-nt98) / [Isolating
+  `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387); not
+  re-derived here. Also documented in [`land-review.md`](../.claude/agents/land-review.md) and
+  [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate).
 - **lode-3v1p (2026-07-20) closes the dirt-axis residual left open above: `git clean -fd` now runs
-  unconditionally at all three recycled-worktree guard sites, not just inside the failed-ancestor-check
-  branch.** The gap: `merge-base --is-ancestor HEAD origin/trunk` cannot recognize a worktree recycled onto a
-  `land/<other-id>` that has *since landed* — its `HEAD` is, by then, genuinely an ancestor of `origin/trunk`,
-  so the check passes exactly as it would for a freshly branched worktree, and the remediation
-  (`git branch rescue/… && git reset --hard origin/trunk && git clean -fd`) never runs. That's harmless on the
-  **ancestry** axis (what the guard misses already satisfies `/land`'s reclaim predicate — the two
-  cancel), but not on the **dirt** axis: the recycled worktree's untracked leftovers (from whatever the
-  prior ticket's build/review left behind, uncommitted) survive, and the lode-9hgu dirty-tree guard in
-  `/land`'s Section 4 backstop sweep *keeps* any worktree that isn't clean, regardless of ancestry or
-  lock state — so the worktree leaks anyway, and (for `coding.md`/`code-reviewer.md` specifically) the
-  same leftovers can pollute the `git status --short` clean-tree assertions and the `nox` run those
-  roles gate on.
+  unconditionally at every recycled-worktree guard site, not just inside the failed-ancestor-check
+  branch.** The gap and why it's harmless on the ancestry axis but not the dirt axis are covered in the
+  canonical account — [agents-workflow.md — Recycled-worktree
+  guard](agents-workflow.md#recycled-worktree-guard-lode-nt98); not re-derived here.
 
   **Three options were on the table; picked the first as the simplest thing that actually closes the
   gap:**
   1. **Run the existing remediation's cleanup arm unconditionally** — move `git clean -fd` out of the
      `if ! merge-base --is-ancestor …` block so it runs every time the guard is reached, pass or fail,
      still gated by the same `.claude/worktrees/`-only `case` that already wraps the destructive branch.
-     **Chosen.** It is a one-line move at each of the four call sites (`coding.md`'s fresh-build and
-     rebase-pickup instances, `code-reviewer.md`, `land-review.md`), touches nothing outside the guard
+     **Chosen.** It is a one-line move at each guard call site, touches nothing outside the guard
      itself, and needs no new precondition: `git clean -fd` (no `-x`) never removes `.gitignore`d build
      state (`venv/`, `.nox/`, `__pycache__/`), so on a genuinely fresh worktree — the overwhelming
      common case — it is a pure no-op; on an undetected recycle it removes exactly the leftover dirt.
@@ -2259,49 +2294,23 @@ while erasing it here would lose the record of what was believed, and when.
      ancestor-check-*passed* path to be treated more cautiously than dirt discovered via the
      ancestor-check-*failed* path, since both are the identical class of pre-cycle scratch.
 
-  **The two axes (ancestry, dirt) stay documented as distinct even though one fix now closes both** —
-  `land-review`'s correctness exposure to a recycled worktree remains nil regardless (it never checks
-  anything out), and this closes a worktree-**leak**, never a correctness, gap. Documented at all four
-  guard sites — [`coding.md`](../.claude/agents/coding.md),
-  [`code-reviewer.md`](../.claude/agents/code-reviewer.md),
-  [`land-review.md`](../.claude/agents/land-review.md) — and in
-  [agents-workflow.md — Recycled-worktree guard](agents-workflow.md#recycled-worktree-guard-lode-nt98).
+  Documented at every guard site and in [agents-workflow.md — Recycled-worktree
+  guard](agents-workflow.md#recycled-worktree-guard-lode-nt98).
 
 - **2026-07-21 (lode-ag7j) — CC 2.1.216 shipped three worktree fixes; recorded as a data point for
-  this thread, guards KEPT unchanged.** Verified live on 2026-07-20: the main session was running
-  2.1.216, and `.claude/settings.json` still carried the undocumented `worktree.baseRef: "head"`,
-  still the un-ruled-out suspected root cause from the `baseRef` investigation
-  (`agents-workflow.md#baseref-investigation-lode-r7ow`). The three changelog entries: (1) fixed
-  worktree-isolated subagents redirecting git into the shared checkout via `git -C`, `--git-dir`, or
-  `GIT_DIR`/`GIT_WORK_TREE`; (2) fixed worktree sessions landing in another project's leftover
-  worktree when the working directory did not match the selected project; (3) fixed background
-  sessions whose worktree has no git repository being undeletable.
+  this thread, guards KEPT unchanged.** Verified live on 2026-07-20 (main session on 2.1.216;
+  `.claude/settings.json` still carried the undocumented `worktree.baseRef: "head"` at that point).
+  None of the three changelog fixes is a confirmed fix for lode-nt98 — the tempting candidate ("land in
+  another project's leftover worktree") is framed cross-project, whereas lode-nt98 is same-project,
+  same-repo. **Verdict: keep every guard, unchanged** — cheap defensive assertions against a
+  catastrophic and irreversible failure mode, and "probably fixed upstream" is not grounds to retire
+  on. Sets up a falsification test: watch whether the guard ever fires again on `>= 2.1.216`; if it
+  stops firing over a sustained window, file a follow-up to retire the lode-nt98 guard family and
+  revisit `baseRef`.
 
-  **None is a confirmed fix for lode-nt98.** Fix #2 is the tempting candidate but is framed
-  **cross-project** ("another project's leftover worktree… working directory did not match the
-  selected project"), whereas lode-nt98 is **same-project, same-repo** (the `lode-eshl` builder got
-  `lode-7abi`'s own leftover worktree, not another project's) — the underlying "land in a pooled
-  leftover worktree" mechanism is plausibly shared, but the changelog framing does not obviously
-  cover lode's single-project fleet, so this is not treated as a confirmed fix. Fix #1 only touches
-  the retired `lode-k5e` `git -C` architecture — current design already fetches branches into the
-  agent's own launch worktree, so this changes nothing operationally here. Fix #3 does not touch
-  lode's guards (lode worktrees are always inside a git repo).
-
-  **Verdict: keep every guard.** They are cheap defensive assertions against a catastrophic and
-  irreversible failure mode (unreviewed code riding into `trunk` on the wrong ticket's `land/<id>`);
-  "probably fixed upstream" is not grounds to retire on. No guard is removed or weakened, and
-  `worktree.baseRef: "head"` is untouched — the baseRef question is tracked in its own thread (the
-  human decision recorded at `lode-r7ow`, its application at `lode-jzbz`), not resolved here.
-
-  **Falsification test this sets up:** with the fleet now on (or moving onto) `>= 2.1.216`, watch
-  whether the recycled-worktree guard ever fires again — any `rescue/recycled-<sha>` branch, any
-  guard-triggered `git reset --hard origin/trunk` — across many `/code` and `/land` passes. If it **stops**
-  firing over a sustained window, that's evidence an upstream fix (candidate: #2) addressed the
-  mechanism despite the cross-project framing, and a follow-up should retire the lode-nt98 guard
-  family and revisit `baseRef`. If it **keeps** firing, 2.1.216 did not address lode-nt98's
-  same-project case, the `baseRef` hypothesis stands, and the guards stay. Documented alongside the
-  `baseRef` investigation and the guard's own section in
-  [agents-workflow.md — Recycled-worktree guard](agents-workflow.md#recycled-worktree-guard-lode-nt98).
+  Full honest-mapping analysis (fix by fix), the verdict's reasoning, and the falsification test are
+  canonical in [agents-workflow.md — Recycled-worktree
+  guard](agents-workflow.md#recycled-worktree-guard-lode-nt98); not re-derived here.
 
 - **Markdown editing — open items parked in [editing.md](editing.md).** `docs/editing.md`
   (`lode-ev5j`) records the shipped markdown-editing surface but leaves the following unresolved,
@@ -3097,3 +3106,127 @@ while erasing it here would lose the record of what was believed, and when.
     `is None` assertion passed whether or not the stub ran. Proven by bypassing the `identity is None`
     early return and watching the raising form still pass; rewritten to count calls and assert
     `probe_calls == 0`. Counting, never raising, is the rule for this function.
+- **2026-08-04 (lode-o7ai) — HUMAN DECISION: a `land-escalated` + `deferred` ticket stays in
+  `/sweep`'s digest and current queue, but its `PushNotification` is suppressed; the report keeps
+  double-listing it (the `NEW HUMAN-DECISION ITEMS` block, when it's new, plus §2a's unconditional
+  deferred section) and now annotates the loud-block row `(deferred)`.** `lode-1q2i` settled only the
+  FORWARD direction (a ticket entering/leaving `deferred` never itself drives `$CURRENT`/the
+  digest/`PushNotification`) and deliberately left the CONVERSE open: `/sweep` §1's `land-escalated`
+  query carries no `--status` filter, so a ticket that is independently BOTH `land-escalated` and
+  `deferred` still flows into `$CURRENT` → the digest → (if new) the notify path, and is ALSO listed
+  in §2a's unconditional deferred section. This entry is the resolution, on all three sub-questions
+  the escalation that filed this ticket recorded as unsettled:
+  - **Stay in `$CURRENT`/the digest? YES — §1 keeps no `--status` filter; option (a) (filter it out
+    of §1) is REJECTED.** Two reasons: (i) the digest-deletion risk the ticket itself named —
+    dropping the row from `$CURRENT_IDS` makes §5 see a removal and rewrite the digest WITHOUT it,
+    silently deleting a real, still-open escalation from the durable cross-machine record; (ii)
+    **`bd defer` is not one of `land-escalated`'s three documented resolution exits** (land-as-is /
+    rebuild / drop — [agents-workflow.md](agents-workflow.md#the-landing-loop--build-review-land),
+    "Resolving `land-escalated`"). Deferring therefore does not resolve the escalation — the label
+    stays on — so filtering it out of §1 would leave an UNRESOLVED escalation with no surface
+    anywhere in the system, defeating `/sweep`'s entire purpose rather than merely risking a
+    deletion.
+  - **Still notify? NO for the push, YES for the report row.** §7's `PushNotification` call is
+    filtered: a row in `$NEW_IDS` whose `bd list` status is `deferred` is excluded from what gets
+    pushed. Rationale: `deferred` status means a human has already said "I've seen this, deal with
+    later" — re-pushing is noise about something already acknowledged. This is safe specifically
+    because escalation always precedes defer in practice: `deferred` tickets are hidden from `bd
+    ready` by design, so `/code` cannot pick one up to build and re-escalate it, meaning by the time
+    a ticket is both `land-escalated` and `deferred`, a human necessarily saw the escalation before
+    parking it. Scope: only the `PushNotification` tool call is filtered — the row still enters
+    `$CURRENT`, `$CURRENT_IDS`, and the digest exactly as before, and `$NEW_IDS` itself is computed
+    unfiltered, so the dedup state (what counts as "new" on a later pass) is unaffected by this
+    filter.
+  - **Double-listed in the report? YES, DELIBERATELY — but now annotated.** Neither the `NEW
+    HUMAN-DECISION ITEMS` listing nor §2a's deferred listing is suppressed; a row appearing in both
+    is information (an escalation that is parked), not redundancy needing cleanup. The `NEW
+    HUMAN-DECISION ITEMS` block marks a deferred row's title with a trailing `(deferred)` so a reader
+    sees at a glance why it wasn't pushed, and so the §2a duplicate reads as intentional rather than
+    as a bug a later edit should tidy away. The **persisted digest body** is intentionally left
+    unannotated and unfiltered — annotating it would go stale the moment a ticket's `deferred` status
+    flips without its id entering or leaving `$CURRENT_IDS` (the digest only rewrites on an id-set
+    change, per §5), so the annotation lives only in the freshly-recomputed, per-pass report, never
+    in the persisted record.
+  - **Accepted residual, recorded rather than left to be discovered:** if a deferred escalation is
+    later un-deferred, it is already in `LAST_IDS` from the prior digest, so no fresh notification
+    fires when it becomes active again. Accepted — the human un-deferred it themselves, so they
+    already know it's back.
+  - **State at decision time: latent, not live.** Verified in the 2026-07-28 `/sweep` pass that
+    produced this decision: the open `land-escalated` set and the open `deferred` set had zero
+    overlap. Nothing was misbehaving; this closes the gap before it can fire.
+  - **Implementation:** `.claude/skills/sweep/SKILL.md` §1 (the `land-escalated` query's `jq` now
+    also captures `.status`, `$ESCALATED`-only, into a 4th tab field — the value is already present
+    on every row that query returns, no extra `bd` call), §7 (re-derives `$NEW_IDS` in its own
+    fenced block per this skill's own cross-block-shell-state discipline — lode-sfnb / lode-x495 —
+    filters the push, and produces the annotated report rows), §8 (report format documents the
+    annotation and the deliberate double-listing), §2a and the Non-goals bullet (both restated to
+    describe the decided behavior instead of pointing at this ticket as still open).
+
+- **RTK (the token-optimizing command proxy) is removed from this repo — decided, done
+  (2026-08-04, maintainer decision).** The `rtk` golden rule and command reference are gone from
+  `CLAUDE.md`, every `rtk`-prefixed call site across `.claude/` skills and agents is now the plain
+  command, `scripts/rtk-setup.sh` and the installer line in `scripts/update-tools.sh` are deleted,
+  and the `Bash(rtk *)` project permission is dropped. The `rtk` tolerance was also stripped from
+  the three guards that carried it (the two `PreToolUse` hooks in `.claude/settings.json` and
+  `scripts/sha-fabrication-guard.sh`) and from their pinning tests — a deliberate call: with no
+  `rtk` on any machine there is nothing for the alternation to match, and the residual risk is only
+  a stale `rtk` binary surviving on some machine and carrying a `bd create --deps blocks:`, a `gh`
+  write, or a fabricated SHA past its guard.
+
+  **Update (2026-08-04, maintainer decision)** — this supersedes, in *effect* but not in *record*,
+  every entry above that reasons about `rtk`: the `"rtk bd dolt push"` prefix-blind audit
+  (`lode-bpl`), `rtk`'s reformatting of `git worktree list --porcelain` (`lode-9j7`), and the `rtk`
+  member of the `gh`/`bd` guard wrapper enumerations (`lode-o29m`, `lode-9mbt`, `lode-ij24`). Those
+  entries stand as written — they record what was true and why. What changed is only that the tool
+  they reason about is no longer installed or referenced.
+
+  The `git log` merge-commit caveat (`lode-eza9`) dies with it: `rtk git log` silently dropped
+  `--no-ff` merge commits, which is the *only* reason `CLAUDE.md` carried a bare-`git log` exception
+  and `.claude/skills/land/SKILL.md` §1 carried a call-site comment defending it. With `rtk` gone
+  every `git log` is faithful, so the caveat and the comment are removed rather than preserved as a
+  rule with no live cause. The residue print in `land/SKILL.md` §1 keeps its *substantive* comment
+  (residue there is by construction merge commits, and the reset below destroys them) — that fact
+  outlives `rtk`.
+
+- **All three `PreToolUse(Bash)` guards extracted from inline config into tested scripts — decided,
+  done (2026-08-04, maintainer decision).** The `lode-ij24` (`bd create --deps blocks:` inversion)
+  and `lode-o29m`/`lode-9mbt` (external-tracker write) guards had their scanning logic inline in
+  `.claude/settings.json` as ~1.4KB and ~3.3KB shell one-liners; they now live in
+  `scripts/bd-deps-blocks-guard.sh` and `scripts/gh-write-guard.sh`, reached by the same thin
+  wrapper shape `lode-fpmi` already shipped for `scripts/sha-fabrication-guard.sh`. Behaviour is
+  unchanged — same regexes, same deny JSON, byte for byte — and the pre-existing hook-level tests
+  passed untouched through the refactor, which is what establishes that. Rationale is `lode-fpmi`'s
+  own acceptance criterion, applied to the two guards it left behind: *"the guard logic lives in a
+  tested script, not untested inline shell"*, because ungated inline shell in config is where this
+  repo has already shipped silent undetected-for-months bugs (`lode-mh9g`, `lode-54mo`). Full
+  write-up: [agents-workflow.md](agents-workflow.md#all-three-pretooluse-guards-live-in-tested-scripts-not-inline-config-2026-08-04).
+
+  **The fail-open path is new, was raised before landing, and was accepted knowingly.** Inline logic
+  could not fail to run; a delegating wrapper can — if `CLAUDE_PROJECT_DIR` is unset *and*
+  `git rev-parse` cannot resolve a root, or the script is missing/non-executable, the guard is
+  silently skipped. The alternative considered and **rejected** was making the `gh` guard fail
+  *closed* on an unresolvable script (consistent with `lode-oii9`'s reasoning for missing `jq`),
+  which would brick every Bash call on such a machine. The maintainer chose fail-open for all three,
+  matching `lode-fpmi`. **Accepted residual, recorded rather than left to be discovered:** on a
+  machine where the root does not resolve, a `gh` write — whose whole premise is that a false allow
+  is an unrecoverable public action under the user's name — is gated only by `CLAUDE.md`'s prose
+  rule. Each wrapper's fail-open is pinned by a test, as is the exec bit, whose loss would otherwise
+  disable a guard with every other test green.
+
+  **`lode-9gm2`'s dash-safety bar moved with the logic** and now binds the wrapper (the part dash
+  executes) rather than the collapse step, which runs under `bash "$SCRIPT"`. The static check is
+  pattern-substitution-specific instead of a blanket `${` ban, since the wrapper legitimately uses
+  POSIX `${CLAUDE_PROJECT_DIR:-…}`; the sabotage test proving dash dies on the bash-only form was
+  retargeted at the wrapper, not dropped.
+
+  **Update (2026-08-04, maintainer decision)** — a follow-up sweep removed the last `rtk` mention
+  from `docs/` outside this file. The one site that had been *deliberately* kept — the `lode-bpl`
+  paragraph in [agents-workflow.md](agents-workflow.md), which quoted the literal
+  `grep -rl "rtk bd dolt push"` that the original audit ran — was rewritten to state the durable
+  lesson (an enumeration that matches only one spelling of a call misses every site written
+  another way) without naming the tool. Nothing was lost: the specific spelling was incidental to
+  the failure, and no reader can now reach a dead tool name from an operational doc.
+  **This file remains the sole exception, on purpose:** it is a dated log, so its `rtk` entries are
+  the record of what was believed and when, and erasing them is exactly what its preamble forbids.
+  `.claude/agents/` and `.claude/skills/` were swept in the same pass and were already clean; the
+  passive `.beads/issues.jsonl` export is a historical snapshot and is never hand-edited (lode-6ra).

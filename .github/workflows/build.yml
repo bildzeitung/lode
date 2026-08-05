@@ -23,11 +23,9 @@ on:
     branches: [trunk, "land/**"]
   pull_request:
 
-# Producers push land/<id> ~2-3x per ticket (builder, code-reviewer, sometimes a
-# rebase), and each push fires a fresh run. Nothing in the landing loop reads
-# these check results -- /land re-gates locally and never consults GitHub
-# Actions (docs/release.md) -- so a superseded run on an older commit of the
-# same ref has zero consumers; cancelling it cannot lose information (lode-2ouz).
+# Cancels a superseded run on the same ref -- safe because nothing in the
+# landing loop reads these check results. Convention + rationale:
+# docs/release.md#ci-workflow-trigger-scope-push-and-pull_request (lode-2ouz).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -35,9 +33,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Well below GitHub's 360-minute default -- caps the tail if a step hangs
-    # (e.g. a stalled pip/PyPI fetch) rather than burning hours for nothing
-    # (lode-2ouz).
+    # Caps a hung step (e.g. a stalled pip/PyPI fetch). Ladder + rationale:
+    # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request (lode-2ouz).
     timeout-minutes: 15
     steps:
       - name: Checkout

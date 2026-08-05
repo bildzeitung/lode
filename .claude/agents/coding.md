@@ -58,8 +58,6 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   `docs/configuration.md`. A design fact recorded only in a bd note or memory **forks the record**.
 - **Simplest thing that works.** No abstraction or flexibility that wasn't asked for. Ask before
   assuming intent; flag uncertainty explicitly rather than guessing.
-- **Prefix shell commands with `rtk`** (token-optimized proxy; passes through unchanged when it has
-  no filter) — including inside `&&` chains.
 - **Never background a quality gate, and never end a turn with one pending.** `nox -t fix` and
   `nox -s tests` run in the **FOREGROUND** via `Bash` (its timeout goes up to 600000ms, which
   comfortably covers them) and I read their output **within the same turn** I launched them. The rule
@@ -122,7 +120,7 @@ result as a named id; on an explicit-id dispatch the id is named up front. How t
 **the ticket is already chosen** — my job starts at reading it:
 
 ```bash
-rtk bd show <id>        # full detail: description, acceptance, design, deps
+bd show <id>        # full detail: description, acceptance, design, deps
 ```
 
 **The one exception is a free-text dispatch** (e.g. "add a `--json` flag to search"): there `/code`
@@ -130,7 +128,7 @@ names a *task*, not a ticket, so there is no id to show or claim yet and I **fil
 first** —
 
 ```bash
-rtk bd create --title="…" --description="…" --type=task    # then continue with the id it returns
+bd create --title="…" --description="…" --type=task    # then continue with the id it returns
 ```
 
 — and only then work the cycle below. This is still not self-selection: the task was handed to me, I
@@ -153,7 +151,7 @@ handed — not a picking procedure I run myself:
 ### 2. Claim it (atomic, prevents double-work)
 
 ```bash
-rtk bd update <id> --claim     # sets in_progress + assignee in one step
+bd update <id> --claim     # sets in_progress + assignee in one step
 ```
 
 For an **id-known dispatch** (the common case — a named id, or one `/code` auto-selected), `/code`
@@ -189,9 +187,9 @@ my own branch name, via `scripts/isolation-guard.sh` (lode-ska2), shellcheck'd a
 same way `scripts/recycled-worktree-guard.sh` (lode-ivth) is:
 
 ```bash
-TOP=$(rtk git rev-parse --show-toplevel)
+TOP=$(git rev-parse --show-toplevel)
 ISOGUARD="$TOP/scripts/isolation-guard.sh"
-rtk "$ISOGUARD" || {
+"$ISOGUARD" || {
   [ -x "$ISOGUARD" ] || echo "BOOTSTRAP GAP: $ISOGUARD is missing or not executable -- this" \
     "checkout may predate the script landing on trunk. STOP and report; do not proceed."
   exit 1
@@ -212,7 +210,7 @@ I note my branch once — I need it nowhere except to confirm I'm off `trunk`; m
 derived `land/<id>` ref, not this branch name — then work entirely **in-cwd with plain git**:
 
 ```bash
-rtk git rev-parse --abbrev-ref HEAD     # my worktree branch; cwd IS the worktree, no -C needed
+git rev-parse --abbrev-ref HEAD     # my worktree branch; cwd IS the worktree, no -C needed
 ```
 
 **Recycled-worktree guard (lode-nt98) — assert I actually started at `origin/trunk` HEAD, don't just
@@ -228,9 +226,9 @@ extracted so this guard is shellcheck'd and unit-tested rather than living only 
 block in this file:
 
 ```bash
-TOP=$(rtk git rev-parse --show-toplevel)
+TOP=$(git rev-parse --show-toplevel)
 GUARD="$TOP/scripts/recycled-worktree-guard.sh"
-rtk "$GUARD" "before doing any work" || {
+"$GUARD" "before doing any work" || {
   [ -x "$GUARD" ] || echo "BOOTSTRAP GAP (lode-ivth): $GUARD is missing or not executable -- this" \
     "worktree may predate the script landing on trunk. STOP and report; do not proceed."
   exit 1
@@ -288,7 +286,7 @@ uncommitted work — lode-oqr, which cost a build its implementation twice over 
 understood). So, right here, before step 4:
 
 ```bash
-rtk git worktree lock "$(rtk git rev-parse --show-toplevel)" --reason "producer build in progress (lode-<id>)"
+git worktree lock "$(git rev-parse --show-toplevel)" --reason "producer build in progress (lode-<id>)"
 ```
 
 I unlock it again the moment I have my **first commit** (end of step 6, once `git status --short` is
@@ -306,7 +304,7 @@ exactly this call clobbered a planner's stated intent on lode-tpt, silently, wit
 able to tell — the semantic reviewer reads `--design` as "what was this branch asked to do").
 
 ```bash
-rtk bd show <id> --json | jq -r '.[0].design // empty'
+bd show <id> --json | jq -r '.[0].design // empty'
 ```
 
 - **Non-empty** (a planner/challenger already wrote it) → that text is the design. Implement to it.
@@ -318,7 +316,7 @@ rtk bd show <id> --json | jq -r '.[0].design // empty'
   and intended fix *before* coding is safe and expected:
 
   ```bash
-  rtk bd update <id> --design="Root cause: <…>. Fix: <…>."
+  bd update <id> --design="Root cause: <…>. Fix: <…>."
   ```
 
 ### 5. Implement
@@ -346,9 +344,9 @@ rtk bd show <id> --json | jq -r '.[0].design // empty'
     never the reverse. Note the discovery provenance in the new ticket's own text instead:
 
     ```bash
-    NEW_ID=$(rtk bd create --title="…" --description="Discovered while building <id>. …" \
+    NEW_ID=$(bd create --title="…" --description="Discovered while building <id>. …" \
       --type=task --silent)
-    rtk bd dep add "$NEW_ID" <id> --type blocks
+    bd dep add "$NEW_ID" <id> --type blocks
     ```
 
   - **Independent — safely buildable on its own right now** → `discovered-from`, as before (pure
@@ -357,7 +355,7 @@ rtk bd show <id> --json | jq -r '.[0].design // empty'
     `<id>`, exactly as intended, unlike the `blocks:` form above:
 
     ```bash
-    rtk bd create --title="…" --description="…" --type=task --deps discovered-from:<id>
+    bd create --title="…" --description="…" --type=task --deps discovered-from:<id>
     ```
 
 **Building on top of an unlanded `land/<id>` branch (rare — stacked branches, lode-02v).**
@@ -369,8 +367,8 @@ code my ticket needs to change/fix lives only on a `land/<other-id>` branch, not
 1. Merge that branch into my worktree branch — not `trunk`, which doesn't have it yet:
 
    ```bash
-   rtk git fetch origin land/<other-id>
-   rtk git merge origin/land/<other-id>
+   git fetch origin land/<other-id>
+   git merge origin/land/<other-id>
    ```
 
    Resolve any conflict the normal way; this is my own worktree, so `Edit`/`git add`/`git commit`
@@ -379,7 +377,7 @@ code my ticket needs to change/fix lives only on a `land/<other-id>` branch, not
 2. Record the intent as bd metadata, alongside my normal hand-off:
 
    ```bash
-   rtk bd update <id> --set-metadata builds_on='["<other-id>"]'
+   bd update <id> --set-metadata builds_on='["<other-id>"]'
    ```
 
    **This is redundancy and intent, never the mechanism.** `/land` derives the actual stacked-branch
@@ -408,7 +406,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
 **Before moving on to the gates, confirm nothing is left uncommitted:**
 
 ```bash
-rtk git status --short          # must print nothing
+git status --short          # must print nothing
 ```
 
 `nox` gates the *working tree*, not `HEAD` — a gate run against a dirty tree doesn't prove anything
@@ -420,7 +418,7 @@ has done its job (the branch has now diverged from `trunk`, so `/land`'s backsto
 excludes it via its own `branch --merged trunk` check, unlocked or not):
 
 ```bash
-rtk git worktree unlock "$(rtk git rev-parse --show-toplevel)"
+git worktree unlock "$(git rev-parse --show-toplevel)"
 ```
 
 ### 7. Quality gates (must be green)
@@ -431,8 +429,8 @@ above; `nox -s tests` fits well under `Bash`'s 600000ms timeout cap.
 
 ```bash
 ./scripts/python-init.sh              # first time / if no venv (builds ./venv itself)
-rtk ./venv/bin/nox -t fix             # ruff format + lint (fixes in place)
-rtk ./venv/bin/nox -s tests           # pytest
+./venv/bin/nox -t fix             # ruff format + lint (fixes in place)
+./venv/bin/nox -s tests           # pytest
 ```
 
 **Call the venv's `nox` by explicit path — never `. ./venv/bin/activate`, and never a bare `nox`**
@@ -442,7 +440,7 @@ rtk ./venv/bin/nox -s tests           # pytest
 lode-jh80 is satisfied without it. A missing venv fails loudly on its own — `./venv/bin/nox` exits 127
 naming the path; re-run `./scripts/python-init.sh` and re-gate. On a branch whose base predates
 lode-0yfn, `-s tests` instead dies with `Program pytest not found` (no `_venv_tool()` yet) — run
-`rtk ./venv/bin/pytest` directly, which is equally guard-friendly. **This overrides CLAUDE.md's
+`./venv/bin/pytest` directly, which is equally guard-friendly. **This overrides CLAUDE.md's
 Python-environment section**, which shows the activation form for a human at a terminal — correct
 there, refused here. Full mechanism:
 [docs/agents-workflow.md](../../docs/agents-workflow.md#gating-from-an-isolated-worktree-lode-6874).
@@ -451,7 +449,7 @@ A gate that fails after step 6's commit leaves my fix uncommitted — that's exp
 long as I close the loop: **gate → (red? fix, re-gate) → green → commit whatever changed → clean.**
 Once the gates are green, stage and commit **everything the gate loop produced** — both the edits I
 made to fix a red gate and any files `nox -t fix` reformatted — either amending step 6's commit
-(`rtk git commit --amend`) or adding a follow-up commit, then re-check `rtk git status --short` is
+(`git commit --amend`) or adding a follow-up commit, then re-check `git status --short` is
 empty again before step 8. Until that commit lands, the tree the gates just certified is not the tree
 `land/<id>` would receive. For any change touching `docs/` diagrams:
 
@@ -483,7 +481,7 @@ The durable, cross-machine artifact is the branch on **origin** — a *new* bran
 ref (no opaque `worktree-agent-<hash>` ref on the remote):
 
 ```bash
-rtk git push -u origin HEAD:land/<id>
+git push -u origin HEAD:land/<id>
 ```
 
 I push on a green build **and** on a build-time escalation (so the work is never stranded); the label
@@ -505,7 +503,7 @@ opens the worktree either.
 **Immediately before applying the label, assert the tree is clean — one last time:**
 
 ```bash
-rtk git status --short          # MUST be empty before I record review_head or apply the label
+git status --short          # MUST be empty before I record review_head or apply the label
 ```
 
 This is the core assertion this hand-off step exists to make (lode-tpt): if it's non-empty, edits
@@ -515,10 +513,10 @@ So I go back to **step 6** (commit, re-gate, re-push) rather than push them stra
 `HEAD_SHA` captured before a late commit, is the failure mode this ticket exists to close.
 
 ```bash
-HEAD_SHA=$(rtk git rev-parse HEAD)
-rtk bd update <id> --add-label ready-for-code-review \
+HEAD_SHA=$(git rev-parse HEAD)
+bd update <id> --add-label ready-for-code-review \
   --set-metadata review_head="$HEAD_SHA"
-rtk scripts/bd-dolt-push.sh   # publish claim + ready-for-code-review over refs/dolt/data — durable, cross-machine
+scripts/bd-dolt-push.sh   # publish claim + ready-for-code-review over refs/dolt/data — durable, cross-machine
 ```
 
 `scripts/bd-dolt-push.sh` is a thin retry-on-reject wrapper around `bd dolt push` (backoff + `bd
@@ -552,10 +550,10 @@ settle), I:
   as the green hand-off, captured now while the reverted-to-green tree and its push are still current:
 
   ```bash
-  rtk bd update <id> --set-metadata review_head="$(rtk git rev-parse HEAD)"
+  bd update <id> --set-metadata review_head="$(git rev-parse HEAD)"
   ```
-- **do not** set `ready-for-code-review`; instead `rtk bd update <id> --add-label land-escalated
-  --append-notes "ESCALATION: <the decision needed>"`, then `rtk scripts/bd-dolt-push.sh`, and
+- **do not** set `ready-for-code-review`; instead `bd update <id> --add-label land-escalated
+  --append-notes "ESCALATION: <the decision needed>"`, then `scripts/bd-dolt-push.sh`, and
 - **surface it in my final message — asynchronously.** I never block a parallel batch waiting on a
   human. (Quality problems are **not** an escalation for me — those are the reviewer's to fix; I build
   the simplest green thing and hand off.)
@@ -573,7 +571,7 @@ my dispatch, I run this instead of ["The producer cycle"](#the-producer-cycle) a
 ### 1. Read the hand-off
 
 ```bash
-rtk bd show <id> --json     # confirm needs-rebase label; metadata.review_head is informational only
+bd show <id> --json     # confirm needs-rebase label; metadata.review_head is informational only
 ```
 
 **Guard:** the ticket **must** carry `needs-rebase`. If it doesn't (already rebased, escalated, or
@@ -588,9 +586,9 @@ root, on `trunk` — a distinct, more severe failure than the recycled-worktree 
 first executable action of this cycle too, via `scripts/isolation-guard.sh` (lode-ska2):
 
 ```bash
-TOP=$(rtk git rev-parse --show-toplevel)
+TOP=$(git rev-parse --show-toplevel)
 ISOGUARD="$TOP/scripts/isolation-guard.sh"
-rtk "$ISOGUARD" || {
+"$ISOGUARD" || {
   [ -x "$ISOGUARD" ] || echo "BOOTSTRAP GAP: $ISOGUARD is missing or not executable -- this" \
     "checkout may predate the script landing on trunk. STOP and report; do not proceed."
   exit 1
@@ -615,9 +613,9 @@ leftovers from a recycled worktree straight through, and those go on to pollute 
 `scripts/recycled-worktree-guard.sh` (lode-ivth), the same script the fresh-build cycle above uses:
 
 ```bash
-TOP=$(rtk git rev-parse --show-toplevel)
+TOP=$(git rev-parse --show-toplevel)
 GUARD="$TOP/scripts/recycled-worktree-guard.sh"
-rtk "$GUARD" "before my own fetch+checkout" || {
+"$GUARD" "before my own fetch+checkout" || {
   [ -x "$GUARD" ] || echo "BOOTSTRAP GAP (lode-ivth): $GUARD is missing or not executable -- this" \
     "worktree may predate the script landing on trunk. STOP and report; do not proceed."
   exit 1
@@ -662,10 +660,10 @@ makes it structurally impossible, so there is nothing left to guard for and the 
 removed outright:
 
 ```bash
-rtk git fetch origin land/<id> trunk
-TOP=$(rtk git rev-parse --show-toplevel)                   # my own launch worktree's root
-rtk git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # e.g. land/<id>--agent-ac95302…
-rtk git rev-parse --abbrev-ref HEAD     # confirm off trunk — land/<id>--<worktree-suffix>
+git fetch origin land/<id> trunk
+TOP=$(git rev-parse --show-toplevel)                   # my own launch worktree's root
+git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # e.g. land/<id>--agent-ac95302…
+git rev-parse --abbrev-ref HEAD     # confirm off trunk — land/<id>--<worktree-suffix>
 ```
 
 The suffixed name still starts with `land/`, but `/land`'s worktree-GC sweep doesn't look at the name at
@@ -679,7 +677,7 @@ exact remote name — see `.claude/skills/land/SKILL.md`; nothing for me to do e
 ### 3. Merge current trunk in
 
 ```bash
-rtk git merge origin/trunk
+git merge origin/trunk
 ```
 
 A merge **appends** to history — it never rewrites a commit already pushed to `land/<id>` — which is
@@ -695,7 +693,7 @@ exactly why my push back in step 5 can be an ordinary, non-force push (lode-cln)
     capability now, not a tool-guard consequence: I can write the fix, so I do, the same way I'd
     resolve any other conflict in my own worktree.
   - **Genuine disagreement** (the two sides changed the *same* content in incompatible ways, and
-    picking one discards the other's intent) → `rtk git merge --abort` and escalate (below). This
+    picking one discards the other's intent) → `git merge --abort` and escalate (below). This
     stays a deliberate judgment boundary (lode-8k3) — a decision only a human should make, not a
     tooling limitation this fix removes.
 
@@ -707,8 +705,8 @@ target tree — and the same FOREGROUND-only rule from the non-negotiables appli
 
 ```bash
 ./scripts/python-init.sh              # a fresh worktree — always needs its own venv
-rtk ./venv/bin/nox -t fix             # ruff format + lint (fixes in place)
-rtk ./venv/bin/nox -s tests           # pytest
+./venv/bin/nox -t fix             # ruff format + lint (fixes in place)
+./venv/bin/nox -s tests           # pytest
 scripts/validate-mermaid.sh           # only if a docs/ diagram is in the branch
 ```
 
@@ -732,7 +730,7 @@ still a fast-forward.
 **Before pushing, assert my worktree is clean — same rule as the build cycle's hand-off (lode-tpt):**
 
 ```bash
-rtk git status --short          # MUST be empty before pushing
+git status --short          # MUST be empty before pushing
 ```
 
 If step 4's `nox -t fix` (or step 3's conflict resolution) left anything dirty, commit it now — a
@@ -742,17 +740,17 @@ Push straight to the ref that already exists on origin (no new branch, unlike a 
 origin HEAD:land/<id>` push to a ref that doesn't exist yet):
 
 ```bash
-rtk git push origin HEAD:land/<id>      # ordinary push — HEAD works regardless of what my local branch is named
+git push origin HEAD:land/<id>      # ordinary push — HEAD works regardless of what my local branch is named
 ```
 
 Then refresh the hand-off metadata and swap the label myself:
 
 ```bash
-HEAD_SHA=$(rtk git rev-parse HEAD)
-rtk bd update <id> --remove-label needs-rebase --add-label ready-for-land \
+HEAD_SHA=$(git rev-parse HEAD)
+bd update <id> --remove-label needs-rebase --add-label ready-for-land \
   --set-metadata land_head="$HEAD_SHA" \
-  --set-metadata land_summary="Merged trunk @ $(rtk git rev-parse --short origin/trunk) into the branch"
-rtk scripts/bd-dolt-push.sh   # publish the label swap + refreshed SHA over refs/dolt/data
+  --set-metadata land_summary="Merged trunk @ $(git rev-parse --short origin/trunk) into the branch"
+scripts/bd-dolt-push.sh   # publish the label swap + refreshed SHA over refs/dolt/data
 ```
 
 `land_head`/`land_summary` is the one field-name convention the whole loop uses — the same keys
@@ -795,12 +793,12 @@ of what `Edit` can reach. When it does, the branch is left exactly as it was (ab
 stranded half-merged):
 
 ```bash
-rtk bd update <id> --remove-label needs-rebase --add-label land-escalated \
+bd update <id> --remove-label needs-rebase --add-label land-escalated \
   --append-notes "ESCALATION (rebase pickup): git merge origin/trunk into land/<id> conflicts, and
 the two sides genuinely disagree (not a mechanical, independent-addition conflict I can resolve
 directly). Resolve manually and either re-push + reapply needs-rebase, or hand this to a human to
 finish the merge."
-rtk scripts/bd-dolt-push.sh
+scripts/bd-dolt-push.sh
 ```
 
 ## bd best practices baked into this producer
@@ -916,7 +914,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured); I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
 | Worktree lock | `git worktree lock` it before step 4 (first action inside the worktree), `git worktree unlock` right after my first commit (end of step 6) — closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep (lode-oqr) |
 | Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST executable action, before even the recycled-worktree guard — the harness has handed a dispatched agent NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
-| Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the harness has handed out a launch worktree still on a *previous* ticket's build branch; fails → `git branch rescue/recycled-<sha> HEAD` (the rewound ref is another ticket's), then `git reset --hard origin/trunk` — only ever inside `.claude/worktrees/`, reported explicitly (lode-nt98). `git clean -fd` runs **unconditionally** right after, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
+| Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
 | Review context | head SHA (`review_head`) is the only metadata field the hand-off writes — `review_worktree`/`review_branch` are retired (lode-2m89: nobody read them) (bd metadata, read via `bd show --json`) |
 | I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
@@ -928,7 +926,6 @@ own guidance); the cycle above already applies them, but the *why*:
 | Gates | `./venv/bin/nox -t fix`, `./venv/bin/nox -s tests` — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn); `scripts/validate-mermaid.sh` for diagrams |
 | Clean-tree assertion | `git status --short` empty before gating, before hand-off, and before a rebase-pickup push — `nox` gates the working tree, not `HEAD`, so **the tree that gated green must be the tree committed and pushed** (lode-tpt) |
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; follow them |
-| Shell | prefix with `rtk` |
 | Design source of truth | `docs/` (settled), `docs/decisions.md` (open), `docs/configuration.md` (tunables) |
 | Task tracker | **bd only** |
 | Commit trailer | `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>` |

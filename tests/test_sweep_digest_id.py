@@ -154,10 +154,17 @@ def test_bd_failure_is_exit_2_not_exit_1(tmp_path: Path) -> None:
 
 def test_both_sweep_call_sites_use_the_script_not_an_inline_query() -> None:
     """Fence-scanning pin, same shape as tests/test_land_lock.py's: the whole
-    point of extracting this was that two markdown copies drift silently. If a
+    point of extracting this was that markdown copies drift silently. If a
     later edit re-inlines `jq -r '.[0].id'` into sweep/SKILL.md's fenced bash,
     that is the regression -- section 4's own `DIGEST_ROWS`/`N` branch is prose
-    with no `.[0].id` in it, so any occurrence is a re-inlined selection."""
+    with no `.[0].id` in it, so any occurrence is a re-inlined selection.
+
+    Three call sites as of lode-o7ai (up from two): §5's read, §6's write, and
+    §7's, which cannot reuse §5's `$DIGEST_ID` across fenced blocks (lode-sfnb)
+    and so re-derives it the same sanctioned way. The "both" in this test's name
+    predates that third site; the property under test -- every fenced-bash
+    selection of the digest goes through the script -- is unchanged by the
+    count."""
     skill = REPO_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
 
@@ -175,8 +182,8 @@ def test_both_sweep_call_sites_use_the_script_not_an_inline_query() -> None:
             executed.append(line)
     body = "\n".join(executed)
 
-    assert body.count("scripts/sweep-digest-id.sh") == 2, (
-        "expected exactly the two call sites (§5 read, §6 write)"
+    assert body.count("scripts/sweep-digest-id.sh") == 3, (
+        "expected exactly the three call sites (§5 read, §6 write, §7 notify)"
     )
     assert ".[0].id" not in body, (
         "a fenced bash block selects the digest with `.[0].id` again -- that is the "

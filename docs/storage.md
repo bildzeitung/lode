@@ -579,17 +579,22 @@ config-shape error belongs here too, same treatment) — never retried, never
 charged against `attempts`, must reach the operator directly. Everything else is
 **transient** — the existing `except Exception` accounting, unchanged.
 
-Exactly one call site *inside the queue machinery* reads that roster wider: `drain`'s
-*batch pre-step* treats the whole `LLMProviderError` base class as permanent
-(`lode-5zqa`), not just its `LLMAuthError` subclass — see "must not starve the
-credential-free work" below. (`cli.py`'s own catch is wider still, but it decides
-only how an already-escaped error is *rendered*, not job accounting — see the
-`lode work` bullet below.) The two sites named next keep the narrow pair
-deliberately, because each has a transient
-`except Exception` path of its own that a non-auth provider error *should* fall into;
-the batch *collect* path has none, which is what makes the difference. Note the
-roster is by exception **type**, so it bounds nothing arriving as another type — e.g.
-`lode-t7en`'s wrong-shape results line, a raw `AttributeError`/`TypeError`.
+Two call sites *inside the queue machinery* read that roster wider: `drain`'s two
+*batch pre-step* `try`s (`_batch_collect_enrich`'s, `lode-knnt`, and
+`_batch_submit_enrich`'s, `lode-2mnj`) both catch bare `Exception`, not just the
+named taxonomy — see "must not starve the credential-free work" below. (`cli.py`'s
+own catch is wider still, but it decides only how an already-escaped error is
+*rendered*, not job accounting — see the `lode work` bullet below.) `run_one` and
+`_batch_submit_enrich` *itself* keep the narrow pair deliberately for their own
+internal, function-scoped catch, because each has a transient `except Exception`
+path of its own that a non-auth provider error *should* fall into — see "Per-handle
+isolation" below for how that differs from what `drain`'s outer `try` around each
+pre-step catches.
+
+The roster itself is still by exception **type**, so at the two narrow sites it
+bounds nothing arriving as another type — e.g. `lode-t7en`'s wrong-shape results
+line, a raw `AttributeError`/`TypeError`. What `lode-knnt` changed is the
+*consequence* of that at the collect pre-step, not the roster.
 
 `run_one` and `_batch_submit_enrich` special-case `(AuthError, LLMAuthError)` ahead
 of their generic catch: the claimed job is reset straight back to `'pending'` with
@@ -610,17 +615,21 @@ decides how loud "surface it" should be:
 - `lode add`'s opportunistic immediate-enrich fast path
   (`lode.cli._enrich_immediately`) catches and discards it instead: capture must
   stay instant (`design.md` §1) regardless of whether the active provider's
-  credentials are configured. The job is already back at `'pending'`, uncharged,
-  for the next explicit `lode work` to report loudly.
+  credentials are configured. **Names `(AuthError, LLMProviderError)`** too
+  (`lode-s08c`, mirroring `lode-yx1c`'s identical fix to `ask`/`work` above).
+  What that actually fixed is `LLMAuthError`: it subclasses `LLMProviderError`,
+  **not** `AuthError`, so the previous bare `except AuthError` let a missing
+  OpenAI/Azure credential (`lode-568v.3`) out of `lode add` as a raw traceback.
+  Naming the base class rather than the exact pair is defence-in-depth for
+  consistency with `ask`/`work`, not a live path — this fast path reaches the
+  provider only through `run_one`, which re-raises exactly
+  `(AuthError, LLMAuthError)`. The job is already back at `'pending'`,
+  uncharged, for the next explicit `lode work` to report loudly.
 - `_batch_collect_enrich` (the *other* batch pre-step, polling an in-flight
-  request) needs no special case of its own: it never wraps its `collect_enrich_batch()`
-  call (which resolves credentials via `build_provider()`) in a broad `except`, so an `AuthError`/`LLMAuthError`
-  there already propagates out of it — the swallow this section fixes never
-  existed on that path. `drain` handles it identically to `_batch_submit_enrich`'s,
-  below. The same "no special case" is true of a non-auth `LLMProviderError` from
-  the same unwrapped `provider.collect_batch()` call (e.g. a permanently
-  malformed batch-results line — `lode-3gtu`); `drain`'s outer catch (below) is
-  widened to absorb that too (`lode-5zqa`), for the identical starvation reason.
+  request): an `AuthError`/`LLMAuthError` here is re-raised immediately (not
+  handle-specific — a missing credential fails every handle identically) and
+  `drain` handles it identically to `_batch_submit_enrich`'s, below. A non-auth
+  provider failure is different — see "Per-handle isolation" below.
 
 **A missing credential — or a stuck batch poll — must not starve the
 credential-free work.** Both enrich batch pre-steps run *before* `drain`'s
@@ -638,24 +647,80 @@ malformed results line makes the same trade even sharper: nothing reclaims it
 otherwise repeat on *every* tick forever — a poison-pill loop with no bound
 (`lode-5zqa`).
 
-So `drain` **stashes** the pre-step's `AuthError`/`LLMAuthError` — and, since
+So `drain` **stashes** each pre-step's `AuthError`/`LLMAuthError` — and, since
 `lode-5zqa`, any other `LLMProviderError` — completes the reclaim, the
 retry-reset and the main claim/run loop, and re-raises it only at the end
 (`LLMAuthError` already subclasses `LLMProviderError`, so widening the catch to
-the base class changed nothing about the credential case). The main loop drains
-`embed` ahead of `enrich` (`_claim_one` orders on type), so the embeds land
-before any residual enrich job re-raises out of `run_one`. Net effect for an
-operator with no credentials, or with a batch wedged on bad data: embeds keep
-draining, enrichment stays pending and uncharged (or the batch stays `'running'`,
+the base class changed nothing about the credential case). "Each pre-step" is
+deliberate (`lode-knnt`): the two pre-steps run in their **own** `try`, not a
+single shared one, so a collect-side failure no longer skips the submit step —
+a stuck batch no longer blocks a *new* enrich batch from being submitted in the
+same pass. The main loop drains `embed` ahead of `enrich` (`_claim_one` orders
+on type), so the embeds land before any residual enrich job re-raises out of
+`run_one`. Net effect for an operator with no credentials, or with a batch
+wedged on bad data: embeds keep draining, new enrich jobs keep submitting,
+enrichment stays pending and uncharged (or the batch stays `'running'`,
 unresolved), and `lode work` still exits non-zero.
 
+**Per-handle isolation (`lode-knnt`).** `_batch_collect_enrich` polls each
+`batch_handle` inside its own `try`, so one poisoned handle no longer stops
+any *other*, healthy handle in the same pass from being collected — before
+this fix, a single raise anywhere in the loop aborted the whole function, and
+with it every remaining handle, for as long as the poisoned one stayed stuck.
+The catch is **consequence-scoped, not type-scoped**: it absorbs whatever
+exception type `collect_enrich_batch` raises — including a well-formed but
+wrong-shape results line surfacing as a raw `AttributeError`/`TypeError`
+rather than an `LLMProviderError` (`lode-t7en`) — so the isolation holds
+regardless of what a future provider bug happens to raise. The one exception
+re-raised **immediately** rather than isolated is `AuthError`/`LLMAuthError`:
+not handle-specific, since every remaining handle would fail identically.
+Everything else is **deferred, not swallowed**: every other handle still gets
+its turn this pass, but once the loop finishes, the first such failure is
+re-raised anyway — of *whatever* type it originally was.
+
+That deferred re-raise is why `drain`'s own `try` around the collect pre-step
+catches bare `Exception`, not the `(AuthError, LLMProviderError)` tuple
+(`lode-knnt`) — and, since `lode-2mnj`, `drain`'s `try` around the submit
+pre-step matches it, for the same reason. This is not a re-widening of the
+named taxonomy — what reaches either `try` is bounded by what each pre-step
+can actually raise, so `drain` still sees it and the "surfaces, non-zero exit"
+contract two paragraphs up is unchanged, for any failure type. Neither `try`
+is scoped as if only the named taxonomy could reach it:
+
+- **Collect side.** The per-handle `try` inside `_batch_collect_enrich` covers
+  only the loop body, so its pre-loop `SELECT` and deferred imports — and the
+  `op_progress` wrapper itself — can raise straight past it (say a
+  `sqlite3.Error` from a locked DB), and `drain`'s own `try` catches those too.
+  A narrower catch here would silently reintroduce the exact starvation
+  `lode-5zqa` fixed, just for any type outside that tuple.
+- **Submit side.** `_batch_submit_enrich`'s own internal `try` opens at the
+  `submit_enrich_batch()` call — the pending-jobs `SELECT`, the deferred
+  imports, and the *entire* pre-claim CAS loop (`UPDATE ... WHERE
+  status='pending'`, the same concurrency guard against a raced immediate-enrich
+  claim documented above) sit outside it. `_batch_submit_enrich`'s own `except
+  Exception` fully absorbs a non-auth failure raised *from inside its try*
+  (revert + return 0, no raise) — but a `sqlite3.OperationalError` from that
+  CAS loop, or anything else raised ahead of the try, is by construction
+  unclassified and escapes uncaught. **This was the exact hole `lode-2mnj`
+  closed**: the premise that "nothing but `AuthError`/`LLMProviderError` can
+  ever reach `_batch_submit_enrich`'s caller" was false the same way it was for
+  the collect side before `lode-knnt` — a probe confirmed a stubbed
+  `sqlite3.OperationalError` from this arm aborted `drain` before a single
+  pending `embed` job ran. `drain`'s own `try` around the submit pre-step now
+  catches bare `Exception` to close it, mirroring the collect side exactly.
+
 The stuck-batch case gets the same clean, traceback-free rendering the credential
-case does, since `lode-yx1c` (the `lode work` bullet above owns it). But the
-widening bounds the *starvation*, not the wedge itself: the batch re-fails every
-tick with no
-failure budget and no dead-letter path, one shared `try` means a stuck collect also
-blocks new submissions, and a single poisoned handle blocks the other healthy ones
-(`lode-knnt`). A permanently stuck batch still needs a human.
+case does, since `lode-yx1c` widened `lode work`'s handler to
+`(AuthError, LLMProviderError)` (the `lode work` bullet above owns it). Note that
+covers the *typed* failures only: a poisoned handle now bounded by the
+consequence-scoped catch above can still be of a type no CLI handler names (say
+lode-t7en's raw `AttributeError`), and that one does still surface as a raw
+traceback. And none of the above
+makes a stuck batch un-stuck: the batch re-fails every tick with no failure
+budget and no dead-letter path (`lode-u6he`, discovered-from `lode-knnt`) — only
+its *blast radius* is bounded now (blocks no other handle, blocks no new
+submission), not the wedge itself. A permanently stuck batch still needs a
+human.
 
 ### The queue's clock must never go backward — nor lag the wall clock (lode-t1y)
 

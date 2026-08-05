@@ -211,16 +211,28 @@ scripts/update-images.sh      # one-time: pull the mermaid-cli image
 scripts/validate-mermaid.sh   # parse every fenced mermaid block, fail on syntax errors
 ```
 
-### 8. (Optional) RTK command exclusions
+### 8. (Optional) Re-create the machine-local settings
 
-Only if you use [RTK](https://github.com/rtk-ai/rtk) to proxy dev commands. Two commands
-must bypass RTK's rewrite so their output stays raw: beads JSON (`bd … --json`) and `git
-worktree list --porcelain` (worktree GC parses real porcelain, not RTK's reformatted
-table). RTK keeps this in your user-global config only, so a script makes it reproducible:
+Two scopes deliberately do **not** travel with the clone, so a fresh machine starts without
+them. Neither is required — set them only if you want them.
 
-```bash
-scripts/rtk-setup.sh          # idempotent: adds the excludes to ~/.config/rtk/config.toml
-```
+**User scope** (`~/.claude/settings.json`) — personal, applies to every project:
+
+- `permissions.defaultMode`,
+- model choice, personal statusline.
+
+**Project-local scope** (`.claude/settings.local.json`, gitignored) — an **optional** pin of
+`/code`'s concurrency cap, `LODE_CODE_MAX_CONCURRENT_AGENTS`, in that file's `"env"` block.
+**A fresh clone needs nothing here:** left unset, `/code` re-derives the cap at the start of
+*every* invocation, so it tracks the machine on its own. A pinned value wins outright and is
+then a cached constant that goes stale — ask Claude to recompute it after a hardware or
+VM-size change. The derivation lives in
+[`scripts/code-concurrency-cap.sh`](../scripts/code-concurrency-cap.sh) (`lode-54mo`);
+override syntax and full rationale:
+[`docs/agents-workflow.md` — Concurrency cap](agents-workflow.md#concurrency-cap-lode-2cf).
+
+Project-scope permissions and auto-mode consent rules need nothing here at all — they live in
+the committed [`.claude/settings.json`](../.claude/settings.json) and arrive with the clone.
 
 ## You're set up when
 
