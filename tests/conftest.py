@@ -1435,7 +1435,7 @@ def _fenced_bash(markdown: str) -> str:
 #: ``case "$BUCKET"`` dispatch directly rather than through the fence parser.
 #: Was defined byte-identically in four modules (test_worktree_gc_classify.py,
 #: test_land_conflicts_state.py, test_land_lock.py,
-#: test_assert_main_checkout.py) until lode-va47 consolidated it here.
+#: test_land_skill_guard_coverage.py) until lode-va47 consolidated it here.
 LAND_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
 

@@ -13,24 +13,14 @@ split out of it (lode-2thl).
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-from conftest import _fenced_bash, bash_fence_blocks
+from conftest import LAND_SKILL, _fenced_bash, bash_fence_blocks
 
 # Share lode-x495's quote-aware comment stripper rather than adding a second,
 # competing implementation -- the same reuse `tests/test_bd_list_limit_gate.py`
 # was told to make, for the same reason: "what does an agent actually execute"
 # parsing is identical across these gates even when the assertions differ.
 from test_skill_bash_state import _strip_comment
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-# ---------------------------------------------------------------------------
-# Call-site pin against the SHIPPED SKILL.md (the fence is where the bug was)
-# ---------------------------------------------------------------------------
-
-LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
-
 
 # The ```bash fence parser is `tests/conftest.py::bash_fence_blocks` and lives
 # there alone; its rules and blind spots are stated next to it and deliberately
@@ -227,6 +217,21 @@ _KNOWN_LAND_SKILL_MUTATIONS: dict[str, str] = {
 }
 
 
+def _normalized_line(raw_line: str) -> str:
+    """A raw fenced-block line reduced to its command text: comment-stripped
+    and `.strip()`'d. Empty means the line carries no command at all.
+    """
+    return _strip_comment(raw_line).strip()
+
+
+def _is_mutating(cmd: str) -> bool:
+    """Whether a `_normalized_line` result is a mutating command -- i.e.
+    whether an allowlist entry keyed on this exact text could excuse
+    anything.
+    """
+    return bool(cmd) and bool(_MUTATING_CMD_RE.search(cmd))
+
+
 def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[str]:
     """Every fenced ```bash block's mutating command that is neither
     allowlisted nor preceded, in its OWN block, by `scripts/assert-main-
@@ -244,13 +249,13 @@ def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[st
     for block_index, block in enumerate(bash_fence_blocks(markdown)):
         guarded = False
         for raw_line in block.splitlines():
-            cmd = _strip_comment(raw_line).strip()
+            cmd = _normalized_line(raw_line)
             if not cmd:
                 continue
             if _GUARD in cmd:
                 guarded = True
                 continue
-            if not _MUTATING_CMD_RE.search(cmd):
+            if not _is_mutating(cmd):
                 continue
             if guarded or cmd in allowlist:
                 continue
@@ -286,7 +291,7 @@ def _dead_allowlist_entries(markdown: str, *, allowlist: dict[str, str]) -> list
     """Allowlist keys in `allowlist` that no longer match any real MUTATING command
     line in `markdown`'s fenced ```bash blocks. The live set is built from the SAME
     two primitives `_unguarded_mutations` applies before a line is even a mutation
-    candidate -- comment-strip/`.strip()` then `_MUTATING_CMD_RE` -- so this pin's
+    candidate -- `_normalized_line` then `_is_mutating` -- so this pin's
     notion of "live" cannot drift from what the sweep actually excuses (lode-dkak;
     before that fix the live set was every comment-stripped line, UNFILTERED, so a
     key present only as a non-mutating line read as live while excusing nothing). A
@@ -309,7 +314,7 @@ def _dead_allowlist_entries(markdown: str, *, allowlist: dict[str, str]) -> list
         cmd
         for block in bash_fence_blocks(markdown)
         for raw in block.splitlines()
-        if _MUTATING_CMD_RE.search(cmd := _strip_comment(raw).strip())
+        if _is_mutating(cmd := _normalized_line(raw))
     }
     return sorted(set(allowlist) - live)
 
@@ -424,7 +429,7 @@ def test_dead_allowlist_entries_requires_a_mutating_line_not_mere_presence() -> 
         "actually have read as live, so the sabotage proves nothing"
     )
 
-    # The fix: the fixed `_dead_allowlist_entries` filters by `_MUTATING_CMD_RE`,
+    # The fix: the fixed `_dead_allowlist_entries` filters by `_is_mutating`,
     # the SAME primitive `_unguarded_mutations` uses, so a key present only
     # as a non-mutating line excuses nothing and must be reported dead.
     assert _dead_allowlist_entries(markdown, allowlist={key: "fixture"}) == [key], (
