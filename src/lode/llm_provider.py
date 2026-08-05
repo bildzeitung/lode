@@ -411,6 +411,34 @@ def _anthropic_error_from_exception(
     )
 
 
+#: Stands in for a batch-results line's ``custom_id`` when the line's own is
+#: missing/``None``/not a non-empty ``str`` (lode-i821). Deliberately not a
+#: plausible version id, so a ``job_map`` lookup misses rather than colliding.
+_UNKNOWN_CUSTOM_ID = "<unknown>"
+
+
+def _result_custom_id(result: Any) -> str:
+    """Read one batch-results line's ``custom_id``, honoring the declared type.
+
+    Sole owner of the invariant that **every** :class:`BatchResult` this
+    module returns carries a non-empty ``str`` ``custom_id``, matching the
+    declared ``custom_id: str`` -- consumers may rely on that without a
+    ``None`` check. ``custom_id`` comes off the same
+    ``construct_type_unchecked`` model as every other field, so the wire can
+    make it absent, ``None``, or the wrong type; reading it never *raises* in
+    the loop body, so it would otherwise break the contract silently, one
+    seam downstream in the consumer.
+
+    Every branch goes through here, not just the wrong-shape ones -- a line
+    whose ``result`` block is well-formed and whose ``custom_id`` alone is
+    missing takes the ordinary *succeeded* (or ``errored``/no-``tool_use``)
+    branch and never touches :func:`_wrong_shape_result`. ``docs/stack.md``
+    "Error contract" owns the reasoning and the routing consequence.
+    """
+    custom_id = getattr(result, "custom_id", None)
+    return custom_id if isinstance(custom_id, str) and custom_id else _UNKNOWN_CUSTOM_ID
+
+
 def _wrong_shape_result(result: Any, detail: str) -> BatchResult:
     """Degrade one well-formed-but-wrong-shape batch-results line (lode-i821).
 
@@ -424,16 +452,12 @@ def _wrong_shape_result(result: Any, detail: str) -> BatchResult:
     collection, matching the pre-existing "no tool_use block" treatment.
 
     ``result.custom_id`` may itself be the field that's missing/malformed --
-    it comes from the same unvalidated line. :class:`BatchResult.custom_id`
-    is declared ``str`` (not ``str | None``), and
-    :func:`lode.enrich.collect_enrich_batch` calls
-    ``short_version_id(result.custom_id)`` unconditionally on every result,
-    so substituting the placeholder here (rather than ``None``) keeps that
-    call safe without widening the type or touching the consumer.
+    it comes from the same unvalidated line -- so it is read via
+    :func:`_result_custom_id`, which owns the placeholder substitution that
+    keeps :class:`BatchResult.custom_id`'s declared ``str`` honest.
     """
-    custom_id = getattr(result, "custom_id", None) or "<unknown>"
     return BatchResult(
-        custom_id=custom_id,
+        custom_id=_result_custom_id(result),
         outcome="errored",
         parsed=None,
         error=LLMProviderError(
@@ -823,6 +847,8 @@ class AnthropicProvider:
                     _wrong_shape_result(result, f"missing 'result' field: {exc}")
                 )
                 continue
+            # One read for every branch below; see `_result_custom_id`.
+            custom_id = _result_custom_id(result)
             if result_type == "succeeded":
                 try:
                     tool_block = next(
@@ -838,7 +864,7 @@ class AnthropicProvider:
                     message = result.result.message
                     results.append(
                         BatchResult(
-                            custom_id=result.custom_id,
+                            custom_id=custom_id,
                             outcome="errored",
                             parsed=None,
                             error=LLMProviderError(
@@ -891,7 +917,7 @@ class AnthropicProvider:
                     continue
                 results.append(
                     BatchResult(
-                        custom_id=result.custom_id,
+                        custom_id=custom_id,
                         outcome="succeeded",
                         parsed=parsed,
                         error=None,
@@ -906,7 +932,7 @@ class AnthropicProvider:
                 )
                 results.append(
                     BatchResult(
-                        custom_id=result.custom_id,
+                        custom_id=custom_id,
                         outcome=error_type,
                         parsed=None,
                         error=LLMProviderError(msg, provider="anthropic"),

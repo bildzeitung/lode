@@ -678,14 +678,35 @@ collection, the same treatment the pre-existing "no `tool_use` block" arm alread
 | `b.type` (each content block, inside the same iteration) | a content item that isn't object-shaped at all (e.g. `null`) → `AttributeError` | same `except (AttributeError, TypeError)` above — one combined arm, since either failure means the line can't be trusted |
 | `tool_block.input` | missing `input` → `None`, and `RootModel[dict[str, Any]](None)` → pydantic `ValidationError` | `except ValidationError` |
 
-`result.custom_id` itself is read directly (not guarded) on the succeeded/errored/other branches —
-`construct_type_unchecked` never raises on a *missing* declared field, only leaves it `None`, so this
-never breaks the loop body. It **is** the field the guard's own placeholder exists for: a wrong-shape
-line's `custom_id` can be `None` (or absent a `result` at all) same as any other field, and
-`BatchResult.custom_id` is declared `str`, not `str | None` — `_wrong_shape_result` substitutes
-`"<unknown>"` rather than propagating `None`, which is what keeps
-`enrich.collect_enrich_batch`'s unconditional `short_version_id(result.custom_id)` call safe on this
-path without widening the type or touching that consumer.
+Two fields round the enumeration out — both unvalidated like the rest, neither able to *raise*
+in the loop body, so both would break their declared type silently rather than loudly:
+
+- **`custom_id`** (declared `str`) is normalized by **`_result_custom_id`, the single reader**, which
+  substitutes `"<unknown>"` for anything that isn't a non-empty `str`. This is deliberately a
+  property of the *field*, not of the wrong-shape lines above: a line whose `result` block is
+  well-formed and whose `custom_id` alone is missing passes every guard in the table and takes the
+  ordinary `succeeded`/`errored`/no-`tool_use` branch, so *every* `BatchResult` built here takes its
+  `custom_id` from that one reader. The result is an invariant consumers can rely on — a
+  `BatchResult`'s `custom_id` is always a non-empty `str` — bought without widening the
+  vendor-neutral type to `str | None` and obliging every consumer to branch on it. A placeholder is
+  merely *unroutable*: it misses `collect_enrich_batch`'s `job_map`, which is an already-handled
+  case, and never reaches a DB write.
+- **`outcome`** (declared `Literal["succeeded", "errored", "expired", "canceled"]`) is
+  `result.result.type` verbatim, which a missing `type` key leaves `None`. Inert rather than
+  guarded: an unrecognized value simply takes the failure arm, which is the right handling for a
+  result whose type can't be read. Listed so the enumeration is complete, not because it needs a
+  guard.
+
+**Why guard chain-by-chain rather than validate the line once up front** (`lode-i821`, decided): a
+single `model_validate` at the top of the loop would collapse all of the above into one rule, and it
+would *not* be the broad `except Exception` this design rejects — it fires before the body, so it
+still couldn't mask a bug there. It is rejected for a different reason: `construct_type_unchecked`'s
+leniency is load-bearing forward-compatibility. A content-block type newer than the pinned SDK
+decodes fine today and yields a usable result; under strict validation the same line would be
+*rejected*, converting a working result into an errored one on an SDK bump. The cost accepted in
+exchange is that this enumeration is not closed by construction — a newly-added attribute read is an
+unguarded hole by default, and the table above has to be re-derived from the loop body whenever it
+changes. That trade is the reason the table is derived rather than asserted.
 
 **One class remains open**, measured against the pinned SDK, not yet bounded:
 

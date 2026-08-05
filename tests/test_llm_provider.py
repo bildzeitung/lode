@@ -773,44 +773,11 @@ def _ended_batch_body() -> dict:
     }
 
 
-def _succeeded_jsonl_line(custom_id: str) -> bytes:
-    """A real, fully-decodable JSONL line for ``batches.results``."""
-    return (
-        json.dumps(
-            {
-                "custom_id": custom_id,
-                "result": {
-                    "type": "succeeded",
-                    "message": {
-                        "id": "msg_1",
-                        "type": "message",
-                        "role": "assistant",
-                        "model": "claude-haiku-4-5",
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "id": "tu_1",
-                                "name": "emit",
-                                "input": {"name": "w", "count": 1},
-                            }
-                        ],
-                        "stop_reason": "tool_use",
-                        "stop_sequence": None,
-                        "usage": {"input_tokens": 1, "output_tokens": 1},
-                    },
-                },
-            }
-        )
-        + "\n"
-    ).encode()
-
-
 def _succeeded_payload(custom_id: str = "ver-shape") -> dict:
     """The success payload as a plain dict, pre-JSON-encoding (lode-i821).
 
-    Byte-for-byte the same shape :func:`_succeeded_jsonl_line` encodes --
-    kept as a separate dict-returning helper so :func:`_payload_without` can
-    delete a field from it before encoding.
+    Dict-returning (rather than pre-encoded) so :func:`_payload_without` can
+    delete a field from it before :func:`_jsonl` encodes it.
     """
     return {
         "custom_id": custom_id,
@@ -855,6 +822,11 @@ def _payload_without(payload: dict, *path: str | int) -> dict:
 def _jsonl(payload: dict) -> bytes:
     """Encode ``payload`` as one JSONL line, the wire shape ``batches.results`` streams."""
     return (json.dumps(payload) + "\n").encode()
+
+
+def _succeeded_jsonl_line(custom_id: str) -> bytes:
+    """A real, fully-decodable JSONL line for ``batches.results``."""
+    return _jsonl(_succeeded_payload(custom_id))
 
 
 def _real_anthropic_client(
@@ -1124,6 +1096,85 @@ def test_collect_batch_substitutes_a_placeholder_for_a_line_that_is_not_an_objec
     assert result.parsed is None
     assert isinstance(result.error, LLMProviderError)
     assert "wrong-shape" in str(result.error)
+
+
+def _drop_custom_id(payload: dict) -> dict:
+    return _payload_without(payload, "custom_id")
+
+
+def _null_custom_id(payload: dict) -> dict:
+    return {**payload, "custom_id": None}
+
+
+def _expired_without_custom_id(payload: dict) -> dict:
+    mutated = _drop_custom_id(payload)
+    mutated["result"] = {"type": "expired"}
+    return mutated
+
+
+def _no_tool_use_without_custom_id(payload: dict) -> dict:
+    mutated = _drop_custom_id(payload)
+    mutated["result"]["message"]["content"] = [{"type": "text", "text": "hi"}]
+    return mutated
+
+
+@pytest.mark.network
+@pytest.mark.parametrize(
+    "mutate,expected_outcome,expected_error_fragment",
+    [
+        (_drop_custom_id, "succeeded", None),
+        (_null_custom_id, "succeeded", None),
+        (_expired_without_custom_id, "expired", None),
+        (_no_tool_use_without_custom_id, "errored", "no tool_use block"),
+    ],
+    ids=[
+        "custom-id-missing",
+        "custom-id-null",
+        "errored-branch",
+        "no-tool-use-branch",
+    ],
+)
+def test_collect_batch_substitutes_a_placeholder_when_only_custom_id_is_unusable(
+    mutate: Callable[[dict], dict],
+    expected_outcome: str,
+    expected_error_fragment: str | None,
+) -> None:
+    """lode-i821, found in review: the placeholder is NOT a wrong-shape-only concern.
+
+    A line whose ``result`` block decodes fine and whose ``custom_id`` alone
+    is missing/``None`` passes every wrong-shape guard and takes an ORDINARY
+    branch -- it never reaches ``_wrong_shape_result``. The rebuild
+    normalized the placeholder only inside that helper, so such a line still
+    emitted ``BatchResult(custom_id=None)``, violating the declared
+    ``custom_id: str`` and re-arming exactly the downstream
+    ``short_version_id(None)`` ``TypeError`` that finding 2 exists to close.
+    ``_result_custom_id`` now owns the substitution for every branch.
+
+    One case per ``BatchResult`` construction site that reads ``custom_id``,
+    since each builds its result from a different code path: the ``succeeded``
+    branch (twice, for the two ways ``custom_id`` can be unusable), the
+    ``else``/``error_type`` branch, and the pre-existing no-``tool_use``
+    ``StopIteration`` arm -- which predates this ticket but leaked
+    identically. Non-vacuous for all four: each asserts ``custom_id is None``
+    pre-fix.
+
+    Note ``outcome`` is unchanged by the substitution -- an unusable
+    ``custom_id`` does not make the result wrong-shaped, only unroutable,
+    which ``collect_enrich_batch`` already handles as a ``job_map`` miss.
+    """
+    payload = mutate(_succeeded_payload("ver-shape"))
+    client = _real_anthropic_client(
+        _results_handler(lambda: httpx.Response(200, content=_jsonl(payload)))
+    )
+
+    status, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    assert status == "ended"
+    (result,) = results
+    assert result.custom_id == "<unknown>"
+    assert result.outcome == expected_outcome
+    if expected_error_fragment is not None:
+        assert expected_error_fragment in str(result.error)
 
 
 def _succeeded_result(custom_id: str, payload: dict) -> mock.MagicMock:
