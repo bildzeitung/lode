@@ -56,10 +56,10 @@ import subprocess
 from pathlib import Path
 
 from _gitrepo import _git
+from conftest import LAND_SKILL
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "worktree-gc-classify.sh"
-LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
 
 def _init_repo(tmp_path: Path) -> Path:

@@ -106,7 +106,7 @@ import time
 from pathlib import Path
 
 from _gitrepo import _git
-from conftest import _fenced_bash, bash_fence_blocks
+from conftest import LAND_SKILL, _fenced_bash, bash_fence_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-lock.sh"
@@ -1259,9 +1259,6 @@ def test_uncreatable_lock_reports_a_machine_fault_not_another_lander(
 # ---------------------------------------------------------------------------
 # Call-site pins against the SHIPPED SKILL.md (the fence is where the bug was)
 # ---------------------------------------------------------------------------
-
-LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
-
 
 def test_land_skill_acquires_and_releases_through_this_script() -> None:
     """The lock only serializes a pass that actually calls this script, and
