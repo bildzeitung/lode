@@ -27,6 +27,12 @@ helper that exists only to serve one parent does not.
 
 Every Python CLI in this repo is built with **Typer**. Never `argparse`.
 
+Every option and argument uses the `Annotated` form — `x: Annotated[Path | None, typer.Option(...)]
+= None` — never a bare `typer.Option(...)`/`typer.Argument(...)` in the default-argument position.
+This holds for *every* parameter, including the `bool`/`str` ones ruff's B008 does not flag; the
+lint's own blind spot is what made the file inconsistent in the first place
+([`stack.md`](stack.md#ruffs-lint-rule-set-settled-lode-cs5u), `lode-up58`).
+
 ## Derive identifiers, never retype them
 
 A long opaque identifier — a full git SHA, a bd issue id, a `.claude/worktrees/` hash — is never
