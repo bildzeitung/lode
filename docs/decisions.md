@@ -3237,13 +3237,18 @@ while erasing it here would lose the record of what was believed, and when.
   correspond to a real, live thing in a real corpus": `tests/test_assert_main_checkout.py`'s
   `_dead_allowlist_entries` (exact command TEXT, keyed on a bare string, against `land/SKILL.md`'s
   fenced-bash corpus), `tests/test_skill_bash_state.py`'s `_dead_allowlist_keys` (a `(file, var)`
-  tuple, matched via `find_violations` run unfiltered, against the shipped skill/agent corpus), and
-  that same module's `_dead_known_env_vars` (a bare name, matched via `_unassigned_uses` run with
-  the known-set emptied, against the same corpus). lode-e49j's own review had already argued both
+  tuple, matched by an unfiltered violation scan over the shipped skill/agent corpus), and
+  that same module's `_dead_known_env_vars` (a bare name, matched by a used-but-unassigned scan
+  with the known-set emptied, over the same corpus). The scan primitives each site uses are
+  described here by what they compute, not by which function supplies them, because that plumbing
+  is itself in motion — lode-dutt reworks how the two `test_skill_bash_state.py` pins obtain their
+  unfiltered scan. That is compatible with, not a counterexample to, the decision below: sharing a
+  genuine scan primitive between two pins that need the same scan is not the generic pin
+  abstraction being rejected here. lode-e49j's own review had already argued both
   sides of extracting them into one shared helper and reached no verdict on purpose, leaving the
   question open across all three call sites; this ticket's acceptance criteria required deciding it
-  in writing rather than leaving it open a fourth time (a fourth pin, `_dead_known_env_vars`'s sibling
-  for a still-hypothetical fourth allowlist, would otherwise face the identical unresolved question).
+  in writing rather than leaving it open a fourth time — a fourth allowlist, whenever one appears,
+  would otherwise face the identical unresolved question with three unexplained precedents behind it.
 
   **Decision: no extraction.** The three key shapes genuinely differ — a raw command string matched
   by exact text, a `(file, var)` tuple derived by a bash-fence/comment parser, and a bare name
@@ -3260,7 +3265,8 @@ while erasing it here would lose the record of what was believed, and when.
   independently for `test_assert_main_checkout.py`'s pin by lode-7zap since it had shipped without a
   sabotage counterpart at all). This entry — not a shared module — is what codifies that discipline
   for the next allowlist a future ticket adds. Full sabotage-proof rationale for the *existing* two
-  precedents: `tests/test_skill_bash_state.py::test_every_allowlist_entry_is_provably_checked_by_
-  sabotage` (lode-e49j) and its `_KNOWN_ENV_VARS` sibling (lode-rscn); the third,
+  precedents:
+  `tests/test_skill_bash_state.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`
+  (lode-e49j) and its `_KNOWN_ENV_VARS` sibling (lode-rscn); the third,
   `tests/test_assert_main_checkout.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`,
   is lode-7zap's own addition.
