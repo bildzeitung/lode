@@ -385,16 +385,32 @@ def test_worktree_agent_not_merged_clean_and_old_enough_is_dir_only(
     tmp_path: Path,
 ) -> None:
     """A builder's own branch, never pushed anywhere, not merged into trunk,
-    but old enough (min-age-seconds=0, trivially satisfied) and clean ->
-    dir-only. The script never touches the branch ref itself -- it only
-    prints the bucket -- so there is nothing to assert about the ref here;
-    SKILL.md's own case arm is what keeps it."""
+    but old enough (min-age-seconds deeply negative, trivially satisfied) and
+    clean -> dir-only. The script never touches the branch ref itself -- it
+    only prints the bucket -- so there is nothing to assert about the ref
+    here; SKILL.md's own case arm is what keeps it.
+
+    lode-ej6u: `min_age_seconds` was originally `"0"`, which flaked under
+    `pytest -n 8` -- reproduced directly (a 300-way parallel stress harness
+    against the real script, outside pytest entirely) and root-caused: under
+    heavy multi-core load in this environment, a `date +%s` read on one vCPU
+    can transiently observe `CLOCK_REALTIME` a few seconds BEHIND an already-
+    committed `git commit`'s recorded timestamp read on another core (cross-
+    core wall-clock skew under a hypervisor -- the same "backward wall-clock
+    step" class this repo has hit before, e.g. lode-0dnk, lode-44cq) -- never
+    a git *ref* race; both refs are read correctly every time. That makes the
+    script's own `now - last_commit_ts` transiently negative, failing even a
+    `-ge 0` floor and routing to `keep-notmerged` instead of `dir-only`. A
+    deeply negative floor (`-3600`, matching lode-44cq's own "widen the
+    boundary" fix) absorbs any such skew of up to an hour while still
+    exercising the same "old enough" branch -- test isolation only, per this
+    ticket's AC4; the script's own age-floor logic is unchanged."""
     repo = _init_repo(tmp_path)
     wt = _add_worktree(repo, ".claude/worktrees/leaked", "worktree-agent-leaked")
     sha = _commit(wt, "wip.txt", "abandoned build")
     assert not _is_ancestor(repo, sha, "trunk")
 
-    result = _run(repo, wt, sha, "0", "worktree-agent-leaked", min_age_seconds="0")
+    result = _run(repo, wt, sha, "0", "worktree-agent-leaked", min_age_seconds="-3600")
 
     assert _bucket(result) == "dir-only"
 
@@ -422,7 +438,13 @@ def test_worktree_agent_not_merged_dirty_and_old_enough_is_kept_dirty(
     tmp_path: Path,
 ) -> None:
     """The dir-only arm gates on the SAME dirty-tree guard as full-reclaim --
-    old enough and worktree-agent-shaped is not sufficient by itself."""
+    old enough and worktree-agent-shaped is not sufficient by itself.
+
+    lode-ej6u: `min_age_seconds` was originally `"0"` here too, and flaked
+    under `pytest -n 8` by the identical mechanism the sibling "clean and old
+    enough" test above documents in full -- cross-core wall-clock skew under
+    heavy load transiently makes `now - last_commit_ts` negative, failing a
+    `-ge 0` floor. Same fix, same margin: `-3600` rather than `0`."""
     repo = _init_repo(tmp_path)
     wt = _add_worktree(
         repo, ".claude/worktrees/leaked-dirty", "worktree-agent-leakeddirty"
@@ -430,7 +452,9 @@ def test_worktree_agent_not_merged_dirty_and_old_enough_is_kept_dirty(
     sha = _commit(wt, "wip.txt", "abandoned build")
     (wt / "scratch.tmp").write_text("uncommitted\n")
 
-    result = _run(repo, wt, sha, "0", "worktree-agent-leakeddirty", min_age_seconds="0")
+    result = _run(
+        repo, wt, sha, "0", "worktree-agent-leakeddirty", min_age_seconds="-3600"
+    )
 
     assert _bucket(result) == "keep-dirty"
 
