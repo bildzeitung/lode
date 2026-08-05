@@ -3488,3 +3488,14 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     `2>/dev/null || true`. The merge then fails again and the script exits 2 blaming an "unexpected
     git failure." Found and reproduced during this ticket's review, when the batched form was tried
     as a simplification; the per-entry loop is load-bearing, not stylistic.
+
+- **A repo-wide shared job-row factory for tests, or file-local helpers?** Many `tests/` modules
+  still write raw `INSERT INTO jobs` inline; a single row factory in `tests/conftest.py` is the
+  fully-consolidated end state. Leaning **all-or-nothing**: a partial hoist covering only the
+  files a cleanup ticket happens to touch, while the rest keep inline INSERTs, is a worse end
+  state than either "all local" or "all shared" — it adds a second convention for a future editor
+  to choose between without retiring the raw-SQL pattern anywhere else. Revisit as its own ticket
+  scoped to every such file at once, never as an incidental expansion riding on a narrower
+  cleanup. **Applied-for-`lode-3en5`:** folding `tests/test_enrich.py`'s `_insert_done_enrich_job`
+  into the sibling `_insert_enrich_job` (hoisted to that file's Helpers section by `lode-z1e7`)
+  stayed file-local on this leaning.

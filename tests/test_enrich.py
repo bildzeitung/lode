@@ -109,13 +109,14 @@ def _insert_enrich_job(
     conn: sqlite3.Connection,
     version_id: str = "ver-1",
     status: str = "pending",
+    prompt_ver: str | None = None,
 ) -> int:
-    """Insert a pending enrich job row; return the job id."""
+    """Insert an enrich job row; return the job id."""
     with conn:
         cur = conn.execute(
-            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
-            "VALUES ('enrich', ?, ?, ?)",
-            (version_id, status, now_iso()),
+            "INSERT INTO jobs (type, target_version, status, prompt_ver, next_attempt_at) "
+            "VALUES ('enrich', ?, ?, ?, ?)",
+            (version_id, status, prompt_ver, now_iso()),
         )
     return cur.lastrowid
 
@@ -1108,25 +1109,6 @@ def test_enrich_gap_multiple_versions(conn: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _insert_done_enrich_job(
-    conn: sqlite3.Connection,
-    *,
-    target_version: str = "ver-1",
-    prompt_ver: str | None = None,
-) -> None:
-    """Insert a ``status='done'`` enrich job row with the given ``prompt_ver``.
-
-    ``prompt_ver=None`` (the default) reproduces a job that completed before
-    lode-q47 stamped it, or one the schema left NULL at enqueue time.
-    """
-    with conn:
-        conn.execute(
-            "INSERT INTO jobs (type, target_version, status, prompt_ver, next_attempt_at) "
-            "VALUES ('enrich', ?, 'done', ?, ?)",
-            (target_version, prompt_ver, now_iso()),
-        )
-
-
 def test_enrich_gap_done_job_missing_prompt_ver_is_gap(
     conn: sqlite3.Connection,
 ) -> None:
@@ -1137,7 +1119,7 @@ def test_enrich_gap_done_job_missing_prompt_ver_is_gap(
     version produced it, so reconcile must re-enqueue.
     """
     _insert_note(conn)
-    _insert_done_enrich_job(conn, prompt_ver=None)
+    _insert_enrich_job(conn, status="done", prompt_ver=None)
     count = _enrich_gap_step(conn)
     assert count == 1
     statuses = conn.execute(
@@ -1155,7 +1137,7 @@ def test_enrich_gap_done_job_with_current_prompt_ver_is_not_a_gap(
     ENRICH_PROMPT_VER is NOT a gap -- reconcile must not re-enqueue
     enrichment that is already current."""
     _insert_note(conn)
-    _insert_done_enrich_job(conn, prompt_ver=ENRICH_PROMPT_VER)
+    _insert_enrich_job(conn, status="done", prompt_ver=ENRICH_PROMPT_VER)
     assert _enrich_gap_step(conn) == 0
     # No new job was enqueued.
     rows = conn.execute(
@@ -1174,7 +1156,7 @@ def test_enrich_gap_reenqueues_on_stale_prompt_ver(
     reconcile scan drives corpus-wide re-enrichment.
     """
     _insert_note(conn)
-    _insert_done_enrich_job(conn, prompt_ver="some-older-prompt-ver")
+    _insert_enrich_job(conn, status="done", prompt_ver="some-older-prompt-ver")
     count = _enrich_gap_step(conn)
     assert count == 1
     statuses = conn.execute(
@@ -1199,7 +1181,7 @@ def test_enrich_gap_empty_summary_with_current_prompt_ver_is_not_a_gap(
     every reconcile tick, forever.
     """
     _insert_note(conn)
-    _insert_done_enrich_job(conn, prompt_ver=ENRICH_PROMPT_VER)
+    _insert_enrich_job(conn, status="done", prompt_ver=ENRICH_PROMPT_VER)
     # Deliberately no summary annotation inserted at all.
     assert _enrich_gap_step(conn) == 0
     rows = conn.execute(
