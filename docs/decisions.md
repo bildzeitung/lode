@@ -3374,3 +3374,45 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   pins the whole chain — the list is non-empty and well-formed, the `Stop` hook
   still names an existing executable script, both bash consumers still read the
   canonical file, and no consumer has re-inlined a literal copy.
+- **2026-08-05 (lode-k4as) — KEPT: `scripts/gate-lib.sh`'s header narrative (history + rejected
+  alternatives) stays in the header, not moved to `docs/agents-workflow.md`.** Filed while
+  technically reviewing `lode-nwqb` (the entry immediately above), which had just added 18 more
+  comment lines to an already-long header: the file is 206 lines, of which the first non-comment
+  line is 155 — roughly 154 lines of header comment for 52 lines of code — and the `GATE_ADVISORY`
+  section alone (from line 79) is ~75 lines governing a 5-line `if`/`else`. Each increment was
+  individually justified; the concern is the aggregate — a reader tracing what the positional
+  arguments do wades through two mechanisms that no longer exist (the retired ordering convention,
+  the rejected `lode-nwqb` prefix-binding alternative) before reaching the one that does.
+  - **This explicitly reckons with `lode-ysr6`'s declaration, immediately above, that the
+    `GATE_ADVISORY` section is the *operative* record of the contract, corrected in place.** That
+    placement was deliberate, made precisely so the contract could not drift from the code it
+    governs — a proposal to relocate the *narrative* portion (history + rejected alternatives) while
+    leaving only the current contract in the header has to answer why that would not reopen the same
+    drift risk `lode-ysr6` closed, not silently reverse the declaration by moving text out from under
+    it.
+  - **Decided: no move.** Three reasons:
+    1. **The split introduces exactly the divergence risk the operative-record declaration exists to
+       prevent, with no mechanism proposed to replace it.** `lode-ysr6`'s discipline is "the header IS
+       the contract, correct it in place" — a scheme with nothing to keep in sync. Moving the
+       "WEIGHED AND REJECTED" and "THIS USED TO BE AN ORDERING CONVENTION" paragraphs to
+       `docs/agents-workflow.md` creates two documents that must be edited together every time the
+       mechanism changes again, and nothing mechanical (no test, no lint) would catch the header and
+       the doc drifting apart — the exact failure class `lode-ysr6` was written to close, reopened one
+       level up.
+    2. **The rejected-alternative paragraphs are not incidental history — they are what stops the
+       mechanism being re-litigated at the point someone would reach for the shortcut.** The
+       `lode-nwqb` paragraph's own closing line says so directly: "so the alternative is not
+       rediscovered a third time." That purpose is served by sitting next to the code a future editor
+       is about to change, not by living a `grep` away in a different file a reader has to know to
+       check before "simplifying" `gate-lib.sh`.
+    3. **Length is not itself a defect.** The ticket that raised this said so explicitly, and nothing
+       in this decision found a concrete cost the length imposes beyond "it reads as long" — no test
+       failure, no maintenance incident, no reader confusion beyond the hypothetical traced above.
+       "Long but correct and load-bearing" does not clear the bar for moving an operative record.
+  - **Not a permanent bar on ever splitting this file.** If a future increment pushes the header
+    materially past this size, or a concrete reading-cost incident turns up (not merely "it's long"),
+    that is grounds to revisit — but the revisit has to name the specific cost and the specific
+    anti-drift mechanism the split would use, the same bar this entry just failed to find a reason to
+    clear. Until then this is not re-raised as a defect each time a new paragraph lands in the header.
+  - No code or test changes: `scripts/gate-lib.sh` and `tests/test_gate_lib.py` are unchanged by this
+    ticket.
