@@ -2141,13 +2141,9 @@ def test_drain_main_loop_skips_enrich_batch_in_flight(
 
     # Provide a no-op batch client: create() 'succeeds' (returns a batch handle),
     # retrieve() shows the batch still in_progress (so collect does nothing).
-    batch_obj = mock.MagicMock()
-    batch_obj.id = "batch-noop"
-    status_obj = mock.MagicMock()
-    status_obj.processing_status = "in_progress"
-    fake_batch = mock.MagicMock()
-    fake_batch.beta.messages.batches.create.return_value = batch_obj
-    fake_batch.beta.messages.batches.retrieve.return_value = status_obj
+    fake_batch = fake_batch_client(
+        batch_id="batch-noop", processing_status="in_progress"
+    )
 
     n = drain(
         conn,

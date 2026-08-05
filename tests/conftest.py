@@ -1138,13 +1138,11 @@ def load_module_from_path(name: str, path: Path) -> ModuleType:
 
 # --- MagicMock Anthropic batch client (lode-ylh2) --------------------------
 #
-# tests/test_enrich.py's _fake_batch_client and tests/test_worker.py's
-# _fake_batch_client_worker were functionally identical MagicMock batch-client
-# builders -- same signature, same three stubs on client.beta.messages.batches
-# (create -> object with .id, retrieve -> object with .processing_status,
-# results -> iter(results or [])) -- differing only in their default batch_id
-# literal and docstring. This is that shared builder, with the per-module
-# default batch_id supplied by the caller instead of baked in.
+# The shared builder for tests/test_enrich.py's and tests/test_worker.py's
+# batch tests. batch_id is REQUIRED and has no default on purpose: the two
+# per-module originals this replaced each baked in a different literal, so any
+# single default would silently change one side's behaviour. Callers pass the
+# id they mean, whether or not they assert on it.
 #
 # NOT moved into tests/_anthropic_rig.py: that module's own docstring
 # disclaims a general "shared test helpers live outside conftest.py" rule --
