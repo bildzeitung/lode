@@ -471,6 +471,46 @@ def test_heredoc_after_a_live_gh_write_does_not_hide_it() -> None:
     assert _run(command) == "deny"
 
 
+# The pre-pass DELETES lines before the scan runs, so every input where it strips
+# MORE than the shell would is a fail-OPEN -- a live gh write hidden from the
+# scanner. Each case below is a heredoc LOOKALIKE: a `<<'D'`-shaped token the
+# shell does not treat as a body-consuming heredoc operator at all, followed by a
+# genuine gh write on a later line that the shell really would execute. All four
+# were live fail-opens in the first cut of strip_quoted_heredoc_bodies() and are
+# pinned here so the pre-pass can never regrow them.
+HEREDOC_LOOKALIKES_THAT_MUST_NOT_HIDE_A_WRITE = [
+    # A <<< HERESTRING consumes no body at all -- read as `<<` + `'EOF'` it
+    # swallowed everything after it.
+    "grep -q x <<<'EOF'\ngh issue create --title x --body y",
+    # A lookalike inside a quoted string argument: not an operator, no body. This
+    # pre-pass is line-based, not quote-aware, so what saves it is that the
+    # delimiter never appears alone on a later line -- an UNCLOSED quoted heredoc
+    # must strip nothing rather than swallow the rest of the command.
+    "echo \"see <<'EOF' here\"\ngh issue create --title x --body y",
+    # A lookalike written inside an UNQUOTED heredoc's body -- that body is text
+    # to the shell, so the token opens nothing.
+    "cat <<EOF > /tmp/f\nexample: <<'Q'\nEOF\ngh issue create --title x --body y",
+    # A closing delimiter with trailing whitespace does not close the heredoc in
+    # real bash either, so the pre-pass must not act as though it did.
+    "cat <<'EOF'\nbody\nEOF \ngh issue create --title x --body y",
+    # The two cases above rely on the delimiter word never appearing alone later,
+    # which is what the strip-nothing-unless-closed rule keys on. These two repeat
+    # them WITH such a line present, so the other two rules -- the herestring guard
+    # and unquoted-heredoc tracking -- are each load-bearing on their own.
+    "grep -q x <<<'EOF'\ngh issue create --title x --body y\nEOF",
+    "cat <<EOF > /tmp/f\nexample: <<'Q'\nEOF\ngh issue create --title x --body y\nQ",
+]
+
+
+@pytest.mark.parametrize("command", HEREDOC_LOOKALIKES_THAT_MUST_NOT_HIDE_A_WRITE)
+def test_heredoc_lookalike_does_not_hide_a_live_gh_write(command: str) -> None:
+    """The pre-pass must never strip MORE than the shell would: stripping less costs a
+    false deny (seconds), stripping more is a false ALLOW (unrecoverable)."""
+    assert _run(command) == "deny", (
+        f"fail-open: gh write hidden by pre-pass: {command!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Script-level tests: drive scripts/gh-write-guard.sh directly (lode-fpmi's pattern,
 # applied here when this guard's logic was extracted out of settings.json).
@@ -519,6 +559,13 @@ def test_script_allows_quoted_heredoc_bodies(command: str) -> None:
 def test_script_denies_unquoted_heredoc_bodies(command: str) -> None:
     assert _script_decision(command) == "deny", (
         f"script wrongly allowed unquoted heredoc: {command!r}"
+    )
+
+
+@pytest.mark.parametrize("command", HEREDOC_LOOKALIKES_THAT_MUST_NOT_HIDE_A_WRITE)
+def test_script_denies_heredoc_lookalikes(command: str) -> None:
+    assert _script_decision(command) == "deny", (
+        f"fail-open at script level: {command!r}"
     )
 
 

@@ -1429,6 +1429,17 @@ An **unquoted** heredoc (`<<EOF`) is left untouched by this pre-pass — substit
 so its body must keep being scanned exactly as before; `tests/test_gh_write_guard.py` pins both
 directions plus the existing quoted-string-argument behavior from `lode-obox` staying unchanged.
 
+Because that pre-pass *deletes* lines before the scan runs, an input where it strips **more** than
+the shell would is a fail-**open** — a live `gh` write hidden from the scanner, strictly worse than
+the false deny it exists to fix. The whole danger is heredoc *lookalikes*: a `<<'D'`-shaped token
+the shell does not treat as a body-consuming operator at all (a `<<<` herestring, a token inside a
+quoted string argument or inside an unquoted heredoc's body), or a delimiter line that does not
+actually close the heredoc. So the pre-pass is biased to strip *less* — its rules are in the
+function's own header, the load-bearing one being that a quoted heredoc which never **closes**
+strips nothing. Accepted residual, same character as the others listed below: a lookalike token in
+a non-operator context whose delimiter word *also* appears alone on a later line, with a live `gh`
+write between the two. Closing that needs a quote-aware parse, not a line-based pre-pass.
+
 Residual gaps that remain — honest about what the inversion does **not** close, same character as the
 `blocks:` guard's own (a guard that reads only the command *string* cannot see through indirection):
 
