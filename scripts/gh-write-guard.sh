@@ -30,9 +30,93 @@ set -euo pipefail
 CMD="${1:-}"
 [ -n "$CMD" ] || exit 0
 
+# A QUOTED heredoc body (<<'EOF', <<"EOF", <<\EOF) is inert text -- the shell
+# performs NO substitution in it at all -- but the segment split below (on
+# `` ` ``/`(`/`)`/etc.) does not know that, so a command substitution written as
+# a worked example inside such a body manufactures a fake segment start and gets
+# scanned as if it were live shell (lode-d5je). An UNQUOTED heredoc (<<EOF) is the
+# opposite: substitution IS real there, so its body must keep being scanned
+# exactly as before -- this function only ever removes QUOTED heredoc bodies.
+# Fence, not fix, same character as the other residuals in docs/agents-workflow.md.
+# Every deviation from real shell heredoc parsing is deliberately biased toward
+# stripping LESS, because stripping MORE than the shell would is a false ALLOW --
+# a live `gh` write hidden from the scan, the unrecoverable failure. Three rules
+# enforce that bias, each closing a fail-open found in this function's own review:
+#   1. A `<<<` HERESTRING is not a heredoc and consumes no body. The operator match
+#      is guarded so `<<<'EOF'` cannot be read as `<<` + `'EOF'`.
+#   2. An UNQUOTED heredoc's body is tracked (passed through verbatim, still
+#      scanned) but never inspected for operators, so a quoted-heredoc lookalike
+#      written INSIDE it cannot start a strip.
+#   3. A quoted heredoc that is never CLOSED strips nothing -- its held lines are
+#      emitted at end of input. This is what keeps a lookalike token appearing in a
+#      context the shell does not treat as an operator at all (most importantly,
+#      inside a quoted string -- this function is line-based, not quote-aware) from
+#      swallowing the remainder of the command.
+# The residual after those three: a lookalike token in a non-operator context whose
+# delimiter word ALSO appears alone on a later line, with a live gh write between
+# them. Documented in docs/agents-workflow.md alongside the other residuals.
+strip_quoted_heredoc_bodies() {
+  local mode=none delim="" strip_tabs=0 line check d
+  local -a held=()
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$mode" != none ]; then
+      check="$line"
+      if [ "$strip_tabs" -eq 1 ]; then
+        while [[ "$check" == $'\t'* ]]; do
+          check="${check:1}"
+        done
+      fi
+      # An unquoted body is emitted (it is live shell and must still be scanned);
+      # a quoted body is HELD, and only discarded once the delimiter is seen.
+      if [ "$mode" = unquoted ]; then
+        printf '%s\n' "$line"
+      else
+        held+=("$line")
+      fi
+      if [ "$check" = "$delim" ]; then
+        [ "$mode" = quoted ] && held=()
+        mode=none
+      fi
+      continue
+    fi
+    printf '%s\n' "$line"
+    # Both patterns below require a literal `<<`; skip the regex work without it.
+    [[ "$line" == *'<<'* ]] || continue
+    # Match the FIRST heredoc operator on the line. `(^|[^<])` keeps a `<<<`
+    # herestring from being read as `<<` plus a quoted word (rule 1 above).
+    # A QUOTED delimiter -- <<[-]'D', <<[-]"D", <<[-]\D -- opens a strippable body;
+    # a bare <<[-]D matches only the second pattern and is merely tracked, so its
+    # body keeps being scanned exactly as before (rule 2 above).
+    if [[ "$line" =~ (^|[^<])\<\<(-)?[[:space:]]*(\'([A-Za-z_][A-Za-z0-9_]*)\'|\"([A-Za-z_][A-Za-z0-9_]*)\"|\\([A-Za-z_][A-Za-z0-9_]*)) ]]; then
+      mode=quoted
+      d="${BASH_REMATCH[4]}${BASH_REMATCH[5]}${BASH_REMATCH[6]}"
+    elif [[ "$line" =~ (^|[^<])\<\<(-)?[[:space:]]*([A-Za-z_][A-Za-z0-9_-]*) ]]; then
+      mode=unquoted
+      d="${BASH_REMATCH[3]}"
+    else
+      continue
+    fi
+    # Both patterns require [A-Za-z_] to start the delimiter, so `d` is never empty.
+    delim="$d"
+    # BASH_REMATCH[2] is the `-` of `<<-` in both patterns: strip leading TABS (only
+    # tabs, matching bash) from the closing delimiter line.
+    if [ -n "${BASH_REMATCH[2]}" ]; then strip_tabs=1; else strip_tabs=0; fi
+  done <<<"$1"
+  # Unterminated quoted heredoc: strip nothing (rule 3 above).
+  [ "${#held[@]}" -eq 0 ] || printf '%s\n' "${held[@]}"
+}
+
+# This hook runs on EVERY Bash call, so skip the fork entirely when there is no
+# heredoc operator to find: with no `<<` present the function is provably an
+# identity transform (it can only ever delete lines a `<<` match opened).
+case "$CMD" in
+  *'<<'*) CMD_SANITIZED=$(strip_quoted_heredoc_bodies "$CMD") ;;
+  *) CMD_SANITIZED="$CMD" ;;
+esac
+
 # Split into command segments on shell control operators, so `gh` is only ever
 # judged at a command position.
-SEG=$(printf '%s' "$CMD" | tr ';&|(){}`' '\n')
+SEG=$(printf '%s' "$CMD_SANITIZED" | tr ';&|(){}`' '\n')
 
 # `gh` at a command position: through a leading VAR=x assignment, a fixed wrapper
 # list, an absolute/relative path to the binary, and gh's global -R/--repo/

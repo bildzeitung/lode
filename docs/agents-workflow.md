@@ -1418,6 +1418,33 @@ straight through; both the old denylist and the first cut of this allowlist did 
 caught in `lode-9mbt`'s technical review. `tests/test_gh_write_guard.py` pins all three spellings
 (`-f x=y`, `-fx=y`, `--field=x=y`).
 
+**A QUOTED heredoc body is inert text and is not scanned as live shell (`lode-d5je`).** Discovered
+during `lode-obox`'s own technical review: writing a commit message via a heredoc whose body
+contained a command-substitution-wrapped `gh` invocation as a worked example — `git commit -F -
+<<'EOF' … $(gh issue create …) … EOF` — was denied, on `trunk` and on the `lode-obox` branch alike,
+even though a *quoted* heredoc delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) means the shell performs
+**no** substitution in the body at all. The segment split (on `` ` ``/`(`/`)`/…) doesn't know that,
+so the `$(...)` inside the inert body manufactured a fake segment start and got scanned anyway —
+the same false-positive class `lode-obox` closed for quoted string *arguments*, in the one shape
+`lode-obox` did not cover (a heredoc *body*, not an argument). It was not a regression from
+`lode-obox`: the pre-fix guard denied it too. `scripts/gh-write-guard.sh` now pre-processes the
+command line-by-line before segmenting, dropping every line between a **quoted** heredoc operator
+and its closing delimiter (honoring `<<-`'s tab-stripping) before the existing scan ever sees them.
+An **unquoted** heredoc (`<<EOF`) is left untouched by this pre-pass — substitution *is* real there,
+so its body must keep being scanned exactly as before; `tests/test_gh_write_guard.py` pins both
+directions plus the existing quoted-string-argument behavior from `lode-obox` staying unchanged.
+
+Because that pre-pass *deletes* lines before the scan runs, an input where it strips **more** than
+the shell would is a fail-**open** — a live `gh` write hidden from the scanner, strictly worse than
+the false deny it exists to fix. The whole danger is heredoc *lookalikes*: a `<<'D'`-shaped token
+the shell does not treat as a body-consuming operator at all (a `<<<` herestring, a token inside a
+quoted string argument or inside an unquoted heredoc's body), or a delimiter line that does not
+actually close the heredoc. So the pre-pass is biased to strip *less* — its rules are in the
+function's own header, the load-bearing one being that a quoted heredoc which never **closes**
+strips nothing. Accepted residual, same character as the others listed below: a lookalike token in
+a non-operator context whose delimiter word *also* appears alone on a later line, with a live `gh`
+write between the two. Closing that needs a quote-aware parse, not a line-based pre-pass.
+
 Residual gaps that remain — honest about what the inversion does **not** close, same character as the
 `blocks:` guard's own (a guard that reads only the command *string* cannot see through indirection):
 
