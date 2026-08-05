@@ -48,7 +48,7 @@ import subprocess
 from pathlib import Path
 
 from _gitrepo import _git
-from conftest import _fenced_bash, bash_fence_blocks
+from conftest import LAND_SKILL, _fenced_bash, bash_fence_blocks
 
 # Share lode-x495's quote-aware comment stripper rather than adding a second,
 # competing implementation -- the same reuse `tests/test_bd_list_limit_gate.py`
@@ -276,9 +276,6 @@ def test_refusal_never_mutates_anything(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Call-site pin against the SHIPPED SKILL.md (the fence is where the bug was)
 # ---------------------------------------------------------------------------
-
-LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
-
 
 # This module carried the last private copy of the ```bash fence parser until
 # lode-p4qb
