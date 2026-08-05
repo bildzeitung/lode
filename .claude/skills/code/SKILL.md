@@ -217,7 +217,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 1. **Sweep for stranded `ready-for-code-review` re-entries too — same invocation, same reason.** A
    human resolving a `code-reviewer` technical-review escalation or a `coding` build-time escalation
    applies exit (a) per `docs/agents-workflow.md` by re-adding `ready-for-code-review` (and removing
-   `land-escalated`) directly on the ticket, **outside** any `/code` run. That ticket stays
+   `land-escalated`) directly on the ticket, **outside** any `/code` run; exit (d)
+   (amend-and-re-gate, `lode-wp2r`) re-enters at the same label from a `/land` combined-re-gate
+   escalation. That ticket stays
    `in_progress` exactly like a `needs-rebase` kick-back, so `bd ready` never returns it either — and
    unlike `needs-rebase`, nothing in the ordinary Phase 1/2 flow below ever looks for it, because
    Phase 2 only dispatches a reviewer for a ticket *this same invocation's* Phase 1 just built
