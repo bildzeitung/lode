@@ -1510,6 +1510,102 @@ Anti-patterns), and the reviewer
 ([`.claude/agents/code-reviewer.md`](../.claude/agents/code-reviewer.md) — Non-negotiables +
 Anti-patterns) — since any of the three can reach a `gh` call mid-task.
 
+#### False-positive class: a `gh` command name merely *quoted* inside unrelated text (`lode-obox`)
+
+**Symptom.** The guard above denied a Bash call that carried **no `gh` invocation at all** — a git
+commit message whose prose *named* a forbidden verb, or a plain read-only `grep` whose pattern
+*mentioned* one. Two independent reproductions in one session: a `lode-w35h` builder's commit
+message backtick-quoted the release-publishing subcommand and was denied (it reworded around it);
+a reviewer's read-only `grep` pattern happened to contain a two-word `gh` subcommand name inside an
+alternation and was denied too. (Of those two, only the `grep` was a true false positive: the commit
+message used *double* quotes around a bare backtick pair, which the shell would really have executed
+— see the carve-out below. The fix covers the genuine class; that one wants single quotes.)
+
+**Mechanism (fixed by `lode-obox`, was live before it).** The guard splits the command into
+candidate "invocation segments" at shell control-operator characters (`; & | ( ) { } \``) so a `gh
+…` phrase after `&&`, inside `$(...)`, etc. is still caught at a command position. The split used
+to be done with plain `tr`, which is **quoting-unaware**: a control character sitting *inside* a
+single- or double-quoted string argument — a commit message, a grep pattern — still split the
+string, and if a `gh <verb>` phrase then landed at the **start** of one of the resulting synthetic
+fragments, the guard evaluated that fragment as if it were a real invocation. `tr ';&|(){}\`'
+'\n'` has no concept of "am I inside a quote right now" — it rewrites every one of those
+characters unconditionally, wherever they appear in the raw string.
+
+**Fixed, not just documented.** The scanning logic was extracted from the inline one-liner in
+`.claude/settings.json` into [`scripts/gh-write-guard.sh`](../scripts/gh-write-guard.sh) (mirroring
+the `lode-fpmi` fabricated-SHA guard's own extraction, and for the same reason: the fix needs
+`bash` array/substring primitives that `dash` — the harness's actual `PreToolUse` interpreter,
+`lode-9gm2` — does not have). The script's `_split_unquoted` walks the command string tracking
+single-/double-quote state (and a backslash escaping the very next character, in or out of quotes)
+and only treats a control character as a split point **outside** any quote — i.e. it mirrors where
+the real shell would treat that character as an operator, instead of splitting blind. This closes
+the false-positive class structurally: `_split_unquoted` never manufactures a segment start where
+the real shell grammar has none, so it can only produce **fewer** segments than the old blind `tr`,
+never new ones.
+
+**"Quote-aware" is not "everything inside a quote is inert" — one case had to be put back.** Inside
+**double** quotes, `;`, `|`, `(`, `)`, `{`, `}` really are literal (that is the false-positive class
+above), but `$(...)` and an **unescaped** backtick are *not*: they are live command substitution the
+shell executes. The old blind `tr` split those incidentally, so it denied
+`echo "$(gh issue create …)"`; a splitter that skipped the whole double-quoted region would have
+dropped that denial **silently** — an unargued narrowing of the guard's deny surface, exactly what
+`lode-obox`'s own acceptance criteria forbid. So `_split_unquoted` splits on those two forms inside
+double quotes and on nothing else, and both are pinned as `DENIED` regression cases. Fewer segments
+is *not* automatically the safe direction; it has to be checked case by case, which is what this
+carve-out is. (Practical consequence for prose: to *name* a `gh` verb in a commit message, use
+**single** quotes or escape the backticks — inside double quotes an unescaped backtick pair is a
+command your shell runs, not a citation.)
+
+**Proof of no widening — this was the load-bearing constraint, not the false-positive fix itself.**
+A `gh` write guard's failure modes are asymmetric: a false ALLOW is a public write under the user's
+identity (unrecoverable, `lode-o29m`); a false DENY costs a reword. So the fix was verified, not
+just written:
+
+- Every one of the guard's existing `DENIED` / `ALLOWED` regression-pin cases
+  (`tests/test_gh_write_guard.py`) still decides identically against the new script — zero
+  regressions, checked directly (script-level) and through the delegating hook (hook-level).
+- **Sabotage-verified**: swapping `_split_unquoted` back out for the old `tr ';&|(){}\`' '\n'`
+  one-liner turns exactly the new false-positive-fix tests red while every other test in the file
+  stays green. That is the property a fix is supposed to have: diagnostic of the specific
+  mechanism, not incidentally passing.
+- A dedicated boundary test (`test_real_invocation_after_quoted_control_chars_is_still_denied`)
+  pins that a *real* `gh` write reached via `&&` **after** a heavily-metacharacter-laden quoted
+  string is still denied — the fix stops at the closing quote and resumes normal splitting, it does
+  not accidentally protect anything past it.
+- The deliberately-accepted "quoted indirection" residual (`sh -c "gh issue create …"`, documented
+  above) is unchanged and pinned by its own test: a `gh` phrase *inside* a quoted string was never
+  at a segment start under the old splitter either, unless a control character happened to precede
+  it *inside* the quotes — which is exactly the class this fix closes, not a new gap it opens.
+- **One accepted fail-open residual, named rather than glossed:** an **unbalanced** quote leaves the
+  rest of the command "inside" a quote, so nothing after it splits — and fewer segments is the
+  *permissive* direction here, not the conservative one. Verified: `echo x " y ; gh issue create
+  --title z` is **allowed**, where the old blind `tr` split denied it. It is accepted rather than
+  fixed because the only alternative is guessing which quote the author meant, and a wrong guess
+  re-manufactures the very false segment start this fix removes; the input is a command the shell is
+  about to run, so an unbalanced quote is overwhelmingly a typo that will not parse anyway.
+- The hook now **fails closed** if `scripts/gh-write-guard.sh` cannot be resolved (missing, not
+  executable, or no repo root) — a new failure mode introduced by extracting the logic into an
+  external script at all. This deliberately does **not** copy `lode-fpmi`'s own wrapper, which
+  silently falls through in that case: that guard's stakes are lower (a missed fabricated-SHA
+  detection vs. an unrecoverable public write), so this one denies instead of risking a silent
+  false ALLOW on a broken checkout.
+
+**No change to the guard's read-only allowlist itself** — the `P`/`API`/`R`/`APIWRITE`/`APIGET`
+regex logic (what counts as a `gh` command position, and which verbs are read-only) is byte-for-byte
+unchanged; only the segment-splitting step that decides *what text the regex logic ever sees*
+changed. `lode-obox`'s original framing was right that a regex *narrowing* here is dangerous and
+must be separately argued with evidence it cannot open an under-deny hole — the fix above stayed
+inside that constraint by construction: it changes when a fragment starts, never what counts as a
+match once a fragment exists.
+
+**If you hit this class again** — an otherwise-legitimate Bash call denied because a `gh` command
+name merely appears, quoted, inside unrelated prose or a search pattern — the correct response is
+still to **reword** around it and, if the fix above did not fully cover the shape you hit, **file a
+bd follow-up with the exact command that triggered it** (the regression-pin table above is the
+guard's entire memory of what "known safe" looks like). **Never** work around the guard, and never
+relax it as a side effect of unrelated work — both remain true after this fix exactly as they were
+before it.
+
 ### Guard against fabricated SHAs (lode-fpmi)
 
 **An agent once wrote a 40-hex SHA it had invented into bd metadata.** It held the short hash
@@ -1612,14 +1708,32 @@ resolve its script. The sabotage test that proves the point (splice the original
 in, watch dash die with "Bad substitution" while the shipped form survives) was retargeted at the
 wrapper rather than dropped.
 
-**The fail-open path is NEW with this change, and was taken deliberately.** While the logic was
-inline, a guard could not fail to run at all; now, if `CLAUDE_PROJECT_DIR` is unset *and*
-`git rev-parse` cannot resolve a root, or the script is missing or loses its exec bit, the wrapper
-silently skips the guard. This was raised explicitly and decided by the maintainer (2026-08-04) in
-favour of matching `lode-fpmi`'s precedent for all three, rather than making the `gh` guard fail
-closed. The accepted residual: on such a machine a `gh` write is gated only by `CLAUDE.md`'s prose
-rule. Each wrapper's fail-open is pinned by its own test, and a lost exec bit — which would disable
-a guard with every other test still green — has a dedicated one.
+**The fail-open path is NEW with this change, and was taken deliberately — for two of the three.**
+While the logic was inline, a guard could not fail to run at all; now, if `CLAUDE_PROJECT_DIR` is
+unset *and* `git rev-parse` cannot resolve a root, or the script is missing or loses its exec bit,
+the wrapper can silently skip the guard. This was raised explicitly and decided by the maintainer
+(2026-08-04) in favour of matching `lode-fpmi`'s precedent, and it stands unchanged for the
+`bd create --deps blocks:` guard and the fabricated-SHA guard. Each of those two wrappers' fail-open
+is pinned by its own test, and a lost exec bit — which would disable a guard with every other test
+still green — has a dedicated one.
+
+**The `gh`-write guard is the deliberate exception: it fails *closed*, not open (`lode-obox`,
+2026-08-04, same day, decided after this section).** The 2026-08-04 decision above was reopened
+specifically for this guard once `lode-obox`'s own review pointed out that an unresolvable
+`scripts/gh-write-guard.sh` is reachable from ordinary VCS state (an older checkout, a partial
+revert, a mid-bisect tree) — not just a machine-level `CLAUDE_PROJECT_DIR` misconfiguration — and
+that a silent fail-open there is exactly the unrecoverable false-ALLOW this guard exists to prevent
+(`gh` is authed as the user; a fabricated-SHA miss or an inverted `blocks:` edge is recoverable in a
+way a public write under the user's name is not). The maintainer accepted the crossing of `lode-obox`'s
+own acceptance criterion 4 ("no change to `.claude/settings.json`'s deny behaviour") to ship it,
+scoped narrowly: the wrapper denies on an unresolvable script **only** when the command text also
+contains the substring `gh` (`case "$CMD" in *gh*) …`), so an unrelated Bash call on a broken
+checkout still falls through rather than bricking the whole session. Pinned by
+`test_hook_fails_closed_when_guard_script_is_missing` and
+`test_hook_fails_closed_when_guard_script_is_not_executable`
+(`tests/test_gh_write_guard.py`) — do not reintroduce a fail-open pin for this guard; see that
+ticket's own notes for the full option analysis (why "land the splitter, defer the mitigation" was
+rejected as incoherent).
 
 ### Guard against cross-block shell state in skill markdown (lode-sfnb / lode-x495)
 
