@@ -2122,10 +2122,10 @@ no call-site `isolation` argument — `subagent_type: "land-review"`
 landed in its own `.claude/worktrees/agent-<hash>`, while the control
 (`subagent_type: "claude"`) ran in the main checkout on `trunk`, ruling out "the harness isolates
 every agent by default" as a confound. As with `lode-09td`'s later probes of the same design (above),
-the contrast is between *whole* agent definitions, not a single-variable ablation of the isolation key
-alone — `subagent_type` differs in system prompt, model, and tools too — so `subagent_type` is the
-only isolation-*relevant* difference between control and test case, not the only difference full
-stop. Frontmatter isolation is therefore the sole enforcement point
+the contrast is between *whole* agent definitions — varying `subagent_type` varies system prompt,
+model, and tools along with it — so the frontmatter key was the only isolation-*relevant* difference
+between control and test case, not a single-variable ablation of that key on one fixed definition.
+Frontmatter isolation is therefore the sole enforcement point
 for this dispatch. Note it took the probe, not a `/land` pass: every real pass dispatched `land-review`
 *with* the option, which is unfalsifiable evidence for the frontmatter.
 
