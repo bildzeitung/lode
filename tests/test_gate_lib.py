@@ -496,6 +496,81 @@ def test_every_consumer_source_line_supplies_advisory_or_sentinel(script: Path):
     )
 
 
+# Matches a real call to either helper -- deliberately NOT anchored to
+# line-start, since a call site can follow `||` or `if ! ` on the same line
+# (e.g. `REPO="..." || gate_could_not_run ...`). `_non_comment_lines` is what
+# keeps a comment that merely NAMES a helper (this file's own header, or
+# validate-mermaid.sh's AUDIT trail, both of which discuss gate_could_not_run
+# in prose) from registering as a call site here.
+CALL_SITE_RE = re.compile(r"\b(?:gate_could_not_run|escalate_unless_content)\b")
+
+
+def _first_call_site_line(text: str) -> int | None:
+    """1-based line number of the first non-comment call site in `text`, or
+    None if there is none."""
+    for n, line in _non_comment_lines(text):
+        if CALL_SITE_RE.search(line):
+            return n
+    return None
+
+
+def _guard_line(text: str) -> int:
+    """1-based line number where the guarded-source block starts."""
+    return text[: _guard_match(text).start()].count("\n") + 1
+
+
+@pytest.mark.parametrize("script", CONSUMERS, ids=lambda p: p.name)
+def test_source_precedes_every_call_site(script: Path):
+    """The successor to the ordering sweep lode-ysr6 deleted (lode-b4md):
+    nothing pinned SOURCE-BEFORE-FIRST-CALL-SITE, only guard-presence and
+    advisory-or-sentinel. `gate_could_not_run`/`escalate_unless_content` are
+    functions gate-lib.sh defines at source time -- a call site above the
+    guarded source line would hit an unbound function (exit 127, no banner
+    at all), a more severe regression than anything the two sweeps above
+    catch. The guarded source line itself is not a call site (see
+    CALL_SITE_RE's docstring) so it can never be its own first match.
+
+    This does NOT backstop lode-dyq0's actual defect (a hardcoded pre-library
+    exit-2 block, not a call site -- see this file's module docstring
+    equivalent note in lode-b4md's ticket text). It catches a different,
+    more severe failure mode: a genuine call site landing above the source.
+    """
+    text = script.read_text()
+    call_line = _first_call_site_line(text)
+    assert call_line is not None, f"{script.name}: no call site discovered"
+    assert call_line > _guard_line(text), (
+        f"{script.name}: a gate_could_not_run/escalate_unless_content call "
+        f"site sits at line {call_line}, above the guarded gate-lib.sh source "
+        f"at line {_guard_line(text)} -- that call would hit an unbound "
+        f"function (exit 127) rather than the fail-closed guard."
+    )
+
+
+@pytest.mark.parametrize("script", CONSUMERS, ids=lambda p: p.name)
+def test_source_precedes_call_site_sweep_is_not_vacuous(script: Path):
+    """NON-VACUITY for the test above, proven the same way the advisory-or-
+    sentinel sweep proves itself (textually, on a copy -- no subprocess
+    needed since both sweeps are purely static line-position checks):
+    inserting a real call site line immediately above the guarded source
+    must put it at or before the source line, i.e. must be what
+    test_source_precedes_every_call_site would flag."""
+    text = script.read_text()
+    match = _guard_match(text)
+    sabotaged = (
+        text[: match.start()]
+        + 'escalate_unless_content 1 "x"\n'
+        + text[match.start() :]
+    )
+    assert sabotaged != text, "sabotage did not apply"
+
+    call_line = _first_call_site_line(sabotaged)
+    assert call_line is not None
+    assert call_line <= _guard_line(sabotaged), (
+        f"{script.name}: sabotaged call site did not land above the source -- "
+        f"this sweep proves nothing about this consumer."
+    )
+
+
 @pytest.mark.parametrize("script", CONSUMERS, ids=lambda p: p.name)
 def test_every_consumer_exits_2_when_gate_lib_is_missing(script: Path, tmp_path: Path):
     """The guard's behaviour, not just its presence. Reproduced the way the
