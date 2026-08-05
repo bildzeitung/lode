@@ -350,6 +350,13 @@ string through `.`, which can't be verified to stay inside the worktree"), so th
 address; hand-rolling `VIRTUAL_ENV=...`/`PATH=...` trips the same guard. The explicit-path form has
 none of those shapes — no sourcing, no substitution, no `$PATH` expansion — so there is nothing to
 refuse. The `./venv/bin/` prefix is load-bearing: `nox` is not on the ambient `PATH` unactivated.
+The refusal is on **shape alone, before any condition is evaluated** — `if [ -x /nonexistent ]; then
+. ./venv/bin/activate; fi` draws the identical message, so burying a `source` in a branch that can
+never run does not get it past the guard. It is the `.` that is refused, not the `if/then/fi`: the
+same compound wrapping a plain `git` command is accepted. So a conditional gate step is available to
+an isolated agent, but never one that sources. (Both verified from a worktree-isolated dispatch,
+lode-828x — the case lode-6874's review raised but could not test, having come up in the main
+checkout rather than a worktree, the fault lode-jk44 later closed.)
 
 **Activation is unnecessary, not merely inconvenient — `_venv_tool()` (lode-0yfn) removed the reason
 for it.** `default_venv_backend = "none"` means sessions inherit the invoking shell's `PATH`, and
@@ -380,7 +387,7 @@ every new worktree branches from `origin/trunk` and so always carries `_venv_too
 guard-friendly fallback for such a branch is `./venv/bin/pytest` directly — a plain command, and
 `tests/conftest.py`'s guard 0 still protects it against a wrong-checkout import. Note that this is
 base skew *transferred*, not eliminated: dropping the wrapper removes the file-missing form of it,
-not the general problem, which is lode-828x's subject.
+not the general problem; lode-828x took that residue up and closed it as needing no further mechanism.
 
 **Why no `scripts/nox.sh` wrapper.** One was built and reviewed for this ticket, justified on three
 grounds — locating `nox`, a guard-friendly single-command shape, and the exit-2 contract — and each
