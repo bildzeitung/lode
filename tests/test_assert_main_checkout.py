@@ -378,6 +378,13 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 #    silently CORRUPTED by the blockquote strip, not skipped. A mutating
 #    command written that way would reach this sweep in mangled form. That
 #    helper owns the rule and the measurement; do not restate either here.
+#
+# `test_every_allowlist_entry_still_matches_a_real_command` below is a hand-written
+# liveness pin, mirroring the precedent `test_skill_bash_state.py::_dead_allowlist_keys`
+# set. Whether these hand-written pins should share one mechanism was decided
+# (rejected extraction, in favor of shared discipline instead) in
+# docs/decisions.md, search "The three hand-written liveness pins stay separate"
+# (lode-7zap). Do not re-litigate here.
 # ---------------------------------------------------------------------------
 
 # Every command shape that mutates cwd's repo. Not git-only, deliberately:
@@ -520,6 +527,27 @@ def test_land_skill_guard_covers_every_known_mutating_fence() -> None:
     assert violations == [], "\n".join(violations)
 
 
+def _dead_allowlist_entries(allowlist: dict[str, str], *, markdown: str) -> list[str]:
+    """Allowlist keys in `allowlist` that no longer match any real command line in
+    `markdown`'s fenced ```bash blocks (comment-stripped, `.strip()`'d) -- the same
+    live-set computation the pin below uses to decide whether an entry excuses
+    anything. A key returned here is dead: it currently excuses nothing, but stays
+    in the allowlist regardless, ready to silently re-excuse a brand-new command
+    that happens to share its exact text (lode-1d2y's own precedent for this shape
+    is `test_skill_bash_state.py::_dead_allowlist_keys`).
+
+    `allowlist` and `markdown` are parameters, not read from the module globals
+    directly, so `test_every_allowlist_entry_is_provably_checked_by_sabotage` below
+    can exercise this exact primitive -- the same one the real pin calls -- against
+    a synthetic fixture, without mutating the real `land/SKILL.md` on disk.
+    """
+    blocks = bash_fence_blocks(markdown)
+    live = {
+        _strip_comment(raw).strip() for block in blocks for raw in block.splitlines()
+    }
+    return sorted(set(allowlist) - live)
+
+
 def test_every_allowlist_entry_still_matches_a_real_command() -> None:
     """The sweep above passes when it finds no violation -- including when it
     finds NOTHING AT ALL. Two silent regressions produce that: a fence parser
@@ -528,19 +556,57 @@ def test_every_allowlist_entry_still_matches_a_real_command() -> None:
     over text that no longer exists. Both leave `_KNOWN_LAND_SKILL_MUTATIONS`
     entries matching nothing, so requiring every entry to still hit a real
     line is what makes the green above mean something.
-    """
-    blocks = bash_fence_blocks(LAND_SKILL.read_text(encoding="utf-8"))
-    live = {
-        _strip_comment(raw).strip() for block in blocks for raw in block.splitlines()
-    }
 
-    orphaned = sorted(set(_KNOWN_LAND_SKILL_MUTATIONS) - live)
+    Non-vacuousness of THIS pin is proven separately, by
+    `test_every_allowlist_entry_is_provably_checked_by_sabotage` below (lode-7zap) --
+    a liveness pin is a negative assertion over data expected to be empty in the
+    healthy case, so its interesting branch never runs on real data and this test
+    alone cannot show it would catch a real regression.
+    """
+    orphaned = _dead_allowlist_entries(
+        _KNOWN_LAND_SKILL_MUTATIONS, markdown=LAND_SKILL.read_text(encoding="utf-8")
+    )
 
     assert orphaned == [], (
         "these allowlist entries no longer match any command in land/SKILL.md, "
         "so they exempt nothing and the sweep's green is that much emptier -- "
         f"delete them or re-derive them from the current file: {orphaned}"
     )
+
+
+def test_every_allowlist_entry_is_provably_checked_by_sabotage() -> None:
+    """Non-vacuousness proof for the pin above (lode-7zap): a test that passes both
+    before and after the regression it's meant to catch is worthless. Mirrors
+    `test_skill_bash_state.py::test_every_allowlist_entry_is_provably_checked_by_
+    sabotage` (lode-e49j) -- the precedent this ticket exists to bring this module
+    up to par with -- including its measured fix: hold ONE key/fixture constant and
+    vary only the markdown CONTENT between the live and dead assertions. Two
+    differently-named fixtures would derive two different keys, so the "now dead"
+    assertion would pass on a name mismatch alone and prove nothing about whether
+    `_dead_allowlist_entries` actually tracks content -- the exact vacuous-sabotage
+    shape lode-e49j's review caught and lode-1d2y's own pin (until now) had no
+    counterpart to guard against at all.
+
+    Sabotage recipe for this ticket's own future maintenance, recorded here per its
+    acceptance criteria: delete either assertion below, or replace `_dead_allowlist_
+    entries`'s body with `return []` unconditionally, and this test goes red.
+    """
+    key = "git push origin trunk"
+    markdown_live = f"```bash\n{key}\n```\n"
+    assert _dead_allowlist_entries({key: "fixture"}, markdown=markdown_live) == [], (
+        "fixture assumption broken: the key is not actually a live command in the "
+        "unfixed markdown fixture"
+    )
+
+    bogus = "git push origin THIS_BRANCH_DOES_NOT_EXIST_ANYWHERE_lode_7zap"
+    assert _dead_allowlist_entries({bogus: "fixture"}, markdown=markdown_live) == [
+        bogus
+    ], "a bogus key matching no real command must be reported dead"
+
+    markdown_fixed = f"```bash\n# {key}\n```\n"  # commented out -- no longer live
+    assert _dead_allowlist_entries({key: "fixture"}, markdown=markdown_fixed) == [
+        key
+    ], "removing the command from the corpus must flip the SAME key from live to dead"
 
 
 def test_sweep_catches_a_brand_new_unguarded_mutation() -> None:
