@@ -522,11 +522,10 @@ with the staleness window stated plainly rather than implied away, wherever each
 
 #### Guard mechanics, scope, and the CC 2.1.216 data point (lode-nt98)
 
-This subsection is general recycled-worktree-guard material — the script, its preconditions, its
-scope, the duplication policy, and the 2.1.216 falsification test — not specific to the `baseRef`
-decision above; it applies regardless of which `baseRef` value is in effect.
+Everything below holds regardless of which `baseRef` value is in effect — none of it is specific to
+the decision above.
 
-The assertion is defence in depth rather than the answer. `coding.md` (both cycles),
+The guard's ancestry assertion is defence in depth, not the root-cause fix. `coding.md` (both cycles),
 `code-reviewer.md`, and `land-review.md` all assert, as the first thing they do after confirming
 they're in a worktree at all (never on `pwd` or the branch name alone — a recycled worktree's branch
 still looks like a normal `worktree-agent-…` name), that `HEAD` is an ancestor of `origin/trunk` —
