@@ -15,7 +15,7 @@ from unittest import mock
 
 import httpx
 import pytest
-from conftest import (
+from _anthropic_rig import (
     _jsonl,
     _payload_without,
     _real_anthropic_client,
@@ -751,8 +751,8 @@ def test_collect_batch_wraps_a_bad_request_from_batches_results() -> None:
     assert err.__cause__ is bad_request
 
 
-# The shared real-SDK Anthropic batch-results rig lives in conftest.py
-# (lode-a9x3); the imports at the top of this file are its roster.
+# The shared real-SDK Anthropic batch-results rig lives in _anthropic_rig.py
+# (lode-a9x3, lode-qnfp); the imports at the top of this file are its roster.
 
 
 def _succeeded_jsonl_line(custom_id: str) -> bytes:
