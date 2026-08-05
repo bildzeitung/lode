@@ -3375,17 +3375,13 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   still names an existing executable script, both bash consumers still read the
   canonical file, and no consumer has re-inlined a literal copy.
 
-- **`lode-3en5`: file-local vs. repo-wide shared row-factory for test INSERT helpers.** While
-  folding `tests/test_enrich.py`'s `_insert_done_enrich_job` into `_insert_enrich_job` (itself
-  hoisted to that file's Helpers section by `lode-z1e7`), the ticket flagged a broader question:
-  `tests/` has roughly two dozen raw `INSERT INTO jobs` sites spread across ten files
-  (`test_cli.py` alone has over a dozen; also `test_jobs.py`, `test_storage.py`,
-  `test_reconcile.py`, `test_enrichment_view.py`, `test_tui_browse_screen.py`,
-  `test_network_guard.py`). A single shared row factory in `tests/conftest.py` is the
-  fully-consolidated end state. **Decision: keep the fold file-local (this ticket's scope), do
-  NOT start a repo-wide `conftest.py` factory here.** A partial hoist covering only
-  `test_enrich.py`/`test_worker.py` (the two files `lode-z1e7` already touched) while nine other
-  files keep inline INSERTs is a worse end state than either "all local" or "all shared" — it adds
-  a second convention for a future editor to choose between without actually retiring the raw-SQL
-  pattern anywhere else. If the repo-wide factory is wanted, it should be its own ticket scoped
-  to all ten files at once, not an incidental expansion riding on a two-file cleanup.
+- **A repo-wide shared job-row factory for tests, or file-local helpers?** Many `tests/` modules
+  still write raw `INSERT INTO jobs` inline; a single row factory in `tests/conftest.py` is the
+  fully-consolidated end state. Leaning **all-or-nothing**: a partial hoist covering only the
+  files a cleanup ticket happens to touch, while the rest keep inline INSERTs, is a worse end
+  state than either "all local" or "all shared" — it adds a second convention for a future editor
+  to choose between without retiring the raw-SQL pattern anywhere else. Revisit as its own ticket
+  scoped to every such file at once, never as an incidental expansion riding on a narrower
+  cleanup. **Applied-for-`lode-3en5`:** folding `tests/test_enrich.py`'s `_insert_done_enrich_job`
+  into the sibling `_insert_enrich_job` (hoisted to that file's Helpers section by `lode-z1e7`)
+  stayed file-local on this leaning.

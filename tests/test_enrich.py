@@ -103,11 +103,7 @@ def _insert_enrich_job(
     status: str = "pending",
     prompt_ver: str | None = None,
 ) -> int:
-    """Insert an enrich job row; return the job id.
-
-    ``prompt_ver`` defaults to ``None``, reproducing a job that completed
-    before lode-q47 stamped it, or one the schema left NULL at enqueue time.
-    """
+    """Insert an enrich job row; return the job id."""
     with conn:
         cur = conn.execute(
             "INSERT INTO jobs (type, target_version, status, prompt_ver, next_attempt_at) "
