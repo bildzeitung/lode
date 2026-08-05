@@ -243,7 +243,9 @@ hazard: a pass armed by one test could still be running, touching that test's ow
 suite drives the app via a synchronous `def test_...` calling `asyncio.run(_drive())` — there is no
 `pytest-asyncio` and no `async def test_` anywhere in `tests/`. `asyncio.run()`'s `Runner.close()`
 awaits `loop.shutdown_default_executor()` on the way out, which joins every thread the default
-executor is still running. Measured directly (Python 3.14.5, this repo): an `asyncio.to_thread`
+executor is still running (bounded by `asyncio.constants.THREAD_JOIN_TIMEOUT`, 300s on 3.14 — a
+thread still running past that is abandoned with a loud `RuntimeWarning`, so the join is never
+silently skipped). Measured directly (Python 3.14.5, this repo): an `asyncio.to_thread`
 task cancelled mid-flight is still `finished=False` immediately after the cancel, but
 `finished=True` once `asyncio.run()` has returned, with zero surviving non-main threads. So a pass
 armed by one test's `asyncio.run()` call cannot in fact outlive that call — the straggler class this
@@ -258,7 +260,7 @@ this ticket gave `RelatedNotesPanel` a private single-worker
 `concurrent.futures.wait()` on the in-flight future after cancelling the coroutine side — turning an
 escaped thread into a bounded (if slow) teardown. Measured on that branch:
 
-- `_cancel_related_pass` has two callers beyond `on_unmount`: `reset()` (Ctrl+S, "Save & New") and
+- `_cancel_related_pass` is not reached only from `on_unmount`: `reset()` (Ctrl+S, "Save & New") and
   `update_draft("")` (an emptied draft, e.g. select-all-delete while typing). Both are mid-session,
   event-loop-thread paths, not teardown. Measured: a 600ms stand-in pass blocked the event loop
   514ms via `reset()` and 493ms via `update_draft("")` — the whole TUI freezes for most of a pass's
@@ -280,17 +282,13 @@ escaped thread into a bounded (if slow) teardown. Measured on that branch:
 
 **Decision: tolerate the straggler.** No product-side join. `_search_related` stays exactly as it
 is on trunk — `await asyncio.to_thread(find_related_notes, ...)` on the shared default executor —
-and `on_unmount` keeps `lode-ivu`'s cancel with no join added. Weighed against the refutation above,
-every join shape considered imposed real, measured interactive cost (event-loop freezes on
-save/discard-draft/screen-pop, an unbounded multi-hundred-MB download on a cold cache) to guard
-against a cross-test hazard that `Runner.close()` already closes. `find_related_notes` reaching a
-network call in production, independent of any join, is `lode-06p2`'s original concern and is
-covered by ordinary embedder-loading behavior elsewhere, not by this ticket.
+and `on_unmount` keeps `lode-ivu`'s cancel with no join added. Every join shape considered imposed
+the measured costs above to guard against a hazard the refutation above already closes. The
+cold-cache download itself is unaffected either way — it happens on the background pass, where it
+always has, rather than on a teardown path the user is waiting on.
 
 **What "provable" means here, given the refutation.** The ticket's acceptance bar asked to prove "a
-pass armed by one test cannot still be running when a later test starts." That is exactly what the
-`Runner.close()` measurement above establishes, per test, without any code change: every TUI test
-calls `asyncio.run()`, and `asyncio.run()` does not return until the default executor's threads —
-including any `find_related_notes` pass a cancelled coroutine left running — have joined. A green
-full suite is not the evidence (nothing failed before this decision either); the
-`shutdown_default_executor()` mechanism is.
+pass armed by one test cannot still be running when a later test starts." The `Runner.close()`
+measurement above establishes exactly that, per test, without any code change. A green full suite is
+not the evidence (nothing failed before this decision either); the `shutdown_default_executor()`
+mechanism is.
