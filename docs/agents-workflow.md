@@ -2841,7 +2841,7 @@ assumption would not have closed it.
   makes `git reset --hard` **unreachable** unless the assertion passed, enforced by the shell with no
   decision in between; nothing crosses a block boundary, so lode-sfnb is satisfied. Because
   `land/SKILL.md` is edited by several tickets concurrently, this is pinned rather than trusted:
-  `tests/test_assert_main_checkout.py` parses the file's ```bash fences **as separate blocks** and
+  `tests/test_land_skill_guard_coverage.py` parses the file's ```bash fences **as separate blocks** and
   asserts the guard call appears in the same block as, and before, every mutation Section 1 issues
   (`bd dolt pull` and each `git` write). Verified by mutation — splitting the fences apart, hoisting
   a single protected command into an unguarded fence, and reordering within the block are each
@@ -2853,7 +2853,7 @@ assumption would not have closed it.
   and Section 4's reformat-commit block, which reach a bare `git merge --no-ff` (via
   `scripts/land-merge-one.sh`) and a bare `git commit`. **Do not maintain the call-site list here, or
   in the script's header** — both went stale within one ticket of being written, which is the whole
-  reason `lode-pxyt` exists. `tests/test_assert_main_checkout.py` is the authoritative list, and it no
+  reason `lode-pxyt` exists. `tests/test_land_skill_guard_coverage.py` is the authoritative list, and it no
   longer keeps it via four hand-anchored per-fence pins. Those were closed-world: a genuinely new
   unguarded fence matched none of their hand-picked selectors and failed nothing, while every
   exemption was prose no gate could falsify. `lode-1d2y` added the open-world replacement — a sweep
