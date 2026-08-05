@@ -125,7 +125,7 @@ _TOOL_NAME = "extract_enrichment"
 #: non-streaming timeout guard, which never applies here for the reason
 #: :data:`lode.qa.MAX_TOKENS` documents (it owns that claim; do not restate
 #: it). On the IMMEDIATE route :func:`_call_haiku` passes
-#: :attr:`~lode.config.Settings.llm_call_timeout_s` (120s), so a runaway
+#: :attr:`~lode.config.Settings.enrich_call_timeout_s` (120s), so a runaway
 #: thinking budget there tends to surface as a timeout before it exhausts this
 #: cap. The BATCH route has no equivalent bound:
 #: :class:`~lode.llm_provider.BatchRequest` carries no per-item timeout (the
@@ -270,7 +270,7 @@ def _call_haiku(
         user_prompt=prompt,
         output_schema=EnrichmentResult,
         max_tokens=tier.resolve_max_tokens(MAX_TOKENS),
-        timeout_s=settings.llm_call_timeout_s,
+        timeout_s=settings.enrich_call_timeout_s,
         tool_name=_TOOL_NAME,
         tool_description=_TOOL_DESCRIPTION,
     )
@@ -708,7 +708,7 @@ def submit_enrich_batch(
     # Submit the batch — this is the network call that commits the spend.
     # Bounded client-side (lode-olmi.15): with no timeout this can otherwise
     # hang indefinitely with no signal to the caller.
-    batch_id = provider.submit_batch(requests, timeout_s=settings.llm_call_timeout_s)
+    batch_id = provider.submit_batch(requests, timeout_s=settings.enrich_call_timeout_s)
 
     # Persist the handle + flip to running so the collect step (and a restart)
     # can find these jobs (lode-i05.5).
@@ -789,7 +789,7 @@ def collect_enrich_batch(
     # Bounded client-side (lode-olmi.15): with no timeout either call below
     # can otherwise hang indefinitely with no signal to the caller.
     status, batch_results = provider.collect_batch(
-        batch_id, timeout_s=settings.llm_call_timeout_s
+        batch_id, timeout_s=settings.enrich_call_timeout_s
     )
     if status == "pending":
         log.debug("collect_enrich_batch: batch=%s still pending", batch_id)

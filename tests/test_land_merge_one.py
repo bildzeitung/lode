@@ -278,6 +278,50 @@ def test_staged_jsonl_trap_is_retried_and_succeeds(tmp_path: Path) -> None:
     assert status.stdout == ""
 
 
+def test_staged_interactions_jsonl_trap_is_retried_and_succeeds(tmp_path: Path) -> None:
+    """The SAME trap, sprung by the OTHER passive export (lode-2nw5). The retry used to
+    restore `.beads/issues.jsonl` alone; it now restores every entry on
+    `scripts/beads-passive-exports.txt`, so `.beads/interactions.jsonl` -- which the
+    pre-commit hook regenerates and restages in the very same commit -- is covered too.
+
+    This is the behavioural half of the pin: `tests/test_land_merge_one_passive_exports.py`
+    asserts over the script's TEXT, which cannot tell whether the restore actually reaches
+    this path. Note the sibling test above deliberately seeds ONLY `issues.jsonl`, leaving
+    `interactions.jsonl` unknown to git in that repo -- between the two, a restore that is
+    atomic over its pathspecs (and so restores NOTHING when one is unknown) is red either
+    way, which is exactly the regression this pair exists to catch."""
+    repo = _init_repo(tmp_path)
+    _commit_file(repo, ".beads/interactions.jsonl", "A\n", "seed interactions on trunk")
+
+    _branch_from(repo, "trunk", "origin/land/lode-i")
+    _commit_file(
+        repo, ".beads/interactions.jsonl", "B\n", "branch updates interactions"
+    )
+    _commit_file(repo, "i.txt", "from I\n", "branch adds i.txt")
+
+    _git(repo, "checkout", "-q", "trunk")
+    (repo / ".beads" / "interactions.jsonl").write_text("C\n")
+    _git(repo, "add", ".beads/interactions.jsonl")  # staged, uncommitted -- the trap
+
+    msg_dir = tmp_path / "msgs"
+    _write_msg(msg_dir, "lode-i", "Merge land/lode-i: interactions trap retry (lode-i)")
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "lode-i", str(msg_dir)],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (repo / "i.txt").read_text() == "from I\n"
+    assert (repo / ".beads" / "interactions.jsonl").read_text() == "B\n"
+    status = _git(repo, "status", "--porcelain")
+    assert status.stdout == ""
+
+
 def test_unexpected_git_failure_exits_2_not_1(tmp_path: Path) -> None:
     """A git failure that is neither the jsonl trap nor a real conflict (git
     ls-files -u stays empty) must be treated as a machine fault -- exit 2,
