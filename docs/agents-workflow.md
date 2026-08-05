@@ -2064,7 +2064,7 @@ flowchart TD
 
 **Resolving `land-escalated`.** The label is not terminal — a human resolves it, outside a `/land`
 pass, and every resolution **removes `land-escalated`** so a surfacer's queue can actually drain
-instead of growing monotonically. Exactly three exits (full mechanics in
+instead of growing monotonically. Exactly four exits (full mechanics in
 [`land/SKILL.md`](../.claude/skills/land/SKILL.md#resolving-a-land-escalated-branch)):
 
 - **Land as-is** — the **branch is unchanged** (this exit is exactly the "it's fine as-is" case); the
@@ -2074,19 +2074,30 @@ instead of growing monotonically. Exactly three exits (full mechanics in
   `land-review`, which hits the same ambiguity and escalates again. There is deliberately **no
   "human-blessed" bypass label** — `land-review` stays authoritative on re-review; forcing a land past
   its objection is an out-of-band manual act, not a designed fast-path.
+- **Amend and re-gate** (`lode-wp2r`, decided) — the escalation was raised by `/land`'s **combined
+  re-gate**, `land-review` already **accepted** the branch, and the merge precheck was clean: the
+  branch itself is not wrong. The re-gate went red because of a defect in code **already on `trunk`**,
+  not in the branch. Neither "land as-is" (defined for an *unchanged* branch) nor "rebuild" (which
+  discards a branch a semantic review already accepted) fits that shape. The human amends the branch
+  with a small, scoped fix to the landed defect and re-enters it at `ready-for-code-review` — see the
+  per-source table below for why that gate, not `ready-for-land`. First observed and resolved this way
+  in `lode-pcee` (2026-07-28), which is what surfaced the gap this exit closes.
 - **Rebuild** — handled exactly like a `land-review` bounce: `bd supersede` the original onto a new
   ticket carrying the human's decision, and drop the branch.
 - **Drop** — `bd close` the ticket with a reason, and GC the branch.
 
 These resolve the label as `/land` sets it. `/code`'s producers set the same label for build-time,
-technical-review, and rebase-conflict escalations: **rebuild** and **drop** apply to those unchanged,
-while **land as-is** re-enters at the gate that escalated it rather than at `ready-for-land` —
-`ready-for-code-review` for both a `code-reviewer` technical-review escalation and a `coding`
-build-time clarification (the arguable case, decided: re-entry asserts the *ambiguity* is resolved,
-not that the branch is finished — the `code-reviewer` can still escalate a half-built branch), and
-`needs-rebase` for a `coding` rebase-pickup conflict; full mechanics and per-source table in
+technical-review, and rebase-conflict escalations: **rebuild** and **drop** apply to those unchanged;
+**amend and re-gate** is specific to a `/land` combined-re-gate escalation (a producer or
+`code-reviewer` gate failure is the branch's own doing, so there is nothing "already landed" to amend
+around — see the per-source table); and **land as-is** re-enters at the gate that escalated it rather
+than at `ready-for-land` — `ready-for-code-review` for both a `code-reviewer` technical-review
+escalation and a `coding` build-time clarification (the arguable case, decided: re-entry asserts the
+*ambiguity* is resolved, not that the branch is finished — the `code-reviewer` can still escalate a
+half-built branch), and `needs-rebase` for a `coding` rebase-pickup conflict; full mechanics and
+per-source table in
 [`land/SKILL.md`](../.claude/skills/land/SKILL.md#exit-a-per-source--re-enter-at-the-gate-that-escalated)
-(`lode-08g`).
+(`lode-08g`, extended by `lode-wp2r`).
 
 **Making the `ready-for-code-review` re-entry executable (lode-08g's decision had two gaps; both
 closed by lode-t83):** re-entering at `ready-for-code-review` is only a real re-entry if something
