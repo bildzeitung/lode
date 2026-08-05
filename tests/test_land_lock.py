@@ -1087,10 +1087,19 @@ _STALL_HOOK_VAR = "LAND_LOCK_TEST_STALL_SECONDS"
 # to name `_STALL_HOOK_VAR` (this ticket's own description does) would
 # otherwise redden this scan for a reason unrelated to any real caller --
 # excluded for that reason, not to widen what the scan is willing to miss.
+#
+# lode-do3q: read from the canonical scripts/beads-passive-exports.txt rather
+# than spelled out here (docs/decisions.md has the why). The assert is not
+# ceremony: an empty or missing list would silently empty this set and WIDEN
+# what the scan is willing to miss, with nothing red.
 _STALL_HOOK_SCAN_EXCLUDED_RELPATHS = {
-    ".beads/issues.jsonl",
-    ".beads/interactions.jsonl",
+    line
+    for line in (REPO_ROOT / "scripts" / "beads-passive-exports.txt")
+    .read_text(encoding="utf-8")
+    .splitlines()
+    if line
 }
+assert _STALL_HOOK_SCAN_EXCLUDED_RELPATHS, "scripts/beads-passive-exports.txt is empty"
 
 
 def _stall_hook_offenders(repo_root: Path, *, allowed: set[Path]) -> list[str]:

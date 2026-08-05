@@ -52,7 +52,7 @@
       {
         "hooks": [
           {
-            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}\"; [ -n \"$root\" ] && git -C \"$root\" checkout HEAD -- .beads/issues.jsonl .beads/interactions.jsonl 2>/dev/null; true",
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}\"; [ -n \"$root\" ] && bash \"$root/scripts/discard-beads-passive-export-churn.sh\" \"$root\"; true",
             "statusMessage": "Discarding passive bd export churn",
             "type": "command"
           }
