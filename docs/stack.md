@@ -633,6 +633,14 @@ more rename: a `config.toml` still carrying the old key is mapped onto the new o
 logic) before validation, so an un-migrated config file keeps working rather than tripping
 `extra="forbid"`. Exact implementation is `lode-568v.2`'s.
 
+> **Update (lode-7y6s):** `llm_call_timeout_s` was itself later renamed
+> `enrich_call_timeout_s`, once the `qa_call_timeout_s` split (`lode-wfyx`)
+> left the general name reaching only `enrich.py`'s call sites. The write-up
+> above stands as decided, but the mechanism it describes now runs **more
+> than once, oldest-name-first** — each hop's output feeds the next, so the
+> oldest key still reaches the current field. That order is load-bearing:
+> reversing it strands the oldest key on `extra="forbid"`.
+
 ### Error contract — diagnosability over genericness
 
 A provider's failure paths must surface enough to diagnose remotely, not collapse into one generic

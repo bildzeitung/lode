@@ -430,14 +430,14 @@ def test_enrich_version_returns_result(
 def test_enrich_version_passes_anthropic_call_timeout_to_create(
     conn: sqlite3.Connection,
 ) -> None:
-    """The immediate Haiku call is bounded by Settings.llm_call_timeout_s
+    """The immediate Haiku call is bounded by Settings.enrich_call_timeout_s
     (lode-olmi.15) -- this call is reachable from 'lode work's drain loop (a
     residual enrich job claimed by the main claim/run loop), so with no
     client-side timeout it could otherwise hang the drain forever.
     """
     _insert_note(conn)
     result = EnrichmentResult(tags=["design"], entities=[], inferred_edges=[])
-    settings = Settings(llm_call_timeout_s=42.0)
+    settings = Settings(enrich_call_timeout_s=42.0)
     client = _fake_client(result)
     enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
 
@@ -1276,14 +1276,14 @@ def test_submit_enrich_batch_returns_batch_id(
 def test_submit_enrich_batch_passes_anthropic_call_timeout_to_create(
     conn: sqlite3.Connection,
 ) -> None:
-    """create() is bounded by Settings.llm_call_timeout_s (lode-olmi.15) --
+    """create() is bounded by Settings.enrich_call_timeout_s (lode-olmi.15) --
     the network call that commits the spend must not be able to hang forever
     with no client-side timeout at all.
     """
     _insert_note(conn)
     job_id = _insert_enrich_job(conn)
 
-    settings = Settings(llm_call_timeout_s=42.0)
+    settings = Settings(enrich_call_timeout_s=42.0)
     client = _fake_batch_client(batch_id="batch-xyz")
     submit_enrich_batch(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
@@ -1598,7 +1598,7 @@ def test_collect_enrich_batch_returns_false_when_in_progress(
 def test_collect_enrich_batch_passes_anthropic_call_timeout_to_retrieve_and_results(
     conn: sqlite3.Connection,
 ) -> None:
-    """retrieve()/results() are bounded by Settings.llm_call_timeout_s
+    """retrieve()/results() are bounded by Settings.enrich_call_timeout_s
     (lode-olmi.15) -- with no client-side timeout either call could otherwise
     hang forever with no signal back to 'lode work'.
     """
@@ -1608,7 +1608,7 @@ def test_collect_enrich_batch_passes_anthropic_call_timeout_to_retrieve_and_resu
         conn.execute(
             "UPDATE jobs SET batch_handle = 'batch-done' WHERE id = ?", (job_id,)
         )
-    settings = Settings(llm_call_timeout_s=42.0)
+    settings = Settings(enrich_call_timeout_s=42.0)
     client = _fake_batch_client(results=[])
     collect_enrich_batch(
         conn, "batch-done", settings, provider=AnthropicProvider(client)
