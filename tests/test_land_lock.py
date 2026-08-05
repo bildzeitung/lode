@@ -120,8 +120,8 @@ def _init_repo(tmp_path: Path) -> Path:
     `git worktree add` requires a ref to branch from) fails outright with
     `fatal: empty ident name` on a machine with no ambient global git identity
     -- a fresh clone or a CI container (measured: exit 128). Setting it here
-    rather than in those tests matches the seven sibling script-test modules
-    that all configure it inside their own `_init_repo`, and keeps this file
+    rather than in those tests matches its sibling script-test modules that
+    all configure it inside their own `_init_repo`, and keeps this file
     from passing only on machines that happen to have a global identity
     configured.
     """

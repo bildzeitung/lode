@@ -23,14 +23,17 @@ fixture file content and commit messages -- encode the different contracts of
 the script each module drives; flattening them into one parametrized helper
 would likely be a net loss (lode-863q). Each module keeps its own.
 
-TWO pairs are byte-identical -- `test_release_latest_tag.py`/
-`test_release_bump.py`, and `test_recycled_worktree_guard.py`/
-`test_worktree_gc_classify.py` (lode-9owc) -- and both are left alone anyway:
-two copies of a fixture premise sits under the three-copy bar both precedents
-above fired at, and the two pairs are NOT identical to each other, so hoisting
-would produce two differently-shaped `_init_repo`s sharing one name across
-this directory rather than one helper. Count the copies per PAIR, not in
-total, when judging whether the bar has been crossed.
+Some `_init_repo`/`_add_worktree` bodies are duplicated across modules. Which
+modules share a body, how many do, and whether the duplication is
+byte-identical or merely identical modulo docstrings, are deliberately NOT
+enumerated here -- this paragraph's own hand-typed inventory has already gone
+stale three times (6f6ba9c, lode-9owc, lode-c835), the same failure class the
+roster paragraph above was rewritten to stop having. Measure it off the code
+when it matters, and count the copies of ONE body, not the copies in total:
+two differently-shaped `_init_repo`s duplicated twice each is not four copies
+of anything, and hoisting them under one name would leave this directory with
+differently-shaped `_init_repo`s sharing that name rather than one helper. A
+body under the three-copy bar both precedents above fired at is left alone.
 """
 
 from __future__ import annotations
