@@ -120,9 +120,24 @@ CMD="${1:-}"
 # position P could ever match already satisfies this test; the pre-filter
 # cannot skip a case P would have caught. Verified against every DENIED case in
 # tests/test_gh_write_guard.py at both script and hook level: zero deny-side
-# regressions (lode-vrhu). Case-SENSITIVE (lowercase `gh` only), matching the
-# old `*gh*` filter's case-sensitivity exactly -- that axis is untouched here.
-[[ "$CMD" =~ (^|[^A-Za-z0-9_])gh[[:space:]] ]] || exit 0
+# regressions (lode-vrhu).
+#
+# CASE-INSENSITIVE (`[Gg][Hh]`), deliberately, and NOT the old `*gh*` filter's
+# case-sensitivity. Every grep below runs `-i`, so P really does match `GH `/`Gh `
+# at a command position; a case-SENSITIVE pre-filter would therefore skip a case P
+# would have caught -- exactly the narrowing this block claims not to do. Measured
+# differentially during review: with a lowercase `gh` present incidentally
+# elsewhere, `git commit -m "walking through" ; GH issue create --title x` went
+# DENY (old filter) -> ALLOW (case-sensitive tightened filter). The old filter's
+# behaviour on this axis was incoherent rather than protective -- a STANDALONE
+# `GH issue create` was already allowed by it, since the command contains no
+# lowercase `gh` at all -- so matching it exactly would have preserved an
+# accidental half-catch and dropped the other half. Matching P's own case-folding
+# instead makes the pre-filter a strict superset of P in both directions: nothing
+# P can catch is skipped, and the one behaviour change versus trunk is
+# allow -> DENY on a standalone uppercase invocation (the conservative direction,
+# and a live write on a case-insensitive filesystem).
+[[ "$CMD" =~ (^|[^A-Za-z0-9_])[Gg][Hh][[:space:]] ]] || exit 0
 
 strip_quoted_heredoc_bodies() {
   local mode=none delim="" strip_tabs=0 line check d
