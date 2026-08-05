@@ -189,6 +189,7 @@ from textual.pilot import Pilot
 import lode
 from lode import jobs
 from lode.config import model_cache_dir
+from lode.enrich import EnrichmentResult
 
 #: lode-kq4v: scrub ambient colour/tty-forcing env vars BEFORE any test module can import
 #: ``lode.cli`` and construct its shared ``console``/``err_console`` (see that module's
@@ -1153,6 +1154,25 @@ def load_module_from_path(name: str, path: Path) -> ModuleType:
 # meets none of that module's stated bar for moving out. conftest.py already
 # deliberately holds several plain non-fixture helpers (see
 # load_module_from_path above).
+
+
+def _make_batch_result(
+    version_id: str,
+    enrichment: EnrichmentResult,
+    result_type: str = "succeeded",
+) -> mock.MagicMock:
+    """Build a mock batch result object (succeeded or errored)."""
+    r = mock.MagicMock()
+    r.custom_id = version_id
+    r.result.type = result_type
+
+    if result_type == "succeeded":
+        tool_block = mock.MagicMock()
+        tool_block.type = "tool_use"
+        tool_block.input = enrichment.model_dump()
+        r.result.message.content = [tool_block]
+
+    return r
 
 
 def fake_batch_client(

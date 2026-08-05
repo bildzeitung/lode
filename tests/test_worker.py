@@ -35,7 +35,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from conftest import fake_batch_client
+from conftest import _make_batch_result, fake_batch_client
 
 from lode import jobs
 from lode.auth import AuthError
@@ -2093,13 +2093,7 @@ def test_drain_collects_enrich_batch_outcome_via_batch_pre_step(
     )
 
     enrichment = EnrichmentResult(tags=["python", "api"], entities=["FastAPI"])
-    result_obj = mock.MagicMock()
-    result_obj.custom_id = "ver-1"
-    result_obj.result.type = "succeeded"
-    tool_block = mock.MagicMock()
-    tool_block.type = "tool_use"
-    tool_block.input = enrichment.model_dump()
-    result_obj.result.message.content = [tool_block]
+    result_obj = _make_batch_result("ver-1", enrichment)
 
     client = fake_batch_client(
         batch_id="collect-batch", results=[result_obj], processing_status="ended"
@@ -3390,13 +3384,7 @@ def test_batch_collect_returns_count_of_ended_batches(
 
     # Build a succeeded result.
     enrichment = EnrichmentResult(tags=["test"])
-    tool_block = mock.MagicMock()
-    tool_block.type = "tool_use"
-    tool_block.input = enrichment.model_dump()
-    result_obj = mock.MagicMock()
-    result_obj.custom_id = "ver-1"
-    result_obj.result.type = "succeeded"
-    result_obj.result.message.content = [tool_block]
+    result_obj = _make_batch_result("ver-1", enrichment)
 
     client = fake_batch_client(
         batch_id="done-batch", results=[result_obj], processing_status="ended"
@@ -3690,13 +3678,7 @@ def test_batch_collect_resumes_after_restart_without_resubmit(
     job_id = _insert_job(conn, "enrich", status="running", batch_handle="restart-batch")
 
     enrichment = EnrichmentResult(tags=["resumed"])
-    tool_block = mock.MagicMock()
-    tool_block.type = "tool_use"
-    tool_block.input = enrichment.model_dump()
-    result_obj = mock.MagicMock()
-    result_obj.custom_id = "ver-1"
-    result_obj.result.type = "succeeded"
-    result_obj.result.message.content = [tool_block]
+    result_obj = _make_batch_result("ver-1", enrichment)
 
     client = fake_batch_client(
         batch_id="restart-batch", results=[result_obj], processing_status="ended"
@@ -3753,13 +3735,7 @@ def test_worker_startup_resumes_batch_without_double_enqueue_or_resubmit(
     _insert_job(conn, "enrich", status="running", batch_handle="resume-batch")
 
     enrichment = EnrichmentResult(tags=["resumed"])
-    tool_block = mock.MagicMock()
-    tool_block.type = "tool_use"
-    tool_block.input = enrichment.model_dump()
-    result_obj = mock.MagicMock()
-    result_obj.custom_id = "ver-1"
-    result_obj.result.type = "succeeded"
-    result_obj.result.message.content = [tool_block]
+    result_obj = _make_batch_result("ver-1", enrichment)
 
     client = fake_batch_client(
         batch_id="resume-batch", results=[result_obj], processing_status="ended"
