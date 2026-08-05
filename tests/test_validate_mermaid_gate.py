@@ -60,7 +60,8 @@ def fake_bin(tmp_path: Path) -> Path:
     """A PATH dir with no docker of any kind on it.
 
     It holds only ``dirname`` — the single external binary the script runs
-    before it reaches the docker guard (to resolve its own repo root). That
+    before it reaches the docker guard (twice: to locate gate-lib.sh, then to
+    resolve its own repo root — see ``_add_broken_dirname``). That
     makes a PATH of exactly this one dir enough to reach the guard, and lets
     the docker-absent case be simulated by simply not putting a docker on it.
     """
@@ -258,7 +259,7 @@ def test_genuine_content_failure_inside_loop_still_reports_per_doc_fail(fake_bin
 # ---------------------------------------------------------------------------
 
 
-def _add_broken_dirname(bin_dir: Path) -> None:
+def _add_broken_dirname(bin_dir: Path) -> Path:
     """A fake ``dirname`` that behaves correctly on its FIRST call, then
     always reports a path with no existing parent on every call after that.
 
@@ -270,7 +271,13 @@ def _add_broken_dirname(bin_dir: Path) -> None:
     the repo root"). Answering correctly once, then breaking, isolates REPO='s
     own call: the source line is the first thing in the script that invokes
     dirname, so it gets the real answer and succeeds; REPO= is the second, and
-    gets the bogus one."""
+    gets the bogus one.
+
+    Returns the counter file, so the caller can assert that ordinal rather
+    than assume it: a future edit that adds a dirname call ABOVE the source
+    would otherwise make this test fail as "gate-lib.sh is missing or
+    unreadable", blaming the source guard for a regression that is not
+    there."""
     counter = bin_dir / ".dirname-calls"
     real_dirname = shutil.which("dirname")
     assert real_dirname, "dirname not found — cannot build a hermetic PATH"
@@ -292,6 +299,7 @@ def _add_broken_dirname(bin_dir: Path) -> None:
         "fi\n"
     )
     shim.chmod(0o755)
+    return counter
 
 
 def test_repo_root_resolution_failure_is_gate_could_not_run(fake_bin):
@@ -301,11 +309,18 @@ def test_repo_root_resolution_failure_is_gate_could_not_run(fake_bin):
     guard entirely would let a failing `cd` fall through to -e's own abort
     with the FAILING COMMAND's exit status (bash's own 1 here), which in this
     script means "invalid mermaid" -- exactly the lode-9i2p inversion."""
-    _add_broken_dirname(fake_bin)
+    counter = _add_broken_dirname(fake_bin)
 
     result = _run_gate(fake_bin)
 
     _assert_gate_could_not_run(result, says="could not resolve the repo root")
+    # The fixture's correct-once-then-broken behaviour only isolates REPO= if
+    # REPO= really is the SECOND dirname call. Asserted, not assumed.
+    assert counter.read_text() == "2", (
+        "expected exactly 2 dirname calls (gate-lib.sh source, then REPO=); "
+        f"got {counter.read_text()!r} — the call the fixture breaks is no "
+        "longer REPO="
+    )
 
 
 def _add_real_rm(bin_dir: Path) -> None:
