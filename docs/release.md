@@ -103,7 +103,7 @@ on:
   repo, free Actions minutes) — this is noise/latency, not spend — and `build.yml`'s own job is cheap
   (`pip install build nox` + `nox -s build`, ~4s, zero runtime deps). But `nox -s tests`
   (lode-qxdn.2) and coverage
-  (lode-qxdn.3) are heavy: a full `-e .[dev]` install (lancedb/fastembed/textual) plus a
+  (lode-qxdn.3) are heavy: a full locked dependency install (lancedb/fastembed/textual) plus a
   FastEmbedCrossEncoder model download, minutes per run. An unfiltered `push:` there would burn real
   wall-clock on every producer push — coding handoff, code-reviewer re-push, every rebase pickup —
   measured at ~2-3 pushes per landed ticket. Both MUST reuse this same narrowed trigger rather than
