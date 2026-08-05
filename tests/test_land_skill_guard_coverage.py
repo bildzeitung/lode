@@ -291,8 +291,8 @@ def _dead_allowlist_entries(markdown: str, *, allowlist: dict[str, str]) -> list
     """Allowlist keys in `allowlist` that no longer match any real MUTATING command
     line in `markdown`'s fenced ```bash blocks. The live set is built from the SAME
     two primitives `_unguarded_mutations` applies before a line is even a mutation
-    candidate -- `_normalized_line` then `_is_mutating` -- so this pin's
-    notion of "live" cannot drift from what the sweep actually excuses (lode-dkak;
+    candidate -- `_normalized_line` then `_is_mutating` -- so this pin's notion
+    of "live" cannot drift from what the sweep actually excuses (lode-dkak;
     before that fix the live set was every comment-stripped line, UNFILTERED, so a
     key present only as a non-mutating line read as live while excusing nothing). A
     key returned here is dead: it currently excuses nothing, but stays in the
