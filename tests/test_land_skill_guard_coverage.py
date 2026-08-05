@@ -92,16 +92,17 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 # 1. INLINE COMMANDS ONLY -- SCRIPT-REFERENCE FOLLOWING IS DELIBERATELY OUT
 #    OF SCOPE. This sweep does not open `scripts/*.sh` and classify what it
 #    mutates; it only sees commands written directly in the fence. It would
-#    NOT have caught lode-pxyt's first exposure on its own merits: Section
-#    3's first-pass merge loop contains zero bare mutating git commands --
-#    its only mutation is inside `scripts/land-merge-one.sh`, named literally
-#    in `_MUTATING_CMD_RE`. A brand-new script reference is caught by nothing
-#    here and would need the same manual discovery lode-pxyt's did. Measured
-#    while writing this: of the scripts referenced from an UNGUARDED fence
-#    today, none runs a cwd-resolved mutating git command -- their only git
-#    calls are `merge-base --is-ancestor` and `merge-tree --write-tree`, both
-#    read-only -- so the gap is latent, not live. Re-measure rather than
-#    assume.
+#    NOT have caught lode-pxyt's exposure: that fence contained zero bare
+#    mutating git commands -- its only mutation was inside a referenced
+#    script. A script reference is caught by nothing here and would need the
+#    same manual discovery lode-pxyt's did. Measured while writing this, and
+#    re-measured for lode-1nty: of the scripts referenced from an UNGUARDED
+#    fence today, the only one running a cwd-resolved mutating git command is
+#    `scripts/land-merge-one.sh`, which asserts its OWN main-checkout identity
+#    internally (see that script's header) rather than depending on this
+#    sweep; every other one's git calls are `merge-base --is-ancestor` and
+#    `merge-tree --write-tree`, both read-only. So the gap is latent, not
+#    live. Re-measure rather than assume.
 # 2. THE MUTATING-COMMAND REGEX IS DELIBERATELY OVER-BROAD, BY DESIGN. It
 #    matches `git branch`, `git worktree`, and `git merge` as whole verbs,
 #    not just the destructive subcommands (`branch -D`, `worktree remove`,
@@ -139,10 +140,15 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 
 # Every command shape that mutates cwd's repo. Not git-only, deliberately:
 # `bd dolt pull` writes cwd's OWN `.beads/` Dolt DB (each worktree carries its
-# own copy), so a wrong-directory run updates the wrong database, and
-# `scripts/land-merge-one.sh` reaches a bare `git merge --no-ff` the same way.
-# The sweep asks ONE question -- does this line mutate cwd's repo -- so all
-# three classes belong in one pattern rather than a git list plus side checks.
+# own copy), so a wrong-directory run updates the wrong database. The sweep
+# asks ONE question -- does this line mutate cwd's repo -- so both classes
+# belong in one pattern rather than a git list plus side checks.
+#
+# Do NOT re-add `scripts/land-merge-one.sh` here: it was named literally as a
+# special case until lode-1nty, and now asserts its own main-checkout identity
+# internally instead, so this sweep does not need to know it exists. Re-adding
+# it means re-litigating that decision (docs/agents-workflow.md's main-checkout
+# section).
 #
 # The bd WRITE side is out of scope here, not overlooked: `land/SKILL.md` only
 # ever reaches it through `scripts/bd-dolt-push.sh`, which is KNOWN
@@ -150,8 +156,7 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 _MUTATING_CMD_RE = re.compile(
     r"\b(?:git\s+(?:add|am|apply|branch|checkout|cherry-pick|clean|commit|fetch"
     r"|merge|mv|pull|push|rebase|reset|restore|revert|rm|stash|switch|worktree)"
-    r"|bd\s+dolt\s+pull"
-    r"|scripts/land-merge-one\.sh)\b"
+    r"|bd\s+dolt\s+pull)\b"
 )
 
 # Exact command text (comment-stripped, `.strip()`'d) -> why it needs no
@@ -278,12 +283,16 @@ def test_land_skill_guard_covers_every_known_mutating_fence() -> None:
 
 
 def _dead_allowlist_entries(markdown: str, *, allowlist: dict[str, str]) -> list[str]:
-    """Allowlist keys in `allowlist` that no longer match any real command line in
-    `markdown`'s fenced ```bash blocks (comment-stripped, `.strip()`'d) -- the same
-    live-set computation the pin below uses to decide whether an entry excuses
-    anything. A key returned here is dead: it currently excuses nothing, but stays
-    in the allowlist regardless, ready to silently re-excuse a brand-new command
-    that happens to share its exact text. Argument order deliberately matches
+    """Allowlist keys in `allowlist` that no longer match any real MUTATING command
+    line in `markdown`'s fenced ```bash blocks. The live set is built from the SAME
+    two primitives `_unguarded_mutations` applies before a line is even a mutation
+    candidate -- comment-strip/`.strip()` then `_MUTATING_CMD_RE` -- so this pin's
+    notion of "live" cannot drift from what the sweep actually excuses (lode-dkak;
+    before that fix the live set was every comment-stripped line, UNFILTERED, so a
+    key present only as a non-mutating line read as live while excusing nothing). A
+    key returned here is dead: it currently excuses nothing, but stays in the
+    allowlist regardless, ready to silently re-excuse a brand-new command that
+    happens to share its exact text. Argument order deliberately matches
     `_unguarded_mutations` above -- same two inputs, same shape.
 
     The parameterized-helper-plus-sabotage shape here is lode-e49j's, whose
@@ -296,9 +305,11 @@ def _dead_allowlist_entries(markdown: str, *, allowlist: dict[str, str]) -> list
     can exercise this exact primitive -- the same one the real pin calls -- against
     a synthetic fixture, without mutating the real `land/SKILL.md` on disk.
     """
-    blocks = bash_fence_blocks(markdown)
     live = {
-        _strip_comment(raw).strip() for block in blocks for raw in block.splitlines()
+        cmd
+        for block in bash_fence_blocks(markdown)
+        for raw in block.splitlines()
+        if _MUTATING_CMD_RE.search(cmd := _strip_comment(raw).strip())
     }
     return sorted(set(allowlist) - live)
 
@@ -367,6 +378,59 @@ def test_every_allowlist_entry_is_provably_checked_by_sabotage() -> None:
     assert _dead_allowlist_entries(markdown_fixed, allowlist={key: "fixture"}) == [
         key
     ], "removing the command from the corpus must flip the SAME key from live to dead"
+
+
+def test_dead_allowlist_entries_requires_a_mutating_line_not_mere_presence() -> None:
+    """Non-vacuity proof for lode-dkak's fix: before this ticket,
+    `_dead_allowlist_entries` computed its live set as every comment-stripped,
+    `.strip()`'d line in a fenced ```bash block -- with NO `_MUTATING_CMD_RE`
+    filter, unlike `_unguarded_mutations`. So a key present in the corpus only as
+    a line that never matches `_MUTATING_CMD_RE` (and therefore excuses nothing
+    in the sweep -- `_unguarded_mutations` never even reaches its allowlist check
+    for such a line) still read as LIVE and passed the liveness pin. That is
+    precisely the dead-entry class the pin exists to catch, surviving the pin.
+
+    Sabotage: hold ONE key constant, and use the exact PRE-FIX live-set
+    computation (every comment-stripped line, unfiltered -- reproduced inline
+    below, not imported, since the fixed `_dead_allowlist_entries` no longer
+    computes it) to prove this fixture's key would have read as live before
+    this ticket. Then run the SAME key/markdown through the fixed
+    `_dead_allowlist_entries` and require it now report the key dead --
+    proving the regex filter, not mere textual presence, is what "live" means.
+
+    Recorded mutation (re-run it if you touch this): restore
+    `_dead_allowlist_entries`' live set to the unfiltered comprehension
+    reproduced below and run this module -- this test, and ONLY this test,
+    must go red. Verified at review of lode-dkak: 1 failed, 16 passed.
+    """
+    key = "echo this line never matches _MUTATING_CMD_RE at all"
+    markdown = f"```bash\n{key}\n```\n"
+
+    assert not _MUTATING_CMD_RE.search(key), (
+        "fixture assumption broken: the chosen text matches _MUTATING_CMD_RE "
+        "after all, so it does not exercise the non-mutating-line case"
+    )
+
+    # Reproduce the PRE-FIX live-set computation (unfiltered, comment-stripped
+    # lines only) to prove this exact key/markdown pair would have read as
+    # live before lode-dkak -- i.e. that the sabotage is not vacuous.
+    pre_fix_live = {
+        _strip_comment(raw).strip()
+        for block in bash_fence_blocks(markdown)
+        for raw in block.splitlines()
+    }
+    assert key in pre_fix_live, (
+        "fixture assumption broken: before lode-dkak's fix this key would not "
+        "actually have read as live, so the sabotage proves nothing"
+    )
+
+    # The fix: the fixed `_dead_allowlist_entries` filters by `_MUTATING_CMD_RE`,
+    # the SAME primitive `_unguarded_mutations` uses, so a key present only
+    # as a non-mutating line excuses nothing and must be reported dead.
+    assert _dead_allowlist_entries(markdown, allowlist={key: "fixture"}) == [key], (
+        "a key present only as a non-mutating line must be reported dead -- "
+        "mere textual presence does not make an allowlist entry live"
+    )
 
 
 def test_sweep_catches_a_brand_new_unguarded_mutation() -> None:

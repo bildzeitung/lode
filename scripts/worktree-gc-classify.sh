@@ -102,6 +102,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 if [ "$#" -ne 5 ]; then
   echo "usage: $0 <worktree-path> <head-sha> <locked:0|1> <branch-name> <min-age-seconds>" >&2
   exit 2
@@ -134,10 +136,29 @@ fi
 # lode-bns3: the passive bd export is EXCLUDED from this judgment, so a
 # staged/modified `.beads/*.jsonl` can never read as "dirty" and zero out the
 # sweep -- it is BY INVARIANT never real work (import.auto: false, lode-6ra).
+#
+# lode-do3q: the excluded relpaths are READ from the canonical
+# scripts/beads-passive-exports.txt rather than spelled out here (docs/decisions.md
+# has the why). Built ONCE at load, and FAIL-LOUD if the list is unreadable or
+# empty: unlike the Stop hook's best-effort sibling
+# (scripts/discard-beads-passive-export-churn.sh), this is a gate, and an empty
+# exclude list would silently INVERT lode-bns3 -- passive-export churn would read
+# as "dirty" and zero out the sweep with nothing red.
+_BEADS_EXPORTS_LIST="$SCRIPT_DIR/beads-passive-exports.txt"
+if [ ! -r "$_BEADS_EXPORTS_LIST" ]; then
+  echo "$0: cannot read $_BEADS_EXPORTS_LIST" >&2
+  exit 2
+fi
+mapfile -t _BEADS_EXPORTS < "$_BEADS_EXPORTS_LIST"
+if [ "${#_BEADS_EXPORTS[@]}" -eq 0 ] || printf '%s\n' "${_BEADS_EXPORTS[@]}" | grep -qx ''; then
+  echo "$0: $_BEADS_EXPORTS_LIST is empty or contains a blank line" >&2
+  exit 2
+fi
+_BEADS_EXCLUDE_PATHSPECS=("${_BEADS_EXPORTS[@]/#/:(exclude)}")
+
 wt_provably_clean() {
   local st
-  st=$(git -C "$1" status --porcelain -- . \
-    ':(exclude).beads/issues.jsonl' ':(exclude).beads/interactions.jsonl' 2>&1) && [ -z "$st" ]
+  st=$(git -C "$1" status --porcelain -- . "${_BEADS_EXCLUDE_PATHSPECS[@]}" 2>&1) && [ -z "$st" ]
 }
 
 # WIDENED PREDICATE (lode-amif): "merged into trunk" is a PROXY for "this

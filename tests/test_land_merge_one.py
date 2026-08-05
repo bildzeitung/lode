@@ -79,6 +79,14 @@ def _init_repo(tmp_path: Path) -> Path:
     return repo
 
 
+def _add_worktree(repo: Path, rel_path: str, branch: str) -> Path:
+    """A real linked worktree of `repo` -- not the main checkout."""
+    wt = repo / rel_path
+    wt.parent.mkdir(parents=True, exist_ok=True)
+    _git(repo, "worktree", "add", "-q", str(wt), "-b", branch, "trunk")
+    return wt
+
+
 def _branch_from(repo: Path, base: str, name: str) -> None:
     _git(repo, "checkout", "-q", base)
     _git(repo, "checkout", "-q", "-b", name)
@@ -300,14 +308,61 @@ def test_unexpected_git_failure_exits_2_not_1(tmp_path: Path) -> None:
     assert unmerged.stdout == ""
 
 
+def test_not_main_checkout_exits_2_before_attempting_any_merge(tmp_path: Path) -> None:
+    """lode-1nty: run from a linked worktree (not the main checkout), the
+    script must refuse before ever calling `git merge` -- exit 2 (machine
+    fault, never the exit-1 conflict code), the shared
+    `_assert_machine_fault_contract`, AND `scripts/assert-main-checkout.sh`'s
+    own diagnostic naming the mismatch. A real precomputed message is
+    provided so a bug that checked main-checkout identity AFTER the
+    missing-message check would still be caught -- this asserts the identity
+    check runs first, not merely that some exit-2 fires."""
+    repo = _init_repo(tmp_path)
+    _branch_from(repo, "trunk", "origin/land/lode-g")
+    _commit_file(repo, "g.txt", "from G\n", "G adds g.txt")
+    wt = _add_worktree(repo, "wt", "some-other-branch")
+
+    msg_dir = tmp_path / "msgs"
+    _write_msg(msg_dir, "lode-g", "Merge land/lode-g: from a worktree (lode-g)")
+
+    before = _git(repo, "rev-parse", "trunk").stdout.strip()
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "lode-g", str(msg_dir)],
+        cwd=wt,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == "", (
+        "exit 2 must print nothing the caller could capture as $CONFLICTS"
+    )
+    _assert_machine_fault_contract(result.stderr)
+    assert "NOT RUNNING IN THE MAIN CHECKOUT" in result.stderr, result.stderr
+    after = _git(repo, "rev-parse", "trunk").stdout.strip()
+    assert before == after, "no merge should have been attempted at all"
+    unmerged = _git(wt, "ls-files", "-u")
+    assert unmerged.stdout == ""
+
+
 @pytest.mark.parametrize("argv", [[], ["lode-a"], ["lode-a", "msgdir", "extra"]])
-def test_wrong_arg_count_is_exit_2_never_1(argv: list[str]) -> None:
+def test_wrong_arg_count_is_exit_2_never_1(tmp_path: Path, argv: list[str]) -> None:
     """A caller bug must never land in the CONFLICT code. Exit 1 is reserved
     for a real textual conflict, so a bad arg count exits 2 -- the same reason
     `scripts/merge-precheck.sh` checks `$#` before anything else rather than
-    relying on `${1:?}` (whose exit 1 would collide)."""
+    relying on `${1:?}` (whose exit 1 would collide).
+
+    Run with an explicit throwaway main-checkout `cwd` (lode-1nty): this
+    script now asserts main-checkout identity BEFORE the arg-count check, so
+    without a real main checkout here this test would instead exercise (and
+    only prove) that earlier guard -- not the arg-count check it's named for.
+    """
+    repo = _init_repo(tmp_path)
     result = subprocess.run(
         ["bash", str(SCRIPT), *argv],
+        cwd=repo,
         capture_output=True,
         text=True,
         timeout=30,

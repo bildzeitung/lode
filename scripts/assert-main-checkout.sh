@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 #
 # Main-checkout identity guard for /land. Called as the FIRST LINE of every
-# land/SKILL.md fence that issues a cwd-resolved mutation -- four of them as of
-# lode-pxyt, each needing its OWN call because every fenced block in that file
+# land/SKILL.md fence that issues a cwd-resolved mutation it cannot otherwise
+# protect, each needing its OWN call because every fenced block in that file
 # is a separate Bash invocation (lode-sfnb), so one block's `exit` cannot stop
 # another's. Do NOT maintain the call-site list here: it went stale within one
 # ticket of being written, which is why this header now names the RULE instead.
-# tests/test_land_skill_guard_coverage.py sweeps every fence and is the
-# authoritative record of which mutations are guarded and which are exempt. Note that not every caller opens with a `git reset
+# tests/test_land_skill_guard_coverage.py sweeps every fence in land/SKILL.md
+# and is the authoritative record of which mutations are guarded and which
+# are exempt. The same rule covers a caller that is itself a script rather
+# than a fence: a tool whose whole body assumes the main checkout calls this
+# as its own first action instead of making every one of its call sites
+# remember to. Note that not every caller opens with a `git reset
 # --hard` -- the reset is the worst case the diagnostic below narrates, not the
 # only thing this guard protects (see lode-ibfw on that message's wording).
 #

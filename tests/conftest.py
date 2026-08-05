@@ -1233,13 +1233,15 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # `> REPO_ROOT=...` / `> echo "$REPO_ROOT"` would still show REPO_ROOT as
 # unassigned, since the leading `> ` defeats the `^`-anchored assignment
 # regexes in tests/test_skill_bash_state.py (lode-wroz). Doing it HERE means every
-# caller gets the fix, not just one. Since lode-kjei there is exactly ONE strip site --
-# `fence_scan` below, which every consumer (fenced and inline alike) reads its lines
-# through -- so the "both paths must unmark to the same shape" hazard this comment used
+# caller gets the fix, not just one. Since lode-kjei there is exactly ONE strip site on
+# any PARSING path -- `fence_scan` below, which every consumer (fenced and inline alike)
+# reads its lines through -- so the "both paths must unmark to the same shape" hazard this comment used
 # to describe is structural rather than a convention: there is no second pass left to
 # disagree. That also keeps lode-3pyo's finding moot: stripping twice is a no-op on
 # today's corpus, measured, but not in general -- a `>>`-leading line double-strips to a
-# bare one -- and nothing strips twice any more.
+# bare one -- and nothing strips twice any more. (tests/test_land_lock.py's independent
+# fence COUNTER strips through this same constant off-path, by design: it must not call
+# `fence_scan` at all, and must not re-type the marker shape either -- lode-bi9h.)
 _BLOCKQUOTE_MARKER = re.compile(r"^[ \t]*>[ \t]?")
 
 # A fence marker: three-or-more backticks, or three-or-more tildes, plus

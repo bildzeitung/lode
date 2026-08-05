@@ -3035,6 +3035,38 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     a dated supersession marker rather than a rewrite (see this file's preamble). (Recorded late:
     `lode-ur6o` was normalizing this file when `lode-ysr6` landed, so `lode-ysr6` left the record in
     the header and `lode-szgb` folded it in here afterwards.)
+- **2026-08-05 (lode-nwqb) — REJECTED: replacing `gate-lib.sh`'s `--no-advisory` sentinel with an
+  assignment-prefix binding (`GATE_ADVISORY_LINES=... . gate-lib.sh`).** Filed while reviewing
+  `lode-ysr6`, which adopted the source-positional-args shape (see the entry immediately above) plus
+  the `--no-advisory` sentinel. The alternative: bind the advisory through a variable-assignment
+  *prefix* on the source command instead of positional args — `gate-lib.sh` reads
+  `GATE_ADVISORY_LINES` and `mapfile`s it into `GATE_ADVISORY`; "no advisory" becomes the natural
+  unset default, so the sentinel, its enumerate-and-assert sweep, that sweep's non-vacuity proof, and
+  the per-consumer sentinel comments all disappear.
+  - **Re-measured empirically on bash 5.2.21 (not taken on the ticket's word, per its own AC):** a
+    prefix assignment on a `source`/`.` command does **not** persist into the calling shell in
+    default mode (`GATE_ADVISORY_LINES` reads unset immediately after the source returns) but **does**
+    persist under `set -o posix` (confirmed: it survives with the exact value intact). `.` is a POSIX
+    special builtin, and the persistence of assignment prefixes on special builtins is specified
+    behaviour, not an accident of this bash build.
+  - **Decided: keep the `--no-advisory` sentinel.** Three reasons, weighed together rather than any one
+    being decisive:
+    1. This is a redesign of finished, gated, behaviour-verified shared gate infrastructure, not a
+       review cleanup — `lode-ysr6`'s own ticket text said "decide before building," and a reviewer
+       swapping the already-decided mechanism wholesale is out of remit for a follow-up ticket to do
+       unilaterally without a fresh, deliberate decision. This entry is that decision, and it declines.
+    2. The measured mode-dependent persistence trades one *documented, already-tested* subtlety (the
+       positional-parameter restore behaviour `lode-ysr6` already covers) for a *less-known,
+       mode-dependent* one. No consumer runs POSIX mode today, but this is the same class of
+       bash-vs-sh divergence `lode-zlg8` exists to guard against — swapping a known hazard for a
+       differently-shaped one is not a demonstrated improvement.
+    3. It loses the bash array at the point the value is built: advisory lines become a
+       newline-joined string that must be reconstituted with `mapfile`, which is more machinery, not
+       less, exactly where `lode-ysr6` was trying to remove machinery.
+  - Honest assessment carried over from the ticket that raised this: the prefix-binding shape is
+    arguably cleaner at consumer call sites (no sentinel token to remember), but "arguably cleaner
+    at the call site" was not enough to outweigh points 1–3 above. Recorded here, and in
+    `scripts/gate-lib.sh`'s own header, so this is not rediscovered a third time.
 - **2026-08-02 (lode-w5nr) — `resolve_model_revision`'s HF probe is now bounded by an explicit
   per-call timeout, closing the stall `lode-r4r2` named but could not cover.** Filed during
   `lode-r4r2`'s review: with `HF_HUB_OFFLINE` *unset* and the network black-holed (captive portal, VPN
@@ -3273,3 +3305,73 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   `tests/test_land_skill_guard_coverage.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`,
   is lode-7zap's own addition (it lived in `tests/test_assert_main_checkout.py` until lode-2thl
   split that module's text-gate half out).
+
+- **The beads passive-export relpath list (`.beads/issues.jsonl`,
+  `.beads/interactions.jsonl`) is canonicalized into a plain text file, not
+  left as three independent hardcoded copies (2026-08-05, lode-do3q).**
+  Discovered mid-review of lode-qg6g, which added the third copy: the same
+  two-path list was hardcoded independently in `scripts/worktree-gc-classify.sh`'s
+  `wt_provably_clean()` dirty-tree guard (a git pathspec `:(exclude)` pair —
+  the code lode-9owc had already moved out of `SKILL.md` into this script by
+  the time this ticket was picked up, so the ticket's original `SKILL.md:1293`
+  citation is stale; the script is now the live location), the `Stop` hook's
+  command string in `.claude/settings.json`, and
+  `tests/test_land_lock.py`'s `_STALL_HOOK_SCAN_EXCLUDED_RELPATHS` Python set.
+  Three files, three syntaxes (bash pathspec, JSON-embedded shell, Python),
+  with nothing keeping them in sync — a fourth candidate already exists and is
+  live rather than hypothetical (`.beads/config.yaml`'s `events-export`,
+  currently `false`, would add `.beads/events.jsonl`).
+
+  **Decision: canonicalize**, rejecting the WONTFIX the ticket flagged as a
+  live possibility. The ticket's own text argued a shared *code* artifact
+  couldn't span all three languages — true, but the actual content that
+  drifts is not code, it's a two-line list of relpaths, and a plain
+  newline-delimited text file is readable natively by both consumers that
+  matter (`bash`'s `read`/`mapfile`, Python's `.read_text().splitlines()`).
+  The third consumer, the `Stop` hook, was the one genuine obstacle — a JSON
+  string can't `source` a file — but this repo's own `settings.json` already
+  established the fix for exactly this shape: every other hook in the file
+  (`bd-deps-blocks-guard.sh`, `gh-write-guard.sh`, `sha-fabrication-guard.sh`)
+  shells out to a script under `scripts/` rather than inlining logic in the
+  JSON string. Applying that same pattern here — extracting the hook's one
+  line of logic into `scripts/discard-beads-passive-export-churn.sh`, which
+  itself reads the canonical list — removed the obstacle rather than forcing
+  an abstraction across it.
+
+  **Mechanism:** `scripts/beads-passive-exports.txt` (one relpath per line)
+  is now the single canonical copy. `scripts/worktree-gc-classify.sh`'s
+  `wt_provably_clean()` reads it to build its `:(exclude)` pathspec list;
+  `scripts/discard-beads-passive-export-churn.sh` (new, called from the
+  `Stop` hook) reads it to build its `git checkout HEAD --` argument list;
+  `tests/test_land_lock.py`'s `_STALL_HOOK_SCAN_EXCLUDED_RELPATHS` reads it
+  directly into the set. **Adding** a passive export is now a one-file edit.
+  No behaviour changed at any of the three sites — each still excludes exactly
+  the same two relpaths it did before, verified by building the pathspec list
+  standalone and diffing it against the retired literals.
+
+  **Scope, stated precisely so the next reader is not misled:** what is
+  canonical is the *exclusion-list* trio above, not every mention of these
+  paths in the repo. A separate cluster still names `.beads/issues.jsonl`
+  literally, under a different verb (`git restore --staged --worktree`, i.e.
+  *unstage before merging*, not *exclude from a judgment*) and naming only the
+  one path: `scripts/land-merge-one.sh`, the executable bash blocks in
+  `.claude/skills/land/SKILL.md` and `.claude/skills/release/SKILL.md`, and the
+  command-string allowlist entry in `tests/test_assert_main_checkout.py`. So a
+  *rename* is NOT yet a one-file edit. Bringing that cluster on is deliberately
+  left out of scope here — it is a different operation with a different failure
+  mode — and is filed separately.
+
+  **What canonicalizing cost, since it is not free.** It replaced three
+  self-contained literals with an indirection chain
+  (`settings.json` → script → data file) in which every link swallows its own
+  errors: the `Stop` hook ends in `; true` and its script always exits 0. That
+  is right for best-effort hygiene, but it means a rename or deletion anywhere
+  along the chain leaves the hook a permanent no-op with nothing red — a
+  failure mode the inline copies could not have had. Two mitigations, both
+  added during technical review rather than left to the next incident:
+  `scripts/worktree-gc-classify.sh` is a *gate*, so it fails LOUD (exit 2) on
+  an unreadable or empty list instead of degrading to an empty exclude set,
+  which would silently invert lode-bns3; and `tests/test_beads_passive_exports.py`
+  pins the whole chain — the list is non-empty and well-formed, the `Stop` hook
+  still names an existing executable script, both bash consumers still read the
+  canonical file, and no consumer has re-inlined a literal copy.
