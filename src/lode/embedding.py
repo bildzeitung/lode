@@ -46,6 +46,7 @@ race (each thread sees ``self._model is None`` and constructs its own model),
 so the load is guarded by a lock.
 """
 
+import logging
 import sqlite3
 import threading
 from pathlib import Path
@@ -61,6 +62,8 @@ from lode.config import (
 from lode.progress import op_progress
 from lode.redact import redact_before_index
 from lode.vectorstore import VectorStore
+
+log = logging.getLogger(__name__)
 
 #: Task prefixes nomic-embed-text-v1.5 expects: ``search_document:`` on the
 #: documents being indexed, ``search_query:`` on the queries searched against them.
@@ -116,6 +119,7 @@ def _embedder_model_revision(embedder: object) -> str | None:
     try:
         return probe()
     except Exception:
+        log.debug("_embedder_model_revision: probe() failed", exc_info=True)
         return None
 
 
@@ -174,6 +178,7 @@ def resolve_model_revision(model_name: str, *, timeout_s: float) -> str | None:
 
         return model_info(hf_source, timeout=timeout_s).sha
     except Exception:
+        log.debug("resolve_model_revision: model_info probe failed", exc_info=True)
         return None
 
 

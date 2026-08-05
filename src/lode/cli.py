@@ -1295,6 +1295,9 @@ def _model_cache_probe(model_name: str) -> bool | None:
             return None
         return _cache_hit(hf_source, model_file)
     except Exception:
+        logging.getLogger(__name__).debug(
+            "_model_cache_probe: probe failed for %s", model_name, exc_info=True
+        )
         return None
 
 
@@ -1371,6 +1374,9 @@ def _model_revision_status(
         )
         return mixed, drift
     except Exception:
+        logging.getLogger(__name__).debug(
+            "_model_revision_status: probe failed", exc_info=True
+        )
         return False, False
 
 
@@ -1507,6 +1513,9 @@ def _enrichment_model_stale(
         finally:
             conn.close()
     except Exception:
+        logging.getLogger(__name__).debug(
+            "_enrichment_model_stale: probe failed", exc_info=True
+        )
         return False
 
 
@@ -1659,6 +1668,9 @@ def status(
     try:
         settings = _resolve_settings()
     except Exception:
+        logging.getLogger(__name__).debug(
+            "status: _resolve_settings failed", exc_info=True
+        )
         settings = None
     cache_cold = False if settings is None else _cold_model_cache(settings)
     # Same non-fatal contract as cache_cold above, and the same reason it stays

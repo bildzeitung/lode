@@ -118,6 +118,4 @@ lode = ["*.sql"]
 "lode.tui" = ["*.tcss"]
 
 [tool.ruff.lint]
-ignore = [
-  "BLE001",
-]
+ignore = []
