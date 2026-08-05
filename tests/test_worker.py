@@ -35,6 +35,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from conftest import fake_batch_client
 
 from lode import jobs
 from lode.auth import AuthError
@@ -2100,7 +2101,7 @@ def test_drain_collects_enrich_batch_outcome_via_batch_pre_step(
     tool_block.input = enrichment.model_dump()
     result_obj.result.message.content = [tool_block]
 
-    client = _fake_batch_client_worker(
+    client = fake_batch_client(
         batch_id="collect-batch", results=[result_obj], processing_status="ended"
     )
 
@@ -3008,23 +3009,6 @@ def test_embed_handler_gate_is_a_no_op_for_a_note_version(
 # ---------------------------------------------------------------------------
 
 
-def _fake_batch_client_worker(
-    batch_id: str = "wbatch-abc",
-    results: list | None = None,
-    processing_status: str = "ended",
-) -> mock.MagicMock:
-    """Mock Anthropic client for worker batch tests."""
-    client = mock.MagicMock()
-    batch = mock.MagicMock()
-    batch.id = batch_id
-    client.beta.messages.batches.create.return_value = batch
-    status_obj = mock.MagicMock()
-    status_obj.processing_status = processing_status
-    client.beta.messages.batches.retrieve.return_value = status_obj
-    client.beta.messages.batches.results.return_value = iter(results or [])
-    return client
-
-
 def _insert_note_worker(
     conn: sqlite3.Connection,
     note_id: str = "note-1",
@@ -3051,7 +3035,7 @@ def test_batch_submit_claims_pending_enrich_jobs(
     _insert_note_worker(conn)
     job_id = _insert_job(conn, "enrich")
 
-    client = _fake_batch_client_worker(batch_id="test-batch")
+    client = fake_batch_client(batch_id="test-batch")
     submitted = _batch_submit_enrich(conn, settings, _client=AnthropicProvider(client))
 
     assert submitted == 1
@@ -3067,7 +3051,7 @@ def test_batch_submit_stamps_claimed_at(
     job_id = _insert_job(conn, "enrich")
 
     before = _now_iso()
-    client = _fake_batch_client_worker(batch_id="test-batch")
+    client = fake_batch_client(batch_id="test-batch")
     submitted = _batch_submit_enrich(conn, settings, _client=AnthropicProvider(client))
     after = _now_iso()
 
@@ -3099,7 +3083,9 @@ def test_batch_submit_survives_crash_before_batch_handle_persist(
         pytest.raises(SystemExit),
     ):
         _batch_submit_enrich(
-            conn, settings, _client=AnthropicProvider(_fake_batch_client_worker())
+            conn,
+            settings,
+            _client=AnthropicProvider(fake_batch_client(batch_id="wbatch-abc")),
         )
 
     # The pre-claim CAS ran and stamped claimed_at before the (simulated)
@@ -3123,7 +3109,7 @@ def test_batch_submit_no_op_when_no_pending_enrich(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
     """_batch_submit_enrich returns 0 when there are no pending enrich jobs."""
-    client = _fake_batch_client_worker()
+    client = fake_batch_client(batch_id="wbatch-abc")
     submitted = _batch_submit_enrich(conn, settings, _client=AnthropicProvider(client))
     assert submitted == 0
     client.beta.messages.batches.create.assert_not_called()
@@ -3144,7 +3130,11 @@ def test_batch_pre_step_with_no_work_does_not_import_enrich(
     there is still no reason to import it to do nothing.
     """
     assert (
-        pre_step(conn, settings, _client=AnthropicProvider(_fake_batch_client_worker()))
+        pre_step(
+            conn,
+            settings,
+            _client=AnthropicProvider(fake_batch_client(batch_id="wbatch-abc")),
+        )
         == 0
     )
     assert "lode.enrich" not in sys.modules
@@ -3290,7 +3280,7 @@ def test_batch_submit_skips_job_claimed_by_concurrent_immediate_enrich(
     raced_job = _insert_job(conn, "enrich", "ver-a")
     won_job = _insert_job(conn, "enrich", "ver-b")
 
-    client = _fake_batch_client_worker(batch_id="race-batch")
+    client = fake_batch_client(batch_id="race-batch")
     racing = _RacingSelectConn(conn, race_job_id=raced_job)
     submitted = _batch_submit_enrich(
         racing, settings, _client=AnthropicProvider(client)
@@ -3322,7 +3312,7 @@ def test_batch_collect_returns_false_when_in_progress(
     _insert_note_worker(conn)
     _insert_job(conn, "enrich", status="running", batch_handle="in-flight-batch")
 
-    client = _fake_batch_client_worker(
+    client = fake_batch_client(
         batch_id="in-flight-batch", processing_status="in_progress"
     )
     ended = _batch_collect_enrich(conn, settings, _client=AnthropicProvider(client))
@@ -3348,7 +3338,7 @@ def test_batch_collect_returns_count_of_ended_batches(
     result_obj.result.type = "succeeded"
     result_obj.result.message.content = [tool_block]
 
-    client = _fake_batch_client_worker(
+    client = fake_batch_client(
         batch_id="done-batch", results=[result_obj], processing_status="ended"
     )
     ended = _batch_collect_enrich(conn, settings, _client=AnthropicProvider(client))
@@ -3648,7 +3638,7 @@ def test_batch_collect_resumes_after_restart_without_resubmit(
     result_obj.result.type = "succeeded"
     result_obj.result.message.content = [tool_block]
 
-    client = _fake_batch_client_worker(
+    client = fake_batch_client(
         batch_id="restart-batch", results=[result_obj], processing_status="ended"
     )
 
@@ -3668,9 +3658,7 @@ def test_batch_collect_in_flight_handle_survives_restart_no_resubmit(
     _insert_note_worker(conn)
     job_id = _insert_job(conn, "enrich", status="running", batch_handle="slow-batch")
 
-    client = _fake_batch_client_worker(
-        batch_id="slow-batch", processing_status="in_progress"
-    )
+    client = fake_batch_client(batch_id="slow-batch", processing_status="in_progress")
 
     # Simulate several worker-startup passes while the batch is still running.
     for _ in range(3):
@@ -3713,7 +3701,7 @@ def test_worker_startup_resumes_batch_without_double_enqueue_or_resubmit(
     result_obj.result.type = "succeeded"
     result_obj.result.message.content = [tool_block]
 
-    client = _fake_batch_client_worker(
+    client = fake_batch_client(
         batch_id="resume-batch", results=[result_obj], processing_status="ended"
     )
 
@@ -3747,9 +3735,7 @@ def test_drain_batch_steps_run_before_main_loop(
     _insert_note_worker(conn)
     enqueue_derive_jobs(conn, "ver-1")  # embed + enrich pending
 
-    client = _fake_batch_client_worker(
-        batch_id="pre-batch", processing_status="in_progress"
-    )
+    client = fake_batch_client(batch_id="pre-batch", processing_status="in_progress")
     n = drain(
         conn,
         db_path,

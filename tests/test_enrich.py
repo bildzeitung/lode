@@ -30,6 +30,7 @@ from _anthropic_rig import (
     _results_handler,
     _succeeded_payload,
 )
+from conftest import fake_batch_client
 from pydantic import ValidationError
 
 from lode.config import Settings
@@ -1210,36 +1211,6 @@ def test_enrich_gap_pending_job_not_reenqueued_regardless_of_prompt_ver(
 # ---------------------------------------------------------------------------
 
 
-def _fake_batch_client(
-    batch_id: str = "batch-abc",
-    results: list | None = None,
-    processing_status: str = "ended",
-) -> mock.MagicMock:
-    """Mock Anthropic client with a Batches API stub.
-
-    ``results`` is a list of mock result objects; each needs:
-    - ``.custom_id`` (version_id)
-    - ``.result.type`` ('succeeded' | 'errored')
-    - ``.result.message.content`` (list of blocks) when type='succeeded'
-    """
-    client = mock.MagicMock()
-
-    # Batch creation
-    batch = mock.MagicMock()
-    batch.id = batch_id
-    client.beta.messages.batches.create.return_value = batch
-
-    # Batch retrieve (status)
-    status_obj = mock.MagicMock()
-    status_obj.processing_status = processing_status
-    client.beta.messages.batches.retrieve.return_value = status_obj
-
-    # Batch results
-    client.beta.messages.batches.results.return_value = iter(results or [])
-
-    return client
-
-
 def _make_batch_result(
     version_id: str,
     enrichment: EnrichmentResult,
@@ -1266,7 +1237,7 @@ def test_submit_enrich_batch_returns_batch_id(
     _insert_note(conn)
     job_id = _insert_enrich_job(conn)
 
-    client = _fake_batch_client(batch_id="batch-xyz")
+    client = fake_batch_client(batch_id="batch-xyz")
     result_id = submit_enrich_batch(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
     )
@@ -1284,7 +1255,7 @@ def test_submit_enrich_batch_passes_anthropic_call_timeout_to_create(
     job_id = _insert_enrich_job(conn)
 
     settings = Settings(enrich_call_timeout_s=42.0)
-    client = _fake_batch_client(batch_id="batch-xyz")
+    client = fake_batch_client(batch_id="batch-xyz")
     submit_enrich_batch(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
     )
@@ -1303,7 +1274,7 @@ def test_submit_enrich_batch_uses_the_raised_max_tokens(
     _insert_note(conn)
     job_id = _insert_enrich_job(conn)
 
-    client = _fake_batch_client(batch_id="batch-xyz")
+    client = fake_batch_client(batch_id="batch-xyz")
     submit_enrich_batch(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
     )
@@ -1326,7 +1297,7 @@ def test_submit_enrich_batch_max_tokens_override_reaches_the_call(
     settings = Settings(
         enrichment_llm=ModelTier(model="claude-haiku-4-5", max_tokens=555)
     )
-    client = _fake_batch_client(batch_id="batch-xyz")
+    client = fake_batch_client(batch_id="batch-xyz")
     submit_enrich_batch(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
     )
@@ -1343,7 +1314,7 @@ def test_submit_enrich_batch_stores_batch_handle(
     _insert_note(conn)
     job_id = _insert_enrich_job(conn)
 
-    client = _fake_batch_client(batch_id="batch-handle-test")
+    client = fake_batch_client(batch_id="batch-handle-test")
     submit_enrich_batch(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
     )
@@ -1362,7 +1333,7 @@ def test_submit_enrich_batch_skips_no_egress(
     _insert_note(conn, no_egress=1)
     job_id = _insert_enrich_job(conn)
 
-    client = _fake_batch_client()
+    client = fake_batch_client(batch_id="batch-abc")
     result_id = submit_enrich_batch(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
     )
@@ -1385,7 +1356,7 @@ def test_submit_enrich_batch_skips_tombstone(
     _insert_note(conn, op="delete")
     job_id = _insert_enrich_job(conn)
 
-    client = _fake_batch_client()
+    client = fake_batch_client(batch_id="batch-abc")
     result_id = submit_enrich_batch(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
     )
@@ -1405,7 +1376,7 @@ def test_submit_enrich_batch_skips_purged(
     _insert_note(conn, purged_at="2026-01-01T00:00:00.000Z")
     job_id = _insert_enrich_job(conn)
 
-    client = _fake_batch_client()
+    client = fake_batch_client(batch_id="batch-abc")
     result_id = submit_enrich_batch(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
     )
@@ -1421,7 +1392,7 @@ def test_submit_enrich_batch_returns_none_for_empty_input(
     conn: sqlite3.Connection, settings: Settings
 ) -> None:
     """Empty job_rows returns None without calling the API."""
-    client = _fake_batch_client()
+    client = fake_batch_client(batch_id="batch-abc")
     result_id = submit_enrich_batch(
         conn, [], settings, provider=AnthropicProvider(client)
     )
@@ -1437,7 +1408,7 @@ def test_submit_enrich_batch_writes_egress_log(
     _insert_note(conn)
     job_id = _insert_enrich_job(conn)
 
-    client = _fake_batch_client(batch_id="batch-egress")
+    client = fake_batch_client(batch_id="batch-egress")
     submit_enrich_batch(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
     )
@@ -1460,7 +1431,7 @@ def test_submit_enrich_batch_multiple_versions(
     job1 = _insert_enrich_job(conn, "ver-1")
     job2 = _insert_enrich_job(conn, "ver-2")
 
-    client = _fake_batch_client(batch_id="batch-multi")
+    client = fake_batch_client(batch_id="batch-multi")
     submit_enrich_batch(
         conn,
         [(job1, "ver-1"), (job2, "ver-2")],
@@ -1501,7 +1472,7 @@ def test_submit_enrich_batch_includes_snapshot_target(
     _insert_external(conn, external_id="ext-1", snapshot_id="snap-1")
     job_id = _insert_enrich_job(conn, "snap-1")
 
-    client = _fake_batch_client(batch_id="batch-snap")
+    client = fake_batch_client(batch_id="batch-snap")
     result_id = submit_enrich_batch(
         conn, [(job_id, "snap-1")], settings, provider=AnthropicProvider(client)
     )
@@ -1524,7 +1495,7 @@ def test_submit_enrich_batch_skips_no_egress_external(
     _insert_external(conn, no_egress=1)
     job_id = _insert_enrich_job(conn, "snap-1")
 
-    client = _fake_batch_client()
+    client = fake_batch_client(batch_id="batch-abc")
     result_id = submit_enrich_batch(
         conn, [(job_id, "snap-1")], settings, provider=AnthropicProvider(client)
     )
@@ -1544,7 +1515,7 @@ def test_submit_enrich_batch_skips_tombstone_snapshot(
     _insert_external(conn, status="tombstone")
     job_id = _insert_enrich_job(conn, "snap-1")
 
-    client = _fake_batch_client()
+    client = fake_batch_client(batch_id="batch-abc")
     result_id = submit_enrich_batch(
         conn, [(job_id, "snap-1")], settings, provider=AnthropicProvider(client)
     )
@@ -1566,7 +1537,7 @@ def test_submit_enrich_batch_mixed_note_and_snapshot_targets(
     job1 = _insert_enrich_job(conn, "ver-1")
     job2 = _insert_enrich_job(conn, "snap-1")
 
-    client = _fake_batch_client(batch_id="batch-mixed")
+    client = fake_batch_client(batch_id="batch-mixed")
     submit_enrich_batch(
         conn,
         [(job1, "ver-1"), (job2, "snap-1")],
@@ -1588,7 +1559,7 @@ def test_collect_enrich_batch_returns_false_when_in_progress(
     conn: sqlite3.Connection, settings: Settings
 ) -> None:
     """collect_enrich_batch returns False when the batch is still in progress."""
-    client = _fake_batch_client(processing_status="in_progress")
+    client = fake_batch_client(batch_id="batch-abc", processing_status="in_progress")
     ended = collect_enrich_batch(
         conn, "batch-in-flight", settings, provider=AnthropicProvider(client)
     )
@@ -1609,7 +1580,7 @@ def test_collect_enrich_batch_passes_anthropic_call_timeout_to_retrieve_and_resu
             "UPDATE jobs SET batch_handle = 'batch-done' WHERE id = ?", (job_id,)
         )
     settings = Settings(enrich_call_timeout_s=42.0)
-    client = _fake_batch_client(results=[])
+    client = fake_batch_client(batch_id="batch-abc", results=[])
     collect_enrich_batch(
         conn, "batch-done", settings, provider=AnthropicProvider(client)
     )
@@ -1642,7 +1613,7 @@ def test_collect_enrich_batch_returns_true_and_writes_enrichment(
         ],
     )
     br = _make_batch_result("ver-1", enrichment)
-    client = _fake_batch_client(batch_id="batch-done", results=[br])
+    client = fake_batch_client(batch_id="batch-done", results=[br])
 
     ended = collect_enrich_batch(
         conn, "batch-done", settings, provider=AnthropicProvider(client)
@@ -1685,7 +1656,7 @@ def test_collect_enrich_batch_marks_failed_on_errored_result(
         )
 
     br = _make_batch_result("ver-1", EnrichmentResult(), result_type="errored")
-    client = _fake_batch_client(batch_id="batch-err", results=[br])
+    client = fake_batch_client(batch_id="batch-err", results=[br])
 
     ended = collect_enrich_batch(
         conn, "batch-err", settings, provider=AnthropicProvider(client)
@@ -1727,7 +1698,7 @@ def test_collect_enrich_batch_survives_a_results_line_with_no_usable_custom_id(
     """lode-i821 criterion 4: drives a results line with no usable
     ``custom_id`` all the way through ``collect_enrich_batch`` (not just
     ``AnthropicProvider.collect_batch``), against the REAL SDK -- a
-    ``MagicMock``-based ``_fake_batch_client`` can't reproduce
+    ``MagicMock``-based ``fake_batch_client`` can't reproduce
     ``construct_type_unchecked``'s leniency, so this uses
     ``httpx.MockTransport`` instead.
 
@@ -1788,7 +1759,7 @@ def test_collect_enrich_batch_dead_letters_at_max_attempts(
         )
 
     br = _make_batch_result("ver-1", EnrichmentResult(), result_type="errored")
-    client = _fake_batch_client(batch_id="batch-dead", results=[br])
+    client = fake_batch_client(batch_id="batch-dead", results=[br])
 
     collect_enrich_batch(
         conn, "batch-dead", settings_low, provider=AnthropicProvider(client)
@@ -1805,7 +1776,7 @@ def test_collect_enrich_batch_idempotent_on_no_running_jobs(
 ) -> None:
     """collect_enrich_batch with no running jobs for the handle returns True."""
     # No running jobs with batch_handle='batch-xyz'.
-    client = _fake_batch_client(batch_id="batch-xyz")
+    client = fake_batch_client(batch_id="batch-xyz")
     ended = collect_enrich_batch(
         conn, "batch-xyz", settings, provider=AnthropicProvider(client)
     )
@@ -1842,7 +1813,7 @@ def test_collect_enrich_batch_writes_enrichment_against_external_id(
         ],
     )
     br = _make_batch_result("snap-1", enrichment)
-    client = _fake_batch_client(batch_id="batch-snap-done", results=[br])
+    client = fake_batch_client(batch_id="batch-snap-done", results=[br])
 
     ended = collect_enrich_batch(
         conn, "batch-snap-done", settings, provider=AnthropicProvider(client)
@@ -1916,7 +1887,7 @@ def test_collect_enrich_batch_appends_outcome_line_on_success(
 
     enrichment = EnrichmentResult(tags=["python", "api"], entities=["FastAPI"])
     br = _make_batch_result("ver-1", enrichment)
-    client = _fake_batch_client(batch_id="batch-outcome", results=[br])
+    client = fake_batch_client(batch_id="batch-outcome", results=[br])
 
     outcomes: list[str] = []
     ended = collect_enrich_batch(
@@ -1943,7 +1914,7 @@ def test_collect_enrich_batch_no_outcome_on_errored_result(
         )
 
     br = _make_batch_result("ver-1", EnrichmentResult(), result_type="errored")
-    client = _fake_batch_client(batch_id="batch-err-outcome", results=[br])
+    client = fake_batch_client(batch_id="batch-err-outcome", results=[br])
 
     outcomes: list[str] = []
     collect_enrich_batch(
@@ -1969,7 +1940,7 @@ def test_collect_enrich_batch_outcomes_default_none_is_a_no_op(
 
     enrichment = EnrichmentResult(tags=["x"])
     br = _make_batch_result("ver-1", enrichment)
-    client = _fake_batch_client(batch_id="batch-no-sink", results=[br])
+    client = fake_batch_client(batch_id="batch-no-sink", results=[br])
 
     ended = collect_enrich_batch(
         conn, "batch-no-sink", settings, provider=AnthropicProvider(client)

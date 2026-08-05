@@ -181,6 +181,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
+from unittest import mock
 
 import pytest
 from textual.pilot import Pilot
@@ -1133,6 +1134,57 @@ def load_module_from_path(name: str, path: Path) -> ModuleType:
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+# --- MagicMock Anthropic batch client (lode-ylh2) --------------------------
+#
+# tests/test_enrich.py's _fake_batch_client and tests/test_worker.py's
+# _fake_batch_client_worker were functionally identical MagicMock batch-client
+# builders -- same signature, same three stubs on client.beta.messages.batches
+# (create -> object with .id, retrieve -> object with .processing_status,
+# results -> iter(results or [])) -- differing only in their default batch_id
+# literal and docstring. This is that shared builder, with the per-module
+# default batch_id supplied by the caller instead of baked in.
+#
+# NOT moved into tests/_anthropic_rig.py: that module's own docstring
+# disclaims a general "shared test helpers live outside conftest.py" rule --
+# it holds the REAL-SDK MockTransport rig, justified by a large body of
+# Anthropic-batch-wire trivia and ~40 lines of SDK-shaped fixture data needing
+# lockstep updates when the pinned SDK's MessageBatch required fields change.
+# This is a ~15-line MagicMock builder with no such fixture-drift risk, so it
+# meets none of that module's stated bar for moving out. conftest.py already
+# deliberately holds several plain non-fixture helpers (see
+# load_module_from_path above).
+
+
+def fake_batch_client(
+    batch_id: str,
+    results: list | None = None,
+    processing_status: str = "ended",
+) -> mock.MagicMock:
+    """Mock Anthropic client with a Batches API stub.
+
+    ``results`` is a list of mock result objects; each needs:
+    - ``.custom_id`` (version_id)
+    - ``.result.type`` ('succeeded' | 'errored')
+    - ``.result.message.content`` (list of blocks) when type='succeeded'
+    """
+    client = mock.MagicMock()
+
+    # Batch creation
+    batch = mock.MagicMock()
+    batch.id = batch_id
+    client.beta.messages.batches.create.return_value = batch
+
+    # Batch retrieve (status)
+    status_obj = mock.MagicMock()
+    status_obj.processing_status = processing_status
+    client.beta.messages.batches.retrieve.return_value = status_obj
+
+    # Batch results
+    client.beta.messages.batches.results.return_value = iter(results or [])
+
+    return client
 
 
 # --- Read noxfile.py's session set without executing it (lode-dis6) --------
