@@ -15,7 +15,7 @@ from unittest import mock
 
 import httpx
 import pytest
-from conftest import (
+from _anthropic_rig import (
     _jsonl,
     _payload_without,
     _real_anthropic_client,
