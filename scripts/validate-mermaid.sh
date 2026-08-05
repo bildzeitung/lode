@@ -10,11 +10,11 @@
 # Usage: scripts/validate-mermaid.sh
 
 # AUDIT (lode-6znq, 2026-07-29, decided by measurement -- supersedes lode-bss5
-# Finding D and lode-3xqb below, both of which kept `-e` and guarded sites one
+# Finding D and lode-3xqb, both of which kept `-e` and guarded sites one
 # at a time). Shebang form: `#!/bin/bash`, matching gate-lib.sh's own form --
-# NOT `#!/usr/bin/env bash`, which the four sibling gate scripts use and which
-# the consistency argument for dropping `-e` cites, but which turned out NOT
-# to be free here: `env bash` does its own PATH lookup for the `bash` binary,
+# NOT `#!/usr/bin/env bash`, which the other gate-lib.sh consumers use and
+# which the consistency argument for dropping `-e` cites, but which turned out
+# NOT to be free here: `env bash` does its own PATH lookup for the `bash` binary,
 # and tests/test_validate_mermaid_gate.py's pre-flight fixtures (`fake_bin`)
 # deliberately run this script with a PATH containing only a `dirname` shim --
 # they assume the interpreter itself is reached by the shebang's own absolute
@@ -23,11 +23,9 @@
 # this gate on a hermetic PATH (`_run_gate(fake_bin)` with no `inherit_path`)
 # with exit 127 ("env: 'bash': No such file or directory") -- not a content or
 # machine-fault exit at all. Stated as a predicate, not a count, so it stays
-# true as fixtures are added. `#!/bin/bash` does no
-# PATH search for the interpreter and keeps them green
-# unmodified, so it is the deliberate pick here, not `env bash` -- both were
-# acceptable per this ticket's acceptance criteria; this is the one that
-# doesn't require touching a pinned test fixture to make it so.
+# true as fixtures are added. `#!/bin/bash` does no PATH search for the
+# interpreter and keeps them green unmodified, so it is the deliberate pick
+# here: it is the form that does not require touching a pinned test fixture.
 #
 # WHY DROP -e: `-e` was kept here (lode-bss5) on the theory that this script's
 # machine-fault-vs-content split lives entirely in `if`/`else` arms, which bash
@@ -41,22 +39,18 @@
 # the class instead: any command added below without a guard is a new,
 # silent route onto exit 1, and no audit can prove there are no more of them
 # for a class it's still possible to add to by omission.
+# Measured (bash 5.2, shebang honoured): `mktemp -d` failing under -e exited
+# 1, and so did the REPO= assignment, the printf into $CFG/puppeteer.json, and
+# both chmod calls -- the exact lode-9i2p inversion, a machine fault blamed on
+# a doc. All five keep their own `gate_could_not_run` guards below (lode-bss5,
+# lode-3xqb, lode-dyq0).
 #
-# But -e is NOT free here, and do not read the above as saying it is: a -e
-# abort exits with the FAILING COMMAND's status, and most commands fail with
-# 1 -- which in THIS script means "invalid mermaid". Every non-`if` command
-# is therefore a route from a machine fault to a fabricated content verdict,
-# the exact lode-9i2p inversion. Measured (bash 5.2, shebang honoured):
-# `mktemp -d` failing under -e exits 1, and so do the REPO= assignment, the
-# printf into $CFG/puppeteer.json, and both chmod calls below. All five are
-# now routed to exit 2 through gate_could_not_run (lode-bss5, lode-3xqb,
-# lode-dyq0).
-#
-# THE ONE MEASURED COUNTEREXAMPLE (bash 5.2, shebang honoured) -- why this is
-# not "just delete -e and stop": a clean run whose EXIT trap's `rm -rf "$CFG"`
-# then fails (its parent went read-only, say) exits with THAT command's status
-# under `-e` -- 1, this script's CONTENT verdict -- rewriting the status of
-# EVERY exit already decided below it, a guard's correct 2 included. No `||`
+# THE ONE FAILURE NO PER-SITE GUARD COULD CLOSE (bash 5.2, shebang honoured),
+# and why the trap keeps `|| :` anyway: a clean run whose EXIT trap's
+# `rm -rf "$CFG"` then fails (its parent went read-only, say) exits with THAT
+# command's status under `-e` -- 1, this script's CONTENT verdict -- rewriting
+# the status of EVERY exit already decided below it, a guard's correct 2
+# included. No `||`
 # guard on a body command can reach this: the trap fires after the body is
 # done. This is the single strongest argument FOR dropping `-e` (no per-site
 # guard closes it), and it is why the trap itself carries `|| :` below --
@@ -90,7 +84,7 @@
 # generic, one-hop-removed complaint about a literal glob string.
 # Separately re-verified with the guard in place and a real `cd` failure
 # (broken `dirname` on PATH): exit 2 with the GATE COULD NOT RUN banner and
-# this gate's advisory trailer, as before -- the existing
+# this gate's advisory trailer, unchanged by the shebang -- the existing
 # test_repo_root_resolution_failure_is_gate_could_not_run in
 # tests/test_validate_mermaid_gate.py pins that arm permanently. Since
 # lode-dyq0 moved the gate-lib.sh source above this assignment, the REPO=
@@ -129,7 +123,7 @@
 #   existing rather than needing a guard):
 #     - `basename "$f"` -> `${f##*/}` in the per-doc loop
 #
-#   SHOWN SAFE TO CONTINUE PAST -- no guard, and none added by this ticket:
+#   SHOWN SAFE TO CONTINUE PAST -- deliberately unguarded:
 #     - `set -uo pipefail` itself, and the literal assignments
 #       `IMAGE="minlag/mermaid-cli:latest"` / `fail=0` / `found=0` -- a bash
 #       literal assignment to a plain variable cannot fail.
