@@ -1417,7 +1417,9 @@ def _fenced_bash(markdown: str) -> str:
 #: defined byte-identically in four modules (test_worktree_gc_classify.py,
 #: test_land_conflicts_state.py, test_land_lock.py,
 #: test_assert_main_checkout.py) until lode-va47 consolidated it here.
-LAND_SKILL = Path(__file__).resolve().parent.parent / ".claude" / "skills" / "land" / "SKILL.md"
+LAND_SKILL = (
+    Path(__file__).resolve().parent.parent / ".claude" / "skills" / "land" / "SKILL.md"
+)
 
 
 # --- TUI test settle helpers (lode-lcju) -----------------------------------

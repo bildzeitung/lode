@@ -1260,6 +1260,7 @@ def test_uncreatable_lock_reports_a_machine_fault_not_another_lander(
 # Call-site pins against the SHIPPED SKILL.md (the fence is where the bug was)
 # ---------------------------------------------------------------------------
 
+
 def test_land_skill_acquires_and_releases_through_this_script() -> None:
     """The lock only serializes a pass that actually calls this script, and
     every call site is prose in a markdown fence that no gate parses. Pin the
