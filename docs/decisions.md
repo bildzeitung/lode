@@ -3268,7 +3268,7 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
 - **The three hand-written liveness pins stay separate, hand-written mechanisms —
   decided, rejected extraction (2026-08-04, maintainer decision, lode-7zap).** By the time
   lode-7zap closed the gap, three tests each pinned "does every allowlist/known-set entry still
-  correspond to a real, live thing in a real corpus": `tests/test_assert_main_checkout.py`'s
+  correspond to a real, live thing in a real corpus": `tests/test_land_skill_guard_coverage.py`'s
   `_dead_allowlist_entries` (exact command TEXT, keyed on a bare string, against `land/SKILL.md`'s
   fenced-bash corpus), `tests/test_skill_bash_state.py`'s `_dead_allowlist_keys` (a `(file, var)`
   tuple, matched by an unfiltered violation scan over the shipped skill/agent corpus), and
@@ -3296,14 +3296,15 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   and (b) a non-vacuity sabotage proof for that pin, holding one key constant and varying only the
   fixture's *content* between the live and dead assertions (never two differently-named fixtures —
   that shape passes on a name mismatch and proves nothing, lode-e49j's own measured finding, repeated
-  independently for `test_assert_main_checkout.py`'s pin by lode-7zap since it had shipped without a
+  independently for the `land/SKILL.md` guard-coverage pin by lode-7zap since it had shipped without a
   sabotage counterpart at all). This entry — not a shared module — is what codifies that discipline
   for the next allowlist a future ticket adds. Full sabotage-proof rationale for the *existing* two
   precedents:
   `tests/test_skill_bash_state.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`
   (lode-e49j) and its `_KNOWN_ENV_VARS` sibling (lode-rscn); the third,
-  `tests/test_assert_main_checkout.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`,
-  is lode-7zap's own addition.
+  `tests/test_land_skill_guard_coverage.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`,
+  is lode-7zap's own addition (it lived in `tests/test_assert_main_checkout.py` until lode-2thl
+  split that module's text-gate half out).
 
 - **The beads passive-export relpath list (`.beads/issues.jsonl`,
   `.beads/interactions.jsonl`) is canonicalized into a plain text file, not

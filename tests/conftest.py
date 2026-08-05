@@ -1212,12 +1212,14 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # invisible to it, and every fence in `.claude/skills/code/SKILL.md` was. Four
 # other modules each rediscovered and re-fixed that independently before
 # lode-ovgs unified three of them here, lode-p4qb folded in the fourth
-# (tests/test_assert_main_checkout.py), and lode-jm4a folded in the fifth
+# (tests/test_assert_main_checkout.py's text-gate half, since split out to
+# tests/test_land_skill_guard_coverage.py by lode-2thl), and lode-jm4a folded
+# in the fifth
 # (tests/test_sweep_digest_id.py).
 #
 # Consumers of the FUNCTION: tests/test_land_lock.py,
 # tests/test_land_conflicts_state.py, tests/test_skill_bash_state.py,
-# tests/test_assert_main_checkout.py, tests/test_sweep_digest_id.py.
+# tests/test_land_skill_guard_coverage.py, tests/test_sweep_digest_id.py.
 # tests/test_bd_list_limit_gate.py's inline-span scan (`inline_violations`) is
 # a further consumer -- of `fence_scan` directly, since lode-kjei collapsed its
 # own open/close loop onto the same generator `bash_fence_blocks` is now built
