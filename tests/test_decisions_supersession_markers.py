@@ -25,17 +25,15 @@ Both scans are module-level helpers taking their lines as a parameter, so the
 sabotage tests below can prove each actually fires on a violation rather than
 passing vacuously -- same shape as tests/test_keybindings_doc.py.
 
-KNOWN LIMITATION (lode-nlk6): neither scan -- nor the preamble-states-the-rule
-check -- can detect a SILENT IN-PLACE REWRITE, the exact failure the
-preamble's own sentence forbids. Both scans key on an artifact a *marker*
-leaves behind (an off-pattern keyword, a wrapped id); a silent rewrite is the
-ABSENCE of a correction, so it produces no marker, no keyword, no wrap, and no
-preamble change -- every scan here stays green. This is a limit of THIS GATE,
-not a hole in the convention itself: the convention still binds, this module
-just cannot enforce the one violation shape that leaves no trace to scan for.
-Closing it would mean diffing an entry against its own git history, a
-materially different and more expensive check than the text scans below; that
-is a separate ticket's cost estimate to make, not an implicit ask here.
+KNOWN LIMITATION (lode-nlk6): no check here -- neither scan, nor the
+preamble-states-the-rule check -- can detect a SILENT IN-PLACE REWRITE, the
+exact failure the preamble's own sentence forbids. Every check keys on an
+artifact a *marker* leaves behind (an off-pattern keyword, a wrapped id, the
+preamble's own wording); a silent rewrite is the ABSENCE of a correction, so
+it leaves nothing for any of them to key on and every check stays green. This
+is a limit of THIS GATE, not a hole in the convention: the convention still
+binds. Closing it would mean diffing an entry against its own git history, a
+materially different and more expensive check than the text scans below.
 """
 
 from __future__ import annotations
