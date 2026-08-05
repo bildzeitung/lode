@@ -165,22 +165,18 @@ def test_load_settings_config_toml_unknown_key_raises(
 
 # --- enrich_call_timeout_s back-compat rename chain (lode-568v.2, lode-7y6s)-
 #
-# anthropic_call_timeout_s was renamed vendor-neutral to llm_call_timeout_s
-# ahead of the LLMProvider seam (lode-568v.2); llm_call_timeout_s was renamed
-# again to enrich_call_timeout_s (lode-7y6s) once the qa_call_timeout_s split
-# (lode-wfyx) left the general name covering only enrich.py's call sites. A
-# config.toml still carrying any of these keys must keep working rather than
-# tripping extra="forbid" (docs/stack.md "Config shape"), and the OLDEST name
-# must still land on the CURRENT field even though it takes two remap hops to
-# get there.
+# A config.toml still carrying any superseded key must keep working rather
+# than tripping extra="forbid", and the OLDEST name must still land on the
+# CURRENT field even though it takes more than one remap hop to get there.
+# load_settings()'s own comment owns why the hops exist and why their order
+# matters; these four tests pin the resulting precedence.
 
 
 def test_load_settings_remaps_old_anthropic_timeout_key(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The oldest name (two hops back) still lands on the current field --
-    confirms the remaps chain rather than each hop only handling its own
-    immediate predecessor."""
+    """The oldest name still lands on the current field -- confirms the
+    remaps chain rather than each hop handling only its own predecessor."""
     monkeypatch.setenv("LODE_HOME", str(tmp_path))
     (tmp_path / "config.toml").write_text(
         "anthropic_call_timeout_s = 42.0\n", encoding="utf-8"

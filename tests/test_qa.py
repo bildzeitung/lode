@@ -225,8 +225,7 @@ def test_qa_think_harder_llm_max_tokens_override_reaches_the_call(conn) -> None:
 def test_qa_call_timeout_s_default_reaches_the_call(conn) -> None:
     # lode-wfyx: with no Settings passed at all, the Q&A synthesis call is
     # timed by its own qa_call_timeout_s knob, split off the shared
-    # enrich_call_timeout_s (renamed from llm_call_timeout_s in lode-7y6s).
-    # The default's *value* is pinned by test_config.py's
+    # enrich_call_timeout_s. The default's *value* is pinned by test_config.py's
     # test_documented_defaults_load, so derive it rather than retype it.
     client = _FakeClient(_envelope([]))
     answer_question(
@@ -251,7 +250,7 @@ def test_qa_call_timeout_s_override_reaches_the_call(conn) -> None:
 
 
 def test_enrich_call_timeout_s_does_not_reach_the_qa_call(conn) -> None:
-    # lode-wfyx (renamed lode-7y6s): enrich_call_timeout_s bounds only
+    # lode-wfyx: enrich_call_timeout_s bounds only
     # enrich.py's call sites -- overriding it must NOT change the Q&A call's
     # timeout, which stays on qa_call_timeout_s's own (unrelated) default.
     # The mirror direction (the qa knob not leaking into enrich's three

@@ -87,9 +87,8 @@ OPUS_MODEL = "claude-opus-5"
 #: Raising this cap while also allowing adaptive thinking pushes wall-clock up
 #: on the think-harder path twice over. ``qa_call_timeout_s`` (lode-wfyx) is
 #: the call's own timeout knob, split off the shared
-#: :attr:`~lode.config.Settings.enrich_call_timeout_s` (renamed from
-#: ``llm_call_timeout_s`` in lode-7y6s; still bounds only ``enrich.py``'s
-#: calls) specifically because 120s was no longer enough
+#: :attr:`~lode.config.Settings.enrich_call_timeout_s` (which still bounds
+#: only ``enrich.py``'s calls) specifically because 120s was no longer enough
 #: headroom once thinking could share this budget. Its default is **derived,
 #: not a measured p95** -- a live-API p95 benchmark was deliberately declined
 #: on cost/value grounds, not skipped for lack of capability. The derivation,
