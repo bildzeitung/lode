@@ -2172,6 +2172,65 @@ while erasing it here would lose the record of what was believed, and when.
   prevent. Documented in
   [`coding.md`](../.claude/agents/coding.md), [`code-reviewer.md`](../.claude/agents/code-reviewer.md),
   and [agents-workflow.md — Isolation guard](agents-workflow.md#isolation-guard-lode-ska2--lode-jk44).
+- **Confirmed and dropped for `coding` and `code-reviewer` (lode-09td, 2026-07-28/29) — the
+  frontmatter-vs-call-site confound `lode-ojsr` could not reach is now resolved, the same way
+  `lode-p2vi` resolved it for `land-review`.** Two dispatches, run on separate days, both from the
+  **top-level orchestrating session** (main checkout, on `trunk`) — not nested inside any dispatched
+  subagent's worktree, which is the vantage point `lode-ojsr`'s own probe could not achieve. Both
+  dispatches in each run were issued in the same message (concurrent, identical conditions), neither
+  carried a call-site `isolation` option, and the precondition (`isolation: worktree` live in the
+  target agent's frontmatter on `trunk`) was re-verified with `git show` before each run rather than
+  assumed.
+
+  **Probe 1 (2026-07-28), `coding` vs a `claude` control:** `coding` landed in a linked worktree
+  (`git rev-parse --show-toplevel` differed from the main checkout, `--git-common-dir` confirmed a
+  linked worktree, branch `worktree-agent-<hash>`, `HEAD ==` the dispatching session's local `trunk`).
+  The `claude` control —
+  carrying **no** isolation frontmatter key at all — landed unisolated in the main checkout on
+  `trunk`. **Probe 2 (2026-07-29), `code-reviewer` vs a `claude` control:** identical design, identical
+  result — `code-reviewer` isolated, the control did not. `code-reviewer` is the role with the actual
+  failure history (`lode-ska2` was 6-of-6 `code-reviewer` dispatches failing to isolate), so this
+  closes the more consequential half of the question, not merely the cheaper one.
+
+  **Conclusion:** since the only difference between control and test case in each run was the
+  presence of the frontmatter key, the frontmatter key — not nested-dispatch inheritance of a parent
+  cwd, which is what made `lode-ojsr`'s own probe invalid — is what provisions the worktree, for both
+  roles. Three roles (`land-review` via `lode-p2vi`, `coding` and `code-reviewer` via `lode-09td`) now
+  measure frontmatter alone as sufficient, against a keyless control that does not isolate.
+
+  **What this does NOT establish — this entry owns the full text; a citing site must carry at least
+  the gist of both limits, and link here rather than re-narrate the probes:**
+  (1) each probe contrasts the target role's *whole* agent definition (system prompt, model, tools)
+  against `claude`'s, not a single-variable ablation of the isolation key on one fixed definition —
+  the key is the only isolation-*relevant* difference, but the probe design does not isolate it in the
+  strict sense. (2) **each probe was a single two-dispatch run — one test role, one control, issued
+  concurrently — never a fan-out.** They
+  establish the mechanism works under light load; they say **nothing** about concurrency pressure, and
+  do **not** refute the harness-side race/resource-pressure hypothesis in
+  [agents-workflow.md — Isolation guard](agents-workflow.md#isolation-guard-lode-ska2--lode-jk44)'s
+  root-cause section. The sharp edge cuts both ways: `lode-ska2`'s 6 failures happened *with* the
+  call-site option present, so that option demonstrably did not prevent them either — dropping it is
+  not claimed to reduce fan-out risk, only to remove a mechanism with no measured protective effect
+  against the one incident it was added for.
+
+  **Decision (human, 2026-07-29): drop `code/SKILL.md`'s call-site `isolation: "worktree"` option for
+  `coding` and `code-reviewer`.** Frontmatter is now the sole enforcement point for all three roles —
+  `land-review`, `coding`, `code-reviewer` — exactly the same rule everywhere. Reasoning: the call-site
+  option was added *for* `lode-ska2` and had zero demonstrated protective value against it; frontmatter
+  travels with the role, so every dispatch site benefits, not just `/code`'s; the call site only
+  protects the sites that remember to ask for it. Every `code/SKILL.md` dispatch site was updated to
+  match, as was `land/SKILL.md`'s then-stale "no top-level probe confirming frontmatter alone
+  suffices for them" sentence. This does not touch the open fan-out question above — see limit (2).
+
+  **What makes a single enforcement point acceptable here** (the question a reader should ask, since
+  the failure mode — a builder or reviewer writing the main checkout on `trunk` — is unrecoverable):
+  the surviving point is *gated* and the dropped one never was, so this removes the ungated mechanism
+  and keeps the gated one — the reverse of how "belt and braces" is usually worth defending.
+  `tests/test_isolation_guard.py::test_every_agent_definition_pins_isolation_in_frontmatter` fails if
+  any `.claude/agents/*.md` loses the key (parsing the frontmatter block, not the whole file — see its
+  helper's docstring for why a substring check is not enough), and `scripts/isolation-guard.sh` still
+  hard-stops any dispatch that arrives unisolated regardless of *why*. Nothing ever failed on a
+  deleted call-site option.
 - **Update (lode-nt98, lode-qv5t, 2026-07-20) — the "qualifies by construction" / "no dedicated
   cleanup" claim above is falsified; lode-qv5t closes the gap it left open.** Everything above this
   entry reasoned about `land-review`'s scratch worktree correctly on the axis it was checking
@@ -3102,3 +3161,72 @@ while erasing it here would lose the record of what was believed, and when.
     filters the push, and produces the annotated report rows), §8 (report format documents the
     annotation and the deliberate double-listing), §2a and the Non-goals bullet (both restated to
     describe the decided behavior instead of pointing at this ticket as still open).
+
+- **RTK (the token-optimizing command proxy) is removed from this repo — decided, done
+  (2026-08-04, maintainer decision).** The `rtk` golden rule and command reference are gone from
+  `CLAUDE.md`, every `rtk`-prefixed call site across `.claude/` skills and agents is now the plain
+  command, `scripts/rtk-setup.sh` and the installer line in `scripts/update-tools.sh` are deleted,
+  and the `Bash(rtk *)` project permission is dropped. The `rtk` tolerance was also stripped from
+  the three guards that carried it (the two `PreToolUse` hooks in `.claude/settings.json` and
+  `scripts/sha-fabrication-guard.sh`) and from their pinning tests — a deliberate call: with no
+  `rtk` on any machine there is nothing for the alternation to match, and the residual risk is only
+  a stale `rtk` binary surviving on some machine and carrying a `bd create --deps blocks:`, a `gh`
+  write, or a fabricated SHA past its guard.
+
+  **Update (2026-08-04, maintainer decision)** — this supersedes, in *effect* but not in *record*,
+  every entry above that reasons about `rtk`: the `"rtk bd dolt push"` prefix-blind audit
+  (`lode-bpl`), `rtk`'s reformatting of `git worktree list --porcelain` (`lode-9j7`), and the `rtk`
+  member of the `gh`/`bd` guard wrapper enumerations (`lode-o29m`, `lode-9mbt`, `lode-ij24`). Those
+  entries stand as written — they record what was true and why. What changed is only that the tool
+  they reason about is no longer installed or referenced.
+
+  The `git log` merge-commit caveat (`lode-eza9`) dies with it: `rtk git log` silently dropped
+  `--no-ff` merge commits, which is the *only* reason `CLAUDE.md` carried a bare-`git log` exception
+  and `.claude/skills/land/SKILL.md` §1 carried a call-site comment defending it. With `rtk` gone
+  every `git log` is faithful, so the caveat and the comment are removed rather than preserved as a
+  rule with no live cause. The residue print in `land/SKILL.md` §1 keeps its *substantive* comment
+  (residue there is by construction merge commits, and the reset below destroys them) — that fact
+  outlives `rtk`.
+
+- **All three `PreToolUse(Bash)` guards extracted from inline config into tested scripts — decided,
+  done (2026-08-04, maintainer decision).** The `lode-ij24` (`bd create --deps blocks:` inversion)
+  and `lode-o29m`/`lode-9mbt` (external-tracker write) guards had their scanning logic inline in
+  `.claude/settings.json` as ~1.4KB and ~3.3KB shell one-liners; they now live in
+  `scripts/bd-deps-blocks-guard.sh` and `scripts/gh-write-guard.sh`, reached by the same thin
+  wrapper shape `lode-fpmi` already shipped for `scripts/sha-fabrication-guard.sh`. Behaviour is
+  unchanged — same regexes, same deny JSON, byte for byte — and the pre-existing hook-level tests
+  passed untouched through the refactor, which is what establishes that. Rationale is `lode-fpmi`'s
+  own acceptance criterion, applied to the two guards it left behind: *"the guard logic lives in a
+  tested script, not untested inline shell"*, because ungated inline shell in config is where this
+  repo has already shipped silent undetected-for-months bugs (`lode-mh9g`, `lode-54mo`). Full
+  write-up: [agents-workflow.md](agents-workflow.md#all-three-pretooluse-guards-live-in-tested-scripts-not-inline-config-2026-08-04).
+
+  **The fail-open path is new, was raised before landing, and was accepted knowingly.** Inline logic
+  could not fail to run; a delegating wrapper can — if `CLAUDE_PROJECT_DIR` is unset *and*
+  `git rev-parse` cannot resolve a root, or the script is missing/non-executable, the guard is
+  silently skipped. The alternative considered and **rejected** was making the `gh` guard fail
+  *closed* on an unresolvable script (consistent with `lode-oii9`'s reasoning for missing `jq`),
+  which would brick every Bash call on such a machine. The maintainer chose fail-open for all three,
+  matching `lode-fpmi`. **Accepted residual, recorded rather than left to be discovered:** on a
+  machine where the root does not resolve, a `gh` write — whose whole premise is that a false allow
+  is an unrecoverable public action under the user's name — is gated only by `CLAUDE.md`'s prose
+  rule. Each wrapper's fail-open is pinned by a test, as is the exec bit, whose loss would otherwise
+  disable a guard with every other test green.
+
+  **`lode-9gm2`'s dash-safety bar moved with the logic** and now binds the wrapper (the part dash
+  executes) rather than the collapse step, which runs under `bash "$SCRIPT"`. The static check is
+  pattern-substitution-specific instead of a blanket `${` ban, since the wrapper legitimately uses
+  POSIX `${CLAUDE_PROJECT_DIR:-…}`; the sabotage test proving dash dies on the bash-only form was
+  retargeted at the wrapper, not dropped.
+
+  **Update (2026-08-04, maintainer decision)** — a follow-up sweep removed the last `rtk` mention
+  from `docs/` outside this file. The one site that had been *deliberately* kept — the `lode-bpl`
+  paragraph in [agents-workflow.md](agents-workflow.md), which quoted the literal
+  `grep -rl "rtk bd dolt push"` that the original audit ran — was rewritten to state the durable
+  lesson (an enumeration that matches only one spelling of a call misses every site written
+  another way) without naming the tool. Nothing was lost: the specific spelling was incidental to
+  the failure, and no reader can now reach a dead tool name from an operational doc.
+  **This file remains the sole exception, on purpose:** it is a dated log, so its `rtk` entries are
+  the record of what was believed and when, and erasing them is exactly what its preamble forbids.
+  `.claude/agents/` and `.claude/skills/` were swept in the same pass and were already clean; the
+  passive `.beads/issues.jsonl` export is a historical snapshot and is never hand-edited (lode-6ra).

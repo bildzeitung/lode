@@ -176,9 +176,11 @@ class TestCheck:
 
         assert check(tmp_path) == []
 
-    def test_files_outside_scan_dirs_are_not_walked_but_are_valid_targets(
-        self, tmp_path
-    ):
+    def test_files_outside_scan_dirs_are_valid_link_targets(self, tmp_path):
+        """Files outside SCAN_DIRS don't get the full markdown-link walk
+        (see TestBareDocAnchorRefs below for what they DO get: a bare
+        docs/-anchor citation check) -- but they remain valid *targets* for
+        a link written inside a SCAN_DIRS document."""
         _write(tmp_path, "docs/a.md", "[readme](../README.md)\n")
         _write(tmp_path, "README.md", "# Readme\n")
         _git_init(tmp_path)
@@ -196,9 +198,155 @@ def test_gate_scans_both_docs_and_dot_claude(tmp_path, scan_dir):
     assert len(errors) == 1
 
 
-def test_real_repo_docs_and_dot_claude_pass_the_gate():
-    """The acceptance criterion: the gate is green against docs/ and .claude/
-    as they stand once this ticket lands."""
+#: Split so this module's own source never spells out a bare
+#: docs-dir-slash-anchor string -- the real-repo self-test below walks tests/
+#: as a tracked file outside SCAN_DIRS, so a contiguous literal here would
+#: make this file cite itself, and its fabricated anchors would fail the gate.
+_DOCS = "doc" + "s"
+
+
+class TestBareDocAnchorRefs:
+    """lode-v10i: a bare-text `docs/<path>.md#<anchor>` reference -- no
+    markdown brackets -- cited from any tracked file OUTSIDE SCAN_DIRS (a
+    .github/workflows/*.yml comment, a scripts/*.sh comment, ...) must also
+    be gated. This is the exact shape that was silently ungated before this
+    ticket: the anchor is referenced exclusively from files check_links.py
+    never scanned."""
+
+    def test_bare_reference_in_workflow_yaml_to_valid_anchor_passes(self, tmp_path):
+        _write(tmp_path, f"{_DOCS}/release.md", "# Release\n\n## CI Trigger Scope\n")
+        _write(
+            tmp_path,
+            ".github/workflows/build.yml",
+            f"# See {_DOCS}/release.md#ci-trigger-scope for details.\n",
+        )
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+    def test_bare_reference_in_workflow_yaml_to_broken_anchor_is_reported(
+        self, tmp_path
+    ):
+        _write(tmp_path, f"{_DOCS}/release.md", "# Release\n\n## CI Trigger Scope\n")
+        _write(
+            tmp_path,
+            ".github/workflows/build.yml",
+            f"# See {_DOCS}/release.md#no-such-anchor for details.\n",
+        )
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert len(errors) == 1
+        assert errors[0].target == f"{_DOCS}/release.md#no-such-anchor"
+        assert "no heading slug" in errors[0].reason
+
+    def test_bare_reference_to_missing_file_is_reported(self, tmp_path):
+        _write(
+            tmp_path,
+            "scripts/foo.sh",
+            f"# {_DOCS}/does-not-exist.md#anything\n",
+        )
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert len(errors) == 1
+        assert "does not exist" in errors[0].reason
+
+    def test_bare_reference_is_root_relative_regardless_of_citing_files_depth(
+        self, tmp_path
+    ):
+        """A scripts/*.sh comment writes a bare docs/x.md-style reference --
+        meant relative to the repo root, NOT to scripts/'s own directory
+        (which would look for scripts/docs/x.md and never find it)."""
+        _write(tmp_path, f"{_DOCS}/x.md", "# X\n\n## Anchor\n")
+        _write(tmp_path, "scripts/foo.sh", f"# {_DOCS}/x.md#anchor\n")
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+    def test_scan_dirs_files_are_excluded_from_the_bare_pass(self, tmp_path):
+        """The two passes must not both claim the same file. Asserted on the
+        pass boundary itself rather than on `check() == []`, which would hold
+        under any implementation (a plain-prose mention matches no `_LINK_RE`
+        either) and so could not detect double-scanning."""
+        _write(tmp_path, f"{_DOCS}/a.md", f"# A\n\nSee {_DOCS}/a.md#no-such-anchor.\n")
+        _write(tmp_path, "README.md", "# R\n")
+        _git_init(tmp_path)
+
+        walked = check_links._tracked_other_files(tmp_path)
+
+        assert tmp_path / f"{_DOCS}/a.md" not in walked
+        assert tmp_path / "README.md" in walked
+        assert check(tmp_path) == []
+
+    def test_url_into_another_repos_docs_is_not_resolved_locally(self, tmp_path):
+        """A URL into ANOTHER repo's docs/ contains the literal
+        `docs/<file>.md#<anchor>` substring but is not a citation into OUR
+        docs/; the regex's root-relative lookbehind is what rejects it."""
+        _write(tmp_path, f"{_DOCS}/release.md", "# R\n\n## Real\n")
+        _write(
+            tmp_path,
+            "README.md",
+            f"See https://github.com/other/repo/blob/main/{_DOCS}"
+            "/release.md#upstream-only for background.\n",
+        )
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+    def test_anchor_inside_a_fenced_block_in_a_non_scan_dir_markdown_is_example(
+        self, tmp_path
+    ):
+        """README.md lives outside SCAN_DIRS, so the bare pass walks it -- but
+        an anchor inside a ``` fence there is an example, not a citation. The
+        identical text OUTSIDE the fence still fails, which is what keeps this
+        test from passing vacuously."""
+        _write(tmp_path, f"{_DOCS}/release.md", "# R\n\n## Real\n")
+        fenced = f"# Example\n\n```\n{_DOCS}/release.md#not-a-real-anchor\n```\n"
+        _write(tmp_path, "README.md", fenced)
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+        _write(
+            tmp_path, "README.md", fenced + f"\n{_DOCS}/release.md#not-a-real-anchor\n"
+        )
+        _git_init(tmp_path)
+
+        assert len(check(tmp_path)) == 1
+
+    def test_fence_rule_is_markdown_only_so_a_py_docstring_fence_hides_nothing(
+        self, tmp_path
+    ):
+        """The fence rule must NOT leak to non-markdown sources. A Python
+        docstring can legitimately open a ``` block (a fence-shaped line at
+        the start of a line, which is what _FENCE_RE actually matches) and
+        still cite a doc anchor after it -- noxfile.py and src/lode/cli.py
+        both carry real docstring citations today. Skipping fenced lines
+        there would silently DROP a real citation -- and worse, an ODD
+        number of fence-shaped lines in a non-markdown file would leave
+        the walker "inside a fence" for the whole remainder of the file,
+        disabling the gate for everything after it with nothing to
+        report. Silent under-checking is the exact failure this gate
+        exists to prevent."""
+        _write(tmp_path, f"{_DOCS}/release.md", "# R\n\n## Real\n")
+        _write(
+            tmp_path,
+            "noxfile.py",
+            f'"""Doc.\n\n```\nSee {_DOCS}/release.md#no-such-anchor.\n```\n"""\n',
+        )
+        _git_init(tmp_path)
+
+        assert len(check(tmp_path)) == 1
+
+
+def test_real_repo_passes_the_gate():
+    """The acceptance criterion, for both passes at once: every relative
+    markdown link in docs/ and .claude/ resolves, AND every bare docs/ anchor
+    citation from anywhere else in the tree (.github/workflows/, scripts/,
+    src/, noxfile.py, README.md, ...) resolves."""
     errors = check(REPO_ROOT)
 
     assert errors == [], "broken link(s):\n" + "\n".join(str(e) for e in errors)

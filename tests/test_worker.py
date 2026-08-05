@@ -2464,6 +2464,105 @@ def test_drain_still_runs_embed_jobs_when_a_batch_poll_fails_with_a_non_llm_erro
     )
 
 
+class _WrappedConn:
+    """Delegating shell for a test connection stub that intercepts ``execute``.
+
+    Subclasses override ``execute`` only. ``__enter__``/``__exit__`` need
+    explicit delegation because dunder lookup bypasses ``__getattr__``;
+    everything else (``executemany``, ``cursor``, ...) forwards through it.
+    """
+
+    def __init__(self, real: sqlite3.Connection) -> None:
+        self._real = real
+
+    def __enter__(self):
+        return self._real.__enter__()
+
+    def __exit__(self, *exc):
+        return self._real.__exit__(*exc)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+class _PoisonSubmitCASConn(_WrappedConn):
+    """Fail the pre-claim CAS UPDATE inside ``_batch_submit_enrich``, exactly
+    as a concurrent writer racing past the busy_timeout would
+    (``sqlite3.OperationalError: database is locked`` — the comment on that
+    loop names this exact concurrency, immediate-enrich flipping a row
+    mid-flight).
+
+    Scoped to a specific ``job_id``, not the SQL text alone: ``_claim_one``'s
+    main-loop claim uses the byte-identical ``UPDATE ... SET status =
+    'running', claimed_at = ... WHERE id = ? AND status = 'pending'`` text, so
+    matching on SQL text alone would also poison the embed job's own claim —
+    exactly the starvation this test exists to prove does NOT happen.
+    """
+
+    def __init__(self, real: sqlite3.Connection, poison_job_id: int) -> None:
+        super().__init__(real)
+        self._poison_job_id = poison_job_id
+
+    def execute(self, sql: str, *args):
+        if (
+            "UPDATE jobs SET status = 'running', claimed_at" in sql
+            and args
+            and self._poison_job_id in args[0]
+        ):
+            raise sqlite3.OperationalError("database is locked (test)")
+        return self._real.execute(sql, *args)
+
+
+def test_drain_still_runs_embed_jobs_when_the_submit_pre_claim_cas_raises_unclassified(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+) -> None:
+    """A non-(AuthError, LLMProviderError) failure escaping
+    ``_batch_submit_enrich`` must NOT starve a pending ``embed`` job in the
+    same ``drain`` pass (lode-2mnj).
+
+    Mirrors ``test_drain_still_runs_embed_jobs_when_a_batch_poll_fails_with_a_non_llm_error``
+    (the collect-side lode-t7en/lode-knnt regression) for the SUBMIT arm.
+    ``_batch_submit_enrich``'s pending-jobs ``SELECT``, its deferred imports,
+    and its ENTIRE pre-claim CAS loop all sit outside that function's own
+    ``try`` (which opens at ``submit_enrich_batch()``), so a failure there —
+    e.g. the ``sqlite3.OperationalError`` this test stubs, exactly the
+    concurrency the CAS loop's own comment says it defends against — used to
+    escape both ``_batch_submit_enrich`` AND drain's narrowly-typed submit
+    arm (``except (AuthError, LLMProviderError)``), aborting ``drain`` before
+    ``_reclaim_stale_running``/``_reset_retryable``/the main claim-run loop
+    ever ran. FAILS against the pre-fix code (narrow submit-arm catch): the
+    ``OperationalError`` propagates raw out of ``drain`` before ``embedded``
+    is ever appended to.
+    """
+    _insert_job(conn, job_type="embed", target_version="ver-1")
+    _insert_note_worker(conn, note_id="note-1", version_id="ver-1")
+    enrich_job_id = _insert_enrich_job_worker(
+        conn, version_id="ver-1", status="pending"
+    )
+
+    poisoned = _PoisonSubmitCASConn(conn, poison_job_id=enrich_job_id)
+
+    embedded: list[str] = []
+
+    def _embed(conn_, tv, db, s):
+        embedded.append(tv)
+
+    # The unclassified OperationalError still surfaces to the caller...
+    with pytest.raises(sqlite3.OperationalError):
+        drain(poisoned, db_path, settings, _registry={"embed": _embed})
+
+    # ...but only AFTER the embed job ran to completion.
+    assert embedded == ["ver-1"], (
+        "embed job was starved by an unclassified submit-arm pre-step failure"
+    )
+    # The enrich job was never claimed (the CAS UPDATE raised before any row
+    # could be flipped to 'running') -- still pending for a later drain tick.
+    row = conn.execute("SELECT status FROM jobs WHERE type = 'enrich'").fetchone()
+    assert row[0] == "pending"
+
+
 def test_drain_returns_count_including_failures(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
@@ -3163,8 +3262,8 @@ class _FrozenCursor:
         return self._rows
 
 
-class _RacingSelectConn:
-    """Wrap a real connection to simulate a concurrent immediate-enrich claim.
+class _RacingSelectConn(_WrappedConn):
+    """Simulate a concurrent immediate-enrich claim.
 
     Right after ``_batch_submit_enrich``'s candidate SELECT returns the pending
     enrich jobs, an external claimer (an interactive ``lode add`` running
@@ -3175,7 +3274,7 @@ class _RacingSelectConn:
     """
 
     def __init__(self, real: sqlite3.Connection, race_job_id: int) -> None:
-        self._real = real
+        super().__init__(real)
         self._race_job_id = race_job_id
         self._raced = False
 
@@ -3196,18 +3295,6 @@ class _RacingSelectConn:
                 )
             return _FrozenCursor(rows)
         return self._real.execute(sql, *args)
-
-    def executemany(self, sql: str, seq):
-        return self._real.executemany(sql, seq)
-
-    def __enter__(self):
-        return self._real.__enter__()
-
-    def __exit__(self, *exc):
-        return self._real.__exit__(*exc)
-
-    def __getattr__(self, name):
-        return getattr(self._real, name)
 
 
 def test_batch_submit_skips_job_claimed_by_concurrent_immediate_enrich(

@@ -670,7 +670,7 @@ def test_default_staleness_threshold_is_generous(tmp_path: Path) -> None:
     assert result.returncode == 1, result.stdout + result.stderr
 
 
-def test_default_staleness_threshold_is_still_1800s(tmp_path: Path) -> None:
+def test_default_staleness_threshold_is_still_about_1800s(tmp_path: Path) -> None:
     """Pin the DEFAULT itself, not just that it exceeds two minutes.
 
     Every other test here passes LAND_LOCK_STALE_SECONDS explicitly, and the
@@ -685,27 +685,48 @@ def test_default_staleness_threshold_is_still_1800s(tmp_path: Path) -> None:
     proposed was reverted for exactly that reason (see scripts/land-lock.sh,
     CAVEAT 1). Lowering it is lode-cp4o's job, and requires the measurement.
 
-    Asserted behaviourally, from the outside: a lock 1799s old is still held,
-    a lock 1801s old is stale. Deliberately not a grep for the literal -- this
+    Asserted behaviourally, from the outside: a lock 1700s old is still held,
+    a lock 1900s old is stale. Deliberately not a grep for the literal -- this
     fails if the semantics change, not merely if the digits move.
+
+    The 100s margins are deliberate, and were 1s until lode-44cq: the age is
+    stamped from ONE clock read here, in Python, then measured against a
+    SECOND, later read inside `land-lock.sh`'s own subprocess, so under load
+    (`-n 8`, interpreter/bash startup, git work) that gap could exceed a
+    second and age a 1799s lock past 1800s -- a false, one-sided red. This is
+    the same hazard `test_fresh_lock_is_not_reclaimed_under_a_large_threshold`
+    calls out for its own boundary; the margin is how this file has always
+    handled it (every other threshold test here uses a 2x-or-wider ratio).
+
+    The trade is real: the pin now catches only a default outside
+    (1700s, 1900s), so a lowering to e.g. 1750s would slip through. Measured
+    on this branch -- defaults of 900s and 3600s each turn it red, 1750s does
+    not.
+
+    Rejected as worse: injecting a pinned "now" into the script. That would
+    put a test-only env var directly into the *decision* input of a
+    production lock's staleness path, unlike the existing
+    LAND_LOCK_TEST_STALL_SECONDS hook, which can only sleep and cannot change
+    a decision.
     """
     repo = _init_repo(tmp_path)
     lock = _lock_path(repo)
 
-    lock.write_text(f"12345 host {int(time.time()) - 1799} 2026-01-01T00:00:00Z\n")
-    just_inside = _run("acquire", repo=repo)
-    assert just_inside.returncode == 1, (
-        "a lock 1799s old was reclaimed -- LAND_LOCK_STALE_SECONDS was lowered "
-        "below 1800s. That is lode-cp4o's decision to make, with measurements "
-        "(scripts/land-lock.sh, CAVEAT 1)."
+    lock.write_text(f"12345 host {int(time.time()) - 1700} 2026-01-01T00:00:00Z\n")
+    well_inside = _run("acquire", repo=repo)
+    assert well_inside.returncode == 1, (
+        "a lock 1700s old was reclaimed -- LAND_LOCK_STALE_SECONDS was lowered "
+        "well below 1800s. That is lode-cp4o's decision to make, with "
+        "measurements (scripts/land-lock.sh, CAVEAT 1)."
     )
 
-    lock.write_text(f"12345 host {int(time.time()) - 1801} 2026-01-01T00:00:00Z\n")
-    just_outside = _run("acquire", repo=repo)
-    assert just_outside.returncode == 0, (
-        "a lock 1801s old was NOT reclaimed -- LAND_LOCK_STALE_SECONDS was "
-        "raised above 1800s, so an abandoned lock now blocks landing for longer "
-        f"than the documented 30min: {just_outside.stdout + just_outside.stderr}"
+    lock.write_text(f"12345 host {int(time.time()) - 1900} 2026-01-01T00:00:00Z\n")
+    well_outside = _run("acquire", repo=repo)
+    assert well_outside.returncode == 0, (
+        "a lock 1900s old was NOT reclaimed -- LAND_LOCK_STALE_SECONDS was "
+        "raised well above 1800s, so an abandoned lock now blocks landing for "
+        f"much longer than the documented 30min: "
+        f"{well_outside.stdout + well_outside.stderr}"
     )
 
 
@@ -1336,6 +1357,21 @@ def test_fenced_bash_sees_every_bash_marker_including_indented_ones() -> None:
     took land/SKILL.md to 25 parsed against 24 markers. What stays independent
     is the METHOD -- a flat per-line marker count, no state machine, no call
     into the parser -- not the grammar.
+
+    KNOWN GAP on one axis, opened by lode-kjei and left deliberately unfixed:
+    the parser now refuses to open a bash fence NESTED inside an enclosing
+    non-bash fence (CommonMark -- a fence cannot open inside an open fence), but
+    a flat per-line count cannot see nesting and still counts the inner marker.
+    Measured on this exact file while reviewing lode-kjei: as shipped, 24
+    markers / 24 parsed, green; append one illustrative ````text block
+    containing a ```bash example and it becomes 25 markers / 24 parsed, so this
+    test goes RED blaming the parser for missing a fence it correctly declined.
+    Latent -- zero nested fence openers exist across the repo's 58 tracked .md
+    files. Not fixed here because the only fix is to make the count
+    nesting-aware, i.e. give it a state machine, which is precisely the
+    independence this test trades on. If someone ever adds such a block to
+    land/SKILL.md, the answer is to re-derive the expected count some third way,
+    NOT to relax the parser.
     """
     text = LAND_SKILL.read_text(encoding="utf-8")
     opening_marker = re.compile(r"^(?:`{3,}|~{3,})\s*(?:bash|sh)$")
