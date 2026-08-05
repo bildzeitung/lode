@@ -180,6 +180,75 @@ def test_next_attempt_at_migrated_onto_pre_existing_jobs_table(tmp_path: Path) -
 
 
 # ---------------------------------------------------------------------------
+# lode-u6he: forward migration for jobs.batch_collect_failures
+# ---------------------------------------------------------------------------
+
+
+def test_batch_collect_failures_migrated_onto_pre_existing_jobs_table(
+    tmp_path: Path,
+) -> None:
+    """A jobs table predating lode-u6he gets ``batch_collect_failures`` added.
+
+    Mirrors ``test_next_attempt_at_migrated_onto_pre_existing_jobs_table``.
+    Worth its own pin because ``_apply_migrations`` swallows every
+    ``sqlite3.OperationalError`` to stay idempotent, so a DDL that is simply
+    *wrong* fails silently and only surfaces later as "no such column". The
+    ``NOT NULL DEFAULT 0`` is the specific risk (see the migration's own
+    comment): a pre-existing row must read back 0, not NULL, or
+    ``batch_collect_failures + 1`` evaluates to NULL and the budget never
+    bites.
+    """
+    db = tmp_path / "lode.db"
+    seed = sqlite3.connect(db)
+    seed.execute(
+        "CREATE TABLE jobs ("
+        "  id INTEGER PRIMARY KEY,"
+        "  type TEXT NOT NULL,"
+        "  target_version TEXT NOT NULL,"
+        "  prompt_ver TEXT,"
+        "  status TEXT NOT NULL DEFAULT 'pending',"
+        "  attempts INTEGER NOT NULL DEFAULT 0,"
+        "  last_error TEXT,"
+        "  batch_handle TEXT,"
+        "  created TEXT NOT NULL DEFAULT '2026-01-01T00:00:00.000Z'"
+        ")"
+    )
+    seed.execute(
+        "INSERT INTO jobs (type, target_version, status, batch_handle) "
+        "VALUES ('enrich', 'ver-1', 'running', 'batch-1')"
+    )
+    seed.commit()
+    seed.close()
+
+    conn = init_db(db)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        assert "batch_collect_failures" in cols, (
+            "migration must add jobs.batch_collect_failures"
+        )
+
+        assert (
+            conn.execute("SELECT batch_collect_failures FROM jobs").fetchone()[0] == 0
+        ), "pre-existing row must migrate to 0, not NULL"
+
+        # The increment the budget depends on works on the migrated row.
+        with conn:
+            conn.execute(
+                "UPDATE jobs SET batch_collect_failures = batch_collect_failures + 1 "
+                "WHERE batch_handle = 'batch-1' AND status = 'running'"
+            )
+        assert (
+            conn.execute("SELECT batch_collect_failures FROM jobs").fetchone()[0] == 1
+        )
+    finally:
+        conn.close()
+
+    # Idempotent: re-running init_db on the migrated DB must not raise.
+    conn2 = init_db(db)
+    conn2.close()
+
+
+# ---------------------------------------------------------------------------
 # lode-568v.4: forward migration for annotations.provider / egress_log.provider
 # ---------------------------------------------------------------------------
 

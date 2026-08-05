@@ -3506,6 +3506,148 @@ def test_batch_collect_auth_error_is_not_caught_as_a_poisoned_handle(
     assert _job(conn, auth_job)["status"] == "running"
 
 
+def _batch_collect_failures(conn: sqlite3.Connection, job_id: int) -> tuple[str, int]:
+    """(status, batch_collect_failures) for one job row."""
+    row = conn.execute(
+        "SELECT status, batch_collect_failures FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert row is not None, f"job {job_id} not found"
+    return row[0], row[1]
+
+
+def test_batch_collect_dead_letters_after_consecutive_failure_budget(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A batch_handle whose poll keeps raising is dead-lettered outright once
+    ``batch_collect_failure_budget`` consecutive failures is reached
+    (lode-u6he) -- the axis lode-knnt explicitly deferred: before this, a
+    permanently malformed batch re-polled and re-failed identically forever,
+    since _reclaim_stale_running excludes any row with batch_handle set.
+    """
+    settings = settings.model_copy(update={"batch_collect_failure_budget": 3})
+    job_id = _insert_enrich_job_worker(
+        conn, status="running", batch_handle="poison-batch"
+    )
+
+    def _always_fails(conn_, batch_id, settings_, *, outcomes=None):
+        raise LLMProviderError("malformed batch results (test)", provider="anthropic")
+
+    monkeypatch.setattr("lode.enrich.collect_enrich_batch", _always_fails)
+
+    # First two failures: deferred (still surfaces to the caller once the
+    # loop finishes), but not yet dead-lettered -- still under budget, ready
+    # to be retried next tick.
+    for expected_failures in (1, 2):
+        with pytest.raises(LLMProviderError):
+            _batch_collect_enrich(conn, settings)
+        status, failures = _batch_collect_failures(conn, job_id)
+        assert status == "running"
+        assert failures == expected_failures
+
+    # Third consecutive failure hits the budget: dead-lettered.
+    with pytest.raises(LLMProviderError):
+        _batch_collect_enrich(conn, settings)
+    status, failures = _batch_collect_failures(conn, job_id)
+    assert status == "dead"
+    assert failures == 3
+
+    # It stops being retried: the handle no longer has any 'running' job, so
+    # the next pass's SELECT DISTINCT batch_handle no longer picks it up --
+    # the poll function is never even called again.
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "lode.enrich.collect_enrich_batch",
+        lambda conn_, batch_id, settings_, **kw: calls.append(batch_id),
+    )
+    ended = _batch_collect_enrich(conn, settings)
+    assert ended == 0
+    assert calls == []
+
+
+def test_batch_collect_resets_failure_count_on_a_successful_poll(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A poll that does not raise resets the consecutive-failure count back
+    to 0 for that handle (lode-u6he) -- the budget counts CONSECUTIVE
+    failures, not a lifetime total.
+    """
+    settings = settings.model_copy(update={"batch_collect_failure_budget": 2})
+    job_id = _insert_enrich_job_worker(
+        conn, status="running", batch_handle="flaky-batch"
+    )
+
+    calls = {"n": 0}
+
+    def _fails_then_succeeds(conn_, batch_id, settings_, *, outcomes=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise LLMProviderError("transient (test)", provider="anthropic")
+        return False  # still in progress -- a successful poll, no raise
+
+    monkeypatch.setattr("lode.enrich.collect_enrich_batch", _fails_then_succeeds)
+
+    # Tick 1: fails once (budget is 2, so not yet dead-lettered).
+    with pytest.raises(LLMProviderError):
+        _batch_collect_enrich(conn, settings)
+    status, failures = _batch_collect_failures(conn, job_id)
+    assert status == "running"
+    assert failures == 1
+
+    # Tick 2: succeeds (in-progress, no raise) -- resets the counter.
+    ended = _batch_collect_enrich(conn, settings)
+    assert ended == 0
+    status, failures = _batch_collect_failures(conn, job_id)
+    assert status == "running"
+    assert failures == 0
+
+    # Tick 3: a fresh failure starts back at 1, not 2 -- proves the reset
+    # actually took effect rather than the count merely not being read.
+    calls["n"] = 0
+    with pytest.raises(LLMProviderError):
+        _batch_collect_enrich(conn, settings)
+    status, failures = _batch_collect_failures(conn, job_id)
+    assert status == "running"
+    assert failures == 1
+
+
+def test_batch_collect_auth_error_does_not_count_against_the_failure_budget(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AuthError/LLMAuthError is re-raised immediately, before the
+    per-handle try's generic except -- it must never be recorded as a
+    consecutive collect failure or count toward the dead-letter budget
+    (lode-u6he); it isn't handle-specific, so dead-lettering on it would be
+    wrong the same way isolating it per-handle would be.
+    """
+    settings = settings.model_copy(update={"batch_collect_failure_budget": 1})
+    job_id = _insert_enrich_job_worker(
+        conn, status="running", batch_handle="auth-batch"
+    )
+
+    monkeypatch.setattr(
+        "lode.enrich.collect_enrich_batch",
+        lambda conn_, batch_id, settings_, **kw: (_ for _ in ()).throw(
+            AuthError("no credentials (test)")
+        ),
+    )
+
+    with pytest.raises(AuthError):
+        _batch_collect_enrich(conn, settings)
+
+    status, failures = _batch_collect_failures(conn, job_id)
+    assert status == "running"
+    assert failures == 0
+
+
 # ---------------------------------------------------------------------------
 # Durable batch-handle persistence + resume-on-restart (lode-i05.5)
 # ---------------------------------------------------------------------------
