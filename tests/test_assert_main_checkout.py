@@ -469,6 +469,25 @@ _KNOWN_LAND_SKILL_MUTATIONS: dict[str, str] = {
 }
 
 
+def _mutating_line(raw_line: str) -> str | None:
+    """Comment-stripped, `.strip()`'d line text if -- and only if -- it is
+    non-empty AND matches `_MUTATING_CMD_RE`; `None` otherwise. This is the
+    exact per-line normalization + filter `_unguarded_mutations` applies
+    before a line is even a mutation *candidate*, factored out as ONE
+    primitive so `_dead_allowlist_entries`' liveness computation cannot drift
+    from what the sweep actually excuses (lode-dkak). Before this extraction
+    the two were 30 lines apart and hand-written separately: the pin's live
+    set was every comment-stripped line, unfiltered, so a key present in the
+    corpus only as a non-mutating line read as live without excusing
+    anything in the sweep -- the exact dead-entry class the pin exists to
+    catch, surviving the pin.
+    """
+    cmd = _strip_comment(raw_line).strip()
+    if not cmd or not _MUTATING_CMD_RE.search(cmd):
+        return None
+    return cmd
+
+
 def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[str]:
     """Every fenced ```bash block's mutating command that is neither
     allowlisted nor preceded, in its OWN block, by `scripts/assert-main-
@@ -486,13 +505,14 @@ def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[st
     for block_index, block in enumerate(bash_fence_blocks(markdown)):
         guarded = False
         for raw_line in block.splitlines():
-            cmd = _strip_comment(raw_line).strip()
-            if not cmd:
+            stripped = _strip_comment(raw_line).strip()
+            if not stripped:
                 continue
-            if _GUARD in cmd:
+            if _GUARD in stripped:
                 guarded = True
                 continue
-            if not _MUTATING_CMD_RE.search(cmd):
+            cmd = _mutating_line(raw_line)
+            if cmd is None:
                 continue
             if guarded or cmd in allowlist:
                 continue
@@ -525,13 +545,17 @@ def test_land_skill_guard_covers_every_known_mutating_fence() -> None:
 
 
 def _dead_allowlist_entries(markdown: str, *, allowlist: dict[str, str]) -> list[str]:
-    """Allowlist keys in `allowlist` that no longer match any real command line in
-    `markdown`'s fenced ```bash blocks (comment-stripped, `.strip()`'d) -- the same
-    live-set computation the pin below uses to decide whether an entry excuses
-    anything. A key returned here is dead: it currently excuses nothing, but stays
-    in the allowlist regardless, ready to silently re-excuse a brand-new command
-    that happens to share its exact text. Argument order deliberately matches
-    `_unguarded_mutations` above -- same two inputs, same shape.
+    """Allowlist keys in `allowlist` that no longer match any real MUTATING command
+    line in `markdown`'s fenced ```bash blocks -- the live set is computed by
+    running `_mutating_line` (the exact per-line normalization + `_MUTATING_CMD_RE`
+    filter `_unguarded_mutations` applies) over every line, so this pin's notion of
+    "live" cannot drift from what the sweep actually excuses (lode-dkak; before this
+    fix the live set was every comment-stripped line, UNFILTERED, so a key present
+    only as a non-mutating line read as live while excusing nothing). A key
+    returned here is dead: it currently excuses nothing, but stays in the allowlist
+    regardless, ready to silently re-excuse a brand-new command that happens to
+    share its exact text. Argument order deliberately matches `_unguarded_mutations`
+    above -- same two inputs, same shape.
 
     The parameterized-helper-plus-sabotage shape here is lode-e49j's, whose
     `test_skill_bash_state.py::_dead_allowlist_keys` modeled its own pin on THIS
@@ -543,9 +567,11 @@ def _dead_allowlist_entries(markdown: str, *, allowlist: dict[str, str]) -> list
     can exercise this exact primitive -- the same one the real pin calls -- against
     a synthetic fixture, without mutating the real `land/SKILL.md` on disk.
     """
-    blocks = bash_fence_blocks(markdown)
     live = {
-        _strip_comment(raw).strip() for block in blocks for raw in block.splitlines()
+        cmd
+        for block in bash_fence_blocks(markdown)
+        for raw in block.splitlines()
+        if (cmd := _mutating_line(raw)) is not None
     }
     return sorted(set(allowlist) - live)
 
@@ -614,6 +640,57 @@ def test_every_allowlist_entry_is_provably_checked_by_sabotage() -> None:
     assert _dead_allowlist_entries(markdown_fixed, allowlist={key: "fixture"}) == [
         key
     ], "removing the command from the corpus must flip the SAME key from live to dead"
+
+
+def test_dead_allowlist_entries_requires_a_mutating_line_not_mere_presence() -> None:
+    """Non-vacuity proof for lode-dkak's fix: before this ticket,
+    `_dead_allowlist_entries` computed its live set as every comment-stripped,
+    `.strip()`'d line in a fenced ```bash block -- with NO `_MUTATING_CMD_RE`
+    filter, unlike `_unguarded_mutations`. So a key present in the corpus only as
+    a line that never matches `_MUTATING_CMD_RE` (and therefore excuses nothing
+    in the sweep -- `_unguarded_mutations` never even reaches its allowlist check
+    for such a line) still read as LIVE and passed the liveness pin. That is
+    precisely the dead-entry class the pin exists to catch, surviving the pin.
+
+    Sabotage: hold ONE key constant, and use the exact PRE-FIX live-set
+    computation (every comment-stripped line, unfiltered -- reproduced inline
+    below, not imported, since the fixed `_dead_allowlist_entries` no longer
+    computes it) to prove this fixture's key would have read as live before
+    this ticket. Then run the SAME key/markdown through the fixed
+    `_dead_allowlist_entries` and require it now report the key dead --
+    proving the regex filter, not mere textual presence, is what "live" means.
+    """
+    key = "echo this line never matches _MUTATING_CMD_RE at all"
+    markdown = f"```bash\n{key}\n```\n"
+
+    assert not _MUTATING_CMD_RE.search(key), (
+        "fixture assumption broken: the chosen text matches _MUTATING_CMD_RE "
+        "after all, so it does not exercise the non-mutating-line case"
+    )
+
+    # Reproduce the PRE-FIX live-set computation (unfiltered, comment-stripped
+    # lines only) to prove this exact key/markdown pair would have read as
+    # live before lode-dkak -- i.e. that the sabotage is not vacuous.
+    pre_fix_live = {
+        _strip_comment(raw).strip()
+        for block in bash_fence_blocks(markdown)
+        for raw in block.splitlines()
+    }
+    assert key in pre_fix_live, (
+        "fixture assumption broken: before lode-dkak's fix this key would not "
+        "actually have read as live, so the sabotage proves nothing"
+    )
+
+    # The fix: the fixed `_dead_allowlist_entries` filters by
+    # `_MUTATING_CMD_RE` (via `_mutating_line`, the SAME primitive
+    # `_unguarded_mutations` uses), so a key present only as a non-mutating
+    # line excuses nothing and must be reported dead.
+    assert _dead_allowlist_entries(markdown, allowlist={key: "fixture"}) == [
+        key
+    ], (
+        "a key present only as a non-mutating line must be reported dead -- "
+        "mere textual presence does not make an allowlist entry live"
+    )
 
 
 def test_sweep_catches_a_brand_new_unguarded_mutation() -> None:
