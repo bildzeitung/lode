@@ -1376,6 +1376,28 @@ def bash_fence_blocks(markdown: str) -> list[str]:
     return blocks
 
 
+def _fenced_bash(markdown: str) -> str:
+    """The ```bash fences only, concatenated into one string -- what an agent
+    actually EXECUTES.
+
+    Scanning the whole file would also match prose that merely *describes* a
+    command (quoting it while explaining a past defect), so a pin that wants
+    to assert something about what actually runs has to separate the executed
+    fences from the surrounding description. That split is also the point:
+    the fence is the one part of these skill docs no other gate parses, which
+    is how more than one bug here survived unnoticed until someone read the
+    file by hand.
+
+    Thin wrapper over :func:`bash_fence_blocks`. Used to carry independent
+    column-0-anchored copies in ``tests/test_land_lock.py`` and
+    ``tests/test_assert_main_checkout.py`` (lode-ovgs, lode-0mkv); moved here
+    so there is one copy of both the implementation and this rationale,
+    following the same no-second-copy rule ``bash_fence_blocks`` itself
+    documents.
+    """
+    return "\n".join(bash_fence_blocks(markdown))
+
+
 # --- TUI test settle helpers (lode-lcju) -----------------------------------
 #
 # The ONE home for both of lode's settle-under-load patterns for driving a

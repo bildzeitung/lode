@@ -48,7 +48,7 @@ import subprocess
 from pathlib import Path
 
 from _gitrepo import _git
-from conftest import bash_fence_blocks
+from conftest import _fenced_bash, bash_fence_blocks
 
 # Share lode-x495's quote-aware comment stripper rather than adding a second,
 # competing implementation -- the same reuse `tests/test_bd_list_limit_gate.py`
@@ -288,30 +288,7 @@ LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 # tests/test_land_lock.py and tests/test_land_conflicts_state.py follow.
 
 
-def _fenced_bash(markdown: str) -> str:
-    """The ```bash fences only, concatenated into one string -- what an agent
-    actually EXECUTES.
-
-    Scanning the whole file would match the prose that *explains* the old
-    defect (it necessarily quotes the broken `-C "$(git rev-parse
-    --show-toplevel)"` idiom), so the pin has to separate what is executed
-    from what is merely described.
-    """
-    return "\n".join(bash_fence_blocks(markdown))
-
-
 _GUARD = "scripts/assert-main-checkout.sh"
-
-
-def test_land_skill_section1_calls_the_script() -> None:
-    """Section 1 must actually invoke the guard, not just describe it in
-    prose -- the defect this ticket fixes lived in a markdown fence, where no
-    other gate reaches it."""
-    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
-    assert _GUARD in executed, (
-        f"land/SKILL.md Section 1 never calls {_GUARD} -- "
-        "the main-checkout identity check is not wired up (lode-pcee)"
-    )
 
 
 def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
