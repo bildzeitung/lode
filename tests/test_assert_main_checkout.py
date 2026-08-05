@@ -512,13 +512,12 @@ def _unguarded_candidates(markdown: str) -> list[tuple[int, str]]:
     its OWN block, by `scripts/assert-main-checkout.sh` -- i.e. exactly the
     set `_unguarded_mutations` would flag as a violation if `allowlist` were
     empty, paired with its block index. `_unguarded_mutations` and
-    `_dead_allowlist_entries` both build on this: a key only excuses anything
-    in the sweep if it names a command reachable at THIS point (unguarded
-    position, mutating verb) -- not merely present anywhere in the file. That
-    is the "live" this module means everywhere below (lode-eu04, one block
-    level up from the per-line gap lode-dkak fixed: a key present only inside
-    an already-guarded block, or only on the `_GUARD`-carrying line itself,
-    must not read as live -- it excuses nothing in the real sweep).
+    `_dead_allowlist_entries` both build on this, and this list is the single
+    definition of "live" both mean: a key only excuses anything in the sweep
+    if it names a command reachable at THIS point (unguarded position,
+    mutating verb) -- not merely present anywhere in the file. See the
+    lode-eu04 DECISION in the module comment above for why the two callers
+    share one list rather than each owning a loop.
 
     Block boundaries are load-bearing, not tidiness: per land/SKILL.md's
     governing rule (lode-sfnb) each fence is its own Bash invocation, so a
@@ -582,15 +581,9 @@ def test_land_skill_guard_covers_every_known_mutating_fence() -> None:
 def _dead_allowlist_entries(markdown: str, *, allowlist: dict[str, str]) -> list[str]:
     """Allowlist keys in `allowlist` that would excuse nothing in the real sweep
     over `markdown` -- i.e. that do not name any `_unguarded_candidates(markdown)`
-    entry. The live set is `_unguarded_mutations`' OWN block-level state machine
-    (guard-in-block, precedes-the-mutation), not merely "is a mutating line
-    somewhere in the file" -- so this pin's notion of "live" cannot drift from
-    what the sweep actually excuses. Before lode-dkak the live set was every
-    comment-stripped line, UNFILTERED (a non-mutating line read as live); before
-    lode-eu04 it was filtered by `_is_mutating` alone but still blind to block
-    state, so a key reachable ONLY inside an already-guarded block, or only on
-    the `_GUARD`-carrying line itself, still read as live while excusing nothing
-    -- the same dead-entry class one level up. A key returned here is dead: it
+    entry, which is the one definition of "live" this module has (see that
+    helper, and the lode-dkak/lode-eu04 history in the module comment above for
+    the two looser definitions it replaced). A key returned here is dead: it
     currently excuses nothing, but stays in the allowlist regardless, ready to
     silently re-excuse a brand-new command that happens to share its exact text.
     Argument order deliberately matches `_unguarded_mutations` above -- same two
@@ -730,22 +723,20 @@ def test_dead_allowlist_entries_requires_a_mutating_line_not_mere_presence() -> 
     )
 
 
-def test_dead_allowlist_entries_requires_unguarded_position_not_just_a_mutating_line() -> (
-    None
-):
-    """Non-vacuity proof for THIS ticket's fix (lode-eu04): before it,
-    `_dead_allowlist_entries`' live set was every `_is_mutating` line in the
-    corpus, blind to `_unguarded_mutations`' own block-level guard state. So a
-    key present in the corpus ONLY inside an already-guarded block still read
-    as live, even though `_unguarded_mutations` never reaches its allowlist
-    check for such a line (the `if guarded or cmd in allowlist: continue`
-    short-circuit) -- excusing nothing, yet reported live.
+def test_dead_allowlist_entries_requires_an_unguarded_position() -> None:
+    """Non-vacuity proof for lode-eu04's fix: before it, the live set was every
+    `_is_mutating` line in the corpus, blind to block-level guard state, so a
+    key reachable only in an already-guarded position read as live.
 
     Sabotage recipe for this ticket's own future maintenance, per its
     acceptance criteria: hold ONE key constant and vary only the fixture's
     guard placement -- present before the mutating line (excuses nothing,
     must read dead) vs absent from the block entirely (the mutating line is
-    reachable, must read live). Restoring the pre-fix live-set computation
+    reachable, must read live). The second dead case its acceptance criteria
+    name -- a key that IS the `_GUARD`-carrying line, which sets `guarded` and
+    `continue`s before the mutation check is ever reached -- is asserted last,
+    with its own key (it cannot share one: the guard text is what makes it
+    that case). Restoring the pre-fix live-set computation
     (every `_is_mutating` line, unfiltered by block guard state -- reproduced
     inline below, not imported, since the fixed `_dead_allowlist_entries` no
     longer computes it) must flip the guarded-block assertion from dead to
@@ -792,6 +783,22 @@ def test_dead_allowlist_entries_requires_unguarded_position_not_just_a_mutating_
     assert (
         _dead_allowlist_entries(markdown_unguarded, allowlist={key: "fixture"}) == []
     ), "the same key in an unguarded block must read live -- fixture assumption broken"
+
+    # The other dead case in this ticket's acceptance criteria: a key whose own
+    # text CARRIES the guard. Such a line sets `guarded` and `continue`s before
+    # the mutation check, so it is never a candidate and excuses nothing --
+    # even though it does match `_MUTATING_CMD_RE` on its own.
+    guard_carrying = f"{_GUARD} && git push origin trunk"
+    assert _is_mutating(guard_carrying), (
+        "fixture assumption broken: the guard-carrying line must itself match "
+        "_MUTATING_CMD_RE, or it exercises the lode-dkak case instead"
+    )
+    assert _dead_allowlist_entries(
+        f"```bash\n{guard_carrying}\n```\n", allowlist={guard_carrying: "fixture"}
+    ) == [guard_carrying], (
+        "a key present only as the `_GUARD`-carrying line itself must be "
+        "reported dead -- that line guards, it never gets excused"
+    )
 
 
 def test_sweep_catches_a_brand_new_unguarded_mutation() -> None:
