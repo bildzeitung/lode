@@ -96,13 +96,48 @@ CMD="${1:-}"
 [ -n "$CMD" ] || exit 0
 
 # This guard runs on EVERY Bash tool call, and the split + five greps below cost
-# ~45ms each time. Any real `gh` invocation necessarily contains the substring
-# `gh`, so a command without it cannot be one -- bailing here cannot weaken the
-# guard and takes the common (no-`gh`) path to ~2ms.
-case "$CMD" in
-  *gh*) ;;
-  *) exit 0 ;;
-esac
+# ~45ms each time -- but the quote-aware _split_unquoted char loop below them
+# (lode-obox) is O(n^2), so a plain `*gh*` substring test here is far too loose
+# a gate: it lets through any LONG command that merely contains "gh" inside an
+# ordinary word (through/highlight/night/eight/brought/high/light/straight --
+# i.e. most commit messages, `bd update --notes`, and heredoc prose this repo
+# writes constantly), paying the O(n^2) cost on gh-free text (lode-vrhu:
+# measured 469ms-3.5s on an 8-25 KB command containing "through", vs ~3ms for a
+# command without "gh" anywhere at all).
+#
+# Tightened to a command-POSITION test: `gh` must be preceded by start-of-string
+# or a non-identifier character, and followed by whitespace. This is NOT a
+# narrowing of the deny surface (lode-obox's binding human decision requires its
+# own argument for that, so it gets one): P below -- the regex that actually
+# decides what counts as a `gh` command position -- only ever matches `gh`
+# preceded by start-of-string, whitespace, or a literal `/` (the sole optional
+# path-prefix group, which itself must end in `/`), and always followed
+# immediately by whitespace (every alternative in P's grammar reduces to
+# `gh(...)?[[:space:]]+`, and the optional flag-group repetition, when present,
+# itself starts with whitespace). Every segment START `_split_unquoted` can ever
+# produce is a shell control character (`;&|(){}\``, or `$(` inside double
+# quotes) -- itself non-alnum-non-underscore -- or the string start. So every
+# position P could ever match already satisfies this test; the pre-filter
+# cannot skip a case P would have caught. Verified against every DENIED case in
+# tests/test_gh_write_guard.py at both script and hook level: zero deny-side
+# regressions (lode-vrhu).
+#
+# CASE-INSENSITIVE (`[Gg][Hh]`), deliberately, and NOT the old `*gh*` filter's
+# case-sensitivity. Every grep below runs `-i`, so P really does match `GH `/`Gh `
+# at a command position; a case-SENSITIVE pre-filter would therefore skip a case P
+# would have caught -- exactly the narrowing this block claims not to do. Measured
+# differentially during review: with a lowercase `gh` present incidentally
+# elsewhere, `git commit -m "walking through" ; GH issue create --title x` went
+# DENY (old filter) -> ALLOW (case-sensitive tightened filter). The old filter's
+# behaviour on this axis was incoherent rather than protective -- a STANDALONE
+# `GH issue create` was already allowed by it, since the command contains no
+# lowercase `gh` at all -- so matching it exactly would have preserved an
+# accidental half-catch and dropped the other half. Matching P's own case-folding
+# instead makes the pre-filter a strict superset of P in both directions: nothing
+# P can catch is skipped, and the one behaviour change versus trunk is
+# allow -> DENY on a standalone uppercase invocation (the conservative direction,
+# and a live write on a case-insensitive filesystem).
+[[ "$CMD" =~ (^|[^A-Za-z0-9_])[Gg][Hh][[:space:]] ]] || exit 0
 
 strip_quoted_heredoc_bodies() {
   local mode=none delim="" strip_tabs=0 line check d

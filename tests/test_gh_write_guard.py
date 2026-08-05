@@ -74,6 +74,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -251,6 +252,15 @@ DENIED = [
     'echo "the guard denies `gh issue create --title x`"',
     'X="$(gh pr comment 1 -b x)"',
     'git commit -m "See `gh release create v1 --notes x` for context"',
+    # -- lode-vrhu, review: every grep below P runs `-i`, so P matches an UPPERCASE/mixed-case
+    #    `GH `/`Gh ` at a command position. The tightened pre-filter must fold case the same way
+    #    or it skips a case P would have caught -- a fail-OPEN. The first line below went
+    #    DENY -> ALLOW under a case-SENSITIVE tightened filter (measured); the second is the
+    #    standalone form, which trunk's `*gh*` filter already let through (no lowercase `gh`
+    #    anywhere) and which the case-folded pre-filter now correctly denies.
+    'git commit -m "walking through" ; GH issue create --title x',
+    "GH issue create --title x",
+    "Gh pr create --title x",
 ]
 
 # Commands that must NOT be denied. Three families, all load-bearing:
@@ -314,6 +324,13 @@ ALLOWED = [
     'bd update lode-x --notes "mentions (gh issue create|gh pr comment) both denied"',
     'git commit -m "(gh issue create) is forbidden"',
     'grep -E "(gh issue create)" docs/',
+    # -- lode-vrhu: "gh" as a substring of an ordinary word, no `gh` invocation anywhere. This is
+    #    the false-positive class the tightened command-position pre-filter exists to reject
+    #    BEFORE the O(n^2) _split_unquoted split/scan ever runs, not merely a case the full scan
+    #    happens to allow -- see test_fast_path_rejects_gh_inside_an_ordinary_word below, which
+    #    pins the performance property directly.
+    "git commit -m 'walking through the design once more, straight to the point'",
+    'bd update lode-x --notes "brought this to light -- highlight the eight open threads tonight"',
     # -- legitimate internal bd usage, unaffected --
     "bd create --title x --description y --type=task",
     "bd update lode-1 --add-label ready-for-code-review",
@@ -496,6 +513,100 @@ def test_quote_aware_real_invocation_wrapped_in_quotes_stays_the_same_accepted_r
     explicitly out of scope (docs/agents-workflow.md says closing it would false-deny this
     repo's own prose about the rule)."""
     assert _run('sh -c "gh issue create --title x"') is None
+
+
+# --- lode-vrhu: the *gh* substring pre-filter was too loose to gate _split_unquoted's O(n^2)
+# char loop (lode-obox) -- a long command merely containing "gh" inside an ordinary word
+# (through/highlight/night/eight/brought/high/light/straight) reached the split anyway.
+# Tightened to a command-position test; the correctness regression pins live in ALLOWED above,
+# but a functional pass/fail alone would not catch a future edit that loosens or drops the
+# pre-filter back to a bare substring test -- that regression only SHOWS UP as a slow session,
+# which no functional assertion notices. The test below pins the performance property directly.
+
+
+def test_fast_path_rejects_gh_inside_an_ordinary_word_without_scanning() -> None:
+    """The pre-filter must reject a "gh"-inside-an-ordinary-word command BEFORE the O(n^2)
+    _split_unquoted split/scan ever runs, not merely allow it (correctly) after paying that cost.
+
+    Measured on this ticket's own machine (bash 5.x, LANG=C.UTF-8): the OLD `*gh*` substring
+    pre-filter let an 8 KB such command through to the split, taking ~469ms; a 24.6 KB one ~3.5s.
+    The tightened command-position pre-filter exits before the split ever runs, so this completes
+    in a small, size-independent budget. The ceiling below is generous -- well under the OLD
+    guard's own smallest measured regression (469ms @ 8 KB) but comfortably above ordinary
+    process-spawn + bash-parse overhead -- so a REVERT of the pre-filter (back to `*gh*`, or
+    dropped outright) fails this test long before anyone notices a slow session.
+    """
+    # ~25 KB of prose containing "through" repeatedly, no real `gh` invocation anywhere.
+    command = "git commit -m '" + ("walking through the design once more. " * 650) + "'"
+    assert len(command) > 24_000, (
+        "test fixture must reproduce the measured 24.6 KB regression"
+    )
+    start = time.monotonic()
+    decision = _script_decision(command)
+    elapsed = time.monotonic() - start
+    assert decision is None, (
+        f"guard wrongly denied a gh-free command: {command[:80]}..."
+    )
+    assert elapsed < 0.25, (
+        f"guard took {elapsed:.3f}s on a gh-free ~25 KB command -- the O(n^2) split/scan ran; "
+        "the command-position pre-filter regressed (lode-vrhu)"
+    )
+
+
+def test_pre_filter_admits_every_shape_the_p_anchor_recognizes() -> None:
+    """The pre-filter must be a strict SUPERSET of P -- nothing P would catch may be skipped.
+
+    That invariant is what makes the fast path safe, and today it is held together only by the
+    prose proof above the pre-filter: P's grammar and the pre-filter's regex are two independent
+    hand-maintained patterns, and a future edit that adds an alternative to P (a new wrapper word,
+    a new global flag, a new path-prefix form) can silently break the superset property. The break
+    is FAIL-OPEN -- the pre-filter `exit 0`s and the write is never scanned -- and no existing
+    assertion notices, because the DENIED table samples P's shapes rather than enumerating them.
+
+    So enumerate them: one write invocation per alternative in P (leading VAR= assignments, each
+    wrapper word, absolute/relative path prefixes, each global flag in both `=` and space forms,
+    each control character that manufactures a segment start, and both case foldings). Every one
+    must still be DENIED -- which it can only be if the pre-filter let it reach the scan.
+    """
+    wrappers = [
+        "if",
+        "then",
+        "else",
+        "do",
+        "env",
+        "command",
+        "sudo",
+        "nohup",
+        "time",
+        "xargs",
+    ]
+    shapes = [
+        *(f"{w} gh issue create --title x" for w in wrappers),
+        "gh issue create --title x",
+        "  gh issue create --title x",
+        "X=1 gh issue create --title x",
+        "X=1 Y=2 env gh issue create --title x",
+        "/usr/bin/gh issue create --title x",
+        "./gh issue create --title x",
+        "gh -R owner/repo issue create --title x",
+        "gh --repo owner/repo issue create --title x",
+        "gh --repo=owner/repo issue create --title x",
+        "gh --hostname github.example.com issue create --title x",
+        "GH issue create --title x",
+        "Gh issue create --title x",
+        "gh\tissue create --title x",
+        *(
+            f"echo hi{c}gh issue create --title x"
+            for c in [";", "&", "|", "(", ")", "{", "}", "`"]
+        ),
+        "echo $(gh issue create --title x)",
+        "echo hi && gh issue create --title x",
+    ]
+    skipped = [s for s in shapes if _script_decision(s) is None]
+    assert not skipped, (
+        "the pre-filter (or P) no longer covers these gh-write shapes -- each one is a live "
+        f"write under the user's identity that the guard now lets through (lode-vrhu): {skipped}"
+    )
 
 
 def _script_decision(command: str) -> str | None:
