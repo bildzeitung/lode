@@ -7,15 +7,21 @@ the OpenAIProvider (lode-568v.3) Responses API mapping + serialize-batch, and
 build_provider's provider resolution for both providers.
 """
 
-import copy
 import json
 from collections.abc import Callable, Iterator
 from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import ClassVar
 from unittest import mock
 
 import httpx
 import pytest
+from conftest import (
+    _jsonl,
+    _payload_without,
+    _real_anthropic_client,
+    _results_handler,
+    _succeeded_payload,
+)
 from pydantic import BaseModel, ValidationError
 
 from lode.config import Settings
@@ -745,122 +751,13 @@ def test_collect_batch_wraps_a_bad_request_from_batches_results() -> None:
     assert err.__cause__ is bad_request
 
 
-_RESULTS_URL = "https://api.anthropic.com/v1/messages/batches/batch-1/results"
-
-
-def _ended_batch_body() -> dict:
-    """The ``retrieve`` body for an "ended" batch.
-
-    Only the fields the SDK's own ``MessageBatch`` model requires. The 200
-    ``retrieve`` leg is load-bearing in every test below: ``batches.results``
-    retrieves the batch itself first, so a transport that errored on *every*
-    path would assert against that call instead of the decoder-returning one.
-    """
-    return {
-        "id": "batch-1",
-        "type": "message_batch",
-        "processing_status": "ended",
-        "results_url": _RESULTS_URL,
-        "created_at": "2026-01-01T00:00:00Z",
-        "expires_at": "2026-01-02T00:00:00Z",
-        "request_counts": {
-            "canceled": 0,
-            "errored": 0,
-            "expired": 0,
-            "processing": 0,
-            "succeeded": 1,
-        },
-    }
-
-
-def _succeeded_payload(custom_id: str = "ver-shape") -> dict:
-    """The success payload as a plain dict, pre-JSON-encoding (lode-i821).
-
-    Dict-returning (rather than pre-encoded) so :func:`_payload_without` can
-    delete a field from it before :func:`_jsonl` encodes it.
-    """
-    return {
-        "custom_id": custom_id,
-        "result": {
-            "type": "succeeded",
-            "message": {
-                "id": "msg_1",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-haiku-4-5",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": "tu_1",
-                        "name": "emit",
-                        "input": {"name": "w", "count": 1},
-                    }
-                ],
-                "stop_reason": "tool_use",
-                "stop_sequence": None,
-                "usage": {"input_tokens": 1, "output_tokens": 1},
-            },
-        },
-    }
-
-
-def _payload_without(payload: dict, *path: str | int) -> dict:
-    """A deep copy of ``payload`` with the field at ``path`` deleted (lode-i821).
-
-    Every wrong-shape test case below is built as :func:`_succeeded_payload`
-    minus exactly one field, via this helper, so a case cannot drift into
-    failing over a different field than the one it names.
-    """
-    result = copy.deepcopy(payload)
-    node = result
-    for key in path[:-1]:
-        node = node[key]
-    del node[path[-1]]
-    return result
-
-
-def _jsonl(payload: dict) -> bytes:
-    """Encode ``payload`` as one JSONL line, the wire shape ``batches.results`` streams."""
-    return (json.dumps(payload) + "\n").encode()
+# The shared real-SDK Anthropic batch-results rig lives in conftest.py
+# (lode-a9x3); the imports at the top of this file are its roster.
 
 
 def _succeeded_jsonl_line(custom_id: str) -> bytes:
     """A real, fully-decodable JSONL line for ``batches.results``."""
     return _jsonl(_succeeded_payload(custom_id))
-
-
-def _real_anthropic_client(
-    handler: Callable[[httpx.Request], httpx.Response],
-) -> Any:
-    """A REAL SDK client answered in-process by ``handler``.
-
-    The ``MagicMock`` ``collect_batch`` tests raise from the call by
-    construction, so they cannot see *when* the SDK resolves status or decodes
-    a line -- and that timing is the entire subject of the tests below. Each
-    caller carries ``@pytest.mark.network`` to lift conftest's autouse
-    real-client-construction guard (lode-85q); ``httpx.MockTransport`` answers
-    in-process, so no socket is ever opened.
-    """
-    import anthropic
-
-    return anthropic.Anthropic(
-        api_key="test-key",
-        max_retries=0,  # keep the SDK's own retry ladder out of the assertion
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
-
-
-def _results_handler(
-    make_results: Callable[[], httpx.Response],
-) -> Callable[[httpx.Request], httpx.Response]:
-    """Route ``/results`` to ``make_results()``, everything else to ``retrieve``."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/results"):
-            return make_results()
-        return httpx.Response(200, json=_ended_batch_body())
-
-    return handler
 
 
 @pytest.mark.network
@@ -874,11 +771,12 @@ def test_collect_batch_wraps_a_real_sdk_status_error_from_the_results_url() -> N
 
     client = _real_anthropic_client(
         _results_handler(
+            "batch-1",
             lambda: httpx.Response(
                 429,
                 headers={"request-id": "req-test-2"},
                 json={"error": {"type": "rate_limit_error", "message": "slow down"}},
-            )
+            ),
         )
     )
 
@@ -902,7 +800,9 @@ def test_collect_batch_wraps_a_malformed_jsonl_line_from_the_results_stream() ->
     raw, failing `pytest.raises(LLMProviderError)`.
     """
     client = _real_anthropic_client(
-        _results_handler(lambda: httpx.Response(200, content=b"not valid json\n"))
+        _results_handler(
+            "batch-1", lambda: httpx.Response(200, content=b"not valid json\n")
+        )
     )
 
     with pytest.raises(LLMProviderError) as excinfo:
@@ -928,7 +828,8 @@ def test_collect_batch_wraps_an_undecodable_utf8_byte_in_the_results_stream() ->
     """
     client = _real_anthropic_client(
         _results_handler(
-            lambda: httpx.Response(200, content=b'{"custom_id": "\xff\xfe\xfd"}\n')
+            "batch-1",
+            lambda: httpx.Response(200, content=b'{"custom_id": "\xff\xfe\xfd"}\n'),
         )
     )
 
@@ -972,7 +873,7 @@ def test_collect_batch_discards_partial_results_on_a_mid_stream_transport_failur
             pass
 
     client = _real_anthropic_client(
-        _results_handler(lambda: httpx.Response(200, stream=_FlakyStream()))
+        _results_handler("batch-1", lambda: httpx.Response(200, stream=_FlakyStream()))
     )
 
     with pytest.raises(LLMProviderError) as excinfo:
@@ -1016,7 +917,9 @@ def test_collect_batch_degrades_a_wrong_shape_line_missing_a_field(
     """
     payload = _payload_without(_succeeded_payload("ver-shape"), *path)
     client = _real_anthropic_client(
-        _results_handler(lambda: httpx.Response(200, content=_jsonl(payload)))
+        _results_handler(
+            "batch-1", lambda: httpx.Response(200, content=_jsonl(payload))
+        )
     )
 
     status, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
@@ -1050,7 +953,9 @@ def test_collect_batch_degrades_a_wrong_shape_line_with_a_non_object_content_blo
     payload = _succeeded_payload("ver-shape")
     payload["result"]["message"]["content"] = [None]
     client = _real_anthropic_client(
-        _results_handler(lambda: httpx.Response(200, content=_jsonl(payload)))
+        _results_handler(
+            "batch-1", lambda: httpx.Response(200, content=_jsonl(payload))
+        )
     )
 
     status, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
@@ -1083,7 +988,7 @@ def test_collect_batch_substitutes_a_placeholder_for_a_line_that_is_not_an_objec
     """
     line = (json.dumps(None) + "\n").encode()
     client = _real_anthropic_client(
-        _results_handler(lambda: httpx.Response(200, content=line))
+        _results_handler("batch-1", lambda: httpx.Response(200, content=line))
     )
 
     status, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
@@ -1164,7 +1069,9 @@ def test_collect_batch_substitutes_a_placeholder_when_only_custom_id_is_unusable
     """
     payload = mutate(_succeeded_payload("ver-shape"))
     client = _real_anthropic_client(
-        _results_handler(lambda: httpx.Response(200, content=_jsonl(payload)))
+        _results_handler(
+            "batch-1", lambda: httpx.Response(200, content=_jsonl(payload))
+        )
     )
 
     status, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
