@@ -51,6 +51,28 @@ CMD="${1:-}"
 # apart but never create one.
 [[ "$CMD" =~ [0-9a-f]{40} ]] || exit 0
 
+# Second cheap, fork-free gate (review, lode-dia6), mirroring the command-position
+# pre-filter scripts/gh-write-guard.sh carries for the same reason (lode-vrhu):
+# `_split_unquoted` is an O(n^2)-ish char loop, far more expensive than the `tr`
+# it replaced, and 40-hex runs are NOT rare in this repo's traffic (a SHA pasted
+# from `git rev-parse`, a land commit message quoting one, a `sha256:` lock line).
+# Measured here: a 8 KB command carrying a 40-hex run but no bd/git word at all
+# went 13ms (tr) -> 489ms (split) with no gate; this returns it to ~5ms.
+#
+# NOT a narrowing of the deny surface, and that needs its own argument: INVOKE_RE
+# below only ever matches `bd`/`git` at a SEGMENT start, optionally behind
+# `VAR=x` assignments and a fixed wrapper word, each separated by [[:space:]]+,
+# and always followed by whitespace or end-of-segment. A segment start is either
+# the string start, a newline, or a shell control character (`;&|(){}\``, or `$(`)
+# -- every one of them non-alnum-non-underscore. Unlike gh-write-guard.sh's `P`,
+# INVOKE_RE has NO path-prefix alternative, so `/usr/bin/git` cannot match either
+# side. So every position INVOKE_RE could match already satisfies this test.
+# The two transforms that run between here and the split can only DELETE lines
+# (heredoc strip) or replace a backslash-newline with a space (continuation
+# collapse) -- neither can create a `bd`/`git` word that is not already here.
+# Pinned by tests/test_sha_fabrication_guard.py's superset enumeration.
+[[ "$CMD" =~ (^|[^A-Za-z0-9_])(bd|git)([[:space:]]|$) ]] || exit 0
+
 # Not in a git work tree -> cat-file has nothing to check against.
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
@@ -61,15 +83,27 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 # this script's OWN directory so it works regardless of the caller's cwd.
 # Placed AFTER the two cheap early-outs above so a command with no 40-hex run
 # (or one outside any git work tree) never pays even the cost of resolving it.
-_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_LIB="$_LIB_DIR/shell-quote-split.sh"
+# Plain `dirname`, not `$(cd ... && pwd)` -- see the same block in
+# scripts/gh-write-guard.sh: under `set -e` a failed `cd` aborts before this
+# fail-closed check can run, which is a fail-OPEN (review, lode-dia6).
+_LIB="$(dirname "${BASH_SOURCE[0]}")/shell-quote-split.sh"
 if [ ! -r "$_LIB" ]; then
   jq -n '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
     permissionDecisionReason: "lode-dia6: scripts/shell-quote-split.sh (the shared quote-aware split library scripts/sha-fabrication-guard.sh depends on) could not be resolved -- denying this Bash call rather than silently scanning with the split disabled, since a false ALLOW here is unrecoverable. Surface this to a human; do not retry."}}'
   exit 0
 fi
+# `-r` proves READABLE, not LOADED -- a present-but-broken library would leave
+# the functions undefined, `set -e` would abort with no stdout, and the wrapper
+# would turn that into a silent ALLOW. Assert the CONTRACT, not the file; see
+# the same block in scripts/gh-write-guard.sh (review, lode-dia6).
 # shellcheck source=scripts/shell-quote-split.sh
-source "$_LIB"
+source "$_LIB" || true
+if ! declare -F _split_unquoted >/dev/null 2>&1 ||
+  ! declare -F strip_quoted_heredoc_bodies >/dev/null 2>&1; then
+  jq -n '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
+    permissionDecisionReason: "lode-dia6: scripts/shell-quote-split.sh was found but did not define the quote-aware split functions scripts/sha-fabrication-guard.sh depends on (a truncated, partially-checked-out, or syntactically broken copy) -- denying this Bash call rather than silently scanning with the split disabled, since a false ALLOW here is unrecoverable. Surface this to a human; do not retry."}}'
+  exit 0
+fi
 
 # Strip QUOTED heredoc bodies first (line-based, operates on the real
 # multi-line command) before collapsing backslash-newline continuations --

@@ -93,15 +93,37 @@ CMD="${1:-}"
 # this script's OWN directory (not $ROOT/PWD) so it works regardless of the
 # caller's cwd. Placed AFTER the cheap early-outs above so a gh-free command
 # (the overwhelmingly common case) never pays even the cost of resolving it.
-_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_LIB="$_LIB_DIR/shell-quote-split.sh"
+#
+# Plain `dirname`, deliberately NOT `$(cd "$(dirname ...)" && pwd)` (review,
+# lode-dia6): under `set -e` a failed `cd` in an assignment aborts the script
+# BEFORE the fail-closed check below can run, and the wrapper's trailing
+# `exit 0` then turns that into a silent ALLOW -- a fail-OPEN in the one block
+# whose whole job is to fail closed. Absolutizing bought nothing anyway: bash
+# resolved this very script from the same cwd, so the sibling path resolves
+# identically, and this drops a subshell fork per gh-position command.
+_LIB="$(dirname "${BASH_SOURCE[0]}")/shell-quote-split.sh"
 if [ ! -r "$_LIB" ]; then
   jq -n '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
     permissionDecisionReason: "lode-dia6: scripts/shell-quote-split.sh (the shared quote-aware split library scripts/gh-write-guard.sh depends on) could not be resolved -- denying this Bash call rather than silently scanning with the split disabled, since a false ALLOW here is unrecoverable. Surface this to a human; do not retry."}}'
   exit 0
 fi
+# `-r` proves the file is READABLE, not that it LOADED. A present-but-broken
+# library -- truncated write, partial checkout, bad merge, syntax error --
+# sources "successfully enough" and then `_split_unquoted` is undefined, `set -e`
+# kills this script at the call site with rc=127 and NO stdout, and the
+# wrapper's trailing `exit 0` turns that into a silent ALLOW: a fail-OPEN in
+# the one block whose entire job is to fail closed (found in review, lode-dia6;
+# reproduced with a comments-only copy of the library). So `source` under
+# `|| true` -- a syntax error must reach the check below, not abort ahead of it
+# -- and then assert the CONTRACT (both functions defined), not the file.
 # shellcheck source=scripts/shell-quote-split.sh
-source "$_LIB"
+source "$_LIB" || true
+if ! declare -F _split_unquoted >/dev/null 2>&1 ||
+  ! declare -F strip_quoted_heredoc_bodies >/dev/null 2>&1; then
+  jq -n '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
+    permissionDecisionReason: "lode-dia6: scripts/shell-quote-split.sh was found but did not define the quote-aware split functions scripts/gh-write-guard.sh depends on (a truncated, partially-checked-out, or syntactically broken copy) -- denying this Bash call rather than silently scanning with the split disabled, since a false ALLOW here is unrecoverable. Surface this to a human; do not retry."}}'
+  exit 0
+fi
 
 # This hook runs on EVERY Bash call, so skip the fork entirely when there is no
 # heredoc operator to find: with no `<<` present the function is provably an

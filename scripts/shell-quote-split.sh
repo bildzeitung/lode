@@ -3,7 +3,11 @@
 # Shared quote-aware shell scanning primitives for the PreToolUse(Bash) guards
 # (lode-dia6). SOURCED, never executed directly -- no `set -euo pipefail` here,
 # since that would leak into whichever guard sources this file; each caller
-# owns its own shell options.
+# owns its own shell options. Deliberately NOT marked executable (review,
+# lode-dia6): in scripts/ the `+x` bit means "entry point", and running this
+# file would be a silent no-op. The shebang stays -- shellcheck uses it for
+# dialect detection, and this file is bash-only. Both properties are pinned by
+# tests/test_shell_quote_split_lib.py.
 #
 # Extracted from scripts/gh-write-guard.sh (lode-o29m/lode-9mbt), where both
 # functions were first written and are still sabotage-verified by
@@ -95,7 +99,17 @@ strip_quoted_heredoc_bodies() {
 # a quote, so nothing after it splits -- the PERMISSIVE direction, not the
 # conservative one. Accepted rather than fixed; documented alongside the
 # other residuals in docs/agents-workflow.md.
+# PERFORMANCE (review, lode-dia6). `local LC_ALL=C` is load-bearing, not a
+# micro-optimization. Under a UTF-8 locale bash must walk the string to find
+# CHARACTER i, so `${s:i:1}` is O(i) and this loop is O(n^2) -- measured 4.0s on
+# a 25 KB command. Byte indexing makes it O(n). It is behaviour-preserving: the
+# loop only ever compares against ASCII operator characters, and every UTF-8
+# non-ASCII byte is >= 0x80, so no byte of a multibyte character can collide
+# with one; every other byte is concatenated through unchanged, so the output
+# is byte-identical. `local` keeps the C locale out of the callers' grep and
+# [[:space:]] semantics -- pinned by a test.
 _split_unquoted() {
+  local LC_ALL=C
   local s="$1" out="" c state=none i=0 len
   len=${#s}
   while ((i < len)); do

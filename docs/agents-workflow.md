@@ -1682,10 +1682,41 @@ splitter that must stay in lockstep across every future refinement — and the t
 drifted once, because they started as byte-identical code. Both primitives
 (`_split_unquoted`, `strip_quoted_heredoc_bodies`) now live in one sourced library,
 [`scripts/shell-quote-split.sh`](../scripts/shell-quote-split.sh), and both guard scripts fail
-*closed* (deny) if that library cannot be resolved — the opposite asymmetry from the guard-script
+*closed* (deny) if that library is unusable — the opposite asymmetry from the guard-script
 resolution above, deliberately: a missing *shared dependency* both guards need is a new hazard this
 extraction itself introduces, not a pre-existing one to be as permissive about as a missing
 top-level script.
+
+*Unusable* covers **two** failure modes, not one — the technical review of `lode-dia6` found the
+second one live. **Absent**: the file is missing or unreadable, caught by each guard's `[ ! -r ]`
+check. **Broken**: the file is present and readable — so `-r` passes and `source` appears to
+succeed — but defines neither function (a truncated write, a partial checkout, a bad merge, a
+syntax error). The guard then dies at the first call site with `rc=127` and *no stdout*, and the
+wrapper's trailing `exit 0` converts that into a silent **ALLOW**: a fail-open in the very block
+whose job is to fail closed. So each guard asserts the *contract* (`declare -F` on both functions)
+after sourcing, not just the file, and sources under `|| true` so a syntax error reaches that check
+instead of aborting ahead of it. Both modes are swept across every consumer — *discovered at
+runtime*, never listed — by `tests/test_shell_quote_split_lib.py`, following
+`tests/test_gate_lib.py`'s pattern for the same reason: a test that enumerates its subjects *is*
+the enumeration, so a third guard that starts sourcing the library would otherwise fail open
+silently until someone hand-wrote a third copy of the test.
+
+The ~10-line fail-closed block itself stays **duplicated** in both guards, deliberately: its whole
+job is to behave when a sourced file is absent, so it cannot live in the sourced file, and a
+separate shared emitter would only relocate the same bootstrap hazard onto a hot path these guards
+keep fork-free. The runtime-discovered sweep above is the mechanism that keeps the copies honest —
+not a further extraction.
+
+The extraction also made the split's cost matter to a second caller, and
+`scripts/sha-fabrication-guard.sh` had no equivalent of the `gh` guard's `lode-vrhu`
+command-position pre-filter: `_split_unquoted` is far more expensive than the `tr` it replaced
+(measured 13 ms → 489 ms on an 8 KB command carrying a 40-hex run), and 40-hex runs are ordinary
+traffic here — a SHA pasted from `git rev-parse`, a land commit message quoting one. Two fixes,
+both from the same review: a fork-free `bd`/`git` command-position gate ahead of the split (with
+its own superset argument, since a pre-filter that skips a case `INVOKE_RE` would have caught is a
+silent narrowing of the deny surface), and `local LC_ALL=C` inside `_split_unquoted` — under a
+UTF-8 locale `${s:i:1}` is O(*i*), which is where the quadratic constant came from. Neither
+changes a single decision; both are pinned by tests.
 
 ### All three PreToolUse guards live in tested scripts, not inline config (2026-08-04)
 

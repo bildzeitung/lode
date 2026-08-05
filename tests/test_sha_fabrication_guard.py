@@ -47,6 +47,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -393,12 +394,17 @@ QUOTED_HEREDOC_FALSE_POSITIVE_SHAPES = [
     # or commit-message draft. Old behaviour: the heredoc body is plain text
     # to `tr`, so a `bd update ... land_head=<FAKE>` line inside it was
     # scanned and denied even though nothing here is live shell.
-    (
-        "cat <<'EOF'\n"
-        f"example: bd update lode-1 --set-metadata land_head={FABRICATED_SHA}\n"
-        "EOF"
-    ),
-    (f'cat <<"EOF"\nexample: git show {FABRICATED_SHA}\nEOF'),
+    #
+    # NOTE (review, lode-dia6): the bd/git token MUST start its body line.
+    # INVOKE_RE is anchored at `^`, and the split leaves newlines intact, so a
+    # body line reading "example: bd update ..." never matched INVOKE_RE in the
+    # first place -- a fixture in that shape is ALLOWED with or without
+    # strip_quoted_heredoc_bodies, and pins nothing. These fixtures were
+    # differentially verified DENY-on-trunk / ALLOW-here.
+    (f"cat <<'EOF'\nbd update lode-1 --set-metadata land_head={FABRICATED_SHA}\nEOF"),
+    (f'cat <<"EOF"\ngit show {FABRICATED_SHA}\nEOF'),
+    # <<\EOF -- the third quoted form.
+    (f"cat <<\\EOF\ngit show {FABRICATED_SHA}\nEOF"),
 ]
 
 
@@ -438,6 +444,50 @@ def test_real_bd_invocation_after_quoted_control_chars_is_still_denied() -> None
     assert _script_decision(command) == "deny"
 
 
+def test_split_admits_every_shape_invoke_re_recognizes() -> None:
+    """SUPERSET invariant (review, lode-dia6) -- the load-bearing one.
+
+    Swapping the quoting-unaware `tr` for `_split_unquoted` can only ever produce FEWER segment
+    starts, and every segment start it drops is one the real shell would not have treated as a
+    command position either. That argument is prose; a single "still denied after `&&`" case does
+    not hold it up, because the break would be FAIL-OPEN (a fabricated SHA in a real bd/git call
+    silently unscanned) and no functional assertion notices a segment start that quietly stopped
+    being produced.
+
+    So enumerate them, mirroring tests/test_gh_write_guard.py's
+    test_pre_filter_admits_every_shape_the_p_anchor_recognizes: one real bd/git invocation per
+    alternative in INVOKE_RE (leading VAR= assignments, each wrapper word) and per control
+    character that manufactures a segment start -- including `$(` and a bare backtick inside
+    double quotes, which ARE live command substitution there. Every one must still be DENIED.
+    """
+    wrappers = ["sudo", "env", "command", "time", "nohup", "xargs"]
+    shapes = [
+        f"git show {FABRICATED_SHA}",
+        f"  git show {FABRICATED_SHA}",
+        f"bd update lode-1 --set-metadata land_head={FABRICATED_SHA}",
+        f"X=1 git show {FABRICATED_SHA}",
+        f"X=1 Y=2 env git show {FABRICATED_SHA}",
+        *(f"{w} git show {FABRICATED_SHA}" for w in wrappers),
+        *(
+            f"echo hi{c}git show {FABRICATED_SHA}"
+            for c in [";", "&", "|", "(", ")", "{", "}", "`"]
+        ),
+        f"echo hi && git show {FABRICATED_SHA}",
+        f'echo "$(git show {FABRICATED_SHA})"',
+        f'echo "`git show {FABRICATED_SHA}`"',
+        # Backslash-newline continuation collapse (lode-m6px) must still run after
+        # the heredoc pre-pass was inserted ahead of it.
+        f"bd update lode-1 \\\n  --set-metadata land_head={FABRICATED_SHA}",
+        # An UNQUOTED heredoc body is live shell and must still be scanned.
+        f"cat <<EOF\ngit show {FABRICATED_SHA}\nEOF",
+    ]
+    skipped = [s for s in shapes if _script_decision(s) is None]
+    assert not skipped, (
+        "the quote-aware split no longer produces a segment start for these shapes -- each one "
+        f"is a fabricated SHA in a real bd/git invocation the guard now lets through: {skipped}"
+    )
+
+
 def test_known_accepted_over_match_still_denies_fabricated_hex_in_bd_line_prose() -> (
     None
 ):
@@ -463,36 +513,60 @@ def test_script_sources_the_shared_quote_split_library() -> None:
     assert "tr ';&|(){}" not in text
 
 
-def test_script_fails_closed_when_shared_library_is_unresolvable(
-    tmp_path: Path,
-) -> None:
-    """AC (lode-dia6): unlike a missing scripts/sha-fabrication-guard.sh itself (which the
-    WRAPPER deliberately fails OPEN on, per test_hook_fails_OPEN_when_the_script_is_unresolvable
-    _deliberately above), a missing/unresolvable scripts/shell-quote-split.sh -- the shared
-    library THIS script depends on -- must fail CLOSED. Adding a second file to the resolution
-    chain widens the missing-file surface; this is the extraction's own new hazard, and it must
-    never be treated as a reason to fall through unscanned."""
-    # Copy the guard script into an isolated directory with NO sibling shell-quote-split.sh.
-    isolated = tmp_path / "scripts"
-    isolated.mkdir()
-    isolated_script = isolated / "sha-fabrication-guard.sh"
-    isolated_script.write_text(SCRIPT.read_text())
-    isolated_script.chmod(0o755)
-    proc = subprocess.run(
-        ["bash", str(isolated_script), f"git show {FABRICATED_SHA}"],
-        cwd=REPO_ROOT,  # still a real repo, so the git-repo early-out doesn't fire
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
+# ---------------------------------------------------------------------------
+# lode-dia6 (review): PERFORMANCE pins. Adopting the shared `_split_unquoted`
+# replaced a constant-time `tr` with a char loop, on a hook that runs on EVERY
+# Bash tool call. Two mitigations landed with it, and NEITHER is visible to a
+# functional assertion -- a regression here shows up only as a slow session,
+# which nothing else in this file would notice. Same rationale, and the same
+# generous-ceiling approach, as tests/test_gh_write_guard.py's
+# test_fast_path_rejects_gh_inside_an_ordinary_word_without_scanning
+# (lode-vrhu). Ceilings are far above ordinary process-spawn overhead and far
+# below the measured regressions, so they are not flaky on a loaded machine.
+# ---------------------------------------------------------------------------
+
+
+def test_fast_path_skips_the_split_when_no_bd_or_git_word_is_present() -> None:
+    """A command carrying a 40-hex run but no `bd`/`git` word cannot possibly match INVOKE_RE,
+    so the cheap command-position gate must reject it BEFORE the split runs.
+
+    Measured on this ticket's machine: with no gate, an 8 KB such command took ~489ms (vs ~13ms
+    under the old `tr`); the gate returns it to a few ms. 40-hex runs are ordinary traffic here
+    (a SHA pasted from `git rev-parse`, a `sha256:` lock line), so this is a hot path, not an
+    exotic one.
+    """
+    command = f"python3 -c \"print('{FABRICATED_SHA} " + ("padding " * 1100) + "')\""
+    assert len(command) > 8_000, "fixture must reproduce the measured 8 KB regression"
+    start = time.monotonic()
+    decision = _script_decision(command)
+    elapsed = time.monotonic() - start
+    assert decision is None, (
+        f"guard wrongly denied a bd/git-free command: {command[:80]}..."
     )
-    assert proc.returncode == 0, f"script exited {proc.returncode}: {proc.stderr}"
-    assert proc.stdout.strip(), (
-        "expected a deny when the shared library is unresolvable"
+    assert elapsed < 0.25, (
+        f"guard took {elapsed:.3f}s on a bd/git-free command -- the O(n^2) split ran; the "
+        "command-position gate regressed (lode-dia6 review)"
     )
-    out = json.loads(proc.stdout)["hookSpecificOutput"]
-    assert out["permissionDecision"] == "deny"
-    assert "shell-quote-split.sh" in out["permissionDecisionReason"]
+
+
+def test_large_git_command_carrying_a_sha_does_not_take_seconds() -> None:
+    """The shape the gate above CANNOT filter: a real `git commit -m '<sha> <long message>'`,
+    which `/land` writes constantly. Here the only mitigation is `local LC_ALL=C` inside
+    `_split_unquoted` -- under a UTF-8 locale `${s:i:1}` is O(i), making the loop quadratic.
+
+    Measured at 25 KB: 4.0s without it, ~0.74s with it (and ~14ms under the old `tr`). The
+    ceiling below sits between those, so dropping the locale line fails this test.
+    """
+    command = f"git commit -m 'landed {REAL_SHA} : " + ("landing notes. " * 1700) + "'"
+    assert len(command) > 24_000, "fixture must reproduce the measured 25 KB regression"
+    start = time.monotonic()
+    decision = _script_decision(command)
+    elapsed = time.monotonic() - start
+    assert decision is None, "a REAL sha must still be allowed"
+    assert elapsed < 2.0, (
+        f"guard took {elapsed:.3f}s on a 25 KB git command carrying a real SHA -- "
+        "`local LC_ALL=C` in _split_unquoted regressed (lode-dia6 review)"
+    )
 
 
 # The GLOBAL "which PreToolUse(Bash) guards are installed" inventory assertion (including this
