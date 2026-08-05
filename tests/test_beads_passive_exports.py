@@ -1,10 +1,12 @@
 """The canonical beads passive-export list, and the chain that reaches it (lode-do3q).
 
 `scripts/beads-passive-exports.txt` is the single copy of the two relpaths that the guards
-must treat as "by invariant never real work" (`import.auto: false`, lode-6ra). Three consumers
-read it: `scripts/worktree-gc-classify.sh`'s dirty-tree guard, the `Stop` hook in
-`.claude/settings.json` (via `scripts/discard-beads-passive-export-churn.sh`), and
-`tests/test_land_lock.py`'s stall-hook scan exclusion.
+must treat as "by invariant never real work" (`import.auto: false`, lode-6ra). Its consumers
+read it rather than re-inlining the paths: `scripts/worktree-gc-classify.sh`'s dirty-tree guard,
+the `Stop` hook in `.claude/settings.json` (via
+`scripts/discard-beads-passive-export-churn.sh`), `scripts/land-merge-one.sh`'s merge-retry
+restore (lode-2nw5), and `tests/test_land_lock.py`'s stall-hook scan exclusion. Register a new
+consumer in the loops below rather than starting a parallel module for it.
 
 Canonicalizing bought a one-file edit, but it also bought a NEW failure surface the previous
 inline copies could not have: an indirection chain (settings.json -> script -> data file) whose
@@ -27,6 +29,7 @@ REPO_ROOT = SETTINGS.parent.parent
 CANONICAL_LIST = REPO_ROOT / "scripts" / "beads-passive-exports.txt"
 HOOK_SCRIPT = REPO_ROOT / "scripts" / "discard-beads-passive-export-churn.sh"
 GC_CLASSIFY = REPO_ROOT / "scripts" / "worktree-gc-classify.sh"
+MERGE_ONE = REPO_ROOT / "scripts" / "land-merge-one.sh"
 
 
 def _entries() -> list[str]:
@@ -80,16 +83,17 @@ def test_no_consumer_keeps_a_literal_copy_of_the_relpaths() -> None:
         ".claude/settings.json (Stop hooks)": stop_commands,
         str(HOOK_SCRIPT): HOOK_SCRIPT.read_text(encoding="utf-8"),
         str(GC_CLASSIFY): GC_CLASSIFY.read_text(encoding="utf-8"),
+        str(MERGE_ONE): MERGE_ONE.read_text(encoding="utf-8"),
     }
     for rel in _entries():
         for name, text in consumers.items():
             assert rel not in text, f"{name} re-inlines the canonical relpath {rel!r}"
 
 
-def test_both_bash_consumers_name_the_canonical_list() -> None:
-    """Cheap proof the two scripts read the file this module is asserting about, so a rename
+def test_every_bash_consumer_names_the_canonical_list() -> None:
+    """Cheap proof the scripts read the file this module is asserting about, so a rename
     of the list cannot leave these tests green while the guards read nothing."""
-    for script in (HOOK_SCRIPT, GC_CLASSIFY):
+    for script in (HOOK_SCRIPT, GC_CLASSIFY, MERGE_ONE):
         assert CANONICAL_LIST.name in script.read_text(encoding="utf-8"), (
             f"{script} no longer reads {CANONICAL_LIST.name}"
         )
