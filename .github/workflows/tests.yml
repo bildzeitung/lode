@@ -16,9 +16,9 @@ name: tests
 # would produce today. See each job's own comments for the mechanism.
 #
 # push trigger convention (lode-bmvy, mirrored from build.yml) -- narrowed to
-# trunk + land/** so this workflow (heavier than build.yml: a full locked
-# dependency install plus reranker/embedder weights) doesn't also fire on a v*
-# tag push or other non-push refs. No tags-ignore needed -- defining only
+# trunk + land/** so this workflow (heavier than build.yml: a full dependency
+# install plus reranker/embedder weights) doesn't also fire on a v* tag push
+# or other non-push refs. No tags-ignore needed -- defining only
 # `branches` already excludes tag pushes; see
 # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request.
 on:
