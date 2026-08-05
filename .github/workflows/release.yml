@@ -35,15 +35,14 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
-          # Deliberately no `cache: pip` here, unlike build.yml's identical step --
-          # setup-python's cache key is derived from OS/arch/python-version/
+          # Deliberately no `cache: pip` here, unlike build.yml's otherwise-identical
+          # step -- setup-python's cache key is derived from OS/arch/python-version/
           # dependency-file-hash, NOT the workflow name, so enabling it would RESTORE
           # a cache populated by build.yml runs on trunk rather than populate a fresh
-          # one. Accepting a cache built by a non-publishing workflow onto the one leg
-          # that ships an artifact undermines the clean-room framing this workflow's
-          # header already claims. Not a runtime concern either way: every release run
-          # to date finishes in 14-30s of job time, so the cost of declining is a
-          # couple of seconds a handful of times a year. Ladder + rationale:
+          # one. Taking the published artifact's dependencies from a non-publishing
+          # workflow's cache is what the clean-room framing in this file's header
+          # exists to avoid. NOT a speed decision, and don't reopen it as one: every
+          # release run to date finishes in 14-30s of job time. Rationale:
           # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
 
       - name: Install build tooling
