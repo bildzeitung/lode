@@ -350,6 +350,13 @@ string through `.`, which can't be verified to stay inside the worktree"), so th
 address; hand-rolling `VIRTUAL_ENV=...`/`PATH=...` trips the same guard. The explicit-path form has
 none of those shapes — no sourcing, no substitution, no `$PATH` expansion — so there is nothing to
 refuse. The `./venv/bin/` prefix is load-bearing: `nox` is not on the ambient `PATH` unactivated.
+The refusal is on **shape alone, before any condition is evaluated** — `if [ -x /nonexistent ]; then
+. ./venv/bin/activate; fi` draws the identical message, so burying a `source` in a branch that can
+never run does not get it past the guard. It is the `.` that is refused, not the `if/then/fi`: the
+same compound wrapping a plain `git` command is accepted. So a conditional gate step is available to
+an isolated agent, but never one that sources. (Both verified from a worktree-isolated dispatch,
+lode-828x — the case lode-6874's review raised but could not test, having come up in the main
+checkout rather than a worktree, the fault lode-jk44 later closed.)
 
 **Activation is unnecessary, not merely inconvenient — `_venv_tool()` (lode-0yfn) removed the reason
 for it.** `default_venv_backend = "none"` means sessions inherit the invoking shell's `PATH`, and
@@ -380,7 +387,7 @@ every new worktree branches from `origin/trunk` and so always carries `_venv_too
 guard-friendly fallback for such a branch is `./venv/bin/pytest` directly — a plain command, and
 `tests/conftest.py`'s guard 0 still protects it against a wrong-checkout import. Note that this is
 base skew *transferred*, not eliminated: dropping the wrapper removes the file-missing form of it,
-not the general problem, which is lode-828x's subject.
+not the general problem; lode-828x took that residue up and closed it as needing no further mechanism.
 
 **Why no `scripts/nox.sh` wrapper.** One was built and reviewed for this ticket, justified on three
 grounds — locating `nox`, a guard-friendly single-command shape, and the exit-2 contract — and each
@@ -399,32 +406,6 @@ worktree-isolated — so `. ./venv/bin/activate` plus a bare `nox` is correct th
 forms at once; rather than hoist an agent-only rule into the project-wide file, `coding.md` and
 `code-reviewer.md` each state outright that their explicit-path rule **overrides** that section. The
 audience split is the reason the two texts differ, not an oversight in either.
-
-**Finding B answered empirically (lode-828x).** lode-6874's technical review raised, but explicitly
-could not test (it came up in the main checkout, not a worktree — that fault was lode-jk44), whether
-the isolation guard refuses an `if/then/fi` compound containing a `source` (`.`) in a branch that
-would never execute — load-bearing for a restore/undo dance that (at the time) gated `scripts/nox.sh`
-back in with `if [ ! -x scripts/nox.sh ]; then git checkout origin/trunk -- scripts/nox.sh; fi`. A
-genuinely worktree-isolated agent ran the equivalent shape directly:
-
-```
-if [ -x /nonexistent-path-xyz ]; then . ./venv/bin/activate; fi
-```
-
-**Refused**, with the same message the bare sourced form gets: *"this command runs a string through
-`.`, which can't be verified to stay inside the worktree."* The guard rejects the compound on shape
-alone, before the condition is ever evaluated — it does not distinguish a `source` sitting in a
-taken branch from one sitting in a branch that can never run. So the answer to Finding B is **yes,
-the guard would have refused that compound too**, which would have made the restore/undo dance
-`lode-6874`'s original commit added *unrunnable by the very agents it targeted* — the same failure
-mode `lode-6874` existed to close in the first place, just relocated.
-
-This is now moot for the mechanism it was raised about: `scripts/nox.sh` was never landed (`lode-6874`'s
-re-examination deleted it, see above), so no `if/then/fi` restore/undo compound is prescribed to any
-agent any more, and there is nothing left that this finding could break. It's recorded here rather than
-left implicit because a future wrapper-shaped fix would walk straight back into the same guard refusal —
-this paragraph is the empirical record that closes that question, so nobody has to re-derive it from
-inference a third time.
 
 ### Recycled-worktree guard (lode-nt98)
 
