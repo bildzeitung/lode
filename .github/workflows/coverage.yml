@@ -24,7 +24,7 @@ on:
 
 # Cancels a superseded run on the same ref, as in tests.yml/build.yml.
 # Convention + rationale:
-# docs/release.md#ci-workflow-trigger-scope-push-and-pull_request (lode-2ouz).
+# docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
 # The one consumer this leg adds over its siblings is the README's Codecov
 # badge, which reads Codecov's dashboard for `trunk` rather than Actions
 # status: a cancel does skip that run's upload, but the push that cancelled it
@@ -65,7 +65,7 @@ jobs:
     # hang catcher, not a perf budget: warm runs land at ~2-4min, and cold is no
     # different (tests.yml run 29783519618 populated the shared 958MB weights
     # cache in 135s end to end, lode-s1ia). Ladder + rationale:
-    # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request.
+    # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
     timeout-minutes: 30
     steps:
       - name: Checkout
