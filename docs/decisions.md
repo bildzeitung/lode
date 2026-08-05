@@ -199,7 +199,7 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   blending into the routine digest. This is deliberately a refinement of surfacing, not a deletion
   mechanism: `/sweep` (lode-nps.1, [agents-workflow.md](agents-workflow.md#running-the-loop-family-unattended--epic-audit-sweep))
   already surfaces every open `land-escalated` item every pass regardless of age; a `land-escalated`
-  branch is otherwise never touched by an automated sweep — only the three human-driven resolution
+  branch is otherwise never touched by an automated sweep — only the human-driven resolution
   exits ([agents-workflow.md](agents-workflow.md#the-lander--land-drained-by-a-self-paced-loop))
   remove the label and let the branch go.
 - **`bd dolt push` retry-on-reject: a backoff wrapper, not a Dolt server-mode migration (lode-83d).**
