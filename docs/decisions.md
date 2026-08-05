@@ -3311,6 +3311,34 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   `scripts/discard-beads-passive-export-churn.sh` (new, called from the
   `Stop` hook) reads it to build its `git checkout HEAD --` argument list;
   `tests/test_land_lock.py`'s `_STALL_HOOK_SCAN_EXCLUDED_RELPATHS` reads it
-  directly into the set. Adding or renaming a passive export is now a
-  one-file edit. No behaviour changed at any of the three sites — each still
-  excludes exactly the same two relpaths it did before.
+  directly into the set. **Adding** a passive export is now a one-file edit.
+  No behaviour changed at any of the three sites — each still excludes exactly
+  the same two relpaths it did before, verified by building the pathspec list
+  standalone and diffing it against the retired literals.
+
+  **Scope, stated precisely so the next reader is not misled:** what is
+  canonical is the *exclusion-list* trio above, not every mention of these
+  paths in the repo. A separate cluster still names `.beads/issues.jsonl`
+  literally, under a different verb (`git restore --staged --worktree`, i.e.
+  *unstage before merging*, not *exclude from a judgment*) and naming only the
+  one path: `scripts/land-merge-one.sh`, the executable bash blocks in
+  `.claude/skills/land/SKILL.md` and `.claude/skills/release/SKILL.md`, and the
+  command-string allowlist entry in `tests/test_assert_main_checkout.py`. So a
+  *rename* is NOT yet a one-file edit. Bringing that cluster on is deliberately
+  left out of scope here — it is a different operation with a different failure
+  mode — and is filed separately.
+
+  **What canonicalizing cost, since it is not free.** It replaced three
+  self-contained literals with an indirection chain
+  (`settings.json` → script → data file) in which every link swallows its own
+  errors: the `Stop` hook ends in `; true` and its script always exits 0. That
+  is right for best-effort hygiene, but it means a rename or deletion anywhere
+  along the chain leaves the hook a permanent no-op with nothing red — a
+  failure mode the inline copies could not have had. Two mitigations, both
+  added during technical review rather than left to the next incident:
+  `scripts/worktree-gc-classify.sh` is a *gate*, so it fails LOUD (exit 2) on
+  an unreadable or empty list instead of degrading to an empty exclude set,
+  which would silently invert lode-bns3; and `tests/test_beads_passive_exports.py`
+  pins the whole chain — the list is non-empty and well-formed, the `Stop` hook
+  still names an existing executable script, both bash consumers still read the
+  canonical file, and no consumer has re-inlined a literal copy.
