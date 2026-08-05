@@ -935,6 +935,16 @@ substring match in `tests/test_gate_lib.py`'s consumer sweep once mistook that c
 reword the comment around it. The sweep now anchors on a real, non-comment source line, so the comment
 is safe where it is.)
 
+**Why agent-executed skill fences that print this same banner exit 1, not 2 (lode-vmnx).** A handful
+of fenced bash blocks in skill markdown (`.claude/skills/land/SKILL.md`,
+`.claude/skills/release/SKILL.md`) print the identical "GATE COULD NOT RUN:" banner on a
+machine/checkout fault and then exit 1 rather than 2 — this is correct, not an inconsistency with the
+convention above, and the call sites are not to be changed. The canonical statement of why lives in
+`scripts/gate-lib.sh`'s own header (search "lode-vmnx"): the exit-2 convention exists for a **calling
+script** to classify a subprocess's exit code programmatically; an agent-executed skill fence has no
+calling script, only the agent itself reading the stderr banner directly, so the distinction this file
+enforces doesn't apply there.
+
 **Every `git` call is wrapped — raw 128 must never escape.** When a guard's own dependency fails
 (`git rev-parse` answering with a `fatal:` instead of a path), the guard converts that into **its own
 exit 2**, with a diagnostic naming the guard and the likely cause. It is never left to `set -e`, which

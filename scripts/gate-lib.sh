@@ -76,6 +76,26 @@
 # correctly (e.g. release-bump.sh's `read_log() { ...; } ... || exit $?`
 # propagation out of its own command-substitution subshell).
 #
+# WHY THIS EXIT-2 CONVENTION BINDS scripts/*.sh AND NOT AGENT-EXECUTED SKILL
+# FENCES (lode-vmnx): the 0/1/2 split above exists so that a CALLER -- another
+# script, invoking one of these as a subprocess -- can classify the exit code
+# programmatically without parsing stderr. Several skill markdown files (e.g.
+# .claude/skills/land/SKILL.md, .claude/skills/release/SKILL.md) contain
+# fenced bash blocks that print this same "GATE COULD NOT RUN:" banner and
+# then exit 1, not 2, when they hit a machine/checkout fault instead of a
+# genuine content verdict. That is CORRECT and not a violation of the
+# convention above: those fences are executed directly by an agent working
+# through the skill, one Bash-tool invocation at a time -- there is no calling
+# SCRIPT to classify the exit code, only the agent itself, which reads the
+# stderr banner text directly. Exit 1 there is a human/agent-readable signal
+# ("stop this pass, something is broken"), not a machine-classified one, so
+# the 2-vs-1 distinction this file exists to enforce does not apply. This is
+# the single canonical statement of that split -- docs/agents-workflow.md
+# cross-references this paragraph rather than restating it. Do not change any
+# of those in-skill call sites to exit 2 to "match" this file: doing so would
+# make that site inconsistent with its own SKILL.md siblings, which is the
+# actual convention it must stay consistent with.
+#
 # GATE_ADVISORY (lode-ysr6): this section is the OPERATIVE record of the
 # contract -- correct it in place. docs/decisions.md (search "lode-ysr6") also
 # carries a dated snapshot of the decision and the alternative that was
