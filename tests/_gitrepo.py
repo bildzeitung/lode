@@ -34,6 +34,11 @@ two differently-shaped `_init_repo`s duplicated twice each is not four copies
 of anything, and hoisting them under one name would leave this directory with
 differently-shaped `_init_repo`s sharing that name rather than one helper. A
 body under the three-copy bar both precedents above fired at is left alone.
+lode-ea5b put that question directly (is there an honest shared builder here,
+or do these stay separate?) and re-measured every body in this directory
+against this rule: same outcome, nothing hoisted. Do not re-litigate it
+without a concrete shape; do re-measure, since lode-ea5b's own ticket text
+carried an inventory that was already stale by the time it was built.
 """
 
 from __future__ import annotations
