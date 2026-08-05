@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 #
 # Merge a single accepted `land/<id>` branch onto the current checkout with its
-# pre-computed commit message, retrying once past a re-staged
-# `.beads/issues.jsonl` (a passive export -- import.auto: false, lode-6ra --
-# never real work). Extracted per lode-sfnb: `/land`'s Section 3 merge loop
+# pre-computed commit message, retrying once past a re-staged passive beads
+# export -- see `scripts/beads-passive-exports.txt` for the canonical list of
+# such exports (import.auto: false, lode-6ra -- never real work). Extracted
+# per lode-sfnb: `/land`'s Section 3 merge loop
 # used to define this as an inline bash FUNCTION (`merge_one()`) and read a
 # bash ASSOCIATIVE ARRAY (`MSG`) populated by a separate, earlier fenced code
 # block in .claude/skills/land/SKILL.md. Those are two different Bash tool
@@ -179,10 +180,21 @@ err="$(git merge --no-ff "origin/land/$id" -m "$msg" 2>&1)" && exit 0
 if [[ "$err" == *"would be overwritten by merge"* ]] \
    && [ -z "$(git ls-files -u)" ]; then
   # Passive-export trap, not a conflict (see docs/decisions.md, lode-6ra /
-  # lode-bns3): `.beads/issues.jsonl` got (re-)staged by something other than
-  # this merge. Restore it -- it is by invariant never real work -- and retry
-  # the SAME merge once.
-  git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true
+  # lode-bns3 / lode-2nw5): a passive beads export got (re-)staged by
+  # something other than this merge. Restore every entry on the canonical
+  # passive-export list (scripts/beads-passive-exports.txt, lode-do3q) -- each
+  # is by invariant never real work -- and retry the SAME merge once. Sourced
+  # from the canonical list rather than hardcoding a single relpath (lode-2nw5):
+  # the pre-commit hook regenerates+restages BOTH entries on that list in the
+  # same commit (confirmed empirically -- both files change together in every
+  # "bd: export ... — passive jsonl" commit), so the identical trap can in
+  # principle hit either. `restore` on an entry that is not staged is a
+  # harmless no-op (`|| true`), so widening the set costs nothing on the
+  # common one-entry case.
+  while IFS= read -r export_path; do
+    [ -n "$export_path" ] || continue
+    git restore --staged --worktree "$export_path" 2>/dev/null || true
+  done < "$(dirname "$0")/beads-passive-exports.txt"
   err="$(git merge --no-ff "origin/land/$id" -m "$msg" 2>&1)" && exit 0
 fi
 
