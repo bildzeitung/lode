@@ -1537,15 +1537,17 @@ async def _press_and_settle(pilot: Pilot, *keys: str) -> None:
 
 # --- Real-SDK Anthropic batch-results test rig (lode-a9x3) ------------------
 #
-# Shared between test_llm_provider.py (AnthropicProvider.collect_batch) and
-# test_enrich.py (collect_enrich_batch's real-SDK survives-a-results-line
-# test): both drive a REAL anthropic.Anthropic client answered in-process by
+# Both callers drive a REAL anthropic.Anthropic client answered in-process by
 # httpx.MockTransport, because a MagicMock-based fake client can't reproduce
 # the SDK's own construct_type_unchecked leniency for a wrong-shape line --
-# see AnthropicProvider.collect_batch's module docstring. Moved here from
-# test_llm_provider.py, which had the only copy; test_enrich.py had
-# hand-duplicated the client construction + handler + the succeeded-message
-# envelope instead of reusing it.
+# `_wrong_shape_result`'s docstring in src/lode/llm_provider.py owns that
+# reasoning, deferring in turn to docs/stack.md "Error contract".
+#
+# Hoisted at TWO copies, under the three-copy bar tests/_gitrepo.py records:
+# the second copy was a ~40-line hand-duplication of SDK-shaped fixture data
+# that has to be updated in lockstep when the pinned SDK's MessageBatch
+# required fields change, not two helpers encoding different contracts. Read
+# the caller roster off the code (`grep -rl '_real_anthropic_client' tests/`).
 
 
 def _real_anthropic_client(
@@ -1609,11 +1611,17 @@ def _ended_batch_body(batch_id: str) -> dict:
     }
 
 
-def _succeeded_payload(custom_id: str = "ver-shape") -> dict:
+def _succeeded_payload(
+    custom_id: str = "ver-shape", tool_input: dict | None = None
+) -> dict:
     """The success payload as a plain dict, pre-JSON-encoding (lode-i821).
 
     Dict-returning (rather than pre-encoded) so :func:`_payload_without` can
     delete a field from it before :func:`_jsonl` encodes it.
+
+    ``tool_input`` overrides the generic ``_Widget``-shaped tool payload, so a
+    caller needing a domain-shaped one (enrichment) asks for it rather than
+    reaching into ``result.message.content[0]`` to swap it (lode-a9x3).
     """
     return {
         "custom_id": custom_id,
@@ -1629,7 +1637,11 @@ def _succeeded_payload(custom_id: str = "ver-shape") -> dict:
                         "type": "tool_use",
                         "id": "tu_1",
                         "name": "emit",
-                        "input": {"name": "w", "count": 1},
+                        "input": (
+                            {"name": "w", "count": 1}
+                            if tool_input is None
+                            else tool_input
+                        ),
                     }
                 ],
                 "stop_reason": "tool_use",

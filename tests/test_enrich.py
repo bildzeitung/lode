@@ -1719,20 +1719,15 @@ def test_collect_enrich_batch_marks_failed_on_errored_result(
 
 
 def _line_without_custom_id() -> bytes:
-    """A fully well-formed ``succeeded`` results line minus only ``custom_id``.
-
-    Built from the shared :func:`_succeeded_payload` envelope (lode-a9x3)
-    rather than hand-rebuilt, with only the ``input`` payload swapped for an
-    enrichment-shaped one (empty tags/entities/inferred_edges) in place of the
-    generic ``_Widget``-shaped default.
-    """
-    payload = _payload_without(_succeeded_payload(), "custom_id")
-    payload["result"]["message"]["content"][0]["input"] = {
-        "tags": [],
-        "entities": [],
-        "inferred_edges": [],
-    }
-    return _jsonl(payload)
+    """A fully well-formed ``succeeded`` results line minus only ``custom_id``."""
+    return _jsonl(
+        _payload_without(
+            _succeeded_payload(
+                tool_input={"tags": [], "entities": [], "inferred_edges": []}
+            ),
+            "custom_id",
+        )
+    )
 
 
 @pytest.mark.network

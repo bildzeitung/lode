@@ -751,10 +751,8 @@ def test_collect_batch_wraps_a_bad_request_from_batches_results() -> None:
     assert err.__cause__ is bad_request
 
 
-# _real_anthropic_client, _results_handler, _ended_batch_body, and the
-# _succeeded_payload/_payload_without/_jsonl payload builders now live in
-# conftest.py (lode-a9x3) -- shared with test_enrich.py's real-SDK test,
-# which used to hand-duplicate them.
+# The shared real-SDK Anthropic batch-results rig lives in conftest.py
+# (lode-a9x3); the imports at the top of this file are its roster.
 
 
 def _succeeded_jsonl_line(custom_id: str) -> bytes:
