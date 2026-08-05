@@ -3376,20 +3376,18 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   canonical file, and no consumer has re-inlined a literal copy.
 - **2026-08-05 (lode-k4as) — KEPT: `scripts/gate-lib.sh`'s header narrative (history + rejected
   alternatives) stays in the header, not moved to `docs/agents-workflow.md`.** Filed while
-  technically reviewing `lode-nwqb` (the entry immediately above), which had just added 18 more
-  comment lines to an already-long header: the file is 206 lines, of which the first non-comment
-  line is 155 — roughly 154 lines of header comment for 52 lines of code — and the `GATE_ADVISORY`
-  section alone (from line 79) is ~75 lines governing a 5-line `if`/`else`. Each increment was
-  individually justified; the concern is the aggregate — a reader tracing what the positional
-  arguments do wades through two mechanisms that no longer exist (the retired ordering convention,
-  the rejected `lode-nwqb` prefix-binding alternative) before reaching the one that does.
-  - **This explicitly reckons with `lode-ysr6`'s declaration, immediately above, that the
-    `GATE_ADVISORY` section is the *operative* record of the contract, corrected in place.** That
-    placement was deliberate, made precisely so the contract could not drift from the code it
-    governs — a proposal to relocate the *narrative* portion (history + rejected alternatives) while
-    leaving only the current contract in the header has to answer why that would not reopen the same
-    drift risk `lode-ysr6` closed, not silently reverse the declaration by moving text out from under
-    it.
+  technically reviewing `lode-nwqb` (its entry is above; search `lode-nwqb`), which had just added
+  18 more comment lines to an already-long header. Measured at this entry's date (no line numbers
+  cited — they rot, `lode-pxyt`): roughly 170 lines of header comment sit above the first executable
+  line, for roughly 50 lines of code. Each increment was individually justified; the concern is the
+  aggregate — a reader tracing what the positional arguments do wades through two mechanisms that no
+  longer exist (the retired ordering convention, the rejected `lode-nwqb` prefix-binding
+  alternative) before reaching the one that does.
+  - **What this has to answer for**: `lode-ysr6`'s entry (above, just before `lode-nwqb`'s) declared
+    the `GATE_ADVISORY` section the *operative* record of the contract, corrected in place, precisely
+    so the contract could not drift from the code it governs. Moving the narrative out from under
+    that declaration would reverse it, so this decision reckons with it explicitly rather than
+    silently — see reason 1.
   - **Decided: no move.** Three reasons:
     1. **The split introduces exactly the divergence risk the operative-record declaration exists to
        prevent, with no mechanism proposed to replace it.** `lode-ysr6`'s discipline is "the header IS
@@ -3401,10 +3399,10 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
        level up.
     2. **The rejected-alternative paragraphs are not incidental history — they are what stops the
        mechanism being re-litigated at the point someone would reach for the shortcut.** The
-       `lode-nwqb` paragraph's own closing line says so directly: "so the alternative is not
-       rediscovered a third time." That purpose is served by sitting next to the code a future editor
-       is about to change, not by living a `grep` away in a different file a reader has to know to
-       check before "simplifying" `gate-lib.sh`.
+       `lode-nwqb` entry says so directly — it was recorded both here and in the header "so this is
+       not rediscovered a third time." That purpose is served by sitting next to the code a future
+       editor is about to change, not by living a `grep` away in a different file a reader has to
+       know to check before "simplifying" `gate-lib.sh`.
     3. **Length is not itself a defect.** The ticket that raised this said so explicitly, and nothing
        in this decision found a concrete cost the length imposes beyond "it reads as long" — no test
        failure, no maintenance incident, no reader confusion beyond the hypothetical traced above.
