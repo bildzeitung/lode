@@ -16,7 +16,10 @@ slot takes whatever does (a bare date, or `maintainer decision`). The rule binds
 re-decided Y") is prose, not a marker, and is left alone. Contrast this with an
 *operational* doc like [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md), which
 describes current behavior and so *is* corrected in place — there is no history to preserve there,
-while erasing it here would lose the record of what was believed, and when.
+while erasing it here would lose the record of what was believed, and when. This convention is
+gated by [`tests/test_decisions_supersession_markers.py`](../tests/test_decisions_supersession_markers.py),
+whose module docstring records a known limitation of what that gate can and cannot catch
+(lode-nlk6).
 
 - **External refresh: on-access revalidation vs. scheduled background refresh.** Leaning
   **on-access with a short TTL cache** for a single instance with finite API quota — but it's
