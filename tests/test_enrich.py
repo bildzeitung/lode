@@ -21,7 +21,15 @@ import sqlite3
 from pathlib import Path
 from unittest import mock
 
+import httpx
 import pytest
+from conftest import (
+    _jsonl,
+    _payload_without,
+    _real_anthropic_client,
+    _results_handler,
+    _succeeded_payload,
+)
 from pydantic import ValidationError
 
 from lode.config import Settings
@@ -1711,30 +1719,20 @@ def test_collect_enrich_batch_marks_failed_on_errored_result(
 
 
 def _line_without_custom_id() -> bytes:
-    """A fully well-formed ``succeeded`` results line minus only ``custom_id``."""
-    payload = {
-        "result": {
-            "type": "succeeded",
-            "message": {
-                "id": "msg_1",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-haiku-4-5",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": "tu_1",
-                        "name": "emit",
-                        "input": {"tags": [], "entities": [], "inferred_edges": []},
-                    }
-                ],
-                "stop_reason": "tool_use",
-                "stop_sequence": None,
-                "usage": {"input_tokens": 1, "output_tokens": 1},
-            },
-        },
+    """A fully well-formed ``succeeded`` results line minus only ``custom_id``.
+
+    Built from the shared :func:`_succeeded_payload` envelope (lode-a9x3)
+    rather than hand-rebuilt, with only the ``input`` payload swapped for an
+    enrichment-shaped one (empty tags/entities/inferred_edges) in place of the
+    generic ``_Widget``-shaped default.
+    """
+    payload = _payload_without(_succeeded_payload(), "custom_id")
+    payload["result"]["message"]["content"][0]["input"] = {
+        "tags": [],
+        "entities": [],
+        "inferred_edges": [],
     }
-    return (json.dumps(payload) + "\n").encode()
+    return _jsonl(payload)
 
 
 @pytest.mark.network
@@ -1774,8 +1772,6 @@ def test_collect_enrich_batch_survives_a_results_line_with_no_usable_custom_id(
     for both: a ``None`` custom_id makes that bare ``version_id[:12]`` slice
     raise a raw ``TypeError`` right here.
     """
-    import anthropic
-
     _insert_note(conn)
     job_id = _insert_enrich_job(conn, "ver-1", status="running")
     with conn:
@@ -1783,38 +1779,8 @@ def test_collect_enrich_batch_survives_a_results_line_with_no_usable_custom_id(
             "UPDATE jobs SET batch_handle = 'batch-nonobj' WHERE id = ?", (job_id,)
         )
 
-    def handler(request: object) -> httpx.Response:
-        import httpx
-
-        if request.url.path.endswith("/results"):  # type: ignore[attr-defined]
-            return httpx.Response(200, content=line)
-        return httpx.Response(
-            200,
-            json={
-                "id": "batch-nonobj",
-                "type": "message_batch",
-                "processing_status": "ended",
-                "results_url": (
-                    "https://api.anthropic.com/v1/messages/batches/batch-nonobj/results"
-                ),
-                "created_at": "2026-01-01T00:00:00Z",
-                "expires_at": "2026-01-02T00:00:00Z",
-                "request_counts": {
-                    "canceled": 0,
-                    "errored": 0,
-                    "expired": 0,
-                    "processing": 0,
-                    "succeeded": 1,
-                },
-            },
-        )
-
-    import httpx
-
-    client = anthropic.Anthropic(
-        api_key="test-key",
-        max_retries=0,
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    client = _real_anthropic_client(
+        _results_handler("batch-nonobj", lambda: httpx.Response(200, content=line))
     )
 
     ended = collect_enrich_batch(
