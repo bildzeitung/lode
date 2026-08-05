@@ -3268,7 +3268,7 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
 - **The three hand-written liveness pins stay separate, hand-written mechanisms —
   decided, rejected extraction (2026-08-04, maintainer decision, lode-7zap).** By the time
   lode-7zap closed the gap, three tests each pinned "does every allowlist/known-set entry still
-  correspond to a real, live thing in a real corpus": `tests/test_assert_main_checkout.py`'s
+  correspond to a real, live thing in a real corpus": `tests/test_land_skill_guard_coverage.py`'s
   `_dead_allowlist_entries` (exact command TEXT, keyed on a bare string, against `land/SKILL.md`'s
   fenced-bash corpus), `tests/test_skill_bash_state.py`'s `_dead_allowlist_keys` (a `(file, var)`
   tuple, matched by an unfiltered violation scan over the shipped skill/agent corpus), and
@@ -3296,14 +3296,15 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   and (b) a non-vacuity sabotage proof for that pin, holding one key constant and varying only the
   fixture's *content* between the live and dead assertions (never two differently-named fixtures —
   that shape passes on a name mismatch and proves nothing, lode-e49j's own measured finding, repeated
-  independently for `test_assert_main_checkout.py`'s pin by lode-7zap since it had shipped without a
+  independently for the `land/SKILL.md` guard-coverage pin by lode-7zap since it had shipped without a
   sabotage counterpart at all). This entry — not a shared module — is what codifies that discipline
   for the next allowlist a future ticket adds. Full sabotage-proof rationale for the *existing* two
   precedents:
   `tests/test_skill_bash_state.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`
   (lode-e49j) and its `_KNOWN_ENV_VARS` sibling (lode-rscn); the third,
-  `tests/test_assert_main_checkout.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`,
-  is lode-7zap's own addition.
+  `tests/test_land_skill_guard_coverage.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`,
+  is lode-7zap's own addition (it lived in `tests/test_assert_main_checkout.py` until lode-2thl
+  split that module's text-gate half out).
 
 - **The beads passive-export relpath list (`.beads/issues.jsonl`,
   `.beads/interactions.jsonl`) is canonicalized into a plain text file, not
@@ -3374,6 +3375,46 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   pins the whole chain — the list is non-empty and well-formed, the `Stop` hook
   still names an existing executable script, both bash consumers still read the
   canonical file, and no consumer has re-inlined a literal copy.
+- **2026-08-05 (lode-k4as) — KEPT: `scripts/gate-lib.sh`'s header narrative (history + rejected
+  alternatives) stays in the header, not moved to `docs/agents-workflow.md`.** Filed while
+  technically reviewing `lode-nwqb` (its entry is above; search `lode-nwqb`), which had just added
+  18 more comment lines to an already-long header. Measured at this entry's date (no line numbers
+  cited — they rot, `lode-pxyt`): roughly 170 lines of header comment sit above the first executable
+  line, for roughly 50 lines of code. Each increment was individually justified; the concern is the
+  aggregate — a reader tracing what the positional arguments do wades through two mechanisms that no
+  longer exist (the retired ordering convention, the rejected `lode-nwqb` prefix-binding
+  alternative) before reaching the one that does.
+  - **What this has to answer for**: `lode-ysr6`'s entry (above, just before `lode-nwqb`'s) declared
+    the `GATE_ADVISORY` section the *operative* record of the contract, corrected in place, precisely
+    so the contract could not drift from the code it governs. Moving the narrative out from under
+    that declaration would reverse it, so this decision reckons with it explicitly rather than
+    silently — see reason 1.
+  - **Decided: no move.** Three reasons:
+    1. **The split introduces exactly the divergence risk the operative-record declaration exists to
+       prevent, with no mechanism proposed to replace it.** `lode-ysr6`'s discipline is "the header IS
+       the contract, correct it in place" — a scheme with nothing to keep in sync. Moving the
+       "WEIGHED AND REJECTED" and "THIS USED TO BE AN ORDERING CONVENTION" paragraphs to
+       `docs/agents-workflow.md` creates two documents that must be edited together every time the
+       mechanism changes again, and nothing mechanical (no test, no lint) would catch the header and
+       the doc drifting apart — the exact failure class `lode-ysr6` was written to close, reopened one
+       level up.
+    2. **The rejected-alternative paragraphs are not incidental history — they are what stops the
+       mechanism being re-litigated at the point someone would reach for the shortcut.** The
+       `lode-nwqb` entry says so directly — it was recorded both here and in the header "so this is
+       not rediscovered a third time." That purpose is served by sitting next to the code a future
+       editor is about to change, not by living a `grep` away in a different file a reader has to
+       know to check before "simplifying" `gate-lib.sh`.
+    3. **Length is not itself a defect.** The ticket that raised this said so explicitly, and nothing
+       in this decision found a concrete cost the length imposes beyond "it reads as long" — no test
+       failure, no maintenance incident, no reader confusion beyond the hypothetical traced above.
+       "Long but correct and load-bearing" does not clear the bar for moving an operative record.
+  - **Not a permanent bar on ever splitting this file.** If a future increment pushes the header
+    materially past this size, or a concrete reading-cost incident turns up (not merely "it's long"),
+    that is grounds to revisit — but the revisit has to name the specific cost and the specific
+    anti-drift mechanism the split would use, the same bar this entry just failed to find a reason to
+    clear. Until then this is not re-raised as a defect each time a new paragraph lands in the header.
+  - No code or test changes: `scripts/gate-lib.sh` and `tests/test_gate_lib.py` are unchanged by this
+    ticket.
 
 - **A repo-wide shared job-row factory for tests, or file-local helpers?** Many `tests/` modules
   still write raw `INSERT INTO jobs` inline; a single row factory in `tests/conftest.py` is the
