@@ -136,11 +136,10 @@ jobs:
           # No `cache: pip` here. The dependency install below runs through
           # `uv` (via scripts/python-init.sh), which uses its own cache
           # directory (~/.cache/uv), never pip's -- but the `pip install -U
-          # uv` bootstrap that precedes it IS a real pip download (a ~22MB
-          # wheel from PyPI, confirmed lode-81w0). Deliberately left
-          # uncached: restoring a ~22MB GitHub Actions cache entry isn't
-          # obviously cheaper than just downloading it, and that trade-off
-          # is unmeasured.
+          # uv` bootstrap that precedes it IS a real pip download, so
+          # leaving the cache off is an unmeasured cost trade-off, not a
+          # no-op. Rationale:
+          # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h
 
       - name: Install dependencies (from requirements.lock)
         # Installs the same bytes a developer runs: the exact, hash-verified
