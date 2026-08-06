@@ -1786,14 +1786,50 @@ be a false ALLOW — the asymmetry this whole guard family is built on. Whether 
 right number now that the premise behind it is corrected is filed as its own follow-up rather than
 re-decided in review.
 
+**DECIDED (2026-08-05, bildzeitung — lode-qzg4): keep 16 KiB, accept the false DENY.** The follow-up
+the paragraph above filed is resolved. `SHELL_QUOTE_SPLIT_MAX_LEN` stays at `16384` — the cap sits
+**below** observed bd `notes` traffic (the table above) and that false DENY is knowingly accepted.
+Raising it is the trap: 16 KiB already costs ~500 ms (re-measured: 475 ms) in the per-character scan
+loop, so clearing the ~36 KB observation would put ~1.1 s on the hot path of *both*
+`PreToolUse(Bash)` guards, on **every** Bash call — buying correctness on a rare,
+cheaply-recoverable path by taxing the universal one. Option (b) above (the operator-first scan,
+which would dissolve the trade-off entirely) is **not** taken up either — YAGNI, on top of the
+fail-open risk already argued in its bullet above: speculative work for a problem whose recovery is
+cheap (below). Nothing about the mechanism changed: over-cap still DENIES, never truncates, never
+allows; both guards' over-cap DENY fixtures and the four-name library contract check are untouched.
+
+**Recovery path for a denied command — verified, not asserted.** `deny_if_over_scan_cap` measures
+the literal Bash **command string** the guard is invoked with (`$1`), never file contents that
+command merely references. So the recovery is to move the large text out of the command string, and
+*how* is per-field:
+
+- **`description` / `design`** — `bd update … --body-file <path>` / `--design-file <path>`, the file
+  written first with the `Write` tool. This is what `/sweep`'s digest rewrite already does
+  (`.claude/skills/sweep/SKILL.md`).
+- **`notes`** — there is **no `--notes-file` flag** in this repo's `bd` (`bd update --help` offers
+  only inline `--notes` / `--append-notes`), contrary to what the ticket raising this question
+  assumed. Use command substitution instead — `bd update <id> --notes "$(cat <path>)"` — which keeps
+  the command string short by the same mechanism. Splitting into several smaller `--append-notes`
+  calls, which the guard's own deny message names, also works and needs no temp file.
+
+Verified by direct invocation of `scripts/sha-fabrication-guard.sh`, on a 40 KB file *whose first
+line is a 40-hex token that is not a real object*: it passed cleanly both via `--body-file` and via
+`--notes "$(cat …)"` — which proves the file's contents genuinely are never scanned, not merely that
+a short command is short — while the same 40 KB inlined into the command string DENIED on the cap,
+and likewise `scripts/gh-write-guard.sh` on an oversized inline `gh` command. Content going
+unscanned that way is the standing residual of any guard that reads only the command string
+("Residual gaps that remain", above), not a new hole opened by the cap; and it launders nothing that
+was independently disallowed — a *short* `gh issue comment … --body-file <path>` still DENIES,
+because `gh-write-guard.sh`'s default-deny allowlist fires whether or not the cap is reached.
+
 **What the cap does and does not buy.** It does *not* make an already-under-cap command faster —
 a genuine 8–16 KB command still pays the full linear scan (a few hundred ms), same as before. What
 it closes is the *unbounded* tail: a 200 KB command (a file catted into a commit message, a giant
 heredoc) would have cost ~6 s on this hot path with no cap at all; past the cap that same command
 now denies in a few milliseconds instead, before `_split_unquoted` is ever called. A denied
-command past the cap is a **cheap, recoverable** cost (split it into smaller pieces, or surface it
-to a human to widen the cap) — the asymmetry this whole guard family is built on (a false DENY
-costs seconds; a false ALLOW here is unrecoverable).
+command past the cap is a **cheap, recoverable** cost (per-field recovery paths above, under
+"Recovery path for a denied command") — the asymmetry this whole guard family is built on (a false
+DENY costs seconds; a false ALLOW here is unrecoverable).
 
 **Verification, per this ticket's acceptance criteria:** every DENIED fixture in both guards'
 suites still denies, and `pytest -k "DENIED or denied"` across both files shows zero deny-side
