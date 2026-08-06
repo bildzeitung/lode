@@ -391,12 +391,16 @@ def test_not_main_checkout_exits_2_before_attempting_any_merge(tmp_path: Path) -
     assert unmerged.stdout == ""
 
 
-@pytest.mark.parametrize("argv", [[], ["lode-a"], ["lode-a", "msgdir", "extra"]])
+@pytest.mark.parametrize("argv", [[], ["lode-a"], ["lode-a", "msgdir", "tok", "extra"]])
 def test_wrong_arg_count_is_exit_2_never_1(tmp_path: Path, argv: list[str]) -> None:
     """A caller bug must never land in the CONFLICT code. Exit 1 is reserved
     for a real textual conflict, so a bad arg count exits 2 -- the same reason
     `scripts/merge-precheck.sh` checks `$#` before anything else rather than
     relying on `${1:?}` (whose exit 1 would collide).
+
+    3 args (`<id> <land-msg-dir> <own-token>`) is now a VALID count
+    (lode-q9pm: `[own-token]` is optional) -- the "too many" case here moved
+    to 4 args to keep testing the boundary this parametrize is named for.
 
     Run with an explicit throwaway main-checkout `cwd` (lode-1nty): this
     script now asserts main-checkout identity BEFORE the arg-count check, so

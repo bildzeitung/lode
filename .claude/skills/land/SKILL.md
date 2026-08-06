@@ -108,7 +108,32 @@ Before doing anything else, take the local lock. If another `/land` is still run
 not run in parallel:
 
 ```bash
-scripts/land-lock.sh acquire || { echo "land: could not acquire the lock this tick -- skipping."; exit 0; }
+STATE_DIR="$(git rev-parse --git-dir)/land-state"    # re-derive -- fresh Bash invocation (lode-sfnb)
+mkdir -p "$STATE_DIR"
+ACQUIRE_OUT="$(scripts/land-lock.sh acquire)" \
+  || { echo "land: could not acquire the lock this tick -- skipping."; exit 0; }
+echo "$ACQUIRE_OUT"
+# Persist THIS pass's own acquire token to disk (lode-q9pm) -- nothing in
+# this file's own shell state survives to Section 2a's/Section 4's later,
+# separate Bash invocations (the governing rule above), so every later
+# heartbeat/release call site re-reads this file rather than a variable.
+# Loud-fail if the pattern doesn't match rather than silently persisting an
+# empty token -- see scripts/land-lock.sh's own "acquired (token ...)"/
+# "acquired via reclaim (token ...)" stdout contract.
+printf '%s\n' "$ACQUIRE_OUT" \
+  | grep -oE 'token [0-9a-f]+' | cut -d' ' -f2 > "$STATE_DIR/land-lock-token"
+[ -s "$STATE_DIR/land-lock-token" ] || {
+  echo "land: could not parse this pass's own token out of: $ACQUIRE_OUT" >&2
+  # RELEASE BEFORE BAILING. We hold the lock as of two lines ago, and this is the
+  # only exit path in the whole skill that aborts while holding it -- without this,
+  # a bail here wedges landing for the FULL staleness window (~6 skipped /loop 5m
+  # ticks) for what is a parse bug, not a running pass. No token argument on
+  # purpose: we could not parse ours, and nothing else can have taken the lock in
+  # the microseconds since `acquire` succeeded, so the blind (pre-lode-q9pm) form
+  # is exactly right here.
+  scripts/land-lock.sh release   # land-lock-blind-ok: no token to supply, see above
+  exit 1
+}
 ```
 
 **Convention:** run the `/land` loop on **one machine only** — the local lock does not cross
@@ -251,7 +276,9 @@ If the queue is empty, there is nothing to land: release the lock and stop —
 
 ```bash
 # Normal completion -- release now rather than waiting out the staleness window for no reason.
-scripts/land-lock.sh release
+STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation
+MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"
+scripts/land-lock.sh release "$MY_TOKEN"
 exit 0
 ```
 
@@ -404,7 +431,9 @@ across the whole queue. `scripts/land-lock.sh`'s own header has the full reasoni
 logged but never stops the pass (this is lock bookkeeping, not the vet itself):
 
 ```bash
-scripts/land-lock.sh heartbeat || true
+STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation
+MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"
+scripts/land-lock.sh heartbeat "$MY_TOKEN" || true
 bd show <id> --json     # read metadata.land_head and metadata.land_summary
 git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on origin...
 # ...and origin/land/<id>'s tip SHA must equal metadata.land_head
@@ -811,6 +840,7 @@ for the decision and its reasoning.
 STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive here -- this is a fresh Bash
 MSG_DIR="$STATE_DIR/msg"                                # invocation; nothing from 3a's block persists
 CONFLICTS_DIR="$STATE_DIR/conflicts"                    # except the FILES 3a wrote under $STATE_DIR
+MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
 
 # Load 3a's accepted set from disk, and REFUSE to continue if it did not load: iterating zero times
 # would land nothing while exiting 0, indistinguishable from a clean pass (governing rule, top).
@@ -825,7 +855,7 @@ for id in $ACCEPTED; do
   # arm is the SCRIPT's real exit status. Do NOT rewrite this as `if ! CMD; then rc=$?`: there `$?`
   # is the *negation's* status, which inside that arm is always 0 -- so a machine-fault 2 would read
   # as a clean merge and the pass would carry on as though the branch had landed.
-  if CONFLICTS=$(scripts/land-merge-one.sh "$id" "$MSG_DIR"); then
+  if CONFLICTS=$(scripts/land-merge-one.sh "$id" "$MSG_DIR" "$MY_TOKEN"); then
     rc=0
   else
     rc=$?
@@ -932,6 +962,7 @@ it would mask the 2. Keep it there.
   STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- see above; 3a's files under
   MSG_DIR="$STATE_DIR/msg"                                 # $STATE_DIR are untouched by the reset
   CONFLICTS_DIR="$STATE_DIR/conflicts"
+  MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
   ACCEPTED=$(cat "$STATE_DIR/accepted") || exit 1
   [ -n "$ACCEPTED" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/accepted is missing or empty." \
     "Landing nothing." >&2; exit 1; }
@@ -980,7 +1011,7 @@ it would mask the 2. Keep it there.
     # Identical idiom and identical shape to the first-pass loop above -- see its comment for why
     # `if ! CMD; then rc=$?` is wrong here (that `$?` is the negation's, always 0 in that arm, so a
     # machine-fault 2 would read as a clean merge). Keep the two loops the same shape.
-    if CONFLICTS=$(scripts/land-merge-one.sh "$id" "$MSG_DIR"); then
+    if CONFLICTS=$(scripts/land-merge-one.sh "$id" "$MSG_DIR" "$MY_TOKEN"); then
       rc=0
     else
       rc=$?
@@ -1487,8 +1518,9 @@ while read -r BR; do
 done < <(git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*')
 echo "bare-ref backstop3 (worktree-agent-*): deleted $B3_DELETED stale local ref(s) (failed=$B3_FAILED)"
 
-scripts/land-lock.sh release   # the pass is fully done -- release now rather than waiting out
-                                     # the staleness window (lode-aps3; see Section 0)
+MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
+scripts/land-lock.sh release "$MY_TOKEN"   # the pass is fully done -- release now rather than
+                                     # waiting out the staleness window (lode-aps3; see Section 0)
 ```
 
 `bd close` unblocks dependents — that is *why* the lander closes (the producer never does): a closed
