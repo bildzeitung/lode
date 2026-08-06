@@ -7,20 +7,12 @@ originally recorded as guidance on lode-l38d.1 (and implicitly relied on by
 the colour children lode-l38d.4/.5/.6/.10) — "colour is off for free under
 test because CliRunner's captured output is never a TTY" — is FALSE.
 
-rich's ``Console()`` freezes ``color_system`` (and ``no_color``/
-``is_interactive``) at CONSTRUCTION time — ``color_system`` is computed once
-in ``Console.__init__`` FROM ``is_terminal`` at that moment and stored as a
-plain attribute; ``self.no_color = no_color if no_color is not None else
-self._environ.get("NO_COLOR", "") != ""`` is likewise evaluated exactly once
-and stored as a plain ``bool``. ``is_terminal`` itself is NOT frozen — it
-stays a live property that keeps re-reading ``os.environ`` on every access —
-but it no longer gates COLOUR once ``color_system`` is fixed, and
-``color_system`` alone decides whether any ANSI style is emitted. (It does
-still gate control codes; it is only the colour question it stops answering.
-Executed verification, with rich source-line refs: ``tests/conftest.py``'s
-scrub comment.) At module scope —
-``console = Console()`` in ``src/lode/cli.py`` — that construction happens at
-IMPORT time, not per-invocation. Two consequences:
+The precise mechanism — what rich freezes at ``Console()`` construction vs.
+what stays live, with source-line refs and executed verification — is
+canonical in ``tests/conftest.py``'s scrub comment; see that for the "why".
+The consequence for THIS module: at module scope — ``console = Console()``
+in ``src/lode/cli.py`` — that construction happens at IMPORT time, not
+per-invocation, so:
 
 * Colour is off under ``typer.testing.CliRunner`` today only because
   *pytest's own default output capture* had already replaced ``sys.stdout``
@@ -54,7 +46,8 @@ negative path should copy this pattern rather than reinvent — or silently
 no-op — one of its own, and should re-run the two subject-sabotage checks
 above rather than trust that a green test exercised anything.
 See also ``src/lode/cli.py``'s ``console`` docstring and docs/stack.md's
-``rich`` row, which record the same mechanism.
+``rich`` row, which record their own local consequences of the same
+canonical mechanism.
 """
 
 from __future__ import annotations
