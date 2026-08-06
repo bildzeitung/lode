@@ -205,14 +205,20 @@ from lode.enrich import EnrichmentResult
 #: pytest silently reddens every test asserting plain, uncoloured CLI output, on an
 #: otherwise-unmodified tree -- OBSERVED landing a real /land pass (lode-kq4v).
 #:
-#: MECHANISM -- verified by execution against the installed rich (15.0.0), and stated precisely
+#: MECHANISM -- CANONICAL (lode-qv91): ``docs/stack.md``'s ``rich`` row, ``src/lode/cli.py``'s
+#: ``console`` docstring and ``tests/test_cli_console.py``'s module docstring all point HERE
+#: rather than restating this, so keep it here and keep it precise.
+#: Verified by execution against the installed rich (15.0.0), and stated precisely
 #: because the loose version ("``Console()`` freezes its TTY check at construction") invites
 #: exactly the wrong simplification. ``is_terminal`` is NOT frozen: it is a live property
 #: (``rich/console.py``:931) that re-reads ``os.environ`` on every access. What IS frozen is
 #: ``_color_system`` -- computed once in ``Console.__init__`` (:708-712) FROM ``is_terminal``,
 #: surfaced by the ``color_system`` property (:909) -- and ``color_system`` is what gates whether
-#: any ANSI is emitted at all. ``no_color`` and ``is_interactive`` are frozen too, as plain
-#: instance attributes.
+#: any ANSI *style* is emitted. ``no_color`` and ``is_interactive`` are frozen too, as plain
+#: instance attributes. ``is_terminal`` staying live is not inert, so do not shorten this to
+#: "``is_terminal`` no longer matters": ``_render_buffer`` re-reads it on every write (:2138) to
+#: decide whether CONTROL segments are emitted, and ``show_cursor``/``set_window_title`` (:1196,
+#: :1258) gate on it too.
 #:
 #: THAT is why this must be top-level module code and NOT an autouse fixture. A fixture runs at
 #: test SETUP, after collection has already imported every test module. Scrubbing there does

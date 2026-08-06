@@ -203,8 +203,17 @@ byte-identical across the three, deliberately; and every job in the repo carries
   would restore a cache `build.yml` populated on `trunk` rather than build a fresh one — taking the
   publishing leg's dependencies from a non-publishing workflow's cache is exactly what the clean-room
   framing exists to avoid. Distinct again from `tests.yml`/`coverage.yml`, which skip `cache: pip`
-  only because their `uv`-based install would leave it empty. As with the timeout ladder, this is not
-  a runtime call: release runs measure 14-30s of job time regardless (lode-le9e).
+  for a third reason — and **not** because the cache would sit empty (lode-81w0). Their dependency
+  install runs through `uv` (its own `~/.cache/uv`), but the `pip install -U uv` bootstrap ahead of
+  it *is* a real pip download — a 22 MB wheel from PyPI (measured: uv 0.12.0, linux x86_64) — so a
+  pip cache there would have something to hold. **Caching is deliberately left off anyway**: a
+  restored GitHub Actions cache entry that size is not obviously cheaper than fetching the wheel
+  fresh each run, and nothing has measured otherwise. Reopen it only on a cold-vs-cached CI
+  comparison; the question and the wheel measurement are recorded at lode-3vrq. Enabling it would
+  also need an explicit `cache-dependency-path`, since neither leg has a `requirements.txt` for
+  `setup-python`'s default glob to match (`build.yml` points its cache at `pyproject.toml` for the
+  same reason). As with the timeout ladder, this is not a runtime call: release runs measure 14-30s
+  of job time regardless (lode-le9e).
 
 ## Packaging assertion is a single implementation, shared by both workflows (lode-zuqp)
 
