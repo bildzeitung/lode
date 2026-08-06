@@ -174,17 +174,15 @@ surface. I list them for visibility only:
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
 
-DEFERRED=$(bd list --status deferred --limit 0 --json \
-  | jq -r '(. // []) | .[] | [.id, .title] | @tsv')
-RC=$?
-if [ "$RC" -eq 0 ]; then
-  printf '%s' "$DEFERRED" > "$SWEEP_TMP/deferred"
-else
-  # Query errored (bd or jq) -- write the sentinel instead of $DEFERRED (which may hold a
-  # partial/garbled capture from the failed pipeline). §8 distinguishes this from both a
-  # missing file and a legitimately empty one -- see the sentinel note below.
-  printf '%s' "SWEEP-QUERY-ERROR" > "$SWEEP_TMP/deferred"
+set -o pipefail   # REQUIRED, not hygiene -- see the sentinel note below.
+
+# On a query error (bd or jq), overwrite the capture -- which may be partial or garbled -- with
+# the sentinel. §8 tells that apart from both a missing file and a legitimately empty one.
+if ! DEFERRED=$(bd list --status deferred --limit 0 --json \
+  | jq -r '(. // []) | .[] | [.id, .title] | @tsv'); then
+  DEFERRED="SWEEP-QUERY-ERROR"
 fi
+printf '%s' "$DEFERRED" > "$SWEEP_TMP/deferred"
 ```
 
 Persisted to `$SWEEP_TMP/deferred` the same way §1 persists `$ESCALATED`/`$HUMAN` — §8 (a later,
@@ -193,14 +191,24 @@ memory of this block's output, which is not the mechanism §0 says this file use
 
 **The sentinel, and why it can't collide with a real row.** `$SWEEP_TMP/deferred` now has three
 readable states: *missing* (this whole block never ran this pass — e.g. it crashed before reaching
-the `printf`), *the literal string `SWEEP-QUERY-ERROR`* (the query itself — `bd` or `jq` — errored;
-captured via `RC=$?` right after the pipeline, before the `printf` runs at all, so a failure is
-recorded *before* it's silently overwritten by an unconditional write), and *anything else*
-(the query succeeded — zero or more real `@tsv` rows, each of which always contains a
-tab). The sentinel is a single line with **no tab**, which is structurally impossible for a real
-row to produce (every row is `<id>\t<title>` via `@tsv`) — so this isn't a string-luck collision
-avoidance, it's a format invariant. §8 checks for the sentinel by exact match before treating the
-file's content as data.
+the `printf`), *the literal string `SWEEP-QUERY-ERROR`* (the query itself — `bd` or `jq` — errored,
+detected on the assignment itself, so the failure replaces the capture before it can be written out
+as data), and *anything else* (the query succeeded — zero or more real `@tsv` rows, each of which
+always contains a tab). The sentinel is a single line with **no tab**, which is structurally
+impossible for a real row to produce (every row is `<id>\t<title>` via `@tsv`) — so this isn't a
+string-luck collision avoidance, it's a format invariant. §8 checks for the sentinel by exact match
+before treating the file's content as data.
+
+**`set -o pipefail` is what makes the failure detectable at all** — it is the load-bearing line, not
+hygiene. Without it, `DEFERRED=$(bd … | jq …)` carries the exit status of the *last* command in the
+pipeline, `jq` alone, and a failing `bd` never reaches it: measured on bd 1.1.0, a failed
+`bd list --limit 0 --json` writes its diagnostic to **stderr** and **zero bytes to stdout**, so `jq`
+reads no input, emits nothing, and exits `0`. The assignment reports success and the sentinel branch
+never fires — the phantom-empty read this section exists to prevent, reintroduced one layer down.
+It is set inside the block, so it is scoped to this Bash invocation (§0: each block is a fresh
+shell). **§1's `(. // [])` note above expects the opposite** — a `bd` error reaching `jq` as
+malformed JSON and aborting it — and that expectation is wrong for bd 1.1.0; §1/§2 still lack this
+guard, at the higher-consequence site (they gate the §6 digest rewrite). Tracked as `lode-5qbi`.
 
 Same `(. // [])` null-empty guard as §1/§2 — and the same `@tsv` as §2, which escapes a tab or
 newline embedded in a title instead of letting it break the row.
@@ -230,10 +238,9 @@ is listed here (unconditionally, unannotated) *and*, on the pass it first appear
 [docs/decisions.md](../../../docs/decisions.md)). This section's own listing is unaffected either
 way — it stays exactly what it always was, every current `deferred` ticket, in full.
 
-If this query itself errors, the failure is isolated to this step alone: it writes the
-`SWEEP-QUERY-ERROR` sentinel above instead of aborting, §8 reads that back and reports it plainly
-as a failed query — distinct from both a missing file and a legitimately empty list — and the pass
-continues. See [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
+If this query itself errors, the failure is isolated to this step alone: the block writes the
+sentinel instead of aborting, and the pass continues. §8 owns what that renders as — see its
+three-state rule, and [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
 
 ## 2b. Collect stranded in_progress tickets (report-only — never touches the digest or notify path)
 
@@ -249,17 +256,15 @@ only:
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
 
-STRANDED=$(bd list --status in_progress --limit 0 --json \
+set -o pipefail   # REQUIRED, same reason as §2a.
+
+# Same sentinel convention as §2a -- see that section's note for the rationale.
+if ! STRANDED=$(bd list --status in_progress --limit 0 --json \
   --exclude-label ready-for-code-review,ready-for-land,needs-rebase,sweep-digest,land-escalated \
-  | jq -r '(. // []) | .[] | [.id, .title] | @tsv')
-RC=$?
-if [ "$RC" -eq 0 ]; then
-  printf '%s' "$STRANDED" > "$SWEEP_TMP/stranded"
-else
-  # Same sentinel convention as §2a -- see that section's note for the format-invariant
-  # rationale (a real @tsv row always has a tab; the sentinel never does).
-  printf '%s' "SWEEP-QUERY-ERROR" > "$SWEEP_TMP/stranded"
+  | jq -r '(. // []) | .[] | [.id, .title] | @tsv'); then
+  STRANDED="SWEEP-QUERY-ERROR"
 fi
+printf '%s' "$STRANDED" > "$SWEEP_TMP/stranded"
 ```
 
 Persisted to `$SWEEP_TMP/stranded` the same way §2a persists `$DEFERRED` — §8 (a later, separate
@@ -303,10 +308,8 @@ reader would expect to see beside it, `human`, which deliberately is not. Each f
 - `$STRANDED` is never written into the digest body (§6) and carries **no dedup state** of its
   own — it is recomputed fresh, in full, every pass, straight into the §8 report.
 
-If this query itself errors, the failure is isolated to this step alone: it writes the
-`SWEEP-QUERY-ERROR` sentinel above instead of aborting, §8 reads that back and reports it plainly
-as a failed query — distinct from both the missing-file case (which still reads "stranded list
-unavailable this pass") and a legitimately empty list. See
+If this query itself errors, the failure is isolated to this step alone, exactly as in §2a: the
+block writes the sentinel instead of aborting, and §8 owns what that renders as. See
 [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
 
 ## 3. Build the current queue (dedup on stable IDs)
@@ -546,31 +549,22 @@ SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocat
 
 # Deliberately NOT §3's `|| { ... exit 1; }` guard: §8 must finish either way (the digest push
 # below is unrelated to the deferred/stranded lists), so a missing file degrades that section alone.
-# Three readable states per list -- missing file, the SWEEP-QUERY-ERROR sentinel (§2a/§2b), or
-# real content (which may legitimately be empty) -- kept as two independent flags so a caller can
-# test either without re-deriving the third state by exclusion.
+# One 3-valued state per list, not a pair of booleans: `missing` (§2a/§2b's block never ran this
+# pass), `error` (it ran, but its query failed -- the SWEEP-QUERY-ERROR sentinel), or `ok` (real
+# content, possibly legitimately empty). One variable makes the three mutually exclusive by
+# construction, so no combination has to be ruled out in prose.
 if DEFERRED="$(cat "$SWEEP_TMP/deferred" 2>/dev/null)"; then
-  DEFERRED_UNAVAILABLE=""                        # file exists
-  if [ "$DEFERRED" = "SWEEP-QUERY-ERROR" ]; then
-    DEFERRED_ERROR="1"                           # §2a's query errored -- see the sentinel note there
-  else
-    DEFERRED_ERROR=""                            # real content, possibly legitimately empty
-  fi
+  DEFERRED_STATE=ok
+  [ "$DEFERRED" = "SWEEP-QUERY-ERROR" ] && DEFERRED_STATE=error
 else
-  DEFERRED_UNAVAILABLE="1"   # $SWEEP_TMP/deferred missing -- §2a's block never ran this pass
-  DEFERRED_ERROR=""
+  DEFERRED_STATE=missing
 fi
 
 if STRANDED="$(cat "$SWEEP_TMP/stranded" 2>/dev/null)"; then
-  STRANDED_UNAVAILABLE=""
-  if [ "$STRANDED" = "SWEEP-QUERY-ERROR" ]; then
-    STRANDED_ERROR="1"                           # §2b's query errored -- see the sentinel note there
-  else
-    STRANDED_ERROR=""
-  fi
+  STRANDED_STATE=ok
+  [ "$STRANDED" = "SWEEP-QUERY-ERROR" ] && STRANDED_STATE=error
 else
-  STRANDED_UNAVAILABLE="1"   # $SWEEP_TMP/stranded missing -- §2b's block never ran this pass
-  STRANDED_ERROR=""
+  STRANDED_STATE=missing
 fi
 
 scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
@@ -579,17 +573,14 @@ scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over ref
 The rule is one rule, over both report-only lists — for each `<list>` in {`deferred`, `stranded`}
 there are three mutually exclusive states, and §8 must not confuse them:
 
-- **Missing file** (`$<LIST>_UNAVAILABLE` set) — that section's §2a/§2b block never ran this pass
-  at all (e.g. it crashed before reaching its `printf`). Say "`<list>` list unavailable this pass"
-  in place of that section below, and write `unavailable` (never `0`) in that list's field of the
-  one-line summary.
-- **`SWEEP-QUERY-ERROR` sentinel** (`$<LIST>_ERROR` set) — that section's block *did* run, but the
-  `bd`/`jq` query itself errored (captured via `RC=$?` right in §2a/§2b, before the file is
-  written). Say "`<list>` query failed this pass" in place of that section below, and write `error`
-  (never `0`, and never `unavailable` — a different failure mode with a different remedy) in that
-  list's field of the one-line summary.
-- **Real content, otherwise** — the query succeeded; report it normally, including the case where
-  it's legitimately empty (`(none)`, `0` in the summary).
+- **`missing`** — that section's §2a/§2b block never ran this pass at all (e.g. it crashed before
+  reaching its `printf`). Section body: "`<list>` list unavailable this pass"; summary field:
+  `unavailable`, never `0`.
+- **`error`** — that section's block *did* run, but its `bd`/`jq` query failed and wrote the
+  sentinel. Section body: "`<list>` query failed this pass"; summary field: `error` — never `0`,
+  and never `unavailable`, which is a different failure with a different remedy.
+- **`ok`** — the query succeeded; report it normally, including the legitimately-empty case
+  (section body `(none)`, summary field `<len $<LIST>>`, which may be `0`).
 
 None of the three states aborts this block (the digest push above still has to run), and none
 suppresses or is suppressed by the §1/§2 escalation/human/epic reporting or by the other
@@ -613,12 +604,9 @@ sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-
 (none) | unavailable this pass | query failed this pass
 ```
 
-Where `<deferred field>`/`<stranded field>` is `<len $DEFERRED>` (a plain count, including `0` for
-a legitimately empty list) in the normal case, `unavailable` when that list's file is missing, or
-`error` when that list's file holds the `SWEEP-QUERY-ERROR` sentinel. Each section lists every
-current row (id + title) each pass, in full, with no dedup, when the query succeeded — the literal
-`(none)` when its list is empty, `unavailable this pass` when the file is missing, or `query failed
-this pass` when the sentinel is present.
+`<deferred field>`/`<stranded field>` and the alternatives on the last line of each section are the
+three states above, per that list's `$<LIST>_STATE`. On `ok`, each section lists every current row
+(id + title) each pass, in full, with no dedup.
 
 When `$SWEEP_TMP/new_annotated` (§7) is non-empty, follow the two sections above with:
 
@@ -660,12 +648,10 @@ real items from the durable record a human relies on.
   guessed at).
 - **A report-only section's failure is isolated to that section alone** — this covers both §2a
   (deferred) and §2b (stranded), identically: if either query errors, its block writes the
-  `SWEEP-QUERY-ERROR` sentinel instead of the (possibly-partial) query output, and §8 reads that
-  back and reports it plainly as "`<list>` query failed this pass" — distinct from the literal "…
-  list unavailable this pass" string, which §8 reserves for a *missing* scratch file (that section's
-  block never ran at all this pass, a different failure with a different cause). Neither state
-  must suppress the §6 rewrite or §7 notification for the (unrelated) escalation/human/epic queue;
-  the reverse holds too (a §1/§2 failure never suppresses §2a or §2b, neither of which has a
+  `SWEEP-QUERY-ERROR` sentinel instead of the (possibly-partial) query output, and §8's three-state
+  rule — the canonical statement of what each state renders as — reports it. Neither a failed query
+  nor a missing scratch file may suppress the §6 rewrite or §7 notification for the (unrelated)
+  escalation/human/epic queue; the reverse holds too (a §1/§2 failure never suppresses §2a or §2b, neither of which has a
   rewrite to protect), and so does the §2a-vs-§2b case — each is its own isolated read.
 - A failed pass still ends with a report and exit 0, so the next `/loop` tick gets a clean shot.
 
