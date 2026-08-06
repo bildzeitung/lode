@@ -190,6 +190,15 @@ import lode
 from lode import jobs
 from lode.config import model_cache_dir
 
+#: Imported eagerly, not under TYPE_CHECKING: this file has no ``from __future__ import
+#: annotations``, so _make_batch_result's parameter annotation is evaluated at def time.
+#: This DOES make ``lode.enrich`` resident from collection onward -- which is safe, and does
+#: not weaken lode-4q97: the tests asserting an embed-only drain never imports the SDK go
+#: through the ``forget_sdk_imports`` fixture, whose whole purpose is evicting this graph
+#: first (see its docstring). ``lode.enrich`` itself keeps ``import anthropic`` deferred, so
+#: the SDK is still not pulled at collection -- verified, not assumed.
+from lode.enrich import EnrichmentResult
+
 #: lode-kq4v: scrub ambient colour/tty-forcing env vars BEFORE any test module can import
 #: ``lode.cli`` and construct its shared ``console``/``err_console`` (see that module's
 #: ``console`` docstring, and lode-xgaa). An ambient ``FORCE_COLOR`` in the shell that launched
@@ -1183,6 +1192,43 @@ def fake_batch_client(
     client.beta.messages.batches.results.return_value = iter(results or [])
 
     return client
+
+
+# --- MagicMock Anthropic batch RESULT payload (lode-0i0k) ------------------
+#
+# The complement to fake_batch_client above: that builds the client, this
+# builds the individual result objects handed to its ``results=`` argument --
+# exactly the shape its docstring documents. Shared by tests/test_enrich.py
+# and tests/test_worker.py, which between them had five hand-written copies.
+#
+# ``enrichment`` is read only on the succeeded branch; the errored branch
+# needs no payload, and its three callers in test_enrich.py pass a throwaway
+# ``EnrichmentResult()``. Left required rather than defaulted to None so the
+# succeeded path -- the overwhelmingly common one -- cannot silently build a
+# result with no tool_use input.
+#
+# Placement matches fake_batch_client's for the same reason: a small
+# MagicMock builder with no SDK-shaped fixture data, so it meets none of
+# tests/_anthropic_rig.py's stated bar for moving out.
+
+
+def _make_batch_result(
+    version_id: str,
+    enrichment: EnrichmentResult,
+    result_type: str = "succeeded",
+) -> mock.MagicMock:
+    """Build a mock batch result object (succeeded or errored)."""
+    r = mock.MagicMock()
+    r.custom_id = version_id
+    r.result.type = result_type
+
+    if result_type == "succeeded":
+        tool_block = mock.MagicMock()
+        tool_block.type = "tool_use"
+        tool_block.input = enrichment.model_dump()
+        r.result.message.content = [tool_block]
+
+    return r
 
 
 # --- Read noxfile.py's session set without executing it (lode-dis6) --------

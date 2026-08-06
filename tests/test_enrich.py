@@ -30,7 +30,7 @@ from _anthropic_rig import (
     _results_handler,
     _succeeded_payload,
 )
-from conftest import fake_batch_client
+from conftest import _make_batch_result, fake_batch_client
 from pydantic import ValidationError
 
 from lode.config import Settings
@@ -1209,25 +1209,6 @@ def test_enrich_gap_pending_job_not_reenqueued_regardless_of_prompt_ver(
 # ---------------------------------------------------------------------------
 # Batch API helpers — submit_enrich_batch (lode-npx.2)
 # ---------------------------------------------------------------------------
-
-
-def _make_batch_result(
-    version_id: str,
-    enrichment: EnrichmentResult,
-    result_type: str = "succeeded",
-) -> mock.MagicMock:
-    """Build a mock batch result object (succeeded or errored)."""
-    r = mock.MagicMock()
-    r.custom_id = version_id
-    r.result.type = result_type
-
-    if result_type == "succeeded":
-        tool_block = mock.MagicMock()
-        tool_block.type = "tool_use"
-        tool_block.input = enrichment.model_dump()
-        r.result.message.content = [tool_block]
-
-    return r
 
 
 def test_submit_enrich_batch_returns_batch_id(
