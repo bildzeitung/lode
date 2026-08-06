@@ -14,7 +14,11 @@ plain attribute; ``self.no_color = no_color if no_color is not None else
 self._environ.get("NO_COLOR", "") != ""`` is likewise evaluated exactly once
 and stored as a plain ``bool``. ``is_terminal`` itself is NOT frozen — it
 stays a live property that keeps re-reading ``os.environ`` on every access —
-but it no longer matters once ``color_system`` is fixed. At module scope —
+but it no longer gates COLOUR once ``color_system`` is fixed, and
+``color_system`` alone decides whether any ANSI style is emitted. (It does
+still gate control codes; it is only the colour question it stops answering.
+Executed verification, with rich source-line refs: ``tests/conftest.py``'s
+scrub comment.) At module scope —
 ``console = Console()`` in ``src/lode/cli.py`` — that construction happens at
 IMPORT time, not per-invocation. Two consequences:
 
@@ -22,8 +26,8 @@ IMPORT time, not per-invocation. Two consequences:
   *pytest's own default output capture* had already replaced ``sys.stdout``
   before ``lode.cli`` was first imported (typically at collection) — NOT
   because of anything ``CliRunner`` itself does. Run the suite as
-  ``pytest -s`` from a real terminal and the import-time TTY check freezes
-  the other way.
+  ``pytest -s`` from a real terminal and the import-time detection freezes
+  ``color_system`` the other way.
 * ``monkeypatch.setenv("NO_COLOR", "1")`` AFTER ``lode.cli`` is already
   imported is a silent no-op: the env read already happened at import, so
   such an assertion passes WITHOUT exercising the ``NO_COLOR`` path at all.
