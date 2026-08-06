@@ -3703,3 +3703,130 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   and the narrower gate already covers the one that matters more. Note this leaning rests on that
   cost asymmetry alone, not on a claim that there is nothing to find: per the measurement above,
   there is.
+
+- **2026-08-06 (maintainer decision, `/sweep` walkthrough) — HUMAN DECISIONS: the `land-lock.sh`
+  ownership cluster (`lode-yuwt` / `lode-l7mj` / `lode-cp4o`) resolves as one decision, not three.**
+  These three tickets were surfaced together by a `/sweep` pass and stepped through with the
+  maintainer in that order deliberately: `lode-l7mj`'s own text says "Evaluate together" with
+  `lode-yuwt`, and `lode-yuwt`'s deeper option **dissolves** `lode-l7mj` rather than fixing it, so
+  deciding `lode-l7mj` first would have built something the other ticket then deletes.
+  - **`lode-yuwt` — DECIDED: the ownership check becomes an INVARIANT of `scripts/land-lock.sh`.**
+    `acquire` writes the token file; `heartbeat`/`release` read it themselves. This collapses all
+    per-call-site threading to zero — `land/SKILL.md`'s four read-back sites and
+    `scripts/land-merge-one.sh`'s optional 3rd positional — so a future call site cannot silently
+    lose the check by forgetting an argument. This is the option lode-q9pm's review considered and
+    **deferred, not rejected**; it is now taken.
+    - **The hazard that blocked it, and how it is closed:** `land-lock.sh`'s release contract
+      permits a caller that never held the lock to call `release` harmlessly. A naive self-reading
+      `release` would, after a FAILED acquire, read the *previous* pass's token, match the live
+      record, and delete a lock it never held — strictly worse than the argument form. **Decided
+      remedy: `release` refuses unless `acquire` succeeded in the SAME invocation** — a control-flow
+      gate, chosen over the alternative of per-pass token-file scoping because it makes the
+      guarantee structural rather than a naming/lifecycle discipline. Today's argument form is safe
+      from this hazard only by accident of `land/SKILL.md`'s skipped-tick path exiting 0 before
+      reaching any `release`; the invariant must not inherit that dependence.
+  - **`lode-l7mj` — DECIDED: shape (c). Folded into `lode-yuwt` and closed as subsumed.** The bug:
+    Section 0 persists the pass's own token to `$STATE_DIR/land-lock-token`, and Section 1's
+    `rm -rf "$STATE_DIR"` (lode-wjw4's per-pass scratch hygiene) deletes that exact directory before
+    any consumer reads it — so `MY_TOKEN` resolves empty at all four read-back sites, `land-lock.sh`
+    treats empty exactly as absent, and **the ownership check lode-q9pm exists to provide has never
+    actually run in production.** Verified live on the 2026-08-06 pass (`ls .git/land-state` after
+    Section 1: no such directory). Shapes (a) (move the token write after the wipe) and (b) (preserve
+    the one file across the wipe) were both rejected in favour of (c) because the `lode-yuwt`
+    invariant leaves no `$STATE_DIR`-resident token to wipe at all — the bug ceases to exist rather
+    than being patched. **An interim fix was explicitly considered and declined:** the exposure needs
+    a concurrent second lander to bite, and `/land` is documented to run on ONE machine, so the
+    interim would buy a throwaway edit plus a regression pin that `lode-yuwt` must then unwind.
+    - **`lode-yuwt` inherits `lode-l7mj`'s acceptance criteria 1-5**, two of which are load-bearing
+      and must not be softened: **verification BY EXECUTION, not by reading** (run Section 0 then
+      Section 1 as separate Bash invocations, then read the token back exactly as Section 2a does),
+      and a **MECHANICAL** regression pin — the three existing lode-q9pm pins are *textual* (they
+      prove the call sites spell `"$MY_TOKEN"`) and are blind to this bug by construction, so a
+      fourth pin of that shape does not count.
+  - **`lode-cp4o` — DECIDED: SPLIT. The heartbeat-gap half folds into `lode-yuwt`; the measurement
+    half stays `deferred`.** `LAND_LOCK_STALE_SECONDS` **stays at 1800s.**
+    - **Folded in now:** heartbeat call sites covering gap (a) (acquire -> the first Section 2a
+      heartbeat, spanning Section 1's networked `bd dolt pull` + `git fetch` and Section 1a's
+      queue-size-dependent merge-base graph) and gap (c) (last heartbeat -> release at the end of
+      Section 4 — the re-gate plus `git push trunk`, per-ticket `bd close`, per-ticket
+      `epic-completion-check.sh`, networked `bd-dolt-push.sh`, branch deletes and the worktree-GC
+      sweep). Gap (c) is the worst of the three: ordinary green path, scales with landed-ticket
+      count, and it is exactly when `trunk` is being written. Done now because `lode-yuwt` puts
+      `land-lock.sh` on the operating table anyway.
+    - **Left deferred:** instrumenting a real distribution of `land-review` dispatch durations (the
+      unmeasured 2a->2a interval) and re-deriving the default against a measured p99. The failure
+      asymmetry is what makes 1800s the safe place to sit while unmeasured: too LOW reclaims a live
+      lock and puts two landers on `trunk` (unbounded); too HIGH only delays landing a few `/loop 5m`
+      ticks (bounded, self-healing, explicitly not latency-critical).
+    - **`lode-yuwt` also settles the interaction `lode-cp4o` flags:** a heartbeat that does not check
+      it still OWNS the lock lets a losing pass keep re-stamping the winner's record, making a
+      two-lander state self-concealing. Under the invariant, `heartbeat` reads the token itself, so
+      that concealment path closes as a side effect.
+
+- **2026-08-06 (maintainer decision, `lode-3npn`) — HUMAN DECISION: the rich Console "consequences
+  under test" are canonicalized BY KIND — the design conclusion stays in `docs/stack.md` and
+  `src/lode/cli.py`; the underlying mechanism is stated in full exactly once, in
+  `tests/test_cli_console.py`.** `lode-3npn`'s acceptance criterion 1 reserved this for a human, and
+  the reservation was real: consequence (a) — colour is off under `CliRunner` because pytest's
+  default capture had already replaced stdout **by import time**, not because CliRunner's sink is not
+  a TTY, and `pytest -s` from a real terminal freezes it the other way and leaks ANSI — is arguably a
+  DESIGN fact `stack.md` legitimately owns, since it is *why* `cli.py` has no test seam. Consequence
+  (b) (`monkeypatch.setenv("NO_COLOR", ...)` after import is a silent no-op, so that path must be
+  asserted in a subprocess) is pure test mechanics and was never contested.
+  - **Why not the binary the ticket posed.** The ticket framed this as "stack.md keeps its own full
+    copy of (a), or delegates like the other two". Consequence (a) splits cleanly instead: the
+    *conclusion* (one process-wide Console, no test seam, and that this is forced rather than chosen)
+    is what `stack.md` and `cli.py` each need locally and in their own words; the *mechanism*
+    (import-time stdout replacement, `pytest -s` leaking ANSI) is what neither needs to restate.
+  - **What this buys.** It honours CLAUDE.md's docs-are-source-of-truth rule without a third full
+    restatement — the exact topology that already forced two correction passes over this material
+    (lode-kq4v -> lode-1f5u -> lode-qv91: three independent full statements, no anchor). It also
+    satisfies the ticket's criterion 3 (a reader of production source still learns from `cli.py` why
+    there is one process-wide Console and no test seam) without reopening criterion 4 (no fork of
+    lode-qv91's canonical mechanism block in `tests/conftest.py`).
+  - **Rejected: full collapse** (test file canonical for both, `stack.md` reduced to a pointer) —
+    it puts a design fact's canonical home under `tests/` rather than `docs/`, against CLAUDE.md.
+    **Rejected: `stack.md` keeps (a) wholesale** — two full statements of (a) surviving by decision
+    is the same fork topology, just sanctioned.
+
+- **2026-08-06 (maintainer decision, `lode-3k6x` / `lode-mm73`) — HUMAN DECISIONS: `/sweep` §2b gets
+  an age discriminator on `started_at` (24h), and its hand-maintained pipeline-label roster is
+  enforced by a GATE TEST rather than by a list anyone must remember to update.**
+  - **`lode-3k6x` — DECIDED: filter on `started_at`, threshold 24h, in `jq`.** The defect: the
+    coding producer claims its ticket up front (`bd update --claim` -> `in_progress`) and only
+    applies `ready-for-code-review` at hand-off, minutes-to-hours later; for that whole window the
+    ticket carries none of §2b's excluded labels and is **indistinguishable from a stranding**. With
+    `/code` fanning out N producers and `/sweep` ticking every 30m, the Stranded section routinely
+    lists the live build queue — which is how a human learns to skim it, and a genuine stranding then
+    hides among the in-flight rows. Root framing error, per the ticket: §2b was built to "mirror §2a
+    exactly", but `deferred` is a TERMINAL parked state while `in_progress` is a TRANSIENT working
+    state, so §2a's shape does not fit §2b's predicate. The age threshold is what restores the mirror.
+    - **Mechanism, measured not assumed:** `bd list` exposes `--created-*`, `--closed-*`, `--defer-*`
+      and `--due-*` but **no `--updated-*` / `--started-*` filter**, so no flag reaches this. The
+      `--json` rows do carry `started_at` (alongside `created_at`/`updated_at`), and §2b already
+      pipes through `jq`, so the discriminator is one added `select(...)` clause and no new
+      dependency. **`started_at` over `updated_at`** deliberately: `started_at` is precisely "when
+      claimed", whereas `updated_at` is refreshed by any edit and would reset the clock on a ticket
+      nobody is actually building.
+    - **Why 24h and not the 3 days the ticket floats:** the measured coding-builder run in this repo
+      is 14m10s, so 24h is ~100x the observed build duration and cannot false-positive a live build,
+      while an abandoned claim still surfaces within a day. 3 days buys no additional safety over
+      that margin and delays a real stranding past several `/loop` cadences.
+  - **`lode-mm73` item 1 — DECIDED: a gate test, mirroring `tests/test_bd_list_limit_gate.py`.**
+    §2b's `--exclude-label` list is the only place in the repo that must enumerate ALL pipeline stage
+    labels (every other call site names exactly one), so it is the only site that rots silently when
+    a new stage label is introduced — new in-flight work starts reading as stranded, with no test
+    failure and no grep that finds it. The repo has already answered this exact class twice:
+    `lode-jhry` deleted a gate roster from `agents-workflow.md` as the staleness anti-pattern, and
+    `lode-200t` added `test_bd_list_limit_gate.py` precisely because a documented roster "is no
+    longer what enforces this" — a test that fails on a NEW unguarded call site beats a list trusted
+    to stay current. The same remedy applies here; the test owns the scan surface and its exclusions,
+    and the SKILL.md prose stops carrying that burden. **Rejected: an anchor comment naming the
+    sources** — that is still a hand-maintained list, degrading the same way with a note attached.
+  - **`lode-mm73` item 2 — uncontested, build it:** collapse §2a/§2b's four near-verbatim
+    report-only paragraphs (the `(. // [])`/`@tsv` note, the `--limit 0` stake paragraph, and both
+    "Deliberately excluded from everything else in this skill" bullets) into one shared
+    "Report-only sections (§2a, §2b)" block, leaving each section its own query plus its own
+    section-specific reasoning. Its stated sequencing blocker is cleared — `lode-lrg2` is closed.
+  - **SEQUENCING (binding):** `lode-3k6x` and `lode-mm73` both edit §2b and must be built in
+    sequence, not in parallel.
