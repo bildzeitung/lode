@@ -3589,7 +3589,28 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   just `src/`. `test_deps_declared.py`'s own module docstring already documents its scope as
   deliberate ("test imports are dev-extra-only and noisier, and `src/` is where the shipped defect
   actually lives"), so widening it is a scope change to a gate that was designed narrow on purpose,
-  not a bug fix.
+  not a bug fix — a judgment call for a human, recorded here with a leaning rather than settled by
+  this ticket. If a human decides to widen it, `test_deps_declared.py`'s own docstring is the place
+  to update the SCOPE section.
+
+  **What widening would actually cost and find — measured, not estimated** (during `lode-z31w`'s
+  technical review, by running the gate's own `_third_party_tops`/`_classify` helpers over `tests/`
+  in place of `src/`):
+  - **UNDECLARED (3):** `numpy`, `packaging`, `tree_sitter_markdown` — each directly imported under
+    `tests/`, each declared nowhere in pyproject.toml, each reaching the venv only transitively.
+    That is three more *live* instances of this ticket's own defect class, so a widened gate would
+    have real findings waiting rather than none. Tracked as `lode-sjbo`.
+  - **UNRESOLVED (5):** `_anthropic_rig`, `_gitrepo`, `_hookharness`, `conftest`,
+    `test_skill_bash_state` — first-party sibling modules. `tests/` is on `sys.path`, so a
+    `tests/`-local import is indistinguishable from a third-party top-level one.
+
+  The second list is the actual obstacle, and it means widening is **not** the pure call-site change
+  it looks like: `_declared_distributions` and `_classify` are directory-agnostic and
+  `_third_party_tops` already takes its directory as a parameter, but `_STDLIB_AND_FIRST_PARTY` would
+  additionally have to learn the `tests/`-local module names (or the sweep learn to skip
+  sibling-importable ones) or the gate fails on five false positives from day one. It is *not* the
+  dev-tooling noise one might assume — `pytest` is already declared, and `nox`/`ruff` are never
+  imported by `tests/` at all.
 
   **Leaning: leave it `src/`-only for now, unwidened.** The failure mode this gate exists to close
   is a *silent* one — `src/` shipping an import that only works by accident of another package's
@@ -3597,11 +3618,6 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   undeclared import fails **loud and immediately** (a collection-time `ImportError` on `nox -s tests`,
   visible on every CI run) the moment its transitive provider drops it — exactly what happened here,
   caught by simple code review rather than by the gate. The two failure modes have different costs,
-  and the narrower gate already covers the one that matters more. Widening would also pull in a fair
-  amount of dev-tooling noise (`pytest`, `nox`, `ruff`, etc. all import things too) for comparatively
-  little payoff.
-
-  This is a judgment call a human should confirm rather than one this ticket settles unilaterally —
-  recorded here as the strongest default recommendation, not enacted in code. If a human decides to
-  widen it, `test_deps_declared.py`'s own docstring is the place to update the SCOPE section, and the
-  AST-sweep + comparison-set logic already generalizes to a second directory without restructuring.
+  and the narrower gate already covers the one that matters more. Note this leaning rests on that
+  cost asymmetry alone, not on a claim that there is nothing to find: per the measurement above,
+  there is.
