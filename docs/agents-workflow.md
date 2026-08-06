@@ -1671,6 +1671,53 @@ being off, given the fiat is the first line of defence and this guard is a backs
 documented prerequisite a human can install; a mis-resolved script path is not something an agent
 could act on. Pinned by a test so the choice stays visible.
 
+**Segment split shared with the `gh` write guard (`lode-dia6`).** This script used to split into
+scan segments with its own quoting-*unaware* `tr` over the shell control-operator characters —
+byte-identical in shape to the splitter `scripts/gh-write-guard.sh` carried before `lode-obox` and
+`lode-d5je` fixed it there (a control character inside a quoted string argument, or inside a
+*quoted* heredoc body, could manufacture a fake segment start and get a nearby 40-hex token scanned
+as if it sat inside a real `bd`/`git` invocation). `lode-dia6`'s human decision, recorded on the
+ticket: **extract, don't re-port.** Porting the two fixes a second time would leave two copies of a
+splitter that must stay in lockstep across every future refinement — and the two guards already
+drifted once, because they started as byte-identical code. Both primitives
+(`_split_unquoted`, `strip_quoted_heredoc_bodies`) now live in one sourced library,
+[`scripts/shell-quote-split.sh`](../scripts/shell-quote-split.sh), and both guard scripts fail
+*closed* (deny) if that library is unusable — the opposite asymmetry from the guard-script
+resolution above, deliberately: a missing *shared dependency* both guards need is a new hazard this
+extraction itself introduces, not a pre-existing one to be as permissive about as a missing
+top-level script.
+
+*Unusable* covers **two** failure modes, not one — the technical review of `lode-dia6` found the
+second one live. **Absent**: the file is missing or unreadable, caught by each guard's `[ ! -r ]`
+check. **Broken**: the file is present and readable — so `-r` passes and `source` appears to
+succeed — but defines neither function (a truncated write, a partial checkout, a bad merge, a
+syntax error). The guard then dies at the first call site with `rc=127` and *no stdout*, and the
+wrapper's trailing `exit 0` converts that into a silent **ALLOW**: a fail-open in the very block
+whose job is to fail closed. So each guard asserts the *contract* (`declare -F` on both functions)
+after sourcing, not just the file, and sources under `|| true` so a syntax error reaches that check
+instead of aborting ahead of it. Both modes are swept across every consumer — *discovered at
+runtime*, never listed — by `tests/test_shell_quote_split_lib.py`, following
+`tests/test_gate_lib.py`'s pattern for the same reason: a test that enumerates its subjects *is*
+the enumeration, so a third guard that starts sourcing the library would otherwise fail open
+silently until someone hand-wrote a third copy of the test.
+
+The ~10-line fail-closed block itself stays **duplicated** in both guards, deliberately: its whole
+job is to behave when a sourced file is absent, so it cannot live in the sourced file, and a
+separate shared emitter would only relocate the same bootstrap hazard onto a hot path these guards
+keep fork-free. The runtime-discovered sweep above is the mechanism that keeps the copies honest —
+not a further extraction.
+
+The extraction also made the split's cost matter to a second caller, and
+`scripts/sha-fabrication-guard.sh` had no equivalent of the `gh` guard's `lode-vrhu`
+command-position pre-filter: `_split_unquoted` is far more expensive than the `tr` it replaced
+(measured 13 ms → 489 ms on an 8 KB command carrying a 40-hex run), and 40-hex runs are ordinary
+traffic here — a SHA pasted from `git rev-parse`, a land commit message quoting one. Two fixes,
+both from the same review: a fork-free `bd`/`git` command-position gate ahead of the split (with
+its own superset argument, since a pre-filter that skips a case `INVOKE_RE` would have caught is a
+silent narrowing of the deny surface), and `local LC_ALL=C` inside `_split_unquoted` — under a
+UTF-8 locale `${s:i:1}` is O(*i*), which is where the quadratic constant came from. Neither
+changes a single decision; both are pinned by tests.
+
 ### All three PreToolUse guards live in tested scripts, not inline config (2026-08-04)
 
 **No `PreToolUse(Bash)` guard keeps its scanning logic inline in `.claude/settings.json`.** Each of
@@ -1681,6 +1728,11 @@ the three is a thin wrapper that resolves and delegates to a script under `scrip
 | `bd create --deps blocks:` inversion (`lode-ij24`) | [`scripts/bd-deps-blocks-guard.sh`](../scripts/bd-deps-blocks-guard.sh) | `tests/test_bd_deps_guard.py` |
 | External-tracker write (`lode-o29m` / `lode-9mbt`) | [`scripts/gh-write-guard.sh`](../scripts/gh-write-guard.sh) | `tests/test_gh_write_guard.py` |
 | Fabricated SHA (`lode-fpmi`) | [`scripts/sha-fabrication-guard.sh`](../scripts/sha-fabrication-guard.sh) | `tests/test_sha_fabrication_guard.py` |
+
+Both the `gh` write guard and the fabricated-SHA guard additionally source
+[`scripts/shell-quote-split.sh`](../scripts/shell-quote-split.sh) (`lode-dia6`) for their shared
+quote-aware segment split and quoted-heredoc pre-pass — see "Segment split shared with the `gh`
+write guard" above.
 
 `lode-fpmi` established this shape and stated the reason as its own acceptance criterion —
 *"the guard logic lives in a tested script, not untested inline shell"* — because **ungated inline
