@@ -3155,9 +3155,10 @@ assumption would not have closed it.
   mid-flight, an operator running a later section by hand) `$MY_TOKEN` is empty and `land-lock.sh`
   treats empty exactly as absent — the call still proceeds blind, with no run-time enforcement. What
   changed under **lode-67nk** (closed): that fail-open is no longer *silent*. Every one of the five
-  `MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" ...)"` read-back sites in `.claude/skills/land/
-  SKILL.md`, and `scripts/land-merge-one.sh`'s own `$own_token` pass-through (which covers a direct
-  invocation with no SKILL.md caller warning in front of it), now emit a loud, non-fatal stderr
+  `MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" ...)"` read-back sites in
+  `.claude/skills/land/SKILL.md`, and `scripts/land-merge-one.sh`'s own `$own_token` pass-through
+  (which covers a direct invocation with no SKILL.md caller warning in front of it), now emit a
+  loud, non-fatal stderr
   diagnostic when the token comes back empty, gated by two new sabotage-verified textual pins in
   `tests/test_land_lock.py` — `test_every_own_token_readback_site_warns_when_empty` (all five SKILL.md
   sites) and `test_land_merge_one_warns_on_an_empty_own_token_argument` (the script's own pass-through,

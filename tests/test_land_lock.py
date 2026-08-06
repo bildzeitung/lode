@@ -113,6 +113,7 @@ from conftest import _BLOCKQUOTE_MARKER, LAND_SKILL, _fenced_bash, bash_fence_bl
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-lock.sh"
+MERGE_ONE = REPO_ROOT / "scripts" / "land-merge-one.sh"
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -1676,7 +1677,7 @@ def test_land_merge_one_warns_on_an_empty_own_token_argument() -> None:
     is the caller's `$CONFLICTS` channel (`CONFLICTS=$(land-merge-one.sh
     ...)` in SKILL.md Section 3), so a diagnostic that lost its redirect
     would be captured as conflict output and misread as a real conflict."""
-    text = (REPO_ROOT / "scripts" / "land-merge-one.sh").read_text(encoding="utf-8")
+    text = MERGE_ONE.read_text(encoding="utf-8")
 
     assert '[ -n "$own_token" ] || echo' in text, (
         "scripts/land-merge-one.sh does not warn when its own-token argument "

@@ -113,10 +113,11 @@ mkdir -p "$STATE_DIR"
 ACQUIRE_OUT="$(scripts/land-lock.sh acquire)" \
   || { echo "land: could not acquire the lock this tick -- skipping."; exit 0; }
 echo "$ACQUIRE_OUT"
-# Persist THIS pass's own acquire token to disk (lode-q9pm) -- nothing in
-# this file's own shell state survives to Section 2a's/Section 4's later,
-# separate Bash invocations (the governing rule above), so every later
-# heartbeat/release call site re-reads this file rather than a variable.
+# Persist THIS pass's own acquire token to disk (lode-q9pm), for every later
+# heartbeat/release call site to re-read -- a file, not a variable, because no
+# shell state survives between this file's separate Bash invocations (the
+# governing rule above). Full threading mechanism: docs/agents-workflow.md's
+# canonical paragraph (search that file for "Threading mechanism.").
 # Loud-fail if the pattern doesn't match rather than silently persisting an
 # empty token -- see scripts/land-lock.sh's own "acquired (token ...)"/
 # "acquired via reclaim (token ...)" stdout contract.

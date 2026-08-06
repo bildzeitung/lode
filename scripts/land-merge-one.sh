@@ -153,7 +153,9 @@ own_token="${3:-}"
 # SKILL.md caller warns at its own read-back site too, so on that path this
 # doubles up; it earns its place by covering a DIRECT invocation, which has no
 # caller diagnostic at all. STDERR, never stdout -- stdout is the caller's
-# $CONFLICTS channel (see the heartbeat comment below).
+# $CONFLICTS channel (see the heartbeat comment below). Scaffolding for the
+# per-call-site design: if lode-yuwt ever moves the check into land-lock.sh
+# itself, this warning and SKILL.md's five go away together.
 [ -n "$own_token" ] || echo "land-merge-one: WARNING -- no own-token supplied;" \
   "land-lock ownership check is DISABLED for this call's heartbeat (lode-67nk)" >&2
 

@@ -363,6 +363,10 @@
 #            stated for this file; `release`'s own `[own-token]`, the
 #            OWNERSHIP CHECK section, and the `OWN_TOKEN=` assignment below
 #            point back here rather than repeating it.
+#            Because that degradation is silent HERE, the convention is that
+#            each CALLER warns on stderr when its own token comes back empty
+#            (lode-67nk) -- a new call site must carry that warning too, and
+#            tests/test_land_lock.py pins that it does.
 #            exit 0 -> re-stamped (or created fresh, if the file was somehow
 #                       already gone -- see the subcommand's own comment).
 #            exit 1 -> could not write the lock file -- including when the
