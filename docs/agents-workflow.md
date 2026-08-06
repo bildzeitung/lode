@@ -1787,55 +1787,49 @@ right number now that the premise behind it is corrected is filed as its own fol
 re-decided in review.
 
 **DECIDED (2026-08-05, bildzeitung — lode-qzg4): keep 16 KiB, accept the false DENY.** The follow-up
-the paragraph above filed is resolved. `SHELL_QUOTE_SPLIT_MAX_LEN` stays at `16384`;
-`scripts/shell-quote-split.sh`'s cap value is unchanged. The cap sits **below** observed bd notes
-traffic (largest ~36 KB, four more between 14 KB and 19 KB, across the full 761-issue DB) and that
-false DENY is knowingly accepted — git commit messages are unaffected either way (~4.9 KB max of the
-last 300, >3× headroom).
+the paragraph above filed is resolved. `SHELL_QUOTE_SPLIT_MAX_LEN` stays at `16384` — the cap sits
+**below** observed bd `notes` traffic (the table above) and that false DENY is knowingly accepted.
+Raising it is the trap: 16 KiB already costs ~500 ms (re-measured: 475 ms) in the per-character scan
+loop, so clearing the ~36 KB observation would put ~1.1 s on the hot path of *both*
+`PreToolUse(Bash)` guards, on **every** Bash call — buying correctness on a rare,
+cheaply-recoverable path by taxing the universal one. Option (b) above (the operator-first scan,
+which would dissolve the trade-off entirely) is **not** taken up either — YAGNI, on top of the
+fail-open risk already argued in its bullet above: speculative work for a problem whose recovery is
+cheap (below). Nothing about the mechanism changed: over-cap still DENIES, never truncates, never
+allows; both guards' over-cap DENY fixtures and the four-name library contract check are untouched.
 
-Why raising it was rejected: 16 KiB already costs ~500 ms in the per-character scan loop, so raising
-the cap to clear the 36 KB observation would put ~1.1 s on the hot path of *both* `PreToolUse(Bash)`
-guards, on **every** Bash call — buying correctness on a rare, cheaply-recoverable path by taxing the
-universal one. Option (b) from the list above (an operator-first scan, whose cost is proportional to
-operator count rather than string length, which would dissolve this trade-off entirely) was
-considered and deliberately **not** taken up — judged YAGNI: speculative work for a problem with a
-cheap recovery path (below), left parked here rather than pulled forward. Nothing about the mechanism
-changed: over-cap still DENIES, never truncates, never allows; both guards' over-cap DENY fixtures
-and the four-name library contract check are untouched by this ticket.
+**Recovery path for a denied command — verified, not asserted.** `deny_if_over_scan_cap` measures
+the literal Bash **command string** the guard is invoked with (`$1`), never file contents that
+command merely references. So the recovery is to move the large text out of the command string, and
+*how* is per-field:
 
-**Recovery path for a denied command — verified, not merely asserted.** `deny_if_over_scan_cap`
-measures the literal Bash **command string** the guard is invoked with (`$1` in
-`scripts/gh-write-guard.sh` / `scripts/sha-fabrication-guard.sh`), never file contents a command
-merely references. That means `bd update`'s **`--body-file`** (and, for the `design` field,
-`--design-file`) genuinely sidesteps the cap: writing the large body to disk with the `Write` tool
-and passing its *path* keeps the command string short regardless of the file's size. Verified by
-direct invocation in this repo (not merely asserted): a `bd update … --body-file <40 KB file>`
-command (136 characters) passed `scripts/sha-fabrication-guard.sh` cleanly (no deny), while the same
-40 KB inlined into the command string — carrying a real 40-hex run at `git`/`bd` command position —
-correctly DENIED past the cap, and likewise for `scripts/gh-write-guard.sh` on an oversized inline
-`gh` command. This matches `/sweep`'s digest rewrite, which already uses `--body-file` for exactly
-this reason (`.claude/skills/sweep/SKILL.md`).
+- **`description` / `design`** — `bd update … --body-file <path>` / `--design-file <path>`, the file
+  written first with the `Write` tool. This is what `/sweep`'s digest rewrite already does
+  (`.claude/skills/sweep/SKILL.md`).
+- **`notes`** — there is **no `--notes-file` flag** in this repo's `bd` (`bd update --help` offers
+  only inline `--notes` / `--append-notes`), contrary to what the ticket raising this question
+  assumed. Use command substitution instead — `bd update <id> --notes "$(cat <path>)"` — which keeps
+  the command string short by the same mechanism. Splitting into several smaller `--append-notes`
+  calls, which the guard's own deny message names, also works and needs no temp file.
 
-That sidestep, however, does **not** extend to the `notes` field as the ticket that raised this
-question assumed: `bd update --help` (this repo's bd version) has no `--notes-file` flag at all —
-only inline `--notes <string>` and `--append-notes <string>`. So a large **notes** update has no
-file-based bypass; the real recovery path for a `notes` write that trips the cap is the one the
-guard's own deny message already names — split it into several smaller `--append-notes` calls — or
-surface it to a human to widen the cap for that one command. (`--body-file`/`--design-file` remain
-genuine bypasses for the `description`/`design` fields specifically, confirmed above.) Also
-confirmed, so the bypass isn't overstated: passing `--body-file` does **not** launder an otherwise
-disallowed `gh` write past `gh-write-guard.sh` — a short `gh issue comment … --body-file <path>`
-command still DENIES, because that guard's default-deny allowlist check fires independently of the
-scan-length cap.
+Verified by direct invocation of `scripts/sha-fabrication-guard.sh`, on a 40 KB file *whose first
+line is a 40-hex token that is not a real object*: it passed cleanly both via `--body-file` and via
+`--notes "$(cat …)"` — which proves the file's contents genuinely are never scanned, not merely that
+a short command is short — while the same 40 KB inlined into the command string DENIED on the cap,
+and likewise `scripts/gh-write-guard.sh` on an oversized inline `gh` command. Content going
+unscanned that way is the standing residual of any guard that reads only the command string
+("Residual gaps that remain", above), not a new hole opened by the cap; and it launders nothing that
+was independently disallowed — a *short* `gh issue comment … --body-file <path>` still DENIES,
+because `gh-write-guard.sh`'s default-deny allowlist fires whether or not the cap is reached.
 
 **What the cap does and does not buy.** It does *not* make an already-under-cap command faster —
 a genuine 8–16 KB command still pays the full linear scan (a few hundred ms), same as before. What
 it closes is the *unbounded* tail: a 200 KB command (a file catted into a commit message, a giant
 heredoc) would have cost ~6 s on this hot path with no cap at all; past the cap that same command
 now denies in a few milliseconds instead, before `_split_unquoted` is ever called. A denied
-command past the cap is a **cheap, recoverable** cost (split it into smaller pieces, or surface it
-to a human to widen the cap) — the asymmetry this whole guard family is built on (a false DENY
-costs seconds; a false ALLOW here is unrecoverable).
+command past the cap is a **cheap, recoverable** cost (per-field recovery paths above, under
+"Recovery path for a denied command") — the asymmetry this whole guard family is built on (a false
+DENY costs seconds; a false ALLOW here is unrecoverable).
 
 **Verification, per this ticket's acceptance criteria:** every DENIED fixture in both guards'
 suites still denies, and `pytest -k "DENIED or denied"` across both files shows zero deny-side
