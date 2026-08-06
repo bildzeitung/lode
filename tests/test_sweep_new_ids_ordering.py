@@ -46,6 +46,7 @@ from pathlib import Path
 
 import pytest
 from conftest import bash_fence_blocks
+from conftest import only_block_with as _shared_only_block_with
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SWEEP_SKILL = REPO_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
@@ -64,14 +65,12 @@ def _only_block_with(*needles: str, what: str) -> str:
     same discipline as tests/test_land_conflicts_state.py's helper of the same
     name (a `next(..., None)` here would silently pin the wrong one of two
     near-identical-looking blocks, e.g. Section 5 and Section 6 both derive
-    `$DIGEST_ID` via the same script call)."""
-    hits = [b for b in _skill_blocks() if all(n in b for n in needles)]
-    assert len(hits) == 1, (
-        f"expected exactly 1 fenced block for {what}, found {len(hits)} -- this "
-        "test's assumption about SKILL.md's structure has drifted; re-check by "
-        "hand before adjusting the locator"
-    )
-    return hits[0]
+    `$DIGEST_ID` via the same script call).
+
+    Thin wrapper over the shared tests/conftest.py::only_block_with (lode-pm37),
+    which this file and tests/test_land_conflicts_state.py had each previously
+    reimplemented byte-identically."""
+    return _shared_only_block_with(_skill_blocks(), *needles, what=what)
 
 
 def _section_5_block() -> str:

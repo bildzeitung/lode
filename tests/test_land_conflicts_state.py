@@ -39,6 +39,7 @@ scaffolding and the cross-block-ordering precedent already are.
 from __future__ import annotations
 
 from conftest import LAND_SKILL, bash_fence_blocks
+from conftest import only_block_with as _shared_only_block_with
 
 
 def _skill_blocks() -> list[str]:
@@ -66,14 +67,12 @@ def _only_block_with(*needles: str, what: str) -> str:
     hazard: Section 3's two merge loops are deliberately the same shape, so a
     locator that stops at the first match would pin one loop and let the other
     regress unseen -- the precise failure the Section-3 test exists to catch.
+
+    Thin wrapper over the shared tests/conftest.py::only_block_with (lode-pm37),
+    which this file and tests/test_sweep_new_ids_ordering.py had each
+    previously reimplemented byte-identically.
     """
-    hits = [b for b in _skill_blocks() if all(n in b for n in needles)]
-    assert len(hits) == 1, (
-        f"expected exactly 1 fenced block for {what}, found {len(hits)} -- this "
-        "test's assumption about SKILL.md's structure has drifted; re-check by "
-        "hand before adjusting the locator"
-    )
-    return hits[0]
+    return _shared_only_block_with(_skill_blocks(), *needles, what=what)
 
 
 def _kick_back_block() -> str:

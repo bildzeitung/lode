@@ -1512,6 +1512,34 @@ def bash_fence_blocks(markdown: str) -> list[str]:
     return blocks
 
 
+def only_block_with(blocks: list[str], *needles: str, what: str) -> str:
+    """The single block in ``blocks`` containing every needle -- asserts exactly
+    one (lode-pm37).
+
+    Hoisted here from byte-identical private copies in
+    ``tests/test_land_conflicts_state.py`` and
+    ``tests/test_sweep_new_ids_ordering.py`` -- same list comprehension, same
+    ``assert len(hits) == 1``, same failure message, differing only in which
+    file's fenced blocks they closed over. ``next(..., None)`` would silently
+    pin the first of several near-identical-looking blocks -- both callers have
+    live pairs this would misfire on (``test_land_conflicts_state.py``'s two
+    Section-3 merge loops; ``test_sweep_new_ids_ordering.py``'s Section 5 and
+    Section 6, which both derive ``$DIGEST_ID`` via the same script call) --
+    which is why this asserts exactly one hit instead.
+
+    Takes ``blocks`` rather than a markdown path so it composes with either
+    caller's own ``_skill_blocks()`` (each closes over a different SKILL.md via
+    :func:`bash_fence_blocks`), instead of this function picking the file.
+    """
+    hits = [b for b in blocks if all(n in b for n in needles)]
+    assert len(hits) == 1, (
+        f"expected exactly 1 fenced block for {what}, found {len(hits)} -- this "
+        "test's assumption about SKILL.md's structure has drifted; re-check by "
+        "hand before adjusting the locator"
+    )
+    return hits[0]
+
+
 def _fenced_bash(markdown: str) -> str:
     """The ```bash fences only, concatenated into one string -- what an agent
     actually EXECUTES.
