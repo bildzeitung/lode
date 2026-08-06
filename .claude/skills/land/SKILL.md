@@ -1937,6 +1937,14 @@ out-of-band manual act, not a designed fast-path):
 bd update <id> --acceptance="<revised, unambiguous acceptance criteria>"   # land-review reads
   # acceptance_criteria as the contract — this is the field that must change; add --description too
   # if the narrative text also needs updating. The BRANCH is untouched.
+# If resolving this escalation required a COMMIT to land/<id> — which it does whenever the decision
+# belongs in docs/ rather than a bd field — refresh land_head, or Section 2a reads the commit you
+# just made as DRIFT and prescribes a bounce next pass (OBSERVED: lode-y3dw, 2026-08-05). This exit
+# is the exposed one because it re-enters at ready-for-land with no reviewer in between; exits (b)
+# and (d) route through a code-reviewer, which refreshes land_head itself.
+# --set-metadata (upsert), NOT --metadata (which takes a whole JSON blob and would drop
+# land_summary/review_head — verified 2026-08-05).
+bd update <id> --set-metadata land_head="$(git rev-parse origin/land/<id>)"   # omit if nothing was committed
 bd update <id> --remove-label land-escalated --add-label ready-for-land
 scripts/bd-dolt-push.sh
 # /land's NEXT pass re-runs land-review against the now-unambiguous ticket — same gate, no bypass.
