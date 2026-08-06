@@ -163,9 +163,16 @@ design and no other loop leg lists them, so once parked they otherwise vanish fr
 surface. I list them for visibility only:
 
 ```bash
+SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
+
 DEFERRED=$(bd list --status deferred --limit 0 --json \
   | jq -r '(. // []) | .[] | [.id, .title] | @tsv')
+printf '%s' "$DEFERRED" > "$SWEEP_TMP/deferred"
 ```
+
+Persisted to `$SWEEP_TMP/deferred` the same way §1 persists `$ESCALATED`/`$HUMAN` — §8 (a later,
+separate Bash invocation) reads it back from disk rather than relying on the model's in-context
+memory of this block's output, which is not the mechanism §0 says this file uses.
 
 Same `(. // [])` null-empty guard as §1/§2 — and the same `@tsv` as §2, which escapes a tab or
 newline embedded in a title instead of letting it break the row.
@@ -426,9 +433,28 @@ report — never fail a pass over the notify channel.
 
 ## 8. Publish and report
 
+This is its own, separate Bash tool invocation — nothing from §2a survives into it (§0's governing
+rule) — so `$DEFERRED` is re-derived from the scratch file §2a already wrote, not from in-context
+memory of that block's output:
+
 ```bash
+SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
+
+if DEFERRED="$(cat "$SWEEP_TMP/deferred" 2>/dev/null)"; then
+  DEFERRED_UNAVAILABLE=""
+else
+  DEFERRED=""
+  DEFERRED_UNAVAILABLE="1"   # $SWEEP_TMP/deferred missing -- §2a did not run (or errored) this pass
+fi
+
 scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
 ```
+
+A missing `$SWEEP_TMP/deferred` here is isolated to the deferred section alone, per §2a's own
+failure-handling rule — it must **not** abort this block (the digest push above still has to run)
+and must **not** suppress or be suppressed by the §1/§2 escalation/human/epic reporting, which reads
+its own, separately-persisted scratch files. When `$DEFERRED_UNAVAILABLE` is set, say "deferred list
+unavailable this pass" in place of the deferred section below and continue.
 
 Report exactly one line, then the deferred section (§2a, always present), plus, when non-empty, the
 loud new-items block:
