@@ -2046,6 +2046,13 @@ and not a suggestion: a broken *tool* is otherwise indistinguishable from broken
 `/land`'s isolation-replay loop **deletes (bounces) a branch on a red gate** — so a machine fault
 misread as content damns an innocent branch, or several, in the same pass.
 
+**Not to be confused with the [precondition guards' own 0/1/2
+family](#precondition-guards-the-012-family-lode-t6ni)** (`isolation-guard.sh` and siblings). Those
+answer *"where is this agent"* and their callers collapse any non-zero to one hard stop; these gates
+answer *"is this content good"*, and their callers must branch on 1 vs. 2 — bouncing on a 2 is the
+whole defect this contract prevents. Same numbers, different families; that section says why the
+guards are deliberately not `gate-lib.sh` consumers.
+
 The contract, in one place instead of re-derived at every call site:
 
 - **exit 0 — PASS.** No further meaning.
@@ -2068,12 +2075,23 @@ differs:**
 - **producer (`coding`)** — same as the reviewer: revert to the last green commit, push, and follow
   the build-time escalation path (`land-escalated`) rather than hand off with the gate unresolved.
 
-**Currently exit-code-aware gates:** [`scripts/validate-mermaid.sh`](../scripts/validate-mermaid.sh),
-[`scripts/merge-precheck.sh`](../scripts/merge-precheck.sh) (`/land`'s Section 2b conflict precheck —
-its exit 2 means the trial merge itself couldn't run, e.g. `merge-tree` failing or an unreadable ref,
-not a real conflict), and `nox -s lock_currency` (`noxfile.py`, lode-sys4 — a nox-hosted gate, so it
-implements the exit-2 path via a direct `sys.exit(2)` helper rather than `session.error()`, per the
-nox mechanic below).
+**Who implements this, and how to find the current set.** The shell side has one shared
+implementation — [`scripts/gate-lib.sh`](../scripts/gate-lib.sh)'s `gate_could_not_run()` and
+`escalate_unless_content()` (lode-090f, lode-1mea), extracted precisely because the contract had
+reached three drifting literal copies. **Do not maintain a list of consumers here** — that list goes
+stale on every migration, which is the same failure this section exists to close. Discover it:
+
+```bash
+grep -lE '^[^#]*\. "\$\(dirname "\$0"\)/gate-lib\.sh"' scripts/*.sh
+```
+
+(the same question [`tests/test_gate_lib.py`](../tests/test_gate_lib.py)'s sweep asks, so a new
+consumer is gated the day it lands). Note the source line itself must be guarded so a missing
+`gate-lib.sh` fails **closed** at exit 2 — see that file's header.
+
+The one gate that *cannot* use the shared library is `nox -s lock_currency` (`noxfile.py`, lode-sys4):
+it is Python, not shell, so it carries its own `_machine_fault()` helper implementing the same
+contract via a direct `sys.exit(2)` — per the nox mechanic below.
 
 **The nox mechanic (verified directly against nox's own `tasks.py` — `Result.__bool__` /
 `final_reduce`):** `session.error()` and a failed `session.run()` both collapse to a flat process
