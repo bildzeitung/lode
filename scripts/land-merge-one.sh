@@ -147,6 +147,15 @@ fi
 id="$1"
 msg_dir="$2"
 own_token="${3:-}"
+# Loud, non-fatal diagnostic when the caller passed no own-token (or an empty
+# one) -- otherwise the heartbeat call below silently degrades to the
+# pre-lode-q9pm blind behaviour with nothing in the log (lode-67nk). Every
+# SKILL.md caller warns at its own read-back site too, so on that path this
+# doubles up; it earns its place by covering a DIRECT invocation, which has no
+# caller diagnostic at all. STDERR, never stdout -- stdout is the caller's
+# $CONFLICTS channel (see the heartbeat comment below).
+[ -n "$own_token" ] || echo "land-merge-one: WARNING -- no own-token supplied;" \
+  "land-lock ownership check is DISABLED for this call's heartbeat (lode-67nk)" >&2
 
 # Heartbeat the single-lander lock (lode-m87j). This script runs once per
 # accepted branch in /land's Section 3 first merge loop AND its

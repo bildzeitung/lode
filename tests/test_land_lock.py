@@ -1615,3 +1615,76 @@ def test_land_skill_never_reintroduces_an_inline_lock() -> None:
         "with its own fenced block and a recorded PID is always already dead by "
         "the next one; the lock must go through scripts/land-lock.sh (lode-aps3)"
     )
+
+
+def test_every_own_token_readback_site_warns_when_empty() -> None:
+    """lode-67nk: land/SKILL.md's own-token READ-BACK sites (every place that
+    does `MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" ...)"`) must each be
+    followed by a loud, non-fatal stderr diagnostic when the read comes back
+    empty, rather than silently proceeding blind. `land-lock.sh` treats an
+    empty own-token argument EXACTLY as an absent one, so a missing/wiped
+    `$STATE_DIR/land-lock-token` (a fresh state dir, a pass resumed
+    mid-flight, or Section 2a/3/4 run by hand without Section 0) used to
+    disable the ownership check with nothing in the log -- invisible to the
+    three existing call-site pins above, which are purely textual and prove
+    only that `"$MY_TOKEN"` is spelled at each site, never that it is
+    non-empty at run time.
+
+    Textual pin, same shape and same limit as the three pins above it (see
+    the module docstring, part 3): it proves the diagnostic is spelled at
+    every call site in the SHIPPED file, not that it fires at run time. Both
+    counts are taken over `_fenced_bash()` — the EXECUTED blocks only, same
+    as those three pins — so prose that merely quotes either string can
+    neither redden this test nor pad the warning count to cover a call site
+    that genuinely lost its diagnostic.
+
+    Section 0's own WRITE-then-bail-out release (`land-lock-blind-ok`) is
+    deliberately excluded from both counts: it has no token to READ by
+    construction, so it is not a read-back site at all and must not warn
+    (this ticket's acceptance criteria name it as off limits)."""
+    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
+
+    token_reads = executed.count('cat "$STATE_DIR/land-lock-token"')
+    assert token_reads == 5, (
+        f"expected exactly 5 reads of $STATE_DIR/land-lock-token in land/"
+        f"SKILL.md (Section 1's release, Section 2a's heartbeat, Section 3's "
+        f"two merge loops, Section 4's final release), found {token_reads} "
+        "-- if a call site was genuinely added or removed, update this "
+        "pin's count deliberately and check the new/removed site got (or "
+        "lost) its own lode-67nk diagnostic too"
+    )
+
+    warning_sites = executed.count("DISABLED for this call (lode-67nk)")
+    assert warning_sites == token_reads, (
+        f"found {token_reads} own-token read-back sites but only "
+        f"{warning_sites} carry the lode-67nk 'no own-token available' "
+        "warning -- every read-back site must warn when the token comes "
+        "back empty, not just some of them"
+    )
+
+
+def test_land_merge_one_warns_on_an_empty_own_token_argument() -> None:
+    """lode-67nk's second half: `land-merge-one.sh`'s own `$own_token`
+    pass-through (fed by two of the five SKILL.md sites pinned above) must
+    also carry its own diagnostic -- covering the case where the script is
+    invoked directly, without going through a SKILL.md caller's warning at
+    all. Textual pin against the shipped script, same reasoning as the
+    SKILL.md pins above: proves the diagnostic is spelled at the call site,
+    not that it fires at run time.
+
+    The `>&2` redirect is pinned too, not incidentally: this script's STDOUT
+    is the caller's `$CONFLICTS` channel (`CONFLICTS=$(land-merge-one.sh
+    ...)` in SKILL.md Section 3), so a diagnostic that lost its redirect
+    would be captured as conflict output and misread as a real conflict."""
+    text = (REPO_ROOT / "scripts" / "land-merge-one.sh").read_text(encoding="utf-8")
+
+    assert '[ -n "$own_token" ] || echo' in text, (
+        "scripts/land-merge-one.sh does not warn when its own-token argument "
+        "is empty -- the heartbeat call below then silently disables the "
+        "ownership check with nothing in the log (lode-67nk)"
+    )
+    assert 'heartbeat (lode-67nk)" >&2' in text, (
+        "scripts/land-merge-one.sh's empty-own-token warning no longer goes "
+        "to stderr -- this script's stdout is the caller's $CONFLICTS "
+        "channel, so a warning on stdout is read back as a merge conflict"
+    )
