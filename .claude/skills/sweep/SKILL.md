@@ -440,11 +440,12 @@ memory of that block's output:
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
 
+# Deliberately NOT §3's `|| { ... exit 1; }` guard: §8 must finish either way (the digest push
+# below is unrelated to the deferred list), so a missing file degrades this section alone.
 if DEFERRED="$(cat "$SWEEP_TMP/deferred" 2>/dev/null)"; then
   DEFERRED_UNAVAILABLE=""
 else
-  DEFERRED=""
-  DEFERRED_UNAVAILABLE="1"   # $SWEEP_TMP/deferred missing -- §2a did not run (or errored) this pass
+  DEFERRED_UNAVAILABLE="1"   # $SWEEP_TMP/deferred missing -- §2a's block never ran this pass
 fi
 
 scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
@@ -454,7 +455,13 @@ A missing `$SWEEP_TMP/deferred` here is isolated to the deferred section alone, 
 failure-handling rule — it must **not** abort this block (the digest push above still has to run)
 and must **not** suppress or be suppressed by the §1/§2 escalation/human/epic reporting, which reads
 its own, separately-persisted scratch files. When `$DEFERRED_UNAVAILABLE` is set, say "deferred list
-unavailable this pass" in place of the deferred section below and continue.
+unavailable this pass" in place of the deferred section below, write `unavailable` (never `0`) in the
+one-line summary's `<len $DEFERRED> deferred` field, and continue — reporting `0 deferred` for a list
+that was never computed is the same phantom-empty read this persistence exists to prevent.
+
+Only a *missing* file reaches that branch: a §2a query that **errors** still writes an empty file
+(its `printf` runs regardless of the pipeline's exit status, exactly as §1's does), so it reads back
+here as an empty list and is reported by §2a's own rule instead.
 
 Report exactly one line, then the deferred section (§2a, always present), plus, when non-empty, the
 loud new-items block:
