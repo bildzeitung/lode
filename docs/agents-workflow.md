@@ -3181,8 +3181,8 @@ assumption would not have closed it.
   could read `$STATE_DIR` on its own initiative.
 
   This paragraph is the **canonical** statement of the threading mechanism. `scripts/land-lock.sh`'s
-  header and `.claude/skills/land/SKILL.md`'s Section 0 comment used to tell it in full as well;
-  **lode-1n4x** collapsed both to a short local conclusion plus a pointer back here.
+  header and `.claude/skills/land/SKILL.md`'s Section 0 comment each carry only a short local
+  conclusion and point back here (**lode-1n4x**) — keep it that way rather than re-expanding either.
 
   **Missing/legacy record on `[own-token]`.** When `[own-token]` is supplied and the lock file is
   missing or predates the 5-field record (no owner token to compare against at all), `heartbeat` stamps

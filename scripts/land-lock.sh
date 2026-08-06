@@ -287,10 +287,10 @@
 # `acquire`'s own O_EXCL create (the FRESH-lock path, not the reclaim path)
 # was always atomic and remains so, unchanged (`write_lock`'s `noclobber`).
 #
-# OWNERSHIP CHECK (lode-q9pm). LOCAL CONCLUSION: `heartbeat` and `release`
-# accept the calling pass's own remembered token as an optional final
-# argument (documented once, in the Usage section below -- not restated
-# here) and refuse to touch the lock record on a mismatch, rather than
+# OWNERSHIP CHECK (lode-q9pm). `heartbeat` and `release` accept the calling
+# pass's own remembered token as an optional final argument (documented in
+# `heartbeat`'s Usage entry below) and refuse to touch the lock record on a
+# mismatch, rather than
 # silently concealing an overlap with a displaced holder (`heartbeat` exits 1
 # without re-stamping; `release` exits 0 without removing $LOCK). `heartbeat`
 # PRESERVES the record's existing owner token (lode-ao95) rather than
@@ -302,9 +302,8 @@
 # pass that keeps blindly re-stamping a reclaimed lock makes a genuine
 # overlap look like one continuous holder) and HOW the token threads across
 # `.claude/skills/land/SKILL.md`'s separate Bash invocations to reach
-# `heartbeat`/`release` here at all, see docs/agents-workflow.md's
-# "Threading mechanism." paragraph (canonical; search lode-q9pm) -- not
-# restated here.
+# `heartbeat`/`release` here at all, see docs/agents-workflow.md's canonical
+# paragraph (search that file for "Threading mechanism.").
 #
 # MERGE RESOLUTION (lode-ao95 x lode-m87j). This branch was built against a
 # trunk with no `heartbeat`; lode-m87j landed on trunk afterward, and this
@@ -357,13 +356,13 @@
 #
 #            `[own-token]` (also accepted by `release` below) is OPTIONAL,
 #            for backward compatibility with a caller that never captured its
-#            own token -- but see the OWNERSHIP CHECK section below for why
+#            own token -- but see the OWNERSHIP CHECK section above for why
 #            every real call site should supply it. Omitting it reproduces
 #            the pre-lode-q9pm behaviour exactly: blind preserve-and-re-stamp,
-#            no ownership comparison. This is the ONE place that sentence is
-#            stated -- `release`'s own `[own-token]`, the header's OWNERSHIP
-#            CHECK section, and the `OWN_TOKEN=` assignment below all point
-#            back here rather than repeating it.
+#            no ownership comparison. This entry is where that semantics is
+#            stated for this file; `release`'s own `[own-token]`, the
+#            OWNERSHIP CHECK section, and the `OWN_TOKEN=` assignment below
+#            point back here rather than repeating it.
 #            exit 0 -> re-stamped (or created fresh, if the file was somehow
 #                       already gone -- see the subcommand's own comment).
 #            exit 1 -> could not write the lock file -- including when the
@@ -385,12 +384,12 @@
 #           there is by definition nothing to release either way.
 #
 #           `[own-token]` is OPTIONAL, same as `heartbeat`'s -- see its own
-#           Usage entry above, not restated here. When supplied and it does
-#           NOT match the record's current owner token (lode-q9pm), `release`
-#           refuses to remove
-#           $LOCK -- deleting it would destroy another pass's live record,
-#           not this pass's own -- and says so on STDERR, still exiting 0
-#           (there is nothing left for THIS pass to clean up either way).
+#           Usage entry above. When supplied and it does NOT match the
+#           record's current owner token (lode-q9pm), `release` refuses to
+#           remove $LOCK -- deleting it would destroy another pass's live
+#           record, not this pass's own -- and says so on STDERR, still
+#           exiting 0 (there is nothing left for THIS pass to clean up
+#           either way).
 #
 # Lock file lives under .git/ (per-machine, never committed) -- the shared,
 # repo-global .git, not a worktree-private one (lode-xkpd; see below).
@@ -410,7 +409,7 @@ cmd="$1"
 # This pass's own remembered token, if the caller supplied one (lode-q9pm) --
 # empty for acquire (never reaches here, $# is 1) and for a heartbeat/release
 # caller that omitted it (see `heartbeat`'s Usage entry above for what
-# omitting it does and does not change; not restated here).
+# omitting it does and does not change).
 OWN_TOKEN="${2:-}"
 
 # `git rev-parse --git-dir` is NOT repo-global: from a LINKED worktree it

@@ -114,10 +114,10 @@ ACQUIRE_OUT="$(scripts/land-lock.sh acquire)" \
   || { echo "land: could not acquire the lock this tick -- skipping."; exit 0; }
 echo "$ACQUIRE_OUT"
 # Persist THIS pass's own acquire token to disk (lode-q9pm), for every later
-# heartbeat/release call site to re-read -- WHY a file rather than a variable
-# (the governing rule above) and the full threading mechanism are
-# docs/agents-workflow.md's "Threading mechanism." paragraph (canonical;
-# search lode-q9pm), not restated here.
+# heartbeat/release call site to re-read -- a file, not a variable, because no
+# shell state survives between this file's separate Bash invocations (the
+# governing rule above). Full threading mechanism: docs/agents-workflow.md's
+# canonical paragraph (search that file for "Threading mechanism.").
 # Loud-fail if the pattern doesn't match rather than silently persisting an
 # empty token -- see scripts/land-lock.sh's own "acquired (token ...)"/
 # "acquired via reclaim (token ...)" stdout contract.
