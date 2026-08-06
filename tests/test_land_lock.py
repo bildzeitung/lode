@@ -14,9 +14,12 @@ brackets -- but not over the whole pass; CAVEAT 1 enumerates the three
 stretches that stay uncovered and why the 1800s default was therefore left
 alone. The stale-lock reclaim path, formerly non-atomic (CAVEAT 2), is now
 atomic (lode-ao95; see that half of the tests below) via an mkdir-gated
-critical section, and the record's owner token (5th field) that a future
-ownership check in `heartbeat` will need is preserved across heartbeat calls
-but not yet verified against anything -- see lode-q9pm.
+critical section, and the record's owner token (5th field) is both preserved
+across heartbeat calls and -- since lode-q9pm -- compared against the calling
+pass's own remembered token, so `heartbeat`/`release` refuse to touch a record
+this pass no longer owns. That comparison is skipped when the caller omits its
+token, which is why the SKILL.md call-site pins near the bottom of this file
+gate that every real call site supplies one.
 
 What this file adds on top of that is the regression gate, in four parts:
 
@@ -571,6 +574,120 @@ def test_heartbeat_write_failure_is_reported_but_never_crashes(
     assert result.returncode == 1, result.stdout + result.stderr
     assert "heartbeat could not write" in result.stderr
     assert not _lock_path(repo).exists()
+
+
+# ---------------------------------------------------------------------------
+# Ownership check (lode-q9pm) -- heartbeat/release refuse to touch a record
+# this pass no longer owns, once they are given their own token to check
+# against.
+# ---------------------------------------------------------------------------
+
+
+def test_heartbeat_with_no_own_token_still_blindly_preserves(tmp_path: Path) -> None:
+    """Backward compatibility, stated as its own test rather than only
+    inferred from the pre-existing heartbeat tests above: omitting
+    `[own-token]` entirely reproduces the pre-lode-q9pm behaviour exactly --
+    no ownership comparison at all, even against a record naming a
+    completely different token. This is the caller-not-yet-updated case."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 100
+    lock.write_text(
+        f"12345 host {old_epoch} 2020-01-01T00:00:00Z someone-elses-token\n"
+    )
+
+    result = _run("heartbeat", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    fields = lock.read_text().split()
+    assert fields[4] == "someone-elses-token"
+
+
+def test_heartbeat_refuses_to_overwrite_a_lock_reclaimed_by_another_pass(
+    tmp_path: Path,
+) -> None:
+    """The exact scenario this ticket's acceptance criteria name: pass A
+    acquires (token A), pass A's lock goes stale and is reclaimed by pass B
+    (token B), and pass A -- unaware it lost the lock -- calls heartbeat with
+    its own remembered token A. heartbeat must NOT overwrite B's record: the
+    mismatch between A (what this call believes it owns) and B (what the
+    record on disk actually says) must refuse the write rather than silently
+    re-stamping over the new holder, which is exactly the self-concealing
+    overlap scripts/land-lock.sh's OWNERSHIP CHECK section describes."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+
+    acquire_a = _run("acquire", repo=repo)
+    assert acquire_a.returncode == 0, acquire_a.stdout + acquire_a.stderr
+    token_a = acquire_a.stdout.strip().split("token ")[1].rstrip(")")
+
+    # Simulate pass A's lock going stale and pass B reclaiming it -- write a
+    # record directly (equivalent to a real reclaim's end state) naming a
+    # DIFFERENT token, so the file now reflects pass B, not pass A.
+    old_epoch = int(time.time()) - 1000
+    lock.write_text(f"99999 other-host {old_epoch} 2020-01-01T00:00:00Z token-b\n")
+
+    # Pass A, unaware it lost the lock, heartbeats with its OWN remembered
+    # token (A) -- not what is currently on disk (B).
+    heartbeat_a = _run("heartbeat", token_a, repo=repo)
+
+    assert heartbeat_a.returncode == 1, heartbeat_a.stdout + heartbeat_a.stderr
+    assert "REFUSING to overwrite" in heartbeat_a.stderr
+    # The record on disk must still be pass B's, byte-for-byte -- this is the
+    # actual assertion the scenario cares about, not just the exit code.
+    assert (
+        lock.read_text()
+        == f"99999 other-host {old_epoch} 2020-01-01T00:00:00Z token-b\n"
+    )
+
+
+def test_heartbeat_with_matching_own_token_re_stamps_normally(tmp_path: Path) -> None:
+    """The non-mismatch path: when the caller's own token DOES match the
+    record's current owner, heartbeat behaves exactly as it always has --
+    the ownership check is not a tax on the common case."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 100
+    lock.write_text(f"12345 host {old_epoch} 2020-01-01T00:00:00Z my-token\n")
+
+    result = _run("heartbeat", "my-token", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    fields = lock.read_text().split()
+    assert fields[4] == "my-token"
+    assert int(fields[2]) > old_epoch
+
+
+def test_release_refuses_to_remove_a_lock_reclaimed_by_another_pass(
+    tmp_path: Path,
+) -> None:
+    """The `release` half of the same scenario: pass A, displaced by pass B,
+    must not delete B's live lock on its own way out. `release` still exits
+    0 (its own always-exit-0 contract), but the file must survive."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 1000
+    lock.write_text(f"99999 other-host {old_epoch} 2020-01-01T00:00:00Z token-b\n")
+
+    result = _run("release", "token-a", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "REFUSING to remove" in result.stderr
+    assert lock.exists(), "release deleted another pass's live lock"
+
+
+def test_release_with_matching_own_token_removes_the_lock(tmp_path: Path) -> None:
+    """The non-mismatch path for release: this pass's own token still owns
+    the record, so release proceeds exactly as it always has."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 100
+    lock.write_text(f"12345 host {old_epoch} 2020-01-01T00:00:00Z my-token\n")
+
+    result = _run("release", "my-token", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not lock.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1308,6 +1425,84 @@ def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
     assert "scripts/land-lock.sh heartbeat" in text, (
         "land/SKILL.md never heartbeats the single-lander lock -- the TTL is "
         "back to measuring acquisition age, not idle time (lode-m87j)"
+    )
+
+
+# `[own-token]` is OPTIONAL on `heartbeat`/`release`, and omitting it reproduces
+# the pre-lode-q9pm blind behaviour EXACTLY -- silently, with every existing test
+# above still green. So the ownership check's whole safety property rests on every
+# call site actually passing the token, which until these pins was unguarded prose
+# in a markdown fence: a fail-OPEN of precisely the class lode-rjqm names. The
+# three pins below close it from the three directions it can break.
+_BLIND_OK = "land-lock-blind-ok"
+
+
+def test_land_skill_persists_its_own_acquire_token_for_later_blocks() -> None:
+    """Section 0 must capture `acquire`'s printed token and write it to
+    `$STATE_DIR/land-lock-token`. Nothing else can: no shell state survives to
+    the later, separate Bash invocations that heartbeat and release (lode-sfnb),
+    so if this write is lost every later call site reads an empty token and
+    silently degrades to the blind, pre-lode-q9pm behaviour."""
+    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
+
+    # Match the WRITE specifically, not a bare mention of the filename: the
+    # read-back sites name that same path four more times, so an `in executed`
+    # check stays green with the write itself deleted (measured by sabotage --
+    # it did).
+    assert re.search(r'>\s*"\$STATE_DIR/land-lock-token"', executed), (
+        "land/SKILL.md never WRITES $STATE_DIR/land-lock-token -- every later "
+        "heartbeat/release then reads an empty token and the lode-q9pm "
+        "ownership check is silently disabled for the whole pass"
+    )
+
+
+def test_every_land_lock_heartbeat_and_release_call_site_supplies_its_own_token() -> (
+    None
+):
+    """The pin that actually holds lode-q9pm up. Bare `land-lock.sh heartbeat`
+    / `release` with no token argument is legal (backward compatibility) and
+    silent, so nothing but this test notices a call site losing its
+    `"$MY_TOKEN"`. A line may opt out ONLY by carrying the `land-lock-blind-ok`
+    marker with a stated reason -- today exactly one does: Section 0's bail-out
+    release, which fires when the token could not be parsed at all and so has
+    none to supply."""
+    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
+
+    offenders = [
+        line.strip()
+        for line in executed.splitlines()
+        if re.search(r"land-lock\.sh (heartbeat|release)(\s|$)", line)
+        and not re.search(r"land-lock\.sh (heartbeat|release)\s+\"\$MY_TOKEN\"", line)
+        and _BLIND_OK not in line
+    ]
+
+    assert not offenders, (
+        f"land/SKILL.md heartbeat/release call site(s) supply no own-token: "
+        f"{offenders}. The argument is optional and omitting it silently "
+        "reproduces the pre-lode-q9pm blind behaviour -- a two-lander overlap "
+        'goes back to being self-concealing. Pass `"$MY_TOKEN"` (re-read from '
+        f"$STATE_DIR/land-lock-token in that same block), or mark the line "
+        f"`{_BLIND_OK}` with a reason if it genuinely has no token to supply."
+    )
+
+
+def test_land_skill_threads_its_own_token_into_land_merge_one() -> None:
+    """`scripts/land-merge-one.sh` heartbeats on every invocation, and it is
+    itself a script called from a fence rather than a block that could read
+    $STATE_DIR on its own -- so BOTH of Section 3's merge loops (the first pass
+    and the isolation replay) must hand it the token as its third argument, or
+    that heartbeat goes blind for every merged branch."""
+    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
+
+    calls = re.findall(r"land-merge-one\.sh [^\n]*", executed)
+    assert len(calls) >= 2, (
+        f"expected both of Section 3's land-merge-one.sh call sites, found "
+        f"{calls} -- has the skill's layout drifted?"
+    )
+    offenders = [c for c in calls if '"$MY_TOKEN"' not in c]
+    assert not offenders, (
+        f"land-merge-one.sh call site(s) omit the own-token third argument: "
+        f"{offenders}. It then heartbeats blind (lode-q9pm)."
     )
 
 
