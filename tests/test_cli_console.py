@@ -45,9 +45,10 @@ Any colour ticket (lode-l38d.4/.5/.6/.10) that asserts the ``NO_COLOR``
 negative path should copy this pattern rather than reinvent — or silently
 no-op — one of its own, and should re-run the two subject-sabotage checks
 above rather than trust that a green test exercised anything.
-See also ``src/lode/cli.py``'s ``console`` docstring and docs/stack.md's
-``rich`` row, which record their own local consequences of the same
-canonical mechanism.
+This module docstring is the canonical, full statement of both consequences
+(``lode-3npn``) — ``src/lode/cli.py``'s ``console`` docstring and
+docs/stack.md's ``rich`` row each carry their own local design conclusion
+(why there is no test seam) plus a pointer here rather than restating them.
 """
 
 from __future__ import annotations
