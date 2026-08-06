@@ -3103,12 +3103,31 @@ assumption would not have closed it.
   either way). **Omitting `[own-token]` reproduces the pre-lode-q9pm blind behaviour exactly and
   silently** — preserve-and-re-stamp / remove, no ownership comparison at all — so the safety property
   is enforced by *who calls the argument*, not by the script refusing to run without it. What actually
-  makes every real call site pass its own token is `.claude/skills/land/SKILL.md` (every executed
-  `heartbeat`/`release` call site passes `"$MY_TOKEN"`) plus three sabotage-verified pins in
-  `tests/test_land_lock.py` on those exact call sites and on `land-merge-one.sh`'s own two call sites —
-  not an invariant of `land-lock.sh` itself. Whether the check should become a script invariant instead
-  (so a future call site cannot silently regress by forgetting the argument) is **lode-yuwt**, open,
-  deliberately deferred rather than folded into this ticket — its own text names the hazard that
+  makes every real call site pass its own token is `.claude/skills/land/SKILL.md` plus three
+  sabotage-verified pins in `tests/test_land_lock.py` — one that Section 0 WRITES
+  `$STATE_DIR/land-lock-token` at all, one over every executed `heartbeat`/`release` call site in that
+  skill, and one over `land-merge-one.sh`'s own two call sites — not an invariant of `land-lock.sh`
+  itself. The call-site pin allows a line to opt out only by carrying a `land-lock-blind-ok` marker,
+  and **exactly one line does**: Section 0's own bail-out `release`, which has no token to supply
+  because parsing it out of `acquire`'s stdout is precisely what failed — the reasoning is in that
+  block's own comment, not restated here.
+
+  **Two honest limits on what this delivers, neither of them closed by the pins.** First, the pins are
+  *textual* — they prove every call site spells `"$MY_TOKEN"` in the skill's source, not that the
+  variable is non-empty at run time. Every read-back site reads `$STATE_DIR/land-lock-token` with
+  `2>/dev/null || true`, so if that file is missing or empty (a wiped `$STATE_DIR`, a pass resumed
+  mid-flight, an operator running a later section by hand) `$MY_TOKEN` is empty, `land-lock.sh` treats
+  empty exactly as absent, and every site degrades to the blind behaviour **with no diagnostic** while
+  all three pins stay green — **lode-67nk**, open. Second, the property actually delivered is *the lock
+  record is not corrupted or deleted by a pass that no longer owns it* — **not** *a displaced pass stops
+  landing*: at both consumers a mismatch verdict is discarded (`heartbeat … || true` in Section 2a, and
+  the same in `land-merge-one.sh`), so a pass that has demonstrably lost the lock still proceeds with
+  its merge. `scripts/land-lock.sh`'s header advises that such a caller "should also stop treating
+  itself as the lock holder"; no caller does that today, and nothing yet asks one to. Whether the check
+  should become a script invariant instead (so a future call site cannot silently regress by forgetting
+  the argument, and so the run-time fail-open above has nothing to fail open *through*) is
+  **lode-yuwt**, open, deliberately deferred rather than folded into lode-q9pm — its own text names the
+  hazard that
   blocked doing it immediately: `release`'s contract lets a caller that never held the lock call it
   harmlessly, and a self-reading design (the token file read by `release` itself rather than passed in)
   would let a caller whose `acquire` failed this tick read the *previous* pass's token, match the live
@@ -3124,6 +3143,10 @@ assumption would not have closed it.
   (invoked from Section 3's two merge loops) takes the same token as an **optional third positional
   argument**, for the identical reason: it is a script called *from* a fenced block, not a block that
   could read `$STATE_DIR` on its own initiative.
+
+  This paragraph is the **canonical** statement of the threading mechanism. `scripts/land-lock.sh`'s
+  header and `.claude/skills/land/SKILL.md`'s Section 0 comment each still tell it in full as well;
+  collapsing those two to local conclusions plus a pointer here is **lode-1n4x**.
 
   **Missing/legacy record on `[own-token]`.** When `[own-token]` is supplied and the lock file is
   missing or predates the 5-field record (no owner token to compare against at all), `heartbeat` stamps
