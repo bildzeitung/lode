@@ -226,10 +226,17 @@ same way, for a different reason — see the exclude-label list below.) I list t
 only:
 
 ```bash
+SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
+
 STRANDED=$(bd list --status in_progress --limit 0 --json \
   --exclude-label ready-for-code-review,ready-for-land,needs-rebase,sweep-digest,land-escalated \
   | jq -r '(. // []) | .[] | [.id, .title] | @tsv')
+printf '%s' "$STRANDED" > "$SWEEP_TMP/stranded"
 ```
+
+Persisted to `$SWEEP_TMP/stranded` the same way §2a persists `$DEFERRED` — §8 (a later, separate
+Bash invocation) reads it back from disk rather than relying on the model's in-context memory of
+this block's output, which is not the mechanism §0 says this file uses.
 
 Same `(. // [])` null-empty guard as §1/§2/§2a, and the same `@tsv` as §2/§2a, which escapes a tab
 or newline embedded in a title instead of letting it break the row.
@@ -267,8 +274,9 @@ reader would expect to see beside it, `human`, which deliberately is not. Each f
 - `$STRANDED` is never written into the digest body (§6) and carries **no dedup state** of its
   own — it is recomputed fresh, in full, every pass, straight into the §8 report.
 
-If this query itself errors, the failure is isolated to this step alone — note "stranded list
-unavailable this pass" in the §8 report and continue. See
+If this query itself errors, the failure is isolated to this step alone — note it in the §8 report
+and continue (§2a's wording, deliberately: §8 reserves the literal "stranded list unavailable this
+pass" for the *missing-file* case, and an errored query still writes its file). See
 [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
 
 ## 3. Build the current queue (dedup on stable IDs)
@@ -499,35 +507,42 @@ report — never fail a pass over the notify channel.
 
 ## 8. Publish and report
 
-This is its own, separate Bash tool invocation — nothing from §2a survives into it (§0's governing
-rule) — so `$DEFERRED` is re-derived from the scratch file §2a already wrote, not from in-context
-memory of that block's output:
+This is its own, separate Bash tool invocation — nothing from §2a/§2b survives into it (§0's
+governing rule) — so `$DEFERRED` and `$STRANDED` are re-derived from the scratch files §2a/§2b
+already wrote, not from in-context memory of those blocks' output:
 
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
 
 # Deliberately NOT §3's `|| { ... exit 1; }` guard: §8 must finish either way (the digest push
-# below is unrelated to the deferred list), so a missing file degrades this section alone.
+# below is unrelated to the deferred/stranded lists), so a missing file degrades that section alone.
 if DEFERRED="$(cat "$SWEEP_TMP/deferred" 2>/dev/null)"; then
   DEFERRED_UNAVAILABLE=""
 else
   DEFERRED_UNAVAILABLE="1"   # $SWEEP_TMP/deferred missing -- §2a's block never ran this pass
 fi
 
+if STRANDED="$(cat "$SWEEP_TMP/stranded" 2>/dev/null)"; then
+  STRANDED_UNAVAILABLE=""
+else
+  STRANDED_UNAVAILABLE="1"   # $SWEEP_TMP/stranded missing -- §2b's block never ran this pass
+fi
+
 scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
 ```
 
-A missing `$SWEEP_TMP/deferred` here is isolated to the deferred section alone, per §2a's own
-failure-handling rule — it must **not** abort this block (the digest push above still has to run)
-and must **not** suppress or be suppressed by the §1/§2 escalation/human/epic reporting, which reads
-its own, separately-persisted scratch files. When `$DEFERRED_UNAVAILABLE` is set, say "deferred list
-unavailable this pass" in place of the deferred section below, write `unavailable` (never `0`) in the
-one-line summary's `<len $DEFERRED> deferred` field, and continue — reporting `0 deferred` for a list
-that was never computed is the same phantom-empty read this persistence exists to prevent.
+The rule is one rule, over both report-only lists — for each `<list>` in {`deferred`, `stranded`}:
+a missing `$SWEEP_TMP/<list>` is isolated to that section alone. It must **not** abort this block
+(the digest push above still has to run), and must **not** suppress or be suppressed by the §1/§2
+escalation/human/epic reporting or by the other report-only section — every one of these reads its
+own, separately-persisted scratch file. When `$<LIST>_UNAVAILABLE` is set, say "`<list>` list
+unavailable this pass" in place of that section below, write `unavailable` (never `0`) in that
+list's field of the one-line summary, and continue — reporting `0` for a list that was never
+computed is the same phantom-empty read this persistence exists to prevent.
 
-Only a *missing* file reaches that branch: a §2a query that **errors** still writes an empty file
+Only a *missing* file reaches that branch: a §2a/§2b query that **errors** still writes an empty file
 (its `printf` runs regardless of the pipeline's exit status, exactly as §1's does), so it reads back
-here as an empty list and is reported by §2a's own rule instead.
+here as an empty list and is reported by §2a's/§2b's own rule instead.
 
 Report exactly one line, then the deferred section (§2a, always present) and the stranded section
 (§2b, always present), plus, when non-empty, the loud new-items block:
@@ -549,7 +564,7 @@ sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-
 Each of those two sections lists every current row (id + title) each pass, in full, with no dedup —
 or the literal `(none)` when its list is empty.
 
-When `$SWEEP_TMP/new_annotated` (§7) is non-empty, follow the deferred section above with:
+When `$SWEEP_TMP/new_annotated` (§7) is non-empty, follow the two sections above with:
 
 ```
 ## NEW HUMAN-DECISION ITEMS (<count of rows in new_annotated>)
@@ -588,8 +603,9 @@ real items from the durable record a human relies on.
 - If §4 finds `N > 1` digests, the write path stops for the pass (that anomaly is reported, never
   guessed at).
 - **A report-only section's failure is isolated to that section alone** — this covers both §2a
-  (deferred) and §2b (stranded), identically: if either query errors, note it in the report (
-  "deferred list unavailable this pass" / "stranded list unavailable this pass") and continue. It
+  (deferred) and §2b (stranded), identically: if either query errors, note it in the report and
+  continue. (Not the literal "… list unavailable this pass" string — §8 reserves that for a
+  *missing* scratch file; an errored query still writes its file and reads back as an empty list.) It
   must **not** suppress the §6 rewrite or §7 notification for the (unrelated) escalation/human/epic
   queue; the reverse holds too (a §1/§2 failure never suppresses §2a or §2b, neither of which has a
   rewrite to protect), and so does the §2a-vs-§2b case — each is its own isolated read.
