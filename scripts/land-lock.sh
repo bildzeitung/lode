@@ -287,24 +287,46 @@
 # `acquire`'s own O_EXCL create (the FRESH-lock path, not the reclaim path)
 # was always atomic and remains so, unchanged (`write_lock`'s `noclobber`).
 #
-# A remaining, deliberately-accepted gap: this fix makes `acquire` alone
-# atomic, but says nothing about a WRITER that already thinks it holds the
-# lock and later re-stamps it (the `heartbeat` subcommand, lode-m87j -- see
-# the MERGE RESOLUTION note below). If a pass's lock is ever reclaimed out
-# from under it by another racer, that original pass -- unaware it lost the
-# lock -- could still re-stamp the NEW holder's record, making a genuine
-# overlap look like one continuous, legitimate holder (self-concealing
-# rather than prevented). That is not hypothetical: in the stalled-gate-
-# holder case above, the surviving record names the DISPLACED holder, not
-# the racer that reclaimed after it -- the file already lies about who
-# holds the lock. `heartbeat` (below) now PRESERVES the current record's
-# owner token rather than dropping or regenerating it on every call, so the
-# field itself stays meaningful across heartbeat calls -- but it does not
-# yet COMPARE that token against anything the calling pass remembers as its
-# own, so it still cannot refuse to overwrite a record it no longer owns.
-# This script records the token (5th record field, see `lock_record` below)
-# precisely so that comparison has something to check against; wiring the
-# actual ownership check is lode-q9pm.
+# OWNERSHIP CHECK (lode-q9pm). `acquire` alone being atomic says nothing
+# about a WRITER that already thinks it holds the lock and later re-stamps it
+# (the `heartbeat` subcommand, lode-m87j -- see the MERGE RESOLUTION note
+# below). If a pass's lock is ever reclaimed out from under it by another
+# racer, that original pass -- unaware it lost the lock -- could keep
+# re-stamping the NEW holder's record, making a genuine overlap look like one
+# continuous, legitimate holder (self-concealing rather than prevented).
+# That is not hypothetical: in the stalled-gate-holder case above, the
+# surviving record names the DISPLACED holder, not the racer that reclaimed
+# after it -- the file already lies about who holds the lock.
+#
+# `heartbeat` PRESERVES the current record's owner token rather than dropping
+# or regenerating it on every call (lode-ao95), so the field itself stays
+# meaningful across heartbeat calls. `heartbeat` and `release` now ALSO
+# accept the calling pass's OWN remembered token as an optional final
+# argument and COMPARE it against the record's current token before acting:
+# a mismatch means another /land has reclaimed the lock since this pass last
+# checked, and both subcommands refuse to touch the record rather than
+# silently concealing the overlap (`heartbeat` exits 1 without re-stamping;
+# `release` exits 0 without removing $LOCK -- see the Usage section above for
+# both diagnostics). The comparison is skipped entirely when the caller omits
+# its own token, which reproduces the pre-lode-q9pm blind behaviour exactly
+# -- kept for backward compatibility with any caller that has not been
+# updated to capture and re-supply its own token yet.
+#
+# THREADING THE TOKEN ACROSS SEPARATE BASH INVOCATIONS is the caller's job,
+# not this script's: `acquire`'s own token never leaves this script except on
+# its stdout (see the Usage section), and a caller executing
+# `.claude/skills/land/SKILL.md` runs each fenced block as its own, separate
+# Bash tool invocation with no shell state surviving between them (lode-sfnb)
+# -- so SKILL.md's Section 0 (`acquire`) captures the printed token and
+# writes it to `$STATE_DIR/land-lock-token` (`$STATE_DIR` = the same
+# `.git/land-state/` every other cross-block value in that skill persists
+# to), and every later heartbeat/release call site re-reads that file. This
+# is the "CLI/threading design decision" this ticket's acceptance criteria
+# call out -- see `.claude/skills/land/SKILL.md` Section 0's own comment for
+# the full reasoning, and `scripts/land-merge-one.sh` (which takes the same
+# token as an optional third positional argument, for the same reason, since
+# it is itself a script called from a fenced block rather than a block that
+# could read $STATE_DIR directly without a caller telling it where).
 #
 # MERGE RESOLUTION (lode-ao95 x lode-m87j). This branch was built against a
 # trunk with no `heartbeat`; lode-m87j landed on trunk afterward, and this
@@ -330,12 +352,15 @@
 #   pins this.
 #
 # Usage: scripts/land-lock.sh acquire
-#        scripts/land-lock.sh heartbeat
-#        scripts/land-lock.sh release
+#        scripts/land-lock.sh heartbeat [own-token]
+#        scripts/land-lock.sh release [own-token]
 #
 # acquire: exit 0 -> lock acquired (fresh, or reclaimed from a stale prior
-#                     holder). Caller proceeds with its /land pass.
-#                     Diagnostic (if any) on stdout.
+#                     holder). Caller proceeds with its /land pass. Prints
+#                     "land-lock: acquired (token <token>)" (or "... via
+#                     reclaim ...") to stdout -- the token is THIS pass's own,
+#                     to be captured and re-supplied to `heartbeat`/`release`
+#                     as their `[own-token]` argument (lode-q9pm; see below).
 #          exit 1 -> another /land is still (plausibly) running on this
 #                     machine, or the lock file could not be created at all --
 #                     including when the lock PATH itself could not even be
@@ -346,36 +371,64 @@
 #                     in parallel. Diagnostic on STDERR.
 #          exit 2 -> usage error (a caller bug, never a lock verdict). NOT
 #                     where a rev-parse/machine failure lands -- see below.
-# heartbeat: re-stamps the lock this pass already holds, so the staleness
-#            check measures idle time from the LAST heartbeat rather than the
-#            original `acquire` (CAVEAT 1). Call it periodically from inside
-#            a still-running pass -- never as a substitute for `acquire`.
+# heartbeat [own-token]: re-stamps the lock this pass already holds, so the
+#            staleness check measures idle time from the LAST heartbeat
+#            rather than the original `acquire` (CAVEAT 1). Call it
+#            periodically from inside a still-running pass -- never as a
+#            substitute for `acquire`.
+#
+#            `[own-token]` is OPTIONAL, for backward compatibility with a
+#            caller that never captured its own token -- but see lode-q9pm's
+#            OWNERSHIP CHECK section below for why every real call site should
+#            supply it. Omitting it reproduces the pre-lode-q9pm behaviour
+#            exactly: blind preserve-and-re-stamp, no ownership comparison.
 #            exit 0 -> re-stamped (or created fresh, if the file was somehow
 #                       already gone -- see the subcommand's own comment).
 #            exit 1 -> could not write the lock file -- including when the
-#                       lock path itself could not be determined (lode-8qkb).
-#                       NOT fatal to the caller's own step by itself (this is
-#                       bookkeeping, not the work) -- log and continue; a
-#                       human should still look if it repeats every tick.
-#                       Diagnostic on STDERR.
-# release: always exit 0 -- `rm -f` is idempotent, and a caller that never
-#           held the lock (e.g. it just skipped the tick above) must be able
-#           to call this harmlessly too. Still exit 0, with a diagnostic on
-#           STDERR rather than silence, when even the lock PATH could not be
-#           determined (lode-8qkb): with no repository here, there is by
-#           definition nothing to release either way.
+#                       lock path itself could not be determined (lode-8qkb),
+#                       OR (lode-q9pm) `[own-token]` was supplied and does not
+#                       match the record's current owner token: this pass no
+#                       longer holds the lock (another /land reclaimed it) and
+#                       heartbeat REFUSES to overwrite the new holder's
+#                       record. NOT fatal to the caller's own step by itself
+#                       either way (this is bookkeeping, not the work) -- log
+#                       and continue; on the mismatch case specifically, the
+#                       caller should also stop treating itself as the lock
+#                       holder. Diagnostic on STDERR.
+# release [own-token]: always exit 0 -- `rm -f` is idempotent, and a caller
+#           that never held the lock (e.g. it just skipped the tick above)
+#           must be able to call this harmlessly too. Still exit 0, with a
+#           diagnostic on STDERR rather than silence, when even the lock PATH
+#           could not be determined (lode-8qkb): with no repository here,
+#           there is by definition nothing to release either way.
+#
+#           `[own-token]` is OPTIONAL, same backward-compatibility reasoning
+#           as `heartbeat`'s. When supplied and it does NOT match the record's
+#           current owner token (lode-q9pm), `release` refuses to remove
+#           $LOCK -- deleting it would destroy another pass's live record,
+#           not this pass's own -- and says so on STDERR, still exiting 0
+#           (there is nothing left for THIS pass to clean up either way).
 #
 # Lock file lives under .git/ (per-machine, never committed) -- the shared,
 # repo-global .git, not a worktree-private one (lode-xkpd; see below).
 
 set -euo pipefail
 
-if [ "$#" -ne 1 ] \
-   || { [ "$1" != "acquire" ] && [ "$1" != "heartbeat" ] && [ "$1" != "release" ]; }; then
-  echo "usage: $0 acquire|heartbeat|release" >&2
+# acquire takes no further argument; heartbeat/release take an OPTIONAL
+# [own-token] as their sole further argument (lode-q9pm) -- so 1 or 2
+# arguments total, never more, and never 2 for acquire.
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] \
+   || { [ "$1" != "acquire" ] && [ "$1" != "heartbeat" ] && [ "$1" != "release" ]; } \
+   || { [ "$1" = "acquire" ] && [ "$#" -ne 1 ]; }; then
+  echo "usage: $0 acquire|heartbeat [own-token]|release [own-token]" >&2
   exit 2
 fi
 cmd="$1"
+# This pass's own remembered token, if the caller supplied one (lode-q9pm) --
+# empty for acquire (never reaches here, $# is 1) and for a heartbeat/release
+# caller that has not been updated to thread it through. See the OWNERSHIP
+# CHECK section of the header for what this does and does not change.
+OWN_TOKEN="${2:-}"
 
 # `git rev-parse --git-dir` is NOT repo-global: from a LINKED worktree it
 # returns that worktree's PRIVATE gitdir (.git/worktrees/<name>), and only from
@@ -473,10 +526,11 @@ lock_record() {
   # 1-4 (pid, host, epoch, ISO stamp) keep their original positions -- only
   # field 5 (owner token) is new, appended rather than inserted, so nothing
   # that reads field 3 needs to change. Fields 1, 2 and 4 are for a human
-  # reading the file by hand; field 5 is for a future consumer (lode-q9pm),
-  # not read back by anything else in this script, but IS read back and
-  # threaded straight through by `heartbeat` below (`token_of`), so the
-  # field survives repeated heartbeat calls unchanged.
+  # reading the file by hand; field 5 (via `token_of`) is read back and
+  # threaded straight through by `heartbeat` below, so the field survives
+  # repeated heartbeat calls unchanged, and is also what `heartbeat`/
+  # `release`'s own ownership check (lode-q9pm) compares an `[own-token]`
+  # argument against.
   #
   # The token is a MANDATORY positional, and that is deliberate -- see the
   # MERGE RESOLUTION note in the header. Defaulting it (`${1:-...}`) would
@@ -534,6 +588,28 @@ write_lock() {
 }
 
 if [ "$cmd" = "release" ]; then
+  # Ownership check (lode-q9pm): only when the caller supplied its own
+  # token. An empty CUR_TOKEN (record predates the field, or the lock is
+  # already gone) is "nothing to compare against" -- not a mismatch -- so
+  # this still falls through to the unconditional `rm -f` below, same as
+  # ever. A non-empty CUR_TOKEN that does not match $OWN_TOKEN means another
+  # /land now owns this lock: removing it would destroy a LIVE record, not
+  # this pass's own, so refuse -- diagnostic on stderr, still exit 0 (this
+  # pass's own release contract; there is nothing further for it to do).
+  if [ -n "$OWN_TOKEN" ]; then
+    CUR_RECORD=""
+    read -r CUR_RECORD < "$LOCK" 2>/dev/null || true
+    CUR_TOKEN="$(token_of "$CUR_RECORD")"
+    if [ -n "$CUR_TOKEN" ] && [ "$OWN_TOKEN" != "$CUR_TOKEN" ]; then
+      echo "land-lock: release REFUSING to remove $LOCK -- its current owner" \
+        "token ($CUR_TOKEN) does not match this pass's own ($OWN_TOKEN)." \
+        "Another /land holds the lock now; leaving its record in place" \
+        "rather than deleting a live holder's lock. Still exiting 0 (release's" \
+        "own always-exit-0 contract) -- there is nothing further for this" \
+        "pass to clean up." >&2
+      exit 0
+    fi
+  fi
   rm -f "$LOCK"
   exit 0
 fi
@@ -569,8 +645,31 @@ if [ "$cmd" = "heartbeat" ]; then
   CUR_RECORD=""
   read -r CUR_RECORD < "$LOCK" 2>/dev/null || true
   CUR_TOKEN="$(token_of "$CUR_RECORD")"
+
+  # Ownership check (lode-q9pm): only when the caller supplied its own
+  # token AND the record already has one to compare against. An empty
+  # CUR_TOKEN means "nothing to compare" (a legacy four-field record, or the
+  # lock is simply gone) -- not a mismatch -- so that case falls through to
+  # the mint-or-preserve logic below exactly as it always has. A non-empty
+  # CUR_TOKEN that does not match $OWN_TOKEN means another /land has
+  # reclaimed this lock since this pass last checked: re-stamping now would
+  # overwrite the NEW holder's live record with this pass's stale identity,
+  # concealing the overlap rather than surfacing it (see the header's
+  # OWNERSHIP CHECK section). Refuse instead -- loud, non-fatal to the
+  # caller's own step (heartbeat's existing contract), same exit code (1) as
+  # every other heartbeat-write failure below.
+  if [ -n "$OWN_TOKEN" ] && [ -n "$CUR_TOKEN" ] && [ "$OWN_TOKEN" != "$CUR_TOKEN" ]; then
+    echo "land-lock: heartbeat REFUSING to overwrite $LOCK -- its current" \
+      "owner token ($CUR_TOKEN) does not match this pass's own ($OWN_TOKEN)." \
+      "Another /land has reclaimed this lock; this pass no longer holds it," \
+      "and re-stamping would silently conceal that overlap. Not fatal to" \
+      "this step by itself, but this pass should stop treating itself as" \
+      "the lock holder." >&2
+    exit 1
+  fi
+
   if [ -z "$CUR_TOKEN" ]; then
-    CUR_TOKEN="$(new_token)"
+    CUR_TOKEN="${OWN_TOKEN:-$(new_token)}"
   fi
   if lock_record "$CUR_TOKEN" > "$LOCK" 2>/dev/null; then
     exit 0

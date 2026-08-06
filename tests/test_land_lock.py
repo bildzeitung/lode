@@ -574,6 +574,120 @@ def test_heartbeat_write_failure_is_reported_but_never_crashes(
 
 
 # ---------------------------------------------------------------------------
+# Ownership check (lode-q9pm) -- heartbeat/release refuse to touch a record
+# this pass no longer owns, once they are given their own token to check
+# against.
+# ---------------------------------------------------------------------------
+
+
+def test_heartbeat_with_no_own_token_still_blindly_preserves(tmp_path: Path) -> None:
+    """Backward compatibility, stated as its own test rather than only
+    inferred from the pre-existing heartbeat tests above: omitting
+    `[own-token]` entirely reproduces the pre-lode-q9pm behaviour exactly --
+    no ownership comparison at all, even against a record naming a
+    completely different token. This is the caller-not-yet-updated case."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 100
+    lock.write_text(
+        f"12345 host {old_epoch} 2020-01-01T00:00:00Z someone-elses-token\n"
+    )
+
+    result = _run("heartbeat", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    fields = lock.read_text().split()
+    assert fields[4] == "someone-elses-token"
+
+
+def test_heartbeat_refuses_to_overwrite_a_lock_reclaimed_by_another_pass(
+    tmp_path: Path,
+) -> None:
+    """The exact scenario this ticket's acceptance criteria name: pass A
+    acquires (token A), pass A's lock goes stale and is reclaimed by pass B
+    (token B), and pass A -- unaware it lost the lock -- calls heartbeat with
+    its own remembered token A. heartbeat must NOT overwrite B's record: the
+    mismatch between A (what this call believes it owns) and B (what the
+    record on disk actually says) must refuse the write rather than silently
+    re-stamping over the new holder, which is exactly the self-concealing
+    overlap scripts/land-lock.sh's OWNERSHIP CHECK section describes."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+
+    acquire_a = _run("acquire", repo=repo)
+    assert acquire_a.returncode == 0, acquire_a.stdout + acquire_a.stderr
+    token_a = acquire_a.stdout.strip().split("token ")[1].rstrip(")")
+
+    # Simulate pass A's lock going stale and pass B reclaiming it -- write a
+    # record directly (equivalent to a real reclaim's end state) naming a
+    # DIFFERENT token, so the file now reflects pass B, not pass A.
+    old_epoch = int(time.time()) - 1000
+    lock.write_text(f"99999 other-host {old_epoch} 2020-01-01T00:00:00Z token-b\n")
+
+    # Pass A, unaware it lost the lock, heartbeats with its OWN remembered
+    # token (A) -- not what is currently on disk (B).
+    heartbeat_a = _run("heartbeat", token_a, repo=repo)
+
+    assert heartbeat_a.returncode == 1, heartbeat_a.stdout + heartbeat_a.stderr
+    assert "REFUSING to overwrite" in heartbeat_a.stderr
+    # The record on disk must still be pass B's, byte-for-byte -- this is the
+    # actual assertion the scenario cares about, not just the exit code.
+    assert (
+        lock.read_text()
+        == f"99999 other-host {old_epoch} 2020-01-01T00:00:00Z token-b\n"
+    )
+
+
+def test_heartbeat_with_matching_own_token_re_stamps_normally(tmp_path: Path) -> None:
+    """The non-mismatch path: when the caller's own token DOES match the
+    record's current owner, heartbeat behaves exactly as it always has --
+    the ownership check is not a tax on the common case."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 100
+    lock.write_text(f"12345 host {old_epoch} 2020-01-01T00:00:00Z my-token\n")
+
+    result = _run("heartbeat", "my-token", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    fields = lock.read_text().split()
+    assert fields[4] == "my-token"
+    assert int(fields[2]) > old_epoch
+
+
+def test_release_refuses_to_remove_a_lock_reclaimed_by_another_pass(
+    tmp_path: Path,
+) -> None:
+    """The `release` half of the same scenario: pass A, displaced by pass B,
+    must not delete B's live lock on its own way out. `release` still exits
+    0 (its own always-exit-0 contract), but the file must survive."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 1000
+    lock.write_text(f"99999 other-host {old_epoch} 2020-01-01T00:00:00Z token-b\n")
+
+    result = _run("release", "token-a", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "REFUSING to remove" in result.stderr
+    assert lock.exists(), "release deleted another pass's live lock"
+
+
+def test_release_with_matching_own_token_removes_the_lock(tmp_path: Path) -> None:
+    """The non-mismatch path for release: this pass's own token still owns
+    the record, so release proceeds exactly as it always has."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 100
+    lock.write_text(f"12345 host {old_epoch} 2020-01-01T00:00:00Z my-token\n")
+
+    result = _run("release", "my-token", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not lock.exists()
+
+
+# ---------------------------------------------------------------------------
 # Staleness reclaim -- the mechanism that replaces the dead-PID trap logic
 # ---------------------------------------------------------------------------
 
