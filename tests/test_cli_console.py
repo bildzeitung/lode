@@ -7,12 +7,16 @@ originally recorded as guidance on lode-l38d.1 (and implicitly relied on by
 the colour children lode-l38d.4/.5/.6/.10) — "colour is off for free under
 test because CliRunner's captured output is never a TTY" — is FALSE.
 
-rich's ``Console()`` freezes BOTH its TTY check and its ``NO_COLOR`` read at
-CONSTRUCTION time (``rich.console.Console.__init__``: ``self.no_color =
-no_color if no_color is not None else self._environ.get("NO_COLOR", "") !=
-""``, evaluated exactly once and stored as a plain ``bool``). At module
-scope — ``console = Console()`` in ``src/lode/cli.py`` — that construction
-happens at IMPORT time, not per-invocation. Two consequences:
+rich's ``Console()`` freezes ``color_system`` (and ``no_color``/
+``is_interactive``) at CONSTRUCTION time — ``color_system`` is computed once
+in ``Console.__init__`` FROM ``is_terminal`` at that moment and stored as a
+plain attribute; ``self.no_color = no_color if no_color is not None else
+self._environ.get("NO_COLOR", "") != ""`` is likewise evaluated exactly once
+and stored as a plain ``bool``. ``is_terminal`` itself is NOT frozen — it
+stays a live property that keeps re-reading ``os.environ`` on every access —
+but it no longer matters once ``color_system`` is fixed. At module scope —
+``console = Console()`` in ``src/lode/cli.py`` — that construction happens at
+IMPORT time, not per-invocation. Two consequences:
 
 * Colour is off under ``typer.testing.CliRunner`` today only because
   *pytest's own default output capture* had already replaced ``sys.stdout``
