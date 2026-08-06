@@ -1718,6 +1718,78 @@ silent narrowing of the deny surface), and `local LC_ALL=C` inside `_split_unquo
 UTF-8 locale `${s:i:1}` is O(*i*), which is where the quadratic constant came from. Neither
 changes a single decision; both are pinned by tests.
 
+### The residual `_split_unquoted` cost: a shared scan-length cap, fail-closed (lode-rjqm)
+
+`local LC_ALL=C` (above) fixed `_split_unquoted`'s *indexing* — the loop is O(*n*) iterations
+now, not O(*n*²) — but each iteration still costs bash's own per-character interpreter overhead
+(~30 μs/byte, measured), with no further per-character algorithmic win available short of
+rewriting the scan in a different language. Measured: **740 ms on a 25 KB command**, still far
+above the ~14 ms the old quoting-*unaware* `tr` split cost, and this loop sits on the hot path of
+*both* PreToolUse(Bash) guards — every single Bash tool call whose command happens to carry a
+`gh`-position match or a `bd`/`git`-position match plus a 40-hex run. The residual shape neither
+guard's cheap pre-filter can screen out is the *common* one: a real `git commit -m …` or `bd
+update … --notes …` that legitimately contains the guard's own trigger word plus a long body —
+exactly what `/land` writes constantly.
+
+**Three options were on the table, from the ticket:** (a) accept ~740 ms as a documented residual;
+(b) replace the char loop with a regex-driven scan that locates candidate operator characters
+first (via bash's C-level `=~`/`grep -o`) and only tracks quote state around *those* positions, so
+cost is proportional to operator count rather than string length; (c) cap the scanned length, with
+an explicit, argued fail-**closed** behaviour past the cap (a truncated scan must never become a
+false ALLOW).
+
+**Decision: (c), a shared length cap.** `scripts/shell-quote-split.sh` declares
+`SHELL_QUOTE_SPLIT_MAX_LEN=16384` (16 KiB) once; both guards check the string they are about to
+hand to `_split_unquoted` against it *before* calling the function, and DENY — never truncate,
+never silently proceed — if it is exceeded. Reasoning behind picking (c) over (b):
+
+- **(b) touches the split's actual quote-tracking logic** — a security-critical primitive whose
+  entire existing coverage (`tests/test_gh_write_guard.py`, `tests/test_sha_fabrication_guard.py`,
+  `tests/test_shell_quote_split_lib.py`) exists specifically because subtle bugs here are
+  fail-*open* (a live `gh` write or a fabricated SHA silently scanned as if it weren't there). An
+  operator-first rewrite is a genuine algorithmic improvement in principle, but re-deriving quote
+  state only around sparse candidate positions is exactly the kind of edge-heavy logic (backslash
+  escapes, `$(` inside double quotes, an unbalanced quote at end-of-string) that is easy to get
+  subtly wrong in a way the existing fixture suite might not catch on the first pass, and this
+  file's own producer instructions are explicit: *favor correctness/fail-closed safety over
+  performance*. (b) was not ruled out on principle — a future ticket carrying its own careful
+  differential-fixture argument could still land it — just not chosen here as the safer default.
+- **(a) leaves the actual complaint open.** 740 ms on a hot path both guards run on every Bash
+  call is a real, measured cost with no offsetting upside — worth closing if a lower-risk option
+  exists, and one does.
+- **(c) changes nothing about how the split itself works** — zero risk of a new false-ALLOW in the
+  quote-tracking logic, because that logic is untouched. It only bounds the *input* the (unchanged)
+  loop is ever asked to scan, and bounds it well outside anything real traffic is expected to
+  produce: sampled from this repo's own bd DB and git history at the time of the decision, the
+  largest single `description`/`notes` field ever recorded was **~4.9 KB** and the largest commit
+  message in the last 100 was **~3.5 KB** — the 16 KiB cap carries **>3×** headroom over the
+  largest single field ever observed, comfortably covering even a command that combines two such
+  fields in one call (e.g. `bd update --append-notes … --set-metadata …`) plus shell-quoting
+  expansion.
+
+**What the cap does and does not buy.** It does *not* make an already-under-cap command faster —
+a genuine 8–16 KB command still pays the full linear scan (a few hundred ms), same as before. What
+it closes is the *unbounded* tail: a 200 KB command (a file catted into a commit message, a giant
+heredoc) would have cost ~6 s on this hot path with no cap at all; past the cap that same command
+now denies in a few milliseconds instead, before `_split_unquoted` is ever called. A denied
+command past the cap is a **cheap, recoverable** cost (split it into smaller pieces, or surface it
+to a human to widen the cap) — the asymmetry this whole guard family is built on (a false DENY
+costs seconds; a false ALLOW here is unrecoverable).
+
+**Verification, per this ticket's acceptance criteria:** every DENIED fixture in both guards'
+suites still denies, and `pytest -k "DENIED or denied"` across both files shows zero deny-side
+changes (228/228 passed unchanged). The existing 25 KB timing fixture
+(`test_large_git_command_carrying_a_sha_does_not_take_seconds`) was resized to stay under the cap
+(so it still exercises "a real SHA in a large real command must be ALLOWED, fast" rather than the
+cap itself) and its ceiling tightened accordingly; a new fixture in each guard's test file pins
+that a command *past* the cap denies, fast, and names `lode-rjqm`/"scan cap" in its reason.
+`local LC_ALL=C` staying `local` (not leaking into either caller's `grep`/`[[:space:]]`
+semantics) continues to be pinned by `tests/test_shell_quote_split_lib.py`, unchanged by this
+ticket. The cap constant itself is declared exactly once, in the shared library — pinned by a new
+test in the same file — so both guards cap at the same value by construction, the identical
+rationale the extraction into a shared library (`lode-dia6`, above) already established for the
+two scanning primitives themselves.
+
 ### All three PreToolUse guards live in tested scripts, not inline config (2026-08-04)
 
 **No `PreToolUse(Bash)` guard keeps its scanning logic inline in `.claude/settings.json`.** Each of

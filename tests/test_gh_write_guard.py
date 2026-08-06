@@ -553,6 +553,33 @@ def test_fast_path_rejects_gh_inside_an_ordinary_word_without_scanning() -> None
     )
 
 
+def test_command_exceeding_the_scan_cap_is_denied_fast() -> None:
+    """lode-rjqm: a genuine `gh`-position command past `SHELL_QUOTE_SPLIT_MAX_LEN` (16 KiB) must
+    DENY without ever calling `_split_unquoted` -- exceeding the cap must never silently become a
+    false ALLOW, and must never pay the split's unbounded per-character cost either.
+
+    Unlike the fixture above (which the *gh*-position pre-filter rejects before the split is ever
+    reached), this one genuinely matches the `gh` command-position test, so it is the shape that
+    would otherwise pay the split's full cost -- the cap must catch it before that happens.
+    """
+    command = "gh issue create --title x --body '" + ("padding " * 2500) + "'"
+    assert len(command) > 16_384, "fixture must exceed the scan cap"
+    start = time.monotonic()
+    out = _script_output(command)
+    elapsed = time.monotonic() - start
+    assert out is not None and out["permissionDecision"] == "deny", (
+        "a command past the scan cap must DENY, never silently allow"
+    )
+    reason = out["permissionDecisionReason"]
+    assert "lode-rjqm" in reason and "scan cap" in reason, (
+        f"deny reason should name the scan cap (lode-rjqm): {reason!r}"
+    )
+    assert elapsed < 0.5, (
+        f"guard took {elapsed:.3f}s past the scan cap -- it must deny BEFORE calling "
+        "_split_unquoted, not after paying its cost (lode-rjqm)"
+    )
+
+
 def test_pre_filter_admits_every_shape_the_p_anchor_recognizes() -> None:
     """The pre-filter must be a strict SUPERSET of P -- nothing P would catch may be skipped.
 
@@ -623,6 +650,23 @@ def _script_decision(command: str) -> str | None:
     if not proc.stdout.strip():
         return None
     return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
+
+
+def _script_output(command: str) -> dict | None:
+    """Run the extracted script against `command`; return its full hookSpecificOutput dict, or
+    None if allowed. Same subprocess shape as `_script_decision`, but keeps the deny reason."""
+    proc = subprocess.run(
+        ["bash", str(SCRIPT), command],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 0, f"script exited {proc.returncode}: {proc.stderr}"
+    if not proc.stdout.strip():
+        return None
+    return json.loads(proc.stdout)["hookSpecificOutput"]
 
 
 class TestGhWriteGuardScriptDirectly:

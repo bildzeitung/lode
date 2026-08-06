@@ -133,6 +133,16 @@ case "$CMD" in
   *) CMD_SANITIZED="$CMD" ;;
 esac
 
+# SCAN LENGTH CAP (lode-rjqm) -- fail CLOSED (deny) rather than pay `_split_unquoted`'s
+# per-character cost without bound. See scripts/shell-quote-split.sh's header for the cap's
+# value and the argument behind it, and docs/agents-workflow.md for the (a)/(b)/(c) decision.
+if [ "${#CMD_SANITIZED}" -gt "$SHELL_QUOTE_SPLIT_MAX_LEN" ]; then
+  jq -n --arg len "${#CMD_SANITIZED}" --arg cap "$SHELL_QUOTE_SPLIT_MAX_LEN" \
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
+      permissionDecisionReason: ("lode-rjqm: this command is " + $len + " bytes, past the " + $cap + "-byte scan cap scripts/gh-write-guard.sh enforces before running its quote-aware split -- denying rather than scanning an oversized command for an unbounded amount of time, or worse, silently skipping the scan. If this is a legitimate command, split it into smaller pieces or surface this to a human to widen the cap.")}}'
+  exit 0
+fi
+
 SEG=$(_split_unquoted "$CMD_SANITIZED")
 
 # `gh` at a command position: through a leading VAR=x assignment, a fixed wrapper

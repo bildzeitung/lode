@@ -239,3 +239,24 @@ def test_split_does_not_leak_the_c_locale_to_its_caller() -> None:
         "the caller's locale is still byte-oriented after _split_unquoted returned -- three "
         f"accented characters counted as more than 3: {result.stdout!r}"
     )
+
+
+def test_scan_length_cap_is_declared_once_and_shared() -> None:
+    """lode-rjqm: `SHELL_QUOTE_SPLIT_MAX_LEN` is declared exactly once, here in the shared
+    library, so both consumers cap at the same value by construction rather than each carrying
+    its own (and eventually drifting) copy -- the same rationale the library itself exists for."""
+    lib_text = LIB.read_text()
+    assert "SHELL_QUOTE_SPLIT_MAX_LEN=" in lib_text, (
+        f"{LIB_NAME} no longer declares the shared scan-length cap"
+    )
+    for path in CONSUMERS:
+        text = path.read_text()
+        assert "SHELL_QUOTE_SPLIT_MAX_LEN=" not in text, (
+            f"{path.name} re-declares SHELL_QUOTE_SPLIT_MAX_LEN instead of using the shared "
+            f"one from {LIB_NAME} -- this is exactly the drift risk the shared library exists "
+            "to avoid (lode-dia6/lode-rjqm)"
+        )
+        assert "SHELL_QUOTE_SPLIT_MAX_LEN" in text, (
+            f"{path.name} sources {LIB_NAME} but never checks the scan-length cap before "
+            "calling _split_unquoted -- lode-rjqm's fail-closed cap is not wired in"
+        )

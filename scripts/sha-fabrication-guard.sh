@@ -125,6 +125,16 @@ CMD=$(printf '%s' "$CMD" | sed -e :a -e '/\\$/N; s/\\\n/ /; ta')
 # so an uppercase token was never meant as a SHA.
 INVOKE_RE='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((sudo|env|command|time|nohup|xargs)[[:space:]]+)*(bd|git)([[:space:]]|$)'
 
+# SCAN LENGTH CAP (lode-rjqm) -- fail CLOSED (deny) rather than pay `_split_unquoted`'s
+# per-character cost without bound. See scripts/shell-quote-split.sh's header for the cap's
+# value and the argument behind it, and docs/agents-workflow.md for the (a)/(b)/(c) decision.
+if [ "${#CMD}" -gt "$SHELL_QUOTE_SPLIT_MAX_LEN" ]; then
+  jq -n --arg len "${#CMD}" --arg cap "$SHELL_QUOTE_SPLIT_MAX_LEN" \
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
+      permissionDecisionReason: ("lode-rjqm: this command is " + $len + " bytes, past the " + $cap + "-byte scan cap scripts/sha-fabrication-guard.sh enforces before running its quote-aware split -- denying rather than scanning an oversized command for an unbounded amount of time, or worse, silently skipping the scan. If this is a legitimate command, split it into smaller pieces or surface this to a human to widen the cap.")}}'
+  exit 0
+fi
+
 TOKENS=$(_split_unquoted "$CMD" \
   | grep -E "$INVOKE_RE" \
   | grep -oE '\b[0-9a-f]{40}\b' \
