@@ -226,10 +226,17 @@ same way, for a different reason — see the exclude-label list below.) I list t
 only:
 
 ```bash
+SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
+
 STRANDED=$(bd list --status in_progress --limit 0 --json \
   --exclude-label ready-for-code-review,ready-for-land,needs-rebase,sweep-digest,land-escalated \
   | jq -r '(. // []) | .[] | [.id, .title] | @tsv')
+printf '%s' "$STRANDED" > "$SWEEP_TMP/stranded"
 ```
+
+Persisted to `$SWEEP_TMP/stranded` the same way §2a persists `$DEFERRED` — §8 (a later, separate
+Bash invocation) reads it back from disk rather than relying on the model's in-context memory of
+this block's output, which is not the mechanism §0 says this file uses.
 
 Same `(. // [])` null-empty guard as §1/§2/§2a, and the same `@tsv` as §2/§2a, which escapes a tab
 or newline embedded in a title instead of letting it break the row.
@@ -499,35 +506,43 @@ report — never fail a pass over the notify channel.
 
 ## 8. Publish and report
 
-This is its own, separate Bash tool invocation — nothing from §2a survives into it (§0's governing
-rule) — so `$DEFERRED` is re-derived from the scratch file §2a already wrote, not from in-context
-memory of that block's output:
+This is its own, separate Bash tool invocation — nothing from §2a/§2b survives into it (§0's
+governing rule) — so `$DEFERRED` and `$STRANDED` are re-derived from the scratch files §2a/§2b
+already wrote, not from in-context memory of those blocks' output:
 
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
 
 # Deliberately NOT §3's `|| { ... exit 1; }` guard: §8 must finish either way (the digest push
-# below is unrelated to the deferred list), so a missing file degrades this section alone.
+# below is unrelated to the deferred/stranded lists), so a missing file degrades that section alone.
 if DEFERRED="$(cat "$SWEEP_TMP/deferred" 2>/dev/null)"; then
   DEFERRED_UNAVAILABLE=""
 else
   DEFERRED_UNAVAILABLE="1"   # $SWEEP_TMP/deferred missing -- §2a's block never ran this pass
 fi
 
+if STRANDED="$(cat "$SWEEP_TMP/stranded" 2>/dev/null)"; then
+  STRANDED_UNAVAILABLE=""
+else
+  STRANDED_UNAVAILABLE="1"   # $SWEEP_TMP/stranded missing -- §2b's block never ran this pass
+fi
+
 scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
 ```
 
-A missing `$SWEEP_TMP/deferred` here is isolated to the deferred section alone, per §2a's own
-failure-handling rule — it must **not** abort this block (the digest push above still has to run)
-and must **not** suppress or be suppressed by the §1/§2 escalation/human/epic reporting, which reads
-its own, separately-persisted scratch files. When `$DEFERRED_UNAVAILABLE` is set, say "deferred list
-unavailable this pass" in place of the deferred section below, write `unavailable` (never `0`) in the
-one-line summary's `<len $DEFERRED> deferred` field, and continue — reporting `0 deferred` for a list
-that was never computed is the same phantom-empty read this persistence exists to prevent.
+A missing `$SWEEP_TMP/deferred` or `$SWEEP_TMP/stranded` here is isolated to that section alone, per
+§2a's/§2b's own failure-handling rule — it must **not** abort this block (the digest push above
+still has to run) and must **not** suppress or be suppressed by the §1/§2 escalation/human/epic
+reporting, or by each other's section, each of which reads its own, separately-persisted scratch
+file. When `$DEFERRED_UNAVAILABLE` (or `$STRANDED_UNAVAILABLE`) is set, say "deferred list
+unavailable this pass" (or "stranded list unavailable this pass") in place of that section below,
+write `unavailable` (never `0`) in the one-line summary's `<len $DEFERRED> deferred` (or `<len
+$STRANDED> stranded`) field, and continue — reporting `0` for a list that was never computed is the
+same phantom-empty read this persistence exists to prevent.
 
-Only a *missing* file reaches that branch: a §2a query that **errors** still writes an empty file
+Only a *missing* file reaches that branch: a §2a/§2b query that **errors** still writes an empty file
 (its `printf` runs regardless of the pipeline's exit status, exactly as §1's does), so it reads back
-here as an empty list and is reported by §2a's own rule instead.
+here as an empty list and is reported by §2a's/§2b's own rule instead.
 
 Report exactly one line, then the deferred section (§2a, always present) and the stranded section
 (§2b, always present), plus, when non-empty, the loud new-items block:
