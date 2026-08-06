@@ -173,11 +173,12 @@ CLI_THEME = Theme(CLI_STYLES)
 #: hand-rolled per command. Deliberately **no test seam** (no
 #: ``force_terminal``, no accessor to monkeypatch) — see docs/stack.md.
 #:
-#: BEWARE, if you are writing the sibling colour tickets' tests: the precise
-#: freeze-vs-live mechanism — what ``Console()`` computes once at
-#: CONSTRUCTION vs. what stays a live property, with source-line refs and
-#: executed verification against the pinned rich — is canonical in
-#: ``tests/conftest.py``'s scrub comment; see that for the "why". At module
+#: BEWARE, if you are writing the sibling colour tickets' tests: ``Console()``
+#: computes ``color_system`` once at CONSTRUCTION, and that alone decides
+#: whether colour is emitted — ``is_terminal`` stays a live property but stops
+#: answering the colour question. The precise freeze-vs-live mechanism, with
+#: source-line refs and executed verification against the pinned rich, is
+#: canonical in ``tests/conftest.py``'s scrub comment. At module
 #: scope that construction happens at **import** time. That is correct for
 #: real use (piping ``lode notes | cat`` replaces stdout before this module
 #: is imported), but it has two non-obvious consequences under test:
