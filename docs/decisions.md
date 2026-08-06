@@ -3582,3 +3582,26 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   cleanup. **Applied-for-`lode-3en5`:** folding `tests/test_enrich.py`'s `_insert_done_enrich_job`
   into the sibling `_insert_enrich_job` (hoisted to that file's Helpers section by `lode-z1e7`)
   stayed file-local on this leaning.
+
+- **Should `tests/test_deps_declared.py`'s deliberate `src/`-only scope widen to `tests/`?**
+  (`lode-z31w`.) `tests/test_workflow_concurrency.py` (`lode-4lqx`) added the repo's first direct
+  `import yaml` under `tests/` — pyyaml is now a genuine direct dependency of the test suite, not
+  just `src/`. `test_deps_declared.py`'s own module docstring already documents its scope as
+  deliberate ("test imports are dev-extra-only and noisier, and `src/` is where the shipped defect
+  actually lives"), so widening it is a scope change to a gate that was designed narrow on purpose,
+  not a bug fix.
+
+  **Leaning: leave it `src/`-only for now, unwidened.** The failure mode this gate exists to close
+  is a *silent* one — `src/` shipping an import that only works by accident of another package's
+  transitive graph, with no test ever exercising the gap until a user's install breaks. A `tests/`-only
+  undeclared import fails **loud and immediately** (a collection-time `ImportError` on `nox -s tests`,
+  visible on every CI run) the moment its transitive provider drops it — exactly what happened here,
+  caught by simple code review rather than by the gate. The two failure modes have different costs,
+  and the narrower gate already covers the one that matters more. Widening would also pull in a fair
+  amount of dev-tooling noise (`pytest`, `nox`, `ruff`, etc. all import things too) for comparatively
+  little payoff.
+
+  This is a judgment call a human should confirm rather than one this ticket settles unilaterally —
+  recorded here as the strongest default recommendation, not enacted in code. If a human decides to
+  widen it, `test_deps_declared.py`'s own docstring is the place to update the SCOPE section, and the
+  AST-sweep + comparison-set logic already generalizes to a second directory without restructuring.

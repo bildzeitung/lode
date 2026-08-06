@@ -70,6 +70,9 @@ dev = [
 		      # for any other dev tool.
     "shellcheck-py", # bundles the shellcheck binary — the `nox -s shellcheck` gate
     "build",         # `python -m build` — canonical wheel/sdist packaging front-end
+    "pyyaml",        # tests/test_workflow_concurrency.py's direct `import yaml`
+                      # (lode-4lqx) -- previously reached the venv only
+                      # transitively via huggingface_hub (lode-z31w).
 ]
 
 [project.scripts]
