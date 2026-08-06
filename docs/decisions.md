@@ -3229,11 +3229,11 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   - **Why this is the opposite overlap call from lode-o7ai, deliberately:** lode-o7ai decided that
     §1 and §2a (deferred) *should* overlap for a `land-escalated` + `deferred` ticket — both listings
     stay true simultaneously, and the double-listing is informative (an escalation that is also
-    parked). §2b is structurally different: its query actively *excludes* `land-escalated`, so a
-    given ticket can never be true for both §1 and §2b at once — a ticket is either surfaced by §1
-    (if `land-escalated`) or by §2b (if unlabeled-and-`in_progress`), never both, because being
-    `land-escalated` is exactly what removes it from §2b's result set. There is no overlap left to
-    preserve, so §2b does not adopt lode-o7ai's "let it double-list" policy — there is nothing for
+    parked). §2b is structurally different: a given ticket can never be true for both §1 and §2b at
+    once — and the two halves of §1 are exclusive with §2b for *different* reasons, which is the
+    whole substance of this entry: `land-escalated` because §2b's exclude-label list removes it,
+    `human` because §1's query is `--status open` while §2b's is `--status in_progress`. There is no
+    overlap left to preserve, so §2b does not adopt lode-o7ai's "let it double-list" policy — nothing for
     that policy to apply to. The one case that *does* still double-list is the same one lode-o7ai
     already governs (`land-escalated` + `deferred`, via §1 and §2a) — §2b is not a party to it.
   - **Implementation:** `.claude/skills/sweep/SKILL.md` §2b (new section, mirroring §2a's structure:

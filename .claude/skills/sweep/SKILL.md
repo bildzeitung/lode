@@ -55,12 +55,10 @@ complete rarely, so a slow tick is fine), or invoked ad hoc as bare `/sweep`.
   escalation, not redundancy to tidy away. Full rationale: lode-o7ai in
   [docs/decisions.md](../../../docs/decisions.md).
 - **Never promotes a ticket to a human-decision item *because* it is `in_progress` with no pipeline
-  label.** §2b is visibility only, on the same terms as §2a above. Unlike §2a, §2b's own query
-  *excludes* `land-escalated` from its result — the opposite overlap policy from lode-o7ai's §1 x
-  §2a decision, and deliberately so: here only one of §1/§2b can ever be true for a given row (a
-  ticket cannot be simultaneously `land-escalated`, which §2b's exclude-label list filters out, and
-  "carries no pipeline label"), so there is no overlap to preserve — the divergence is recorded
-  alongside lode-o7ai in [docs/decisions.md](../../../docs/decisions.md) (lode-ppki).
+  label.** §2b is visibility only, on the same terms as §2a above. Unlike §2a, §2b's query is
+  *non-overlapping* with §1 by construction — the opposite of lode-o7ai's decided §1 x §2a overlap,
+  and deliberately so. The mechanism is spelled out once, in §2b's exclude-label prose; the decision
+  is recorded alongside lode-o7ai in [docs/decisions.md](../../../docs/decisions.md) (lode-ppki).
 - **Never auto-remediates a stranded ticket.** §2b does not unclaim, reassign, or reopen anything —
   surface only. A human decides whether a stranded ticket is abandoned or deliberately held.
 
@@ -214,9 +212,11 @@ and continue. See [Failure handling](#failure-handling--a-sub-step-fails-the-loo
 A fourth, independent read, on its own track — mirroring §2a exactly. Claiming a ticket sets
 `status=in_progress`, which removes it from `bd ready` — so `/code` never picks it up again. Without
 a `ready-for-*` label it is also invisible to `/code` phase 2, to `/code`'s `needs-rebase` sweep, and
-to `/land`; it is not `deferred`, not `human`, not `land-escalated`, so nothing else in the pipeline
-sees it either. Every consumer keys on either `bd ready` or a label, and `in_progress` + unlabeled
-satisfies neither — the ticket is stranded silently. I list them for visibility only:
+to `/land`; and if it is not `deferred` and not `land-escalated`, nothing else in the pipeline sees
+it either. Every consumer keys on either `bd ready` or a label, and `in_progress` + unlabeled
+satisfies neither — the ticket is stranded silently. (A `human`-labeled ticket can be stranded the
+same way, for a different reason — see the exclude-label list below.) I list them for visibility
+only:
 
 ```bash
 STRANDED=$(bd list --status in_progress --limit 0 --json \
@@ -231,10 +231,11 @@ or newline embedded in a title instead of letting it break the row.
 list "in full, with no dedup" every pass, so a capped query would under-report past 50 while the §8
 count still read as the true total.
 
-**The exclude-label list — four labels, not the fuller set §1 might suggest.** `ready-for-code-review`,
-`ready-for-land`, and `needs-rebase` exclude live mid-pipeline work — those rows are not strandings,
-they are mid-flight. `sweep-digest` excludes my own digest issue (claimed on purpose, never a
-stranding). Two labels are deliberately **not** on this list, each for its own reason:
+**The exclude-label list — deliberately not the fuller set §1 might suggest.**
+`ready-for-code-review`, `ready-for-land`, and `needs-rebase` exclude live mid-pipeline work — those
+rows are not strandings, they are mid-flight. `sweep-digest` excludes my own digest issue (claimed on
+purpose, never a stranding). That leaves `land-escalated`, which *is* excluded, and the label a
+reader would expect to see beside it, `human`, which deliberately is not. Each for its own reason:
 
 - **`land-escalated` is on the exclude-label list, and correctly so.** §1's `land-escalated` query
   passes no `--status` filter, so an `in_progress` + `land-escalated` ticket already reaches
@@ -512,9 +513,8 @@ sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-
 (none)
 ```
 
-The deferred section lists every current `$DEFERRED` row (id + title) each pass, in full, with no
-dedup — or the literal `(none)` when `$DEFERRED` is empty. The stranded section does the same for
-`$STRANDED` (§2b) — every current row, in full, with no dedup, or `(none)` when empty.
+Each of those two sections lists every current row (id + title) each pass, in full, with no dedup —
+or the literal `(none)` when its list is empty.
 
 When `$SWEEP_TMP/new_annotated` (§7) is non-empty, follow the deferred section above with:
 
@@ -558,9 +558,8 @@ real items from the durable record a human relies on.
   (deferred) and §2b (stranded), identically: if either query errors, note it in the report (
   "deferred list unavailable this pass" / "stranded list unavailable this pass") and continue. It
   must **not** suppress the §6 rewrite or §7 notification for the (unrelated) escalation/human/epic
-  queue, and the reverse holds too: a §1/§2 failure never suppresses §2a or §2b, neither of which has
-  a rewrite to protect. A failure in one of §2a/§2b likewise never suppresses the other — each is its
-  own isolated read.
+  queue; the reverse holds too (a §1/§2 failure never suppresses §2a or §2b, neither of which has a
+  rewrite to protect), and so does the §2a-vs-§2b case — each is its own isolated read.
 - A failed pass still ends with a report and exit 0, so the next `/loop` tick gets a clean shot.
 
 ## What I never do
@@ -570,8 +569,6 @@ real items from the durable record a human relies on.
   state and write my own digest issue.
 - **Resolve a `land-escalated` or `human` item myself, or guess at a duplicate digest.** Surface,
   never decide.
-- **Unclaim, reassign, or reopen a stranded ticket (§2b).** Surface only, same as every other
-  section — a human decides whether it's abandoned or deliberately held.
 - **Let the digest issue enter `bd ready`.** I claim it immediately on creation for exactly that
   reason.
 - **Commit or `bd import` `.beads/issues.jsonl`**, or record a design decision in a bd note instead
