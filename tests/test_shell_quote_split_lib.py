@@ -239,3 +239,87 @@ def test_split_does_not_leak_the_c_locale_to_its_caller() -> None:
         "the caller's locale is still byte-oriented after _split_unquoted returned -- three "
         f"accented characters counted as more than 3: {result.stdout!r}"
     )
+
+
+def test_scan_length_cap_is_declared_and_enforced_once_and_shared() -> None:
+    """lode-rjqm: BOTH halves of the scan-length cap -- the value
+    (`SHELL_QUOTE_SPLIT_MAX_LEN`) and its enforcement (`deny_if_over_scan_cap`) -- live exactly
+    once, here in the shared library, so every consumer caps at the same value with the same
+    deny behaviour by construction rather than each carrying its own (and eventually drifting)
+    copy. Sharing only the constant, as this ticket first did, left the interesting half
+    duplicated verbatim in both guards (review, lode-rjqm) -- the same rationale the library
+    itself exists for, applied one level up."""
+    lib_text = LIB.read_text()
+    assert "SHELL_QUOTE_SPLIT_MAX_LEN=" in lib_text, (
+        f"{LIB_NAME} no longer declares the shared scan-length cap"
+    )
+    assert "deny_if_over_scan_cap()" in lib_text, (
+        f"{LIB_NAME} no longer defines the shared scan-cap enforcement helper"
+    )
+    for path in CONSUMERS:
+        text = path.read_text()
+        assert "SHELL_QUOTE_SPLIT_MAX_LEN=" not in text, (
+            f"{path.name} re-declares SHELL_QUOTE_SPLIT_MAX_LEN instead of using the shared "
+            f"one from {LIB_NAME} -- this is exactly the drift risk the shared library exists "
+            "to avoid (lode-dia6/lode-rjqm)"
+        )
+        assert "deny_if_over_scan_cap()" not in text, (
+            f"{path.name} re-implements deny_if_over_scan_cap instead of calling the shared "
+            f"one from {LIB_NAME} (lode-rjqm)"
+        )
+        assert "deny_if_over_scan_cap" in text, (
+            f"{path.name} sources {LIB_NAME} but never calls deny_if_over_scan_cap before "
+            "handing a string to _split_unquoted -- lode-rjqm's fail-closed cap is not wired in"
+        )
+
+
+def _library_without(name: str) -> str:
+    """The shared library's real text with one contract name removed -- an out-of-date copy, a
+    partial checkout, or a revert of just `shell-quote-split.sh`. Drops the constant's
+    assignment line, or the named function's whole definition (`name() {` .. first `^}`)."""
+    lines = LIB.read_text().splitlines()
+    if not name.endswith("()"):
+        return "\n".join(ln for ln in lines if not ln.startswith(f"{name}="))
+    out, skipping = [], False
+    for ln in lines:
+        if ln.startswith(f"{name[:-2]}() {{"):
+            skipping = True
+        elif skipping and ln == "}":
+            skipping = False
+        elif not skipping:
+            out.append(ln)
+    return "\n".join(out)
+
+
+@pytest.mark.parametrize("script", CONSUMERS, ids=lambda p: p.name)
+@pytest.mark.parametrize(
+    "omitted", ["SHELL_QUOTE_SPLIT_MAX_LEN", "deny_if_over_scan_cap()"]
+)
+def test_every_consumer_denies_when_the_library_omits_a_scan_cap_name(
+    script: Path, omitted: str, tmp_path: Path
+) -> None:
+    """The contract check must cover EVERY name the guards use, not just the two original
+    functions (review, lode-rjqm).
+
+    lode-rjqm grew the library's contract from two names to four, and each new one fails OPEN on
+    its own if unasserted -- a library defining only the two originals is an out-of-date copy, a
+    partial checkout, or a revert of just this file, all reachable because lode-rjqm changed the
+    library and both guards together:
+
+    - `SHELL_QUOTE_SPLIT_MAX_LEN` is read under `set -u`: `unbound variable`, script aborts, NO
+      decision on stdout, and the settings.json wrapper's trailing `exit 0` makes that a silent
+      ALLOW. Verified by sabotage before the fix (rc=1, empty stdout, in both guards).
+    - `deny_if_over_scan_cap` is called as `... || exit 0`, so the `||` SWALLOWS an undefined
+      function's rc=127 into a silent ALLOW even without `set -u` -- strictly worse, since no
+      shell option protects it.
+
+    Both are the identical fail-OPEN the `declare -F` contract check above exists to close,
+    reopened one line lower down.
+    """
+    lib_text = _library_without(omitted)
+    gone = f"{omitted[:-2]}() {{" if omitted.endswith("()") else f"{omitted}="
+    assert gone not in lib_text, f"sabotage did not actually remove {omitted}"
+    copied = _isolate(tmp_path, script, lib_text=lib_text)
+    _assert_denied_for_the_library(
+        _run_isolated(copied, PROBES[script.name]), script.name
+    )

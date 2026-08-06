@@ -1,5 +1,34 @@
 #!/usr/bin/env bash
 #
+# SCAN LENGTH CAP (lode-rjqm). `_split_unquoted` below is a per-character bash
+# loop; `local LC_ALL=C` (lode-dia6 review) fixed its O(n^2) *indexing* under a
+# UTF-8 locale, but the loop itself is still O(n) iterations of bash's own
+# interpreter overhead per character (~30us/byte measured -- 25 KB -> ~740ms),
+# with no further per-character algorithmic fix available short of a language
+# change. Cost is UNBOUNDED in the input: a 200 KB command (a file catted into
+# a commit message, a giant heredoc) would cost ~6s on a hot path both
+# PreToolUse(Bash) guards run on EVERY Bash call. Both guards cap the length of
+# the string they hand to `_split_unquoted` and FAIL CLOSED (deny) past the
+# cap, rather than let cost grow without bound.
+#
+# 16 KiB. The cap is a COST ceiling, not a "nothing real ever gets this big"
+# claim -- 16 KiB already costs ~500ms, so raising it to clear every observed
+# input would defeat the point. Measured against this repo's own traffic
+# (review, lode-rjqm -- the pre-review figure here sampled only the ~20 OPEN bd
+# issues and read as far more headroom than there is): git commit messages sit
+# well under it (largest of the last 300: ~4.9 KB, >3x headroom), but across
+# the FULL 761-issue bd DB the largest single notes field is ~36 KB, with four
+# more between 14 KB and 19 KB. Those accumulated over many `--append-notes`
+# calls, so it is not established that any single command ever exceeded the
+# cap -- but a big one-shot `bd update ... --notes` plainly can, and past the
+# cap it now DENIES. That is the deliberate trade: a denied command is a cheap,
+# recoverable cost (append in smaller pieces, or surface it to a human to widen
+# the cap), while silently scanning for seconds on every Bash call is not, and
+# silently NOT scanning would be a false ALLOW. Whether 16 KiB is still the
+# right number now the premise is corrected is filed as its own follow-up.
+# Full argument and the (a)/(b)/(c) options weighed: docs/agents-workflow.md.
+SHELL_QUOTE_SPLIT_MAX_LEN=16384
+#
 # Shared quote-aware shell scanning primitives for the PreToolUse(Bash) guards
 # (lode-dia6). SOURCED, never executed directly -- no `set -euo pipefail` here,
 # since that would leak into whichever guard sources this file; each caller
@@ -143,4 +172,32 @@ _split_unquoted() {
     i=$((i + 1))
   done
   printf '%s' "$out"
+}
+
+# deny_if_over_scan_cap <string> <calling-script-name>
+#
+# The ENFORCEMENT half of the scan-length cap declared at the top of this file
+# (lode-rjqm; factored out of the two guards in technical review). Both callers
+# ran a byte-identical copy of this block, differing only in which variable
+# they measured and which script name the message named -- the exact
+# copy-that-must-stay-in-lockstep shape this library exists to eliminate, and
+# which the two guards have already drifted into once (see the header). Sharing
+# the constant but not its enforcement left the interesting half duplicated.
+#
+# Emits the PreToolUse deny JSON and returns 1 when <string> is over the cap;
+# returns 0 (silent) otherwise, so the caller reads:
+#
+#     deny_if_over_scan_cap "$CMD" "scripts/foo.sh" || exit 0
+#
+# Callers MUST measure the string they are about to hand to `_split_unquoted`,
+# not the raw command -- the cap exists to bound THAT loop's input, and
+# measuring a longer, pre-transform string would deny commands whose actual
+# scanned length is under the cap.
+deny_if_over_scan_cap() {
+  local s="$1" who="$2"
+  [ "${#s}" -gt "$SHELL_QUOTE_SPLIT_MAX_LEN" ] || return 0
+  jq -n --arg len "${#s}" --arg cap "$SHELL_QUOTE_SPLIT_MAX_LEN" --arg who "$who" \
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
+      permissionDecisionReason: ("lode-rjqm: this command is " + $len + " characters, past the " + $cap + "-character scan cap " + $who + " enforces before running its quote-aware split -- denying rather than scanning an oversized command for an unbounded amount of time, or worse, silently skipping the scan. If this is a legitimate command, split it into smaller pieces (e.g. several `bd update --append-notes` calls instead of one) or surface this to a human to widen the cap.")}}'
+  return 1
 }

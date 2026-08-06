@@ -551,21 +551,60 @@ def test_fast_path_skips_the_split_when_no_bd_or_git_word_is_present() -> None:
 
 def test_large_git_command_carrying_a_sha_does_not_take_seconds() -> None:
     """The shape the gate above CANNOT filter: a real `git commit -m '<sha> <long message>'`,
-    which `/land` writes constantly. Here the only mitigation is `local LC_ALL=C` inside
-    `_split_unquoted` -- under a UTF-8 locale `${s:i:1}` is O(i), making the loop quadratic.
+    which `/land` writes constantly. Two mitigations apply, in order: `local LC_ALL=C` inside
+    `_split_unquoted` (lode-dia6 review -- under a UTF-8 locale `${s:i:1}` is O(i), making the
+    loop quadratic) and, below the cap this fixture stays under, nothing else runs but the
+    (now-linear) char loop itself.
 
-    Measured at 25 KB: 4.0s without it, ~0.74s with it (and ~14ms under the old `tr`). The
-    ceiling below sits between those, so dropping the locale line fails this test.
+    Sized comfortably under `SHELL_QUOTE_SPLIT_MAX_LEN` (16 KiB, lode-rjqm) so this exercises
+    the "cap doesn't get in normal traffic's way" path, not the cap itself (see
+    test_command_exceeding_the_scan_cap_is_denied_fast below for that). Measured at this size:
+    ~150ms with LC_ALL=C, ~4x that without it (quadratic under UTF-8) -- well under 8 KB, the
+    largest single bd/git field this repo's own DB or git history has ever held is ~5 KB, so an
+    8 KB real-world command is already a generous stress fixture, not a realistic one.
     """
-    command = f"git commit -m 'landed {REAL_SHA} : " + ("landing notes. " * 1700) + "'"
-    assert len(command) > 24_000, "fixture must reproduce the measured 25 KB regression"
+    command = f"git commit -m 'landed {REAL_SHA} : " + ("landing notes. " * 500) + "'"
+    assert 7_000 < len(command) < 16_384, (
+        "fixture must stay comfortably under the scan cap while still exercising a "
+        "multi-KB real command"
+    )
     start = time.monotonic()
     decision = _script_decision(command)
     elapsed = time.monotonic() - start
-    assert decision is None, "a REAL sha must still be allowed"
-    assert elapsed < 2.0, (
-        f"guard took {elapsed:.3f}s on a 25 KB git command carrying a real SHA -- "
+    assert decision is None, (
+        "a REAL sha in a command under the scan cap must still be allowed"
+    )
+    assert elapsed < 0.5, (
+        f"guard took {elapsed:.3f}s on an under-cap git command carrying a real SHA -- "
         "`local LC_ALL=C` in _split_unquoted regressed (lode-dia6 review)"
+    )
+
+
+def test_command_exceeding_the_scan_cap_is_denied_fast() -> None:
+    """lode-rjqm: past `SHELL_QUOTE_SPLIT_MAX_LEN`, the guard must DENY without ever calling
+    `_split_unquoted` -- exceeding the cap must never silently become a false ALLOW, and must
+    never pay the unbounded per-character scan cost either.
+
+    25 KB reproduces the pre-lode-rjqm ~740ms regression this ticket exists to bound; with the
+    cap in place it must complete in a small, size-independent budget instead, and DENY (the
+    correct default for content nobody has reviewed the shape of), even though it carries a
+    REAL SHA that would have been allowed had it been under the cap.
+    """
+    command = f"git commit -m 'landed {REAL_SHA} : " + ("landing notes. " * 1700) + "'"
+    assert len(command) > 16_384, "fixture must exceed the scan cap"
+    start = time.monotonic()
+    out = _script_output(command)
+    elapsed = time.monotonic() - start
+    assert out is not None and out["permissionDecision"] == "deny", (
+        "a command past the scan cap must DENY, never silently allow"
+    )
+    reason = out["permissionDecisionReason"]
+    assert "lode-rjqm" in reason and "scan cap" in reason, (
+        f"deny reason should name the scan cap (lode-rjqm): {reason!r}"
+    )
+    assert elapsed < 0.5, (
+        f"guard took {elapsed:.3f}s past the scan cap -- it must deny BEFORE calling "
+        "_split_unquoted, not after paying its cost (lode-rjqm)"
     )
 
 
