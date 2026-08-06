@@ -291,19 +291,14 @@ own copy of the `uv pip compile` command string:
 - **Offline / `uv`-absent behaviour: fails closed, and fails *distinguishably*.**
   `scripts/compile-lock.sh` exits non-zero with an explicit message if `uv` is not on `PATH`, rather
   than silently skipping the check. A stale lock landing unnoticed because a local check was quietly
-  skipped is worse than a noisy failure that tells a developer to install `uv`. But failing closed is
-  only half of `lode-9i2p`'s rule, and the half that is easy to get wrong is the other one — so
-  `nox -s lock_currency` splits its own non-zero into two statuses, the same contract
-  `scripts/validate-mermaid.sh` already carries:
-  - **exit 1 — CONTENT.** The committed lock genuinely disagrees with what `pyproject.toml` resolves
-    to. Some diff caused it; `/land` may attribute it to a branch, isolate, and bounce.
-  - **exit 2 — MACHINE.** The gate could not run at all: `uv` absent, or `compile-lock.sh` unable to
-    resolve (PyPI unreachable, a 5xx, DNS). Nothing about any branch's content failed, so `/land`
-    stops the pass and surfaces it as a human decision instead of isolating. Without this split, a
-    transient PyPI blip on the lander would bounce — and delete — every reviewed branch in the pass,
-    each with a fabricated "stale lock" finding, which is precisely the failure `lode-9i2p` was filed
-    to prevent. nox collapses every ordinary session failure to exit 1, so the session leaves the
-    process directly (`sys.exit`) for the machine-fault path.
+  skipped is worse than a noisy failure that tells a developer to install `uv`. `nox -s lock_currency`
+  splits its own non-zero into content (exit 1: the committed lock genuinely disagrees with what
+  `pyproject.toml` resolves to) vs. machine (exit 2: `uv` absent, or `compile-lock.sh` unable to
+  resolve — PyPI unreachable, a 5xx, DNS) — the same [gate exit-code
+  contract](agents-workflow.md#gate-exit-code-contract-012-lode-jhry) every other gate in this repo
+  honours; see that section for the full 0/1/2 rule, each consumer's obligation, and the nox
+  mechanic (`session.error`/a failed `session.run` both collapse to exit 1, so the machine-fault path
+  needs a direct `sys.exit(2)`).
 
   This gate needs that distinction more than the offline default set does, not less: `nox -t
   fix`/`nox -s tests` are offline once the model cache is warm, whereas `lock_currency` requires `uv`

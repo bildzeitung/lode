@@ -2144,6 +2144,69 @@ code:**
 Both run autonomously and surface to you on the **same rule**: only a **genuine decision** pulls you
 in (and, for the technical review, "I think I'm making it worse"). Everything else they handle.
 
+### Gate exit-code contract (0/1/2) (lode-jhry)
+
+Every gate a producer, a code-reviewer, or `/land` runs must distinguish a genuine **content**
+failure from a **machine/environment fault** — origin lode-9i2p, whose incident (a docker binary on
+`PATH` that could not reach an engine, making every doc report FAIL) is the reason this is a contract
+and not a suggestion: a broken *tool* is otherwise indistinguishable from broken *content*, and
+`/land`'s isolation-replay loop **deletes (bounces) a branch on a red gate** — so a machine fault
+misread as content damns an innocent branch, or several, in the same pass.
+
+**Not to be confused with the [precondition guards' own 0/1/2
+family](#precondition-guards-the-012-family-lode-t6ni)** (`isolation-guard.sh` and siblings). Those
+answer *"where is this agent"* and their callers collapse any non-zero to one hard stop; these gates
+answer *"is this content good"*, and their callers must branch on 1 vs. 2 — bouncing on a 2 is the
+whole defect this contract prevents. Same numbers, different families; that section says why the
+guards are deliberately not `gate-lib.sh` consumers.
+
+The contract, in one place instead of re-derived at every call site:
+
+- **exit 0 — PASS.** No further meaning.
+- **exit 1 — CONTENT.** The gate ran to completion and found a genuine problem: invalid Mermaid, a
+  stale lock, a failing test. This is a real verdict on the branch.
+- **exit 2 — MACHINE.** The gate itself **could not run** — a missing tool, an unreachable network
+  dependency, an environment fault. This says **nothing** about the content being gated; it is never
+  a verdict on the branch.
+
+**Each consumer's obligation on exit 2 is the same shape, restated per role only because the action
+differs:**
+
+- **`/land`** — never isolate or bounce a branch on exit 2. Stop the pass, surface the gate's own
+  diagnostic verbatim as a human decision (it names the cause and the remedy), and land nothing that
+  pass. Bouncing on a machine fault would delete every reviewed branch in the pass, each carrying a
+  fabricated content finding.
+- **`code-reviewer`** — escalate, never skip. Never hand-verify the gated thing in the gate's place,
+  never swap to `ready-for-land` with the gate silently skipped, and never read the fault as license
+  to proceed without it. Only a human can fix the machine.
+- **producer (`coding`)** — same as the reviewer: revert to the last green commit, push, and follow
+  the build-time escalation path (`land-escalated`) rather than hand off with the gate unresolved.
+
+**Who implements this, and how to find the current set.** The shell side has one shared
+implementation — [`scripts/gate-lib.sh`](../scripts/gate-lib.sh)'s `gate_could_not_run()` and
+`escalate_unless_content()` (lode-090f, lode-1mea), extracted precisely because the contract had
+reached three drifting literal copies. **Do not maintain a list of consumers here** — that list goes
+stale on every migration, which is the same failure this section exists to close. Discover it:
+
+```bash
+grep -lE '^[^#]*\. "\$\(dirname "\$0"\)/gate-lib\.sh"' scripts/*.sh
+```
+
+(the same question [`tests/test_gate_lib.py`](../tests/test_gate_lib.py)'s sweep asks, so a new
+consumer is gated the day it lands). Note the source line itself must be guarded so a missing
+`gate-lib.sh` fails **closed** at exit 2 — see that file's header.
+
+The one gate that *cannot* use the shared library is `nox -s lock_currency` (`noxfile.py`, lode-sys4):
+it is Python, not shell, so it carries its own `_machine_fault()` helper implementing the same
+contract via a direct `sys.exit(2)` — per the nox mechanic below.
+
+**The nox mechanic (verified directly against nox's own `tasks.py` — `Result.__bool__` /
+`final_reduce`):** `session.error()` and a failed `session.run()` both collapse to a flat process
+exit **1** — nox has no built-in concept of an exit-2 machine fault. A nox-hosted gate that needs the
+exit-2 path must call `sys.exit(2)` directly inside the session function, bypassing nox's own result
+reduction entirely. This is non-obvious and easy to get wrong by reaching for `session.error()` out
+of habit, which is exactly what would produce a fault that reads as content.
+
 ### The producers — `/code`, solo or fan-out
 
 There is **no separate `/code-parallel`** — once landing leaves the producer, building one task and

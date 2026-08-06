@@ -1228,7 +1228,9 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   it may be staged even when `git diff` says otherwise"), never as a measurement, and a direct attempt to
   reproduce it staged nothing. Replacing one confidently-wrong causal story with another — in prose about
   a `--force`-wielding loop — is the very defect this entry exists to close, one step removed (the
-  lode-9i2p pattern: inventing a plausible machine-level cause is worse than an admitted gap). Crucially,
+  lode-9i2p pattern — see the [gate exit-code
+  contract](agents-workflow.md#gate-exit-code-contract-012-lode-jhry) for the canonical statement of
+  that rule: inventing a plausible machine-level cause is worse than an admitted gap). Crucially,
   **nothing depends on the answer**: the export is by invariant never work (`import.auto: false`,
   lode-6ra), so restoring it unconditionally is correct *whatever* the trigger is — which is precisely
   why the restore is the right fix for an unestablished cause, rather than a reason to keep hunting one.
