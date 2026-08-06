@@ -1,6 +1,6 @@
 ---
 name: sweep
-description: The third `/loop` leg — a SURFACE-ONLY human-decision surfacer. Scans bd for work that has stopped waiting on a human and nothing else consumes (`land-escalated` branches, `human`-labeled decision tickets, epics ready for a human close-decision), dedups against a durable cross-machine digest issue, and surfaces new items; also lists every `deferred`-status ticket in its report each pass (read-only, no dedup, never in the digest) so parked work stays visible. Writes no `trunk`, makes no decisions, dispatches no builders/landers/auditors. Run self-paced as `/loop 30m /sweep`. Examples — "/sweep", "/loop 30m /sweep", "what needs a human decision right now?", "sweep the human-decision queue".
+description: The third `/loop` leg — a SURFACE-ONLY human-decision surfacer. Scans bd for work that has stopped waiting on a human and nothing else consumes (`land-escalated` branches, `human`-labeled decision tickets, epics ready for a human close-decision), dedups against a durable cross-machine digest issue, and surfaces new items; also lists every `deferred`-status ticket (§2a) and every `in_progress` ticket carrying no pipeline label (§2b) in its report each pass (read-only, no dedup, never in the digest) so parked and stranded work stays visible. Writes no `trunk`, makes no decisions, dispatches no builders/landers/auditors. Run self-paced as `/loop 30m /sweep`. Examples — "/sweep", "/loop 30m /sweep", "what needs a human decision right now?", "sweep the human-decision queue".
 ---
 
 # sweep
@@ -14,8 +14,10 @@ human when work parks on one of these — you only find it by manually running `
 silence into an active surface.
 
 I also list every `deferred`-status ticket in my report each pass (§2a) — parked work that
-`bd ready` hides by design and no other loop leg surfaces. Report-only: no dedup state, no digest
-rewrite, no notification.
+`bd ready` hides by design and no other loop leg surfaces — and every `in_progress` ticket carrying
+none of the pipeline labels (§2b) — claimed work that fell out of every consumer's sight (`bd ready`
+excludes it because it's `in_progress`; every pipeline leg keys on a label it doesn't have). Both are
+report-only: no dedup state, no digest rewrite, no notification.
 
 I am the **lowest-privilege** loop leg, deliberately: I write **one** self-owned bookkeeping issue
 (a running digest) and nothing else. The full design record — why this exists, what was challenged,
@@ -52,6 +54,15 @@ complete rarely, so a slow tick is fine), or invoked ad hoc as bare `/sweep`.
   block (annotated `(deferred)`) and §2a (unannotated). That is information about a parked
   escalation, not redundancy to tidy away. Full rationale: lode-o7ai in
   [docs/decisions.md](../../../docs/decisions.md).
+- **Never promotes a ticket to a human-decision item *because* it is `in_progress` with no pipeline
+  label.** §2b is visibility only, on the same terms as §2a above. Unlike §2a, §2b's own query
+  *excludes* `land-escalated` from its result — the opposite overlap policy from lode-o7ai's §1 x
+  §2a decision, and deliberately so: here only one of §1/§2b can ever be true for a given row (a
+  ticket cannot be simultaneously `land-escalated`, which §2b's exclude-label list filters out, and
+  "carries no pipeline label"), so there is no overlap to preserve — the divergence is recorded
+  alongside lode-o7ai in [docs/decisions.md](../../../docs/decisions.md) (lode-ppki).
+- **Never auto-remediates a stranded ticket.** §2b does not unclaim, reassign, or reopen anything —
+  surface only. A human decides whether a stranded ticket is abandoned or deliberately held.
 
 ## 0. Setup — Dolt-authoritative, fresh scratch state
 
@@ -197,6 +208,60 @@ way — it stays exactly what it always was, every current `deferred` ticket, in
 
 If this query itself errors, the failure is isolated to this step alone — note it in the §8 report
 and continue. See [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
+
+## 2b. Collect stranded in_progress tickets (report-only — never touches the digest or notify path)
+
+A fourth, independent read, on its own track — mirroring §2a exactly. Claiming a ticket sets
+`status=in_progress`, which removes it from `bd ready` — so `/code` never picks it up again. Without
+a `ready-for-*` label it is also invisible to `/code` phase 2, to `/code`'s `needs-rebase` sweep, and
+to `/land`; it is not `deferred`, not `human`, not `land-escalated`, so nothing else in the pipeline
+sees it either. Every consumer keys on either `bd ready` or a label, and `in_progress` + unlabeled
+satisfies neither — the ticket is stranded silently. I list them for visibility only:
+
+```bash
+STRANDED=$(bd list --status in_progress --limit 0 --json \
+  --exclude-label ready-for-code-review,ready-for-land,needs-rebase,sweep-digest,land-escalated \
+  | jq -r '(. // []) | .[] | [.id, .title] | @tsv')
+```
+
+Same `(. // [])` null-empty guard as §1/§2/§2a, and the same `@tsv` as §2/§2a, which escapes a tab
+or newline embedded in a title instead of letting it break the row.
+
+**`--limit 0` — same reason as §1.** The stake specific to this section: it promises the stranded
+list "in full, with no dedup" every pass, so a capped query would under-report past 50 while the §8
+count still read as the true total.
+
+**The exclude-label list — four labels, not the fuller set §1 might suggest.** `ready-for-code-review`,
+`ready-for-land`, and `needs-rebase` exclude live mid-pipeline work — those rows are not strandings,
+they are mid-flight. `sweep-digest` excludes my own digest issue (claimed on purpose, never a
+stranding). Two labels are deliberately **not** on this list, each for its own reason:
+
+- **`land-escalated` is on the exclude-label list, and correctly so.** §1's `land-escalated` query
+  passes no `--status` filter, so an `in_progress` + `land-escalated` ticket already reaches
+  `$CURRENT` and the digest through §1. Were §2b not to exclude it, the same ticket would surface a
+  second time here with no benefit — §1 already has it covered regardless of status.
+- **`human` is deliberately NOT excluded.** §1's `human` source (`bd human list --status open
+  --json`, §1 above) is status-filtered — an `in_progress` ticket that also carries the `human`
+  label is invisible to that query. If §2b also excluded `human`, such a ticket would be surfaced by
+  **neither** §1 nor §2b — stranded from every consumer, exactly the class of silence this section
+  exists to close. So §2b's exclude-label list is deliberately narrower than "everything §1 also
+  looks at": it excludes only the label whose §1 counterpart is status-agnostic
+  (`land-escalated`), and leaves `human` in the stranded list, where an `in_progress` human-labeled
+  ticket will actually be seen. Full rationale, and why this diverges from lode-o7ai's decided §1 x
+  §2a overlap: lode-ppki in [docs/decisions.md](../../../docs/decisions.md).
+
+**Deliberately excluded from everything else in this skill:**
+
+- `$STRANDED` never feeds `$CURRENT` (§3) — it must never enter `$CURRENT_IDS`/`$NEW_IDS` (§5),
+  never drive the digest rewrite/no-op decision, and never trigger the §7 `PushNotification`. A
+  ticket becoming (or ceasing to be) stranded is not a new human-decision item — it is surfaced so a
+  human notices it, not resolved by this skill.
+- `$STRANDED` is never written into the digest body (§6) and carries **no dedup state** of its
+  own — it is recomputed fresh, in full, every pass, straight into the §8 report.
+
+If this query itself errors, the failure is isolated to this step alone — note "stranded list
+unavailable this pass" in the §8 report and continue. See
+[Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
 
 ## 3. Build the current queue (dedup on stable IDs)
 
@@ -430,20 +495,26 @@ report — never fail a pass over the notify channel.
 scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
 ```
 
-Report exactly one line, then the deferred section (§2a, always present), plus, when non-empty, the
-loud new-items block:
+Report exactly one line, then the deferred section (§2a, always present) and the stranded section
+(§2b, always present), plus, when non-empty, the loud new-items block:
 
 ```
-sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-to-close rows> closable, <len $DEFERRED> deferred
+sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-to-close rows> closable, <len $DEFERRED> deferred, <len $STRANDED> stranded
 
 ## Deferred (surfaced, not reviewed) (<len $DEFERRED>)
+<id> <title>
+...
+(none)
+
+## Stranded (in_progress, no pipeline label) (<len $STRANDED>)
 <id> <title>
 ...
 (none)
 ```
 
 The deferred section lists every current `$DEFERRED` row (id + title) each pass, in full, with no
-dedup — or the literal `(none)` when `$DEFERRED` is empty.
+dedup — or the literal `(none)` when `$DEFERRED` is empty. The stranded section does the same for
+`$STRANDED` (§2b) — every current row, in full, with no dedup, or `(none)` when empty.
 
 When `$SWEEP_TMP/new_annotated` (§7) is non-empty, follow the deferred section above with:
 
@@ -462,8 +533,9 @@ appear in the `## Deferred (surfaced, not reviewed)` section above. That double 
 deliberate (the two sections answer different questions — "what's new" vs. "what's parked" — and a
 row can honestly be both), not a bug for a later edit to "fix" by suppressing either listing.
 
-If §4 found `N > 1` duplicate digests, any sub-step in §1/§2 failed, or the §2a deferred query
-failed, say so plainly in the same report (see below) — the pass still ends cleanly either way.
+If §4 found `N > 1` duplicate digests, any sub-step in §1/§2 failed, or the §2a deferred or §2b
+stranded query failed, say so plainly in the same report (see below) — the pass still ends cleanly
+either way.
 
 ## Failure handling — a sub-step fails, the loop survives
 
@@ -482,10 +554,13 @@ real items from the durable record a human relies on.
   `--body-file` write).
 - If §4 finds `N > 1` digests, the write path stops for the pass (that anomaly is reported, never
   guessed at).
-- If the §2a deferred query errors, that failure is isolated to the deferred section alone: note
-  "deferred list unavailable this pass" in the report and continue — it must **not** suppress the
-  §6 rewrite or §7 notification for the (unrelated) escalation/human/epic queue, and vice versa: a
-  §1/§2 failure never suppresses the §2a deferred section, which has no rewrite to protect.
+- **A report-only section's failure is isolated to that section alone** — this covers both §2a
+  (deferred) and §2b (stranded), identically: if either query errors, note it in the report (
+  "deferred list unavailable this pass" / "stranded list unavailable this pass") and continue. It
+  must **not** suppress the §6 rewrite or §7 notification for the (unrelated) escalation/human/epic
+  queue, and the reverse holds too: a §1/§2 failure never suppresses §2a or §2b, neither of which has
+  a rewrite to protect. A failure in one of §2a/§2b likewise never suppresses the other — each is its
+  own isolated read.
 - A failed pass still ends with a report and exit 0, so the next `/loop` tick gets a clean shot.
 
 ## What I never do
@@ -495,6 +570,8 @@ real items from the durable record a human relies on.
   state and write my own digest issue.
 - **Resolve a `land-escalated` or `human` item myself, or guess at a duplicate digest.** Surface,
   never decide.
+- **Unclaim, reassign, or reopen a stranded ticket (§2b).** Surface only, same as every other
+  section — a human decides whether it's abandoned or deliberately held.
 - **Let the digest issue enter `bd ready`.** I claim it immediately on creation for exactly that
   reason.
 - **Commit or `bd import` `.beads/issues.jsonl`**, or record a design decision in a bd note instead
@@ -503,6 +580,7 @@ real items from the durable record a human relies on.
 ## Stop and report
 
 When the pass ends I report: the one-line summary (§8), the deferred section (§2a, always present),
-the full **NEW HUMAN-DECISION ITEMS** block when `$NEW_IDS` is non-empty (annotated `(deferred)`
-per-row where applicable, per §7 — lode-o7ai), any duplicate-digest anomaly, and any sub-step that
-failed. A clean, unchanged queue is a valid, common outcome — I say so plainly and stop.
+the stranded section (§2b, always present), the full **NEW HUMAN-DECISION ITEMS** block when
+`$NEW_IDS` is non-empty (annotated `(deferred)` per-row where applicable, per §7 — lode-o7ai), any
+duplicate-digest anomaly, and any sub-step that failed. A clean, unchanged queue is a valid, common
+outcome — I say so plainly and stop.
