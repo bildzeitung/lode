@@ -89,37 +89,33 @@ SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocat
 
 set -o pipefail   # REQUIRED -- makes a failed bd query detectable; see the note below.
 
-QUERY_FAILED=0
-
+# The marker is written INSIDE each failure branch, never as a trailing `[ $FAILED = 1 ] &&
+# touch ...`: a conditional at the end of a block becomes the block's own exit status, so the
+# healthy path would short-circuit to 1 and report a failure on every good pass. Existence is the
+# whole signal -- content is irrelevant. Deliberately NOT §2a/§2b's SWEEP-QUERY-ERROR sentinel:
+# that sentinel lives inside a report-only list; this marker's consumer is §5, gating the §6
+# digest rewrite, and its meaning is "skip the rewrite this pass", not "render as errored".
 if ! ESCALATED=$(bd list --label land-escalated --exclude-label sweep-digest --limit 0 --json \
   | jq -r '(. // []) | .[] | "\(.id)\tland-escalated\t\(.title)\t\(.status)"'); then
-  QUERY_FAILED=1
-  ESCALATED=""
+  touch "$SWEEP_TMP/source_query_failed"
+  ESCALATED=""   # the capture may be partial/garbled on failure -- never persist it as data
 fi
 printf '%s' "$ESCALATED" > "$SWEEP_TMP/escalated"
 
 if ! HUMAN=$(bd human list --status open --json \
   | jq -r '(. // []) | .[] | "\(.id)\thuman\t\(.title)"'); then
-  QUERY_FAILED=1
+  touch "$SWEEP_TMP/source_query_failed"
   HUMAN=""
 fi
 printf '%s' "$HUMAN" > "$SWEEP_TMP/human"
-
-# Marker only -- content is irrelevant, existence is the signal. Deliberately NOT §2a/§2b's
-# SWEEP-QUERY-ERROR sentinel: that sentinel lives inside a report-only list, read by §8's
-# three-state rule. This marker has a different consumer (§5, gating the §6 digest rewrite) and a
-# different meaning (skip the rewrite entirely for this pass, not "report as errored").
-[ "$QUERY_FAILED" = 1 ] && touch "$SWEEP_TMP/source_query_failed"
 ```
 
-**`set -o pipefail` is what makes the failure detectable at all here too** — the same mechanism
-§2a introduces below (§2a's own note explains the underlying bd behaviour in full), applied here at
-the higher-consequence site: without it, `VAR=$(bd … | jq …)` carries only `jq`'s exit status, and
-a failing `bd` that writes zero bytes to stdout (measured on bd 1.1.0) never reaches it — `jq` reads
-no input, emits nothing, and exits `0`, so the assignment reports success on a failed query and
-`$ESCALATED`/`$HUMAN` come out empty, indistinguishable from a legitimately empty queue, at the
-exact site that gates §6's wholesale digest rewrite. It is set inside this block, so it is scoped to
-this Bash invocation (§0: each block is a fresh shell).
+**`set -o pipefail` is what makes those `if !` guards mean anything** — without it a failing `bd`
+never reaches the assignment's exit status at all. The mechanism, and the measured bd 1.1.0
+behaviour behind it, is stated once in §2a below; it applies identically here, at the
+higher-consequence site: `$ESCALATED`/`$HUMAN` would come out empty on a failed query,
+indistinguishable from a legitimately empty queue, at the exact site that gates §6's wholesale
+digest rewrite. Set inside this block, so it is scoped to this Bash invocation (§0).
 
 **`--limit 0` on every `bd list` in this skill — the canonical reason, referenced from §2/§2a/§4.**
 `bd list --help` documents `--limit` with a default of 50 ("use 0 for unlimited"), and bd emits **no**
@@ -145,7 +141,7 @@ so without `set -o pipefail` (above) the assignment would report success on a fa
 VAR=$(...)` guard above catches directly — no malformed-JSON path is involved; `jq` never sees
 anything to abort on, because it never receives input in this case.
 
-If either `bd` call errors, the `QUERY_FAILED` marker above is set and **the digest rewrite is
+If either `bd` call errors, the `$SWEEP_TMP/source_query_failed` marker above is written and **the digest rewrite is
 skipped for this pass** (§5 checks for `$SWEEP_TMP/source_query_failed`) rather than the pass
 aborting — a failed query is not an empty queue (but a `null`-serialized *empty* result is not
 a failure — see above). See
@@ -175,7 +171,6 @@ SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocat
 set -o pipefail   # REQUIRED -- see the note below.
 
 CLOSABLE=""
-QUERY_FAILED=0
 # Pull id AND title in the ONE list read -- `bd list --json` rows already carry
 # `title`, so re-fetching it per epic with a second `bd show` would be a wasted
 # round-trip against derivable state. Capture the query into a plain variable FIRST so its exit
@@ -196,13 +191,12 @@ if EPICS=$(bd list --type=epic --label epic-audited --status open --limit 0 --js
 "
   done <<< "$EPICS"
 else
-  QUERY_FAILED=1
+  # Same marker file as §1 -- either section's failure is sufficient to skip §6/§7 for this pass,
+  # so it is one shared existence check, not a per-section one. Written inside the branch for the
+  # reason §1's block spells out.
+  touch "$SWEEP_TMP/source_query_failed"
 fi
 printf '%s' "$CLOSABLE" > "$SWEEP_TMP/closable"
-
-# Same marker as §1, and the same file -- either section's failure is sufficient to skip §6/§7
-# for this pass, so the marker is a single shared existence check, not a per-section one.
-[ "$QUERY_FAILED" = 1 ] && touch "$SWEEP_TMP/source_query_failed"
 ```
 
 **Why the query is captured into `$EPICS` first, rather than piped straight into `< <(...)` as
@@ -210,7 +204,7 @@ before:** a `while read` loop's own exit status is `read`'s, never the upstream 
 setting of `pipefail` changes that, because process substitution runs the pipeline in a *separate*
 subshell the loop's exit status never reflects. That is what let a failed `bd`/`jq` upstream pass
 silently before: the loop itself always reported success (or simply produced zero rows, read as an
-empty epic queue). Checking the `if EPICS=$(...); then … else QUERY_FAILED=1; fi` assignment's own
+empty epic queue). Checking the `if EPICS=$(...); then … else …; fi` assignment's own
 status, before the loop ever starts, is what actually surfaces the failure.
 
 `--limit 0` for the same reason as §1 — same `$CURRENT`, same wholesale §6 rewrite.
@@ -258,7 +252,7 @@ reads no input, emits nothing, and exits `0`. The assignment reports success and
 never fires — the phantom-empty read this section exists to prevent, reintroduced one layer down.
 It is set inside the block, so it is scoped to this Bash invocation (§0: each block is a fresh
 shell). §1 and §2 above carry the identical `pipefail` guard, at the higher-consequence site (they
-gate the §6 digest rewrite) — via a `QUERY_FAILED` variable and a shared `source_query_failed`
+gate the §6 digest rewrite) — via a shared `source_query_failed`
 marker file rather than this section's `SWEEP-QUERY-ERROR` sentinel, since their consumer (§5) needs
 "skip the rewrite", not "render as errored in a report line" (lode-5qbi).
 
@@ -444,7 +438,7 @@ SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocat
 # Hard precondition (below): a failed §1/§2 source query is indistinguishable from an empty
 # queue, and §6 rewrites the digest WHOLESALE from $CURRENT -- so a failure here must suppress
 # the rewrite, not fall through to it. This is the actual enforcement of that rule; §1/§2's
-# `QUERY_FAILED` blocks write the marker, this reads it.
+# failure branches write the marker, this reads it.
 if [ -f "$SWEEP_TMP/source_query_failed" ]; then
   echo "SOURCE QUERY FAILED THIS PASS (§1 and/or §2) -- skipping §6 rewrite and §7" \
     "notification; prior digest left untouched. Re-run /sweep next tick." >&2
@@ -651,6 +645,10 @@ else
   STRANDED_STATE=missing
 fi
 
+# §1/§2's shared marker (written there, enforced in §5). Read from DISK, like everything else in
+# this block: §5's stderr message is in-context state, which §0 says this file never relies on.
+if [ -f "$SWEEP_TMP/source_query_failed" ]; then SOURCE_STATE=error; else SOURCE_STATE=ok; fi
+
 scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
 ```
 
@@ -709,9 +707,10 @@ appear in the `## Deferred (surfaced, not reviewed)` section above. That double 
 deliberate (the two sections answer different questions — "what's new" vs. "what's parked" — and a
 row can honestly be both), not a bug for a later edit to "fix" by suppressing either listing.
 
-If §4 found `N > 1` duplicate digests, any sub-step in §1/§2 failed, or the §2a deferred or §2b
-stranded query failed, say so plainly in the same report (see below) — the pass still ends cleanly
-either way.
+If §4 found `N > 1` duplicate digests, any sub-step in §1/§2 failed (`$SOURCE_STATE` = `error`, in
+which case also say that §6 and §7 were skipped and the prior digest is stale but intact), or the
+§2a deferred or §2b stranded query failed, say so plainly in the same report — the pass still ends
+cleanly either way.
 
 ## Failure handling — a sub-step fails, the loop survives
 
@@ -720,10 +719,10 @@ in opposite directions, and the digest wins: it is rebuilt wholesale from `$CURR
 query that errors is indistinguishable from "that queue is empty", and rewriting on it would delete
 real items from the durable record a human relies on.
 
-- If any §1/§2 query errors (`bd` or `jq`), §1/§2's `set -o pipefail` + `QUERY_FAILED` guards detect
+- If any §1/§2 query errors (`bd` or `jq`), §1/§2's `set -o pipefail` + `if !` guards detect
   it and write `$SWEEP_TMP/source_query_failed`; §5 checks that marker and exits before §6/§7 ever
-  run, note the failure in the report, and leave the prior digest exactly as it was. Stale, not
-  truncated. An *empty* result that serializes as literal `null` is **not** a failure — the
+  run, leaving the prior digest exactly as it was. §8 re-reads the same marker from disk (never
+  from memory of §5's stderr — §0) and reports the failure. Stale, not truncated. An *empty* result that serializes as literal `null` is **not** a failure — the
   `(. // [])` guard in §1/§2 normalizes it to an empty list, so a queue that legitimately emptied
   still rewrites the digest and drops the resolved item promptly (a bare `jq '.[]'` abort on that
   `null` would otherwise look like a failed query and wrongly suppress the rewrite).
