@@ -84,6 +84,7 @@ exercise. See scripts/land-lock.sh's header (CAVEAT 2) for the full history.
 from __future__ import annotations
 
 import concurrent.futures
+import fcntl
 import os
 import re
 import subprocess
@@ -130,16 +131,33 @@ def _path_without_flock(tmp_path: Path) -> str:
     excluded, rather than merely dropping the one directory `flock` happens
     to live in (which would still leave it reachable if some other $PATH
     entry also carries a copy). Used to exercise the lode-y3dw portability
-    fallback without needing an actual flock-less machine."""
+    fallback without needing an actual flock-less machine.
+
+    Only the directories that ACTUALLY carry a `flock` are farmed; every
+    other $PATH entry is passed through unchanged. The invariant is
+    identical either way ("no entry on this PATH resolves flock, every other
+    tool still resolves"), and it still holds if a third directory grows a
+    `flock` later -- but on a typical box that is 2 of ~26 directories, so
+    this builds a few thousand symlinks instead of ~9000 (measured here:
+    9011 before, and the teardown of those pays again). `os.scandir` does
+    the isdir/listdir work in one pass."""
     shim_root = tmp_path / "path-without-flock"
     shim_root.mkdir()
     shim_dirs: list[str] = []
     for i, d in enumerate(os.environ.get("PATH", "").split(os.pathsep)):
         if not d or not os.path.isdir(d):
             continue
+        try:
+            entries = [e.name for e in os.scandir(d)]
+        except OSError:
+            continue
+        if "flock" not in entries:
+            # Cannot resolve `flock` anyway -- no need to mirror it.
+            shim_dirs.append(d)
+            continue
         shim_dir = shim_root / str(i)
         shim_dir.mkdir()
-        for name in os.listdir(d):
+        for name in entries:
             if name == "flock":
                 continue
             try:
@@ -823,8 +841,6 @@ def test_a_slow_holder_blocks_a_concurrent_acquire_rather_than_racing_it(
     never race ahead and reclaim/write regardless -- and the lock record
     itself must be untouched afterward.
     """
-    import fcntl
-
     repo = _init_repo(tmp_path)
     _write_stale_lock(repo)
     lock = _lock_path(repo)
@@ -891,6 +907,73 @@ def test_flock_missing_from_path_is_a_reported_machine_fault(tmp_path: Path) -> 
     assert "MACHINE FAULT" in result.stderr
     assert "flock" in result.stderr
     assert not _lock_path(repo).exists()
+
+
+def test_every_write_lock_call_site_is_inside_the_flocked_section() -> None:
+    """Structural pin for "route 2" -- the FRESH path must be inside the mutex.
+
+    lode-y3dw's whole thesis is that BOTH acquire paths (fresh attempt and
+    reclaim) execute inside ONE mutex. The measured route 2 it closed was
+    precisely the fresh path executing OUTSIDE the reclaim's serialization:
+    a top-of-script `write_lock` landing between a reclaimer's staleness
+    decision and its `rm -f "$LOCK"` wins, and then the reclaimer's `rm`
+    destroys that record and its own `write_lock` succeeds into the hole --
+    two winners.
+
+    This is pinned STRUCTURALLY rather than behaviourally, and that is a
+    deliberate choice rather than a shortcut. MEASURED during lode-y3dw's
+    technical review: with the fresh `write_lock` moved back above the
+    `flock` acquisition (route 2 reintroduced verbatim, portability check
+    left in place), the ENTIRE module -- including the 32-way x 40-round
+    barriered stress test -- stayed green, 31 passed. The two-winner window
+    is real but narrow and timing-dependent, so a stochastic test does not
+    gate it at any contention level this suite can afford; and the obvious
+    extra stress arrangement does NOT help either -- starting a round with
+    NO lock present still yields exactly one winner even with route 2
+    reintroduced, because `write_lock`'s `noclobber` is itself atomic. What
+    actually distinguishes the two designs is WHERE the call sits, so that
+    is what this asserts.
+
+    Deliberately tolerant of reformatting: it compares line ORDER of real
+    call sites against the `flock` acquisition, not exact source text.
+    """
+    lines = SCRIPT.read_text(encoding="utf-8").splitlines()
+
+    def _code(line: str) -> str:
+        return "" if line.lstrip().startswith("#") else line
+
+    flock_lines = [
+        i for i, ln in enumerate(lines) if re.search(r"^\s*if ! flock ", _code(ln))
+    ]
+    assert len(flock_lines) == 1, (
+        f"expected exactly one `flock` acquisition in {SCRIPT.name}, found "
+        f"{len(flock_lines)} at lines {[i + 1 for i in flock_lines]} -- if the "
+        "script legitimately grew a second one, this pin needs updating "
+        "deliberately, not silently."
+    )
+    flock_line = flock_lines[0]
+
+    # Call sites only -- never the `write_lock() {` definition, never prose.
+    call_sites = [
+        i
+        for i, ln in enumerate(lines)
+        if re.search(r"^\s*(if\s+)?write_lock\s+\"?\$", _code(ln))
+    ]
+    assert call_sites, (
+        "found no `write_lock` call sites at all -- this pin has gone vacuous "
+        f"against {SCRIPT.name}; re-derive it against the current script."
+    )
+
+    early = [i + 1 for i in call_sites if i < flock_line]
+    assert not early, (
+        f"`write_lock` is called at line(s) {early} of {SCRIPT.name}, BEFORE "
+        f"the flock is taken at line {flock_line + 1}. That reintroduces "
+        "lode-y3dw's measured route 2: the fresh-lock path would no longer be "
+        "serialized against a concurrent reclaim's rm+write, so two /land "
+        "passes can both believe they hold the lock and write `trunk` at once. "
+        "The whole point of the flock is that the ENTIRE acquire decision -- "
+        "fresh attempt included -- runs inside it."
+    )
 
 
 # ---------------------------------------------------------------------------

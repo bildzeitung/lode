@@ -239,8 +239,10 @@
 #   * Taking trunk's 4-field `lock_record` wholesale would have silently
 #     dropped the owner token and reverted the reclaim to the non-atomic
 #     `rm`-then-create form.
-#   * The resolution kept this branch's reclaim gate AND trunk's
-#     `heartbeat`, and made `heartbeat` PRESERVE the existing token (via
+#   * The resolution kept that branch's reclaim gate AND trunk's
+#     `heartbeat` (the gate is gone again as of lode-y3dw -- only the
+#     `heartbeat` half of this resolution still constrains the code below),
+#     and made `heartbeat` PRESERVE the existing token (via
 #     `token_of`, see below) rather than regenerate or blank it -- a
 #     heartbeat that minted a fresh token every tick would have destroyed
 #     the one thing lode-q9pm needs to compare against, turning the field
@@ -448,7 +450,7 @@ write_lock() {
   # already exists, so two concurrent FRESH attempts can't both think they
   # got it. Takes the new owner token as $1. This guarantee covers THIS
   # function only -- the reclaim path below never calls it without first
-  # winning the exclusive gate (CAVEAT 2), which is what extends the same
+  # holding the exclusive `flock` (CAVEAT 2), which is what extends the same
   # single-winner property to the reclaim case.
   ( set -o noclobber
     lock_record "$1" > "$LOCK" ) 2>/dev/null
