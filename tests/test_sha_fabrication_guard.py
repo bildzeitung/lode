@@ -47,6 +47,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -363,6 +364,247 @@ def test_hook_fails_OPEN_when_the_script_is_unresolvable_deliberately() -> None:
     assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
     assert proc.stdout.strip() == "", (
         "guard denied when its script was unresolvable -- that bricks every Bash call in the repo"
+    )
+
+
+# ---------------------------------------------------------------------------
+# lode-dia6: the guard now sources scripts/shell-quote-split.sh (shared with
+# scripts/gh-write-guard.sh, lode-obox/lode-d5je) instead of its own
+# quoting-UNAWARE `tr ';&|(){}\`' '\n'` segment split. That old split let a
+# control character sitting inside a quoted STRING ARGUMENT or a QUOTED
+# HEREDOC body manufacture a fake segment start; if a `bd`/`git` invocation
+# then appeared to start at that fake boundary, a 40-hex token nearby got
+# scanned as if it sat inside a real bd/git call. These tests pin the two
+# false-positive shapes closed, plus a superset/no-fail-open invariant
+# mirroring tests/test_gh_write_guard.py's own coverage for the shared split.
+# ---------------------------------------------------------------------------
+
+QUOTED_ARG_FALSE_POSITIVE_SHAPES = [
+    # A control character (`;`) inside a double-quoted argument used to split
+    # the command into a fake segment `bd update x --sha <FAKE>` that starts
+    # with `bd` -- even though the REAL, only invocation here is `echo`.
+    f'echo "safe; bd update x --sha {FABRICATED_SHA}"',
+    # Same shape with a different control char and `git`.
+    f'echo "note (git show {FABRICATED_SHA})"',
+]
+
+QUOTED_HEREDOC_FALSE_POSITIVE_SHAPES = [
+    # A QUOTED heredoc body (inert text -- no shell substitution at all) that
+    # merely QUOTES a fabricated-looking SHA as a worked example, e.g. a doc
+    # or commit-message draft. Old behaviour: the heredoc body is plain text
+    # to `tr`, so a `bd update ... land_head=<FAKE>` line inside it was
+    # scanned and denied even though nothing here is live shell.
+    #
+    # NOTE (review, lode-dia6): the bd/git token MUST start its body line.
+    # INVOKE_RE is anchored at `^`, and the split leaves newlines intact, so a
+    # body line reading "example: bd update ..." never matched INVOKE_RE in the
+    # first place -- a fixture in that shape is ALLOWED with or without
+    # strip_quoted_heredoc_bodies, and pins nothing. These fixtures were
+    # differentially verified DENY-on-trunk / ALLOW-here.
+    (f"cat <<'EOF'\nbd update lode-1 --set-metadata land_head={FABRICATED_SHA}\nEOF"),
+    (f'cat <<"EOF"\ngit show {FABRICATED_SHA}\nEOF'),
+    # <<\EOF -- the third quoted form.
+    (f"cat <<\\EOF\ngit show {FABRICATED_SHA}\nEOF"),
+]
+
+
+@pytest.mark.parametrize("command", QUOTED_ARG_FALSE_POSITIVE_SHAPES)
+def test_fabricated_sha_inside_quoted_argument_is_not_denied(command: str) -> None:
+    """AC (lode-dia6): a control character inside a quoted STRING ARGUMENT must not
+    manufacture a fake bd/git segment start -- the real invocation here is not bd/git at all."""
+    assert _script_decision(command) is None, (
+        f"quoted-argument false-denied: {command!r}"
+    )
+
+
+@pytest.mark.parametrize("command", QUOTED_HEREDOC_FALSE_POSITIVE_SHAPES)
+def test_fabricated_sha_inside_quoted_heredoc_body_is_not_denied(command: str) -> None:
+    """AC (lode-dia6): a QUOTED heredoc body is inert text -- a fabricated-looking SHA quoted
+    inside one as a worked example must not be scanned as if it were live shell."""
+    assert _script_decision(command) is None, (
+        f"quoted-heredoc false-denied: {command!r}"
+    )
+
+
+def test_unquoted_heredoc_body_with_fabricated_sha_is_still_denied() -> None:
+    """Regression guard: an UNQUOTED heredoc body IS live shell (substitution happens), so a
+    fabricated SHA inside one, in a real bd/git invocation, must still be denied -- the fix
+    only strips QUOTED heredoc bodies, never unquoted ones."""
+    command = (
+        f"cat <<EOF\nbd update lode-1 --set-metadata land_head={FABRICATED_SHA}\nEOF"
+    )
+    assert _script_decision(command) == "deny"
+
+
+def test_real_bd_invocation_after_quoted_control_chars_is_still_denied() -> None:
+    """The fix must not become an over-broad narrowing: a genuine bd/git invocation carrying a
+    fabricated SHA, reached via `&&` after a metacharacter-laden quoted string earlier in the
+    command, must still be denied."""
+    command = f'echo "safe; not a real command" && bd update lode-1 --set-metadata land_head={FABRICATED_SHA}'
+    assert _script_decision(command) == "deny"
+
+
+def test_split_admits_every_shape_invoke_re_recognizes() -> None:
+    """SUPERSET invariant (review, lode-dia6) -- the load-bearing one.
+
+    Swapping the quoting-unaware `tr` for `_split_unquoted` can only ever produce FEWER segment
+    starts, and every segment start it drops is one the real shell would not have treated as a
+    command position either. That argument is prose; a single "still denied after `&&`" case does
+    not hold it up, because the break would be FAIL-OPEN (a fabricated SHA in a real bd/git call
+    silently unscanned) and no functional assertion notices a segment start that quietly stopped
+    being produced.
+
+    So enumerate them, mirroring tests/test_gh_write_guard.py's
+    test_pre_filter_admits_every_shape_the_p_anchor_recognizes: one real bd/git invocation per
+    alternative in INVOKE_RE (leading VAR= assignments, each wrapper word) and per control
+    character that manufactures a segment start -- including `$(` and a bare backtick inside
+    double quotes, which ARE live command substitution there. Every one must still be DENIED.
+    """
+    wrappers = ["sudo", "env", "command", "time", "nohup", "xargs"]
+    shapes = [
+        f"git show {FABRICATED_SHA}",
+        f"  git show {FABRICATED_SHA}",
+        f"bd update lode-1 --set-metadata land_head={FABRICATED_SHA}",
+        f"X=1 git show {FABRICATED_SHA}",
+        f"X=1 Y=2 env git show {FABRICATED_SHA}",
+        *(f"{w} git show {FABRICATED_SHA}" for w in wrappers),
+        *(
+            f"echo hi{c}git show {FABRICATED_SHA}"
+            for c in [";", "&", "|", "(", ")", "{", "}", "`"]
+        ),
+        f"echo hi && git show {FABRICATED_SHA}",
+        f'echo "$(git show {FABRICATED_SHA})"',
+        f'echo "`git show {FABRICATED_SHA}`"',
+        # Backslash-newline continuation collapse (lode-m6px) must still run after
+        # the heredoc pre-pass was inserted ahead of it.
+        f"bd update lode-1 \\\n  --set-metadata land_head={FABRICATED_SHA}",
+        # An UNQUOTED heredoc body is live shell and must still be scanned.
+        f"cat <<EOF\ngit show {FABRICATED_SHA}\nEOF",
+    ]
+    skipped = [s for s in shapes if _script_decision(s) is None]
+    assert not skipped, (
+        "the quote-aware split no longer produces a segment start for these shapes -- each one "
+        f"is a fabricated SHA in a real bd/git invocation the guard now lets through: {skipped}"
+    )
+
+
+def test_known_accepted_over_match_still_denies_fabricated_hex_in_bd_line_prose() -> (
+    None
+):
+    """Regression pin for the EXISTING accepted over-match
+    (test_known_accepted_over_match_prose_with_fabricated_looking_hex above): this is a
+    heuristic guard, not a shell parser, and a fabricated-looking 40-hex run in free-text prose
+    that sits on the SAME segment as a real bd/git invocation (no control character separating
+    them) is still scanned and denied. Distinguishing this from the two false-positive shapes
+    above is the entire point of `_split_unquoted` being QUOTE-aware rather than simply
+    ignoring everything inside quotes."""
+    command = f'bd create --title="x" --notes="mentions {FABRICATED_SHA} in passing"'
+    assert _script_decision(command) == "deny"
+
+
+def test_script_sources_the_shared_quote_split_library() -> None:
+    """The script must delegate to scripts/shell-quote-split.sh, not re-embed its own private
+    split -- per this ticket's own scope (lode-dia6: extract, don't duplicate)."""
+    text = SCRIPT.read_text()
+    assert "shell-quote-split.sh" in text
+    assert "_split_unquoted" in text
+    assert "strip_quoted_heredoc_bodies" in text
+    # No re-embedded quoting-unaware `tr` segment split left behind.
+    assert "tr ';&|(){}" not in text
+
+
+# ---------------------------------------------------------------------------
+# lode-dia6 (review): PERFORMANCE pins. Adopting the shared `_split_unquoted`
+# replaced a constant-time `tr` with a char loop, on a hook that runs on EVERY
+# Bash tool call. Two mitigations landed with it, and NEITHER is visible to a
+# functional assertion -- a regression here shows up only as a slow session,
+# which nothing else in this file would notice. Same rationale, and the same
+# generous-ceiling approach, as tests/test_gh_write_guard.py's
+# test_fast_path_rejects_gh_inside_an_ordinary_word_without_scanning
+# (lode-vrhu). Ceilings are far above ordinary process-spawn overhead and far
+# below the measured regressions, so they are not flaky on a loaded machine.
+# ---------------------------------------------------------------------------
+
+
+def test_fast_path_skips_the_split_when_no_bd_or_git_word_is_present() -> None:
+    """A command carrying a 40-hex run but no `bd`/`git` word cannot possibly match INVOKE_RE,
+    so the cheap command-position gate must reject it BEFORE the split runs.
+
+    Measured on this ticket's machine: with no gate, an 8 KB such command took ~489ms (vs ~13ms
+    under the old `tr`); the gate returns it to a few ms. 40-hex runs are ordinary traffic here
+    (a SHA pasted from `git rev-parse`, a `sha256:` lock line), so this is a hot path, not an
+    exotic one.
+    """
+    command = f"python3 -c \"print('{FABRICATED_SHA} " + ("padding " * 1100) + "')\""
+    assert len(command) > 8_000, "fixture must reproduce the measured 8 KB regression"
+    start = time.monotonic()
+    decision = _script_decision(command)
+    elapsed = time.monotonic() - start
+    assert decision is None, (
+        f"guard wrongly denied a bd/git-free command: {command[:80]}..."
+    )
+    assert elapsed < 0.25, (
+        f"guard took {elapsed:.3f}s on a bd/git-free command -- the O(n^2) split ran; the "
+        "command-position gate regressed (lode-dia6 review)"
+    )
+
+
+def test_large_git_command_carrying_a_sha_does_not_take_seconds() -> None:
+    """The shape the gate above CANNOT filter: a real `git commit -m '<sha> <long message>'`,
+    which `/land` writes constantly. Two mitigations apply, in order: `local LC_ALL=C` inside
+    `_split_unquoted` (lode-dia6 review -- under a UTF-8 locale `${s:i:1}` is O(i), making the
+    loop quadratic) and, below the cap this fixture stays under, nothing else runs but the
+    (now-linear) char loop itself.
+
+    Sized comfortably under `SHELL_QUOTE_SPLIT_MAX_LEN` (16 KiB, lode-rjqm) so this exercises
+    the "cap doesn't get in normal traffic's way" path, not the cap itself (see
+    test_command_exceeding_the_scan_cap_is_denied_fast below for that). Measured at this size:
+    ~150ms with LC_ALL=C, ~4x that without it (quadratic under UTF-8) -- well under 8 KB, the
+    largest single bd/git field this repo's own DB or git history has ever held is ~5 KB, so an
+    8 KB real-world command is already a generous stress fixture, not a realistic one.
+    """
+    command = f"git commit -m 'landed {REAL_SHA} : " + ("landing notes. " * 500) + "'"
+    assert 7_000 < len(command) < 16_384, (
+        "fixture must stay comfortably under the scan cap while still exercising a "
+        "multi-KB real command"
+    )
+    start = time.monotonic()
+    decision = _script_decision(command)
+    elapsed = time.monotonic() - start
+    assert decision is None, (
+        "a REAL sha in a command under the scan cap must still be allowed"
+    )
+    assert elapsed < 0.5, (
+        f"guard took {elapsed:.3f}s on an under-cap git command carrying a real SHA -- "
+        "`local LC_ALL=C` in _split_unquoted regressed (lode-dia6 review)"
+    )
+
+
+def test_command_exceeding_the_scan_cap_is_denied_fast() -> None:
+    """lode-rjqm: past `SHELL_QUOTE_SPLIT_MAX_LEN`, the guard must DENY without ever calling
+    `_split_unquoted` -- exceeding the cap must never silently become a false ALLOW, and must
+    never pay the unbounded per-character scan cost either.
+
+    25 KB reproduces the pre-lode-rjqm ~740ms regression this ticket exists to bound; with the
+    cap in place it must complete in a small, size-independent budget instead, and DENY (the
+    correct default for content nobody has reviewed the shape of), even though it carries a
+    REAL SHA that would have been allowed had it been under the cap.
+    """
+    command = f"git commit -m 'landed {REAL_SHA} : " + ("landing notes. " * 1700) + "'"
+    assert len(command) > 16_384, "fixture must exceed the scan cap"
+    start = time.monotonic()
+    out = _script_output(command)
+    elapsed = time.monotonic() - start
+    assert out is not None and out["permissionDecision"] == "deny", (
+        "a command past the scan cap must DENY, never silently allow"
+    )
+    reason = out["permissionDecisionReason"]
+    assert "lode-rjqm" in reason and "scan cap" in reason, (
+        f"deny reason should name the scan cap (lode-rjqm): {reason!r}"
+    )
+    assert elapsed < 0.5, (
+        f"guard took {elapsed:.3f}s past the scan cap -- it must deny BEFORE calling "
+        "_split_unquoted, not after paying its cost (lode-rjqm)"
     )
 
 

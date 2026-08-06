@@ -174,10 +174,14 @@ CLI_THEME = Theme(CLI_STYLES)
 #: ``force_terminal``, no accessor to monkeypatch) — see docs/stack.md.
 #:
 #: BEWARE, if you are writing the sibling colour tickets' tests: ``Console()``
-#: freezes BOTH its TTY check and its ``NO_COLOR`` read at CONSTRUCTION, which
-#: at module scope means **import** time. That is correct for real use (piping
-#: ``lode notes | cat`` replaces stdout before this module is imported), but it
-#: has two non-obvious consequences under test:
+#: computes ``color_system`` once at CONSTRUCTION, and that alone decides
+#: whether colour is emitted — ``is_terminal`` stays a live property but stops
+#: answering the colour question. The precise freeze-vs-live mechanism, with
+#: source-line refs and executed verification against the pinned rich, is
+#: canonical in ``tests/conftest.py``'s scrub comment. At module
+#: scope that construction happens at **import** time. That is correct for
+#: real use (piping ``lode notes | cat`` replaces stdout before this module
+#: is imported), but it has two non-obvious consequences under test:
 #:
 #: * Colour is off under ``CliRunner`` because *pytest's default capture* had
 #:   already replaced stdout by import time — NOT because CliRunner's output is

@@ -190,20 +190,35 @@ import lode
 from lode import jobs
 from lode.config import model_cache_dir
 
+#: Imported eagerly, not under TYPE_CHECKING: this file has no ``from __future__ import
+#: annotations``, so _make_batch_result's parameter annotation is evaluated at def time.
+#: This DOES make ``lode.enrich`` resident from collection onward -- which is safe, and does
+#: not weaken lode-4q97: the tests asserting an embed-only drain never imports the SDK go
+#: through the ``forget_sdk_imports`` fixture, whose whole purpose is evicting this graph
+#: first (see its docstring). ``lode.enrich`` itself keeps ``import anthropic`` deferred, so
+#: the SDK is still not pulled at collection -- verified, not assumed.
+from lode.enrich import EnrichmentResult
+
 #: lode-kq4v: scrub ambient colour/tty-forcing env vars BEFORE any test module can import
 #: ``lode.cli`` and construct its shared ``console``/``err_console`` (see that module's
 #: ``console`` docstring, and lode-xgaa). An ambient ``FORCE_COLOR`` in the shell that launched
 #: pytest silently reddens every test asserting plain, uncoloured CLI output, on an
 #: otherwise-unmodified tree -- OBSERVED landing a real /land pass (lode-kq4v).
 #:
-#: MECHANISM -- verified by execution against the installed rich (15.0.0), and stated precisely
+#: MECHANISM -- CANONICAL (lode-qv91): ``docs/stack.md``'s ``rich`` row, ``src/lode/cli.py``'s
+#: ``console`` docstring and ``tests/test_cli_console.py``'s module docstring all point HERE
+#: rather than restating this, so keep it here and keep it precise.
+#: Verified by execution against the installed rich (15.0.0), and stated precisely
 #: because the loose version ("``Console()`` freezes its TTY check at construction") invites
 #: exactly the wrong simplification. ``is_terminal`` is NOT frozen: it is a live property
 #: (``rich/console.py``:931) that re-reads ``os.environ`` on every access. What IS frozen is
 #: ``_color_system`` -- computed once in ``Console.__init__`` (:708-712) FROM ``is_terminal``,
 #: surfaced by the ``color_system`` property (:909) -- and ``color_system`` is what gates whether
-#: any ANSI is emitted at all. ``no_color`` and ``is_interactive`` are frozen too, as plain
-#: instance attributes.
+#: any ANSI *style* is emitted. ``no_color`` and ``is_interactive`` are frozen too, as plain
+#: instance attributes. ``is_terminal`` staying live is not inert, so do not shorten this to
+#: "``is_terminal`` no longer matters": ``_render_buffer`` re-reads it on every write (:2138) to
+#: decide whether CONTROL segments are emitted, and ``show_cursor``/``set_window_title`` (:1196,
+#: :1258) gate on it too.
 #:
 #: THAT is why this must be top-level module code and NOT an autouse fixture. A fixture runs at
 #: test SETUP, after collection has already imported every test module. Scrubbing there does
@@ -1183,6 +1198,43 @@ def fake_batch_client(
     client.beta.messages.batches.results.return_value = iter(results or [])
 
     return client
+
+
+# --- MagicMock Anthropic batch RESULT payload (lode-0i0k) ------------------
+#
+# The complement to fake_batch_client above: that builds the client, this
+# builds the individual result objects handed to its ``results=`` argument --
+# exactly the shape its docstring documents. Shared by tests/test_enrich.py
+# and tests/test_worker.py, which between them had five hand-written copies.
+#
+# ``enrichment`` is read only on the succeeded branch; the errored branch
+# needs no payload, and its three callers in test_enrich.py pass a throwaway
+# ``EnrichmentResult()``. Left required rather than defaulted to None so the
+# succeeded path -- the overwhelmingly common one -- cannot silently build a
+# result with no tool_use input.
+#
+# Placement matches fake_batch_client's for the same reason: a small
+# MagicMock builder with no SDK-shaped fixture data, so it meets none of
+# tests/_anthropic_rig.py's stated bar for moving out.
+
+
+def _make_batch_result(
+    version_id: str,
+    enrichment: EnrichmentResult,
+    result_type: str = "succeeded",
+) -> mock.MagicMock:
+    """Build a mock batch result object (succeeded or errored)."""
+    r = mock.MagicMock()
+    r.custom_id = version_id
+    r.result.type = result_type
+
+    if result_type == "succeeded":
+        tool_block = mock.MagicMock()
+        tool_block.type = "tool_use"
+        tool_block.input = enrichment.model_dump()
+        r.result.message.content = [tool_block]
+
+    return r
 
 
 # --- Read noxfile.py's session set without executing it (lode-dis6) --------

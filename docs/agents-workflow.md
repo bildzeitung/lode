@@ -1671,6 +1671,196 @@ being off, given the fiat is the first line of defence and this guard is a backs
 documented prerequisite a human can install; a mis-resolved script path is not something an agent
 could act on. Pinned by a test so the choice stays visible.
 
+**Segment split shared with the `gh` write guard (`lode-dia6`).** This script used to split into
+scan segments with its own quoting-*unaware* `tr` over the shell control-operator characters —
+byte-identical in shape to the splitter `scripts/gh-write-guard.sh` carried before `lode-obox` and
+`lode-d5je` fixed it there (a control character inside a quoted string argument, or inside a
+*quoted* heredoc body, could manufacture a fake segment start and get a nearby 40-hex token scanned
+as if it sat inside a real `bd`/`git` invocation). `lode-dia6`'s human decision, recorded on the
+ticket: **extract, don't re-port.** Porting the two fixes a second time would leave two copies of a
+splitter that must stay in lockstep across every future refinement — and the two guards already
+drifted once, because they started as byte-identical code. Both primitives
+(`_split_unquoted`, `strip_quoted_heredoc_bodies`) now live in one sourced library,
+[`scripts/shell-quote-split.sh`](../scripts/shell-quote-split.sh), and both guard scripts fail
+*closed* (deny) if that library is unusable — the opposite asymmetry from the guard-script
+resolution above, deliberately: a missing *shared dependency* both guards need is a new hazard this
+extraction itself introduces, not a pre-existing one to be as permissive about as a missing
+top-level script.
+
+*Unusable* covers **two** failure modes, not one — the technical review of `lode-dia6` found the
+second one live. **Absent**: the file is missing or unreadable, caught by each guard's `[ ! -r ]`
+check. **Broken**: the file is present and readable — so `-r` passes and `source` appears to
+succeed — but defines neither function (a truncated write, a partial checkout, a bad merge, a
+syntax error). The guard then dies at the first call site with `rc=127` and *no stdout*, and the
+wrapper's trailing `exit 0` converts that into a silent **ALLOW**: a fail-open in the very block
+whose job is to fail closed. So each guard asserts the *contract* (`declare -F` on both functions)
+after sourcing, not just the file, and sources under `|| true` so a syntax error reaches that check
+instead of aborting ahead of it. Both modes are swept across every consumer — *discovered at
+runtime*, never listed — by `tests/test_shell_quote_split_lib.py`, following
+`tests/test_gate_lib.py`'s pattern for the same reason: a test that enumerates its subjects *is*
+the enumeration, so a third guard that starts sourcing the library would otherwise fail open
+silently until someone hand-wrote a third copy of the test.
+
+The ~10-line fail-closed block itself stays **duplicated** in both guards, deliberately: its whole
+job is to behave when a sourced file is absent, so it cannot live in the sourced file, and a
+separate shared emitter would only relocate the same bootstrap hazard onto a hot path these guards
+keep fork-free. The runtime-discovered sweep above is the mechanism that keeps the copies honest —
+not a further extraction.
+
+The extraction also made the split's cost matter to a second caller, and
+`scripts/sha-fabrication-guard.sh` had no equivalent of the `gh` guard's `lode-vrhu`
+command-position pre-filter: `_split_unquoted` is far more expensive than the `tr` it replaced
+(measured 13 ms → 489 ms on an 8 KB command carrying a 40-hex run), and 40-hex runs are ordinary
+traffic here — a SHA pasted from `git rev-parse`, a land commit message quoting one. Two fixes,
+both from the same review: a fork-free `bd`/`git` command-position gate ahead of the split (with
+its own superset argument, since a pre-filter that skips a case `INVOKE_RE` would have caught is a
+silent narrowing of the deny surface), and `local LC_ALL=C` inside `_split_unquoted` — under a
+UTF-8 locale `${s:i:1}` is O(*i*), which is where the quadratic constant came from. Neither
+changes a single decision; both are pinned by tests.
+
+### The residual `_split_unquoted` cost: a shared scan-length cap, fail-closed (lode-rjqm)
+
+`local LC_ALL=C` (above) fixed `_split_unquoted`'s *indexing* — the loop is O(*n*) iterations
+now, not O(*n*²) — but each iteration still costs bash's own per-character interpreter overhead
+(~30 μs/byte, measured), with no further per-character algorithmic win available short of
+rewriting the scan in a different language. Measured: **740 ms on a 25 KB command**, still far
+above the ~14 ms the old quoting-*unaware* `tr` split cost, and this loop sits on the hot path of
+*both* PreToolUse(Bash) guards — every single Bash tool call whose command happens to carry a
+`gh`-position match or a `bd`/`git`-position match plus a 40-hex run. The residual shape neither
+guard's cheap pre-filter can screen out is the *common* one: a real `git commit -m …` or `bd
+update … --notes …` that legitimately contains the guard's own trigger word plus a long body —
+exactly what `/land` writes constantly.
+
+**Three options were on the table, from the ticket:** (a) accept ~740 ms as a documented residual;
+(b) replace the char loop with a regex-driven scan that locates candidate operator characters
+first (via bash's C-level `=~`/`grep -o`) and only tracks quote state around *those* positions, so
+cost is proportional to operator count rather than string length; (c) cap the scanned length, with
+an explicit, argued fail-**closed** behaviour past the cap (a truncated scan must never become a
+false ALLOW).
+
+**Decision: (c), a shared length cap.** `scripts/shell-quote-split.sh` owns *both* halves — the
+value `SHELL_QUOTE_SPLIT_MAX_LEN=16384` (16 KiB) and the enforcement helper
+`deny_if_over_scan_cap <string> <caller>` — declared once. Each guard calls
+`deny_if_over_scan_cap "$…" "scripts/…" || exit 0` on the string it is about to hand to
+`_split_unquoted`, *before* calling it, and DENYs — never truncates, never silently proceeds —
+past the cap. (Sharing the constant while hand-duplicating the check-and-deny block in both guards
+was the shape this ticket first took; technical review folded the enforcement into the library
+too, since a verbatim copy in both guards is precisely the drift `lode-dia6` created this library
+to eliminate.) Reasoning behind picking (c) over (b):
+
+- **(b) touches the split's actual quote-tracking logic** — a security-critical primitive whose
+  entire existing coverage (`tests/test_gh_write_guard.py`, `tests/test_sha_fabrication_guard.py`,
+  `tests/test_shell_quote_split_lib.py`) exists specifically because subtle bugs here are
+  fail-*open* (a live `gh` write or a fabricated SHA silently scanned as if it weren't there). An
+  operator-first rewrite is a genuine algorithmic improvement in principle, but re-deriving quote
+  state only around sparse candidate positions is exactly the kind of edge-heavy logic (backslash
+  escapes, `$(` inside double quotes, an unbalanced quote at end-of-string) that is easy to get
+  subtly wrong in a way the existing fixture suite might not catch on the first pass, and this
+  file's own producer instructions are explicit: *favor correctness/fail-closed safety over
+  performance*. (b) was not ruled out on principle — a future ticket carrying its own careful
+  differential-fixture argument could still land it — just not chosen here as the safer default.
+- **(a) leaves the actual complaint open.** 740 ms on a hot path both guards run on every Bash
+  call is a real, measured cost with no offsetting upside — worth closing if a lower-risk option
+  exists, and one does.
+- **(c) changes nothing about how the split itself works** — zero risk of a new false-ALLOW in the
+  quote-tracking logic, because that logic is untouched. It only bounds the *input* the (unchanged)
+  loop is ever asked to scan.
+
+**Where 16 KiB comes from, and what it does *not* claim** (corrected in technical review, lode-rjqm
+— the figure recorded pre-review sampled only the ~20 *open* bd issues and read as far more headroom
+than there is). The cap is a **cost ceiling**, not a "no real command is ever this big" claim: 16 KiB
+already costs ~500 ms, so raising it until it clears every observed input would defeat its purpose.
+Measured against this repo's own traffic:
+
+| Source | Largest observed | vs. the 16 KiB cap |
+|---|---|---|
+| git commit messages (last 300) | ~4.9 KB | >3× headroom — never bites |
+| bd `description`/`notes`, **full** 761-issue DB | **~36 KB** (`lode-905v`), plus four more at 14–19 KB | **exceeds the cap** |
+
+Those large notes fields accumulated over many `--append-notes` calls, so it is *not* established
+that any single command ever exceeded the cap — but a big one-shot `bd update … --notes` plainly
+can, and past the cap it now DENIES. That is the deliberate trade, not an oversight: a denied
+command is a **cheap, recoverable** cost (append in smaller pieces, or surface it to a human to
+widen the cap), whereas paying seconds on every Bash call is not, and silently *not* scanning would
+be a false ALLOW — the asymmetry this whole guard family is built on. Whether 16 KiB remains the
+right number now that the premise behind it is corrected is filed as its own follow-up rather than
+re-decided in review.
+
+**DECIDED (2026-08-05, bildzeitung — lode-qzg4): keep 16 KiB, accept the false DENY.** The follow-up
+the paragraph above filed is resolved. `SHELL_QUOTE_SPLIT_MAX_LEN` stays at `16384` — the cap sits
+**below** observed bd `notes` traffic (the table above) and that false DENY is knowingly accepted.
+Raising it is the trap: 16 KiB already costs ~500 ms (re-measured: 475 ms) in the per-character scan
+loop, so clearing the ~36 KB observation would put ~1.1 s on the hot path of *both*
+`PreToolUse(Bash)` guards, on **every** Bash call — buying correctness on a rare,
+cheaply-recoverable path by taxing the universal one. Option (b) above (the operator-first scan,
+which would dissolve the trade-off entirely) is **not** taken up either — YAGNI, on top of the
+fail-open risk already argued in its bullet above: speculative work for a problem whose recovery is
+cheap (below). Nothing about the mechanism changed: over-cap still DENIES, never truncates, never
+allows; both guards' over-cap DENY fixtures and the four-name library contract check are untouched.
+
+**Recovery path for a denied command — verified, not asserted.** `deny_if_over_scan_cap` measures
+the literal Bash **command string** the guard is invoked with (`$1`), never file contents that
+command merely references. So the recovery is to move the large text out of the command string, and
+*how* is per-field:
+
+- **`description` / `design`** — `bd update … --body-file <path>` / `--design-file <path>`, the file
+  written first with the `Write` tool. This is what `/sweep`'s digest rewrite already does
+  (`.claude/skills/sweep/SKILL.md`).
+- **`notes`** — there is **no `--notes-file` flag** in this repo's `bd` (`bd update --help` offers
+  only inline `--notes` / `--append-notes`), contrary to what the ticket raising this question
+  assumed. Use command substitution instead — `bd update <id> --notes "$(cat <path>)"` — which keeps
+  the command string short by the same mechanism. Splitting into several smaller `--append-notes`
+  calls, which the guard's own deny message names, also works and needs no temp file.
+
+Verified by direct invocation of `scripts/sha-fabrication-guard.sh`, on a 40 KB file *whose first
+line is a 40-hex token that is not a real object*: it passed cleanly both via `--body-file` and via
+`--notes "$(cat …)"` — which proves the file's contents genuinely are never scanned, not merely that
+a short command is short — while the same 40 KB inlined into the command string DENIED on the cap,
+and likewise `scripts/gh-write-guard.sh` on an oversized inline `gh` command. Content going
+unscanned that way is the standing residual of any guard that reads only the command string
+("Residual gaps that remain", above), not a new hole opened by the cap; and it launders nothing that
+was independently disallowed — a *short* `gh issue comment … --body-file <path>` still DENIES,
+because `gh-write-guard.sh`'s default-deny allowlist fires whether or not the cap is reached.
+
+**What the cap does and does not buy.** It does *not* make an already-under-cap command faster —
+a genuine 8–16 KB command still pays the full linear scan (a few hundred ms), same as before. What
+it closes is the *unbounded* tail: a 200 KB command (a file catted into a commit message, a giant
+heredoc) would have cost ~6 s on this hot path with no cap at all; past the cap that same command
+now denies in a few milliseconds instead, before `_split_unquoted` is ever called. A denied
+command past the cap is a **cheap, recoverable** cost (per-field recovery paths above, under
+"Recovery path for a denied command") — the asymmetry this whole guard family is built on (a false
+DENY costs seconds; a false ALLOW here is unrecoverable).
+
+**Verification, per this ticket's acceptance criteria:** every DENIED fixture in both guards'
+suites still denies, and `pytest -k "DENIED or denied"` across both files shows zero deny-side
+changes (228/228 passed unchanged). The existing 25 KB timing fixture
+(`test_large_git_command_carrying_a_sha_does_not_take_seconds`) was resized to stay under the cap
+(so it still exercises "a real SHA in a large real command must be ALLOWED, fast" rather than the
+cap itself) and its ceiling tightened accordingly; a new fixture in each guard's test file pins
+that a command *past* the cap denies, fast, and names `lode-rjqm`/"scan cap" in its reason.
+`local LC_ALL=C` staying `local` (not leaking into either caller's `grep`/`[[:space:]]`
+semantics) continues to be pinned by `tests/test_shell_quote_split_lib.py`, unchanged by this
+ticket. The cap constant itself is declared exactly once, in the shared library — pinned by a new
+test in the same file — so both guards cap at the same value by construction, the identical
+rationale the extraction into a shared library (`lode-dia6`, above) already established for the
+two scanning primitives themselves.
+
+**One fail-OPEN found and closed in technical review.** The cap grew the library's contract to
+**four** names, not two, but each guard's post-`source` contract check still asserted only the two
+original *functions*. A library that defines the functions but not `SHELL_QUOTE_SPLIT_MAX_LEN` — an
+out-of-date copy, a partial checkout, or a revert of just `shell-quote-split.sh`, all reachable
+since this ticket changed the library and both guards together — therefore hit the new cap line
+under `set -u`, aborted with `unbound variable`, emitted no decision, and the `settings.json`
+wrapper's trailing `exit 0` turned that into a **silent ALLOW** on every guarded Bash call. Verified
+by sabotage (strip only the constant: rc=1, empty stdout, in *both* guards). The enforcement helper
+carries the same hazard one notch worse: it is called as `… || exit 0`, so the `||` swallows an
+undefined function's rc=127 into a silent ALLOW with no shell option protecting it at all. Both are
+fixed by asserting the full four-name contract in the same block, pinned by a parametrized sweep in
+`tests/test_shell_quote_split_lib.py` that crosses *every consumer the library discovers* with
+*each new contract name removed* — so a fifth name added later is caught by the same shape. This is
+the identical fail-OPEN class `lode-dia6`'s own review closed for the functions, reopened one line
+lower down.
+
 ### All three PreToolUse guards live in tested scripts, not inline config (2026-08-04)
 
 **No `PreToolUse(Bash)` guard keeps its scanning logic inline in `.claude/settings.json`.** Each of
@@ -1681,6 +1871,11 @@ the three is a thin wrapper that resolves and delegates to a script under `scrip
 | `bd create --deps blocks:` inversion (`lode-ij24`) | [`scripts/bd-deps-blocks-guard.sh`](../scripts/bd-deps-blocks-guard.sh) | `tests/test_bd_deps_guard.py` |
 | External-tracker write (`lode-o29m` / `lode-9mbt`) | [`scripts/gh-write-guard.sh`](../scripts/gh-write-guard.sh) | `tests/test_gh_write_guard.py` |
 | Fabricated SHA (`lode-fpmi`) | [`scripts/sha-fabrication-guard.sh`](../scripts/sha-fabrication-guard.sh) | `tests/test_sha_fabrication_guard.py` |
+
+Both the `gh` write guard and the fabricated-SHA guard additionally source
+[`scripts/shell-quote-split.sh`](../scripts/shell-quote-split.sh) (`lode-dia6`) for their shared
+quote-aware segment split and quoted-heredoc pre-pass — see "Segment split shared with the `gh`
+write guard" above.
 
 `lode-fpmi` established this shape and stated the reason as its own acceptance criterion —
 *"the guard logic lives in a tested script, not untested inline shell"* — because **ungated inline
@@ -1984,6 +2179,69 @@ code:**
 
 Both run autonomously and surface to you on the **same rule**: only a **genuine decision** pulls you
 in (and, for the technical review, "I think I'm making it worse"). Everything else they handle.
+
+### Gate exit-code contract (0/1/2) (lode-jhry)
+
+Every gate a producer, a code-reviewer, or `/land` runs must distinguish a genuine **content**
+failure from a **machine/environment fault** — origin lode-9i2p, whose incident (a docker binary on
+`PATH` that could not reach an engine, making every doc report FAIL) is the reason this is a contract
+and not a suggestion: a broken *tool* is otherwise indistinguishable from broken *content*, and
+`/land`'s isolation-replay loop **deletes (bounces) a branch on a red gate** — so a machine fault
+misread as content damns an innocent branch, or several, in the same pass.
+
+**Not to be confused with the [precondition guards' own 0/1/2
+family](#precondition-guards-the-012-family-lode-t6ni)** (`isolation-guard.sh` and siblings). Those
+answer *"where is this agent"* and their callers collapse any non-zero to one hard stop; these gates
+answer *"is this content good"*, and their callers must branch on 1 vs. 2 — bouncing on a 2 is the
+whole defect this contract prevents. Same numbers, different families; that section says why the
+guards are deliberately not `gate-lib.sh` consumers.
+
+The contract, in one place instead of re-derived at every call site:
+
+- **exit 0 — PASS.** No further meaning.
+- **exit 1 — CONTENT.** The gate ran to completion and found a genuine problem: invalid Mermaid, a
+  stale lock, a failing test. This is a real verdict on the branch.
+- **exit 2 — MACHINE.** The gate itself **could not run** — a missing tool, an unreachable network
+  dependency, an environment fault. This says **nothing** about the content being gated; it is never
+  a verdict on the branch.
+
+**Each consumer's obligation on exit 2 is the same shape, restated per role only because the action
+differs:**
+
+- **`/land`** — never isolate or bounce a branch on exit 2. Stop the pass, surface the gate's own
+  diagnostic verbatim as a human decision (it names the cause and the remedy), and land nothing that
+  pass. Bouncing on a machine fault would delete every reviewed branch in the pass, each carrying a
+  fabricated content finding.
+- **`code-reviewer`** — escalate, never skip. Never hand-verify the gated thing in the gate's place,
+  never swap to `ready-for-land` with the gate silently skipped, and never read the fault as license
+  to proceed without it. Only a human can fix the machine.
+- **producer (`coding`)** — same as the reviewer: revert to the last green commit, push, and follow
+  the build-time escalation path (`land-escalated`) rather than hand off with the gate unresolved.
+
+**Who implements this, and how to find the current set.** The shell side has one shared
+implementation — [`scripts/gate-lib.sh`](../scripts/gate-lib.sh)'s `gate_could_not_run()` and
+`escalate_unless_content()` (lode-090f, lode-1mea), extracted precisely because the contract had
+reached three drifting literal copies. **Do not maintain a list of consumers here** — that list goes
+stale on every migration, which is the same failure this section exists to close. Discover it:
+
+```bash
+grep -lE '^[^#]*\. "\$\(dirname "\$0"\)/gate-lib\.sh"' scripts/*.sh
+```
+
+(the same question [`tests/test_gate_lib.py`](../tests/test_gate_lib.py)'s sweep asks, so a new
+consumer is gated the day it lands). Note the source line itself must be guarded so a missing
+`gate-lib.sh` fails **closed** at exit 2 — see that file's header.
+
+The one gate that *cannot* use the shared library is `nox -s lock_currency` (`noxfile.py`, lode-sys4):
+it is Python, not shell, so it carries its own `_machine_fault()` helper implementing the same
+contract via a direct `sys.exit(2)` — per the nox mechanic below.
+
+**The nox mechanic (verified directly against nox's own `tasks.py` — `Result.__bool__` /
+`final_reduce`):** `session.error()` and a failed `session.run()` both collapse to a flat process
+exit **1** — nox has no built-in concept of an exit-2 machine fault. A nox-hosted gate that needs the
+exit-2 path must call `sys.exit(2)` directly inside the session function, bypassing nox's own result
+reduction entirely. This is non-obvious and easy to get wrong by reaching for `session.error()` out
+of habit, which is exactly what would produce a fault that reads as content.
 
 ### The producers — `/code`, solo or fan-out
 
@@ -2788,24 +3046,81 @@ assumption would not have closed it.
   **The lock record's owner token (5th field, lode-ao95) is unaffected by this change** — it exists for
   a *different* reclaim-adjacent concern, and remains lode-q9pm's scope: see below.
 
-  **The lock record carries an owner token (5th field, lode-ao95) that `heartbeat` now preserves but
-  still does not verify.** It exists so a future ownership check has something to compare against: even
-  with an atomic reclaim, a pass whose lock is reclaimed out from under it (still possible under the
-  documented crash-recovery scenario — atomicity guarantees exactly one winner, not that the original
-  holder learns it lost) can keep calling `heartbeat` and re-stamp the new holder's record, turning a
-  genuine two-lander overlap *self-concealing* rather than merely non-atomic — the file looks
-  continuously fresh and names whichever pass wrote last, erasing the evidence a human would spot one
-  by. `heartbeat` (lode-m87j) reads whichever record is currently on disk and re-stamps that SAME token
-  rather than regenerating or blanking it, so the field stays meaningful across heartbeat calls —
-  lode-ao95 was built strictly against a trunk with no `heartbeat`, so this preservation is what merging
-  the two branches had to add (see the MERGE NOTE in `scripts/land-lock.sh`'s header). What it does
-  **not** do is compare that token against anything the calling pass remembers as *its own* — so a pass
-  that lost the lock still has no way to notice and still cannot refuse to overwrite a record it no
-  longer owns. Wiring that ownership check — threading each pass's own token through to its own
-  `heartbeat`/`release` calls, and refusing to overwrite on mismatch — is **lode-q9pm**, still open. The
-  standing rule that outlives this merge: **`heartbeat` must PRESERVE field 5, never regenerate or blank
-  it** — a heartbeat that mints a fresh token each tick leaves the field looking healthy while
-  destroying the only thing an ownership check can compare against.
+  **The lock record carries an owner token (5th field, lode-ao95); `heartbeat` and `release` now both
+  preserve it AND verify it (lode-q9pm, landed).** It exists so an ownership check has something to
+  compare against: even with an atomic reclaim, a pass whose lock is reclaimed out from under it (still
+  possible under the documented crash-recovery scenario — atomicity guarantees exactly one winner, not
+  that the original holder learns it lost) could otherwise keep calling `heartbeat` and re-stamp the new
+  holder's record, turning a genuine two-lander overlap *self-concealing* rather than merely non-atomic
+  — the file would look continuously fresh and name whichever pass wrote last, erasing the evidence a
+  human would spot one by. `heartbeat` (lode-m87j) reads whichever record is currently on disk and
+  re-stamps that SAME token rather than regenerating or blanking it, so the field stays meaningful
+  across heartbeat calls — lode-ao95 was built strictly against a trunk with no `heartbeat`, so this
+  preservation is what merging the two branches had to add (see the MERGE RESOLUTION note in
+  `scripts/land-lock.sh`'s header). The standing rule that outlives that merge: **`heartbeat` must
+  PRESERVE field 5, never regenerate or blank it** — a heartbeat that mints a fresh token each tick
+  leaves the field looking healthy while destroying the only thing an ownership check can compare
+  against.
+
+  `heartbeat`/`release` now both also accept the calling pass's own remembered token as an **OPTIONAL**
+  trailing `[own-token]` argument and compare it against the record's current token before acting: on a
+  mismatch — another `/land` has reclaimed the lock since this pass last checked — `heartbeat` refuses
+  to re-stamp (exit 1, still non-fatal to the caller's own step) and `release` refuses to `rm -f $LOCK`
+  (still exits 0, its own always-succeeds contract; there is nothing left for *this* pass to clean up
+  either way). **Omitting `[own-token]` reproduces the pre-lode-q9pm blind behaviour exactly and
+  silently** — preserve-and-re-stamp / remove, no ownership comparison at all — so the safety property
+  is enforced by *who calls the argument*, not by the script refusing to run without it. What actually
+  makes every real call site pass its own token is `.claude/skills/land/SKILL.md` plus three
+  sabotage-verified pins in `tests/test_land_lock.py` — one that Section 0 WRITES
+  `$STATE_DIR/land-lock-token` at all, one over every executed `heartbeat`/`release` call site in that
+  skill, and one over `land-merge-one.sh`'s own two call sites — not an invariant of `land-lock.sh`
+  itself. The call-site pin allows a line to opt out only by carrying a `land-lock-blind-ok` marker,
+  and **exactly one line does**: Section 0's own bail-out `release`, which has no token to supply
+  because parsing it out of `acquire`'s stdout is precisely what failed — the reasoning is in that
+  block's own comment, not restated here.
+
+  **Two honest limits on what this delivers, neither of them closed by the pins.** First, the pins are
+  *textual* — they prove every call site spells `"$MY_TOKEN"` in the skill's source, not that the
+  variable is non-empty at run time. Every read-back site reads `$STATE_DIR/land-lock-token` with
+  `2>/dev/null || true`, so if that file is missing or empty (a wiped `$STATE_DIR`, a pass resumed
+  mid-flight, an operator running a later section by hand) `$MY_TOKEN` is empty, `land-lock.sh` treats
+  empty exactly as absent, and every site degrades to the blind behaviour **with no diagnostic** while
+  all three pins stay green — **lode-67nk**, open. Second, the property actually delivered is *the lock
+  record is not corrupted or deleted by a pass that no longer owns it* — **not** *a displaced pass stops
+  landing*: at both consumers a mismatch verdict is discarded (`heartbeat … || true` in Section 2a, and
+  the same in `land-merge-one.sh`), so a pass that has demonstrably lost the lock still proceeds with
+  its merge. `scripts/land-lock.sh`'s header advises that such a caller "should also stop treating
+  itself as the lock holder"; no caller does that today, and nothing yet asks one to. Whether the check
+  should become a script invariant instead (so a future call site cannot silently regress by forgetting
+  the argument, and so the run-time fail-open above has nothing to fail open *through*) is
+  **lode-yuwt**, open, deliberately deferred rather than folded into lode-q9pm — its own text names the
+  hazard that
+  blocked doing it immediately: `release`'s contract lets a caller that never held the lock call it
+  harmlessly, and a self-reading design (the token file read by `release` itself rather than passed in)
+  would let a caller whose `acquire` failed this tick read the *previous* pass's token, match the live
+  record, and delete a lock it never held.
+
+  **Threading mechanism.** `acquire`'s own token never leaves `land-lock.sh` except on its stdout.
+  Because `.claude/skills/land/SKILL.md` runs every fenced `bash` block as its own, separate Bash tool
+  invocation with no shell state surviving between them (lode-sfnb, same constraint as the single-lander
+  lock design itself, above), Section 0's `acquire` block captures the printed token and writes it to
+  `$STATE_DIR/land-lock-token` (`$STATE_DIR` = `.git/land-state/`, the same cross-block persistence
+  mechanism every other cross-block value in that skill uses) — every later `heartbeat`/`release` call
+  site re-reads that file into `$MY_TOKEN` before calling `land-lock.sh`. `scripts/land-merge-one.sh`
+  (invoked from Section 3's two merge loops) takes the same token as an **optional third positional
+  argument**, for the identical reason: it is a script called *from* a fenced block, not a block that
+  could read `$STATE_DIR` on its own initiative.
+
+  This paragraph is the **canonical** statement of the threading mechanism. `scripts/land-lock.sh`'s
+  header and `.claude/skills/land/SKILL.md`'s Section 0 comment each carry only a short local
+  conclusion and point back here (**lode-1n4x**) — keep it that way rather than re-expanding either.
+
+  **Missing/legacy record on `[own-token]`.** When `[own-token]` is supplied and the lock file is
+  missing or predates the 5-field record (no owner token to compare against at all), `heartbeat` stamps
+  a fresh record using the *caller's own* token rather than minting an unrelated new one — at least as
+  good as the prior blind-regenerate behaviour, but worth naming: a displaced pass can still resurrect a
+  lock under its own identity in this narrow case, since there is no prior token for the comparison to
+  fail against when the record is simply absent.
 
   **Release reaches only two sites** — Section 1's empty-queue exit and the end of Section 4 — as a
   latency optimization; every other stop, *including the routine pass in which every branch was kicked

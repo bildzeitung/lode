@@ -30,8 +30,15 @@ on:
 # heaviest workflow (see the trigger comment above) wastes real wall-clock, not
 # just a queue slot. Convention + rationale:
 # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
+#
+# The group collapses a branch's push run and its pull_request run so one
+# cancels the other. Fallback is github.ref_name, NOT github.ref -- and NOT
+# `head_ref || ref`, the form most likely to be copied in, which still leaves
+# the push run in its own group and cancels nothing. Derivation + the accepted
+# fork-branch-name trade-off: the release.md anchor above (lode-7hbu).
+# This expression is byte-identical in build/tests/coverage.yml -- keep it so.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -133,10 +140,14 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
-          # No `cache: pip` here -- this leg installs via `uv` (below, through
-          # scripts/python-init.sh), which uses its own cache directory
-          # (~/.cache/uv), never pip's. A `cache: pip` option would populate
-          # nothing and silently do no work.
+          # No `cache: pip` here. The dependency install below runs through
+          # `uv` (via scripts/python-init.sh), which uses its own cache
+          # directory (~/.cache/uv), never pip's -- but the `pip install -U
+          # uv` bootstrap that precedes it IS a real pip download (a 22 MB
+          # wheel, measured). Caching is deliberately left off anyway: a
+          # restored cache entry that size isn't obviously cheaper than
+          # fetching it fresh. Reopen it only on numbers (lode-3vrq). Rationale:
+          # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
 
       - name: Install dependencies (from requirements.lock)
         # Installs the same bytes a developer runs: the exact, hash-verified

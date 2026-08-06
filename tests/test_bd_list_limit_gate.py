@@ -270,7 +270,7 @@ SKIP_PROSE: dict[tuple[str, str], str] = {
         "`list` is exactly what hid it from lode-2gun's literal `bd list` search', "
         "'--limit 0... so every `bd list` in this skill reads the same way') -- none "
         "is a literal invocation with its own arguments; every REAL `bd list` call "
-        "in this file (sections 1, 2, 2a, 4) already carries --limit 0."
+        "in this file (sections 1, 2, 2a, 2b, 4) already carries --limit 0."
     ),
     (".claude/skills/sweep/SKILL.md", "bd list --help"): (
         "Cites bd's own --help text ('`bd list --help` documents --limit with a "

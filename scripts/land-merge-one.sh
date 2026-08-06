@@ -16,7 +16,7 @@
 # A script on disk has no such problem: it is available identically to every
 # Bash invocation that calls it, with no bash state to redeclare.
 #
-# Usage: scripts/land-merge-one.sh <id> <land-msg-dir>
+# Usage: scripts/land-merge-one.sh <id> <land-msg-dir> [own-token]
 #
 #   <id>            -- the bd ticket id whose `origin/land/<id>` branch is
 #                      about to be merged into the current checkout (trunk).
@@ -27,6 +27,14 @@
 #                      script never calls `bd` itself, so the "one bd-show
 #                      pass instead of N subprocess calls per merge" property
 #                      lode-bns3 established stays intact.
+#   [own-token]     -- OPTIONAL: the current /land pass's own remembered
+#                      `scripts/land-lock.sh acquire` token (lode-q9pm),
+#                      threaded straight through to this script's own
+#                      heartbeat call below so it can refuse to overwrite a
+#                      lock this pass no longer owns. Omit it to reproduce
+#                      the pre-lode-q9pm blind heartbeat (no ownership
+#                      check) -- see scripts/land-lock.sh's own header for
+#                      what supplying it does and does not change.
 #
 # Exit codes -- same 0/1/2 convention as scripts/merge-precheck.sh and
 # scripts/validate-mermaid.sh (lode-9i2p's rule: exit 2 is a MACHINE/setup
@@ -128,15 +136,17 @@ fi
 
 # Arg-count check next -- first among the CALLER-INPUT checks -- and it must
 # exit 2, never `${1:?...}`, whose exit 1 is exactly the CONFLICT code (same
-# reasoning as merge-precheck.sh's header).
-if [ "$#" -ne 2 ]; then
+# reasoning as merge-precheck.sh's header). 2 or 3 args: [own-token]
+# (lode-q9pm) is optional.
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
   gate_could_not_run \
-    "usage: land-merge-one.sh <id> <land-msg-dir>" \
-    "Got $# argument(s), expected exactly 2. This is a caller bug, not a" \
+    "usage: land-merge-one.sh <id> <land-msg-dir> [own-token]" \
+    "Got $# argument(s), expected 2 or 3. This is a caller bug, not a" \
     "branch conflict, so it exits 2 (never 1) to stay out of the conflict path."
 fi
 id="$1"
 msg_dir="$2"
+own_token="${3:-}"
 
 # Heartbeat the single-lander lock (lode-m87j). This script runs once per
 # accepted branch in /land's Section 3 first merge loop AND its
@@ -159,7 +169,13 @@ msg_dir="$2"
 # the same "must be observable, never silent" standard lode-aps3 set for the
 # lock itself. Extra stderr is already normal on this path (the merge's own
 # error text goes there below).
-"$(dirname "$0")/land-lock.sh" heartbeat >/dev/null || true
+#
+# `$own_token` (lode-q9pm) is passed through unconditionally rather than
+# conditionally: an empty string is treated by land-lock.sh identically to
+# the argument being absent, so this call site never has to branch. What
+# supplying it does and does not change is documented once, in the Usage
+# block above -- not restated here.
+"$(dirname "$0")/land-lock.sh" heartbeat "$own_token" >/dev/null || true
 
 msg_file="$msg_dir/$id"
 if [ ! -s "$msg_file" ]; then

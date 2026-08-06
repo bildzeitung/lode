@@ -149,17 +149,35 @@ on:
 `concurrency: cancel-in-progress` and `timeout-minutes` are the same kind of convention as the
 `branches:` narrowing in the section above — recorded once here rather than re-derived in each
 workflow file. `build.yml`, `tests.yml`, and `coverage.yml` all carry `concurrency: { group:
-${{ github.workflow }}-${{ github.ref }}, cancel-in-progress: true }`; and every job in the repo
-carries a `timeout-minutes` (all five are named in the ladder below).
+${{ github.workflow }}-${{ github.head_ref || github.ref_name }}, cancel-in-progress: true }` —
+byte-identical across the three, deliberately; and every job in the repo carries a
+`timeout-minutes` (all five are named in the ladder below).
 
 - **`cancel-in-progress: true` is safe for the same reason the trigger narrowing above is safe.**
   "Nothing in the landing loop reads these check results" (the trigger-scope section above) — so
   cancelling a superseded run on an older commit of the same `land/<id>` or `trunk` ref discards
   nothing anyone would have read. Nor is this a rare case: it fires on every one of the ~2-3
   producer pushes per ticket counted in that same section (lode-2ouz).
+- **The group's fallback is `github.ref_name`, NOT `github.ref` (lode-7hbu).** Each of these three
+  workflows subscribes to *two* events, `push` and `pull_request`. Under the original
+  `${{ github.ref }}` key those two landed in different groups for the same branch — `github.ref` is
+  `refs/heads/<branch>` on a push but `refs/pull/<N>/merge` on a `pull_request` — so neither run
+  cancelled the other. `github.head_ref` is empty on push and the bare source-branch name on
+  `pull_request`, so `head_ref || ref_name` yields that same bare name on both events and the pair
+  shares one group. The near-miss worth naming: **`head_ref || ref` does not work.** `head_ref`
+  still wins on `pull_request`, but the push side falls through to `ref`'s `refs/heads/<branch>`
+  form — two strings again, nothing cancelled. It is the form most likely to be copied in.
+  - *Trade-off accepted, not overlooked:* `head_ref` is the bare branch name and is **not**
+    qualified by the source fork, whereas the old `refs/pull/<N>/merge` key was globally unique per
+    PR. Two PRs from different forks sharing a branch name (`patch-1`, `fix`, …) would therefore now
+    share a group and cancel each other. Cost here is currently zero — `gh pr list --state all`
+    returns nothing and this is a single-author repo — and the obvious "fix" is worse than the
+    problem: folding in `github.event.pull_request.head.repo.full_name` is empty on `push`, which
+    re-splits the very pair this key exists to collapse. Revisit only if outside forks ever open PRs
+    here.
 - **`release.yml` is deliberately EXCLUDED from `concurrency:`.** It is tag-triggered
-  (`push: tags: [v*]`), not branch-triggered, and each tag is its own distinct `github.ref` — so a
-  `${{ github.workflow }}-${{ github.ref }}` group has no legitimate same-ref run to collide with in
+  (`push: tags: [v*]`), not branch-triggered, and each tag is its own distinct ref — so a
+  workflow-plus-ref group has no legitimate same-ref run to collide with in
   normal use. Adding it would buy nothing while risking an interrupted `gh release create` (a
   genuine in-progress publish, not an advisory check) on the one path — a repushed tag — where the
   group key would ever actually collide.
@@ -185,8 +203,17 @@ carries a `timeout-minutes` (all five are named in the ladder below).
   would restore a cache `build.yml` populated on `trunk` rather than build a fresh one — taking the
   publishing leg's dependencies from a non-publishing workflow's cache is exactly what the clean-room
   framing exists to avoid. Distinct again from `tests.yml`/`coverage.yml`, which skip `cache: pip`
-  only because their `uv`-based install would leave it empty. As with the timeout ladder, this is not
-  a runtime call: release runs measure 14-30s of job time regardless (lode-le9e).
+  for a third reason — and **not** because the cache would sit empty (lode-81w0). Their dependency
+  install runs through `uv` (its own `~/.cache/uv`), but the `pip install -U uv` bootstrap ahead of
+  it *is* a real pip download — a 22 MB wheel from PyPI (measured: uv 0.12.0, linux x86_64) — so a
+  pip cache there would have something to hold. **Caching is deliberately left off anyway**: a
+  restored GitHub Actions cache entry that size is not obviously cheaper than fetching the wheel
+  fresh each run, and nothing has measured otherwise. Reopen it only on a cold-vs-cached CI
+  comparison; the question and the wheel measurement are recorded at lode-3vrq. Enabling it would
+  also need an explicit `cache-dependency-path`, since neither leg has a `requirements.txt` for
+  `setup-python`'s default glob to match (`build.yml` points its cache at `pyproject.toml` for the
+  same reason). As with the timeout ladder, this is not a runtime call: release runs measure 14-30s
+  of job time regardless (lode-le9e).
 
 ## Packaging assertion is a single implementation, shared by both workflows (lode-zuqp)
 

@@ -70,6 +70,22 @@ dev = [
 		      # for any other dev tool.
     "shellcheck-py", # bundles the shellcheck binary — the `nox -s shellcheck` gate
     "build",         # `python -m build` — canonical wheel/sdist packaging front-end
+    "pyyaml",        # tests/test_workflow_concurrency.py's direct `import yaml`
+                     # (lode-4lqx) -- previously reached the venv only
+                     # transitively via huggingface_hub (lode-z31w).
+    "numpy",         # tests/test_worker.py's direct `import numpy as np` --
+                     # previously reached the venv only transitively via
+                     # fastembed/onnxruntime (lode-sjbo, same defect class
+                     # as lode-z31w).
+    "packaging",     # tests/test_deps_declared.py's and tests/test_cli.py's
+                     # direct `from packaging...` imports -- previously
+                     # reached the venv only transitively (lode-sjbo).
+    "tree-sitter-markdown", # tests/test_tui_markdown_syntax.py's direct
+                            # `import tree_sitter_markdown` -- previously
+                            # reached the venv only transitively via
+                            # textual[syntax] (lode-sjbo). Hyphenated: a
+                            # requirement names the distribution, not the
+                            # import.
 ]
 
 [project.scripts]

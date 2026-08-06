@@ -1228,7 +1228,9 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   it may be staged even when `git diff` says otherwise"), never as a measurement, and a direct attempt to
   reproduce it staged nothing. Replacing one confidently-wrong causal story with another — in prose about
   a `--force`-wielding loop — is the very defect this entry exists to close, one step removed (the
-  lode-9i2p pattern: inventing a plausible machine-level cause is worse than an admitted gap). Crucially,
+  lode-9i2p pattern — see the [gate exit-code
+  contract](agents-workflow.md#gate-exit-code-contract-012-lode-jhry) for the canonical statement of
+  that rule: inventing a plausible machine-level cause is worse than an admitted gap). Crucially,
   **nothing depends on the answer**: the export is by invariant never work (`import.auto: false`,
   lode-6ra), so restoring it unconditionally is correct *whatever* the trigger is — which is precisely
   why the restore is the right fix for an unestablished cause, rather than a reason to keep hunting one.
@@ -3196,6 +3198,52 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     annotation and the deliberate double-listing), §2a and the Non-goals bullet (both restated to
     describe the decided behavior instead of pointing at this ticket as still open).
 
+- **2026-08-06 (lode-ppki) — DECISION: `/sweep` §2b's exclude-label list deliberately does NOT
+  mirror §2a x §1's decided overlap (lode-o7ai above) — it excludes `land-escalated` but not
+  `human`, the opposite direction from what a naive read of that entry might suggest.** §2b lists
+  every `in_progress` ticket carrying none of `ready-for-code-review`, `ready-for-land`,
+  `needs-rebase`, `sweep-digest`, `land-escalated` — a stranded-work surfacer for tickets claimed but
+  never labeled into any pipeline stage. This entry records why its exclusion set diverges from
+  lode-o7ai's overlap policy, and corrects a defect an earlier rebuild (lode-r8lc, bounced by
+  `/land`'s semantic review) introduced trying to extend that policy here.
+  - **The bounced branch's defect:** it excluded SIX labels, adding `land-escalated` AND `human` on
+    the stated premise that both are "already surfaced by §1." True for `land-escalated` — §1's
+    `land-escalated` query (`bd list --label land-escalated`, no `--status` filter) already covers
+    an `in_progress` + `land-escalated` ticket regardless of status, so excluding it from §2b avoids
+    a redundant second listing with no new information. **False for `human`** — §1's human source is
+    `bd human list --status open --json` (status-filtered, confirmed against `bd human list --help`
+    and the skill's own §1 prose), so an `in_progress` ticket that also carries `human` is invisible
+    to that query. Excluding `human` from §2b as well left such a ticket surfaced by **neither**
+    section — stranded from every consumer, precisely the class of silence `/sweep` exists to close.
+    The bounced branch closed one hole (an unlabeled `in_progress` ticket invisible everywhere) by
+    opening a smaller one of the identical shape.
+  - **Resolution (the minimal of the two options land-review offered): drop `human` from §2b's
+    exclude-label list.** An `in_progress` ticket carrying the `human` label now surfaces in §2b's
+    stranded section, since §1's `--status open` filter means it has nowhere else to be seen. The
+    alternative — making §1's `bd human list` query status-agnostic and keeping `human` on §2b's
+    exclude list — was rejected as the non-minimal fix: it would have widened §1's `$CURRENT`/digest
+    behavior (a `human`-labeled ticket entering the digest and notify path purely because it also
+    became `in_progress`) to solve a problem §2b's own exclude list can solve on its own, with no
+    change to §1 at all. `land-escalated` stays excluded — that half of the bounced branch's list was
+    verified correct and is unchanged.
+  - **Why this is the opposite overlap call from lode-o7ai, deliberately:** lode-o7ai decided that
+    §1 and §2a (deferred) *should* overlap for a `land-escalated` + `deferred` ticket — both listings
+    stay true simultaneously, and the double-listing is informative (an escalation that is also
+    parked). §2b is structurally different: a given ticket can never be true for both §1 and §2b at
+    once — and the two halves of §1 are exclusive with §2b for *different* reasons, which is the
+    whole substance of this entry: `land-escalated` because §2b's exclude-label list removes it,
+    `human` because §1's query is `--status open` while §2b's is `--status in_progress`. There is no
+    overlap left to preserve, so §2b does not adopt lode-o7ai's "let it double-list" policy — nothing for
+    that policy to apply to. The one case that *does* still double-list is the same one lode-o7ai
+    already governs (`land-escalated` + `deferred`, via §1 and §2a) — §2b is not a party to it.
+  - **Implementation:** `.claude/skills/sweep/SKILL.md` §2b (new section, mirroring §2a's structure:
+    `--limit 0`, `(. // [])` null-empty guard, `@tsv`, no `$CURRENT`/`$NEW_IDS`/digest/notify
+    contact, isolated failure handling generalized into one rule shared with §2a), the Non-goals
+    section (a new bullet recording this divergence and the no-auto-remediation stance), §8 (a
+    `<N> stranded` field and a `## Stranded (in_progress, no pipeline label)` section), and
+    `tests/test_bd_list_limit_gate.py`'s `SKIP_PROSE` roster comment (added "2b" alongside "1, 2, 2a,
+    4").
+
 - **RTK (the token-optimizing command proxy) is removed from this repo — decided, done
   (2026-08-04, maintainer decision).** The `rtk` golden rule and command reference are gone from
   `CLAUDE.md`, every `rtk`-prefixed call site across `.claude/` skills and agents is now the plain
@@ -3616,3 +3664,42 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   was `/land`'s semantic review that caught the reservation and escalated. The outcome above is the
   maintainer's, arrived at independently — but a reserved decision reaching a builder unlabelled is
   the gap, not the answer it happened to produce.
+
+- **Should `tests/test_deps_declared.py`'s deliberate `src/`-only scope widen to `tests/`?**
+  (`lode-z31w`.) `tests/test_workflow_concurrency.py` (`lode-4lqx`) added the repo's first direct
+  `import yaml` under `tests/` — pyyaml is now a genuine direct dependency of the test suite, not
+  just `src/`. `test_deps_declared.py`'s own module docstring already documents its scope as
+  deliberate ("test imports are dev-extra-only and noisier, and `src/` is where the shipped defect
+  actually lives"), so widening it is a scope change to a gate that was designed narrow on purpose,
+  not a bug fix — a judgment call for a human, recorded here with a leaning rather than settled by
+  this ticket. If a human decides to widen it, `test_deps_declared.py`'s own docstring is the place
+  to update the SCOPE section.
+
+  **What widening would actually cost and find — measured, not estimated** (during `lode-z31w`'s
+  technical review, by running the gate's own `_third_party_tops`/`_classify` helpers over `tests/`
+  in place of `src/`):
+  - **UNDECLARED (3):** `numpy`, `packaging`, `tree_sitter_markdown` — each directly imported under
+    `tests/`, each declared nowhere in pyproject.toml, each reaching the venv only transitively.
+    That is three more *live* instances of this ticket's own defect class, so a widened gate would
+    have real findings waiting rather than none. Tracked as `lode-sjbo`.
+  - **UNRESOLVED (5):** `_anthropic_rig`, `_gitrepo`, `_hookharness`, `conftest`,
+    `test_skill_bash_state` — first-party sibling modules. `tests/` is on `sys.path`, so a
+    `tests/`-local import is indistinguishable from a third-party top-level one.
+
+  The second list is the actual obstacle, and it means widening is **not** the pure call-site change
+  it looks like: `_declared_distributions` and `_classify` are directory-agnostic and
+  `_third_party_tops` already takes its directory as a parameter, but `_STDLIB_AND_FIRST_PARTY` would
+  additionally have to learn the `tests/`-local module names (or the sweep learn to skip
+  sibling-importable ones) or the gate fails on five false positives from day one. It is *not* the
+  dev-tooling noise one might assume — `pytest` is already declared, and `nox`/`ruff` are never
+  imported by `tests/` at all.
+
+  **Leaning: leave it `src/`-only for now, unwidened.** The failure mode this gate exists to close
+  is a *silent* one — `src/` shipping an import that only works by accident of another package's
+  transitive graph, with no test ever exercising the gap until a user's install breaks. A `tests/`-only
+  undeclared import fails **loud and immediately** (a collection-time `ImportError` on `nox -s tests`,
+  visible on every CI run) the moment its transitive provider drops it — exactly what happened here,
+  caught by simple code review rather than by the gate. The two failure modes have different costs,
+  and the narrower gate already covers the one that matters more. Note this leaning rests on that
+  cost asymmetry alone, not on a claim that there is nothing to find: per the measurement above,
+  there is.

@@ -108,7 +108,33 @@ Before doing anything else, take the local lock. If another `/land` is still run
 not run in parallel:
 
 ```bash
-scripts/land-lock.sh acquire || { echo "land: could not acquire the lock this tick -- skipping."; exit 0; }
+STATE_DIR="$(git rev-parse --git-dir)/land-state"    # re-derive -- fresh Bash invocation (lode-sfnb)
+mkdir -p "$STATE_DIR"
+ACQUIRE_OUT="$(scripts/land-lock.sh acquire)" \
+  || { echo "land: could not acquire the lock this tick -- skipping."; exit 0; }
+echo "$ACQUIRE_OUT"
+# Persist THIS pass's own acquire token to disk (lode-q9pm), for every later
+# heartbeat/release call site to re-read -- a file, not a variable, because no
+# shell state survives between this file's separate Bash invocations (the
+# governing rule above). Full threading mechanism: docs/agents-workflow.md's
+# canonical paragraph (search that file for "Threading mechanism.").
+# Loud-fail if the pattern doesn't match rather than silently persisting an
+# empty token -- see scripts/land-lock.sh's own "acquired (token ...)"/
+# "acquired via reclaim (token ...)" stdout contract.
+printf '%s\n' "$ACQUIRE_OUT" \
+  | grep -oE 'token [0-9a-f]+' | cut -d' ' -f2 > "$STATE_DIR/land-lock-token"
+[ -s "$STATE_DIR/land-lock-token" ] || {
+  echo "land: could not parse this pass's own token out of: $ACQUIRE_OUT" >&2
+  # RELEASE BEFORE BAILING. We hold the lock as of two lines ago, and this is the
+  # only exit path in the whole skill that aborts while holding it -- without this,
+  # a bail here wedges landing for the FULL staleness window (~6 skipped /loop 5m
+  # ticks) for what is a parse bug, not a running pass. No token argument on
+  # purpose: we could not parse ours, and nothing else can have taken the lock in
+  # the microseconds since `acquire` succeeded, so the blind (pre-lode-q9pm) form
+  # is exactly right here.
+  scripts/land-lock.sh release   # land-lock-blind-ok: no token to supply, see above
+  exit 1
+}
 ```
 
 **Convention:** run the `/land` loop on **one machine only** — the local lock does not cross
@@ -251,7 +277,9 @@ If the queue is empty, there is nothing to land: release the lock and stop —
 
 ```bash
 # Normal completion -- release now rather than waiting out the staleness window for no reason.
-scripts/land-lock.sh release
+STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation
+MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"
+scripts/land-lock.sh release "$MY_TOKEN"
 exit 0
 ```
 
@@ -404,7 +432,9 @@ across the whole queue. `scripts/land-lock.sh`'s own header has the full reasoni
 logged but never stops the pass (this is lock bookkeeping, not the vet itself):
 
 ```bash
-scripts/land-lock.sh heartbeat || true
+STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation
+MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"
+scripts/land-lock.sh heartbeat "$MY_TOKEN" || true
 bd show <id> --json     # read metadata.land_head and metadata.land_summary
 git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on origin...
 # ...and origin/land/<id>'s tip SHA must equal metadata.land_head
@@ -471,13 +501,13 @@ fi
   `$ACCEPTED` from outcomes that include "kicked back `needs-rebase`", so a branch reaching 3a
   un-kicked-back is out of order on its own terms.
 - **`rc=2`** → **MACHINE FAULT, not a branch conflict** (git < 2.38, an unreadable/unknown ref, or
-  `merge-tree` itself failing). Per lode-9i2p's rule — the same one Section 3 already honours for
-  `validate-mermaid.sh`'s exit 2 ("a red gate is content; exit 2 is the machine") — I do **not** kick
-  this branch back `needs-rebase`. A machine fault blaming an innocent branch is exactly the defect
-  this extraction closed (defect 2, in the script's header). Instead I **stop the pass** and surface
-  the script's own stderr diagnostic verbatim as a human decision — it names the cause and the
-  remedy, and only a human can fix the machine. This is the one behaviour change from the inline
-  snippet this replaced; do not "simplify" it back into a kick-back.
+  `merge-tree` itself failing) — same [gate exit-code
+  contract](../../../docs/agents-workflow.md#gate-exit-code-contract-012-lode-jhry) every other gate
+  here honours. I do **not** kick this branch back `needs-rebase`. A machine fault blaming an
+  innocent branch is exactly the defect this extraction closed (defect 2, in the script's header).
+  Instead I **stop the pass** and surface the script's own stderr diagnostic verbatim as a human
+  decision — it names the cause and the remedy, and only a human can fix the machine. This is the one
+  behaviour change from the inline snippet this replaced; do not "simplify" it back into a kick-back.
 
 A conflict (`rc=1`) is **neither a bounce nor an escalate** — the branch's *content* may be perfectly
 fine, it simply can't replay onto where `trunk` now is. I handle it per
@@ -811,6 +841,7 @@ for the decision and its reasoning.
 STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive here -- this is a fresh Bash
 MSG_DIR="$STATE_DIR/msg"                                # invocation; nothing from 3a's block persists
 CONFLICTS_DIR="$STATE_DIR/conflicts"                    # except the FILES 3a wrote under $STATE_DIR
+MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
 
 # Load 3a's accepted set from disk, and REFUSE to continue if it did not load: iterating zero times
 # would land nothing while exiting 0, indistinguishable from a clean pass (governing rule, top).
@@ -825,7 +856,7 @@ for id in $ACCEPTED; do
   # arm is the SCRIPT's real exit status. Do NOT rewrite this as `if ! CMD; then rc=$?`: there `$?`
   # is the *negation's* status, which inside that arm is always 0 -- so a machine-fault 2 would read
   # as a clean merge and the pass would carry on as though the branch had landed.
-  if CONFLICTS=$(scripts/land-merge-one.sh "$id" "$MSG_DIR"); then
+  if CONFLICTS=$(scripts/land-merge-one.sh "$id" "$MSG_DIR" "$MY_TOKEN"); then
     rc=0
   else
     rc=$?
@@ -883,31 +914,18 @@ with **exit 1**, the same way a red `nox -s tests` would; treat *that* identical
 covers it, and the isolation-replay loop re-runs it per branch (see its own `nox -s lock_currency`
 call) to find the culprit.
 
-**`nox -s lock_currency` exit 2 is NOT a red gate either — same rule, same reason as
-`validate-mermaid.sh` below.** Exit 2 means the gate *could not run*: `uv` is not on `PATH`, or
-`scripts/compile-lock.sh` could not resolve at all (PyPI unreachable, a 5xx, DNS). Only exit **1**
-means the lock is genuinely stale. This gate needs that distinction more than any other I run, not
-less: `nox -t fix` and `nox -s tests` are `noxfile.py`'s *offline, keyless* default set and stay
-offline once the model cache is warm, whereas `lock_currency` requires `uv` present and PyPI
-reachable on **every single invocation** — a genuinely new environment requirement on the one machine
-that writes `trunk`, and one a `/loop 5m /land` re-runs all day. On exit 2 I do **not** isolate, do
-**not** bounce, and do **not** land: I stop the pass and surface the message as a human decision.
-Bouncing on it would delete every reviewed branch in the pass for a network blip, each with a
-fabricated "stale lock" finding. `lock_currency` is **last** in the `&&` chain above for exactly this
-reason — an `&&` chain reports its last-run command's status, so putting anything after it would mask
-the 2. Keep it there.
+**`nox -s lock_currency` and `validate-mermaid.sh` exit 2 are NOT red gates — they are machine
+faults, and isolating on either bounces an innocent branch.** Full contract (what 0/1/2 mean, and
+why): [docs/agents-workflow.md — Gate exit-code
+contract](../../../docs/agents-workflow.md#gate-exit-code-contract-012-lode-jhry). On either exit 2 I
+do **not** isolate, do **not** bounce, and do **not** land: I stop the pass and surface the script's
+own message verbatim as a human decision. `lock_currency` is **last** in the `&&` chain above for
+exactly this reason — an `&&` chain reports its last-run command's status, so putting anything after
+it would mask the 2. Keep it there.
 
 **Neither exit-2 stop in this section restores local `trunk`** — deliberately; that is
 [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)'s job, and the reasoning lives there
 (lode-k9ef).
-
-**`validate-mermaid.sh` exit 2 is NOT a red gate — it is a machine fault, and isolating on it bounces
-an innocent branch.** Exit 2 means the *gate itself could not run*; only exit **1** means invalid
-mermaid. The distinction exists precisely because a broken tool used to be indistinguishable from
-broken content (lode-9i2p). On exit 2 I do **not** isolate, do **not** bounce, and do **not** land the
-docs set with the diagram unverified: I stop the pass and surface the script's own exit-2 message
-verbatim as a human decision — it names the cause and the remedy, and only a human can fix the
-machine. A red gate is content; exit 2 is the machine.
 
 - **Green** → proceed to [Land the survivors](#4-land-the-survivors).
 - **Red** → **isolate**. The combined merge is bad but I don't yet know which branch. Reset `trunk`
@@ -945,6 +963,7 @@ machine. A red gate is content; exit 2 is the machine.
   STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- see above; 3a's files under
   MSG_DIR="$STATE_DIR/msg"                                 # $STATE_DIR are untouched by the reset
   CONFLICTS_DIR="$STATE_DIR/conflicts"
+  MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
   ACCEPTED=$(cat "$STATE_DIR/accepted") || exit 1
   [ -n "$ACCEPTED" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/accepted is missing or empty." \
     "Landing nothing." >&2; exit 1; }
@@ -993,7 +1012,7 @@ machine. A red gate is content; exit 2 is the machine.
     # Identical idiom and identical shape to the first-pass loop above -- see its comment for why
     # `if ! CMD; then rc=$?` is wrong here (that `$?` is the negation's, always 0 in that arm, so a
     # machine-fault 2 would read as a clean merge). Keep the two loops the same shape.
-    if CONFLICTS=$(scripts/land-merge-one.sh "$id" "$MSG_DIR"); then
+    if CONFLICTS=$(scripts/land-merge-one.sh "$id" "$MSG_DIR" "$MY_TOKEN"); then
       rc=0
     else
       rc=$?
@@ -1500,8 +1519,9 @@ while read -r BR; do
 done < <(git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*')
 echo "bare-ref backstop3 (worktree-agent-*): deleted $B3_DELETED stale local ref(s) (failed=$B3_FAILED)"
 
-scripts/land-lock.sh release   # the pass is fully done -- release now rather than waiting out
-                                     # the staleness window (lode-aps3; see Section 0)
+MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
+scripts/land-lock.sh release "$MY_TOKEN"   # the pass is fully done -- release now rather than
+                                     # waiting out the staleness window (lode-aps3; see Section 0)
 ```
 
 `bd close` unblocks dependents — that is *why* the lander closes (the producer never does): a closed
@@ -1918,6 +1938,14 @@ out-of-band manual act, not a designed fast-path):
 bd update <id> --acceptance="<revised, unambiguous acceptance criteria>"   # land-review reads
   # acceptance_criteria as the contract — this is the field that must change; add --description too
   # if the narrative text also needs updating. The BRANCH is untouched.
+# If resolving this escalation required a COMMIT to land/<id> — which it does whenever the decision
+# belongs in docs/ rather than a bd field — refresh land_head, or Section 2a reads the commit you
+# just made as DRIFT and prescribes a bounce next pass (OBSERVED: lode-y3dw, 2026-08-05). This exit
+# is the exposed one because it re-enters at ready-for-land with no reviewer in between; exits (b)
+# and (d) route through a code-reviewer, which refreshes land_head itself.
+# --set-metadata (upsert), NOT --metadata (which takes a whole JSON blob and would drop
+# land_summary/review_head — verified 2026-08-05).
+bd update <id> --set-metadata land_head="$(git rev-parse origin/land/<id>)"   # omit if nothing was committed
 bd update <id> --remove-label land-escalated --add-label ready-for-land
 scripts/bd-dolt-push.sh
 # /land's NEXT pass re-runs land-review against the now-unambiguous ticket — same gate, no bypass.
@@ -2143,6 +2171,12 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   [Resolving a `land-escalated` branch](#resolving-a-land-escalated-branch). Both are per-branch
   verdicts — /land's actual job — not incidental discoveries.
 
+  **Not filing is not the same as leaving work for the human.** When the discovery's whole remedy is
+  a one-line doc change, the report must carry the *patch* — exact text, file, derived line number —
+  not just the gap: see [If the whole remedy is a one-line doc
+  change](#if-the-whole-remedy-is-a-one-line-doc-change-report-the-patch--not-the-gap). That is what
+  keeps "don't file a ticket" from silently becoming "hand the human a research task."
+
   *Why not-filing loses nothing:* every pass **executes** this skill's own code, so every pass gets
   the same opportunity to notice the same flaw — the observation recurs on its own, without a ticket
   to carry it between passes. lode-v4rk's dead epic-completion check is the proof: three independent
@@ -2182,3 +2216,33 @@ mid-pass that isn't a per-branch verdict (see [What I never do](#what-i-never-do
 rather than filed as a ticket. On any
 genuine ambiguity in the landing mechanics themselves — not a per-branch verdict, which `land-review`
 owns — I stop and surface it rather than guess.
+
+### If the whole remedy is a one-line doc change, report the patch — not the gap
+
+Naming a one-line fix as a "discovery" and stopping there hands the human a research task: re-find
+the surface, re-derive the wording, decide whether it earns a ticket. For a remedy that small the
+ticket costs more than the fix, and [What I never do](#what-i-never-do) has already ruled out filing
+one. So whenever I can state the remedy in a line or two of prose, I report it as a patch the human
+can apply directly, with all three of:
+
+- **The exact replacement text**, written out in full — the words to paste, never a description of
+  what they should say.
+- **Where it goes** — file path plus the line number I actually **derived this pass** (`grep -n` at
+  report time, never recalled or estimated, per
+  [`docs/conventions.md`](../../../docs/conventions.md)'s derive-identifiers fiat) — *and* the anchor
+  line **quoted verbatim**, so the location survives the number going stale between my pass and the
+  human reading it.
+- **What it changes**, in one sentence, so the human can accept or reject without opening the file.
+
+**I still do not apply it.** I run on `trunk` in the main checkout, and a doc edit typed here reaches
+`trunk` with no branch, no technical review, no `land-review` and no re-gate — bypassing every gate
+this skill exists to be, for exactly the class of change (prose in `docs/`, or in a skill's own
+markdown) that this repo treats as its source of truth. The patch text is a **hand-off**: the human
+pastes it, or feeds it to `/code` as a ready-made brief that needs no rediscovery.
+
+**The escape hatch, stated so it isn't quietly stretched.** This applies only when the remedy is
+purely *how to word it*. The moment the fix needs a judgment call about *what to say* — which of two
+behaviours is correct, whether a rule should exist at all — it is no longer a one-line patch, and it
+goes back to being an ordinary reported discovery for the human to decide. Length is the symptom, not
+the test: a two-line change that encodes a decision is a discovery; a five-line change that only
+transcribes an already-settled one is still a patch.

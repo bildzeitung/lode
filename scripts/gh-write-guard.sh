@@ -24,71 +24,18 @@
 # under the harness's dash /bin/sh. The WRAPPER in settings.json is what must stay
 # POSIX (lode-9gm2), and its test pins that.
 #
-# QUOTE-AWARE SEGMENT SPLIT (lode-obox). The command is split into candidate
-# "invocation segments" at shell control-operator characters (; & | ( ) { } `)
-# so a `gh ...` phrase mid-command (after `&&`, inside `$(...)`, ...) is still
-# caught at a command position. Splitting used to be done with plain `tr`,
-# which is QUOTING-UNAWARE: a control character sitting inside a single- or
-# double-quoted STRING ARGUMENT -- a commit message, a grep pattern -- still
-# split the string, and if a `gh <verb>` phrase then landed at the START of
-# one of the synthetic fragments, the guard evaluated that fragment as if it
-# were a real invocation. Confirmed live against the shipped (pre-fix) hook:
-#   git commit -m "See \`gh release create\` for context (lode-w35h)"   -> denied
-#   grep -E "(gh issue create)" docs/                                   -> denied
-#   bd update lode-x --notes "mentions (gh issue create|gh pr comment) both denied" -> denied
-# all pure prose/search text with NO actual `gh` invocation anywhere on the
-# line. `_split_unquoted` below walks the string tracking single-/double-quote
-# state (and a backslash escaping the very next character, in or out of
-# quotes) and only treats a control character as a split point OUTSIDE any
-# quote -- i.e. it mirrors where the real shell would treat that character as
-# an operator, not blindly.
-#
-# This does NOT touch the deliberately-accepted "quoted indirection" residual
-# (`sh -c "gh issue create ..."`, docs/agents-workflow.md): a `gh` phrase
-# INSIDE a quoted string was never at a segment START under the OLD splitter
-# either, unless a control character happened to precede it INSIDE the quotes
-# -- which is exactly the false-positive class this fix closes, not a new gap
-# it opens. The fix only stops manufacturing a false segment start where none
-# exists in the real shell grammar; it creates no NEW segment starts.
-#
-# But fewer segment starts is not automatically safe, and one case had to be
-# put back: `$(...)` and an UNESCAPED backtick are live command substitution
-# INSIDE double quotes (`;`, `|`, `(`, `{` are literal there; these two are
-# not). The old blind `tr` split them incidentally and so denied
-# `echo "$(gh issue create ...)"`; treating the whole double-quoted region as
-# inert would have dropped that silently -- an unargued narrowing of the deny
-# surface, which this ticket's own acceptance criteria forbid. So
-# `_split_unquoted` splits on those two inside double quotes and only those
-# two, which is exactly where the real shell would. Differential and mutation
-# coverage: tests/test_gh_write_guard.py.
-#
-# QUOTED-HEREDOC PRE-PASS (lode-d5je). A QUOTED heredoc body (<<'EOF', <<"EOF",
-# <<\EOF) is inert text -- the shell performs NO substitution in it at all --
-# but the segment split above (on `` ` ``/`(`/`)`/etc.) does not know that, so
-# a command substitution written as a worked example inside such a body
-# manufactures a fake segment start and gets scanned as if it were live shell.
-# An UNQUOTED heredoc (<<EOF) is the opposite: substitution IS real there, so
-# its body must keep being scanned exactly as before -- `strip_quoted_heredoc_bodies`
-# below only ever removes QUOTED heredoc bodies, before the quote-aware split
-# above ever runs. Fence, not fix, same character as the other residuals in
-# docs/agents-workflow.md. Every deviation from real shell heredoc parsing is
-# deliberately biased toward stripping LESS, because stripping MORE than the
-# shell would is a false ALLOW -- a live `gh` write hidden from the scan, the
-# unrecoverable failure. Three rules enforce that bias, each closing a
-# fail-open found in this function's own review:
-#   1. A `<<<` HERESTRING is not a heredoc and consumes no body. The operator match
-#      is guarded so `<<<'EOF'` cannot be read as `<<` + `'EOF'`.
-#   2. An UNQUOTED heredoc's body is tracked (passed through verbatim, still
-#      scanned) but never inspected for operators, so a quoted-heredoc lookalike
-#      written INSIDE it cannot start a strip.
-#   3. A quoted heredoc that is never CLOSED strips nothing -- its held lines are
-#      emitted at end of input. This is what keeps a lookalike token appearing in a
-#      context the shell does not treat as an operator at all (most importantly,
-#      inside a quoted string -- this function is line-based, not quote-aware) from
-#      swallowing the remainder of the command.
-# The residual after those three: a lookalike token in a non-operator context whose
-# delimiter word ALSO appears alone on a later line, with a live gh write between
-# them. Documented in docs/agents-workflow.md alongside the other residuals.
+# QUOTE-AWARE SEGMENT SPLIT (lode-obox) and QUOTED-HEREDOC PRE-PASS (lode-d5je).
+# The command is split into candidate "invocation segments" at shell
+# control-operator characters (; & | ( ) { } `) so a `gh ...` phrase
+# mid-command (after `&&`, inside `$(...)`, ...) is still caught at a command
+# position -- and a quoted heredoc body (a commit-message worked example, a
+# doc quoting real shell) is stripped first so it cannot manufacture a fake
+# segment start either. Both primitives (`_split_unquoted`,
+# `strip_quoted_heredoc_bodies`) now live in scripts/shell-quote-split.sh
+# (lode-dia6), shared with scripts/sha-fabrication-guard.sh -- see that file's
+# header for the full rationale, the false-positive shapes each fix closes,
+# and the fail-open residuals each deliberately accepts. Differential and
+# mutation coverage for both: tests/test_gh_write_guard.py.
 
 set -euo pipefail
 
@@ -139,56 +86,58 @@ CMD="${1:-}"
 # and a live write on a case-insensitive filesystem).
 [[ "$CMD" =~ (^|[^A-Za-z0-9_])[Gg][Hh][[:space:]] ]] || exit 0
 
-strip_quoted_heredoc_bodies() {
-  local mode=none delim="" strip_tabs=0 line check d
-  local -a held=()
-  while IFS= read -r line || [ -n "$line" ]; do
-    if [ "$mode" != none ]; then
-      check="$line"
-      if [ "$strip_tabs" -eq 1 ]; then
-        while [[ "$check" == $'\t'* ]]; do
-          check="${check:1}"
-        done
-      fi
-      # An unquoted body is emitted (it is live shell and must still be scanned);
-      # a quoted body is HELD, and only discarded once the delimiter is seen.
-      if [ "$mode" = unquoted ]; then
-        printf '%s\n' "$line"
-      else
-        held+=("$line")
-      fi
-      if [ "$check" = "$delim" ]; then
-        [ "$mode" = quoted ] && held=()
-        mode=none
-      fi
-      continue
-    fi
-    printf '%s\n' "$line"
-    # Both patterns below require a literal `<<`; skip the regex work without it.
-    [[ "$line" == *'<<'* ]] || continue
-    # Match the FIRST heredoc operator on the line. `(^|[^<])` keeps a `<<<`
-    # herestring from being read as `<<` plus a quoted word (rule 1 above).
-    # A QUOTED delimiter -- <<[-]'D', <<[-]"D", <<[-]\D -- opens a strippable body;
-    # a bare <<[-]D matches only the second pattern and is merely tracked, so its
-    # body keeps being scanned exactly as before (rule 2 above).
-    if [[ "$line" =~ (^|[^<])\<\<(-)?[[:space:]]*(\'([A-Za-z_][A-Za-z0-9_]*)\'|\"([A-Za-z_][A-Za-z0-9_]*)\"|\\([A-Za-z_][A-Za-z0-9_]*)) ]]; then
-      mode=quoted
-      d="${BASH_REMATCH[4]}${BASH_REMATCH[5]}${BASH_REMATCH[6]}"
-    elif [[ "$line" =~ (^|[^<])\<\<(-)?[[:space:]]*([A-Za-z_][A-Za-z0-9_-]*) ]]; then
-      mode=unquoted
-      d="${BASH_REMATCH[3]}"
-    else
-      continue
-    fi
-    # Both patterns require [A-Za-z_] to start the delimiter, so `d` is never empty.
-    delim="$d"
-    # BASH_REMATCH[2] is the `-` of `<<-` in both patterns: strip leading TABS (only
-    # tabs, matching bash) from the closing delimiter line.
-    if [ -n "${BASH_REMATCH[2]}" ]; then strip_tabs=1; else strip_tabs=0; fi
-  done <<<"$1"
-  # Unterminated quoted heredoc: strip nothing (rule 3 above).
-  [ "${#held[@]}" -eq 0 ] || printf '%s\n' "${held[@]}"
-}
+# Fail CLOSED (deny) if the shared quote-aware split library cannot be
+# resolved -- a missing/unreadable copy here would silently disable both the
+# quoted-argument (lode-obox) and quoted-heredoc (lode-d5je) fixes, reopening
+# the exact false-positive class this guard exists to avoid. Resolved via
+# this script's OWN directory (not $ROOT/PWD) so it works regardless of the
+# caller's cwd. Placed AFTER the cheap early-outs above so a gh-free command
+# (the overwhelmingly common case) never pays even the cost of resolving it.
+#
+# Plain `dirname`, deliberately NOT `$(cd "$(dirname ...)" && pwd)` (review,
+# lode-dia6): under `set -e` a failed `cd` in an assignment aborts the script
+# BEFORE the fail-closed check below can run, and the wrapper's trailing
+# `exit 0` then turns that into a silent ALLOW -- a fail-OPEN in the one block
+# whose whole job is to fail closed. Absolutizing bought nothing anyway: bash
+# resolved this very script from the same cwd, so the sibling path resolves
+# identically, and this drops a subshell fork per gh-position command.
+_LIB="$(dirname "${BASH_SOURCE[0]}")/shell-quote-split.sh"
+if [ ! -r "$_LIB" ]; then
+  jq -n '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
+    permissionDecisionReason: "lode-dia6: scripts/shell-quote-split.sh (the shared quote-aware split library scripts/gh-write-guard.sh depends on) could not be resolved -- denying this Bash call rather than silently scanning with the split disabled, since a false ALLOW here is unrecoverable. Surface this to a human; do not retry."}}'
+  exit 0
+fi
+# `-r` proves the file is READABLE, not that it LOADED. A present-but-broken
+# library -- truncated write, partial checkout, bad merge, syntax error --
+# sources "successfully enough" and then `_split_unquoted` is undefined, `set -e`
+# kills this script at the call site with rc=127 and NO stdout, and the
+# wrapper's trailing `exit 0` turns that into a silent ALLOW: a fail-OPEN in
+# the one block whose entire job is to fail closed (found in review, lode-dia6;
+# reproduced with a comments-only copy of the library). So `source` under
+# `|| true` -- a syntax error must reach the check below, not abort ahead of it
+# -- and then assert the CONTRACT (both functions defined), not the file.
+#
+# The contract is FOUR names, not two (review, lode-rjqm): the scan-length cap
+# adds `SHELL_QUOTE_SPLIT_MAX_LEN` and `deny_if_over_scan_cap`, and an older
+# library copy -- a partial checkout, or a revert of just this one file, both
+# reachable since lode-rjqm changed the library and the guards together --
+# defines the two original functions but neither of those. The constant is read
+# under `set -u` (abort, no stdout, wrapper's `exit 0` -> silent ALLOW), and the
+# call site is `deny_if_over_scan_cap ... || exit 0`, whose `||` SWALLOWS the
+# rc=127 of an undefined function into a silent ALLOW even without `set -u`.
+# Both are the exact fail-OPEN this block closed for the functions. Verified by
+# sabotage: stripping only the constant reproduced rc=1 + empty stdout in both
+# guards. Assert the whole contract here, where failing is still a DENY.
+# shellcheck source=scripts/shell-quote-split.sh
+source "$_LIB" || true
+if ! declare -F _split_unquoted >/dev/null 2>&1 ||
+  ! declare -F strip_quoted_heredoc_bodies >/dev/null 2>&1 ||
+  ! declare -F deny_if_over_scan_cap >/dev/null 2>&1 ||
+  [ -z "${SHELL_QUOTE_SPLIT_MAX_LEN:-}" ]; then
+  jq -n '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
+    permissionDecisionReason: "lode-dia6/lode-rjqm: scripts/shell-quote-split.sh was found but did not define the quote-aware split functions and scan-length cap scripts/gh-write-guard.sh depends on (a truncated, partially-checked-out, out-of-date, or syntactically broken copy) -- denying this Bash call rather than silently scanning with the split disabled, since a false ALLOW here is unrecoverable. Surface this to a human; do not retry."}}'
+  exit 0
+fi
 
 # This hook runs on EVERY Bash call, so skip the fork entirely when there is no
 # heredoc operator to find: with no `<<` present the function is provably an
@@ -198,58 +147,12 @@ case "$CMD" in
   *) CMD_SANITIZED="$CMD" ;;
 esac
 
-# Emit $1 with every UNQUOTED occurrence of ; & | ( ) { } ` replaced by a
-# newline; occurrences inside '...' or "..." (and any backslash-escaped
-# character, in or out of quotes) are left untouched -- EXCEPT `$(` and a bare
-# backtick inside "...", which the shell really does execute.
-#
-# RESIDUAL (fail-OPEN, accepted): an UNBALANCED quote leaves the tail "inside" a
-# quote, so nothing after it splits -- which is the PERMISSIVE direction, not the
-# conservative one. Accepted rather than fixed; rationale with the other residuals
-# in docs/agents-workflow.md.
-_split_unquoted() {
-  local s="$1" out="" c state=none i=0 len
-  len=${#s}
-  while ((i < len)); do
-    c="${s:i:1}"
-    if [[ "$state" != "single" && "$c" == '\' ]]; then
-      # A backslash escapes the next character outside quotes and inside double
-      # quotes alike; inside SINGLE quotes it is literal, so that state is excluded.
-      out+="$c"
-      i=$((i + 1))
-      ((i < len)) && out+="${s:i:1}"
-    elif [[ "$state" == "none" && "$c" == "'" ]]; then
-      state=single
-      out+="$c"
-    elif [[ "$state" == "single" && "$c" == "'" ]]; then
-      state=none
-      out+="$c"
-    elif [[ "$state" == "none" && "$c" == '"' ]]; then
-      state=double
-      out+="$c"
-    elif [[ "$state" == "double" && "$c" == '"' ]]; then
-      state=none
-      out+="$c"
-    elif [[ "$state" == "double" && "$c" == '`' ]]; then
-      # Command substitution IS live inside double quotes (only a backslash --
-      # handled above -- makes a backtick literal there). Splitting here is not
-      # a false positive: the shell really does run what follows.
-      out+=$'\n'
-    elif [[ "$state" == "double" && "$c" == '$' && "${s:i+1:1}" == '(' ]]; then
-      # Same for `$( ... )`. Note a bare `(` inside double quotes is NOT a split
-      # point (it is literal there) -- that is what keeps a quoted grep
-      # alternation like "(gh issue create)" from being denied.
-      out+=$'\n'
-      i=$((i + 1))
-    elif [[ "$state" == "none" && ';&|(){}`' == *"$c"* ]]; then
-      out+=$'\n'
-    else
-      out+="$c"
-    fi
-    i=$((i + 1))
-  done
-  printf '%s' "$out"
-}
+# SCAN LENGTH CAP (lode-rjqm) -- fail CLOSED (deny) rather than pay `_split_unquoted`'s
+# per-character cost without bound. Enforcement lives in the shared library alongside the
+# constant (review, lode-rjqm), so this guard and sha-fabrication-guard.sh cannot drift.
+# Measured on `$CMD_SANITIZED`, i.e. exactly the string handed to `_split_unquoted` below --
+# see that function's header, and docs/agents-workflow.md for the (a)/(b)/(c) decision.
+deny_if_over_scan_cap "$CMD_SANITIZED" "scripts/gh-write-guard.sh" || exit 0
 
 SEG=$(_split_unquoted "$CMD_SANITIZED")
 
