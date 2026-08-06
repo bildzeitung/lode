@@ -27,13 +27,12 @@ on:
 # landing loop reads these check results. Convention + rationale:
 # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
 #
-# Fallback is github.ref_name, NOT github.ref: on push, github.ref is
-# refs/heads/<branch>, but on pull_request it's refs/pull/<N>/merge -- two
-# different strings for the same branch, so a push run and its PR run would
-# otherwise never share a group and neither cancels the other. head_ref is
-# unset on push, so `head_ref || ref_name` collapses both events onto the
-# same bare branch name (`head_ref || ref` does NOT work -- ref still keeps
-# the refs/pull/<N>/merge form on pull_request). See lode-7hbu.
+# The group collapses a branch's push run and its pull_request run so one
+# cancels the other. Fallback is github.ref_name, NOT github.ref -- and NOT
+# `head_ref || ref`, the form most likely to be copied in, which still leaves
+# the push run in its own group and cancels nothing. Derivation + the accepted
+# fork-branch-name trade-off: the release.md anchor above (lode-7hbu).
+# This expression is byte-identical in build/tests/coverage.yml -- keep it so.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
