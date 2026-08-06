@@ -133,10 +133,14 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
-          # No `cache: pip` here -- this leg installs via `uv` (below, through
-          # scripts/python-init.sh), which uses its own cache directory
-          # (~/.cache/uv), never pip's. A `cache: pip` option would populate
-          # nothing and silently do no work.
+          # No `cache: pip` here. The dependency install below runs through
+          # `uv` (via scripts/python-init.sh), which uses its own cache
+          # directory (~/.cache/uv), never pip's -- but the `pip install -U
+          # uv` bootstrap that precedes it IS a real pip download (a ~22MB
+          # wheel from PyPI, confirmed lode-81w0). Deliberately left
+          # uncached: restoring a ~22MB GitHub Actions cache entry isn't
+          # obviously cheaper than just downloading it, and that trade-off
+          # is unmeasured.
 
       - name: Install dependencies (from requirements.lock)
         # Installs the same bytes a developer runs: the exact, hash-verified
