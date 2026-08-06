@@ -403,6 +403,17 @@ LAST_IDS=$(printf '%s\n' "$LAST_BODY" | grep '^SWEEP-ITEM' | awk '{print $2}' | 
 CURRENT_IDS=$(printf '%s\n' "$CURRENT" | awk -F'\t' '{print $1}' | sort -u)
 
 NEW_IDS=$(comm -13 <(printf '%s\n' "$LAST_IDS") <(printf '%s\n' "$CURRENT_IDS"))
+
+# Persist NOW, before §6 (a separate, later Bash invocation) rewrites the digest
+# body this block just read as $LAST_BODY. §7 needs this exact value -- the
+# delta against the digest as it stood BEFORE the rewrite -- but §7 runs after
+# §6, by which point re-deriving from the digest would see the body §6 just
+# wrote (LAST_IDS == CURRENT_IDS by construction) and compute an always-empty
+# NEW_IDS (lode-fm7t). Same `printf '%s'` idiom as §1/§2/§2a/§2b/§3 above: no
+# trailing newline, so a legitimately-empty NEW_IDS lands as a ZERO-BYTE file
+# rather than one blank line -- §7 distinguishes an absent file ("§5 never ran")
+# from an empty one ("nothing new"), so that distinction must survive the write.
+printf '%s' "$NEW_IDS" > "$SWEEP_TMP/new_ids"
 ```
 
 **Two separate triggers, not one** (a fix carried over from the design review — the original
@@ -475,34 +486,42 @@ I run as a **skill in the main conversation**, so I have the main session's tool
 `PushNotification`, which reaches a human who is away from the terminal. That is the entire point of
 this leg: the `land-escalated` and `human` labels already sat in `bd`, where nobody was looking.
 
-**First, re-derive `$NEW_IDS` and split it on deferred status.** This is its own, separate Bash tool
-invocation — nothing from §5 survives into it (lode-sfnb; §0's governing rule) — so everything it
-needs is re-derived from the scratch files §1/§3 already wrote, the sanctioned remedy for
-cross-block state (re-deriving is cheap and deterministic; see this skill's own §0 and
-`docs/agents-workflow.md`'s cross-block-shell-state section):
+**First, read back this pass's new ids and split them on deferred status.** This is its own, separate Bash tool
+invocation — nothing from §5 survives into it (lode-sfnb; §0's governing rule) — so `$CURRENT` is
+re-derived from the scratch file §3 wrote, the sanctioned remedy for cross-block state (re-deriving
+is cheap and deterministic; see this skill's own §0 and `docs/agents-workflow.md`'s
+cross-block-shell-state section). The new-id set itself is **not** re-derived here — it is read back from
+`$SWEEP_TMP/new_ids`, which §5 persisted *before* §6 rewrote the digest body. Re-deriving it the same
+way §5 did — reading the digest's current description — would see the body §6 just wrote, where
+`LAST_IDS == CURRENT_IDS` by construction, and always compute an empty `NEW_IDS` (lode-fm7t: this is
+the defect this file exists to fix, so this block must never read the digest description again for
+this purpose). Nothing here calls `scripts/sweep-digest-id.sh` or `bd show "$DIGEST_ID"` any more —
+there is no digest read left in this block:
 
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
 
-DIGEST_ID="$(scripts/sweep-digest-id.sh)" || exit 1
 CURRENT="$(cat "$SWEEP_TMP/current")" || {
   echo "GATE COULD NOT RUN: $SWEEP_TMP/current missing -- §3 did not run this pass" >&2
   exit 1
 }
+# Existence, not content: the awk below reads $SWEEP_TMP/new_ids as a file, so
+# nothing here needs its value in a variable. An ABSENT file means §5 never ran
+# this pass and is a hard stop; a file that exists but is EMPTY is the ordinary
+# "nothing new" pass and must run on through to a clean no-op (lode-fm7t,
+# acceptance #3 -- missing vs. empty are distinct and must never be conflated).
+[ -f "$SWEEP_TMP/new_ids" ] || {
+  echo "GATE COULD NOT RUN: $SWEEP_TMP/new_ids missing -- §5 did not run this pass" >&2
+  exit 1
+}
 
-LAST_BODY=$(bd show "$DIGEST_ID" --json | jq -r '.[0].description')
-LAST_IDS=$(printf '%s\n' "$LAST_BODY" | grep '^SWEEP-ITEM' | awk '{print $2}' | sort -u)
-CURRENT_IDS=$(printf '%s\n' "$CURRENT" | awk -F'\t' '{print $1}' | sort -u)
-NEW_IDS=$(comm -13 <(printf '%s\n' "$LAST_IDS") <(printf '%s\n' "$CURRENT_IDS"))
-
-# Split $NEW_IDS into "report it" (all of them) vs "push it" (not the deferred ones)
+# Split the new ids into "report it" (all of them) vs "push it" (not the deferred ones)
 # -- decided, lode-o7ai; rationale in docs/decisions.md. Only $ESCALATED-sourced rows
 # carry a 4th field (§1/§3), so a $HUMAN/$CLOSABLE row's empty $4 is correctly never
 # "deferred" and $CURRENT alone is enough -- no second read of $SWEEP_TMP/escalated.
 # Emit ONLY fields 1-3: §8's report format is `<id> <kind> <title>`, so passing the
 # row through whole would leak the raw status ("<title>\topen") into every escalated
 # row. Truncate both outputs first, so a zero-match pass leaves them empty, not stale.
-printf '%s\n' "$NEW_IDS" | sed '/^$/d' > "$SWEEP_TMP/new_ids"
 : > "$SWEEP_TMP/new_annotated"
 : > "$SWEEP_TMP/push_ids"
 awk -F'\t' -v ann="$SWEEP_TMP/new_annotated" -v push="$SWEEP_TMP/push_ids" '

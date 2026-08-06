@@ -160,12 +160,16 @@ def test_both_sweep_call_sites_use_the_script_not_an_inline_query() -> None:
     that is the regression -- section 4's own `DIGEST_ROWS`/`N` branch is prose
     with no `.[0].id` in it, so any occurrence is a re-inlined selection.
 
-    Three call sites as of lode-o7ai (up from two): §5's read, §6's write, and
-    §7's, which cannot reuse §5's `$DIGEST_ID` across fenced blocks (lode-sfnb)
-    and so re-derives it the same sanctioned way. The "both" in this test's name
-    predates that third site; the property under test -- every fenced-bash
-    selection of the digest goes through the script -- is unchanged by the
-    count.
+    Two call sites as of lode-fm7t (was three, briefly, as of lode-o7ai): §5's
+    read and §6's write. §7 used to re-derive `$DIGEST_ID` the same sanctioned
+    way (it cannot reuse §5's across fenced blocks, lode-sfnb) purely to `bd
+    show` the digest body for a delta computation -- but that delta is always
+    wrong there (lode-fm7t: §7 runs after §6 has already rewritten the body it
+    would read). The fix removes that read entirely; §7 now consumes
+    `$SWEEP_TMP/new_ids`, which §5 persists before §6 runs, so it no longer
+    needs `$DIGEST_ID` at all. The "both" in this test's name predates both
+    count changes; the property under test -- every fenced-bash selection of
+    the digest goes through the script -- is unchanged by the count.
 
     Fence-partitioning itself is `conftest.bash_fence_blocks` (lode-kjei), not a
     private state machine here -- and lode-k5qb makes that a mechanical gate
@@ -188,8 +192,9 @@ def test_both_sweep_call_sites_use_the_script_not_an_inline_query() -> None:
         if not line.strip().startswith("#")
     )
 
-    assert body.count("scripts/sweep-digest-id.sh") == 3, (
-        "expected exactly the three call sites (§5 read, §6 write, §7 notify)"
+    assert body.count("scripts/sweep-digest-id.sh") == 2, (
+        "expected exactly the two call sites (§5 read, §6 write) -- §7 no longer "
+        "reads the digest at all as of lode-fm7t"
     )
     assert ".[0].id" not in body, (
         "a fenced bash block selects the digest with `.[0].id` again -- that is the "
