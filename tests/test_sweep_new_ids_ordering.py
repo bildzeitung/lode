@@ -18,13 +18,13 @@ WHY A TEXTUAL PIN IS NOT ENOUGH (lode-fm7t acceptance #5). A test that merely
 greps Section 7's fenced block for the substring `$SWEEP_TMP/new_ids` would
 have passed on the OLD, broken text too -- Section 7 always wrote that path
 (as an output, from its own broken re-derivation). The property that actually
-matters is an ORDERING one: Section 7's `$NEW_IDS`/`$SWEEP_TMP/push_ids` must
-reflect the delta AS SEEN BEFORE Section 6's rewrite, not after. The only way
+matters is an ORDERING one: Section 7's `$SWEEP_TMP/push_ids` must reflect the
+delta AS SEEN BEFORE Section 6's rewrite, not after. The only way
 to pin that mechanically is to run the real extracted blocks in the order an
 agent actually executes them -- one fresh subprocess per fenced block, exactly
 as `docs/agents-workflow.md`'s cross-block-shell-state rule describes -- with a
 fake `bd` whose `bd show <digest-id>` response is swapped mid-test to model
-Section 6 having already run. `test_section_7_still_reads_the_digest_description_reddens_this_pin`
+Section 6 having already run. `test_section_7_reddens_if_restored_to_reading_the_digest_body`
 below proves the pin actually catches the regression: it reimplements the OLD,
 broken Section 7 shape and asserts it fails these same assertions.
 
@@ -85,10 +85,19 @@ def _section_5_block() -> str:
 
 
 def _section_7_block() -> str:
-    """Section 7 -- notify/split. Must read $NEW_IDS back from
-    $SWEEP_TMP/new_ids, never from a fresh `bd show` of the digest."""
+    """Section 7 -- notify/split. Must read this pass's new ids back from
+    $SWEEP_TMP/new_ids, never from a fresh `bd show` of the digest.
+
+    Deliberately located by its awk split alone -- text this fix does NOT
+    touch -- and never by the fixed-up read itself. A locator keyed on the fix
+    would match zero blocks the moment Section 7 regressed, so every test below
+    would die inside `_only_block_with` with "this test's assumption about
+    SKILL.md's structure has drifted; re-check by hand before adjusting the
+    locator" -- an invitation to loosen the locator on precisely the regression
+    this file exists to catch. Keyed this way, a regression instead reddens
+    `test_section_7_no_longer_reads_the_digest_at_all` on its own terms.
+    """
     return _only_block_with(
-        'NEW_IDS="$(cat "$SWEEP_TMP/new_ids")"',
         "awk -F'\\t' -v ann=",
         what="Section 7's notify/split",
     )
@@ -100,23 +109,36 @@ def test_section_5_persists_new_ids_before_any_digest_rewrite() -> None:
     and it must do so using $NEW_IDS -- the value computed in THIS block,
     against the digest body as it stood before Section 6 touches it."""
     block = _section_5_block()
-    assert '> "$SWEEP_TMP/new_ids"' in block, (
-        "Section 5 no longer persists $NEW_IDS to $SWEEP_TMP/new_ids -- Section 7 "
-        "(a separate Bash invocation, lode-sfnb) has no other way to see this "
-        "pass's pre-rewrite delta (lode-fm7t)"
+    # One assertion, on the whole persist line: it must write $SWEEP_TMP/new_ids
+    # (the only mechanism that survives into Section 7 at all) sourced from
+    # $NEW_IDS as computed in THIS block via `comm`, not from some other value.
+    # `printf '%s'` (no trailing newline) is the same idiom Sections 1/2/2a/2b/3
+    # persist with, and is what makes an empty $NEW_IDS a ZERO-BYTE file rather
+    # than one blank line -- load-bearing for the missing-vs-empty distinction
+    # Section 7 gates on (acceptance #3), so it is pinned here verbatim.
+    assert 'printf \'%s\' "$NEW_IDS" > "$SWEEP_TMP/new_ids"' in block, (
+        "Section 5 no longer persists $NEW_IDS to $SWEEP_TMP/new_ids with the "
+        "repo-standard `printf '%s'` idiom -- Section 7 (a separate Bash "
+        "invocation, lode-sfnb) has no other way to see this pass's pre-rewrite "
+        "delta, and a trailing newline would make an empty delta indistinguishable "
+        "from a one-item one (lode-fm7t)"
     )
-    # The write must come from $NEW_IDS as computed in this block (via `comm`),
-    # not some other value -- i.e. the persist line pipes $NEW_IDS itself.
-    assert '%s\n" "$NEW_IDS"' in block.replace("printf '%s\\n'", '%s\n"') or (
-        "printf '%s\\n' \"$NEW_IDS\"" in block
-    ), "the $SWEEP_TMP/new_ids write does not appear to source from $NEW_IDS"
 
 
 def test_section_7_no_longer_reads_the_digest_at_all() -> None:
     """lode-fm7t acceptance #2: Section 7 must not read the digest description
     for delta purposes any more -- no `scripts/sweep-digest-id.sh` re-derivation
-    and no `bd show` round-trip in this block at all."""
+    and no `bd show` round-trip in this block at all.
+
+    The positive half is asserted here too, since `_section_7_block`'s locator
+    deliberately no longer keys on it (see that helper's docstring).
+    """
     block = _section_7_block()
+    assert '"$SWEEP_TMP/new_ids"' in block, (
+        "Section 7 no longer references $SWEEP_TMP/new_ids at all -- it must "
+        "consume the delta Section 5 persisted before Section 6's rewrite "
+        "(lode-fm7t)"
+    )
     assert "sweep-digest-id.sh" not in block, (
         "Section 7 still re-derives $DIGEST_ID -- it should have no reason to "
         "any more, since it no longer reads the digest body (lode-fm7t)"
@@ -135,21 +157,21 @@ def test_section_7_no_longer_reads_the_digest_at_all() -> None:
 # an agent would (one fresh Bash tool invocation per fenced block) -----------
 
 
-def _fake_bd(bin_dir: Path, digest_body: dict[str, str]) -> None:
+def _fake_bd(bin_dir: Path, description: str) -> Path:
     """A PATH dir holding a fake `bd` serving:
       - `bd list --label sweep-digest --all --limit 0 --json` (used by
         scripts/sweep-digest-id.sh) -> exactly one digest row, id "lode-dig1".
-      - `bd show lode-dig1 --json` -> `digest_body["description"]`, mutable by
-        the caller between block executions to model Section 6's rewrite.
-    `digest_body` is a one-entry dict (not a plain string) so the test can
-    mutate what the SAME fake binary returns across two separate subprocess
-    invocations -- the file backing it is re-read by the fake `bd` on every
-    call, so a later `digest_body["description"] = ...` takes effect on the
-    NEXT `bd show`, exactly as Section 6's real rewrite would.
+      - `bd show lode-dig1 --json` -> the current contents of the returned
+        body file, which starts as `description`.
+
+    Returns that body file so a test can rewrite it BETWEEN two subprocess
+    invocations to model Section 6's rewrite: the fake `bd` re-reads it on
+    every call, so a `body_file.write_text(...)` takes effect on the NEXT
+    `bd show`, exactly as Section 6's real digest rewrite would.
     """
     fake_bd = bin_dir / "bd"
     body_file = bin_dir / "digest_body.txt"
-    body_file.write_text(digest_body["description"])
+    body_file.write_text(description)
     fake_bd.write_text(
         textwrap.dedent(f"""\
             #!/usr/bin/env bash
@@ -223,7 +245,7 @@ def test_full_pass_new_item_reaches_push_ids_after_the_digest_rewrite(
         "## Epics ready for a human close-decision (0)\n"
         "(none)"
     )
-    body_file = _fake_bd(bin_dir, {"description": old_body})
+    body_file = _fake_bd(bin_dir, old_body)
     path_env = f"{bin_dir}:{os.environ['PATH']}"
 
     # $SWEEP_TMP/current -- what §3 would have built: the prior item PLUS one
@@ -289,7 +311,7 @@ def test_no_change_pass_is_a_true_no_op(sweep_tmp: Path, tmp_path: Path) -> None
         "## Epics ready for a human close-decision (0)\n"
         "(none)"
     )
-    _fake_bd(bin_dir, {"description": body})
+    _fake_bd(bin_dir, body)
     path_env = f"{bin_dir}:{os.environ['PATH']}"
 
     (sweep_tmp / "current").write_text(
@@ -314,7 +336,7 @@ def test_section_7_missing_new_ids_file_is_a_loud_gate_failure(
     read that silently behaves like a legitimate no-op."""
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir()
-    _fake_bd(bin_dir, {"description": "(none)"})
+    _fake_bd(bin_dir, "(none)")
     path_env = f"{bin_dir}:{os.environ['PATH']}"
 
     (sweep_tmp / "current").write_text(
@@ -340,7 +362,7 @@ def test_section_7_present_but_empty_new_ids_is_not_conflated_with_missing(
     not trip the same refusal a missing file does."""
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir()
-    _fake_bd(bin_dir, {"description": "(none)"})
+    _fake_bd(bin_dir, "(none)")
     path_env = f"{bin_dir}:{os.environ['PATH']}"
 
     (sweep_tmp / "current").write_text(
@@ -394,7 +416,7 @@ awk -F'\t' -v ann="$SWEEP_TMP/new_annotated" -v push="$SWEEP_TMP/push_ids" '
         "## Land/build escalations + human decisions (1)\n"
         "SWEEP-ITEM lode-yuwt land-escalated Some prior item"
     )
-    body_file = _fake_bd(bin_dir, {"description": old_body})
+    body_file = _fake_bd(bin_dir, old_body)
     path_env = f"{bin_dir}:{os.environ['PATH']}"
 
     current_rows = (
