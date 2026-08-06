@@ -2162,6 +2162,12 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   [Resolving a `land-escalated` branch](#resolving-a-land-escalated-branch). Both are per-branch
   verdicts — /land's actual job — not incidental discoveries.
 
+  **Not filing is not the same as leaving work for the human.** When the discovery's whole remedy is
+  a one-line doc change, the report must carry the *patch* — exact text, file, derived line number —
+  not just the gap: see [If the whole remedy is a one-line doc
+  change](#if-the-whole-remedy-is-a-one-line-doc-change-report-the-patch--not-the-gap). That is what
+  keeps "don't file a ticket" from silently becoming "hand the human a research task."
+
   *Why not-filing loses nothing:* every pass **executes** this skill's own code, so every pass gets
   the same opportunity to notice the same flaw — the observation recurs on its own, without a ticket
   to carry it between passes. lode-v4rk's dead epic-completion check is the proof: three independent
@@ -2201,3 +2207,33 @@ mid-pass that isn't a per-branch verdict (see [What I never do](#what-i-never-do
 rather than filed as a ticket. On any
 genuine ambiguity in the landing mechanics themselves — not a per-branch verdict, which `land-review`
 owns — I stop and surface it rather than guess.
+
+### If the whole remedy is a one-line doc change, report the patch — not the gap
+
+Naming a one-line fix as a "discovery" and stopping there hands the human a research task: re-find
+the surface, re-derive the wording, decide whether it earns a ticket. For a remedy that small the
+ticket costs more than the fix, and [What I never do](#what-i-never-do) has already ruled out filing
+one. So whenever I can state the remedy in a line or two of prose, I report it as a patch the human
+can apply directly, with all three of:
+
+- **The exact replacement text**, written out in full — the words to paste, never a description of
+  what they should say.
+- **Where it goes** — file path plus the line number I actually **derived this pass** (`grep -n` at
+  report time, never recalled or estimated, per
+  [`docs/conventions.md`](../../../docs/conventions.md)'s derive-identifiers fiat) — *and* the anchor
+  line **quoted verbatim**, so the location survives the number going stale between my pass and the
+  human reading it.
+- **What it changes**, in one sentence, so the human can accept or reject without opening the file.
+
+**I still do not apply it.** I run on `trunk` in the main checkout, and a doc edit typed here reaches
+`trunk` with no branch, no technical review, no `land-review` and no re-gate — bypassing every gate
+this skill exists to be, for exactly the class of change (prose in `docs/`, or in a skill's own
+markdown) that this repo treats as its source of truth. The patch text is a **hand-off**: the human
+pastes it, or feeds it to `/code` as a ready-made brief that needs no rediscovery.
+
+**The escape hatch, stated so it isn't quietly stretched.** This applies only when the remedy is
+purely *how to word it*. The moment the fix needs a judgment call about *what to say* — which of two
+behaviours is correct, whether a rule should exist at all — it is no longer a one-line patch, and it
+goes back to being an ordinary reported discovery for the human to decide. Length is the symptom, not
+the test: a two-line change that encodes a decision is a discovery; a five-line change that only
+transcribes an already-settled one is still a patch.
