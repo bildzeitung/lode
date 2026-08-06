@@ -3198,6 +3198,52 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     annotation and the deliberate double-listing), §2a and the Non-goals bullet (both restated to
     describe the decided behavior instead of pointing at this ticket as still open).
 
+- **2026-08-06 (lode-ppki) — DECISION: `/sweep` §2b's exclude-label list deliberately does NOT
+  mirror §2a x §1's decided overlap (lode-o7ai above) — it excludes `land-escalated` but not
+  `human`, the opposite direction from what a naive read of that entry might suggest.** §2b lists
+  every `in_progress` ticket carrying none of `ready-for-code-review`, `ready-for-land`,
+  `needs-rebase`, `sweep-digest`, `land-escalated` — a stranded-work surfacer for tickets claimed but
+  never labeled into any pipeline stage. This entry records why its exclusion set diverges from
+  lode-o7ai's overlap policy, and corrects a defect an earlier rebuild (lode-r8lc, bounced by
+  `/land`'s semantic review) introduced trying to extend that policy here.
+  - **The bounced branch's defect:** it excluded SIX labels, adding `land-escalated` AND `human` on
+    the stated premise that both are "already surfaced by §1." True for `land-escalated` — §1's
+    `land-escalated` query (`bd list --label land-escalated`, no `--status` filter) already covers
+    an `in_progress` + `land-escalated` ticket regardless of status, so excluding it from §2b avoids
+    a redundant second listing with no new information. **False for `human`** — §1's human source is
+    `bd human list --status open --json` (status-filtered, confirmed against `bd human list --help`
+    and the skill's own §1 prose), so an `in_progress` ticket that also carries `human` is invisible
+    to that query. Excluding `human` from §2b as well left such a ticket surfaced by **neither**
+    section — stranded from every consumer, precisely the class of silence `/sweep` exists to close.
+    The bounced branch closed one hole (an unlabeled `in_progress` ticket invisible everywhere) by
+    opening a smaller one of the identical shape.
+  - **Resolution (the minimal of the two options land-review offered): drop `human` from §2b's
+    exclude-label list.** An `in_progress` ticket carrying the `human` label now surfaces in §2b's
+    stranded section, since §1's `--status open` filter means it has nowhere else to be seen. The
+    alternative — making §1's `bd human list` query status-agnostic and keeping `human` on §2b's
+    exclude list — was rejected as the non-minimal fix: it would have widened §1's `$CURRENT`/digest
+    behavior (a `human`-labeled ticket entering the digest and notify path purely because it also
+    became `in_progress`) to solve a problem §2b's own exclude list can solve on its own, with no
+    change to §1 at all. `land-escalated` stays excluded — that half of the bounced branch's list was
+    verified correct and is unchanged.
+  - **Why this is the opposite overlap call from lode-o7ai, deliberately:** lode-o7ai decided that
+    §1 and §2a (deferred) *should* overlap for a `land-escalated` + `deferred` ticket — both listings
+    stay true simultaneously, and the double-listing is informative (an escalation that is also
+    parked). §2b is structurally different: a given ticket can never be true for both §1 and §2b at
+    once — and the two halves of §1 are exclusive with §2b for *different* reasons, which is the
+    whole substance of this entry: `land-escalated` because §2b's exclude-label list removes it,
+    `human` because §1's query is `--status open` while §2b's is `--status in_progress`. There is no
+    overlap left to preserve, so §2b does not adopt lode-o7ai's "let it double-list" policy — nothing for
+    that policy to apply to. The one case that *does* still double-list is the same one lode-o7ai
+    already governs (`land-escalated` + `deferred`, via §1 and §2a) — §2b is not a party to it.
+  - **Implementation:** `.claude/skills/sweep/SKILL.md` §2b (new section, mirroring §2a's structure:
+    `--limit 0`, `(. // [])` null-empty guard, `@tsv`, no `$CURRENT`/`$NEW_IDS`/digest/notify
+    contact, isolated failure handling generalized into one rule shared with §2a), the Non-goals
+    section (a new bullet recording this divergence and the no-auto-remediation stance), §8 (a
+    `<N> stranded` field and a `## Stranded (in_progress, no pipeline label)` section), and
+    `tests/test_bd_list_limit_gate.py`'s `SKIP_PROSE` roster comment (added "2b" alongside "1, 2, 2a,
+    4").
+
 - **RTK (the token-optimizing command proxy) is removed from this repo — decided, done
   (2026-08-04, maintainer decision).** The `rtk` golden rule and command reference are gone from
   `CLAUDE.md`, every `rtk`-prefixed call site across `.claude/` skills and agents is now the plain
