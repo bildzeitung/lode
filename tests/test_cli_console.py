@@ -19,7 +19,8 @@ per-invocation, so:
   before ``lode.cli`` was first imported (typically at collection) — NOT
   because of anything ``CliRunner`` itself does. Run the suite as
   ``pytest -s`` from a real terminal and the import-time detection freezes
-  ``color_system`` the other way.
+  ``color_system`` the other way: ANSI then leaks into captured output and
+  assertions that expect none fail.
 * ``monkeypatch.setenv("NO_COLOR", "1")`` AFTER ``lode.cli`` is already
   imported is a silent no-op: the env read already happened at import, so
   such an assertion passes WITHOUT exercising the ``NO_COLOR`` path at all.
