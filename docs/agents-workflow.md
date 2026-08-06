@@ -3152,22 +3152,35 @@ assumption would not have closed it.
   *textual* — they prove every call site spells `"$MY_TOKEN"` in the skill's source, not that the
   variable is non-empty at run time. Every read-back site reads `$STATE_DIR/land-lock-token` with
   `2>/dev/null || true`, so if that file is missing or empty (a wiped `$STATE_DIR`, a pass resumed
-  mid-flight, an operator running a later section by hand) `$MY_TOKEN` is empty, `land-lock.sh` treats
-  empty exactly as absent, and every site degrades to the blind behaviour **with no diagnostic** while
-  all three pins stay green — **lode-67nk**, open. Second, the property actually delivered is *the lock
-  record is not corrupted or deleted by a pass that no longer owns it* — **not** *a displaced pass stops
-  landing*: at both consumers a mismatch verdict is discarded (`heartbeat … || true` in Section 2a, and
-  the same in `land-merge-one.sh`), so a pass that has demonstrably lost the lock still proceeds with
-  its merge. `scripts/land-lock.sh`'s header advises that such a caller "should also stop treating
-  itself as the lock holder"; no caller does that today, and nothing yet asks one to. Whether the check
-  should become a script invariant instead (so a future call site cannot silently regress by forgetting
-  the argument, and so the run-time fail-open above has nothing to fail open *through*) is
-  **lode-yuwt**, open, deliberately deferred rather than folded into lode-q9pm — its own text names the
-  hazard that
-  blocked doing it immediately: `release`'s contract lets a caller that never held the lock call it
-  harmlessly, and a self-reading design (the token file read by `release` itself rather than passed in)
-  would let a caller whose `acquire` failed this tick read the *previous* pass's token, match the live
-  record, and delete a lock it never held.
+  mid-flight, an operator running a later section by hand) `$MY_TOKEN` is empty and `land-lock.sh`
+  treats empty exactly as absent — the call still proceeds blind, with no run-time enforcement. What
+  changed under **lode-67nk** (closed): that fail-open is no longer *silent*. Every one of the five
+  `MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" ...)"` read-back sites in
+  `.claude/skills/land/SKILL.md`, and `scripts/land-merge-one.sh`'s own `$own_token` pass-through
+  (which covers a direct invocation with no SKILL.md caller warning in front of it), now emit a
+  loud, non-fatal stderr
+  diagnostic when the token comes back empty, gated by two new sabotage-verified textual pins in
+  `tests/test_land_lock.py` — `test_every_own_token_readback_site_warns_when_empty` (all five SKILL.md
+  sites) and `test_land_merge_one_warns_on_an_empty_own_token_argument` (the script's own pass-through,
+  redirect included) — alongside the three existing call-site pins. These two new pins carry the exact
+  same limit as those three: proving the diagnostic is spelled at every call site in the shipped file
+  is not proof it fires, or that some future edit can't silently drop it from a newly added site. So the
+  fail-open itself is unchanged and still occurs — what's delivered is that it is now **observable**
+  (an operator or a log-reader sees the warning on stderr) rather than undiagnosed; the call still goes
+  through with no ownership check, and nothing here makes that call fail closed. Second, the property
+  actually delivered is *the lock record is not corrupted or deleted by a pass that no longer owns it*
+  — **not** *a displaced pass stops landing*: at both consumers a mismatch verdict is discarded
+  (`heartbeat … || true` in Section 2a, and the same in `land-merge-one.sh`), so a pass that has
+  demonstrably lost the lock still proceeds with its merge. `scripts/land-lock.sh`'s header advises that
+  such a caller "should also stop treating itself as the lock holder"; no caller does that today, and
+  nothing yet asks one to. Whether the check should become a script invariant instead (so a future call
+  site cannot silently regress by forgetting the argument, and so an operator doesn't have to be reading
+  stderr for the fail-open above to be caught) is **lode-yuwt**, open on its own merits, deliberately
+  deferred rather than folded into lode-q9pm — its own text names the hazard that blocked doing it
+  immediately: `release`'s contract lets a caller that never held the lock call it harmlessly, and a
+  self-reading design (the token file read by `release` itself rather than passed in) would let a
+  caller whose `acquire` failed this tick read the *previous* pass's token, match the live record, and
+  delete a lock it never held.
 
   **Threading mechanism.** `acquire`'s own token never leaves `land-lock.sh` except on its stdout.
   Because `.claude/skills/land/SKILL.md` runs every fenced `bash` block as its own, separate Bash tool

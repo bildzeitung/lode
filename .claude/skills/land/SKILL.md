@@ -279,6 +279,8 @@ If the queue is empty, there is nothing to land: release the lock and stop —
 # Normal completion -- release now rather than waiting out the staleness window for no reason.
 STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation
 MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"
+[ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
+  "DISABLED for this call (lode-67nk)" >&2
 scripts/land-lock.sh release "$MY_TOKEN"
 exit 0
 ```
@@ -434,6 +436,8 @@ logged but never stops the pass (this is lock bookkeeping, not the vet itself):
 ```bash
 STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation
 MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"
+[ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
+  "DISABLED for this call (lode-67nk)" >&2
 scripts/land-lock.sh heartbeat "$MY_TOKEN" || true
 bd show <id> --json     # read metadata.land_head and metadata.land_summary
 git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on origin...
@@ -842,6 +846,8 @@ STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive here -- this is 
 MSG_DIR="$STATE_DIR/msg"                                # invocation; nothing from 3a's block persists
 CONFLICTS_DIR="$STATE_DIR/conflicts"                    # except the FILES 3a wrote under $STATE_DIR
 MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
+[ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
+  "DISABLED for this call (lode-67nk)" >&2
 
 # Load 3a's accepted set from disk, and REFUSE to continue if it did not load: iterating zero times
 # would land nothing while exiting 0, indistinguishable from a clean pass (governing rule, top).
@@ -964,6 +970,8 @@ it would mask the 2. Keep it there.
   MSG_DIR="$STATE_DIR/msg"                                 # $STATE_DIR are untouched by the reset
   CONFLICTS_DIR="$STATE_DIR/conflicts"
   MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
+  [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check" \
+    "is DISABLED for this call (lode-67nk)" >&2
   ACCEPTED=$(cat "$STATE_DIR/accepted") || exit 1
   [ -n "$ACCEPTED" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/accepted is missing or empty." \
     "Landing nothing." >&2; exit 1; }
@@ -1520,6 +1528,8 @@ done < <(git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent
 echo "bare-ref backstop3 (worktree-agent-*): deleted $B3_DELETED stale local ref(s) (failed=$B3_FAILED)"
 
 MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
+[ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
+  "DISABLED for this call (lode-67nk)" >&2
 scripts/land-lock.sh release "$MY_TOKEN"   # the pass is fully done -- release now rather than
                                      # waiting out the staleness window (lode-aps3; see Section 0)
 ```
