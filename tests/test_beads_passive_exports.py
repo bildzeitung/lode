@@ -4,9 +4,15 @@
 must treat as "by invariant never real work" (`import.auto: false`, lode-6ra). Its consumers
 read it rather than re-inlining the paths: `scripts/worktree-gc-classify.sh`'s dirty-tree guard,
 the `Stop` hook in `.claude/settings.json` (via
-`scripts/discard-beads-passive-export-churn.sh`), `scripts/land-merge-one.sh`'s merge-retry
-restore (lode-2nw5), and `tests/test_land_lock.py`'s stall-hook scan exclusion. Register a new
-consumer in the loops below rather than starting a parallel module for it.
+`scripts/discard-beads-passive-export-churn.sh`), and `scripts/land-merge-one.sh`'s merge-retry
+restore (lode-2nw5). Register a new consumer in the loops below rather than starting a
+parallel module for it.
+
+(A fourth consumer, `tests/test_land_lock.py`'s `_STALL_HOOK_SCAN_EXCLUDED_RELPATHS`, is gone
+as of lode-y3dw: `flock(1)` replaced the mkdir reclaim gate, retiring the
+`LAND_LOCK_TEST_STALL_SECONDS` hook that scan existed to police. `docs/decisions.md`'s lode-do3q
+entry still names it -- correctly, since that file records decisions as of their date and is
+appended to rather than rewritten.)
 
 Canonicalizing bought a one-file edit, but it also bought a NEW failure surface the previous
 inline copies could not have: an indirection chain (settings.json -> script -> data file) whose

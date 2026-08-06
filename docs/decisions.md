@@ -3629,6 +3629,42 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   into the sibling `_insert_enrich_job` (hoisted to that file's Helpers section by `lode-z1e7`)
   stayed file-local on this leaning.
 
+- **`/land` requires `flock(1)` — a portability floor, decided (`lode-y3dw`, 2026-08-05).**
+  `scripts/land-lock.sh`'s acquire wraps its entire decision (fresh attempt, staleness check,
+  reclaim) in one `flock(1)`-held exclusive lock, replacing the `mkdir`-based reclaim gate. That
+  makes `flock(1)` — **util-linux, not present on stock macOS or git-bash** — a hard prerequisite
+  for the machine that runs `/land`. **Accepted, by the maintainer, not by the building agent.**
+  The three reasons, in the order they carried the decision:
+  - **`trunk` today carries a *measured* two-winner race on the very lock that guards every write
+    to `trunk`.** 2 of 150 rounds at 32-way contention under 28-way CPU saturation, with **no stall
+    injected**, via two distinct check-then-act routes on the gate directory object. No amount of
+    additional shell-level ownership checking closes them: POSIX shell has no atomic
+    compare-and-swap on a directory. A kernel `flock` has no such object to misjudge, and releases
+    the instant the holder dies by any means — which also makes the permanent-wedge failure
+    structurally impossible.
+  - **The fallback fails CLOSED.** Where `flock(1)` is absent, acquire reports a MACHINE FAULT and
+    skips the tick; it never silently reverts to the two-winner-capable pre-flock path. The failure
+    symptom is "the `ready-for-land` queue never drains" — visible, bounded, and self-healing once
+    the binary is installed. Contrast the failure it replaces, which is two landers writing `trunk`.
+  - **`/land` is documented to run on ONE machine.** So this is a one-time per-machine environment
+    gap (Homebrew installs it on macOS), not a per-tick cost, and it constrains exactly one host —
+    not the repo, not the venv, not any other loop leg. `docs/onboarding.md` declares it under
+    prerequisites.
+
+  **What was traded away, stated plainly:** a contributor on stock macOS or git-bash can no longer
+  run `/land` without installing util-linux first. Every other workflow in this repo is unaffected.
+  If that floor ever becomes untenable, the alternative on the table was a further gate-ownership
+  check (`lode-y3dw`'s original option (a)) — revisit knowing it can only **narrow**, never close,
+  the two measured stall-free routes above.
+
+  **Process note, recorded because the record is the point:** this decision was reserved for a human
+  in `lode-y3dw`'s own text ("this is a portability decision a human should make rather than an
+  agent"), but the building agent wrote `DECISION (lode-y3dw): adopted flock(1)` into the ticket's
+  design field and built it. The ticket carried no `human` label, so `/sweep` never surfaced it; it
+  was `/land`'s semantic review that caught the reservation and escalated. The outcome above is the
+  maintainer's, arrived at independently — but a reserved decision reaching a builder unlabelled is
+  the gap, not the answer it happened to produce.
+
 - **Should `tests/test_deps_declared.py`'s deliberate `src/`-only scope widen to `tests/`?**
   (`lode-z31w`.) `tests/test_workflow_concurrency.py` (`lode-4lqx`) added the repo's first direct
   `import yaml` under `tests/` — pyyaml is now a genuine direct dependency of the test suite, not
