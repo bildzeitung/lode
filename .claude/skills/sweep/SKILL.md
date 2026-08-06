@@ -87,14 +87,39 @@ Two sources, per the epic's decided scope. I defensively exclude my own digest i
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
 
-ESCALATED=$(bd list --label land-escalated --exclude-label sweep-digest --limit 0 --json \
-  | jq -r '(. // []) | .[] | "\(.id)\tland-escalated\t\(.title)\t\(.status)"')
+set -o pipefail   # REQUIRED -- makes a failed bd query detectable; see the note below.
+
+QUERY_FAILED=0
+
+if ! ESCALATED=$(bd list --label land-escalated --exclude-label sweep-digest --limit 0 --json \
+  | jq -r '(. // []) | .[] | "\(.id)\tland-escalated\t\(.title)\t\(.status)"'); then
+  QUERY_FAILED=1
+  ESCALATED=""
+fi
 printf '%s' "$ESCALATED" > "$SWEEP_TMP/escalated"
 
-HUMAN=$(bd human list --status open --json \
-  | jq -r '(. // []) | .[] | "\(.id)\thuman\t\(.title)"')
+if ! HUMAN=$(bd human list --status open --json \
+  | jq -r '(. // []) | .[] | "\(.id)\thuman\t\(.title)"'); then
+  QUERY_FAILED=1
+  HUMAN=""
+fi
 printf '%s' "$HUMAN" > "$SWEEP_TMP/human"
+
+# Marker only -- content is irrelevant, existence is the signal. Deliberately NOT §2a/§2b's
+# SWEEP-QUERY-ERROR sentinel: that sentinel lives inside a report-only list, read by §8's
+# three-state rule. This marker has a different consumer (§5, gating the §6 digest rewrite) and a
+# different meaning (skip the rewrite entirely for this pass, not "report as errored").
+[ "$QUERY_FAILED" = 1 ] && touch "$SWEEP_TMP/source_query_failed"
 ```
+
+**`set -o pipefail` is what makes the failure detectable at all here too** — the same mechanism
+§2a introduces below (§2a's own note explains the underlying bd behaviour in full), applied here at
+the higher-consequence site: without it, `VAR=$(bd … | jq …)` carries only `jq`'s exit status, and
+a failing `bd` that writes zero bytes to stdout (measured on bd 1.1.0) never reaches it — `jq` reads
+no input, emits nothing, and exits `0`, so the assignment reports success on a failed query and
+`$ESCALATED`/`$HUMAN` come out empty, indistinguishable from a legitimately empty queue, at the
+exact site that gates §6's wholesale digest rewrite. It is set inside this block, so it is scoped to
+this Bash invocation (§0: each block is a fresh shell).
 
 **`--limit 0` on every `bd list` in this skill — the canonical reason, referenced from §2/§2a/§4.**
 `bd list --help` documents `--limit` with a default of 50 ("use 0 for unlimited"), and bd emits **no**
@@ -113,13 +138,16 @@ read as resolved, and re-notify as "new" on a later pass — §5's hard precondi
 query* — and a failed query suppresses the rewrite (§5's hard precondition), so a `human` item that
 was just resolved would **zombie in the digest** instead of dropping out promptly. `(. // [])`
 normalizes `null` → `[]` so an empty queue reads as empty. It does **not** mask the usual failure
-signature: a `bd` error prints a diagnostic (malformed JSON), on which `jq` still aborts, so that
-failure surfaces. (The one case neither the guard nor `jq` distinguishes — a `bd` failure that exits
-non-zero but writes *zero bytes* — was already indistinguishable from an empty queue before this
-guard; it is unchanged, not introduced, here.)
+signature: measured on bd 1.1.0, a failing `bd list`/`bd human list` writes its diagnostic to
+**stderr** and **zero bytes to stdout** — `jq` then reads no input, emits nothing, and exits `0`,
+so without `set -o pipefail` (above) the assignment would report success on a failed query. With
+`pipefail` set, the pipeline's exit status is `bd`'s non-zero status, which the `if !
+VAR=$(...)` guard above catches directly — no malformed-JSON path is involved; `jq` never sees
+anything to abort on, because it never receives input in this case.
 
-If either `bd` call errors, note the failure and **skip the digest rewrite for this pass** rather
-than aborting — a failed query is not an empty queue (but a `null`-serialized *empty* result is not
+If either `bd` call errors, the `QUERY_FAILED` marker above is set and **the digest rewrite is
+skipped for this pass** (§5 checks for `$SWEEP_TMP/source_query_failed`) rather than the pass
+aborting — a failed query is not an empty queue (but a `null`-serialized *empty* result is not
 a failure — see above). See
 [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
 
@@ -144,23 +172,46 @@ three skills until lode-v4rk):
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
 
+set -o pipefail   # REQUIRED -- see the note below.
+
 CLOSABLE=""
+QUERY_FAILED=0
 # Pull id AND title in the ONE list read -- `bd list --json` rows already carry
 # `title`, so re-fetching it per epic with a second `bd show` would be a wasted
-# round-trip against derivable state.
-while IFS=$'\t' read -r e TITLE; do
-  [ "$(scripts/epic-children-closed.sh "$e")" = "true" ] || continue
-  ROW=$(printf '%s\tepic-ready-to-close\t%s' "$e" "$TITLE")
-  # The newline MUST sit outside the command substitution above: `$(...)` strips
-  # trailing newlines, so building the row as `printf '...\n'` would silently drop
-  # the separator and jam every epic onto ONE line (only visible with >=2 closable
-  # epics, which is why it reads fine in a one-epic spot check).
-  CLOSABLE="${CLOSABLE}${ROW}
+# round-trip against derivable state. Capture the query into a plain variable FIRST so its exit
+# status is checkable -- piping straight into the loop via `< <(...)` (the prior form) only ever
+# exposes `read`'s own exit status to the `while`, silently swallowing a failed `bd`/`jq` upstream
+# no matter how the pipeline's own status is set (this ticket's §2 finding).
+if EPICS=$(bd list --type=epic --label epic-audited --status open --limit 0 --json \
+  | jq -r '(. // []) | .[] | [.id, .title] | @tsv'); then
+  while IFS=$'\t' read -r e TITLE; do
+    [ -z "$e" ] && continue   # a genuinely empty $EPICS still yields one blank read via <<<
+    [ "$(scripts/epic-children-closed.sh "$e")" = "true" ] || continue
+    ROW=$(printf '%s\tepic-ready-to-close\t%s' "$e" "$TITLE")
+    # The newline MUST sit outside the command substitution above: `$(...)` strips
+    # trailing newlines, so building the row as `printf '...\n'` would silently drop
+    # the separator and jam every epic onto ONE line (only visible with >=2 closable
+    # epics, which is why it reads fine in a one-epic spot check).
+    CLOSABLE="${CLOSABLE}${ROW}
 "
-done < <(bd list --type=epic --label epic-audited --status open --limit 0 --json \
-  | jq -r '(. // []) | .[] | [.id, .title] | @tsv')
+  done <<< "$EPICS"
+else
+  QUERY_FAILED=1
+fi
 printf '%s' "$CLOSABLE" > "$SWEEP_TMP/closable"
+
+# Same marker as §1, and the same file -- either section's failure is sufficient to skip §6/§7
+# for this pass, so the marker is a single shared existence check, not a per-section one.
+[ "$QUERY_FAILED" = 1 ] && touch "$SWEEP_TMP/source_query_failed"
 ```
+
+**Why the query is captured into `$EPICS` first, rather than piped straight into `< <(...)` as
+before:** a `while read` loop's own exit status is `read`'s, never the upstream pipeline's — no
+setting of `pipefail` changes that, because process substitution runs the pipeline in a *separate*
+subshell the loop's exit status never reflects. That is what let a failed `bd`/`jq` upstream pass
+silently before: the loop itself always reported success (or simply produced zero rows, read as an
+empty epic queue). Checking the `if EPICS=$(...); then … else QUERY_FAILED=1; fi` assignment's own
+status, before the loop ever starts, is what actually surfaces the failure.
 
 `--limit 0` for the same reason as §1 — same `$CURRENT`, same wholesale §6 rewrite.
 
@@ -206,9 +257,10 @@ pipeline, `jq` alone, and a failing `bd` never reaches it: measured on bd 1.1.0,
 reads no input, emits nothing, and exits `0`. The assignment reports success and the sentinel branch
 never fires — the phantom-empty read this section exists to prevent, reintroduced one layer down.
 It is set inside the block, so it is scoped to this Bash invocation (§0: each block is a fresh
-shell). **§1's `(. // [])` note above expects the opposite** — a `bd` error reaching `jq` as
-malformed JSON and aborting it — and that expectation is wrong for bd 1.1.0; §1/§2 still lack this
-guard, at the higher-consequence site (they gate the §6 digest rewrite). Tracked as `lode-5qbi`.
+shell). §1 and §2 above carry the identical `pipefail` guard, at the higher-consequence site (they
+gate the §6 digest rewrite) — via a `QUERY_FAILED` variable and a shared `source_query_failed`
+marker file rather than this section's `SWEEP-QUERY-ERROR` sentinel, since their consumer (§5) needs
+"skip the rewrite", not "render as errored in a report line" (lode-5qbi).
 
 Same `(. // [])` null-empty guard as §1/§2 — and the same `@tsv` as §2, which escapes a tab or
 newline embedded in a title instead of letting it break the row.
@@ -388,6 +440,17 @@ designed to be trivially re-parseable):
 
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
+
+# Hard precondition (below): a failed §1/§2 source query is indistinguishable from an empty
+# queue, and §6 rewrites the digest WHOLESALE from $CURRENT -- so a failure here must suppress
+# the rewrite, not fall through to it. This is the actual enforcement of that rule; §1/§2's
+# `QUERY_FAILED` blocks write the marker, this reads it.
+if [ -f "$SWEEP_TMP/source_query_failed" ]; then
+  echo "SOURCE QUERY FAILED THIS PASS (§1 and/or §2) -- skipping §6 rewrite and §7" \
+    "notification; prior digest left untouched. Re-run /sweep next tick." >&2
+  exit 1
+fi
+
 # Re-derive DIGEST_ID -- cheap and deterministic, so re-running the query beats persisting an id.
 # The script refuses unless exactly one digest exists; a bare `.[0].id` would silently pick the
 # first of several duplicates (§4's `N > 1` anomaly) or yield "null" when none exists (§4's
@@ -430,8 +493,10 @@ If `$CURRENT_IDS` equals `$LAST_IDS` exactly, nothing changed: skip the write en
 **Hard precondition — a failed source query suppresses the rewrite.** §6 rebuilds the digest
 wholesale from `$CURRENT`, so if any §1/§2 query errored, `$CURRENT` is not the true queue: a query
 that fails is indistinguishable from a queue that is empty, and rewriting on it would **delete real
-escalations from the durable record** and then re-notify them as "new" on the next pass. If any
-source failed, skip §6 and §7 and leave the prior digest untouched. Stale is recoverable;
+escalations from the durable record** and then re-notify them as "new" on the next pass. Enforced
+by the `$SWEEP_TMP/source_query_failed` check at the top of this block's code above — a detected
+failure exits this block before `$DIGEST_ID` is even derived, so §6 and §7 (both later, separate
+Bash invocations) never run this pass, and the prior digest is left untouched. Stale is recoverable;
 silently truncated is not.
 
 ## 6. Rewrite the digest (only when the queue changed, and every source query succeeded)
@@ -655,12 +720,13 @@ in opposite directions, and the digest wins: it is rebuilt wholesale from `$CURR
 query that errors is indistinguishable from "that queue is empty", and rewriting on it would delete
 real items from the durable record a human relies on.
 
-- If any §1/§2 query errors (`bd` or `jq`), note the failure in the report, **skip the §6 rewrite and
-  the §7 notification entirely**, and leave the prior digest exactly as it was. Stale, not truncated.
-  An *empty* result that serializes as literal `null` is **not** a failure — the `(. // [])` guard in
-  §1/§2 normalizes it to an empty list, so a queue that legitimately emptied still rewrites the digest
-  and drops the resolved item promptly (without it, the `jq` abort would look like a failed query and
-  wrongly suppress the rewrite).
+- If any §1/§2 query errors (`bd` or `jq`), §1/§2's `set -o pipefail` + `QUERY_FAILED` guards detect
+  it and write `$SWEEP_TMP/source_query_failed`; §5 checks that marker and exits before §6/§7 ever
+  run, note the failure in the report, and leave the prior digest exactly as it was. Stale, not
+  truncated. An *empty* result that serializes as literal `null` is **not** a failure — the
+  `(. // [])` guard in §1/§2 normalizes it to an empty list, so a queue that legitimately emptied
+  still rewrites the digest and drops the resolved item promptly (a bare `jq '.[]'` abort on that
+  `null` would otherwise look like a failed query and wrongly suppress the rewrite).
 - The §6 rewrite is all-or-nothing: it either completes cleanly or is skipped (no partial
   `--body-file` write).
 - If §4 finds `N > 1` digests, the write path stops for the pass (that anomaly is reported, never
