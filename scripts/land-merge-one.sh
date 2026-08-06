@@ -170,11 +170,11 @@ own_token="${3:-}"
 # lock itself. Extra stderr is already normal on this path (the merge's own
 # error text goes there below).
 #
-# `$own_token` (lode-q9pm) is passed through unconditionally -- an empty
-# string when the caller omitted it, which land-lock.sh's own `[ -n
-# "$OWN_TOKEN" ]` guard treats identically to the argument being absent
-# entirely (no ownership check performed), so this call site does not need
-# to branch on whether it was supplied.
+# `$own_token` (lode-q9pm) is passed through unconditionally rather than
+# conditionally: an empty string is treated by land-lock.sh identically to
+# the argument being absent, so this call site never has to branch. What
+# supplying it does and does not change is documented once, in the Usage
+# block above -- not restated here.
 "$(dirname "$0")/land-lock.sh" heartbeat "$own_token" >/dev/null || true
 
 msg_file="$msg_dir/$id"

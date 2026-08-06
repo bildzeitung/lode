@@ -14,9 +14,12 @@ brackets -- but not over the whole pass; CAVEAT 1 enumerates the three
 stretches that stay uncovered and why the 1800s default was therefore left
 alone. The stale-lock reclaim path, formerly non-atomic (CAVEAT 2), is now
 atomic (lode-ao95; see that half of the tests below) via an mkdir-gated
-critical section, and the record's owner token (5th field) that a future
-ownership check in `heartbeat` will need is preserved across heartbeat calls
-but not yet verified against anything -- see lode-q9pm.
+critical section, and the record's owner token (5th field) is both preserved
+across heartbeat calls and -- since lode-q9pm -- compared against the calling
+pass's own remembered token, so `heartbeat`/`release` refuse to touch a record
+this pass no longer owns. That comparison is skipped when the caller omits its
+token, which is why the SKILL.md call-site pins near the bottom of this file
+gate that every real call site supplies one.
 
 What this file adds on top of that is the regression gate, in four parts:
 
@@ -1422,6 +1425,84 @@ def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
     assert "scripts/land-lock.sh heartbeat" in text, (
         "land/SKILL.md never heartbeats the single-lander lock -- the TTL is "
         "back to measuring acquisition age, not idle time (lode-m87j)"
+    )
+
+
+# `[own-token]` is OPTIONAL on `heartbeat`/`release`, and omitting it reproduces
+# the pre-lode-q9pm blind behaviour EXACTLY -- silently, with every existing test
+# above still green. So the ownership check's whole safety property rests on every
+# call site actually passing the token, which until these pins was unguarded prose
+# in a markdown fence: a fail-OPEN of precisely the class lode-rjqm names. The
+# three pins below close it from the three directions it can break.
+_BLIND_OK = "land-lock-blind-ok"
+
+
+def test_land_skill_persists_its_own_acquire_token_for_later_blocks() -> None:
+    """Section 0 must capture `acquire`'s printed token and write it to
+    `$STATE_DIR/land-lock-token`. Nothing else can: no shell state survives to
+    the later, separate Bash invocations that heartbeat and release (lode-sfnb),
+    so if this write is lost every later call site reads an empty token and
+    silently degrades to the blind, pre-lode-q9pm behaviour."""
+    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
+
+    # Match the WRITE specifically, not a bare mention of the filename: the
+    # read-back sites name that same path four more times, so an `in executed`
+    # check stays green with the write itself deleted (measured by sabotage --
+    # it did).
+    assert re.search(r'>\s*"\$STATE_DIR/land-lock-token"', executed), (
+        "land/SKILL.md never WRITES $STATE_DIR/land-lock-token -- every later "
+        "heartbeat/release then reads an empty token and the lode-q9pm "
+        "ownership check is silently disabled for the whole pass"
+    )
+
+
+def test_every_land_lock_heartbeat_and_release_call_site_supplies_its_own_token() -> (
+    None
+):
+    """The pin that actually holds lode-q9pm up. Bare `land-lock.sh heartbeat`
+    / `release` with no token argument is legal (backward compatibility) and
+    silent, so nothing but this test notices a call site losing its
+    `"$MY_TOKEN"`. A line may opt out ONLY by carrying the `land-lock-blind-ok`
+    marker with a stated reason -- today exactly one does: Section 0's bail-out
+    release, which fires when the token could not be parsed at all and so has
+    none to supply."""
+    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
+
+    offenders = [
+        line.strip()
+        for line in executed.splitlines()
+        if re.search(r"land-lock\.sh (heartbeat|release)(\s|$)", line)
+        and not re.search(r"land-lock\.sh (heartbeat|release)\s+\"\$MY_TOKEN\"", line)
+        and _BLIND_OK not in line
+    ]
+
+    assert not offenders, (
+        f"land/SKILL.md heartbeat/release call site(s) supply no own-token: "
+        f"{offenders}. The argument is optional and omitting it silently "
+        "reproduces the pre-lode-q9pm blind behaviour -- a two-lander overlap "
+        'goes back to being self-concealing. Pass `"$MY_TOKEN"` (re-read from '
+        f"$STATE_DIR/land-lock-token in that same block), or mark the line "
+        f"`{_BLIND_OK}` with a reason if it genuinely has no token to supply."
+    )
+
+
+def test_land_skill_threads_its_own_token_into_land_merge_one() -> None:
+    """`scripts/land-merge-one.sh` heartbeats on every invocation, and it is
+    itself a script called from a fence rather than a block that could read
+    $STATE_DIR on its own -- so BOTH of Section 3's merge loops (the first pass
+    and the isolation replay) must hand it the token as its third argument, or
+    that heartbeat goes blind for every merged branch."""
+    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
+
+    calls = re.findall(r"land-merge-one\.sh [^\n]*", executed)
+    assert len(calls) >= 2, (
+        f"expected both of Section 3's land-merge-one.sh call sites, found "
+        f"{calls} -- has the skill's layout drifted?"
+    )
+    offenders = [c for c in calls if '"$MY_TOKEN"' not in c]
+    assert not offenders, (
+        f"land-merge-one.sh call site(s) omit the own-token third argument: "
+        f"{offenders}. It then heartbeats blind (lode-q9pm)."
     )
 
 

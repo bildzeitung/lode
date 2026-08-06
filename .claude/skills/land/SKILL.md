@@ -124,6 +124,14 @@ printf '%s\n' "$ACQUIRE_OUT" \
   | grep -oE 'token [0-9a-f]+' | cut -d' ' -f2 > "$STATE_DIR/land-lock-token"
 [ -s "$STATE_DIR/land-lock-token" ] || {
   echo "land: could not parse this pass's own token out of: $ACQUIRE_OUT" >&2
+  # RELEASE BEFORE BAILING. We hold the lock as of two lines ago, and this is the
+  # only exit path in the whole skill that aborts while holding it -- without this,
+  # a bail here wedges landing for the FULL staleness window (~6 skipped /loop 5m
+  # ticks) for what is a parse bug, not a running pass. No token argument on
+  # purpose: we could not parse ours, and nothing else can have taken the lock in
+  # the microseconds since `acquire` succeeded, so the blind (pre-lode-q9pm) form
+  # is exactly right here.
+  scripts/land-lock.sh release   # land-lock-blind-ok: no token to supply, see above
   exit 1
 }
 ```

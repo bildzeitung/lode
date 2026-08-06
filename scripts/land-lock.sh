@@ -562,8 +562,10 @@ token_of() {
   # field (four fields only, lode-aps3-era) or is otherwise malformed. Same
   # word-split-in-a-function shape as `epoch_of`, and for the same reason --
   # confines the split so it cannot clobber the script's own "$@" at top
-  # level. Used only by `heartbeat`, to PRESERVE whatever token is currently
-  # on disk rather than regenerate or blank it (see MERGE RESOLUTION above).
+  # level. Used by `heartbeat`, to PRESERVE whatever token is currently on
+  # disk rather than regenerate or blank it (see MERGE RESOLUTION above), and
+  # by BOTH `heartbeat` and `release` as the left-hand side of the lode-q9pm
+  # ownership comparison against the caller's `[own-token]`.
   # shellcheck disable=SC2086  # deliberate word-split of the record
   set -- $1
   printf '%s' "${5:-}"
