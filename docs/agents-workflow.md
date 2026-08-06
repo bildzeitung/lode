@@ -3074,29 +3074,63 @@ assumption would not have closed it.
   deliberately generous — the guarded critical section is a handful of forks — and **must not be reduced
   to "tighten" this**, since a smaller window makes displacing a live holder *more* likely and does
   nothing about the residual above. Note this is a *different* object and check
-  from lode-q9pm below: q9pm is entirely about `heartbeat` re-stamping the *main lock's* own token field,
-  never the *gate directory's* own small record touched here — landing q9pm exactly as scoped would have
-  left this reclaim-path hole exactly as open as it was, which is why it needed its own ticket rather
-  than folding into q9pm.
+  from the owner-token ownership check below: that check is entirely about `heartbeat`/`release`
+  re-stamping or removing the *main lock's* own token field, never the *gate directory's* own small
+  record touched here — landing it exactly as scoped left this reclaim-path hole exactly as open as it
+  was, which is why it needed its own ticket (lode-78ih) rather than folding the two together.
 
-  **The lock record carries an owner token (5th field, lode-ao95) that `heartbeat` now preserves but
-  still does not verify.** It exists so a future ownership check has something to compare against: even
-  with an atomic reclaim, a pass whose lock is reclaimed out from under it (still possible under the
-  documented crash-recovery scenario — atomicity guarantees exactly one winner, not that the original
-  holder learns it lost) can keep calling `heartbeat` and re-stamp the new holder's record, turning a
-  genuine two-lander overlap *self-concealing* rather than merely non-atomic — the file looks
-  continuously fresh and names whichever pass wrote last, erasing the evidence a human would spot one
-  by. `heartbeat` (lode-m87j) reads whichever record is currently on disk and re-stamps that SAME token
-  rather than regenerating or blanking it, so the field stays meaningful across heartbeat calls —
-  lode-ao95 was built strictly against a trunk with no `heartbeat`, so this preservation is what merging
-  the two branches had to add (see the MERGE NOTE in `scripts/land-lock.sh`'s header). What it does
-  **not** do is compare that token against anything the calling pass remembers as *its own* — so a pass
-  that lost the lock still has no way to notice and still cannot refuse to overwrite a record it no
-  longer owns. Wiring that ownership check — threading each pass's own token through to its own
-  `heartbeat`/`release` calls, and refusing to overwrite on mismatch — is **lode-q9pm**, still open. The
-  standing rule that outlives this merge: **`heartbeat` must PRESERVE field 5, never regenerate or blank
-  it** — a heartbeat that mints a fresh token each tick leaves the field looking healthy while
-  destroying the only thing an ownership check can compare against.
+  **The lock record carries an owner token (5th field, lode-ao95); `heartbeat` and `release` now both
+  preserve it AND verify it (lode-q9pm, landed).** It exists so an ownership check has something to
+  compare against: even with an atomic reclaim, a pass whose lock is reclaimed out from under it (still
+  possible under the documented crash-recovery scenario — atomicity guarantees exactly one winner, not
+  that the original holder learns it lost) could otherwise keep calling `heartbeat` and re-stamp the new
+  holder's record, turning a genuine two-lander overlap *self-concealing* rather than merely non-atomic
+  — the file would look continuously fresh and name whichever pass wrote last, erasing the evidence a
+  human would spot one by. `heartbeat` (lode-m87j) reads whichever record is currently on disk and
+  re-stamps that SAME token rather than regenerating or blanking it, so the field stays meaningful
+  across heartbeat calls — lode-ao95 was built strictly against a trunk with no `heartbeat`, so this
+  preservation is what merging the two branches had to add (see the MERGE RESOLUTION note in
+  `scripts/land-lock.sh`'s header). The standing rule that outlives that merge: **`heartbeat` must
+  PRESERVE field 5, never regenerate or blank it** — a heartbeat that mints a fresh token each tick
+  leaves the field looking healthy while destroying the only thing an ownership check can compare
+  against.
+
+  `heartbeat`/`release` now both also accept the calling pass's own remembered token as an **OPTIONAL**
+  trailing `[own-token]` argument and compare it against the record's current token before acting: on a
+  mismatch — another `/land` has reclaimed the lock since this pass last checked — `heartbeat` refuses
+  to re-stamp (exit 1, still non-fatal to the caller's own step) and `release` refuses to `rm -f $LOCK`
+  (still exits 0, its own always-succeeds contract; there is nothing left for *this* pass to clean up
+  either way). **Omitting `[own-token]` reproduces the pre-lode-q9pm blind behaviour exactly and
+  silently** — preserve-and-re-stamp / remove, no ownership comparison at all — so the safety property
+  is enforced by *who calls the argument*, not by the script refusing to run without it. What actually
+  makes every real call site pass its own token is `.claude/skills/land/SKILL.md` (every executed
+  `heartbeat`/`release` call site passes `"$MY_TOKEN"`) plus three sabotage-verified pins in
+  `tests/test_land_lock.py` on those exact call sites and on `land-merge-one.sh`'s own two call sites —
+  not an invariant of `land-lock.sh` itself. Whether the check should become a script invariant instead
+  (so a future call site cannot silently regress by forgetting the argument) is **lode-yuwt**, open,
+  deliberately deferred rather than folded into this ticket — its own text names the hazard that
+  blocked doing it immediately: `release`'s contract lets a caller that never held the lock call it
+  harmlessly, and a self-reading design (the token file read by `release` itself rather than passed in)
+  would let a caller whose `acquire` failed this tick read the *previous* pass's token, match the live
+  record, and delete a lock it never held.
+
+  **Threading mechanism.** `acquire`'s own token never leaves `land-lock.sh` except on its stdout.
+  Because `.claude/skills/land/SKILL.md` runs every fenced `bash` block as its own, separate Bash tool
+  invocation with no shell state surviving between them (lode-sfnb, same constraint as the single-lander
+  lock design itself, above), Section 0's `acquire` block captures the printed token and writes it to
+  `$STATE_DIR/land-lock-token` (`$STATE_DIR` = `.git/land-state/`, the same cross-block persistence
+  mechanism every other cross-block value in that skill uses) — every later `heartbeat`/`release` call
+  site re-reads that file into `$MY_TOKEN` before calling `land-lock.sh`. `scripts/land-merge-one.sh`
+  (invoked from Section 3's two merge loops) takes the same token as an **optional third positional
+  argument**, for the identical reason: it is a script called *from* a fenced block, not a block that
+  could read `$STATE_DIR` on its own initiative.
+
+  **Missing/legacy record on `[own-token]`.** When `[own-token]` is supplied and the lock file is
+  missing or predates the 5-field record (no owner token to compare against at all), `heartbeat` stamps
+  a fresh record using the *caller's own* token rather than minting an unrelated new one — at least as
+  good as the prior blind-regenerate behaviour, but worth naming: a displaced pass can still resurrect a
+  lock under its own identity in this narrow case, since there is no prior token for the comparison to
+  fail against when the record is simply absent.
 
   **Release reaches only two sites** — Section 1's empty-queue exit and the end of Section 4 — as a
   latency optimization; every other stop, *including the routine pass in which every branch was kicked
