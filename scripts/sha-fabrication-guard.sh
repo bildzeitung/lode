@@ -96,12 +96,22 @@ fi
 # the functions undefined, `set -e` would abort with no stdout, and the wrapper
 # would turn that into a silent ALLOW. Assert the CONTRACT, not the file; see
 # the same block in scripts/gh-write-guard.sh (review, lode-dia6).
+#
+# The contract is FOUR names, not two (review, lode-rjqm) -- the scan-length cap
+# adds `SHELL_QUOTE_SPLIT_MAX_LEN` (read under `set -u`) and
+# `deny_if_over_scan_cap` (called as `... || exit 0`, whose `||` swallows an
+# undefined function's rc=127 into a silent ALLOW). An older library copy from
+# a partial checkout, or a revert of just that one file, defines the two
+# original functions and neither of the new names. Same fail-OPEN this block
+# closed for the functions; see the fuller note in scripts/gh-write-guard.sh.
 # shellcheck source=scripts/shell-quote-split.sh
 source "$_LIB" || true
 if ! declare -F _split_unquoted >/dev/null 2>&1 ||
-  ! declare -F strip_quoted_heredoc_bodies >/dev/null 2>&1; then
+  ! declare -F strip_quoted_heredoc_bodies >/dev/null 2>&1 ||
+  ! declare -F deny_if_over_scan_cap >/dev/null 2>&1 ||
+  [ -z "${SHELL_QUOTE_SPLIT_MAX_LEN:-}" ]; then
   jq -n '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
-    permissionDecisionReason: "lode-dia6: scripts/shell-quote-split.sh was found but did not define the quote-aware split functions scripts/sha-fabrication-guard.sh depends on (a truncated, partially-checked-out, or syntactically broken copy) -- denying this Bash call rather than silently scanning with the split disabled, since a false ALLOW here is unrecoverable. Surface this to a human; do not retry."}}'
+    permissionDecisionReason: "lode-dia6/lode-rjqm: scripts/shell-quote-split.sh was found but did not define the quote-aware split functions and scan-length cap scripts/sha-fabrication-guard.sh depends on (a truncated, partially-checked-out, out-of-date, or syntactically broken copy) -- denying this Bash call rather than silently scanning with the split disabled, since a false ALLOW here is unrecoverable. Surface this to a human; do not retry."}}'
   exit 0
 fi
 
@@ -126,14 +136,11 @@ CMD=$(printf '%s' "$CMD" | sed -e :a -e '/\\$/N; s/\\\n/ /; ta')
 INVOKE_RE='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((sudo|env|command|time|nohup|xargs)[[:space:]]+)*(bd|git)([[:space:]]|$)'
 
 # SCAN LENGTH CAP (lode-rjqm) -- fail CLOSED (deny) rather than pay `_split_unquoted`'s
-# per-character cost without bound. See scripts/shell-quote-split.sh's header for the cap's
-# value and the argument behind it, and docs/agents-workflow.md for the (a)/(b)/(c) decision.
-if [ "${#CMD}" -gt "$SHELL_QUOTE_SPLIT_MAX_LEN" ]; then
-  jq -n --arg len "${#CMD}" --arg cap "$SHELL_QUOTE_SPLIT_MAX_LEN" \
-    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
-      permissionDecisionReason: ("lode-rjqm: this command is " + $len + " bytes, past the " + $cap + "-byte scan cap scripts/sha-fabrication-guard.sh enforces before running its quote-aware split -- denying rather than scanning an oversized command for an unbounded amount of time, or worse, silently skipping the scan. If this is a legitimate command, split it into smaller pieces or surface this to a human to widen the cap.")}}'
-  exit 0
-fi
+# per-character cost without bound. Enforcement lives in the shared library alongside the
+# constant (review, lode-rjqm), so this guard and gh-write-guard.sh cannot drift. Measured on
+# the post-transform `$CMD`, i.e. exactly the string handed to `_split_unquoted` below -- see
+# that function's header, and docs/agents-workflow.md for the (a)/(b)/(c) decision.
+deny_if_over_scan_cap "$CMD" "scripts/sha-fabrication-guard.sh" || exit 0
 
 TOKENS=$(_split_unquoted "$CMD" \
   | grep -E "$INVOKE_RE" \

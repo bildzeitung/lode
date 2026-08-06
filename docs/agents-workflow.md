@@ -1738,10 +1738,15 @@ cost is proportional to operator count rather than string length; (c) cap the sc
 an explicit, argued fail-**closed** behaviour past the cap (a truncated scan must never become a
 false ALLOW).
 
-**Decision: (c), a shared length cap.** `scripts/shell-quote-split.sh` declares
-`SHELL_QUOTE_SPLIT_MAX_LEN=16384` (16 KiB) once; both guards check the string they are about to
-hand to `_split_unquoted` against it *before* calling the function, and DENY — never truncate,
-never silently proceed — if it is exceeded. Reasoning behind picking (c) over (b):
+**Decision: (c), a shared length cap.** `scripts/shell-quote-split.sh` owns *both* halves — the
+value `SHELL_QUOTE_SPLIT_MAX_LEN=16384` (16 KiB) and the enforcement helper
+`deny_if_over_scan_cap <string> <caller>` — declared once. Each guard calls
+`deny_if_over_scan_cap "$…" "scripts/…" || exit 0` on the string it is about to hand to
+`_split_unquoted`, *before* calling it, and DENYs — never truncates, never silently proceeds —
+past the cap. (Sharing the constant while hand-duplicating the check-and-deny block in both guards
+was the shape this ticket first took; technical review folded the enforcement into the library
+too, since a verbatim copy in both guards is precisely the drift `lode-dia6` created this library
+to eliminate.) Reasoning behind picking (c) over (b):
 
 - **(b) touches the split's actual quote-tracking logic** — a security-critical primitive whose
   entire existing coverage (`tests/test_gh_write_guard.py`, `tests/test_sha_fabrication_guard.py`,
@@ -1759,13 +1764,27 @@ never silently proceed — if it is exceeded. Reasoning behind picking (c) over 
   exists, and one does.
 - **(c) changes nothing about how the split itself works** — zero risk of a new false-ALLOW in the
   quote-tracking logic, because that logic is untouched. It only bounds the *input* the (unchanged)
-  loop is ever asked to scan, and bounds it well outside anything real traffic is expected to
-  produce: sampled from this repo's own bd DB and git history at the time of the decision, the
-  largest single `description`/`notes` field ever recorded was **~4.9 KB** and the largest commit
-  message in the last 100 was **~3.5 KB** — the 16 KiB cap carries **>3×** headroom over the
-  largest single field ever observed, comfortably covering even a command that combines two such
-  fields in one call (e.g. `bd update --append-notes … --set-metadata …`) plus shell-quoting
-  expansion.
+  loop is ever asked to scan.
+
+**Where 16 KiB comes from, and what it does *not* claim** (corrected in technical review, lode-rjqm
+— the figure recorded pre-review sampled only the ~20 *open* bd issues and read as far more headroom
+than there is). The cap is a **cost ceiling**, not a "no real command is ever this big" claim: 16 KiB
+already costs ~500 ms, so raising it until it clears every observed input would defeat its purpose.
+Measured against this repo's own traffic:
+
+| Source | Largest observed | vs. the 16 KiB cap |
+|---|---|---|
+| git commit messages (last 300) | ~4.9 KB | >3× headroom — never bites |
+| bd `description`/`notes`, **full** 761-issue DB | **~36 KB** (`lode-905v`), plus four more at 14–19 KB | **exceeds the cap** |
+
+Those large notes fields accumulated over many `--append-notes` calls, so it is *not* established
+that any single command ever exceeded the cap — but a big one-shot `bd update … --notes` plainly
+can, and past the cap it now DENIES. That is the deliberate trade, not an oversight: a denied
+command is a **cheap, recoverable** cost (append in smaller pieces, or surface it to a human to
+widen the cap), whereas paying seconds on every Bash call is not, and silently *not* scanning would
+be a false ALLOW — the asymmetry this whole guard family is built on. Whether 16 KiB remains the
+right number now that the premise behind it is corrected is filed as its own follow-up rather than
+re-decided in review.
 
 **What the cap does and does not buy.** It does *not* make an already-under-cap command faster —
 a genuine 8–16 KB command still pays the full linear scan (a few hundred ms), same as before. What
@@ -1789,6 +1808,22 @@ ticket. The cap constant itself is declared exactly once, in the shared library 
 test in the same file — so both guards cap at the same value by construction, the identical
 rationale the extraction into a shared library (`lode-dia6`, above) already established for the
 two scanning primitives themselves.
+
+**One fail-OPEN found and closed in technical review.** The cap grew the library's contract to
+**four** names, not two, but each guard's post-`source` contract check still asserted only the two
+original *functions*. A library that defines the functions but not `SHELL_QUOTE_SPLIT_MAX_LEN` — an
+out-of-date copy, a partial checkout, or a revert of just `shell-quote-split.sh`, all reachable
+since this ticket changed the library and both guards together — therefore hit the new cap line
+under `set -u`, aborted with `unbound variable`, emitted no decision, and the `settings.json`
+wrapper's trailing `exit 0` turned that into a **silent ALLOW** on every guarded Bash call. Verified
+by sabotage (strip only the constant: rc=1, empty stdout, in *both* guards). The enforcement helper
+carries the same hazard one notch worse: it is called as `… || exit 0`, so the `||` swallows an
+undefined function's rc=127 into a silent ALLOW with no shell option protecting it at all. Both are
+fixed by asserting the full four-name contract in the same block, pinned by a parametrized sweep in
+`tests/test_shell_quote_split_lib.py` that crosses *every consumer the library discovers* with
+*each new contract name removed* — so a fifth name added later is caught by the same shape. This is
+the identical fail-OPEN class `lode-dia6`'s own review closed for the functions, reopened one line
+lower down.
 
 ### All three PreToolUse guards live in tested scripts, not inline config (2026-08-04)
 

@@ -636,25 +636,9 @@ def test_pre_filter_admits_every_shape_the_p_anchor_recognizes() -> None:
     )
 
 
-def _script_decision(command: str) -> str | None:
-    """Run the extracted script against `command`; return its decision, or None if allowed."""
-    proc = subprocess.run(
-        ["bash", str(SCRIPT), command],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert proc.returncode == 0, f"script exited {proc.returncode}: {proc.stderr}"
-    if not proc.stdout.strip():
-        return None
-    return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
-
-
 def _script_output(command: str) -> dict | None:
     """Run the extracted script against `command`; return its full hookSpecificOutput dict, or
-    None if allowed. Same subprocess shape as `_script_decision`, but keeps the deny reason."""
+    None if allowed. The single place this file shells out to the guard."""
     proc = subprocess.run(
         ["bash", str(SCRIPT), command],
         cwd=REPO_ROOT,
@@ -667,6 +651,14 @@ def _script_output(command: str) -> dict | None:
     if not proc.stdout.strip():
         return None
     return json.loads(proc.stdout)["hookSpecificOutput"]
+
+
+def _script_decision(command: str) -> str | None:
+    """The decision alone, or None if allowed -- a thin slice of `_script_output` rather than a
+    second copy of the subprocess shape (review, lode-rjqm), mirroring how
+    tests/test_sha_fabrication_guard.py already layers these two helpers."""
+    out = _script_output(command)
+    return None if out is None else out["permissionDecision"]
 
 
 class TestGhWriteGuardScriptDirectly:
