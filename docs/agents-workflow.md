@@ -2037,6 +2037,51 @@ code:**
 Both run autonomously and surface to you on the **same rule**: only a **genuine decision** pulls you
 in (and, for the technical review, "I think I'm making it worse"). Everything else they handle.
 
+### Gate exit-code contract (0/1/2) (lode-jhry)
+
+Every gate a producer, a code-reviewer, or `/land` runs must distinguish a genuine **content**
+failure from a **machine/environment fault** — origin lode-9i2p, whose incident (a docker binary on
+`PATH` that could not reach an engine, making every doc report FAIL) is the reason this is a contract
+and not a suggestion: a broken *tool* is otherwise indistinguishable from broken *content*, and
+`/land`'s isolation-replay loop **deletes (bounces) a branch on a red gate** — so a machine fault
+misread as content damns an innocent branch, or several, in the same pass.
+
+The contract, in one place instead of re-derived at every call site:
+
+- **exit 0 — PASS.** No further meaning.
+- **exit 1 — CONTENT.** The gate ran to completion and found a genuine problem: invalid Mermaid, a
+  stale lock, a failing test. This is a real verdict on the branch.
+- **exit 2 — MACHINE.** The gate itself **could not run** — a missing tool, an unreachable network
+  dependency, an environment fault. This says **nothing** about the content being gated; it is never
+  a verdict on the branch.
+
+**Each consumer's obligation on exit 2 is the same shape, restated per role only because the action
+differs:**
+
+- **`/land`** — never isolate or bounce a branch on exit 2. Stop the pass, surface the gate's own
+  diagnostic verbatim as a human decision (it names the cause and the remedy), and land nothing that
+  pass. Bouncing on a machine fault would delete every reviewed branch in the pass, each carrying a
+  fabricated content finding.
+- **`code-reviewer`** — escalate, never skip. Never hand-verify the gated thing in the gate's place,
+  never swap to `ready-for-land` with the gate silently skipped, and never read the fault as license
+  to proceed without it. Only a human can fix the machine.
+- **producer (`coding`)** — same as the reviewer: revert to the last green commit, push, and follow
+  the build-time escalation path (`land-escalated`) rather than hand off with the gate unresolved.
+
+**Currently exit-code-aware gates:** [`scripts/validate-mermaid.sh`](../scripts/validate-mermaid.sh),
+[`scripts/merge-precheck.sh`](../scripts/merge-precheck.sh) (`/land`'s Section 2b conflict precheck —
+its exit 2 means the trial merge itself couldn't run, e.g. `merge-tree` failing or an unreadable ref,
+not a real conflict), and `nox -s lock_currency` (`noxfile.py`, lode-sys4 — a nox-hosted gate, so it
+implements the exit-2 path via a direct `sys.exit(2)` helper rather than `session.error()`, per the
+nox mechanic below).
+
+**The nox mechanic (verified directly against nox's own `tasks.py` — `Result.__bool__` /
+`final_reduce`):** `session.error()` and a failed `session.run()` both collapse to a flat process
+exit **1** — nox has no built-in concept of an exit-2 machine fault. A nox-hosted gate that needs the
+exit-2 path must call `sys.exit(2)` directly inside the session function, bypassing nox's own result
+reduction entirely. This is non-obvious and easy to get wrong by reaching for `session.error()` out
+of habit, which is exactly what would produce a fault that reads as content.
+
 ### The producers — `/code`, solo or fan-out
 
 There is **no separate `/code-parallel`** — once landing leaves the producer, building one task and

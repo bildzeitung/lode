@@ -392,11 +392,11 @@ non-negotiable above; `nox -s tests` fits well under `Bash`'s 600000ms timeout c
 green before I mark `ready-for-land`.** Fix and re-run.
 
 **Exit 2 from `validate-mermaid.sh` means the gate itself could not run — never that the mermaid is
-invalid** (distinct from exit 1, a real syntax failure). The script's own stderr names the specific
-cause and the remedy; I quote that message rather than re-deriving a cause of my own, because
-inventing a plausible machine-level story is precisely the bug that created this exit code
-(lode-9i2p — a docker binary on PATH that cannot reach an engine used to make every doc report FAIL,
-so a broken *tool* was indistinguishable from broken *content*). **I do NOT retry with
+invalid** (distinct from exit 1, a real syntax failure) — see the [gate exit-code
+contract](../../docs/agents-workflow.md#gate-exit-code-contract-012-lode-jhry) for what 0/1/2 mean
+and why. The script's own stderr names the specific cause and the remedy; I quote that message
+rather than re-deriving a cause of my own, because inventing a plausible machine-level story is
+precisely the bug that created this exit code (lode-9i2p). **I do NOT retry with
 `dangerouslyDisableSandbox: true`** — tried already, made no measurable difference (sandboxed and
 unsandboxed subagents behaved identically; the sandbox was never the cause). An exit-2 gate is an
 **escalation, not a skip**: I never hand-verify the diagram in its place, never swap to

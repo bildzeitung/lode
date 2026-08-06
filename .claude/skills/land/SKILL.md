@@ -471,13 +471,13 @@ fi
   `$ACCEPTED` from outcomes that include "kicked back `needs-rebase`", so a branch reaching 3a
   un-kicked-back is out of order on its own terms.
 - **`rc=2`** → **MACHINE FAULT, not a branch conflict** (git < 2.38, an unreadable/unknown ref, or
-  `merge-tree` itself failing). Per lode-9i2p's rule — the same one Section 3 already honours for
-  `validate-mermaid.sh`'s exit 2 ("a red gate is content; exit 2 is the machine") — I do **not** kick
-  this branch back `needs-rebase`. A machine fault blaming an innocent branch is exactly the defect
-  this extraction closed (defect 2, in the script's header). Instead I **stop the pass** and surface
-  the script's own stderr diagnostic verbatim as a human decision — it names the cause and the
-  remedy, and only a human can fix the machine. This is the one behaviour change from the inline
-  snippet this replaced; do not "simplify" it back into a kick-back.
+  `merge-tree` itself failing) — same [gate exit-code
+  contract](../../../docs/agents-workflow.md#gate-exit-code-contract-012-lode-jhry) every other gate
+  here honours. I do **not** kick this branch back `needs-rebase`. A machine fault blaming an
+  innocent branch is exactly the defect this extraction closed (defect 2, in the script's header).
+  Instead I **stop the pass** and surface the script's own stderr diagnostic verbatim as a human
+  decision — it names the cause and the remedy, and only a human can fix the machine. This is the one
+  behaviour change from the inline snippet this replaced; do not "simplify" it back into a kick-back.
 
 A conflict (`rc=1`) is **neither a bounce nor an escalate** — the branch's *content* may be perfectly
 fine, it simply can't replay onto where `trunk` now is. I handle it per
@@ -883,31 +883,18 @@ with **exit 1**, the same way a red `nox -s tests` would; treat *that* identical
 covers it, and the isolation-replay loop re-runs it per branch (see its own `nox -s lock_currency`
 call) to find the culprit.
 
-**`nox -s lock_currency` exit 2 is NOT a red gate either — same rule, same reason as
-`validate-mermaid.sh` below.** Exit 2 means the gate *could not run*: `uv` is not on `PATH`, or
-`scripts/compile-lock.sh` could not resolve at all (PyPI unreachable, a 5xx, DNS). Only exit **1**
-means the lock is genuinely stale. This gate needs that distinction more than any other I run, not
-less: `nox -t fix` and `nox -s tests` are `noxfile.py`'s *offline, keyless* default set and stay
-offline once the model cache is warm, whereas `lock_currency` requires `uv` present and PyPI
-reachable on **every single invocation** — a genuinely new environment requirement on the one machine
-that writes `trunk`, and one a `/loop 5m /land` re-runs all day. On exit 2 I do **not** isolate, do
-**not** bounce, and do **not** land: I stop the pass and surface the message as a human decision.
-Bouncing on it would delete every reviewed branch in the pass for a network blip, each with a
-fabricated "stale lock" finding. `lock_currency` is **last** in the `&&` chain above for exactly this
-reason — an `&&` chain reports its last-run command's status, so putting anything after it would mask
-the 2. Keep it there.
+**`nox -s lock_currency` and `validate-mermaid.sh` exit 2 are NOT red gates — they are machine
+faults, and isolating on either bounces an innocent branch.** Full contract (what 0/1/2 mean, and
+why): [docs/agents-workflow.md — Gate exit-code
+contract](../../../docs/agents-workflow.md#gate-exit-code-contract-012-lode-jhry). On either exit 2 I
+do **not** isolate, do **not** bounce, and do **not** land: I stop the pass and surface the script's
+own message verbatim as a human decision. `lock_currency` is **last** in the `&&` chain above for
+exactly this reason — an `&&` chain reports its last-run command's status, so putting anything after
+it would mask the 2. Keep it there.
 
 **Neither exit-2 stop in this section restores local `trunk`** — deliberately; that is
 [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)'s job, and the reasoning lives there
 (lode-k9ef).
-
-**`validate-mermaid.sh` exit 2 is NOT a red gate — it is a machine fault, and isolating on it bounces
-an innocent branch.** Exit 2 means the *gate itself could not run*; only exit **1** means invalid
-mermaid. The distinction exists precisely because a broken tool used to be indistinguishable from
-broken content (lode-9i2p). On exit 2 I do **not** isolate, do **not** bounce, and do **not** land the
-docs set with the diagram unverified: I stop the pass and surface the script's own exit-2 message
-verbatim as a human decision — it names the cause and the remedy, and only a human can fix the
-machine. A red gate is content; exit 2 is the machine.
 
 - **Green** → proceed to [Land the survivors](#4-land-the-survivors).
 - **Red** → **isolate**. The combined merge is bad but I don't yet know which branch. Reset `trunk`
