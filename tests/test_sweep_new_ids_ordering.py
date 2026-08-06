@@ -45,8 +45,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import bash_fence_blocks
-from conftest import only_block_with as _shared_only_block_with
+from conftest import bash_fence_blocks, only_block_with
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SWEEP_SKILL = REPO_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
@@ -67,10 +66,9 @@ def _only_block_with(*needles: str, what: str) -> str:
     near-identical-looking blocks, e.g. Section 5 and Section 6 both derive
     `$DIGEST_ID` via the same script call).
 
-    Thin wrapper over the shared tests/conftest.py::only_block_with (lode-pm37),
-    which this file and tests/test_land_conflicts_state.py had each previously
-    reimplemented byte-identically."""
-    return _shared_only_block_with(_skill_blocks(), *needles, what=what)
+    Thin wrapper over the shared tests/conftest.py::only_block_with, onto which
+    lode-pm37 unified this file's own former private copy."""
+    return only_block_with(_skill_blocks(), *needles, what=what)
 
 
 def _section_5_block() -> str:
