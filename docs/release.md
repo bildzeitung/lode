@@ -208,8 +208,8 @@ byte-identical across the three, deliberately; and every job in the repo carries
   it *is* a real pip download — a 22 MB wheel from PyPI (measured: uv 0.12.0, linux x86_64) — so a
   pip cache there would have something to hold. **Caching is deliberately left off anyway**: a
   restored GitHub Actions cache entry that size is not obviously cheaper than fetching the wheel
-  fresh each run, and nothing has measured otherwise. Revisiting this needs numbers, not another
-  read of this paragraph — a cold-vs-cached CI comparison, tracked at lode-3vrq. Enabling it would
+  fresh each run, and nothing has measured otherwise. Reopen it only on a cold-vs-cached CI
+  comparison; the question and the wheel measurement are recorded at lode-3vrq. Enabling it would
   also need an explicit `cache-dependency-path`, since neither leg has a `requirements.txt` for
   `setup-python`'s default glob to match (`build.yml` points its cache at `pyproject.toml` for the
   same reason). As with the timeout ladder, this is not a runtime call: release runs measure 14-30s
