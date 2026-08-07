@@ -23,7 +23,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import SWEEP_SKILL_TEXT, bash_fence_blocks, fake_bin_env
+from conftest import SWEEP_SKILL_BLOCKS, bash_fence_blocks, fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "sweep-digest-id.sh"
@@ -170,14 +170,12 @@ def test_both_sweep_call_sites_use_the_script_not_an_inline_query() -> None:
     states outright that the rule set is "stated once, there, not duplicated
     here", and a fourth copy is one more place to go stale when a fence rule
     changes."""
-    text = SWEEP_SKILL_TEXT
-
     # Comments are not executed, and these blocks deliberately EXPLAIN the
     # `.[0].id` guess they no longer make -- scanning that prose would make
     # this pin fire on its own rationale.
     body = "\n".join(
         line
-        for block in bash_fence_blocks(text)
+        for block in SWEEP_SKILL_BLOCKS
         for line in block.splitlines()
         if not line.strip().startswith("#")
     )

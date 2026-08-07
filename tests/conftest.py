@@ -1665,20 +1665,34 @@ SWEEP_SKILL_TEXT = SWEEP_SKILL.read_text(encoding="utf-8")
 #: session. See :data:`SWEEP_SKILL_TEXT` above for why this is cached at all.
 SWEEP_SKILL_BLOCKS = bash_fence_blocks(SWEEP_SKILL_TEXT)
 
-#: DECISION (lode-pxwn), recorded here rather than adding a generic
-#: ``@functools.cache`` to :func:`bash_fence_blocks` itself: that function
-#: returns a plain, MUTABLE ``list[str]``, so decorating it would silently
-#: hand every caller in the session the *same* list object -- fine for the
-#: read-only callers that exist today (``len()``, iteration,
-#: :func:`only_block_with`), but an unenforced contract across ~10 modules
-#: that a future caller could break by mutating its "own" result. The
-#: per-module constants above (``LAND_SKILL_BLOCKS``/``LAND_SKILL_BASH``,
-#: ``SWEEP_SKILL_BLOCKS``) sidestep the hazard entirely: each is computed
-#: exactly once, at import time, from a fixed input, and every caller already
-#: treats the result as read-only in practice -- so there is nothing left to
-#: generalize. A module that gains its own fresh SKILL.md to pin should add
-#: its own ``<NAME>_TEXT``/``<NAME>_BLOCKS`` pair here, following this same
-#: shape, rather than reaching for a shared cached helper.
+# DECISION (lode-pxwn) -- deliberately a plain `#` block, not the `#:`
+# attribute-doc form used above: it documents no single constant, and an `#:`
+# run here would silently become the rendered doc for whatever constant is
+# added below it next.
+#
+# Why the per-skill constants above rather than a generic
+# ``@functools.cache`` on :func:`bash_fence_blocks`: that function returns a
+# plain, MUTABLE ``list[str]``, so decorating it would hand every caller in
+# the session the *same* list object -- an unenforced contract across ~10
+# modules that a future caller could break by mutating its "own" result. The
+# constants above (``LAND_SKILL_BLOCKS``/``LAND_SKILL_BASH``,
+# ``SWEEP_SKILL_BLOCKS``) narrow that exposure to a fixed, reviewable set
+# computed once at import time from a fixed input.
+#
+# They do NOT eliminate it, and the honest version of the read-only claim is:
+# every consumer today is read-only EXCEPT
+# ``tests/test_land_conflicts_state.py::test_section_3_regate_precedes_push_is_sabotage_proven``,
+# which copies (``sabotaged = list(blocks)``) before reordering. That copy was
+# incidental when each call re-parsed the file; it is load-bearing now, and is
+# annotated as such at its own call site.
+#
+# A module that gains its own fresh SKILL.md to pin should add its own
+# ``<NAME>_TEXT``/``<NAME>_BLOCKS`` pair here, following this same shape,
+# rather than reaching for a shared cached helper. Making
+# :func:`bash_fence_blocks` return a ``tuple[str, ...]`` would enforce the
+# contract instead of documenting it; it was left alone here because it also
+# changes the parser's own pinned equality assertions, well outside a
+# tests-only hoist (tracked separately).
 
 
 # --- TUI test settle helpers (lode-lcju) -----------------------------------

@@ -321,6 +321,10 @@ def test_section_3_regate_precedes_push_is_sabotage_proven() -> None:
     blocks = _skill_blocks()
     regate_indices, push_index = _regate_and_push_indices(blocks)
 
+    # The copy is MANDATORY, not defensive housekeeping (lode-pxwn):
+    # `_skill_blocks()` now returns the session-shared `conftest.LAND_SKILL_BLOCKS`
+    # itself, so reordering in place would corrupt it for every test that runs
+    # after this one -- an order-dependent failure elsewhere in the suite.
     sabotaged = list(blocks)
     last_regate = max(regate_indices)
     sabotaged[push_index], sabotaged[last_regate] = (
