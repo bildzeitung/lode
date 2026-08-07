@@ -3194,6 +3194,19 @@ assumption would not have closed it.
   latency optimization; every other stop, *including the routine pass in which every branch was kicked
   back `needs-rebase` or bounced*, waits the window out. Deliberate: a TTL that asks nothing of any exit
   site cannot rot as exits are added, the same reasoning as the pass-start `reset --hard` below.
+- **A failed `acquire` is signposted, not re-printed (lode-119w).** `land-lock.sh` exits 1 for both a
+  transient "another /land appears to still be running" and a permanent per-machine MACHINE FAULT
+  (`flock` missing, `rev-parse` failure, an unwritable lock dir), and every caller collapses non-zero to
+  "skip this tick" — so under `/loop 5m /land` a permanent fault can read as just another overrunning
+  tick, forever, with the visible symptom "the queue never drains". The exit contract is deliberately
+  left alone (a third code would have to be taught to every collapsing caller for no behavioural gain);
+  Section 0's skip line instead goes to **stderr** and names the distinction, so it is ordered
+  immediately after the script's own diagnostic on that same stream. **Correcting the record:** the
+  diagnostic was never being *swallowed* — `ACQUIRE_OUT="$(land-lock.sh acquire)"` captures stdout only,
+  so the stderr wording always reached the reader; the gap was one of salience, not suppression, and the
+  fix is worded accordingly. That also fixes the ceiling on this: it makes a fault a reader *can* see
+  easier to recognize, and does nothing for the real remaining problem, which is that nobody reads an
+  unattended loop's per-tick output at all.
 - **Pass-start `git reset --hard origin/trunk`, not `git pull --rebase` (lode-k9ef).** Several
   "stop the pass" exits fire on a **machine** fault rather than a content red — today the 2b
   cheap-conflict precheck's `merge-tree` exit 2, `validate-mermaid.sh`'s exit 2, and

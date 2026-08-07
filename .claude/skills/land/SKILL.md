@@ -110,8 +110,22 @@ not run in parallel:
 ```bash
 STATE_DIR="$(git rev-parse --git-dir)/land-state"    # re-derive -- fresh Bash invocation (lode-sfnb)
 mkdir -p "$STATE_DIR"
-ACQUIRE_OUT="$(scripts/land-lock.sh acquire)" \
-  || { echo "land: could not acquire the lock this tick -- skipping."; exit 0; }
+# On a non-zero acquire, this skip line goes to STDERR and points AT the
+# diagnostic land-lock.sh has already printed there itself -- whose wording
+# distinguishes a transient "another /land appears to still be running" from a
+# permanent MACHINE FAULT (flock missing, rev-parse failure, an unwritable lock
+# dir), the distinction a reader of `/loop 5m /land`'s output needs and that a
+# generic line alone invites them to skim past (lode-119w; docs/agents-workflow.md).
+# Same stream, so it is ordered immediately after it. Deliberately NOT `2>&1`
+# into $ACQUIRE_OUT: land-lock.sh's token contract is its STDOUT, and on the
+# SUCCESS path that variable is the input to the token parse below, whose
+# failure aborts the pass -- widening it buys nothing there and risks that parse.
+ACQUIRE_OUT="$(scripts/land-lock.sh acquire)" || {
+  echo "land: could not acquire the lock this tick -- skipping. Read land-lock.sh's" \
+    "own diagnostic immediately above: a MACHINE FAULT there is PERMANENT on this" \
+    "machine and blocks landing until a human fixes it -- not an overrunning tick." >&2
+  exit 0
+}
 echo "$ACQUIRE_OUT"
 # Persist THIS pass's own acquire token to disk (lode-q9pm), for every later
 # heartbeat/release call site to re-read -- a file, not a variable, because no
