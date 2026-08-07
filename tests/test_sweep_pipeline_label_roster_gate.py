@@ -82,12 +82,11 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import bash_fence_blocks, only_block_with
+from conftest import SWEEP_SKILL, bash_fence_blocks, only_block_with
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
 AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
-SWEEP_SKILL = SKILLS_DIR / "sweep" / "SKILL.md"
 
 # Same scan surface as test_bd_list_limit_gate.py's MD_GLOBS: skills a Claude Code agent executes
 # bash out of, and subagent definitions (.claude/agents/*.md), which carry just as many operative

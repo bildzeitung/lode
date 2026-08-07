@@ -1624,6 +1624,13 @@ def _fenced_bash(markdown: str) -> str:
 #: LAND_SKILL at all; its text-gate half is test_land_skill_guard_coverage.py.
 LAND_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
+#: The sweep skill doc, derived the same way as LAND_SKILL above. Was
+#: hand-derived independently in every tests/ module that pins a sweep block
+#: (five of them by then) until lode-b8jc consolidated it here. Import this
+#: rather than re-deriving it: the duplication had already re-forked once, on a
+#: file that landed after the first consolidation attempt was written.
+SWEEP_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
+
 
 # --- TUI test settle helpers (lode-lcju) -----------------------------------
 #
