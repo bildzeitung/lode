@@ -1219,21 +1219,35 @@ def test_uncreatable_lock_reports_a_machine_fault_not_another_lander(
 # ---------------------------------------------------------------------------
 
 
+#: The throwaway $TMPDIR every test below redirects land-lock.sh at. Named once
+#: -- _fault_env and _fault_count_path must never disagree about it, or an
+#: `assert not ...exists()` would pass against a path the script never writes.
+_FAULT_TMPDIR_NAME = "fault-tmpdir"
+
+
 def _fault_env(tmp_path: Path) -> dict[str, str]:
-    fault_tmp = tmp_path / "fault-tmpdir"
+    fault_tmp = tmp_path / _FAULT_TMPDIR_NAME
     fault_tmp.mkdir(exist_ok=True)
     return {"TMPDIR": str(fault_tmp), "LAND_LOCK_FAULT_ESCALATE_THRESHOLD": "3"}
 
 
 def _fault_count_path(tmp_path: Path) -> Path:
-    return tmp_path / "fault-tmpdir" / "lode-land-lock-fault-count"
+    return tmp_path / _FAULT_TMPDIR_NAME / "lode-land-lock-fault-count"
+
+
+def _faulty_repo_and_env(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    """A repo plus the env that makes every `acquire` in it hit a MACHINE FAULT
+    (no `flock` on $PATH), with the counter redirected into the throwaway
+    $TMPDIR. The three-line preamble every test below would otherwise repeat."""
+    return _init_repo(tmp_path), {
+        **_fault_env(tmp_path),
+        "PATH": _path_without_flock(tmp_path),
+    }
 
 
 def test_a_single_machine_fault_does_not_escalate(tmp_path: Path) -> None:
     """Below threshold: MACHINE FAULT is still reported, but no ESCALATE line."""
-    repo = _init_repo(tmp_path)
-    path_without_flock = _path_without_flock(tmp_path)
-    env = {**_fault_env(tmp_path), "PATH": path_without_flock}
+    repo, env = _faulty_repo_and_env(tmp_path)
 
     result = _run("acquire", repo=repo, env_overrides=env)
 
@@ -1248,9 +1262,7 @@ def test_consecutive_machine_faults_escalate_at_the_threshold(
 ) -> None:
     """Three consecutive MACHINE FAULT acquires (the default threshold) must
     escalate on the third; the first two must not."""
-    repo = _init_repo(tmp_path)
-    path_without_flock = _path_without_flock(tmp_path)
-    env = {**_fault_env(tmp_path), "PATH": path_without_flock}
+    repo, env = _faulty_repo_and_env(tmp_path)
 
     first = _run("acquire", repo=repo, env_overrides=env)
     second = _run("acquire", repo=repo, env_overrides=env)
@@ -1265,16 +1277,20 @@ def test_consecutive_machine_faults_escalate_at_the_threshold(
 
 def test_escalation_keeps_repeating_past_the_threshold(tmp_path: Path) -> None:
     """Not just the first crossing -- a caller checking only the LATEST tick's
-    output must still see it, so every tick at or past threshold announces."""
-    repo = _init_repo(tmp_path)
-    path_without_flock = _path_without_flock(tmp_path)
-    env = {**_fault_env(tmp_path), "PATH": path_without_flock}
+    output must still see it, so every tick at or past threshold announces.
 
-    for _ in range(3):
-        _run("acquire", repo=repo, env_overrides=env)
-    fourth = _run("acquire", repo=repo, env_overrides=env)
+    Seeds the counter file directly rather than re-driving three faulted
+    acquires (the test above already pins the crossing itself, and each real
+    acquire costs a fresh $PATH-without-flock symlink farm)."""
+    repo, env = _faulty_repo_and_env(tmp_path)
+    _fault_count_path(tmp_path).write_text("7\n", encoding="utf-8")
 
-    assert "ESCALATE" in fourth.stderr, fourth.stderr
+    result = _run("acquire", repo=repo, env_overrides=env)
+
+    assert "ESCALATE" in result.stderr, result.stderr
+    assert _fault_count_path(tmp_path).read_text().strip() == "8", (
+        "a tick already past the threshold must still keep counting up"
+    )
 
 
 def test_a_clean_acquire_resets_the_fault_counter(tmp_path: Path) -> None:
@@ -1282,9 +1298,7 @@ def test_a_clean_acquire_resets_the_fault_counter(tmp_path: Path) -> None:
     carry over silently -- otherwise two isolated faults years apart could
     eventually cross the threshold together, which is not what "consecutive"
     means."""
-    repo = _init_repo(tmp_path)
-    path_without_flock = _path_without_flock(tmp_path)
-    faulty_env = {**_fault_env(tmp_path), "PATH": path_without_flock}
+    repo, faulty_env = _faulty_repo_and_env(tmp_path)
     healthy_env = _fault_env(tmp_path)
 
     faulted = _run("acquire", repo=repo, env_overrides=faulty_env)
@@ -1312,9 +1326,7 @@ def test_a_transient_lock_held_skip_resets_the_fault_counter_not_bumps_it(
     is NOT a MACHINE FAULT -- the flock, the lock dir, and the lock file all
     worked fine. It must reset the counter (proof the machine is healthy),
     never bump it."""
-    repo = _init_repo(tmp_path)
-    path_without_flock = _path_without_flock(tmp_path)
-    faulty_env = {**_fault_env(tmp_path), "PATH": path_without_flock}
+    repo, faulty_env = _faulty_repo_and_env(tmp_path)
     healthy_env = _fault_env(tmp_path)
 
     faulted = _run("acquire", repo=repo, env_overrides=faulty_env)
@@ -1335,13 +1347,8 @@ def test_a_transient_lock_held_skip_resets_the_fault_counter_not_bumps_it(
 
 
 def test_fault_escalate_threshold_is_configurable(tmp_path: Path) -> None:
-    repo = _init_repo(tmp_path)
-    path_without_flock = _path_without_flock(tmp_path)
-    env = {
-        **_fault_env(tmp_path),
-        "PATH": path_without_flock,
-        "LAND_LOCK_FAULT_ESCALATE_THRESHOLD": "1",
-    }
+    repo, faulty_env = _faulty_repo_and_env(tmp_path)
+    env = {**faulty_env, "LAND_LOCK_FAULT_ESCALATE_THRESHOLD": "1"}
 
     result = _run("acquire", repo=repo, env_overrides=env)
 

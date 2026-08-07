@@ -3231,10 +3231,21 @@ assumption would not have closed it.
   rest of the script; Section 0 in `.claude/skills/land/SKILL.md` is what actually reaches a human — it
   captures `acquire`'s stderr to a scratch file (never `2>&1` into `$ACQUIRE_OUT` itself, so the token
   parse on the success path is untouched), re-echoes it so lode-119w's reader loses nothing, and greps it
-  for the `ESCALATE` marker. On a match it opens (or, on a repeat, appends a note to) a single
-  `--type=decision --label=human` ticket keyed by a fixed title, so a human sees it via `/sweep`'s
-  existing `human`-labeled-ticket surfacing — no new escalation mechanism, and repeated ticks update the
-  same ticket rather than spawning a new one every 5 minutes.
+  for the `ESCALATE` marker. On a match it opens a single `--type=decision --label=human` ticket keyed by
+  a fixed title, so a human sees it via `/sweep`'s existing `human`-labeled-ticket surfacing — no new
+  escalation mechanism. Two properties of that Section 0 block are load-bearing and easy to break:
+  - **The stderr scratch file lives under `${TMPDIR:-/tmp}`, never under `$STATE_DIR`.** `$STATE_DIR` is
+    inside the git dir, and an unwritable git dir is the headline fault being escalated — a redirect
+    there fails *before* `acquire` runs, so the counter would never bump, the marker would never be
+    emitted, and lode-119w's diagnostic would vanish too, leaving the fault **quieter** than before the
+    feature. Both halves of the mechanism sit outside the git dir for the same reason.
+  - **The ticket is filed once per fault episode, not refreshed per tick.** The dedup lookup is
+    `bd list --label human --limit 0` with *no* `--status open`: `bd list` already excludes closed
+    issues, while pinning `open` would miss the ticket the moment a human moved it to `in_progress`
+    while investigating — and then duplicate it every tick. A persistent fault is thousands of ticks, so
+    refreshing the ticket per tick would grow its notes without bound and commit to Dolt every 5 minutes
+    for information a human already has. The ticket **existing** is the signal; closing it re-arms
+    filing, so a recurrence after a fix opens a fresh one.
 - **Pass-start `git reset --hard origin/trunk`, not `git pull --rebase` (lode-k9ef).** Several
   "stop the pass" exits fire on a **machine** fault rather than a content red — today the 2b
   cheap-conflict precheck's `merge-tree` exit 2, `validate-mermaid.sh`'s exit 2, and

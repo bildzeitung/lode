@@ -132,7 +132,14 @@ mkdir -p "$STATE_DIR"
 # inspect it for land-lock.sh's own escalation marker without a second
 # `acquire` call (which would double-count its consecutive-fault counter).
 # Nothing changes on the success path -- `acquire` never writes stderr there.
-ACQUIRE_ERR_FILE="$STATE_DIR/land-lock-acquire-stderr"
+#
+# That capture file is deliberately NOT under $STATE_DIR, for the same reason
+# land-lock.sh keeps its fault counter out of $GIT_COMMON_DIR: an unwritable git
+# dir IS the headline fault being escalated, and a redirect into the git dir
+# fails BEFORE `acquire` runs at all -- no counter bump, no ESCALATE marker, and
+# lode-119w's diagnostic gone too. Both halves live under ${TMPDIR:-/tmp} so
+# both survive that fault.
+ACQUIRE_ERR_FILE="${TMPDIR:-/tmp}/lode-land-lock-acquire-stderr"
 ACQUIRE_OUT="$(scripts/land-lock.sh acquire 2>"$ACQUIRE_ERR_FILE")" || {
   ACQUIRE_ERR="$(cat "$ACQUIRE_ERR_FILE" 2>/dev/null || true)"
   echo "$ACQUIRE_ERR" >&2
@@ -143,27 +150,29 @@ ACQUIRE_OUT="$(scripts/land-lock.sh acquire 2>"$ACQUIRE_ERR_FILE")" || {
   # consecutive-MACHINE-FAULT counter past LAND_LOCK_FAULT_ESCALATE_THRESHOLD)
   # and marks it with the distinctly-prefixed "land-lock: ESCALATE" stderr
   # line -- it stays bd-free by design, same as the rest of that script. THIS
-  # is the one place that actually reaches a human: open, or refresh, a
-  # `human`-labeled ticket -- lode's escalation mechanism, which `/sweep`
-  # already surfaces (no new mechanism). Keyed by a fixed title so repeated
-  # ticks update the SAME ticket instead of spawning a new one every 5
-  # minutes.
-  if printf '%s' "$ACQUIRE_ERR" | grep -q 'land-lock: ESCALATE'; then
+  # is the one place that actually reaches a human: open a `human`-labeled
+  # ticket -- lode's escalation mechanism, which `/sweep` already surfaces (no
+  # new mechanism). Keyed by a fixed title and FILED ONCE per fault episode: a
+  # fault that persists for days is thousands of ticks, so refreshing the ticket
+  # per tick would grow its notes without bound and commit to Dolt every 5
+  # minutes for information a human already has. The ticket EXISTING is the
+  # signal; closing it re-arms filing, so a recurrence opens a fresh one.
+  if grep -q 'land-lock: ESCALATE' "$ACQUIRE_ERR_FILE" 2>/dev/null; then
     # `--limit 0` (never a bare `bd list`, see docs/agents-workflow.md's
-    # canonical "bd list defaults to a small page" rationale) and the title
-    # comparison goes through jq's `env.` builtin rather than `--arg` (no
-    # existing call site in this file uses `--arg`, and its `$name` binding
-    # inside the jq PROGRAM string would falsely trip
-    # tests/test_skill_bash_state.py's cross-block-shell-state scanner, which
-    # has no notion of jq's own quoting) -- `export` makes the bash variable
-    # visible to the jq child process without one.
+    # canonical "bd list defaults to a small page" rationale), and NO
+    # `--status open` -- `bd list` already excludes closed issues, while pinning
+    # `open` would miss this very ticket once a human moves it to
+    # in_progress/blocked and then duplicate it every tick.
+    #
+    # The title comparison goes through jq's `env.` builtin rather than `--arg`
+    # (no call site in this file uses `--arg`, and a `$name` binding inside the
+    # jq PROGRAM string falsely trips tests/test_skill_bash_state.py's
+    # cross-block-shell-state scanner, which has no notion of jq's quoting) --
+    # `export` is what makes the value visible to the jq child process.
     export ESCALATION_TITLE="land-lock: persistent MACHINE FAULT is blocking /land on this machine"
-    EXISTING_ESCALATION="$(bd list --label human --status open --limit 0 --json \
+    EXISTING_ESCALATION="$(bd list --label human --limit 0 --json \
       | jq -r '(. // [])[] | select(.title == env.ESCALATION_TITLE) | .id' | head -1)"
-    if [ -n "$EXISTING_ESCALATION" ]; then
-      bd update "$EXISTING_ESCALATION" \
-        --append-notes "Still failing as of $(date -u +%FT%TZ): $ACQUIRE_ERR"
-    else
+    if [ -z "$EXISTING_ESCALATION" ]; then
       bd create --type=decision --label=human \
         --title="$ESCALATION_TITLE" \
         --description="scripts/land-lock.sh acquire has hit a persistent MACHINE FAULT
@@ -172,10 +181,16 @@ under /loop 5m /land on this machine -- past its escalation threshold
 routine overrunning pass; it will not self-heal, and every tick keeps skipping
 until a human fixes the underlying cause named in the diagnostic below.
 
-Latest diagnostic:
+This ticket is filed ONCE per fault episode and is not refreshed per tick -- the
+live diagnostic is in the /land loop's own output. Do NOT run
+\`scripts/land-lock.sh acquire\` by hand to check: on a machine that has since
+been fixed it would take the lock out from under the loop. Close this ticket
+once the machine is fixed; a recurrence after that opens a fresh one.
+
+Diagnostic at the time of filing:
 $ACQUIRE_ERR"
+      bd dolt push
     fi
-    bd dolt push
   fi
   exit 0
 }
