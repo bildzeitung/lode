@@ -743,6 +743,85 @@ def test_list_notes_with_all_tags_treats_a_tombstoned_tag_as_absent(
     assert list_notes_with_all_tags(db_path, ["removed-tag"]) == []
 
 
+def test_list_notes_with_all_tags_resolves_an_external_scoped_tag_through_linked_notes(
+    tmp_path: Path,
+) -> None:
+    """lode-35nu.7: a tag scoped to an external (enrich.py writes tag
+    annotations at ``target = owner_id``, an external_id for an external)
+    matches a note through a fresh edge linking that external, not just a
+    direct note-scoped tag. Reproduces the confirmed failure: before the fix,
+    ``_list_notes_with_all_tags``'s join was strict on ``a.target =
+    n.note_id``, so an external-only tag matched zero notes even though the
+    tag itself was offered by :func:`list_tags`.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "cites an external").version_id
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type) VALUES (?, 'web')",
+            ("ext-1",),
+        )
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, status) "
+            "VALUES (?, ?, 'ai', 'fresh')",
+            ("note-a", "ext-1"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    # Tag annotation's target is the EXTERNAL's id, not the note's -- exactly
+    # how enrich.py writes an external-scoped tag.
+    _write_tag(db_path, "ext-1", head, "ai")
+
+    assert "ai" in list_tags(db_path)
+    rows = list_notes_with_all_tags(db_path, ["ai"])
+    assert [row.note_id for row in rows] == ["note-a"]
+
+
+def test_list_notes_with_all_tags_ignores_a_stale_edge_to_a_tagged_external(
+    tmp_path: Path,
+) -> None:
+    """Only a *fresh* edge resolves an external-scoped tag through to a note --
+    a stale/orphaned edge no longer reflects a live link."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "cites an external").version_id
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type) VALUES (?, 'web')",
+            ("ext-1",),
+        )
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, status) "
+            "VALUES (?, ?, 'ai', 'stale')",
+            ("note-a", "ext-1"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    _write_tag(db_path, "ext-1", head, "ai")
+
+    assert list_notes_with_all_tags(db_path, ["ai"]) == []
+
+
+def test_list_notes_with_all_tags_note_scoped_tag_still_direct_match(
+    tmp_path: Path,
+) -> None:
+    """The note-scoped path is unchanged by the external-tag resolution arm."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "tagged directly").version_id
+    finally:
+        conn.close()
+    _write_tag(db_path, "note-a", head, "staging")
+
+    rows = list_notes_with_all_tags(db_path, ["staging"])
+
+    assert [row.note_id for row in rows] == ["note-a"]
+
+
 def test_list_notes_with_all_tags_orders_newest_first(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     _seed_note_with_created(
