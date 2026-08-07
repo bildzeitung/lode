@@ -82,7 +82,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import SWEEP_SKILL, bash_fence_blocks, only_block_with
+from conftest import SWEEP_SKILL_BLOCKS, only_block_with
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
@@ -156,7 +156,7 @@ def _sweep_exclude_labels() -> set[str]:
     # the longest match. `only_block_with` asserts exactly one hit, so a structural change that
     # makes this ambiguous fails loudly instead of pinning the wrong block.
     block = only_block_with(
-        bash_fence_blocks(SWEEP_SKILL.read_text(encoding="utf-8")),
+        SWEEP_SKILL_BLOCKS,
         "STRANDED=$(bd list --status in_progress",
         "--exclude-label",
         what="Section 2b's stranded-ticket collection",

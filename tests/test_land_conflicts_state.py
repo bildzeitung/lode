@@ -38,7 +38,7 @@ scaffolding and the cross-block-ordering precedent already are.
 
 from __future__ import annotations
 
-from conftest import LAND_SKILL, bash_fence_blocks, only_block_with
+from conftest import LAND_SKILL_BLOCKS, only_block_with
 
 
 def _skill_blocks() -> list[str]:
@@ -48,14 +48,16 @@ def _skill_blocks() -> list[str]:
     Unlike a single concatenation of every fenced block (the
     tests/test_land_lock.py precedent), this preserves block BOUNDARIES,
     which is the point here: whether $CONFLICTS is read from a file or from a
-    bash variable set earlier is a per-block question. Thin wrapper over the
-    shared tests/conftest.py::bash_fence_blocks parser, onto which lode-ovgs
-    unified this file's own former private copy (byte-identical in behaviour
-    on every consumed file -- verified, so this file's pins policed exactly the
-    same block set before and after). The parser's known blind spots are
-    documented next to it, not restated here.
+    bash variable set earlier is a per-block question. Reads the shared,
+    session-cached :data:`conftest.LAND_SKILL_BLOCKS` (lode-pxwn) rather than
+    re-reading and re-parsing land/SKILL.md on every call -- this helper used
+    to be a thin wrapper over tests/conftest.py::bash_fence_blocks, onto which
+    lode-ovgs unified this file's own former private copy (byte-identical in
+    behaviour on every consumed file -- verified, so this file's pins policed
+    exactly the same block set before and after). The parser's known blind
+    spots are documented next to it, not restated here.
     """
-    return bash_fence_blocks(LAND_SKILL.read_text(encoding="utf-8"))
+    return LAND_SKILL_BLOCKS
 
 
 def _only_block_with(*needles: str, what: str) -> str:
