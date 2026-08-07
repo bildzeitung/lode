@@ -1405,6 +1405,117 @@ def test_land_skill_acquires_and_releases_through_this_script() -> None:
     )
 
 
+def test_land_skill_escalation_stderr_capture_not_under_git_dir_lode_jcnl() -> None:
+    """lode-oup2's Section 0 failure branch captures `scripts/land-lock.sh
+    acquire`'s stderr to a scratch file so it can grep it for the
+    'land-lock: ESCALATE' marker. That file MUST NOT live under $STATE_DIR /
+    the git dir: the technical review found the original implementation at
+    $STATE_DIR/land-lock-acquire-stderr, which fails BEFORE `acquire` even
+    runs in exactly the unwritable-git-dir MACHINE FAULT this feature exists
+    to escalate -- no counter bump, no ESCALATE marker, and lode-119w's own
+    diagnostic lost too. A future edit could silently move it back under
+    $STATE_DIR without anything else here catching it."""
+    executed = LAND_SKILL_BASH
+
+    match = re.search(r'ACQUIRE_ERR_FILE="([^"]+)"', executed)
+    assert match is not None, (
+        "land/SKILL.md no longer defines ACQUIRE_ERR_FILE -- Section 0's "
+        "escalation branch has nothing to grep for 'land-lock: ESCALATE', so "
+        "a persistent MACHINE FAULT silently stops reaching a human at all"
+    )
+    acquire_err_file = match.group(1)
+
+    # Every spelling of "somewhere under the git dir" -- $STATE_DIR, the
+    # `git rev-parse --git-dir` derivation, and the raw env vars -- fails the
+    # same way, so they are one assertion rather than one per spelling.
+    for git_dir_spelling in ("STATE_DIR", "git-dir", "GIT_DIR", "GIT_COMMON_DIR"):
+        assert git_dir_spelling not in acquire_err_file, (
+            f"ACQUIRE_ERR_FILE is defined in terms of ${git_dir_spelling} -- "
+            f"it resolves under the git dir, and on exactly the "
+            "unwritable-git-dir MACHINE FAULT this feature escalates, "
+            "redirecting stderr there fails BEFORE `acquire` runs at all: no "
+            "counter bump, no ESCALATE marker, and lode-119w's own diagnostic "
+            "is lost too, so the fault escalates LESS visibly than it did "
+            f"before lode-oup2 shipped. Got: {acquire_err_file}"
+        )
+
+
+def test_land_skill_escalation_ticket_dedup_has_no_status_open_lode_jcnl() -> None:
+    """lode-oup2's dedup lookup (before filing the human-labeled escalation
+    ticket) must NOT carry `--status open`: `bd list` already excludes closed
+    issues on its own, and pinning `--status open` would miss this very
+    ticket once a human moves it to in_progress/blocked while investigating
+    -- silently duplicating it on every subsequent /loop 5m /land tick until
+    the fault clears."""
+    executed = LAND_SKILL_BASH
+
+    # Anchor on the specific `bd list --label human` lookup this feature
+    # added, not just any `bd list` call in the file, so this test fails on
+    # the right line if a second, unrelated `bd list --status open` call is
+    # ever added elsewhere in the skill. The match spans the WHOLE logical
+    # command, following `\`-continuations: the call is written across two
+    # physical lines, so stopping at the first newline would miss a
+    # `--status open` added on the continuation.
+    match = re.search(r"bd list --label human(?:[^\n]*\\\n)*[^\n]*", executed)
+    assert match is not None, (
+        "land/SKILL.md no longer runs the `bd list --label human` dedup "
+        "lookup before filing the escalation ticket -- without it a "
+        "persistent MACHINE FAULT files a fresh duplicate ticket on every "
+        "tick instead of filing once per fault episode"
+    )
+    assert "--status open" not in match.group(0), (
+        "the escalation ticket's dedup lookup (`bd list --label human ...`) "
+        "carries --status open -- it would miss the escalation ticket once "
+        "a human moves it to in_progress/blocked while investigating, and "
+        "/land would then file a fresh duplicate every tick until the fault "
+        "clears"
+    )
+
+
+def test_land_skill_escalation_ticket_filed_exactly_once_lode_jcnl() -> None:
+    """The human-labeled escalation ticket must be filed by exactly ONE `bd
+    create` call site, and that call must sit inside the not-found guard (the
+    dedup lookup's result is empty) -- never refreshed per tick. A fault that
+    persists for days is thousands of /loop 5m /land ticks; a second call
+    site, or one that fires unconditionally, would grow the ticket's history
+    or commit to Dolt every 5 minutes for information a human already has."""
+    executed = LAND_SKILL_BASH
+
+    creates = list(re.finditer(r"bd create --type=decision --label=human", executed))
+    assert len(creates) == 1, (
+        f"expected exactly ONE `bd create --type=decision --label=human` "
+        f"call site for the escalation ticket, found {len(creates)} -- a "
+        "second site (or a dropped one) means the ticket is either filed "
+        "more than once per fault episode or never filed at all"
+    )
+
+    # The call must be textually inside the not-found guard's BODY. The
+    # guard is nested (indented) inside Section 0's `|| { ... }` failure
+    # branch, so its closing `fi` carries the same indentation as its `if` --
+    # match on that, rather than on the next line-initial `fi`, which lands
+    # ~7900 chars away in an unrelated section and would admit a `bd create`
+    # moved clean outside the guard.
+    guard = re.search(
+        r'^(?P<indent>[ \t]*)if \[ -z "\$EXISTING_ESCALATION" \]; then\n'
+        r"(?P<body>.*?)"
+        r"^(?P=indent)fi$",
+        executed,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert guard is not None, (
+        'land/SKILL.md no longer has the `if [ -z "$EXISTING_ESCALATION" ]; '
+        "then ... fi` not-found guard (or its closing `fi` no longer lines up "
+        "with its `if`) -- without that guard the escalation ticket is refiled "
+        "on every tick instead of once per fault episode"
+    )
+    assert creates[0].group(0) in guard.group("body"), (
+        "the `bd create` call for the escalation ticket is not inside the "
+        '`if [ -z "$EXISTING_ESCALATION" ]; then ... fi` not-found guard -- '
+        "an unguarded (or misplaced) call would refresh/refile the ticket on "
+        "every tick instead of filing it once per fault episode"
+    )
+
+
 def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
     """lode-m87j: the vet loop (Section 2a) heartbeats the lock as the first
     action of every iteration, so the staleness window measures the gap since
