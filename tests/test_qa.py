@@ -11,7 +11,6 @@ network call is ever made and the gates run without credentials):
 - the send is recorded in the ``egress_log``.
 """
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -393,10 +392,14 @@ def test_body_offset_is_absent_from_the_provider_schema() -> None:
     # gate, never supplied by the model), but Support also doubles as the
     # structured-output response shape. The request-side mirror
     # (_ClaimsEnvelope -> _RequestClaim -> _RequestSupport) must omit it
-    # entirely from the JSON schema handed to the provider (lode-9nmk) -- not
-    # just describe it as "leave unset".
+    # entirely as a *property* of the JSON schema handed to the provider
+    # (lode-9nmk) -- not just describe it as "leave unset". (Doc prose
+    # elsewhere in the schema may still mention the field name in passing, so
+    # this checks property keys specifically rather than the raw dump.)
     schema = _ClaimsEnvelope.model_json_schema()
-    assert "body_offset" not in json.dumps(schema)
+    all_defs = {"": schema, **schema.get("$defs", {})}
+    for definition in all_defs.values():
+        assert "body_offset" not in definition.get("properties", {})
 
 
 def test_decoded_claims_are_converted_to_real_claim_and_support(conn) -> None:
