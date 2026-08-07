@@ -410,7 +410,9 @@ def _render_grouped_citation(
     ``quoted_span`` highlighted rather than the bare span alone.
     """
     provenance = _provenance(support, as_of)
-    context = _render_context(body, support.quoted_span, context_chars)
+    context = _render_context(
+        body, support.quoted_span, context_chars, hint=support.body_offset
+    )
     return f"[{provenance}]  {context}"
 
 
@@ -422,7 +424,9 @@ def _provenance(support: Support, as_of: str | None) -> str:
     return f"{target}, as of {as_of}" if as_of else f"{target}, as of unknown"
 
 
-def _render_context(body: str | None, span: str, context_chars: int) -> str:
+def _render_context(
+    body: str | None, span: str, context_chars: int, *, hint: int | None = None
+) -> str:
     """Surrounding text around ``span`` inside ``body``, with ``span`` highlighted.
 
     ``context_chars`` characters of ``body`` on either side of the span,
@@ -439,15 +443,17 @@ def _render_context(body: str | None, span: str, context_chars: int) -> str:
     through. (An exact-substring-only search here would be: the gate accepts a
     span matching only after whitespace normalization, and a quote reflowed off
     a multi-line body is the common case, so context would silently vanish for
-    a whole class of gate-passing citation.) Only the *first* occurrence is
-    located -- a ``Support`` carries no offset into its target, so a span
-    occurring twice is genuinely ambiguous here (lode-hruz tracks threading the
-    offset through). Falls back to the bare quoted span (no context) only when
-    there's no body to draw from or the span doesn't locate at all.
+    a whole class of gate-passing citation.) When ``span`` occurs more than once
+    in ``body``, ``hint`` -- ``Support.body_offset``, stamped app-side against
+    the retrieved passage the span actually came from (lode-hruz) -- picks the
+    occurrence nearest it; ``hint=None`` (unresolved) falls back to the first
+    occurrence, same as before that offset existed. Falls back to the bare
+    quoted span (no context) only when there's no body to draw from or the span
+    doesn't locate at all.
     """
     if body is None:
         return f'"{span}"'
-    located = locate_span(span, body)
+    located = locate_span(span, body, hint=hint)
     if located is None:
         return f'"{span}"'
     start, end = located

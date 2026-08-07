@@ -74,7 +74,9 @@ def normalize_whitespace(text: str) -> str:
     return _WHITESPACE.sub(" ", text).strip()
 
 
-def locate_span(span: str, body: str) -> tuple[int, int] | None:
+def locate_span(
+    span: str, body: str, *, hint: int | None = None
+) -> tuple[int, int] | None:
     """``(start, end)`` offsets of ``span`` within ``body``, or ``None`` if absent.
 
     This is the single definition of "occurs verbatim" for the whole codebase --
@@ -90,15 +92,35 @@ def locate_span(span: str, body: str) -> tuple[int, int] | None:
     unlike normalizing both sides it preserves the mapping back to ``body``'s own
     offsets -- which is why the locator, not the boolean, is the primitive. No
     model is involved: this is a pure string search.
+
+    When ``span`` occurs more than once, ``hint`` -- a caller-supplied char offset
+    into ``body`` (e.g. the retrieved passage a citation actually came from,
+    lode-hruz) -- picks the occurrence, exact OR whitespace-flexible, whose start
+    is nearest to it, rather than always the leftmost exact match. ``hint=None``
+    (the default) keeps the original leftmost-exact-else-leftmost-flexible
+    behavior, so every existing caller is unaffected.
     """
-    start = body.find(span)
-    if start != -1:
-        return start, start + len(span)
     tokens = span.split()
-    if not tokens:
+    flexible = r"\s+".join(re.escape(token) for token in tokens) if tokens else None
+
+    if hint is None:
+        start = body.find(span)
+        if start != -1:
+            return start, start + len(span)
+        if flexible is None:
+            return None
+        found = re.search(flexible, body)
+        return found.span() if found else None
+
+    candidates = [
+        (match.start(), match.start() + len(span))
+        for match in re.finditer(re.escape(span), body)
+    ]
+    if flexible is not None:
+        candidates += [match.span() for match in re.finditer(flexible, body)]
+    if not candidates:
         return None
-    found = re.search(r"\s+".join(re.escape(token) for token in tokens), body)
-    return found.span() if found else None
+    return min(candidates, key=lambda span_range: abs(span_range[0] - hint))
 
 
 def span_occurs(span: str, body: str) -> bool:

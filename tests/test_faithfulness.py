@@ -82,6 +82,39 @@ def test_locate_span_returns_none_for_an_absent_span() -> None:
     assert locate_span("rerank ON by default", BODY) is None
 
 
+def test_locate_span_defaults_to_the_leftmost_occurrence() -> None:
+    """No ``hint`` -- the original behavior, and every pre-existing caller's
+    expectation -- keeps picking the first (leftmost) occurrence."""
+    body = "one OAuth two OAuth three"
+    start, _ = locate_span("OAuth", body)
+    assert start == body.index("OAuth")
+
+
+def test_locate_span_hint_picks_the_nearest_occurrence() -> None:
+    """A repeated span is genuinely ambiguous without a hint (lode-hruz) --
+    given one, the occurrence nearest it is returned, not the leftmost."""
+    body = "one OAuth two OAuth three"
+    first = body.index("OAuth")
+    second = body.index("OAuth", first + 1)
+
+    start, _ = locate_span("OAuth", body, hint=second)
+
+    assert start == second
+    assert start != first
+
+
+def test_locate_span_hint_also_disambiguates_a_whitespace_reflowed_span() -> None:
+    body = "one\nrerank OFF\ntwo\nrerank\tOFF\nthree"
+    first = body.index("rerank OFF")
+    second = body.index("rerank\tOFF")
+
+    start, end = locate_span("rerank OFF", body, hint=second)
+
+    assert body[start:end] == "rerank\tOFF"
+    assert start == second
+    assert start != first
+
+
 def test_normalize_whitespace_collapses_and_strips() -> None:
     assert normalize_whitespace("  a\t b\n\nc  ") == "a b c"
 
