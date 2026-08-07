@@ -9,12 +9,12 @@ re-implementing retrieval or the gate. It reuses ``cli._retrieve`` verbatim
 duplicating the read pipeline's composition a third time (``lode.eval.harness``
 already keeps its own deliberately-narrower copy for deterministic scoring).
 
-What this module adds is what the terminal's ``lode ask`` doesn't need: each
-surviving citation's **as-of** provenance, resolved from the store --
-``docs/design.md`` ("Retrieval always points back to the source note, 'as of'
-a known version") and ``docs/externals.md`` ("as of ``fetched_at``"). A note
-citation's as-of is its version's write time (``versions.created``); an
-external citation's is its snapshot's fetch time (``snapshots.fetched_at``).
+Each surviving citation's **as-of** provenance and note/external identity are
+resolved by :func:`lode.citations_read.resolve_citations`, which owns that SQL
+and the ``versions.created`` / ``snapshots.fetched_at`` rule behind it --
+shared verbatim with the terminal's ``lode ask``, which used to keep a
+hand-copied as-of mirror of its own (lode-kuc7). This module only wires that
+call and renders its output.
 
 :func:`run_ask` is the screen's only entry point -- pure I/O (DB + the Q&A
 send), no widget/App state, so it is unit-testable without spinning up a
