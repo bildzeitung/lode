@@ -42,6 +42,30 @@ segment (the glob pattern is a separate string argument, not a Path
 segment), and tests/test_bd_list_limit_gate.py's path-keyed table holds
 ``".claude/skills/land/SKILL.md"``-shaped strings as dict keys, not as
 chained Path expressions at all.
+
+KNOWN, DELIBERATE BLIND SPOTS (narrowness is the ticket's choice; these are
+stated limits, not accidents). None of them is a shape that has actually
+re-forked, and each would be caught by the same review that would catch a
+freshly invented evasion:
+
+* a single joined string segment -- ``ROOT / ".claude/skills/land/SKILL.md"``
+  -- or a whole-path ``Path(".claude/skills/land/SKILL.md")``;
+* an f-string or any non-literal segment (``_flatten_div_chain`` bails);
+* ``.joinpath(".claude", "skills", ...)`` -- a Call, not a ``/`` chain;
+* a chain rooted in a name that already holds ``.claude`` (``CLAUDE_DIR /
+  "skills" / "land" / "SKILL.md"``), since this gate does not resolve names.
+  That last one is load-bearing rather than merely tolerated: it is what
+  keeps tests/test_skill_bash_state.py's own ``SKILLS_DIR`` green.
+
+SCOPE is tests/*.py only -- deliberately narrower than
+tests/test_no_private_fence_state_machine.py, whose ``SCAN_DIRS`` also covers
+scripts/. The duplication this gate exists to stop is a *test-fixture* one:
+all nine consolidated copies (lode-va47, lode-b8jc) were test modules pinning
+a skill doc to assert against, and tests/conftest.py -- the constant's home,
+and the remedy the failure message points at -- is importable only from
+tests/. A script hand-deriving a SKILL.md path would have no conftest constant
+to import, so widening the scan would produce a finding with no fix. Widen it
+if a scripts/ offender ever appears, and give it a home first.
 """
 
 from __future__ import annotations
@@ -56,7 +80,8 @@ EXEMPT = {CONFTEST_PATH}
 
 
 def _flatten_div_chain(node: ast.expr) -> list[str] | None:
-    """Flatten a right-associated chain of ``x / "a" / "b" / ...`` into the
+    """Flatten a chain of ``x / "a" / "b" / ...`` (``/`` is left-associative,
+    so the outermost BinOp is the last segment) into the
     ordered list of its string-literal segments, base excluded. Returns
     ``None`` if any segment along the way is not a plain string constant
     (e.g. a variable, an f-string, a glob pattern built dynamically) -- such
@@ -82,47 +107,52 @@ def _is_hand_derived_skill_or_agent_path(segments: list[str]) -> bool:
     for i in range(len(segments) - 1):
         if segments[i] != ".claude":
             continue
-        if segments[i + 1] == "skills" and segments and segments[-1] == "SKILL.md":
+        if segments[i + 1] == "skills" and segments[-1] == "SKILL.md":
             return True
         if (
             segments[i + 1] == "agents"
-            and segments
             and segments[-1].endswith(".md")
             and "*" not in segments[-1]
-            and segments[-1] != "agents"
         ):
             return True
     return False
 
 
-def hand_derived_findings(tree: ast.AST) -> list[int]:
-    """The line number of every Path-division chain in ``tree`` that
-    hand-derives a ``.claude/skills/*/SKILL.md`` or ``.claude/agents/*.md``
-    path instead of importing the shared conftest.py constant."""
-    findings: list[int] = []
+def hand_derived_findings(tree: ast.AST) -> list[tuple[int, list[str]]]:
+    """Every Path-division chain in ``tree`` that hand-derives a
+    ``.claude/skills/*/SKILL.md`` or ``.claude/agents/*.md`` path instead of
+    importing the shared conftest.py constant, as ``(lineno, segments)``.
+
+    This is the ONE implementation of the detection: the gate below calls it,
+    and so do the sabotage-proof tests -- so the AC3 non-vacuity evidence
+    applies to the code the gate actually runs, not to a parallel copy.
+
+    Inner BinOps of a chain are walked too (``ast.walk`` visits every node)
+    but cannot match: their flattened segments stop short of the filename, so
+    the ``"SKILL.md"``/``*.md`` terminal condition fails. No de-duplication is
+    therefore needed."""
+    findings: list[tuple[int, list[str]]] = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)):
             continue
-        # Only report the outermost BinOp of a chain -- an inner BinOp is
-        # walked too (ast.walk visits every node), and would otherwise
-        # double-report the same chain once per segment.
         segments = _flatten_div_chain(node)
         if segments is None:
             continue
         if _is_hand_derived_skill_or_agent_path(segments):
-            findings.append(node.lineno)
+            findings.append((node.lineno, segments))
     return findings
 
 
 def _suggested_constant(segments: list[str]) -> str:
-    """Best-effort suggestion for the failure message: the conftest.py
-    constant name a skill's own path would use (``LAND_SKILL``,
+    """The conftest.py constant name this path would use (``LAND_SKILL``,
     ``SWEEP_SKILL``, ...), derived the same way those two were named -- the
-    segment right before the final ``SKILL.md``, upper-cased."""
-    if len(segments) >= 2 and segments[-1] == "SKILL.md":
-        skill_name = segments[-2].upper().replace("-", "_")
-        return f"{skill_name}_SKILL"
-    return "a conftest.py constant for this path"
+    segment right before the final ``SKILL.md``, upper-cased. The
+    ``.claude/agents/`` sibling shape is named after its filename stem
+    (``coding.md`` -> ``CODING_AGENT``)."""
+    if segments[-1] == "SKILL.md" and len(segments) >= 2:
+        return f"{segments[-2].upper().replace('-', '_')}_SKILL"
+    stem = segments[-1].removesuffix(".md").upper().replace("-", "_")
+    return f"{stem}_AGENT"
 
 
 def _scan_paths() -> list[Path]:
@@ -138,12 +168,7 @@ def test_no_hand_derived_skill_md_path_outside_conftest() -> None:
     offenders: list[str] = []
     for path in _scan_paths():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)):
-                continue
-            segments = _flatten_div_chain(node)
-            if segments is None or not _is_hand_derived_skill_or_agent_path(segments):
-                continue
+        for lineno, segments in hand_derived_findings(tree):
             suggestion = _suggested_constant(segments)
             if f"{suggestion} =" in conftest_text:
                 howto = f"import {suggestion} from tests/conftest.py instead of re-deriving it"
@@ -152,7 +177,7 @@ def test_no_hand_derived_skill_md_path_outside_conftest() -> None:
                     f"tests/conftest.py has no {suggestion} yet -- add one there "
                     "(following LAND_SKILL/SWEEP_SKILL's pattern) and import it"
                 )
-            offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno} -- {howto}")
+            offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno} -- {howto}")
     assert not offenders, (
         "hand-derived SKILL.md/agent-md Path expression(s) found outside "
         f"tests/conftest.py: {offenders} (lode-1el8, lode-b8jc, lode-va47)"
@@ -229,6 +254,10 @@ SWEEP_SKILL = REPO_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
     assert findings, (
         "gate failed to catch the pre-lode-b8jc hand-derived SWEEP_SKILL shape"
     )
+    # AC2: the failure message must name the constant to import.
+    assert [_suggested_constant(segments) for _, segments in findings] == [
+        "SWEEP_SKILL"
+    ]
 
 
 def test_gate_catches_the_land_skill_shape() -> None:
@@ -239,9 +268,9 @@ def test_gate_catches_the_land_skill_shape() -> None:
 LAND_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 """
     tree = ast.parse(src)
-    assert hand_derived_findings(tree), (
-        "gate failed to catch the pre-lode-va47 LAND_SKILL shape"
-    )
+    findings = hand_derived_findings(tree)
+    assert findings, "gate failed to catch the pre-lode-va47 LAND_SKILL shape"
+    assert [_suggested_constant(segments) for _, segments in findings] == ["LAND_SKILL"]
 
 
 def test_gate_catches_the_agents_equivalent_shape() -> None:
@@ -251,9 +280,13 @@ def test_gate_catches_the_agents_equivalent_shape() -> None:
 CODING_AGENT = REPO_ROOT / ".claude" / "agents" / "coding.md"
 """
     tree = ast.parse(src)
-    assert hand_derived_findings(tree), (
-        "gate failed to catch a hand-derived single-agent-file path"
-    )
+    findings = hand_derived_findings(tree)
+    assert findings, "gate failed to catch a hand-derived single-agent-file path"
+    # No CODING_AGENT exists in conftest.py today, so the gate's message takes
+    # its "add one there" branch -- which still has to name something concrete.
+    assert [_suggested_constant(segments) for _, segments in findings] == [
+        "CODING_AGENT"
+    ]
 
 
 def test_gate_ignores_an_agents_directory_level_chain() -> None:
