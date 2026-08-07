@@ -174,6 +174,39 @@ Runs app-side, after the Q&A LLM returns and before display:
    the honest failure mode. Fidelity over fluency means a *willingness to return nothing* rather than
    a confident hallucination.
 
+> **SPIKE (lode-35nu.8): no change to `_WORD` or `normalize_whitespace` — but not because
+> tokenization is verdict-neutral.** Step 2's `_WORD` (`[^\W_]+`, maximal runs of letters/digits) is
+> applied to both `claim.text` and each `quoted_span`, splitting contractions (`doesn't` →
+> `doesn`+`t`), possessives (`client's` → `client`+`s`), hyphenated compounds (`allkeys-lru` →
+> `allkeys`+`lru`), and parenthesized identifiers (`age(datfrozenxid)` → `age`+`datfrozenxid`).
+>
+> Applying the *same* regex to both sides does **not** make the verdict independent of where it draws
+> boundaries: coupling is **asymmetric containment** — `payload(claim) ⊆ tokens(span)` — so splitting
+> more finely enlarges the *span's* token set and is monotonically **more permissive**.
+> Counter-example, run against the shipped code: claim `"the policy is allkeys-lru"` against span
+> `"maxmemory-policy allkeys-lru"` **couples** under `_WORD` (the span's `maxmemory-policy` contributes
+> a bare `policy` token) but not under a hyphen/apostrophe-preserving alternative
+> (`[^\W_]+(?:[-'][^\W_]+)*`). The same mechanism lets a claim naming only a *fragment* of a compound
+> identifier (`DNS` where the span says `DNS-01`) couple.
+>
+> That inverts the usual bounding argument. A coupling **miss** is harmless — it falls through to NLI
+> entailment (step 3), which is fail-closed (`gate._claim_survives` returns `claim_entailed(...)`, not
+> `True`). But the tokenization risk is a spurious **hit**, which returns `True` and bypasses step 3
+> entirely — the fail-*open* direction. "A miss only costs latency" does not cover the real exposure.
+>
+> **Evidence and its limits.** 8 claim/span pairs drawn from the eval corpus
+> (`src/lode/eval/corpus/*.md`, `src/lode/eval/golden.py`) covering every construct above gave
+> identical verdicts under both regexes. That is a corpus-specific null result from a throwaway harness
+> (no standing test was added), not a proof — the counter-example shows verdict-flipping inputs exist;
+> none appear in the corpus.
+>
+> **Recommendation: no change.** The richer regex is a pure *tightening* (it only demotes claims to
+> NLI) with **zero measured benefit** on the corpus; a tokenizer library (spaCy, `regex` with Unicode
+> word-break rules) buys the same absent benefit at the cost of a dependency. The residual fail-open
+> exposure is recorded rather than dismissed — tracked as **lode-1qxy**; revisit if the eval harness
+> exhibits it. Separately, a mismatched Unicode **normalization** form between an LLM-generated claim
+> and a stored span is a narrower failure that word-splitting refinement cannot close at all.
+
 The gate verifies each span against the **stored bytes of the cited version/snapshot**, resolved
 only for the **egress-cleared** targets — the same set eligible to reach the model. A
 [no-egress](externals.md) target's body is withheld from that verification set, so a
