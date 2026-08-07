@@ -27,6 +27,7 @@ the ticket's acceptance surface.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -44,6 +45,23 @@ if TYPE_CHECKING:
 #: and is command-private; each surface owns its phrasing rather than sharing
 #: one literal.
 ABSTAIN_LINE = "Your notes don't answer this."
+
+#: Pipeline stage names, in the order :func:`run_ask` reaches them -- passed
+#: verbatim to an ``on_stage`` callback (lode-35nu.5). ``gate`` covers both
+#: the faithfulness gate and its immediate predecessor, synthesis
+#: (:func:`lode.cited_answer.ask` runs synthesize-then-gate as one call, so
+#: there is no seam between them to report a stage change at) -- it fires
+#: once that call returns, i.e. "gate complete".
+STAGE_RETRIEVING = "retrieving"
+STAGE_SYNTHESIZING = "synthesizing"
+STAGE_GATE = "gate complete"
+
+#: A callback taking the current stage name -- ``None`` (the default) means
+#: no caller wants progress reporting. Kept Textual-free, per the module
+#: docstring's own constraint: the caller (the TUI screen) supplies whatever
+#: it needs to marshal this onto its own thread; this module never imports
+#: Textual.
+OnStage = Callable[[str], None]
 
 
 @dataclass(frozen=True)
@@ -67,6 +85,7 @@ def run_ask(
     *,
     think_harder: bool = False,
     settings: Settings | None = None,
+    on_stage: OnStage | None = None,
 ) -> AskResult:
     """Run the cited Q&A loop for ``question`` and resolve citation provenance.
 
@@ -76,6 +95,15 @@ def run_ask(
     surviving citation. Raises :class:`lode.auth.AuthError` on unresolved
     Anthropic credentials, same as the CLI -- the screen catches it and
     notifies rather than crashing.
+
+    ``on_stage``, when given, is called synchronously (on this function's own
+    calling thread -- this module does no threading of its own) once per
+    stage transition, in order: :data:`STAGE_RETRIEVING` before retrieval
+    starts, :data:`STAGE_SYNTHESIZING` before the synthesize+gate call, and
+    :data:`STAGE_GATE` once that call returns. Optional so this stays a plain
+    function call for every existing caller/test; a caller wanting
+    in-flight UI feedback (the TUI's ask screen) supplies one that marshals
+    onto whatever thread it needs.
 
     Imports the retrieval/Q&A stack here, not at module scope: ``cli._retrieve``
     pulls in the vector stack (pyarrow) and ``cited_answer`` pulls in the
@@ -89,12 +117,18 @@ def run_ask(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = init_db(db_path)
     try:
+        if on_stage is not None:
+            on_stage(STAGE_RETRIEVING)
         context = _retrieve(
             conn, question, lance_dir=lance_dir(db_path), settings=settings
         )
+        if on_stage is not None:
+            on_stage(STAGE_SYNTHESIZING)
         answer = cited_answer.ask(
             conn, question, context, think_harder=think_harder, settings=settings
         )
+        if on_stage is not None:
+            on_stage(STAGE_GATE)
         as_of = {
             support.target_id: _resolve_as_of(conn, support)
             for claim in answer.claims

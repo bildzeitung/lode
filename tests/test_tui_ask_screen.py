@@ -17,6 +17,7 @@ escape-pop tests below drive it the real way instead: pressing ``ctrl+l``.
 """
 
 import asyncio
+import threading
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -31,7 +32,7 @@ from lode.egress import WithheldCitation
 from lode.tui.app import LodeApp
 from lode.tui.screens.ask import QUESTION_ID, RESULTS_ID, AskScreen
 from lode.tui.screens.capture import CaptureScreen
-from lode.tui.services.ask import AskResult
+from lode.tui.services.ask import STAGE_RETRIEVING, AskResult
 
 
 def test_app_registers_ask_screen(tmp_path: Path) -> None:
@@ -212,6 +213,146 @@ def test_asking_an_ungrounded_question_renders_the_abstention_line(
     rendered = asyncio.run(_drive())
 
     assert "Your notes don't answer this." in rendered
+
+
+def test_asking_shows_an_animated_spinner_with_the_current_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-35nu.5: while in flight, the results pane shows a spinner frame
+    plus the current pipeline stage -- not the old static "Thinking..."
+    string -- and the frame changes over time (proves it is animated, not a
+    single static substitute string).
+    """
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+
+    reached_retrieving = threading.Event()
+    release_worker = threading.Event()
+
+    def _stub_run_ask(db_path, question, *, on_stage=None, **kwargs):
+        if on_stage is not None:
+            on_stage(STAGE_RETRIEVING)
+        reached_retrieving.set()
+        release_worker.wait(timeout=5)
+        return AskResult(answer=CitedAnswer(claims=(), withheld_citations=()))
+
+    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _stub_run_ask)
+
+    async def _drive() -> tuple[str, str]:
+        async with app.run_test() as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            question_input = app.screen.query_one(f"#{QUESTION_ID}")
+            question_input.value = "what did we decide about auth?"
+            await pilot.press("enter")
+            await asyncio.get_event_loop().run_in_executor(
+                None, reached_retrieving.wait, 5
+            )
+            await pilot.pause()
+            first = app.screen.query_one(f"#{RESULTS_ID}").content
+            # Let the animation timer tick at least once.
+            await asyncio.sleep(0.25)
+            await pilot.pause()
+            second = app.screen.query_one(f"#{RESULTS_ID}").content
+            release_worker.set()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            return first, second
+
+    first, second = asyncio.run(_drive())
+
+    assert STAGE_RETRIEVING in first
+    assert first != "Thinking..."
+    assert STAGE_RETRIEVING in second
+    # Same stage text throughout, but the spinner glyph itself must have
+    # advanced -- the frame-prefix differs even though the stage text is
+    # identical.
+    assert first != second
+
+
+def test_a_superseded_asks_late_write_never_overwrites_the_newer_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-35nu.5 / the ``/challenge`` hazard: ``AskScreen._ask`` is
+    ``@work(thread=True, exclusive=True)``, but Textual cannot preempt a
+    blocking call already running inside a stale worker's thread -- it can
+    only cancel the *next* worker it starts. So a slow first question can
+    still finish and call ``results.update`` *after* a second, faster
+    question has already shown its own answer. The generation-token guard
+    (``AskScreen._finish``) is what stops that late write from landing.
+    """
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+
+    release_first = threading.Event()
+    calls: list[str] = []
+
+    def _stub_run_ask(db_path, question, *, on_stage=None, **kwargs):
+        calls.append(question)
+        if question == "first (slow)":
+            release_first.wait(timeout=5)
+            return AskResult(
+                answer=CitedAnswer(
+                    claims=(
+                        Claim(
+                            text="STALE ANSWER",
+                            support=[Support(version_id="v1", quoted_span="x")],
+                        ),
+                    ),
+                    withheld_citations=(),
+                )
+            )
+        return AskResult(
+            answer=CitedAnswer(
+                claims=(
+                    Claim(
+                        text="FRESH ANSWER",
+                        support=[Support(version_id="v2", quoted_span="y")],
+                    ),
+                ),
+                withheld_citations=(),
+            )
+        )
+
+    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _stub_run_ask)
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            question_input = app.screen.query_one(f"#{QUESTION_ID}")
+
+            question_input.value = "first (slow)"
+            await pilot.press("enter")
+            await pilot.pause()
+
+            question_input.value = "second (fast)"
+            await pilot.press("enter")
+            # Not ``app.workers.wait_for_complete()`` -- the STALE first
+            # worker is still deliberately blocked on ``release_first`` at
+            # this point, and waiting for *every* worker would deadlock on
+            # it. Poll for the fast worker's own result instead.
+            fresh = ""
+            for _ in range(50):
+                await pilot.pause()
+                await asyncio.sleep(0.02)
+                fresh = app.screen.query_one(f"#{RESULTS_ID}").content
+                if "FRESH ANSWER" in fresh:
+                    break
+
+            # Now let the stale first worker finish and try to write.
+            release_first.set()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            after_stale_completes = app.screen.query_one(f"#{RESULTS_ID}").content
+            return fresh + "|" + after_stale_completes
+
+    rendered = asyncio.run(_drive())
+    fresh, after_stale = rendered.split("|", 1)
+
+    assert "FRESH ANSWER" in fresh
+    assert "FRESH ANSWER" in after_stale
+    assert "STALE ANSWER" not in after_stale
 
 
 def test_escape_pops_back_to_the_previous_screen(tmp_path: Path) -> None:
