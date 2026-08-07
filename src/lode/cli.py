@@ -79,7 +79,6 @@ from lode.fetch_outcome import HttpOutcome, classify_http_status
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.jira_fetch import JiraHttpFetcher, fetch_jira_issue
 from lode.lexical import LexicalCacheBackend
-from lode.reconcile import lexical_gap_heads
 from lode.llm_provider import LLMProviderError, provider_identity
 from lode.lock import LockHeld, WorkerLock
 from lode.logconfig import configure_logging
@@ -89,6 +88,7 @@ from lode.notes_read import (
     list_notes,
     list_notes_conn,
 )
+from lode.reconcile import lexical_gap_heads
 from lode.repository import AmbiguousNoteIdError, CompositeCache, Repository
 from lode.storage import init_db
 from lode.timestamps import parse_stamp

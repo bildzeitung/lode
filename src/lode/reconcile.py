@@ -513,7 +513,9 @@ def lexical_gap_heads(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:
     ).fetchall()
 
 
-def _lexical_gap_step(conn: sqlite3.Connection, settings: Settings | None = None) -> int:
+def _lexical_gap_step(
+    conn: sqlite3.Connection, settings: Settings | None = None
+) -> int:
     """Lexical gap: heal live NOTE heads with zero ``passages_fts`` rows, inline.
 
     Discovered while technically reviewing lode-x9lu, which added the manual
