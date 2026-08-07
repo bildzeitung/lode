@@ -1625,9 +1625,10 @@ def _fenced_bash(markdown: str) -> str:
 LAND_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
 #: The sweep skill doc, derived the same way as LAND_SKILL above. Was
-#: hand-derived independently in test_sweep_new_ids_ordering.py,
-#: test_sweep_digest_id.py, and test_sweep_source_query_failure.py until
-#: lode-b8jc consolidated it here.
+#: hand-derived independently in every tests/ module that pins a sweep block
+#: (five of them by then) until lode-b8jc consolidated it here. Import this
+#: rather than re-deriving it: the duplication had already re-forked once, on a
+#: file that landed after the first consolidation attempt was written.
 SWEEP_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
 
 
