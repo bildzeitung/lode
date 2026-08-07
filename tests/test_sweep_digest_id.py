@@ -23,7 +23,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import bash_fence_blocks
+from conftest import bash_fence_blocks, fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "sweep-digest-id.sh"
@@ -52,14 +52,11 @@ def _run(tmp_path: Path, rows: object) -> subprocess.CompletedProcess[str]:
     )
     fake_bd.chmod(0o755)
 
-    import os
-
-    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
     return subprocess.run(
         [str(SCRIPT)],
         capture_output=True,
         text=True,
-        env=env,
+        env=fake_bin_env(bin_dir),
         cwd=REPO_ROOT,
         check=False,
     )
@@ -111,16 +108,13 @@ def test_duplicate_digests_refuse_and_never_pick_one(tmp_path: Path) -> None:
 
 
 def test_arguments_are_rejected_as_a_machine_fault(tmp_path: Path) -> None:
-    import os
-
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir()
-    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
     r = subprocess.run(
         [str(SCRIPT), "unexpected"],
         capture_output=True,
         text=True,
-        env=env,
+        env=fake_bin_env(bin_dir),
         cwd=REPO_ROOT,
         check=False,
     )
@@ -133,19 +127,16 @@ def test_bd_failure_is_exit_2_not_exit_1(tmp_path: Path) -> None:
     Collapsing them would let a broken bd read as a clean empty queue -- the
     "a failed query is indistinguishable from an empty one" hazard section 5's
     hard precondition exists for."""
-    import os
-
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir()
     fake_bd = bin_dir / "bd"
     fake_bd.write_text("#!/usr/bin/env bash\nexit 3\n")
     fake_bd.chmod(0o755)
-    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
     r = subprocess.run(
         [str(SCRIPT)],
         capture_output=True,
         text=True,
-        env=env,
+        env=fake_bin_env(bin_dir),
         cwd=REPO_ROOT,
         check=False,
     )

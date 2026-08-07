@@ -1534,6 +1534,17 @@ def only_block_with(blocks: list[str], *needles: str, what: str) -> str:
     return hits[0]
 
 
+def fake_bin_env(bin_dir: Path) -> dict[str, str]:
+    """``os.environ``, overlaid so ``bin_dir`` is first on ``PATH``.
+
+    How a test puts a fake tool (usually a fake ``bd``) in front of the real
+    one for a subprocess under test: the real environment untouched, except
+    ``PATH`` gaining ``bin_dir`` at the front. Callers needing further keys
+    overlay them on the result, as :func:`run_block` does with ``TMPDIR``.
+    """
+    return dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+
 def run_block(
     block: str, sweep_tmp: Path, bin_dir: Path
 ) -> subprocess.CompletedProcess[str]:
@@ -1546,19 +1557,15 @@ def run_block(
     execution model, so nothing a block sets in its own shell survives into
     the next one (lode-sfnb/lode-x495). ``bin_dir`` is prepended to ``PATH``
     ahead of the real one -- the caller's fake ``bd`` (or other faked tool)
-    lives there. ``TMPDIR`` is redirected to ``sweep_tmp``'s parent so a
-    block's own ``${TMPDIR:-/tmp}/lode-sweep-state`` derivation lands exactly
-    on the ``sweep_tmp`` fixture's directory -- that derivation is ``/sweep``'s
-    §0 convention SPECIFICALLY, so a caller testing a different skill's blocks
-    inherits a redirection it did not ask for. ``cwd`` is the checkout root
-    (:data:`_CHECKOUT_ROOT`, worktree-aware) rather than a hand-rolled
-    ``Path(__file__).parent.parent`` in each caller.
+    lives there, via :func:`fake_bin_env`. ``TMPDIR`` is redirected to
+    ``sweep_tmp``'s parent so a block's own ``${TMPDIR:-/tmp}/lode-sweep-state``
+    derivation lands exactly on the ``sweep_tmp`` fixture's directory -- that
+    derivation is ``/sweep``'s §0 convention SPECIFICALLY, so a caller testing
+    a different skill's blocks inherits a redirection it did not ask for.
+    ``cwd`` is the checkout root (:data:`_CHECKOUT_ROOT`, worktree-aware)
+    rather than a hand-rolled ``Path(__file__).parent.parent`` in each caller.
     """
-    env = dict(
-        os.environ,
-        PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-        TMPDIR=str(sweep_tmp.parent),
-    )
+    env = dict(fake_bin_env(bin_dir), TMPDIR=str(sweep_tmp.parent))
     return subprocess.run(
         ["bash", "-c", block],
         capture_output=True,
