@@ -153,7 +153,14 @@ def test_clean_merge_heartbeats_the_single_lander_lock(tmp_path: Path) -> None:
     REQUIRED (exit 2 on empty) as of lode-yuwt -- so the epoch only advances
     because this script substitutes the explicit `--land-lock-blind` sentinel
     on that path. Drop the substitution and the heartbeat stops happening
-    entirely instead of going blind, and this test goes red."""
+    entirely instead of going blind, and this test goes red.
+
+    lode-sp9l: also the BEHAVIOURAL pin on the empty-own-token warning itself
+    (tests/test_land_lock.py's textual pin only proves the warning STRING
+    exists in the source; this proves it actually FIRES on stderr, and only
+    stderr, on exactly the no-third-argument path this test already
+    exercises). Delete the warning line from land-merge-one.sh and this test
+    goes red on the `in result.stderr` assertion below."""
     repo = _init_repo(tmp_path)
     _branch_from(repo, "trunk", "origin/land/lode-hb")
     _commit_file(repo, "hb.txt", "from HB\n", "HB adds hb.txt")
@@ -167,6 +174,11 @@ def test_clean_merge_heartbeats_the_single_lander_lock(tmp_path: Path) -> None:
     result = _run("lode-hb", msg_dir, repo)
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert "no own-token supplied" in result.stderr, (
+        "scripts/land-merge-one.sh must warn loudly on stderr when called "
+        "with no third own-token argument (lode-67nk / lode-sp9l)"
+    )
     assert lock.exists(), "the heartbeat call must not delete the lock file"
     new_epoch = int(lock.read_text().split()[2])
     assert new_epoch > old_epoch, (
