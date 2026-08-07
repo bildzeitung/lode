@@ -70,9 +70,7 @@ def _run(
     PREPENDED to the real PATH so a shim it holds wins the PATH search over the
     genuine binary -- how the grep-fault tests below beat the real grep, while
     every other tool the script needs (git, mktemp) still resolves normally."""
-    env = None
-    if bin_dir is not None:
-        env = fake_bin_env(bin_dir)
+    env = fake_bin_env(bin_dir) if bin_dir is not None else None
     return subprocess.run(
         ["bash", str(SCRIPT), range_],
         cwd=repo,
