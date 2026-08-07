@@ -315,6 +315,27 @@
 #                     skip this tick cleanly (exit 0 of its OWN, per the
 #                     "single lander" convention) -- do not queue, do not run
 #                     in parallel. Diagnostic on STDERR.
+#
+#                     PERSISTENT MACHINE FAULT ESCALATION (lode-oup2): every
+#                     MACHINE FAULT branch below (`flock` missing, the lock
+#                     path itself undeterminable, the lock file/flock-mutex
+#                     unwritable) bumps a persisted consecutive-fault counter
+#                     -- never a transient "another /land is still running"
+#                     skip, which is proof the machine itself is fine and
+#                     resets the counter same as a clean acquire. Once that
+#                     counter reaches `LAND_LOCK_FAULT_ESCALATE_THRESHOLD`
+#                     (default 3), the MACHINE FAULT stderr line is followed
+#                     by a second, distinctly-prefixed line -- "land-lock:
+#                     ESCALATE -- ..." -- for a caller to grep for and act on
+#                     (SKILL.md Section 0 does; see there). No new exit code:
+#                     the exit-code contract stays exactly the three values
+#                     documented here (lode-119w already declined to teach a
+#                     third code to every collapsing caller for no
+#                     behavioural gain; this file follows the same call).
+#                     land-lock.sh itself makes NO bd call and creates no
+#                     ticket -- it stays dependency-free the same way the rest
+#                     of this script already is; escalating to a human is
+#                     entirely the caller's business.
 #          exit 2 -> usage error (a caller bug, never a lock verdict). NOT
 #                     where a rev-parse/machine failure lands -- see below.
 # heartbeat <own-token>: re-stamps the lock this pass already holds, so the
@@ -389,6 +410,71 @@ set -euo pipefail
 # be unambiguous against a real token: `new_token` below only ever produces
 # 16 lowercase hex characters, so a leading `--` can never collide.
 BLIND_SENTINEL="--land-lock-blind"
+
+# lode-oup2: a persisted, consecutive-MACHINE-FAULT counter, so a permanent
+# per-machine fault (flock missing, an unwritable lock dir, ...) escalates
+# past per-tick output nobody reads under `/loop 5m /land`, instead of
+# reading forever as just another overrunning tick (lode-119w closed the
+# SALIENCE gap; this closes the underlying "nobody escalates" one).
+#
+# Deliberately NOT repo-scoped (never under $GIT_COMMON_DIR, unlike $LOCK
+# itself): the most common MACHINE FAULT this counts is an unwritable/missing
+# git dir -- keying the counter off that SAME directory would make it fail to
+# persist for precisely the fault it exists to track, silently defeating
+# escalation rather than driving it. A FIXED, git-independent location sidesteps
+# that, and also means the one fault branch that fires before $GIT_COMMON_DIR
+# is even derived (the `git rev-parse --git-common-dir` failure itself) has
+# somewhere to count to as well, with no special case. `${TMPDIR:-/tmp}`
+# matches this script's own existing convention for machine-local scratch (see
+# scripts/merge-precheck.sh, scripts/validate-mermaid.sh); sharing one file
+# across every repo on the machine is an accepted, narrow tradeoff -- SKILL.md
+# already documents "run the /land loop on one machine only", so a second
+# concurrently-landing repo on the same box is out of scope here too.
+LAND_LOCK_FAULT_COUNT_FILE="${TMPDIR:-/tmp}/lode-land-lock-fault-count"
+LAND_LOCK_FAULT_ESCALATE_THRESHOLD="${LAND_LOCK_FAULT_ESCALATE_THRESHOLD:-3}"
+
+# Current count, or 0 if the file is absent/malformed -- same "unreadable
+# means unknown, treat conservatively" stance as this script's other record
+# parsers (`epoch_of`, `token_of` below).
+read_fault_count() {
+  local n
+  n=""
+  read -r n < "$LAND_LOCK_FAULT_COUNT_FILE" 2>/dev/null || true
+  case "$n" in
+    ''|*[!0-9]*) printf '0' ;;
+    *) printf '%s' "$n" ;;
+  esac
+}
+
+# Any successful acquire, or a transient "lock genuinely held" skip, is
+# proof the machine itself is fine -- both call this to zero the count.
+reset_fault_count() {
+  rm -f "$LAND_LOCK_FAULT_COUNT_FILE" 2>/dev/null || true
+}
+
+# Bumps the count by one and prints the NEW value. Best-effort: a write
+# failure here (e.g. $TMPDIR itself is somehow unwritable too) must never
+# itself abort `acquire` -- it just means this one tick's bump is lost, and
+# the next MACHINE FAULT tick tries again.
+bump_fault_count() {
+  local new
+  new=$(( $(read_fault_count) + 1 ))
+  printf '%s\n' "$new" > "$LAND_LOCK_FAULT_COUNT_FILE" 2>/dev/null || true
+  printf '%s' "$new"
+}
+
+# $1: the fault count to judge (already bumped). Prints an ESCALATE line to
+# stderr, distinctly prefixed for a caller to grep, once the count reaches
+# the threshold -- every tick from then on, not just the first crossing, so
+# a caller that only checks the most recent tick's output still sees it.
+maybe_announce_escalation() {
+  if [ "$1" -ge "$LAND_LOCK_FAULT_ESCALATE_THRESHOLD" ]; then
+    echo "land-lock: ESCALATE -- $1 consecutive MACHINE FAULT acquires" \
+      "(threshold $LAND_LOCK_FAULT_ESCALATE_THRESHOLD reached). This is not" \
+      "self-healing; a human should investigate, or it will keep repeating" \
+      "every tick until fixed." >&2
+  fi
+}
 
 # acquire takes no further argument; heartbeat/release now each REQUIRE
 # exactly one further argument -- their own token, or the explicit
@@ -476,6 +562,7 @@ if ! GIT_COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"; 
         "failed (git's own error is above); cannot derive the lock path." \
         "This is not another lander; landing stays blocked until it is" \
         "fixed. Skipping this tick." >&2
+      maybe_announce_escalation "$(bump_fault_count)"
       exit 1
       ;;
     heartbeat)
@@ -571,6 +658,11 @@ token_of() {
 
 skip_lock_still_held() {
   # The lock is present and not (yet) reclaimable. One wording, two callers.
+  # This is a TRANSIENT skip, never a MACHINE FAULT -- the flock, the lock
+  # dir, and the lock file are all working fine; something else genuinely
+  # holds the lock. Resets the fault counter for the same reason a clean
+  # acquire does (lode-oup2).
+  reset_fault_count
   echo "land-lock: another /land appears to still be running on this machine" \
     "(lock: $1) -- skipping this tick." >&2
   exit 1
@@ -692,6 +784,7 @@ if ! command -v flock >/dev/null 2>&1; then
     "This platform cannot serialize a reclaim safely; landing stays blocked" \
     "until flock is installed (see CAVEAT 2 in this script's header for the" \
     "portability tradeoff). Skipping this tick." >&2
+  maybe_announce_escalation "$(bump_fault_count)"
   exit 1
 fi
 
@@ -713,9 +806,14 @@ if ! { exec {FLOCK_FD}>"$FLOCK_FILE"; } 2>/dev/null; then
   echo "land-lock: MACHINE FAULT -- cannot open $FLOCK_FILE (unwritable or" \
     "missing git dir, or no space). This is not another lander; landing" \
     "stays blocked until it is fixed. Skipping this tick." >&2
+  maybe_announce_escalation "$(bump_fault_count)"
   exit 1
 fi
 if ! flock -x -w "$FLOCK_TIMEOUT_SECONDS" "$FLOCK_FD"; then
+  # Transient, not a MACHINE FAULT -- the mutex itself is working; another
+  # acquire is just genuinely mid-flight. Resets the counter, same as
+  # `skip_lock_still_held` (lode-oup2).
+  reset_fault_count
   echo "land-lock: another /land appears to be mid-acquire on this machine" \
     "(held the flock on $FLOCK_FILE for ${FLOCK_TIMEOUT_SECONDS}s+) --" \
     "skipping this tick." >&2
@@ -724,6 +822,7 @@ fi
 
 TOKEN="$(new_token)"
 if write_lock "$TOKEN"; then
+  reset_fault_count
   echo "land-lock: acquired (token $TOKEN)"
   exit 0
 fi
@@ -740,6 +839,7 @@ if [ ! -e "$LOCK" ]; then
   echo "land-lock: MACHINE FAULT -- cannot create $LOCK (unwritable or missing" \
     "git dir, or no space). This is not another lander; landing stays blocked" \
     "until it is fixed. Skipping this tick." >&2
+  maybe_announce_escalation "$(bump_fault_count)"
   exit 1
 fi
 
@@ -769,9 +869,12 @@ echo "land-lock: reclaiming stale lock (age ${AGE}s >= ${STALE_SECONDS}s)," \
   "previously held by: $RECORD"
 rm -f "$LOCK"
 if write_lock "$TOKEN"; then
+  reset_fault_count
   echo "land-lock: acquired via reclaim (token $TOKEN)"
   exit 0
 fi
-echo "land-lock: could not write the lock after reclaiming it (unwritable or" \
-  "missing git dir, or no space) -- skipping this tick." >&2
+echo "land-lock: MACHINE FAULT -- could not write the lock after reclaiming" \
+  "it (unwritable or missing git dir, or no space). This is not another" \
+  "lander; landing stays blocked until it is fixed. Skipping this tick." >&2
+maybe_announce_escalation "$(bump_fault_count)"
 exit 1

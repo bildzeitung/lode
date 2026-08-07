@@ -126,10 +126,57 @@ mkdir -p "$STATE_DIR"
 # into $ACQUIRE_OUT: land-lock.sh's token contract is its STDOUT, and on the
 # SUCCESS path that variable is the input to the token parse below, whose
 # failure aborts the pass -- widening it buys nothing there and risks that parse.
-ACQUIRE_OUT="$(scripts/land-lock.sh acquire)" || {
+#
+# lode-oup2: stderr is ALSO captured to a scratch file (never `2>&1` into
+# $ACQUIRE_OUT itself, same reasoning as above) so the failure branch below can
+# inspect it for land-lock.sh's own escalation marker without a second
+# `acquire` call (which would double-count its consecutive-fault counter).
+# Nothing changes on the success path -- `acquire` never writes stderr there.
+ACQUIRE_ERR_FILE="$STATE_DIR/land-lock-acquire-stderr"
+ACQUIRE_OUT="$(scripts/land-lock.sh acquire 2>"$ACQUIRE_ERR_FILE")" || {
+  ACQUIRE_ERR="$(cat "$ACQUIRE_ERR_FILE" 2>/dev/null || true)"
+  echo "$ACQUIRE_ERR" >&2
   echo "land: could not acquire the lock this tick -- skipping. Read land-lock.sh's" \
     "own diagnostic immediately above: a MACHINE FAULT there is PERMANENT on this" \
     "machine and blocks landing until a human fixes it -- not an overrunning tick." >&2
+  # lode-oup2: land-lock.sh only DETECTS a persistent fault (its own
+  # consecutive-MACHINE-FAULT counter past LAND_LOCK_FAULT_ESCALATE_THRESHOLD)
+  # and marks it with the distinctly-prefixed "land-lock: ESCALATE" stderr
+  # line -- it stays bd-free by design, same as the rest of that script. THIS
+  # is the one place that actually reaches a human: open, or refresh, a
+  # `human`-labeled ticket -- lode's escalation mechanism, which `/sweep`
+  # already surfaces (no new mechanism). Keyed by a fixed title so repeated
+  # ticks update the SAME ticket instead of spawning a new one every 5
+  # minutes.
+  if printf '%s' "$ACQUIRE_ERR" | grep -q 'land-lock: ESCALATE'; then
+    # `--limit 0` (never a bare `bd list`, see docs/agents-workflow.md's
+    # canonical "bd list defaults to a small page" rationale) and the title
+    # comparison goes through jq's `env.` builtin rather than `--arg` (no
+    # existing call site in this file uses `--arg`, and its `$name` binding
+    # inside the jq PROGRAM string would falsely trip
+    # tests/test_skill_bash_state.py's cross-block-shell-state scanner, which
+    # has no notion of jq's own quoting) -- `export` makes the bash variable
+    # visible to the jq child process without one.
+    export ESCALATION_TITLE="land-lock: persistent MACHINE FAULT is blocking /land on this machine"
+    EXISTING_ESCALATION="$(bd list --label human --status open --limit 0 --json \
+      | jq -r '(. // [])[] | select(.title == env.ESCALATION_TITLE) | .id' | head -1)"
+    if [ -n "$EXISTING_ESCALATION" ]; then
+      bd update "$EXISTING_ESCALATION" \
+        --append-notes "Still failing as of $(date -u +%FT%TZ): $ACQUIRE_ERR"
+    else
+      bd create --type=decision --label=human \
+        --title="$ESCALATION_TITLE" \
+        --description="scripts/land-lock.sh acquire has hit a persistent MACHINE FAULT
+under /loop 5m /land on this machine -- past its escalation threshold
+(LAND_LOCK_FAULT_ESCALATE_THRESHOLD, default 3 consecutive ticks). This is not a
+routine overrunning pass; it will not self-heal, and every tick keeps skipping
+until a human fixes the underlying cause named in the diagnostic below.
+
+Latest diagnostic:
+$ACQUIRE_ERR"
+    fi
+    bd dolt push
+  fi
   exit 0
 }
 echo "$ACQUIRE_OUT"
