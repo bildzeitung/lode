@@ -96,7 +96,13 @@ import time
 from pathlib import Path
 
 from _gitrepo import _git
-from conftest import _BLOCKQUOTE_MARKER, LAND_SKILL, _fenced_bash, bash_fence_blocks
+from conftest import (
+    _BLOCKQUOTE_MARKER,
+    LAND_SKILL,
+    _fenced_bash,
+    bash_fence_blocks,
+    only_block_with,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-lock.sh"
@@ -1203,20 +1209,31 @@ _BLIND_OK = "land-lock-blind-ok"
 
 def test_land_skill_persists_its_own_acquire_token_for_later_blocks() -> None:
     """Section 0 must capture `acquire`'s printed token and write it to
-    `$STATE_DIR/land-lock-token`. Nothing else can: no shell state survives to
-    the later, separate Bash invocations that heartbeat and release (lode-sfnb),
-    so if this write is lost every later call site reads an empty token and
-    silently degrades to the blind, pre-lode-q9pm behaviour."""
+    `$(git rev-parse --git-dir)/land-lock-token` -- deliberately OUTSIDE
+    `$STATE_DIR` (lode-l7mj): Section 1's `rm -rf "$STATE_DIR"` would otherwise
+    destroy it before any consumer reads it (it did, in production, on every
+    pass -- see the mechanical execution test below). Nothing else can carry
+    the token forward: no shell state survives to the later, separate Bash
+    invocations that heartbeat and release (lode-sfnb), so if this write is
+    lost every later call site reads an empty token and silently degrades to
+    the blind, pre-lode-q9pm behaviour."""
     executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
 
     # Match the WRITE specifically, not a bare mention of the filename: the
     # read-back sites name that same path four more times, so an `in executed`
     # check stays green with the write itself deleted (measured by sabotage --
     # it did).
-    assert re.search(r'>\s*"\$STATE_DIR/land-lock-token"', executed), (
-        "land/SKILL.md never WRITES $STATE_DIR/land-lock-token -- every later "
-        "heartbeat/release then reads an empty token and the lode-q9pm "
-        "ownership check is silently disabled for the whole pass"
+    assert re.search(
+        r'>\s*"\$\(git rev-parse --git-dir\)/land-lock-token"', executed
+    ), (
+        "land/SKILL.md never WRITES $(git rev-parse --git-dir)/land-lock-token"
+        " -- every later heartbeat/release then reads an empty token and the "
+        "lode-q9pm ownership check is silently disabled for the whole pass"
+    )
+    assert '"$STATE_DIR/land-lock-token"' not in executed, (
+        "land/SKILL.md still writes or reads the token under $STATE_DIR -- "
+        'Section 1\'s `rm -rf "$STATE_DIR"` wipes it before any consumer '
+        "reads it (lode-l7mj, the exact bug this shape (c') fixes)"
     )
 
 
@@ -1245,8 +1262,9 @@ def test_every_land_lock_heartbeat_and_release_call_site_supplies_its_own_token(
         f"{offenders}. The argument is optional and omitting it silently "
         "reproduces the pre-lode-q9pm blind behaviour -- a two-lander overlap "
         'goes back to being self-concealing. Pass `"$MY_TOKEN"` (re-read from '
-        f"$STATE_DIR/land-lock-token in that same block), or mark the line "
-        f"`{_BLIND_OK}` with a reason if it genuinely has no token to supply."
+        f"$(git rev-parse --git-dir)/land-lock-token in that same block), or "
+        f"mark the line `{_BLIND_OK}` with a reason if it genuinely has no "
+        "token to supply."
     )
 
 
@@ -1383,16 +1401,18 @@ def test_land_skill_never_reintroduces_an_inline_lock() -> None:
 
 def test_every_own_token_readback_site_warns_when_empty() -> None:
     """lode-67nk: land/SKILL.md's own-token READ-BACK sites (every place that
-    does `MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" ...)"`) must each be
-    followed by a loud, non-fatal stderr diagnostic when the read comes back
-    empty, rather than silently proceeding blind. `land-lock.sh` treats an
-    empty own-token argument EXACTLY as an absent one, so a missing/wiped
-    `$STATE_DIR/land-lock-token` (a fresh state dir, a pass resumed
-    mid-flight, or Section 2a/3/4 run by hand without Section 0) used to
-    disable the ownership check with nothing in the log -- invisible to the
-    three existing call-site pins above, which are purely textual and prove
-    only that `"$MY_TOKEN"` is spelled at each site, never that it is
-    non-empty at run time.
+    does `MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" ...)"`)
+    must each be followed by a loud, non-fatal stderr diagnostic when the read
+    comes back empty, rather than silently proceeding blind. `land-lock.sh`
+    treats an empty own-token argument EXACTLY as an absent one, so a
+    missing/empty token file (a pass resumed mid-flight before Section 0 ever
+    ran, or Section 2a/3/4 run by hand without Section 0) used to disable the
+    ownership check with nothing in the log -- invisible to the three existing
+    call-site pins above, which are purely textual and prove only that
+    `"$MY_TOKEN"` is spelled at each site, never that it is non-empty at run
+    time. (Before lode-l7mj, the token additionally lived under `$STATE_DIR`
+    and was reliably wiped by Section 1 on EVERY pass -- a stronger, now-fixed
+    cause of the same empty read; see the mechanical execution test below.)
 
     Textual pin, same shape and same limit as the three pins above it (see
     the module docstring, part 3): it proves the diagnostic is spelled at
@@ -1408,14 +1428,14 @@ def test_every_own_token_readback_site_warns_when_empty() -> None:
     (this ticket's acceptance criteria name it as off limits)."""
     executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
 
-    token_reads = executed.count('cat "$STATE_DIR/land-lock-token"')
+    token_reads = executed.count('cat "$(git rev-parse --git-dir)/land-lock-token"')
     assert token_reads == 5, (
-        f"expected exactly 5 reads of $STATE_DIR/land-lock-token in land/"
-        f"SKILL.md (Section 1's release, Section 2a's heartbeat, Section 3's "
-        f"two merge loops, Section 4's final release), found {token_reads} "
-        "-- if a call site was genuinely added or removed, update this "
-        "pin's count deliberately and check the new/removed site got (or "
-        "lost) its own lode-67nk diagnostic too"
+        f"expected exactly 5 reads of $(git rev-parse --git-dir)/land-lock-token"
+        f" in land/SKILL.md (Section 1's release, Section 2a's heartbeat, "
+        f"Section 3's two merge loops, Section 4's final release), found "
+        f"{token_reads} -- if a call site was genuinely added or removed, "
+        "update this pin's count deliberately and check the new/removed site "
+        "got (or lost) its own lode-67nk diagnostic too"
     )
 
     warning_sites = executed.count("DISABLED for this call (lode-67nk)")
@@ -1451,4 +1471,154 @@ def test_land_merge_one_warns_on_an_empty_own_token_argument() -> None:
         "scripts/land-merge-one.sh's empty-own-token warning no longer goes "
         "to stderr -- this script's stdout is the caller's $CONFLICTS "
         "channel, so a warning on stdout is read back as a merge conflict"
+    )
+
+
+# ---------------------------------------------------------------------------
+# lode-l7mj: MECHANICAL regression, verified BY EXECUTION -- run Section 0
+# then Section 1 as two separate Bash invocations (the governing rule's own
+# model) against a real throwaway "main checkout", then read the token back
+# exactly as Section 2a does. The three textual pins above (updated for the
+# new path) are blind to this bug BY CONSTRUCTION: they prove a line is
+# spelled "$(git rev-parse --git-dir)/land-lock-token" in the shipped file,
+# never that the WIPE positioned between the write and every read-back site
+# leaves that file intact at run time. Only running the real fences catches
+# that -- which is exactly how this bug shipped past the three textual pins
+# that already existed for the ownership check (lode-q9pm) at the time.
+# ---------------------------------------------------------------------------
+
+
+def _acquire_block() -> str:
+    """Section 0's lock-acquire block -- locates it by content, not by
+    heading, so a future reflow of the section doesn't silently repin the
+    wrong fence. `only_block_with` asserts exactly one hit."""
+    return only_block_with(
+        bash_fence_blocks(LAND_SKILL.read_text(encoding="utf-8")),
+        "scripts/land-lock.sh acquire",
+        "land-lock-token",
+        what="Section 0's acquire block",
+    )
+
+
+def _pass_start_block() -> str:
+    """Section 1's pass-start block -- the one that wipes $STATE_DIR and ends
+    on `git reset --hard origin/trunk` (same locator shape as
+    tests/test_land_conflicts_state.py's `_only_block_with`, kept independent
+    rather than imported so this file's own execution-based pin does not
+    depend on that module's helper existing or matching in shape)."""
+    return only_block_with(
+        bash_fence_blocks(LAND_SKILL.read_text(encoding="utf-8")),
+        "assert-main-checkout.sh",
+        'rm -rf "$STATE_DIR"',
+        "git reset --hard origin/trunk",
+        what="Section 1's pass-start block",
+    )
+
+
+def _init_main_checkout_with_origin(tmp_path: Path) -> Path:
+    """A throwaway "main checkout" -- a real, non-worktree repo (so
+    `scripts/assert-main-checkout.sh` passes) with a `trunk` branch pushed to
+    a real `origin` remote (so Section 1's `git fetch origin` /
+    `git reset --hard origin/trunk` have something real to resolve), plus a
+    `scripts/` symlink to this repo's real `scripts/` directory so the
+    fences' own relative `scripts/land-lock.sh` / `scripts/assert-main-
+    checkout.sh` calls resolve exactly as they do for a real /land pass
+    (cwd-relative, no PATH lookup: a path containing a slash is never
+    PATH-searched)."""
+    origin = tmp_path / "origin.git"
+    _git(tmp_path, "init", "-q", "--bare", str(origin))
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "trunk")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "test")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    _git(repo, "remote", "add", "origin", str(origin))
+    _git(repo, "push", "-q", "origin", "trunk")
+    _git(repo, "fetch", "-q", "origin")
+    (repo / "scripts").symlink_to(REPO_ROOT / "scripts")
+    return repo
+
+
+def _fake_bd_dir(tmp_path: Path) -> Path:
+    """A PATH-prepended dir holding a fake `bd` that answers every subcommand
+    (Section 1 only calls `bd dolt pull`) with success and nothing else --
+    this test exercises the lock/token mechanism, not bd itself."""
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir()
+    fake_bd = bin_dir / "bd"
+    fake_bd.write_text("#!/usr/bin/env bash\nexit 0\n")
+    fake_bd.chmod(0o755)
+    return bin_dir
+
+
+def _run_block(block: str, repo: Path, bin_dir: Path) -> subprocess.CompletedProcess:
+    """One fenced block as its own fresh `bash` subprocess, cwd'd at the
+    throwaway main checkout -- mirrors an agent's one-Bash-tool-invocation-
+    per-fence execution model (lode-sfnb), the same convention
+    `tests/conftest.py::run_block` uses for other skills' fences. Not that
+    helper itself: it cwd's at the REAL checkout root, which is exactly the
+    directory this test must NOT touch (it would contend with this machine's
+    own `.git/land.lock` and `.git/land-state/`)."""
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    return subprocess.run(
+        ["bash", "-c", block],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+        check=False,
+    )
+
+
+def test_section_0_then_section_1_leaves_the_token_readable_by_section_2a(
+    tmp_path: Path,
+) -> None:
+    """THE regression pin for lode-l7mj, verified by execution rather than by
+    reading. Before the fix: Section 0 wrote the token to
+    `$STATE_DIR/land-lock-token`, and Section 1's `rm -rf "$STATE_DIR"` -- run
+    as a LATER, separate Bash invocation, exactly as a real /land pass does --
+    deleted it before this test's read-back, reproducing the live 2026-08-06
+    observation (`ls .git/land-state` -> no such directory) exactly. After the
+    fix: the token lives beside `.git/land.lock`, which Section 1 never
+    touches, so it survives.
+
+    Reads the token back the same way Section 2a's own fence does: `cat
+    "$(git rev-parse --git-dir)/land-lock-token"`, run as a THIRD, separate
+    Bash invocation -- not a Python-side file read -- so this pin exercises
+    the exact mechanism a real pass relies on, not merely the file's final
+    state on disk."""
+    repo = _init_main_checkout_with_origin(tmp_path)
+    bin_dir = _fake_bd_dir(tmp_path)
+
+    acquire_result = _run_block(_acquire_block(), repo, bin_dir)
+    assert acquire_result.returncode == 0, (
+        f"Section 0's acquire block failed: rc={acquire_result.returncode}, "
+        f"stdout={acquire_result.stdout!r}, stderr={acquire_result.stderr!r}"
+    )
+
+    pass_start_result = _run_block(_pass_start_block(), repo, bin_dir)
+    assert pass_start_result.returncode == 0, (
+        f"Section 1's pass-start block failed: rc={pass_start_result.returncode}, "
+        f"stdout={pass_start_result.stdout!r}, stderr={pass_start_result.stderr!r}"
+    )
+
+    readback = _run_block(
+        'cat "$(git rev-parse --git-dir)/land-lock-token"', repo, bin_dir
+    )
+    assert readback.returncode == 0 and readback.stdout.strip(), (
+        "Section 2a's own token read-back came back empty after Section 0 "
+        "then Section 1 ran -- the ownership check is silently disabled for "
+        f"the whole pass (lode-l7mj). stdout={readback.stdout!r}, "
+        f"stderr={readback.stderr!r}"
+    )
+
+    lock_record = (repo / ".git" / "land.lock").read_text(encoding="utf-8").split()
+    assert len(lock_record) == 5, lock_record
+    assert readback.stdout.strip() == lock_record[4], (
+        "the token read back by Section 2a does not match field 5 (the owner "
+        f"token) of the lock record this pass itself just wrote -- "
+        f"read_back={readback.stdout.strip()!r}, lock_record={lock_record!r}"
     )

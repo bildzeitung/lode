@@ -3072,7 +3072,7 @@ assumption would not have closed it.
   is enforced by *who calls the argument*, not by the script refusing to run without it. What actually
   makes every real call site pass its own token is `.claude/skills/land/SKILL.md` plus three
   sabotage-verified pins in `tests/test_land_lock.py` — one that Section 0 WRITES
-  `$STATE_DIR/land-lock-token` at all, one over every executed `heartbeat`/`release` call site in that
+  `$(git rev-parse --git-dir)/land-lock-token` at all, one over every executed `heartbeat`/`release` call site in that
   skill, and one over `land-merge-one.sh`'s own two call sites — not an invariant of `land-lock.sh`
   itself. The call-site pin allows a line to opt out only by carrying a `land-lock-blind-ok` marker,
   and **exactly one line does**: Section 0's own bail-out `release`, which has no token to supply
@@ -3081,12 +3081,22 @@ assumption would not have closed it.
 
   **Two honest limits on what this delivers, neither of them closed by the pins.** First, the pins are
   *textual* — they prove every call site spells `"$MY_TOKEN"` in the skill's source, not that the
-  variable is non-empty at run time. Every read-back site reads `$STATE_DIR/land-lock-token` with
-  `2>/dev/null || true`, so if that file is missing or empty (a wiped `$STATE_DIR`, a pass resumed
-  mid-flight, an operator running a later section by hand) `$MY_TOKEN` is empty and `land-lock.sh`
-  treats empty exactly as absent — the call still proceeds blind, with no run-time enforcement. What
-  changed under **lode-67nk** (closed): that fail-open is no longer *silent*. Every one of the five
-  `MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" ...)"` read-back sites in
+  variable is non-empty at run time. Every read-back site reads
+  `$(git rev-parse --git-dir)/land-lock-token` with `2>/dev/null || true`, so if that file is missing or
+  empty (a pass resumed mid-flight before Section 0 ever ran, an operator running a later section by
+  hand with no prior `acquire` in this working tree) `$MY_TOKEN` is empty and `land-lock.sh` treats
+  empty exactly as absent — the call still proceeds blind, with no run-time enforcement. **This is no
+  longer caused by Section 1's `$STATE_DIR` wipe (lode-l7mj, fixed):** the token file was originally
+  written under `$STATE_DIR` (`.git/land-state/`) and destroyed by Section 1's unconditional
+  `rm -rf "$STATE_DIR"` before any consumer read it, disabling the ownership check on *every* pass —
+  not a corner case, the default. It now lives beside `.git/land.lock`, at the git-common-dir root,
+  which Section 1 never touches; every successful `acquire` (fresh or reclaimed) unconditionally
+  overwrites it, so it is available to every later read-back site for the rest of the pass, and — since
+  it is no longer per-pass scratch — a crashed pass's token now legitimately survives into the next
+  pass, compared against a lock record that survives by the same staleness-TTL design. What changed
+  under **lode-67nk** (closed), independent of lode-l7mj: the remaining fail-open causes above are no
+  longer *silent*. Every one of the five
+  `MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" ...)"` read-back sites in
   `.claude/skills/land/SKILL.md`, and `scripts/land-merge-one.sh`'s own `$own_token` pass-through
   (which covers a direct invocation with no SKILL.md caller warning in front of it), now emit a
   loud, non-fatal stderr
@@ -3117,12 +3127,29 @@ assumption would not have closed it.
   Because `.claude/skills/land/SKILL.md` runs every fenced `bash` block as its own, separate Bash tool
   invocation with no shell state surviving between them (lode-sfnb, same constraint as the single-lander
   lock design itself, above), Section 0's `acquire` block captures the printed token and writes it to
-  `$STATE_DIR/land-lock-token` (`$STATE_DIR` = `.git/land-state/`, the same cross-block persistence
-  mechanism every other cross-block value in that skill uses) — every later `heartbeat`/`release` call
-  site re-reads that file into `$MY_TOKEN` before calling `land-lock.sh`. `scripts/land-merge-one.sh`
-  (invoked from Section 3's two merge loops) takes the same token as an **optional third positional
-  argument**, for the identical reason: it is a script called *from* a fenced block, not a block that
-  could read `$STATE_DIR` on its own initiative.
+  `$(git rev-parse --git-dir)/land-lock-token` — every later `heartbeat`/`release` call site re-reads
+  that file into `$MY_TOKEN` before calling `land-lock.sh`. `scripts/land-merge-one.sh` (invoked from
+  Section 3's two merge loops) takes the same token as an **optional third positional argument**, for
+  the identical reason: it is a script called *from* a fenced block, not a block that could read the
+  file on its own initiative.
+
+  **Deliberately NOT under `$STATE_DIR` (lode-l7mj).** `$STATE_DIR` (`.git/land-state/`) is the
+  cross-block persistence mechanism every *other* cross-block value in this skill uses, and an earlier
+  shipped version stored the token there too — but Section 1 unconditionally `rm -rf`s that whole
+  directory as per-pass scratch hygiene (lode-wjw4), which ran *after* Section 0 wrote the token and
+  before any consumer read it, silently disabling the ownership check on every single pass (not a
+  corner case reachable only via a wiped or resumed state dir — the default, every time). The token is
+  lock state, not per-pass scratch, so it now sits beside `.git/land.lock` at the git-common-dir root —
+  a location Section 1's wipe was never scoped to touch and does not need to be taught about. This was
+  chosen over the two alternatives that *do* touch `$STATE_DIR`'s wipe: writing the token after
+  Section 1's wipe (re-opens the writer-before-the-wipe ordering question lode-wjw4 closed) and sparing
+  the token file from the wipe (re-introduces the enumerate-subdirectories coupling lode-wjw4 removed,
+  and forces changes to `tests/test_land_conflicts_state.py`'s pins on the wipe's shape). Storing it
+  outside `$STATE_DIR` touches neither: the wipe and its pins stay byte-identical. Consequence: because
+  the token is no longer wiped every pass, a crashed pass's token now survives into the next one — this
+  is correct, not a leak, because the lock record it is compared against survives by the identical
+  staleness-TTL design, and every successful `acquire` (fresh or reclaimed) unconditionally overwrites
+  it, so there is no "clean up the stale token" step needed.
 
   This paragraph is the **canonical** statement of the threading mechanism. `scripts/land-lock.sh`'s
   header and `.claude/skills/land/SKILL.md`'s Section 0 comment each carry only a short local
