@@ -168,31 +168,26 @@ def test_surviving_claim_renders_with_its_citation(conn) -> None:
 def test_surviving_claim_stamps_body_offset_from_its_own_retrieved_passage(
     conn,
 ) -> None:
-    """``OAuth`` occurs twice in the body; only the SECOND retrieved passage's
-    own char range contains it, so the stamped ``Support.body_offset`` (lode-hruz)
-    must point at the second occurrence, not the leftmost."""
-    body = "alpha OAuth beta " + ("x" * 40) + " gamma OAuth delta"
-    second_offset = body.index("OAuth", body.index("OAuth") + 1)
+    """``OAuth`` occurs twice in the body, but the only retrieved passage for this
+    target covers the SECOND occurrence's section -- so the stamped
+    ``Support.body_offset`` (lode-hruz) must point there, not the leftmost."""
+    second_block = "gamma OAuth delta"
+    body = "alpha OAuth beta" + ("x" * 40) + second_block
+    first_offset = body.index("OAuth")
+    second_offset = body.index("OAuth", first_offset + 1)
+    second_start = len(body) - len(second_block)
+    assert body[second_start:] == second_block  # sanity: the retrieved section
     _insert_note(conn, note_id="n1", version_id="v1", body=body)
     client = _FakeClient([_note_claim("uses OAuth", "OAuth", "v1")])
     context = [
         ContextItem(
             tier=TrustTier.OWNED_NOTE,
-            passage_id="p-v1-0",
-            target_version="v1",
-            char_range="0:17",  # "alpha OAuth beta " -- the FIRST OAuth
-            passage_text=body[0:17],
-            parent_block=body,
-            score=0.9,
-        ),
-        ContextItem(
-            tier=TrustTier.OWNED_NOTE,
             passage_id="p-v1-1",
             target_version="v1",
-            char_range=f"{second_offset - 6}:{len(body)}",  # "gamma OAuth delta"
-            passage_text=body[second_offset - 6 :],
+            char_range=f"{second_start}:{len(body)}",
+            passage_text=second_block,
             parent_block=body,
-            score=0.8,
+            score=0.9,
         ),
     ]
 
@@ -201,6 +196,7 @@ def test_surviving_claim_stamps_body_offset_from_its_own_retrieved_passage(
     assert not answer.abstained
     (claim,) = answer.claims
     assert claim.support[0].body_offset == second_offset
+    assert claim.support[0].body_offset != first_offset
 
 
 def test_surviving_claim_leaves_body_offset_unset_when_no_passage_contains_it(

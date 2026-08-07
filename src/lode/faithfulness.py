@@ -95,30 +95,30 @@ def locate_span(
 
     When ``span`` occurs more than once, ``hint`` -- a caller-supplied char offset
     into ``body`` (e.g. the retrieved passage a citation actually came from,
-    lode-hruz) -- picks the occurrence whose start is nearest to it, rather than
-    always the leftmost. ``hint=None`` (the default) keeps the original
-    leftmost-match behavior, so every existing caller is unaffected.
+    lode-hruz) -- picks the occurrence, exact OR whitespace-flexible, whose start
+    is nearest to it, rather than always the leftmost exact match. ``hint=None``
+    (the default) keeps the original leftmost-exact-else-leftmost-flexible
+    behavior, so every existing caller is unaffected.
     """
     exact_starts = [m.start() for m in re.finditer(re.escape(span), body)]
-    if exact_starts:
-        start = exact_starts[0] if hint is None else _nearest(exact_starts, hint)
-        return start, start + len(span)
     tokens = span.split()
-    if not tokens:
-        return None
-    matches = list(
-        re.finditer(r"\s+".join(re.escape(token) for token in tokens), body)
+    flexible_matches = (
+        list(re.finditer(r"\s+".join(re.escape(token) for token in tokens), body))
+        if tokens
+        else []
     )
-    if not matches:
-        return None
+
     if hint is None:
-        return matches[0].span()
-    return min(matches, key=lambda m: abs(m.start() - hint)).span()
+        if exact_starts:
+            start = exact_starts[0]
+            return start, start + len(span)
+        return flexible_matches[0].span() if flexible_matches else None
 
-
-def _nearest(starts: list[int], hint: int) -> int:
-    """The offset in ``starts`` closest to ``hint`` (ties keep the leftmost)."""
-    return min(starts, key=lambda s: abs(s - hint))
+    candidates = [(start, start + len(span)) for start in exact_starts]
+    candidates += [match.span() for match in flexible_matches]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda span_range: abs(span_range[0] - hint))
 
 
 def span_occurs(span: str, body: str) -> bool:
