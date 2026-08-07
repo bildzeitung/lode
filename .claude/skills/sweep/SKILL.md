@@ -1,6 +1,6 @@
 ---
 name: sweep
-description: The third `/loop` leg — a SURFACE-ONLY human-decision surfacer. Scans bd for work that has stopped waiting on a human and nothing else consumes (`land-escalated` branches, `human`-labeled decision tickets, epics ready for a human close-decision), dedups against a durable cross-machine digest issue, and surfaces new items; also lists every `deferred`-status ticket (§2a) and every `in_progress` ticket carrying no pipeline label (§2b) in its report each pass (read-only, no dedup, never in the digest) so parked and stranded work stays visible. Writes no `trunk`, makes no decisions, dispatches no builders/landers/auditors. Run self-paced as `/loop 30m /sweep`. Examples — "/sweep", "/loop 30m /sweep", "what needs a human decision right now?", "sweep the human-decision queue".
+description: The third `/loop` leg — a SURFACE-ONLY human-decision surfacer. Scans bd for work that has stopped waiting on a human and nothing else consumes (`land-escalated` branches, `human`-labeled decision tickets, epics ready for a human close-decision), dedups against a durable cross-machine digest issue, and surfaces new items; also lists every `deferred`-status ticket (§2a) and every `in_progress` ticket claimed more than 24h ago that carries no pipeline label (§2b) in its report each pass (read-only, no dedup, never in the digest) so parked and stranded work stays visible. Writes no `trunk`, makes no decisions, dispatches no builders/landers/auditors. Run self-paced as `/loop 30m /sweep`. Examples — "/sweep", "/loop 30m /sweep", "what needs a human decision right now?", "sweep the human-decision queue".
 ---
 
 # sweep
@@ -14,9 +14,10 @@ human when work parks on one of these — you only find it by manually running `
 silence into an active surface.
 
 I also list every `deferred`-status ticket in my report each pass (§2a) — parked work that
-`bd ready` hides by design and no other loop leg surfaces — and every `in_progress` ticket carrying
-none of the pipeline labels (§2b) — claimed work that fell out of every consumer's sight (`bd ready`
-excludes it because it's `in_progress`; every pipeline leg keys on a label it doesn't have). Both are
+`bd ready` hides by design and no other loop leg surfaces — and every `in_progress` ticket claimed
+more than 24h ago (§2b's age discriminator, below) that carries none of the pipeline labels — claimed
+work that fell out of every consumer's sight (`bd ready` excludes it because it's `in_progress`;
+every pipeline leg keys on a label it doesn't have). Both are
 report-only: no dedup state, no digest rewrite, no notification.
 
 I am the **lowest-privilege** loop leg, deliberately: I write **one** self-owned bookkeeping issue
@@ -290,14 +291,25 @@ three-state rule, and [Failure handling](#failure-handling--a-sub-step-fails-the
 
 ## 2b. Collect stranded in_progress tickets (report-only — never touches the digest or notify path)
 
-A fourth, independent read, on its own track — mirroring §2a exactly. Claiming a ticket sets
-`status=in_progress`, which removes it from `bd ready` — so `/code` never picks it up again. Without
-a `ready-for-*` label it is also invisible to `/code` phase 2, to `/code`'s `needs-rebase` sweep, and
-to `/land`; and if it is not `deferred` and not `land-escalated`, nothing else in the pipeline sees
-it either. Every consumer keys on either `bd ready` or a label, and `in_progress` + unlabeled
-satisfies neither — the ticket is stranded silently. (A `human`-labeled ticket can be stranded the
-same way, for a different reason — see the exclude-label list below.) I list them for visibility
-only:
+A fourth, independent read, on its own track. Claiming a ticket sets `status=in_progress`, which
+removes it from `bd ready` — so `/code` never picks it up again. Without a `ready-for-*` label it is
+also invisible to `/code` phase 2, to `/code`'s `needs-rebase` sweep, and to `/land`; and if it is not
+`deferred` and not `land-escalated`, nothing else in the pipeline sees it either. Every consumer keys
+on either `bd ready` or a label, and `in_progress` + unlabeled satisfies neither — the ticket is
+stranded silently. (A `human`-labeled ticket can be stranded the same way, for a different reason —
+see the exclude-label list below.) I list them for visibility only:
+
+**Age discriminator — DECIDED 2026-08-06 (maintainer, `lode-3k6x`; full record:
+[docs/decisions.md](../../../docs/decisions.md), entry "`/sweep` §2b gets an age discriminator on
+`started_at` (24h)").** Unlike §2a's `deferred` (a terminal, parked state), `in_progress` is a
+*transient working state* — a coding producer claims its ticket up front (`bd update --claim` ->
+`in_progress`) and only applies `ready-for-code-review` at hand-off, minutes-to-hours later, so for
+that whole build window the ticket carries none of the exclude-labels below and is indistinguishable
+from a stranding. Unfiltered, §2b therefore lists the live build queue every pass. So §2b filters on
+`started_at` — "when claimed", not `updated_at` — with a **24h** threshold. Why that field and that
+number (and why not 3 days) is settled in the decisions.md entry above; don't re-derive it here.
+`bd list` exposes no `--started-*` flag, but the `--json` rows carry `started_at` and §2b already
+pipes through `jq`, so the discriminator is one added `select(...)` clause, no new dependency:
 
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
@@ -305,9 +317,15 @@ SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocat
 set -o pipefail   # REQUIRED, same reason as §2a.
 
 # Same sentinel convention as §2a -- see that section's note for the rationale.
+# select(...): only tickets claimed (started_at) more than 24h ago (86400s -- a DECIDED threshold,
+# see the age-discriminator note above; do not retune it here). A null/missing started_at
+# (should not happen for in_progress, but defensively) is treated as stranded, not filtered out,
+# since there is no age evidence to exclude it on.
 if ! STRANDED=$(bd list --status in_progress --limit 0 --json \
   --exclude-label ready-for-code-review,ready-for-land,needs-rebase,sweep-digest,land-escalated \
-  | jq -r '(. // []) | .[] | [.id, .title] | @tsv'); then
+  | jq -r '(. // []) | .[]
+      | select(.started_at == null or (.started_at | fromdateiso8601) < (now - 86400))
+      | [.id, .title] | @tsv'); then
   STRANDED="SWEEP-QUERY-ERROR"
 fi
 printf '%s' "$STRANDED" > "$SWEEP_TMP/stranded"
@@ -680,7 +698,7 @@ sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-
 ...
 (none) | unavailable this pass | query failed this pass
 
-## Stranded (in_progress, no pipeline label) (<stranded field>)
+## Stranded (in_progress 24h+, no pipeline label) (<stranded field>)
 <id> <title>
 ...
 (none) | unavailable this pass | query failed this pass
