@@ -28,6 +28,7 @@ from lode.tui.services.ask import (
     AskResult,
     CitationIdentity,
     _resolve_citations,
+    citation_targets,
     render_ask_result,
     run_ask,
 )
@@ -493,3 +494,108 @@ def test_run_ask_with_no_on_stage_is_unaffected() -> None:
     import inspect
 
     assert inspect.signature(run_ask).parameters["on_stage"].default is None
+
+
+# ---------------------------------------------------------------------------
+# citation_targets (lode-35nu.4) -- the ask screen's navigation order.
+# ---------------------------------------------------------------------------
+
+
+def test_citation_targets_lists_distinct_targets_in_first_cited_order() -> None:
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="claim one",
+                support=[
+                    Support(version_id="v2", quoted_span="a"),
+                    Support(version_id="v1", quoted_span="b"),
+                ],
+            ),
+            Claim(
+                text="claim two",
+                # v1 cited again -- must not appear twice.
+                support=[Support(version_id="v1", quoted_span="c")],
+            ),
+        ),
+        withheld_citations=(),
+    )
+    identities = {
+        "v1": CitationIdentity(note_id="n1", title="Note One", is_head=True),
+        "v2": CitationIdentity(note_id="n2", title="Note Two", is_head=True),
+    }
+    result = AskResult(answer=answer, identities=identities)
+
+    assert citation_targets(result) == ["v2", "v1"]
+
+
+def test_citation_targets_excludes_a_target_with_no_resolved_identity() -> None:
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="claim",
+                support=[Support(version_id="v1", quoted_span="a")],
+            ),
+        ),
+        withheld_citations=(),
+    )
+    # No identities at all -- store had nothing to resolve (AskResult's own
+    # documented "practically unreachable but handled" case).
+    result = AskResult(answer=answer, identities={})
+
+    assert citation_targets(result) == []
+
+
+def test_citation_targets_empty_for_an_abstained_answer() -> None:
+    result = AskResult(answer=CitedAnswer(claims=(), withheld_citations=()))
+
+    assert citation_targets(result) == []
+
+
+def test_citation_targets_walks_groups_contiguously_like_the_rendered_answer() -> None:
+    """Navigation order must be the RENDERED order, not a flat first-cited walk.
+
+    ``n1`` is cited by claims 0 and 2 with an ``n2`` claim in between, so
+    ``_render_claims`` emits one contiguous ``n1`` block (v1 then v3) followed
+    by ``n2``'s. A flat first-cited walk would yield ``v1, v2, v3`` -- the
+    status line's "Citation n/m" would then disagree with what the reader is
+    looking at.
+    """
+    answer = CitedAnswer(
+        claims=(
+            Claim(text="one", support=[Support(version_id="v1", quoted_span="a")]),
+            Claim(text="two", support=[Support(version_id="v2", quoted_span="b")]),
+            Claim(text="three", support=[Support(version_id="v3", quoted_span="c")]),
+        ),
+        withheld_citations=(),
+    )
+    identities = {
+        # v1 and v3 are two different versions of the SAME note.
+        "v1": CitationIdentity(note_id="n1", title="Note One", is_head=False),
+        "v2": CitationIdentity(note_id="n2", title="Note Two", is_head=True),
+        "v3": CitationIdentity(note_id="n1", title="Note One", is_head=True),
+    }
+    result = AskResult(answer=answer, identities=identities)
+
+    assert citation_targets(result) == ["v1", "v3", "v2"]
+
+
+def test_citation_targets_excludes_an_identity_with_neither_note_nor_external() -> None:
+    """The "exactly one of note_id/external_id" invariant violated.
+
+    ``_render_claims`` drops such a citation into its ungrouped flat fallback
+    (nothing to open); ``citation_targets`` must agree, or ``Ctrl+J`` would
+    push a ``SnapshotViewerScreen`` at a target that is not an external
+    snapshot at all.
+    """
+    answer = CitedAnswer(
+        claims=(
+            Claim(text="claim", support=[Support(version_id="v1", quoted_span="a")]),
+        ),
+        withheld_citations=(),
+    )
+    result = AskResult(
+        answer=answer,
+        identities={"v1": CitationIdentity(title="Neither", is_head=True)},
+    )
+
+    assert citation_targets(result) == []

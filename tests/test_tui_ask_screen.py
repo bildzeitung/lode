@@ -23,16 +23,21 @@ from pathlib import Path
 
 import pytest
 from textual.binding import Binding
+from textual.containers import VerticalScroll
 from textual.widgets import Footer, Input, Static, TextArea
 from textual.widgets._footer import FooterKey
 
 from lode.answer import Claim, Support
 from lode.cited_answer import CitedAnswer
 from lode.egress import WithheldCitation
+from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.screens.ask import QUESTION_ID, RESULTS_ID, AskScreen
+from lode.tui.screens.ask import CITATION_STATUS_ID, QUESTION_ID, RESULTS_ID, AskScreen
 from lode.tui.screens.capture import CaptureScreen
-from lode.tui.services.ask import STAGE_RETRIEVING, AskResult
+from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
+from lode.tui.screens.version_view import VersionViewScreen
+from lode.tui.services.ask import STAGE_RETRIEVING, AskResult, CitationIdentity
+from lode.versions import save
 
 
 def test_app_registers_ask_screen(tmp_path: Path) -> None:
@@ -415,5 +420,364 @@ def test_footer_shows_each_action_once_with_no_duplicate_quit(
 
     descriptions = asyncio.run(_drive())
 
-    assert descriptions == ["Back", "Quit", "Cfg", "Browse", "Tags", "Ask"]
+    assert descriptions == [
+        "Back",
+        "Open citation",
+        "Quit",
+        "Cfg",
+        "Browse",
+        "Tags",
+        "Ask",
+    ]
     assert descriptions.count("Quit") == 1
+
+
+# ---------------------------------------------------------------------------
+# Citation navigation (lode-35nu.4) -- Up/Down step the focused citation,
+# Ctrl+J opens its exact cited version/snapshot, Escape returns with the
+# answer intact (not re-queried).
+# ---------------------------------------------------------------------------
+
+
+def test_down_then_up_steps_the_citation_status_line_and_wraps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+
+    canned = AskResult(
+        answer=CitedAnswer(
+            claims=(
+                Claim(
+                    text="claim one",
+                    support=[Support(version_id="v1", quoted_span="a")],
+                ),
+                Claim(
+                    text="claim two",
+                    support=[Support(version_id="v2", quoted_span="b")],
+                ),
+            ),
+            withheld_citations=(),
+        ),
+        identities={
+            "v1": CitationIdentity(note_id="n1", title="Note One", is_head=True),
+            "v2": CitationIdentity(note_id="n2", title="Note Two", is_head=True),
+        },
+    )
+    monkeypatch.setattr(
+        "lode.tui.screens.ask.run_ask", lambda db_path, question, **kwargs: canned
+    )
+
+    async def _drive() -> tuple[str, str, str]:
+        async with app.run_test() as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            question_input = app.screen.query_one(f"#{QUESTION_ID}")
+            question_input.value = "which notes?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            status = app.screen.query_one(f"#{CITATION_STATUS_ID}")
+            first = status.content
+            await pilot.press("down")
+            second = status.content
+            # Wraps back to the first citation.
+            await pilot.press("down")
+            third = status.content
+            return first, second, third
+
+    first, second, third = asyncio.run(_drive())
+
+    assert "1/2" in first and "Note One" in first
+    assert "2/2" in second and "Note Two" in second
+    assert "1/2" in third and "Note One" in third
+
+
+def test_down_still_scrolls_the_answer_pane_when_the_pane_has_focus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The citation cursor must not steal scrolling from a long answer.
+
+    ``up``/``down`` are SCREEN-level bindings, so they only fire when the
+    focused widget doesn't consume them first. ``#ask-results-pane`` is a
+    focusable ``VerticalScroll`` with its own arrow bindings, so tabbing to it
+    keeps scrolling intact and simply parks the citation cursor. ``ctrl+j`` is
+    bound on neither widget, so it still reaches the screen from the pane.
+    """
+    app = LodeApp(db_path=tmp_path / "lode.db")
+
+    canned = AskResult(
+        answer=CitedAnswer(
+            claims=(
+                # Long enough to overflow the pane and give it something to
+                # scroll.
+                Claim(
+                    text="claim one " * 400,
+                    support=[Support(version_id="v1", quoted_span="a")],
+                ),
+                Claim(
+                    text="claim two " * 400,
+                    support=[Support(version_id="v2", quoted_span="b")],
+                ),
+            ),
+            withheld_citations=(),
+        ),
+        identities={
+            "v1": CitationIdentity(note_id="n1", title="Note One", is_head=True),
+            "v2": CitationIdentity(note_id="n2", title="Note Two", is_head=True),
+        },
+    )
+    monkeypatch.setattr(
+        "lode.tui.screens.ask.run_ask", lambda db_path, question, **kwargs: canned
+    )
+
+    async def _drive() -> tuple[int, int, str, str]:
+        async with app.run_test() as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            screen = app.screen
+            screen.query_one(f"#{QUESTION_ID}").value = "which notes?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            pane = screen.query_one("#ask-results-pane", VerticalScroll)
+            assert pane.max_scroll_y > 0, (
+                "answer must overflow for this to mean anything"
+            )
+            await pilot.press("tab")
+            await pilot.pause()
+            assert screen.focused is pane
+
+            before_y = pane.scroll_offset.y
+            before_status = screen.query_one(f"#{CITATION_STATUS_ID}").content
+            await pilot.press("down")
+            await pilot.pause()
+            after_status = screen.query_one(f"#{CITATION_STATUS_ID}").content
+            return before_y, pane.scroll_offset.y, before_status, after_status
+
+    before_y, after_y, before_status, after_status = asyncio.run(_drive())
+
+    assert after_y > before_y, "down must still scroll the answer pane"
+    assert after_status == before_status, "and must not move the citation cursor"
+
+
+def test_ctrl_j_opens_the_exact_cited_version_not_the_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-35nu.4's core acceptance line: opens the VERSION actually cited."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        old = save(conn, "n1", "original body")
+        save(
+            conn, "n1", "edited body", parent=old.version_id
+        )  # supersedes old -- new head
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    canned = AskResult(
+        answer=CitedAnswer(
+            claims=(
+                Claim(
+                    text="claim",
+                    support=[
+                        Support(version_id=old.version_id, quoted_span="original")
+                    ],
+                ),
+            ),
+            withheld_citations=(),
+        ),
+        identities={
+            old.version_id: CitationIdentity(
+                note_id="n1", title="original body", is_head=False
+            )
+        },
+    )
+    monkeypatch.setattr(
+        "lode.tui.screens.ask.run_ask", lambda db_path, question, **kwargs: canned
+    )
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            question_input = app.screen.query_one(f"#{QUESTION_ID}")
+            question_input.value = "what was the original?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            ask_screen = app.screen
+            results_before = app.screen.query_one(f"#{RESULTS_ID}").content
+
+            await pilot.press("ctrl+j")
+            await pilot.pause()
+            assert isinstance(app.screen, VersionViewScreen)
+            assert app.screen.note_id == "n1"
+            assert app.screen.version_id == old.version_id
+
+            await pilot.press("escape")
+            await pilot.pause()
+            # Back on the same AskScreen instance, answer untouched -- not
+            # re-queried.
+            assert app.screen is ask_screen
+            assert app.screen.query_one(f"#{RESULTS_ID}").content == results_before
+
+    asyncio.run(_drive())
+
+
+def test_ctrl_j_opens_the_snapshot_viewer_for_an_external_citation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO externals (external_id, source_type, no_egress) "
+                "VALUES (?, ?, ?)",
+                ("e1", "web", 0),
+            )
+            conn.execute(
+                "INSERT INTO snapshots "
+                "(snapshot_id, external_id, body, raw_payload, status, fetched_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("s1", "e1", "status: open", None, "ok", "2026-07-08T00:00:00.000000Z"),
+            )
+            conn.execute(
+                "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
+                ("s1", "e1"),
+            )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    canned = AskResult(
+        answer=CitedAnswer(
+            claims=(
+                Claim(
+                    text="claim",
+                    support=[Support(snapshot_id="s1", quoted_span="status: open")],
+                ),
+            ),
+            withheld_citations=(),
+        ),
+        identities={
+            "s1": CitationIdentity(external_id="e1", title="Ticket", is_head=True)
+        },
+    )
+    monkeypatch.setattr(
+        "lode.tui.screens.ask.run_ask", lambda db_path, question, **kwargs: canned
+    )
+    # Wraps the real ``push_screen`` (rather than replacing it) so the actual
+    # screen switch still happens -- this only records what gets pushed,
+    # letting the assertion inspect the *instance* Ctrl+J built without
+    # needing a real ``snapshots``/``externals`` row in the DB for
+    # ``SnapshotViewerScreen.on_mount`` to read back.
+    pushed: list[object] = []
+    original_push_screen = app.push_screen
+
+    def _record_push(screen: object, *args: object, **kwargs: object) -> object:
+        pushed.append(screen)
+        return original_push_screen(screen, *args, **kwargs)
+
+    monkeypatch.setattr(app, "push_screen", _record_push)
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            pushed.clear()  # drop the "ask" push captured above
+            question_input = app.screen.query_one(f"#{QUESTION_ID}")
+            question_input.value = "is the ticket open?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            await pilot.press("ctrl+j")
+            await pilot.pause()
+
+    asyncio.run(_drive())
+
+    assert len(pushed) == 1
+    assert isinstance(pushed[0], SnapshotViewerScreen)
+    assert pushed[0].snapshot_id == "s1"
+
+
+def test_ctrl_j_with_nothing_asked_yet_notifies_instead_of_crashing(
+    tmp_path: Path,
+) -> None:
+    app = LodeApp(db_path=tmp_path / "lode.db")
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            await pilot.press("ctrl+j")
+            await pilot.pause()
+            # Still on the ask screen -- no crash, nothing pushed.
+            assert isinstance(app.screen, AskScreen)
+
+    asyncio.run(_drive())
+
+
+def test_a_new_question_clears_the_previous_answers_citation_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+
+    canned = AskResult(
+        answer=CitedAnswer(
+            claims=(
+                Claim(
+                    text="claim",
+                    support=[Support(version_id="v1", quoted_span="a")],
+                ),
+            ),
+            withheld_citations=(),
+        ),
+        identities={"v1": CitationIdentity(note_id="n1", title="Note", is_head=True)},
+    )
+    # The second question's worker is held open with a threading.Event so the
+    # test can observe the status line cleared synchronously on submit --
+    # before that (stubbed) worker has any chance to repopulate it.
+    release_second = threading.Event()
+
+    def _stub_run_ask(db_path, question, **kwargs):
+        if question == "second question":
+            release_second.wait(timeout=5)
+        return canned
+
+    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _stub_run_ask)
+
+    async def _drive() -> tuple[str, str]:
+        async with app.run_test() as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            question_input = app.screen.query_one(f"#{QUESTION_ID}")
+            question_input.value = "first question"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.screen.query_one(f"#{CITATION_STATUS_ID}").content != ""
+
+            question_input = app.screen.query_one(f"#{QUESTION_ID}")
+            question_input.value = "second question"
+            await pilot.press("enter")
+            await pilot.pause()
+            # Cleared synchronously on submit -- the second worker is still
+            # blocked on ``release_second`` at this point.
+            cleared = app.screen.query_one(f"#{CITATION_STATUS_ID}").content
+
+            release_second.set()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            repopulated = app.screen.query_one(f"#{CITATION_STATUS_ID}").content
+            return cleared, repopulated
+
+    cleared, repopulated = asyncio.run(_drive())
+
+    assert cleared == ""
+    assert repopulated != ""

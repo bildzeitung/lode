@@ -349,6 +349,46 @@ def _group_key(identity: CitationIdentity) -> tuple[str, str] | None:
     return None
 
 
+def citation_targets(result: AskResult) -> list[str]:
+    """Distinct navigable citation ``target_id``s, in the order they render (lode-35nu.4).
+
+    Walks the *same* grouped traversal :func:`_render_claims` renders with --
+    outer loop over distinct notes/externals in first-cited order, inner loop
+    over that group's citations in claim order -- so a caller offering
+    "next/previous citation" navigation (the ask screen) steps through targets
+    top-to-bottom exactly as they appear on screen. A flat first-cited walk
+    does *not* do this: a note cited by two claims with another note's claim
+    between them renders as one contiguous block but would be walked
+    non-contiguously, so the status line's "Citation n/m" would disagree with
+    what the reader is looking at.
+
+    A target is excluded when it has no :class:`CitationIdentity`, or an
+    identity that :func:`_group_key` cannot place (neither ``note_id`` nor
+    ``external_id`` -- the "exactly one is set" invariant violated). Those are
+    exactly the citations :func:`_render_claims` drops into its ungrouped flat
+    fallback section, and there is no note/external to navigate to for them --
+    so the navigable set is precisely the grouped, rendered set.
+
+    Keyed by ``target_id`` (a specific ``version_id``/``snapshot_id``), not by
+    note/external -- deliberately: two citations of the same note but
+    different versions are two distinct, individually navigable entries, and
+    opening one must show the exact version actually cited, not just the
+    note's current head (the ticket's own framing).
+    """
+    seen: set[str] = set()
+    grouped: dict[tuple[str, str], list[str]] = {}
+    for claim in result.answer.claims:
+        for support in claim.support:
+            identity = result.identities.get(support.target_id)
+            if identity is None or (group_key := _group_key(identity)) is None:
+                continue
+            if support.target_id in seen:
+                continue
+            seen.add(support.target_id)
+            grouped.setdefault(group_key, []).append(support.target_id)
+    return [target_id for bucket in grouped.values() for target_id in bucket]
+
+
 def _render_citation(support: Support, as_of: str | None) -> str:
     """Render one support as an indented ``[<id-kind> <id>, as of <ts>] "<span>"`` line.
 
