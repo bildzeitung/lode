@@ -288,3 +288,41 @@ synthesis through while still catching *invalid* synthesis. The residual risk is
 place — the untuned threshold — which is why it's called out as a revisit, not a settled value. An
 optional **LLM-judge** second pass can serve as a "high-assurance" toggle (stronger than local NLI),
 but it costs a round-trip + dollars per answer and re-ships content off-box, so it is not the default.
+
+---
+
+## Tool-augmented Ask: the tool path is the draw-down path
+
+Ask can reach live external systems mid-answer — read-only JIRA/Confluence/web tools the LLM may
+call when the corpus doesn't already hold what the question needs (`lode-35nu.11`). The governing
+constraint is that **this must not become a second, ungated evidence path**: a live tool result has
+no `version_id`/`snapshot_id`, so the [faithfulness gate](#the-faithfulness-gate-a-stage-like-rerank)
+above has no stored bytes to verify a span against. The answer is not to weaken the gate or to add
+an "unverified claims" section — it is to make tool results into ordinary evidence *before*
+synthesis sees them.
+
+**Snapshot-then-cite.** Every tool result that will be cited is persisted on the existing
+externals/snapshots path (content-addressed body, `fetched_at`, provenance, `no_egress` evaluated)
+**before** it is handed to synthesis, reusing `lode.drawdown` / `lode.externals` rather than
+inventing a second snapshot writer. Synthesis then cites it by `snapshot_id` like any other
+external, `cited_answer._resolve_target` verifies spans against stored bytes, and **all five gate
+steps run unmodified.** The cost is a write per fetched resource, and it is accepted.
+
+Three consequences of that constraint are settled in
+[externals.md](externals.md#a-query-result-has-no-identity--discovery-is-not-citation-decided-lode-35nu115)
+(`lode-35nu.11.5`) rather than restated here, because they are facts about external identity,
+persistence, and egress, not about retrieval:
+
+1. **Search returns identifiers, never bodies.** A query result has no stable `external_id`, so it
+   is never persisted and never citable; the model fetches the specific resources it names, and
+   *those* are snapshotted and cited. Discovery is not citation.
+2. **Ask-time snapshots are first-class `externals` rows** marked `discovered_via = 'ask'`, with no
+   note→external edge. No ephemeral class, no separate GC; dedup and identical-refetch suppression
+   fall out of the existing `external_id` / `snapshot_id` machinery.
+3. **A tool call is an egress event** — it writes an `egress_log` row (`purpose = 'tool'`),
+   `gate_qa_egress`'s redaction runs over the tool *arguments* and not only over passages, and a
+   tool call whose destination source is `no_egress` is forbidden.
+
+The gate is the reason the whole sub-tree is shaped this way: everything above exists so that a
+claim sourced from a live lookup is exactly as verifiable as a claim sourced from a note the user
+wrote a year ago, and reaches the user through the identical stage.
