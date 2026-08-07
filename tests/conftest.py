@@ -1625,9 +1625,12 @@ def _fenced_bash(markdown: str) -> str:
 LAND_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
 #: The land skill doc's text, read once per session rather than once per test
-#: (lode-6mt3/lode-ulkf). ``tests/test_land_lock.py`` alone used to call
-#: ``LAND_SKILL.read_text(encoding="utf-8")`` up to eight times per run against
-#: this 166KB file; every call site there now reads this cached value instead.
+#: (lode-6mt3/lode-ulkf). ``tests/test_land_lock.py`` alone carried eleven
+#: static ``LAND_SKILL.read_text(encoding="utf-8")`` call sites against this
+#: 174KB file -- and more reads than that per run, since two of them sit in
+#: per-test block locators (``_acquire_block``/``_pass_start_block``) rather
+#: than in a test body. Every call site there now reads this cached value
+#: instead.
 #: A test that is pinning the *parser itself*
 #: (``test_fenced_bash_sees_every_bash_marker_including_indented_ones``) still
 #: calls :func:`bash_fence_blocks` directly on this text rather than going
