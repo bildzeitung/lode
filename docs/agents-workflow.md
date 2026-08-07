@@ -3085,15 +3085,10 @@ assumption would not have closed it.
   `$(git rev-parse --git-dir)/land-lock-token` with `2>/dev/null || true`, so if that file is missing or
   empty (a pass resumed mid-flight before Section 0 ever ran, an operator running a later section by
   hand with no prior `acquire` in this working tree) `$MY_TOKEN` is empty and `land-lock.sh` treats
-  empty exactly as absent — the call still proceeds blind, with no run-time enforcement. **This is no
-  longer caused by Section 1's `$STATE_DIR` wipe (lode-l7mj, fixed):** the token file was originally
-  written under `$STATE_DIR` (`.git/land-state/`) and destroyed by Section 1's unconditional
-  `rm -rf "$STATE_DIR"` before any consumer read it, disabling the ownership check on *every* pass —
-  not a corner case, the default. It now lives beside `.git/land.lock`, at the git-common-dir root,
-  which Section 1 never touches; every successful `acquire` (fresh or reclaimed) unconditionally
-  overwrites it, so it is available to every later read-back site for the rest of the pass, and — since
-  it is no longer per-pass scratch — a crashed pass's token now legitimately survives into the next
-  pass, compared against a lock record that survives by the same staleness-TTL design. What changed
+  empty exactly as absent — the call still proceeds blind, with no run-time enforcement. Note that
+  those are now the *only* causes: the far bigger one, Section 1's `$STATE_DIR` wipe destroying the
+  token on **every** pass, is fixed (lode-l7mj) — see "Deliberately NOT under `$STATE_DIR`" below for
+  the mechanism and its consequences. What changed
   under **lode-67nk** (closed), independent of lode-l7mj: the remaining fail-open causes above are no
   longer *silent*. Every one of the five
   `MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" ...)"` read-back sites in
@@ -3139,8 +3134,9 @@ assumption would not have closed it.
   directory as per-pass scratch hygiene (lode-wjw4), which ran *after* Section 0 wrote the token and
   before any consumer read it, silently disabling the ownership check on every single pass (not a
   corner case reachable only via a wiped or resumed state dir — the default, every time). The token is
-  lock state, not per-pass scratch, so it now sits beside `.git/land.lock` at the git-common-dir root —
-  a location Section 1's wipe was never scoped to touch and does not need to be taught about. This was
+  lock state, not per-pass scratch, so it now sits in `$(git rev-parse --git-dir)` itself — beside
+  `.git/land.lock` whenever `/land` runs where it is supposed to, in the main checkout — a location
+  Section 1's wipe was never scoped to touch and does not need to be taught about. This was
   chosen over the two alternatives that *do* touch `$STATE_DIR`'s wipe: writing the token after
   Section 1's wipe (re-opens the writer-before-the-wipe ordering question lode-wjw4 closed) and sparing
   the token file from the wipe (re-introduces the enumerate-subdirectories coupling lode-wjw4 removed,
@@ -3150,6 +3146,15 @@ assumption would not have closed it.
   is correct, not a leak, because the lock record it is compared against survives by the identical
   staleness-TTL design, and every successful `acquire` (fresh or reclaimed) unconditionally overwrites
   it, so there is no "clean up the stale token" step needed.
+
+  One honest asymmetry worth knowing about: the token path is derived with `--git-dir`, matching
+  `$STATE_DIR` and the rest of the skill, while `land-lock.sh` derives `$LOCK` with
+  `--path-format=absolute --git-common-dir` precisely because `--git-dir` is *not* repo-global (from a
+  linked worktree it returns that worktree's private gitdir — see that script's own header). The two
+  therefore only coincide in the main checkout. Nothing is broken by this today: a pass writes and
+  reads its token through the same expression, so the ownership check round-trips correctly wherever it
+  runs. It is a latent inconsistency of the same class the script's header documents, kept visible here
+  rather than silently unified, since the recorded 2026-08-07 decision names this exact path.
 
   This paragraph is the **canonical** statement of the threading mechanism. `scripts/land-lock.sh`'s
   header and `.claude/skills/land/SKILL.md`'s Section 0 comment each carry only a short local

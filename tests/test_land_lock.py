@@ -101,6 +101,7 @@ from conftest import (
     LAND_SKILL,
     _fenced_bash,
     bash_fence_blocks,
+    fake_bin_env,
     only_block_with,
 )
 
@@ -1528,11 +1529,7 @@ def _init_main_checkout_with_origin(tmp_path: Path) -> Path:
     origin = tmp_path / "origin.git"
     _git(tmp_path, "init", "-q", "--bare", str(origin))
 
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-q", "-b", "trunk")
-    _git(repo, "config", "user.email", "test@example.com")
-    _git(repo, "config", "user.name", "test")
+    repo = _init_repo(tmp_path)  # same throwaway-repo shape, identity config included
     _git(repo, "commit", "-q", "--allow-empty", "-m", "init")
     _git(repo, "remote", "add", "origin", str(origin))
     _git(repo, "push", "-q", "origin", "trunk")
@@ -1561,14 +1558,13 @@ def _run_block(block: str, repo: Path, bin_dir: Path) -> subprocess.CompletedPro
     helper itself: it cwd's at the REAL checkout root, which is exactly the
     directory this test must NOT touch (it would contend with this machine's
     own `.git/land.lock` and `.git/land-state/`)."""
-    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
     return subprocess.run(
         ["bash", "-c", block],
         cwd=repo,
         capture_output=True,
         text=True,
         timeout=30,
-        env=env,
+        env=fake_bin_env(bin_dir),
         check=False,
     )
 
