@@ -46,7 +46,7 @@ import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from lode.answer import Answer, Claim
 from lode.config import Settings
@@ -147,77 +147,22 @@ class QaPassage:
     is_external: bool = False
 
 
-class _RequestSupport(BaseModel):
-    """Request-side mirror of :class:`lode.answer.Support`, omitting ``body_offset``
-    (lode-9nmk).
-
-    ``body_offset`` is stamped app-side after the faithfulness gate
-    (``cited_answer._stamp_body_offsets``) and never supplied by the model, but
-    ``Support`` doubles as the structured-output response shape -- keeping the
-    field on it means it rides in the JSON schema handed to the provider on
-    every call, an app-side artifact leaking into the wire contract. This mirror
-    is what actually gets sent; :func:`answer_question` converts the decoded
-    claims into real :class:`~lode.answer.Claim`/``Support`` afterward, where
-    ``body_offset`` defaults to ``None`` until the gate stamps it.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    version_id: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Cited note version id (mutually exclusive with snapshot_id).",
-    )
-    snapshot_id: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Cited external snapshot id (mutually exclusive with version_id).",
-    )
-    quoted_span: str = Field(
-        ...,
-        min_length=1,
-        description="Verbatim text copied from the cited target.",
-    )
-
-    @model_validator(mode="after")
-    def _exactly_one_target(self) -> _RequestSupport:
-        if (self.version_id is None) == (self.snapshot_id is None):
-            raise ValueError(
-                "support must cite exactly one of version_id or snapshot_id"
-            )
-        return self
-
-
-class _RequestClaim(BaseModel):
-    """Request-side mirror of :class:`lode.answer.Claim`, using
-    :class:`_RequestSupport` so ``Support.body_offset`` never appears in the
-    schema sent to the provider (lode-9nmk)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    text: str = Field(..., min_length=1, description="A single factual claim.")
-    support: list[_RequestSupport] = Field(
-        ...,
-        min_length=1,
-        description="Evidence the claim rests on; at least one support.",
-    )
-
-
 class _ClaimsEnvelope(BaseModel):
     """Object wrapper around the claims list, for structured-output decoding.
 
     Structured outputs constrain the response to an **object** schema, so the
     verifiable answer (:class:`lode.answer.Answer` is a list-rooted model) is
     decoded through this single-field envelope and unwrapped to ``Answer``.
-    Uses :class:`_RequestClaim` (a mirror of :class:`lode.answer.Claim` that
-    omits ``Support.body_offset``, lode-9nmk) so the schema stays pinned to the
-    landed claims/support shape without leaking that app-side field into the
-    provider call -- this module owns the call, not the answer shape.
+    Reuses :class:`lode.answer.Claim` so the schema stays pinned to the landed
+    claims/support shape -- this module owns the call, not the answer shape.
+    ``Support.body_offset`` is app-side only and is dropped from the generated
+    schema by ``SkipJsonSchema`` on the field itself (lode-9nmk), so nothing
+    here has to mirror or strip it.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    claims: list[_RequestClaim] = Field(
+    claims: list[Claim] = Field(
         default_factory=list,
         description="The factual claims answering the question; empty if the "
         "sources do not answer it.",
@@ -292,14 +237,8 @@ def answer_question(
         is_external,
         settings.qa_call_timeout_s,
     )
-    # envelope.claims are the request-side mirror shape (_RequestClaim, no
-    # body_offset -- lode-9nmk); round-trip through model_dump()/model_validate()
-    # into the real Claim/Support, where body_offset defaults to None until the
-    # faithfulness gate stamps it. Also tolerates a real Claim here unchanged
-    # (test fixtures fake the provider response with lode.answer.Claim directly).
-    claims = [Claim.model_validate(c.model_dump()) for c in envelope.claims]
     return QaResult(
-        answer=Answer(claims),
+        answer=Answer(envelope.claims),
         withheld_citations=egress.withheld_citations,
         model=model,
         egress_log_id=egress.egress_log_id,

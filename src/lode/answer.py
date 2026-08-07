@@ -21,7 +21,10 @@ Accordingly this module deliberately never reads a version/snapshot body; whethe
 a ``quoted_span`` actually occurs in its cited target is the span check's job.
 """
 
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 
 class Support(BaseModel):
@@ -51,10 +54,10 @@ class Support(BaseModel):
         min_length=1,
         description="Verbatim text copied from the cited target.",
     )
-    body_offset: int | None = Field(
+    body_offset: Annotated[int | None, SkipJsonSchema()] = Field(
         default=None,
         ge=0,
-        description="Leave unset: an app-side field, not part of the answer.",
+        description="App-side only: stamped after the faithfulness gate.",
     )
     """Char offset of this span's occurrence in the cited body, when known (lode-hruz).
 
@@ -66,13 +69,12 @@ class Support(BaseModel):
     matched, in which case renderers fall back to the first occurrence.
 
     It rides on this model rather than a parallel app-side type because
-    ``Support`` is what every consumer already threads through. It does NOT
-    appear in the JSON schema handed to the LLM provider: ``qa._ClaimsEnvelope``
-    sends a request-side mirror (``qa._RequestClaim`` / ``qa._RequestSupport``)
-    that omits this field entirely, so the invariant rests on a type boundary
-    rather than prose alone (lode-9nmk). The terse ``description`` below is
-    dead weight for the model (it never sees this field) but still documents
-    the field for every other reader of this class.
+    ``Support`` is what every consumer already threads through. ``Support``
+    doubles as the structured-output response shape (``qa._ClaimsEnvelope``),
+    so ``SkipJsonSchema`` drops this app-side field from the JSON schema handed
+    to the provider while leaving it a normal field everywhere else -- the
+    invariant rests on the type, not on prose (lode-9nmk). The ``description``
+    is for readers of this class; the model never sees the field.
     """
 
     @model_validator(mode="after")

@@ -24,8 +24,6 @@ from lode.qa import (
     SONNET_MODEL,
     QaPassage,
     _ClaimsEnvelope,
-    _RequestClaim,
-    _RequestSupport,
     answer_question,
 )
 from lode.storage import init_db
@@ -390,36 +388,17 @@ def test_empty_answer_is_valid(conn) -> None:
 def test_body_offset_is_absent_from_the_provider_schema() -> None:
     # Support.body_offset is an app-side field (stamped after the faithfulness
     # gate, never supplied by the model), but Support also doubles as the
-    # structured-output response shape. The request-side mirror
-    # (_ClaimsEnvelope -> _RequestClaim -> _RequestSupport) must omit it
-    # entirely as a *property* of the JSON schema handed to the provider
-    # (lode-9nmk) -- not just describe it as "leave unset". (Doc prose
-    # elsewhere in the schema may still mention the field name in passing, so
-    # this checks property keys specifically rather than the raw dump.)
+    # structured-output response shape, so SkipJsonSchema on the field must
+    # keep it out of the schema handed to the provider entirely, as a
+    # *property* (lode-9nmk) -- not merely describe it as "leave unset". The
+    # anthropic SDK derives the wire schema from model_json_schema()
+    # (anthropic/lib/_parse/_transform.py), so this is the schema actually
+    # sent. Doc prose elsewhere in the schema may still mention the field name,
+    # so this checks property keys rather than the raw dump.
     schema = _ClaimsEnvelope.model_json_schema()
     all_defs = {"": schema, **schema.get("$defs", {})}
-    for definition in all_defs.values():
-        assert "body_offset" not in definition.get("properties", {})
-
-
-def test_decoded_claims_are_converted_to_real_claim_and_support(conn) -> None:
-    # The provider returns the request-side mirror shape (_RequestClaim /
-    # _RequestSupport, no body_offset); answer_question converts it into real
-    # Claim/Support, where body_offset defaults to None until the faithfulness
-    # gate stamps it.
-    mirror_claim = _RequestClaim(
-        text="lode is event-sourced.",
-        support=[_RequestSupport(version_id="v1", quoted_span="event-sourced")],
-    )
-    client = _FakeClient(_envelope([mirror_claim]))
-    result = answer_question(
-        conn,
-        "How is lode stored?",
-        [QaPassage("v1", "lode is event-sourced")],
-        provider=AnthropicProvider(client),
-    )
-    (claim,) = result.answer.claims
-    assert isinstance(claim, Claim)
-    support = claim.support[0]
-    assert isinstance(support, Support)
-    assert support.body_offset is None
+    properties = {k for d in all_defs.values() for k in d.get("properties", {})}
+    assert "body_offset" not in properties
+    # ...and the model-supplied fields are all still there, so this cannot pass
+    # by the schema having quietly lost its Support definition.
+    assert {"version_id", "snapshot_id", "quoted_span", "text", "support"} <= properties
