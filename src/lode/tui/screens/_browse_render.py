@@ -95,15 +95,25 @@ def _clip_summary_to_row_height(summary: str, width: int) -> Text:
 
 
 def _item_text(item: EnrichmentItem) -> Text:
-    """One tag/entity/summary value, dimmed if stale.
+    """One tag/entity/summary value, dimmed if stale, italicized if inherited.
 
-    Styles the ``stale`` bit directly rather than printing a baked-in suffix
-    (lode-0qc) -- the whole reason :class:`~lode.enrichment_view.
-    EnrichmentItem` carries ``stale`` as a structured flag instead of a
-    ``" [stale]"``-suffixed string is so a consumer that wants to *style* a
-    stale item (as this modal does) never has to string-sniff for the marker.
+    Styles the ``stale``/``inherited`` bits directly rather than printing a
+    baked-in suffix (lode-0qc, lode-f0m1) -- the whole reason
+    :class:`~lode.enrichment_view.EnrichmentItem` carries both as structured
+    flags instead of a suffixed string is so a consumer that wants to
+    *style* an item (as this modal does) never has to string-sniff for a
+    marker. ``inherited`` (a tag resolved through a linked external rather
+    than scoped to this note directly) gets its own distinct style so it
+    reads as "not this note's own tag" without merging into the ``stale``
+    styling -- a tag can be inherited and fresh, inherited and stale, or
+    neither, and all three must stay visually distinguishable.
     """
-    return Text(item.value, style="dim" if item.stale else "")
+    style_parts = []
+    if item.stale:
+        style_parts.append("dim")
+    if item.inherited:
+        style_parts.append("italic")
+    return Text(item.value, style=" ".join(style_parts))
 
 
 def _items_line(items: list[EnrichmentItem]) -> Text:

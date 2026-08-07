@@ -1025,11 +1025,21 @@ def notes_(
 def _render_item(item: EnrichmentItem) -> str:
     """Render one :class:`~lode.enrichment_view.EnrichmentItem` for the CLI.
 
-    The view-model carries ``stale`` as a bare boolean (lode-0qc); this is
-    where the CLI's own ``" [stale]"`` suffix convention gets applied -- the
-    TUI modal (lode-ay5.2) is free to style the same bit differently.
+    The view-model carries ``stale``/``inherited`` as bare booleans
+    (lode-0qc, lode-f0m1); this is where the CLI's own bracket-suffix
+    convention gets applied -- the TUI modal (lode-ay5.2) is free to style
+    the same bits differently. ``inherited`` prints before ``stale`` when
+    both apply, matching the order the two concepts are introduced in the
+    module's own docstrings.
     """
-    return f"{item.value} [stale]" if item.stale else item.value
+    suffixes = []
+    if item.inherited:
+        suffixes.append("inherited")
+    if item.stale:
+        suffixes.append("stale")
+    if not suffixes:
+        return item.value
+    return f"{item.value} [{', '.join(suffixes)}]"
 
 
 def _render_items(items: list[EnrichmentItem]) -> str:

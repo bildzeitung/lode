@@ -658,6 +658,149 @@ def test_no_egress_takes_priority_over_tombstone_for_state(
 
 
 # ---------------------------------------------------------------------------
+# Externally-inherited tags (lode-f0m1)
+# ---------------------------------------------------------------------------
+
+
+def test_tag_scoped_to_a_linked_external_is_surfaced_and_flagged_inherited(
+    conn: sqlite3.Connection,
+) -> None:
+    """A tag annotation whose target is an external, linked via a fresh edge,
+    shows up in the note's own ``tags`` -- flagged ``inherited=True`` -- rather
+    than being invisible on the note that a Tags-screen filter on that same
+    tag (lode-35nu.7) would return. Reproduces the ticket's own repro: filter
+    by an external-only tag, open the resulting note, the tag was nowhere on
+    it.
+    """
+    _insert_note(conn)
+    _insert_external(conn, external_id="https://example.com/article")
+    _insert_edge(
+        conn, from_id="note-1", to_id="https://example.com/article", status="fresh"
+    )
+    _insert_annotation(
+        conn,
+        target="https://example.com/article",
+        kind="tag",
+        payload_value="external-only-tag",
+        status="fresh",
+    )
+
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    assert (
+        EnrichmentItem(value="external-only-tag", stale=False, inherited=True)
+        in view.tags
+    )
+
+
+def test_inherited_tag_carries_the_stale_flag_from_its_own_row(
+    conn: sqlite3.Connection,
+) -> None:
+    """An inherited tag goes through the SAME stale-display policy a directly-
+    scoped tag does -- a non-fresh external-scoped annotation row shows up
+    flagged stale, not hidden."""
+    _insert_note(conn)
+    _insert_external(conn, external_id="https://example.com/article")
+    _insert_edge(
+        conn, from_id="note-1", to_id="https://example.com/article", status="fresh"
+    )
+    _insert_annotation(
+        conn,
+        target="https://example.com/article",
+        kind="tag",
+        payload_value="stale-external-tag",
+        status="stale",
+    )
+
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    assert (
+        EnrichmentItem(value="stale-external-tag", stale=True, inherited=True)
+        in view.tags
+    )
+
+
+def test_inherited_tag_is_not_duplicated_when_the_note_also_carries_it_directly(
+    conn: sqlite3.Connection,
+) -> None:
+    """The same tag value scoped BOTH directly on the note and on a linked
+    external appears once, as the directly-scoped (non-inherited) item -- the
+    note's own tag wins rather than showing an ambiguous duplicate."""
+    _insert_note(conn)
+    _insert_annotation(conn, kind="tag", payload_value="shared-tag", status="fresh")
+    _insert_external(conn, external_id="https://example.com/article")
+    _insert_edge(
+        conn, from_id="note-1", to_id="https://example.com/article", status="fresh"
+    )
+    _insert_annotation(
+        conn,
+        target="https://example.com/article",
+        kind="tag",
+        payload_value="shared-tag",
+        status="fresh",
+    )
+
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    matches = [item for item in view.tags if item.value == "shared-tag"]
+    assert matches == [EnrichmentItem(value="shared-tag", stale=False, inherited=False)]
+
+
+def test_a_note_to_note_edge_does_not_inherit_the_other_notes_tags(
+    conn: sqlite3.Connection,
+) -> None:
+    """``edges.to_id`` is polymorphic (:func:`~lode.enrichment_view._external_view`)
+    -- a fresh note->note edge must not make note-1 inherit note-2's own tag,
+    mirroring ``notes_read``'s identical regression test for the Tags-screen
+    filter this ticket's inspector gap sits next to."""
+    _insert_note(conn, note_id="note-1", version_id="ver-1")
+    _insert_note(conn, note_id="note-2", version_id="ver-2")
+    _insert_edge(conn, from_id="note-1", to_id="note-2", status="fresh")
+    _insert_annotation(
+        conn,
+        target="note-2",
+        source_version="ver-2",
+        kind="tag",
+        payload_value="note-2-only-tag",
+        status="fresh",
+    )
+
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    assert view.tags == []
+
+
+def test_inherited_tag_requires_a_fresh_edge_not_a_stale_or_orphaned_one(
+    conn: sqlite3.Connection,
+) -> None:
+    """Only ``status = 'fresh'`` resolves an inherited tag -- the same filter
+    :func:`lode.notes_read._list_notes_with_all_tags` uses for the Tags-screen
+    filter this inspector gap sits next to. A stale (or orphaned) edge no
+    longer reflects a live link."""
+    _insert_note(conn)
+    _insert_external(conn, external_id="https://example.com/article")
+    _insert_edge(
+        conn, from_id="note-1", to_id="https://example.com/article", status="stale"
+    )
+    _insert_annotation(
+        conn,
+        target="https://example.com/article",
+        kind="tag",
+        payload_value="external-only-tag",
+        status="fresh",
+    )
+
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    assert view.tags == []
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 
