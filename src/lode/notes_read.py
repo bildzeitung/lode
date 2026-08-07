@@ -55,6 +55,13 @@ head, these two walk and read the *whole* chain. :func:`list_versions` walks
 ``parent_version_id`` back from the head rather than counting/sorting rows, so
 it stays correct even under same-tick timestamps; :func:`version_body` is a
 plain ``version_id`` lookup, live or not.
+
+**Quick search (lode-35nu.6).** :func:`search_notes` is a fourth read-side
+variant, alongside :func:`list_notes`/:func:`list_deleted_notes`/
+:func:`candidate_rows_conn` -- offline, model-free BM25 search over live
+notes' current content via the existing ``passages_fts`` FTS5 index, for the
+browse screen's quick-search box. See its own docstring for why it is not
+just a thin wrapper over :meth:`lode.lexical.LexicalIndex.search`.
 """
 
 from __future__ import annotations
@@ -65,7 +72,15 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from lode.lexical import LexicalIndex, build_match_query
 from lode.storage import init_db
+
+#: Soft cap on how many passage rows :func:`_search_notes` reads back from
+#: :meth:`~lode.lexical.LexicalIndex.search` before ranking/deduping to notes.
+#: A single note can contribute more than one matching passage, so this must be
+#: comfortably above the number of live notes rather than equal to it; a
+#: personal note base is small enough that this never binds in practice.
+_QUICK_SEARCH_PASSAGE_LIMIT = 1000
 
 #: THE short note-id length across the epic (lode-1gr.2's Browse Id column,
 #: lode-1gr.5's 'lode show' short refs) -- long enough to feed
@@ -184,6 +199,85 @@ def _list_notes(
         )
         for note_id, created, head_version_id, body, chain_length in rows
     ]
+
+
+def search_notes(db_path: Path, query_text: str) -> list[NoteRow]:
+    """BM25 quick search over live notes' current content (lode-35nu.6).
+
+    Offline, model-free -- reuses the existing ``passages_fts`` FTS5 index
+    (:class:`~lode.lexical.LexicalIndex`, the same one the retrieval pipeline's
+    lexical leg reads), no embedder, no network. Returns the matching live
+    notes ordered best-match-first; ``query_text`` with no usable token (empty,
+    or all punctuation/whitespace) returns an empty list rather than every note
+    -- the browse screen's own "clearing it restores the full list" is a
+    caller-side branch on an empty ``query_text``, not something this function
+    special-cases.
+
+    Two things distinguish this from a plain :meth:`LexicalIndex.search` call:
+
+    - **Scoped to live *note* head versions only**, via a query local to this
+      function -- not :func:`lode.retrieval.live_head_versions`, which also
+      admits *external* snapshot heads (``lode.externals`` drives its own FTS
+      leg through the same ``passages_fts`` table, keyed by ``snapshot_id``
+      rather than a note version). An unscoped or externals-inclusive search
+      would surface passages with no owning note to open from Browse.
+    - **Prefix-matching, sanitized query** via
+      :func:`~lode.lexical.build_match_query` (``prefix=True``) -- safe against FTS5
+      syntax injection from a free-typed search box, and matches a
+      still-being-typed word (an as-you-type box otherwise shows nothing
+      until a whole word is finished, since a bare FTS5 term requires an
+      exact token match).
+
+    **Known limitation, not fixed here:** a note saved before the lexical leg
+    landed (or before any lexical reindex, since no such command exists yet --
+    ``cli.py``'s ``reembed`` explicitly leaves FTS untouched) is not in
+    ``passages_fts`` and quietly won't surface here. Recorded as a build
+    requirement on lode-35nu.6, not resolved by it.
+    """
+    conn = init_db(db_path)
+    try:
+        return _search_notes(conn, query_text)
+    finally:
+        conn.close()
+
+
+def _search_notes(conn: sqlite3.Connection, query_text: str) -> list[NoteRow]:
+    match = build_match_query(query_text, prefix=True)
+    if match is None:
+        return []
+    head_rows = conn.execute(
+        "SELECT n.note_id, v.version_id FROM notes n "
+        "JOIN versions v ON v.version_id = n.head_version_id "
+        "WHERE v.op != 'delete'"
+    ).fetchall()
+    # An empty map needs no early return of its own: LexicalIndex.search
+    # documents an empty ``target_versions`` collection as matching nothing.
+    note_id_by_head_version = {version_id: note_id for note_id, version_id in head_rows}
+    hits = LexicalIndex(conn).search(
+        match,
+        k=_QUICK_SEARCH_PASSAGE_LIMIT,
+        target_versions=note_id_by_head_version.keys(),
+    )
+    # Dedup to the one best (first, since hits are already best-first) hit per
+    # note, preserving BM25 rank order.
+    ranked_note_ids: list[str] = []
+    seen: set[str] = set()
+    for hit in hits:
+        note_id = note_id_by_head_version[hit.target_version]
+        if note_id not in seen:
+            seen.add(note_id)
+            ranked_note_ids.append(note_id)
+    if not ranked_note_ids:
+        return []
+    placeholders = ", ".join("?" for _ in ranked_note_ids)
+    matched = _list_notes(
+        conn,
+        extra_where=f"AND n.note_id IN ({placeholders}) ",
+        params=ranked_note_ids,
+    )
+    rank = {note_id: index for index, note_id in enumerate(ranked_note_ids)}
+    matched.sort(key=lambda row: rank[row.note_id])
+    return matched
 
 
 def list_deleted_notes(db_path: Path) -> list[NoteRow]:
