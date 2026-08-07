@@ -1209,6 +1209,178 @@ def test_uncreatable_lock_reports_a_machine_fault_not_another_lander(
 
 
 # ---------------------------------------------------------------------------
+# Persistent MACHINE FAULT escalation (lode-oup2)
+#
+# The counter is deliberately NOT under $GIT_COMMON_DIR (see land-lock.sh's own
+# comment beside LAND_LOCK_FAULT_COUNT_FILE) -- it lives under $TMPDIR, so every
+# test here overrides TMPDIR to a throwaway, per-test directory. Without that
+# override these tests would pollute -- and be polluted by -- the real
+# machine-wide counter file (including a concurrent test run, or a real /land
+# loop on the same box).
+# ---------------------------------------------------------------------------
+
+
+#: The throwaway $TMPDIR every test below redirects land-lock.sh at. Named once
+#: -- _fault_env and _fault_count_path must never disagree about it, or an
+#: `assert not ...exists()` would pass against a path the script never writes.
+_FAULT_TMPDIR_NAME = "fault-tmpdir"
+
+
+def _fault_env(tmp_path: Path) -> dict[str, str]:
+    fault_tmp = tmp_path / _FAULT_TMPDIR_NAME
+    fault_tmp.mkdir(exist_ok=True)
+    return {"TMPDIR": str(fault_tmp), "LAND_LOCK_FAULT_ESCALATE_THRESHOLD": "3"}
+
+
+def _fault_count_path(tmp_path: Path) -> Path:
+    return tmp_path / _FAULT_TMPDIR_NAME / "lode-land-lock-fault-count"
+
+
+def _faulty_repo_and_env(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    """A repo plus the env that makes every `acquire` in it hit a MACHINE FAULT
+    (no `flock` on $PATH), with the counter redirected into the throwaway
+    $TMPDIR. The three-line preamble every test below would otherwise repeat."""
+    return _init_repo(tmp_path), {
+        **_fault_env(tmp_path),
+        "PATH": _path_without_flock(tmp_path),
+    }
+
+
+def test_a_single_machine_fault_does_not_escalate(tmp_path: Path) -> None:
+    """Below threshold: MACHINE FAULT is still reported, but no ESCALATE line."""
+    repo, env = _faulty_repo_and_env(tmp_path)
+
+    result = _run("acquire", repo=repo, env_overrides=env)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "MACHINE FAULT" in result.stderr
+    assert "ESCALATE" not in result.stderr
+    assert _fault_count_path(tmp_path).read_text().strip() == "1"
+
+
+def test_consecutive_machine_faults_escalate_at_the_threshold(
+    tmp_path: Path,
+) -> None:
+    """Three consecutive MACHINE FAULT acquires (the default threshold) must
+    escalate on the third; the first two must not."""
+    repo, env = _faulty_repo_and_env(tmp_path)
+
+    first = _run("acquire", repo=repo, env_overrides=env)
+    second = _run("acquire", repo=repo, env_overrides=env)
+    third = _run("acquire", repo=repo, env_overrides=env)
+
+    assert "ESCALATE" not in first.stderr, first.stderr
+    assert "ESCALATE" not in second.stderr, second.stderr
+    assert "ESCALATE" in third.stderr, third.stderr
+    assert "MACHINE FAULT" in third.stderr
+    assert _fault_count_path(tmp_path).read_text().strip() == "3"
+
+
+def test_escalation_keeps_repeating_past_the_threshold(tmp_path: Path) -> None:
+    """Not just the first crossing -- a caller checking only the LATEST tick's
+    output must still see it, so every tick at or past threshold announces.
+
+    Seeds the counter file directly rather than re-driving three faulted
+    acquires (the test above already pins the crossing itself, and each real
+    acquire costs a fresh $PATH-without-flock symlink farm)."""
+    repo, env = _faulty_repo_and_env(tmp_path)
+    _fault_count_path(tmp_path).write_text("7\n", encoding="utf-8")
+
+    result = _run("acquire", repo=repo, env_overrides=env)
+
+    assert "ESCALATE" in result.stderr, result.stderr
+    assert _fault_count_path(tmp_path).read_text().strip() == "8", (
+        "a tick already past the threshold must still keep counting up"
+    )
+
+
+def test_a_clean_acquire_resets_the_fault_counter(tmp_path: Path) -> None:
+    """A machine fault, then a machine that recovers: the counter must NOT
+    carry over silently -- otherwise two isolated faults years apart could
+    eventually cross the threshold together, which is not what "consecutive"
+    means."""
+    repo, faulty_env = _faulty_repo_and_env(tmp_path)
+    healthy_env = _fault_env(tmp_path)
+
+    faulted = _run("acquire", repo=repo, env_overrides=faulty_env)
+    assert faulted.returncode == 1, faulted.stdout + faulted.stderr
+    assert _fault_count_path(tmp_path).read_text().strip() == "1"
+
+    healed = _run("acquire", repo=repo, env_overrides=healthy_env)
+    assert healed.returncode == 0, healed.stdout + healed.stderr
+    assert not _fault_count_path(tmp_path).exists()
+
+    _run("release", BLIND, repo=repo, env_overrides=healthy_env)
+    refaulted = _run("acquire", repo=repo, env_overrides=faulty_env)
+    assert refaulted.returncode == 1, refaulted.stdout + refaulted.stderr
+    assert "ESCALATE" not in refaulted.stderr, (
+        "counter carried over across the healthy acquire in between -- it "
+        "must have reset to 0, not merely paused"
+    )
+    assert _fault_count_path(tmp_path).read_text().strip() == "1"
+
+
+def test_a_transient_lock_held_skip_resets_the_fault_counter_not_bumps_it(
+    tmp_path: Path,
+) -> None:
+    """`skip_lock_still_held` (a fresh lock genuinely held by another /land)
+    is NOT a MACHINE FAULT -- the flock, the lock dir, and the lock file all
+    worked fine. It must reset the counter (proof the machine is healthy),
+    never bump it."""
+    repo, faulty_env = _faulty_repo_and_env(tmp_path)
+    healthy_env = _fault_env(tmp_path)
+
+    faulted = _run("acquire", repo=repo, env_overrides=faulty_env)
+    assert faulted.returncode == 1, faulted.stdout + faulted.stderr
+    assert _fault_count_path(tmp_path).read_text().strip() == "1"
+
+    held = _run("acquire", repo=repo, env_overrides=healthy_env)
+    assert held.returncode == 0, held.stdout + held.stderr  # fresh acquire
+
+    still_held = _run("acquire", repo=repo, env_overrides=healthy_env)
+    assert still_held.returncode == 1, still_held.stdout + still_held.stderr
+    assert "another /land appears to still be running" in still_held.stderr
+    assert "MACHINE FAULT" not in still_held.stderr
+    assert not _fault_count_path(tmp_path).exists(), (
+        "a transient 'lock held' skip must reset the fault counter, not "
+        "leave it untouched or bump it"
+    )
+
+
+def test_fault_escalate_threshold_is_configurable(tmp_path: Path) -> None:
+    repo, faulty_env = _faulty_repo_and_env(tmp_path)
+    env = {**faulty_env, "LAND_LOCK_FAULT_ESCALATE_THRESHOLD": "1"}
+
+    result = _run("acquire", repo=repo, env_overrides=env)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "ESCALATE" in result.stderr, result.stderr
+
+
+def test_fault_counter_is_not_scoped_under_git_common_dir(tmp_path: Path) -> None:
+    """Deliberate design choice (lode-oup2): if the counter lived under
+    $GIT_COMMON_DIR it would fail to persist for exactly the MACHINE FAULT
+    class it exists to track (an unwritable/missing git dir) -- self-defeating.
+    Pin that it lives under $TMPDIR instead, and specifically that an
+    unwritable .git/ does not prevent the counter from being written."""
+    repo = _init_repo(tmp_path)
+    git_dir = repo / ".git"
+    original_mode = git_dir.stat().st_mode
+    git_dir.chmod(0o500)  # readable + traversable, not writable
+    try:
+        result = _run("acquire", repo=repo, env_overrides=_fault_env(tmp_path))
+    finally:
+        git_dir.chmod(original_mode)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "MACHINE FAULT" in result.stderr
+    assert _fault_count_path(tmp_path).read_text().strip() == "1", (
+        "the fault counter must persist even when .git/ itself is unwritable "
+        "-- that is precisely the fault it needs to survive to count"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Call-site pins against the SHIPPED SKILL.md (the fence is where the bug was)
 # ---------------------------------------------------------------------------
 

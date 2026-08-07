@@ -3213,6 +3213,39 @@ assumption would not have closed it.
   fix is worded accordingly. That also fixes the ceiling on this: it makes a fault a reader *can* see
   easier to recognize, and does nothing for the real remaining problem, which is that nobody reads an
   unattended loop's per-tick output at all.
+- **A permanent MACHINE FAULT escalates to a `human`-labeled bd ticket, not just louder stderr
+  (lode-oup2).** lode-119w closed the *salience* gap above but left the underlying one untouched: under
+  `/loop 5m /land` nobody reads an unattended loop's per-tick output at all, so even a correctly-worded,
+  correctly-ordered MACHINE FAULT diagnostic never reaches a human on its own — the visible symptom stays
+  "the `ready-for-land` queue never drains", indefinitely. `land-lock.sh` now persists a consecutive-
+  MACHINE-FAULT counter across ticks (`${TMPDIR:-/tmp}/lode-land-lock-fault-count` — deliberately **not**
+  under `$GIT_COMMON_DIR`, unlike `$LOCK` itself: the single most common fault this counts IS an
+  unwritable/missing git dir, and keying the counter off that same directory would make it fail to
+  persist for exactly the fault it exists to track). The counter only ever moves on a genuine MACHINE
+  FAULT (`flock` missing, the lock path undeterminable, the lock file or its flock-mutex file
+  unwritable) — a transient "another /land appears to still be running" skip is proof the machine itself
+  is fine and resets it, same as a clean acquire. Once the count reaches
+  `LAND_LOCK_FAULT_ESCALATE_THRESHOLD` (default 3, i.e. ~15 min of a 5-minute loop), `acquire`'s stderr
+  gains a second, distinctly-prefixed line — `land-lock: ESCALATE -- ...` — every tick from then on, not
+  just the first crossing. `land-lock.sh` itself makes no bd call and stays dependency-free, matching the
+  rest of the script; Section 0 in `.claude/skills/land/SKILL.md` is what actually reaches a human — it
+  captures `acquire`'s stderr to a scratch file (never `2>&1` into `$ACQUIRE_OUT` itself, so the token
+  parse on the success path is untouched), re-echoes it so lode-119w's reader loses nothing, and greps it
+  for the `ESCALATE` marker. On a match it opens a single `--type=decision --label=human` ticket keyed by
+  a fixed title, so a human sees it via `/sweep`'s existing `human`-labeled-ticket surfacing — no new
+  escalation mechanism. Two properties of that Section 0 block are load-bearing and easy to break:
+  - **The stderr scratch file lives under `${TMPDIR:-/tmp}`, never under `$STATE_DIR`.** `$STATE_DIR` is
+    inside the git dir, and an unwritable git dir is the headline fault being escalated — a redirect
+    there fails *before* `acquire` runs, so the counter would never bump, the marker would never be
+    emitted, and lode-119w's diagnostic would vanish too, leaving the fault **quieter** than before the
+    feature. Both halves of the mechanism sit outside the git dir for the same reason.
+  - **The ticket is filed once per fault episode, not refreshed per tick.** The dedup lookup is
+    `bd list --label human --limit 0` with *no* `--status open`: `bd list` already excludes closed
+    issues, while pinning `open` would miss the ticket the moment a human moved it to `in_progress`
+    while investigating — and then duplicate it every tick. A persistent fault is thousands of ticks, so
+    refreshing the ticket per tick would grow its notes without bound and commit to Dolt every 5 minutes
+    for information a human already has. The ticket **existing** is the signal; closing it re-arms
+    filing, so a recurrence after a fix opens a fresh one.
 - **Pass-start `git reset --hard origin/trunk`, not `git pull --rebase` (lode-k9ef).** Several
   "stop the pass" exits fire on a **machine** fault rather than a content red — today the 2b
   cheap-conflict precheck's `merge-tree` exit 2, `validate-mermaid.sh`'s exit 2, and
