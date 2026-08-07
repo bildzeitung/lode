@@ -480,13 +480,14 @@ class BrowseScreen(Screen[None]):
         # (lode-ligf): no live notes at all (fresh install, or everything
         # tombstoned) vs. a non-empty quick-search query whose BM25
         # search_notes matched nothing. Each gets its own explanation rather
-        # than one message trying to cover both.
-        if rows:
-            table.empty_message = None
-        elif self._quick_search_query:
-            table.empty_message = f"No notes match '{self._quick_search_query}'."
-        else:
-            table.empty_message = "No notes yet."
+        # than one message trying to cover both. Set unconditionally -- the
+        # widget itself only paints it when row_count == 0, so there is no
+        # populated-table case to clear it for.
+        table.empty_message = (
+            f"No notes match '{self._quick_search_query}'."
+            if self._quick_search_query
+            else "No notes yet."
+        )
 
         # Id/Date/Version keep their natural widths -- the same max(header,
         # widest cell) a DataTable auto-column would pick. Date is the short
