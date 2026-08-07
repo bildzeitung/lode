@@ -292,7 +292,7 @@ printf '%s' "$DEFERRED" > "$SWEEP_TMP/deferred"
 The persistence/sentinel convention, the `(. // [])`/`@tsv` guards, the `--limit 0` stake, and what
 this section is deliberately excluded from are all stated once, for both this section and §2b, in
 [Report-only sections (§2a, §2b) — shared contract](#report-only-sections-2a-2b--shared-contract)
-just above.
+just above. A ticket moving into (or out of) `deferred` is not a new human-decision item.
 
 **The one deliberate overlap:** a ticket that is simultaneously `land-escalated` (§1) and `deferred`
 is listed here (unconditionally, unannotated) *and*, on the pass it first appears, also in §7/§8's
@@ -368,19 +368,13 @@ reader would expect to see beside it, `human`, which deliberately is not. Each f
   ticket will actually be seen. Full rationale, and why this diverges from lode-o7ai's decided §1 x
   §2a overlap: lode-ppki in [docs/decisions.md](../../../docs/decisions.md).
 
-**This roster is enforced by a gate test, not by staying current on its own (DECIDED 2026-08-06,
-maintainer, `lode-mm73`; full record: [docs/decisions.md](../../../docs/decisions.md), entry "`/sweep`
-§2b ... hand-maintained pipeline-label roster is enforced by a GATE TEST").**
-`tests/test_sweep_pipeline_label_roster_gate.py` scans every `--add-label`/`bd label add` site across
-`.claude/skills/*/SKILL.md` and `.claude/agents/*.md` and fails if it finds a label applied to a
-ticket (not an epic) that this exclude-label list doesn't cover — the same shape as
-`tests/test_bd_list_limit_gate.py` above. The test owns the scan surface and its exclusions; this
-prose is documentation for a human reader, and — like the `--limit 0` paragraph above — deliberately
-does not restate them.
-
-If this query itself errors, the failure is isolated to this step alone, exactly as in §2a: the
-block writes the sentinel instead of aborting, and §8 owns what that renders as. See
-[Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
+**This roster is enforced by a gate test, not by staying current on its own** (decided `lode-mm73`,
+[docs/decisions.md](../../../docs/decisions.md)). `tests/test_sweep_pipeline_label_roster_gate.py`
+scans every `--add-label`/`bd label add` site across `.claude/skills/*/SKILL.md` and
+`.claude/agents/*.md` and fails on a label applied to a ticket (not an epic) that this exclude-label
+list doesn't cover — the same shape as `tests/test_bd_list_limit_gate.py` above. The test owns the
+scan surface and its exclusions; like the `--limit 0` paragraph above, this prose deliberately does
+not restate them.
 
 ## 3. Build the current queue (dedup on stable IDs)
 

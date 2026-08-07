@@ -33,9 +33,17 @@ ticket §2b's query would otherwise see stranding, and adding it to §2b's `--ex
 be a pure no-op against the real query, which is exactly the "roster grows regardless of whether it
 does anything" shape `lode-ppki`'s design deliberately keeps narrow (see §2b's own "deliberately not
 the fuller set §1 might suggest" note). `test_epic_only_labels_are_still_live` below keeps this list
-itself from rotting the same way the roster it exempts from could.
+itself from rotting the same way the roster it exempts from could — though only against *deletion*
+of a label's call site; that an entry is still epic-only stays a prose claim, auditable from the
+site named in each value. (No `epic-`prefix shortcut: `epic-audit-gap` is a *ticket* label.)
 
 ## Scan surface and mechanics
+
+**Scope: labels stamped on an ALREADY-EXISTING ticket** — `bd update --add-label` and
+`bd label add`, the only two ways a pipeline *stage* is applied. `bd create --label=...`
+(`.claude/skills/epic-audit/SKILL.md`, `/sweep` §4's own digest issue) is deliberately NOT scanned:
+it applies category labels at birth (`epic-audit-gap`, `human`), none of which is a stage label, and
+sweeping them in would only force a second exemption list to green the gate again.
 
 Deliberately simpler than `test_bd_list_limit_gate.py`'s fence-aware scan: every `--add-label`/
 `bd label add` site found in this repo's history is either inside a fenced ```bash block or an
@@ -44,9 +52,9 @@ inline single-backtick span in prose describing that exact same invocation (e.g.
 never inside a comment or a sentence describing an unrelated command — so a plain regex over the raw
 file text finds every real site with no observed false positive, and adding fence/comment-awareness
 would cost real complexity for zero measured benefit on this corpus. If a future false positive shows
-up, add it to `NON_PIPELINE_LABELS` with a reason (mirroring `EPIC_ONLY_LABELS`'s shape) rather than
-narrowing the regex — see `test_bd_list_limit_gate.py`'s own docstring for why an explicit, reasoned
-skip beats a cleverer pattern.
+up, add a documented exemption dict alongside `EPIC_ONLY_LABELS` rather than narrowing the regex —
+see `test_bd_list_limit_gate.py`'s own docstring for why an explicit, reasoned skip beats a cleverer
+pattern.
 
 `ADD_LABEL_RE` matches `--add-label` (or `--add-label=`) followed by one or more `-`/alphanumeric
 label tokens, optionally wrapped in `<...>` and separated by `|` or `,` — the `<ready-for-code-review
@@ -61,13 +69,20 @@ the `bd label add <target> <label>` form (`.claude/skills/epic-audit/SKILL.md`,
 `_sweep_exclude_labels()` parses §2b's actual `--exclude-label` line out of `sweep/SKILL.md` rather
 than hand-copying the list into this test file a second time — the whole point of this gate is to
 catch that list falling behind reality, so the gate must compare against the REAL, currently-shipped
-roster, not a second copy of it that could itself drift unnoticed.
+roster, not a second copy of it that could itself drift unnoticed. It locates §2b's block with
+`conftest.bash_fence_blocks`/`only_block_with` (the repo's existing SKILL.md block locator, shared
+with `tests/test_sweep_stranded_age_filter.py` and friends), so only executed bash is parsed and a
+prose mention of `--exclude-label` cannot be picked up by mistake.
 """
 
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
+
+import pytest
+from conftest import bash_fence_blocks, only_block_with
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
@@ -110,17 +125,25 @@ EPIC_ONLY_LABELS: dict[str, str] = {
 }
 
 
+def _labels_in(text: str) -> set[str]:
+    """Every label applied by an `--add-label`/`bd label add` site in one file's text.
+
+    The unit tests below call this rather than re-inlining the extraction, so they exercise the
+    production path instead of a copy of it."""
+    found: set[str] = set()
+    for m in ADD_LABEL_RE.finditer(text):
+        found.update(re.split(r"[|,]\s*", m.group(1)))
+    for m in LABEL_ADD_CMD_RE.finditer(text):
+        found.add(m.group(1))
+    return found
+
+
 def _discover_add_label_sites() -> set[str]:
     """Every label this repo applies via `--add-label`/`bd label add`, across the scan surface."""
     found: set[str] = set()
     for base, pattern in SCAN_GLOBS:
         for path in sorted(base.glob(pattern)):
-            text = path.read_text(encoding="utf-8")
-            for m in ADD_LABEL_RE.finditer(text):
-                for token in re.split(r"[|,]\s*", m.group(1)):
-                    found.add(token)
-            for m in LABEL_ADD_CMD_RE.finditer(text):
-                found.add(m.group(1))
+            found |= _labels_in(path.read_text(encoding="utf-8"))
     return found
 
 
@@ -128,20 +151,24 @@ def _sweep_exclude_labels() -> set[str]:
     """The literal `--exclude-label` roster §2b's bash block passes to `bd list`, parsed straight
     from the shipped file -- see the module docstring's final section for why this must not be a
     second hand-copied list."""
-    text = SWEEP_SKILL.read_text(encoding="utf-8")
-    # §1's own `bd list --label land-escalated --exclude-label sweep-digest ...` (excluding only
-    # its own digest issue) is a DIFFERENT, single-label --exclude-label site earlier in this same
-    # file -- picking the match with the most comma-separated tokens is what selects §2b's roster
-    # rather than §1's, without hard-coding a line number that would silently go stale if the file
-    # is reordered.
-    matches = re.findall(r"--exclude-label\s+([\w,-]+)", text)
-    assert matches, (
-        "could not find any --exclude-label list in .claude/skills/sweep/SKILL.md -- did "
-        "the section move, get reworded, or lose its --exclude-label flag? Update this "
+    # §1 carries a DIFFERENT, single-label `--exclude-label sweep-digest` site in this same file,
+    # so the roster is located by §2b's own fenced block (the same locator, and the same marker
+    # strings, tests/test_sweep_stranded_age_filter.py uses) rather than by position or by picking
+    # the longest match. `only_block_with` asserts exactly one hit, so a structural change that
+    # makes this ambiguous fails loudly instead of pinning the wrong block.
+    block = only_block_with(
+        bash_fence_blocks(SWEEP_SKILL.read_text(encoding="utf-8")),
+        "STRANDED=$(bd list --status in_progress",
+        "--exclude-label",
+        what="Section 2b's stranded-ticket collection",
+    )
+    matches = re.findall(r"--exclude-label\s+([\w,-]+)", block)
+    assert len(matches) == 1, (
+        f"expected exactly one --exclude-label list in §2b's block, found {len(matches)} -- did "
+        "the block gain a second exclusion or lose its --exclude-label flag? Update this "
         "gate's parsing if the shape genuinely changed."
     )
-    roster = max(matches, key=lambda m: m.count(","))
-    return set(roster.split(","))
+    return set(matches[0].split(","))
 
 
 # =====================================================================================
@@ -150,38 +177,37 @@ def _sweep_exclude_labels() -> set[str]:
 
 
 def test_bare_add_label_matches() -> None:
-    assert ADD_LABEL_RE.search("bd update <id> --add-label needs-rebase")
-    assert {
-        tok
-        for m in ADD_LABEL_RE.finditer("bd update <id> --add-label needs-rebase")
-        for tok in re.split(r"[|,]\s*", m.group(1))
-    } == {"needs-rebase"}
+    assert _labels_in("bd update <id> --add-label needs-rebase") == {"needs-rebase"}
 
 
 def test_multi_label_placeholder_yields_both_names() -> None:
-    text = "bd update <id> --remove-label land-escalated --add-label <ready-for-code-review|needs-rebase>"
-    labels = {
-        tok
-        for m in ADD_LABEL_RE.finditer(text)
-        for tok in re.split(r"[|,]\s*", m.group(1))
-    }
-    assert labels == {"ready-for-code-review", "needs-rebase"}
+    # The `<a|b>` placeholder shape .claude/skills/land/SKILL.md uses for "pick one of these two".
+    text = (
+        "bd update <id> --remove-label land-escalated "
+        "--add-label <ready-for-code-review|needs-rebase>"
+    )
+    assert _labels_in(text) == {"ready-for-code-review", "needs-rebase"}
 
 
 def test_bd_label_add_command_form_matches() -> None:
-    assert {
-        m.group(1)
-        for m in LABEL_ADD_CMD_RE.finditer('bd label add "$PARENT" epic-ready-to-audit')
-    } == {"epic-ready-to-audit"}
+    assert _labels_in('bd label add "$PARENT" epic-ready-to-audit') == {
+        "epic-ready-to-audit"
+    }
 
 
 def test_comma_separated_labels_both_captured() -> None:
-    labels = {
-        tok
-        for m in ADD_LABEL_RE.finditer("bd update <id> --add-label foo,bar")
-        for tok in re.split(r"[|,]\s*", m.group(1))
-    }
-    assert labels == {"foo", "bar"}
+    assert _labels_in("bd update <id> --add-label foo,bar") == {"foo", "bar"}
+
+
+def test_bd_create_label_form_is_out_of_scope() -> None:
+    """`bd create --label=` applies category labels at birth, never a pipeline stage -- pinned so
+    the deliberate scope boundary in the module docstring is a fact, not a comment."""
+    assert (
+        _labels_in(
+            "bd create --type=task --no-inherit-labels --label=human,epic-audit-gap"
+        )
+        == set()
+    )
 
 
 # =====================================================================================
@@ -233,12 +259,21 @@ def test_every_pipeline_label_is_covered_by_sweep_2b_or_documented_epic_only() -
     )
 
 
-def test_sabotage_new_uncovered_label_is_flagged() -> None:
-    """Confirm the gate's own comparison actually fires on a genuinely new, uncovered label --
-    guards against a vacuous pass the same way test_bd_list_limit_gate.py's sabotage tests do,
-    without needing to edit a real shipped file to prove it (this gate's assertion is a pure set
-    difference, not a text scan of a specific site, so a synthetic input suffices)."""
-    covered = _sweep_exclude_labels() | set(EPIC_ONLY_LABELS)
-    discovered = covered | {"totally-new-pipeline-label"}
-    uncovered = discovered - covered
+def test_sabotage_new_uncovered_label_is_flagged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sabotage the DISCOVERY path, not just the arithmetic: point the scan surface at a synthetic
+    skill file that applies a brand-new label and confirm the gate's real comparison goes red.
+    Asserting the set difference over a hand-built `discovered` would prove only that Python
+    subtracts sets, leaving a silently non-matching regex to pass the gate vacuously."""
+    fake_skill = tmp_path / "fake" / "SKILL.md"
+    fake_skill.parent.mkdir()
+    fake_skill.write_text(
+        "bd update <id> --add-label totally-new-pipeline-label\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(sys.modules[__name__], "SCAN_GLOBS", [(tmp_path, "*/SKILL.md")])
+
+    uncovered = _discover_add_label_sites() - (
+        _sweep_exclude_labels() | set(EPIC_ONLY_LABELS)
+    )
     assert uncovered == {"totally-new-pipeline-label"}
