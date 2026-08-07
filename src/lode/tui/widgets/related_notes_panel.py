@@ -147,6 +147,30 @@ class RelatedNotesPanel(Static):
         #: a fresh instance per pass -- see :meth:`_ensure_embedder`.
         self._embedder: Embedder | None = None
 
+    def on_mount(self) -> None:
+        """Reserve this panel's full growth height up front (lode-35nu.10).
+
+        This widget composes into a ``Vertical`` alongside a ``1fr`` body
+        ``TextArea`` (``EditScreen``/``CaptureScreen``). ``Static``'s own
+        ``DEFAULT_CSS`` height is ``auto`` (``docs/tui.md``), and Textual
+        sizes ``auto`` siblings *before* handing the remainder to any ``1fr``
+        sibling — so every time a passive pass renders more related notes,
+        this panel's auto height grows *after* the ``TextArea`` has already
+        been laid out, stealing rows from it on the next layout pass and
+        displacing whatever line the edit cursor was resting on. The
+        related-notes list is asynchronous and non-user-initiated; it must
+        never move the ground under an active edit.
+
+        Fixing this panel's height to its maximum possible content — one
+        header line plus ``settings.related_notes_limit`` note lines — here,
+        at mount, before any pass has ever rendered a result, makes its
+        content growth invisible to layout: the panel's box never grows past
+        what was already reserved, so the ``TextArea``'s own space (and the
+        cursor's line within it) never moves, regardless of how many related
+        notes a later pass finds.
+        """
+        self.styles.height = self.app.settings.related_notes_limit + 1
+
     def _ensure_embedder(self) -> Embedder:
         """Return the shared query embedder, constructing the wrapper on first use.
 
