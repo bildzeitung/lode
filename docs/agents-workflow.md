@@ -2972,24 +2972,30 @@ assumption would not have closed it.
   calls. A pass that outran the window had its own lock reclaimed by the next tick, mid-merge — the
   dangerous direction, and why the original 1800s default was never reduced. `heartbeat` re-stamps the
   same record `acquire` wrote, with no atomicity contest of its own (overwriting is the point), from
-  **two** call sites chosen to be structurally periodic rather than dependent on a future editor adding
-  one per section: [Section 2a](../.claude/skills/land/SKILL.md#2a-re-validate-that-beads-and-git-havent-drifted)
-  (once per ticket, immediately before that ticket's `land-review` dispatch) and
+  **four** call sites chosen to be structurally periodic rather than dependent on a future editor adding
+  one per section: a boundary call right before Section 1a (lode-v4sv, fires once per pass, right after
+  Section 1's two networked calls and right before Section 1a's O(n²) work);
+  [Section 2a](../.claude/skills/land/SKILL.md#2a-re-validate-that-beads-and-git-havent-drifted)
+  (once per ticket, immediately before that ticket's `land-review` dispatch);
   `scripts/land-merge-one.sh` (on every invocation, covering both Section 3's first merge loop and its
-  isolation-replay copy from one call site). Both are pinned by tests the same way `acquire`/`release`
+  isolation-replay copy from one call site); and a second boundary call at the top of Section 4's main
+  block (lode-v4sv, fires once per pass, right after `git push origin trunk` and right before the
+  per-ticket `bd close` loop). All four are pinned by tests the same way `acquire`/`release`
   are (`tests/test_land_lock.py`, `tests/test_land_merge_one.py`) — a heartbeat call site that quietly
   stops firing is exactly as dangerous as the original inert lock, just slower to notice.
 
-  **Those two sites bracket the two loops, not the pass — "a heartbeat exists" is not "the pass is
-  covered".** Three stretches still run unheartbeated, and lode-m87j's own design note named only the
-  second: (1) `acquire` → the first Section-2a heartbeat, i.e. all of Section 1 (networked `bd dolt
-  pull` + `git fetch`) and Section 1a's O(n²) stacked-branch graph — the one gap that *grows* with
-  queue size; (2) Section 3's single combined re-gate, measured at ~60s on the 2026-07-28 dev machine
-  and so not the binding constraint; (3) the last heartbeat → `release`, i.e. that re-gate **plus all
-  of Section 4** — `git push origin trunk`, a `bd close` and an `epic-completion-check.sh` per landed
-  ticket, a networked `bd-dolt-push.sh`, the branch deletes and the worktree-GC sweep. (3) is the one
-  that matters: it is the ordinary green path, it scales with the number of landed tickets, and it is
-  the stretch during which `trunk` is being written.
+  **These four sites bracket the two loops plus the two boundary points, not literally every line of
+  the pass — "a heartbeat exists" is not "the pass is covered".** Before lode-v4sv, three stretches ran
+  unheartbeated; two of those (the two that *grew* with queue size) are now closed by the two boundary
+  call sites above, leaving **one**: Section 3's single combined re-gate, measured at ~60s on the
+  2026-07-28 dev machine, which runs exactly once per pass regardless of queue size and so is not the
+  binding constraint. Neither new boundary call site individually *bounds* the growing work it sits in
+  front of — each is a single interval, not itself re-fired inside Section 1a's O(n²) loop or inside
+  Section 4's own per-ticket loops (`bd close`, `epic-completion-check.sh`, the branch deletes) — what
+  it buys is isolating that growing work as the sole remaining contributor to its own stretch, rather
+  than summed with the adjacent networked/fixed-cost calls that used to share the same unheartbeated
+  span with it. `scripts/land-lock.sh`'s own header (CAVEAT 1) is the canonical, more detailed account;
+  this paragraph is a summary of it, not a second source of truth.
 
   **So the default stays at 1800s** (lode-m87j proposed 600s; the technical review reverted it). The
   heartbeat is the whole fix for "a long pass has its own lock reclaimed mid-merge", and at 1800s that
