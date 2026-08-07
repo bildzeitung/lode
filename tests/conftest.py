@@ -1512,6 +1512,27 @@ def bash_fence_blocks(markdown: str) -> list[str]:
     return blocks
 
 
+def only_block_with(blocks: list[str], *needles: str, what: str) -> str:
+    """The single block in ``blocks`` containing every needle -- asserts exactly
+    one (lode-pm37).
+
+    Asserts exactly one hit rather than taking ``next(..., None)``, which would
+    silently pin the first of several near-identical-looking blocks; each
+    caller's docstring names the live pair it would misfire on.
+
+    Takes ``blocks`` rather than a markdown path so it composes with either
+    caller's own ``_skill_blocks()`` (each closes over a different SKILL.md via
+    :func:`bash_fence_blocks`), instead of this function picking the file.
+    """
+    hits = [b for b in blocks if all(n in b for n in needles)]
+    assert len(hits) == 1, (
+        f"expected exactly 1 fenced block for {what}, found {len(hits)} -- this "
+        "test's assumption about SKILL.md's structure has drifted; re-check by "
+        "hand before adjusting the locator"
+    )
+    return hits[0]
+
+
 def _fenced_bash(markdown: str) -> str:
     """The ```bash fences only, concatenated into one string -- what an agent
     actually EXECUTES.
