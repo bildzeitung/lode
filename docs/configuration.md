@@ -124,6 +124,12 @@ Passages are regenerable, so re-chunking with new values is a cheap local rebuil
 
 Runs the same read pipeline as `lode ask` ([retrieval.md](retrieval.md)) minus the cross-encoder rerank stage (skipped for latency; the seam stays wired for Q&A), off the UI thread so it never blocks capture.
 
+## TUI — ask screen citation rendering (lode-35nu.3)
+
+| Knob | Kind | Default | Notes |
+|---|---|---|---|
+| Ask context chars (`ask_context_chars`) | runtime | `80` | Characters of a cited note/external's body shown before and after a citation's `quoted_span` when the ask screen groups citations by their cited note/external. Applies only to a citation whose identity resolved to a note/external (`lode-35nu.1`) — a citation whose target the store had nothing to resolve falls back to the flat, ungrouped rendering with no context. |
+
 ## Async work queue
 
 | Knob | Kind | Default | Notes |

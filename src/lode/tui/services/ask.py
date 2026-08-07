@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from lode.config import Settings, lance_dir
+from lode.faithfulness import locate_span, normalize_whitespace
 from lode.notes_read import first_line
 from lode.storage import init_db
 
@@ -101,13 +102,17 @@ class AskResult:
     its resolved :class:`CitationIdentity` (lode-35nu.1) -- absent, not
     ``None``, for a target the store had nothing to resolve, so a caller's
     ``.get(target_id)`` returning ``None`` means exactly "unresolvable",
-    same convention as ``as_of``. Both come from one batched pass
-    (:func:`_resolve_citations`).
+    same convention as ``as_of``. ``bodies`` maps the same ``target_id`` to
+    the cited version/snapshot's full body text, used only to render
+    surrounding context around a citation's ``quoted_span`` (lode-35nu.3);
+    same absent-means-unresolvable convention as ``identities``. All three
+    come from one batched pass (:func:`_resolve_citations`).
     """
 
     answer: CitedAnswer
     as_of: dict[str, str | None] = field(default_factory=dict)
     identities: dict[str, CitationIdentity] = field(default_factory=dict)
+    bodies: dict[str, str] = field(default_factory=dict)
 
 
 def run_ask(
@@ -159,33 +164,38 @@ def run_ask(
         )
         report(STAGE_GATE)
         supports = [support for claim in answer.claims for support in claim.support]
-        as_of, identities = _resolve_citations(conn, supports)
-        return AskResult(answer=answer, as_of=as_of, identities=identities)
+        as_of, identities, bodies = _resolve_citations(conn, supports)
+        return AskResult(
+            answer=answer, as_of=as_of, identities=identities, bodies=bodies
+        )
     finally:
         conn.close()
 
 
 def _resolve_citations(
     conn: sqlite3.Connection, supports: list[Support]
-) -> tuple[dict[str, str | None], dict[str, CitationIdentity]]:
-    """Resolve as-of provenance and identity for every cited target, batched (lode-35nu.1).
+) -> tuple[dict[str, str | None], dict[str, CitationIdentity], dict[str, str]]:
+    """Resolve as-of provenance, identity, and body for every cited target, batched (lode-35nu.1).
 
     Two queries total -- one ``IN (...)`` over every distinct cited
     ``version_id``, one over every distinct cited ``snapshot_id`` -- so a
     multi-claim answer costs a fixed two round-trips regardless of citation
     count (the ticket's "a single batched query" acceptance line). The as-of
-    stamp rides along on the same rows the identity comes from (a note version
-    is stamped at write time, ``versions.created``; an external snapshot at
-    fetch time, ``snapshots.fetched_at``), so it costs no extra query.
+    stamp and the full body both ride along on the same rows the identity
+    comes from (a note version is stamped at write time, ``versions.created``;
+    an external snapshot at fetch time, ``snapshots.fetched_at``), so neither
+    costs an extra query. The body is kept only so the ask screen can render
+    surrounding context around a citation's ``quoted_span`` (lode-35nu.3).
 
-    Returns ``(as_of, identities)``, both keyed by
+    Returns ``(as_of, identities, bodies)``, all keyed by
     :attr:`~lode.answer.Support.target_id`. Every cited target is a key in
     ``as_of``, mapping to ``None`` when the store had nothing to resolve; such
-    a target is simply absent from ``identities``. Unresolvable is practically
-    unreachable -- the faithfulness gate already verified the span against the
-    stored body -- but handled rather than assumed away.
+    a target is simply absent from ``identities`` and ``bodies``. Unresolvable
+    is practically unreachable -- the faithfulness gate already verified the
+    span against the stored body -- but handled rather than assumed away.
     """
     identities: dict[str, CitationIdentity] = {}
+    bodies: dict[str, str] = {}
     as_of: dict[str, str | None] = {}
 
     version_ids = tuple({s.version_id for s in supports if s.version_id is not None})
@@ -203,6 +213,7 @@ def _resolve_citations(
                 is_head=version_id == head_version_id,
                 note_id=note_id,
             )
+            bodies[version_id] = body
             as_of[version_id] = created
 
     snapshot_ids = tuple({s.snapshot_id for s in supports if s.snapshot_id is not None})
@@ -221,34 +232,54 @@ def _resolve_citations(
                 is_head=snapshot_id == head_snapshot_id,
                 external_id=external_id,
             )
+            bodies[snapshot_id] = body
             as_of[snapshot_id] = fetched_at
 
     for support in supports:
         as_of.setdefault(support.target_id, None)
-    return as_of, identities
+    return as_of, identities, bodies
 
 
-def render_ask_result(result: AskResult) -> str:
+#: Wraps a citation's matched body text inside its surrounding-context
+#: line so it stands out in plain text -- ``LodeStatic`` renders with
+#: ``markup=False`` (the module docstring explains why), so this can't lean
+#: on Rich markup for emphasis.
+_HIGHLIGHT_OPEN = "»"
+_HIGHLIGHT_CLOSE = "«"
+
+#: Prefix/suffix marking that a context window was truncated against the
+#: full body (i.e. the window doesn't start/end at the body's own edge).
+_ELLIPSIS = "…"
+
+
+def render_ask_result(result: AskResult, *, context_chars: int) -> str:
     """Render a gated ask result as the screen's display text.
 
-    Each surviving claim prints its text followed by one indented citation
-    line per support -- its version/snapshot id, its resolved as-of
-    provenance, and the verbatim span. When the answer abstained (no claim
-    survived the gate), the honest abstention line prints instead. Either
-    way, any no_egress material that matched surfaces under an explicit
-    "withheld" heading rather than being silently dropped.
+    Citations whose target resolved to a note/external identity
+    (lode-35nu.1) are grouped by that note/external (lode-35nu.3): each cited
+    note/external prints once, its title as a header, with the claims that
+    cite it nested underneath and each citation shown as surrounding body
+    context with the verbatim ``quoted_span`` highlighted
+    (``context_chars`` either side -- :func:`_render_context`). A citation
+    whose target the store had nothing to resolve (practically unreachable --
+    the faithfulness gate already verified the span -- but handled rather
+    than assumed away) falls back to the old flat rendering: the claim text
+    followed by an indented ``[<id-kind> <id>, as of <ts>] "<span>"`` line,
+    with no grouping and no context (there is no body to pull context from).
+
+    When the answer abstained (no claim survived the gate), the honest
+    abstention line prints instead. Either way, any no_egress material that
+    matched surfaces under an explicit "withheld" heading rather than being
+    silently dropped -- unchanged by the grouping above (ticket acceptance:
+    "withheld citations and the abstention line keep their current explicit
+    treatment").
     """
     lines: list[str] = []
     answer = result.answer
     if answer.abstained:
         lines.append(ABSTAIN_LINE)
     else:
-        for claim in answer.claims:
-            lines.append(claim.text)
-            for support in claim.support:
-                lines.append(
-                    _render_citation(support, result.as_of.get(support.target_id))
-                )
+        lines.extend(_render_claims(result, context_chars))
     if answer.withheld_citations:
         lines.append("")
         lines.append("Withheld from cloud synthesis (present locally):")
@@ -257,11 +288,137 @@ def render_ask_result(result: AskResult) -> str:
     return "\n".join(lines)
 
 
+def _render_claims(result: AskResult, context_chars: int) -> list[str]:
+    """Group every surviving claim's citations by cited note/external.
+
+    Returns the grouped section (one block per distinct note/external, in
+    first-cited order) followed by the flat fallback section (unresolvable
+    citations, in original claim order) -- see :func:`render_ask_result`.
+    """
+    # Both dicts rely on insertion order for "first-cited order" -- no separate
+    # ordering list. A claim is identified by its index into
+    # ``result.answer.claims``, so its text is looked up at render time rather
+    # than copied into every group that cites it.
+    titles: dict[tuple[str, str], str] = {}
+    grouped: dict[tuple[str, str], dict[int, list[str]]] = {}
+    flat: list[tuple[str, str]] = []  # (claim text, rendered citation line)
+
+    for claim_idx, claim in enumerate(result.answer.claims):
+        for support in claim.support:
+            identity = result.identities.get(support.target_id)
+            if identity is None or (group_key := _group_key(identity)) is None:
+                flat.append(
+                    (
+                        claim.text,
+                        _render_citation(support, result.as_of.get(support.target_id)),
+                    )
+                )
+                continue
+            titles.setdefault(group_key, identity.title)
+            citations = grouped.setdefault(group_key, {}).setdefault(claim_idx, [])
+            citations.append(
+                _render_grouped_citation(
+                    support,
+                    result.as_of.get(support.target_id),
+                    result.bodies.get(support.target_id),
+                    context_chars,
+                )
+            )
+
+    lines: list[str] = []
+    for group_key, claims in grouped.items():
+        lines.append(titles[group_key])
+        for claim_idx, citation_lines in claims.items():
+            lines.append(f"  {result.answer.claims[claim_idx].text}")
+            lines.extend(f"    {line}" for line in citation_lines)
+    if flat:
+        if lines:
+            lines.append("")
+        for claim_text, citation_line in flat:
+            lines.append(claim_text)
+            lines.append(citation_line)
+    return lines
+
+
+def _group_key(identity: CitationIdentity) -> tuple[str, str] | None:
+    """The note/external this citation groups under, or ``None`` if unresolvable."""
+    if identity.note_id is not None:
+        return ("note", identity.note_id)
+    if identity.external_id is not None:
+        return ("external", identity.external_id)
+    return None
+
+
 def _render_citation(support: Support, as_of: str | None) -> str:
-    """Render one support as an indented ``[<id-kind> <id>, as of <ts>] "<span>"`` line."""
+    """Render one support as an indented ``[<id-kind> <id>, as of <ts>] "<span>"`` line.
+
+    The flat fallback for a citation whose target didn't resolve to an
+    identity -- no body to pull surrounding context from, so this renders
+    the bare span exactly as before grouping existed.
+    """
+    provenance = _provenance(support, as_of)
+    return f'  [{provenance}]  "{support.quoted_span}"'
+
+
+def _render_grouped_citation(
+    support: Support, as_of: str | None, body: str | None, context_chars: int
+) -> str:
+    """Render one support nested under its note/external group's header.
+
+    Same ``[<id-kind> <id>, as of <ts>]`` provenance prefix as the flat
+    fallback, followed by the citation's surrounding context with its
+    ``quoted_span`` highlighted rather than the bare span alone.
+    """
+    provenance = _provenance(support, as_of)
+    context = _render_context(body, support.quoted_span, context_chars)
+    return f"[{provenance}]  {context}"
+
+
+def _provenance(support: Support, as_of: str | None) -> str:
     if support.version_id is not None:
         target = f"version {support.version_id}"
     else:
         target = f"snapshot {support.snapshot_id}"
-    provenance = f"{target}, as of {as_of}" if as_of else f"{target}, as of unknown"
-    return f'  [{provenance}]  "{support.quoted_span}"'
+    return f"{target}, as of {as_of}" if as_of else f"{target}, as of unknown"
+
+
+def _render_context(body: str | None, span: str, context_chars: int) -> str:
+    """Surrounding text around ``span`` inside ``body``, with ``span`` highlighted.
+
+    ``context_chars`` characters of ``body`` on either side of the span,
+    all collapsed to single-line whitespace (a note body is often multi-line;
+    the citation is one display line). The highlighted text is the body's own
+    matched region -- not the span string as the model wrote it -- wrapped in
+    :data:`_HIGHLIGHT_OPEN`/:data:`_HIGHLIGHT_CLOSE`, so the highlight is
+    always contiguous with the context around it. An ellipsis marks a side
+    truncated against the body's own edge.
+
+    The span is located with :func:`~lode.faithfulness.locate_span` -- the same
+    primitive the faithfulness gate's own ``span_occurs`` is derived from, so
+    this renderer can never be stricter than the gate that let the citation
+    through. (An exact-substring-only search here would be: the gate accepts a
+    span matching only after whitespace normalization, and a quote reflowed off
+    a multi-line body is the common case, so context would silently vanish for
+    a whole class of gate-passing citation.) Only the *first* occurrence is
+    located -- a ``Support`` carries no offset into its target, so a span
+    occurring twice is genuinely ambiguous here (lode-hruz tracks threading the
+    offset through). Falls back to the bare quoted span (no context) only when
+    there's no body to draw from or the span doesn't locate at all.
+    """
+    if body is None:
+        return f'"{span}"'
+    located = locate_span(span, body)
+    if located is None:
+        return f'"{span}"'
+    start, end = located
+    before = normalize_whitespace(body[max(0, start - context_chars) : start])
+    after = normalize_whitespace(body[end : end + context_chars])
+    highlighted = normalize_whitespace(body[start:end])
+    prefix = _ELLIPSIS if start - context_chars > 0 else ""
+    suffix = _ELLIPSIS if end + context_chars < len(body) else ""
+    parts = [
+        f"{prefix}{before}" if before else "",
+        f"{_HIGHLIGHT_OPEN}{highlighted}{_HIGHLIGHT_CLOSE}",
+        f"{after}{suffix}" if after else "",
+    ]
+    return " ".join(p for p in parts if p)

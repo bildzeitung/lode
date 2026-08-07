@@ -31,6 +31,7 @@ from lode.faithfulness import (
     claim_entailed,
     claim_extractively_coupled,
     claim_spans_verified,
+    locate_span,
     normalize_whitespace,
     span_occurs,
     support_verified,
@@ -57,6 +58,28 @@ def test_whitespace_only_difference_is_accepted() -> None:
 def test_non_whitespace_difference_is_rejected() -> None:
     # Differs by a real character, not just whitespace -- must not match.
     assert not span_occurs("rerank OFFF", BODY)
+
+
+def test_locate_span_returns_offsets_into_the_body_as_given() -> None:
+    """``locate_span`` is the primitive ``span_occurs`` is derived from; the ask
+    screen renders surrounding context from these offsets, so they must index the
+    body as given, never a whitespace-normalized copy."""
+    start, end = locate_span("rerank OFF", BODY)
+    assert BODY[start:end] == "rerank OFF"
+
+
+def test_locate_span_offsets_span_the_reflowed_region_of_the_body() -> None:
+    body = "lead in\nrerank\t OFF\ntrailing"
+    start, end = locate_span("rerank OFF", body)
+    # Offsets bracket the body's own (differently whitespaced) text, so the
+    # surrounding context either side stays contiguous with the highlight.
+    assert body[start:end] == "rerank\t OFF"
+    assert body[:start] == "lead in\n"
+    assert body[end:] == "\ntrailing"
+
+
+def test_locate_span_returns_none_for_an_absent_span() -> None:
+    assert locate_span("rerank ON by default", BODY) is None
 
 
 def test_normalize_whitespace_collapses_and_strips() -> None:

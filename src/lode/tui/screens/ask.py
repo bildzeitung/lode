@@ -137,7 +137,10 @@ class AskScreen(Screen[None]):
             self.app.call_from_thread(self._finish, generation, _PLACEHOLDER)
             self.app.call_from_thread(self.notify, str(err), severity="error")
             return
-        self.app.call_from_thread(self._finish, generation, render_ask_result(result))
+        rendered = render_ask_result(
+            result, context_chars=app.settings.ask_context_chars
+        )
+        self.app.call_from_thread(self._finish, generation, rendered)
 
     def _start_spinner(self) -> None:
         """Begin the animated in-flight indicator. Main thread only.
