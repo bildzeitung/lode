@@ -157,6 +157,25 @@ def test_coupling_is_case_insensitive() -> None:
     assert _coupled("RERANK OFF", "rerank off in the skeleton")
 
 
+def test_compound_identifier_fragment_couples_known_fail_open_exposure() -> None:
+    """Known, explicitly accepted exposure (lode-1qxy, docs/retrieval.md): ``_WORD``
+    splits hyphenated compounds, so a span's compound identifier contributes bare
+    fragments to the accepting set -- a claim naming only a fragment of the span's
+    compound still couples. This is the fail-*open* direction (a spurious coupling
+    HIT returns True and bypasses NLI), not the harmless miss direction.
+
+    This test is a canary, not a specification: it pins *today's* accepted
+    behavior. If ``_WORD`` is ever tightened -- here or as a side effect of
+    unrelated tokenizer work -- this test will fail and must be updated
+    deliberately, alongside the docs/retrieval.md decision note, not silently.
+    """
+    # The span's "maxmemory-policy" splits into a bare "policy" token, which
+    # spuriously supplies the claim's payload.
+    assert _coupled("the policy is allkeys-lru", "maxmemory-policy allkeys-lru")
+    # Same mechanism: the claim names only the "DNS" fragment of the span's "DNS-01".
+    assert _coupled("the check uses DNS", "the check uses DNS-01 validation")
+
+
 # --- Step 3: NLI entailment ------------------------------------------------
 
 
