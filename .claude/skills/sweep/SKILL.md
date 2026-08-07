@@ -210,57 +210,43 @@ status, before the loop ever starts, is what actually surfaces the failure.
 
 `--limit 0` for the same reason as §1 — same `$CURRENT`, same wholesale §6 rewrite.
 
-## 2a. Collect deferred tickets (report-only — never touches the digest or notify path)
+## Report-only sections (§2a, §2b) — shared contract
 
-A third, independent read, on its own track. `deferred`-status tickets are explicitly parked "deal
-with later" by a human — the opposite of a fresh human-decision item — but `bd ready` hides them by
-design and no other loop leg lists them, so once parked they otherwise vanish from every workflow
-surface. I list them for visibility only:
+§2a (`deferred` tickets) and §2b (stranded `in_progress` tickets) are two independent reads, each on
+its own track, that share one contract — stated once here rather than twice below. Each section
+keeps only its own query, its own persistence target, and its own section-specific reasoning.
 
-```bash
-SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
-
-set -o pipefail   # REQUIRED, not hygiene -- see the sentinel note below.
-
-# On a query error (bd or jq), overwrite the capture -- which may be partial or garbled -- with
-# the sentinel. §8 tells that apart from both a missing file and a legitimately empty one.
-if ! DEFERRED=$(bd list --status deferred --limit 0 --json \
-  | jq -r '(. // []) | .[] | [.id, .title] | @tsv'); then
-  DEFERRED="SWEEP-QUERY-ERROR"
-fi
-printf '%s' "$DEFERRED" > "$SWEEP_TMP/deferred"
-```
-
-Persisted to `$SWEEP_TMP/deferred` the same way §1 persists `$ESCALATED`/`$HUMAN` — §8 (a later,
-separate Bash invocation) reads it back from disk rather than relying on the model's in-context
-memory of this block's output, which is not the mechanism §0 says this file uses.
-
-**The sentinel, and why it can't collide with a real row.** `$SWEEP_TMP/deferred` now has three
-readable states: *missing* (this whole block never ran this pass — e.g. it crashed before reaching
-the `printf`), *the literal string `SWEEP-QUERY-ERROR`* (the query itself — `bd` or `jq` — errored,
+**The sentinel, and why it can't collide with a real row.** Each section persists its result to its
+own `$SWEEP_TMP` file (`$SWEEP_TMP/deferred` for §2a, `$SWEEP_TMP/stranded` for §2b) the same way §1
+persists `$ESCALATED`/`$HUMAN` — §8 (a later, separate Bash invocation) reads it back from disk
+rather than relying on the model's in-context memory of the block's output, which is not the
+mechanism §0 says this file uses. On a query error (`bd` or `jq`), the block overwrites the
+capture — which may be partial or garbled — with the literal string `SWEEP-QUERY-ERROR` instead of
+letting the pass abort. That gives each file three readable states: *missing* (the block never ran
+this pass — e.g. it crashed before reaching the `printf`), *the sentinel* (the query itself errored,
 detected on the assignment itself, so the failure replaces the capture before it can be written out
 as data), and *anything else* (the query succeeded — zero or more real `@tsv` rows, each of which
 always contains a tab). The sentinel is a single line with **no tab**, which is structurally
 impossible for a real row to produce (every row is `<id>\t<title>` via `@tsv`) — so this isn't a
 string-luck collision avoidance, it's a format invariant. §8 checks for the sentinel by exact match
-before treating the file's content as data.
+before treating a file's content as data.
 
-**`set -o pipefail` is what makes the failure detectable at all** — it is the load-bearing line, not
-hygiene. Without it, `DEFERRED=$(bd … | jq …)` carries the exit status of the *last* command in the
-pipeline, `jq` alone, and a failing `bd` never reaches it: measured on bd 1.1.0, a failed
-`bd list --limit 0 --json` writes its diagnostic to **stderr** and **zero bytes to stdout**, so `jq`
-reads no input, emits nothing, and exits `0`. The assignment reports success and the sentinel branch
-never fires — the phantom-empty read this section exists to prevent, reintroduced one layer down.
-It is set inside the block, so it is scoped to this Bash invocation (§0: each block is a fresh
-shell). §1 and §2 above carry the identical `pipefail` guard, at the higher-consequence site (they
-gate the §6 digest rewrite) — via a shared `source_query_failed`
+**`set -o pipefail` is what makes the failure detectable at all** — it is the load-bearing line in
+each section's block, not hygiene. Without it, `VAR=$(bd … | jq …)` carries the exit status of the
+*last* command in the pipeline, `jq` alone, and a failing `bd` never reaches it: measured on bd
+1.1.0, a failed `bd list --limit 0 --json` writes its diagnostic to **stderr** and **zero bytes to
+stdout**, so `jq` reads no input, emits nothing, and exits `0`. The assignment reports success and
+the sentinel branch never fires — the phantom-empty read this section exists to prevent,
+reintroduced one layer down. It is set inside each block, so it is scoped to that Bash invocation
+(§0: each block is a fresh shell). §1 and §2 above carry the identical `pipefail` guard, at the
+higher-consequence site (they gate the §6 digest rewrite) — via a shared `source_query_failed`
 marker file rather than this section's `SWEEP-QUERY-ERROR` sentinel, since their consumer (§5) needs
 "skip the rewrite", not "render as errored in a report line" (lode-5qbi).
 
 Same `(. // [])` null-empty guard as §1/§2 — and the same `@tsv` as §2, which escapes a tab or
 newline embedded in a title instead of letting it break the row.
 
-**`--limit 0` — same reason as §1.** The stake specific to this section: it promises the deferred list
+**`--limit 0` — same reason as §1.** The stake specific to these sections: each promises its list
 "in full, with no dedup" every pass, so a capped query would under-report past 50 while the §8 count
 still read as the true total. (`lode-2gun` extended the same pin to `/land`, `/code`, `/epic-audit`,
 `/release` and to `scripts/epic-children-closed.sh`, called from §2 above; `lode-9bbq` added
@@ -271,23 +257,48 @@ literal `bd list` search. **But the roster is no longer what enforces this** —
 this list to stay current by itself. That test owns the scan surface and the exclusions; this
 paragraph is documentation for a human reader, and deliberately does not restate them.)
 
-**Deliberately excluded from everything else in this skill:**
+**Deliberately excluded from everything else in this skill.** Neither `$DEFERRED` (§2a) nor
+`$STRANDED` (§2b) ever feeds `$CURRENT` (§3) — neither may enter `$CURRENT_IDS`/`$NEW_IDS` (§5),
+drive the digest rewrite/no-op decision, or trigger the §7 `PushNotification`. Neither is ever
+written into the digest body (§6), and neither carries **dedup state** of its own — each is
+recomputed fresh, in full, every pass, straight into the §8 report. (What a ticket entering or
+leaving each list *means* differs by section — see each section's own note below.)
 
-- `$DEFERRED` never feeds `$CURRENT` (§3) — it must never enter `$CURRENT_IDS`/`$NEW_IDS` (§5),
-  never drive the digest rewrite/no-op decision, and never trigger the §7 `PushNotification`. A
-  ticket moving into (or out of) `deferred` is not a new human-decision item.
-- `$DEFERRED` is never written into the digest body (§6) and carries **no dedup state** of its
-  own — it is recomputed fresh, in full, every pass, straight into the §8 report.
+If either section's query errors, the failure is isolated to that step alone: the block writes the
+sentinel instead of aborting, and the pass continues. §8 owns what that renders as — see its
+three-state rule, and [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
+
+## 2a. Collect deferred tickets (report-only — never touches the digest or notify path)
+
+A third, independent read, on its own track. `deferred`-status tickets are explicitly parked "deal
+with later" by a human — the opposite of a fresh human-decision item — but `bd ready` hides them by
+design and no other loop leg lists them, so once parked they otherwise vanish from every workflow
+surface. I list them for visibility only:
+
+```bash
+SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
+
+set -o pipefail   # REQUIRED, not hygiene -- see the shared report-only contract above.
+
+# On a query error (bd or jq), overwrite the capture -- which may be partial or garbled -- with
+# the sentinel. §8 tells that apart from both a missing file and a legitimately empty one.
+if ! DEFERRED=$(bd list --status deferred --limit 0 --json \
+  | jq -r '(. // []) | .[] | [.id, .title] | @tsv'); then
+  DEFERRED="SWEEP-QUERY-ERROR"
+fi
+printf '%s' "$DEFERRED" > "$SWEEP_TMP/deferred"
+```
+
+The persistence/sentinel convention, the `(. // [])`/`@tsv` guards, the `--limit 0` stake, and what
+this section is deliberately excluded from are all stated once, for both this section and §2b, in
+[Report-only sections (§2a, §2b) — shared contract](#report-only-sections-2a-2b--shared-contract)
+just above. A ticket moving into (or out of) `deferred` is not a new human-decision item.
 
 **The one deliberate overlap:** a ticket that is simultaneously `land-escalated` (§1) and `deferred`
 is listed here (unconditionally, unannotated) *and*, on the pass it first appears, also in §7/§8's
 `NEW HUMAN-DECISION ITEMS` block (there, annotated `(deferred)`) — decided, not a gap (lode-o7ai,
 [docs/decisions.md](../../../docs/decisions.md)). This section's own listing is unaffected either
 way — it stays exactly what it always was, every current `deferred` ticket, in full.
-
-If this query itself errors, the failure is isolated to this step alone: the block writes the
-sentinel instead of aborting, and the pass continues. §8 owns what that renders as — see its
-three-state rule, and [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
 
 ## 2b. Collect stranded in_progress tickets (report-only — never touches the digest or notify path)
 
@@ -331,17 +342,11 @@ fi
 printf '%s' "$STRANDED" > "$SWEEP_TMP/stranded"
 ```
 
-Persisted to `$SWEEP_TMP/stranded` the same way §2a persists `$DEFERRED` — §8 (a later, separate
-Bash invocation) reads it back from disk rather than relying on the model's in-context memory of
-this block's output, which is not the mechanism §0 says this file uses. Same three-state sentinel
-convention as §2a, applied identically: missing file, `SWEEP-QUERY-ERROR`, or real content.
-
-Same `(. // [])` null-empty guard as §1/§2/§2a, and the same `@tsv` as §2/§2a, which escapes a tab
-or newline embedded in a title instead of letting it break the row.
-
-**`--limit 0` — same reason as §1.** The stake specific to this section: it promises the stranded
-list "in full, with no dedup" every pass, so a capped query would under-report past 50 while the §8
-count still read as the true total.
+The persistence/sentinel convention, the `(. // [])`/`@tsv` guards, the `--limit 0` stake, and what
+this section is deliberately excluded from are all stated once, for both this section and §2a, in
+[Report-only sections (§2a, §2b) — shared contract](#report-only-sections-2a-2b--shared-contract)
+above. A ticket becoming (or ceasing to be) stranded is not a new human-decision item — it is
+surfaced so a human notices it, not resolved by this skill.
 
 **The exclude-label list — deliberately not the fuller set §1 might suggest.**
 `ready-for-code-review`, `ready-for-land`, and `needs-rebase` exclude live mid-pipeline work — those
@@ -363,18 +368,13 @@ reader would expect to see beside it, `human`, which deliberately is not. Each f
   ticket will actually be seen. Full rationale, and why this diverges from lode-o7ai's decided §1 x
   §2a overlap: lode-ppki in [docs/decisions.md](../../../docs/decisions.md).
 
-**Deliberately excluded from everything else in this skill:**
-
-- `$STRANDED` never feeds `$CURRENT` (§3) — it must never enter `$CURRENT_IDS`/`$NEW_IDS` (§5),
-  never drive the digest rewrite/no-op decision, and never trigger the §7 `PushNotification`. A
-  ticket becoming (or ceasing to be) stranded is not a new human-decision item — it is surfaced so a
-  human notices it, not resolved by this skill.
-- `$STRANDED` is never written into the digest body (§6) and carries **no dedup state** of its
-  own — it is recomputed fresh, in full, every pass, straight into the §8 report.
-
-If this query itself errors, the failure is isolated to this step alone, exactly as in §2a: the
-block writes the sentinel instead of aborting, and §8 owns what that renders as. See
-[Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
+**This roster is enforced by a gate test, not by staying current on its own** (decided `lode-mm73`,
+[docs/decisions.md](../../../docs/decisions.md)). `tests/test_sweep_pipeline_label_roster_gate.py`
+scans every `--add-label`/`bd label add` site across `.claude/skills/*/SKILL.md` and
+`.claude/agents/*.md` and fails on a label applied to a ticket (not an epic) that this exclude-label
+list doesn't cover — the same shape as `tests/test_bd_list_limit_gate.py` above. The test owns the
+scan surface and its exclusions; like the `--limit 0` paragraph above, this prose deliberately does
+not restate them.
 
 ## 3. Build the current queue (dedup on stable IDs)
 

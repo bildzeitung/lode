@@ -1,0 +1,279 @@
+"""Gate: `/sweep` §2b's `--exclude-label` roster covers every pipeline-stage label this repo
+applies to a ticket (lode-mm73 item 1; discovered while technically reviewing lode-ppki).
+
+## The bug this closes
+
+`.claude/skills/sweep/SKILL.md` §2b's `--exclude-label` list
+(`ready-for-code-review,ready-for-land,needs-rebase,sweep-digest,land-escalated`) is the only place
+in the repo that must enumerate ALL pipeline stage labels — every other call site names exactly one
+(`.claude/skills/code/SKILL.md`, `.claude/skills/land/SKILL.md`,
+`.claude/skills/epic-audit/SKILL.md`, `/sweep` §1/§2). It is therefore the only site that rots
+silently when a new stage label is introduced: a ticket carrying that new label, while still
+`in_progress`, would start reading as stranded, with no test failure and no grep that finds it.
+
+The repo has already answered this exact class of problem twice: `lode-jhry` deleted a gate roster
+from `agents-workflow.md` as the staleness anti-pattern, and `lode-200t` added
+`tests/test_bd_list_limit_gate.py` precisely because a documented roster "is no longer what enforces
+this". This gate applies the same remedy here: it FAILS when it finds a `--add-label`/`bd label add`
+site anywhere in `.claude/skills/*/SKILL.md` or `.claude/agents/*.md` applying a label §2b's roster
+does not cover — unless that label is documented in `EPIC_ONLY_LABELS` below as one that can never
+reach §2b's query in the first place. DECIDED shape: `docs/decisions.md`, entry "`/sweep` §2b ...
+hand-maintained pipeline-label roster is enforced by a GATE TEST".
+
+## Why `EPIC_ONLY_LABELS` is a legitimate exemption, not a second hand-maintained roster
+
+§2b's query is `bd list --status in_progress ...` — it can only ever surface a ticket sitting in
+`status=in_progress`. `epic-debated` (`.claude/skills/challenge/SKILL.md`), `epic-ready-to-audit`
+(`.claude/skills/land/SKILL.md`), and `epic-audited` (`.claude/skills/epic-audit/SKILL.md`) are
+stamped exclusively onto `type: epic` issues, which this repo's own epic lifecycle keeps at
+`status: open` throughout labeling (see `.claude/skills/epic-audit/SKILL.md`'s auditable-epic
+definition: `issue_type == "epic" and status != "closed"`, never `in_progress`) — an epic never
+transitions through `in_progress` the way a task/bug ticket does. So a label here can never make a
+ticket §2b's query would otherwise see stranding, and adding it to §2b's `--exclude-label` list would
+be a pure no-op against the real query, which is exactly the "roster grows regardless of whether it
+does anything" shape `lode-ppki`'s design deliberately keeps narrow (see §2b's own "deliberately not
+the fuller set §1 might suggest" note). `test_epic_only_labels_are_still_live` below keeps this list
+itself from rotting the same way the roster it exempts from could — though only against *deletion*
+of a label's call site; that an entry is still epic-only stays a prose claim, auditable from the
+site named in each value. (No `epic-`prefix shortcut: `epic-audit-gap` is a *ticket* label.)
+
+## Scan surface and mechanics
+
+**Scope: labels stamped on an ALREADY-EXISTING ticket** — `bd update --add-label` and
+`bd label add`, the only two ways a pipeline *stage* is applied. `bd create --label=...`
+(`.claude/skills/epic-audit/SKILL.md`, `/sweep` §4's own digest issue) is deliberately NOT scanned:
+it applies category labels at birth (`epic-audit-gap`, `human`), none of which is a stage label, and
+sweeping them in would only force a second exemption list to green the gate again.
+
+Deliberately simpler than `test_bd_list_limit_gate.py`'s fence-aware scan: every `--add-label`/
+`bd label add` site found in this repo's history is either inside a fenced ```bash block or an
+inline single-backtick span in prose describing that exact same invocation (e.g.
+`.claude/skills/challenge/SKILL.md`'s "I stamp it: `bd update <epic-id> --add-label epic-debated`"),
+never inside a comment or a sentence describing an unrelated command — so a plain regex over the raw
+file text finds every real site with no observed false positive, and adding fence/comment-awareness
+would cost real complexity for zero measured benefit on this corpus. If a future false positive shows
+up, add a documented exemption dict alongside `EPIC_ONLY_LABELS` rather than narrowing the regex —
+see `test_bd_list_limit_gate.py`'s own docstring for why an explicit, reasoned skip beats a cleverer
+pattern.
+
+`ADD_LABEL_RE` matches `--add-label` (or `--add-label=`) followed by one or more `-`/alphanumeric
+label tokens, optionally wrapped in `<...>` and separated by `|` or `,` — the `<ready-for-code-review
+|needs-rebase>` placeholder shape `.claude/skills/land/SKILL.md:2097` uses for "pick one of these two"
+prose parses to both underlying names, not the literal placeholder text. `LABEL_ADD_CMD_RE` matches
+the `bd label add <target> <label>` form (`.claude/skills/epic-audit/SKILL.md`,
+`.claude/skills/land/SKILL.md`'s epic-completion loop) — a different bd subcommand than
+`bd update --add-label`, used for a single ID instead of a variable ticket in a shared loop.
+
+## The exclude-label roster is read from the shipped file, not re-typed here
+
+`_sweep_exclude_labels()` parses §2b's actual `--exclude-label` line out of `sweep/SKILL.md` rather
+than hand-copying the list into this test file a second time — the whole point of this gate is to
+catch that list falling behind reality, so the gate must compare against the REAL, currently-shipped
+roster, not a second copy of it that could itself drift unnoticed. It locates §2b's block with
+`conftest.bash_fence_blocks`/`only_block_with` (the repo's existing SKILL.md block locator, shared
+with `tests/test_sweep_stranded_age_filter.py` and friends), so only executed bash is parsed and a
+prose mention of `--exclude-label` cannot be picked up by mistake.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+import pytest
+from conftest import bash_fence_blocks, only_block_with
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
+AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
+SWEEP_SKILL = SKILLS_DIR / "sweep" / "SKILL.md"
+
+# Same scan surface as test_bd_list_limit_gate.py's MD_GLOBS: skills a Claude Code agent executes
+# bash out of, and subagent definitions (.claude/agents/*.md), which carry just as many operative
+# `bd update`/`bd label add` invocations as a SKILL.md.
+SCAN_GLOBS = [(SKILLS_DIR, "*/SKILL.md"), (AGENTS_DIR, "*.md")]
+
+_LABEL_TOKEN = r"[A-Za-z][A-Za-z0-9-]*"
+
+# `--add-label foo`, `--add-label=foo`, `--add-label foo,bar`, or the placeholder
+# `--add-label <foo|bar>` shape -- see the module docstring for why each is real.
+ADD_LABEL_RE = re.compile(
+    rf"--add-label[= ]+<?({_LABEL_TOKEN}(?:[|,]\s*{_LABEL_TOKEN})*)>?"
+)
+
+# `bd label add <target> <label>` -- a different bd subcommand than `bd update --add-label`.
+LABEL_ADD_CMD_RE = re.compile(rf"\bbd label add\s+\S+\s+({_LABEL_TOKEN})")
+
+# Labels stamped exclusively onto `type: epic` issues, which stay `status: open` throughout
+# labeling and so can never reach §2b's `--status in_progress` query -- see the module docstring's
+# "Why EPIC_ONLY_LABELS is a legitimate exemption" section for the full argument. Each entry names
+# the site that applies it, so a reader can verify the claim without re-deriving it.
+EPIC_ONLY_LABELS: dict[str, str] = {
+    "epic-debated": (
+        ".claude/skills/challenge/SKILL.md -- stamped on an epic after a /challenge pass; "
+        "epics stay status=open, never in_progress."
+    ),
+    "epic-ready-to-audit": (
+        ".claude/skills/land/SKILL.md -- stamped on an epic when /land closes its last "
+        "parent-child child; epics stay status=open, never in_progress."
+    ),
+    "epic-audited": (
+        ".claude/skills/epic-audit/SKILL.md -- stamped on an epic once /epic-audit reviews "
+        "it; epics stay status=open, never in_progress."
+    ),
+}
+
+
+def _labels_in(text: str) -> set[str]:
+    """Every label applied by an `--add-label`/`bd label add` site in one file's text.
+
+    The unit tests below call this rather than re-inlining the extraction, so they exercise the
+    production path instead of a copy of it."""
+    found: set[str] = set()
+    for m in ADD_LABEL_RE.finditer(text):
+        found.update(re.split(r"[|,]\s*", m.group(1)))
+    for m in LABEL_ADD_CMD_RE.finditer(text):
+        found.add(m.group(1))
+    return found
+
+
+def _discover_add_label_sites() -> set[str]:
+    """Every label this repo applies via `--add-label`/`bd label add`, across the scan surface."""
+    found: set[str] = set()
+    for base, pattern in SCAN_GLOBS:
+        for path in sorted(base.glob(pattern)):
+            found |= _labels_in(path.read_text(encoding="utf-8"))
+    return found
+
+
+def _sweep_exclude_labels() -> set[str]:
+    """The literal `--exclude-label` roster §2b's bash block passes to `bd list`, parsed straight
+    from the shipped file -- see the module docstring's final section for why this must not be a
+    second hand-copied list."""
+    # §1 carries a DIFFERENT, single-label `--exclude-label sweep-digest` site in this same file,
+    # so the roster is located by §2b's own fenced block (the same locator, and the same marker
+    # strings, tests/test_sweep_stranded_age_filter.py uses) rather than by position or by picking
+    # the longest match. `only_block_with` asserts exactly one hit, so a structural change that
+    # makes this ambiguous fails loudly instead of pinning the wrong block.
+    block = only_block_with(
+        bash_fence_blocks(SWEEP_SKILL.read_text(encoding="utf-8")),
+        "STRANDED=$(bd list --status in_progress",
+        "--exclude-label",
+        what="Section 2b's stranded-ticket collection",
+    )
+    matches = re.findall(r"--exclude-label\s+([\w,-]+)", block)
+    assert len(matches) == 1, (
+        f"expected exactly one --exclude-label list in §2b's block, found {len(matches)} -- did "
+        "the block gain a second exclusion or lose its --exclude-label flag? Update this "
+        "gate's parsing if the shape genuinely changed."
+    )
+    return set(matches[0].split(","))
+
+
+# =====================================================================================
+# Unit tests -- the regex's own precision, against synthetic snippets.
+# =====================================================================================
+
+
+def test_bare_add_label_matches() -> None:
+    assert _labels_in("bd update <id> --add-label needs-rebase") == {"needs-rebase"}
+
+
+def test_multi_label_placeholder_yields_both_names() -> None:
+    # The `<a|b>` placeholder shape .claude/skills/land/SKILL.md uses for "pick one of these two".
+    text = (
+        "bd update <id> --remove-label land-escalated "
+        "--add-label <ready-for-code-review|needs-rebase>"
+    )
+    assert _labels_in(text) == {"ready-for-code-review", "needs-rebase"}
+
+
+def test_bd_label_add_command_form_matches() -> None:
+    assert _labels_in('bd label add "$PARENT" epic-ready-to-audit') == {
+        "epic-ready-to-audit"
+    }
+
+
+def test_comma_separated_labels_both_captured() -> None:
+    assert _labels_in("bd update <id> --add-label foo,bar") == {"foo", "bar"}
+
+
+def test_bd_create_label_form_is_out_of_scope() -> None:
+    """`bd create --label=` applies category labels at birth, never a pipeline stage -- pinned so
+    the deliberate scope boundary in the module docstring is a fact, not a comment."""
+    assert (
+        _labels_in(
+            "bd create --type=task --no-inherit-labels --label=human,epic-audit-gap"
+        )
+        == set()
+    )
+
+
+# =====================================================================================
+# The gate itself, against the real, shipped files.
+# =====================================================================================
+
+
+def test_sweep_exclude_label_list_parses_the_shipped_roster() -> None:
+    """Sanity check on the parser itself -- pins today's known-good roster so a parsing
+    regression (not a real roster change) shows up here first, distinct from the gate below."""
+    assert _sweep_exclude_labels() == {
+        "ready-for-code-review",
+        "ready-for-land",
+        "needs-rebase",
+        "sweep-digest",
+        "land-escalated",
+    }
+
+
+def test_epic_only_labels_are_still_live() -> None:
+    """Stale-entry guard, mirroring test_bd_list_limit_gate.py's `test_every_skip_entry_is_live_
+    and_justified`: an EPIC_ONLY_LABELS entry that stops matching anything in the corpus is dead
+    weight nobody can audit, not a routine no-op -- if a label's only call site is deleted or
+    renamed, this entry must be removed too, not linger."""
+    discovered = _discover_add_label_sites()
+    stale = set(EPIC_ONLY_LABELS) - discovered
+    assert not stale, (
+        f"EPIC_ONLY_LABELS entries no longer found anywhere in the scanned corpus -- delete "
+        f"them: {sorted(stale)}"
+    )
+
+
+def test_every_pipeline_label_is_covered_by_sweep_2b_or_documented_epic_only() -> None:
+    """The actual gate (lode-mm73 item 1). Every label this repo applies to a TICKET via
+    `--add-label`/`bd label add` must appear in §2b's live `--exclude-label` roster, or be a
+    documented EPIC_ONLY_LABELS exemption -- otherwise a ticket carrying that label, while still
+    in_progress, silently reads as stranded, exactly the class of drift §2b's roster exists to
+    avoid."""
+    discovered = _discover_add_label_sites()
+    covered = _sweep_exclude_labels() | set(EPIC_ONLY_LABELS)
+    uncovered = discovered - covered
+    assert not uncovered, (
+        f"new pipeline-stage label(s) found via --add-label/bd label add with no §2b "
+        f"exclude-label coverage: {sorted(uncovered)}. If a ticket can carry this label "
+        f"while still in_progress, add it to §2b's --exclude-label list in "
+        f".claude/skills/sweep/SKILL.md. If it is stamped ONLY on epics (which never reach "
+        f"status=in_progress), add it to EPIC_ONLY_LABELS in this file instead, with a "
+        f"reason naming the site."
+    )
+
+
+def test_sabotage_new_uncovered_label_is_flagged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sabotage the DISCOVERY path, not just the arithmetic: point the scan surface at a synthetic
+    skill file that applies a brand-new label and confirm the gate's real comparison goes red.
+    Asserting the set difference over a hand-built `discovered` would prove only that Python
+    subtracts sets, leaving a silently non-matching regex to pass the gate vacuously."""
+    fake_skill = tmp_path / "fake" / "SKILL.md"
+    fake_skill.parent.mkdir()
+    fake_skill.write_text(
+        "bd update <id> --add-label totally-new-pipeline-label\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(sys.modules[__name__], "SCAN_GLOBS", [(tmp_path, "*/SKILL.md")])
+
+    uncovered = _discover_add_label_sites() - (
+        _sweep_exclude_labels() | set(EPIC_ONLY_LABELS)
+    )
+    assert uncovered == {"totally-new-pipeline-label"}
