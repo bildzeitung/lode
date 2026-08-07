@@ -10,9 +10,12 @@ tests/test_blocks_dependents.py precedent) -- it lives next to the code it
 constrains, so it cannot drift out of sync with a second copy. The header
 also records the mechanism's known limits: the `heartbeat` subcommand
 (lode-m87j) moves the TTL toward idle-time semantics over the two loops it
-brackets -- but not over the whole pass; CAVEAT 1 enumerates the three
-stretches that stay uncovered and why the 1800s default was therefore left
-alone. The stale-lock reclaim path (CAVEAT 2) is now closed OUTRIGHT via
+brackets, plus (lode-v4sv) two boundary call sites that close the two
+originally-uncovered stretches that grew with queue size -- but not over the
+whole pass; CAVEAT 1 enumerates the one stretch that still stays uncovered
+(Section 3's combined re-gate, which does not grow with queue size) and why
+the 1800s default was therefore left alone. The stale-lock reclaim path
+(CAVEAT 2) is now closed OUTRIGHT via
 `flock(1)` (lode-y3dw) -- see that section of the header for why the earlier
 mkdir-gate design (lode-ao95, lode-78ih) could narrow but never fully close
 it -- and the record's owner token (5th field) is both preserved across
@@ -1250,6 +1253,74 @@ def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
     )
 
 
+def test_land_skill_heartbeats_at_all_four_call_sites_lode_v4sv() -> None:
+    """lode-v4sv closed the two originally-uncovered stretches that grew with
+    queue size (scripts/land-lock.sh's CAVEAT 1: gap (a), Section 0's acquire
+    -> the first Section 2a heartbeat; gap (c), the last Section 3 merge
+    heartbeat -> Section 4's release) by adding TWO boundary heartbeat call
+    sites in land/SKILL.md, on top of the two loop-bracketing sites
+    test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a already
+    pins the mere existence of. That test alone is silently blind to either
+    NEW site quietly being dropped later (existence of >=1 call stays true
+    even if a specific site vanishes) -- pin the COUNT instead, so a future
+    edit that drops one of the four is caught here rather than by a live
+    /land pass losing its lock mid-pass.
+
+    A count alone can't prove WHICH site vanished if it drops, so this also
+    pins each new site's TEXTUAL POSITION relative to a fixed landmark next to
+    it -- gap (a)'s new call must appear before the "## 1a." heading (so it
+    covers Section 1 and precedes Section 1a's O(n^2) work); gap (c)'s new
+    call must appear after "git push origin trunk" and before the per-ticket
+    `bd close` loop's own `for id in $LANDED` line (so it covers the push and
+    precedes the per-ticket work). Both landmarks are pinned elsewhere in this
+    file / test_land_conflicts_state.py for unrelated reasons, so this test
+    does not introduce a new fragile anchor on its own.
+    """
+    text = LAND_SKILL.read_text(encoding="utf-8")
+
+    calls = re.findall(
+        r"scripts/land-lock\.sh heartbeat \"\$MY_TOKEN\" \|\| true", text
+    )
+    assert len(calls) == 3, (
+        f'expected exactly 3 in-skill \'scripts/land-lock.sh heartbeat "$MY_TOKEN" || '
+        f"true' call sites (Section 1 -> 1a boundary [lode-v4sv], Section 2a's "
+        f"per-ticket vet loop, Section 4's push-trunk -> release boundary "
+        f"[lode-v4sv]), found {len(calls)}. A dropped site silently re-widens "
+        "one of the two queue-size-growing gaps lode-v4sv closed."
+    )
+
+    heading_1a = text.index("## 1a. Compute the stacked-branch graph")
+    section_2a_heartbeat = text.index(
+        'scripts/land-lock.sh heartbeat "$MY_TOKEN" || true',
+        heading_1a,
+    )
+    gap_a_heartbeat_positions = [
+        m.start()
+        for m in re.finditer(
+            r'scripts/land-lock\.sh heartbeat "\$MY_TOKEN" \|\| true', text
+        )
+    ]
+    assert gap_a_heartbeat_positions[0] < heading_1a < section_2a_heartbeat, (
+        "gap (a)'s new heartbeat call site must sit strictly between the end "
+        "of Section 1 and the '## 1a.' heading -- otherwise Section 1a's "
+        "O(n^2) merge-base work is no longer inside the covered stretch "
+        "(lode-v4sv acceptance criteria)"
+    )
+
+    push_trunk = text.index("git push origin trunk")
+    landed_loop = text.index("for id in $LANDED; do\n  bd close")
+    gap_c_heartbeat = next(
+        p for p in gap_a_heartbeat_positions if push_trunk < p < landed_loop
+    )
+    assert push_trunk < gap_c_heartbeat < landed_loop, (
+        "gap (c)'s new heartbeat call site must sit strictly between "
+        "'git push origin trunk' and the per-ticket 'bd close' loop -- "
+        "otherwise the per-ticket bd close / epic-completion-check.sh / "
+        "bd-dolt-push.sh / branch-delete / worktree-GC work is no longer "
+        "inside the covered stretch (lode-v4sv acceptance criteria)"
+    )
+
+
 # `<own-token>` is REQUIRED on `heartbeat`/`release` as of lode-yuwt --
 # land-lock.sh itself now refuses (exit 2) a bare/empty argument, so a call
 # site that forgot it fails LOUDLY at the script layer. These pins stay as a
@@ -1470,14 +1541,14 @@ def test_every_own_token_readback_site_warns_when_empty() -> None:
     treats an empty own-token argument EXACTLY as an absent one, so a
     missing/empty token file (a pass resumed mid-flight before Section 0 ever
     ran, or Section 2a/3/4 run by hand without Section 0) used to disable the
-    ownership check with nothing in the log -- invisible to the three existing
-    call-site pins above, which are purely textual and prove only that
-    `"$MY_TOKEN"` is spelled at each site, never that it is non-empty at run
-    time. (Before lode-l7mj, the token additionally lived under `$STATE_DIR`
-    and was reliably wiped by Section 1 on EVERY pass -- a stronger, now-fixed
-    cause of the same empty read; see the mechanical execution test below.)
+    ownership check with nothing in the log -- invisible to the call-site pins
+    above, which are purely textual and prove only that `"$MY_TOKEN"` is
+    spelled at each site, never that it is non-empty at run time. (Before
+    lode-l7mj, the token additionally lived under `$STATE_DIR` and was
+    reliably wiped by Section 1 on EVERY pass -- a stronger, now-fixed cause
+    of the same empty read; see the mechanical execution test below.)
 
-    Textual pin, same shape and same limit as the three pins above it (see
+    Textual pin, same shape and same limit as the pins above it (see
     the module docstring, part 3): it proves the diagnostic is spelled at
     every call site in the SHIPPED file, not that it fires at run time. Both
     counts are taken over `_fenced_bash()` — the EXECUTED blocks only, same
@@ -1492,10 +1563,12 @@ def test_every_own_token_readback_site_warns_when_empty() -> None:
     executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
 
     token_reads = executed.count('cat "$(git rev-parse --git-dir)/land-lock-token"')
-    assert token_reads == 5, (
-        f"expected exactly 5 reads of $(git rev-parse --git-dir)/land-lock-token"
-        f" in land/SKILL.md (Section 1's release, Section 2a's heartbeat, "
-        f"Section 3's two merge loops, Section 4's final release), found "
+    assert token_reads == 7, (
+        f"expected exactly 7 reads of $(git rev-parse --git-dir)/land-lock-token"
+        f" in land/SKILL.md (Section 1's release, the gap (a) boundary heartbeat "
+        f"before Section 1a [lode-v4sv], Section 2a's per-ticket heartbeat, "
+        f"Section 3's two merge loops, the gap (c) boundary heartbeat at the top "
+        f"of Section 4 [lode-v4sv], Section 4's final release), found "
         f"{token_reads} -- if a call site was genuinely added or removed, "
         "update this pin's count deliberately and check the new/removed site "
         "got (or lost) its own lode-67nk diagnostic too"

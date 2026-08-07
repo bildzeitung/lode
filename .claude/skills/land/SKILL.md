@@ -86,10 +86,16 @@ sites, so this section cannot quietly go back to an inline lock.
 2a](#2a-re-validate-that-beads-and-git-havent-drifted) re-stamps it once per ticket in the vet loop
 (right before that ticket's `land-review` dispatch) and `scripts/land-merge-one.sh` re-stamps it on
 every call, covering both Section 3 merge loops — so a pass no longer risks having its *own* lock
-reclaimed mid-merge just for running long. **That did not shorten the window below, and the two call
-sites do not cover the whole pass**: Section 1/1a before the first heartbeat, the combined re-gate,
-and all of Section 4 (where `trunk` is actually written) run unheartbeated. `scripts/land-lock.sh`'s
-header enumerates all three and explains why the default stays at 1800s; re-deriving it is lode-cp4o.
+reclaimed mid-merge just for running long. Two more boundary call sites (lode-v4sv) close the two
+originally-uncovered stretches that *grew* with queue size: one right before Section 1a (below,
+covering Section 1's networked calls before it and isolating Section 1a's O(n²) work after it), and
+one at the top of Section 4's main block (covering the per-ticket `bd close`/`epic-completion-check.sh`
+work, the networked `bd-dolt-push.sh`, the branch deletes, and the worktree-GC sweep). **That did not
+shorten the window below, and the four call sites still do not cover literally every line of the
+pass**: Section 3's single combined re-gate (~60s measured, and — unlike the two gaps just closed —
+does not grow with queue size) still runs unheartbeated. `scripts/land-lock.sh`'s header has the full,
+current accounting and explains why the default stays at 1800s; re-deriving the number itself is
+lode-cp4o (closed 2026-08-07 — the number stays 1800s permanently).
 
 **What I need to know to run the pass:** the lock is released explicitly at exactly two sites below —
 the empty-queue exit in [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin) and the end
@@ -292,6 +298,25 @@ exit 0
 ```
 
 — otherwise process the batch.
+
+**Heartbeat once more here, closing gap (a) (lode-v4sv).** Section 0's acquire → this point already
+covers Section 1's two networked calls (`bd dolt pull`, `git fetch origin`); without a call here,
+[Section 1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)'s `O(n^2)`
+`git merge-base` work below — which grows with the size of the `ready-for-land` queue — ran completely
+unheartbeated, all the way out to the first per-ticket heartbeat in
+[Section 2a](#2a-re-validate-that-beads-and-git-havent-drifted). This single call does not itself
+bound 1a's growth (it is one interval, not a per-pair heartbeat) — it isolates 1a as the sole
+remaining contributor to this stretch, rather than 1a plus Section 1's networked calls combined. Same
+best-effort contract as every other heartbeat call site: failure here is logged but never stops the
+pass.
+
+```bash
+MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"
+[ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
+  "DISABLED for this call (lode-67nk) -- land-lock.sh REFUSES it outright (exit 2, lode-yuwt)" \
+  "rather than re-stamping blind, so this heartbeat simply does not fire (|| true below)" >&2
+scripts/land-lock.sh heartbeat "$MY_TOKEN" || true
+```
 
 ---
 
@@ -1131,6 +1156,22 @@ git status --short
 ```bash
 git push origin trunk
 git status                 # MUST show trunk up to date with origin
+
+# Heartbeat once more here, closing gap (c) (lode-v4sv) -- positioned so every per-ticket `bd close`,
+# `epic-completion-check.sh`, the networked `scripts/bd-dolt-push.sh`, every per-ticket branch delete,
+# and the worktree-GC sweep below all sit strictly BETWEEN this call and the pass-end `release` near
+# the end of this same block, rather than after the LAST heartbeat Section 3's own merge helper (see
+# above) fired during its loop. That old gap was the worst of the three CAVEAT 1 named: the ordinary
+# GREEN path, growing with the number of tickets landed, during the exact stretch `trunk` is being
+# written. Same caveat as gap (a)'s own new call site: one interval, not a per-ticket heartbeat, so it
+# does not itself bound the per-ticket loops' own growth -- it just isolates this stretch as the one
+# remaining unheartbeated span, cleanly separated from Section 3's own re-gate + merge loops (already
+# heartbeated via that same helper). Same best-effort contract as every other call site here.
+MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
+[ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
+  "DISABLED for this call (lode-67nk) -- land-lock.sh REFUSES it outright (exit 2, lode-yuwt)" \
+  "rather than re-stamping blind, so this heartbeat simply does not fire (|| true below)" >&2
+scripts/land-lock.sh heartbeat "$MY_TOKEN" || true
 
 # $LANDED: the ids that actually stayed merged through Section 3 -- read back from the file Section 3's
 # merge loops appended to as each branch merged (lode-sfnb), never restated by hand. On the Green path

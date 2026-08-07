@@ -56,9 +56,15 @@
 # `heartbeat` re-stamps the SAME record `acquire` wrote, with no atomicity
 # contest (see its own comment below) -- so as long as SOMETHING calls it
 # periodically during a pass, the token's age never reflects more than the
-# GAP since the last call, not the pass's total duration. Two call sites make
+# GAP since the last call, not the pass's total duration. FOUR call sites make
 # that periodic, by construction rather than by a future editor remembering a
 # new one per section (the exact rot this design has avoided from the start):
+#   - `.claude/skills/land/SKILL.md`, right before Section 1a (lode-v4sv) --
+#     fires once per pass, immediately after Section 1's two networked calls
+#     (`bd dolt pull`, `git fetch origin`) and immediately before Section 1a's
+#     O(n^2) stacked-branch-graph computation, so that O(n^2) work sits
+#     between this call and the next (Section 2a's, below) rather than
+#     unheartbeated all the way from `acquire`.
 #   - `.claude/skills/land/SKILL.md` Section 2a (the top of the per-ticket
 #     "vet each branch" loop) -- fires once per ticket, immediately before
 #     that ticket's `land-review` Opus dispatch (2c), bounding that gap to
@@ -68,35 +74,46 @@
 #     branch) AND its isolation-replay copy (once per branch being re-tested
 #     after a red combined re-gate) with a single call site inside the
 #     script, needing no second SKILL.md edit for the replay loop.
-# Both are pinned by tests the same way `acquire`/`release` are (see
+#   - `.claude/skills/land/SKILL.md`, at the top of Section 4's main block
+#     (lode-v4sv) -- fires once per pass, right after `git push origin trunk`
+#     and before the per-ticket `bd close` loop, so every per-ticket `bd
+#     close` / `epic-completion-check.sh` / the networked
+#     `scripts/bd-dolt-push.sh` / every per-ticket branch delete / the
+#     worktree-GC sweep sits between this call and the pass-end `release`,
+#     rather than unheartbeated all the way from the LAST `land-merge-one.sh`
+#     call in Section 3.
+# All four are pinned by tests the same way `acquire`/`release` are (see
 # tests/test_land_lock.py and tests/test_land_merge_one.py) -- a heartbeat
 # call site that quietly stops being called is exactly as dangerous as the
 # original inert lock, just slower to notice.
 #
-# THREE stretches of a pass are still uncovered -- the two call sites bracket
-# the two LOOPS, not the pass. Do not read "heartbeat exists" as "the whole
-# pass is covered" (lode-m87j's technical review; the ticket's own design note
-# named only the second of these):
-#   1. `acquire` (Section 0) -> the FIRST Section-2a heartbeat: all of Section
-#      1 (`bd dolt pull` and `git fetch origin`, both networked) and all of
-#      Section 1a, whose stacked-branch graph is O(n^2) `git merge-base` work
-#      in the size of the ready-for-land queue -- the one uncovered stretch
-#      that GROWS with the queue.
-#   2. Section 3's single COMBINED re-gate (`nox -t fix && nox -s tests &&
+# ONE stretch of a pass remains uncovered post-lode-v4sv (down from three) --
+# the four call sites above bracket the two per-ticket LOOPS plus the two
+# named boundary points, not literally every line of the pass. Do not read
+# "heartbeat exists" as "the whole pass is covered" (lode-m87j's technical
+# review; the ticket's own design note named only this one):
+#   1. Section 3's single COMBINED re-gate (`nox -t fix && nox -s tests &&
 #      nox -s lock_currency`, plus `validate-mermaid.sh` on a docs change),
 #      which runs once, between the merge loop and the isolation-replay loop.
 #      MEASURED on the 2026-07-28 dev machine at ~60s total (tests ~50s, fix
 #      ~0.4s, lock_currency ~1s, mermaid ~10s) -- comfortably small, but it is
-#      wall-clock on one machine, not a bound.
-#   3. The LAST heartbeat -> `release` at the end of Section 4: the re-gate
-#      above PLUS the whole of Section 4 -- `git push origin trunk`, a
-#      `bd close` per landed ticket, `epic-completion-check.sh` per ticket,
-#      `scripts/bd-dolt-push.sh` (networked, with its own retry/backoff), a
-#      branch delete per landed ticket, and the worktree-GC sweep. This is the
-#      worst one: it is on the ordinary GREEN path, it scales with the number
-#      of landed tickets, and it is the stretch during which `trunk` is
-#      actually being written -- so a reclaim here is a reclaim at the exact
-#      moment two landers must not overlap.
+#      wall-clock on one machine, not a bound. Unlike the two gaps lode-v4sv
+#      closed, this one does NOT grow with the size of the `ready-for-land`
+#      queue -- it runs exactly once per pass regardless of how many tickets
+#      are being landed -- which is why it was left uncovered rather than
+#      folded into this ticket; re-deriving whether it is worth a call site of
+#      its own is a separate decision, not implied by this one.
+#
+# lode-v4sv (2026-08-07) closed the other two of the original three -- both of
+# which DID grow with queue size, unlike the one above -- by adding the first
+# and fourth call sites listed above. Neither new call site individually
+# BOUNDS the per-pass-or-per-ticket work it sits in front of (each is a single
+# interval, not itself a per-iteration heartbeat re-fired inside Section 1a's
+# loop or inside Section 4's per-ticket loops) -- what it buys is isolating
+# that work as the SOLE remaining contributor to its stretch, rather than
+# that work summed with adjacent networked/fixed-cost calls. This does not
+# change LAND_LOCK_STALE_SECONDS and must not be read as though it does --
+# see "WHY THE DEFAULT STAYS AT 1800s" below, unchanged by this ticket.
 #
 # WHY THE DEFAULT STAYS AT 1800s. The heartbeat shrinks the exposure a lot: it
 # is the whole fix for "a long pass has its OWN lock reclaimed mid-merge", and
