@@ -38,14 +38,12 @@ from a bash variable/digest read is a per-block question.
 
 from __future__ import annotations
 
-import os
 import shutil
-import subprocess
 import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import bash_fence_blocks, only_block_with
+from conftest import bash_fence_blocks, only_block_with, run_block
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SWEEP_SKILL = REPO_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
@@ -188,33 +186,6 @@ def _fake_bd(bin_dir: Path, description: str) -> Path:
     return body_file
 
 
-def _run_block(
-    block: str, sweep_tmp: Path, path_env: str, extra_env: dict[str, str] | None = None
-) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ, PATH=path_env, TMPDIR=str(sweep_tmp.parent))
-    if extra_env:
-        env.update(extra_env)
-    # Every real fenced block starts by re-deriving SWEEP_TMP from
-    # ${TMPDIR:-/tmp}/lode-sweep-state (§0) -- point TMPDIR at a scratch parent
-    # so that derivation lands exactly on our tmp_path-backed dir.
-    return subprocess.run(
-        ["bash", "-c", block],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=REPO_ROOT,
-        check=False,
-    )
-
-
-@pytest.fixture
-def sweep_tmp(tmp_path: Path) -> Path:
-    """Mirrors §0's own layout: $SWEEP_TMP = $TMPDIR/lode-sweep-state."""
-    d = tmp_path / "lode-sweep-state"
-    d.mkdir()
-    return d
-
-
 def test_full_pass_new_item_reaches_push_ids_after_the_digest_rewrite(
     sweep_tmp: Path, tmp_path: Path
 ) -> None:
@@ -243,7 +214,6 @@ def test_full_pass_new_item_reaches_push_ids_after_the_digest_rewrite(
         "(none)"
     )
     body_file = _fake_bd(bin_dir, old_body)
-    path_env = f"{bin_dir}:{os.environ['PATH']}"
 
     # $SWEEP_TMP/current -- what §3 would have built: the prior item PLUS one
     # genuinely new escalation, lode-l7mj.
@@ -254,7 +224,7 @@ def test_full_pass_new_item_reaches_push_ids_after_the_digest_rewrite(
     (sweep_tmp / "current").write_text(current_rows)
 
     # --- Section 5, its own subprocess ---
-    r5 = _run_block(_section_5_block(), sweep_tmp, path_env)
+    r5 = run_block(_section_5_block(), sweep_tmp, bin_dir)
     assert r5.returncode == 0, f"Section 5 failed: {r5.stderr}"
 
     new_ids_after_5 = (sweep_tmp / "new_ids").read_text()
@@ -278,7 +248,7 @@ def test_full_pass_new_item_reaches_push_ids_after_the_digest_rewrite(
     # --- Section 7, its OWN, separate subprocess -- nothing from Section 5's
     # shell survives (lode-sfnb); only $SWEEP_TMP/new_ids and
     # $SWEEP_TMP/current on disk do. ---
-    r7 = _run_block(_section_7_block(), sweep_tmp, path_env)
+    r7 = run_block(_section_7_block(), sweep_tmp, bin_dir)
     assert r7.returncode == 0, f"Section 7 failed: {r7.stderr}"
 
     push_ids = (sweep_tmp / "push_ids").read_text().strip()
@@ -309,17 +279,16 @@ def test_no_change_pass_is_a_true_no_op(sweep_tmp: Path, tmp_path: Path) -> None
         "(none)"
     )
     _fake_bd(bin_dir, body)
-    path_env = f"{bin_dir}:{os.environ['PATH']}"
 
     (sweep_tmp / "current").write_text(
         "lode-yuwt\tland-escalated\tSome prior item\topen"
     )
 
-    r5 = _run_block(_section_5_block(), sweep_tmp, path_env)
+    r5 = run_block(_section_5_block(), sweep_tmp, bin_dir)
     assert r5.returncode == 0, f"Section 5 failed: {r5.stderr}"
     assert (sweep_tmp / "new_ids").read_text().strip() == ""
 
-    r7 = _run_block(_section_7_block(), sweep_tmp, path_env)
+    r7 = run_block(_section_7_block(), sweep_tmp, bin_dir)
     assert r7.returncode == 0, f"Section 7 failed: {r7.stderr}"
     assert (sweep_tmp / "push_ids").read_text().strip() == ""
     assert (sweep_tmp / "new_annotated").read_text().strip() == ""
@@ -334,14 +303,13 @@ def test_section_7_missing_new_ids_file_is_a_loud_gate_failure(
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir()
     _fake_bd(bin_dir, "(none)")
-    path_env = f"{bin_dir}:{os.environ['PATH']}"
 
     (sweep_tmp / "current").write_text(
         "lode-yuwt\tland-escalated\tSome prior item\topen"
     )
     # Deliberately do NOT write $SWEEP_TMP/new_ids.
 
-    r7 = _run_block(_section_7_block(), sweep_tmp, path_env)
+    r7 = run_block(_section_7_block(), sweep_tmp, bin_dir)
     assert r7.returncode == 1
     assert "GATE COULD NOT RUN" in r7.stderr
     assert "new_ids" in r7.stderr
@@ -360,14 +328,13 @@ def test_section_7_present_but_empty_new_ids_is_not_conflated_with_missing(
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir()
     _fake_bd(bin_dir, "(none)")
-    path_env = f"{bin_dir}:{os.environ['PATH']}"
 
     (sweep_tmp / "current").write_text(
         "lode-yuwt\tland-escalated\tSome prior item\topen"
     )
     (sweep_tmp / "new_ids").write_text("")
 
-    r7 = _run_block(_section_7_block(), sweep_tmp, path_env)
+    r7 = run_block(_section_7_block(), sweep_tmp, bin_dir)
     assert r7.returncode == 0, (
         f"Section 7 must not fail on a legitimately-empty new_ids: {r7.stderr}"
     )
@@ -414,7 +381,6 @@ awk -F'\t' -v ann="$SWEEP_TMP/new_annotated" -v push="$SWEEP_TMP/push_ids" '
         "SWEEP-ITEM lode-yuwt land-escalated Some prior item"
     )
     body_file = _fake_bd(bin_dir, old_body)
-    path_env = f"{bin_dir}:{os.environ['PATH']}"
 
     current_rows = (
         "lode-yuwt\tland-escalated\tSome prior item\topen\n"
@@ -422,7 +388,7 @@ awk -F'\t' -v ann="$SWEEP_TMP/new_annotated" -v push="$SWEEP_TMP/push_ids" '
     )
     (sweep_tmp / "current").write_text(current_rows)
 
-    r5 = _run_block(_section_5_block(), sweep_tmp, path_env)
+    r5 = run_block(_section_5_block(), sweep_tmp, bin_dir)
     assert r5.returncode == 0, f"Section 5 failed: {r5.stderr}"
     assert (sweep_tmp / "new_ids").read_text().strip() == "lode-l7mj"
 
@@ -434,7 +400,7 @@ awk -F'\t' -v ann="$SWEEP_TMP/new_annotated" -v push="$SWEEP_TMP/push_ids" '
     )
     body_file.write_text(new_body)
 
-    r7 = _run_block(old_broken_section_7, sweep_tmp, path_env)
+    r7 = run_block(old_broken_section_7, sweep_tmp, bin_dir)
     assert r7.returncode == 0, f"reimplemented old Section 7 errored: {r7.stderr}"
 
     # THIS is the regression this whole file exists to catch: the OLD shape
