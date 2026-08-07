@@ -47,18 +47,44 @@ ABSTAIN_LINE = "Your notes don't answer this."
 
 
 @dataclass(frozen=True)
+class CitationIdentity:
+    """Resolved note/external identity for one citation target (lode-35nu.1).
+
+    Exactly one of ``note_id``/``external_id`` is set, mirroring
+    :class:`~lode.answer.Support`'s own ``version_id``/``snapshot_id`` split.
+    ``title`` is the first non-blank line of the *cited* version/snapshot's
+    own body -- the only "title" concept this codebase has (mirrors
+    ``notes_read._first_line``'s convention for the browse table's summary
+    column); it comes from the cited version even when that version is
+    superseded, so an old citation still shows a title rather than the
+    current head's. ``is_head`` is True when the cited version/snapshot is
+    still the note/external's current head, False when superseded.
+    """
+
+    note_id: str | None = None
+    external_id: str | None = None
+    title: str = ""
+    is_head: bool = False
+
+
+@dataclass(frozen=True)
 class AskResult:
-    """A gated cited answer plus each citation's as-of provenance.
+    """A gated cited answer plus each citation's as-of provenance and identity.
 
     ``as_of`` maps a cited ``target_id`` (a note ``version_id`` or external
     ``snapshot_id``) to its resolved as-of timestamp, or ``None`` when the
     store had nothing to resolve (practically unreachable -- the faithfulness
     gate already verified the span against the stored body -- but handled
-    rather than assumed away).
+    rather than assumed away). ``identities`` maps the same ``target_id`` to
+    its resolved :class:`CitationIdentity` (lode-35nu.1) -- absent, not
+    ``None``, for a target the store had nothing to resolve, so a caller's
+    ``.get(target_id)`` returning ``None`` means exactly "unresolvable",
+    same convention as ``as_of``.
     """
 
     answer: CitedAnswer
     as_of: dict[str, str | None] = field(default_factory=dict)
+    identities: dict[str, CitationIdentity] = field(default_factory=dict)
 
 
 def run_ask(
@@ -95,12 +121,12 @@ def run_ask(
         answer = cited_answer.ask(
             conn, question, context, think_harder=think_harder, settings=settings
         )
+        supports = [support for claim in answer.claims for support in claim.support]
         as_of = {
-            support.target_id: _resolve_as_of(conn, support)
-            for claim in answer.claims
-            for support in claim.support
+            support.target_id: _resolve_as_of(conn, support) for support in supports
         }
-        return AskResult(answer=answer, as_of=as_of)
+        identities = _resolve_identities(conn, supports)
+        return AskResult(answer=answer, as_of=as_of, identities=identities)
     finally:
         conn.close()
 
@@ -123,6 +149,68 @@ def _resolve_as_of(conn: sqlite3.Connection, support: Support) -> str | None:
             (support.snapshot_id,),
         ).fetchone()
     return row[0] if row is not None else None
+
+
+def _resolve_identities(
+    conn: sqlite3.Connection, supports: list[Support]
+) -> dict[str, CitationIdentity]:
+    """Resolve note/external identity for every ``supports`` target, batched (lode-35nu.1).
+
+    Two queries total -- one ``IN (...)`` for every cited ``version_id``, one
+    for every cited ``snapshot_id`` -- not one query per support, so a
+    multi-claim answer costs a fixed two round-trips regardless of citation
+    count (the ticket's "a single batched query" acceptance line). A
+    target absent from the store (practically unreachable, same as
+    :func:`_resolve_as_of`) is simply missing from the returned dict.
+    """
+    identities: dict[str, CitationIdentity] = {}
+    version_ids = {s.version_id for s in supports if s.version_id is not None}
+    if version_ids:
+        placeholders = ",".join("?" for _ in version_ids)
+        rows = conn.execute(
+            "SELECT v.version_id, v.note_id, v.body, n.head_version_id "
+            "FROM versions v JOIN notes n ON n.note_id = v.note_id "
+            f"WHERE v.version_id IN ({placeholders})",
+            tuple(version_ids),
+        ).fetchall()
+        for version_id, note_id, body, head_version_id in rows:
+            identities[version_id] = CitationIdentity(
+                note_id=note_id,
+                title=_first_line(body),
+                is_head=version_id == head_version_id,
+            )
+    snapshot_ids = {s.snapshot_id for s in supports if s.snapshot_id is not None}
+    if snapshot_ids:
+        placeholders = ",".join("?" for _ in snapshot_ids)
+        rows = conn.execute(
+            "SELECT s.snapshot_id, s.external_id, s.body, e.head_snapshot_id "
+            "FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
+            f"WHERE s.snapshot_id IN ({placeholders})",
+            tuple(snapshot_ids),
+        ).fetchall()
+        for snapshot_id, external_id, body, head_snapshot_id in rows:
+            identities[snapshot_id] = CitationIdentity(
+                external_id=external_id,
+                title=_first_line(body),
+                is_head=snapshot_id == head_snapshot_id,
+            )
+    return identities
+
+
+def _first_line(body: str) -> str:
+    """The first non-blank line of ``body``, or ``""`` for an all-blank body.
+
+    Mirrors ``lode.notes_read._first_line`` (the browse table's summary
+    fallback) -- duplicated rather than imported since that one is private to
+    its module, the same "each surface owns its own copy of a tiny private
+    helper" convention this file already follows for ``_resolve_as_of``
+    (``lode.cli`` keeps its own copy too).
+    """
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
 
 
 def render_ask_result(result: AskResult) -> str:
