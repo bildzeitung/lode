@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from lode.config import Settings, lance_dir
+from lode.faithfulness import locate_span, normalize_whitespace
 from lode.notes_read import first_line
 from lode.storage import init_db
 
@@ -239,15 +240,7 @@ def _resolve_citations(
     return as_of, identities, bodies
 
 
-#: Default surrounding-context window (chars each side of ``quoted_span``)
-#: when a caller doesn't pass its own (mirrors ``Settings.ask_context_chars``'s
-#: default -- kept as a plain module constant rather than importing
-#: ``lode.config`` here, so this stays a Settings-free function like every
-#: other renderer in this module; the TUI screen threads the real knob
-#: through explicitly).
-DEFAULT_ASK_CONTEXT_CHARS = 80
-
-#: Wraps a citation's verbatim ``quoted_span`` inside its surrounding-context
+#: Wraps a citation's matched body text inside its surrounding-context
 #: line so it stands out in plain text -- ``LodeStatic`` renders with
 #: ``markup=False`` (the module docstring explains why), so this can't lean
 #: on Rich markup for emphasis.
@@ -259,9 +252,7 @@ _HIGHLIGHT_CLOSE = "«"
 _ELLIPSIS = "…"
 
 
-def render_ask_result(
-    result: AskResult, *, context_chars: int = DEFAULT_ASK_CONTEXT_CHARS
-) -> str:
+def render_ask_result(result: AskResult, *, context_chars: int) -> str:
     """Render a gated ask result as the screen's display text.
 
     Citations whose target resolved to a note/external identity
@@ -304,16 +295,18 @@ def _render_claims(result: AskResult, context_chars: int) -> list[str]:
     first-cited order) followed by the flat fallback section (unresolvable
     citations, in original claim order) -- see :func:`render_ask_result`.
     """
-    # group_key -> {"title": str, "claims": {claim_idx: {"text": str, "citations": [str, ...]}}}
-    groups: dict[tuple[str, str], dict[str, object]] = {}
-    group_order: list[tuple[str, str]] = []
+    # Both dicts rely on insertion order for "first-cited order" -- no separate
+    # ordering list. A claim is identified by its index into
+    # ``result.answer.claims``, so its text is looked up at render time rather
+    # than copied into every group that cites it.
+    titles: dict[tuple[str, str], str] = {}
+    grouped: dict[tuple[str, str], dict[int, list[str]]] = {}
     flat: list[tuple[str, str]] = []  # (claim text, rendered citation line)
 
     for claim_idx, claim in enumerate(result.answer.claims):
         for support in claim.support:
             identity = result.identities.get(support.target_id)
-            group_key = _group_key(identity)
-            if group_key is None:
+            if identity is None or (group_key := _group_key(identity)) is None:
                 flat.append(
                     (
                         claim.text,
@@ -321,16 +314,9 @@ def _render_claims(result: AskResult, context_chars: int) -> list[str]:
                     )
                 )
                 continue
-            group = groups.get(group_key)
-            if group is None:
-                assert identity is not None  # group_key is None whenever identity is
-                group = {"title": identity.title, "claims": {}}
-                groups[group_key] = group
-                group_order.append(group_key)
-            claims = group["claims"]
-            assert isinstance(claims, dict)
-            entry = claims.setdefault(claim_idx, {"text": claim.text, "citations": []})
-            entry["citations"].append(
+            titles.setdefault(group_key, identity.title)
+            citations = grouped.setdefault(group_key, {}).setdefault(claim_idx, [])
+            citations.append(
                 _render_grouped_citation(
                     support,
                     result.as_of.get(support.target_id),
@@ -340,15 +326,11 @@ def _render_claims(result: AskResult, context_chars: int) -> list[str]:
             )
 
     lines: list[str] = []
-    for group_key in group_order:
-        group = groups[group_key]
-        lines.append(str(group["title"]))
-        claims = group["claims"]
-        assert isinstance(claims, dict)
-        for entry in claims.values():
-            lines.append(f"  {entry['text']}")
-            for citation_line in entry["citations"]:
-                lines.append(f"    {citation_line}")
+    for group_key, claims in grouped.items():
+        lines.append(titles[group_key])
+        for claim_idx, citation_lines in claims.items():
+            lines.append(f"  {result.answer.claims[claim_idx].text}")
+            lines.extend(f"    {line}" for line in citation_lines)
     if flat:
         if lines:
             lines.append("")
@@ -358,10 +340,8 @@ def _render_claims(result: AskResult, context_chars: int) -> list[str]:
     return lines
 
 
-def _group_key(identity: CitationIdentity | None) -> tuple[str, str] | None:
+def _group_key(identity: CitationIdentity) -> tuple[str, str] | None:
     """The note/external this citation groups under, or ``None`` if unresolvable."""
-    if identity is None:
-        return None
     if identity.note_id is not None:
         return ("note", identity.note_id)
     if identity.external_id is not None:
@@ -405,33 +385,40 @@ def _provenance(support: Support, as_of: str | None) -> str:
 def _render_context(body: str | None, span: str, context_chars: int) -> str:
     """Surrounding text around ``span`` inside ``body``, with ``span`` highlighted.
 
-    ``context_chars`` characters of ``body`` on either side of ``span``,
-    collapsed to single-line whitespace (a note body is often multi-line;
-    the citation is one display line). ``span`` itself is never collapsed --
-    it prints exactly as cited, wrapped in :data:`_HIGHLIGHT_OPEN`/
-    :data:`_HIGHLIGHT_CLOSE`. An ellipsis marks a side truncated against the
-    body's own edge. Falls back to the bare quoted span (no context) when
-    there's no body to draw from, or ``span`` doesn't occur in it verbatim --
-    both practically unreachable (the faithfulness gate already verified the
-    span against the stored body) but handled rather than assumed away.
+    ``context_chars`` characters of ``body`` on either side of the span,
+    all collapsed to single-line whitespace (a note body is often multi-line;
+    the citation is one display line). The highlighted text is the body's own
+    matched region -- not the span string as the model wrote it -- wrapped in
+    :data:`_HIGHLIGHT_OPEN`/:data:`_HIGHLIGHT_CLOSE`, so the highlight is
+    always contiguous with the context around it. An ellipsis marks a side
+    truncated against the body's own edge.
+
+    The span is located with :func:`~lode.faithfulness.locate_span` -- the same
+    primitive the faithfulness gate's own ``span_occurs`` is derived from, so
+    this renderer can never be stricter than the gate that let the citation
+    through. (An exact-substring-only search here would be: the gate accepts a
+    span matching only after whitespace normalization, and a quote reflowed off
+    a multi-line body is the common case, so context would silently vanish for
+    a whole class of gate-passing citation.) Only the *first* occurrence is
+    located -- a ``Support`` carries no offset into its target, so a span
+    occurring twice is genuinely ambiguous here (lode-hruz tracks threading the
+    offset through). Falls back to the bare quoted span (no context) only when
+    there's no body to draw from or the span doesn't locate at all.
     """
     if body is None:
         return f'"{span}"'
-    start = body.find(span)
-    if start == -1:
+    located = locate_span(span, body)
+    if located is None:
         return f'"{span}"'
-    end = start + len(span)
-    before = " ".join(body[max(0, start - context_chars) : start].split())
-    after = " ".join(body[end : end + context_chars].split())
+    start, end = located
+    before = normalize_whitespace(body[max(0, start - context_chars) : start])
+    after = normalize_whitespace(body[end : end + context_chars])
+    highlighted = normalize_whitespace(body[start:end])
     prefix = _ELLIPSIS if start - context_chars > 0 else ""
     suffix = _ELLIPSIS if end + context_chars < len(body) else ""
     parts = [
-        p
-        for p in (
-            f"{prefix}{before}",
-            f"{_HIGHLIGHT_OPEN}{span}{_HIGHLIGHT_CLOSE}",
-            f"{after}{suffix}",
-        )
-        if p
+        f"{prefix}{before}" if before else "",
+        f"{_HIGHLIGHT_OPEN}{highlighted}{_HIGHLIGHT_CLOSE}",
+        f"{after}{suffix}" if after else "",
     ]
-    return " ".join(parts)
+    return " ".join(p for p in parts if p)

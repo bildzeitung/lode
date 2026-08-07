@@ -36,7 +36,7 @@ from lode.versions import save
 
 def test_render_ask_result_abstains_with_the_honest_line() -> None:
     result = AskResult(answer=CitedAnswer(claims=(), withheld_citations=()))
-    assert render_ask_result(result) == ABSTAIN_LINE
+    assert render_ask_result(result, context_chars=80) == ABSTAIN_LINE
 
 
 def test_render_ask_result_shows_cited_claim_with_as_of_provenance() -> None:
@@ -51,7 +51,7 @@ def test_render_ask_result_shows_cited_claim_with_as_of_provenance() -> None:
     )
     result = AskResult(answer=answer, as_of={"v1": "2026-06-18T00:00:00.000Z"})
 
-    rendered = render_ask_result(result)
+    rendered = render_ask_result(result, context_chars=80)
 
     assert "We chose OAuth for service auth." in rendered
     assert "version v1" in rendered
@@ -71,7 +71,7 @@ def test_render_ask_result_shows_snapshot_citation_provenance() -> None:
     )
     result = AskResult(answer=answer, as_of={"s1": "2026-06-01T00:00:00.000Z"})
 
-    rendered = render_ask_result(result)
+    rendered = render_ask_result(result, context_chars=80)
 
     assert "snapshot s1" in rendered
     assert "as of 2026-06-01T00:00:00.000Z" in rendered
@@ -89,7 +89,7 @@ def test_render_ask_result_marks_a_citation_with_unresolved_provenance() -> None
     )
     result = AskResult(answer=answer, as_of={})
 
-    assert "as of unknown" in render_ask_result(result)
+    assert "as of unknown" in render_ask_result(result, context_chars=80)
 
 
 def test_render_ask_result_surfaces_withheld_markers_alongside_abstention() -> None:
@@ -99,7 +99,7 @@ def test_render_ask_result_surfaces_withheld_markers_alongside_abstention() -> N
     )
     result = AskResult(answer=answer)
 
-    rendered = render_ask_result(result)
+    rendered = render_ask_result(result, context_chars=80)
 
     assert ABSTAIN_LINE in rendered
     assert "[withheld] v9" in rendered
@@ -143,7 +143,7 @@ def test_render_ask_result_groups_a_note_cited_by_multiple_claims_once(
     bodies = {saved.version_id: "We chose OAuth for service auth. It scales well."}
     result = AskResult(answer=answer, identities=identities, bodies=bodies)
 
-    rendered = render_ask_result(result)
+    rendered = render_ask_result(result, context_chars=80)
 
     # The note's title (the group header) appears exactly once, as its own line.
     header_lines = [
@@ -209,6 +209,35 @@ def test_render_ask_result_context_chars_is_configurable(tmp_path: Path) -> None
     assert "x" * 50 in rendered_wide
 
 
+def test_render_ask_result_renders_context_for_a_whitespace_reflowed_span() -> None:
+    """The faithfulness gate accepts a span matching only after whitespace
+    normalization (``span_occurs``), so the renderer must too -- an exact-only
+    search would be stricter than the gate and silently drop context for a
+    quote reflowed off a multi-line body, which is the common case."""
+    body = "lead in\nthe token\nrotates hourly\ntrailing"
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="claim",
+                support=[
+                    Support(version_id="v1", quoted_span="the token rotates hourly")
+                ],
+            ),
+        ),
+        withheld_citations=(),
+    )
+    identities = {"v1": CitationIdentity(note_id="n1", title="title", is_head=True)}
+    result = AskResult(answer=answer, identities=identities, bodies={"v1": body})
+
+    rendered = render_ask_result(result, context_chars=80)
+
+    # Highlighted, with real context on both sides -- not the bare-span fallback.
+    assert "»the token rotates hourly«" in rendered
+    assert "lead in" in rendered
+    assert "trailing" in rendered
+    assert '"the token rotates hourly"' not in rendered
+
+
 def test_render_ask_result_falls_back_to_flat_rendering_when_unresolved() -> None:
     """A citation whose target didn't resolve to an identity has no body to
     pull context from -- it keeps the old flat, ungrouped rendering."""
@@ -222,7 +251,7 @@ def test_render_ask_result_falls_back_to_flat_rendering_when_unresolved() -> Non
     )
     result = AskResult(answer=answer)
 
-    rendered = render_ask_result(result)
+    rendered = render_ask_result(result, context_chars=80)
 
     assert '"x"' in rendered
     assert "»" not in rendered

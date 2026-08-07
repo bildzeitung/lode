@@ -74,17 +74,40 @@ def normalize_whitespace(text: str) -> str:
     return _WHITESPACE.sub(" ", text).strip()
 
 
+def locate_span(span: str, body: str) -> tuple[int, int] | None:
+    """``(start, end)`` offsets of ``span`` within ``body``, or ``None`` if absent.
+
+    This is the single definition of "occurs verbatim" for the whole codebase --
+    :func:`span_occurs` is derived from it, and the ask screen's context renderer
+    uses the offsets to show surrounding body text. Offsets index ``body`` as
+    given, never a normalized copy.
+
+    Exact substring is tried first (the common case, and a strict subset of the
+    flexible match); failing that, the span's whitespace-separated tokens are
+    searched joined by ``\\s+``, so a span differing from the body only by
+    reflowed whitespace still locates. That second pass accepts exactly what
+    ``normalize_whitespace(span) in normalize_whitespace(body)`` accepts, but
+    unlike normalizing both sides it preserves the mapping back to ``body``'s own
+    offsets -- which is why the locator, not the boolean, is the primitive. No
+    model is involved: this is a pure string search.
+    """
+    start = body.find(span)
+    if start != -1:
+        return start, start + len(span)
+    tokens = span.split()
+    if not tokens:
+        return None
+    found = re.search(r"\s+".join(re.escape(token) for token in tokens), body)
+    return found.span() if found else None
+
+
 def span_occurs(span: str, body: str) -> bool:
     """Whether ``span`` occurs verbatim in ``body`` -- exact, or normalized-whitespace.
 
-    Exact substring is tried first (the common case and a strict subset of the
-    normalized match); failing that, both sides are whitespace-normalized so a span
-    that differs from the body only by reflowed whitespace is still accepted. No
-    model is involved -- this is a pure string check.
+    The boolean face of :func:`locate_span`; see there for the matching rule. Kept
+    as its own name because the gate reads better as a yes/no question.
     """
-    if span in body:
-        return True
-    return normalize_whitespace(span) in normalize_whitespace(body)
+    return locate_span(span, body) is not None
 
 
 def support_verified(support: Support, body: str) -> bool:
