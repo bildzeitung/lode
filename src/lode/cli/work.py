@@ -1,6 +1,5 @@
 """``lode work`` -- drain the async work queue: claim, run, retry, or dead-letter each job."""
 
-import sqlite3
 from typing import Annotated
 
 import typer
@@ -13,17 +12,6 @@ from lode.jobs_read import outstanding_jobs
 from lode.llm_provider import LLMProviderError
 from lode.lock import LockHeld, WorkerLock
 from lode.storage import init_db
-
-
-def _outstanding_jobs(conn: sqlite3.Connection) -> list[tuple[int, str, str, str]]:
-    """List jobs still ``pending``/``running`` -- for ``--wait``'s timeout report.
-
-    Thin wrapper over :func:`lode.jobs_read.outstanding_jobs`, kept as this
-    module's own name (rather than importing the relocated function under
-    its own name directly) purely so this command's body -- unchanged since
-    before the SQL moved out (lode-35nu.9) -- reads identically.
-    """
-    return outstanding_jobs(conn)
 
 
 def _format_outstanding(jobs: list[tuple[int, str, str, str]]) -> str:
@@ -168,7 +156,7 @@ def work(
                         typer.echo(f"drained {n} job(s)")
 
                         if wait:
-                            outstanding = _outstanding_jobs(conn)
+                            outstanding = outstanding_jobs(conn)
                             if not outstanding:
                                 break
                             if cli.time.monotonic() >= deadline:
@@ -197,7 +185,7 @@ def work(
                         # 'lode work'. Report the same outstanding-jobs detail
                         # --wait's own timeout path names, every pass, so a
                         # one-shot (or --loop) run is never silent about it.
-                        outstanding = _outstanding_jobs(conn)
+                        outstanding = outstanding_jobs(conn)
                         if outstanding:
                             typer.echo(
                                 f"{len(outstanding)} job(s) still outstanding "

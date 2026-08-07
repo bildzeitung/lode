@@ -19,7 +19,7 @@ notes' DB lives (``$LODE_HOME``), and does not travel on the Dolt/git wire.
 A connector registers a :data:`BackfillHandler` under a short name (e.g.
 ``"jira"``) via :func:`register_backfill`, the same shape
 :func:`lode.reconcile.register_step` already uses for the reconciliation
-scan's step registry. ``lode backfill <name>`` (``src/lode/cli.py``) resolves
+scan's step registry. ``lode backfill <name>`` (``src/lode/cli/backfill.py``) resolves
 the handler via :func:`run_backfill` and prints whatever one-line summary the
 handler returns — mirroring the outcome-line convention
 :func:`lode.drawdown.refresh_external` / ``lode work`` already use, rather

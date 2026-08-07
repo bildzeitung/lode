@@ -38,14 +38,35 @@ same live-binding indirection this single flat module gave every call for
 free before the split. This is a deliberate, narrow exception; every other
 cross-command helper (``_open_db``, ``console``, ``SafeTable``, ...) is
 imported normally, since nothing patches those by name.
+
+**``time`` and ``uuid`` are patched DIFFERENTLY from each other, and the
+difference decides the call-site form -- do not unify them.**
+
+* ``time`` is REBOUND AS A NAME on this package:
+  ``monkeypatch.setattr(cli, "time", SimpleNamespace(monotonic=..., sleep=...))``
+  (``tests/test_cli.py``'s ``_patch_cli_clock_past_deadline``, deliberately
+  narrowed to this namespace in lode-e8lo so no other module observes the
+  fake). That is the same live-binding problem as the six names above, so
+  ``lode.cli.work`` must call ``cli.time.monotonic()`` / ``cli.time.sleep()``;
+  a plain ``import time`` there would bind the real module and the fake clock
+  would never be seen -- ``work --wait``'s timeout tests would spin instead of
+  trip.
+* ``uuid`` is patched as an ATTRIBUTE ON THE SHARED MODULE OBJECT:
+  ``monkeypatch.setattr(cli.uuid, "uuid4", ...)`` (``tests/test_cli.py``).
+  That mutates the stdlib module every importer already shares, so
+  ``lode.cli.add``'s plain ``uuid.uuid4()`` sees it and needs no indirection.
+
+Both ``import`` lines below are load-bearing regardless: they are what make
+``cli.time`` / ``cli.uuid`` resolve for those patches to target at all.
 """
 
 import logging
 import sqlite3
 import tempfile
-import time  # noqa: F401 -- re-exported so `cli.time` resolves for tests (see module docstring)
+import time  # noqa: F401 -- rebound by name in tests; call sites use `cli.time` (see module docstring)
 import tomllib
 import uuid  # noqa: F401 -- re-exported so `cli.uuid` resolves for tests (see module docstring)
+from importlib import import_module
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -430,46 +451,76 @@ def _abort_on_provider_error(command: str, err: BaseException) -> NoReturn:
     raise typer.Exit(code=1) from None
 
 
-# --- command module registration --------------------------------------------
-# Each import below triggers its module's own @app.command()/@models_app.command()
-# decorators. Order among these is immaterial (Typer collects commands, it
-# doesn't dispatch at import time) except that `models` must be imported
-# before anything expects `models_app` to already be attached to `app` --
-# each module attaches itself, so there is no ordering hazard here either.
-from lode.cli import add as _add  # noqa: F401
-from lode.cli import ask as _ask  # noqa: F401
-from lode.cli import backfill as _backfill  # noqa: F401
-from lode.cli import config as _config  # noqa: F401
-from lode.cli import dump_html as _dump_html  # noqa: F401
-from lode.cli import egress as _egress  # noqa: F401
-from lode.cli import jobs as _jobs  # noqa: F401
-from lode.cli import models as _models  # noqa: F401
-from lode.cli import notes as _notes  # noqa: F401
-from lode.cli import purge as _purge  # noqa: F401
-from lode.cli import recover as _recover  # noqa: F401
-from lode.cli import reembed as _reembed  # noqa: F401
-from lode.cli import reenrich as _reenrich  # noqa: F401
-from lode.cli import reindex_lexical as _reindex_lexical  # noqa: F401
-from lode.cli import show as _show  # noqa: F401
-from lode.cli import status as _status  # noqa: F401
-from lode.cli import tui as _tui  # noqa: F401
-from lode.cli import verify as _verify  # noqa: F401
-from lode.cli import version as _version  # noqa: F401
-from lode.cli import work as _work  # noqa: F401
+# --- command module registration ---------------------------------------------
+#: The command modules, in the order their commands must REGISTER (lode-35nu.9).
+#:
+#: Order is load-bearing and user-visible: Typer lists subcommands in
+#: registration order, so this tuple IS the order of ``lode --help``'s command
+#: table -- which the split must preserve byte-for-byte, exactly as it
+#: preserves each command's name and flags. It reproduces the order the
+#: commands were defined in when ``lode.cli`` was one flat module.
+#:
+#: Registration is driven by this explicit tuple rather than by a block of
+#: twenty ``from lode.cli import <module>`` statements because import order is
+#: the wrong place to encode it twice over: the isort rules ruff enforces would
+#: re-sort such a block alphabetically, AND a module pulled in transitively by
+#: an earlier sibling (``egress``/``jobs``/``work`` all import
+#: ``lode.cli.status``) registers at the point of the *transitive* import, not
+#: at its own line -- so the statement order and the real order silently
+#: disagree. Naming the order once, here, is immune to both.
+#:
+#: ``models`` attaches its own sub-``Typer`` to ``app`` at its module level, so
+#: it needs no special handling -- its position in this tuple is its position
+#: in the help table like every other entry.
+_COMMAND_MODULES = (
+    "add",
+    "ask",
+    "purge",
+    "recover",
+    "notes",
+    "show",
+    "status",
+    "reembed",
+    "reindex_lexical",
+    "reenrich",
+    "jobs",
+    "egress",  # also registers `no-egress`
+    "dump_html",
+    "config",
+    "verify",
+    "tui",
+    "models",
+    "version",
+    "work",
+    "backfill",
+)
+
+for _name in _COMMAND_MODULES:
+    import_module(f"lode.cli.{_name}")
+del _name
 
 # --- backward-compatible re-exports ------------------------------------------
 # A handful of names other packages (lode.tui.services.ask's deferred
 # `from lode.cli import _retrieve`) or tests still reach as `lode.cli.<name>`.
-# Plain re-exports (unlike the six call-through-the-package names documented
-# in this module's own docstring, which are never imported anywhere -- every
+# Plain re-exports (unlike the call-through-the-package names documented in
+# this module's own docstring, which are never imported anywhere -- every
 # INTERNAL call site reaches them via `cli.<name>` instead).
+#
+# `_retrieve` REACHES LESS FAR THAN IT DID (lode-35nu.9). It is defined in
+# `lode.cli.ask` and re-exported here, so `monkeypatch.setattr("lode.cli.
+# ._retrieve", ...)` (tests/test_tui_ask.py) still reaches
+# `lode.tui.services.ask.run_ask`, which resolves it lazily at call time.
+# It no longer reaches the `lode ask` COMMAND: that calls its own module
+# global in `lode.cli.ask`, which this rebind does not touch. Before the
+# split both lived in one namespace and one patch covered both. Nothing
+# depends on the wider reach today; a test that needs the command's
+# retrieval faked must patch `lode.cli.ask._retrieve` instead.
 from lode.cli.ask import (  # noqa: F401
     _ABSTAIN_LINE,
     _format_citation,
     _format_cited_answer,
     _retrieve,
 )
-from lode.cli.dump_html import _raw_payload  # noqa: F401
 from lode.cli.models import _FASTEMBED_EXHAUSTED_SOURCES, _warm  # noqa: F401
 from lode.cli.status import (  # noqa: F401
     EgressPurpose,
@@ -479,9 +530,9 @@ from lode.cli.status import (  # noqa: F401
     _enrichment_model_stale,
     _model_cache_probe,
     _model_revision_status,
+    _short,
 )
 from lode.cli.verify import _default_verify_fetcher  # noqa: F401
-from lode.cli.work import _short  # noqa: F401
 from lode.enrichment_view import (
     stale_enrichment_heads as _stale_enrichment_heads,  # noqa: F401
 )

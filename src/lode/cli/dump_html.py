@@ -17,11 +17,6 @@ from lode.ids import short_version_id
 from lode.notes_read import list_notes_conn
 from lode.repository import AmbiguousNoteIdError, Repository
 
-# ``_raw_payload`` kept as the CLI-facing name (lode-35nu.9) for backward
-# compatibility -- ``tests/test_cli.py`` and the package's own re-export
-# reach it as ``cli._raw_payload``/``cli.dump_html._raw_payload``.
-_raw_payload = raw_snapshot_payload
-
 
 def _render_external_choice(index: int, external: ExternalView) -> str:
     """Render one numbered listing line for ``dump-html``'s disambiguation prompt.
@@ -155,7 +150,7 @@ def _dump_all_notes(
     dumped = 0
     for note in list_notes_conn(conn):
         for index, external in enumerate(_note_externals(conn, note.note_id), start=1):
-            raw_payload = _raw_payload(conn, external.snapshot_id)
+            raw_payload = raw_snapshot_payload(conn, external.snapshot_id)
             if not raw_payload:
                 continue
             if write_files:
@@ -311,7 +306,7 @@ def dump_html(
                 raise typer.Exit(code=1)
             chosen_index, chosen = selected
 
-        raw_payload = _raw_payload(conn, chosen.snapshot_id)
+        raw_payload = raw_snapshot_payload(conn, chosen.snapshot_id)
     finally:
         conn.close()
 

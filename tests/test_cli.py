@@ -42,7 +42,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import click
 import pytest
+import typer.main
 from rich.console import Console
 from rich.table import Table
 from typer.testing import CliRunner
@@ -107,6 +109,49 @@ def test_help_lists_all_subcommands() -> None:
     assert result.exit_code == 0
     for name in ALL_SUBCOMMANDS:
         assert name in result.stdout
+
+
+#: The exact order ``lode --help`` lists its subcommands in. Typer/click render
+#: the command table in REGISTRATION order (groups, i.e. ``models``, after the
+#: plain commands), so this is a user-visible output contract, not an internal
+#: detail -- and since the lode-35nu.9 split it is produced by
+#: ``lode.cli._COMMAND_MODULES``' declared order rather than by one file's
+#: top-to-bottom layout. Pinned here because that split silently reordered it
+#: once already: an alphabetised import block, plus modules pulled in early and
+#: transitively by a sibling, made the real order an accident of import
+#: statements. Reordering the help table is a deliberate UX change -- update
+#: this list in the same commit, never to make a red test green.
+HELP_COMMAND_ORDER = [
+    "add",
+    "ask",
+    "purge",
+    "recover",
+    "notes",
+    "show",
+    "status",
+    "reembed",
+    "reindex-lexical",
+    "reenrich",
+    "jobs",
+    "egress",
+    "no-egress",
+    "dump-html",
+    "config",
+    "verify",
+    "tui",
+    "version",
+    "work",
+    "backfill",
+    "models",
+]
+
+
+def test_help_lists_subcommands_in_the_pinned_order() -> None:
+    # `typer.main.get_command` returns a TyperGroup -- a click Group subclass
+    # whose `list_commands` deliberately does NOT sort (click's own base does),
+    # which is exactly what makes registration order the rendered order.
+    group = typer.main.get_command(app)
+    assert group.list_commands(click.Context(group)) == HELP_COMMAND_ORDER
 
 
 # --- lode --debug (top-level flag, lode-1i8.3) ------------------------------
@@ -5501,13 +5546,21 @@ def test_every_cli_table_construction_routes_through_safe_table() -> None:
     # whole defect class regardless of how a future call site writes its
     # add_row calls.
     # lode-35nu.9: lode.cli is now a PACKAGE (src/lode/cli/**), not one file --
-    # scan every module in it, not just `cli.__file__` (which is now this
-    # package's own __init__.py). SafeTable's home module still needs no
-    # exemption below: excluded explicitly, the same way its class body was
-    # implicitly exempt when this was one file (see the regex comment).
+    # scan EVERY module in it, `__init__.py`/`__main__.py` included, not just
+    # `cli.__file__` (which is now only this package's own __init__.py). No
+    # module is exempted: SafeTable's own class body lives in __init__.py and
+    # still contains no `\bTable\(` for the scan to trip on (see the regex
+    # comment below), exactly as when this was one flat file.
     cli_dir = Path(cli.__file__).parent
     assert cli_dir.name == "cli"  # sanity: still lode.cli, not some other package
-    for py_file in sorted(cli_dir.glob("*.py")):
+    py_files = sorted(cli_dir.glob("*.py"))
+    # A glob that silently matches nothing would make this whole guard pass
+    # vacuously -- the one failure mode the single-file version could not have.
+    # Pin both that the scan found files AND that it reached the package's own
+    # __init__.py, the module the pre-split premise was entirely about.
+    assert len(py_files) > 1, f"cli package scan matched nothing in {cli_dir}"
+    assert cli_dir / "__init__.py" in py_files
+    for py_file in py_files:
         source = py_file.read_text(encoding="utf-8")
         # \bTable\( (not \bSafeTable\() -- word-boundary regex so a legitimate
         # `SafeTable(...)` construction (which itself contains the substring
@@ -6119,7 +6172,7 @@ def test_work_wait_does_not_duplicate_the_one_shot_outstanding_line(
 ) -> None:
     """'--wait' keeps its own outstanding-jobs reporting -- no duplicate generic line.
 
-    --wait already decides whether to keep polling from _outstanding_jobs()
+    --wait already decides whether to keep polling from jobs_read.outstanding_jobs()
     and names outstanding jobs itself on timeout; the new one-shot/--loop
     "still outstanding after this pass" line (lode-olmi.13) is specific to
     the non---wait path and must not also appear under --wait.

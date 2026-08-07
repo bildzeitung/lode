@@ -549,9 +549,10 @@ def read_snapshot(db_path: Path, snapshot_id: str) -> SnapshotRow | None:
 
     Feeds :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` (lode-0sjj):
     a plain ``snapshot_id`` lookup, the read-side counterpart to
-    :func:`lode.cli.dump_html`'s (lode-olmi.7) ``raw_payload`` SELECT. That
-    query now has a name of its own -- ``cli._raw_payload`` (lode-l38d.8,
-    which needed it on two paths) -- but it stays private to ``cli.py``: it
+    ``lode dump-html``'s (lode-olmi.7) ``raw_payload`` SELECT. That query now
+    has a name of its own -- :func:`lode.enrichment_view.raw_snapshot_payload`
+    (lode-l38d.8, which needed it on two paths; relocated out of the cli
+    package by lode-35nu.9) -- but it stays a distinct read: it
     takes the open ``conn`` that command already holds and returns only
     ``raw_payload``, where this returns a whole :class:`SnapshotRow` from a
     ``db_path``. A later refactor could still unify the two, on the

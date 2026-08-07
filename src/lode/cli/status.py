@@ -390,7 +390,8 @@ def status(db: _DbOption = None) -> None:
     #   against lode-l38d.11's rule that colour comes from CLI_STYLES by
     #   semantic name. Same defect lode-re0s found in sibling .5; fixed at the
     #   CALL SITE here, per that ticket -- hoisting the flag onto the shared
-    #   Console (cli.py:~202) is lode-re0s's call to make once .4/.6/.10 land,
+    #   Console (lode.cli's own module namespace) is lode-re0s's call to make
+    #   once .4/.6/.10 land,
     #   and taking it here would conflict with sibling branches live on this
     #   file. Table cells need none of this: rich runs no highlighter over them.
     cli.console.print(
