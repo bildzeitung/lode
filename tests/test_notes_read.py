@@ -697,6 +697,8 @@ def test_list_notes_with_all_tags_requires_every_selected_tag(tmp_path: Path) ->
 def test_list_notes_with_all_tags_single_tag_is_a_plain_membership_filter(
     tmp_path: Path,
 ) -> None:
+    """Also the note-scoped regression guard for lode-35nu.7: the direct
+    ``a.target = n.note_id`` arm is unchanged by the external-tag arm."""
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -741,6 +743,72 @@ def test_list_notes_with_all_tags_treats_a_tombstoned_tag_as_absent(
     _write_tag(db_path, "note-a", head, "removed-tag", source="user", status="orphaned")
 
     assert list_notes_with_all_tags(db_path, ["removed-tag"]) == []
+
+
+@pytest.mark.parametrize(
+    ("edge_status", "expected"), [("fresh", ["note-a"]), ("stale", [])]
+)
+def test_list_notes_with_all_tags_resolves_an_external_scoped_tag_through_fresh_edges(
+    tmp_path: Path, edge_status: str, expected: list[str]
+) -> None:
+    """lode-35nu.7: a tag scoped to an external (enrich.py writes tag
+    annotations at ``target = owner_id``, an external_id for an external)
+    matches a note through a *fresh* edge linking that external, not just a
+    direct note-scoped tag. Reproduces the confirmed failure: before the fix,
+    ``_list_notes_with_all_tags``'s join was strict on ``a.target =
+    n.note_id``, so an external-only tag matched zero notes even though the
+    tag itself was offered by :func:`list_tags`. Only ``'fresh'`` resolves --
+    the same filter :func:`lode.retrieval` builds its graph on; a stale (or
+    orphaned) edge no longer reflects a live link.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "cites an external").version_id
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type) VALUES (?, 'web')",
+            ("ext-1",),
+        )
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, status) VALUES (?, ?, 'ai', ?)",
+            ("note-a", "ext-1", edge_status),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    # Tag annotation's target is the EXTERNAL's id, not the note's -- exactly
+    # how enrich.py writes an external-scoped tag.
+    _write_tag(db_path, "ext-1", head, "ai")
+
+    assert "ai" in list_tags(db_path)
+    rows = list_notes_with_all_tags(db_path, ["ai"])
+    assert [row.note_id for row in rows] == expected
+
+
+def test_list_notes_with_all_tags_does_not_inherit_tags_across_a_note_to_note_edge(
+    tmp_path: Path,
+) -> None:
+    """Only an *external* target resolves through an edge. ``edges.to_id`` is
+    polymorphic (``lode.enrichment_view._external_view``) -- a fresh note->note
+    edge must not make note-a inherit note-b's own tags."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "links another note")
+        head_b = save(conn, "note-b", "the tagged note").version_id
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, status) "
+            "VALUES (?, ?, 'ai', 'fresh')",
+            ("note-a", "note-b"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    _write_tag(db_path, "note-b", head_b, "prod")
+
+    rows = list_notes_with_all_tags(db_path, ["prod"])
+
+    assert [row.note_id for row in rows] == ["note-b"]
 
 
 def test_list_notes_with_all_tags_orders_newest_first(tmp_path: Path) -> None:

@@ -526,6 +526,25 @@ def list_notes_with_all_tags(db_path: Path, tags: Collection[str]) -> list[NoteR
     is_annotation_suppressed` uses for a single tag, just repeated once per
     tag so a note only qualifies when *every* clause finds a live
     (non-tombstone) row for it.
+
+    A tag qualifies a note two ways (lode-35nu.7): directly, when the tag
+    annotation's ``target`` is the note's own ``note_id`` -- or transitively,
+    when the tag is scoped to an *external* (``annotations.target`` is
+    polymorphic: a note_id or an external_id, ``src/lode/schema.sql``) that
+    the note links via a fresh ``edges`` row (``from_id = note_id, to_id =
+    external_id, status = 'fresh'`` -- the same "note cites this external"
+    edge :func:`lode.retrieval` builds its graph from, on the same
+    ``status = 'fresh'`` filter). ``edges.to_id`` is itself polymorphic
+    (:func:`lode.enrichment_view._external_view`), so that arm resolves only
+    ``to_id`` values that are real ``externals`` rows -- a note->note edge
+    does not make one note inherit the other's tags. Without the second
+    arm, an external-only tag (``enrich.py`` writes tag annotations at
+    ``target = owner_id``, an external_id for an external) matches zero notes
+    by construction: it is offered by :func:`list_tags` (which applies no
+    target-kind filter) but can never satisfy a note-only join, so selecting
+    it always yielded an empty note list. Root cause confirmed against the
+    maintainer's live DB: 6 of 28 visible tags existed only as external-scoped
+    rows.
     """
     conn = init_db(db_path)
     try:
@@ -541,9 +560,18 @@ def _list_notes_with_all_tags(
     # One EXISTS clause per selected tag (empty selection -> "", i.e. the plain
     # list_notes query): a note qualifies only when a live tag row matches every
     # clause. Delegates the shared SELECT + NoteRow mapping to _list_notes.
+    # A qualifying tag row's target is either the note itself, or an external
+    # the note links via a fresh edge (see list_notes_with_all_tags's docstring).
+    # The JOIN onto externals is load-bearing, not decoration -- edges.to_id is
+    # polymorphic (see that docstring).
     exists_clause = (
-        "AND EXISTS (SELECT 1 FROM annotations a WHERE a.target = n.note_id "
-        f"AND a.payload = ? AND {_visible_tag_where('a.')}) "
+        "AND EXISTS (SELECT 1 FROM annotations a WHERE a.payload = ? "
+        f"AND {_visible_tag_where('a.')} AND ("
+        "a.target = n.note_id OR a.target IN ("
+        "SELECT e.to_id FROM edges e "
+        "JOIN externals x ON x.external_id = e.to_id "
+        "WHERE e.from_id = n.note_id AND e.status = 'fresh'"
+        "))) "
     )
     return _list_notes(
         conn,
