@@ -266,6 +266,23 @@ citation")`; Up/Down are `Binding("up", "focus_prev_citation", ..., show=False)`
 `Binding("down", "focus_next_citation", ..., show=False)` — hidden from the footer, matching how
 `BrowseScreen`'s own `DataTable` row navigation (also Up/Down) isn't listed there either.
 
+Two things this claim did *not* clear, recorded so the next reader doesn't re-derive them:
+
+- **Up/Down are not globally free on this screen — they are free from the question `Input` only.**
+  The answer pane (`#ask-results-pane`) is a focusable `VerticalScroll` whose own `up`/`down`
+  bindings scroll the answer, and a focused widget wins over a Screen binding. Verified empirically
+  (tab to the pane, press Down: it scrolls and the citation cursor does *not* move). This is the
+  wanted outcome — scrolling a long answer is never stolen — but it means the citation cursor is
+  reachable only while the question field has focus. `ctrl+j` reaches the Screen from both.
+- **The terminal-level `ctrl+j` caveat from the "No function keys" section still stands** and was
+  not retired by this claim. Textual's own tables are clean (`\n` → `ctrl+j`, `\r` → `enter`, so a
+  `ctrl+j` binding never sees a normal Return, verified against the installed 8.2.8 tables), but a
+  terminal emulator configured to send LF rather than CR for Return would deliver `ctrl+j` here.
+  That does **not** regress submit-on-Enter: on such a terminal `Input`'s `enter` binding is
+  already unreachable app-wide, before and after this ticket. The residual is narrower — on that
+  configuration, Return in the question field would additionally fire "open citation". Accepted as
+  the known cost of spending the last risk-flagged letter; revisit if the letter pool is widened.
+
 ## Resolved collisions (history, for context)
 
 Three siblings (`lode-olmi.9`, `.6`, `.2`) independently claimed keys with no shared reference and

@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 from textual.binding import Binding
+from textual.containers import VerticalScroll
 from textual.widgets import Footer, Input, Static, TextArea
 from textual.widgets._footer import FooterKey
 
@@ -490,6 +491,75 @@ def test_down_then_up_steps_the_citation_status_line_and_wraps(
     assert "1/2" in first and "Note One" in first
     assert "2/2" in second and "Note Two" in second
     assert "1/2" in third and "Note One" in third
+
+
+def test_down_still_scrolls_the_answer_pane_when_the_pane_has_focus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The citation cursor must not steal scrolling from a long answer.
+
+    ``up``/``down`` are SCREEN-level bindings, so they only fire when the
+    focused widget doesn't consume them first. ``#ask-results-pane`` is a
+    focusable ``VerticalScroll`` with its own arrow bindings, so tabbing to it
+    keeps scrolling intact and simply parks the citation cursor. ``ctrl+j`` is
+    bound on neither widget, so it still reaches the screen from the pane.
+    """
+    app = LodeApp(db_path=tmp_path / "lode.db")
+
+    canned = AskResult(
+        answer=CitedAnswer(
+            claims=(
+                # Long enough to overflow the pane and give it something to
+                # scroll.
+                Claim(
+                    text="claim one " * 400,
+                    support=[Support(version_id="v1", quoted_span="a")],
+                ),
+                Claim(
+                    text="claim two " * 400,
+                    support=[Support(version_id="v2", quoted_span="b")],
+                ),
+            ),
+            withheld_citations=(),
+        ),
+        identities={
+            "v1": CitationIdentity(note_id="n1", title="Note One", is_head=True),
+            "v2": CitationIdentity(note_id="n2", title="Note Two", is_head=True),
+        },
+    )
+    monkeypatch.setattr(
+        "lode.tui.screens.ask.run_ask", lambda db_path, question, **kwargs: canned
+    )
+
+    async def _drive() -> tuple[int, int, str, str]:
+        async with app.run_test() as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            screen = app.screen
+            screen.query_one(f"#{QUESTION_ID}").value = "which notes?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            pane = screen.query_one("#ask-results-pane", VerticalScroll)
+            assert pane.max_scroll_y > 0, (
+                "answer must overflow for this to mean anything"
+            )
+            await pilot.press("tab")
+            await pilot.pause()
+            assert screen.focused is pane
+
+            before_y = pane.scroll_offset.y
+            before_status = screen.query_one(f"#{CITATION_STATUS_ID}").content
+            await pilot.press("down")
+            await pilot.pause()
+            after_status = screen.query_one(f"#{CITATION_STATUS_ID}").content
+            return before_y, pane.scroll_offset.y, before_status, after_status
+
+    before_y, after_y, before_status, after_status = asyncio.run(_drive())
+
+    assert after_y > before_y, "down must still scroll the answer pane"
+    assert after_status == before_status, "and must not move the citation cursor"
 
 
 def test_ctrl_j_opens_the_exact_cited_version_not_the_head(

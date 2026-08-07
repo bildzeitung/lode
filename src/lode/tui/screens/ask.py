@@ -10,7 +10,7 @@ runs the pipeline off the UI thread, and displays what
 
 **Navigate from a cited result to the note it came from (lode-35nu.4).** Once
 an answer renders, Up/Down step a "focused citation" cursor through the
-distinct citation targets in first-cited order
+distinct citation targets in the order they render
 (:func:`lode.tui.services.ask.citation_targets`) -- shown in
 :data:`CITATION_STATUS_ID`'s status line, since the answer itself still
 renders as plain text (:data:`RESULTS_ID`) with no per-citation widget to
@@ -75,11 +75,16 @@ class AskScreen(Screen[None]):
 
     BINDINGS: ClassVar = [
         Binding("escape", "app.pop_screen", "Back"),
-        # Up/Down step the focused-citation cursor -- hidden from the footer
-        # (like a DataTable's own arrow-key row navigation elsewhere in this
-        # TUI) since neither Textual's ``Input`` nor anything else on this
-        # screen consumes them (see the module docstring's navigation
-        # section; confirmed empirically against ``Input.BINDINGS``).
+        # Up/Down step the focused-citation cursor -- hidden from the footer,
+        # like a DataTable's own arrow-key row navigation elsewhere in this
+        # TUI. These are SCREEN-level, so they only fire when the focused
+        # widget doesn't consume the key first. Textual's ``Input`` (the
+        # question field, focused on mount) has no up/down binding, so they
+        # bubble here. The results pane deliberately still wins: it is a
+        # focusable ``VerticalScroll`` whose own up/down bindings scroll the
+        # answer, so tabbing to it keeps scrolling intact and simply parks
+        # the citation cursor -- verified empirically, not assumed. Ctrl+J
+        # is bound to nothing on either, so it reaches this screen from both.
         Binding("up", "focus_prev_citation", "Prev citation", show=False),
         Binding("down", "focus_next_citation", "Next citation", show=False),
         # ctrl+j: the one formally-safe letter docs/keybindings.md's letter
@@ -108,15 +113,12 @@ class AskScreen(Screen[None]):
         self._spinner_timer: Timer | None = None
         self._spinner_frame = 0
         self._stage = ""
-        # Citation navigation (lode-35nu.4). ``_result`` is the last
-        # SUCCESSFUL, non-abstained answer -- kept only so
-        # ``action_open_citation`` can look up a focused target's
-        # ``CitationIdentity`` without re-deriving it from the rendered text.
-        # ``_citations`` is that answer's distinct citation target_ids in
-        # first-cited order (:func:`~lode.tui.services.ask.citation_targets`);
-        # ``_citation_idx`` is which one Up/Down/Ctrl+J currently act on.
+        # Citation navigation (lode-35nu.4). ``_result`` is the last rendered
+        # answer and the SINGLE source of truth for what is navigable: the
+        # target list is re-derived from it on demand by ``_targets`` rather
+        # than cached alongside it, so the two can never drift out of sync.
+        # ``_citation_idx`` is which target Up/Down/Ctrl+J currently act on.
         self._result: AskResult | None = None
-        self._citations: list[str] = []
         self._citation_idx = 0
 
     def compose(self) -> ComposeResult:
@@ -156,7 +158,6 @@ class AskScreen(Screen[None]):
         # clear the focused-citation cursor now rather than leaving Ctrl+J
         # briefly reachable against a stale target while the spinner runs.
         self._result = None
-        self._citations = []
         self._citation_idx = 0
         self._update_citation_status()
         self._ask(question, self._ask_generation)
@@ -244,9 +245,18 @@ class AskScreen(Screen[None]):
         results = self.query_one(f"#{RESULTS_ID}", LodeStatic)
         results.update(text)
         self._result = result
-        self._citations = citation_targets(result) if result is not None else []
         self._citation_idx = 0
         self._update_citation_status()
+
+    def _targets(self) -> list[str]:
+        """The current answer's navigable citation targets, in rendered order.
+
+        Re-derived from :attr:`_result` on demand rather than cached beside
+        it, so there is no second field to keep in sync (and no way for the
+        two to drift). Cheap: a pure in-memory walk of one already-resolved
+        answer's handful of citations, no I/O.
+        """
+        return citation_targets(self._result) if self._result is not None else []
 
     def _update_citation_status(self) -> None:
         """Refresh :data:`CITATION_STATUS_ID` for the current focused-citation cursor.
@@ -256,29 +266,31 @@ class AskScreen(Screen[None]):
         identity (see :func:`~lode.tui.services.ask.citation_targets`).
         """
         status = self.query_one(f"#{CITATION_STATUS_ID}", LodeStatic)
-        if not self._citations or self._result is None:
+        targets = self._targets()
+        if not targets or self._result is None:
             status.update("")
             return
-        target_id = self._citations[self._citation_idx]
-        identity = self._result.identities[target_id]
+        identity = self._result.identities[targets[self._citation_idx]]
         status.update(
-            f"Citation {self._citation_idx + 1}/{len(self._citations)}: "
+            f"Citation {self._citation_idx + 1}/{len(targets)}: "
             f"{identity.title}  (Ctrl+J to open)"
         )
 
+    def _step_citation(self, delta: int) -> None:
+        """Move the focused-citation cursor by ``delta``, wrapping at both ends."""
+        targets = self._targets()
+        if not targets:
+            return
+        self._citation_idx = (self._citation_idx + delta) % len(targets)
+        self._update_citation_status()
+
     def action_focus_prev_citation(self) -> None:
         """Up: move the focused-citation cursor to the previous citation, wrapping."""
-        if not self._citations:
-            return
-        self._citation_idx = (self._citation_idx - 1) % len(self._citations)
-        self._update_citation_status()
+        self._step_citation(-1)
 
     def action_focus_next_citation(self) -> None:
         """Down: move the focused-citation cursor to the next citation, wrapping."""
-        if not self._citations:
-            return
-        self._citation_idx = (self._citation_idx + 1) % len(self._citations)
-        self._update_citation_status()
+        self._step_citation(1)
 
     def action_open_citation(self) -> None:
         """Ctrl+J: open the focused citation's exact cited version/snapshot.
@@ -293,10 +305,11 @@ class AskScreen(Screen[None]):
         navigable, e.g. no question has been asked yet or the answer
         abstained.
         """
-        if not self._citations or self._result is None:
+        targets = self._targets()
+        if not targets or self._result is None:
             self.notify("no citation to open", severity="warning")
             return
-        target_id = self._citations[self._citation_idx]
+        target_id = targets[self._citation_idx]
         identity = self._result.identities[target_id]
         if identity.note_id is not None:
             self.app.push_screen(VersionViewScreen(identity.note_id, target_id))

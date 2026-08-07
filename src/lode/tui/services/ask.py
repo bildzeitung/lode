@@ -340,16 +340,34 @@ def _render_claims(result: AskResult, context_chars: int) -> list[str]:
     return lines
 
 
-def citation_targets(result: AskResult) -> list[str]:
-    """Distinct citation ``target_id``s with a resolved identity, in first-cited order (lode-35nu.4).
+def _group_key(identity: CitationIdentity) -> tuple[str, str] | None:
+    """The note/external this citation groups under, or ``None`` if unresolvable."""
+    if identity.note_id is not None:
+        return ("note", identity.note_id)
+    if identity.external_id is not None:
+        return ("external", identity.external_id)
+    return None
 
-    Traversal order matches :func:`_render_claims`'s own grouped pass --
-    first-cited, not sorted -- so a caller offering "next/previous citation"
-    navigation (the ask screen) steps through targets in the same order they
-    appear on screen. A target absent from ``result.identities`` (the store
-    had nothing to resolve for it -- practically unreachable, see
-    :class:`AskResult`'s own docstring) is excluded: there is no note/external
-    to navigate to for it.
+
+def citation_targets(result: AskResult) -> list[str]:
+    """Distinct navigable citation ``target_id``s, in the order they render (lode-35nu.4).
+
+    Walks the *same* grouped traversal :func:`_render_claims` renders with --
+    outer loop over distinct notes/externals in first-cited order, inner loop
+    over that group's citations in claim order -- so a caller offering
+    "next/previous citation" navigation (the ask screen) steps through targets
+    top-to-bottom exactly as they appear on screen. A flat first-cited walk
+    does *not* do this: a note cited by two claims with another note's claim
+    between them renders as one contiguous block but would be walked
+    non-contiguously, so the status line's "Citation n/m" would disagree with
+    what the reader is looking at.
+
+    A target is excluded when it has no :class:`CitationIdentity`, or an
+    identity that :func:`_group_key` cannot place (neither ``note_id`` nor
+    ``external_id`` -- the "exactly one is set" invariant violated). Those are
+    exactly the citations :func:`_render_claims` drops into its ungrouped flat
+    fallback section, and there is no note/external to navigate to for them --
+    so the navigable set is precisely the grouped, rendered set.
 
     Keyed by ``target_id`` (a specific ``version_id``/``snapshot_id``), not by
     note/external -- deliberately: two citations of the same note but
@@ -358,23 +376,17 @@ def citation_targets(result: AskResult) -> list[str]:
     note's current head (the ticket's own framing).
     """
     seen: set[str] = set()
-    order: list[str] = []
+    grouped: dict[tuple[str, str], list[str]] = {}
     for claim in result.answer.claims:
         for support in claim.support:
-            target_id = support.target_id
-            if target_id in result.identities and target_id not in seen:
-                seen.add(target_id)
-                order.append(target_id)
-    return order
-
-
-def _group_key(identity: CitationIdentity) -> tuple[str, str] | None:
-    """The note/external this citation groups under, or ``None`` if unresolvable."""
-    if identity.note_id is not None:
-        return ("note", identity.note_id)
-    if identity.external_id is not None:
-        return ("external", identity.external_id)
-    return None
+            identity = result.identities.get(support.target_id)
+            if identity is None or (group_key := _group_key(identity)) is None:
+                continue
+            if support.target_id in seen:
+                continue
+            seen.add(support.target_id)
+            grouped.setdefault(group_key, []).append(support.target_id)
+    return [target_id for bucket in grouped.values() for target_id in bucket]
 
 
 def _render_citation(support: Support, as_of: str | None) -> str:
