@@ -162,6 +162,55 @@ def test_empty_message_is_not_shown_once_a_real_row_exists() -> None:
     assert "real data" in line
 
 
+def test_empty_message_wider_than_the_table_is_cropped_to_the_strip_width() -> None:
+    """``render_line`` must return a Strip of exactly the widget's width.
+
+    ``Strip.text_align`` pads a short line but never truncates a long one --
+    for an over-wide message it returns a Strip that *claims* the requested
+    ``cell_length`` while still carrying every over-wide segment, which
+    bleeds across the rest of the line in a narrow terminal. The crop in
+    ``_empty_message_strip`` is what keeps the claim honest, so assert the
+    segments really measure what the Strip says they do.
+    """
+    app = _TableHarnessApp()
+
+    async def _drive() -> tuple[int, int, int]:
+        async with app.run_test(size=(20, 10)) as pilot:
+            table = pilot.app.screen.query_one(f"#{_TABLE_ID}", LodeDataTable)
+            table.add_column("Value")
+            table.empty_message = "A message far, far wider than twenty cells."
+            await pilot.pause()
+            strip = table.render_line(table.header_height)
+            actual = sum(segment.cell_length for segment in strip)
+            return table.size.width, strip.cell_length, actual
+
+    width, declared, actual = asyncio.run(_drive())
+
+    assert declared == width
+    assert actual == width
+
+
+def test_empty_message_is_centered_by_cell_width_not_character_count() -> None:
+    """A CJK message is centered on its *rendered* width -- padding computed
+    from ``len(str)`` would over-pad by one cell per double-width character
+    and push the line past the strip."""
+    app = _TableHarnessApp()
+
+    async def _drive() -> tuple[int, str]:
+        async with app.run_test(size=(20, 10)) as pilot:
+            table = pilot.app.screen.query_one(f"#{_TABLE_ID}", LodeDataTable)
+            table.add_column("Value")
+            table.empty_message = "日本語のメッセージ"  # 9 chars, 18 cells
+            await pilot.pause()
+            strip = table.render_line(table.header_height)
+            return sum(segment.cell_length for segment in strip), strip.text
+
+    actual, text = asyncio.run(_drive())
+
+    assert actual == 20
+    assert text == " 日本語のメッセージ "  # one pad cell each side, not five
+
+
 def test_update_cell_coerces_a_bare_str_value() -> None:
     """``update_cell`` (and by delegation ``update_cell_at``) get the same
     coercion an initial ``add_row`` does -- a later in-place edit can't

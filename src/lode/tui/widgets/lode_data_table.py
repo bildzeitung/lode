@@ -93,15 +93,23 @@ class LodeDataTable(DataTable):
                 return super().render_line(y)
             width = self.size.width
             if y == header_height:
-                return self._empty_message_strip(width)
+                return self._empty_message_strip(self.empty_message, width)
             return Strip.blank(width, self.rich_style)
         return super().render_line(y)
 
-    def _empty_message_strip(self, width: int) -> Strip:
-        """The centered ``empty_message`` line, padded/cropped to *width*."""
-        message = self.empty_message
-        assert message is not None  # only called when set -- see render_line
-        strip = Strip([Segment(message, self.rich_style)])
+    def _empty_message_strip(self, message: str, width: int) -> Strip:
+        """The centered *message* line, cropped then padded to exactly *width*.
+
+        The crop is not optional: ``Strip.text_align`` pads a short line but
+        does **not** truncate a long one -- for a message wider than the
+        table it returns a Strip that *claims* ``cell_length == width`` while
+        still carrying every over-wide segment, and ``render_line``'s
+        contract is a Strip of exactly the requested width. Cropping first
+        (on the accurate pre-align ``cell_length``) keeps a long message in a
+        narrow terminal from bleeding across the rest of the line; ``crop``
+        is a no-op for a message that already fits.
+        """
+        strip = Strip([Segment(message, self.rich_style)]).crop(0, width)
         return strip.text_align(width, "center")
 
     def add_row(

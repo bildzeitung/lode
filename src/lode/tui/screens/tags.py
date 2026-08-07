@@ -301,8 +301,6 @@ class TagsScreen(Screen[None]):
             if not rows and self._selected
             else None
         )
-        if not rows:
-            return
         for row in rows:
             table.add_row(
                 short_note_id(row.note_id),
