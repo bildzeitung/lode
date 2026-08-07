@@ -2164,6 +2164,43 @@ def test_escape_closes_the_quick_search_box_but_keeps_the_narrowed_list(
     assert row_count == 1  # the narrowed result is kept
 
 
+def test_opening_one_search_box_closes_the_other(tmp_path: Path) -> None:
+    """At most one of the two boxes is ever open (lode-35nu.6, review).
+
+    '/' leaves its box open when focus moves off it, so '/' then Tab then 's'
+    used to display BOTH boxes at once -- and then Escape's branch order, not
+    anything the user did, decided which one it closed. Verified in both
+    directions.
+    """
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes_indexed(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[bool, bool, bool, bool]:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            scan = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
+            quick = app.screen.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
+            # '/' -> Tab (focus back to the table) -> 's'
+            await pilot.press("slash")
+            await pilot.press("tab")
+            await pilot.press("s")
+            await pilot.pause()
+            scan_after_s, quick_after_s = scan.display, quick.display
+            # ...and the mirror: 's' is open now, Tab off it, then '/'
+            await pilot.press("tab")
+            await pilot.press("slash")
+            await pilot.pause()
+            return scan_after_s, quick_after_s, scan.display, quick.display
+
+    scan_after_s, quick_after_s, scan_after_slash, quick_after_slash = asyncio.run(
+        _drive()
+    )
+
+    assert not scan_after_s and quick_after_s  # 's' closed the '/' box
+    assert scan_after_slash and not quick_after_slash  # '/' closed the 's' box
+
+
 def test_quick_search_never_touches_the_scan_search_box(tmp_path: Path) -> None:
     """The two boxes are independent -- opening one leaves the other closed."""
     db_path = tmp_path / "lode.db"

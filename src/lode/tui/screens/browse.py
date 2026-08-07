@@ -620,6 +620,11 @@ class BrowseScreen(Screen[None]):
         table = self.query_one(f"#{TABLE_ID}", LodeDataTable)
         if table.row_count == 0:
             return
+        # The mirror of action_quick_search's guard -- at most one of the two
+        # boxes is open at a time (lode-35nu.6). Closing the quick-search box
+        # keeps its filter, exactly as Escape on it would.
+        if self._quick_search_open:
+            self._close_quick_search()
         self._search_direction = direction
         self._search_open = True
         search_input = self.query_one(f"#{SEARCH_INPUT_ID}", Input)
@@ -683,9 +688,13 @@ class BrowseScreen(Screen[None]):
         rather than scanning/highlighting the already-loaded rows the way
         ``/``'s progressive search does. Available from Browse only.
         """
-        self._open_quick_search()
-
-    def _open_quick_search(self) -> None:
+        # At most one of the two boxes is ever open. Nothing else enforces
+        # that: '/' leaves its box open when focus moves off it (Tab), so
+        # '/' then Tab then 's' would otherwise display BOTH boxes at once
+        # and leave action_dismiss_screen's branch order deciding which one
+        # Escape closes.
+        if self._search_open:
+            self._close_search()
         self._quick_search_open = True
         quick_search_input = self.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
         # Always starts blank (mirrors _open_search) -- setting .value fires

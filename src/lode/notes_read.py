@@ -72,7 +72,7 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from lode.lexical import LexicalIndex, build_prefix_match_query
+from lode.lexical import LexicalIndex, build_match_query
 from lode.storage import init_db
 
 #: Soft cap on how many passage rows :func:`_search_notes` reads back from
@@ -222,7 +222,7 @@ def search_notes(db_path: Path, query_text: str) -> list[NoteRow]:
       rather than a note version). An unscoped or externals-inclusive search
       would surface passages with no owning note to open from Browse.
     - **Prefix-matching, sanitized query** via
-      :func:`~lode.lexical.build_prefix_match_query` -- safe against FTS5
+      :func:`~lode.lexical.build_match_query` (``prefix=True``) -- safe against FTS5
       syntax injection from a free-typed search box, and matches a
       still-being-typed word (an as-you-type box otherwise shows nothing
       until a whole word is finished, since a bare FTS5 term requires an
@@ -242,7 +242,7 @@ def search_notes(db_path: Path, query_text: str) -> list[NoteRow]:
 
 
 def _search_notes(conn: sqlite3.Connection, query_text: str) -> list[NoteRow]:
-    match = build_prefix_match_query(query_text)
+    match = build_match_query(query_text, prefix=True)
     if match is None:
         return []
     head_rows = conn.execute(
@@ -250,9 +250,9 @@ def _search_notes(conn: sqlite3.Connection, query_text: str) -> list[NoteRow]:
         "JOIN versions v ON v.version_id = n.head_version_id "
         "WHERE v.op != 'delete'"
     ).fetchall()
+    # An empty map needs no early return of its own: LexicalIndex.search
+    # documents an empty ``target_versions`` collection as matching nothing.
     note_id_by_head_version = {version_id: note_id for note_id, version_id in head_rows}
-    if not note_id_by_head_version:
-        return []
     hits = LexicalIndex(conn).search(
         match,
         k=_QUICK_SEARCH_PASSAGE_LIMIT,

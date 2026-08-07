@@ -41,32 +41,46 @@ from lode.config import Settings
 #: replacement by the UNINDEXED ``target_version`` column; ``text`` is indexed.
 _FTS_TABLE = "passages_fts"
 
-#: Alphanumeric word tokens only -- the same shape ``lode.eval.harness._fts_query``
-#: uses to sanitize a free-typed question into a safe FTS5 ``MATCH`` expression
-#: (that function is module-private and never does prefix matching, so it isn't
-#: imported here; this mirrors its tokenizer approach rather than reimplementing
-#: the *sanitization* idea from scratch).
+#: Alphanumeric word tokens only -- everything else a user can type is dropped
+#: before it reaches the FTS5 ``MATCH`` parser. See :func:`build_match_query`.
 _WORD = re.compile(r"[0-9a-z]+")
 
 
-def build_prefix_match_query(text: str) -> str | None:
-    """Build a safe, prefix-matching FTS5 ``MATCH`` expression from free-typed text.
+def build_match_query(text: str, *, prefix: bool = False) -> str | None:
+    """Build a safe FTS5 ``MATCH`` expression from free-typed ``text``.
 
-    Stripping to ``[0-9a-z]+`` tokens is what makes the expression safe against
-    FTS5 syntax injection -- a typed ``-``, ``"`` or ``:`` never reaches the
-    ``MATCH`` parser (the same hazard ``lode.eval.harness._fts_query`` guards
-    against for a submitted question). Each token is suffixed ``*`` and the
-    tokens are ``OR``-ed, so a still-incomplete word (an as-you-type quick
-    search, lode-35nu.6) matches any passage containing a word that *starts*
-    with it, rather than requiring the token to already be a whole word the way
-    a bare FTS5 term does. Returns ``None`` when ``text`` has no usable token,
-    so the caller can skip the query (an empty/whitespace-only search box)
-    instead of issuing a ``MATCH`` against nothing.
+    THE query builder for this repo's two free-text callers -- the eval
+    scorer's submitted question (``lode.eval.harness``) and the browse
+    screen's as-you-type quick-search box (lode-35nu.6, via
+    :func:`lode.notes_read.search_notes`). One function, because the
+    *sanitization* is the security-relevant part and must not fork: stripping
+    to ``[0-9a-z]+`` tokens is what keeps a typed ``-``, ``"``, ``:``, ``^``
+    or ``(`` from ever reaching the ``MATCH`` parser (which would otherwise
+    raise mid-typing), and lowercasing is what stops a typed ``OR``/``AND``/
+    ``NEAR`` from being read as an FTS5 operator -- those keywords are
+    recognised only in uppercase. Tokens are ``OR``-ed rather than FTS5's
+    default ``AND`` so recall stays honest: a passage sharing any salient
+    keyword is a candidate and BM25 ranks them.
+
+    ``prefix=True`` suffixes each token ``*``, so a still-incomplete word
+    matches any passage containing a word that *starts* with it -- what an
+    as-you-type box needs, since a bare FTS5 term matches whole words only and
+    would show nothing until the user finishes typing one. The eval scorer
+    keeps the default (whole-word) form: its questions are submitted complete.
+
+    Returns ``None`` when ``text`` has no usable token (empty, whitespace, or
+    all punctuation), so the caller skips the query rather than issue a
+    ``MATCH`` against nothing.
+
+    **Known limitation:** the token class is ASCII-only, so a non-ASCII word
+    is truncated at its first non-ASCII character (``café`` -> ``caf``) and a
+    wholly non-ASCII one yields no token at all -- see lode-35nu.6's follow-up.
     """
     tokens = _WORD.findall(text.lower())
     if not tokens:
         return None
-    return " OR ".join(f"{token}*" for token in tokens)
+    suffix = "*" if prefix else ""
+    return " OR ".join(f"{token}{suffix}" for token in tokens)
 
 
 @dataclass(frozen=True, slots=True)

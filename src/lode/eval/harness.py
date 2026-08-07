@@ -49,7 +49,6 @@ The three scores are each a fraction in ``[0, 1]``:
   out-of-corpus ones must abstain.
 """
 
-import re
 import sqlite3
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -60,7 +59,7 @@ from lode.config import Settings
 from lode.embedding import Embedder, EmbeddingCacheBackend
 from lode.eval.golden import GoldenItem, golden_set
 from lode.eval.seed import seed_notes
-from lode.lexical import LexicalCacheBackend
+from lode.lexical import LexicalCacheBackend, build_match_query
 from lode.repository import CompositeCache, Repository
 from lode.retrieval import (
     ContextItem,
@@ -78,8 +77,6 @@ from lode.vectorstore import VectorStore
 #: :func:`lode.cited_answer.ask` with a real client; tests pass a deterministic
 #: stub so a fixed corpus yields a fixed score and no network is hit.
 Answerer = Callable[[str, Sequence[ContextItem]], CitedAnswer]
-
-_WORD = re.compile(r"[0-9a-z]+")
 
 
 @dataclass(frozen=True)
@@ -115,25 +112,6 @@ class GoldenScore:
     faithfulness_accuracy: float
     abstention_accuracy: float
     items: tuple[ItemScore, ...]
-
-
-def _fts_query(question: str) -> str | None:
-    """Build an FTS5 ``MATCH`` expression from a natural-language ``question``.
-
-    No query-builder has landed on the read side yet (``lode.retrieval`` takes the
-    MATCH expression as given), so the scorer -- the first caller to retrieve from a
-    free-text question -- builds one: the question's alphanumeric word tokens
-    ``OR``-ed together. ``OR`` (not the FTS5 default ``AND``) keeps recall honest --
-    a passage sharing any salient keyword is a candidate, and BM25 ranks them -- and
-    stripping to ``[0-9a-z]+`` tokens makes the expression safe (question marks,
-    apostrophes and quotes never reach the parser). ``None`` when the question has
-    no usable token, so the caller skips the lexical leg rather than issue an empty
-    MATCH.
-    """
-    tokens = _WORD.findall(question.lower())
-    if not tokens:
-        return None
-    return " OR ".join(tokens)
 
 
 def _build_seed_store(
@@ -195,7 +173,7 @@ def _retrieve(
     intended sub-spaces and avoids the dense-leg bias that arises when the query
     is embedded with the document prefix (lode-vhn / lode-7yw).
     """
-    match = _fts_query(question)
+    match = build_match_query(question)
     lexical = lexical_search(conn, match, k=k) if match else []
     query_vector = embedder.embed_query(question)
     vector = vector_search(store, conn, query_vector, k=k)

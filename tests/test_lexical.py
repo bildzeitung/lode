@@ -15,7 +15,7 @@ import pytest
 
 from lode.chunking import chunk
 from lode.embedding import EmbeddingCacheBackend
-from lode.lexical import LexicalCacheBackend, LexicalIndex, build_prefix_match_query
+from lode.lexical import LexicalCacheBackend, LexicalIndex, build_match_query
 from lode.repository import CacheBackend, CompositeCache, Repository
 from lode.storage import init_db
 
@@ -277,39 +277,70 @@ def test_recover_redacts_seeded_secret_from_the_lexical_leg(conn) -> None:
     assert secret in stored_body
 
 
-# --- build_prefix_match_query (lode-35nu.6) ------------------------------------
+# --- build_match_query (lode-35nu.6) ------------------------------------
 
 
-def test_build_prefix_match_query_tokenizes_and_ors_with_prefix_stars() -> None:
-    assert build_prefix_match_query("staging cert") == "staging* OR cert*"
+def test_build_match_query_tokenizes_and_ors_whole_words_by_default() -> None:
+    """The default (no ``prefix``) form -- what the eval scorer submits."""
+    assert build_match_query("staging cert") == "staging OR cert"
 
 
-def test_build_prefix_match_query_lowercases() -> None:
-    assert build_prefix_match_query("Staging CERT") == "staging* OR cert*"
+def test_build_match_query_suffixes_prefix_stars_when_asked() -> None:
+    assert build_match_query("staging cert", prefix=True) == "staging* OR cert*"
 
 
-def test_build_prefix_match_query_strips_fts5_syntax_characters() -> None:
+def test_build_match_query_lowercases() -> None:
+    assert build_match_query("Staging CERT", prefix=True) == "staging* OR cert*"
+
+
+def test_build_match_query_strips_fts5_syntax_characters() -> None:
     # A typed '"', ':', '-' etc. never reaches the MATCH parser -- only the
-    # alphanumeric word tokens survive (note: "or" is itself alphanumeric, so
-    # a literal typed "OR" becomes its own token, same as any other word).
+    # alphanumeric word tokens survive.
     assert (
-        build_prefix_match_query('foo" bar:baz-qux') == "foo* OR bar* OR baz* OR qux*"
+        build_match_query('foo" bar:baz-qux', prefix=True)
+        == "foo* OR bar* OR baz* OR qux*"
     )
 
 
-def test_build_prefix_match_query_returns_none_for_no_usable_token() -> None:
-    assert build_prefix_match_query("") is None
-    assert build_prefix_match_query('   "-:  ') is None
+def test_build_match_query_neutralizes_typed_fts5_operator_keywords() -> None:
+    """FTS5 recognises AND/OR/NOT/NEAR only in uppercase, so the lowercasing is
+    what stops a typed one from being parsed as an operator (lode-35nu.6)."""
+    assert build_match_query("a AND b", prefix=True) == "a* OR and* OR b*"
+    assert build_match_query("NEAR(x y)", prefix=True) == "near* OR x* OR y*"
 
 
-def test_build_prefix_match_query_output_is_a_valid_fts5_match_expression(conn) -> None:
+def test_build_match_query_returns_none_for_no_usable_token() -> None:
+    assert build_match_query("") is None
+    assert build_match_query('   "-:  ') is None
+    # Every FTS5 metacharacter on its own, prefix mode included -- none of
+    # these may produce an expression (a lone "*" is itself a syntax error).
+    for text in ("*", "^", "(", ")", '"', ":", "-", "!!!"):
+        assert build_match_query(text, prefix=True) is None
+
+
+@pytest.mark.parametrize(
+    "typed",
+    ["cert", "a AND b", "NEAR(x y)", "col:val", "a-b", "a^2", 'foo" bar', "x" * 2000],
+)
+def test_build_match_query_output_never_raises_in_fts5(conn, typed: str) -> None:
+    """The injection boundary: nothing a user can type reaches MATCH unsanitized."""
+    index = LexicalIndex(conn)
+    index.replace_passages("v1", chunk("the staging certificate rotation", "v1"))
+
+    query = build_match_query(typed, prefix=True)
+
+    if query is not None:
+        index.search(query, k=5)  # must not raise sqlite3.OperationalError
+
+
+def test_build_match_query_output_is_a_valid_fts5_match_expression(conn) -> None:
     """The built query actually MATCHes a still-incomplete word, prefix-style."""
     index = LexicalIndex(conn)
     index.replace_passages(
         "v1", chunk("the staging certificate rotation runbook", "v1")
     )
 
-    query = build_prefix_match_query("cert")  # "cert*" -- word not yet complete
+    query = build_match_query("cert", prefix=True)  # "cert*" -- word not yet complete
 
     assert query is not None
     hits = index.search(query, k=5)
