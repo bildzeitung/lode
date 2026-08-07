@@ -1117,6 +1117,147 @@ def test_reembed_never_enqueues_enrich_jobs(tmp_path: Path) -> None:
     assert types == {"embed"}
 
 
+# --- lode-x9lu: `lode reindex-lexical` -- backfill passages_fts for legacy notes ---
+
+
+def test_reindex_lexical_backfills_a_note_saved_before_the_lexical_leg(
+    tmp_path: Path,
+) -> None:
+    """A note written straight via versions.save (no cache) has zero FTS rows.
+
+    ``versions.save`` is the lower-level primitive Repository.save wraps with
+    the cache seam -- calling it directly, uncached, is exactly what a note
+    saved before the lexical leg (lode-x6r.4) landed looks like today: a
+    head with no passages/passages_fts rows at all. reindex-lexical must
+    backfill it.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-legacy", "hello world, a legacy note")
+        version_id = result.version_id
+    finally:
+        conn.close()
+
+    reader = sqlite3.connect(db_path)
+    try:
+        (before,) = reader.execute(
+            "SELECT COUNT(*) FROM passages_fts WHERE target_version = ?",
+            (version_id,),
+        ).fetchone()
+    finally:
+        reader.close()
+    assert before == 0
+
+    result = runner.invoke(app, ["reindex-lexical", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "reindexed 1 live note head(s)" in result.stdout
+
+    reader = sqlite3.connect(db_path)
+    try:
+        (after,) = reader.execute(
+            "SELECT COUNT(*) FROM passages_fts WHERE target_version = ?",
+            (version_id,),
+        ).fetchone()
+        rows = reader.execute(
+            "SELECT text FROM passages_fts WHERE target_version = ?", (version_id,)
+        ).fetchall()
+    finally:
+        reader.close()
+    assert after > 0
+    assert any("legacy" in text for (text,) in rows)
+
+
+def test_reindex_lexical_no_live_notes_is_a_clean_no_op(tmp_path: Path) -> None:
+    """An empty corpus reindexes nothing and says so, exiting 0."""
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = runner.invoke(app, ["reindex-lexical", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "no live note heads to reindex" in result.stdout
+
+
+def test_reindex_lexical_is_idempotent(tmp_path: Path) -> None:
+    """Re-running against an already-indexed head changes nothing (converges, not duplicates)."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-idem", "idempotent body text")
+        version_id = result.version_id
+    finally:
+        conn.close()
+
+    for _ in range(2):
+        result = runner.invoke(app, ["reindex-lexical", "--db", str(db_path)])
+        assert result.exit_code == 0, result.output
+
+    reader = sqlite3.connect(db_path)
+    try:
+        (count,) = reader.execute(
+            "SELECT COUNT(*) FROM passages_fts WHERE target_version = ?",
+            (version_id,),
+        ).fetchone()
+    finally:
+        reader.close()
+    assert count > 0  # unchanged across the second run, not doubled
+
+
+def test_reindex_lexical_excludes_soft_deleted_notes(tmp_path: Path) -> None:
+    """A soft-deleted note's tombstone head is not backfilled."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-gone", "will be deleted")
+        delete(conn, "note-gone")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reindex-lexical", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "no live note heads to reindex" in result.stdout
+
+
+def test_reindex_lexical_does_not_touch_external_snapshot_rows(tmp_path: Path) -> None:
+    """An external snapshot's own FTS rows are untouched -- notes only."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO externals (external_id, source_type) VALUES ('ext-1', 'web')"
+            )
+            conn.execute(
+                "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
+                "VALUES ('snap-1', 'ext-1', 'external snapshot body', 'ok')"
+            )
+            conn.execute(
+                "UPDATE externals SET head_snapshot_id = 'snap-1' WHERE external_id = 'ext-1'"
+            )
+            # An external's FTS rows are written by ingest_snapshot in
+            # production; simulate one directly here to prove reindex-lexical
+            # leaves it alone.
+            conn.execute(
+                "INSERT INTO passages_fts (passage_id, target_version, text) "
+                "VALUES ('p-ext-1', 'snap-1', 'external snapshot body')"
+            )
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reindex-lexical", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "no live note heads to reindex" in result.stdout
+
+    reader = sqlite3.connect(db_path)
+    try:
+        rows = reader.execute(
+            "SELECT passage_id, text FROM passages_fts WHERE target_version = 'snap-1'"
+        ).fetchall()
+    finally:
+        reader.close()
+    assert rows == [("p-ext-1", "external snapshot body")]
+
+
 # --- lode-14jr: `lode reenrich` -- targeted, not whole-corpus, regeneration --
 
 

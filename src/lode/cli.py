@@ -1842,6 +1842,59 @@ def reembed(db: _DbOption = None) -> None:
 
 
 @app.command()
+def reindex_lexical(db: _DbOption = None) -> None:
+    """Rebuild ``passages_fts`` for every live NOTE head from its current body (lode-x9lu).
+
+    Closes the coverage hole ``reembed``'s own docstring calls out ("the
+    lexical/FTS leg is untouched") from the other side: a note saved before
+    the lexical leg landed (``lode-x6r.4``) has no rows in ``passages_fts`` at
+    all, so it silently never surfaces in Browse quick search
+    (:func:`lode.notes_read.search_notes`) or retrieval's lexical leg
+    (:func:`lode.retrieval.lexical_search`) -- both scope to the live-head set
+    and simply find nothing there for it. Unlike ``reembed``, this needs no
+    async job: chunking and the FTS5 write are the same synchronous,
+    model-free path :class:`lode.lexical.LexicalCacheBackend` already runs
+    inline on every save (``lode-xyb``), so this command drives that same
+    ``index()`` call directly, once per live note head, and returns done --
+    no ``lode work`` step, no queue.
+
+    **Notes only, not externals.** Every external snapshot's own FTS rows are
+    written by :func:`lode.externals.ingest_snapshot` at fetch time and are
+    untouched here -- this command walks ``notes``/``versions`` directly
+    rather than reusing :func:`lode.retrieval.live_head_versions` (which
+    unions in external heads too), so an external's rows are neither read nor
+    rewritten.
+
+    **Idempotent.** :meth:`~lode.lexical.LexicalCacheBackend.index` chunks the
+    body (deterministic, content-addressed passage ids) and
+    :meth:`~lode.lexical.LexicalIndex.replace_passages` deletes-then-inserts
+    per ``target_version`` -- so re-running this command against a head
+    already indexed just re-writes the same rows, changing nothing.
+
+    Offline and model-free, like the leg it repairs: no embedder, no network,
+    no job queue -- safe to run any time, including against a corpus that is
+    already fully indexed.
+    """
+    conn = _open_db(db)
+    try:
+        rows = conn.execute(
+            "SELECT n.note_id, n.head_version_id, v.body FROM notes n "
+            "JOIN versions v ON v.version_id = n.head_version_id "
+            "WHERE v.op != 'delete'"
+        ).fetchall()
+        cache = LexicalCacheBackend(conn)
+        for note_id, version_id, body in rows:
+            cache.index(note_id, version_id, body)
+    finally:
+        conn.close()
+
+    if rows:
+        typer.echo(f"reindexed {len(rows)} live note head(s) into passages_fts.")
+    else:
+        typer.echo("no live note heads to reindex.")
+
+
+@app.command()
 def reenrich(db: _DbOption = None) -> None:
     """Force a fresh enrich job for every live head whose annotations are stale (lode-14jr).
 
