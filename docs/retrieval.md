@@ -202,10 +202,20 @@ Runs app-side, after the Q&A LLM returns and before display:
 >
 > **Recommendation: no change.** The richer regex is a pure *tightening* (it only demotes claims to
 > NLI) with **zero measured benefit** on the corpus; a tokenizer library (spaCy, `regex` with Unicode
-> word-break rules) buys the same absent benefit at the cost of a dependency. The residual fail-open
-> exposure is recorded rather than dismissed — tracked as **lode-1qxy**; revisit if the eval harness
-> exhibits it. Separately, a mismatched Unicode **normalization** form between an LLM-generated claim
-> and a stored span is a narrower failure that word-splitting refinement cannot close at all.
+> word-break rules) buys the same absent benefit at the cost of a dependency. Separately, a mismatched
+> Unicode **normalization** form between an LLM-generated claim and a stored span is a narrower failure
+> that word-splitting refinement cannot close at all.
+>
+> **DECISION (lode-1qxy): exposure explicitly accepted, `_WORD`/`normalize_whitespace` unchanged.**
+> Closing the "revisit" left open above: the compound-identifier fragment exposure (`allkeys-lru` /
+> `DNS-01`) is real but stays accepted, for the same zero-measured-benefit-on-corpus reasoning as the
+> SPIKE. A standing regression test
+> (`tests/test_faithfulness.py::test_compound_identifier_fragment_couples_known_fail_open_exposure`)
+> pins the *current* behavior (both examples above couple) as a canary: if `_WORD` is ever tightened —
+> here or as a side effect of unrelated tokenizer work — that test fails and must be updated
+> deliberately alongside this note, rather than the exposure silently closing or reopening unnoticed.
+> This concerns **only** the fragment-containment mechanism in `_WORD`; other fail-open paths through
+> `claim_extractively_coupled` (e.g. inverted polarity) are tracked and closed separately.
 
 > **DECISION (lode-w2y7): negated-span coupling hole — closed, via a small negation-cue check.**
 > Containment (`payload(claim) ⊆ tokens(span)`) is asymmetric in a *second*, distinct way from
