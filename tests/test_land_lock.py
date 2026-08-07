@@ -102,8 +102,9 @@ import pytest
 from _gitrepo import _git
 from conftest import (
     _BLOCKQUOTE_MARKER,
-    LAND_SKILL,
-    _fenced_bash,
+    LAND_SKILL_BASH,
+    LAND_SKILL_BLOCKS,
+    LAND_SKILL_TEXT,
     bash_fence_blocks,
     fake_bin_env,
     only_block_with,
@@ -1217,7 +1218,7 @@ def test_land_skill_acquires_and_releases_through_this_script() -> None:
     every call site is prose in a markdown fence that no gate parses. Pin the
     shipped file (the tests/_hookharness.py precedent: assert what is
     committed, never a reimplementation)."""
-    text = LAND_SKILL.read_text(encoding="utf-8")
+    text = LAND_SKILL_TEXT
 
     assert "scripts/land-lock.sh acquire" in text, (
         "land/SKILL.md never acquires the single-lander lock -- overlapping "
@@ -1245,7 +1246,7 @@ def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
     the loop body, or that the loop runs once per ticket. Markdown call sites
     have no better mechanical gate available here; placement rests on review.
     """
-    text = LAND_SKILL.read_text(encoding="utf-8")
+    text = LAND_SKILL_TEXT
 
     assert "scripts/land-lock.sh heartbeat" in text, (
         "land/SKILL.md never heartbeats the single-lander lock -- the TTL is "
@@ -1278,7 +1279,7 @@ def test_land_skill_heartbeats_at_both_new_boundary_call_sites_lode_v4sv() -> No
     file / test_land_conflicts_state.py for unrelated reasons, so this test
     does not introduce a new fragile anchor on its own.
     """
-    text = LAND_SKILL.read_text(encoding="utf-8")
+    text = LAND_SKILL_TEXT
 
     positions = [
         m.start()
@@ -1339,7 +1340,7 @@ def test_land_skill_persists_its_own_acquire_token_for_later_blocks() -> None:
     invocations that heartbeat and release (lode-sfnb), so if this write is
     lost every later call site reads an empty token and silently degrades to
     the blind, pre-lode-q9pm behaviour."""
-    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
+    executed = LAND_SKILL_BASH
 
     # Match the WRITE specifically, not a bare mention of the filename: the
     # read-back sites name that same path four more times, so an `in executed`
@@ -1371,7 +1372,7 @@ def test_every_land_lock_heartbeat_and_release_call_site_supplies_its_own_token(
     spelling the explicit `--land-lock-blind` sentinel -- today exactly one
     does: Section 0's bail-out release, which fires when the token could not
     be parsed at all and so has none to supply."""
-    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
+    executed = LAND_SKILL_BASH
 
     offenders = [
         line.strip()
@@ -1402,7 +1403,7 @@ def test_land_skill_threads_its_own_token_into_land_merge_one() -> None:
     $STATE_DIR on its own -- so BOTH of Section 3's merge loops (the first pass
     and the isolation replay) must hand it the token as its third argument, or
     that heartbeat goes blind for every merged branch."""
-    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
+    executed = LAND_SKILL_BASH
 
     calls = re.findall(r"land-merge-one\.sh [^\n]*", executed)
     assert len(calls) >= 2, (
@@ -1476,7 +1477,7 @@ def test_fenced_bash_sees_every_bash_marker_including_indented_ones() -> None:
     with it, the two agree. No blockquoted fence exists in land/SKILL.md
     today, so the strip is a measured no-op as shipped.
     """
-    text = LAND_SKILL.read_text(encoding="utf-8")
+    text = LAND_SKILL_TEXT
     opening_marker = re.compile(r"^(?:`{3,}|~{3,})\s*(?:bash|sh)$")
     expected_marker_count = sum(
         1
@@ -1505,7 +1506,7 @@ def test_land_skill_never_reintroduces_an_inline_lock() -> None:
     """The exact regression this ticket fixed: a lock managed inline in a
     fenced block via `trap`/`kill -0`/`noclobber`, none of which can outlive
     the single Bash invocation that block runs in."""
-    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
+    executed = LAND_SKILL_BASH
     assert "land-lock.sh acquire" in executed, (
         "the acquire call is not inside an executable ```bash fence -- "
         "_fenced_bash() or the skill's layout has drifted"
@@ -1554,7 +1555,7 @@ def test_every_own_token_readback_site_warns_when_empty() -> None:
     deliberately excluded from both counts: it has no token to READ by
     construction, so it is not a read-back site at all and must not warn
     (this ticket's acceptance criteria name it as off limits)."""
-    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
+    executed = LAND_SKILL_BASH
 
     token_reads = executed.count('cat "$(git rev-parse --git-dir)/land-lock-token"')
     assert token_reads == 7, (
@@ -1623,7 +1624,7 @@ def _acquire_block() -> str:
     heading, so a future reflow of the section doesn't silently repin the
     wrong fence. `only_block_with` asserts exactly one hit."""
     return only_block_with(
-        bash_fence_blocks(LAND_SKILL.read_text(encoding="utf-8")),
+        LAND_SKILL_BLOCKS,
         "scripts/land-lock.sh acquire",
         "land-lock-token",
         what="Section 0's acquire block",
@@ -1637,7 +1638,7 @@ def _pass_start_block() -> str:
     rather than imported so this file's own execution-based pin does not
     depend on that module's helper existing or matching in shape)."""
     return only_block_with(
-        bash_fence_blocks(LAND_SKILL.read_text(encoding="utf-8")),
+        LAND_SKILL_BLOCKS,
         "assert-main-checkout.sh",
         'rm -rf "$STATE_DIR"',
         "git reset --hard origin/trunk",

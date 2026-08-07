@@ -1624,6 +1624,27 @@ def _fenced_bash(markdown: str) -> str:
 #: LAND_SKILL at all; its text-gate half is test_land_skill_guard_coverage.py.
 LAND_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
+#: The land skill doc's text, read once per session rather than once per test
+#: (lode-6mt3/lode-ulkf). ``tests/test_land_lock.py`` alone used to call
+#: ``LAND_SKILL.read_text(encoding="utf-8")`` up to eight times per run against
+#: this 166KB file; every call site there now reads this cached value instead.
+#: A test that is pinning the *parser itself*
+#: (``test_fenced_bash_sees_every_bash_marker_including_indented_ones``) still
+#: calls :func:`bash_fence_blocks` directly on this text rather than going
+#: through :data:`LAND_SKILL_BLOCKS`/:data:`LAND_SKILL_BASH` below, since the
+#: point of that test is to exercise the parser, not to reuse a pre-parsed
+#: result.
+LAND_SKILL_TEXT = LAND_SKILL.read_text(encoding="utf-8")
+
+#: :func:`bash_fence_blocks` applied to :data:`LAND_SKILL_TEXT` once per
+#: session. See :data:`LAND_SKILL_TEXT` above for why this is cached at all.
+LAND_SKILL_BLOCKS = bash_fence_blocks(LAND_SKILL_TEXT)
+
+#: :func:`_fenced_bash`'s result on :data:`LAND_SKILL_TEXT` once per session --
+#: equivalently, ``"\n".join(LAND_SKILL_BLOCKS)``. See :data:`LAND_SKILL_TEXT`
+#: above for why this is cached at all.
+LAND_SKILL_BASH = "\n".join(LAND_SKILL_BLOCKS)
+
 #: The sweep skill doc, derived the same way as LAND_SKILL above. Was
 #: hand-derived independently in every tests/ module that pins a sweep block
 #: (five of them by then) until lode-b8jc consolidated it here. Import this
