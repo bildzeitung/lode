@@ -1088,7 +1088,7 @@ it would mask the 2. Keep it there.
         continue
         ;;
     esac
-    if ! nox -s tests; then
+    if ! nox -t fix || ! nox -s tests; then
       git reset --hard HEAD~1   # back the culprit out
       # → bounce <id> (Section "Bounce"); it does NOT land this pass
       continue
