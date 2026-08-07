@@ -31,7 +31,13 @@ import pytest
 
 from lode.config import Settings
 from lode.jobs import now_iso
-from lode.reconcile import _embed_gap_step, _refresh_stale_step, reconcile
+from lode.reconcile import (
+    _embed_gap_step,
+    _lexical_gap_step,
+    _refresh_stale_step,
+    lexical_gap_heads,
+    reconcile,
+)
 from lode.storage import init_db
 
 # ---------------------------------------------------------------------------
@@ -203,6 +209,14 @@ def _pending_refresh_jobs(conn: sqlite3.Connection, external_id: str) -> list[st
             (external_id,),
         ).fetchall()
     ]
+
+
+def _fts_row_count(conn: sqlite3.Connection, target_version: str) -> int:
+    """Count of ``passages_fts`` rows for ``target_version`` (lode-cyly)."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM passages_fts WHERE target_version = ?",
+        (target_version,),
+    ).fetchone()[0]
 
 
 def _old_timestamp(seconds_ago: int) -> str:
@@ -885,3 +899,88 @@ def test_reconcile_progress_logs_failed_and_reraises(
 
     assert "reconcile.boom: starting" in caplog.text
     assert "reconcile.boom: failed" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# _lexical_gap_step / lexical_gap_heads (lode-cyly)
+# ---------------------------------------------------------------------------
+
+
+def test_lexical_gap_heals_a_head_with_no_fts_rows(conn: sqlite3.Connection) -> None:
+    """A live note head with zero passages_fts rows is healed inline -- no job queued."""
+    _insert_note_with_version(conn, "note-1", "ver-1")
+    assert _fts_row_count(conn, "ver-1") == 0
+
+    count = _lexical_gap_step(conn, Settings())
+
+    assert count == 1
+    assert _fts_row_count(conn, "ver-1") > 0
+    # Synchronous, no job queue: no job row of any type was created.
+    assert _all_jobs_for_version(conn, "ver-1") == []
+
+
+def test_lexical_gap_no_gap_when_fts_rows_already_present(
+    conn: sqlite3.Connection,
+) -> None:
+    """A head already indexed is not re-flagged."""
+    _insert_note_with_version(conn, "note-1", "ver-1")
+    _lexical_gap_step(conn, Settings())
+    assert _lexical_gap_step(conn, Settings()) == 0
+
+
+def test_lexical_gap_excludes_soft_deleted_head(conn: sqlite3.Connection) -> None:
+    _insert_note_with_version(conn, "note-1", "ver-1", op="delete")
+    assert lexical_gap_heads(conn) == []
+    assert _lexical_gap_step(conn, Settings()) == 0
+
+
+def test_lexical_gap_excludes_purged_head(conn: sqlite3.Connection) -> None:
+    _insert_note_with_version(conn, "note-1", "ver-1", purged_at=now_iso())
+    assert lexical_gap_heads(conn) == []
+    assert _lexical_gap_step(conn, Settings()) == 0
+
+
+def test_lexical_gap_idempotent_repeated_calls(conn: sqlite3.Connection) -> None:
+    """Re-running the step against an already-healed head changes nothing further."""
+    _insert_note_with_version(conn, "note-1", "ver-1")
+    _lexical_gap_step(conn, Settings())
+    rows_after_first = _fts_row_count(conn, "ver-1")
+
+    assert _lexical_gap_step(conn, Settings()) == 0
+    assert _fts_row_count(conn, "ver-1") == rows_after_first
+
+
+def test_lexical_gap_multiple_heads(conn: sqlite3.Connection) -> None:
+    _insert_note_with_version(conn, "note-1", "ver-1")
+    _insert_note_with_version(conn, "note-2", "ver-2")
+    count = _lexical_gap_step(conn, Settings())
+    assert count == 2
+    assert _fts_row_count(conn, "ver-1") > 0
+    assert _fts_row_count(conn, "ver-2") > 0
+
+
+def test_lexical_gap_registered_in_module_steps() -> None:
+    from lode.reconcile import _STEPS
+
+    names = [name for name, _ in _STEPS]
+    assert "lexical_gap" in names
+
+
+def test_reconcile_lexical_gap_end_to_end(conn: sqlite3.Connection) -> None:
+    """End-to-end via reconcile(): the lexical_gap step heals the gap inline."""
+    _insert_note_with_version(conn, "note-1", "ver-1")
+    total = reconcile(conn, steps=[("lexical_gap", _lexical_gap_step)])
+    assert total == 1
+    assert _fts_row_count(conn, "ver-1") > 0
+
+
+def test_lexical_gap_heads_reads_the_same_query_the_step_heals(
+    conn: sqlite3.Connection,
+) -> None:
+    """lexical_gap_heads() (also driving lode status's hint) matches the step's own gap."""
+    _insert_note_with_version(conn, "note-1", "ver-1")
+    heads = lexical_gap_heads(conn)
+    assert [h[1] for h in heads] == ["ver-1"]
+
+    _lexical_gap_step(conn, Settings())
+    assert lexical_gap_heads(conn) == []

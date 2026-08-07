@@ -79,6 +79,7 @@ from lode.fetch_outcome import HttpOutcome, classify_http_status
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.jira_fetch import JiraHttpFetcher, fetch_jira_issue
 from lode.lexical import LexicalCacheBackend
+from lode.reconcile import lexical_gap_heads
 from lode.llm_provider import LLMProviderError, provider_identity
 from lode.lock import LockHeld, WorkerLock
 from lode.logconfig import configure_logging
@@ -1517,6 +1518,37 @@ def _enrichment_model_stale(
         return False
 
 
+def _lexical_gap_count(db: Path | None) -> int:
+    """Count of live note heads with zero ``passages_fts`` rows right now (lode-cyly).
+
+    Reads :func:`lode.reconcile.lexical_gap_heads` -- the identical query the
+    ``lexical_gap`` reconcile step heals from -- so this count can never
+    disagree with what the next reconcile pass (worker startup, or the start
+    of any ``--loop``/``--wait`` drain tick) is about to fix. It is a plain
+    read only: unlike the reconcile step itself, this probe never calls
+    :class:`~lode.lexical.LexicalCacheBackend` and never writes anything --
+    ``lode status`` reports health, it does not perform repair.
+
+    Opens its own connection, mirroring :func:`_enrichment_model_stale`'s
+    independent-connection convention (this runs after ``status``'s own
+    early connection has already closed).
+
+    Never raises: any failure (a locked DB, an unexpectedly old schema, a
+    failed connection open) is reported as ``0`` -- this can only ever add a
+    hint line to ``lode status``, never fail the command, mirroring the
+    other status-hint probes' non-fatal contract.
+    """
+    try:
+        conn = _open_db(db)
+        try:
+            return len(lexical_gap_heads(conn))
+        finally:
+            conn.close()
+    except Exception:
+        log.debug("_lexical_gap_count: probe failed", exc_info=True)
+        return 0
+
+
 @app.command()
 def status(db: _DbOption = None) -> None:
     """Show work-queue health: job counts, dead-letters, an egress summary, and what needs your attention.
@@ -1538,7 +1570,10 @@ def status(db: _DbOption = None) -> None:
     configured enrichment_llm or the currently active provider
     (lode-14jr/lode-o9k3/lode-568v.6 -- no drift counterpart; see
     docs/configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745
-    for why), or an explicit
+    for why), flag any live note head missing its lexical (FTS5) index rows
+    -- the same signal the ``lexical_gap`` reconcile step self-heals on its
+    own schedule, surfaced here as a count so a user isn't waiting on that
+    schedule blind (lode-cyly) -- or an explicit
     "No action needed." if none of those apply. Dead-letter jobs get no hint
     -- they are already listed above with their errors, and won't be
     retried.
@@ -1685,6 +1720,10 @@ def status(db: _DbOption = None) -> None:
         enrichment_stale = _enrichment_model_stale(
             db, settings.enrichment_llm.model, provider_identity(settings)
         )
+    # Independent of `settings` (the query needs none), unlike the three
+    # probes above -- but still non-fatal (returns 0 on any failure) and run
+    # in the same "outside any try, own connection" style, per lode-cyly.
+    lexical_gap_count = _lexical_gap_count(db)
     console.print()
     # markup stays ON here -- these strings are author-written, not DB-derived,
     # so the [warn]/[ok] tags are the point. highlight stays OFF for the same
@@ -1723,12 +1762,21 @@ def status(db: _DbOption = None) -> None:
             "'lode reenrich' to make it consistent again.",
             highlight=False,
         )
+    if lexical_gap_count:
+        console.print(
+            f"[warn]Action needed:[/warn] {lexical_gap_count} live note head(s) "
+            "have no lexical (FTS5) index rows -- run 'lode reindex-lexical' to "
+            "make them keyword-findable now, or wait for 'lode work' to heal "
+            "them automatically on its next reconcile pass.",
+            highlight=False,
+        )
     if (
         pending_or_failed == 0
         and not cache_cold
         and not revision_mixed
         and not revision_drift
         and not enrichment_stale
+        and not lexical_gap_count
     ):
         console.print("[ok]No action needed.[/ok]", highlight=False)
 
