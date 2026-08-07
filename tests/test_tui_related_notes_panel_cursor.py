@@ -50,12 +50,14 @@ def _cursor_row_visible(text_area) -> bool:
     return top <= row < top + text_area.size.height
 
 
-async def _put_cursor_at_bottom_then_expand_panel(pilot, text_area, panel) -> dict:
-    """Shared body: scroll the cursor to the bottom, expand the panel, measure.
+async def _put_cursor_at_bottom_then_expand_panel(pilot, text_area, panel) -> None:
+    """Shared body: scroll the cursor to the bottom, expand the panel, assert.
 
     Both the edit and the capture path funnel through this once the screen
     is already open and the body's text is set -- the only thing that
-    differs between the two tests is how each screen/body get there.
+    differs between the two tests is how each screen/body get there, so the
+    assertions live here rather than being handed back through a dict for
+    each caller to re-spell identically.
     """
     text_area.move_cursor(text_area.document.end)
     text_area.scroll_cursor_visible()
@@ -74,13 +76,9 @@ async def _put_cursor_at_bottom_then_expand_panel(pilot, text_area, panel) -> di
     panel._render_related(_MAX_RELATED)
     await pilot.pause()
 
-    return {
-        "region_before": region_before,
-        "region_after": text_area.region,
-        "cursor_before": cursor_before,
-        "cursor_after": text_area.cursor_location,
-        "cursor_visible_after": _cursor_row_visible(text_area),
-    }
+    assert text_area.region == region_before
+    assert text_area.cursor_location == cursor_before
+    assert _cursor_row_visible(text_area)
 
 
 def test_edit_screen_panel_expansion_does_not_displace_the_cursor(
@@ -92,7 +90,7 @@ def test_edit_screen_panel_expansion_does_not_displace_the_cursor(
     conn.close()
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> dict:
+    async def _drive() -> None:
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.press("ctrl+b")
             await pilot.press("enter")
@@ -100,15 +98,51 @@ def test_edit_screen_panel_expansion_does_not_displace_the_cursor(
             assert isinstance(app.screen, EditScreen)
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             panel = app.screen.query_one(RelatedNotesPanel)
-            return await _put_cursor_at_bottom_then_expand_panel(
-                pilot, text_area, panel
-            )
+            await _put_cursor_at_bottom_then_expand_panel(pilot, text_area, panel)
+
+    asyncio.run(_drive())
+
+
+def test_focus_border_neither_clips_the_panel_nor_moves_the_text_area(
+    tmp_path: Path,
+) -> None:
+    """The reserved height must absorb the Ctrl+F focus border too.
+
+    ``lode.tcss``'s ``RelatedNotesPanel:focus`` draws a ``round`` border
+    (lode-olmi.9) and Textual's default ``box-sizing`` is ``border-box``, so a
+    fixed height counts that border *inside* the box. Reserving only
+    ``related_notes_limit + 1`` keeps the box stable but silently clips the
+    last two related notes exactly when the panel is focused — which is the
+    only time Up/Down can step onto them. Pin both halves at once: focusing
+    leaves the body ``TextArea``'s region untouched *and* leaves room for the
+    header plus every note line.
+    """
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> dict:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            text_area = app.screen.query_one(f"#{CAPTURE_BODY_ID}")
+            text_area.text = _LONG_BODY
+            panel = app.screen.query_one(RelatedNotesPanel)
+            panel._render_related(_MAX_RELATED)
+            await pilot.pause()
+            region_before = text_area.region
+            panel.focus()
+            await pilot.pause()
+            return {
+                "region_before": region_before,
+                "region_after": text_area.region,
+                "content_height": panel.content_region.height,
+            }
 
     result = asyncio.run(_drive())
 
     assert result["region_after"] == result["region_before"]
-    assert result["cursor_after"] == result["cursor_before"]
-    assert result["cursor_visible_after"]
+    # One header line + every note line a pass can render, still on screen.
+    assert result["content_height"] >= len(_MAX_RELATED) + 1
 
 
 def test_capture_screen_panel_expansion_does_not_displace_the_cursor(
@@ -118,7 +152,7 @@ def test_capture_screen_panel_expansion_does_not_displace_the_cursor(
     init_db(db_path).close()
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> dict:
+    async def _drive() -> None:
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, CaptureScreen)
@@ -126,12 +160,6 @@ def test_capture_screen_panel_expansion_does_not_displace_the_cursor(
             text_area.text = _LONG_BODY
             await pilot.pause()
             panel = app.screen.query_one(RelatedNotesPanel)
-            return await _put_cursor_at_bottom_then_expand_panel(
-                pilot, text_area, panel
-            )
+            await _put_cursor_at_bottom_then_expand_panel(pilot, text_area, panel)
 
-    result = asyncio.run(_drive())
-
-    assert result["region_after"] == result["region_before"]
-    assert result["cursor_after"] == result["cursor_before"]
-    assert result["cursor_visible_after"]
+    asyncio.run(_drive())

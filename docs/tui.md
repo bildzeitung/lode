@@ -227,6 +227,35 @@ correctly; forcing every site onto `_wait_until`/`_press_and_settle` would add c
 mechanism behind it. Reach for one of the two helpers above only when a test hits the actual
 load-dependent failure mode this section describes.
 
+## RelatedNotesPanel reserves its maximum height at mount (`lode-35nu.10`)
+
+`RelatedNotesPanel` composes into a `Vertical` alongside the body `TextArea`, whose height is `1fr`.
+`Static`'s own `DEFAULT_CSS` height is `auto` and Textual sizes `auto` siblings *before* handing the
+remainder to a `1fr` sibling — so every time a passive pass rendered *more* related notes than the
+last one, the panel's auto height grew on the next layout pass and took rows away from the
+already-laid-out `TextArea`, pushing the line the edit cursor was resting on out of view. The
+related-notes list is asynchronous and non-user-initiated: it must never move the ground under an
+active edit.
+
+The fix is `RelatedNotesPanel.on_mount` pinning `self.styles.height` to the panel's **maximum
+possible** size, before any pass has rendered anything, so content growth is invisible to layout.
+Three components, all named in the module (`_HEADER_ROWS`, `_FOCUS_BORDER_ROWS`):
+
+- `settings.related_notes_limit` — the most note lines a pass can ever render.
+- **+1** header row (`"Related notes:"`).
+- **+2** border rows. `lode.tcss`'s `RelatedNotesPanel:focus` rule draws a `round` border once Ctrl+F
+  moves focus onto the panel (`lode-olmi.9`), and Textual's default `box-sizing` is `border-box`, so
+  a *fixed* height counts that border inside the box. Reserving only the note lines and the header
+  keeps the box stable but silently clips the last two related notes exactly while the panel is
+  focused — i.e. exactly while Up/Down can step the selection cursor onto them.
+
+**This couples `related_notes_panel.py` to `lode.tcss`.** Changing the `:focus` border, or giving the
+panel a border/padding in its unfocused state, changes how many rows the box spends on chrome and
+requires updating `_FOCUS_BORDER_ROWS` with it. The knowable cost of the reservation is two blank
+rows below the notes while the panel is unfocused; that is the accepted price of never displacing the
+cursor. The height cannot live in `lode.tcss` instead: it depends on a runtime config knob, and TCSS
+cannot read `Settings`.
+
 ## RelatedNotesPanel's background pass: the straggler is tolerated, not joined (`lode-du4p`)
 
 `RelatedNotesPanel._search_related` runs its work as `await asyncio.to_thread(find_related_notes,

@@ -87,6 +87,18 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+#: Rows :meth:`RelatedNotesPanel.on_mount` reserves beyond the note lines
+#: themselves: the ``"Related notes:"`` header rendered by
+#: :meth:`RelatedNotesPanel._render_related`.
+_HEADER_ROWS = 1
+
+#: Rows reserved for ``lode.tcss``'s ``RelatedNotesPanel:focus`` border, which
+#: Textual counts *inside* a fixed height (its default ``box-sizing`` is
+#: ``border-box``). **Coupled to that CSS rule**: change the ``:focus``
+#: border there — or add one to the unfocused state — and this must change with
+#: it, or the panel starts clipping its own last notes (lode-35nu.10).
+_FOCUS_BORDER_ROWS = 2
+
 
 class RelatedNotesPanel(Static):
     """A "related past notes" panel — passive surfacing, interactive stepping.
@@ -161,15 +173,30 @@ class RelatedNotesPanel(Static):
         related-notes list is asynchronous and non-user-initiated; it must
         never move the ground under an active edit.
 
-        Fixing this panel's height to its maximum possible content — one
-        header line plus ``settings.related_notes_limit`` note lines — here,
-        at mount, before any pass has ever rendered a result, makes its
-        content growth invisible to layout: the panel's box never grows past
-        what was already reserved, so the ``TextArea``'s own space (and the
-        cursor's line within it) never moves, regardless of how many related
-        notes a later pass finds.
+        Fixing this panel's height to its maximum possible size here, at
+        mount, before any pass has ever rendered a result, makes its content
+        growth invisible to layout: the panel's box never grows past what was
+        already reserved, so the ``TextArea``'s own space (and the cursor's
+        line within it) never moves, regardless of how many related notes a
+        later pass finds.
+
+        Every reserved row is load-bearing: the ``related_notes_limit`` note
+        lines a pass can ever render, plus :data:`_HEADER_ROWS`, plus
+        :data:`_FOCUS_BORDER_ROWS`. The border rows are the subtle half —
+        ``lode.tcss``'s ``RelatedNotesPanel:focus`` rule draws a ``round``
+        border once Ctrl+F moves focus here (lode-olmi.9), and Textual's
+        default ``box-sizing`` is ``border-box``, so a fixed height counts that
+        border *inside* the box. Reserving the note lines and the header alone
+        would keep the box stable (the bug this fixes) but silently clip the
+        last two related notes the moment the panel is focused — precisely when
+        the user is stepping through them with Up/Down, so the selection cursor
+        could land on a row that is not on screen. Reserving the border rows
+        costs two blank rows while unfocused and keeps every note reachable in
+        both states. See ``docs/tui.md``.
         """
-        self.styles.height = self.app.settings.related_notes_limit + 1
+        self.styles.height = (
+            self.app.settings.related_notes_limit + _HEADER_ROWS + _FOCUS_BORDER_ROWS
+        )
 
     def _ensure_embedder(self) -> Embedder:
         """Return the shared query embedder, constructing the wrapper on first use.
