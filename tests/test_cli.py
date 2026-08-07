@@ -5500,22 +5500,30 @@ def test_every_cli_table_construction_routes_through_safe_table() -> None:
     # dangerous on an unguarded Table, so barring the construction bars the
     # whole defect class regardless of how a future call site writes its
     # add_row calls.
-    source = Path(cli.__file__).read_text(encoding="utf-8")
-    # \bTable\( (not \bSafeTable\() -- word-boundary regex so a legitimate
-    # `SafeTable(...)` construction (which itself contains the substring
-    # "Table(") never false-positives: there is no \b between "Safe" and
-    # "Table" inside one identifier, so this matches only a standalone
-    # `Table(` construction. SafeTable's own class body needs no exemption:
-    # its base-class reference is `SafeTable(Table):` (a `Table)`, not a
-    # `Table(`) and its override calls `super().add_row`, so it contains no
-    # `\bTable\(` for this scan to trip on.
-    bare_construction = re.search(r"\bTable\(", source)
-    assert bare_construction is None, (
-        "found a direct rich.table.Table(...) construction in lode.cli "
-        "outside SafeTable -- every CLI table must construct a SafeTable "
-        "instead (lode-9tmd), or a bare-str cell can silently drop "
-        "bracketed content again"
-    )
+    # lode-35nu.9: lode.cli is now a PACKAGE (src/lode/cli/**), not one file --
+    # scan every module in it, not just `cli.__file__` (which is now this
+    # package's own __init__.py). SafeTable's home module still needs no
+    # exemption below: excluded explicitly, the same way its class body was
+    # implicitly exempt when this was one file (see the regex comment).
+    cli_dir = Path(cli.__file__).parent
+    assert cli_dir.name == "cli"  # sanity: still lode.cli, not some other package
+    for py_file in sorted(cli_dir.glob("*.py")):
+        source = py_file.read_text(encoding="utf-8")
+        # \bTable\( (not \bSafeTable\() -- word-boundary regex so a legitimate
+        # `SafeTable(...)` construction (which itself contains the substring
+        # "Table(") never false-positives: there is no \b between "Safe" and
+        # "Table" inside one identifier, so this matches only a standalone
+        # `Table(` construction. SafeTable's own class body (lode.cli.__init__)
+        # needs no exemption: its base-class reference is `SafeTable(Table):`
+        # (a `Table)`, not a `Table(`) and its override calls `super().add_row`,
+        # so it contains no `\bTable\(` for this scan to trip on.
+        bare_construction = re.search(r"\bTable\(", source)
+        assert bare_construction is None, (
+            f"found a direct rich.table.Table(...) construction in "
+            f"lode.cli.{py_file.stem} -- every CLI table must construct a "
+            "SafeTable instead (lode-9tmd), or a bare-str cell can silently "
+            "drop bracketed content again"
+        )
 
 
 def test_config_knob_table_round_trips_the_github_pat_pattern_at_cli_level(
