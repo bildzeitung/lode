@@ -78,6 +78,23 @@ class Passage:
     parent_block: str
 
 
+def parse_char_range(char_range: str | None) -> tuple[int, int] | None:
+    """``(start, end)`` from a ``"start:end"`` :attr:`Passage.char_range`, else ``None``.
+
+    The reader half of the format this module writes. ``None`` for anything that
+    doesn't parse -- the ``passages.char_range`` column is nullable
+    (``schema.sql``) and a row can predate the current chunker -- so every caller
+    degrades (no highlight, no offset) instead of raising over a stored string.
+    """
+    if char_range is None:
+        return None
+    start_s, _, end_s = char_range.partition(":")
+    try:
+        return int(start_s), int(end_s)
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True)
 class _Block:
     """A structural unit of the body: ``body[start:end]`` plus whether it is a heading.

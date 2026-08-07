@@ -238,6 +238,39 @@ def test_render_ask_result_renders_context_for_a_whitespace_reflowed_span() -> N
     assert '"the token rotates hourly"' not in rendered
 
 
+def test_render_ask_result_uses_body_offset_to_pick_the_right_occurrence() -> None:
+    """A ``quoted_span`` occurring twice in its body is otherwise ambiguous
+    (``locate_span`` alone always finds the leftmost) -- ``Support.body_offset``
+    (lode-hruz), when stamped, disambiguates which occurrence the context comes
+    from."""
+    body = "alpha OAuth beta " + ("x" * 100) + " gamma OAuth delta"
+    second_offset = body.index("OAuth", body.index("OAuth") + 1)
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="claim",
+                support=[
+                    Support(
+                        version_id="v1",
+                        quoted_span="OAuth",
+                        body_offset=second_offset,
+                    )
+                ],
+            ),
+        ),
+        withheld_citations=(),
+    )
+    identities = {"v1": CitationIdentity(note_id="n1", title="title", is_head=True)}
+    result = AskResult(answer=answer, identities=identities, bodies={"v1": body})
+
+    rendered = render_ask_result(result, context_chars=10)
+
+    assert "gamma" in rendered
+    assert "delta" in rendered
+    assert "alpha" not in rendered
+    assert "beta" not in rendered
+
+
 def test_render_ask_result_falls_back_to_flat_rendering_when_unresolved() -> None:
     """A citation whose target didn't resolve to an identity has no body to
     pull context from -- it keeps the old flat, ungrouped rendering."""
