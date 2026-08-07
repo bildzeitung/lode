@@ -1535,17 +1535,12 @@ def only_block_with(blocks: list[str], *needles: str, what: str) -> str:
 
 
 def fake_bin_env(bin_dir: Path) -> dict[str, str]:
-    """``os.environ``, overlaid so ``bin_dir`` is first on ``PATH`` (lode-oj8x).
+    """``os.environ``, overlaid so ``bin_dir`` is first on ``PATH``.
 
-    The one place a fake tool -- most often a fake ``bd``, but not always --
-    gets put in front of the real one for a subprocess under test. Every
-    caller that shells out against a fake-bin directory wants exactly this:
-    the real environment, untouched, except ``PATH`` gaining ``bin_dir`` at
-    the front. Hoisted out of three duplicate ``dict(os.environ,
-    PATH=f"{bin_dir}:{os.environ['PATH']}")`` literals in
-    tests/test_sweep_digest_id.py, and reused by :func:`run_block` below,
-    which needs the same PATH overlay plus its own ``/sweep``-specific
-    ``TMPDIR`` redirection on top.
+    How a test puts a fake tool (usually a fake ``bd``) in front of the real
+    one for a subprocess under test: the real environment untouched, except
+    ``PATH`` gaining ``bin_dir`` at the front. Callers needing further keys
+    overlay them on the result, as :func:`run_block` does with ``TMPDIR``.
     """
     return dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
