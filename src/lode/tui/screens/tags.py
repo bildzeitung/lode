@@ -280,11 +280,29 @@ class TagsScreen(Screen[None]):
         :class:`~rich.text.Text` before it reaches ``add_row`` (lode-ix4i) --
         see :meth:`_tag_cell_text`'s docstring for why a bare ``str`` cell is
         unsafe.
+
+        Two or more selected tags that legitimately never co-occur on any
+        note is a real (correct) outcome of the AND/intersection semantics,
+        not a bug -- but a silently empty table reads as one. When the
+        selection is non-empty and the result is, this shows one explanatory
+        row (key=None -- :meth:`on_data_table_row_selected` already guards on
+        a non-``None`` row key, so it can't be opened as a note) instead of
+        leaving the table blank with no explanation (lode-35nu.7).
         """
         table = self.query_one(f"#{NOTES_TABLE_ID}", LodeDataTable)
         table.clear(columns=True)
         table.add_columns("Id", "Date", "Version", "Summary")
-        for row in list_notes_with_all_tags(self.app.db_path, self._selected):
+        rows = list_notes_with_all_tags(self.app.db_path, self._selected)
+        if not rows and self._selected:
+            table.add_row(
+                "",
+                "",
+                "",
+                Text("No notes carry every selected tag together."),
+                key=None,
+            )
+            return
+        for row in rows:
             table.add_row(
                 short_note_id(row.note_id),
                 format_adaptive_date(row.created),

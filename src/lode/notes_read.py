@@ -235,7 +235,7 @@ def _list_deleted_notes(conn: sqlite3.Connection) -> list[NoteRow]:
             # version_ids differ), so _head_summary would always miss and fall
             # through to the first line anyway -- skip the lookup and the
             # head_version_id it would need, and go straight there.
-            summary=_first_line(body),
+            summary=first_line(body),
         )
         for note_id, created, body, chain_length in rows
     ]
@@ -253,11 +253,18 @@ def _head_summary(
     ).fetchone()
     if row is not None:
         return json.loads(row[0])
-    return _first_line(head_body)
+    return first_line(head_body)
 
 
-def _first_line(body: str) -> str:
-    """The first non-blank line of ``body``, or ``""`` for an all-blank body."""
+def first_line(body: str) -> str:
+    """The first non-blank line of ``body``, or ``""`` for an all-blank body.
+
+    Public, and the ONE owner of this repo's "a note's title/summary is its
+    first non-blank line" convention -- the browse table's summary fallback
+    and the Ask screen's citation titles (lode-35nu.1) both call it, so a
+    refinement to what counts as a title lands in one place rather than
+    silently diverging between the two surfaces.
+    """
     for line in body.splitlines():
         stripped = line.strip()
         if stripped:
@@ -298,13 +305,13 @@ def candidate_rows_conn(
     one deleted note is ambiguous by design (repository.py) and both
     candidates must render, not just the live one.
 
-    A tombstoned candidate's summary skips straight to :func:`_first_line` on
+    A tombstoned candidate's summary skips straight to :func:`first_line` on
     the same grounds :func:`_list_deleted_notes` already documents: a
     tombstone's ``version_id`` is never the ``source_version`` a summary
     annotation was written against (the annotation targets the pre-delete
     head; the tombstone re-hashes with that head as its parent), so
     :func:`_head_summary` would always miss and fall through to
-    :func:`_first_line` anyway -- skip the lookup and go straight there.
+    :func:`first_line` anyway -- skip the lookup and go straight there.
 
     Takes an already-open ``conn`` (the ``Repository``'s own, same one that
     just raised the ``AmbiguousNoteIdError`` this feeds) rather than a
@@ -329,7 +336,7 @@ def candidate_rows_conn(
         created, head_version_id, body, op = found[note_id]
         deleted = op == "delete"
         summary = (
-            _first_line(body)
+            first_line(body)
             if deleted
             else _head_summary(conn, note_id, head_version_id, body)
         )
@@ -526,6 +533,25 @@ def list_notes_with_all_tags(db_path: Path, tags: Collection[str]) -> list[NoteR
     is_annotation_suppressed` uses for a single tag, just repeated once per
     tag so a note only qualifies when *every* clause finds a live
     (non-tombstone) row for it.
+
+    A tag qualifies a note two ways (lode-35nu.7): directly, when the tag
+    annotation's ``target`` is the note's own ``note_id`` -- or transitively,
+    when the tag is scoped to an *external* (``annotations.target`` is
+    polymorphic: a note_id or an external_id, ``src/lode/schema.sql``) that
+    the note links via a fresh ``edges`` row (``from_id = note_id, to_id =
+    external_id, status = 'fresh'`` -- the same "note cites this external"
+    edge :func:`lode.retrieval` builds its graph from, on the same
+    ``status = 'fresh'`` filter). ``edges.to_id`` is itself polymorphic
+    (:func:`lode.enrichment_view._external_view`), so that arm resolves only
+    ``to_id`` values that are real ``externals`` rows -- a note->note edge
+    does not make one note inherit the other's tags. Without the second
+    arm, an external-only tag (``enrich.py`` writes tag annotations at
+    ``target = owner_id``, an external_id for an external) matches zero notes
+    by construction: it is offered by :func:`list_tags` (which applies no
+    target-kind filter) but can never satisfy a note-only join, so selecting
+    it always yielded an empty note list. Root cause confirmed against the
+    maintainer's live DB: 6 of 28 visible tags existed only as external-scoped
+    rows.
     """
     conn = init_db(db_path)
     try:
@@ -541,9 +567,18 @@ def _list_notes_with_all_tags(
     # One EXISTS clause per selected tag (empty selection -> "", i.e. the plain
     # list_notes query): a note qualifies only when a live tag row matches every
     # clause. Delegates the shared SELECT + NoteRow mapping to _list_notes.
+    # A qualifying tag row's target is either the note itself, or an external
+    # the note links via a fresh edge (see list_notes_with_all_tags's docstring).
+    # The JOIN onto externals is load-bearing, not decoration -- edges.to_id is
+    # polymorphic (see that docstring).
     exists_clause = (
-        "AND EXISTS (SELECT 1 FROM annotations a WHERE a.target = n.note_id "
-        f"AND a.payload = ? AND {_visible_tag_where('a.')}) "
+        "AND EXISTS (SELECT 1 FROM annotations a WHERE a.payload = ? "
+        f"AND {_visible_tag_where('a.')} AND ("
+        "a.target = n.note_id OR a.target IN ("
+        "SELECT e.to_id FROM edges e "
+        "JOIN externals x ON x.external_id = e.to_id "
+        "WHERE e.from_id = n.note_id AND e.status = 'fresh'"
+        "))) "
     )
     return _list_notes(
         conn,

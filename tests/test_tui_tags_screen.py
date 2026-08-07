@@ -149,6 +149,39 @@ def test_selecting_a_tag_narrows_notes_by_and_semantics(tmp_path: Path) -> None:
     assert summaries == ["has both tags"]
 
 
+def test_and_intersection_empty_result_shows_an_explanatory_message(
+    tmp_path: Path,
+) -> None:
+    """lode-35nu.7: two tags that legitimately never co-occur is a correct,
+    non-buggy outcome of AND/intersection -- the empty table now explains
+    that instead of just going blank."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head_a = save(conn, "note-a", "only prod").version_id
+        head_b = save(conn, "note-b", "only staging").version_id
+    finally:
+        conn.close()
+    _write_tag(db_path, "note-a", head_a, "prod")
+    _write_tag(db_path, "note-b", head_b, "staging")
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> list[str]:
+        async with app.run_test(size=_NARROW) as pilot:
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            await pilot.press("space")  # select "prod"
+            await pilot.press("down")
+            await pilot.press("space")  # select "staging" too -- no overlap
+            await pilot.pause()
+            table = app.screen.query_one(f"#{NOTES_TABLE_ID}", DataTable)
+            return [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
+
+    summaries = asyncio.run(_drive())
+
+    assert summaries == ["No notes carry every selected tag together."]
+
+
 def test_deselecting_a_tag_widens_the_filter_again(tmp_path: Path) -> None:
     """Selecting prod+staging narrows to the one note with both; deselecting
     "prod" again widens back to every note carrying just "staging"."""
