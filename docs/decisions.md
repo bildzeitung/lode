@@ -3964,8 +3964,12 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   and only ever matches `land/<id>--*` names, never `worktree-agent-*`) and a concurrent `/land` pass
   (none was running). **Mitigation shipped by `lode-6wgc`** (not a fix for the hypothesis above, which
   remains open): `coding.md` and `code-reviewer.md` now re-run `scripts/isolation-guard.sh`
-  immediately before their first mutating `Edit`/`Write` and again before `nox -t fix`, narrowing —
-  not eliminating — the window in which a worktree can vanish undetected. Full write-up:
+  immediately before their first mutating `Edit`/`Write`, and again before the builder's first
+  `git commit` (the highest-consequence step — in this failure mode the commit *succeeds*, against
+  `trunk`) / the reviewer's gate loop, narrowing — not eliminating — the window in which a worktree
+  can vanish undetected. A markdown checkpoint is not the structurally correct altitude for this: a
+  `PreToolUse` hook needs no agent cooperation, and is deferred on stated grounds (it would also fire
+  in the main session's sanctioned `trunk` workflows) to `lode-p8zl`. Full write-up:
   [agents-workflow.md](agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc).
   Revisit if this recurs with better evidence, or if a harness changelog ever documents worktree
   lifecycle behavior across `SendMessage` resumes.

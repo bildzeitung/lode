@@ -277,23 +277,25 @@ the venv's `nox` by explicit path (lode-6874). For a docs-only branch there is n
 ### 4. Technical review (the whole point)
 
 **Re-assert isolation before the first mutating write (lode-6wgc).** Step 1's isolation guard ran once,
-at the very start, before this cycle's own fetch/checkout even happened; it cannot catch a launch
-worktree that vanishes *mid-session* — observed for a `coding` producer resumed via `SendMessage`,
-whose worktree was deleted out from under it, silently dropping its cwd onto the main checkout on
-`trunk` with nothing mechanical catching it (full account:
-[docs/agents-workflow.md](../../docs/agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc)).
-Re-run the same 0/1/2 precondition here, immediately before the first `Edit`/`Write` this pass makes:
+at the very start, so it cannot catch a launch worktree that vanishes *mid-session* — observed, with
+the agent's cwd silently falling back to the main checkout on `trunk` ([full
+account](../../docs/agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc)). Re-run
+the same 0/1/2 precondition here, immediately before the first `Edit`/`Write` this pass makes:
 
 ```bash
-"$TOP/scripts/isolation-guard.sh" || {
+"$(git rev-parse --show-toplevel)/scripts/isolation-guard.sh" || {
   echo "STOP: isolation guard failed mid-session (lode-6wgc) -- do NOT edit, write, or run nox." \
     "Report to the operator."
   exit 1
 }
 ```
 
-(`$TOP` is the toplevel captured in step 2; re-derive with `git rev-parse --show-toplevel` if out of
-scope.) On failure: hard stop, no self-rescue, report the diagnostic — identical to step 1's rule.
+The toplevel is substituted inline, never carried in a variable from step 2 — each fenced block is a
+separate `Bash` invocation and shell state does not survive between them (lode-lv04, gated by
+`tests/test_skill_bash_state.py`). On failure: hard stop, no self-rescue, report the diagnostic —
+identical to step 1's rule. (I do **not** re-run `recycled-worktree-guard.sh` here — that guard's
+failure mode is destructive repair, appropriate as a one-time precondition, not as a mid-session
+recheck against a tree that may hold my own uncommitted review fixes.)
 
 `Edit`/`Write` now work normally — I'm in my own worktree, not fighting a guard pinned somewhere else.
 
@@ -392,7 +394,7 @@ clean. Never gate a tree I then keep editing.
 insurance against the worktree vanishing in the interval since:
 
 ```bash
-"$TOP/scripts/isolation-guard.sh" || {
+"$(git rev-parse --show-toplevel)/scripts/isolation-guard.sh" || {
   echo "STOP: isolation guard failed before gating (lode-6wgc) -- do NOT run nox against this cwd." \
     "Report to the operator."
   exit 1
@@ -574,6 +576,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Model | **Opus** (review quality is where the spend goes; the builder runs cheaper) |
 | Where I work | my **own launch worktree** — never `git -C` or `EnterWorktree` into the builder's worktree, never `trunk` |
 | Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST thing I run in step 2, before even the recycled-worktree guard — the harness has handed a dispatched `code-reviewer` NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
+| Isolation guard (mid-session) | re-run the same script immediately before my first mutating `Edit`/`Write` (step 4) and again before `nox -t fix` (step 5) — a worktree can pass step 2's guards and still be destroyed mid-session; same stop-and-report contract, and the toplevel is substituted inline, never carried across fenced blocks (lode-6wgc) |
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before the fetch (step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | Reaching the branch | `git fetch origin land/<id> trunk`, then `TOP=$(git rev-parse --show-toplevel)` + `git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD` — unique local name, no detaching fallback (lode-em6v) |
 | Input | a ticket carrying **`ready-for-code-review`** + `metadata.review_head` |
