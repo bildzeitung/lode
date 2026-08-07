@@ -100,22 +100,24 @@ def locate_span(
     (the default) keeps the original leftmost-exact-else-leftmost-flexible
     behavior, so every existing caller is unaffected.
     """
-    exact_starts = [m.start() for m in re.finditer(re.escape(span), body)]
     tokens = span.split()
-    flexible_matches = (
-        list(re.finditer(r"\s+".join(re.escape(token) for token in tokens), body))
-        if tokens
-        else []
-    )
+    flexible = r"\s+".join(re.escape(token) for token in tokens) if tokens else None
 
     if hint is None:
-        if exact_starts:
-            start = exact_starts[0]
+        start = body.find(span)
+        if start != -1:
             return start, start + len(span)
-        return flexible_matches[0].span() if flexible_matches else None
+        if flexible is None:
+            return None
+        found = re.search(flexible, body)
+        return found.span() if found else None
 
-    candidates = [(start, start + len(span)) for start in exact_starts]
-    candidates += [match.span() for match in flexible_matches]
+    candidates = [
+        (match.start(), match.start() + len(span))
+        for match in re.finditer(re.escape(span), body)
+    ]
+    if flexible is not None:
+        candidates += [match.span() for match in re.finditer(flexible, body)]
     if not candidates:
         return None
     return min(candidates, key=lambda span_range: abs(span_range[0] - hint))

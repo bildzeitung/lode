@@ -54,16 +54,22 @@ class Support(BaseModel):
     body_offset: int | None = Field(
         default=None,
         ge=0,
-        description=(
-            "Char offset of the retrieved passage this span came from, when "
-            "known (lode-hruz). Never supplied by the model -- the LLM has no "
-            "notion of body offsets -- stamped app-side after the gate, by "
-            "matching quoted_span against the retrieved ContextItems for this "
-            "target. Disambiguates which occurrence a repeated quoted_span "
-            "renders context from; None when no retrieved passage could be "
-            "matched, in which case renderers fall back to the first occurrence."
-        ),
+        description="Leave unset: an app-side field, not part of the answer.",
     )
+    """Char offset of this span's occurrence in the cited body, when known (lode-hruz).
+
+    App-side only: never supplied by the model (the LLM has no notion of body
+    offsets), stamped after the gate by ``cited_answer._stamp_body_offsets``
+    against the retrieved passage the span actually came from, which overwrites
+    whatever the model put here. It disambiguates *which* occurrence a repeated
+    ``quoted_span`` renders context from; ``None`` when no retrieved passage
+    matched, in which case renderers fall back to the first occurrence.
+
+    It rides on this model rather than a parallel app-side type because
+    ``Support`` is what every consumer already threads through -- the cost is
+    that it does appear in the structured-output schema (``qa._ClaimsEnvelope``),
+    hence the terse ``description`` the model actually sees.
+    """
 
     @model_validator(mode="after")
     def _exactly_one_target(self) -> Support:

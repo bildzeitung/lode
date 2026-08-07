@@ -20,6 +20,7 @@ from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 
+from lode.chunking import parse_char_range
 from lode.notes_read import version_body
 from lode.tui.widgets.lode_static import LodeStatic
 
@@ -97,11 +98,10 @@ class RelatedNoteModalScreen(ModalScreen[None]):
         out of a glance-and-dismiss popup or highlighting the wrong span.
         """
         text = Text(body)
-        start_str, _, end_str = self._note.char_range.partition(":")
-        try:
-            start, end = int(start_str), int(end_str)
-        except ValueError:
+        bounds = parse_char_range(self._note.char_range)
+        if bounds is None:
             return text
+        start, end = bounds
         if not (0 <= start < end <= len(body)):
             return text
         text.stylize("reverse", start, end)
