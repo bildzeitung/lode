@@ -206,6 +206,16 @@ externals' own passages in the same FTS5 table) and its one documented
 coverage gap (notes saved before the lexical leg landed, or before any
 lexical reindex -- no such command exists yet).
 
+**Bare-blank table explained (lode-ligf).** An empty table used to give no
+indication of *why* -- a fresh install with no notes yet and a quick search
+that matched nothing looked identical. :meth:`_reload_rows` now sets
+:attr:`~lode.tui.widgets.lode_data_table.LodeDataTable.empty_message` on
+:data:`TABLE_ID` distinguishing the two: no live notes at all (fresh
+install, or everything tombstoned) vs. :attr:`_quick_search_query` non-empty
+with zero :func:`~lode.notes_read.search_notes` matches. Mirrors
+:class:`~lode.tui.screens.tags.TagsScreen`'s own adoption of the same
+mechanism (lode-t7pw) for its AND/intersection empty result.
+
 **Search box stays on-screen with a long list (lode-juz8.2).** Before this,
 the table had no height constraint from ``lode.tcss``, leaving it on
 ``DataTable``'s own ``DEFAULT_CSS`` of ``height: auto; max-height: 100%``.
@@ -466,6 +476,17 @@ class BrowseScreen(Screen[None]):
             ).row_key.value
         rows = self._current_rows()
         table.clear(columns=True)
+        # Two structurally distinct empty outcomes share this one table
+        # (lode-ligf): no live notes at all (fresh install, or everything
+        # tombstoned) vs. a non-empty quick-search query whose BM25
+        # search_notes matched nothing. Each gets its own explanation rather
+        # than one message trying to cover both.
+        if rows:
+            table.empty_message = None
+        elif self._quick_search_query:
+            table.empty_message = f"No notes match '{self._quick_search_query}'."
+        else:
+            table.empty_message = "No notes yet."
 
         # Id/Date/Version keep their natural widths -- the same max(header,
         # widest cell) a DataTable auto-column would pick. Date is the short

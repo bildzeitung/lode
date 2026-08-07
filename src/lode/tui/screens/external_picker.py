@@ -77,6 +77,11 @@ class ExternalPickerScreen(Screen[None]):
         """
         table = self.query_one(f"#{EXTERNAL_PICKER_TABLE_ID}", LodeDataTable)
         table.add_columns("Source", "Snapshot", "Fetched", "State")
+        # This screen is only ever pushed with >1 external (the "many" branch
+        # of the zero/one/many addressing rule), so this is not expected to
+        # actually render empty -- set for consistency with the other
+        # bare-blank tables (lode-ligf) rather than a reachable case here.
+        table.empty_message = "No externals for this note."
         for external in self._externals:
             table.add_row(
                 Text(external.source_type),
