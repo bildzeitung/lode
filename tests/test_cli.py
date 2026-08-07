@@ -1208,8 +1208,8 @@ def test_reindex_lexical_excludes_soft_deleted_notes(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
-        save(conn, "note-gone", "will be deleted")
-        delete(conn, "note-gone")
+        head = save(conn, "note-gone", "will be deleted")
+        delete(conn, "note-gone", parent=head.version_id)
     finally:
         conn.close()
 
