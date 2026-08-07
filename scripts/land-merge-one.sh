@@ -27,14 +27,26 @@
 #                      script never calls `bd` itself, so the "one bd-show
 #                      pass instead of N subprocess calls per merge" property
 #                      lode-bns3 established stays intact.
-#   [own-token]     -- OPTIONAL: the current /land pass's own remembered
+#   [own-token]     -- OPTIONAL at THIS script's own argument level (kept
+#                      optional so a direct invocation without a token still
+#                      runs): the current /land pass's own remembered
 #                      `scripts/land-lock.sh acquire` token (lode-q9pm),
 #                      threaded straight through to this script's own
 #                      heartbeat call below so it can refuse to overwrite a
-#                      lock this pass no longer owns. Omit it to reproduce
-#                      the pre-lode-q9pm blind heartbeat (no ownership
-#                      check) -- see scripts/land-lock.sh's own header for
-#                      what supplying it does and does not change.
+#                      lock this pass no longer owns. land-lock.sh's OWN
+#                      [own-token] argument is REQUIRED as of lode-yuwt, so
+#                      omitting it HERE does not reach land-lock.sh as an
+#                      empty argument: this script substitutes the explicit
+#                      `--land-lock-blind` sentinel below, keeping the
+#                      pre-lode-q9pm blind heartbeat this argument's contract
+#                      has always promised a token-less caller. That
+#                      degradation is NOT silent -- the loud, non-fatal
+#                      lode-67nk warning below fires at the point the
+#                      argument is missing -- but the loudness is THIS
+#                      script's, not land-lock.sh's exit-2 enforcement, which
+#                      this path deliberately never reaches. See
+#                      scripts/land-lock.sh's own header for what supplying a
+#                      real token does and does not change.
 #
 # Exit codes -- same 0/1/2 convention as scripts/merge-precheck.sh and
 # scripts/validate-mermaid.sh (lode-9i2p's rule: exit 2 is a MACHINE/setup
@@ -147,17 +159,28 @@ fi
 id="$1"
 msg_dir="$2"
 own_token="${3:-}"
-# Loud, non-fatal diagnostic when the caller passed no own-token (or an empty
-# one) -- otherwise the heartbeat call below silently degrades to the
-# pre-lode-q9pm blind behaviour with nothing in the log (lode-67nk). Every
-# SKILL.md caller warns at its own read-back site too, so on that path this
-# doubles up; it earns its place by covering a DIRECT invocation, which has no
-# caller diagnostic at all. STDERR, never stdout -- stdout is the caller's
-# $CONFLICTS channel (see the heartbeat comment below). Scaffolding for the
-# per-call-site design: if lode-yuwt ever moves the check into land-lock.sh
-# itself, this warning and SKILL.md's five go away together.
-[ -n "$own_token" ] || echo "land-merge-one: WARNING -- no own-token supplied;" \
-  "land-lock ownership check is DISABLED for this call's heartbeat (lode-67nk)" >&2
+# No own-token (or an empty one) -- warn loudly, then hand land-lock.sh the
+# explicit `--land-lock-blind` sentinel instead. Both halves are about the same
+# case, so they live in the same block:
+#   - the WARNING (lode-67nk) fires here, at the point of the missing argument,
+#     with nothing else to grep through. Every SKILL.md caller warns at its own
+#     read-back site too, so on that path this doubles up; it earns its place by
+#     covering a DIRECT invocation, which has no caller diagnostic at all.
+#     STDERR, never stdout -- stdout is the caller's $CONFLICTS channel (see the
+#     heartbeat comment below).
+#   - the SENTINEL is required because land-lock.sh's own [own-token] argument
+#     is REQUIRED as of lode-yuwt: an empty string is refused outright (exit 2),
+#     which would turn a caller who simply omitted THIS script's optional third
+#     argument into a heartbeat that stops re-stamping the lock at all, rather
+#     than the best-effort blind re-stamp this script's own contract has always
+#     promised a token-less caller. `land-lock-blind-ok:` -- this is the second
+#     of land-lock.sh's two sanctioned sentinel uses; see its OWNERSHIP CHECK
+#     header for both.
+if [ -z "$own_token" ]; then
+  echo "land-merge-one: WARNING -- no own-token supplied;" \
+    "land-lock ownership check is DISABLED for this call's heartbeat (lode-67nk)" >&2
+  own_token="--land-lock-blind"
+fi
 
 # Heartbeat the single-lander lock (lode-m87j). This script runs once per
 # accepted branch in /land's Section 3 first merge loop AND its
@@ -181,11 +204,10 @@ own_token="${3:-}"
 # lock itself. Extra stderr is already normal on this path (the merge's own
 # error text goes there below).
 #
-# `$own_token` (lode-q9pm) is passed through unconditionally rather than
-# conditionally: an empty string is treated by land-lock.sh identically to
-# the argument being absent, so this call site never has to branch. What
-# supplying it does and does not change is documented once, in the Usage
-# block above -- not restated here.
+# `$own_token` (lode-q9pm / lode-yuwt) is non-empty by this point -- either the
+# caller's real token, or the blind sentinel substituted above -- which
+# land-lock.sh now requires. What supplying a real token does and does not
+# change is documented once, in the Usage block above -- not restated here.
 "$(dirname "$0")/land-lock.sh" heartbeat "$own_token" >/dev/null || true
 
 msg_file="$msg_dir/$id"

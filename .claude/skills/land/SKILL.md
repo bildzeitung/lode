@@ -132,11 +132,13 @@ printf '%s\n' "$ACQUIRE_OUT" \
   # RELEASE BEFORE BAILING. We hold the lock as of two lines ago, and this is the
   # only exit path in the whole skill that aborts while holding it -- without this,
   # a bail here wedges landing for the FULL staleness window (~6 skipped /loop 5m
-  # ticks) for what is a parse bug, not a running pass. No token argument on
-  # purpose: we could not parse ours, and nothing else can have taken the lock in
-  # the microseconds since `acquire` succeeded, so the blind (pre-lode-q9pm) form
-  # is exactly right here.
-  scripts/land-lock.sh release   # land-lock-blind-ok: no token to supply, see above
+  # ticks) for what is a parse bug, not a running pass. The explicit
+  # --land-lock-blind sentinel on purpose: we could not parse our own token, and
+  # nothing else can have taken the lock in the microseconds since `acquire`
+  # succeeded, so skipping the ownership comparison (the pre-lode-q9pm blind form)
+  # is exactly right here -- land-lock.sh's own [own-token] argument is REQUIRED
+  # as of lode-yuwt, so this is the one sanctioned opt-out, not an omission.
+  scripts/land-lock.sh release --land-lock-blind   # land-lock-blind-ok: the one sanctioned opt-out, see above
   exit 1
 }
 ```
@@ -283,7 +285,8 @@ If the queue is empty, there is nothing to land: release the lock and stop —
 # Normal completion -- release now rather than waiting out the staleness window for no reason.
 MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"
 [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
-  "DISABLED for this call (lode-67nk)" >&2
+  "DISABLED for this call (lode-67nk) -- land-lock.sh REFUSES it outright (exit 2, lode-yuwt)" \
+  "rather than releasing blind, so the lock stays held until the staleness window reclaims it" >&2
 scripts/land-lock.sh release "$MY_TOKEN"
 exit 0
 ```
@@ -439,7 +442,8 @@ logged but never stops the pass (this is lock bookkeeping, not the vet itself):
 ```bash
 MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"
 [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
-  "DISABLED for this call (lode-67nk)" >&2
+  "DISABLED for this call (lode-67nk) -- land-lock.sh REFUSES it outright (exit 2, lode-yuwt)" \
+  "rather than re-stamping blind, so this iteration simply does not heartbeat (|| true below)" >&2
 scripts/land-lock.sh heartbeat "$MY_TOKEN" || true
 bd show <id> --json     # read metadata.land_head and metadata.land_summary
 git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on origin...
@@ -1531,7 +1535,8 @@ echo "bare-ref backstop3 (worktree-agent-*): deleted $B3_DELETED stale local ref
 
 MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
 [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
-  "DISABLED for this call (lode-67nk)" >&2
+  "DISABLED for this call (lode-67nk) -- land-lock.sh REFUSES it outright (exit 2, lode-yuwt)" \
+  "rather than releasing blind, so the lock stays held until the staleness window reclaims it" >&2
 scripts/land-lock.sh release "$MY_TOKEN"   # the pass is fully done -- release now rather than
                                      # waiting out the staleness window (lode-aps3; see Section 0)
 ```

@@ -203,16 +203,50 @@
 # live next to, so q9pm's owner-token check is scoped entirely to `$LOCK`
 # itself and `heartbeat`, with nothing here for it to coordinate with.
 #
-# OWNERSHIP CHECK (lode-q9pm). `heartbeat` and `release` accept the calling
-# pass's own remembered token as an optional final argument (documented in
-# `heartbeat`'s Usage entry below) and refuse to touch the lock record on a
-# mismatch, rather than
-# silently concealing an overlap with a displaced holder (`heartbeat` exits 1
-# without re-stamping; `release` exits 0 without removing $LOCK). `heartbeat`
+# OWNERSHIP CHECK (lode-q9pm, made a REQUIRED argument by lode-yuwt).
+# `heartbeat` and `release` require the calling pass's own remembered token as
+# their final argument (documented in `heartbeat`'s Usage entry below) and
+# refuse to touch the lock record on a mismatch, rather than silently
+# concealing an overlap with a displaced holder (`heartbeat` exits 1 without
+# re-stamping; `release` exits 0 without removing $LOCK). `heartbeat`
 # PRESERVES the record's existing owner token (lode-ao95) rather than
 # regenerating it, so the field stays meaningful to compare call to call --
 # see the MERGE RESOLUTION note below for why that specific behaviour was the
 # merge outcome, not a redesign.
+#
+# lode-yuwt (2026-08-07): the argument is REQUIRED, not optional. lode-q9pm
+# originally shipped it as an OPTIONAL final argument, purely for backward
+# compatibility with a caller that had not yet been updated to thread its own
+# token through. That compatibility need never actually existed -- there is
+# no external caller of this script; every caller lives in this repo, and
+# every real call site was updated to supply its token in the same change
+# that added the check. Leaving the argument optional meant the safety
+# property was opt-in per call site rather than an invariant of the script
+# itself, and a future call site that simply forgot the argument would
+# silently degrade to the pre-lode-q9pm blind behaviour with nothing to catch
+# it. Requiring it turns "forgot to thread the token" into a loud, immediate
+# usage error (exit 2) instead.
+#
+# TWO call sites are sanctioned to pass the explicit `--land-lock-blind`
+# sentinel instead of a real token -- explicitly, so the opt-out is visible at
+# the call site rather than looking like an oversight, and greppable as
+# `land-lock-blind-ok:`:
+#   - `.claude/skills/land/SKILL.md` Section 0's parse-failure bail path,
+#     which must release the lock it just acquired before it has had any
+#     chance to persist its own token to disk;
+#   - `scripts/land-merge-one.sh`, whose own third positional argument stays
+#     OPTIONAL (a direct invocation must still run) and which substitutes the
+#     sentinel when it is empty, after warning.
+# Each carries its own comment; both are pinned by tests/test_land_lock.py.
+#
+# lode-yuwt ALSO considered, and explicitly REJECTED, making the check a
+# self-reading invariant of this script (`acquire` writes a token file that
+# `heartbeat`/`release` read back themselves, collapsing every call-site
+# argument to zero): there is no self-reading form that keeps `release`'s
+# "a caller that never held the lock can call it harmlessly" contract, so
+# per-call-site threading is the correct end state, not a stopgap. Full
+# reasoning lives in docs/decisions.md (search "lode-yuwt") and
+# docs/agents-workflow.md -- deliberately not re-expanded here (lode-1n4x).
 #
 # For WHY this check exists (the self-concealing-overlap hazard: a displaced
 # pass that keeps blindly re-stamping a reclaimed lock makes a genuine
@@ -247,15 +281,15 @@
 #   pins this.
 #
 # Usage: scripts/land-lock.sh acquire
-#        scripts/land-lock.sh heartbeat [own-token]
-#        scripts/land-lock.sh release [own-token]
+#        scripts/land-lock.sh heartbeat <own-token>|--land-lock-blind
+#        scripts/land-lock.sh release <own-token>|--land-lock-blind
 #
 # acquire: exit 0 -> lock acquired (fresh, or reclaimed from a stale prior
 #                     holder). Caller proceeds with its /land pass. Prints
 #                     "land-lock: acquired (token <token>)" (or "... via
 #                     reclaim ...") to stdout -- the token is THIS pass's own,
 #                     to be captured and re-supplied to `heartbeat`/`release`
-#                     as their `[own-token]` argument (lode-q9pm; see below).
+#                     as their `<own-token>` argument (lode-q9pm; see below).
 #          exit 1 -> another /land is still (plausibly) running on this
 #                     machine, or the lock file could not be created at all --
 #                     including when the lock PATH itself could not even be
@@ -266,73 +300,114 @@
 #                     in parallel. Diagnostic on STDERR.
 #          exit 2 -> usage error (a caller bug, never a lock verdict). NOT
 #                     where a rev-parse/machine failure lands -- see below.
-# heartbeat [own-token]: re-stamps the lock this pass already holds, so the
+# heartbeat <own-token>: re-stamps the lock this pass already holds, so the
 #            staleness check measures idle time from the LAST heartbeat
 #            rather than the original `acquire` (CAVEAT 1). Call it
 #            periodically from inside a still-running pass -- never as a
 #            substitute for `acquire`.
 #
-#            `[own-token]` (also accepted by `release` below) is OPTIONAL,
-#            for backward compatibility with a caller that never captured its
-#            own token -- but see the OWNERSHIP CHECK section above for why
-#            every real call site should supply it. Omitting it reproduces
-#            the pre-lode-q9pm behaviour exactly: blind preserve-and-re-stamp,
-#            no ownership comparison. This entry is where that semantics is
-#            stated for this file; `release`'s own `[own-token]`, the
-#            OWNERSHIP CHECK section, and the `OWN_TOKEN=` assignment below
-#            point back here rather than repeating it.
-#            Because that degradation is silent HERE, the convention is that
-#            each CALLER warns on stderr when its own token comes back empty
-#            (lode-67nk) -- a new call site must carry that warning too, and
-#            tests/test_land_lock.py pins that it does.
+#            `<own-token>` (also required by `release` below) is REQUIRED
+#            (lode-q9pm, made mandatory by lode-yuwt) -- see the OWNERSHIP
+#            CHECK section above for the full reasoning. There is no external
+#            caller of this script to stay backward compatible with, so an
+#            absent or empty argument is now a CALLER BUG, not a supported
+#            degraded mode: it is rejected with exit 2 before any lock file
+#            is even touched (see the arg-parsing block below). This entry is
+#            where that semantics is stated for this file; `release`'s own
+#            `<own-token>`, the OWNERSHIP CHECK section, and the `OWN_TOKEN=`
+#            assignment below point back here rather than repeating it.
+#
+#            The ONLY sanctioned way to skip the ownership comparison on
+#            purpose is the literal sentinel `--land-lock-blind` in place of
+#            a real token, from one of the two call sites named in the
+#            OWNERSHIP CHECK section above. Using the sentinel from anywhere
+#            else defeats the point of this check and is not sanctioned.
 #            exit 0 -> re-stamped (or created fresh, if the file was somehow
 #                       already gone -- see the subcommand's own comment).
 #            exit 1 -> could not write the lock file -- including when the
 #                       lock path itself could not be determined (lode-8qkb),
-#                       OR (lode-q9pm) `[own-token]` was supplied and does not
-#                       match the record's current owner token: this pass no
-#                       longer holds the lock (another /land reclaimed it) and
+#                       OR (lode-q9pm) `<own-token>` does not match the
+#                       record's current owner token: this pass no longer
+#                       holds the lock (another /land reclaimed it) and
 #                       heartbeat REFUSES to overwrite the new holder's
 #                       record. NOT fatal to the caller's own step by itself
 #                       either way (this is bookkeeping, not the work) -- log
 #                       and continue; on the mismatch case specifically, the
 #                       caller should also stop treating itself as the lock
 #                       holder. Diagnostic on STDERR.
-# release [own-token]: always exit 0 -- `rm -f` is idempotent, and a caller
-#           that never held the lock (e.g. it just skipped the tick above)
-#           must be able to call this harmlessly too. Still exit 0, with a
-#           diagnostic on STDERR rather than silence, when even the lock PATH
-#           could not be determined (lode-8qkb): with no repository here,
-#           there is by definition nothing to release either way.
+#          exit 2 -> `<own-token>` was absent, empty, and not the
+#                       `--land-lock-blind` sentinel -- a caller bug, never a
+#                       lock verdict. Diagnostic on STDERR.
+# release <own-token>: always exit 0 when the argument was valid -- `rm -f`
+#           is idempotent, and a caller that never held the lock (e.g. it
+#           just skipped the tick above) must be able to call this
+#           harmlessly too. Still exit 0, with a diagnostic on STDERR rather
+#           than silence, when even the lock PATH could not be determined
+#           (lode-8qkb): with no repository here, there is by definition
+#           nothing to release either way.
 #
-#           `[own-token]` is OPTIONAL, same as `heartbeat`'s -- see its own
-#           Usage entry above. When supplied and it does NOT match the
-#           record's current owner token (lode-q9pm), `release` refuses to
-#           remove $LOCK -- deleting it would destroy another pass's live
-#           record, not this pass's own -- and says so on STDERR, still
-#           exiting 0 (there is nothing left for THIS pass to clean up
-#           either way).
+#           `<own-token>` is REQUIRED, same as `heartbeat`'s -- see its own
+#           Usage entry above, including the `--land-lock-blind` sentinel and
+#           its one sanctioned call site. When a real token is supplied and it
+#           does NOT match the record's current owner token (lode-q9pm),
+#           `release` refuses to remove $LOCK -- deleting it would destroy
+#           another pass's live record, not this pass's own -- and says so on
+#           STDERR, still exiting 0 (there is nothing left for THIS pass to
+#           clean up either way).
+#           exit 2 -> `<own-token>` was absent, empty, and not the
+#                       `--land-lock-blind` sentinel -- a caller bug, never a
+#                       lock verdict. Diagnostic on STDERR. (The prior
+#                       "release always exits 0" promise is about a VALID
+#                       call whose lock is simply not held -- not about a
+#                       malformed call.)
 #
 # Lock file lives under .git/ (per-machine, never committed) -- the shared,
 # repo-global .git, not a worktree-private one (lode-xkpd; see below).
 
 set -euo pipefail
 
-# acquire takes no further argument; heartbeat/release take an OPTIONAL
-# [own-token] as their sole further argument (lode-q9pm) -- so 1 or 2
-# arguments total, never more, and never 2 for acquire.
-if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] \
-   || { [ "$1" != "acquire" ] && [ "$1" != "heartbeat" ] && [ "$1" != "release" ]; } \
-   || { [ "$1" = "acquire" ] && [ "$#" -ne 1 ]; }; then
-  echo "usage: $0 acquire|heartbeat [own-token]|release [own-token]" >&2
-  exit 2
-fi
+# The literal sentinel that opts a heartbeat/release call OUT of the
+# ownership check on purpose, distinct from an omitted/empty argument (which
+# is now a caller bug, not a supported degraded mode -- lode-yuwt). Chosen to
+# be unambiguous against a real token: `new_token` below only ever produces
+# 16 lowercase hex characters, so a leading `--` can never collide.
+BLIND_SENTINEL="--land-lock-blind"
+
+# acquire takes no further argument; heartbeat/release now each REQUIRE
+# exactly one further argument -- their own token, or the explicit
+# $BLIND_SENTINEL opt-out (lode-yuwt). Stated as the three legal
+# <argc>:<subcommand> shapes rather than as a chain of negated conditions, so
+# adding a fourth shape is one more `case` arm and nothing else.
+case "$#:${1:-}" in
+  1:acquire | 2:heartbeat | 2:release) ;;
+  *)
+    echo "usage: $0 acquire" >&2
+    echo "       $0 heartbeat <own-token>|$BLIND_SENTINEL" >&2
+    echo "       $0 release <own-token>|$BLIND_SENTINEL" >&2
+    exit 2
+    ;;
+esac
 cmd="$1"
-# This pass's own remembered token, if the caller supplied one (lode-q9pm) --
-# empty for acquire (never reaches here, $# is 1) and for a heartbeat/release
-# caller that omitted it (see `heartbeat`'s Usage entry above for what
-# omitting it does and does not change).
+# This pass's own remembered token -- empty for acquire (never reaches here,
+# $# is 1) and, for heartbeat/release, either a real token or the literal
+# $BLIND_SENTINEL (both required, see the arg-count check above). Resolved to
+# the ownership-check-skipping empty string just below when the sentinel was
+# supplied; rejected outright when it is truly absent or empty (lode-yuwt --
+# see `heartbeat`'s Usage entry above for what that does and does not mean).
 OWN_TOKEN="${2:-}"
+if [ "$cmd" = "heartbeat" ] || [ "$cmd" = "release" ]; then
+  if [ "$OWN_TOKEN" = "$BLIND_SENTINEL" ]; then
+    OWN_TOKEN=""
+  elif [ -z "$OWN_TOKEN" ]; then
+    echo "land-lock: $cmd requires a non-empty own-token argument, or the" \
+      "explicit $BLIND_SENTINEL opt-out -- got empty/absent. This is a" \
+      "caller bug: every caller of this script lives in this repo" \
+      "(lode-yuwt), so there is no external caller left to stay silently" \
+      "backward compatible with. See this script's OWNERSHIP CHECK header" \
+      "section." >&2
+    exit 2
+  fi
+fi
 
 # `git rev-parse --git-dir` is NOT repo-global: from a LINKED worktree it
 # returns that worktree's PRIVATE gitdir (.git/worktrees/<name>), and only from

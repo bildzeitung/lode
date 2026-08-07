@@ -95,6 +95,7 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
 from _gitrepo import _git
 from conftest import (
     _BLOCKQUOTE_MARKER,
@@ -108,6 +109,17 @@ from conftest import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-lock.sh"
 MERGE_ONE = REPO_ROOT / "scripts" / "land-merge-one.sh"
+
+# The literal sentinel land-lock.sh accepts in place of a real own-token to
+# opt a heartbeat/release call OUT of the ownership check on purpose
+# (lode-yuwt) -- see that script's own header for the one sanctioned call
+# site (SKILL.md Section 0's parse-failure bail). Used throughout this file
+# wherever a test needs a VALID heartbeat/release call but is not itself
+# exercising the ownership comparison -- an omitted or empty own-token is, as
+# of lode-yuwt, a caller bug (exit 2), not a supported degraded mode, so a
+# bare `_run("heartbeat", repo=repo)` no longer reproduces the old
+# blind-and-legal behaviour.
+BLIND = "--land-lock-blind"
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -232,7 +244,7 @@ def test_acquire_on_a_fresh_repo_succeeds_and_writes_a_lock_file(
     # but must actually be present and vary, or a future ownership check has
     # nothing to compare against.
     assert fields[4], fields
-    second = _run("release", repo=repo)
+    second = _run("release", BLIND, repo=repo)
     assert second.returncode == 0
     reacquired = _run("acquire", repo=repo)
     assert reacquired.returncode == 0
@@ -266,7 +278,7 @@ def test_release_then_acquire_succeeds_again(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     assert _run("acquire", repo=repo).returncode == 0
 
-    released = _run("release", repo=repo)
+    released = _run("release", BLIND, repo=repo)
     assert released.returncode == 0
     assert not _lock_path(repo).exists()
 
@@ -279,7 +291,7 @@ def test_release_with_no_lock_held_is_a_harmless_no_op(tmp_path: Path) -> None:
     held the lock (e.g. it just skipped the tick) without that erroring."""
     repo = _init_repo(tmp_path)
 
-    result = _run("release", repo=repo)
+    result = _run("release", BLIND, repo=repo)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert not _lock_path(repo).exists()
@@ -335,7 +347,7 @@ def test_heartbeat_outside_any_git_repository_exits_1_not_a_raw_128(
     outside = tmp_path / "not-a-repo"
     outside.mkdir()
 
-    result = _run("heartbeat", repo=outside)
+    result = _run("heartbeat", BLIND, repo=outside)
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert "land-lock: heartbeat" in result.stderr
@@ -350,7 +362,7 @@ def test_release_outside_any_git_repository_still_exits_0(tmp_path: Path) -> Non
     outside = tmp_path / "not-a-repo"
     outside.mkdir()
 
-    result = _run("release", repo=outside)
+    result = _run("release", BLIND, repo=outside)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "land-lock: release" in result.stderr
@@ -474,7 +486,7 @@ def test_heartbeat_refreshes_an_existing_locks_timestamp(tmp_path: Path) -> None
     old_epoch = int(time.time()) - 100
     lock.write_text(f"12345 host {old_epoch} 2020-01-01T00:00:00Z\n")
 
-    result = _run("heartbeat", repo=repo)
+    result = _run("heartbeat", BLIND, repo=repo)
 
     assert result.returncode == 0, result.stdout + result.stderr
     new_epoch = int(lock.read_text().split()[2])
@@ -500,7 +512,7 @@ def test_heartbeat_preserves_the_existing_owner_token(tmp_path: Path) -> None:
     original_token = "deadbeefcafef00d"
     lock.write_text(f"12345 host {old_epoch} 2020-01-01T00:00:00Z {original_token}\n")
 
-    result = _run("heartbeat", repo=repo)
+    result = _run("heartbeat", BLIND, repo=repo)
 
     assert result.returncode == 0, result.stdout + result.stderr
     fields = lock.read_text().split()
@@ -527,7 +539,7 @@ def test_heartbeat_on_a_pre_token_four_field_lock_mints_a_fresh_token(
     old_epoch = int(time.time()) - 100
     lock.write_text(f"12345 host {old_epoch} 2020-01-01T00:00:00Z\n")
 
-    result = _run("heartbeat", repo=repo)
+    result = _run("heartbeat", BLIND, repo=repo)
 
     assert result.returncode == 0, result.stdout + result.stderr
     fields = lock.read_text().split()
@@ -544,7 +556,7 @@ def test_heartbeat_on_a_missing_lock_creates_one(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     assert not _lock_path(repo).exists()
 
-    result = _run("heartbeat", repo=repo)
+    result = _run("heartbeat", BLIND, repo=repo)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert _lock_path(repo).exists()
@@ -561,7 +573,7 @@ def test_stale_lock_refreshed_by_heartbeat_is_not_reclaimed(tmp_path: Path) -> N
     lock.write_text(f"12345 host {old_epoch} 2020-01-01T00:00:00Z\n")
 
     heartbeat = _run(
-        "heartbeat", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "500"}
+        "heartbeat", BLIND, repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "500"}
     )
     assert heartbeat.returncode == 0, heartbeat.stdout + heartbeat.stderr
 
@@ -589,7 +601,7 @@ def test_heartbeat_write_failure_is_reported_but_never_crashes(
     original_mode = git_dir.stat().st_mode
     git_dir.chmod(0o500)  # readable + traversable, not writable
     try:
-        result = _run("heartbeat", repo=repo)
+        result = _run("heartbeat", BLIND, repo=repo)
     finally:
         git_dir.chmod(original_mode)  # or tmp_path teardown fails
 
@@ -605,12 +617,16 @@ def test_heartbeat_write_failure_is_reported_but_never_crashes(
 # ---------------------------------------------------------------------------
 
 
-def test_heartbeat_with_no_own_token_still_blindly_preserves(tmp_path: Path) -> None:
-    """Backward compatibility, stated as its own test rather than only
-    inferred from the pre-existing heartbeat tests above: omitting
-    `[own-token]` entirely reproduces the pre-lode-q9pm behaviour exactly --
-    no ownership comparison at all, even against a record naming a
-    completely different token. This is the caller-not-yet-updated case."""
+def test_heartbeat_with_explicit_blind_sentinel_still_blindly_preserves(
+    tmp_path: Path,
+) -> None:
+    """The one sanctioned opt-out (lode-yuwt): the literal `--land-lock-blind`
+    sentinel in place of a real own-token reproduces the pre-lode-q9pm
+    behaviour exactly -- no ownership comparison at all, even against a
+    record naming a completely different token. Unlike before lode-yuwt, this
+    is no longer reachable by simply OMITTING the argument -- that is now a
+    caller bug (exit 2, see test_heartbeat_with_missing_own_token_is_exit_2
+    below) -- the caller must spell the sentinel explicitly."""
     repo = _init_repo(tmp_path)
     lock = _lock_path(repo)
     old_epoch = int(time.time()) - 100
@@ -618,11 +634,46 @@ def test_heartbeat_with_no_own_token_still_blindly_preserves(tmp_path: Path) -> 
         f"12345 host {old_epoch} 2020-01-01T00:00:00Z someone-elses-token\n"
     )
 
-    result = _run("heartbeat", repo=repo)
+    result = _run("heartbeat", BLIND, repo=repo)
 
     assert result.returncode == 0, result.stdout + result.stderr
     fields = lock.read_text().split()
     assert fields[4] == "someone-elses-token"
+
+
+@pytest.mark.parametrize("cmd", ["heartbeat", "release"])
+@pytest.mark.parametrize(
+    ("args", "needle"),
+    [
+        # Omitted entirely -> caught by the arg-COUNT check ("usage: ...").
+        ((), "usage"),
+        # Present but empty -> caught by the arg-VALUE check, which names the
+        # sentinel. Both must be rejected, and both must leave the record alone.
+        (("",), "requires a non-empty own-token"),
+    ],
+    ids=["omitted", "empty"],
+)
+def test_missing_or_empty_own_token_is_exit_2(
+    tmp_path: Path, cmd: str, args: tuple[str, ...], needle: str
+) -> None:
+    """lode-yuwt: the argument is now REQUIRED on BOTH subcommands. Omitting it
+    (or passing an empty string) is a caller bug, not a supported degraded
+    mode -- land-lock.sh refuses outright (exit 2, a usage error, never a lock
+    verdict) instead of silently falling back to the pre-lode-q9pm blind
+    behaviour. The lock record itself must be untouched in every case: this is
+    a rejection before any lock-file logic runs, so in particular `release`
+    must NOT have removed the lock on its way out."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 100
+    lock.write_text(f"12345 host {old_epoch} 2020-01-01T00:00:00Z my-token\n")
+    original = lock.read_text()
+
+    result = _run(cmd, *args, repo=repo)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert needle in result.stderr
+    assert lock.read_text() == original, f"{cmd} touched the lock despite exit 2"
 
 
 def test_heartbeat_refuses_to_overwrite_a_lock_reclaimed_by_another_pass(
@@ -1199,12 +1250,17 @@ def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
     )
 
 
-# `[own-token]` is OPTIONAL on `heartbeat`/`release`, and omitting it reproduces
-# the pre-lode-q9pm blind behaviour EXACTLY -- silently, with every existing test
-# above still green. So the ownership check's whole safety property rests on every
-# call site actually passing the token, which until these pins was unguarded prose
-# in a markdown fence: a fail-OPEN of precisely the class lode-rjqm names. The
-# three pins below close it from the three directions it can break.
+# `<own-token>` is REQUIRED on `heartbeat`/`release` as of lode-yuwt --
+# land-lock.sh itself now refuses (exit 2) a bare/empty argument, so a call
+# site that forgot it fails LOUDLY at the script layer. These pins stay as a
+# second, cheaper layer that catches the same drift earlier and more legibly
+# (a failing test naming the exact offending line, rather than a live /land
+# pass discovering it at exit 2) -- lode-yuwt's own scope note keeps them
+# rather than deleting them for exactly this reason. A call site may opt out
+# of supplying a real token ONLY by carrying the `land-lock-blind-ok` marker
+# with a stated reason AND spelling the explicit `--land-lock-blind`
+# sentinel -- today exactly one does: Section 0's bail-out release, which
+# fires when the token could not be parsed at all and so has none to supply.
 _BLIND_OK = "land-lock-blind-ok"
 
 
@@ -1241,13 +1297,15 @@ def test_land_skill_persists_its_own_acquire_token_for_later_blocks() -> None:
 def test_every_land_lock_heartbeat_and_release_call_site_supplies_its_own_token() -> (
     None
 ):
-    """The pin that actually holds lode-q9pm up. Bare `land-lock.sh heartbeat`
-    / `release` with no token argument is legal (backward compatibility) and
-    silent, so nothing but this test notices a call site losing its
-    `"$MY_TOKEN"`. A line may opt out ONLY by carrying the `land-lock-blind-ok`
-    marker with a stated reason -- today exactly one does: Section 0's bail-out
-    release, which fires when the token could not be parsed at all and so has
-    none to supply."""
+    """The pin that actually holds lode-q9pm up, kept as a second layer
+    alongside land-lock.sh's own required-argument enforcement (lode-yuwt) --
+    a bare `land-lock.sh heartbeat`/`release` with no real token now fails
+    loudly at the script layer too, but this test catches the drift earlier
+    and names the exact offending line. A line may opt out of a real token
+    ONLY by carrying the `land-lock-blind-ok` marker with a stated reason AND
+    spelling the explicit `--land-lock-blind` sentinel -- today exactly one
+    does: Section 0's bail-out release, which fires when the token could not
+    be parsed at all and so has none to supply."""
     executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
 
     offenders = [
@@ -1255,17 +1313,21 @@ def test_every_land_lock_heartbeat_and_release_call_site_supplies_its_own_token(
         for line in executed.splitlines()
         if re.search(r"land-lock\.sh (heartbeat|release)(\s|$)", line)
         and not re.search(r"land-lock\.sh (heartbeat|release)\s+\"\$MY_TOKEN\"", line)
-        and _BLIND_OK not in line
+        # An opt-out must BOTH carry the marker (so a human reviewing the
+        # skill sees a stated reason) and spell the sentinel (so the call
+        # actually runs -- as of lode-yuwt a bare heartbeat/release exits 2,
+        # which the marker alone would not prevent).
+        and not (_BLIND_OK in line and BLIND in line)
     ]
 
     assert not offenders, (
         f"land/SKILL.md heartbeat/release call site(s) supply no own-token: "
-        f"{offenders}. The argument is optional and omitting it silently "
-        "reproduces the pre-lode-q9pm blind behaviour -- a two-lander overlap "
-        'goes back to being self-concealing. Pass `"$MY_TOKEN"` (re-read from '
-        f"$(git rev-parse --git-dir)/land-lock-token in that same block), or "
-        f"mark the line `{_BLIND_OK}` with a reason if it genuinely has no "
-        "token to supply."
+        f"{offenders}. Since lode-yuwt land-lock.sh refuses such a call outright "
+        "(exit 2), so the call site does not degrade to the pre-lode-q9pm blind "
+        'behaviour -- it stops working. Pass `"$MY_TOKEN"` (re-read from '
+        f"$(git rev-parse --git-dir)/land-lock-token in that same block), or -- "
+        f"only if it genuinely has no token to supply -- mark the line "
+        f"`{_BLIND_OK}` with a reason AND pass the explicit `{BLIND}` sentinel."
     )
 
 
@@ -1463,7 +1525,7 @@ def test_land_merge_one_warns_on_an_empty_own_token_argument() -> None:
     would be captured as conflict output and misread as a real conflict."""
     text = MERGE_ONE.read_text(encoding="utf-8")
 
-    assert '[ -n "$own_token" ] || echo' in text, (
+    assert 'if [ -z "$own_token" ]; then\n  echo' in text, (
         "scripts/land-merge-one.sh does not warn when its own-token argument "
         "is empty -- the heartbeat call below then silently disables the "
         "ownership check with nothing in the log (lode-67nk)"
