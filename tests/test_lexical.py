@@ -318,9 +318,50 @@ def test_build_match_query_returns_none_for_no_usable_token() -> None:
         assert build_match_query(text, prefix=True) is None
 
 
+# --- non-ASCII tokens (lode-8irr) ---------------------------------------------
+
+
+def test_build_match_query_tokenizes_non_ascii_script() -> None:
+    """A wholly non-Latin-script word yields a real token, not None (lode-8irr)."""
+    assert build_match_query("Москва", prefix=True) == "москва*"
+
+
+def test_build_match_query_does_not_truncate_accented_latin() -> None:
+    assert build_match_query("café", prefix=True) == "café*"
+
+
+def test_build_match_query_keeps_both_terms_in_a_mixed_ascii_non_ascii_query() -> None:
+    """A mixed query must not silently drop the non-ASCII term (lode-8irr)."""
+    assert build_match_query("notes Москва", prefix=True) == "notes* OR москва*"
+
+
+def test_build_match_query_non_ascii_output_matches_an_indexed_passage(conn) -> None:
+    index = LexicalIndex(conn)
+    index.replace_passages("v1", chunk("проект переезжает в Москва завтра", "v1"))
+
+    query = build_match_query("Москва", prefix=True)
+
+    assert query is not None
+    hits = index.search(query, k=5)
+    assert [h.target_version for h in hits] == ["v1"]
+
+
 @pytest.mark.parametrize(
     "typed",
-    ["cert", "a AND b", "NEAR(x y)", "col:val", "a-b", "a^2", 'foo" bar', "x" * 2000],
+    [
+        "cert",
+        "a AND b",
+        "NEAR(x y)",
+        "col:val",
+        "a-b",
+        "a^2",
+        'foo" bar',
+        "x" * 2000,
+        "Москва",
+        "notes Москва",
+        'Москва" OR bar:baz-qux',
+        "日本語",
+    ],
 )
 def test_build_match_query_output_never_raises_in_fts5(conn, typed: str) -> None:
     """The injection boundary: nothing a user can type reaches MATCH unsanitized."""

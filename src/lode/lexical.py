@@ -43,7 +43,12 @@ _FTS_TABLE = "passages_fts"
 
 #: Alphanumeric word tokens only -- everything else a user can type is dropped
 #: before it reaches the FTS5 ``MATCH`` parser. See :func:`build_match_query`.
-_WORD = re.compile(r"[0-9a-z]+")
+#: ``\w`` is unicode-aware under Python's default (non-``re.ASCII``) ``re``, so
+#: this matches letters/digits/underscore in any script -- not just ASCII
+#: (lode-8irr). SQLite FTS5 treats alphanumerics, ``_``, and any codepoint
+#: >= 0x80 as bareword characters, so a unicode token is still a safe bareword
+#: and cannot introduce an FTS5 metacharacter into the MATCH expression.
+_WORD = re.compile(r"\w+")
 
 
 def build_match_query(text: str, *, prefix: bool = False) -> str | None:
@@ -71,10 +76,6 @@ def build_match_query(text: str, *, prefix: bool = False) -> str | None:
     Returns ``None`` when ``text`` has no usable token (empty, whitespace, or
     all punctuation), so the caller skips the query rather than issue a
     ``MATCH`` against nothing.
-
-    **Known limitation:** the token class is ASCII-only, so a non-ASCII word
-    is truncated at its first non-ASCII character (``café`` -> ``caf``) and a
-    wholly non-ASCII one yields no token at all -- see lode-35nu.6's follow-up.
     """
     tokens = _WORD.findall(text.lower())
     if not tokens:
