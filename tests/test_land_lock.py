@@ -1405,6 +1405,106 @@ def test_land_skill_acquires_and_releases_through_this_script() -> None:
     )
 
 
+def test_land_skill_escalation_stderr_capture_not_under_git_dir_lode_jcnl() -> None:
+    """lode-oup2's Section 0 failure branch captures `scripts/land-lock.sh
+    acquire`'s stderr to a scratch file so it can grep it for the
+    'land-lock: ESCALATE' marker. That file MUST NOT live under $STATE_DIR /
+    the git dir: the technical review found the original implementation at
+    $STATE_DIR/land-lock-acquire-stderr, which fails BEFORE `acquire` even
+    runs in exactly the unwritable-git-dir MACHINE FAULT this feature exists
+    to escalate -- no counter bump, no ESCALATE marker, and lode-119w's own
+    diagnostic lost too. A future edit could silently move it back under
+    $STATE_DIR without anything else here catching it."""
+    text = LAND_SKILL_TEXT
+
+    match = re.search(r'ACQUIRE_ERR_FILE="([^"]+)"', text)
+    assert match is not None, (
+        "land/SKILL.md no longer defines ACQUIRE_ERR_FILE -- Section 0's "
+        "escalation branch has nothing to grep for 'land-lock: ESCALATE', so "
+        "a persistent MACHINE FAULT silently stops reaching a human at all"
+    )
+    acquire_err_file = match.group(1)
+
+    assert "STATE_DIR" not in acquire_err_file, (
+        "ACQUIRE_ERR_FILE is defined in terms of $STATE_DIR / the git dir -- "
+        "on exactly the unwritable-git-dir MACHINE FAULT this feature "
+        "escalates, redirecting stderr there fails BEFORE `acquire` runs at "
+        "all: no counter bump, no ESCALATE marker, and lode-119w's own "
+        "diagnostic is lost too, so the fault escalates less visibly than "
+        "before lode-oup2 shipped"
+    )
+    assert "git-dir" not in acquire_err_file, (
+        "ACQUIRE_ERR_FILE is derived from `git rev-parse --git-dir` -- same "
+        "failure mode as pinning it under $STATE_DIR: an unwritable git dir "
+        "is the headline fault being escalated, so redirecting into it fails "
+        "before `acquire` ever runs and the escalation is silently lost"
+    )
+
+
+def test_land_skill_escalation_ticket_dedup_has_no_status_open_lode_jcnl() -> None:
+    """lode-oup2's dedup lookup (before filing the human-labeled escalation
+    ticket) must NOT carry `--status open`: `bd list` already excludes closed
+    issues on its own, and pinning `--status open` would miss this very
+    ticket once a human moves it to in_progress/blocked while investigating
+    -- silently duplicating it on every subsequent /loop 5m /land tick until
+    the fault clears."""
+    executed = LAND_SKILL_BASH
+
+    # Anchor on the specific `bd list --label human` lookup this feature
+    # added, not just any `bd list` call in the file, so this test fails on
+    # the right line if a second, unrelated `bd list --status open` call is
+    # ever added elsewhere in the skill.
+    match = re.search(r"bd list --label human[^\n]*", executed)
+    assert match is not None, (
+        "land/SKILL.md no longer runs the `bd list --label human` dedup "
+        "lookup before filing the escalation ticket -- without it a "
+        "persistent MACHINE FAULT files a fresh duplicate ticket on every "
+        "tick instead of filing once per fault episode"
+    )
+    dedup_call = match.group(0)
+
+    assert "--status open" not in dedup_call, (
+        "the escalation ticket's dedup lookup (`bd list --label human ...`) "
+        "carries --status open -- it would miss the escalation ticket once "
+        "a human moves it to in_progress/blocked while investigating, and "
+        "/land would then file a fresh duplicate every tick until the fault "
+        "clears"
+    )
+
+
+def test_land_skill_escalation_ticket_filed_exactly_once_lode_jcnl() -> None:
+    """The human-labeled escalation ticket must be filed by exactly ONE `bd
+    create` call site, and that call must sit inside the not-found guard (the
+    dedup lookup's result is empty) -- never refreshed per tick. A fault that
+    persists for days is thousands of /loop 5m /land ticks; a second call
+    site, or one that fires unconditionally, would grow the ticket's history
+    or commit to Dolt every 5 minutes for information a human already has."""
+    executed = LAND_SKILL_BASH
+
+    creates = list(re.finditer(r"bd create --type=decision --label=human", executed))
+    assert len(creates) == 1, (
+        f"expected exactly ONE `bd create --type=decision --label=human` "
+        f"call site for the escalation ticket, found {len(creates)} -- a "
+        "second site (or a dropped one) means the ticket is either filed "
+        "more than once per fault episode or never filed at all"
+    )
+
+    # The call must be textually inside the not-found guard, i.e. after the
+    # `if [ -z "$EXISTING_ESCALATION" ]; then` that gates it and before its
+    # matching `fi` (approximated here by the next `fi` after the guard,
+    # which is the guard's own closing `fi` in this block).
+    guard_start = executed.index('if [ -z "$EXISTING_ESCALATION" ]; then')
+    guard_body = executed[guard_start:]
+    guard_fi = guard_body.index("\nfi")
+    create_pos_in_body = creates[0].start() - guard_start
+    assert 0 < create_pos_in_body < guard_fi, (
+        "the `bd create` call for the escalation ticket is not inside the "
+        '`if [ -z "$EXISTING_ESCALATION" ]; then ... fi` not-found guard -- '
+        "an unguarded (or misplaced) call would refresh/refile the ticket on "
+        "every tick instead of filing it once per fault episode"
+    )
+
+
 def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
     """lode-m87j: the vet loop (Section 2a) heartbeats the lock as the first
     action of every iteration, so the staleness window measures the gap since
