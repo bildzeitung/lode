@@ -106,6 +106,128 @@ def test_render_ask_result_surfaces_withheld_markers_alongside_abstention() -> N
     assert "withheld from cloud synthesis" in rendered.lower()
 
 
+def test_render_ask_result_groups_a_note_cited_by_multiple_claims_once(
+    tmp_path: Path,
+) -> None:
+    """lode-35nu.3's core acceptance line: a note cited by N claims renders
+    once, with its claims nested under it -- not once per claim."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        saved = save(conn, "n1", "We chose OAuth for service auth. It scales well.")
+    finally:
+        conn.close()
+
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="We chose OAuth.",
+                support=[Support(version_id=saved.version_id, quoted_span="OAuth")],
+            ),
+            Claim(
+                text="It scales well.",
+                support=[
+                    Support(version_id=saved.version_id, quoted_span="scales well")
+                ],
+            ),
+        ),
+        withheld_citations=(),
+    )
+    identities = {
+        saved.version_id: CitationIdentity(
+            note_id="n1",
+            title="We chose OAuth for service auth.",
+            is_head=True,
+        )
+    }
+    bodies = {saved.version_id: "We chose OAuth for service auth. It scales well."}
+    result = AskResult(answer=answer, identities=identities, bodies=bodies)
+
+    rendered = render_ask_result(result)
+
+    # The note's title (the group header) appears exactly once, as its own line.
+    header_lines = [
+        line
+        for line in rendered.splitlines()
+        if line == "We chose OAuth for service auth."
+    ]
+    assert len(header_lines) == 1
+    assert "  We chose OAuth." in rendered
+    assert "  It scales well." in rendered
+
+
+def test_render_ask_result_highlights_the_quoted_span_in_context(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        saved = save(conn, "n1", "before text OAuth after text")
+    finally:
+        conn.close()
+
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="claim",
+                support=[Support(version_id=saved.version_id, quoted_span="OAuth")],
+            ),
+        ),
+        withheld_citations=(),
+    )
+    identities = {
+        saved.version_id: CitationIdentity(note_id="n1", title="title", is_head=True)
+    }
+    bodies = {saved.version_id: "before text OAuth after text"}
+    result = AskResult(answer=answer, identities=identities, bodies=bodies)
+
+    rendered = render_ask_result(result, context_chars=80)
+
+    assert "»OAuth«" in rendered
+    assert "before text" in rendered
+    assert "after text" in rendered
+
+
+def test_render_ask_result_context_chars_is_configurable(tmp_path: Path) -> None:
+    body = "x" * 200 + "OAuth" + "y" * 200
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="claim", support=[Support(version_id="v1", quoted_span="OAuth")]
+            ),
+        ),
+        withheld_citations=(),
+    )
+    identities = {"v1": CitationIdentity(note_id="n1", title="title", is_head=True)}
+    result = AskResult(answer=answer, identities=identities, bodies={"v1": body})
+
+    rendered_narrow = render_ask_result(result, context_chars=5)
+    rendered_wide = render_ask_result(result, context_chars=50)
+
+    assert "x" * 5 in rendered_narrow
+    assert "x" * 6 not in rendered_narrow
+    assert "x" * 50 in rendered_wide
+
+
+def test_render_ask_result_falls_back_to_flat_rendering_when_unresolved() -> None:
+    """A citation whose target didn't resolve to an identity has no body to
+    pull context from -- it keeps the old flat, ungrouped rendering."""
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="claim", support=[Support(version_id="missing", quoted_span="x")]
+            ),
+        ),
+        withheld_citations=(),
+    )
+    result = AskResult(answer=answer)
+
+    rendered = render_ask_result(result)
+
+    assert '"x"' in rendered
+    assert "»" not in rendered
+
+
 def test_resolve_citations_reads_version_created_from_store(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
@@ -115,7 +237,7 @@ def test_resolve_citations_reads_version_created_from_store(tmp_path: Path) -> N
             "SELECT created FROM versions WHERE version_id = ?", (result.version_id,)
         ).fetchone()
 
-        as_of, _ = _resolve_citations(
+        as_of, _, _ = _resolve_citations(
             conn, [Support(version_id=result.version_id, quoted_span="hello")]
         )
     finally:
@@ -137,7 +259,7 @@ def test_resolve_citations_reads_snapshot_fetched_at_from_store(tmp_path: Path) 
         )
         conn.commit()
 
-        as_of, _ = _resolve_citations(
+        as_of, _, _ = _resolve_citations(
             conn, [Support(snapshot_id="s1", quoted_span="status: open")]
         )
     finally:
@@ -150,7 +272,7 @@ def test_resolve_citations_maps_an_unresolvable_target_to_none(tmp_path: Path) -
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
-        as_of, identities = _resolve_citations(
+        as_of, identities, _ = _resolve_citations(
             conn, [Support(version_id="nonexistent", quoted_span="x")]
         )
     finally:
@@ -166,7 +288,7 @@ def test_resolve_citations_resolves_head_note_version(tmp_path: Path) -> None:
     try:
         result = save(conn, "n1", "First line of the note.\nmore body")
 
-        _, identities = _resolve_citations(
+        _, identities, _ = _resolve_citations(
             conn, [Support(version_id=result.version_id, quoted_span="First line")]
         )
     finally:
@@ -186,7 +308,7 @@ def test_resolve_citations_marks_a_superseded_version_not_head(tmp_path: Path) -
             conn, "n1", "Updated body.", parent=v1.version_id
         )  # new head; v1 superseded
 
-        _, identities = _resolve_citations(
+        _, identities, _ = _resolve_citations(
             conn, [Support(version_id=v1.version_id, quoted_span="Original")]
         )
     finally:
@@ -212,7 +334,7 @@ def test_resolve_citations_resolves_head_snapshot(tmp_path: Path) -> None:
         )
         conn.commit()
 
-        _, identities = _resolve_citations(
+        _, identities, _ = _resolve_citations(
             conn, [Support(snapshot_id="s1", quoted_span="body")]
         )
     finally:
@@ -233,7 +355,7 @@ def test_resolve_citations_batches_one_query_per_kind(tmp_path: Path) -> None:
         executed: list[str] = []
         conn.set_trace_callback(executed.append)
 
-        _, identities = _resolve_citations(
+        _, identities, _ = _resolve_citations(
             conn,
             [
                 Support(version_id=v1.version_id, quoted_span="one"),
