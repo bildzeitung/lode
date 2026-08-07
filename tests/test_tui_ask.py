@@ -24,8 +24,7 @@ from lode.tui.services.ask import (
     ABSTAIN_LINE,
     AskResult,
     CitationIdentity,
-    _resolve_as_of,
-    _resolve_identities,
+    _resolve_citations,
     render_ask_result,
     run_ask,
 )
@@ -104,7 +103,7 @@ def test_render_ask_result_surfaces_withheld_markers_alongside_abstention() -> N
     assert "withheld from cloud synthesis" in rendered.lower()
 
 
-def test_resolve_as_of_reads_version_created_from_store(tmp_path: Path) -> None:
+def test_resolve_citations_reads_version_created_from_store(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -113,16 +112,16 @@ def test_resolve_as_of_reads_version_created_from_store(tmp_path: Path) -> None:
             "SELECT created FROM versions WHERE version_id = ?", (result.version_id,)
         ).fetchone()
 
-        as_of = _resolve_as_of(
-            conn, Support(version_id=result.version_id, quoted_span="hello")
+        as_of, _ = _resolve_citations(
+            conn, [Support(version_id=result.version_id, quoted_span="hello")]
         )
     finally:
         conn.close()
 
-    assert as_of == created
+    assert as_of == {result.version_id: created}
 
 
-def test_resolve_as_of_reads_snapshot_fetched_at_from_store(tmp_path: Path) -> None:
+def test_resolve_citations_reads_snapshot_fetched_at_from_store(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -135,33 +134,36 @@ def test_resolve_as_of_reads_snapshot_fetched_at_from_store(tmp_path: Path) -> N
         )
         conn.commit()
 
-        as_of = _resolve_as_of(
-            conn, Support(snapshot_id="s1", quoted_span="status: open")
+        as_of, _ = _resolve_citations(
+            conn, [Support(snapshot_id="s1", quoted_span="status: open")]
         )
     finally:
         conn.close()
 
-    assert as_of == "2026-06-01T00:00:00.000Z"
+    assert as_of == {"s1": "2026-06-01T00:00:00.000Z"}
 
 
-def test_resolve_as_of_returns_none_for_an_unresolvable_target(tmp_path: Path) -> None:
+def test_resolve_citations_maps_an_unresolvable_target_to_none(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
-        as_of = _resolve_as_of(conn, Support(version_id="nonexistent", quoted_span="x"))
+        as_of, identities = _resolve_citations(
+            conn, [Support(version_id="nonexistent", quoted_span="x")]
+        )
     finally:
         conn.close()
 
-    assert as_of is None
+    assert as_of == {"nonexistent": None}
+    assert identities == {}
 
 
-def test_resolve_identities_resolves_head_note_version(tmp_path: Path) -> None:
+def test_resolve_citations_resolves_head_note_version(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
         result = save(conn, "n1", "First line of the note.\nmore body")
 
-        identities = _resolve_identities(
+        _, identities = _resolve_citations(
             conn, [Support(version_id=result.version_id, quoted_span="First line")]
         )
     finally:
@@ -172,7 +174,7 @@ def test_resolve_identities_resolves_head_note_version(tmp_path: Path) -> None:
     )
 
 
-def test_resolve_identities_marks_a_superseded_version_not_head(tmp_path: Path) -> None:
+def test_resolve_citations_marks_a_superseded_version_not_head(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -181,18 +183,18 @@ def test_resolve_identities_marks_a_superseded_version_not_head(tmp_path: Path) 
             conn, "n1", "Updated body.", parent=v1.version_id
         )  # new head; v1 superseded
 
-        identities = _resolve_identities(
+        _, identities = _resolve_citations(
             conn, [Support(version_id=v1.version_id, quoted_span="Original")]
         )
     finally:
         conn.close()
 
-    assert identities[v1.version_id].note_id == "n1"
-    assert identities[v1.version_id].title == "Original body."
-    assert identities[v1.version_id].is_head is False
+    assert identities[v1.version_id] == CitationIdentity(
+        note_id="n1", title="Original body.", is_head=False
+    )
 
 
-def test_resolve_identities_resolves_head_snapshot(tmp_path: Path) -> None:
+def test_resolve_citations_resolves_head_snapshot(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -207,7 +209,7 @@ def test_resolve_identities_resolves_head_snapshot(tmp_path: Path) -> None:
         )
         conn.commit()
 
-        identities = _resolve_identities(
+        _, identities = _resolve_citations(
             conn, [Support(snapshot_id="s1", quoted_span="body")]
         )
     finally:
@@ -218,7 +220,7 @@ def test_resolve_identities_resolves_head_snapshot(tmp_path: Path) -> None:
     )
 
 
-def test_resolve_identities_batches_one_query_per_kind(tmp_path: Path) -> None:
+def test_resolve_citations_batches_one_query_per_kind(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -228,7 +230,7 @@ def test_resolve_identities_batches_one_query_per_kind(tmp_path: Path) -> None:
         executed: list[str] = []
         conn.set_trace_callback(executed.append)
 
-        identities = _resolve_identities(
+        _, identities = _resolve_citations(
             conn,
             [
                 Support(version_id=v1.version_id, quoted_span="one"),
@@ -241,19 +243,6 @@ def test_resolve_identities_batches_one_query_per_kind(tmp_path: Path) -> None:
 
     assert len(executed) == 1
     assert len(identities) == 2
-
-
-def test_resolve_identities_skips_an_unresolvable_target(tmp_path: Path) -> None:
-    db_path = tmp_path / "lode.db"
-    conn = init_db(db_path)
-    try:
-        identities = _resolve_identities(
-            conn, [Support(version_id="nonexistent", quoted_span="x")]
-        )
-    finally:
-        conn.close()
-
-    assert identities == {}
 
 
 def test_run_ask_wires_retrieve_and_gate_then_resolves_as_of(
