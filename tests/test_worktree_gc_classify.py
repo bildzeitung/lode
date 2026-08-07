@@ -56,7 +56,7 @@ import subprocess
 from pathlib import Path
 
 from _gitrepo import _git
-from conftest import LAND_SKILL
+from conftest import LAND_SKILL_TEXT
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "worktree-gc-classify.sh"
@@ -162,7 +162,7 @@ def _buckets_the_script_can_print() -> set[str]:
 
 def _buckets_the_land_loop_handles() -> set[str]:
     """Every non-default arm label of `SKILL.md`'s `case "$BUCKET"` dispatch."""
-    text = LAND_SKILL.read_text(encoding="utf-8")
+    text = LAND_SKILL_TEXT
     start = text.index('case "$BUCKET" in')
     end = text.index("\n  esac", start)
     return set(re.findall(r"^\s*([a-z][a-z-]*)\)", text[start:end], re.MULTILINE))

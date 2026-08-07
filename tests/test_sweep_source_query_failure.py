@@ -27,7 +27,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import SWEEP_SKILL, bash_fence_blocks, only_block_with, run_block
+from conftest import SWEEP_SKILL_BLOCKS, only_block_with, run_block
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the skill's fenced blocks shell out to jq"
@@ -37,7 +37,7 @@ MARKER = "source_query_failed"
 
 
 def _skill_blocks() -> list[str]:
-    return bash_fence_blocks(SWEEP_SKILL.read_text(encoding="utf-8"))
+    return SWEEP_SKILL_BLOCKS
 
 
 def _only_block_with(*needles: str, what: str) -> str:

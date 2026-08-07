@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from conftest import LAND_SKILL, _fenced_bash, bash_fence_blocks
+from conftest import LAND_SKILL_BASH, LAND_SKILL_TEXT, bash_fence_blocks
 
 # Share lode-x495's quote-aware comment stripper rather than adding a second,
 # competing implementation -- the same reuse `tests/test_bd_list_limit_gate.py`
@@ -38,7 +38,7 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
     an EXECUTED fence, and the destructive `git reset --hard origin/trunk`
     line must never carry any `-C` either (that would be the same false
     assurance one line later)."""
-    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
+    executed = LAND_SKILL_BASH
 
     assert "show-toplevel" not in executed, (
         "land/SKILL.md executes a `--show-toplevel`-derived -C again -- this "
@@ -315,7 +315,7 @@ def test_land_skill_guard_covers_every_known_mutating_fence() -> None:
     violations. Do not re-add a per-section duplicate.
     """
     violations = _unguarded_mutations(
-        LAND_SKILL.read_text(encoding="utf-8"),
+        LAND_SKILL_TEXT,
         allowlist=_KNOWN_LAND_SKILL_MUTATIONS,
     )
     assert violations == [], "\n".join(violations)
@@ -362,7 +362,7 @@ def test_every_allowlist_entry_still_matches_a_real_command() -> None:
     alone cannot show it would catch a real regression.
     """
     orphaned = _dead_allowlist_entries(
-        LAND_SKILL.read_text(encoding="utf-8"),
+        LAND_SKILL_TEXT,
         allowlist=_KNOWN_LAND_SKILL_MUTATIONS,
     )
 

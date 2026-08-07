@@ -1655,6 +1655,45 @@ LAND_SKILL_BASH = "\n".join(LAND_SKILL_BLOCKS)
 #: file that landed after the first consolidation attempt was written.
 SWEEP_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
 
+#: The sweep skill doc's text, read once per session rather than once per test
+#: (lode-pxwn) -- the same fix LAND_SKILL_TEXT above applied to LAND_SKILL.
+#: All five tests/test_sweep_*.py modules that previously called
+#: ``SWEEP_SKILL.read_text(encoding="utf-8")`` directly now read this instead.
+SWEEP_SKILL_TEXT = SWEEP_SKILL.read_text(encoding="utf-8")
+
+#: :func:`bash_fence_blocks` applied to :data:`SWEEP_SKILL_TEXT` once per
+#: session. See :data:`SWEEP_SKILL_TEXT` above for why this is cached at all.
+SWEEP_SKILL_BLOCKS = bash_fence_blocks(SWEEP_SKILL_TEXT)
+
+# DECISION (lode-pxwn) -- deliberately a plain `#` block, not the `#:`
+# attribute-doc form used above: it documents no single constant, and an `#:`
+# run here would silently become the rendered doc for whatever constant is
+# added below it next.
+#
+# Why the per-skill constants above rather than a generic
+# ``@functools.cache`` on :func:`bash_fence_blocks`: that function returns a
+# plain, MUTABLE ``list[str]``, so decorating it would hand every caller in
+# the session the *same* list object -- an unenforced contract across ~10
+# modules that a future caller could break by mutating its "own" result. The
+# constants above (``LAND_SKILL_BLOCKS``/``LAND_SKILL_BASH``,
+# ``SWEEP_SKILL_BLOCKS``) narrow that exposure to a fixed, reviewable set
+# computed once at import time from a fixed input.
+#
+# They do NOT eliminate it, and the honest version of the read-only claim is:
+# every consumer today is read-only EXCEPT
+# ``tests/test_land_conflicts_state.py::test_section_3_regate_precedes_push_is_sabotage_proven``,
+# which copies (``sabotaged = list(blocks)``) before reordering. That copy was
+# incidental when each call re-parsed the file; it is load-bearing now, and is
+# annotated as such at its own call site.
+#
+# A module that gains its own fresh SKILL.md to pin should add its own
+# ``<NAME>_TEXT``/``<NAME>_BLOCKS`` pair here, following this same shape,
+# rather than reaching for a shared cached helper. Making
+# :func:`bash_fence_blocks` return a ``tuple[str, ...]`` would enforce the
+# contract instead of documenting it; it was left alone here because it also
+# changes the parser's own pinned equality assertions, well outside a
+# tests-only hoist (tracked separately).
+
 
 # --- TUI test settle helpers (lode-lcju) -----------------------------------
 #
