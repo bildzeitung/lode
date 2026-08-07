@@ -223,6 +223,14 @@ class Settings(BaseModel):
         "runs; skips near-empty buffers without touching the DB.",
         ge=0,
     )
+    ask_context_chars: int = _knob(
+        80,
+        Kind.RUNTIME,
+        "Characters of a cited note/external body shown before and after a "
+        "citation's quoted_span in the ask screen's grouped-by-note view "
+        "(lode-35nu.3).",
+        ge=0,
+    )
 
     # --- Async work queue -----------------------------------------------------
     reconciliation_scan_interval_s: int = _knob(

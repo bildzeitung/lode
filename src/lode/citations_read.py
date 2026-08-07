@@ -46,8 +46,8 @@ class CitationIdentity:
 
 def resolve_citations(
     conn: sqlite3.Connection, supports: list[Support]
-) -> tuple[dict[str, str | None], dict[str, CitationIdentity]]:
-    """Resolve as-of provenance and identity for every cited target, batched (lode-35nu.1).
+) -> tuple[dict[str, str | None], dict[str, CitationIdentity], dict[str, str]]:
+    """Resolve as-of provenance, identity, and body for every cited target, batched (lode-35nu.1, lode-35nu.3).
 
     Two queries total -- one ``IN (...)`` over every distinct cited
     ``version_id``, one over every distinct cited ``snapshot_id`` -- so a
@@ -56,16 +56,21 @@ def resolve_citations(
     stamp rides along on the same rows the identity comes from (a note version
     is stamped at write time, ``versions.created``; an external snapshot at
     fetch time, ``snapshots.fetched_at``), so it costs no extra query.
+    ``bodies`` rides along the same way -- the body is already SELECTed for
+    :func:`~lode.notes_read.first_line`, so surfacing it for the ask screen's
+    context rendering around ``quoted_span`` (lode-35nu.3) costs nothing
+    extra.
 
-    Returns ``(as_of, identities)``, both keyed by
+    Returns ``(as_of, identities, bodies)``, all keyed by
     :attr:`~lode.answer.Support.target_id`. Every cited target is a key in
     ``as_of``, mapping to ``None`` when the store had nothing to resolve; such
-    a target is simply absent from ``identities``. Unresolvable is practically
-    unreachable -- the faithfulness gate already verified the span against the
-    stored body -- but handled rather than assumed away.
+    a target is simply absent from ``identities``/``bodies``. Unresolvable is
+    practically unreachable -- the faithfulness gate already verified the
+    span against the stored body -- but handled rather than assumed away.
     """
     identities: dict[str, CitationIdentity] = {}
     as_of: dict[str, str | None] = {}
+    bodies: dict[str, str] = {}
 
     version_ids = tuple({s.version_id for s in supports if s.version_id is not None})
     if version_ids:
@@ -83,6 +88,7 @@ def resolve_citations(
                 note_id=note_id,
             )
             as_of[version_id] = created
+            bodies[version_id] = body
 
     snapshot_ids = tuple({s.snapshot_id for s in supports if s.snapshot_id is not None})
     if snapshot_ids:
@@ -101,7 +107,8 @@ def resolve_citations(
                 external_id=external_id,
             )
             as_of[snapshot_id] = fetched_at
+            bodies[snapshot_id] = body
 
     for support in supports:
         as_of.setdefault(support.target_id, None)
-    return as_of, identities
+    return as_of, identities, bodies

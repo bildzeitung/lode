@@ -877,6 +877,17 @@ def test_search_notes_orders_by_relevance_best_first(tmp_path: Path) -> None:
     assert [row.note_id for row in rows] == ["note-strong", "note-weak"]
 
 
+def test_search_notes_finds_a_note_by_non_ascii_keyword(tmp_path: Path) -> None:
+    """The Browse quick-search caller surfaces non-Latin-script notes (lode-8irr)."""
+    db_path = tmp_path / "lode.db"
+    _seed_and_index(db_path, "note-1", "проект переезжает в Москва завтра")
+    _seed_and_index(db_path, "note-2", "grocery list: eggs, milk, bread")
+
+    rows = search_notes(db_path, "Москва")
+
+    assert [row.note_id for row in rows] == ["note-1"]
+
+
 def test_search_notes_empty_query_returns_no_rows(tmp_path: Path) -> None:
     """The caller (BrowseScreen) branches to the full list on an empty query --
     this function itself returns nothing for one, never "everything"."""

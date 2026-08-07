@@ -19,7 +19,7 @@ def test_resolve_citations_reads_version_created_from_store(tmp_path: Path) -> N
             "SELECT created FROM versions WHERE version_id = ?", (result.version_id,)
         ).fetchone()
 
-        as_of, _ = resolve_citations(
+        as_of, _, _ = resolve_citations(
             conn, [Support(version_id=result.version_id, quoted_span="hello")]
         )
     finally:
@@ -41,7 +41,7 @@ def test_resolve_citations_reads_snapshot_fetched_at_from_store(tmp_path: Path) 
         )
         conn.commit()
 
-        as_of, _ = resolve_citations(
+        as_of, _, _ = resolve_citations(
             conn, [Support(snapshot_id="s1", quoted_span="status: open")]
         )
     finally:
@@ -54,7 +54,7 @@ def test_resolve_citations_maps_an_unresolvable_target_to_none(tmp_path: Path) -
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
-        as_of, identities = resolve_citations(
+        as_of, identities, _ = resolve_citations(
             conn, [Support(version_id="nonexistent", quoted_span="x")]
         )
     finally:
@@ -70,7 +70,7 @@ def test_resolve_citations_resolves_head_note_version(tmp_path: Path) -> None:
     try:
         result = save(conn, "n1", "First line of the note.\nmore body")
 
-        _, identities = resolve_citations(
+        _, identities, _ = resolve_citations(
             conn, [Support(version_id=result.version_id, quoted_span="First line")]
         )
     finally:
@@ -90,7 +90,7 @@ def test_resolve_citations_marks_a_superseded_version_not_head(tmp_path: Path) -
             conn, "n1", "Updated body.", parent=v1.version_id
         )  # new head; v1 superseded
 
-        _, identities = resolve_citations(
+        _, identities, _ = resolve_citations(
             conn, [Support(version_id=v1.version_id, quoted_span="Original")]
         )
     finally:
@@ -116,7 +116,7 @@ def test_resolve_citations_resolves_head_snapshot(tmp_path: Path) -> None:
         )
         conn.commit()
 
-        _, identities = resolve_citations(
+        _, identities, _ = resolve_citations(
             conn, [Support(snapshot_id="s1", quoted_span="body")]
         )
     finally:
@@ -137,7 +137,7 @@ def test_resolve_citations_batches_one_query_per_kind(tmp_path: Path) -> None:
         executed: list[str] = []
         conn.set_trace_callback(executed.append)
 
-        _, identities = resolve_citations(
+        _, identities, _ = resolve_citations(
             conn,
             [
                 Support(version_id=v1.version_id, quoted_span="one"),

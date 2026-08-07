@@ -25,9 +25,11 @@ from lode.cited_answer import CitedAnswer, ask
 from lode.config import load_settings
 from lode.eval.golden import golden_set
 from lode.eval.harness import GoldenScore, score_golden_set
+from lode.lexical import LexicalCacheBackend, build_match_query
 from lode.llm_provider import AnthropicProvider
-from lode.retrieval import ContextItem
+from lode.retrieval import ContextItem, lexical_search
 from lode.storage import init_db
+from lode.versions import save
 
 # A tiny vector dim keeps the stub embedder cheap; recall is carried by the
 # model-free FTS5 leg, so the dense leg only needs to be deterministic.
@@ -137,6 +139,27 @@ def test_recall_is_model_free_and_finds_known_good_notes(conn, settings, tmp_pat
         # The known-good versions are all present in the retrieved set.
         assert item.relevant_version_ids <= set(scored.retrieved), item.question
         assert scored.recall == pytest.approx(1.0)
+
+
+def test_lexical_leg_retrieves_a_non_ascii_question(conn) -> None:
+    """The scorer's lexical leg surfaces a non-Latin-script note (lode-8irr).
+
+    Exercises the exact ``build_match_query`` -> ``lexical_search`` pair
+    ``harness._retrieve`` opens with, over the production ``LexicalCacheBackend``
+    index path -- but without ``_retrieve``'s embedder/``VectorStore``, which the
+    ASCII defect never involved. The sibling assertions in ``test_lexical.py``
+    and ``test_notes_read.py`` cover the other two callers of this builder.
+    """
+    result = save(conn, "note-1", "проект переезжает в Москва завтра")
+    LexicalCacheBackend(conn).index(
+        "note-1", result.version_id, "проект переезжает в Москва завтра"
+    )
+
+    match = build_match_query("Москва")
+    assert match is not None
+    hits = lexical_search(conn, match, k=5)
+
+    assert [h.target_version for h in hits] == [result.version_id]
 
 
 # --- determinism: a fixed corpus yields a fixed score --------------------------

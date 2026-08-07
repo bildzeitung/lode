@@ -41,9 +41,20 @@ from lode.config import Settings
 #: replacement by the UNINDEXED ``target_version`` column; ``text`` is indexed.
 _FTS_TABLE = "passages_fts"
 
-#: Alphanumeric word tokens only -- everything else a user can type is dropped
-#: before it reaches the FTS5 ``MATCH`` parser. See :func:`build_match_query`.
-_WORD = re.compile(r"[0-9a-z]+")
+#: Word tokens only -- everything else a user can type is dropped before it
+#: reaches the FTS5 ``MATCH`` parser. See :func:`build_match_query`.
+#: ``\w`` is unicode-aware under Python's default (non-``re.ASCII``) ``re``, so
+#: this matches letters/digits/underscore in any script -- not just ASCII
+#: (lode-8irr). SQLite FTS5 treats alphanumerics, ``_``, and any codepoint
+#: >= 0x80 as bareword characters -- exactly the set ``\w`` admits -- so a
+#: unicode token is still a safe bareword and cannot introduce an FTS5
+#: metacharacter into the MATCH expression.
+#:
+#: NOT the same token class as :data:`lode.faithfulness._WORD` (``[^\W_]+``,
+#: which excludes ``_``); that one splits claims/spans for the coupling check
+#: and the ``docs/retrieval.md`` SPIKE note about "``_WORD``" is about *it*,
+#: not this.
+_WORD = re.compile(r"\w+")
 
 
 def build_match_query(text: str, *, prefix: bool = False) -> str | None:
@@ -52,15 +63,19 @@ def build_match_query(text: str, *, prefix: bool = False) -> str | None:
     THE query builder for this repo's two free-text callers -- the eval
     scorer's submitted question (``lode.eval.harness``) and the browse
     screen's as-you-type quick-search box (lode-35nu.6, via
-    :func:`lode.notes_read.search_notes`). One function, because the
+    :func:`lode.notes_read.search_notes`). One function *for these two*,
+    because the
     *sanitization* is the security-relevant part and must not fork: stripping
-    to ``[0-9a-z]+`` tokens is what keeps a typed ``-``, ``"``, ``:``, ``^``
+    to ``\\w+`` tokens is what keeps a typed ``-``, ``"``, ``:``, ``^``
     or ``(`` from ever reaching the ``MATCH`` parser (which would otherwise
     raise mid-typing), and lowercasing is what stops a typed ``OR``/``AND``/
     ``NEAR`` from being read as an FTS5 operator -- those keywords are
     recognised only in uppercase. Tokens are ``OR``-ed rather than FTS5's
     default ``AND`` so recall stays honest: a passage sharing any salient
-    keyword is a candidate and BM25 ranks them.
+    keyword is a candidate and BM25 ranks them. The Q&A path has its own
+    builder (:func:`lode.retrieval.build_match_query`) with a different
+    contract -- quoted tokens, ``""`` rather than ``None`` on empty -- so
+    "one function" is scoped to the two callers named above.
 
     ``prefix=True`` suffixes each token ``*``, so a still-incomplete word
     matches any passage containing a word that *starts* with it -- what an
@@ -72,9 +87,14 @@ def build_match_query(text: str, *, prefix: bool = False) -> str | None:
     all punctuation), so the caller skips the query rather than issue a
     ``MATCH`` against nothing.
 
-    **Known limitation:** the token class is ASCII-only, so a non-ASCII word
-    is truncated at its first non-ASCII character (``café`` -> ``caf``) and a
-    wholly non-ASCII one yields no token at all -- see lode-35nu.6's follow-up.
+    **Residual edge (lode-8irr):** Python's ``.lower()`` and SQLite's
+    ``unicode61`` tokenizer fold case slightly differently. The handful of
+    characters whose lowercase *expands* to a base letter plus a combining
+    mark -- ``İ`` (U+0130) -> ``i`` + U+0307 being the practical one -- split
+    into two tokens here (``i`` + ``stanbul``) where the index holds one
+    (``istanbul``). ``prefix=True`` still matches; whole-word mode misses.
+    Over-splitting is the fail-*broad* direction (tokens are OR-ed), so this
+    never returns a wrong note, only sometimes none.
     """
     tokens = _WORD.findall(text.lower())
     if not tokens:
