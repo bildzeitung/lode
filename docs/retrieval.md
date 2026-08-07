@@ -209,15 +209,13 @@ Runs app-side, after the Q&A LLM returns and before display:
 > **DECISION (lode-1qxy): exposure explicitly accepted, `_WORD`/`normalize_whitespace` unchanged.**
 > Closing the "revisit" left open above: the compound-identifier fragment exposure (`allkeys-lru` /
 > `DNS-01`) is real but stays accepted, for the same zero-measured-benefit-on-corpus reasoning as the
-> SPIKE. It is no longer just recorded prose — a standing regression test
+> SPIKE. A standing regression test
 > (`tests/test_faithfulness.py::test_compound_identifier_fragment_couples_known_fail_open_exposure`)
 > pins the *current* behavior (both examples above couple) as a canary: if `_WORD` is ever tightened —
 > here or as a side effect of unrelated tokenizer work — that test fails and must be updated
 > deliberately alongside this note, rather than the exposure silently closing or reopening unnoticed.
-> This is orthogonal to lode-w2y7's negation-cue check in `claim_extractively_coupled` (a raw-text
-> `n't`-contraction regex that blocks coupling when a span carries a negation the claim lacks): that
-> closes a *different* fail-open path (inverted polarity) and does not touch `_WORD` or the
-> fragment-containment mechanism this note is about.
+> This concerns **only** the fragment-containment mechanism in `_WORD`; other fail-open paths through
+> `claim_extractively_coupled` (e.g. inverted polarity) are tracked and closed separately.
 
 The gate verifies each span against the **stored bytes of the cited version/snapshot**, resolved
 only for the **egress-cleared** targets — the same set eligible to reach the model. A
