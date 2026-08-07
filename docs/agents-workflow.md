@@ -3071,7 +3071,7 @@ assumption would not have closed it.
   empty `<own-token>` is now a caller bug, not a supported degraded mode**: `land-lock.sh` refuses outright
   (exit 2, a loud diagnostic) rather than silently falling back to the pre-lode-q9pm blind behaviour. The
   ONE sanctioned way to skip the ownership comparison on purpose is the literal sentinel
-  `--land-lock-blind` in place of a real token, reserved for exactly one call site (below). What actually
+  `--land-lock-blind` in place of a real token, reserved for exactly two call sites (below). What actually
   makes every real call site pass its own token, now backstopped by that script-level enforcement, is
   `.claude/skills/land/SKILL.md` plus three sabotage-verified pins in `tests/test_land_lock.py` — one that
   Section 0 WRITES `$(git rev-parse --git-dir)/land-lock-token` at all, one over every executed
@@ -3081,9 +3081,12 @@ assumption would not have closed it.
   cheap second layer, not dead code — a failing test names the exact offending line, earlier and more
   legibly than a live `/land` pass discovering an exit 2 from `land-lock.sh` itself. The call-site pin
   allows a line to opt out only by carrying a `land-lock-blind-ok` marker AND spelling the explicit
-  `--land-lock-blind` sentinel, and **exactly one line does**: Section 0's own bail-out `release`, which
-  has no token to supply because parsing it out of `acquire`'s stdout is precisely what failed — the
-  reasoning is in that block's own comment, not restated here.
+  `--land-lock-blind` sentinel, and **exactly one line in that skill does**: Section 0's own bail-out
+  `release`, which has no token to supply because parsing it out of `acquire`'s stdout is precisely what
+  failed — the reasoning is in that block's own comment, not restated here. The **second** sanctioned
+  sentinel use is outside that pin's corpus (it is a shell script, not a fenced block): `land-merge-one.sh`
+  substitutes the sentinel when its own optional third argument is empty — see "Threading mechanism"
+  below, and `land-lock.sh`'s OWNERSHIP CHECK header, which names both.
 
   **Why the argument is required now, not merely conventionally supplied.** lode-q9pm originally shipped
   `[own-token]` as OPTIONAL, purely for backward compatibility with a caller not yet updated to thread its
@@ -3140,9 +3143,13 @@ assumption would not have closed it.
   Section 3's two merge loops) takes the same token as an optional third positional argument *at its own
   argument level* (kept optional there so a direct invocation without a token still runs, unblocked), for
   the identical reason: it is a script called *from* a fenced block, not a block that could read the file
-  on its own initiative. It passes that argument through to `land-lock.sh heartbeat` unconditionally,
-  which is where the required-argument enforcement (lode-yuwt) actually lands — an empty token now
-  surfaces as `land-lock.sh`'s own loud, non-fatal diagnostic rather than a silent blind heartbeat.
+  on its own initiative. Keeping it optional *there* has a consequence worth naming rather than
+  glossing: when it is empty, `land-merge-one.sh` substitutes the explicit `--land-lock-blind` sentinel
+  before calling `land-lock.sh heartbeat`, so lode-yuwt's exit-2 enforcement is **deliberately never
+  reached on that path** — an omitted third argument still yields a blind heartbeat, exactly as this
+  script's own contract has always promised a token-less caller. What keeps that from being *silent* is
+  lode-67nk's warning in `land-merge-one.sh` itself, which fires at the point the argument is missing;
+  the required-argument enforcement covers the direct `land-lock.sh` call sites only.
 
   **Deliberately NOT under `$STATE_DIR` (lode-l7mj).** `$STATE_DIR` (`.git/land-state/`) is the
   cross-block persistence mechanism every *other* cross-block value in this skill uses, and an earlier

@@ -146,7 +146,14 @@ def test_clean_merge_heartbeats_the_single_lander_lock(tmp_path: Path) -> None:
     pass and the isolation-replay copy) -- a dropped heartbeat here silently
     reintroduces the acquisition-age exposure the ticket exists to close.
     Behavioural, not a source grep: seeds a lock file that LOOKS old, then
-    asserts its recorded epoch actually advanced after the script ran."""
+    asserts its recorded epoch actually advanced after the script ran.
+
+    Doubles as the mechanical pin on lode-yuwt's layering: this call supplies
+    NO third own-token argument, and land-lock.sh's own token argument is
+    REQUIRED (exit 2 on empty) as of lode-yuwt -- so the epoch only advances
+    because this script substitutes the explicit `--land-lock-blind` sentinel
+    on that path. Drop the substitution and the heartbeat stops happening
+    entirely instead of going blind, and this test goes red."""
     repo = _init_repo(tmp_path)
     _branch_from(repo, "trunk", "origin/land/lode-hb")
     _commit_file(repo, "hb.txt", "from HB\n", "HB adds hb.txt")

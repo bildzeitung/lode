@@ -225,31 +225,28 @@
 # itself, and a future call site that simply forgot the argument would
 # silently degrade to the pre-lode-q9pm blind behaviour with nothing to catch
 # it. Requiring it turns "forgot to thread the token" into a loud, immediate
-# usage error (exit 2) instead. The ONE sanctioned exception is
-# `.claude/skills/land/SKILL.md` Section 0's own parse-failure bail path,
-# which must be able to release the lock it just acquired before it has had
-# any chance to persist its own token to disk -- it passes the explicit
-# `--land-lock-blind` sentinel below rather than omitting the argument, so
-# the exception is visible at its call site instead of looking like an
-# oversight. See that call site's own `land-lock-blind-ok:` comment.
+# usage error (exit 2) instead.
+#
+# TWO call sites are sanctioned to pass the explicit `--land-lock-blind`
+# sentinel instead of a real token -- explicitly, so the opt-out is visible at
+# the call site rather than looking like an oversight, and greppable as
+# `land-lock-blind-ok:`:
+#   - `.claude/skills/land/SKILL.md` Section 0's parse-failure bail path,
+#     which must release the lock it just acquired before it has had any
+#     chance to persist its own token to disk;
+#   - `scripts/land-merge-one.sh`, whose own third positional argument stays
+#     OPTIONAL (a direct invocation must still run) and which substitutes the
+#     sentinel when it is empty, after warning.
+# Each carries its own comment; both are pinned by tests/test_land_lock.py.
 #
 # lode-yuwt ALSO considered, and explicitly REJECTED, making the check a
-# self-reading invariant of this script -- i.e. `acquire` writes a token file
-# and `heartbeat`/`release` read it back themselves, collapsing every
-# call-site argument to zero. Full reasoning: docs/decisions.md (search
-# "lode-yuwt"). In short: the property `release` must keep (a caller that
-# never held the lock can call it harmlessly) has no implementable
-# self-reading form here -- `acquire` and every later `heartbeat`/`release`
-# call are SEPARATE OS processes (SKILL.md's fenced-block model, lode-sfnb),
-# so there is no in-process state to distinguish "this pass's own successful
-# acquire" from "a later, unrelated caller" without EITHER a per-pass-scoped
-# file (rejected: still needs threading a name/path to find it, which is the
-# same call-site work this ticket was meant to eliminate) OR a single
-# machine-shared file (which reopens the exact lode-q9pm displaced-pass
-# hazard this check exists to close, the moment a reclaim overwrites it).
-# Per-call-site threading is therefore the correct end state, not a
-# stopgap -- this REQUIRED-argument form is the whole of the "invariant"
-# value that was actually reachable.
+# self-reading invariant of this script (`acquire` writes a token file that
+# `heartbeat`/`release` read back themselves, collapsing every call-site
+# argument to zero): there is no self-reading form that keeps `release`'s
+# "a caller that never held the lock can call it harmlessly" contract, so
+# per-call-site threading is the correct end state, not a stopgap. Full
+# reasoning lives in docs/decisions.md (search "lode-yuwt") and
+# docs/agents-workflow.md -- deliberately not re-expanded here (lode-1n4x).
 #
 # For WHY this check exists (the self-concealing-overlap hazard: a displaced
 # pass that keeps blindly re-stamping a reclaimed lock makes a genuine
@@ -320,14 +317,11 @@
 #            `<own-token>`, the OWNERSHIP CHECK section, and the `OWN_TOKEN=`
 #            assignment below point back here rather than repeating it.
 #
-#            The ONE sanctioned way to skip the ownership comparison on
+#            The ONLY sanctioned way to skip the ownership comparison on
 #            purpose is the literal sentinel `--land-lock-blind` in place of
-#            a real token -- reserved for `.claude/skills/land/SKILL.md`
-#            Section 0's own parse-failure bail path (see its
-#            `land-lock-blind-ok:` comment), which must release a lock it
-#            just acquired before it has captured its own token at all. Using
-#            the sentinel from anywhere else defeats the point of this check
-#            and is not sanctioned.
+#            a real token, from one of the two call sites named in the
+#            OWNERSHIP CHECK section above. Using the sentinel from anywhere
+#            else defeats the point of this check and is not sanctioned.
 #            exit 0 -> re-stamped (or created fresh, if the file was somehow
 #                       already gone -- see the subcommand's own comment).
 #            exit 1 -> could not write the lock file -- including when the
@@ -381,16 +375,18 @@ BLIND_SENTINEL="--land-lock-blind"
 
 # acquire takes no further argument; heartbeat/release now each REQUIRE
 # exactly one further argument -- their own token, or the explicit
-# $BLIND_SENTINEL opt-out (lode-yuwt) -- so this is always exactly 1 argument
-# total for acquire, exactly 2 for heartbeat/release, never any other count.
-if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] \
-   || { [ "$1" != "acquire" ] && [ "$1" != "heartbeat" ] && [ "$1" != "release" ]; } \
-   || { [ "$1" = "acquire" ] && [ "$#" -ne 1 ]; } \
-   || { { [ "$1" = "heartbeat" ] || [ "$1" = "release" ]; } && [ "$#" -ne 2 ]; }; then
-  echo "usage: $0 acquire|heartbeat <own-token>|--land-lock-blind|release" \
-    "<own-token>|--land-lock-blind" >&2
-  exit 2
-fi
+# $BLIND_SENTINEL opt-out (lode-yuwt). Stated as the three legal
+# <argc>:<subcommand> shapes rather than as a chain of negated conditions, so
+# adding a fourth shape is one more `case` arm and nothing else.
+case "$#:${1:-}" in
+  1:acquire | 2:heartbeat | 2:release) ;;
+  *)
+    echo "usage: $0 acquire" >&2
+    echo "       $0 heartbeat <own-token>|$BLIND_SENTINEL" >&2
+    echo "       $0 release <own-token>|$BLIND_SENTINEL" >&2
+    exit 2
+    ;;
+esac
 cmd="$1"
 # This pass's own remembered token -- empty for acquire (never reaches here,
 # $# is 1) and, for heartbeat/release, either a real token or the literal

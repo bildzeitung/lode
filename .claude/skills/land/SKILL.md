@@ -285,7 +285,8 @@ If the queue is empty, there is nothing to land: release the lock and stop —
 # Normal completion -- release now rather than waiting out the staleness window for no reason.
 MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"
 [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
-  "DISABLED for this call (lode-67nk)" >&2
+  "DISABLED for this call (lode-67nk) -- land-lock.sh REFUSES it outright (exit 2, lode-yuwt)" \
+  "rather than releasing blind, so the lock stays held until the staleness window reclaims it" >&2
 scripts/land-lock.sh release "$MY_TOKEN"
 exit 0
 ```
@@ -441,7 +442,8 @@ logged but never stops the pass (this is lock bookkeeping, not the vet itself):
 ```bash
 MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"
 [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
-  "DISABLED for this call (lode-67nk)" >&2
+  "DISABLED for this call (lode-67nk) -- land-lock.sh REFUSES it outright (exit 2, lode-yuwt)" \
+  "rather than re-stamping blind, so this iteration simply does not heartbeat (|| true below)" >&2
 scripts/land-lock.sh heartbeat "$MY_TOKEN" || true
 bd show <id> --json     # read metadata.land_head and metadata.land_summary
 git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on origin...
@@ -1533,7 +1535,8 @@ echo "bare-ref backstop3 (worktree-agent-*): deleted $B3_DELETED stale local ref
 
 MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
 [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
-  "DISABLED for this call (lode-67nk)" >&2
+  "DISABLED for this call (lode-67nk) -- land-lock.sh REFUSES it outright (exit 2, lode-yuwt)" \
+  "rather than releasing blind, so the lock stays held until the staleness window reclaims it" >&2
 scripts/land-lock.sh release "$MY_TOKEN"   # the pass is fully done -- release now rather than
                                      # waiting out the staleness window (lode-aps3; see Section 0)
 ```
