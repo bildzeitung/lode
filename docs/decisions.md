@@ -3762,6 +3762,80 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
       it still OWNS the lock lets a losing pass keep re-stamping the winner's record, making a
       two-lander state self-concealing. Under the invariant, `heartbeat` reads the token itself, so
       that concealment path closes as a side effect.
+  - **Update (`lode-yuwt`, 2026-08-07)** — the `lode-yuwt` half of this entry is **withdrawn**, and
+    with it the `lode-l7mj` folding and the `lode-cp4o` heartbeat-gap folding. The invariant shape
+    decided above is not implementable, and the reasoning that picked it over the argument form does
+    not survive contact with where the token actually lives. See the 2026-08-07 entry below for the
+    replacement. What stands unchanged from this entry: the `lode-l7mj` bug diagnosis and its live
+    verification, `lode-l7mj`'s acceptance criteria 1-5 (including the two load-bearing ones),
+    `LAND_LOCK_STALE_SECONDS` staying at 1800s, and `lode-cp4o`'s measurement half staying deferred.
+
+- **2026-08-07 (maintainer decision, `/sweep` walkthrough) — HUMAN DECISION: `lode-yuwt` resolves as
+  its acceptance-criteria option (2) — per-call-site threading IS the correct end state, and the
+  ownership check does NOT become a self-reading invariant of `scripts/land-lock.sh`.** This
+  supersedes the `lode-yuwt` half of the 2026-08-06 entry above, which is left in place as the record
+  of what was believed then. Two reasons, the second of which the earlier decision did not have in
+  front of it:
+  - **The decided hazard closure cannot be built.** "`release` refuses unless `acquire` succeeded in
+    the SAME invocation" has no referent here: `acquire` (`land/SKILL.md` Section 0) and every
+    `heartbeat`/`release` (Section 2a, `scripts/land-merge-one.sh`, Section 4) are separate Bash tool
+    invocations — separate OS processes, sometimes many minutes apart (`lode-sfnb`). No process state
+    survives between them, so a control-flow gate spanning them does not exist. A producer escalated
+    this from the build side before any code was written; **that escalation is correct and is not to
+    be re-litigated.**
+  - **Threading is unavoidable, so the invariant buys nothing.** `heartbeat`/`release` must locate
+    *some* per-pass identity that `acquire` produced. Either the caller supplies it, or it sits at a
+    fixed path — and a fixed path is machine-global, so a reclaiming pass overwrites it and a
+    displaced pass reads the *new* holder's token, matches, and `lode-q9pm`'s displacement guarantee
+    evaporates. Whether the caller passes a token **value** or a **file path** is the same threading
+    at the same call sites. There is no third mechanism.
+  - **The finding that decided it, and that the 2026-08-06 entry did not have:** the second point
+    above applies to the **status quo as written**. `$STATE_DIR` is
+    `$(git rev-parse --git-dir)/land-state` — *machine-global, not per-pass* — so today's
+    `$STATE_DIR/land-lock-token` is already the single shared file the escalation calls "strictly
+    worse". Self-reading would not have been worse than today; it would have been the **same**. That
+    is why the hazard argument could not decide between the two options at all, and why this decision
+    turns on the two points above instead.
+  - **`lode-yuwt`'s scope, now that no design fork is left:** make the `[own-token]` argument
+    **required** by `heartbeat` and `release` — exit non-zero with a diagnostic on an absent or empty
+    token instead of silently degrading to the blind pre-`lode-q9pm` behaviour. There are no external
+    callers; every caller lives in this repo. That is the whole of the "invariant" value that was
+    actually reachable. Section 0's parse-failure bail path, which calls `release` deliberately blind,
+    gets an **explicit** opt-out (a distinguished sentinel argument, never an omitted one) so the rule
+    has no silent hole. `land-lock.sh`'s OWNERSHIP CHECK header and CAVEAT 1, and
+    [`agents-workflow.md`](agents-workflow.md)'s ownership-check/threading passage, are rewritten to
+    state this as a reasoned position rather than "backward compatibility". `lode-67nk`'s six
+    caller-side empty-token diagnostics and both textual pins **stay** — the earlier scope note said
+    to delete them if `lode-yuwt` was taken; under this resolution they become a cheap second layer,
+    not dead code.
+  - **`lode-l7mj` is REOPENED, not subsumed, and lands FIRST** (dependency recorded). It is the only
+    live defect in the cluster, and it is worse than a corner case: Section 1's `rm -rf "$STATE_DIR"`
+    runs after Section 0 wrote the token and nothing rewrites it, so the ownership check is
+    **disabled on every pass, every time** — `lode-67nk`'s empty-token warning should therefore be
+    firing on every `/land` pass, and if it is not, that is a second finding to file. Ordering is
+    binding: making the argument required while the token file is still being wiped would hard-fail
+    every pass.
+    - **Shape: (c′)** — store the token **outside** `$STATE_DIR`, at
+      `$(git rev-parse --git-dir)/land-lock-token`, beside `.git/land.lock`, which already lives there
+      and is never wiped. The old shape (c) is gone with the invariant, but this half of it survives
+      and is now strictly best: (a) (write it after the wipe) re-opens the writer-before-the-wipe
+      ordering question `lode-wjw4` closed, and (b) (spare the one file) restores the
+      enumerate-subdirectories coupling `lode-wjw4` removed and forces changes to
+      `tests/test_land_conflicts_state.py`'s pins. (c′) touches **neither** — the wipe and both of its
+      pins stay byte-identical, because the token stops being per-pass scratch and becomes lock state
+      sitting with the lock.
+    - **Consequence to handle, not to paper over:** the token now survives a crashed pass into the
+      next one. That is correct — the lock record it is compared against survives too, by the same
+      staleness-TTL design — but every successful `acquire`, fresh or reclaimed, must overwrite it
+      unconditionally. No "clean up the stale token" step: a successful acquire always rewrites it,
+      and a failed one exits before any consumer reads it.
+  - **`lode-cp4o`'s heartbeat-gap half returns to `lode-cp4o`** — it was folded into `lode-yuwt` only
+    because that ticket put `land-lock.sh` on the operating table, which is no longer the case at that
+    scale. `LAND_LOCK_STALE_SECONDS` still stays at 1800s and the measurement half stays `deferred`,
+    both unchanged from the entry above. The side effect the 2026-08-06 entry credited to the
+    invariant — a non-checking `heartbeat` making a two-lander state self-concealing — is **not**
+    delivered by this resolution; it is closed instead by `lode-l7mj` (the token stops being empty, so
+    the existing check actually runs) plus `lode-yuwt`'s required argument.
 
 - **2026-08-06 (maintainer decision, `lode-3npn`) — HUMAN DECISION: the rich Console "consequences
   under test" are canonicalized BY KIND — the design conclusion stays in `docs/stack.md` and
