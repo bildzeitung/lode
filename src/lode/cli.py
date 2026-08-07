@@ -176,22 +176,16 @@ CLI_THEME = Theme(CLI_STYLES)
 #: BEWARE, if you are writing the sibling colour tickets' tests: ``Console()``
 #: computes ``color_system`` once at CONSTRUCTION, and that alone decides
 #: whether colour is emitted — ``is_terminal`` stays a live property but stops
-#: answering the colour question. The precise freeze-vs-live mechanism, with
-#: source-line refs and executed verification against the pinned rich, is
-#: canonical in ``tests/conftest.py``'s scrub comment. At module
-#: scope that construction happens at **import** time. That is correct for
-#: real use (piping ``lode notes | cat`` replaces stdout before this module
-#: is imported), but it has two non-obvious consequences under test:
-#:
-#: * Colour is off under ``CliRunner`` because *pytest's default capture* had
-#:   already replaced stdout by import time — NOT because CliRunner's output is
-#:   not a TTY. Swapping stdout afterwards cannot change the frozen decision.
-#:   Under ``pytest -s`` from a real terminal the decision freezes the other
-#:   way and ANSI leaks into captured output, failing such assertions.
-#: * ``monkeypatch.setenv("NO_COLOR", "1")`` after import is a **no-op** — it
-#:   is read too late, so the assertion passes without exercising anything.
-#:   Assert the ``NO_COLOR`` path in a **subprocess** with ``NO_COLOR=1`` in
-#:   its env, which re-imports and so re-detects (verified in lode-l38d.1).
+#: answering the colour question. At module scope that construction happens
+#: at **import** time. That is correct for real use (piping ``lode notes |
+#: cat`` replaces stdout before this module is imported), but it makes the
+#: two consequences under test — why colour reads as off under
+#: ``CliRunner``, and why ``monkeypatch.setenv("NO_COLOR", ...)`` after
+#: import is a silent no-op — non-obvious. The freeze-vs-live mechanism
+#: itself is canonical in ``tests/conftest.py``'s scrub comment; the two
+#: consequences for THIS module's tests are canonical in full in
+#: ``tests/test_cli_console.py``'s module docstring — read that before
+#: writing a colour assertion here.
 #:
 #: Attached to a shared ``Theme`` (lode-l38d.11) so every colour-rendering
 #: command below references a semantic style NAME (e.g. ``style="note_id"``)

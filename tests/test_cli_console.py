@@ -19,7 +19,8 @@ per-invocation, so:
   before ``lode.cli`` was first imported (typically at collection) — NOT
   because of anything ``CliRunner`` itself does. Run the suite as
   ``pytest -s`` from a real terminal and the import-time detection freezes
-  ``color_system`` the other way.
+  ``color_system`` the other way: ANSI then leaks into captured output and
+  assertions that expect none fail.
 * ``monkeypatch.setenv("NO_COLOR", "1")`` AFTER ``lode.cli`` is already
   imported is a silent no-op: the env read already happened at import, so
   such an assertion passes WITHOUT exercising the ``NO_COLOR`` path at all.
@@ -45,9 +46,10 @@ Any colour ticket (lode-l38d.4/.5/.6/.10) that asserts the ``NO_COLOR``
 negative path should copy this pattern rather than reinvent — or silently
 no-op — one of its own, and should re-run the two subject-sabotage checks
 above rather than trust that a green test exercised anything.
-See also ``src/lode/cli.py``'s ``console`` docstring and docs/stack.md's
-``rich`` row, which record their own local consequences of the same
-canonical mechanism.
+This module docstring is the canonical, full statement of both consequences
+(``lode-3npn``) — ``src/lode/cli.py``'s ``console`` docstring and
+docs/stack.md's ``rich`` row each carry their own local design conclusion
+(why there is no test seam) plus a pointer here rather than restating them.
 """
 
 from __future__ import annotations

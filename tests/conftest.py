@@ -245,7 +245,7 @@ from lode.enrich import EnrichmentResult
 #: NOT CLOSED BY THIS SCRUB, deliberately (lode-kq4v acceptance A.3): ``pytest -s`` /
 #: ``--capture=no`` from a REAL terminal. stdout is then a genuine tty, so ``is_terminal`` is
 #: ``True`` at import with none of these four set -- confirmed under a pty -- and the same tests
-#: fail. ``docs/stack.md``'s ``rich`` row already records that constraint. Left unfixed ON
+#: fail. ``tests/test_cli_console.py``'s module docstring records that constraint (lode-3npn). Left unfixed ON
 #: PURPOSE: the only way to force colour off is to SET ``NO_COLOR=1`` rather than clear it, which
 #: would make ``test_config_output_has_no_ansi_when_piped`` vacuous -- it would then pass because
 #: colour was forced off, not because the pipe was detected, which is the one thing it exists to
