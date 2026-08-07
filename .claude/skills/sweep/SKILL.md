@@ -290,14 +290,29 @@ three-state rule, and [Failure handling](#failure-handling--a-sub-step-fails-the
 
 ## 2b. Collect stranded in_progress tickets (report-only — never touches the digest or notify path)
 
-A fourth, independent read, on its own track — mirroring §2a exactly. Claiming a ticket sets
-`status=in_progress`, which removes it from `bd ready` — so `/code` never picks it up again. Without
-a `ready-for-*` label it is also invisible to `/code` phase 2, to `/code`'s `needs-rebase` sweep, and
-to `/land`; and if it is not `deferred` and not `land-escalated`, nothing else in the pipeline sees
-it either. Every consumer keys on either `bd ready` or a label, and `in_progress` + unlabeled
-satisfies neither — the ticket is stranded silently. (A `human`-labeled ticket can be stranded the
-same way, for a different reason — see the exclude-label list below.) I list them for visibility
-only:
+A fourth, independent read, on its own track. Claiming a ticket sets `status=in_progress`, which
+removes it from `bd ready` — so `/code` never picks it up again. Without a `ready-for-*` label it is
+also invisible to `/code` phase 2, to `/code`'s `needs-rebase` sweep, and to `/land`; and if it is not
+`deferred` and not `land-escalated`, nothing else in the pipeline sees it either. Every consumer keys
+on either `bd ready` or a label, and `in_progress` + unlabeled satisfies neither — the ticket is
+stranded silently. (A `human`-labeled ticket can be stranded the same way, for a different reason —
+see the exclude-label list below.) I list them for visibility only:
+
+**Age discriminator — DECIDED 2026-08-06 (maintainer, `lode-3k6x`; full record:
+[docs/decisions.md](../../../docs/decisions.md), entry "`/sweep` §2b gets an age discriminator on
+`started_at` (24h)").** Unlike §2a's `deferred` (a terminal, parked state), `in_progress` is a
+*transient working state* — a coding producer claims its ticket up front (`bd update --claim` ->
+`in_progress`) and only applies `ready-for-code-review` at hand-off, minutes-to-hours later. For that
+whole build window the ticket carries none of the exclude-labels below and is indistinguishable from
+a stranding, so an unfiltered §2b routinely lists the live build queue — exactly how a human learns to
+skim past the section, and how a genuine stranding then hides among the in-flight rows. The fix is a
+`started_at` age filter, threshold 24h (~100x the measured 14m10s coding-builder run, so it cannot
+false-positive a live build, while an abandoned claim still surfaces within a day). `started_at` over
+`updated_at`, deliberately: `started_at` is precisely "when claimed", whereas `updated_at` is
+refreshed by any edit and would reset the clock on a ticket nobody is actually building. `bd list`
+exposes no `--started-*` flag to filter server-side (only `--created-*`/`--closed-*`/`--defer-*`/
+`--due-*`), but the `--json` rows carry `started_at` directly, and §2b already pipes through `jq` — so
+the discriminator is one added `select(...)` clause, no new dependency:
 
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
@@ -305,9 +320,14 @@ SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocat
 set -o pipefail   # REQUIRED, same reason as §2a.
 
 # Same sentinel convention as §2a -- see that section's note for the rationale.
+# select(...): only tickets claimed (started_at) more than 24h ago -- a null/missing started_at
+# (should not happen for in_progress, but defensively) is treated as stranded, not filtered out,
+# since there is no age evidence to exclude it on.
 if ! STRANDED=$(bd list --status in_progress --limit 0 --json \
   --exclude-label ready-for-code-review,ready-for-land,needs-rebase,sweep-digest,land-escalated \
-  | jq -r '(. // []) | .[] | [.id, .title] | @tsv'); then
+  | jq -r '(. // []) | .[]
+      | select(.started_at == null or (.started_at | fromdateiso8601) < (now - 86400))
+      | [.id, .title] | @tsv'); then
   STRANDED="SWEEP-QUERY-ERROR"
 fi
 printf '%s' "$STRANDED" > "$SWEEP_TMP/stranded"
