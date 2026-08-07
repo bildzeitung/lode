@@ -139,6 +139,41 @@ def test_clean_merge_exits_0_and_uses_the_precomputed_message(
     assert status.stdout == ""
 
 
+def test_no_own_token_argument_warns_loudly_on_stderr_only(tmp_path: Path) -> None:
+    """lode-sp9l: the BEHAVIOURAL pin on the empty-own-token warning.
+
+    tests/test_land_lock.py's
+    test_land_merge_one_warns_on_an_empty_own_token_argument greps the shipped
+    source for the `if [ -z "$own_token" ]` branch and a ` >&2`; that proves
+    the warning is SPELLED, not that it fires. This proves it actually reaches
+    stderr on the no-third-argument path -- which `_run` already takes -- and
+    that it stays OFF stdout, which is the caller's $CONFLICTS channel and must
+    stay clean. It therefore subsumes that textual pin behaviourally; the
+    textual one is left in place only to avoid a same-file edit racing other
+    in-flight work on tests/test_land_lock.py, and is safe to drop.
+
+    Delete the warning line from scripts/land-merge-one.sh and this test goes
+    red (verified by sabotage) -- the sentinel substitution below it keeps the
+    heartbeat working, so no other test notices."""
+    repo = _init_repo(tmp_path)
+    _branch_from(repo, "trunk", "origin/land/lode-wt")
+    _commit_file(repo, "wt.txt", "from WT\n", "WT adds wt.txt")
+    msg_dir = tmp_path / "msgs"
+    _write_msg(msg_dir, "lode-wt", "Merge land/lode-wt: warning check (lode-wt)")
+
+    result = _run("lode-wt", msg_dir, repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "no own-token supplied" in result.stderr, (
+        "scripts/land-merge-one.sh must warn loudly on stderr when called "
+        "with no third own-token argument (lode-67nk / lode-sp9l)"
+    )
+    assert result.stdout == "", (
+        "the warning must never reach stdout -- that is the caller's "
+        "$CONFLICTS channel (lode-sp9l)"
+    )
+
+
 def test_clean_merge_heartbeats_the_single_lander_lock(tmp_path: Path) -> None:
     """lode-m87j: every call to this script must re-stamp the single-lander
     lock (scripts/land-lock.sh heartbeat), because this script is the sole
