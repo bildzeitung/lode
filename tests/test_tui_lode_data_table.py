@@ -121,6 +121,47 @@ def test_add_rows_coerces_every_bare_str_cell_too() -> None:
     assert _render(cells[1]) == "plain"
 
 
+def test_empty_message_renders_when_row_count_is_zero() -> None:
+    """lode-t7pw: setting ``empty_message`` on a table with no rows paints
+    it into the table's own canvas, below the header -- no row is added."""
+    app = _TableHarnessApp()
+
+    async def _drive() -> tuple[int, str]:
+        async with app.run_test() as pilot:
+            table = pilot.app.screen.query_one(f"#{_TABLE_ID}", LodeDataTable)
+            table.add_column("Value")
+            table.empty_message = "Nothing here yet."
+            await pilot.pause()
+            line = table.render_line(table.header_height).text
+            return table.row_count, line
+
+    row_count, line = asyncio.run(_drive())
+
+    assert row_count == 0  # no sentinel row was added
+    assert "Nothing here yet." in line
+
+
+def test_empty_message_is_not_shown_once_a_real_row_exists() -> None:
+    """A stale ``empty_message`` from a previous (empty) reload never bleeds
+    into a table that now has real rows -- the guard is on ``row_count``,
+    not on whether the attribute happens to be set."""
+    app = _TableHarnessApp()
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            table = pilot.app.screen.query_one(f"#{_TABLE_ID}", LodeDataTable)
+            table.add_column("Value")
+            table.empty_message = "Nothing here yet."
+            table.add_row("real data")
+            await pilot.pause()
+            return table.render_line(table.header_height).text
+
+    line = asyncio.run(_drive())
+
+    assert "Nothing here yet." not in line
+    assert "real data" in line
+
+
 def test_update_cell_coerces_a_bare_str_value() -> None:
     """``update_cell`` (and by delegation ``update_cell_at``) get the same
     coercion an initial ``add_row`` does -- a later in-place edit can't
