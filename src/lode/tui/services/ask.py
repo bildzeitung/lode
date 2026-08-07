@@ -9,12 +9,12 @@ re-implementing retrieval or the gate. It reuses ``cli._retrieve`` verbatim
 duplicating the read pipeline's composition a third time (``lode.eval.harness``
 already keeps its own deliberately-narrower copy for deterministic scoring).
 
-What this module adds is what the terminal's ``lode ask`` doesn't need: each
-surviving citation's **as-of** provenance, resolved from the store --
-``docs/design.md`` ("Retrieval always points back to the source note, 'as of'
-a known version") and ``docs/externals.md`` ("as of ``fetched_at``"). A note
-citation's as-of is its version's write time (``versions.created``); an
-external citation's is its snapshot's fetch time (``snapshots.fetched_at``).
+Each surviving citation's **as-of** provenance and note/external identity are
+resolved by :func:`lode.citations_read.resolve_citations`, which owns that SQL
+and the ``versions.created`` / ``snapshots.fetched_at`` rule behind it --
+shared verbatim with the terminal's ``lode ask``, which used to keep a
+hand-copied as-of mirror of its own (lode-kuc7). This module only wires that
+call and renders its output.
 
 :func:`run_ask` is the screen's only entry point -- pure I/O (DB + the Q&A
 send), no widget/App state, so it is unit-testable without spinning up a
@@ -26,15 +26,14 @@ the ticket's acceptance surface.
 
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from lode.citations_read import CitationIdentity, resolve_citations
 from lode.config import Settings, lance_dir
 from lode.faithfulness import locate_span, normalize_whitespace
-from lode.notes_read import first_line
 from lode.storage import init_db
 
 if TYPE_CHECKING:
@@ -72,25 +71,6 @@ def _no_stage(stage: str) -> None:
 
 
 @dataclass(frozen=True)
-class CitationIdentity:
-    """Resolved note/external identity for one citation target (lode-35nu.1).
-
-    Exactly one of ``note_id``/``external_id`` is set, mirroring
-    :class:`~lode.answer.Support`'s own ``version_id``/``snapshot_id`` split.
-    ``title`` is :func:`lode.notes_read.first_line` of the *cited*
-    version/snapshot's body -- taken from the cited version even when that
-    version is superseded, so an old citation shows the title it had rather
-    than the current head's. ``is_head`` is True when the cited
-    version/snapshot is still the note/external's current head.
-    """
-
-    title: str
-    is_head: bool
-    note_id: str | None = None
-    external_id: str | None = None
-
-
-@dataclass(frozen=True)
 class AskResult:
     """A gated cited answer plus each citation's as-of provenance and identity.
 
@@ -106,7 +86,7 @@ class AskResult:
     the cited version/snapshot's full body text, used only to render
     surrounding context around a citation's ``quoted_span`` (lode-35nu.3);
     same absent-means-unresolvable convention as ``identities``. All three
-    come from one batched pass (:func:`_resolve_citations`).
+    come from one batched pass (:func:`lode.citations_read.resolve_citations`).
     """
 
     answer: CitedAnswer
@@ -164,80 +144,12 @@ def run_ask(
         )
         report(STAGE_GATE)
         supports = [support for claim in answer.claims for support in claim.support]
-        as_of, identities, bodies = _resolve_citations(conn, supports)
+        as_of, identities, bodies = resolve_citations(conn, supports)
         return AskResult(
             answer=answer, as_of=as_of, identities=identities, bodies=bodies
         )
     finally:
         conn.close()
-
-
-def _resolve_citations(
-    conn: sqlite3.Connection, supports: list[Support]
-) -> tuple[dict[str, str | None], dict[str, CitationIdentity], dict[str, str]]:
-    """Resolve as-of provenance, identity, and body for every cited target, batched (lode-35nu.1).
-
-    Two queries total -- one ``IN (...)`` over every distinct cited
-    ``version_id``, one over every distinct cited ``snapshot_id`` -- so a
-    multi-claim answer costs a fixed two round-trips regardless of citation
-    count (the ticket's "a single batched query" acceptance line). The as-of
-    stamp and the full body both ride along on the same rows the identity
-    comes from (a note version is stamped at write time, ``versions.created``;
-    an external snapshot at fetch time, ``snapshots.fetched_at``), so neither
-    costs an extra query. The body is kept only so the ask screen can render
-    surrounding context around a citation's ``quoted_span`` (lode-35nu.3).
-
-    Returns ``(as_of, identities, bodies)``, all keyed by
-    :attr:`~lode.answer.Support.target_id`. Every cited target is a key in
-    ``as_of``, mapping to ``None`` when the store had nothing to resolve; such
-    a target is simply absent from ``identities`` and ``bodies``. Unresolvable
-    is practically unreachable -- the faithfulness gate already verified the
-    span against the stored body -- but handled rather than assumed away.
-    """
-    identities: dict[str, CitationIdentity] = {}
-    bodies: dict[str, str] = {}
-    as_of: dict[str, str | None] = {}
-
-    version_ids = tuple({s.version_id for s in supports if s.version_id is not None})
-    if version_ids:
-        placeholders = ",".join("?" for _ in version_ids)
-        rows = conn.execute(
-            "SELECT v.version_id, v.note_id, v.body, v.created, n.head_version_id "
-            "FROM versions v JOIN notes n ON n.note_id = v.note_id "
-            f"WHERE v.version_id IN ({placeholders})",
-            version_ids,
-        ).fetchall()
-        for version_id, note_id, body, created, head_version_id in rows:
-            identities[version_id] = CitationIdentity(
-                title=first_line(body),
-                is_head=version_id == head_version_id,
-                note_id=note_id,
-            )
-            bodies[version_id] = body
-            as_of[version_id] = created
-
-    snapshot_ids = tuple({s.snapshot_id for s in supports if s.snapshot_id is not None})
-    if snapshot_ids:
-        placeholders = ",".join("?" for _ in snapshot_ids)
-        rows = conn.execute(
-            "SELECT s.snapshot_id, s.external_id, s.body, s.fetched_at, "
-            "e.head_snapshot_id "
-            "FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
-            f"WHERE s.snapshot_id IN ({placeholders})",
-            snapshot_ids,
-        ).fetchall()
-        for snapshot_id, external_id, body, fetched_at, head_snapshot_id in rows:
-            identities[snapshot_id] = CitationIdentity(
-                title=first_line(body),
-                is_head=snapshot_id == head_snapshot_id,
-                external_id=external_id,
-            )
-            bodies[snapshot_id] = body
-            as_of[snapshot_id] = fetched_at
-
-    for support in supports:
-        as_of.setdefault(support.target_id, None)
-    return as_of, identities, bodies
 
 
 #: Wraps a citation's matched body text inside its surrounding-context
