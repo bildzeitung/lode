@@ -110,24 +110,22 @@ not run in parallel:
 ```bash
 STATE_DIR="$(git rev-parse --git-dir)/land-state"    # re-derive -- fresh Bash invocation (lode-sfnb)
 mkdir -p "$STATE_DIR"
-# Capture BOTH streams together (2>&1) rather than just stdout: land-lock.sh's
-# exit-1 diagnostics on stderr already distinguish "another /land is plausibly
-# running" (transient, self-clearing) from a permanent MACHINE FAULT (rev-parse
-# failure, flock missing, an unwritable lock dir) with different wording --
-# collapsing every non-zero exit into one generic "could not acquire the lock"
-# line (as this call site used to) threw that distinction away, so a permanent,
-# per-machine fault under `/loop 5m /land` looked identical, forever, to an
-# ordinary overrunning tick (lode-119w). This is deliberately NOT a new exit
-# code: land-lock.sh's exit contract is unchanged (every existing caller still
-# collapses non-zero to "skip"), this call site alone now echoes the script's
-# own words instead of replacing them.
-ACQUIRE_STATUS=0
-ACQUIRE_OUT="$(scripts/land-lock.sh acquire 2>&1)" || ACQUIRE_STATUS=$?
-if [ "$ACQUIRE_STATUS" -ne 0 ]; then
-  echo "land: could not acquire the lock this tick -- skipping. land-lock.sh said:" >&2
-  echo "$ACQUIRE_OUT" >&2
+# On a non-zero acquire, this skip line goes to STDERR and points AT the
+# diagnostic land-lock.sh has already printed there itself -- whose wording
+# distinguishes a transient "another /land appears to still be running" from a
+# permanent MACHINE FAULT (flock missing, rev-parse failure, an unwritable lock
+# dir), the distinction a reader of `/loop 5m /land`'s output needs and that a
+# generic line alone invites them to skim past (lode-119w; docs/agents-workflow.md).
+# Same stream, so it is ordered immediately after it. Deliberately NOT `2>&1`
+# into $ACQUIRE_OUT: land-lock.sh's token contract is its STDOUT, and on the
+# SUCCESS path that variable is the input to the token parse below, whose
+# failure aborts the pass -- widening it buys nothing there and risks that parse.
+ACQUIRE_OUT="$(scripts/land-lock.sh acquire)" || {
+  echo "land: could not acquire the lock this tick -- skipping. Read land-lock.sh's" \
+    "own diagnostic immediately above: a MACHINE FAULT there is PERMANENT on this" \
+    "machine and blocks landing until a human fixes it -- not an overrunning tick." >&2
   exit 0
-fi
+}
 echo "$ACQUIRE_OUT"
 # Persist THIS pass's own acquire token to disk (lode-q9pm), for every later
 # heartbeat/release call site to re-read -- a file, not a variable, because no
