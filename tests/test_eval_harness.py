@@ -142,9 +142,14 @@ def test_recall_is_model_free_and_finds_known_good_notes(conn, settings, tmp_pat
 
 
 def test_lexical_leg_retrieves_a_non_ascii_question(conn) -> None:
-    """The eval scorer's lexical leg (build_match_query + lexical_search, as used
-    by ``lode.eval.harness._retrieve``) surfaces a non-Latin-script note rather
-    than silently returning nothing (lode-8irr)."""
+    """The scorer's lexical leg surfaces a non-Latin-script note (lode-8irr).
+
+    Exercises the exact ``build_match_query`` -> ``lexical_search`` pair
+    ``harness._retrieve`` opens with, over the production ``LexicalCacheBackend``
+    index path -- but without ``_retrieve``'s embedder/``VectorStore``, which the
+    ASCII defect never involved. The sibling assertions in ``test_lexical.py``
+    and ``test_notes_read.py`` cover the other two callers of this builder.
+    """
     result = save(conn, "note-1", "проект переезжает в Москва завтра")
     LexicalCacheBackend(conn).index(
         "note-1", result.version_id, "проект переезжает в Москва завтра"
