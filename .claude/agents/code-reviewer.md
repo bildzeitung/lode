@@ -276,6 +276,25 @@ the venv's `nox` by explicit path (lode-6874). For a docs-only branch there is n
 
 ### 4. Technical review (the whole point)
 
+**Re-assert isolation before the first mutating write (lode-6wgc).** Step 1's isolation guard ran once,
+at the very start, before this cycle's own fetch/checkout even happened; it cannot catch a launch
+worktree that vanishes *mid-session* — observed for a `coding` producer resumed via `SendMessage`,
+whose worktree was deleted out from under it, silently dropping its cwd onto the main checkout on
+`trunk` with nothing mechanical catching it (full account:
+[docs/agents-workflow.md](../../docs/agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc)).
+Re-run the same 0/1/2 precondition here, immediately before the first `Edit`/`Write` this pass makes:
+
+```bash
+"$TOP/scripts/isolation-guard.sh" || {
+  echo "STOP: isolation guard failed mid-session (lode-6wgc) -- do NOT edit, write, or run nox." \
+    "Report to the operator."
+  exit 1
+}
+```
+
+(`$TOP` is the toplevel captured in step 2; re-derive with `git rev-parse --show-toplevel` if out of
+scope.) On failure: hard stop, no self-rescue, report the diagnostic — identical to step 1's rule.
+
 `Edit`/`Write` now work normally — I'm in my own worktree, not fighting a guard pinned somewhere else.
 
 1. **Correctness — my own reasoning is the whole of it; nothing backs it up (lode-rlyx).**
@@ -368,6 +387,17 @@ carry, the exact failure lode-tpt describes. My step-4 fixes leave the tree dirt
 first** (step 6), then re-assert `git status --short` is empty and gate. If `nox -t fix` rewrites
 files, `git commit --amend` the reformat in and re-run, until the gates are green *and* the tree is
 clean. Never gate a tree I then keep editing.
+
+**Re-assert isolation once more before `nox -t fix` (lode-6wgc)** — same one-liner as step 4, cheap
+insurance against the worktree vanishing in the interval since:
+
+```bash
+"$TOP/scripts/isolation-guard.sh" || {
+  echo "STOP: isolation guard failed before gating (lode-6wgc) -- do NOT run nox against this cwd." \
+    "Report to the operator."
+  exit 1
+}
+```
 
 ```bash
 ./venv/bin/nox -t fix             # ruff format + lint (fixes in place)

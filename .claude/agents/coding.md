@@ -321,6 +321,30 @@ bd show <id> --json | jq -r '.[0].design // empty'
 
 ### 5. Implement
 
+**Re-assert isolation before the first mutating write (lode-6wgc).** Step 3's guards run once, before
+work starts; they cannot catch a launch worktree that vanishes *mid-session*. Observed: a producer's
+worktree was deleted out from under it after being resumed via `SendMessage` — its cwd silently fell
+back to the main checkout on `trunk`, and nothing mechanical caught it; only the English "if my cwd is
+trunk, stop" instruction held, which is luck-adjacent, not a guarantee (full account:
+[docs/agents-workflow.md](../../docs/agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc)).
+A second, cheap run of the same 0/1/2 precondition — one `git rev-parse` — closes that gap at the
+point it matters most: immediately before the first `Edit`/`Write` of the task.
+
+```bash
+"$TOP/scripts/isolation-guard.sh" || {
+  echo "STOP: isolation guard failed mid-session (lode-6wgc) -- my launch worktree is gone or my" \
+    "cwd has moved off it since step 3. Do NOT edit, write, or run nox. Report to the operator."
+  exit 1
+}
+```
+
+(`$TOP` is the `git rev-parse --show-toplevel` captured in step 3; re-derive it if it's out of scope
+— `TOP=$(git rev-parse --show-toplevel 2>/dev/null || true)`.) On failure the response is identical
+to step 3's: hard stop, no `EnterWorktree` retry, no self-provisioned `git worktree add` — report the
+exact diagnostic and let the operator decide. (I do **not** re-run
+`recycled-worktree-guard.sh` here — that guard's failure mode is destructive repair, appropriate as a
+one-time precondition, not as a mid-session recheck.)
+
 - **Create new files with the `Write` tool**, not `bash` heredocs/echo (a `\n#` in a quoted bash
   arg — comments, section headers — trips a security prompt; Write avoids it).
 - Match the surrounding code's idiom, naming, and comment density, and honor the coding-style fiats
@@ -422,6 +446,19 @@ git worktree unlock "$(git rev-parse --show-toplevel)"
 ```
 
 ### 7. Quality gates (must be green)
+
+**Re-assert isolation once more before `nox -t fix` (lode-6wgc)** — same one-liner as step 5, same
+rationale: `nox -t fix` rewrites files in place, and this is the last mutating checkpoint before the
+gate loop. If step 5's guard already ran moments ago this is cheap insurance, not busywork — the fault
+this closes is a worktree that vanishes *between* steps, and time has passed.
+
+```bash
+"$TOP/scripts/isolation-guard.sh" || {
+  echo "STOP: isolation guard failed before gating (lode-6wgc) -- do NOT run nox against this cwd." \
+    "Report to the operator."
+  exit 1
+}
+```
 
 **Run these in the FOREGROUND, in the same turn, and read the output before doing anything else.**
 No `run_in_background`, no `Monitor`, no ending the turn on a pending gate — see the non-negotiable

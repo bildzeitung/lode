@@ -3951,3 +3951,21 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     section-specific reasoning. Its stated sequencing blocker is cleared — `lode-lrg2` is closed.
   - **SEQUENCING (binding):** `lode-3k6x` and `lode-mm73` both edit §2b and must be built in
     sequence, not in parallel.
+
+- **2026-08-07 — Open: does the harness reap a launch worktree on resume via `SendMessage`?
+  (`lode-6wgc`)** During a bare `/code` fan-out (cap 5), a `coding` producer's launch worktree was
+  deleted from disk *while the agent was actively working in it*, silently dropping its cwd onto the
+  main checkout on `trunk`. The agent noticed (`pwd`/`HEAD` both read wrong) and stopped before
+  touching anything, but that outcome was luck-adjacent, not guaranteed. The leading hypothesis —
+  the worktree vanished during a turn the agent had been *resumed into* via `SendMessage`, after
+  stalling on a backgrounded gate (`lode-95o`) — is **unconfirmed and left open**: it requires
+  harness-side instrumentation this repo has no way to add or inspect from inside a session. Checked
+  and ruled out for this specific incident: fan-out reclaim (`/code`'s end-of-pass block hadn't run,
+  and only ever matches `land/<id>--*` names, never `worktree-agent-*`) and a concurrent `/land` pass
+  (none was running). **Mitigation shipped by `lode-6wgc`** (not a fix for the hypothesis above, which
+  remains open): `coding.md` and `code-reviewer.md` now re-run `scripts/isolation-guard.sh`
+  immediately before their first mutating `Edit`/`Write` and again before `nox -t fix`, narrowing —
+  not eliminating — the window in which a worktree can vanish undetected. Full write-up:
+  [agents-workflow.md](agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc).
+  Revisit if this recurs with better evidence, or if a harness changelog ever documents worktree
+  lifecycle behavior across `SendMessage` resumes.
