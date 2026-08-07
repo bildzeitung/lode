@@ -1253,7 +1253,7 @@ def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
     )
 
 
-def test_land_skill_heartbeats_at_all_four_call_sites_lode_v4sv() -> None:
+def test_land_skill_heartbeats_at_both_new_boundary_call_sites_lode_v4sv() -> None:
     """lode-v4sv closed the two originally-uncovered stretches that grew with
     queue size (scripts/land-lock.sh's CAVEAT 1: gap (a), Section 0's acquire
     -> the first Section 2a heartbeat; gap (c), the last Section 3 merge
@@ -1263,8 +1263,10 @@ def test_land_skill_heartbeats_at_all_four_call_sites_lode_v4sv() -> None:
     pins the mere existence of. That test alone is silently blind to either
     NEW site quietly being dropped later (existence of >=1 call stays true
     even if a specific site vanishes) -- pin the COUNT instead, so a future
-    edit that drops one of the four is caught here rather than by a live
-    /land pass losing its lock mid-pass.
+    edit that drops one of the THREE in-skill sites is caught here rather than
+    by a live /land pass losing its lock mid-pass. (The fourth call site of
+    the four CAVEAT 1 enumerates lives in `scripts/land-merge-one.sh`, not in
+    the skill, and is pinned by tests/test_land_merge_one.py.)
 
     A count alone can't prove WHICH site vanished if it drops, so this also
     pins each new site's TEXTUAL POSITION relative to a fixed landmark next to
@@ -1278,41 +1280,33 @@ def test_land_skill_heartbeats_at_all_four_call_sites_lode_v4sv() -> None:
     """
     text = LAND_SKILL.read_text(encoding="utf-8")
 
-    calls = re.findall(
-        r"scripts/land-lock\.sh heartbeat \"\$MY_TOKEN\" \|\| true", text
-    )
-    assert len(calls) == 3, (
-        f'expected exactly 3 in-skill \'scripts/land-lock.sh heartbeat "$MY_TOKEN" || '
-        f"true' call sites (Section 1 -> 1a boundary [lode-v4sv], Section 2a's "
-        f"per-ticket vet loop, Section 4's push-trunk -> release boundary "
-        f"[lode-v4sv]), found {len(calls)}. A dropped site silently re-widens "
-        "one of the two queue-size-growing gaps lode-v4sv closed."
-    )
-
-    heading_1a = text.index("## 1a. Compute the stacked-branch graph")
-    section_2a_heartbeat = text.index(
-        'scripts/land-lock.sh heartbeat "$MY_TOKEN" || true',
-        heading_1a,
-    )
-    gap_a_heartbeat_positions = [
+    positions = [
         m.start()
         for m in re.finditer(
             r'scripts/land-lock\.sh heartbeat "\$MY_TOKEN" \|\| true', text
         )
     ]
-    assert gap_a_heartbeat_positions[0] < heading_1a < section_2a_heartbeat, (
+    assert len(positions) == 3, (
+        f'expected exactly 3 in-skill \'scripts/land-lock.sh heartbeat "$MY_TOKEN" || '
+        f"true' call sites (Section 1 -> 1a boundary [lode-v4sv], Section 2a's "
+        f"per-ticket vet loop, Section 4's push-trunk -> release boundary "
+        f"[lode-v4sv]), found {len(positions)}. A dropped site silently re-widens "
+        "one of the two queue-size-growing gaps lode-v4sv closed."
+    )
+
+    heading_1a = text.index("## 1a. Compute the stacked-branch graph")
+    assert positions[0] < heading_1a, (
         "gap (a)'s new heartbeat call site must sit strictly between the end "
         "of Section 1 and the '## 1a.' heading -- otherwise Section 1a's "
         "O(n^2) merge-base work is no longer inside the covered stretch "
         "(lode-v4sv acceptance criteria)"
     )
 
-    push_trunk = text.index("git push origin trunk")
+    # Anchor on the EXECUTED `git push origin trunk` line (own line, no
+    # backticks), not the prose mention of it earlier in Section 4.
+    push_trunk = text.index("\ngit push origin trunk\n")
     landed_loop = text.index("for id in $LANDED; do\n  bd close")
-    gap_c_heartbeat = next(
-        p for p in gap_a_heartbeat_positions if push_trunk < p < landed_loop
-    )
-    assert push_trunk < gap_c_heartbeat < landed_loop, (
+    assert push_trunk < positions[2] < landed_loop, (
         "gap (c)'s new heartbeat call site must sit strictly between "
         "'git push origin trunk' and the per-ticket 'bd close' loop -- "
         "otherwise the per-ticket bd close / epic-completion-check.sh / "
