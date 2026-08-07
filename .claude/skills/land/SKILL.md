@@ -118,12 +118,16 @@ echo "$ACQUIRE_OUT"
 # shell state survives between this file's separate Bash invocations (the
 # governing rule above). Full threading mechanism: docs/agents-workflow.md's
 # canonical paragraph (search that file for "Threading mechanism.").
+# It lives OUTSIDE $STATE_DIR, beside .git/land.lock, because Section 1's
+# per-pass scratch wipe (lode-wjw4) would otherwise delete it before any
+# consumer read it -- it is lock state, not per-pass scratch (lode-l7mj).
+# Reasoning: the same canonical paragraph.
 # Loud-fail if the pattern doesn't match rather than silently persisting an
 # empty token -- see scripts/land-lock.sh's own "acquired (token ...)"/
 # "acquired via reclaim (token ...)" stdout contract.
 printf '%s\n' "$ACQUIRE_OUT" \
-  | grep -oE 'token [0-9a-f]+' | cut -d' ' -f2 > "$STATE_DIR/land-lock-token"
-[ -s "$STATE_DIR/land-lock-token" ] || {
+  | grep -oE 'token [0-9a-f]+' | cut -d' ' -f2 > "$(git rev-parse --git-dir)/land-lock-token"
+[ -s "$(git rev-parse --git-dir)/land-lock-token" ] || {
   echo "land: could not parse this pass's own token out of: $ACQUIRE_OUT" >&2
   # RELEASE BEFORE BAILING. We hold the lock as of two lines ago, and this is the
   # only exit path in the whole skill that aborts while holding it -- without this,
@@ -277,8 +281,7 @@ If the queue is empty, there is nothing to land: release the lock and stop —
 
 ```bash
 # Normal completion -- release now rather than waiting out the staleness window for no reason.
-STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation
-MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"
+MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"
 [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
   "DISABLED for this call (lode-67nk)" >&2
 scripts/land-lock.sh release "$MY_TOKEN"
@@ -434,8 +437,7 @@ across the whole queue. `scripts/land-lock.sh`'s own header has the full reasoni
 logged but never stops the pass (this is lock bookkeeping, not the vet itself):
 
 ```bash
-STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation
-MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"
+MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"
 [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
   "DISABLED for this call (lode-67nk)" >&2
 scripts/land-lock.sh heartbeat "$MY_TOKEN" || true
@@ -845,7 +847,7 @@ for the decision and its reasoning.
 STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive here -- this is a fresh Bash
 MSG_DIR="$STATE_DIR/msg"                                # invocation; nothing from 3a's block persists
 CONFLICTS_DIR="$STATE_DIR/conflicts"                    # except the FILES 3a wrote under $STATE_DIR
-MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
+MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
 [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
   "DISABLED for this call (lode-67nk)" >&2
 
@@ -969,7 +971,7 @@ it would mask the 2. Keep it there.
   STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- see above; 3a's files under
   MSG_DIR="$STATE_DIR/msg"                                 # $STATE_DIR are untouched by the reset
   CONFLICTS_DIR="$STATE_DIR/conflicts"
-  MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
+  MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
   [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check" \
     "is DISABLED for this call (lode-67nk)" >&2
   ACCEPTED=$(cat "$STATE_DIR/accepted") || exit 1
@@ -1527,7 +1529,7 @@ while read -r BR; do
 done < <(git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*')
 echo "bare-ref backstop3 (worktree-agent-*): deleted $B3_DELETED stale local ref(s) (failed=$B3_FAILED)"
 
-MY_TOKEN="$(cat "$STATE_DIR/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
+MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
 [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
   "DISABLED for this call (lode-67nk)" >&2
 scripts/land-lock.sh release "$MY_TOKEN"   # the pass is fully done -- release now rather than
