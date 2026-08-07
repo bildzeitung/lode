@@ -1547,16 +1547,12 @@ def run_block(
     the next one (lode-sfnb/lode-x495). ``bin_dir`` is prepended to ``PATH``
     ahead of the real one -- the caller's fake ``bd`` (or other faked tool)
     lives there. ``TMPDIR`` is redirected to ``sweep_tmp``'s parent so a
-    block's own ``${TMPDIR:-/tmp}/lode-sweep-state`` derivation (the skills'
-    own §0 convention) lands exactly on the ``sweep_tmp`` fixture's directory.
-    ``cwd`` is the checkout root (:data:`_CHECKOUT_ROOT`, worktree-aware)
-    rather than a hand-rolled ``Path(__file__).parent.parent`` in each caller.
-
-    Hoisted from byte-identical copies in tests/test_sweep_new_ids_ordering.py
-    and tests/test_sweep_source_query_failure.py, which differed only in how
-    the caller assembled ``PATH`` -- one pre-formatted a ``path_env`` string
-    itself, the other passed ``bin_dir`` and let the helper build it; unified
-    on the latter, the simpler contract for a caller.
+    block's own ``${TMPDIR:-/tmp}/lode-sweep-state`` derivation lands exactly
+    on the ``sweep_tmp`` fixture's directory -- that derivation is ``/sweep``'s
+    §0 convention SPECIFICALLY, so a caller testing a different skill's blocks
+    inherits a redirection it did not ask for. ``cwd`` is the checkout root
+    (:data:`_CHECKOUT_ROOT`, worktree-aware) rather than a hand-rolled
+    ``Path(__file__).parent.parent`` in each caller.
     """
     env = dict(
         os.environ,
@@ -1578,10 +1574,8 @@ def sweep_tmp(tmp_path: Path) -> Path:
     """Mirrors ``/sweep``'s own §0 layout: ``$SWEEP_TMP =
     $TMPDIR/lode-sweep-state`` (lode-n6q0).
 
-    Byte-identical (docstring included) in tests/test_sweep_new_ids_ordering.py
-    and tests/test_sweep_source_query_failure.py before this hoist -- both pin
-    the same ``/sweep`` §0 state-directory convention, so a future change to
-    that layout only needs to move here once.
+    Shared by every pin of that layout, so a future change to it moves here
+    once.
     """
     d = tmp_path / "lode-sweep-state"
     d.mkdir()

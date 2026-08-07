@@ -39,15 +39,16 @@ pytestmark = pytest.mark.skipif(
 MARKER = "source_query_failed"
 
 
+def _skill_blocks() -> list[str]:
+    return bash_fence_blocks(SWEEP_SKILL.read_text(encoding="utf-8"))
+
+
 def _only_block_with(*needles: str, what: str) -> str:
     """Thin wrapper over the shared tests/conftest.py::only_block_with, same
-    discipline as tests/test_sweep_new_ids_ordering.py's helper of the same
-    name (lode-pm37/lode-n6q0)."""
-    return only_block_with(
-        bash_fence_blocks(SWEEP_SKILL.read_text(encoding="utf-8")),
-        *needles,
-        what=what,
-    )
+    discipline and same call shape as tests/test_sweep_new_ids_ordering.py's
+    and tests/test_land_conflicts_state.py's helpers of the same name -- each
+    binds its own ``_skill_blocks()`` (lode-pm37/lode-n6q0)."""
+    return only_block_with(_skill_blocks(), *needles, what=what)
 
 
 def _section_1_block() -> str:
