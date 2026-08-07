@@ -45,12 +45,12 @@ printing the abstention line or the cited claims -- belongs to the ``lode ask`` 
 
 import sqlite3
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from lode.answer import Claim
 from lode.config import Settings
 from lode.egress import WithheldCitation
-from lode.faithfulness import EntailmentScorer
+from lode.faithfulness import EntailmentScorer, locate_span
 from lode.gate import apply_gate
 from lode.llm_provider import LLMProvider
 from lode.qa import QaPassage, QaResult, answer_question
@@ -174,7 +174,55 @@ def ask(
         provider=provider,
         settings=settings,
     )
-    return gate_cited_answer(result, bodies, scorer=scorer, settings=settings)
+    cited = gate_cited_answer(result, bodies, scorer=scorer, settings=settings)
+    return replace(cited, claims=_stamp_body_offsets(cited.claims, context, bodies))
+
+
+def _stamp_body_offsets(
+    claims: tuple[Claim, ...],
+    context: Sequence[ContextItem],
+    bodies: Mapping[str, str],
+) -> tuple[Claim, ...]:
+    """Disambiguate a repeated ``quoted_span`` by locating it in its own retrieved passage (lode-hruz).
+
+    A claim's ``Support`` carries no offset from the LLM -- it only echoes back
+    ``version_id``/``snapshot_id`` + verbatim text -- so when the same span text
+    occurs more than once in the cited body, which occurrence the model actually
+    saw is otherwise lost. Each retrieved :class:`~lode.retrieval.ContextItem`
+    DOES know its own precise char offset (``body[start:end] == item.passage_text``,
+    ``chunking.py``), so for every surviving support this finds a retrieved
+    passage for the same target whose own range contains the span, and stamps
+    ``Support.body_offset`` with the span's offset located *near that passage* --
+    disambiguating a repeated span without ever trusting anything the model
+    reported. Leaves ``body_offset`` unset (``None``) when no retrieved passage
+    for the target contains the span -- e.g. it only appears in the larger
+    ``parent_block`` context outside any single passage's own precise range --
+    in which case the renderer keeps its prior first-occurrence behavior.
+    """
+    passage_ranges: dict[str, list[tuple[int, int]]] = {}
+    for item in context:
+        start_s, _, end_s = item.char_range.partition(":")
+        passage_ranges.setdefault(item.target_version, []).append(
+            (int(start_s), int(end_s))
+        )
+
+    stamped: list[Claim] = []
+    for claim in claims:
+        new_supports = []
+        for support in claim.support:
+            offset = None
+            body = bodies.get(support.target_id)
+            if body is not None:
+                for start, end in passage_ranges.get(support.target_id, ()):
+                    if support.quoted_span not in body[start:end]:
+                        continue
+                    located = locate_span(support.quoted_span, body, hint=start)
+                    if located is not None:
+                        offset = located[0]
+                    break
+            new_supports.append(support.model_copy(update={"body_offset": offset}))
+        stamped.append(claim.model_copy(update={"support": new_supports}))
+    return tuple(stamped)
 
 
 def _resolve_target(

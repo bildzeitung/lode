@@ -51,6 +51,19 @@ class Support(BaseModel):
         min_length=1,
         description="Verbatim text copied from the cited target.",
     )
+    body_offset: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Char offset of the retrieved passage this span came from, when "
+            "known (lode-hruz). Never supplied by the model -- the LLM has no "
+            "notion of body offsets -- stamped app-side after the gate, by "
+            "matching quoted_span against the retrieved ContextItems for this "
+            "target. Disambiguates which occurrence a repeated quoted_span "
+            "renders context from; None when no retrieved passage could be "
+            "matched, in which case renderers fall back to the first occurrence."
+        ),
+    )
 
     @model_validator(mode="after")
     def _exactly_one_target(self) -> Support:

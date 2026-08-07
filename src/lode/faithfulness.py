@@ -74,7 +74,9 @@ def normalize_whitespace(text: str) -> str:
     return _WHITESPACE.sub(" ", text).strip()
 
 
-def locate_span(span: str, body: str) -> tuple[int, int] | None:
+def locate_span(
+    span: str, body: str, *, hint: int | None = None
+) -> tuple[int, int] | None:
     """``(start, end)`` offsets of ``span`` within ``body``, or ``None`` if absent.
 
     This is the single definition of "occurs verbatim" for the whole codebase --
@@ -90,15 +92,33 @@ def locate_span(span: str, body: str) -> tuple[int, int] | None:
     unlike normalizing both sides it preserves the mapping back to ``body``'s own
     offsets -- which is why the locator, not the boolean, is the primitive. No
     model is involved: this is a pure string search.
+
+    When ``span`` occurs more than once, ``hint`` -- a caller-supplied char offset
+    into ``body`` (e.g. the retrieved passage a citation actually came from,
+    lode-hruz) -- picks the occurrence whose start is nearest to it, rather than
+    always the leftmost. ``hint=None`` (the default) keeps the original
+    leftmost-match behavior, so every existing caller is unaffected.
     """
-    start = body.find(span)
-    if start != -1:
+    exact_starts = [m.start() for m in re.finditer(re.escape(span), body)]
+    if exact_starts:
+        start = exact_starts[0] if hint is None else _nearest(exact_starts, hint)
         return start, start + len(span)
     tokens = span.split()
     if not tokens:
         return None
-    found = re.search(r"\s+".join(re.escape(token) for token in tokens), body)
-    return found.span() if found else None
+    matches = list(
+        re.finditer(r"\s+".join(re.escape(token) for token in tokens), body)
+    )
+    if not matches:
+        return None
+    if hint is None:
+        return matches[0].span()
+    return min(matches, key=lambda m: abs(m.start() - hint)).span()
+
+
+def _nearest(starts: list[int], hint: int) -> int:
+    """The offset in ``starts`` closest to ``hint`` (ties keep the leftmost)."""
+    return min(starts, key=lambda s: abs(s - hint))
 
 
 def span_occurs(span: str, body: str) -> bool:

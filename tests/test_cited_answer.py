@@ -165,6 +165,68 @@ def test_surviving_claim_renders_with_its_citation(conn) -> None:
     assert claim.support[0].quoted_span == "lode is event-sourced"
 
 
+def test_surviving_claim_stamps_body_offset_from_its_own_retrieved_passage(
+    conn,
+) -> None:
+    """``OAuth`` occurs twice in the body; only the SECOND retrieved passage's
+    own char range contains it, so the stamped ``Support.body_offset`` (lode-hruz)
+    must point at the second occurrence, not the leftmost."""
+    body = "alpha OAuth beta " + ("x" * 40) + " gamma OAuth delta"
+    second_offset = body.index("OAuth", body.index("OAuth") + 1)
+    _insert_note(conn, note_id="n1", version_id="v1", body=body)
+    client = _FakeClient([_note_claim("uses OAuth", "OAuth", "v1")])
+    context = [
+        ContextItem(
+            tier=TrustTier.OWNED_NOTE,
+            passage_id="p-v1-0",
+            target_version="v1",
+            char_range="0:17",  # "alpha OAuth beta " -- the FIRST OAuth
+            passage_text=body[0:17],
+            parent_block=body,
+            score=0.9,
+        ),
+        ContextItem(
+            tier=TrustTier.OWNED_NOTE,
+            passage_id="p-v1-1",
+            target_version="v1",
+            char_range=f"{second_offset - 6}:{len(body)}",  # "gamma OAuth delta"
+            passage_text=body[second_offset - 6 :],
+            parent_block=body,
+            score=0.8,
+        ),
+    ]
+
+    answer = ask(conn, "q", context, provider=AnthropicProvider(client))
+
+    assert not answer.abstained
+    (claim,) = answer.claims
+    assert claim.support[0].body_offset == second_offset
+
+
+def test_surviving_claim_leaves_body_offset_unset_when_no_passage_contains_it(
+    conn,
+) -> None:
+    """A citation whose span isn't inside any single retrieved passage's own
+    range (only the larger ``parent_block``) gets no offset -- the renderer
+    falls back to its first-occurrence behavior, same as before lode-hruz."""
+    body = "lode is event-sourced and append-only."
+    _insert_note(conn, note_id="n1", version_id="v1", body=body)
+    client = _FakeClient(
+        [_note_claim("lode is event-sourced.", "lode is event-sourced", "v1")]
+    )
+
+    answer = ask(
+        conn,
+        "How is lode stored?",
+        [_note_context("v1", body)],  # char_range="0:5" -- too narrow to contain it
+        provider=AnthropicProvider(client),
+    )
+
+    assert not answer.abstained
+    (claim,) = answer.claims
+    assert claim.support[0].body_offset is None
+
+
 def test_fabricated_claim_is_dropped_and_abstains(conn) -> None:
     # A "quoted" span that is in no version body fails the gate -> dropped -> abstain.
     body = "lode is event-sourced and append-only."
