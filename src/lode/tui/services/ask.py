@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from lode.config import Settings, lance_dir
+from lode.notes_read import first_line
 from lode.storage import init_db
 
 if TYPE_CHECKING:
@@ -47,18 +48,43 @@ ABSTAIN_LINE = "Your notes don't answer this."
 
 
 @dataclass(frozen=True)
+class CitationIdentity:
+    """Resolved note/external identity for one citation target (lode-35nu.1).
+
+    Exactly one of ``note_id``/``external_id`` is set, mirroring
+    :class:`~lode.answer.Support`'s own ``version_id``/``snapshot_id`` split.
+    ``title`` is :func:`lode.notes_read.first_line` of the *cited*
+    version/snapshot's body -- taken from the cited version even when that
+    version is superseded, so an old citation shows the title it had rather
+    than the current head's. ``is_head`` is True when the cited
+    version/snapshot is still the note/external's current head.
+    """
+
+    title: str
+    is_head: bool
+    note_id: str | None = None
+    external_id: str | None = None
+
+
+@dataclass(frozen=True)
 class AskResult:
-    """A gated cited answer plus each citation's as-of provenance.
+    """A gated cited answer plus each citation's as-of provenance and identity.
 
     ``as_of`` maps a cited ``target_id`` (a note ``version_id`` or external
     ``snapshot_id``) to its resolved as-of timestamp, or ``None`` when the
     store had nothing to resolve (practically unreachable -- the faithfulness
     gate already verified the span against the stored body -- but handled
-    rather than assumed away).
+    rather than assumed away). ``identities`` maps the same ``target_id`` to
+    its resolved :class:`CitationIdentity` (lode-35nu.1) -- absent, not
+    ``None``, for a target the store had nothing to resolve, so a caller's
+    ``.get(target_id)`` returning ``None`` means exactly "unresolvable",
+    same convention as ``as_of``. Both come from one batched pass
+    (:func:`_resolve_citations`).
     """
 
     answer: CitedAnswer
     as_of: dict[str, str | None] = field(default_factory=dict)
+    identities: dict[str, CitationIdentity] = field(default_factory=dict)
 
 
 def run_ask(
@@ -95,34 +121,74 @@ def run_ask(
         answer = cited_answer.ask(
             conn, question, context, think_harder=think_harder, settings=settings
         )
-        as_of = {
-            support.target_id: _resolve_as_of(conn, support)
-            for claim in answer.claims
-            for support in claim.support
-        }
-        return AskResult(answer=answer, as_of=as_of)
+        supports = [support for claim in answer.claims for support in claim.support]
+        as_of, identities = _resolve_citations(conn, supports)
+        return AskResult(answer=answer, as_of=as_of, identities=identities)
     finally:
         conn.close()
 
 
-def _resolve_as_of(conn: sqlite3.Connection, support: Support) -> str | None:
-    """Resolve one citation's as-of timestamp from the store.
+def _resolve_citations(
+    conn: sqlite3.Connection, supports: list[Support]
+) -> tuple[dict[str, str | None], dict[str, CitationIdentity]]:
+    """Resolve as-of provenance and identity for every cited target, batched (lode-35nu.1).
 
-    A note ``version_id`` is stamped at write time (``versions.created``); an
-    external ``snapshot_id`` at fetch time (``snapshots.fetched_at``). Returns
-    ``None`` for a target absent from the store.
+    Two queries total -- one ``IN (...)`` over every distinct cited
+    ``version_id``, one over every distinct cited ``snapshot_id`` -- so a
+    multi-claim answer costs a fixed two round-trips regardless of citation
+    count (the ticket's "a single batched query" acceptance line). The as-of
+    stamp rides along on the same rows the identity comes from (a note version
+    is stamped at write time, ``versions.created``; an external snapshot at
+    fetch time, ``snapshots.fetched_at``), so it costs no extra query.
+
+    Returns ``(as_of, identities)``, both keyed by
+    :attr:`~lode.answer.Support.target_id`. Every cited target is a key in
+    ``as_of``, mapping to ``None`` when the store had nothing to resolve; such
+    a target is simply absent from ``identities``. Unresolvable is practically
+    unreachable -- the faithfulness gate already verified the span against the
+    stored body -- but handled rather than assumed away.
     """
-    if support.version_id is not None:
-        row = conn.execute(
-            "SELECT created FROM versions WHERE version_id = ?",
-            (support.version_id,),
-        ).fetchone()
-    else:
-        row = conn.execute(
-            "SELECT fetched_at FROM snapshots WHERE snapshot_id = ?",
-            (support.snapshot_id,),
-        ).fetchone()
-    return row[0] if row is not None else None
+    identities: dict[str, CitationIdentity] = {}
+    as_of: dict[str, str | None] = {}
+
+    version_ids = tuple({s.version_id for s in supports if s.version_id is not None})
+    if version_ids:
+        placeholders = ",".join("?" for _ in version_ids)
+        rows = conn.execute(
+            "SELECT v.version_id, v.note_id, v.body, v.created, n.head_version_id "
+            "FROM versions v JOIN notes n ON n.note_id = v.note_id "
+            f"WHERE v.version_id IN ({placeholders})",
+            version_ids,
+        ).fetchall()
+        for version_id, note_id, body, created, head_version_id in rows:
+            identities[version_id] = CitationIdentity(
+                title=first_line(body),
+                is_head=version_id == head_version_id,
+                note_id=note_id,
+            )
+            as_of[version_id] = created
+
+    snapshot_ids = tuple({s.snapshot_id for s in supports if s.snapshot_id is not None})
+    if snapshot_ids:
+        placeholders = ",".join("?" for _ in snapshot_ids)
+        rows = conn.execute(
+            "SELECT s.snapshot_id, s.external_id, s.body, s.fetched_at, "
+            "e.head_snapshot_id "
+            "FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
+            f"WHERE s.snapshot_id IN ({placeholders})",
+            snapshot_ids,
+        ).fetchall()
+        for snapshot_id, external_id, body, fetched_at, head_snapshot_id in rows:
+            identities[snapshot_id] = CitationIdentity(
+                title=first_line(body),
+                is_head=snapshot_id == head_snapshot_id,
+                external_id=external_id,
+            )
+            as_of[snapshot_id] = fetched_at
+
+    for support in supports:
+        as_of.setdefault(support.target_id, None)
+    return as_of, identities
 
 
 def render_ask_result(result: AskResult) -> str:
