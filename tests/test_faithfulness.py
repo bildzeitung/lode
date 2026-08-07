@@ -165,6 +165,30 @@ def test_negated_span_is_not_coupled() -> None:
     assert not _coupled("the cache is invalidated", "the cache isn't invalidated")
 
 
+def test_dont_and_wont_spans_are_not_coupled() -> None:
+    # The two contractions a bare-stem cue list cannot carry without colliding
+    # with the real words "don" / "won" -- matched whole, so they block here.
+    assert not _coupled(
+        "rebuilds invalidate the cache", "rebuilds don't invalidate the cache"
+    )
+    assert not _coupled(
+        "the worker retries", "the worker won't stop; retries are dropped"
+    )
+
+
+def test_typographic_apostrophe_negation_is_not_coupled() -> None:
+    # Bodies harvested from the web carry U+2019, not the ASCII apostrophe.
+    assert not _coupled("the cache is invalidated", "the cache isn’t invalidated")
+
+
+def test_negation_lookalike_word_still_couples() -> None:
+    # "won"/"don" as ordinary words must not raise a false cue and demote a
+    # legitimate fast-path couple to NLI.
+    assert _coupled(
+        "don won the rerank bake-off", "don won the rerank bake-off outright"
+    )
+
+
 def test_negation_present_on_both_sides_still_couples() -> None:
     # The negation-asymmetry check only blocks a cue that's in the span but
     # *absent* from the claim -- a claim that itself states the negation still

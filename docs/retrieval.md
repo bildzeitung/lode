@@ -217,31 +217,41 @@ Runs app-side, after the Q&A LLM returns and before display:
 > claim is verified outright instead of falling through to the fail-closed entailment check.
 >
 > **Fix: a negation-cue asymmetry check, additive to containment, not a change to tokenization.**
-> A span couples only if it carries no negation cue (`_NEGATION_CUES` in `faithfulness.py`) that the
-> claim itself lacks. Two disjoint cue kinds, both produced by the *existing* `_WORD` tokenizer (no
-> new tokenization rule, so this does not touch lode-1qxy's territory): standalone negation words
-> (`not`, `no`, `never`, `cannot`, `nothing`, `nobody`, `none`, `neither`, `nor`, `without`) and the
-> stems `_WORD` leaves behind when it splits a contraction on the apostrophe (`isn't` → `isn`+`t`) —
-> `isn`, `aren`, `wasn`, `weren`, `doesn`, `didn`, `hasn`, `hadn`, `haven`, `wouldn`, `shouldn`,
-> `couldn`, `mustn`, `mightn`, `needn`. A cue present in the claim itself (a claim that states its own
-> negation) does not block coupling — only a cue *asymmetric* to the span does.
+> A span couples only if it carries no negation cue (`_negation_cues` in `faithfulness.py`) that the
+> claim itself lacks. Two cue kinds:
 >
-> **Deliberately excluded: `don` and `won`.** Both are real, non-negation words common enough in
-> freeform notes (`don` a name, `won` the past tense of "win") that treating them as negation cues
-> risked a false cue — blocking a legitimate fast-path couple on an unrelated span — which was judged
-> the worse failure mode than the residual miss. **Residual exposure:** a claim/span pair whose only
-> asymmetric negation is `don't`/`won't` still fast-path-couples under this fix, same as before. That
-> miss is bounded and fails toward the *safe* side only by accident, not by design — it is a real gap,
-> not a hypothetical one, and is not separately ticketed because it is narrow enough (two specific
-> contractions, already-known-excluded) to track here rather than spin up a new issue for.
+> - **Standalone negation words**, matched as whole tokens from the *existing* `_WORD` tokenizer:
+>   `not`, `no`, `never`, `cannot`, `nothing`, `nobody`, `none`, `neither`, `nor`, `without`.
+> - **`n't` contractions**, matched on the **raw text** (`\w+n['’]t\b`), not the token set. `_WORD`
+>   splits on the apostrophe and leaves only a stem behind (`isn't` → `isn`+`t`), so a stem list would
+>   have to either collide with real words (`don` a name, `won` the past tense of "win") or miss
+>   `don't`/`won't` — two of the most common negations in English. Matching the contraction whole
+>   avoids both horns, and makes this check independent of where `_WORD` draws its boundaries, so it
+>   neither depends on nor constrains lode-1qxy. Both the ASCII and the typographic apostrophe are
+>   accepted; stored bodies are web prose as often as typed notes.
 >
-> This is judged a "clearly cheapest/safest option without a real tradeoff": it only *removes*
-> fast-path couplings (fail-closed direction, same shape as the stopword-set and tokenization
-> arguments above — a bounded exposure demoted to NLI never opens the gate wider), it added a
-> standing regression test (`tests/test_faithfulness.py::test_negated_span_is_not_coupled`, which
-> fails against the pre-fix containment-only check and passes after), and it does not touch `_WORD`,
-> `normalize_whitespace`, or any tokenization boundary — orthogonal to lode-1qxy's tokenization-only
-> territory, which remains open and separately tracked.
+> A cue present in the claim itself (a claim that states its own negation) does not block coupling —
+> only a cue *asymmetric* to the span does.
+>
+> **Residual exposure, stated plainly.** This is a lexical cue check, not a polarity parser. It does
+> not see affixal negation (`unchanged`, `non-empty`), multiword hedges (`fails to`, `hardly`,
+> `no longer` beyond the bare `no`), or negation *scope* — a span may negate a clause the claim never
+> touched. Every such miss leaves the original fail-**open** behaviour intact for that input: the
+> claim fast-path-couples and skips NLI, exactly as before the fix. The fix strictly shrinks that
+> exposure and never widens it, because cues are only ever *added* to the blocking side — but it does
+> not eliminate it, and the remainder is bounded only by how much negation English expresses
+> lexically. Revisit if the eval harness exhibits it; the same "record rather than dismiss" register
+> as the lode-1qxy note above.
+>
+> **Why this option, and why it needed no escalation.** The ticket offered three options; this is
+> option 1 (a cue list), taken because it is the only one with no tradeoff to weigh: it only *removes*
+> fast-path couplings (the fail-closed direction — a demoted claim goes to NLI, never straight to
+> verified), so it cannot widen the gate. Option 2 (bounding unmatched span tokens) would have
+> demoted many currently-fast-path claims and carries a real latency cost — that one *is* a judgment
+> call for a human. Standing regression tests live in `tests/test_faithfulness.py`
+> (`test_negated_span_is_not_coupled` and the `don't`/`won't`, typographic-apostrophe, and
+> `don`/`won`-as-real-words cases), and nothing here touches `_WORD`, `normalize_whitespace`, or any
+> tokenization boundary — lode-1qxy remains open and separately tracked.
 
 The gate verifies each span against the **stored bytes of the cited version/snapshot**, resolved
 only for the **egress-cleared** targets — the same set eligible to reach the model. A

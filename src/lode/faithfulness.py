@@ -124,27 +124,9 @@ def _word_tokens(text: str) -> frozenset[str]:
     return frozenset(_WORD.findall(text.casefold()))
 
 
-#: Negation cues checked for **asymmetric** presence -- in a ``quoted_span`` but
-#: absent from the claim -- to stop containment from coupling a claim to a span
-#: that negates it (e.g. claim "the cache is invalidated" vs span "the cache
-#: isn't invalidated": the claim's payload is a subset of the span's tokens, so
-#: pure containment would couple, silently discarding the negation, lode-w2y7).
-#: Two disjoint kinds, both produced by the *same* ``_WORD`` tokenizer already
-#: used for coupling (this list adds no new tokenization rule):
-#:   - Standalone negation words, unambiguous on their own: "not", "no",
-#:     "never", "cannot", "nothing", "nobody", "none", "neither", "nor",
-#:     "without".
-#:   - Contraction stems left behind when ``_WORD`` splits "isn't" -> "isn",
-#:     "t" (apostrophe is not a word character). Only stems with **no**
-#:     standalone-word meaning are listed, so a token match is never a false
-#:     cue: "isn", "aren", "wasn", "weren", "doesn", "didn", "hasn", "hadn",
-#:     "haven", "wouldn", "shouldn", "couldn", "mustn", "mightn", "needn".
-#:     "don" and "won" are deliberately **excluded** -- both collide with real
-#:     words ("don" a name, "won" past tense of "win") common enough in
-#:     freeform notes that a false cue (blocking a legitimate fast-path couple)
-#:     was judged the worse failure mode than the residual miss on "don't"/
-#:     "won't", which still falls through to NLI (fail-closed, just slower).
-_NEGATION_CUES = frozenset(
+#: Standalone words that carry negation on their own. Matched as whole tokens
+#: (via :func:`_word_tokens`), so no substring can raise a false cue.
+_NEGATION_WORDS = frozenset(
     {
         "not",
         "no",
@@ -156,23 +138,33 @@ _NEGATION_CUES = frozenset(
         "neither",
         "nor",
         "without",
-        "isn",
-        "aren",
-        "wasn",
-        "weren",
-        "doesn",
-        "didn",
-        "hasn",
-        "hadn",
-        "haven",
-        "wouldn",
-        "shouldn",
-        "couldn",
-        "mustn",
-        "mightn",
-        "needn",
     }
 )
+
+#: The other negation form: an ``n't`` contraction, matched whole on the **raw
+#: text** rather than as a token, because ``_WORD`` splits on the apostrophe and
+#: leaves only a stem ("isn't" -> "isn" + "t") -- a stem list would have to
+#: either collide with real words ("don", "won") or miss ``don't``/``won't``.
+#: Matching whole also keeps this independent of where ``_WORD`` draws its
+#: boundaries. The typographic apostrophe is accepted alongside the ASCII one.
+_CONTRACTED_NOT = re.compile(r"\w+n['’]t\b")
+
+
+def _negation_cues(text: str) -> frozenset[str]:
+    """The negation cues ``text`` carries (lode-w2y7).
+
+    Used for an **asymmetry** test: a cue in a ``quoted_span`` but absent from
+    the claim means the span negates something the claim does not, so the two
+    must not couple (see :func:`claim_extractively_coupled`). A lexical
+    heuristic, not a polarity parser -- affixal negation ("unchanged"), hedges
+    ("fails to"), and negation *scope* are out of reach, and each miss simply
+    leaves the pre-fix fail-open behaviour for that input. Full rationale and
+    the residual exposure: ``docs/retrieval.md``.
+    """
+    folded = text.casefold()
+    return (_word_tokens(folded) & _NEGATION_WORDS) | frozenset(
+        _CONTRACTED_NOT.findall(folded)
+    )
 
 
 def claim_extractively_coupled(claim: Claim) -> bool:
@@ -182,7 +174,7 @@ def claim_extractively_coupled(claim: Claim) -> bool:
     claim's load-bearing payload is its word tokens minus grammatical glue
     (:data:`_STOPWORDS`); the claim is coupled iff **some single** ``quoted_span``
     contains every one of those tokens **and** carries no negation cue
-    (:data:`_NEGATION_CUES`) that the claim itself lacks -- otherwise containment
+    (:func:`_negation_cues`) that the claim itself lacks -- otherwise containment
     alone would couple a claim to a span that negates it (lode-w2y7). A claim
     whose payload is split *across* spans is genuine **synthesis**, not
     extractive -- it is deliberately not coupled here and falls through to the
@@ -195,16 +187,14 @@ def claim_extractively_coupled(claim: Claim) -> bool:
     couples with nothing -- there is no payload to find inside a span -- so it
     fails closed and is left for a later stage rather than vacuously verified.
     """
-    claim_tokens = _word_tokens(claim.text)
-    payload = claim_tokens - _STOPWORDS
+    payload = _word_tokens(claim.text) - _STOPWORDS
     if not payload:
         return False
-    claim_cues = claim_tokens & _NEGATION_CUES
+    claim_cues = _negation_cues(claim.text)
     for support in claim.support:
-        span_tokens = _word_tokens(support.quoted_span)
-        if not payload <= span_tokens:
+        if not payload <= _word_tokens(support.quoted_span):
             continue
-        if span_tokens & _NEGATION_CUES > claim_cues:
+        if _negation_cues(support.quoted_span) - claim_cues:
             continue  # span negates something the claim doesn't -- not coupled
         return True
     return False
