@@ -207,6 +207,42 @@ Runs app-side, after the Q&A LLM returns and before display:
 > exhibits it. Separately, a mismatched Unicode **normalization** form between an LLM-generated claim
 > and a stored span is a narrower failure that word-splitting refinement cannot close at all.
 
+> **DECISION (lode-w2y7): negated-span coupling hole — closed, via a small negation-cue check.**
+> Containment (`payload(claim) ⊆ tokens(span)`) is asymmetric in a *second*, distinct way from
+> lode-1qxy above: it never looks at tokens the span carries that the claim's payload doesn't need.
+> A span containing a negation the claim lacks — claim `"the cache is invalidated"` vs span
+> `"the cache isn't invalidated"` — still couples: `{cache, invalidated}` is a subset of the span's
+> tokens regardless of the `isn`/`t` fragments sitting alongside them. This is fail-*open*: coupling
+> returning `True` skips NLI entailment entirely (`gate.py`'s `_claim_survives`), so the contradicting
+> claim is verified outright instead of falling through to the fail-closed entailment check.
+>
+> **Fix: a negation-cue asymmetry check, additive to containment, not a change to tokenization.**
+> A span couples only if it carries no negation cue (`_NEGATION_CUES` in `faithfulness.py`) that the
+> claim itself lacks. Two disjoint cue kinds, both produced by the *existing* `_WORD` tokenizer (no
+> new tokenization rule, so this does not touch lode-1qxy's territory): standalone negation words
+> (`not`, `no`, `never`, `cannot`, `nothing`, `nobody`, `none`, `neither`, `nor`, `without`) and the
+> stems `_WORD` leaves behind when it splits a contraction on the apostrophe (`isn't` → `isn`+`t`) —
+> `isn`, `aren`, `wasn`, `weren`, `doesn`, `didn`, `hasn`, `hadn`, `haven`, `wouldn`, `shouldn`,
+> `couldn`, `mustn`, `mightn`, `needn`. A cue present in the claim itself (a claim that states its own
+> negation) does not block coupling — only a cue *asymmetric* to the span does.
+>
+> **Deliberately excluded: `don` and `won`.** Both are real, non-negation words common enough in
+> freeform notes (`don` a name, `won` the past tense of "win") that treating them as negation cues
+> risked a false cue — blocking a legitimate fast-path couple on an unrelated span — which was judged
+> the worse failure mode than the residual miss. **Residual exposure:** a claim/span pair whose only
+> asymmetric negation is `don't`/`won't` still fast-path-couples under this fix, same as before. That
+> miss is bounded and fails toward the *safe* side only by accident, not by design — it is a real gap,
+> not a hypothetical one, and is not separately ticketed because it is narrow enough (two specific
+> contractions, already-known-excluded) to track here rather than spin up a new issue for.
+>
+> This is judged a "clearly cheapest/safest option without a real tradeoff": it only *removes*
+> fast-path couplings (fail-closed direction, same shape as the stopword-set and tokenization
+> arguments above — a bounded exposure demoted to NLI never opens the gate wider), it added a
+> standing regression test (`tests/test_faithfulness.py::test_negated_span_is_not_coupled`, which
+> fails against the pre-fix containment-only check and passes after), and it does not touch `_WORD`,
+> `normalize_whitespace`, or any tokenization boundary — orthogonal to lode-1qxy's tokenization-only
+> territory, which remains open and separately tracked.
+
 The gate verifies each span against the **stored bytes of the cited version/snapshot**, resolved
 only for the **egress-cleared** targets — the same set eligible to reach the model. A
 [no-egress](externals.md) target's body is withheld from that verification set, so a

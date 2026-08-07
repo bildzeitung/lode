@@ -157,6 +157,21 @@ def test_coupling_is_case_insensitive() -> None:
     assert _coupled("RERANK OFF", "rerank off in the skeleton")
 
 
+def test_negated_span_is_not_coupled() -> None:
+    # lode-w2y7: the span negates the claim ("isn't" vs "is") but pure
+    # containment ignores the negation entirely -- the claim's payload
+    # ("cache", "invalidated") is still a subset of the span's tokens. This is
+    # the ticket's own motivating example: it must NOT couple.
+    assert not _coupled("the cache is invalidated", "the cache isn't invalidated")
+
+
+def test_negation_present_on_both_sides_still_couples() -> None:
+    # The negation-asymmetry check only blocks a cue that's in the span but
+    # *absent* from the claim -- a claim that itself states the negation still
+    # couples normally.
+    assert _coupled("the cache isn't invalidated", "the cache isn't invalidated")
+
+
 # --- Step 3: NLI entailment ------------------------------------------------
 
 

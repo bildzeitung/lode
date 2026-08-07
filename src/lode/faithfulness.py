@@ -124,15 +124,70 @@ def _word_tokens(text: str) -> frozenset[str]:
     return frozenset(_WORD.findall(text.casefold()))
 
 
+#: Negation cues checked for **asymmetric** presence -- in a ``quoted_span`` but
+#: absent from the claim -- to stop containment from coupling a claim to a span
+#: that negates it (e.g. claim "the cache is invalidated" vs span "the cache
+#: isn't invalidated": the claim's payload is a subset of the span's tokens, so
+#: pure containment would couple, silently discarding the negation, lode-w2y7).
+#: Two disjoint kinds, both produced by the *same* ``_WORD`` tokenizer already
+#: used for coupling (this list adds no new tokenization rule):
+#:   - Standalone negation words, unambiguous on their own: "not", "no",
+#:     "never", "cannot", "nothing", "nobody", "none", "neither", "nor",
+#:     "without".
+#:   - Contraction stems left behind when ``_WORD`` splits "isn't" -> "isn",
+#:     "t" (apostrophe is not a word character). Only stems with **no**
+#:     standalone-word meaning are listed, so a token match is never a false
+#:     cue: "isn", "aren", "wasn", "weren", "doesn", "didn", "hasn", "hadn",
+#:     "haven", "wouldn", "shouldn", "couldn", "mustn", "mightn", "needn".
+#:     "don" and "won" are deliberately **excluded** -- both collide with real
+#:     words ("don" a name, "won" past tense of "win") common enough in
+#:     freeform notes that a false cue (blocking a legitimate fast-path couple)
+#:     was judged the worse failure mode than the residual miss on "don't"/
+#:     "won't", which still falls through to NLI (fail-closed, just slower).
+_NEGATION_CUES = frozenset(
+    {
+        "not",
+        "no",
+        "never",
+        "cannot",
+        "nothing",
+        "nobody",
+        "none",
+        "neither",
+        "nor",
+        "without",
+        "isn",
+        "aren",
+        "wasn",
+        "weren",
+        "doesn",
+        "didn",
+        "hasn",
+        "hadn",
+        "haven",
+        "wouldn",
+        "shouldn",
+        "couldn",
+        "mustn",
+        "mightn",
+        "needn",
+    }
+)
+
+
 def claim_extractively_coupled(claim: Claim) -> bool:
     """Whether ``claim``'s load-bearing payload lies inside one of its cited spans.
 
     The **extractive-coupling fast path** (``docs/retrieval.md`` step 2): the
     claim's load-bearing payload is its word tokens minus grammatical glue
     (:data:`_STOPWORDS`); the claim is coupled iff **some single** ``quoted_span``
-    contains every one of those tokens. A claim whose payload is split *across*
-    spans is genuine **synthesis**, not extractive -- it is deliberately not
-    coupled here and falls through to the NLI stage (lode-1k3.4).
+    contains every one of those tokens **and** carries no negation cue
+    (:data:`_NEGATION_CUES`) that the claim itself lacks -- otherwise containment
+    alone would couple a claim to a span that negates it (lode-w2y7). A claim
+    whose payload is split *across* spans is genuine **synthesis**, not
+    extractive -- it is deliberately not coupled here and falls through to the
+    NLI stage (lode-1k3.4); so is a claim blocked by the negation check, which
+    is the correct fail-closed outcome, not a drop.
 
     This is a pure ``claim.text``-vs-``quoted_span`` check; it takes no bodies,
     because step 1 (:func:`claim_spans_verified`) already proved each span is
@@ -140,12 +195,19 @@ def claim_extractively_coupled(claim: Claim) -> bool:
     couples with nothing -- there is no payload to find inside a span -- so it
     fails closed and is left for a later stage rather than vacuously verified.
     """
-    payload = _word_tokens(claim.text) - _STOPWORDS
+    claim_tokens = _word_tokens(claim.text)
+    payload = claim_tokens - _STOPWORDS
     if not payload:
         return False
-    return any(
-        payload <= _word_tokens(support.quoted_span) for support in claim.support
-    )
+    claim_cues = claim_tokens & _NEGATION_CUES
+    for support in claim.support:
+        span_tokens = _word_tokens(support.quoted_span)
+        if not payload <= span_tokens:
+            continue
+        if span_tokens & _NEGATION_CUES > claim_cues:
+            continue  # span negates something the claim doesn't -- not coupled
+        return True
+    return False
 
 
 class EntailmentScorer(Protocol):
