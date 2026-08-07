@@ -1,22 +1,22 @@
 """Regression pin for lode-42fh: `.claude/skills/sweep/SKILL.md` Section 2b's
 `started_at` 24h age discriminator (added by lode-3k6x) had no test executing
-the real fenced block -- its behaviour rested entirely on manual verification
-against live `bd` (see lode-3k6x's technical review). This pins that arithmetic
-mechanically instead.
+the real fenced block. This pins that arithmetic mechanically.
 
-WHAT THIS PINS, per lode-42fh's acceptance criteria:
-- a ticket `started_at` just under 24h ago is NOT listed (excluded, live build);
-- one just over 24h ago IS listed (stranded);
-- a `null` `started_at` is treated as stranded (listed), not filtered out;
-- an ABSENT `started_at` key is treated as stranded (listed), not filtered out;
-- a healthy query exits 0 and writes real content, not the `SWEEP-QUERY-ERROR`
-  sentinel.
+What it pins: a ticket claimed just under 24h ago is NOT listed; one claimed
+just over 24h ago IS listed; a `null` `started_at` and an ABSENT `started_at`
+key are both listed (no age evidence to exclude them on); and a healthy query
+exits 0 writing real content, not the `SWEEP-QUERY-ERROR` sentinel.
 
-Sabotage checks (comparison direction flipped; null branch dropped) are
-included directly rather than via a mutated copy of the skill file, since the
-property under test -- "a ticket at the boundary lands on the correct side" --
-is exactly what a flipped `<`/`>` would invert, and dropping the null branch
-would exclude the null-`started_at` row instead of listing it.
+NON-VACUITY, verified by execution against a mutated `.claude/skills/sweep/SKILL.md`
+(re-run either mutation by hand if this test's coverage is ever doubted):
+- flip `<` to `>` in the `select()` clause -> the under-24h row is listed and
+  the over-24h row is not, reddening both boundary assertions;
+- drop the `.started_at == null or` branch -> jq's `fromdateiso8601` raises on
+  the null row, `pipefail` trips, and the block writes `SWEEP-QUERY-ERROR`,
+  reddening the sentinel assertion.
+Deliberately NOT shipped as mutation tests of their own: they would assert only
+that a mutant behaves differently (which the assertions below already imply),
+while coupling permanently to the exact jq source text.
 
 Same fake-`bd`-on-PATH-plus-real-fenced-block pattern as
 tests/test_sweep_source_query_failure.py and tests/test_sweep_new_ids_ordering.py;
@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import textwrap
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -43,8 +42,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 # IDs chosen to be distinguishable in assertions -- not real bd ids.
-JUST_UNDER_ID = "lode-under23h"  # started_at ~23h ago -- must be EXCLUDED (live build)
-JUST_OVER_ID = "lode-over33h"  # started_at ~33h ago -- must be LISTED (stranded)
+JUST_UNDER_ID = "lode-under23h"  # started_at 23h ago -- must be EXCLUDED (live build)
+JUST_OVER_ID = "lode-over25h"  # started_at 25h ago -- must be LISTED (stranded)
 NULL_ID = "lode-nullstart"  # started_at: null -- must be LISTED (no age evidence)
 ABSENT_ID = "lode-noattr"  # no started_at key at all -- must be LISTED
 
@@ -63,12 +62,10 @@ def _skill_blocks() -> list[str]:
 def _section_2b_block() -> str:
     """Section 2b -- the stranded in_progress collection with the age filter.
 
-    Located by text this ticket does not change (the `fromdateiso8601` select
-    and the `STRANDED=` assignment), not by a text this test could itself be
-    pinning -- a locator keyed on the exact select() clause would match zero
-    blocks the moment the fix regressed, and this test would die inside
-    `only_block_with` complaining about drift instead of reddening on its own
-    terms.
+    Located by the query shape rather than by the section heading, so moving or
+    renaming §2b does not break the locator; `only_block_with` asserts exactly
+    one hit, so a structural change that makes this ambiguous fails loudly
+    rather than silently pinning the wrong block.
     """
     return only_block_with(
         _skill_blocks(),
@@ -80,21 +77,23 @@ def _section_2b_block() -> str:
 
 def _fake_bd(bin_dir: Path, rows: list[dict]) -> None:
     """A PATH dir holding a fake `bd` that answers `bd list --status
-    in_progress ...` with a fixed JSON array, and everything else with `[]`."""
+    in_progress ...` with a fixed JSON array, and everything else with `[]`.
+
+    The heredoc terminator must stay at column 0 -- the payload is interpolated
+    unindented and `<<'JSON'` (not `<<-`) matches only an unindented terminator.
+    """
     bin_dir.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(rows)
     fake_bd = bin_dir / "bd"
     fake_bd.write_text(
-        "#!/usr/bin/env bash\nset -uo pipefail\n"
-        + textwrap.dedent(f"""\
-            if [ "$1" = "list" ]; then
-              cat <<'JSON'
-{payload}
-JSON
-            else
-              echo '[]'
-            fi
-        """)
+        "#!/usr/bin/env bash\n"
+        "set -uo pipefail\n"
+        'if [ "$1" = "list" ]; then\n'
+        "  cat <<'JSON'\n"
+        f"{json.dumps(rows)}\n"
+        "JSON\n"
+        "else\n"
+        "  echo '[]'\n"
+        "fi\n"
     )
     fake_bd.chmod(0o755)
 
@@ -104,13 +103,13 @@ def _rows() -> list[dict]:
     return [
         {
             "id": JUST_UNDER_ID,
-            "title": "just under 23h",
+            "title": "claimed 23h ago",
             "started_at": _iso(now - timedelta(hours=23)),
         },
         {
             "id": JUST_OVER_ID,
-            "title": "just over 33h",
-            "started_at": _iso(now - timedelta(hours=33)),
+            "title": "claimed 25h ago",
+            "started_at": _iso(now - timedelta(hours=25)),
         },
         {
             "id": NULL_ID,
@@ -144,12 +143,12 @@ def test_boundary_and_null_absent_rows(sweep_tmp: Path, tmp_path: Path) -> None:
     )
 
     assert JUST_UNDER_ID not in content, (
-        f"a ticket claimed ~23h ago (under the 24h threshold) was listed as "
+        f"a ticket claimed 23h ago (under the 24h threshold) was listed as "
         f"stranded -- it is still a live build, not a stranding (lode-3k6x). "
         f"content={content!r}"
     )
     assert JUST_OVER_ID in content, (
-        f"a ticket claimed ~33h ago (over the 24h threshold) was NOT listed as "
+        f"a ticket claimed 25h ago (over the 24h threshold) was NOT listed as "
         f"stranded. content={content!r}"
     )
     assert NULL_ID in content, (
@@ -161,59 +160,3 @@ def test_boundary_and_null_absent_rows(sweep_tmp: Path, tmp_path: Path) -> None:
         f"a ticket with no started_at key at all was NOT listed as stranded -- "
         f"same defensive branch as the null case. content={content!r}"
     )
-
-
-def test_flipped_comparison_direction_would_be_caught(
-    sweep_tmp: Path, tmp_path: Path
-) -> None:
-    """Sabotage check: reimplements §2b's block with the comparison direction
-    flipped (`>` instead of `<`) and asserts the resulting selection is wrong
-    on the very rows this ticket pins -- proving the real test above would
-    catch a regression of exactly this shape."""
-    block = _section_2b_block()
-    sabotaged = block.replace(
-        "(.started_at | fromdateiso8601) < (now - 86400)",
-        "(.started_at | fromdateiso8601) > (now - 86400)",
-    )
-    assert sabotaged != block, "the select() clause text this test replaces has drifted"
-
-    bin_dir = tmp_path / "fakebin"
-    _fake_bd(bin_dir, _rows())
-    proc = run_block(sabotaged, sweep_tmp, bin_dir)
-    assert proc.returncode == 0
-    content = (sweep_tmp / "stranded").read_text(encoding="utf-8")
-
-    # With the direction flipped, the just-under-threshold (live build) ticket
-    # is now wrongly listed -- exactly the regression this test exists to catch.
-    assert JUST_UNDER_ID in content, (
-        "flipping the comparison direction did not change the outcome -- this "
-        "sabotage check no longer proves the real assertions are sensitive to "
-        "the comparison direction"
-    )
-
-
-def test_dropped_null_branch_would_be_caught(sweep_tmp: Path, tmp_path: Path) -> None:
-    """Sabotage check: reimplements §2b's block with the `.started_at == null
-    or` branch dropped, and asserts the null-started_at row is then wrongly
-    excluded -- proving the real test above would catch a regression of
-    exactly this shape."""
-    block = _section_2b_block()
-    sabotaged = block.replace(
-        "select(.started_at == null or (.started_at | fromdateiso8601) < (now - 86400))",
-        "select((.started_at | fromdateiso8601) < (now - 86400))",
-    )
-    assert sabotaged != block, "the select() clause text this test replaces has drifted"
-
-    bin_dir = tmp_path / "fakebin"
-    _fake_bd(bin_dir, _rows())
-    proc = run_block(sabotaged, sweep_tmp, bin_dir)
-    # A null started_at piped into fromdateiso8601 errors -- jq exits non-zero,
-    # so this drop degrades to the SWEEP-QUERY-ERROR sentinel path rather than
-    # a clean-but-wrong selection. Either symptom proves the branch mattered.
-    if proc.returncode == 0:
-        content = (sweep_tmp / "stranded").read_text(encoding="utf-8")
-        assert content == "SWEEP-QUERY-ERROR" or NULL_ID not in content, (
-            "dropping the null-started_at branch did not change the outcome "
-            "-- this sabotage check no longer proves the real assertions are "
-            "sensitive to that branch"
-        )
