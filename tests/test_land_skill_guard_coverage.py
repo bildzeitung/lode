@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from conftest import LAND_SKILL, _fenced_bash, bash_fence_blocks
+from conftest import LAND_SKILL, LAND_SKILL_BLOCKS, _fenced_bash, bash_fence_blocks
 
 # Share lode-x495's quote-aware comment stripper rather than adding a second,
 # competing implementation -- the same reuse `tests/test_bd_list_limit_gate.py`
@@ -250,17 +250,13 @@ def _is_mutating(cmd: str) -> bool:
     return bool(cmd) and bool(_MUTATING_CMD_RE.search(cmd))
 
 
-def _unguarded_candidates(markdown: str) -> list[tuple[int, str]]:
-    """Every fenced ```bash block's mutating command that is not preceded, in
-    its OWN block, by `scripts/assert-main-checkout.sh` -- i.e. exactly the
-    set `_unguarded_mutations` would flag as a violation if `allowlist` were
-    empty, paired with its block index. `_unguarded_mutations` and
-    `_dead_allowlist_entries` both build on this, and this list is the single
-    definition of "live" both mean: a key only excuses anything in the sweep
-    if it names a command reachable at THIS point (unguarded position,
-    mutating verb) -- not merely present anywhere in the file. See the
-    lode-eu04 DECISION in the module comment above for why the two callers
-    share one list rather than each owning a loop.
+def _unguarded_candidates_from_blocks(blocks: list[str]) -> list[tuple[int, str]]:
+    """Same result as `_unguarded_candidates`, but takes already-fence-parsed
+    ```bash blocks (e.g. `conftest.LAND_SKILL_BLOCKS`) instead of raw markdown,
+    so a caller that already has the parsed blocks cached doesn't re-run
+    `bash_fence_blocks` to get this. `_unguarded_candidates` below is a thin
+    wrapper over this for the synthetic-markdown fixture call sites, which
+    don't have a pre-parsed blocks list of their own.
 
     Block boundaries are load-bearing, not tidiness: per land/SKILL.md's
     governing rule (lode-sfnb) each fence is its own Bash invocation, so a
@@ -271,7 +267,7 @@ def _unguarded_candidates(markdown: str) -> list[tuple[int, str]]:
     the regex/allowlist design and its known limitations.
     """
     candidates: list[tuple[int, str]] = []
-    for block_index, block in enumerate(bash_fence_blocks(markdown)):
+    for block_index, block in enumerate(blocks):
         guarded = False
         for raw_line in block.splitlines():
             cmd = _normalized_line(raw_line)
@@ -288,18 +284,55 @@ def _unguarded_candidates(markdown: str) -> list[tuple[int, str]]:
     return candidates
 
 
-def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[str]:
-    """Every unguarded candidate (see `_unguarded_candidates`) not excused by
-    `allowlist`. Empty means full coverage.
+def _unguarded_candidates(markdown: str) -> list[tuple[int, str]]:
+    """Every fenced ```bash block's mutating command that is not preceded, in
+    its OWN block, by `scripts/assert-main-checkout.sh` -- i.e. exactly the
+    set `_unguarded_mutations` would flag as a violation if `allowlist` were
+    empty, paired with its block index. `_unguarded_mutations` and
+    `_dead_allowlist_entries` both build on this, and this list is the single
+    definition of "live" both mean: a key only excuses anything in the sweep
+    if it names a command reachable at THIS point (unguarded position,
+    mutating verb) -- not merely present anywhere in the file. See the
+    lode-eu04 DECISION in the module comment above for why the two callers
+    share one list rather than each owning a loop.
+
+    Thin wrapper over `_unguarded_candidates_from_blocks` that fence-parses
+    `markdown` itself -- for the synthetic-markdown fixture call sites below,
+    which construct their own markdown string and have no pre-parsed blocks
+    list to pass instead. The two real `land/SKILL.md` call sites use
+    `_unguarded_candidates_from_blocks(LAND_SKILL_BLOCKS)` directly so the
+    largest doc in the repo is fence-parsed once per session, not per call
+    (lode-lmnx).
+    """
+    return _unguarded_candidates_from_blocks(bash_fence_blocks(markdown))
+
+
+def _unguarded_mutations_from_blocks(
+    blocks: list[str], *, allowlist: dict[str, str]
+) -> list[str]:
+    """Same result as `_unguarded_mutations`, but takes already-fence-parsed
+    ```bash blocks -- see `_unguarded_candidates_from_blocks` for why.
     """
     return [
         f"block {block_index}: {cmd!r} is a mutating command with "
         f"no preceding {_GUARD} in its own fenced block, and is not "
         "in the allowlist -- either guard it or record a reasoned "
         "allowlist entry"
-        for block_index, cmd in _unguarded_candidates(markdown)
+        for block_index, cmd in _unguarded_candidates_from_blocks(blocks)
         if cmd not in allowlist
     ]
+
+
+def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[str]:
+    """Every unguarded candidate (see `_unguarded_candidates`) not excused by
+    `allowlist`. Empty means full coverage.
+
+    Thin wrapper over `_unguarded_mutations_from_blocks` -- see
+    `_unguarded_candidates`'s docstring for why this wrapper exists.
+    """
+    return _unguarded_mutations_from_blocks(
+        bash_fence_blocks(markdown), allowlist=allowlist
+    )
 
 
 def test_land_skill_guard_covers_every_known_mutating_fence() -> None:
@@ -314,11 +347,21 @@ def test_land_skill_guard_covers_every_known_mutating_fence() -> None:
     appears in three other fences -- while this sweep reports 4 named
     violations. Do not re-add a per-section duplicate.
     """
-    violations = _unguarded_mutations(
-        LAND_SKILL.read_text(encoding="utf-8"),
+    violations = _unguarded_mutations_from_blocks(
+        LAND_SKILL_BLOCKS,
         allowlist=_KNOWN_LAND_SKILL_MUTATIONS,
     )
     assert violations == [], "\n".join(violations)
+
+
+def _dead_allowlist_entries_from_blocks(
+    blocks: list[str], *, allowlist: dict[str, str]
+) -> list[str]:
+    """Same result as `_dead_allowlist_entries`, but takes already-fence-parsed
+    ```bash blocks -- see `_unguarded_candidates_from_blocks` for why.
+    """
+    live = {cmd for _, cmd in _unguarded_candidates_from_blocks(blocks)}
+    return sorted(set(allowlist) - live)
 
 
 def _dead_allowlist_entries(markdown: str, *, allowlist: dict[str, str]) -> list[str]:
@@ -341,9 +384,13 @@ def _dead_allowlist_entries(markdown: str, *, allowlist: dict[str, str]) -> list
     directly, so `test_every_allowlist_entry_is_provably_checked_by_sabotage` below
     can exercise this exact primitive -- the same one the real pin calls -- against
     a synthetic fixture, without mutating the real `land/SKILL.md` on disk.
+
+    Thin wrapper over `_dead_allowlist_entries_from_blocks` -- see
+    `_unguarded_candidates`'s docstring for why this wrapper exists.
     """
-    live = {cmd for _, cmd in _unguarded_candidates(markdown)}
-    return sorted(set(allowlist) - live)
+    return _dead_allowlist_entries_from_blocks(
+        bash_fence_blocks(markdown), allowlist=allowlist
+    )
 
 
 def test_every_allowlist_entry_still_matches_a_real_command() -> None:
@@ -361,8 +408,8 @@ def test_every_allowlist_entry_still_matches_a_real_command() -> None:
     healthy case, so its interesting branch never runs on real data and this test
     alone cannot show it would catch a real regression.
     """
-    orphaned = _dead_allowlist_entries(
-        LAND_SKILL.read_text(encoding="utf-8"),
+    orphaned = _dead_allowlist_entries_from_blocks(
+        LAND_SKILL_BLOCKS,
         allowlist=_KNOWN_LAND_SKILL_MUTATIONS,
     )
 
