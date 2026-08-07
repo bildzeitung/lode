@@ -191,8 +191,17 @@ class RelatedNotesPanel(Static):
         last two related notes the moment the panel is focused — precisely when
         the user is stepping through them with Up/Down, so the selection cursor
         could land on a row that is not on screen. Reserving the border rows
-        costs two blank rows while unfocused and keeps every note reachable in
-        both states. See ``docs/tui.md``.
+        costs two blank rows while unfocused.
+
+        This arithmetic counts **one row per note**, which is true only because
+        ``lode.tcss`` also pins this panel to ``text-wrap: nowrap`` with
+        ``text-overflow: ellipsis``. Without that rule a full-length snippet
+        wraps to *two* rows and the reservation becomes optimistic rather than
+        exact, silently pushing the tail of the list off screen. The two are
+        one mechanism — the ``nowrap`` constraint is what makes this
+        reservation exact, and together they keep every note reachable in both
+        the focused and the unfocused state; dropping either reintroduces a
+        bug. Measurements and rejected alternatives: ``docs/tui.md``.
         """
         self.styles.height = (
             self.app.settings.related_notes_limit + _HEADER_ROWS + _FOCUS_BORDER_ROWS

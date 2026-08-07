@@ -62,6 +62,15 @@ screen or middle panel, ask: **if this panel's content outgrows the terminal, wh
 overflow go?** If the honest answer is "off the bottom, past the Footer," give it `height: 1fr` (or
 an `overflow-y: auto` scroll container, if scrolling rather than a fixed pane is the right shape).
 
+**One documented exception: `RelatedNotesPanel`** — see [its own section
+below](#relatednotespanel-reserves-its-maximum-height-at-mount-lode-35nu10). Do *not* reach for
+`height: 1fr` there. It is an `auto`-height `Static` sharing a `Vertical` with a `1fr` `TextArea`,
+and its content arrives **asynchronously** while the user is typing, so the requirement is stronger
+than "stay inside the terminal": its box must never change size *at all*, or it moves the ground
+under the edit cursor. `1fr` would also clip rather than scroll — a `Static` is not a `ScrollView`,
+which is exactly the distinction the `DataTable` prose above turns on. It gets a fixed reserved
+height instead, pinned imperatively because the row count comes from a runtime `Settings` knob.
+
 Guard tests for this shape assert on layout geometry, not selector text — see
 `tests/test_tui_config.py::test_knob_table_scrolls_within_its_own_pane_not_the_whole_screen` and
 its `tests/test_tui_browse_screen.py` siblings for the pattern: drive the screen with `run_test`,
@@ -249,12 +258,44 @@ Three components, all named in the module (`_HEADER_ROWS`, `_FOCUS_BORDER_ROWS`)
   keeps the box stable but silently clips the last two related notes exactly while the panel is
   focused — i.e. exactly while Up/Down can step the selection cursor onto them.
 
-**This couples `related_notes_panel.py` to `lode.tcss`.** Changing the `:focus` border, or giving the
-panel a border/padding in its unfocused state, changes how many rows the box spends on chrome and
-requires updating `_FOCUS_BORDER_ROWS` with it. The knowable cost of the reservation is two blank
-rows below the notes while the panel is unfocused; that is the accepted price of never displacing the
-cursor. The height cannot live in `lode.tcss` instead: it depends on a runtime config knob, and TCSS
-cannot read `Settings`.
+A fixed reservation is only *correct* while the panel's rendered height is predictable, and one note
+line is not inherently one row. A rendered line is `"· <age> — <snippet>"` and `related.py` truncates
+every snippet to `_SNIPPET_CHARS` (80), so at the default 80-column width a full-length snippet
+overruns the panel and **wraps to two rows**. Under wrapping the arithmetic above is optimistic
+rather than exact, and because a `Static` does not scroll, the overflow is not merely ugly — the tail
+of the list is simply *not on screen*: measured by driving the real app at 80x24 with five
+full-length snippets, three of five notes were visible unfocused and two of five focused, while
+Ctrl+F Up/Down would still happily step the selection cursor onto an invisible row. That defeats the
+panel's entire purpose, so the reservation is paired with a constraint that makes it exact:
+
+```css
+RelatedNotesPanel {
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+```
+
+**Every note now occupies exactly one row, at any width**, which is what turns `limit + 1 + 2` from
+an estimate into a guarantee. The cost is the snippet's tail, replaced by an ellipsis on a narrow
+terminal — accepted deliberately, because the snippet is *already* an arbitrary 80-character
+truncation of the passage, so nothing complete was being shown in the first place. (Two alternatives
+were rejected: shortening `_SNIPPET_CHARS` gets the same one-row property but perturbs a tuned
+display constant with a wider blast radius; reserving the two-rows-per-note worst case is complete
+but permanently spends ~13 of a 24-row terminal on the panel, plausibly worse than the original bug;
+and making the panel *scroll* its own overflow — the shape §1 above would otherwise point you at,
+which would make the reservation merely need to be big enough rather than exact and would cost no
+snippet text — requires the panel to stop being a `Static`, since a `Static` is not a `ScrollView`.
+That last one is the only rejection that is about cost rather than correctness, and it is the one to
+revisit if the ellipsis ever proves too lossy in practice.)
+
+**This couples `related_notes_panel.py` to `lode.tcss` in two directions.** Changing the `:focus`
+border, or giving the panel a border/padding in its unfocused state, changes how many rows the box
+spends on chrome and requires updating `_FOCUS_BORDER_ROWS` with it; and dropping the `nowrap` rule
+silently returns the reservation to being optimistic. With both in place the knowable cost of the
+reservation is two blank rows below the notes while the panel is unfocused, plus an ellipsized
+snippet tail — that is the accepted price of never displacing the cursor while keeping every note
+reachable. The height cannot live in `lode.tcss` instead: it depends on a runtime config knob, and
+TCSS cannot read `Settings`.
 
 ## RelatedNotesPanel's background pass: the straggler is tolerated, not joined (`lode-du4p`)
 
