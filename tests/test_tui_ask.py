@@ -22,6 +22,9 @@ from lode.egress import WithheldCitation
 from lode.storage import init_db
 from lode.tui.services.ask import (
     ABSTAIN_LINE,
+    STAGE_GATE,
+    STAGE_RETRIEVING,
+    STAGE_SYNTHESIZING,
     AskResult,
     CitationIdentity,
     _resolve_citations,
@@ -285,3 +288,57 @@ def test_run_ask_wires_retrieve_and_gate_then_resolves_as_of(
         title="We decided to use OAuth for service auth.",
         is_head=True,
     )
+
+
+def test_run_ask_reports_stages_in_order_via_on_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-35nu.5: the in-flight spinner needs a progress callback threaded
+    through ``run_ask`` -- proves the callback fires once per stage, in
+    pipeline order, without coupling this module to Textual (``on_stage`` is
+    a plain callable).
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    saved = save(conn, "n1", "We decided to use OAuth for service auth.")
+    conn.close()
+
+    canned_answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="use OAuth",
+                support=[Support(version_id=saved.version_id, quoted_span="use OAuth")],
+            ),
+        ),
+        withheld_citations=(),
+    )
+
+    monkeypatch.setattr(
+        "lode.cli._retrieve", lambda conn, question, *, lance_dir, settings=None: []
+    )
+    monkeypatch.setattr(
+        "lode.cited_answer.ask",
+        lambda conn, question, context, *, think_harder=False, settings=None: (
+            canned_answer
+        ),
+    )
+
+    stages: list[str] = []
+    result = run_ask(
+        db_path,
+        "what did we decide about auth?",
+        settings=Settings(),
+        on_stage=stages.append,
+    )
+
+    assert stages == [STAGE_RETRIEVING, STAGE_SYNTHESIZING, STAGE_GATE]
+    assert result.answer is canned_answer
+
+
+def test_run_ask_with_no_on_stage_is_unaffected() -> None:
+    """The default (``on_stage=None``) is every existing caller/test -- must
+    stay a plain, callback-free call.
+    """
+    import inspect
+
+    assert inspect.signature(run_ask).parameters["on_stage"].default is None
