@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from lode.answer import Claim, Support
+from lode.citations_read import CitationIdentity
 from lode.cited_answer import CitedAnswer
 from lode.config import Settings
 from lode.egress import WithheldCitation
@@ -26,8 +27,6 @@ from lode.tui.services.ask import (
     STAGE_RETRIEVING,
     STAGE_SYNTHESIZING,
     AskResult,
-    CitationIdentity,
-    _resolve_citations,
     render_ask_result,
     run_ask,
 )
@@ -104,148 +103,6 @@ def test_render_ask_result_surfaces_withheld_markers_alongside_abstention() -> N
     assert ABSTAIN_LINE in rendered
     assert "[withheld] v9" in rendered
     assert "withheld from cloud synthesis" in rendered.lower()
-
-
-def test_resolve_citations_reads_version_created_from_store(tmp_path: Path) -> None:
-    db_path = tmp_path / "lode.db"
-    conn = init_db(db_path)
-    try:
-        result = save(conn, "n1", "hello world")
-        (created,) = conn.execute(
-            "SELECT created FROM versions WHERE version_id = ?", (result.version_id,)
-        ).fetchone()
-
-        as_of, _ = _resolve_citations(
-            conn, [Support(version_id=result.version_id, quoted_span="hello")]
-        )
-    finally:
-        conn.close()
-
-    assert as_of == {result.version_id: created}
-
-
-def test_resolve_citations_reads_snapshot_fetched_at_from_store(tmp_path: Path) -> None:
-    db_path = tmp_path / "lode.db"
-    conn = init_db(db_path)
-    try:
-        conn.execute(
-            "INSERT INTO externals (external_id, source_type) VALUES ('e1', 'jira')"
-        )
-        conn.execute(
-            "INSERT INTO snapshots (snapshot_id, external_id, body, status, fetched_at) "
-            "VALUES ('s1', 'e1', 'status: open', 'ok', '2026-06-01T00:00:00.000Z')"
-        )
-        conn.commit()
-
-        as_of, _ = _resolve_citations(
-            conn, [Support(snapshot_id="s1", quoted_span="status: open")]
-        )
-    finally:
-        conn.close()
-
-    assert as_of == {"s1": "2026-06-01T00:00:00.000Z"}
-
-
-def test_resolve_citations_maps_an_unresolvable_target_to_none(tmp_path: Path) -> None:
-    db_path = tmp_path / "lode.db"
-    conn = init_db(db_path)
-    try:
-        as_of, identities = _resolve_citations(
-            conn, [Support(version_id="nonexistent", quoted_span="x")]
-        )
-    finally:
-        conn.close()
-
-    assert as_of == {"nonexistent": None}
-    assert identities == {}
-
-
-def test_resolve_citations_resolves_head_note_version(tmp_path: Path) -> None:
-    db_path = tmp_path / "lode.db"
-    conn = init_db(db_path)
-    try:
-        result = save(conn, "n1", "First line of the note.\nmore body")
-
-        _, identities = _resolve_citations(
-            conn, [Support(version_id=result.version_id, quoted_span="First line")]
-        )
-    finally:
-        conn.close()
-
-    assert identities[result.version_id] == CitationIdentity(
-        note_id="n1", title="First line of the note.", is_head=True
-    )
-
-
-def test_resolve_citations_marks_a_superseded_version_not_head(tmp_path: Path) -> None:
-    db_path = tmp_path / "lode.db"
-    conn = init_db(db_path)
-    try:
-        v1 = save(conn, "n1", "Original body.")
-        save(
-            conn, "n1", "Updated body.", parent=v1.version_id
-        )  # new head; v1 superseded
-
-        _, identities = _resolve_citations(
-            conn, [Support(version_id=v1.version_id, quoted_span="Original")]
-        )
-    finally:
-        conn.close()
-
-    assert identities[v1.version_id] == CitationIdentity(
-        note_id="n1", title="Original body.", is_head=False
-    )
-
-
-def test_resolve_citations_resolves_head_snapshot(tmp_path: Path) -> None:
-    db_path = tmp_path / "lode.db"
-    conn = init_db(db_path)
-    try:
-        conn.execute(
-            "INSERT INTO externals (external_id, source_type, head_snapshot_id) "
-            "VALUES ('e1', 'web', 's1')"
-        )
-        conn.execute(
-            "INSERT INTO snapshots (snapshot_id, external_id, body, status, fetched_at) "
-            "VALUES ('s1', 'e1', ?, 'ok', '2026-06-01T00:00:00.000Z')",
-            ("Ticket title\nbody",),
-        )
-        conn.commit()
-
-        _, identities = _resolve_citations(
-            conn, [Support(snapshot_id="s1", quoted_span="body")]
-        )
-    finally:
-        conn.close()
-
-    assert identities["s1"] == CitationIdentity(
-        external_id="e1", title="Ticket title", is_head=True
-    )
-
-
-def test_resolve_citations_batches_one_query_per_kind(tmp_path: Path) -> None:
-    db_path = tmp_path / "lode.db"
-    conn = init_db(db_path)
-    try:
-        v1 = save(conn, "n1", "one")
-        v2 = save(conn, "n2", "two")
-
-        executed: list[str] = []
-        conn.set_trace_callback(executed.append)
-
-        _, identities = _resolve_citations(
-            conn,
-            [
-                Support(version_id=v1.version_id, quoted_span="one"),
-                Support(version_id=v2.version_id, quoted_span="two"),
-            ],
-        )
-        conn.set_trace_callback(None)
-    finally:
-        conn.close()
-
-    assert len(executed) == 1
-    assert len(identities) == 2
 
 
 def test_run_ask_wires_retrieve_and_gate_then_resolves_as_of(
