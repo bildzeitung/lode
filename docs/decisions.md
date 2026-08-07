@@ -3836,6 +3836,53 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     invariant — a non-checking `heartbeat` making a two-lander state self-concealing — is **not**
     delivered by this resolution; it is closed instead by `lode-l7mj` (the token stops being empty, so
     the existing check actually runs) plus `lode-yuwt`'s required argument.
+    - **Update (`lode-cp4o`, 2026-08-07, later the same day)** — `lode-cp4o` is now **closed**, not
+      left `deferred`. See the next entry.
+
+- **2026-08-07 (maintainer decision, `/sweep` walkthrough) — HUMAN DECISION: `LAND_LOCK_STALE_SECONDS`
+  stays at **1800s permanently**; `lode-cp4o` closes with that written argument, and its gap-covering
+  half splits out as `lode-v4sv`.** This closes the last of the three tickets in the `land-lock.sh`
+  ownership cluster, and supersedes both the 2026-08-05 deferral and the 2026-08-06 SPLIT.
+  - **Route A — instrumenting a real distribution of `land-review` dispatch durations and re-deriving
+    against a measured p99 — is ABANDONED, not deferred a fourth time.** The ticket was parked
+    2026-08-05, split 2026-08-06, and returned to `/sweep`'s queue both times. Route A needs live
+    telemetry that nothing in this repo collects, and across three passes over the ticket **nobody
+    proposed a mechanism to collect it.** A fourth deferral buys the same wall.
+  - **Why closing is safe rather than lazy:** the failure directions are asymmetric (`lode-aps3`'s
+    original reasoning, unchanged throughout). Too LOW reclaims a live lock and puts two landers on
+    `trunk` — unbounded damage. Too HIGH only delays landing by a few `/loop 5m` ticks — bounded,
+    self-healing, and explicitly not latency-critical. **A fixed high number on the safe side of an
+    asymmetric trade does not need a measured p99 to justify it.** The measurement was only ever
+    needed to justify a *reduction*, and no reduction is wanted. If a `/land` pass is ever observed
+    reclaiming a live lock, that is new evidence and a new ticket — with the observation attached.
+  - **The received reasoning about which gap binds was wrong, and the correction is why `lode-v4sv`
+    exists.** `lode-cp4o`, its build-time escalation, and the 2026-08-06 entry above all named the
+    Section-2a→2a interval "the binding gap" because it is the largest today (one `land-review` Opus
+    dispatch, unmeasured, ~14m10s order of magnitude per `lode-m87j`'s own builder), and concluded
+    that covering gaps (a) and (c) "narrows two non-binding stretches and does not change the
+    derivable number". **The number part is correct; the significance part inverts.** 2a→2a is bounded
+    by a SINGLE dispatch and does not grow with queue size. Gaps (a) and (c) both DO — (a) via Section
+    1a's O(n²) merge-base graph, (c) via per-ticket `bd close` / `epic-completion-check.sh` / branch
+    deletes / worktree GC. **At a FIXED TTL, an unbounded-in-queue-size gap is a worse exposure than a
+    larger-but-bounded one.**
+  - **What the heartbeat actually delivers, stated once:** it converts the safety requirement from
+    *"total pass duration < TTL"* into *"max inter-heartbeat gap < TTL"* — a large weakening, but one
+    that only holds if the whole pass is covered. With both ends uncovered (call sites verified
+    2026-08-07: `acquire` at `SKILL.md:113`, heartbeats at `SKILL.md:441` and
+    `scripts/land-merge-one.sh:78`, `release` at `SKILL.md:1533`), the live requirement is still
+    `Section 0 → first 2a heartbeat < TTL` AND `last Section 3 merge → Section 4 end < TTL`. So
+    `lode-v4sv`'s value is **not numeric** — it is that it makes 1800s's justification *bounded*
+    rather than "no queue has been big enough yet". It is blocked on `lode-l7mj` and `lode-yuwt`,
+    which change the call convention it must be written against.
+  - **Re-attribution the 2026-08-06 entry got wrong, now that the invariant is withdrawn:**
+    `lode-cp4o`'s note that a `heartbeat` which does not check it still OWNS the lock makes a
+    mis-reclaim self-concealing was credited to `lode-yuwt`'s self-reading invariant. That path closes
+    instead via `lode-l7mj` (the token stops resolving empty, so the *existing* `lode-q9pm` check
+    actually runs) plus `lode-yuwt`'s required-argument rule.
+  - **Unchanged by this close:** `scripts/land-lock.sh`'s CAVEAT 1,
+    [`agents-workflow.md`](agents-workflow.md)'s single-lander-lock bullet, and `land/SKILL.md`
+    Section 0 all still say 1800s and all stay correct. CAVEAT 1's *enumeration of which stretches are
+    uncovered* goes stale only when `lode-v4sv` lands, and updating it is that ticket's job.
 
 - **2026-08-06 (maintainer decision, `lode-3npn`) — HUMAN DECISION: the rich Console "consequences
   under test" are canonicalized BY KIND — the design conclusion stays in `docs/stack.md` and
