@@ -173,6 +173,7 @@ import logging
 import os
 import re
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -1531,6 +1532,54 @@ def only_block_with(blocks: list[str], *needles: str, what: str) -> str:
         "hand before adjusting the locator"
     )
     return hits[0]
+
+
+def run_block(
+    block: str, sweep_tmp: Path, bin_dir: Path
+) -> subprocess.CompletedProcess[str]:
+    """Run one fenced ```bash block as its own, fresh subprocess (lode-n6q0).
+
+    This is the execution convention every test that runs a skill's real
+    fenced blocks (rather than merely locating them, see
+    :func:`only_block_with`) is built on: one fresh ``bash`` subprocess PER
+    block, mirroring an agent's own one-Bash-tool-invocation-per-fence
+    execution model, so nothing a block sets in its own shell survives into
+    the next one (lode-sfnb/lode-x495). ``bin_dir`` is prepended to ``PATH``
+    ahead of the real one -- the caller's fake ``bd`` (or other faked tool)
+    lives there. ``TMPDIR`` is redirected to ``sweep_tmp``'s parent so a
+    block's own ``${TMPDIR:-/tmp}/lode-sweep-state`` derivation lands exactly
+    on the ``sweep_tmp`` fixture's directory -- that derivation is ``/sweep``'s
+    §0 convention SPECIFICALLY, so a caller testing a different skill's blocks
+    inherits a redirection it did not ask for. ``cwd`` is the checkout root
+    (:data:`_CHECKOUT_ROOT`, worktree-aware) rather than a hand-rolled
+    ``Path(__file__).parent.parent`` in each caller.
+    """
+    env = dict(
+        os.environ,
+        PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        TMPDIR=str(sweep_tmp.parent),
+    )
+    return subprocess.run(
+        ["bash", "-c", block],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=_CHECKOUT_ROOT,
+        check=False,
+    )
+
+
+@pytest.fixture
+def sweep_tmp(tmp_path: Path) -> Path:
+    """Mirrors ``/sweep``'s own §0 layout: ``$SWEEP_TMP =
+    $TMPDIR/lode-sweep-state`` (lode-n6q0).
+
+    Shared by every pin of that layout, so a future change to it moves here
+    once.
+    """
+    d = tmp_path / "lode-sweep-state"
+    d.mkdir()
+    return d
 
 
 def _fenced_bash(markdown: str) -> str:

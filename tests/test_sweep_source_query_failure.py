@@ -22,14 +22,12 @@ tests/conftest.py::bash_fence_blocks (lode-kjei).
 
 from __future__ import annotations
 
-import os
 import shutil
-import subprocess
 import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import bash_fence_blocks
+from conftest import bash_fence_blocks, only_block_with, run_block
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SWEEP_SKILL = REPO_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
@@ -41,18 +39,16 @@ pytestmark = pytest.mark.skipif(
 MARKER = "source_query_failed"
 
 
+def _skill_blocks() -> list[str]:
+    return bash_fence_blocks(SWEEP_SKILL.read_text(encoding="utf-8"))
+
+
 def _only_block_with(*needles: str, what: str) -> str:
-    hits = [
-        b
-        for b in bash_fence_blocks(SWEEP_SKILL.read_text(encoding="utf-8"))
-        if all(n in b for n in needles)
-    ]
-    assert len(hits) == 1, (
-        f"expected exactly 1 fenced block for {what}, found {len(hits)} -- this "
-        "test's assumption about SKILL.md's structure has drifted; re-check by "
-        "hand before adjusting the locator"
-    )
-    return hits[0]
+    """Thin wrapper over the shared tests/conftest.py::only_block_with, same
+    discipline and same call shape as tests/test_sweep_new_ids_ordering.py's
+    and tests/test_land_conflicts_state.py's helpers of the same name -- each
+    binds its own ``_skill_blocks()`` (lode-pm37/lode-n6q0)."""
+    return only_block_with(_skill_blocks(), *needles, what=what)
 
 
 def _section_1_block() -> str:
@@ -132,32 +128,6 @@ def _fake_bd(bin_dir: Path, *, failing: str | None) -> None:
     fake_bd.chmod(0o755)
 
 
-def _run_block(
-    block: str, sweep_tmp: Path, bin_dir: Path
-) -> subprocess.CompletedProcess[str]:
-    env = dict(
-        os.environ,
-        PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-        TMPDIR=str(sweep_tmp.parent),
-    )
-    return subprocess.run(
-        ["bash", "-c", block],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=REPO_ROOT,
-        check=False,
-    )
-
-
-@pytest.fixture
-def sweep_tmp(tmp_path: Path) -> Path:
-    """Mirrors §0's own layout: $SWEEP_TMP = $TMPDIR/lode-sweep-state."""
-    d = tmp_path / "lode-sweep-state"
-    d.mkdir()
-    return d
-
-
 @pytest.mark.parametrize(
     ("block_fn", "failing"),
     [
@@ -175,7 +145,7 @@ def test_failed_source_query_writes_the_marker(
     marker Section 5 reads to suppress Section 6's wholesale digest rewrite."""
     bin_dir = tmp_path / "fakebin"
     _fake_bd(bin_dir, failing=failing)
-    _run_block(block_fn(), sweep_tmp, bin_dir)
+    run_block(block_fn(), sweep_tmp, bin_dir)
     assert (sweep_tmp / MARKER).exists(), (
         "a failed bd source query did not write $SWEEP_TMP/source_query_failed -- "
         "Section 5 will fall through and Section 6 will rewrite the digest "
@@ -194,7 +164,7 @@ def test_successful_pass_writes_no_marker_and_exits_zero(
     healthy pass the block must NOT write the marker, and must exit 0."""
     bin_dir = tmp_path / "fakebin"
     _fake_bd(bin_dir, failing=None)
-    proc = _run_block(block_fn(), sweep_tmp, bin_dir)
+    proc = run_block(block_fn(), sweep_tmp, bin_dir)
     assert not (sweep_tmp / MARKER).exists(), (
         "a SUCCESSFUL pass wrote $SWEEP_TMP/source_query_failed -- Section 5 "
         "would then skip the digest rewrite on every pass, silently freezing "
