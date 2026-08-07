@@ -229,10 +229,10 @@ def search_notes(db_path: Path, query_text: str) -> list[NoteRow]:
       exact token match).
 
     **Known limitation, not fixed here:** a note saved before the lexical leg
-    landed (or before any lexical reindex, since no such command exists yet --
-    ``cli.py``'s ``reembed`` explicitly leaves FTS untouched) is not in
-    ``passages_fts`` and quietly won't surface here. Recorded as a build
-    requirement on lode-35nu.6, not resolved by it.
+    landed and never since backfilled is not in ``passages_fts`` and quietly
+    won't surface here -- run ``lode reindex-lexical`` (lode-x9lu) to backfill
+    it; ``cli.py``'s ``reembed`` explicitly leaves FTS untouched. Recorded as
+    a build requirement on lode-35nu.6, not resolved by it.
     """
     conn = init_db(db_path)
     try:
