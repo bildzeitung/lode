@@ -64,6 +64,11 @@ STAGE_GATE = "gate complete"
 OnStage = Callable[[str], None]
 
 
+def _no_stage(stage: str) -> None:
+    """Stand in for an omitted ``on_stage`` so :func:`run_ask` reports
+    unconditionally, instead of repeating a ``None`` check per stage."""
+
+
 @dataclass(frozen=True)
 class AskResult:
     """A gated cited answer plus each citation's as-of provenance.
@@ -117,18 +122,16 @@ def run_ask(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = init_db(db_path)
     try:
-        if on_stage is not None:
-            on_stage(STAGE_RETRIEVING)
+        report = on_stage or _no_stage
+        report(STAGE_RETRIEVING)
         context = _retrieve(
             conn, question, lance_dir=lance_dir(db_path), settings=settings
         )
-        if on_stage is not None:
-            on_stage(STAGE_SYNTHESIZING)
+        report(STAGE_SYNTHESIZING)
         answer = cited_answer.ask(
             conn, question, context, think_harder=think_harder, settings=settings
         )
-        if on_stage is not None:
-            on_stage(STAGE_GATE)
+        report(STAGE_GATE)
         as_of = {
             support.target_id: _resolve_as_of(conn, support)
             for claim in answer.claims

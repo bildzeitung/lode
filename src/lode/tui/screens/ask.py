@@ -56,12 +56,20 @@ class AskScreen(Screen[None]):
 
     def __init__(self) -> None:
         super().__init__()
-        # Bumped once per submitted question; a worker's writes to the
-        # results pane are stamped with the generation live when it
-        # started, and dropped if a newer question has since superseded it
-        # (see ``_ask``'s docstring -- lode-35nu.5's noted late-write hazard:
-        # ``@work(exclusive=True)`` cancels a stale worker's *task* but
-        # cannot preempt a blocking call already in flight inside it).
+        # The late-write guard (lode-35nu.5's noted hazard).
+        # ``@work(exclusive=True)`` cancels a stale worker's *task* but cannot
+        # preempt a blocking call already in flight inside it, so a superseded
+        # ask can still come back with an answer to an old question. Every
+        # write to the results pane therefore carries the generation live when
+        # its question was submitted, and is dropped once a newer question has
+        # bumped the counter.
+        #
+        # ``on_input_submitted`` is the counter's ONLY writer -- main thread,
+        # never the worker's. That keeps the ``+= 1`` single-threaded (it is a
+        # non-atomic read-modify-write) and orders generations by *submission*
+        # rather than by the thread pool's arbitrary worker-start order; the
+        # inverted order would hand the older question the higher generation
+        # and let its answer win, which is the very bug being guarded.
         self._ask_generation = 0
         self._spinner_timer: Timer | None = None
         self._spinner_frame = 0
@@ -91,10 +99,16 @@ class AskScreen(Screen[None]):
         question = event.value.strip()
         if not question:
             return
-        self._ask(question)
+        # Bumped here, on the main thread, never inside the worker -- see
+        # ``_ask_generation``'s comment in ``__init__`` for why. Starting the
+        # spinner here too means the indicator appears on submit, even if the
+        # worker's thread is slow to start.
+        self._ask_generation += 1
+        self._start_spinner()
+        self._ask(question, self._ask_generation)
 
     @work(thread=True, exclusive=True)
-    def _ask(self, question: str) -> None:
+    def _ask(self, question: str, generation: int) -> None:
         """Run the ask pipeline off the UI thread -- it does DB + network I/O.
 
         Deferred import -- :class:`~lode.auth.AuthError` lives in a module
@@ -102,21 +116,14 @@ class AskScreen(Screen[None]):
         module scope may load (mirrors ``lode.cli.ask``'s own deferred import
         of the same name, for the same reason).
 
-        Every write to the results pane is stamped with ``generation`` (the
-        counter's value when *this* call started) and dropped once a newer
-        question has bumped it. ``exclusive=True`` cancels a stale worker's
-        *task* on the next await point, but Textual cannot preempt a
-        blocking network call already in flight inside a thread worker (the
-        ``/challenge`` hazard recorded on this ticket) -- so a superseded
-        worker can still reach this point after a newer one has already
-        started writing. The generation check is what actually stops its
-        results from landing over the newer question's.
+        ``generation`` is the counter's value at the moment *this* question
+        was submitted, passed in by :meth:`on_input_submitted`; every write it
+        makes to the results pane carries it and is dropped if superseded.
+        See ``_ask_generation``'s comment in :meth:`__init__` for the hazard
+        that guard exists for.
         """
         from lode.auth import AuthError
 
-        self._ask_generation += 1
-        generation = self._ask_generation
-        self.app.call_from_thread(self._start_spinner, generation)
         app = self.app
 
         def _on_stage(stage: str) -> None:
@@ -132,10 +139,12 @@ class AskScreen(Screen[None]):
             return
         self.app.call_from_thread(self._finish, generation, render_ask_result(result))
 
-    def _start_spinner(self, generation: int) -> None:
-        """Begin the animated in-flight indicator for ``generation``. Main thread only."""
-        if generation != self._ask_generation:
-            return
+    def _start_spinner(self) -> None:
+        """Begin the animated in-flight indicator. Main thread only.
+
+        Needs no generation check of its own: its sole caller runs on the main
+        thread immediately after bumping the counter, so it is always current.
+        """
         self._spinner_frame = 0
         self._stage = ""
         if self._spinner_timer is not None:

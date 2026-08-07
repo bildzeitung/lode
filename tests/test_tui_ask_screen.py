@@ -250,10 +250,16 @@ def test_asking_shows_an_animated_spinner_with_the_current_stage(
             )
             await pilot.pause()
             first = app.screen.query_one(f"#{RESULTS_ID}").content
-            # Let the animation timer tick at least once.
-            await asyncio.sleep(0.25)
-            await pilot.pause()
-            second = app.screen.query_one(f"#{RESULTS_ID}").content
+            # Poll until the animation timer ticks rather than sleeping a
+            # fixed multiple of the interval -- exits as soon as the frame
+            # advances, and does not assume exactly one tick landed.
+            second = first
+            for _ in range(50):
+                await asyncio.sleep(0.02)
+                await pilot.pause()
+                second = app.screen.query_one(f"#{RESULTS_ID}").content
+                if second != first:
+                    break
             release_worker.set()
             await app.workers.wait_for_complete()
             await pilot.pause()
