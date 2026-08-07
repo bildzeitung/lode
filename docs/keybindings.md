@@ -166,13 +166,12 @@ tree by `lode-pijc`.
 No App-level function keys remain — see the "No function keys" policy above. `ctrl+l` is now
 claimed (above); `ctrl+n` is now claimed too, at the **Screen** level — `EditScreen`,
 `VersionViewScreen`, `SnapshotViewerScreen` (`lode-ev5j.3`), and `CaptureScreen` (`lode-5ill`,
-below) all share the same open-link-under-cursor binding. **`ctrl+j` is the one formally-safe
-letter left** for the next ticket that
-needs a new App-level (or Screen-level) key — it still carries the terminal-level caveat flagged in
-the "No function keys" section (the raw LF byte some terminals treat as Enter-adjacent), so confirm
-the full trap checklist before landing it, and **check every screen's own `BINDINGS` for the same
-key too — not just `LodeApp`'s** (still the operative rule from "Two altitudes" above; only the
-alphabet changed).
+below) all share the same open-link-under-cursor binding. **`ctrl+j` is now claimed too** — at the
+**Screen** level, by `AskScreen` (`lode-35nu.4`, below), for "open the focused citation's cited
+version/snapshot". **No formally-safe letter is left** for the next ticket that needs a new
+App-level (or Screen-level) key — see the "No function keys" section's letter-space accounting
+above for how to widen the pool (a fresh `ctrl+<letter>` audit, or reclaiming one already spent on
+a feature that no longer needs it) before landing one.
 
 ### Screen-level
 
@@ -215,6 +214,9 @@ alphabet changed).
 | | | `ctrl+f` | Focus related-notes panel | |
 | | | `ctrl+n` | Open link under cursor | |
 | `AskScreen` | `screens/ask.py` | `escape` | Back | — |
+| | | `up` | Move the focused-citation cursor to the previous citation (`show=False` — hidden the same way `BrowseScreen`'s own arrow-key row navigation is; the status line above the footer shows the current one) | |
+| | | `down` | Move the focused-citation cursor to the next citation (`show=False`, same reasoning) | |
+| | | `ctrl+j` | Open the focused citation's cited version/snapshot (`lode-35nu.4`) | |
 | `ConfigScreen` | `screens/config.py` | `escape` | Back | — |
 | `ReconcileScreen` | `screens/reconcile.py` | `r` | Re-apply | read-only diff |
 | | | `d` | Discard | |
@@ -250,6 +252,19 @@ free there (`lode-bsmc`), and link extraction never depended on the colouring at
 regex scan of the cursor's line (`_link_open.py`), independent of whichever screens happen to be
 coloured. Bound identically: `Binding("ctrl+n", "open_link", "Link")` delegating to the same
 `open_link_under_cursor` helper.
+
+**`lode-35nu.4` claims the last formally-safe letter, `ctrl+j`, on `AskScreen`.** Up/Down were free
+(confirmed against `Input.BINDINGS` — the question field's own builtin bindings cover left/right/
+home/end/backspace/delete/enter/cut/copy/paste, never up/down, so they bubble to the Screen), but
+opening the focused citation needed a genuine action key, and every bare printable letter is
+reachable by the question `Input` too (it consumes any `is_printable` key exactly like `TextArea`
+does — see the "hard rule" above) — so this is not a `read_only`-body exception; a bare `o` here
+would type into the question field instead of opening anything. `ctrl+j` was the one letter this
+doc's own ledger had left unclaimed, confirmed against `Input.BINDINGS`, `KEY_ALIASES`, and every
+other screen's `BINDINGS` before landing it. Bound as `Binding("ctrl+j", "open_citation", "Open
+citation")`; Up/Down are `Binding("up", "focus_prev_citation", ..., show=False)` /
+`Binding("down", "focus_next_citation", ..., show=False)` — hidden from the footer, matching how
+`BrowseScreen`'s own `DataTable` row navigation (also Up/Down) isn't listed there either.
 
 ## Resolved collisions (history, for context)
 

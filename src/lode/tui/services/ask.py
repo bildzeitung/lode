@@ -340,6 +340,34 @@ def _render_claims(result: AskResult, context_chars: int) -> list[str]:
     return lines
 
 
+def citation_targets(result: AskResult) -> list[str]:
+    """Distinct citation ``target_id``s with a resolved identity, in first-cited order (lode-35nu.4).
+
+    Traversal order matches :func:`_render_claims`'s own grouped pass --
+    first-cited, not sorted -- so a caller offering "next/previous citation"
+    navigation (the ask screen) steps through targets in the same order they
+    appear on screen. A target absent from ``result.identities`` (the store
+    had nothing to resolve for it -- practically unreachable, see
+    :class:`AskResult`'s own docstring) is excluded: there is no note/external
+    to navigate to for it.
+
+    Keyed by ``target_id`` (a specific ``version_id``/``snapshot_id``), not by
+    note/external -- deliberately: two citations of the same note but
+    different versions are two distinct, individually navigable entries, and
+    opening one must show the exact version actually cited, not just the
+    note's current head (the ticket's own framing).
+    """
+    seen: set[str] = set()
+    order: list[str] = []
+    for claim in result.answer.claims:
+        for support in claim.support:
+            target_id = support.target_id
+            if target_id in result.identities and target_id not in seen:
+                seen.add(target_id)
+                order.append(target_id)
+    return order
+
+
 def _group_key(identity: CitationIdentity) -> tuple[str, str] | None:
     """The note/external this citation groups under, or ``None`` if unresolvable."""
     if identity.note_id is not None:
