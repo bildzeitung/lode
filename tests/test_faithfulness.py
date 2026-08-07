@@ -31,6 +31,7 @@ from lode.faithfulness import (
     claim_entailed,
     claim_extractively_coupled,
     claim_spans_verified,
+    locate_span,
     normalize_whitespace,
     span_occurs,
     support_verified,
@@ -57,6 +58,28 @@ def test_whitespace_only_difference_is_accepted() -> None:
 def test_non_whitespace_difference_is_rejected() -> None:
     # Differs by a real character, not just whitespace -- must not match.
     assert not span_occurs("rerank OFFF", BODY)
+
+
+def test_locate_span_returns_offsets_into_the_body_as_given() -> None:
+    """``locate_span`` is the primitive ``span_occurs`` is derived from; the ask
+    screen renders surrounding context from these offsets, so they must index the
+    body as given, never a whitespace-normalized copy."""
+    start, end = locate_span("rerank OFF", BODY)
+    assert BODY[start:end] == "rerank OFF"
+
+
+def test_locate_span_offsets_span_the_reflowed_region_of_the_body() -> None:
+    body = "lead in\nrerank\t OFF\ntrailing"
+    start, end = locate_span("rerank OFF", body)
+    # Offsets bracket the body's own (differently whitespaced) text, so the
+    # surrounding context either side stays contiguous with the highlight.
+    assert body[start:end] == "rerank\t OFF"
+    assert body[:start] == "lead in\n"
+    assert body[end:] == "\ntrailing"
+
+
+def test_locate_span_returns_none_for_an_absent_span() -> None:
+    assert locate_span("rerank ON by default", BODY) is None
 
 
 def test_normalize_whitespace_collapses_and_strips() -> None:
@@ -174,6 +197,45 @@ def test_compound_identifier_fragment_couples_known_fail_open_exposure() -> None
     assert _coupled("the policy is allkeys-lru", "maxmemory-policy allkeys-lru")
     # Same mechanism: the claim names only the "DNS" fragment of the span's "DNS-01".
     assert _coupled("the check uses DNS", "the check uses DNS-01 validation")
+
+
+def test_negated_span_is_not_coupled() -> None:
+    # lode-w2y7: the span negates the claim ("isn't" vs "is") but pure
+    # containment ignores the negation entirely -- the claim's payload
+    # ("cache", "invalidated") is still a subset of the span's tokens. This is
+    # the ticket's own motivating example: it must NOT couple.
+    assert not _coupled("the cache is invalidated", "the cache isn't invalidated")
+
+
+def test_dont_and_wont_spans_are_not_coupled() -> None:
+    # The two contractions a bare-stem cue list cannot carry without colliding
+    # with the real words "don" / "won" -- matched whole, so they block here.
+    assert not _coupled(
+        "rebuilds invalidate the cache", "rebuilds don't invalidate the cache"
+    )
+    assert not _coupled(
+        "the worker retries", "the worker won't stop; retries are dropped"
+    )
+
+
+def test_typographic_apostrophe_negation_is_not_coupled() -> None:
+    # Bodies harvested from the web carry U+2019, not the ASCII apostrophe.
+    assert not _coupled("the cache is invalidated", "the cache isn’t invalidated")
+
+
+def test_negation_lookalike_word_still_couples() -> None:
+    # "won"/"don" as ordinary words must not raise a false cue and demote a
+    # legitimate fast-path couple to NLI.
+    assert _coupled(
+        "don won the rerank bake-off", "don won the rerank bake-off outright"
+    )
+
+
+def test_negation_present_on_both_sides_still_couples() -> None:
+    # The negation-asymmetry check only blocks a cue that's in the span but
+    # *absent* from the claim -- a claim that itself states the negation still
+    # couples normally.
+    assert _coupled("the cache isn't invalidated", "the cache isn't invalidated")
 
 
 # --- Step 3: NLI entailment ------------------------------------------------

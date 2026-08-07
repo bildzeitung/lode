@@ -28,6 +28,7 @@ from lode.tui.services.ask import (
     AskResult,
     CitationIdentity,
     _resolve_citations,
+    citation_targets,
     render_ask_result,
     run_ask,
 )
@@ -36,7 +37,7 @@ from lode.versions import save
 
 def test_render_ask_result_abstains_with_the_honest_line() -> None:
     result = AskResult(answer=CitedAnswer(claims=(), withheld_citations=()))
-    assert render_ask_result(result) == ABSTAIN_LINE
+    assert render_ask_result(result, context_chars=80) == ABSTAIN_LINE
 
 
 def test_render_ask_result_shows_cited_claim_with_as_of_provenance() -> None:
@@ -51,7 +52,7 @@ def test_render_ask_result_shows_cited_claim_with_as_of_provenance() -> None:
     )
     result = AskResult(answer=answer, as_of={"v1": "2026-06-18T00:00:00.000Z"})
 
-    rendered = render_ask_result(result)
+    rendered = render_ask_result(result, context_chars=80)
 
     assert "We chose OAuth for service auth." in rendered
     assert "version v1" in rendered
@@ -71,7 +72,7 @@ def test_render_ask_result_shows_snapshot_citation_provenance() -> None:
     )
     result = AskResult(answer=answer, as_of={"s1": "2026-06-01T00:00:00.000Z"})
 
-    rendered = render_ask_result(result)
+    rendered = render_ask_result(result, context_chars=80)
 
     assert "snapshot s1" in rendered
     assert "as of 2026-06-01T00:00:00.000Z" in rendered
@@ -89,7 +90,7 @@ def test_render_ask_result_marks_a_citation_with_unresolved_provenance() -> None
     )
     result = AskResult(answer=answer, as_of={})
 
-    assert "as of unknown" in render_ask_result(result)
+    assert "as of unknown" in render_ask_result(result, context_chars=80)
 
 
 def test_render_ask_result_surfaces_withheld_markers_alongside_abstention() -> None:
@@ -99,11 +100,162 @@ def test_render_ask_result_surfaces_withheld_markers_alongside_abstention() -> N
     )
     result = AskResult(answer=answer)
 
-    rendered = render_ask_result(result)
+    rendered = render_ask_result(result, context_chars=80)
 
     assert ABSTAIN_LINE in rendered
     assert "[withheld] v9" in rendered
     assert "withheld from cloud synthesis" in rendered.lower()
+
+
+def test_render_ask_result_groups_a_note_cited_by_multiple_claims_once(
+    tmp_path: Path,
+) -> None:
+    """lode-35nu.3's core acceptance line: a note cited by N claims renders
+    once, with its claims nested under it -- not once per claim."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        saved = save(conn, "n1", "We chose OAuth for service auth. It scales well.")
+    finally:
+        conn.close()
+
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="We chose OAuth.",
+                support=[Support(version_id=saved.version_id, quoted_span="OAuth")],
+            ),
+            Claim(
+                text="It scales well.",
+                support=[
+                    Support(version_id=saved.version_id, quoted_span="scales well")
+                ],
+            ),
+        ),
+        withheld_citations=(),
+    )
+    identities = {
+        saved.version_id: CitationIdentity(
+            note_id="n1",
+            title="We chose OAuth for service auth.",
+            is_head=True,
+        )
+    }
+    bodies = {saved.version_id: "We chose OAuth for service auth. It scales well."}
+    result = AskResult(answer=answer, identities=identities, bodies=bodies)
+
+    rendered = render_ask_result(result, context_chars=80)
+
+    # The note's title (the group header) appears exactly once, as its own line.
+    header_lines = [
+        line
+        for line in rendered.splitlines()
+        if line == "We chose OAuth for service auth."
+    ]
+    assert len(header_lines) == 1
+    assert "  We chose OAuth." in rendered
+    assert "  It scales well." in rendered
+
+
+def test_render_ask_result_highlights_the_quoted_span_in_context(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        saved = save(conn, "n1", "before text OAuth after text")
+    finally:
+        conn.close()
+
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="claim",
+                support=[Support(version_id=saved.version_id, quoted_span="OAuth")],
+            ),
+        ),
+        withheld_citations=(),
+    )
+    identities = {
+        saved.version_id: CitationIdentity(note_id="n1", title="title", is_head=True)
+    }
+    bodies = {saved.version_id: "before text OAuth after text"}
+    result = AskResult(answer=answer, identities=identities, bodies=bodies)
+
+    rendered = render_ask_result(result, context_chars=80)
+
+    assert "»OAuth«" in rendered
+    assert "before text" in rendered
+    assert "after text" in rendered
+
+
+def test_render_ask_result_context_chars_is_configurable(tmp_path: Path) -> None:
+    body = "x" * 200 + "OAuth" + "y" * 200
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="claim", support=[Support(version_id="v1", quoted_span="OAuth")]
+            ),
+        ),
+        withheld_citations=(),
+    )
+    identities = {"v1": CitationIdentity(note_id="n1", title="title", is_head=True)}
+    result = AskResult(answer=answer, identities=identities, bodies={"v1": body})
+
+    rendered_narrow = render_ask_result(result, context_chars=5)
+    rendered_wide = render_ask_result(result, context_chars=50)
+
+    assert "x" * 5 in rendered_narrow
+    assert "x" * 6 not in rendered_narrow
+    assert "x" * 50 in rendered_wide
+
+
+def test_render_ask_result_renders_context_for_a_whitespace_reflowed_span() -> None:
+    """The faithfulness gate accepts a span matching only after whitespace
+    normalization (``span_occurs``), so the renderer must too -- an exact-only
+    search would be stricter than the gate and silently drop context for a
+    quote reflowed off a multi-line body, which is the common case."""
+    body = "lead in\nthe token\nrotates hourly\ntrailing"
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="claim",
+                support=[
+                    Support(version_id="v1", quoted_span="the token rotates hourly")
+                ],
+            ),
+        ),
+        withheld_citations=(),
+    )
+    identities = {"v1": CitationIdentity(note_id="n1", title="title", is_head=True)}
+    result = AskResult(answer=answer, identities=identities, bodies={"v1": body})
+
+    rendered = render_ask_result(result, context_chars=80)
+
+    # Highlighted, with real context on both sides -- not the bare-span fallback.
+    assert "»the token rotates hourly«" in rendered
+    assert "lead in" in rendered
+    assert "trailing" in rendered
+    assert '"the token rotates hourly"' not in rendered
+
+
+def test_render_ask_result_falls_back_to_flat_rendering_when_unresolved() -> None:
+    """A citation whose target didn't resolve to an identity has no body to
+    pull context from -- it keeps the old flat, ungrouped rendering."""
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="claim", support=[Support(version_id="missing", quoted_span="x")]
+            ),
+        ),
+        withheld_citations=(),
+    )
+    result = AskResult(answer=answer)
+
+    rendered = render_ask_result(result, context_chars=80)
+
+    assert '"x"' in rendered
+    assert "»" not in rendered
 
 
 def test_resolve_citations_reads_version_created_from_store(tmp_path: Path) -> None:
@@ -115,7 +267,7 @@ def test_resolve_citations_reads_version_created_from_store(tmp_path: Path) -> N
             "SELECT created FROM versions WHERE version_id = ?", (result.version_id,)
         ).fetchone()
 
-        as_of, _ = _resolve_citations(
+        as_of, _, _ = _resolve_citations(
             conn, [Support(version_id=result.version_id, quoted_span="hello")]
         )
     finally:
@@ -137,7 +289,7 @@ def test_resolve_citations_reads_snapshot_fetched_at_from_store(tmp_path: Path) 
         )
         conn.commit()
 
-        as_of, _ = _resolve_citations(
+        as_of, _, _ = _resolve_citations(
             conn, [Support(snapshot_id="s1", quoted_span="status: open")]
         )
     finally:
@@ -150,7 +302,7 @@ def test_resolve_citations_maps_an_unresolvable_target_to_none(tmp_path: Path) -
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
-        as_of, identities = _resolve_citations(
+        as_of, identities, _ = _resolve_citations(
             conn, [Support(version_id="nonexistent", quoted_span="x")]
         )
     finally:
@@ -166,7 +318,7 @@ def test_resolve_citations_resolves_head_note_version(tmp_path: Path) -> None:
     try:
         result = save(conn, "n1", "First line of the note.\nmore body")
 
-        _, identities = _resolve_citations(
+        _, identities, _ = _resolve_citations(
             conn, [Support(version_id=result.version_id, quoted_span="First line")]
         )
     finally:
@@ -186,7 +338,7 @@ def test_resolve_citations_marks_a_superseded_version_not_head(tmp_path: Path) -
             conn, "n1", "Updated body.", parent=v1.version_id
         )  # new head; v1 superseded
 
-        _, identities = _resolve_citations(
+        _, identities, _ = _resolve_citations(
             conn, [Support(version_id=v1.version_id, quoted_span="Original")]
         )
     finally:
@@ -212,7 +364,7 @@ def test_resolve_citations_resolves_head_snapshot(tmp_path: Path) -> None:
         )
         conn.commit()
 
-        _, identities = _resolve_citations(
+        _, identities, _ = _resolve_citations(
             conn, [Support(snapshot_id="s1", quoted_span="body")]
         )
     finally:
@@ -233,7 +385,7 @@ def test_resolve_citations_batches_one_query_per_kind(tmp_path: Path) -> None:
         executed: list[str] = []
         conn.set_trace_callback(executed.append)
 
-        _, identities = _resolve_citations(
+        _, identities, _ = _resolve_citations(
             conn,
             [
                 Support(version_id=v1.version_id, quoted_span="one"),
@@ -342,3 +494,108 @@ def test_run_ask_with_no_on_stage_is_unaffected() -> None:
     import inspect
 
     assert inspect.signature(run_ask).parameters["on_stage"].default is None
+
+
+# ---------------------------------------------------------------------------
+# citation_targets (lode-35nu.4) -- the ask screen's navigation order.
+# ---------------------------------------------------------------------------
+
+
+def test_citation_targets_lists_distinct_targets_in_first_cited_order() -> None:
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="claim one",
+                support=[
+                    Support(version_id="v2", quoted_span="a"),
+                    Support(version_id="v1", quoted_span="b"),
+                ],
+            ),
+            Claim(
+                text="claim two",
+                # v1 cited again -- must not appear twice.
+                support=[Support(version_id="v1", quoted_span="c")],
+            ),
+        ),
+        withheld_citations=(),
+    )
+    identities = {
+        "v1": CitationIdentity(note_id="n1", title="Note One", is_head=True),
+        "v2": CitationIdentity(note_id="n2", title="Note Two", is_head=True),
+    }
+    result = AskResult(answer=answer, identities=identities)
+
+    assert citation_targets(result) == ["v2", "v1"]
+
+
+def test_citation_targets_excludes_a_target_with_no_resolved_identity() -> None:
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="claim",
+                support=[Support(version_id="v1", quoted_span="a")],
+            ),
+        ),
+        withheld_citations=(),
+    )
+    # No identities at all -- store had nothing to resolve (AskResult's own
+    # documented "practically unreachable but handled" case).
+    result = AskResult(answer=answer, identities={})
+
+    assert citation_targets(result) == []
+
+
+def test_citation_targets_empty_for_an_abstained_answer() -> None:
+    result = AskResult(answer=CitedAnswer(claims=(), withheld_citations=()))
+
+    assert citation_targets(result) == []
+
+
+def test_citation_targets_walks_groups_contiguously_like_the_rendered_answer() -> None:
+    """Navigation order must be the RENDERED order, not a flat first-cited walk.
+
+    ``n1`` is cited by claims 0 and 2 with an ``n2`` claim in between, so
+    ``_render_claims`` emits one contiguous ``n1`` block (v1 then v3) followed
+    by ``n2``'s. A flat first-cited walk would yield ``v1, v2, v3`` -- the
+    status line's "Citation n/m" would then disagree with what the reader is
+    looking at.
+    """
+    answer = CitedAnswer(
+        claims=(
+            Claim(text="one", support=[Support(version_id="v1", quoted_span="a")]),
+            Claim(text="two", support=[Support(version_id="v2", quoted_span="b")]),
+            Claim(text="three", support=[Support(version_id="v3", quoted_span="c")]),
+        ),
+        withheld_citations=(),
+    )
+    identities = {
+        # v1 and v3 are two different versions of the SAME note.
+        "v1": CitationIdentity(note_id="n1", title="Note One", is_head=False),
+        "v2": CitationIdentity(note_id="n2", title="Note Two", is_head=True),
+        "v3": CitationIdentity(note_id="n1", title="Note One", is_head=True),
+    }
+    result = AskResult(answer=answer, identities=identities)
+
+    assert citation_targets(result) == ["v1", "v3", "v2"]
+
+
+def test_citation_targets_excludes_an_identity_with_neither_note_nor_external() -> None:
+    """The "exactly one of note_id/external_id" invariant violated.
+
+    ``_render_claims`` drops such a citation into its ungrouped flat fallback
+    (nothing to open); ``citation_targets`` must agree, or ``Ctrl+J`` would
+    push a ``SnapshotViewerScreen`` at a target that is not an external
+    snapshot at all.
+    """
+    answer = CitedAnswer(
+        claims=(
+            Claim(text="claim", support=[Support(version_id="v1", quoted_span="a")]),
+        ),
+        withheld_citations=(),
+    )
+    result = AskResult(
+        answer=answer,
+        identities={"v1": CitationIdentity(title="Neither", is_head=True)},
+    )
+
+    assert citation_targets(result) == []

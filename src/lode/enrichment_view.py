@@ -14,6 +14,21 @@ deliberately NOT shared: this module hands back the ``stale`` bit as data, and
 each consumer decides how to show it (the TUI styles it, the CLI prints
 ``" [stale]"``).
 
+**Externally-inherited tags** (lode-f0m1) are surfaced too, distinguishable
+from a note's own directly-scoped tags via :attr:`EnrichmentItem.inherited`.
+``lode-35nu.7`` made a tag scoped to an *external* resolve to every note that
+links that external via a fresh edge for the Tags-screen filter's purposes,
+but left this view-model's ``tags`` strictly note_id-scoped (built from
+:func:`~lode.display.display_annotations`, which only ever reads rows whose
+``target`` is the note's own id) -- so a note could match an external-only
+tag filter yet show no trace of that tag once opened. :func:`_inherited_tag_items`
+closes that gap with the same resolution :func:`lode.notes_read.
+_list_notes_with_all_tags` uses (a fresh note->external edge), appended to
+``tags`` and flagged ``inherited=True`` rather than merged in
+indistinguishably -- the whole point being to make which-is-which legible,
+exactly the way ``stale`` is already carried as data and rendered
+per-consumer, not baked into the value string.
+
 **Content** is built ENTIRELY on :mod:`lode.display` --
 :func:`~lode.display.display_annotations` / :func:`~lode.display.
 display_edges`, the shared stale-display policy (lode-npx.4) -- so
@@ -70,7 +85,7 @@ No writes; this module only reads.
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -149,10 +164,19 @@ class EnrichmentItem:
     than printing a suffix -- doesn't have to string-sniff a baked-in
     ``" [stale]"`` marker. ``value`` is the bare annotation payload; rendering
     (including whether/how to mark staleness) is entirely the consumer's call.
+
+    ``inherited`` (lode-f0m1) is ``True`` only for a *tag* item resolved
+    through an external the note links via a fresh edge, rather than scoped
+    directly to the note's own ``note_id`` -- see
+    :func:`_inherited_tag_items`. It is always ``False`` for entities and
+    summaries, which have no external-inheritance concept. Carried as a bare
+    bool the same way ``stale`` is: this module hands back the bit as data,
+    each consumer decides how to render it.
     """
 
     value: str
     stale: bool
+    inherited: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +221,76 @@ def _annotation_items(annotations: list[dict], kind: str) -> list[EnrichmentItem
         for a in annotations
         if a["kind"] == kind
     ]
+
+
+def _inherited_tag_items(
+    conn: sqlite3.Connection, note_id: str, direct_values: set[str]
+) -> list[EnrichmentItem]:
+    """Tags ``note_id`` inherits from an external it links via a fresh edge (lode-f0m1).
+
+    Mirrors :func:`lode.notes_read._list_notes_with_all_tags`'s resolution --
+    the same model this ticket's dispatch names as the reference: a tag
+    annotation whose ``target`` is an *external's* id (``enrich.py`` writes
+    tag annotations at ``target = owner_id``, an external_id for an
+    external) resolves to every note that links that external via a
+    ``status = 'fresh'`` edge, the identical filter :func:`lode.retrieval`
+    builds its graph on. The join onto ``externals`` is load-bearing, not
+    decoration -- ``edges.to_id`` is polymorphic (another note, an
+    inferred-edge target string, or a drawn-down external's id,
+    :func:`_external_view`) -- so only edges that actually resolve to a real
+    external row qualify; a note->note edge must never make one note inherit
+    the other's tags (``notes_read``'s own regression test for that case).
+
+    SQL resolves only *which externals* this note inherits from; the tag rows
+    themselves then go through :func:`~lode.display.display_annotations` +
+    :func:`_annotation_items` -- the exact pair a note's own directly-scoped
+    tags already use, just pointed at an external's id instead of the note's
+    (``annotations.target`` is polymorphic, so the same read serves both).
+    That keeps this module's "**Content** is built ENTIRELY on
+    :mod:`lode.display`" contract intact: the stale/tombstone policy and the
+    payload decoding stay in exactly one place, so a tombstoned
+    (``source='user', status='orphaned'``) inherited tag is dropped and a
+    non-fresh one is flagged ``stale`` because that is what the shared seam
+    does, not because this function re-derives it.
+
+    Deliberately NOT reusing ``enrichment_view_conn``'s already-built
+    ``view_edges``, which looks like the same set: :func:`_external_view`
+    additionally joins ``snapshots`` on ``head_snapshot_id`` and returns
+    ``None`` when that snapshot is missing, so filtering on it would make the
+    inspector STRICTER than the Tags-screen filter -- reintroducing this
+    ticket's own asymmetry (a note matched on a tag it then doesn't show) for
+    an external drawn down but not yet fetched. The predicate here is
+    character-for-character ``notes_read``'s, and must stay that way.
+
+    ``direct_values`` is the set of tag values already surfaced directly on
+    the note (:func:`_annotation_items`); a value already shown directly is
+    not repeated here as an inherited duplicate -- the note's own tag wins
+    and stays a single, unambiguous entry. Where several *externals* carry
+    the same tag value, the non-stale one wins (the ``sorted`` on ``stale``
+    is stable, so equally-stale ties keep edge/insertion order).
+    """
+    external_ids = [
+        row[0]
+        for row in conn.execute(
+            "SELECT e.to_id FROM edges e "
+            "JOIN externals x ON x.external_id = e.to_id "
+            "WHERE e.from_id = ? AND e.status = 'fresh'",
+            (note_id,),
+        )
+    ]
+    candidates = [
+        item
+        for external_id in external_ids
+        for item in _annotation_items(display_annotations(conn, external_id), "tag")
+    ]
+    items: list[EnrichmentItem] = []
+    seen = set(direct_values)
+    for item in sorted(candidates, key=lambda candidate: candidate.stale):
+        if item.value in seen:
+            continue
+        seen.add(item.value)
+        items.append(replace(item, inherited=True))
+    return items
 
 
 def _summary(annotations: list[dict]) -> EnrichmentItem | None:
@@ -266,6 +360,7 @@ def enrichment_view_conn(
     edges = display_edges(conn, note_id)
 
     tags = _annotation_items(annotations, "tag")
+    tags = tags + _inherited_tag_items(conn, note_id, {item.value for item in tags})
     entities = _annotation_items(annotations, "entity")
     view_edges = [
         EnrichmentEdge(

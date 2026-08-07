@@ -7,6 +7,20 @@ rather than silently dropped, and an unsupported question abstains rather
 than hallucinating. This screen owns none of that; it only asks a question,
 runs the pipeline off the UI thread, and displays what
 :func:`lode.tui.services.ask.run_ask` / :func:`lode.tui.services.ask.render_ask_result` return.
+
+**Navigate from a cited result to the note it came from (lode-35nu.4).** Once
+an answer renders, Up/Down step a "focused citation" cursor through the
+distinct citation targets in the order they render
+(:func:`lode.tui.services.ask.citation_targets`) -- shown in
+:data:`CITATION_STATUS_ID`'s status line, since the answer itself still
+renders as plain text (:data:`RESULTS_ID`) with no per-citation widget to
+focus. ``Ctrl+J`` (the last formally-safe letter per ``docs/keybindings.md``)
+opens the focused citation's *exact cited version* -- not just the note's
+current head -- via :class:`~lode.tui.screens.version_view.VersionViewScreen`,
+or the cited snapshot via
+:class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` for an
+external. Escape from either of those pops back to this screen, which was
+never destroyed, so the answer is exactly as it was -- no re-query.
 """
 
 from __future__ import annotations
@@ -21,7 +35,14 @@ from textual.screen import Screen
 from textual.timer import Timer
 from textual.widgets import Header, Input
 
-from lode.tui.services.ask import render_ask_result, run_ask
+from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
+from lode.tui.screens.version_view import VersionViewScreen
+from lode.tui.services.ask import (
+    AskResult,
+    citation_targets,
+    render_ask_result,
+    run_ask,
+)
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.widgets.lode_static import LodeStatic
 
@@ -29,6 +50,8 @@ from lode.tui.widgets.lode_static import LodeStatic
 QUESTION_ID = "ask-question"
 #: The results pane's widget id -- read back in tests.
 RESULTS_ID = "ask-results"
+#: The focused-citation status line's widget id (lode-35nu.4) -- read back in tests.
+CITATION_STATUS_ID = "ask-citation-status"
 
 _PLACEHOLDER = "Ask a question about your notes, then press Enter."
 
@@ -52,6 +75,22 @@ class AskScreen(Screen[None]):
 
     BINDINGS: ClassVar = [
         Binding("escape", "app.pop_screen", "Back"),
+        # Up/Down step the focused-citation cursor -- hidden from the footer,
+        # like a DataTable's own arrow-key row navigation elsewhere in this
+        # TUI. These are SCREEN-level, so they only fire when the focused
+        # widget doesn't consume the key first. Textual's ``Input`` (the
+        # question field, focused on mount) has no up/down binding, so they
+        # bubble here. The results pane deliberately still wins: it is a
+        # focusable ``VerticalScroll`` whose own up/down bindings scroll the
+        # answer, so tabbing to it keeps scrolling intact and simply parks
+        # the citation cursor -- verified empirically, not assumed. Ctrl+J
+        # is bound to nothing on either, so it reaches this screen from both.
+        Binding("up", "focus_prev_citation", "Prev citation", show=False),
+        Binding("down", "focus_next_citation", "Next citation", show=False),
+        # ctrl+j: the one formally-safe letter docs/keybindings.md's letter
+        # ledger had left unclaimed -- confirmed free against Input.BINDINGS,
+        # textual.keys.KEY_ALIASES, and every other screen's own BINDINGS.
+        Binding("ctrl+j", "open_citation", "Open citation"),
     ]
 
     def __init__(self) -> None:
@@ -74,6 +113,13 @@ class AskScreen(Screen[None]):
         self._spinner_timer: Timer | None = None
         self._spinner_frame = 0
         self._stage = ""
+        # Citation navigation (lode-35nu.4). ``_result`` is the last rendered
+        # answer and the SINGLE source of truth for what is navigable: the
+        # target list is re-derived from it on demand by ``_targets`` rather
+        # than cached alongside it, so the two can never drift out of sync.
+        # ``_citation_idx`` is which target Up/Down/Ctrl+J currently act on.
+        self._result: AskResult | None = None
+        self._citation_idx = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -89,6 +135,9 @@ class AskScreen(Screen[None]):
                 LodeStatic(_PLACEHOLDER, id=RESULTS_ID),
                 id="ask-results-pane",
             ),
+            # Empty until an answer with at least one navigable citation
+            # renders -- see :meth:`_update_citation_status`.
+            LodeStatic("", id=CITATION_STATUS_ID),
         )
         yield LodeFooter()
 
@@ -105,6 +154,12 @@ class AskScreen(Screen[None]):
         # worker's thread is slow to start.
         self._ask_generation += 1
         self._start_spinner()
+        # A new question invalidates the previous answer's citations --
+        # clear the focused-citation cursor now rather than leaving Ctrl+J
+        # briefly reachable against a stale target while the spinner runs.
+        self._result = None
+        self._citation_idx = 0
+        self._update_citation_status()
         self._ask(question, self._ask_generation)
 
     @work(thread=True, exclusive=True)
@@ -134,10 +189,13 @@ class AskScreen(Screen[None]):
                 app.db_path, question, settings=app.settings, on_stage=_on_stage
             )
         except AuthError as err:
-            self.app.call_from_thread(self._finish, generation, _PLACEHOLDER)
+            self.app.call_from_thread(self._finish, generation, _PLACEHOLDER, None)
             self.app.call_from_thread(self.notify, str(err), severity="error")
             return
-        self.app.call_from_thread(self._finish, generation, render_ask_result(result))
+        rendered = render_ask_result(
+            result, context_chars=app.settings.ask_context_chars
+        )
+        self.app.call_from_thread(self._finish, generation, rendered, result)
 
     def _start_spinner(self) -> None:
         """Begin the animated in-flight indicator. Main thread only.
@@ -169,12 +227,15 @@ class AskScreen(Screen[None]):
         results = self.query_one(f"#{RESULTS_ID}", LodeStatic)
         results.update(f"{frame} {self._stage}" if self._stage else frame)
 
-    def _finish(self, generation: int, text: str) -> None:
+    def _finish(self, generation: int, text: str, result: AskResult | None) -> None:
         """Stop the spinner and show the final result for ``generation``. Main thread only.
 
         Dropped (spinner left running for whichever worker *is* current) if
         a newer question has since superseded this one -- the late-write
-        guard.
+        guard. ``result`` is ``None`` on the ``AuthError`` path (nothing to
+        navigate) and on an abstained answer's own citation set is simply
+        empty -- either way :meth:`_update_citation_status` clears the status
+        line rather than special-casing them here.
         """
         if generation != self._ask_generation:
             return
@@ -183,3 +244,74 @@ class AskScreen(Screen[None]):
             self._spinner_timer = None
         results = self.query_one(f"#{RESULTS_ID}", LodeStatic)
         results.update(text)
+        self._result = result
+        self._citation_idx = 0
+        self._update_citation_status()
+
+    def _targets(self) -> list[str]:
+        """The current answer's navigable citation targets, in rendered order.
+
+        Re-derived from :attr:`_result` on demand rather than cached beside
+        it, so there is no second field to keep in sync (and no way for the
+        two to drift). Cheap: a pure in-memory walk of one already-resolved
+        answer's handful of citations, no I/O.
+        """
+        return citation_targets(self._result) if self._result is not None else []
+
+    def _update_citation_status(self) -> None:
+        """Refresh :data:`CITATION_STATUS_ID` for the current focused-citation cursor.
+
+        Empty when there is nothing navigable -- no answer yet, an
+        abstention, or an answer whose citations all failed to resolve an
+        identity (see :func:`~lode.tui.services.ask.citation_targets`).
+        """
+        status = self.query_one(f"#{CITATION_STATUS_ID}", LodeStatic)
+        targets = self._targets()
+        if not targets or self._result is None:
+            status.update("")
+            return
+        identity = self._result.identities[targets[self._citation_idx]]
+        status.update(
+            f"Citation {self._citation_idx + 1}/{len(targets)}: "
+            f"{identity.title}  (Ctrl+J to open)"
+        )
+
+    def _step_citation(self, delta: int) -> None:
+        """Move the focused-citation cursor by ``delta``, wrapping at both ends."""
+        targets = self._targets()
+        if not targets:
+            return
+        self._citation_idx = (self._citation_idx + delta) % len(targets)
+        self._update_citation_status()
+
+    def action_focus_prev_citation(self) -> None:
+        """Up: move the focused-citation cursor to the previous citation, wrapping."""
+        self._step_citation(-1)
+
+    def action_focus_next_citation(self) -> None:
+        """Down: move the focused-citation cursor to the next citation, wrapping."""
+        self._step_citation(1)
+
+    def action_open_citation(self) -> None:
+        """Ctrl+J: open the focused citation's exact cited version/snapshot.
+
+        Pushes :class:`~lode.tui.screens.version_view.VersionViewScreen` keyed
+        to the cited ``version_id`` (not the note's current head) for a note
+        citation, or :class:`~lode.tui.screens.snapshot_viewer.
+        SnapshotViewerScreen` keyed to the cited ``snapshot_id`` for an
+        external. Escape from either pops straight back to this screen,
+        which was never destroyed -- the answer is exactly as it was, not
+        re-queried. A no-op (with a notification) when there is nothing
+        navigable, e.g. no question has been asked yet or the answer
+        abstained.
+        """
+        targets = self._targets()
+        if not targets or self._result is None:
+            self.notify("no citation to open", severity="warning")
+            return
+        target_id = targets[self._citation_idx]
+        identity = self._result.identities[target_id]
+        if identity.note_id is not None:
+            self.app.push_screen(VersionViewScreen(identity.note_id, target_id))
+        else:
+            self.app.push_screen(SnapshotViewerScreen(target_id))

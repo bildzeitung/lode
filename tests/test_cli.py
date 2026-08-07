@@ -62,7 +62,7 @@ from lode.jobs import enqueue_derive_jobs, now_iso
 from lode.llm_provider import AnthropicProvider, LLMAuthError, LLMProviderError
 from lode.redact import REDACTION_MARKER
 from lode.storage import init_db
-from lode.versions import delete, save
+from lode.versions import delete, purge, save
 
 runner = CliRunner()
 
@@ -1115,6 +1115,196 @@ def test_reembed_never_enqueues_enrich_jobs(tmp_path: Path) -> None:
     finally:
         reader.close()
     assert types == {"embed"}
+
+
+# --- lode-x9lu: `lode reindex-lexical` -- backfill passages_fts for legacy notes ---
+
+
+def _fts_rows(db_path: Path, version_id: str) -> list[tuple[str, str]]:
+    """Every ``passages_fts`` row keyed to ``version_id``, ordered for comparison."""
+    reader = sqlite3.connect(db_path)
+    try:
+        return reader.execute(
+            "SELECT passage_id, text FROM passages_fts WHERE target_version = ? "
+            "ORDER BY passage_id",
+            (version_id,),
+        ).fetchall()
+    finally:
+        reader.close()
+
+
+def test_reindex_lexical_backfills_a_note_saved_before_the_lexical_leg(
+    tmp_path: Path,
+) -> None:
+    """A note written straight via versions.save (no cache) has zero FTS rows.
+
+    ``versions.save`` is the lower-level primitive Repository.save wraps with
+    the cache seam -- calling it directly, uncached, is exactly what a note
+    saved before the lexical leg (lode-x6r.4) landed looks like today: a
+    head with no passages/passages_fts rows at all. reindex-lexical must
+    backfill it.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-legacy", "hello world, a legacy note")
+        version_id = result.version_id
+    finally:
+        conn.close()
+
+    assert _fts_rows(db_path, version_id) == []
+
+    result = runner.invoke(app, ["reindex-lexical", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "reindexed 1 live note head(s)" in result.stdout
+
+    rows = _fts_rows(db_path, version_id)
+    assert rows
+    assert any("legacy" in text for (_, text) in rows)
+
+
+def test_reindex_lexical_no_live_notes_is_a_clean_no_op(tmp_path: Path) -> None:
+    """An empty corpus reindexes nothing and says so, exiting 0."""
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = runner.invoke(app, ["reindex-lexical", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "no live note heads to reindex" in result.stdout
+
+
+def test_reindex_lexical_is_idempotent(tmp_path: Path) -> None:
+    """Re-running against an already-indexed head changes nothing (converges, not duplicates)."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-idem", "idempotent body text")
+        version_id = result.version_id
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reindex-lexical", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    after_first = _fts_rows(db_path, version_id)
+    assert after_first  # the head really did get indexed
+
+    result = runner.invoke(app, ["reindex-lexical", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    # The delete-then-insert in LexicalIndex.replace_passages is what makes this
+    # converge; passages_fts carries no unique constraint, so without it the second
+    # run would simply double the rows. Compare the actual rows, not just a ">0".
+    assert _fts_rows(db_path, version_id) == after_first
+
+
+def test_reindex_lexical_indexes_only_the_head_of_a_version_chain(
+    tmp_path: Path,
+) -> None:
+    """An updated note indexes its head only -- the superseded version gets no rows.
+
+    The command joins ``notes.head_version_id``, so a chain of any length yields
+    exactly one row per note and cannot produce duplicate or stale FTS rows for
+    the parent version.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        first = save(conn, "note-chain", "the original body text")
+        second = save(
+            conn, "note-chain", "the revised body text", parent=first.version_id
+        )
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reindex-lexical", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "reindexed 1 live note head(s)" in result.stdout
+
+    head_rows = _fts_rows(db_path, second.version_id)
+    assert any("revised" in text for (_, text) in head_rows)
+    assert _fts_rows(db_path, first.version_id) == []
+
+
+def test_reindex_lexical_indexes_a_purged_note_head_as_the_marker(
+    tmp_path: Path,
+) -> None:
+    """A purged note's head is still indexed -- as the ``[purged ...]`` marker.
+
+    The executable proof for the "no ``purged_at`` guard" paragraph on
+    :func:`lode.cli.reindex_lexical`: :meth:`lode.repository.Repository.purge`
+    itself re-indexes the live head from the marker body, so skipping purged
+    heads here would diverge from the path this command reproduces.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-purged", "a secret worth purging")
+        purge(conn, "note-purged")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reindex-lexical", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "reindexed 1 live note head(s)" in result.stdout
+
+    rows = _fts_rows(db_path, head.version_id)
+    assert rows, "the purged head should still be indexed"
+    assert all("secret" not in text for (_, text) in rows)
+    assert any("purged" in text for (_, text) in rows)
+
+
+def test_reindex_lexical_excludes_soft_deleted_notes(tmp_path: Path) -> None:
+    """A soft-deleted note's tombstone head is not backfilled."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-gone", "will be deleted")
+        delete(conn, "note-gone", parent=head.version_id)
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reindex-lexical", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "no live note heads to reindex" in result.stdout
+
+
+def test_reindex_lexical_does_not_touch_external_snapshot_rows(tmp_path: Path) -> None:
+    """An external snapshot's own FTS rows are untouched -- notes only.
+
+    A live note is present deliberately, so the command actually does work
+    (rather than short-circuiting on an empty corpus) and the external's rows
+    are proved to survive a real reindex pass, not merely a no-op.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        note = save(conn, "note-alongside", "a live note beside an external")
+        with conn:
+            conn.execute(
+                "INSERT INTO externals (external_id, source_type) VALUES ('ext-1', 'web')"
+            )
+            conn.execute(
+                "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
+                "VALUES ('snap-1', 'ext-1', 'external snapshot body', 'ok')"
+            )
+            conn.execute(
+                "UPDATE externals SET head_snapshot_id = 'snap-1' WHERE external_id = 'ext-1'"
+            )
+            # An external's FTS rows are written by ingest_snapshot in
+            # production; simulate one directly here to prove reindex-lexical
+            # leaves it alone.
+            conn.execute(
+                "INSERT INTO passages_fts (passage_id, target_version, text) "
+                "VALUES ('p-ext-1', 'snap-1', 'external snapshot body')"
+            )
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reindex-lexical", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "reindexed 1 live note head(s)" in result.stdout
+
+    assert _fts_rows(db_path, "snap-1") == [("p-ext-1", "external snapshot body")]
+    assert _fts_rows(db_path, note.version_id)  # the note WAS reindexed
 
 
 # --- lode-14jr: `lode reenrich` -- targeted, not whole-corpus, regeneration --
