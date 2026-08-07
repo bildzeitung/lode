@@ -562,21 +562,43 @@ def test_large_git_command_carrying_a_sha_does_not_take_seconds() -> None:
     ~150ms with LC_ALL=C, ~4x that without it (quadratic under UTF-8) -- well under 8 KB, the
     largest single bd/git field this repo's own DB or git history has ever held is ~5 KB, so an
     8 KB real-world command is already a generous stress fixture, not a realistic one.
+
+    lode-vaxe: a bare `elapsed < 0.5` wall-clock assertion here is load-dependent by
+    construction -- under `pytest -n 8` on a machine running several other agents'
+    gates concurrently it measured 0.749s and failed, while the same test passed 3/3 in
+    isolation immediately afterwards. The regression this guards against (`LC_ALL=C`
+    dropped from `_split_unquoted`) is a SOURCE-TEXT fact, not a scheduler-noise-sensitive
+    one, so it is asserted directly below instead of inferred from timing. A generous,
+    scheduler-tolerant elapsed ceiling is kept as a secondary sanity check (~15x the
+    unloaded measurement -- headroom deliberately wide enough that ordinary xdist
+    contention cannot trip it) so a *different*, unforeseen slowdown in this path still
+    shows up as a failure, just not as the primary detector for the known regression.
     """
     command = f"git commit -m 'landed {REAL_SHA} : " + ("landing notes. " * 500) + "'"
     assert 7_000 < len(command) < 16_384, (
         "fixture must stay comfortably under the scan cap while still exercising a "
         "multi-KB real command"
     )
+
+    lib_text = (REPO_ROOT / "scripts" / "shell-quote-split.sh").read_text()
+    split_fn = lib_text.split("_split_unquoted() {", 1)[1].split("\n}", 1)[0]
+    assert "local LC_ALL=C" in split_fn, (
+        "`local LC_ALL=C` is missing from _split_unquoted -- this is the actual "
+        "regression this test exists to catch (lode-dia6 review): without it, "
+        "${s:i:1} indexing goes O(i) under a UTF-8 locale, making the char loop "
+        "quadratic. Restore it rather than widening any timing ceiling."
+    )
+
     start = time.monotonic()
     decision = _script_decision(command)
     elapsed = time.monotonic() - start
     assert decision is None, (
         "a REAL sha in a command under the scan cap must still be allowed"
     )
-    assert elapsed < 0.5, (
+    assert elapsed < 2.0, (
         f"guard took {elapsed:.3f}s on an under-cap git command carrying a real SHA -- "
-        "`local LC_ALL=C` in _split_unquoted regressed (lode-dia6 review)"
+        "well past even generous scheduler noise; something beyond the LC_ALL=C "
+        "regression (already checked directly above) is slow here"
     )
 
 
