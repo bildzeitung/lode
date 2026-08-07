@@ -40,13 +40,13 @@ completion scripts' `bd show`/`bd list` payloads).
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import textwrap
 from pathlib import Path
 
 import pytest
+from conftest import fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GUARD_SCRIPT = REPO_ROOT / "scripts" / "bd-dolt-push-guard.sh"
@@ -139,7 +139,7 @@ def _run_guard(
     tmp_path: Path, *, env_overrides: dict[str, str]
 ) -> subprocess.CompletedProcess:
     bin_dir = _fake_bin(tmp_path)
-    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+    env = fake_bin_env(bin_dir)
     env.update(env_overrides)
     return subprocess.run(
         ["bash", str(GUARD_SCRIPT)],
@@ -157,7 +157,7 @@ def _run_push(
     bin_dir = _fake_bin(tmp_path)
     call_log = tmp_path / "calls.log"
     call_log.write_text("")
-    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+    env = fake_bin_env(bin_dir)
     env["BD_FAKE_CALL_LOG"] = str(call_log)
     # Keep the retry loop from actually sleeping/retrying in tests.
     env.setdefault("BD_DOLT_PUSH_MAX_ATTEMPTS", "1")

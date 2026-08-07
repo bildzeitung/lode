@@ -50,6 +50,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "validate-mermaid.sh"
@@ -123,11 +124,15 @@ def _run_gate(
     fake docker beats a real one here, and how the grep tests below beat a real
     grep.
     """
-    path = f"{path_dir}:{os.environ.get('PATH', '')}" if inherit_path else str(path_dir)
+    env = (
+        fake_bin_env(path_dir)
+        if inherit_path
+        else {**os.environ, "PATH": str(path_dir)}
+    )
     return subprocess.run(
         [str(SCRIPT)],
         cwd=REPO_ROOT,
-        env={**os.environ, "PATH": path},
+        env=env,
         capture_output=True,
         text=True,
         timeout=30,

@@ -1541,8 +1541,13 @@ def fake_bin_env(bin_dir: Path) -> dict[str, str]:
     one for a subprocess under test: the real environment untouched, except
     ``PATH`` gaining ``bin_dir`` at the front. Callers needing further keys
     overlay them on the result, as :func:`run_block` does with ``TMPDIR``.
+
+    An unset ``PATH`` yields ``bin_dir`` alone rather than a trailing empty
+    entry, which POSIX reads as the current directory.
     """
-    return dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    existing = os.environ.get("PATH", "")
+    path = f"{bin_dir}{os.pathsep}{existing}" if existing else str(bin_dir)
+    return dict(os.environ, PATH=path)
 
 
 def run_block(
