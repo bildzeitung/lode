@@ -40,13 +40,13 @@ docstring for the reasoning (lode-863q, ratified by lode-ea5b).
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import textwrap
 from pathlib import Path
 
 import pytest
+from conftest import fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "epic-completion-check.sh"
@@ -118,7 +118,7 @@ def _run(
     )
     return subprocess.run(
         ["bash", str(SCRIPT), id_],
-        env={**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+        env=fake_bin_env(bin_dir),
         capture_output=True,
         text=True,
         timeout=30,

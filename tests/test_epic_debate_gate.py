@@ -18,13 +18,13 @@ dependency-array / label logic is what's under test, not bd itself.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import textwrap
 from pathlib import Path
 
 import pytest
+from conftest import fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "epic-debate-gate.sh"
@@ -87,7 +87,7 @@ def _run(
     bin_dir = _fake_bd(tmp_path, fixtures)
     return subprocess.run(
         ["bash", str(SCRIPT), id_],
-        env={**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+        env=fake_bin_env(bin_dir),
         capture_output=True,
         text=True,
         timeout=30,

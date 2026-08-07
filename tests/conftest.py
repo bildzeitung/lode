@@ -1542,7 +1542,7 @@ def fake_bin_env(bin_dir: Path) -> dict[str, str]:
     ``PATH`` gaining ``bin_dir`` at the front. Callers needing further keys
     overlay them on the result, as :func:`run_block` does with ``TMPDIR``.
     """
-    return dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    return dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
 
 
 def run_block(

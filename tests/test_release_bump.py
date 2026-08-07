@@ -29,13 +29,13 @@ tests/test_merge_precheck.py for the same house style).
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 from _gitrepo import _git
+from conftest import fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "release-bump.sh"
@@ -72,7 +72,7 @@ def _run(
     every other tool the script needs (git, mktemp) still resolves normally."""
     env = None
     if bin_dir is not None:
-        env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+        env = fake_bin_env(bin_dir)
     return subprocess.run(
         ["bash", str(SCRIPT), range_],
         cwd=repo,
