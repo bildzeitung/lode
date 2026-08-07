@@ -84,13 +84,12 @@ No writes; this module only reads.
 
 from __future__ import annotations
 
-import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from lode.display import classify_annotation_display, display_annotations, display_edges
+from lode.display import display_annotations, display_edges
 from lode.storage import init_db
 
 #: The three enrichment states an :class:`EnrichmentView` can report --
@@ -242,40 +241,55 @@ def _inherited_tag_items(
     external row qualify; a note->note edge must never make one note inherit
     the other's tags (``notes_read``'s own regression test for that case).
 
-    Each qualifying row is passed back through
-    :func:`~lode.display.classify_annotation_display`, the *same* policy
-    :func:`~lode.display.display_annotations` already applies to note-scoped
-    rows -- a tombstoned (``source='user', status='orphaned'``) inherited tag
-    is dropped, and a non-fresh one is flagged ``stale``, exactly like a
-    directly-scoped tag. ``direct_values`` is the set of tag values already
-    surfaced directly on the note (:func:`_annotation_items`); a value
-    already shown directly is not repeated here as an inherited duplicate --
-    the note's own tag wins and stays a single, unambiguous entry. Ties
-    across multiple qualifying rows for the same value are broken toward the
-    non-stale (or -- failing that -- most recently inserted) row via
-    ``ORDER BY (status != 'fresh'), id DESC``, so a stale duplicate never
-    shadows a fresher one for the same tag.
+    SQL resolves only *which externals* this note inherits from; the tag rows
+    themselves then go through :func:`~lode.display.display_annotations` +
+    :func:`_annotation_items` -- the exact pair a note's own directly-scoped
+    tags already use, just pointed at an external's id instead of the note's
+    (``annotations.target`` is polymorphic, so the same read serves both).
+    That keeps this module's "**Content** is built ENTIRELY on
+    :mod:`lode.display`" contract intact: the stale/tombstone policy and the
+    payload decoding stay in exactly one place, so a tombstoned
+    (``source='user', status='orphaned'``) inherited tag is dropped and a
+    non-fresh one is flagged ``stale`` because that is what the shared seam
+    does, not because this function re-derives it.
+
+    Deliberately NOT reusing ``enrichment_view_conn``'s already-built
+    ``view_edges``, which looks like the same set: :func:`_external_view`
+    additionally joins ``snapshots`` on ``head_snapshot_id`` and returns
+    ``None`` when that snapshot is missing, so filtering on it would make the
+    inspector STRICTER than the Tags-screen filter -- reintroducing this
+    ticket's own asymmetry (a note matched on a tag it then doesn't show) for
+    an external drawn down but not yet fetched. The predicate here is
+    character-for-character ``notes_read``'s, and must stay that way.
+
+    ``direct_values`` is the set of tag values already surfaced directly on
+    the note (:func:`_annotation_items`); a value already shown directly is
+    not repeated here as an inherited duplicate -- the note's own tag wins
+    and stays a single, unambiguous entry. Where several *externals* carry
+    the same tag value, the non-stale one wins (the ``sorted`` on ``stale``
+    is stable, so equally-stale ties keep edge/insertion order).
     """
-    rows = conn.execute(
-        "SELECT a.id, a.payload, a.source, a.status "
-        "FROM annotations a "
-        "JOIN edges e ON e.to_id = a.target "
-        "JOIN externals x ON x.external_id = e.to_id "
-        "WHERE e.from_id = ? AND e.status = 'fresh' AND a.kind = 'tag' "
-        "ORDER BY (a.status != 'fresh'), a.id DESC",
-        (note_id,),
-    ).fetchall()
+    external_ids = [
+        row[0]
+        for row in conn.execute(
+            "SELECT e.to_id FROM edges e "
+            "JOIN externals x ON x.external_id = e.to_id "
+            "WHERE e.from_id = ? AND e.status = 'fresh'",
+            (note_id,),
+        )
+    ]
+    candidates = [
+        item
+        for external_id in external_ids
+        for item in _annotation_items(display_annotations(conn, external_id), "tag")
+    ]
     items: list[EnrichmentItem] = []
     seen = set(direct_values)
-    for _row_id, payload_json, source, status in rows:
-        decision = classify_annotation_display("tag", source, status)
-        if not decision.visible:
+    for item in sorted(candidates, key=lambda candidate: candidate.stale):
+        if item.value in seen:
             continue
-        value = str(json.loads(payload_json))
-        if value in seen:
-            continue
-        seen.add(value)
-        items.append(EnrichmentItem(value=value, stale=decision.stale, inherited=True))
+        seen.add(item.value)
+        items.append(replace(item, inherited=True))
     return items
 
 

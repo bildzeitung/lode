@@ -800,6 +800,60 @@ def test_inherited_tag_requires_a_fresh_edge_not_a_stale_or_orphaned_one(
     assert view.tags == []
 
 
+def test_a_tombstoned_external_tag_is_not_inherited(
+    conn: sqlite3.Connection,
+) -> None:
+    """A curation tombstone (``source='user', status='orphaned'``) on an
+    external-scoped tag suppresses it here exactly as it does for a
+    directly-scoped one -- inherited tags go through the SAME
+    :func:`lode.display.display_annotations` seam, so the tombstone policy is
+    not something this path can drift on. Pins the containment claim: a tag
+    the user curated away must not reappear on a note by inheritance."""
+    _insert_note(conn)
+    _insert_external(conn, external_id="https://example.com/article")
+    _insert_edge(
+        conn, from_id="note-1", to_id="https://example.com/article", status="fresh"
+    )
+    _insert_annotation(
+        conn,
+        target="https://example.com/article",
+        kind="tag",
+        payload_value="curated-away",
+        source="user",
+        status="orphaned",
+    )
+
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    assert view.tags == []
+
+
+def test_a_fresh_external_tag_wins_over_a_stale_one_of_the_same_value(
+    conn: sqlite3.Connection,
+) -> None:
+    """Two linked externals carrying the same tag value, one fresh and one
+    stale, yield ONE entry flagged fresh -- a stale duplicate never shadows a
+    fresher one, and the value is never listed twice."""
+    _insert_note(conn)
+    for external_id, snapshot_id, status in (
+        ("https://example.com/stale-one", "snap-stale", "stale"),
+        ("https://example.com/fresh-one", "snap-fresh", "fresh"),
+    ):
+        _insert_external(conn, external_id=external_id, snapshot_id=snapshot_id)
+        _insert_edge(conn, from_id="note-1", to_id=external_id, status="fresh")
+        _insert_annotation(
+            conn, target=external_id, kind="tag", payload_value="shared", status=status
+        )
+
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    assert view.tags == [
+        EnrichmentItem(value="shared", stale=False, inherited=True),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------

@@ -1029,8 +1029,8 @@ def _render_item(item: EnrichmentItem) -> str:
     (lode-0qc, lode-f0m1); this is where the CLI's own bracket-suffix
     convention gets applied -- the TUI modal (lode-ay5.2) is free to style
     the same bits differently. ``inherited`` prints before ``stale`` when
-    both apply, matching the order the two concepts are introduced in the
-    module's own docstrings.
+    both apply -- an arbitrary but fixed order, so the suffix is stable
+    enough to grep for.
     """
     suffixes = []
     if item.inherited:
