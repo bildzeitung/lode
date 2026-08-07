@@ -185,6 +185,27 @@ calls ``_reload_rows`` too, but *after* setting/clearing
 ``_expanded_note_id`` -- that reload is what renders the just-toggled state,
 not a reset.
 
+**BM25 quick search (lode-35nu.6).** ``s`` opens a *second*, distinct
+one-line ``Input`` (:data:`QUICK_SEARCH_INPUT_ID`) at the bottom of the
+screen -- separate from ``/``/``?``'s progressive-scan box above, which
+highlights within the already-loaded rows rather than changing which rows
+are loaded. This one instead *narrows* the table in place: every keystroke
+re-runs :func:`~lode.notes_read.search_notes` -- offline, model-free BM25
+over the existing ``passages_fts`` FTS5 index (no embedder, no network,
+never touches the Ask path) -- and :meth:`BrowseScreen._reload_rows` renders
+whatever it returns, relevance-ordered, instead of the full live-note list.
+Clearing the box (backspacing to empty) is what restores the full list --
+:meth:`BrowseScreen._current_rows` branches on an empty
+:attr:`_quick_search_query`, not a separate "restore" action. Closing the box
+(``Escape`` or Enter)
+mirrors ``/``'s "keep the current selection" contract (:meth:`_close_search`)
+rather than reverting the filter; reopening it always starts blank, the same
+way ``/`` always starts its own box blank. See :func:`~lode.notes_read.search_notes`'s
+own docstring for what scopes the search to live *notes* only (excluding
+externals' own passages in the same FTS5 table) and its one documented
+coverage gap (notes saved before the lexical leg landed, or before any
+lexical reindex -- no such command exists yet).
+
 **Search box stays on-screen with a long list (lode-juz8.2).** Before this,
 the table had no height constraint from ``lode.tcss``, leaving it on
 ``DataTable``'s own ``DEFAULT_CSS`` of ``height: auto; max-height: 100%``.
@@ -234,7 +255,7 @@ from textual.screen import Screen
 from textual.widgets import Header, Input
 from textual.widgets.data_table import RowDoesNotExist
 
-from lode.notes_read import list_notes, short_note_id
+from lode.notes_read import NoteRow, list_notes, search_notes, short_note_id
 from lode.tui.dates import format_adaptive_date
 from lode.tui.screens._browse_render import (
     _SUMMARY_ROW_HEIGHT,
@@ -255,6 +276,11 @@ TABLE_ID = "browse-table"
 #: The progressive-search one-line input's widget id (lode-olmi.4) -- read
 #: back in tests.
 SEARCH_INPUT_ID = "browse-search-input"
+#: The BM25 quick-search one-line input's widget id (lode-35nu.6) -- read
+#: back in tests. Distinct from :data:`SEARCH_INPUT_ID`: that box scans/
+#: highlights within the already-loaded rows (lode-olmi.4); this one narrows
+#: which rows are loaded at all, via the FTS5 index.
+QUICK_SEARCH_INPUT_ID = "browse-quick-search-input"
 
 #: Left+right cell padding a ``DataTable`` adds *per column* -- used to work out
 #: how much horizontal room the Summary column may claim without pushing the
@@ -268,14 +294,15 @@ _MIN_SUMMARY_WIDTH = 10
 class BrowseScreen(Screen[None]):
     """Id | Date | Version | Summary, newest-first, over every live note."""
 
-    # All 7 of these plus the 4 App-level bindings (LodeApp.BINDINGS) render
+    # All of these plus the 4 App-level bindings (LodeApp.BINDINGS) render
     # in one footer line via the shared LodeFooter (lode-uczx) -- every
     # binding stays visible, none hidden via show=False (ruled out on
     # lode-l38d.3: the footer is the only surface these keys are
     # discoverable on). Labels restored to full words (lode-uczx): the
     # 80-column bound that forced "Insp"/"Del"/"Exp" is superseded -- lode's
     # minimum supported terminal width is 100 columns (docs/tui.md) -- and
-    # the full words fit comfortably within it.
+    # the full words fit comfortably within it. "Search" (lode-35nu.6) is the
+    # BM25 quick search, distinct from "Find" ('/', lode-olmi.4's summary scan).
     BINDINGS: ClassVar = [
         Binding("escape", "dismiss_screen", "Back"),
         Binding("i", "inspect_selected", "Inspect"),
@@ -284,6 +311,7 @@ class BrowseScreen(Screen[None]):
         Binding("x", "toggle_summary", "Expand"),
         Binding("slash", "search_forward", "Find"),
         Binding("question_mark", "search_backward", "Up"),
+        Binding("s", "quick_search", "Search"),
     ]
 
     def __init__(self) -> None:
@@ -303,11 +331,23 @@ class BrowseScreen(Screen[None]):
         #: their own reload, so expansion does not survive tabbing away or a
         #: resize (see the module docstring's lode-juz8.4 section).
         self._expanded_note_id: str | None = None
+        #: The BM25 quick-search box's current text (lode-35nu.6) -- "" means
+        #: no filter (the full live-note list). Read by :meth:`_current_rows`
+        #: on every reload, so it persists across a resize/screen-resume the
+        #: same way the table's own content would; only becomes "" again by
+        #: the user clearing the box (or reopening it, which always starts
+        #: blank -- see :meth:`_open_quick_search`).
+        self._quick_search_query = ""
+        #: Whether the quick-search box is currently open -- read by
+        #: :meth:`action_dismiss_screen` the same way :attr:`_search_open` is,
+        #: so Escape closes whichever of the two boxes is open.
+        self._quick_search_open = False
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield LodeDataTable(id=TABLE_ID, cursor_type="row")
         yield Input(id=SEARCH_INPUT_ID, placeholder="Search summaries...")
+        yield Input(id=QUICK_SEARCH_INPUT_ID, placeholder="Quick search notes...")
         yield LodeFooter()
 
     def on_mount(self) -> None:
@@ -317,8 +357,9 @@ class BrowseScreen(Screen[None]):
         self.query_one(f"#{TABLE_ID}", LodeDataTable).focus()
         # Closed by default (lode-olmi.4) -- display=False claims no vertical
         # space, so the "one-line input box at the bottom" only appears once
-        # '/' or '?' is pressed.
+        # '/' or '?' is pressed. Same for the quick-search box (lode-35nu.6).
         self.query_one(f"#{SEARCH_INPUT_ID}", Input).display = False
+        self.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input).display = False
 
     def on_resize(self, event: events.Resize) -> None:
         """Rebuild on resize so the wrapped Summary column re-fills the new width.
@@ -355,6 +396,20 @@ class BrowseScreen(Screen[None]):
         """
         self._expanded_note_id = None
         self._reload_rows()
+
+    def _current_rows(self) -> list[NoteRow]:
+        """The rows :meth:`_reload_rows` should render right now (lode-35nu.6).
+
+        An empty :attr:`_quick_search_query` (the default, and what a cleared
+        quick-search box leaves it as) is every live note, same as before this
+        ticket. A non-empty query instead narrows to :func:`search_notes`'
+        BM25-ranked, relevance-ordered matches -- "clearing it restores the
+        full list" (acceptance criteria) falls out of this branch, not a
+        separate restore path.
+        """
+        if self._quick_search_query:
+            return search_notes(self.app.db_path, self._quick_search_query)
+        return list_notes(self.app.db_path)
 
     def _reload_rows(self) -> None:
         """Rebuild the whole table so the Summary column wraps instead of scrolling.
@@ -404,7 +459,7 @@ class BrowseScreen(Screen[None]):
             selected_note_id = table.coordinate_to_cell_key(
                 table.cursor_coordinate
             ).row_key.value
-        rows = list_notes(self.app.db_path)
+        rows = self._current_rows()
         table.clear(columns=True)
 
         # Id/Date/Version keep their natural widths -- the same max(header,
@@ -568,16 +623,19 @@ class BrowseScreen(Screen[None]):
         search_input.focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        """Every keystroke re-scans from the cursor's current row (lode-olmi.4)."""
-        if event.input.id != SEARCH_INPUT_ID:
-            return
-        self._seek_match(event.value)
+        """Every keystroke re-scans (lode-olmi.4) or re-narrows (lode-35nu.6)."""
+        if event.input.id == SEARCH_INPUT_ID:
+            self._seek_match(event.value)
+        elif event.input.id == QUICK_SEARCH_INPUT_ID:
+            self._quick_search_query = event.value
+            self._reload_rows()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Enter: confirm and close the box, keeping wherever the search landed."""
-        if event.input.id != SEARCH_INPUT_ID:
-            return
-        self._close_search()
+        """Enter: confirm and close whichever box is open, keeping its result."""
+        if event.input.id == SEARCH_INPUT_ID:
+            self._close_search()
+        elif event.input.id == QUICK_SEARCH_INPUT_ID:
+            self._close_quick_search()
 
     def _seek_match(self, query: str) -> None:
         """Move the cursor to the closest row (in ``_search_direction``) whose
@@ -612,14 +670,53 @@ class BrowseScreen(Screen[None]):
         self._search_open = False
         self.query_one(f"#{TABLE_ID}", LodeDataTable).focus()
 
+    def action_quick_search(self) -> None:
+        """``s``: open the BM25 quick-search box (lode-35nu.6).
+
+        Offline, model-free -- no summarization, no network; narrows the
+        visible list in place via the existing FTS5 ``passages_fts`` index
+        rather than scanning/highlighting the already-loaded rows the way
+        ``/``'s progressive search does. Available from Browse only.
+        """
+        self._open_quick_search()
+
+    def _open_quick_search(self) -> None:
+        self._quick_search_open = True
+        quick_search_input = self.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
+        # Always starts blank (mirrors _open_search) -- setting .value fires
+        # Input.Changed, which clears any previous filter via
+        # on_input_changed -> _current_rows, so reopening the box always
+        # starts from the full list again rather than resuming a stale one.
+        quick_search_input.value = ""
+        quick_search_input.display = True
+        quick_search_input.focus()
+
+    def _close_quick_search(self) -> None:
+        """Hide the box; the narrowed table (if any) stays as-is (lode-35nu.6).
+
+        Mirrors :meth:`_close_search`'s "keep the current selection" contract
+        -- closing the box is not a revert-on-cancel. Clearing the query text
+        (backspacing to empty), not closing the box, is what restores the
+        full list (acceptance criteria); :meth:`_current_rows` already
+        handles that branch on every keystroke.
+        """
+        quick_search_input = self.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
+        quick_search_input.display = False
+        self._quick_search_open = False
+        self.query_one(f"#{TABLE_ID}", LodeDataTable).focus()
+
     def action_dismiss_screen(self) -> None:
         """Escape: close an open search box first, else pop back to capture.
 
-        The same key means two different things depending on whether the
-        search box is open (lode-olmi.4) -- closing it keeps the current
-        selection rather than popping the whole screen out from under it.
+        The same key means three different things depending on which (if
+        any) search box is open (lode-olmi.4, lode-35nu.6) -- closing one
+        keeps its current result rather than popping the whole screen out
+        from under it.
         """
         if self._search_open:
             self._close_search()
+            return
+        if self._quick_search_open:
+            self._close_quick_search()
             return
         self.app.pop_screen()

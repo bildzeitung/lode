@@ -29,6 +29,7 @@ Two pieces:
   two-method seam as :class:`~lode.embedding.EmbeddingCacheBackend`.
 """
 
+import re
 import sqlite3
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -39,6 +40,33 @@ from lode.config import Settings
 #: The FTS5 virtual table holding one row per passage (``schema.sql``). Keyed for
 #: replacement by the UNINDEXED ``target_version`` column; ``text`` is indexed.
 _FTS_TABLE = "passages_fts"
+
+#: Alphanumeric word tokens only -- the same shape ``lode.eval.harness._fts_query``
+#: uses to sanitize a free-typed question into a safe FTS5 ``MATCH`` expression
+#: (that function is module-private and never does prefix matching, so it isn't
+#: imported here; this mirrors its tokenizer approach rather than reimplementing
+#: the *sanitization* idea from scratch).
+_WORD = re.compile(r"[0-9a-z]+")
+
+
+def build_prefix_match_query(text: str) -> str | None:
+    """Build a safe, prefix-matching FTS5 ``MATCH`` expression from free-typed text.
+
+    Stripping to ``[0-9a-z]+`` tokens is what makes the expression safe against
+    FTS5 syntax injection -- a typed ``-``, ``"`` or ``:`` never reaches the
+    ``MATCH`` parser (the same hazard ``lode.eval.harness._fts_query`` guards
+    against for a submitted question). Each token is suffixed ``*`` and the
+    tokens are ``OR``-ed, so a still-incomplete word (an as-you-type quick
+    search, lode-35nu.6) matches any passage containing a word that *starts*
+    with it, rather than requiring the token to already be a whole word the way
+    a bare FTS5 term does. Returns ``None`` when ``text`` has no usable token,
+    so the caller can skip the query (an empty/whitespace-only search box)
+    instead of issuing a ``MATCH`` against nothing.
+    """
+    tokens = _WORD.findall(text.lower())
+    if not tokens:
+        return None
+    return " OR ".join(f"{token}*" for token in tokens)
 
 
 @dataclass(frozen=True, slots=True)

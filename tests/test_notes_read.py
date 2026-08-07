@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from lode.lexical import LexicalCacheBackend
 from lode.notes_read import (
     candidate_rows_conn,
     list_deleted_notes,
@@ -20,6 +21,7 @@ from lode.notes_read import (
     list_notes_with_all_tags,
     list_tags,
     list_versions,
+    search_notes,
     short_note_id,
     version_body,
 )
@@ -757,3 +759,118 @@ def test_list_notes_with_all_tags_orders_newest_first(tmp_path: Path) -> None:
     rows = list_notes_with_all_tags(db_path, ["staging"])
 
     assert [row.note_id for row in rows] == ["note-2", "note-1"]
+
+
+# --- search_notes: BM25 quick search over live notes (lode-35nu.6) ------------
+
+
+def _seed_and_index(db_path: Path, note_id: str, body: str) -> str:
+    """Save a note AND drive its lexical (FTS5) index, mirroring the production
+    save path (``Repository`` + ``LexicalCacheBackend``) -- plain
+    :func:`lode.versions.save` alone never touches ``passages_fts``."""
+    conn = init_db(db_path)
+    try:
+        result = save(conn, note_id, body)
+        LexicalCacheBackend(conn).index(note_id, result.version_id, body)
+        return result.version_id
+    finally:
+        conn.close()
+
+
+def test_search_notes_finds_a_note_by_keyword(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_and_index(db_path, "note-1", "rotate the staging certificates nightly")
+    _seed_and_index(db_path, "note-2", "grocery list: eggs, milk, bread")
+
+    rows = search_notes(db_path, "certificates")
+
+    assert [row.note_id for row in rows] == ["note-1"]
+
+
+def test_search_notes_matches_a_still_incomplete_word_via_prefix(tmp_path: Path) -> None:
+    """Incremental typing: "cert" (word not yet finished) still matches "certificates"."""
+    db_path = tmp_path / "lode.db"
+    _seed_and_index(db_path, "note-1", "rotate the staging certificates nightly")
+
+    rows = search_notes(db_path, "cert")
+
+    assert [row.note_id for row in rows] == ["note-1"]
+
+
+def test_search_notes_orders_by_relevance_best_first(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_and_index(db_path, "note-weak", "widget mentioned once")
+    _seed_and_index(db_path, "note-strong", "widget widget widget widget")
+
+    rows = search_notes(db_path, "widget")
+
+    assert [row.note_id for row in rows] == ["note-strong", "note-weak"]
+
+
+def test_search_notes_empty_query_returns_no_rows(tmp_path: Path) -> None:
+    """The caller (BrowseScreen) branches to the full list on an empty query --
+    this function itself returns nothing for one, never "everything"."""
+    db_path = tmp_path / "lode.db"
+    _seed_and_index(db_path, "note-1", "some note body")
+
+    assert search_notes(db_path, "") == []
+    assert search_notes(db_path, '   "-:') == []  # no usable token either
+
+
+def test_search_notes_excludes_a_soft_deleted_note(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    version_id = _seed_and_index(db_path, "note-1", "widget rotation runbook")
+    conn = init_db(db_path)
+    try:
+        delete(conn, "note-1", parent=version_id)
+    finally:
+        conn.close()
+
+    assert search_notes(db_path, "widget") == []
+
+
+def test_search_notes_excludes_stale_prior_head_content(tmp_path: Path) -> None:
+    """An edited note's superseded body must not still surface via quick search."""
+    db_path = tmp_path / "lode.db"
+    root = _seed_and_index(db_path, "note-1", "original gadget text")
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-1", "replacement text", parent=root)
+        LexicalCacheBackend(conn).index("note-1", result.version_id, "replacement text")
+    finally:
+        conn.close()
+
+    assert search_notes(db_path, "gadget") == []
+    assert [row.note_id for row in search_notes(db_path, "replacement")] == ["note-1"]
+
+
+def test_search_notes_excludes_external_snapshot_passages(tmp_path: Path) -> None:
+    """passages_fts also carries externals' own passages (lode.externals) -- an
+    unfiltered scope would surface those with no owning note (/challenge gap 1)."""
+    from lode.externals import ingest_snapshot
+
+    db_path = tmp_path / "lode.db"
+    _seed_and_index(db_path, "note-1", "a note about widgets")
+    conn = init_db(db_path)
+    try:
+        ingest_snapshot(
+            conn, "ext-1", "web", "widgets mentioned in an external page"
+        )
+    finally:
+        conn.close()
+
+    rows = search_notes(db_path, "widgets")
+
+    assert [row.note_id for row in rows] == ["note-1"]
+
+
+def test_search_notes_deduplicates_a_note_with_multiple_matching_passages(
+    tmp_path: Path,
+) -> None:
+    body = "# widget\n\nfirst widget section\n\n# gadget\n\nsecond widget section"
+    db_path = tmp_path / "lode.db"
+    _seed_and_index(db_path, "note-1", body)
+
+    rows = search_notes(db_path, "widget")
+
+    assert [row.note_id for row in rows] == ["note-1"]  # one row, not one per passage

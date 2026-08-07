@@ -15,7 +15,7 @@ import pytest
 
 from lode.chunking import chunk
 from lode.embedding import EmbeddingCacheBackend
-from lode.lexical import LexicalCacheBackend, LexicalIndex
+from lode.lexical import LexicalCacheBackend, LexicalIndex, build_prefix_match_query
 from lode.repository import CacheBackend, CompositeCache, Repository
 from lode.storage import init_db
 
@@ -275,3 +275,37 @@ def test_recover_redacts_seeded_secret_from_the_lexical_leg(conn) -> None:
         "SELECT body FROM versions WHERE version_id = ?", (root,)
     ).fetchone()
     assert secret in stored_body
+
+
+# --- build_prefix_match_query (lode-35nu.6) ------------------------------------
+
+
+def test_build_prefix_match_query_tokenizes_and_ors_with_prefix_stars() -> None:
+    assert build_prefix_match_query("staging cert") == "staging* OR cert*"
+
+
+def test_build_prefix_match_query_lowercases() -> None:
+    assert build_prefix_match_query("Staging CERT") == "staging* OR cert*"
+
+
+def test_build_prefix_match_query_strips_fts5_syntax_characters() -> None:
+    # A typed '"', '-', ':' etc. never reaches the MATCH parser -- only the
+    # alphanumeric word tokens survive.
+    assert build_prefix_match_query('foo" OR bar:baz-qux') == "foo* OR bar* OR baz* OR qux*"
+
+
+def test_build_prefix_match_query_returns_none_for_no_usable_token() -> None:
+    assert build_prefix_match_query("") is None
+    assert build_prefix_match_query('   "-:  ') is None
+
+
+def test_build_prefix_match_query_output_is_a_valid_fts5_match_expression(conn) -> None:
+    """The built query actually MATCHes a still-incomplete word, prefix-style."""
+    index = LexicalIndex(conn)
+    index.replace_passages("v1", chunk("the staging certificate rotation runbook", "v1"))
+
+    query = build_prefix_match_query("cert")  # "cert*" -- word not yet complete
+
+    assert query is not None
+    hits = index.search(query, k=5)
+    assert [h.target_version for h in hits] == ["v1"]

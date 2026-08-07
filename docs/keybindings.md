@@ -192,6 +192,7 @@ alphabet changed).
 | | | `x` | Expand/collapse summary | |
 | | | `slash` | Search forward | |
 | | | `question_mark` | Search backward | |
+| | | `s` | Quick search (BM25, narrows the list, `lode-35nu.6`) | distinct from `slash`'s scan-and-highlight |
 | `ExternalPickerScreen` | `screens/external_picker.py` | `escape` | Back | — (DataTable) |
 | `TagsScreen` | `screens/tags.py` | `escape` | Back | — (DataTable grid, `lode-l38d.9`) |
 | | | `space` | Toggle tag (`show=False`) | hand-rolled multi-select; `enter` (DataTable's own native binding) does the same. Hidden to match the `SelectionList` it replaced, whose own `space` binding was `show=False` too |

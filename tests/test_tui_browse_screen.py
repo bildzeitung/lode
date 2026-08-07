@@ -22,11 +22,17 @@ from textual.widgets._footer import FooterKey
 
 from lode.ids import short_version_id
 from lode.jobs import now_iso
+from lode.lexical import LexicalCacheBackend
 from lode.notes_read import short_note_id
 from lode.storage import init_db
 from lode.tui.app import LodeApp
 from lode.tui.dates import format_adaptive_date
-from lode.tui.screens.browse import SEARCH_INPUT_ID, TABLE_ID, BrowseScreen
+from lode.tui.screens.browse import (
+    QUICK_SEARCH_INPUT_ID,
+    SEARCH_INPUT_ID,
+    TABLE_ID,
+    BrowseScreen,
+)
 from lode.tui.screens.capture import CaptureScreen
 from lode.tui.screens.delete_confirm import (
     DELETE_CONFIRM_MESSAGE_ID,
@@ -1845,6 +1851,26 @@ def _seed_four_notes(db_path: Path) -> None:
         conn.close()
 
 
+def _seed_four_notes_indexed(db_path: Path) -> None:
+    """Same four notes as :func:`_seed_four_notes`, but also FTS5-indexed
+    (lode-35nu.6's quick search needs ``passages_fts`` populated -- plain
+    :func:`~lode.versions.save` alone, unlike ``Repository``, never drives
+    :class:`~lode.lexical.LexicalCacheBackend`)."""
+    conn = init_db(db_path)
+    try:
+        backend = LexicalCacheBackend(conn)
+        for note_id, body in (
+            ("note-alpha", "alpha widget"),
+            ("note-beta", "beta widget"),
+            ("note-gamma", "gamma widget"),
+            ("note-delta", "delta report"),
+        ):
+            result = save(conn, note_id, body)
+            backend.index(note_id, result.version_id, body)
+    finally:
+        conn.close()
+
+
 # _press_and_settle moved to tests/conftest.py (lode-lcju) -- see docs/tui.md's
 # "Settling TUI tests under load" section for the ruling + mechanism, and
 # tests/conftest.py's own docstring for the helper itself. In brief: this
@@ -2036,6 +2062,127 @@ def test_enter_confirms_and_closes_the_search_box(tmp_path: Path) -> None:
 
     assert not box_visible
     assert cursor_row == 1  # gamma widget, kept after Enter confirms
+
+
+# --- 's': BM25 quick search narrows the list (lode-35nu.6) --------------------
+
+
+def test_s_opens_a_hidden_quick_search_box_and_focuses_it(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes_indexed(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[bool, bool, bool]:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            quick_input = app.screen.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
+            closed_before = not quick_input.display
+            await pilot.press("s")
+            await pilot.pause()
+            open_after = quick_input.display
+            focused_after = app.focused is quick_input
+            return closed_before, open_after, focused_after
+
+    closed_before, open_after, focused_after = asyncio.run(_drive())
+
+    assert closed_before
+    assert open_after
+    assert focused_after
+
+
+def test_typing_in_quick_search_narrows_the_table_to_bm25_matches(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes_indexed(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> list[str]:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("s")
+            await _press_and_settle(pilot, *"report")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            return [
+                str(table.get_row_at(i)[0]) for i in range(table.row_count)
+            ]
+
+    id_cells = asyncio.run(_drive())
+
+    assert id_cells == [short_note_id("note-delta")]  # only "delta report" matches
+
+
+def test_clearing_the_quick_search_box_restores_the_full_list(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes_indexed(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[int, int]:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("s")
+            await _press_and_settle(pilot, *"report")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            narrowed_count = table.row_count
+            quick_input = app.screen.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
+            quick_input.value = ""
+            await pilot.pause()
+            return narrowed_count, table.row_count
+
+    narrowed_count, restored_count = asyncio.run(_drive())
+
+    assert narrowed_count == 1
+    assert restored_count == 4
+
+
+def test_escape_closes_the_quick_search_box_but_keeps_the_narrowed_list(
+    tmp_path: Path,
+) -> None:
+    """Mirrors '/'s own contract (lode-olmi.4): closing the box is not a
+    revert-on-cancel -- only clearing the text (not closing the box) restores
+    the full list, per :func:`test_clearing_the_quick_search_box_restores_the_full_list`."""
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes_indexed(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[bool, bool, int]:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("s")
+            await _press_and_settle(pilot, *"report")
+            await pilot.press("escape")
+            await pilot.pause()
+            quick_input = app.screen.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            still_browsing = isinstance(app.screen, BrowseScreen)
+            return still_browsing, quick_input.display, table.row_count
+
+    still_browsing, box_visible, row_count = asyncio.run(_drive())
+
+    assert still_browsing  # Escape closed the box, not the whole screen
+    assert not box_visible
+    assert row_count == 1  # the narrowed result is kept
+
+
+def test_quick_search_never_touches_the_scan_search_box(tmp_path: Path) -> None:
+    """The two boxes are independent -- opening one leaves the other closed."""
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes_indexed(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> bool:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("s")
+            await pilot.pause()
+            search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
+            return search_input.display
+
+    scan_box_visible = asyncio.run(_drive())
+
+    assert not scan_box_visible
 
 
 def test_search_box_stays_on_screen_when_the_notes_list_overflows_the_viewport(
