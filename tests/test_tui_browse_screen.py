@@ -2103,9 +2103,7 @@ def test_typing_in_quick_search_narrows_the_table_to_bm25_matches(
             await pilot.press("s")
             await _press_and_settle(pilot, *"report")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
-            return [
-                str(table.get_row_at(i)[0]) for i in range(table.row_count)
-            ]
+            return [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
 
     id_cells = asyncio.run(_drive())
 
@@ -2974,8 +2972,10 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     # ...and it fits WITHOUT Textual collapsing the gutters to get there.
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 7 screen-level + 5 App-level bindings stay visible (none hidden via
-    # show=False) -- restored to full words at the new 100-column bound.
+    # All 8 screen-level + 5 App-level bindings stay visible (none hidden via
+    # show=False) -- restored to full words at the new 100-column bound
+    # (lode-35nu.6's own quick-search entry is the one exception -- see the
+    # inline comment on it below for why it's a single letter, not a word).
     assert descriptions == [
         "Back",
         "Inspect",
@@ -2984,6 +2984,8 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
         "Expand",
         "Find",
         "Up",
+        "S",  # BM25 quick search (lode-35nu.6) -- see BrowseScreen.BINDINGS'
+        # own comment for why this one stays a single letter
         "Quit",
         "Cfg",
         "Browse",

@@ -301,8 +301,13 @@ class BrowseScreen(Screen[None]):
     # discoverable on). Labels restored to full words (lode-uczx): the
     # 80-column bound that forced "Insp"/"Del"/"Exp" is superseded -- lode's
     # minimum supported terminal width is 100 columns (docs/tui.md) -- and
-    # the full words fit comfortably within it. "Search" (lode-35nu.6) is the
-    # BM25 quick search, distinct from "Find" ('/', lode-olmi.4's summary scan).
+    # the full words fit comfortably within it. "S" (bare `s`, lode-35nu.6) is
+    # the BM25 quick search, distinct from "Find" ('/', lode-olmi.4's summary
+    # scan) -- an 8th entry blew the 100-column budget at any label longer
+    # than one character (measured: "Qk" alone still triggered
+    # show_horizontal_scrollbar at exactly 100 consumed columns), so this one
+    # stays a single letter mirroring its own key, same terseness as "Up"/
+    # "Cfg" elsewhere in this same bar.
     BINDINGS: ClassVar = [
         Binding("escape", "dismiss_screen", "Back"),
         Binding("i", "inspect_selected", "Inspect"),
@@ -311,7 +316,7 @@ class BrowseScreen(Screen[None]):
         Binding("x", "toggle_summary", "Expand"),
         Binding("slash", "search_forward", "Find"),
         Binding("question_mark", "search_backward", "Up"),
-        Binding("s", "quick_search", "Search"),
+        Binding("s", "quick_search", "S"),
     ]
 
     def __init__(self) -> None:

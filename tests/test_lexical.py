@@ -289,9 +289,12 @@ def test_build_prefix_match_query_lowercases() -> None:
 
 
 def test_build_prefix_match_query_strips_fts5_syntax_characters() -> None:
-    # A typed '"', '-', ':' etc. never reaches the MATCH parser -- only the
-    # alphanumeric word tokens survive.
-    assert build_prefix_match_query('foo" OR bar:baz-qux') == "foo* OR bar* OR baz* OR qux*"
+    # A typed '"', ':', '-' etc. never reaches the MATCH parser -- only the
+    # alphanumeric word tokens survive (note: "or" is itself alphanumeric, so
+    # a literal typed "OR" becomes its own token, same as any other word).
+    assert (
+        build_prefix_match_query('foo" bar:baz-qux') == "foo* OR bar* OR baz* OR qux*"
+    )
 
 
 def test_build_prefix_match_query_returns_none_for_no_usable_token() -> None:
@@ -302,7 +305,9 @@ def test_build_prefix_match_query_returns_none_for_no_usable_token() -> None:
 def test_build_prefix_match_query_output_is_a_valid_fts5_match_expression(conn) -> None:
     """The built query actually MATCHes a still-incomplete word, prefix-style."""
     index = LexicalIndex(conn)
-    index.replace_passages("v1", chunk("the staging certificate rotation runbook", "v1"))
+    index.replace_passages(
+        "v1", chunk("the staging certificate rotation runbook", "v1")
+    )
 
     query = build_prefix_match_query("cert")  # "cert*" -- word not yet complete
 

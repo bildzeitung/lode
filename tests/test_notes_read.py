@@ -787,7 +787,9 @@ def test_search_notes_finds_a_note_by_keyword(tmp_path: Path) -> None:
     assert [row.note_id for row in rows] == ["note-1"]
 
 
-def test_search_notes_matches_a_still_incomplete_word_via_prefix(tmp_path: Path) -> None:
+def test_search_notes_matches_a_still_incomplete_word_via_prefix(
+    tmp_path: Path,
+) -> None:
     """Incremental typing: "cert" (word not yet finished) still matches "certificates"."""
     db_path = tmp_path / "lode.db"
     _seed_and_index(db_path, "note-1", "rotate the staging certificates nightly")
@@ -853,9 +855,7 @@ def test_search_notes_excludes_external_snapshot_passages(tmp_path: Path) -> Non
     _seed_and_index(db_path, "note-1", "a note about widgets")
     conn = init_db(db_path)
     try:
-        ingest_snapshot(
-            conn, "ext-1", "web", "widgets mentioned in an external page"
-        )
+        ingest_snapshot(conn, "ext-1", "web", "widgets mentioned in an external page")
     finally:
         conn.close()
 
