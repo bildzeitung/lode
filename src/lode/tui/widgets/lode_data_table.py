@@ -34,11 +34,31 @@ identical hazard for the CLI's ``rich.table.Table`` the same way -- coerce a
 bare ``str`` cell to ``Text`` inside ``add_row`` itself, once, so no call
 site can reintroduce it. ``LodeDataTable`` is that same fix for the TUI's
 ``DataTable`` side of the same bug class.
+
+**Empty state lives here too (lode-t7pw), not as a sentinel row.**
+``TagsScreen`` (lode-35nu.7) originally represented "zero results" as a real
+row (``key=None``, an explanatory ``Text`` cell) so a legitimately-empty
+AND/intersection filter didn't read as a silent bug. That works, but it has
+real costs: the cursor lands on and highlights a row that isn't data,
+``row_count`` reports 1 for a table with nothing in it (an idiom
+:mod:`lode.tui.screens.browse` already relies on for its own real emptiness
+check), and every future screen that wants the same "explain why this is
+blank" treatment would have to re-invent the ``key=None`` guard in its own
+``on_data_table_row_selected``. Setting :attr:`empty_message` instead paints
+the text directly into the table's own empty canvas -- no row is added, so
+``row_count`` stays ``0``, the cursor has nothing to land on, and no
+row-selected handler needs a sentinel guard. Screens that want no message at
+all (the common case: a table that's just plain empty, no explanation
+needed) simply never set it, and get exactly ``DataTable``'s stock blank
+render.
 """
 
 from __future__ import annotations
 
+from rich.segment import Segment
 from rich.text import Text
+from textual.reactive import reactive
+from textual.strip import Strip
 from textual.widgets import DataTable
 from textual.widgets.data_table import CellType, ColumnKey, RowKey
 
@@ -57,6 +77,40 @@ class LodeDataTable(DataTable):
     under ``src/lode/tui/screens/`` constructs this instead (enforced by
     ``tests/test_tui_widget_seam_guard.py``).
     """
+
+    #: Explanatory text painted into the table's canvas -- below the header,
+    #: where the first row would otherwise go -- whenever ``row_count`` is
+    #: 0. ``None`` (the default) renders nothing extra: a genuinely empty
+    #: table with no explanation needed (most screens, most of the time)
+    #: looks exactly like a stock ``DataTable``. Never shown while any real
+    #: row exists, no matter what it's set to.
+    empty_message: reactive[str | None] = reactive(None)
+
+    def render_line(self, y: int) -> Strip:
+        if self.empty_message is not None and self.row_count == 0:
+            header_height = self.header_height if self.show_header else 0
+            if y < header_height:
+                return super().render_line(y)
+            width = self.size.width
+            if y == header_height:
+                return self._empty_message_strip(self.empty_message, width)
+            return Strip.blank(width, self.rich_style)
+        return super().render_line(y)
+
+    def _empty_message_strip(self, message: str, width: int) -> Strip:
+        """The centered *message* line, cropped then padded to exactly *width*.
+
+        The crop is not optional: ``Strip.text_align`` pads a short line but
+        does **not** truncate a long one -- for a message wider than the
+        table it returns a Strip that *claims* ``cell_length == width`` while
+        still carrying every over-wide segment, and ``render_line``'s
+        contract is a Strip of exactly the requested width. Cropping first
+        (on the accurate pre-align ``cell_length``) keeps a long message in a
+        narrow terminal from bleeding across the rest of the line; ``crop``
+        is a no-op for a message that already fits.
+        """
+        strip = Strip([Segment(message, self.rich_style)]).crop(0, width)
+        return strip.text_align(width, "center")
 
     def add_row(
         self,

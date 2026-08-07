@@ -35,6 +35,7 @@ from lode.tui.app import LodeApp
 from lode.tui.screens.capture import CaptureScreen
 from lode.tui.screens.edit import EDIT_BODY_ID, EditScreen
 from lode.tui.screens.tags import NOTES_TABLE_ID, TAG_LIST_ID, TagsScreen
+from lode.tui.widgets.lode_data_table import LodeDataTable
 from lode.versions import save
 
 #: A narrow terminal forces the tag grid to a single column regardless of
@@ -152,9 +153,11 @@ def test_selecting_a_tag_narrows_notes_by_and_semantics(tmp_path: Path) -> None:
 def test_and_intersection_empty_result_shows_an_explanatory_message(
     tmp_path: Path,
 ) -> None:
-    """lode-35nu.7: two tags that legitimately never co-occur is a correct,
-    non-buggy outcome of AND/intersection -- the empty table now explains
-    that instead of just going blank."""
+    """lode-35nu.7 / lode-t7pw: two tags that legitimately never co-occur is
+    a correct, non-buggy outcome of AND/intersection -- the empty table now
+    explains that via ``LodeDataTable.empty_message`` instead of a sentinel
+    row, so ``row_count`` stays a true 0 (no fake row for the cursor to land
+    on or for ``on_data_table_row_selected`` to guard against)."""
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -166,7 +169,7 @@ def test_and_intersection_empty_result_shows_an_explanatory_message(
     _write_tag(db_path, "note-b", head_b, "staging")
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> list[str]:
+    async def _drive() -> tuple[int, str | None]:
         async with app.run_test(size=_NARROW) as pilot:
             await pilot.press("ctrl+t")
             await pilot.pause()
@@ -174,12 +177,13 @@ def test_and_intersection_empty_result_shows_an_explanatory_message(
             await pilot.press("down")
             await pilot.press("space")  # select "staging" too -- no overlap
             await pilot.pause()
-            table = app.screen.query_one(f"#{NOTES_TABLE_ID}", DataTable)
-            return [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
+            table = app.screen.query_one(f"#{NOTES_TABLE_ID}", LodeDataTable)
+            return table.row_count, table.empty_message
 
-    summaries = asyncio.run(_drive())
+    row_count, empty_message = asyncio.run(_drive())
 
-    assert summaries == ["No notes carry every selected tag together."]
+    assert row_count == 0
+    assert empty_message == "No notes carry every selected tag together."
 
 
 def test_deselecting_a_tag_widens_the_filter_again(tmp_path: Path) -> None:
