@@ -111,7 +111,10 @@ log = logging.getLogger(__name__)
 
 #: Scan step signature: receives an open SQLite connection and the resolved
 #: runtime :class:`~lode.config.Settings`; returns the count of gap versions
-#: found (each triggers a targeted ``enqueue_derive_jobs`` call). Steps run
+#: found and **handled** — for most steps that means a targeted
+#: ``enqueue_derive_jobs`` call each, but ``lexical_gap`` (lode-cyly) heals its
+#: gaps inline instead, so the total is "gaps dealt with", not "jobs queued";
+#: nothing may read it as queue depth. Steps run
 #: within no outer transaction of their own — each step opens ``with conn:``
 #: for the batch enqueue internally.
 #:
@@ -183,7 +186,7 @@ def reconcile(
         ):
             count = step_fn(conn, settings)
         if count:
-            log.info("reconcile[%s]: %d gap version(s) enqueued", name, count)
+            log.info("reconcile[%s]: %d gap version(s) handled", name, count)
         total += count
     return total
 
@@ -487,30 +490,49 @@ register_step("refresh_stale", _refresh_stale_step)
 # ---------------------------------------------------------------------------
 
 
+#: The lexical-gap predicate — the ONE definition of "live NOTE head with no
+#: ``passages_fts`` rows" (lode-cyly). Both readers below interpolate their own
+#: select list in front of it, so the healer (:func:`_lexical_gap_step`) and
+#: ``lode status``'s hint (``lode.cli._lexical_gap_count``) cannot disagree
+#: about what a gap *is* — mirroring :func:`_stale_enrichment_heads`'s "status
+#: says clean and the healer has work are structurally the same read" pattern.
+#: Scope/filter rationale lives on :func:`_lexical_gap_step`.
+_LEXICAL_GAP_FROM = """
+    FROM notes n
+    JOIN versions v ON v.version_id = n.head_version_id
+    WHERE n.head_version_id IS NOT NULL
+      AND v.op != 'delete'
+      AND v.purged_at IS NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM passages_fts f
+          WHERE f.target_version = n.head_version_id
+      )
+"""
+
+
 def lexical_gap_heads(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:
     """Live NOTE heads with zero ``passages_fts`` rows: ``(note_id, version_id, body)``.
 
-    Extracted so :func:`_lexical_gap_step` and ``lode status``'s lexical-gap
-    hint (``lode.cli._lexical_gap_count``, lode-cyly) read the identical
-    query -- mirroring :func:`_stale_enrichment_heads`'s "status says clean
-    and the healer has work cannot disagree because they are, structurally,
-    the same read" pattern. See :func:`_lexical_gap_step` for the full gap
-    signal writeup (scope, filters, idempotency).
+    The healer's read — it needs each body to re-index. A caller that only
+    needs "how many" must use :func:`lexical_gap_count` instead, which shares
+    :data:`_LEXICAL_GAP_FROM` but never materializes a body.
     """
     return conn.execute(
-        """
-        SELECT n.note_id, n.head_version_id, v.body
-        FROM notes n
-        JOIN versions v ON v.version_id = n.head_version_id
-        WHERE n.head_version_id IS NOT NULL
-          AND v.op != 'delete'
-          AND v.purged_at IS NULL
-          AND NOT EXISTS (
-              SELECT 1 FROM passages_fts f
-              WHERE f.target_version = n.head_version_id
-          )
-        """
+        "SELECT n.note_id, n.head_version_id, v.body" + _LEXICAL_GAP_FROM
     ).fetchall()
+
+
+def lexical_gap_count(conn: sqlite3.Connection) -> int:
+    """How many live NOTE heads currently have no ``passages_fts`` rows.
+
+    Same predicate as :func:`lexical_gap_heads` (:data:`_LEXICAL_GAP_FROM`),
+    so ``lode status``'s hint can never disagree with what the next
+    ``lexical_gap`` reconcile pass will heal — but counted in SQLite rather
+    than by reading every gap head's body into Python, which on the very
+    corpus this hint exists for (a whole DB predating the lexical leg) is the
+    entire note text, per ``lode status`` invocation.
+    """
+    return conn.execute("SELECT COUNT(*)" + _LEXICAL_GAP_FROM).fetchone()[0]
 
 
 def _lexical_gap_step(
@@ -552,9 +574,17 @@ def _lexical_gap_step(
     the body (deterministic, content-addressed passage ids) and
     :meth:`~lode.lexical.LexicalIndex.replace_passages` deletes-then-inserts
     per ``target_version`` -- so a head already indexed is never re-flagged
-    (the ``NOT EXISTS`` guard fails once any row exists), and a genuinely
-    empty-body head (chunks to zero passages) simply stays a same-count
-    no-op each scan rather than accumulating anything.
+    (the ``NOT EXISTS`` guard fails once any row exists).
+
+    **One head shape never converges:** a body that chunks to zero passages
+    writes no FTS row, so it is re-counted (and re-"healed", writing nothing)
+    on every scan, and ``lode status``'s hint for it never clears. Left
+    unguarded deliberately: every write path refuses an empty/whitespace-only
+    body (``lode add``, :func:`lode.tui.services.capture.save_capture`,
+    :func:`lode.tui.services.edit.save_edit`), so such a head is not
+    reachable through the product — only by hand-inserted rows. Suppressing
+    it would mean chunking every gap body inside the *status probe*, which is
+    a much larger cost than the case is worth.
 
     Returns the count of gap heads found and healed.
     """

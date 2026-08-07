@@ -88,7 +88,7 @@ from lode.notes_read import (
     list_notes,
     list_notes_conn,
 )
-from lode.reconcile import lexical_gap_heads
+from lode.reconcile import lexical_gap_count
 from lode.repository import AmbiguousNoteIdError, CompositeCache, Repository
 from lode.storage import init_db
 from lode.timestamps import parse_stamp
@@ -1521,8 +1521,8 @@ def _enrichment_model_stale(
 def _lexical_gap_count(db: Path | None) -> int:
     """Count of live note heads with zero ``passages_fts`` rows right now (lode-cyly).
 
-    Reads :func:`lode.reconcile.lexical_gap_heads` -- the identical query the
-    ``lexical_gap`` reconcile step heals from -- so this count can never
+    Reads :func:`lode.reconcile.lexical_gap_count` -- the identical predicate
+    the ``lexical_gap`` reconcile step heals from -- so this count can never
     disagree with what the next reconcile pass (worker startup, or the start
     of any ``--loop``/``--wait`` drain tick) is about to fix. It is a plain
     read only: unlike the reconcile step itself, this probe never calls
@@ -1541,7 +1541,7 @@ def _lexical_gap_count(db: Path | None) -> int:
     try:
         conn = _open_db(db)
         try:
-            return len(lexical_gap_heads(conn))
+            return lexical_gap_count(conn)
         finally:
             conn.close()
     except Exception:

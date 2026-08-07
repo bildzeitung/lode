@@ -35,6 +35,7 @@ from lode.reconcile import (
     _embed_gap_step,
     _lexical_gap_step,
     _refresh_stale_step,
+    lexical_gap_count,
     lexical_gap_heads,
     reconcile,
 )
@@ -919,15 +920,6 @@ def test_lexical_gap_heals_a_head_with_no_fts_rows(conn: sqlite3.Connection) -> 
     assert _all_jobs_for_version(conn, "ver-1") == []
 
 
-def test_lexical_gap_no_gap_when_fts_rows_already_present(
-    conn: sqlite3.Connection,
-) -> None:
-    """A head already indexed is not re-flagged."""
-    _insert_note_with_version(conn, "note-1", "ver-1")
-    _lexical_gap_step(conn, Settings())
-    assert _lexical_gap_step(conn, Settings()) == 0
-
-
 def test_lexical_gap_excludes_soft_deleted_head(conn: sqlite3.Connection) -> None:
     _insert_note_with_version(conn, "note-1", "ver-1", op="delete")
     assert lexical_gap_heads(conn) == []
@@ -984,3 +976,20 @@ def test_lexical_gap_heads_reads_the_same_query_the_step_heals(
 
     _lexical_gap_step(conn, Settings())
     assert lexical_gap_heads(conn) == []
+
+
+def test_lexical_gap_count_tracks_the_heads_query(conn: sqlite3.Connection) -> None:
+    """The status probe's count and the healer's rows share one predicate (lode-cyly).
+
+    Pinned as a property, not a literal: the count exists only so `lode status`
+    need not read every gap body, and it must stay exactly len(heads) across a
+    gap, a soft-deleted head (excluded), and a healed head.
+    """
+    assert lexical_gap_count(conn) == len(lexical_gap_heads(conn)) == 0
+
+    _insert_note_with_version(conn, "note-1", "ver-1")
+    _insert_note_with_version(conn, "note-2", "ver-2", op="delete")
+    assert lexical_gap_count(conn) == len(lexical_gap_heads(conn)) == 1
+
+    _lexical_gap_step(conn, Settings())
+    assert lexical_gap_count(conn) == len(lexical_gap_heads(conn)) == 0
