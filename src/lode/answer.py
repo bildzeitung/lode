@@ -66,9 +66,13 @@ class Support(BaseModel):
     matched, in which case renderers fall back to the first occurrence.
 
     It rides on this model rather than a parallel app-side type because
-    ``Support`` is what every consumer already threads through -- the cost is
-    that it does appear in the structured-output schema (``qa._ClaimsEnvelope``),
-    hence the terse ``description`` the model actually sees.
+    ``Support`` is what every consumer already threads through. It does NOT
+    appear in the JSON schema handed to the LLM provider: ``qa._ClaimsEnvelope``
+    sends a request-side mirror (``qa._RequestClaim`` / ``qa._RequestSupport``)
+    that omits this field entirely, so the invariant rests on a type boundary
+    rather than prose alone (lode-9nmk). The terse ``description`` below is
+    dead weight for the model (it never sees this field) but still documents
+    the field for every other reader of this class.
     """
 
     @model_validator(mode="after")
