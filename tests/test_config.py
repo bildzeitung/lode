@@ -288,6 +288,7 @@ def test_azure_openai_api_version_alone_is_fine() -> None:
     # Only azure_openai_endpoint presence triggers the requirement -- an
     # api_version with no endpoint is meaningless but not itself invalid.
     s = Settings(azure_openai_api_version="2025-04-01-preview")
+    assert s.azure_openai_endpoint == ""
 
 
 def test_no_egress_scopes_default_empty() -> None:
@@ -310,7 +311,6 @@ def test_no_egress_scopes_rejects_confluence_at_load() -> None:
     rather than silently accepted as a no-op."""
     with pytest.raises(ValidationError, match="confluence"):
         Settings(no_egress_scopes=[{"source_type": "confluence", "match": "SPACE"}])
-    assert s.azure_openai_endpoint == ""
 
 
 # --- reasoning_effort validated against llm_provider at load (lode-tvps) ----

@@ -35,18 +35,13 @@ def test_jira_rule_does_not_match_web_source_type() -> None:
 
 def test_web_host_matches_exactly() -> None:
     rules = [NoEgressScopeRule(source_type="web", match="internal.example.com")]
-    assert (
-        is_no_egress_scoped("https://internal.example.com/a/b", "web", rules) is True
-    )
+    assert is_no_egress_scoped("https://internal.example.com/a/b", "web", rules) is True
 
 
 def test_web_host_does_not_match_subdomain_or_different_host() -> None:
     rules = [NoEgressScopeRule(source_type="web", match="internal.example.com")]
     assert (
-        is_no_egress_scoped(
-            "https://sub.internal.example.com/a", "web", rules
-        )
-        is False
+        is_no_egress_scoped("https://sub.internal.example.com/a", "web", rules) is False
     )
     assert is_no_egress_scoped("https://other.example.com/a", "web", rules) is False
 

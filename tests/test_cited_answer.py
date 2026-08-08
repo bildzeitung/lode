@@ -96,8 +96,7 @@ def _insert_external(
 ) -> None:
     """Seed one external + its head snapshot, optionally no_egress."""
     conn.execute(
-        "INSERT INTO externals (external_id, source_type, no_egress) "
-        "VALUES (?, ?, ?)",
+        "INSERT INTO externals (external_id, source_type, no_egress) VALUES (?, ?, ?)",
         (external_id, source_type, int(no_egress)),
     )
     conn.execute(
