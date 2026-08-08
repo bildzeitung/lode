@@ -870,9 +870,17 @@ the draw-down path, never JIRA/Confluence) closes two gaps a single pre-fetch ad
    result) — so a rebind that fools the pre-check is still caught.
 
 An address is disallowed if it is private, loopback, link-local, reserved, multicast, or unspecified
-(`ipaddress.IPv4Address`/`IPv6Address`'s own classification — no bespoke CIDR list to keep in sync).
-A host that fails to resolve at all is refused, not passed through unclassified — fail-closed, the
-same posture `is_no_egress_scoped` takes.
+(`ipaddress.IPv4Address`/`IPv6Address`'s own classification), **plus** two ranges no `ipaddress`
+attribute flags and which are therefore live bypasses of the attribute check alone: `100.64.0.0/10`
+(RFC 6598 carrier-grade NAT — routinely a container or ISP-internal network) and `fec0::/10`
+(RFC 3879 deprecated IPv6 site-local, which `ipaddress` even reports as `is_global`). IPv4-mapped
+IPv6 addresses (`::ffff:127.0.0.1`) are unwrapped and judged as the IPv4 address they really are.
+The scheme is allowlisted to `http`/`https`. A host that fails to resolve at all, and a *peer* whose
+address cannot be read at all, are refused rather than passed through unclassified — fail-closed, the
+same posture `is_no_egress_scoped` takes. Fail-closed on the peer is only correct because the check
+runs on a **still-streaming** response: httpcore can only answer `get_extra_info('server_addr')`
+while the connection is live, so after a non-streaming read a `Connection: close` server's socket is
+already gone and the call raises `OSError`.
 
 **Relationship to `lode.tools._refuse_private_web_destination`.** A sibling ticket (`lode-ejfv`) was,
 at the time this ticket was scoped, adding a private-address guard directly in `lode.tools` (checked
@@ -880,10 +888,14 @@ on the initial URL and again on the post-redirect final URL) — but had not yet
 this ticket was built, so `trunk` carries no such function to remove or extend. `GuardedHttpxFetcher`
 was built standalone against `trunk` as it stood, per this ticket's own SHAPE decision to guard at
 the fetcher layer rather than extend a `lode.tools`-level check either way. **Land-time note:** if
-`lode-ejfv`'s `_refuse_private_web_destination` lands first or alongside this branch, its coarser
-(initial-URL + final-URL-only, no per-hop or rebinding check) guard is fully subsumed by
-`GuardedHttpxFetcher` and should be removed rather than kept as a redundant, weaker second check —
-see `docs/decisions.md` for the open reconciliation item.
+`lode-ejfv`'s `_refuse_private_web_destination` lands first or alongside this branch, its guard is
+strictly coarser on the axes this ticket was scoped for (initial-URL + final-URL only, no per-hop and
+no rebinding check) — but it is **not** simply redundant, and "delete it" is not automatically the
+right reconciliation. It covers one case `GuardedHttpxFetcher` structurally cannot: `_fetch_web`
+installs the guarded fetcher only when the caller injects *no* `fetcher`, so any caller that injects
+one gets no address policy at all, whereas the `lode.tools`-level check runs regardless. Whoever
+lands both decides: delete it, or keep it as the injection-proof outer check. See
+`docs/decisions.md` for the open reconciliation item.
 
 ### Prompt injection via tool results steering later tool calls (threat model, `lode-80bv`)
 

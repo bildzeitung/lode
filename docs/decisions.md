@@ -4276,9 +4276,20 @@ entries below from being rewritten to chase the current tree.)
   [externals.md](externals.md#web-fetch-destination-guard-ssrf-via-a-model-chosen-url-decided-lode-xwah))
   was built standalone, closing the redirect-chain and DNS-rebinding gaps at the fetcher layer
   instead. **Left open for whoever lands both:** if `lode-ejfv`'s `_refuse_private_web_destination`
-  ends up on `trunk` (landed first, or merged alongside), it becomes fully subsumed by
-  `GuardedHttpxFetcher` — same address-class checks, strictly coarser (no per-hop redirect
-  validation, no post-connect rebinding check) — and should be removed rather than kept as a
-  redundant, weaker second guard. This reconciliation is scoped as ordinary land-time cleanup, not a
-  design question; no new ticket is filed for it here since `/land`'s stacked/overlapping-branch
-  handling is the natural place it surfaces.
+  ends up on `trunk` (landed first, or merged alongside), the two guards overlap heavily —
+  `GuardedHttpxFetcher` is strictly stronger on the two axes this ticket was scoped for (per-hop
+  redirect validation, post-connect rebinding check) and, after this branch's technical review, now
+  matches `lode-ejfv`'s address coverage exactly (CGNAT `100.64.0.0/10`, IPv6 site-local `fec0::/10`,
+  IPv4-mapped unwrapping, and the `http`/`https` scheme allowlist — all of which the branch as first
+  built was *missing*, and all of which `lode-ejfv`'s own review had already added on its side).
+  **Correction to this entry's first draft:** it asserted the `lode.tools` guard would be "fully
+  subsumed" and should simply be removed. That was wrong twice over — at the time it was written the
+  fetcher-layer guard was materially *weaker* on address coverage and had no scheme check at all; and
+  even now one gap remains structural rather than incidental: `_fetch_web` installs
+  `GuardedHttpxFetcher` **only when the caller injects no `fetcher`**, so a caller that injects its
+  own gets no address policy whatsoever, while a `lode.tools`-level check runs unconditionally. The
+  real open question for whoever lands both is therefore *which layer owns the policy* — delete the
+  `lode.tools` guard and accept that the injection seam is unguarded (defensible: today only tests
+  inject), or keep it as the injection-proof outer check and let the fetcher own only the per-hop and
+  rebinding halves. Not a mechanical cleanup, but still not a blocker for either branch; no new
+  ticket is filed here since `/land`'s stacked/overlapping-branch handling is where it surfaces.
