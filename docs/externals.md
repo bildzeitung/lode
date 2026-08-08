@@ -876,14 +876,26 @@ Alternatives considered and rejected:
   endpoint or the local network) is concrete and severe *whenever a user does opt in* — a default-off
   flag protects users who never turn tools on, not the ones the feature is for.
 
-**Known residual gap, left open:** the guard checks only the **initial** destination. A redirect
-returned by an otherwise-public, allowed host can still steer the underlying HTTP client at a private
-address mid-chain, since `lode.webfetch`'s fetcher follows redirects transparently inside one `httpx`
-client call with no per-hop validation hook. Closing that needs per-hop redirect validation inside
-`lode.webfetch` itself — a real gap, but a narrower and harder-to-exploit one (requires an
-attacker-controlled server that both passes the initial guard *and* then redirects to an internal
-address) than the direct "point the tool straight at `169.254.169.254`" case this guard exists to
-close first. Tracked as open in [decisions.md](decisions.md).
+**Two known residual gaps, left open.** Both are tracked in [decisions.md](decisions.md), and
+together they mean this guard raises the cost of the direct attack rather than making the ask path
+SSRF-proof — it is worth stating that plainly rather than letting the mechanism read as a solved
+problem:
+
+1. **Redirect chains.** The guard validates the initial destination, and again the **final** URL
+   before the snapshot is persisted (same place the `no_egress` re-check happens). What it cannot do
+   is stop the intermediate request: `lode.webfetch`'s fetcher follows redirects transparently inside
+   one `httpx` client call with no per-hop validation hook, so a public, allowed host can still cause
+   the client to *issue* a GET against an internal address. The final-URL check keeps that response
+   from being persisted as a citable snapshot or returned to the model, so the vector is a **blind**
+   fetch, not a read-and-exfiltrate. Closing it fully needs per-hop validation inside `lode.webfetch`.
+2. **TOCTOU / DNS rebinding.** The guard resolves the hostname, then `httpx` resolves it *again* when
+   it makes the request. A hostile resolver serving a short TTL can answer the guard with a public
+   address and the client with a private one, defeating the check outright. This is the standard,
+   well-known limitation of validating a destination by hostname. Closing it requires pinning the
+   validated IP for the connection (a custom transport dialing the resolved address with the original
+   `Host` header) — a `lode.webfetch`-wide change, deliberately out of this ticket's scope. It is
+   nonetheless the *cheaper* of the two attacks to mount, so it is recorded as a peer of the redirect
+   gap rather than a footnote to it.
 
 ### Egress log (auditability)
 

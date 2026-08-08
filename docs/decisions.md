@@ -4113,15 +4113,34 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   3. It reintroduces a `jq` dependency against RULING 3, on a hook measured at ~10ms in the hot path
      of every `Edit`/`Write`.
 
-- **Open (`lode-ejfv`, 2026-08-08) — web_fetch redirect-chain SSRF is not closed, only the initial
-  destination.** [`docs/externals.md`](externals.md#web-fetch-destination-guard-decided-lode-ejfv)
-  decided a private/loopback/link-local/reserved/multicast address guard on the ask path's
-  `web_fetch` destination (`lode.tools._refuse_private_web_destination`), checked before any network
-  call. It validates only the **initial** URL's resolved address: an otherwise-public, allowed host
-  can still respond with a redirect that steers `lode.webfetch`'s `httpx` client at a private address
-  mid-chain, since redirects are followed transparently inside one client call with no per-hop
-  validation hook. Closing that needs per-hop redirect validation added to `lode.webfetch` itself —
-  deferred: it is a real but narrower and harder-to-exploit vector (requires an attacker-controlled
-  server that both passes the initial guard *and* then redirects internally) than the direct
-  "point the tool straight at `169.254.169.254`" case the guard closes today, and touching
-  `lode.webfetch`'s redirect handling is a larger, connector-wide change out of this ticket's scope.
+- **Open (`lode-ejfv`, 2026-08-08) — the web_fetch destination guard closes the direct case only;
+  redirect chains and DNS rebinding stay open.**
+  [`docs/externals.md`](externals.md#web-fetch-destination-guard-decided-lode-ejfv) decided a
+  private/loopback/link-local/reserved/multicast address guard on the ask path's `web_fetch`
+  destination (`lode.tools._refuse_private_web_destination`), checked before any network call and
+  again on the post-redirect final URL before anything is persisted. Two vectors remain:
+  1. **Redirect chains.** `lode.webfetch` follows redirects transparently inside one `httpx` client
+     call with no per-hop hook, so an allowed public host can still make the client *issue* a GET at
+     an internal address. The final-URL re-check (added at technical review) stops that response
+     being persisted as a citable snapshot or reaching the model, so the vector is a **blind** fetch
+     rather than a read-and-exfiltrate. Fully closing it needs per-hop validation in `lode.webfetch`.
+  2. **TOCTOU / DNS rebinding.** The guard resolves the host; `httpx` resolves it again for the real
+     request. A hostile short-TTL resolver can answer the two differently and defeat the check
+     outright — the standard limitation of guarding a destination by hostname, and the *cheaper* of
+     the two attacks. Closing it needs the validated IP pinned for the connection (a custom transport
+     dialing the address with the original `Host` header).
+
+  Both fixes live in `lode.webfetch`, and both are deferred on **effort, not blast radius** — the
+  distinction matters, because "it would affect every connector" is the kind of rationale a later
+  reader accepts without re-examining. It would not: `HttpxFetcher` already documents "whether
+  redirects are followed at all" as one of its intended per-connector seams, and `fetch_for_ask`
+  already threads an injectable `fetcher=` through. A `GuardedHttpxFetcher(HttpxFetcher)`
+  constructed *only* by the ask path would close both gaps at the layer that can actually enforce
+  them, with the same scoping and no effect on drawdown/JIRA/Confluence. That is the shape the
+  follow-up should take, and it likely subsumes `lode.tools`' guard entirely.
+
+  Recorded explicitly so the guard is not mistaken for making the ask path SSRF-proof; it raises the
+  cost of the direct "point the tool at `169.254.169.254`" attack, which is what it was built to do.
+  Note that TOCTOU is bypassable by *precisely* the adversary in the stated threat model — one who
+  chooses the URL therefore controls the domain and its TTL — so the follow-up is load-bearing
+  rather than nice-to-have.

@@ -93,23 +93,40 @@ later check would (wrongly) find absent. Scoped to ``SOURCE_TYPE_WEB``
 only — the JIRA/Confluence legs resolve to a configured ``api_base``, not a
 model-chosen host.
 
-**Known residual gap, not closed here:** a redirect returned by an otherwise
-public, allowed host can still point the underlying HTTP client at a private
-address mid-chain, since :mod:`lode.webfetch` follows redirects transparently
-inside one ``httpx`` client call with no per-hop hook. Closing that needs
-per-hop redirect validation in :mod:`lode.webfetch` itself — a larger change
-against a narrower, harder-to-exploit vector (the attacker needs a server
-they control that both passes the initial guard *and* redirects to an
-internal address) than the direct "point the tool straight at
-169.254.169.254" case this guard exists to close. Recorded as open in
-``docs/decisions.md``.
+The **final** URL after any redirect is re-checked the same way before the
+snapshot is persisted, alongside the ``no_egress`` re-check — see
+:func:`_fetch_web`.
+
+**Two known residual gaps, not closed here** (both recorded as open in
+``docs/decisions.md``):
+
+1. *Redirect chains.* :mod:`lode.webfetch` follows redirects transparently
+   inside one ``httpx`` client call with no per-hop hook, so a public,
+   allowed host can still make the client *issue* a request to a private
+   address mid-chain. The final-URL re-check keeps that response from being
+   persisted or returned to the model, leaving a blind fetch rather than a
+   read; closing it fully needs per-hop validation in :mod:`lode.webfetch`.
+2. *TOCTOU / DNS rebinding.* This guard resolves the host, and ``httpx``
+   then resolves it **again** for the actual request. A hostile resolver
+   answering with a short TTL can return a public address to the guard and a
+   private one to the client, defeating the check entirely. Closing it
+   requires pinning the validated address for the connection (a custom
+   transport that dials the resolved IP with the original ``Host`` header).
+   This is the standard, well-known limitation of address-guarding by
+   hostname — the guard raises the cost of the direct attack, it does not
+   make the path SSRF-proof.
+
+Both are deferred on effort, **not** blast radius: the right home for both is
+a ``HttpxFetcher`` subclass injected only by the ask path via the ``fetcher=``
+seam :func:`fetch_for_ask` already threads, which would leave the draw-down
+and JIRA/Confluence fetchers untouched. Tracked as ``lode-xwah``.
 """
 
 from __future__ import annotations
 
 import socket
 import sqlite3
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 from urllib.parse import urlsplit
 
 from lode.config import Settings
@@ -123,7 +140,7 @@ from lode.drawdown import (
 from lode.egress import TOOL_PURPOSE, log_egress
 from lode.externals import IngestResult, ingest_snapshot
 from lode.jira_fetch import fetch_jira_issue
-from lode.no_egress_scope import is_no_egress_scoped
+from lode.no_egress_scope import is_no_egress_scoped, url_host
 from lode.redact import redact_before_egress_counting
 from lode.webfetch import (
     Fetcher,
@@ -178,16 +195,27 @@ def _no_egress_denied(
 
 
 def _resolve_host_addresses(host: str) -> list[str]:
-    """DNS-resolve ``host`` to its IP address strings.
+    """DNS-resolve ``host`` to its IP address strings -- a seam tests stub.
 
-    A thin wrapper over :func:`socket.getaddrinfo` so tests can monkeypatch
-    exactly this call (module's own test suite stubs it module-wide via an
-    autouse fixture) rather than requiring real network access to exercise
-    :func:`_refuse_private_web_destination`. A bare numeric host (an IP
-    literal) resolves locally with no network I/O either way.
+    ``type=SOCK_STREAM`` because we only ever dial TCP, and because an
+    unhinted :func:`socket.getaddrinfo` returns every address once per
+    socket type, tripling the work below for no new information.
     """
-    infos = socket.getaddrinfo(host, None)
-    return [info[4][0] for info in infos]
+    infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    return list(dict.fromkeys(info[4][0] for info in infos))
+
+
+#: Per IP version, the ranges that are *not* covered by any ``ipaddress``
+#: attribute but are still never a legitimate public ``web_fetch``
+#: destination. ``100.64.0.0/10`` is carrier-grade NAT (RFC 6598) -- routinely
+#: the address space of a container or ISP-internal network, and ``ipaddress``
+#: classifies it as neither private nor reserved. ``fec0::/10`` is deprecated
+#: IPv6 site-local (RFC 3879), which ``ipaddress`` likewise does not flag.
+#: Both were bypasses of the attribute check alone (lode-ejfv review).
+_EXTRA_DISALLOWED_NETWORKS = {
+    4: (ip_network("100.64.0.0/10"),),
+    6: (ip_network("fec0::/10"),),
+}
 
 
 def _is_disallowed_ip(ip_str: str) -> bool:
@@ -195,7 +223,8 @@ def _is_disallowed_ip(ip_str: str) -> bool:
 
     Covers the IPv4-mapped-IPv6 case (``::ffff:127.0.0.1``) by checking the
     mapped v4 address too -- the plain IPv6 attributes alone don't see
-    through the mapping.
+    through the mapping -- plus :data:`_EXTRA_DISALLOWED_NETWORKS`, the
+    internal ranges ``ipaddress`` has no attribute for.
     """
     addr = ip_address(ip_str)
     if addr.version == 6 and addr.ipv4_mapped is not None:
@@ -207,6 +236,7 @@ def _is_disallowed_ip(ip_str: str) -> bool:
         or addr.is_reserved
         or addr.is_multicast
         or addr.is_unspecified
+        or any(addr in net for net in _EXTRA_DISALLOWED_NETWORKS[addr.version])
     )
 
 
@@ -219,12 +249,12 @@ def _refuse_private_web_destination(url: str) -> None:
     on a disallowed scheme, an unresolvable host, or a host that resolves to
     a private/loopback/link-local/reserved/multicast address.
     """
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https"):
-        raise ToolFetchError(
-            f"{url}: scheme {parts.scheme!r} is not permitted for web_fetch"
-        )
-    host = parts.hostname
+    scheme = urlsplit(url).scheme
+    if scheme not in ("http", "https"):
+        raise ToolFetchError(f"{url}: scheme {scheme!r} is not permitted for web_fetch")
+    # Same host derivation the no_egress check one step earlier uses, so the
+    # two guards on this URL can never disagree about what host they judge.
+    host = url_host(url)
     if not host:
         raise ToolFetchError(f"{url}: no host to fetch")
     try:
@@ -373,13 +403,18 @@ def _fetch_web(
     except (FetchError, ValueError) as exc:
         raise ToolFetchError(f"fetch failed for {external_id}: {exc}") from exc
 
-    if final_external_id != external_id and _no_egress_denied(
-        conn, final_external_id, SOURCE_TYPE_WEB, settings
-    ):
-        raise ToolFetchError(
-            f"{final_external_id} (redirected from {external_id}) is no_egress "
-            "and cannot be fetched for a cloud Q&A tool call."
-        )
+    if final_external_id != external_id:
+        # Re-guard the post-redirect destination; see the module docstring's
+        # "Web-fetch destination guard". Only when the redirect crossed to a
+        # different host -- a scheme/path-only redirect resolves to the host
+        # already cleared above, so re-resolving it would be pure extra DNS.
+        if url_host(final_external_id) != url_host(external_id):
+            _refuse_private_web_destination(final_external_id)
+        if _no_egress_denied(conn, final_external_id, SOURCE_TYPE_WEB, settings):
+            raise ToolFetchError(
+                f"{final_external_id} (redirected from {external_id}) is "
+                "no_egress and cannot be fetched for a cloud Q&A tool call."
+            )
 
     return _ingest_or_raise(
         conn, final_external_id, SOURCE_TYPE_WEB, result, settings=settings

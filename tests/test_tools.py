@@ -394,11 +394,25 @@ class TestFetchForAskPrivateDestinationGuard:
         assert _tool_egress_rows(conn) == []
         assert _externals_row(conn, url) is None
 
-    def test_link_local_metadata_address_refuses(self, conn, monkeypatch) -> None:
+    @pytest.mark.parametrize(
+        "address",
+        [
+            "169.254.169.254",  # cloud metadata endpoint (link-local)
+            "10.1.2.3",  # RFC1918 intranet
+            "::ffff:127.0.0.1",  # IPv4-mapped IPv6 loopback
+            "::1",  # IPv6 loopback
+            "fc00::1",  # IPv6 unique-local (ULA)
+            "fec0::1",  # deprecated IPv6 site-local -- no ipaddress attribute
+            "100.64.0.1",  # carrier-grade NAT (RFC 6598) -- likewise
+            "0.0.0.0",  # "this host"
+            "224.0.0.1",  # multicast
+        ],
+    )
+    def test_internal_ranges_refuse(self, conn, monkeypatch, address) -> None:
         monkeypatch.setattr(
-            "lode.tools._resolve_host_addresses", lambda host: ["169.254.169.254"]
+            "lode.tools._resolve_host_addresses", lambda host: [address]
         )
-        url = "http://metadata.internal/"
+        url = "http://internal.example.com/"
         fetcher = _StubFetcher(
             response=RawResponse(final_url=url, status_code=200, text=_ARTICLE_HTML)
         )
@@ -410,11 +424,16 @@ class TestFetchForAskPrivateDestinationGuard:
 
         assert fetcher.calls == []
 
-    def test_private_rfc1918_address_refuses(self, conn, monkeypatch) -> None:
+    def test_any_disallowed_address_in_a_multi_record_answer_refuses(
+        self, conn, monkeypatch
+    ) -> None:
+        """A host with both a public and a private A record is refused: the
+        guard must not be satisfiable by returning one good address."""
         monkeypatch.setattr(
-            "lode.tools._resolve_host_addresses", lambda host: ["10.1.2.3"]
+            "lode.tools._resolve_host_addresses",
+            lambda host: ["93.184.216.34", "127.0.0.1"],
         )
-        url = "http://intranet.example.com/"
+        url = "http://split-horizon.example.com/"
         fetcher = _StubFetcher(
             response=RawResponse(final_url=url, status_code=200, text=_ARTICLE_HTML)
         )
@@ -426,21 +445,34 @@ class TestFetchForAskPrivateDestinationGuard:
 
         assert fetcher.calls == []
 
-    def test_ipv4_mapped_ipv6_loopback_refuses(self, conn, monkeypatch) -> None:
-        monkeypatch.setattr(
-            "lode.tools._resolve_host_addresses", lambda host: ["::ffff:127.0.0.1"]
-        )
-        url = "http://sneaky.example.com/"
+    def test_redirect_to_private_address_is_not_persisted(
+        self, conn, monkeypatch
+    ) -> None:
+        """The initial host is public, but the server redirects to an internal
+        address. The GET cannot be prevented (httpx follows redirects inside
+        one client call -- the documented residual gap), but the response must
+        never be persisted as a citable snapshot or reach the model."""
+        final_url = "http://169.254.169.254/latest/meta-data/"
+
+        def _resolve(host: str) -> list[str]:
+            return (
+                ["169.254.169.254"] if host == "169.254.169.254" else ["93.184.216.34"]
+            )
+
+        monkeypatch.setattr("lode.tools._resolve_host_addresses", _resolve)
         fetcher = _StubFetcher(
-            response=RawResponse(final_url=url, status_code=200, text=_ARTICLE_HTML)
+            response=RawResponse(
+                final_url=final_url, status_code=200, text=_ARTICLE_HTML
+            )
         )
 
         with pytest.raises(ToolFetchError):
             fetch_for_ask(
-                conn, url, SOURCE_TYPE_WEB, fetcher=fetcher, settings=load_settings()
+                conn, _URL, SOURCE_TYPE_WEB, fetcher=fetcher, settings=load_settings()
             )
 
-        assert fetcher.calls == []
+        assert _externals_row(conn, final_url) is None
+        assert _externals_row(conn, _URL) is None
 
     def test_unresolvable_host_refuses_as_toolfetcherror(
         self, conn, monkeypatch
@@ -483,8 +515,8 @@ class TestFetchForAskPrivateDestinationGuard:
         assert fetcher.calls == []
 
     def test_public_address_is_unaffected(self, conn) -> None:
-        """Sanity check: the default autouse DNS stub (a public TEST-NET-3
-        address) does not itself trip the guard -- covered implicitly by
+        """Sanity check: the default autouse DNS stub's genuinely public
+        address does not itself trip the guard -- covered implicitly by
         every other passing test in this module, asserted directly here."""
         fetcher = _StubFetcher(
             response=RawResponse(final_url=_URL, status_code=200, text=_ARTICLE_HTML)
