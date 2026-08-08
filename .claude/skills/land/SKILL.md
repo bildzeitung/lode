@@ -987,16 +987,14 @@ MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true
 # SKIPPED (nothing merged, so there is nothing new to gate -- see that section's own note), and the
 # pass falls through to Section 4 exactly as a real merge would.
 #
-# The test is the `cat`'s OWN exit status, which is what makes the distinction reliable rather than
-# a string comparison on the contents: a missing file, an unreadable one, and a directory in its
-# place all fail the read (cat prints the specific reason to this call's stderr, so the operator sees
-# which), while a present-but-empty OR whitespace-only file reads clean and yields an empty
-# $ACCEPTED -- unquoted word-splitting in the `for` below then iterates zero times over either.
-ACCEPTED=$(cat "$STATE_DIR/accepted") || {
-  echo "GATE COULD NOT RUN: $STATE_DIR/accepted could not be read (missing, or unreadable -- see" \
-    "cat's own error above) -- 3a's precompute did not run. Landing nothing." >&2
-  exit 1
-}
+# scripts/land-state-load.sh (lode-dc4n) makes this the "missing fatal, empty OK" policy explicit
+# -- one of the two policies every $STATE_DIR load in this skill now shares, instead of a fourth
+# hand-rolled spelling. Its own exit status IS the missing-vs-empty discriminator: a missing file, an
+# unreadable one, and a directory in its place all fail the read and print a diagnostic to this
+# call's stderr, while a present-but-empty OR whitespace-only file reads clean and prints nothing --
+# unquoted word-splitting in the `for` below then iterates zero times over either.
+ACCEPTED=$(scripts/land-state-load.sh "$STATE_DIR/accepted" -- \
+  "3a's precompute did not run. Landing nothing.") || exit 1
 
 for id in $ACCEPTED; do
   # Same idiom as Section 2b's merge-precheck.sh call, for the same reason: a command substitution
@@ -1126,17 +1124,17 @@ it would mask the 2. Keep it there.
   MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
   [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check" \
     "is DISABLED for this call (lode-67nk)" >&2
-  ACCEPTED=$(cat "$STATE_DIR/accepted") || exit 1
   # DELIBERATELY ASYMMETRIC with the first-pass loop above, which lode-0jan taught to let an EMPTY
-  # accepted set through: here an empty one is still refused. This block only runs on a RED combined
-  # re-gate, and a nothing-merged pass now skips that re-gate entirely (see its note above), so an
-  # empty set should be unreachable here -- which is exactly why it stays fatal rather than being
-  # relaxed for symmetry. If it ever does arrive, `trunk` is byte-identical to `origin/trunk`, so the
-  # red is attributable to no branch in this pass: nothing to isolate, nothing to bounce, and a loud
-  # stop is the only honest outcome. Do not "finish the job" by deleting this guard -- the two blocks
-  # are answering different questions.
-  [ -n "$ACCEPTED" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/accepted is missing or empty, on the" \
-    "isolation-replay path -- nothing to attribute this red to. Landing nothing." >&2; exit 1; }
+  # accepted set through: here an empty one is still refused (--require-nonempty). This block only
+  # runs on a RED combined re-gate, and a nothing-merged pass now skips that re-gate entirely (see its
+  # note above), so an empty set should be unreachable here -- which is exactly why it stays fatal
+  # rather than being relaxed for symmetry. If it ever does arrive, `trunk` is byte-identical to
+  # `origin/trunk`, so the red is attributable to no branch in this pass: nothing to isolate, nothing
+  # to bounce, and a loud stop is the only honest outcome. Do not "finish the job" by deleting this
+  # guard -- the two blocks are answering different questions; scripts/land-state-load.sh (lode-dc4n)
+  # is what makes that difference a single visible flag instead of two divergent hand-rolled loads.
+  ACCEPTED=$(scripts/land-state-load.sh "$STATE_DIR/accepted" --require-nonempty -- \
+    "isolation-replay path -- nothing to attribute this red to. Landing nothing.") || exit 1
   : > "$STATE_DIR/landed"    # the reset above discarded every merge the first-pass loop recorded --
                               # start the replay's record from empty so Section 4 closes only what
                               # THIS loop actually keeps merged
@@ -1309,9 +1307,13 @@ scripts/land-lock.sh heartbeat "$MY_TOKEN" || true
 # that is $ACCEPTED minus any mid-loop needs-rebase kick-backs; on the Red/isolation path the replay
 # loop truncated the file and re-recorded only the branches it kept merged, so bounced culprits and
 # held dependents are already excluded. An EMPTY file is legitimate (every branch kicked back or
-# bounced) and correctly closes nothing; a MISSING one means Section 3 never ran -- abort.
+# bounced) and correctly closes nothing; a MISSING one means Section 3 never ran -- abort loudly, same
+# policy and same shared script (scripts/land-state-load.sh, lode-dc4n) as the first-pass accepted
+# load above -- this used to be a bare `cat ... || exit 1` with no diagnostic at all, the one
+# $STATE_DIR load in the skill that dropped lode-0jan's loud/silent distinction one section later.
 STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation again
-LANDED=$(cat "$STATE_DIR/landed") || exit 1
+LANDED=$(scripts/land-state-load.sh "$STATE_DIR/landed" -- \
+  "Section 3 never ran (or never reached its end-of-loop write). Nothing to close.") || exit 1
 for id in $LANDED; do
   bd close "$id" --reason "Landed on trunk via /land (merge <sha>)"
   bd update "$id" --remove-label ready-for-land   # tidy the queue label off the (now closed) ticket --
@@ -1876,11 +1878,14 @@ paths section if that file is missing or empty:
 
 ```bash
 STATE_DIR="$(git rev-parse --git-dir)/land-state"     # re-derive -- fresh Bash invocation; the
-CONFLICTS=$(cat "$STATE_DIR/conflicts/<id>" 2>/dev/null)  # FILE under $STATE_DIR is what survived,
-                                                            # never a bash variable
-[ -n "$CONFLICTS" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/conflicts/<id> is missing or empty --" \
+                                                       # FILE under $STATE_DIR is what survived,
+                                                       # never a bash variable
+# scripts/land-state-load.sh --require-nonempty (lode-dc4n) -- same "missing or empty, both fatal"
+# policy as the isolation-replay accepted load above, and the same script; this used to be its own
+# fourth hand-rolled spelling (`cat ... 2>/dev/null` + a separate `[ -n ... ]` check).
+CONFLICTS=$(scripts/land-state-load.sh "$STATE_DIR/conflicts/<id>" --require-nonempty -- \
   "the producer site (2b's merge-precheck.sh call, or a Section-3 merge loop) did not persist the" \
-  "conflicting paths. Refusing to kick back with a blank paths section." >&2; exit 1; }
+  "conflicting paths. Refusing to kick back with a blank paths section.") || exit 1
 
 bd update <id> --remove-label ready-for-land --add-label needs-rebase \
   --append-notes "NEEDS REBASE (/land): origin/land/<id> no longer merges cleanly onto trunk @ $(git rev-parse --short origin/trunk).
