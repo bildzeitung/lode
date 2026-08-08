@@ -1723,7 +1723,7 @@ def status(db: _DbOption = None) -> None:
     # Independent of `settings` (the query needs none), unlike the three
     # probes above -- but still non-fatal (returns 0 on any failure) and run
     # in the same "outside any try, own connection" style, per lode-cyly.
-    lexical_gap_count = _lexical_gap_count(db)
+    lexical_gaps = _lexical_gap_count(db)
     console.print()
     # markup stays ON here -- these strings are author-written, not DB-derived,
     # so the [warn]/[ok] tags are the point. highlight stays OFF for the same
@@ -1762,9 +1762,9 @@ def status(db: _DbOption = None) -> None:
             "'lode reenrich' to make it consistent again.",
             highlight=False,
         )
-    if lexical_gap_count:
+    if lexical_gaps:
         console.print(
-            f"[warn]Action needed:[/warn] {lexical_gap_count} live note head(s) "
+            f"[warn]Action needed:[/warn] {lexical_gaps} live note head(s) "
             "have no lexical (FTS5) index rows -- run 'lode reindex-lexical' to "
             "make them keyword-findable now, or wait for 'lode work' to heal "
             "them automatically on its next reconcile pass.",
@@ -1776,7 +1776,7 @@ def status(db: _DbOption = None) -> None:
         and not revision_mixed
         and not revision_drift
         and not enrichment_stale
-        and not lexical_gap_count
+        and not lexical_gaps
     ):
         console.print("[ok]No action needed.[/ok]", highlight=False)
 
