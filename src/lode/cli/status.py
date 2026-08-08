@@ -5,15 +5,17 @@ import logging
 from enum import Enum
 from pathlib import Path
 
-# Printing here goes through ``cli.console``, NOT a plain
-# ``from lode.cli import console`` -- this is the one module a test rebinds the
-# name for (``tests/test_cli.py``'s
-# ``test_status_dead_line_is_uniformly_danger_not_repr_highlighted``), and a
-# plain import would freeze a reference the rebind can never reach, silently
-# capturing nothing. Every other command module imports ``console`` plainly;
-# see ``lode.cli``'s module docstring (lode-1bfn).
+# Load-bearing: `model_cache_dir`, `_resolve_settings`, `_cold_model_cache` and
+# `provider_identity` below are rebound AS NAMES on the `lode.cli` package by
+# tests, so they must be looked up through it at call time -- see `lode.cli`'s
+# module docstring.
 from lode import cli
-from lode.cli import _DbOption, _open_db, _tabular_table, app
+
+# `console` is NOT one of those: it is imported plainly here, like every other
+# command module. The one test that substitutes a Console for it rebinds it on
+# THIS module's namespace (lode-nftw) -- see
+# tests/test_cli.py::test_status_dead_line_is_uniformly_danger_not_repr_highlighted.
+from lode.cli import _DbOption, _open_db, _tabular_table, app, console
 from lode.config import Settings, default_db_path, lance_dir
 from lode.enrichment_view import stale_enrichment_heads
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
@@ -406,16 +408,16 @@ def status(db: _DbOption = None) -> None:
     table.add_row("Done", str(job_counts.get("done", 0)))
     table.add_row("Failed", str(job_counts.get("failed", 0)))
     table.add_row("Dead", str(len(dead_letters)), style=dead_style)
-    cli.console.print(table)
+    console.print(table)
 
     total_egress = sum(n for _, n in egress_counts)
     by_purpose = ", ".join(f"{purpose}: {n}" for purpose, n in egress_counts) or "none"
-    # Two cli.console.print defaults must be turned OFF on every prose line below --
+    # Two console.print defaults must be turned OFF on every prose line below --
     # each is a behaviour change the typer.echo -> rich switch would otherwise
     # smuggle in, since the typer.echo these replaced printed plain, verbatim
     # text:
     #
-    # markup=False -- cli.console.print parses "[...]" as rich markup, so a job's
+    # markup=False -- console.print parses "[...]" as rich markup, so a job's
     #   last_error is no longer safe to interpolate: "HTTP 500 [/v1/embed]
     #   failed" raises MarkupError and takes the whole command down (exit 1),
     #   and "[red]oops" is silently swallowed to "oops". Both land precisely
@@ -437,18 +439,18 @@ def status(db: _DbOption = None) -> None:
     #   once .4/.6/.10 land,
     #   and taking it here would conflict with sibling branches live on this
     #   file. Table cells need none of this: rich runs no highlighter over them.
-    cli.console.print(
+    console.print(
         f"egress: {total_egress} sends ({by_purpose})", markup=False, highlight=False
     )
 
-    cli.console.print(
+    console.print(
         f"dead-letters (dead jobs): {len(dead_letters)}",
         style=dead_style,
         markup=False,
         highlight=False,
     )
     for job_id, job_type, target_version, last_error in dead_letters:
-        cli.console.print(
+        console.print(
             f"  job {job_id} ({job_type}) target={_short(target_version)}: "
             f"{last_error or 'no error recorded'}",
             style="danger",
@@ -511,46 +513,46 @@ def status(db: _DbOption = None) -> None:
     # probes above -- but still non-fatal (returns 0 on any failure) and run
     # in the same "outside any try, own connection" style, per lode-cyly.
     lexical_gaps = _lexical_gap_count(db)
-    cli.console.print()
+    console.print()
     # markup stays ON here -- these strings are author-written, not DB-derived,
     # so the [warn]/[ok] tags are the point. highlight stays OFF for the same
     # reason as above: the job count and the quoted 'lode work' would otherwise
     # pick up rich's undeclared repr.* colours mid-sentence.
     if pending_or_failed > 0:
-        cli.console.print(
+        console.print(
             f"[warn]Action needed:[/warn] {pending_or_failed} job(s) pending or "
             "failed -- run 'lode work' to drain the queue.",
             highlight=False,
         )
     if cache_cold:
-        cli.console.print(
+        console.print(
             "[warn]Action needed:[/warn] the local model cache is cold -- run "
             "'lode models pull' to warm it.",
             highlight=False,
         )
     if revision_mixed:
-        cli.console.print(
+        console.print(
             "[warn]Action needed:[/warn] the embedder's live vectors carry more "
             "than one model revision -- the index is mixed; re-embed to make it "
             "consistent again.",
             highlight=False,
         )
     if revision_drift:
-        cli.console.print(
+        console.print(
             "[warn]Action needed:[/warn] the embedder's cached weights have "
             "moved past the revision your vectors were embedded with -- "
             "re-embed to pick up the change.",
             highlight=False,
         )
     if enrichment_stale:
-        cli.console.print(
+        console.print(
             "[warn]Action needed:[/warn] the enrichment store's AI annotations "
             "disagree with the currently configured enrichment_llm -- run "
             "'lode reenrich' to make it consistent again.",
             highlight=False,
         )
     if lexical_gaps:
-        cli.console.print(
+        console.print(
             f"[warn]Action needed:[/warn] {lexical_gaps} live note head(s) "
             "have no lexical (FTS5) index rows -- run 'lode reindex-lexical' to "
             "make them keyword-findable now, or wait for 'lode work' to heal "
@@ -565,4 +567,4 @@ def status(db: _DbOption = None) -> None:
         and not enrichment_stale
         and not lexical_gaps
     ):
-        cli.console.print("[ok]No action needed.[/ok]", highlight=False)
+        console.print("[ok]No action needed.[/ok]", highlight=False)
