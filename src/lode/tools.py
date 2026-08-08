@@ -81,6 +81,7 @@ timeout and any other fetch failure are handed back to the model identically
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable
 
 from lode.config import Settings
 from lode.confluence import fetch_confluence_page
@@ -125,7 +126,7 @@ class ToolFetchError(Exception):
     """
 
 
-def _no_egress_denied(
+def no_egress_denied(
     conn: sqlite3.Connection, external_id: str, source_type: str, settings: Settings
 ) -> bool:
     """Whether ``external_id`` must be refused -- per-row flag OR scope rule.
@@ -136,6 +137,11 @@ def _no_egress_denied(
     :func:`~lode.no_egress_scope.is_no_egress_scoped` is what lets this
     refuse a resource with **no** row yet -- the case a fetch tool exists to
     reach (``lode-35nu.11.8``).
+
+    Public (not ``_``-prefixed, lode-8hsk): :mod:`lode.tool_dispatch` reuses
+    this exact predicate to drop a no_egress search hit -- id and title
+    together -- before it ever reaches the model, rather than reimplementing
+    the per-row-flag-OR-scope-rule check a second time.
     """
     row = conn.execute(
         "SELECT no_egress FROM externals WHERE external_id = ?",
@@ -167,42 +173,60 @@ def _redact_arguments(
     return redacted, total
 
 
-def _log_tool_fetch(
+def log_tool_egress(
     conn: sqlite3.Connection,
     *,
-    external_id: str,
+    sent_targets: Iterable[str] = (),
     destination: str,
     arguments: dict[str, str],
     settings: Settings,
+    redaction_key: str | None = None,
 ) -> None:
-    """Write the ``purpose='tool'`` audit row for a fetch about to be attempted.
+    """Write the ``purpose='tool'`` audit row for a tool call about to be attempted.
 
-    Called once per network attempt this module makes, **immediately before**
-    the request goes out -- so the row exists regardless of whether that
-    attempt then succeeds, tombstones, or raises anything at all (module
+    Called once per network attempt a tool-dispatch call makes, **immediately
+    before** the request goes out -- so the row exists regardless of whether
+    that attempt then succeeds, tombstones, or raises anything at all (module
     docstring, egress section item 2). ``destination`` is the endpoint the
     request is aimed at, which is all that is knowable pre-send: the URL as
-    sent for web, the ``api_base`` for JIRA/Confluence. A redirect that
-    resolves elsewhere is handled by :func:`_fetch_web`'s post-fetch
-    re-check, not by rewriting this row.
+    sent for a web fetch, the ``api_base`` for JIRA/Confluence (fetch or
+    search alike). A redirect that resolves elsewhere is handled by
+    :func:`_fetch_web`'s post-fetch re-check, not by rewriting this row.
+
+    Public (lode-8hsk): :mod:`lode.tool_dispatch` reuses this exact writer
+    for the search legs, not just this module's own fetch legs -- one audit
+    row shape for every tool call, never a second writer. ``sent_targets`` is
+    the destination's ``external_id``(s) actually addressed; a **search**
+    call passes ``()`` (the default) -- a query has no resolved target yet,
+    per this ticket's carried-over design (a search result's id is never a
+    citation target either, ``docs/externals.md`` "A query result has no
+    identity"). ``redaction_key`` keys the per-target redaction-count summary
+    stored alongside ``arguments`` -- a fetch call passes its
+    ``external_id`` (matching :func:`fetch_for_ask`'s prior behaviour
+    exactly); a search call leaves it ``None`` since there is no target id to
+    key by, so no per-target breakdown is recorded (the redaction still
+    happens on ``arguments`` either way -- this only affects the summary
+    dict's key).
 
     ``destination`` is redacted on the same terms as the arguments (lode-l87l).
-    On the web leg it is character-for-character the ``{"url": ...}`` argument,
-    so redacting one copy and persisting the other raw would durably store the
-    very secret the audit row reports as stripped -- and ``egress_log`` is read
-    by more than one surface (``lode egress`` renders the column since
-    lode-l87l; sqlite3, backups and exports see it regardless). Its span count
-    is deliberately NOT added to the per-target total: on the web leg that
-    would double-count the same URL's secrets, which are already counted via
-    the argument.
+    On the web fetch leg it is character-for-character the ``{"url": ...}``
+    argument, so redacting one copy and persisting the other raw would
+    durably store the very secret the audit row reports as stripped -- and
+    ``egress_log`` is read by more than one surface (``lode egress`` renders
+    the column since lode-l87l; sqlite3, backups and exports see it
+    regardless). Its span count is deliberately NOT added to the per-target
+    total: on that leg that would double-count the same URL's secrets, which
+    are already counted via the argument.
     """
     redacted_arguments, redaction_count = _redact_arguments(arguments, settings)
     log_egress(
         conn,
         TOOL_PURPOSE,
         None,
-        [external_id],
-        {external_id: redaction_count} if redaction_count else None,
+        list(sent_targets),
+        {redaction_key: redaction_count}
+        if redaction_key is not None and redaction_count
+        else None,
         destination=redact_before_egress(destination, settings),
         arguments=redacted_arguments,
     )
@@ -237,7 +261,7 @@ def fetch_for_ask(
         raise ValueError(f"fetch_for_ask: unsupported source_type={source_type!r}")
     settings = settings or Settings()
 
-    if _no_egress_denied(conn, external_id, source_type, settings):
+    if no_egress_denied(conn, external_id, source_type, settings):
         raise ToolFetchError(
             f"{external_id} is no_egress (marked, or under a configured scope "
             "rule) and cannot be fetched for a cloud Q&A tool call."
@@ -275,12 +299,13 @@ def _fetch_web(
     just another fetch failure and is surfaced as :class:`ToolFetchError`
     like any other, never leaked to the caller as a raw ``ValueError``.
     """
-    _log_tool_fetch(
+    log_tool_egress(
         conn,
-        external_id=external_id,
+        sent_targets=[external_id],
         destination=external_id,
         arguments={"url": external_id},
         settings=settings,
+        redaction_key=external_id,
     )
     try:
         result = fetch_and_extract(external_id, fetcher=fetcher, settings=settings)
@@ -288,7 +313,7 @@ def _fetch_web(
     except (FetchError, ValueError) as exc:
         raise ToolFetchError(f"fetch failed for {external_id}: {exc}") from exc
 
-    if final_external_id != external_id and _no_egress_denied(
+    if final_external_id != external_id and no_egress_denied(
         conn, final_external_id, SOURCE_TYPE_WEB, settings
     ):
         raise ToolFetchError(
@@ -333,12 +358,13 @@ def _fetch_atlassian(
     fetch_fn = (
         fetch_jira_issue if source_type == SOURCE_TYPE_JIRA else fetch_confluence_page
     )
-    _log_tool_fetch(
+    log_tool_egress(
         conn,
-        external_id=external_id,
+        sent_targets=[external_id],
         destination=api_base,
         arguments={"external_id": external_id, "api_base": api_base},
         settings=settings,
+        redaction_key=external_id,
     )
     try:
         result = fetch_fn(external_id, api_base, fetcher=fetcher, settings=settings)
@@ -402,4 +428,9 @@ def _ingest_or_raise(
     return ingest.snapshot_id
 
 
-__all__ = ["ToolFetchError", "fetch_for_ask"]
+__all__ = [
+    "ToolFetchError",
+    "fetch_for_ask",
+    "log_tool_egress",
+    "no_egress_denied",
+]

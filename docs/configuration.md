@@ -251,6 +251,48 @@ default empty rule set there is nothing to fail.
 live inside the join. `lode.no_egress_scope.is_no_egress_scoped` is the one shared predicate; each
 site composes it with its own per-row flag itself, rather than reimplementing the match.
 
+## Tool-augmented Ask (lode-8hsk / lode-35nu.11.2)
+
+| Knob | Kind | Default | Notes |
+|---|---|---|---|
+| `ask_tools_enabled` | runtime | `false` | Feature flag: offer the read-only `search_jira`/`search_confluence`/`fetch` tools to the Q&A synthesis call. Off by default — `lode.tool_dispatch.build_ask_tools` returns `()` regardless of what a caller passes as `answer_question`'s own `tools_enabled` argument, so notes-only behaviour is unchanged either way. |
+| `ask_tool_budget` | runtime | `6` | Per-ask tool-call budget — search and fetch share **one** counter (`lode.tool_dispatch.ToolBudget`), enforced before each dispatch; a call past the budget is refused (the model is told so, via the tool result text) rather than dispatched. Distinct from `_DEFAULT_MAX_TOOL_TURNS` above (a provider-level free-turn cap — one turn is not assumed to be one tool call). |
+
+**Tool set.** `search_jira`/`search_confluence` return **identifiers and titles only** —
+`lode.jira_fetch.JiraSearchHit`/`lode.confluence.ConfluenceSearchHit` each carry exactly
+`external_id` + `title`; no body/snippet field exists on either dataclass, so the schema makes a leak
+impossible rather than merely absent. `fetch` delegates wholly to `lode.tools.fetch_for_ask`
+(`lode-35nu.11.1`) — the one path that ever persists a citable snapshot. No write verb is defined
+anywhere in `build_ask_tools`: there is nothing to disable, because nothing writes to JIRA, Confluence,
+or the web.
+
+`search_jira` targets `GET /rest/api/3/search/jql` — the CHANGE-2046 replacement for the retired
+`GET/POST /rest/api/3/search` (verified finding, `lode-6nwu`; see [decisions.md](decisions.md)) — with
+`fields=summary` passed **explicitly** (the replacement endpoint defaults to returning `id` only) and
+`jql` always a bounded `text ~ "..."` clause (the endpoint rejects an unbounded query). `search_jira`
+is only offered when `jira_active(settings)` **and** `jira_base_url` is configured — a search call, unlike
+a fetch of an already-drawn-down issue, has no pasted link to infer an `api_base` from.
+`search_confluence` is the CQL equivalent (`type=page AND text ~ "..."`), gated the same way on
+`confluence_active(settings)` + `confluence_base_url`. Both single-page (no cursor/CQL pagination) — a
+tool-search call is not a full corpus traversal.
+
+**Egress.** Each search or fetch call writes one `purpose='tool'` `egress_log` row (`lode.tools.log_tool_egress`,
+shared by both legs) **before** the request goes out, with the query/arguments redacted through the
+same `redact_before_egress_counting` path the fetch legs already used. A search call's row carries
+`sent_targets=()` (a query has no resolved citation target yet — [externals.md](externals.md) "A query
+result has no identity"). Search results are then filtered through the exact same `no_egress_denied`
+predicate (`lode.tools.no_egress_denied` — per-row flag OR `no_egress_scopes` rule, above) a fetch
+call already enforces pre-fetch: a denied hit is dropped **whole**, id and title together, before it
+ever reaches the model.
+
+**Q&A synthesis prompt.** `lode.qa`'s system prompt is chosen from whether the `tools` tuple
+`run_tool_turns` receives is non-empty — never from a second flag — so `ask_tools_enabled=false`
+(the tuple collapsing to `()`) reproduces the pre-lode-8hsk notes-only prompt byte-for-byte. The
+tool-aware prompt keeps the verbatim-span rule and the never-from-model-knowledge rule intact (the
+faithfulness gate downstream is unmodified) while permitting the one path the notes-only prompt
+forbade: calling a tool, and citing a `snapshot_id` it returns, exactly like any other external
+citation target.
+
 ## Models
 
 | Knob | Kind | Default | Notes |
@@ -264,7 +306,7 @@ site composes it with its own per-row flag itself, rather than reimplementing th
 | Enrichment LLM (`enrichment_llm`) | runtime | Claude Haiku 4.5 (default provider) | High-volume background extraction. A `(model, reasoning_effort, max_tokens)` `ModelTier` (`lode-568v.2`; `max_tokens` `lode-d70n`) — a bare TOML string still coerces to a `ModelTier` with `reasoning_effort=None` and `max_tokens=None`. `model` is interpreted **against the active `llm_provider`**: an Anthropic model id under the default provider, or an Azure/OpenAI deployment name under `llm_provider = "openai"`. `max_tokens`, when set, overrides [`enrich.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (2048) for both the immediate and batch enrichment calls. Persists into the DB (`annotations`/`edges`) — DB-affecting; the model (and, once non-Anthropic, the provider) is recorded per-row on `annotations.model`/`annotations.provider` and drift is detected from it, never pinned. ([below](#model-provenance-the-enrichment-llm-decided-lode-g2745)) |
 | Q&A LLM (`qa_llm`) | runtime | Claude Sonnet 4.6 (default provider) | Default interactive synthesis model. A `ModelTier`, same shape as Enrichment LLM — `model` is likewise interpreted against the active `llm_provider` (an Azure/OpenAI deployment name under `llm_provider = "openai"`). `max_tokens`, when set, overrides [`qa.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (8192). Answer-time only, persists nothing — recorded default, no provenance machinery. |
 | Q&A "think harder" (`qa_think_harder_llm`) | runtime | Opus 5 (toggle, default provider) | Higher-quality, higher-cost synthesis on demand. A `ModelTier`, same provider-relative interpretation as the two knobs above — "think harder" can be a deployment swap (today's Anthropic Sonnet→Opus default), a `reasoning_effort` bump, a `max_tokens` override, or any combination, on the same deployment. Answer-time only, persists nothing — recorded default, no provenance machinery. |
-| Q&A call timeout (`qa_call_timeout_s`) | runtime | `300s` | Budget for the Q&A synthesis call (`qa.py`, routed through `LLMProvider.run_tool_turns` — `lode-35nu.11.6`), split off `enrich_call_timeout_s` (`lode-wfyx`) — [below](#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx). **Per-RUN, not per-call** (`lode-35nu.11.6`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)): today `qa.py` passes no tools, so a "run" is exactly one call and this is unchanged from before; once a future ticket wires real tools in, this same value bounds the whole free-tool-turns-then-forced-answer run, not each turn individually. **Derived, not a measured p95.** Does not reach `enrich.py`'s three call sites — those stay on `enrich_call_timeout_s` (120s) unchanged, and are unaffected by this ticket (still calling `structured_call` directly). The derivation, the retained SDK retry-on-timeout it was chosen alongside, and the `ModelTier.max_tokens` override that invalidates it are all in the write-up linked above, deliberately not restated here. |
+| Q&A call timeout (`qa_call_timeout_s`) | runtime | `300s` | Budget for the Q&A synthesis call (`qa.py`, routed through `LLMProvider.run_tool_turns` — `lode-35nu.11.6`), split off `enrich_call_timeout_s` (`lode-wfyx`) — [below](#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx). **Per-RUN, not per-call** (`lode-35nu.11.6`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)): with `tools_enabled=False` (or `ask_tools_enabled=false`, above) a "run" is exactly one call and this is unchanged from before lode-35nu.11.6; with the [Ask tools](#tool-augmented-ask-lode-8hsk--lode-35nu112) enabled, this same value bounds the whole free-tool-turns-then-forced-answer run, not each turn individually. **Derived, not a measured p95.** Does not reach `enrich.py`'s three call sites — those stay on `enrich_call_timeout_s` (120s) unchanged, and are unaffected by this ticket (still calling `structured_call` directly). The derivation, the retained SDK retry-on-timeout it was chosen alongside, and the `ModelTier.max_tokens` override that invalidates it are all in the write-up linked above, deliberately not restated here. |
 | Max free tool turns (`_DEFAULT_MAX_TOOL_TURNS`) | build | `8` | Not a `Settings` knob — an internal constant (`src/lode/llm_provider.py`) bounding `LLMProvider.run_tool_turns`'s free-tool-choice phase. This is the mechanism that bounds a run's **total** output-token spend: `max_tokens` is per-**turn**, not per-run — a deliberate asymmetry with `qa_call_timeout_s` above, decided rather than left open (`lode-3dh1`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)) — so the worst case for one `run_tool_turns` call is `(max_tool_turns + 1) × max_tokens` output tokens — **9×** today's per-tier `max_tokens` default, not 8×, because this constant bounds only the *free* tool turns and the final forced-schema turn is spent on top. Lower this (or override the `max_tool_turns` parameter at a call site) to tighten that bound; a separate per-run token ceiling was considered and deferred, not built (`lode-csl2`). Why per-turn was chosen over decrementing, and the rejected alternative, are in the write-up linked above — deliberately not restated here. |
 | HF probe timeout (`hf_probe_timeout_s`) | runtime | `5s` | Per-call timeout passed to `huggingface_hub.model_info()` by the indexing-side revision probe (`resolve_model_revision`, below). Bounds a black-holed network to this instead of the OS TCP connect timeout, which the probe used to block for before falling back to `model_revision = NULL` anyway (`lode-w5nr`). Matches `httpx`'s own default rather than the Fetch timeout below (`10s`, web content fetches) — this is a small metadata GET, not a page fetch. Bounds the probe only, **not** `fastembed`'s weights download (next section). What a float timeout actually bounds in `httpx`, with the measurement: `docs/decisions.md`, the `lode-w5nr` entry. |
 

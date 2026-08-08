@@ -25,7 +25,12 @@ import httpx
 import pytest
 
 from lode.config import AtlassianCredentials, load_settings
-from lode.jira_fetch import JiraHttpFetcher, fetch_jira_issue
+from lode.jira_fetch import (
+    JiraHttpFetcher,
+    JiraSearchError,
+    fetch_jira_issue,
+    search_jira_issues,
+)
 from lode.webfetch import (
     FetchStatus,
     RawResponse,
@@ -414,3 +419,105 @@ class TestFetchJiraIssueDefaultFetcherWiring:
         assert fake_token not in (result.tombstone_reason or "")
         assert fake_token not in (result.raw_html or "")
         assert fake_token not in (result.clean_text or "")
+
+
+# ---------------------------------------------------------------------------
+# search_jira_issues (lode-8hsk) -- ids + titles only, /search/jql endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestSearchJiraIssues:
+    def test_hits_return_id_and_title_only(self) -> None:
+        payload = {
+            "issues": [
+                {"key": "ABC-1", "fields": {"summary": "First issue"}},
+                {"key": "ABC-2", "fields": {"summary": "Second issue"}},
+            ],
+            "nextPageToken": None,
+        }
+        fetcher = _QueueFetcher(
+            [_response(payload, url=f"{_API_BASE}/rest/api/3/search/jql")]
+        )
+
+        hits = search_jira_issues("prod outage", _API_BASE, fetcher=fetcher)
+
+        assert [(h.external_id, h.title) for h in hits] == [
+            ("ABC-1", "First issue"),
+            ("ABC-2", "Second issue"),
+        ]
+        # No body/snippet attribute exists on the hit at all -- the schema
+        # makes it impossible, not merely absent.
+        assert not hasattr(hits[0], "body")
+        assert not hasattr(hits[0], "snippet")
+
+    def test_targets_the_search_jql_replacement_endpoint_never_the_retired_one(
+        self,
+    ) -> None:
+        # lode-6nwu verified finding: GET/POST /rest/api/3/search is retired
+        # under CHANGE-2046 -- this must never be requested.
+        fetcher = _QueueFetcher(
+            [_response({"issues": []}, url=f"{_API_BASE}/rest/api/3/search/jql")]
+        )
+        search_jira_issues("q", _API_BASE, fetcher=fetcher)
+        (called_url,) = fetcher.calls
+        assert called_url.startswith(f"{_API_BASE}/rest/api/3/search/jql?")
+        assert "/rest/api/3/search?" not in called_url
+
+    def test_fields_is_passed_explicitly_as_summary(self) -> None:
+        # lode-6nwu's single most likely migration bug: /search/jql defaults
+        # to returning IDs only unless `fields` is passed explicitly.
+        fetcher = _QueueFetcher(
+            [_response({"issues": []}, url=f"{_API_BASE}/rest/api/3/search/jql")]
+        )
+        search_jira_issues("q", _API_BASE, fetcher=fetcher)
+        (called_url,) = fetcher.calls
+        assert "fields=summary" in called_url
+
+    def test_jql_carries_a_bounding_text_clause(self) -> None:
+        # /search/jql rejects an unbounded jql (e.g. a bare "order by ...").
+        fetcher = _QueueFetcher(
+            [_response({"issues": []}, url=f"{_API_BASE}/rest/api/3/search/jql")]
+        )
+        search_jira_issues("prod outage", _API_BASE, fetcher=fetcher)
+        (called_url,) = fetcher.calls
+        assert "jql=text" in called_url.replace("%20", " ").replace("+", " ")
+
+    def test_query_text_is_jql_escaped(self) -> None:
+        fetcher = _QueueFetcher(
+            [_response({"issues": []}, url=f"{_API_BASE}/rest/api/3/search/jql")]
+        )
+        search_jira_issues('say "hi"', _API_BASE, fetcher=fetcher)
+        (called_url,) = fetcher.calls
+        # The embedded quote must be escaped, not left to break the JQL string.
+        from urllib.parse import unquote
+
+        assert '\\"hi\\"' in unquote(called_url)
+
+    def test_api_base_trailing_slash_is_stripped(self) -> None:
+        fetcher = _QueueFetcher(
+            [_response({"issues": []}, url=f"{_API_BASE}/rest/api/3/search/jql")]
+        )
+        search_jira_issues("q", f"{_API_BASE}/", fetcher=fetcher)
+        (called_url,) = fetcher.calls
+        assert "//rest" not in called_url
+
+    def test_non_ok_response_raises_search_error(self) -> None:
+        fetcher = _QueueFetcher(
+            [
+                RawResponse(
+                    final_url=f"{_API_BASE}/rest/api/3/search/jql",
+                    status_code=410,
+                    text="Gone",
+                )
+            ]
+        )
+        with pytest.raises(JiraSearchError):
+            search_jira_issues("q", _API_BASE, fetcher=fetcher)
+
+    def test_max_results_is_sent_on_the_wire(self) -> None:
+        fetcher = _QueueFetcher(
+            [_response({"issues": []}, url=f"{_API_BASE}/rest/api/3/search/jql")]
+        )
+        search_jira_issues("q", _API_BASE, max_results=5, fetcher=fetcher)
+        (called_url,) = fetcher.calls
+        assert "maxResults=5" in called_url
