@@ -151,12 +151,22 @@ CLI_THEME = Theme(CLI_STYLES)
 #: command submodule it exercises (``lode.cli.status``, lode-nftw), so no
 #: seam on the shared object is required.
 #:
-#: ``highlight=False`` (lode-re0s) is process-wide colour POLICY -- see
-#: ``tests/test_cli_console.py`` for the full rationale; every command below
-#: relies on it rather than passing the flag per call site. IF A SECOND
-#: Console IS EVER ADDED to this module (as ``err_console`` below already
-#: has been -- lode-l810), it MUST also pass ``highlight=False``, for the
-#: same reason.
+#: ``highlight=False`` (lode-re0s) is process-wide colour POLICY: rich's
+#: default ``ReprHighlighter`` runs over every plain string rendered
+#: through a ``Console``, injecting ``repr.*`` styles absent from
+#: :data:`CLI_STYLES` -- a rendered date like ``2026-07-16 14:32`` gets
+#: shredded into bold-cyan ``repr.number`` numerals and a bold-green
+#: ``repr.ipv6`` time (yes, the clock reads as an IPv6 address), with the
+#: separators left unstyled between them (verified against rich 15.0.0 --
+#: ``ReprHighlighter()("2026-07-16 14:32").spans``). ``Table`` rendering
+#: never runs this highlighter over cell text, so there is no blast
+#: radius there, and a per-call
+#: ``highlight=True`` still works where wanted -- nothing is foreclosed.
+#: So this Console hoists ``highlight=False`` once at construction instead
+#: of leaving it a per-call-site kwarg, and every command below relies on
+#: that. IF A SECOND Console IS EVER ADDED to this module (as
+#: ``err_console`` below already has been -- lode-l810), it MUST also pass
+#: ``highlight=False``, for the same reason.
 console = Console(theme=CLI_THEME, highlight=False)
 
 #: A STDERR twin of ``console`` above (lode-l810) -- same theme, same

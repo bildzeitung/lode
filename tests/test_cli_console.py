@@ -114,10 +114,8 @@ def test_console_no_color_false_when_env_absent() -> None:
 def test_console_highlight_is_disabled() -> None:
     """``highlight=False`` (lode-re0s) is process-wide policy hoisted onto the
     shared ``console`` at construction, not left as a per-call-site kwarg —
-    see ``src/lode/cli/__init__.py``'s ``console`` docstring for the ReprHighlighter
-    defect this closes (a plain string like a rendered date gets shredded
-    into mismatched styled spans by rich's default highlighter, verified
-    against rich 15.0.0).
+    see ``src/lode/cli/__init__.py``'s ``console`` docstring for the full
+    ReprHighlighter rationale this closes.
 
     Unlike ``no_color`` above, ``highlight`` is not environment-detected —
     it is a plain constructor kwarg — so this needs no subprocess; asserting
