@@ -33,6 +33,12 @@ disposes of the ``~`` Sphinx "show only the last component" prefix cleanly:
 it is stripped before the ``lode.`` prefix check, so ``:func:`~lode.cli.
 _tabular_table``` is treated identically to the unprefixed form.
 
+This scoping covers RESOLUTION only. The wrapped-role check below is
+deliberately repo-wide: a role split across a line break is a syntax defect
+that stops Sphinx resolving it and hides it from ``grep`` no matter who owns
+the symbol, so ``:func:`httpx.<newline>get``` hard-fails too. Ownership is a
+question about whether we can check a symbol exists; wrapping is not.
+
 RESOLUTION ALGORITHM: a dotted path ``lode.cli._short_date`` is resolved by
 importing the longest importable *module* prefix, then walking the
 remaining dotted segments as attribute access from there. This is
@@ -44,16 +50,14 @@ _short_date``-style imports, not because it is defined in ``cli/__init__.py``
 itself. A plain "does this exact file define this exact name" check would
 reject every such re-exported ref as a false positive.
 
-WRAPPED-REF DISPOSITION (lode-8oeu, acceptance criterion 3): this gate
-reports every wrapped ref it finds (even when it resolves) but does not
-hard-fail on wrapping alone, and this pass does not mechanically unwrap the
-pre-existing wrapped sites -- see ``docs/decisions.md`` for the recorded
-reasoning. The count is printed live on every run rather than hard-typed
-here -- a hand-typed count in a file whose whole job is stopping stale
-references is the wrong thing to carry, and this one would already have gone
-stale twice: lode-2hfd's sweep counted 31 wrapped sites by looking at
-``:func:`` alone, and the number rose again when this gate widened past the
-four roles that ticket enumerated.
+WRAPPED-REF DISPOSITION (lode-hg49, amends lode-8oeu's original warn-only
+call): the 81 pre-existing wrapped sites (lode-8oeu's widened role set) were
+mechanically unwrapped in one pass -- prose-only, no behavior change, every
+formerly-wrapped ref still resolves identically since the normalize step was
+already collapsing its whitespace before resolving. With the backlog at
+zero, this gate now HARD-FAILS on any wrapped role, same as an unresolved
+one -- see ``docs/decisions.md`` for the recorded reasoning behind the
+warn-then-unwrap-then-hard-fail sequencing.
 
 ``docs/decisions.md``'s own append-only exemption from pointer sweeps does
 not interact with this gate at all: this gate only ever reads ``src/`` and
@@ -107,8 +111,11 @@ _ROLE_RE = re.compile(
 class RefFinding:
     """One reported ref, carrying its own wording in ``reason`` -- mirrors
     ``check_links.py``'s ``LinkError``. The two finding kinds differ only in
-    that wording; which list a finding lands in, not its type, is what
-    separates a hard failure from a warning."""
+    that wording. Since lode-hg49 BOTH kinds hard-fail, so which list a
+    finding lands in no longer decides severity -- it decides only how the
+    findings are grouped and counted in ``main()``'s report. The split is
+    kept over one flat list because list membership is a typed discriminator
+    the callers (and tests) can rely on, where ``reason`` is free text."""
 
     path: Path
     line_no: int
@@ -241,9 +248,9 @@ def main(
     ] = None,
 ) -> None:
     """Fail if any symbol-naming Sphinx role (see ``_ROLE_RE``) naming a
-    ``lode.*`` symbol under ``src/`` or ``tests/`` does not resolve. A
-    line-wrapped role is reported as a warning (not a failure) whether or
-    not it resolves -- see the module docstring's WRAPPED-REF DISPOSITION."""
+    ``lode.*`` symbol under ``src/`` or ``tests/`` does not resolve, OR if
+    any symbol-naming role is line-wrapped -- see the module docstring's
+    WRAPPED-REF DISPOSITION (lode-hg49)."""
     target_root = (root or REPO_ROOT).resolve()
     # Test the entry actually inserted, not a different one -- ``--root``'s
     # tree must win over any ambient ``lode``, and the guard has to be able
@@ -252,8 +259,13 @@ def main(
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
     unresolved, wrapped = check(target_root)
-    for ref in wrapped:
-        print(f"WARNING: {ref}", file=sys.stderr)
+    # Each kind prints its own findings immediately followed by its own
+    # count -- interleaving the two loops first would detach every count
+    # from the lines it counts whenever both kinds fire at once.
+    if wrapped:
+        for ref in wrapped:
+            print(str(ref), file=sys.stderr)
+        print(f"\n{len(wrapped)} line-wrapped reference(s) found", file=sys.stderr)
     if unresolved:
         for ref in unresolved:
             print(str(ref), file=sys.stderr)
@@ -261,11 +273,11 @@ def main(
             f"\n{len(unresolved)} unresolved docstring reference(s) found",
             file=sys.stderr,
         )
+    if wrapped or unresolved:
         raise typer.Exit(1)
-    suffix = f" ({len(wrapped)} line-wrapped ref(s) warned above)" if wrapped else ""
     print(
         "OK: every symbol-naming Sphinx role naming a lode.* symbol under "
-        f"src/ and tests/ resolves{suffix}"
+        "src/ and tests/ resolves and none is line-wrapped"
     )
 
 

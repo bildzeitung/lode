@@ -14,28 +14,26 @@ deliberately NOT shared: this module hands back the ``stale`` bit as data, and
 each consumer decides how to show it (the TUI styles it, the CLI prints
 ``" [stale]"``).
 
-**Externally-inherited tags** (lode-f0m1) are surfaced too, distinguishable
-from a note's own directly-scoped tags via :attr:`EnrichmentItem.inherited`.
-``lode-35nu.7`` made a tag scoped to an *external* resolve to every note that
-links that external via a fresh edge for the Tags-screen filter's purposes,
-but left this view-model's ``tags`` strictly note_id-scoped (built from
-:func:`~lode.display.display_annotations`, which only ever reads rows whose
-``target`` is the note's own id) -- so a note could match an external-only
-tag filter yet show no trace of that tag once opened. :func:`_inherited_tag_items`
-closes that gap with the same resolution :func:`lode.notes_read.
-_list_notes_with_all_tags` uses (a fresh note->external edge), appended to
-``tags`` and flagged ``inherited=True`` rather than merged in
-indistinguishably -- the whole point being to make which-is-which legible,
-exactly the way ``stale`` is already carried as data and rendered
-per-consumer, not baked into the value string.
+**Externally-inherited tags** (lode-f0m1) are surfaced too, distinguishable from a
+note's own directly-scoped tags via :attr:`EnrichmentItem.inherited`. ``lode-35nu.7``
+made a tag scoped to an *external* resolve to every note that links that external via a
+fresh edge for the Tags-screen filter's purposes, but left this view-model's ``tags``
+strictly note_id-scoped (built from :func:`~lode.display.display_annotations`, which
+only ever reads rows whose ``target`` is the note's own id) -- so a note could match an
+external-only tag filter yet show no trace of that tag once opened.
+:func:`_inherited_tag_items` closes that gap with the same resolution
+:func:`lode.notes_read._list_notes_with_all_tags` uses (a fresh note->external edge),
+appended to ``tags`` and flagged ``inherited=True`` rather than merged in
+indistinguishably -- the whole point being to make which-is-which legible, exactly the
+way ``stale`` is already carried as data and rendered per-consumer, not baked into the
+value string.
 
 **Content** is built ENTIRELY on :mod:`lode.display` --
-:func:`~lode.display.display_annotations` / :func:`~lode.display.
-display_edges`, the shared stale-display policy (lode-npx.4) -- so
-tombstones and hidden-assertive items are dropped and stale items are
-flagged exactly the way every other consumer already sees them. Content is
-note_id-scoped (spans every version in the chain) and is **never** suppressed
-by :attr:`EnrichmentView.enrichment_state`; a re-enriching note legitimately
+:func:`~lode.display.display_annotations` / :func:`~lode.display.display_edges`, the
+shared stale-display policy (lode-npx.4) -- so tombstones and hidden-assertive items are
+dropped and stale items are flagged exactly the way every other consumer already sees
+them. Content is note_id-scoped (spans every version in the chain) and is **never**
+suppressed by :attr:`EnrichmentView.enrichment_state`; a re-enriching note legitimately
 shows ``pending`` state alongside its stale last-known content.
 
 **State** (``enrichment_state``) is keyed on the note's HEAD version instead,

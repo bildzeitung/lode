@@ -67,12 +67,11 @@ class EmptyEditError(Exception):
 def load_head(db_path: Path, note_id: str) -> tuple[str, str] | None:
     """Return ``(head_version_id, head_body)`` for ``note_id``'s live head.
 
-    ``None`` if the note is absent or its head is a soft-delete tombstone
-    (``op = 'delete'``) — same "live heads only" guard :func:`lode.notes_read.
-    list_notes` applies, since a tombstoned note has nothing editable to load.
-    :class:`~lode.tui.screens.edit.EditScreen` uses this both to seed the
-    editable buffer and to remember the CAS ``parent`` its save must reparent
-    onto.
+    ``None`` if the note is absent or its head is a soft-delete tombstone (``op =
+    'delete'``) — same "live heads only" guard :func:`lode.notes_read.list_notes`
+    applies, since a tombstoned note has nothing editable to load.
+    :class:`~lode.tui.screens.edit.EditScreen` uses this both to seed the editable
+    buffer and to remember the CAS ``parent`` its save must reparent onto.
     """
     conn = init_db(db_path)
     try:
@@ -103,14 +102,13 @@ def delete_note(
     "deleted" note still keyword-findable until something else happened to
     touch the cache.
 
-    Unlike :func:`save_edit`, a CAS reject (:class:`~lode.versions.
-    HeadConflictError` — someone else edited or deleted the note first) is
-    **not** converted into a preserved-draft :class:`~lode.tui.services.reconcile.
-    Conflict` here: a delete carries no user buffer to preserve, so there is
-    nothing to reconcile. It is simplest for the caller
-    (:class:`~lode.tui.screens.browse.BrowseScreen`) to let the exception
-    propagate, notify, and reload the list — which already reflects the
-    current state either way.
+    Unlike :func:`save_edit`, a CAS reject (:class:`~lode.versions.HeadConflictError` —
+    someone else edited or deleted the note first) is **not** converted into a
+    preserved-draft :class:`~lode.tui.services.reconcile.Conflict` here: a delete
+    carries no user buffer to preserve, so there is nothing to reconcile. It is simplest
+    for the caller (:class:`~lode.tui.screens.browse.BrowseScreen`) to let the exception
+    propagate, notify, and reload the list — which already reflects the current state
+    either way.
     """
     settings = settings or Settings()
     conn = init_db(db_path)

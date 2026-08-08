@@ -52,18 +52,17 @@ This module owns the **fetch-path** egress obligations only:
 
 ## Failure semantics (human decision, ``lode-35nu.11.5`` /challenge 2nd pass)
 
-**A fetch that fails on the ask path is never persisted.** No ``snapshots``
-row, no ``externals`` row, no tombstone — :func:`fetch_for_ask` raises
-:class:`ToolFetchError` instead, for the caller (the tool-dispatch layer) to
-turn into an error the model sees. This is a deliberate divergence from the
-draw-down path (:func:`lode.drawdown.refresh_external`), which *does*
-tombstone: a draw-down failure is revisiting a source already in the corpus,
-whereas a source discovered mid-question that fails to fetch was never in
-the corpus and must not enter it as a dead row. It also closes a real hole a
-tombstone would reopen: a tombstone is a genuine snapshot with a genuine
-``snapshot_id`` and an inspectable body (:func:`lode.externals.
-tombstone_body`), so the model could quote it and the faithfulness gate
-would pass the quote for content that was never actually fetched.
+**A fetch that fails on the ask path is never persisted.** No ``snapshots`` row, no
+``externals`` row, no tombstone — :func:`fetch_for_ask` raises :class:`ToolFetchError`
+instead, for the caller (the tool-dispatch layer) to turn into an error the model sees.
+This is a deliberate divergence from the draw-down path
+(:func:`lode.drawdown.refresh_external`), which *does* tombstone: a draw-down failure is
+revisiting a source already in the corpus, whereas a source discovered mid-question that
+fails to fetch was never in the corpus and must not enter it as a dead row. It also
+closes a real hole a tombstone would reopen: a tombstone is a genuine snapshot with a
+genuine ``snapshot_id`` and an inspectable body (:func:`lode.externals.tombstone_body`),
+so the model could quote it and the faithfulness gate would pass the quote for content
+that was never actually fetched.
 
 ## Fetch timeout (build-time decision, this ticket)
 

@@ -90,6 +90,20 @@ entries below from being rewritten to chase the current tree.)
      a redesign. **Known cost, filed as a follow-up:** those warnings print on every green
      `nox` run, so a genuinely new wrapped ref is indistinguishable from the backlog in that
      output — a warning that always fires trains readers to ignore the channel.
+
+     **Update (lode-hg49, 2026-08-08)** — the "known cost" above was filed as `lode-hg49` and is now
+     resolved by taking the third option that entry called a small follow-up: the **81** pre-existing
+     wrapped sites (30 files) were mechanically unwrapped in one pass, and with the backlog at zero
+     the gate now **hard-fails on any wrapped role**, the same as an unresolved one. Two claims above
+     are therefore stale: wrapped refs are no longer merely reported, and the gate no longer prints a
+     live wrapped count (there is nothing left to count, so the `OK:` line states the invariant
+     instead). Chosen over the two alternatives `lode-hg49` also listed — summary-only output, and a
+     hard-fail above a pinned baseline count — because unwrapping a small, one-time backlog buys a
+     clean binary rule with no baseline number to maintain, whereas both alternatives keep the
+     backlog *and* add ongoing bookkeeping. The unwrap was prose-only: verified by re-parsing all 30
+     files and confirming the AST is unchanged once docstrings are blanked, and that the whole file
+     content is byte-identical modulo whitespace, so no code, comment text, or non-docstring string
+     literal moved.
   4. **Wired as a nox session (`docstringcheck`) in the DEFAULT set, hard-fail on any unresolved
      `lode.*` ref** — mirrors `linkcheck`'s placement (pure Python, no Docker/network) rather than a
      pytest test or a pre-commit hook, so it runs on every bare `nox` the same as the markdown-link

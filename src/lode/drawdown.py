@@ -564,18 +564,17 @@ def _refresh_web(
     real :class:`~lode.webfetch.HttpxFetcher`) — this module adds no new
     network seam of its own.
 
-    Returns a one-line human-readable outcome (mirrors the ``embed``/
-    ``enrich`` handler convention, ``lode-1gr.4``) for ``lode work``'s echo.
-    When the fetch permanently failed, :attr:`~lode.webfetch.FetchResult.
-    tombstone_reason` (a short machine tag such as ``"http_404"``, never an
-    interpolated body) is appended in parens -- e.g. ``"refreshed <url>:
-    tombstone (http_404)"`` -- mirroring the Atlassian legs' reason-surfacing
-    (``lode-gpzn.5``, ``lode-pmx0``). It precedes the redirect/repoint suffix.
-    The two are independent -- the redirect suffix fires on any final-URL
-    change, not only a 200 success -- so a redirect that lands on a permanent
-    failure (a 3xx to a URL that then 404s) sets both; they are appended by
-    separate ``if``\\s, not an ``if``/``elif``, and compose unambiguously as
-    ``"tombstone (http_404) -> <final> (repointed N edge(s))"``.
+    Returns a one-line human-readable outcome (mirrors the ``embed``/ ``enrich`` handler
+    convention, ``lode-1gr.4``) for ``lode work``'s echo. When the fetch permanently
+    failed, :attr:`~lode.webfetch.FetchResult.tombstone_reason` (a short machine tag
+    such as ``"http_404"``, never an interpolated body) is appended in parens -- e.g.
+    ``"refreshed <url>: tombstone (http_404)"`` -- mirroring the Atlassian legs'
+    reason-surfacing (``lode-gpzn.5``, ``lode-pmx0``). It precedes the redirect/repoint
+    suffix. The two are independent -- the redirect suffix fires on any final-URL
+    change, not only a 200 success -- so a redirect that lands on a permanent failure (a
+    3xx to a URL that then 404s) sets both; they are appended by separate ``if``\\s, not
+    an ``if``/``elif``, and compose unambiguously as ``"tombstone (http_404) -> <final>
+    (repointed N edge(s))"``.
     """
     result = fetch_and_extract(target_external_id, fetcher=fetcher, settings=settings)
     final_external_id = canonicalize_url(result.final_url, settings)
@@ -620,14 +619,13 @@ def _refresh_atlassian(
     explicit ``if``/``elif`` dispatch (not a registry — speculative
     flexibility this ticket doesn't need).
 
-    Unlike the web leg, ``external_id`` here is a semantic key (an issue key
-    / page id), not itself a fetchable URL — the request URL is rebuilt
-    inside ``fetch_fn`` from the ``api_base`` persisted on the ``externals``
-    row at link-detection time (lode-gpzn.2). No redirect/repoint step is
-    needed here (unlike :func:`_refresh_web`): a semantic key has no
-    redirect concept, and :attr:`~lode.webfetch.FetchResult.final_url` is
-    purely informational for this leg — :func:`~lode.externals.
-    ingest_fetch_result` never reads it.
+    Unlike the web leg, ``external_id`` here is a semantic key (an issue key / page id),
+    not itself a fetchable URL — the request URL is rebuilt inside ``fetch_fn`` from the
+    ``api_base`` persisted on the ``externals`` row at link-detection time
+    (lode-gpzn.2). No redirect/repoint step is needed here (unlike
+    :func:`_refresh_web`): a semantic key has no redirect concept, and
+    :attr:`~lode.webfetch.FetchResult.final_url` is purely informational for this leg —
+    :func:`~lode.externals.ingest_fetch_result` never reads it.
 
     **Work-pass error visibility (lode-gpzn.5):** on a tombstone (e.g. a 401/
     403/404 the fetch unit classified as permanent — see
@@ -683,8 +681,8 @@ def refresh_external(
     - **No ``externals`` row yet, or ``source_type == SOURCE_TYPE_WEB``:**
       the unchanged web fetch leg (:func:`_refresh_web`) —
       ``target_external_id`` is itself the fetchable URL. "No row yet" is
-      the common case for a *first* web refresh: :func:`detect_and_
-      enqueue_drawdown` never pre-creates a web external's row (only
+      the common case for a *first* web refresh: :func:`detect_and_enqueue_drawdown`
+      never pre-creates a web external's row (only
       :func:`lode.externals.ingest_snapshot`, on the first successful
       fetch, does) — see :func:`lode.worker._refresh_dead_letter_hook`'s
       matching fallback for the same reasoning.
