@@ -595,9 +595,7 @@ class TestGuardedHttpxFetcher:
     ):
         """A literal loopback/private host needs no DNS -- refused immediately."""
         calls: list = []
-        monkeypatch.setattr(
-            httpx, "Client", _guarded_fake_client_cls([], calls)
-        )
+        monkeypatch.setattr(httpx, "Client", _guarded_fake_client_cls([], calls))
         fetcher = GuardedHttpxFetcher(load_settings())
 
         with pytest.raises(UnsafeWebDestinationError):
@@ -627,9 +625,7 @@ class TestGuardedHttpxFetcher:
             302, "http://93.184.216.34/", location="http://127.0.0.1/admin"
         )
         calls: list = []
-        monkeypatch.setattr(
-            httpx, "Client", _guarded_fake_client_cls([first], calls)
-        )
+        monkeypatch.setattr(httpx, "Client", _guarded_fake_client_cls([first], calls))
         fetcher = GuardedHttpxFetcher(load_settings())
 
         with pytest.raises(UnsafeWebDestinationError):
@@ -643,9 +639,7 @@ class TestGuardedHttpxFetcher:
         first = _GuardedFakeResponse(
             302, "http://93.184.216.34/", location="http://93.184.216.35/final"
         )
-        second = _GuardedFakeResponse(
-            200, "http://93.184.216.35/final", text="landed"
-        )
+        second = _GuardedFakeResponse(200, "http://93.184.216.35/final", text="landed")
         calls: list = []
         monkeypatch.setattr(
             httpx, "Client", _guarded_fake_client_cls([first, second], calls)
