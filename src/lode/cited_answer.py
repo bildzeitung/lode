@@ -151,6 +151,17 @@ def ask(
     """
     settings = settings or Settings()
     passages: list[QaPassage] = []
+    # Several ContextItems can be chunked from the same parent_block -- most
+    # often under lode-35nu.11.3's unbounded pin, which prepends EVERY live-head
+    # passage of one note (docs/retrieval.md "Pinned-note context is deliberately
+    # unbounded"). Sending that block's text once per sharing item is pure
+    # duplicate egress cost with no completeness benefit: nothing downstream is
+    # positional in `passages` (the egress gate, the is_external map and the
+    # bodies map are all keyed by target_id) and the citation offset is stamped
+    # from the item's own char_range over the un-deduped `context`, not from the
+    # QaPassage text -- so a (target_id, text) duplicate is safe to drop before
+    # it ever reaches the send (lode-ol2v).
+    seen_passages: set[tuple[str, str]] = set()
     # Verify spans only against bodies the model was eligible to see: a no_egress
     # body (withheld from the send) and an unresolved target are kept out of the
     # map, so a claim citing content the model never received fails closed, just
@@ -160,14 +171,17 @@ def ask(
     for item in context:
         is_external = item.tier in _EXTERNAL_TIERS
         body, no_egress = resolved.get(item.target_version, (None, False))
-        passages.append(
-            QaPassage(
-                target_id=item.target_version,
-                text=item.parent_block,
-                no_egress=no_egress,
-                is_external=is_external,
+        key = (item.target_version, item.parent_block)
+        if key not in seen_passages:
+            seen_passages.add(key)
+            passages.append(
+                QaPassage(
+                    target_id=item.target_version,
+                    text=item.parent_block,
+                    no_egress=no_egress,
+                    is_external=is_external,
+                )
             )
-        )
         if body is not None and not no_egress:
             bodies[item.target_version] = body
 

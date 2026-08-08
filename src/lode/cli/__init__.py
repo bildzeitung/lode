@@ -155,7 +155,10 @@ CLI_THEME = Theme(CLI_STYLES)
 #:
 #: ``highlight=False`` (lode-re0s) is process-wide colour POLICY -- see
 #: ``tests/test_cli_console.py`` for the full rationale; every command below
-#: relies on it rather than passing the flag per call site.
+#: relies on it rather than passing the flag per call site. IF A SECOND
+#: Console IS EVER ADDED to this module (as ``err_console`` below already
+#: has been -- lode-l810), it MUST also pass ``highlight=False``, for the
+#: same reason.
 console = Console(theme=CLI_THEME, highlight=False)
 
 #: A STDERR twin of ``console`` above (lode-l810) -- same theme, same

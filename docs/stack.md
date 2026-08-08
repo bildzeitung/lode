@@ -828,19 +828,24 @@ was added — these are the same two knobs `structured_call` already took, and a
   raising `LLMProviderError` rather than starting a further call once it is exhausted, instead of
   resetting the clock every turn. A run therefore cannot outlive `timeout_s` however many turns it
   takes.
-- **`max_tokens` — per-TURN, and it stays that way.** The ticket's acceptance criteria asked for both
-  budgets to be per-run; only `timeout_s` is, and this is the one place the implementation knowingly
-  departs from that wording. `max_tokens` is not a spend meter — it is Anthropic's hard cap on a
-  *single response*, so "per-run" could only be emulated by decrementing it against each turn's
-  `usage.output_tokens`. That emulation is worse than the problem: it silently shrinks the budget
-  available to the **final forced-schema turn**, so a run that narrated its way through several tool
-  calls would produce a truncated `_ClaimsEnvelope` and fail with the budget-exhausted diagnostic —
-  turning a cost overshoot into a wrong answer on the user-visible Q&A path. The real exposure is an
-  N-turn run emitting up to N × `max_tokens` output tokens.
-- **Why it is safe to leave open here.** Today no call site passes tools, so every run is exactly one
-  turn and the two readings coincide exactly. `lode-35nu.11.2` is the first ticket that can spend more
-  than one turn, and is the right place to settle whether the answer is a decremented budget, a
-  separate `max_output_tokens_per_run` knob, or simply a lower `max_tool_turns`.
+- **`max_tokens` — per-TURN, DECIDED to stay that way (maintainer, `lode-3dh1`).** The ticket's
+  acceptance criteria asked for both budgets to be per-run; only `timeout_s` is, and that asymmetry is
+  now a settled design decision, not a known gap awaiting a fix. `max_tokens` is not a spend meter —
+  it is Anthropic's hard cap on a *single response*, so "per-run" could only be emulated by
+  decrementing it against each turn's `usage.output_tokens`. That emulation was **rejected**: it
+  silently shrinks the budget available to the **final forced-schema turn**, so a run that narrated
+  its way through several tool calls would produce a truncated `_ClaimsEnvelope` and fail with the
+  budget-exhausted diagnostic — turning a cost overshoot into a wrong answer on the user-visible Q&A
+  path. Instead, total spend for a run is bounded by the turn count
+  ([`_DEFAULT_MAX_TOOL_TURNS`](configuration.md#models) = 8) rather than by decrementing `max_tokens`:
+  the worst case is `(max_tool_turns + 1) × max_tokens` output tokens per run — the `+ 1` is the
+  final forced-schema turn, spent *after* the free-turn loop and not covered by the constant, so the
+  ceiling at today's default is 9 × `max_tokens`. A bound is the property that matters here.
+- **A separate per-run ceiling remains available, deferred not rejected.** A dedicated
+  `max_output_tokens_per_run` knob is the principled fix if real cost pressure ever shows up, and
+  bounding by turn count does not preclude adding it later — it would be additive. Building it now
+  would be machinery for a pressure nobody has measured, so it is filed as a follow-up (`lode-csl2`)
+  rather than built here.
 
 **Degenerate case, byte-for-byte (the acceptance bar every existing call site must clear)**: when
 `tools` is empty, **every** `LLMProvider` implementation is required to delegate straight to
