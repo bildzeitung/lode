@@ -2599,6 +2599,29 @@ carries the hand-off and something else consumes the label —
    way it looks for `needs-rebase`, and dispatches a `code-reviewer` at each — mirroring the
    `needs-rebase` sweep exactly, just one gate earlier in the pipeline.
 
+**`review_head` is stale BY CONSTRUCTION on an exit (d) re-entry (lode-9b5n).** A ticket reaching exit
+(d) has already been through `code-reviewer` once, so `metadata.review_head` still names the
+*pre*-technical-review commit — nothing refreshes it when a review pushes further commits onto
+`land/<id>`. Re-entering at `ready-for-code-review` therefore hands the next `code-reviewer` a
+`review_head` that necessarily disagrees with the fetched tip, on every exit (d) re-entry, not just an
+occasional race. This was harmless in practice — `code-reviewer` checks out `origin/land/<id>`, never
+`review_head`, and only compares the two to detect drift — but a reviewer trained to expect a spurious
+mismatch here is a reviewer that will also discount a *genuine* one. **Fixed by narrowing what counts
+as drift, not by trying to keep `review_head` fresh:** `code-reviewer`'s drift check
+([`code-reviewer.md`](../.claude/agents/code-reviewer.md), step 2) now asks one question — is
+`review_head` an **ancestor** of the fetched tip? Yes means the branch only moved forward: not drift,
+not noted. No means history was rewritten, so commits `review_head` accounted for may be *gone* rather
+than superseded: real drift, still noted. Keeping `review_head` itself unwritten on this path is
+deliberate — the field is *provenance*, not a review boundary, so there is nothing to keep fresh.
+
+**What the ancestor arm gives up.** It cannot separate an exit (d) re-entry from a fast-forward push of
+never-reviewed commits — both leave `review_head` an ancestor — so silencing the first silences the
+second. Accepted: the drift note never gated anything, and `code-reviewer` reviews **`trunk...HEAD`**,
+the whole branch, never `review_head...HEAD`, so commits pushed on top are reviewed either way. What
+survives is the one case where that reasoning fails — a rewrite, where content is *removed* rather than
+added. Narrowing the signal to exactly that case is what keeps it credible, which was the ticket's
+actual complaint.
+
 ### Isolating `land-review` dispatches (lode-g387)
 
 `/land` runs on **trunk, in the main checkout** — the same working tree its Section 3 batch-merges
@@ -3292,9 +3315,26 @@ assumption would not have closed it.
   fail against when the record is simply absent.
 
   **Release reaches only two sites** — Section 1's empty-queue exit and the end of Section 4 — as a
-  latency optimization; every other stop, *including the routine pass in which every branch was kicked
-  back `needs-rebase` or bounced*, waits the window out. Deliberate: a TTL that asks nothing of any exit
-  site cannot rot as exits are added, the same reasoning as the pass-start `reset --hard` below.
+  latency optimization; every genuine abort (an exit-2 machine fault, an isolation-replay baseline red,
+  a crash) waits the window out. Deliberate: a TTL that asks nothing of any exit site cannot rot as
+  exits are added, the same reasoning as the pass-start `reset --hard` below.
+
+  **A pass in which every branch was bounced, escalated, held, or kicked back `needs-rebase` is NOT
+  one of those waits-it-out stops (lode-0jan).** It used to be: Section 3's empty-`accepted` guard
+  aborted identically whether `$STATE_DIR/accepted` was missing (3a's precompute never ran — a real
+  silent-failure signal) or merely present-but-empty (every branch already left the set for a
+  legitimate reason before the merge loop even started). Only the missing case still aborts. An empty
+  one now falls through — the merge loop it guards iterates zero times either way, the re-gate that
+  follows is skipped (nothing merged, so `trunk` is byte-identical to the already-gated `origin/trunk`
+  Section 1 fetched; skipped rather than merely harmless, since running it would spend a full suite
+  re-certifying content `trunk` already carries), and the pass reaches Section 4's end-of-pass path
+  exactly as a real merge would, which already closes an empty `$LANDED` correctly by construction.
+  Section 3's *isolation-replay* guard is deliberately left refusing an empty set: skipping the
+  re-gate should make that state unreachable, and if it arrives anyway the red is attributable to no
+  branch in the pass, so a loud stop is the honest outcome. This is
+  narrowly scoped to that one outcome, not a new release call added at Section 3 or anywhere else — the
+  rejection of per-exit-site releases in the paragraph above is unchanged and still governs every
+  genuine abort.
 - **A failed `acquire` is signposted, not re-printed (lode-119w).** `land-lock.sh` exits 1 for both a
   transient "another /land appears to still be running" and a permanent per-machine MACHINE FAULT
   (`flock` missing, `rev-parse` failure, an unwritable lock dir), and every caller collapses non-zero to

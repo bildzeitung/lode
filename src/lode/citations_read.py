@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from lode.notes_read import first_line
-from lode.target_rows import fetch_target_rows
+from lode.sql_ids import fetch_by_ids
 
 if TYPE_CHECKING:
     from lode.answer import Support
@@ -53,11 +53,11 @@ def resolve_citations(
     Two queries total -- one ``IN (...)`` over every distinct cited
     ``version_id``, one over every distinct cited ``snapshot_id`` -- so a
     multi-claim answer costs a fixed two round-trips regardless of citation
-    count (the ticket's "a single batched query" acceptance line). The
-    batched pair itself is :func:`lode.target_rows.fetch_target_rows`, the
-    same shared shape :func:`lode.cited_answer._resolve_targets` uses
-    (lode-r9z0); this function keeps its own column list and its own
-    row -> result mapping. The as-of
+    count (the ticket's "a single batched query" acceptance line). Each
+    ``IN(...)`` fetch is :func:`lode.sql_ids.fetch_by_ids`, the same shared
+    primitive :func:`lode.cited_answer._resolve_targets` uses (lode-r9z0,
+    re-cut lode-oca9); this function keeps its own full SQL (columns, JOIN)
+    and its own row -> result mapping. The as-of
     stamp rides along on the same rows the identity comes from (a note version
     is stamped at write time, ``versions.created``; an external snapshot at
     fetch time, ``snapshots.fetched_at``), so it costs no extra query.
@@ -80,12 +80,19 @@ def resolve_citations(
     version_ids = tuple({s.version_id for s in supports if s.version_id is not None})
     snapshot_ids = tuple({s.snapshot_id for s in supports if s.snapshot_id is not None})
 
-    version_rows, snapshot_rows = fetch_target_rows(
+    version_rows = fetch_by_ids(
         conn,
         version_ids,
+        "SELECT v.version_id, v.note_id, v.body, v.created, n.head_version_id "
+        "FROM versions v JOIN notes n ON n.note_id = v.note_id "
+        "WHERE v.version_id IN ({placeholders})",
+    )
+    snapshot_rows = fetch_by_ids(
+        conn,
         snapshot_ids,
-        "v.version_id, v.note_id, v.body, v.created, n.head_version_id",
-        "s.snapshot_id, s.external_id, s.body, s.fetched_at, e.head_snapshot_id",
+        "SELECT s.snapshot_id, s.external_id, s.body, s.fetched_at, e.head_snapshot_id "
+        "FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
+        "WHERE s.snapshot_id IN ({placeholders})",
     )
 
     for version_id, note_id, body, created, head_version_id in version_rows:

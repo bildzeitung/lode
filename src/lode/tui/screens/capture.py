@@ -53,49 +53,45 @@ keystroke->render latency proxy. All of it is gated behind
 the lode-5y8.4 seed corpus and the measured verdict.
 
 **Latency fix: reuse one embedder instead of one per pass (lode-0wj.4).** The
-lag-diagnosis spike (lode-0wj.2) found the related-notes pass itself
-non-blocking -- but only tested it with a *pre-warmed* embedder. This screen's
-real wiring never passed one, so :func:`~lode.tui.services.related.find_related_notes`
-built a *fresh* :class:`~lode.embedding.FastEmbedEmbedder` every debounce fire
--- and unlike ONNX *inference* (which releases the GIL, per the spike), the
-ONNX model's *construction* does not: measured against the lode-5y8.4 seed
-corpus with the real embedder (the same diagnostic harness the spike used,
-but driving the real screen through Textual's pilot rather than an isolated
-function call), this cost the event loop ~1.5s of stall on *every* pause in
-typing, for the whole session -- exactly the felt "typing blocks" complaint.
-The shared embedder now lives in :class:`~lode.tui.widgets.related_notes_panel.
-RelatedNotesPanel` (below) and is reused for the panel's lifetime, so only the
-*first* pass in a session pays the ONNX model's cold-load cost; every pass
-after it reuses the already-loaded model and pays only the single-digit-ms
-inference cost lode-0wj.2's spike measured.
+lag-diagnosis spike (lode-0wj.2) found the related-notes pass itself non-blocking -- but
+only tested it with a *pre-warmed* embedder. This screen's real wiring never passed one,
+so :func:`~lode.tui.services.related.find_related_notes` built a *fresh*
+:class:`~lode.embedding.FastEmbedEmbedder` every debounce fire -- and unlike ONNX
+*inference* (which releases the GIL, per the spike), the ONNX model's *construction*
+does not: measured against the lode-5y8.4 seed corpus with the real embedder (the same
+diagnostic harness the spike used, but driving the real screen through Textual's pilot
+rather than an isolated function call), this cost the event loop ~1.5s of stall on
+*every* pause in typing, for the whole session -- exactly the felt "typing blocks"
+complaint. The shared embedder now lives in
+:class:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel` (below) and is reused
+for the panel's lifetime, so only the *first* pass in a session pays the ONNX model's
+cold-load cost; every pass after it reuses the already-loaded model and pays only the
+single-digit-ms inference cost lode-0wj.2's spike measured.
 
 **Extracted into a shared widget (lode-aoc).** The debounce timer, the
-``@work(exclusive=True)`` search pass, the lazy shared embedder, cancel-in-
-flight logic, and the panel's own rendering all now live in
-:class:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel`, not this screen --
-see that module's docstring for why (composition over a shared base class,
-decided 2026-07-09) and for the full behaviour-contract list this extraction
-preserved. This screen now only composes the widget, forwards its text area's
-``Changed`` text to :meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel.
-update_draft`, and calls :meth:`~lode.tui.widgets.related_notes_panel.
-RelatedNotesPanel.reset` wherever it used to cancel/clear a pass of its own
-(:meth:`CaptureScreen.action_save`). :class:`~lode.tui.screens.edit.
-EditScreen` composes the same widget for parity (the ticket this extraction
-was done for).
+``@work(exclusive=True)`` search pass, the lazy shared embedder, cancel-in- flight
+logic, and the panel's own rendering all now live in
+:class:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel`, not this screen -- see
+that module's docstring for why (composition over a shared base class, decided
+2026-07-09) and for the full behaviour-contract list this extraction preserved. This
+screen now only composes the widget, forwards its text area's ``Changed`` text to
+:meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel.update_draft`, and calls
+:meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel.reset` wherever it used
+to cancel/clear a pass of its own (:meth:`CaptureScreen.action_save`).
+:class:`~lode.tui.screens.edit.EditScreen` composes the same widget for parity (the
+ticket this extraction was done for).
 
-**One stack-aware Ctrl+S; Ctrl+N retired (lode-bsmc).** This screen used to
-bind its own "Save & quit" to Ctrl+S and a separate "Save & new" to Ctrl+N
-(lode-d32.4). Both saved through the identical no-AI path
-(:meth:`_save_buffer`); the only difference was what happened after: exit, or
-reset-and-stay. Consolidated onto one stack-aware Ctrl+S -- this screen is
-always the bottom of the stack (a brand-new note, nothing pushed on top), so
-its Ctrl+S is unconditionally "Save & New" now (:meth:`action_save`, the
-renamed former ``action_save_and_new``); :class:`~lode.tui.screens.edit.
-EditScreen`'s Ctrl+S (a screen *is* on the stack there) was already "Save &
-pop" and is unchanged. "Save & quit" survives only inside the quit/discard
-confirm dialog's own "Save" answer, decoupled onto its own exit path
-(:meth:`_save_and_exit`) rather than reusing :meth:`action_save`, precisely
-because that method no longer exits. ``ctrl+n`` is freed --
+**One stack-aware Ctrl+S; Ctrl+N retired (lode-bsmc).** This screen used to bind its own
+"Save & quit" to Ctrl+S and a separate "Save & new" to Ctrl+N (lode-d32.4). Both saved
+through the identical no-AI path (:meth:`_save_buffer`); the only difference was what
+happened after: exit, or reset-and-stay. Consolidated onto one stack-aware Ctrl+S --
+this screen is always the bottom of the stack (a brand-new note, nothing pushed on top),
+so its Ctrl+S is unconditionally "Save & New" now (:meth:`action_save`, the renamed
+former ``action_save_and_new``); :class:`~lode.tui.screens.edit.EditScreen`'s Ctrl+S (a
+screen *is* on the stack there) was already "Save & pop" and is unchanged. "Save & quit"
+survives only inside the quit/discard confirm dialog's own "Save" answer, decoupled onto
+its own exit path (:meth:`_save_and_exit`) rather than reusing :meth:`action_save`,
+precisely because that method no longer exits. ``ctrl+n`` is freed --
 ``docs/keybindings.md``'s letter-space accounting.
 
 **...and reclaimed for open-link (lode-5ill)** -- a different action on the same

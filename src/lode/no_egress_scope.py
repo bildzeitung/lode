@@ -112,7 +112,7 @@ def is_no_egress_scoped(
                 candidate = external_id.upper()
                 if candidate.startswith(prefix) and candidate[len(prefix) :].isdigit():
                     return True
-            elif _url_host(external_id) == _normalize_host(rule.match):
+            elif url_host(external_id) == _normalize_host(rule.match):
                 return True
         except Exception:  # noqa: BLE001 -- fail CLOSED, see the docstring
             return True
@@ -124,7 +124,7 @@ def _normalize_host(host: str) -> str:
     return host.strip().lower().rstrip(".")
 
 
-def _url_host(url: str) -> str:
+def url_host(url: str) -> str:
     """The normalized host of ``url``, or ``""`` if it carries none.
 
     ``urlsplit(...).hostname`` -- not ``netloc`` -- so userinfo and port are
