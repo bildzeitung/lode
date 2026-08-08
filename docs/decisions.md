@@ -4112,3 +4112,16 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
      this inverts who gets guarded.
   3. It reintroduces a `jq` dependency against RULING 3, on a hook measured at ~10ms in the hot path
      of every `Edit`/`Write`.
+
+- **Open (`lode-ejfv`, 2026-08-08) — web_fetch redirect-chain SSRF is not closed, only the initial
+  destination.** [`docs/externals.md`](externals.md#web-fetch-destination-guard-decided-lode-ejfv)
+  decided a private/loopback/link-local/reserved/multicast address guard on the ask path's
+  `web_fetch` destination (`lode.tools._refuse_private_web_destination`), checked before any network
+  call. It validates only the **initial** URL's resolved address: an otherwise-public, allowed host
+  can still respond with a redirect that steers `lode.webfetch`'s `httpx` client at a private address
+  mid-chain, since redirects are followed transparently inside one client call with no per-hop
+  validation hook. Closing that needs per-hop redirect validation added to `lode.webfetch` itself —
+  deferred: it is a real but narrower and harder-to-exploit vector (requires an attacker-controlled
+  server that both passes the initial guard *and* then redirects internally) than the direct
+  "point the tool straight at `169.254.169.254`" case the guard closes today, and touching
+  `lode.webfetch`'s redirect handling is a larger, connector-wide change out of this ticket's scope.

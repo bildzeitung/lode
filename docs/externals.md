@@ -841,6 +841,50 @@ option, and under it the model *would* see `no_egress` content and *could* put i
 argument. Choosing the mechanism now, while it costs one reused function call, is cheaper than
 retrofitting it onto a path that by then has users.
 
+### Web-fetch destination guard (decided, `lode-ejfv`)
+
+Discovered while reviewing tool-augmented Ask (`lode-35nu.11.2`): before that ticket, every URL lode
+fetched originated from something the **user** wrote (a link pasted into a note, drawn down by
+`lode.drawdown`). With `web_fetch` exposed to the Q&A loop, the destination is chosen by an **LLM**
+whose context can include attacker-influenced content — a fetched page, a JIRA ticket body. Two
+consequences: (1) the destination is otherwise unconstrained — `no_egress_scopes` is a *deny* list,
+so it only covers hosts the user thought to name, and a model steered by fetched content could be
+pointed at an internal address (`169.254.169.254`, `localhost`, an intranet host) from the user's own
+network position; (2) there is an exfiltration *shape* (content encoded into a chosen URL), not just
+a read — already audited via the `purpose='tool'` egress-log row (detection, not prevention).
+
+**Decided: a private/loopback/link-local/reserved/multicast address guard on the `web_fetch`
+destination, scoped to the ask path's `SOURCE_TYPE_WEB` leg only** (`lode.tools._refuse_private_web_destination`).
+The initial destination's scheme is restricted to `http`/`https` and its resolved IP address(es) are
+checked against those ranges — refused, with nothing fetched and no `externals` row minted, **before**
+any network call, mirroring the `no_egress` check's ordering and rationale immediately above.
+JIRA/Confluence fetches are not in scope: their destination is a configured `api_base`, not a
+model-chosen host.
+
+Alternatives considered and rejected:
+
+- **An allowlist of hosts/schemes for `web_fetch`.** Rejected as the wrong shape for a
+  general-purpose research tool — it would need constant maintenance as the user's browsing needs
+  change, and does nothing an address-range guard doesn't already cover for the concrete threat (an
+  internal address, not an untrusted-but-public one).
+- **Requiring a `web_fetch` destination to already have an `externals` row** (tools may only
+  re-read what the corpus already knows; discovery stays JIRA/Confluence-only). Rejected — it removes
+  the entire point of exposing `web_fetch` to Ask (discovering and citing a **new** web source
+  mid-question), for a threat the address-range guard already closes more narrowly.
+- **Accepting the risk, with `Settings.tools_enabled=False`-by-default as the whole mitigation.**
+  Rejected as too weak given the mitigation is cheap and the risk (SSRF against a cloud-metadata
+  endpoint or the local network) is concrete and severe *whenever a user does opt in* — a default-off
+  flag protects users who never turn tools on, not the ones the feature is for.
+
+**Known residual gap, left open:** the guard checks only the **initial** destination. A redirect
+returned by an otherwise-public, allowed host can still steer the underlying HTTP client at a private
+address mid-chain, since `lode.webfetch`'s fetcher follows redirects transparently inside one `httpx`
+client call with no per-hop validation hook. Closing that needs per-hop redirect validation inside
+`lode.webfetch` itself — a real gap, but a narrower and harder-to-exploit one (requires an
+attacker-controlled server that both passes the initial guard *and* then redirects to an internal
+address) than the direct "point the tool straight at `169.254.169.254`" case this guard exists to
+close first. Tracked as open in [decisions.md](decisions.md).
+
 ### Egress log (auditability)
 
 Every time content leaves the box it is **logged**: timestamp, purpose (`enrich` | `qa` | `tool`),

@@ -76,11 +76,41 @@ tool loop already spending a Q&A budget, not the retry-friendly queue). A
 timeout and any other fetch failure are handed back to the model identically
 — both simply mean "could not retrieve this source right now" — via the same
 :class:`ToolFetchError`.
+
+## Web-fetch destination guard (decided, ``lode-ejfv``)
+
+``web_fetch``'s destination on the ask path is chosen by the model, whose
+context can include attacker-influenced content (a fetched page, a JIRA
+ticket body) — unlike every other fetch in this codebase, which always
+originates from something the *user* wrote. ``docs/externals.md``
+("Web-fetch destination guard") records the decision and the rejected
+alternatives; the short version: **the initial destination's resolved IP
+address is checked against private/loopback/link-local/reserved/multicast
+ranges (:func:`_refuse_private_web_destination`) before any network call and
+before any ``externals`` row is minted** — same ordering as the ``no_egress``
+check above, and the same reasoning: refusing must never leave a trace a
+later check would (wrongly) find absent. Scoped to ``SOURCE_TYPE_WEB``
+only — the JIRA/Confluence legs resolve to a configured ``api_base``, not a
+model-chosen host.
+
+**Known residual gap, not closed here:** a redirect returned by an otherwise
+public, allowed host can still point the underlying HTTP client at a private
+address mid-chain, since :mod:`lode.webfetch` follows redirects transparently
+inside one ``httpx`` client call with no per-hop hook. Closing that needs
+per-hop redirect validation in :mod:`lode.webfetch` itself — a larger change
+against a narrower, harder-to-exploit vector (the attacker needs a server
+they control that both passes the initial guard *and* redirects to an
+internal address) than the direct "point the tool straight at
+169.254.169.254" case this guard exists to close. Recorded as open in
+``docs/decisions.md``.
 """
 
 from __future__ import annotations
 
+import socket
 import sqlite3
+from ipaddress import ip_address
+from urllib.parse import urlsplit
 
 from lode.config import Settings
 from lode.confluence import fetch_confluence_page
@@ -145,6 +175,70 @@ def _no_egress_denied(
     return row_denied or is_no_egress_scoped(
         external_id, source_type, settings.no_egress_scopes
     )
+
+
+def _resolve_host_addresses(host: str) -> list[str]:
+    """DNS-resolve ``host`` to its IP address strings.
+
+    A thin wrapper over :func:`socket.getaddrinfo` so tests can monkeypatch
+    exactly this call (module's own test suite stubs it module-wide via an
+    autouse fixture) rather than requiring real network access to exercise
+    :func:`_refuse_private_web_destination`. A bare numeric host (an IP
+    literal) resolves locally with no network I/O either way.
+    """
+    infos = socket.getaddrinfo(host, None)
+    return [info[4][0] for info in infos]
+
+
+def _is_disallowed_ip(ip_str: str) -> bool:
+    """Whether ``ip_str`` is private/loopback/link-local/reserved/multicast.
+
+    Covers the IPv4-mapped-IPv6 case (``::ffff:127.0.0.1``) by checking the
+    mapped v4 address too -- the plain IPv6 attributes alone don't see
+    through the mapping.
+    """
+    addr = ip_address(ip_str)
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_multicast
+        or addr.is_unspecified
+    )
+
+
+def _refuse_private_web_destination(url: str) -> None:
+    """Refuse a ``web_fetch`` destination that isn't a public http(s) host.
+
+    Runs strictly before any network call and before any ``externals`` row
+    is minted (module docstring, "Web-fetch destination guard") -- the same
+    ordering :func:`_no_egress_denied` uses. Raises :class:`ToolFetchError`
+    on a disallowed scheme, an unresolvable host, or a host that resolves to
+    a private/loopback/link-local/reserved/multicast address.
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise ToolFetchError(
+            f"{url}: scheme {parts.scheme!r} is not permitted for web_fetch"
+        )
+    host = parts.hostname
+    if not host:
+        raise ToolFetchError(f"{url}: no host to fetch")
+    try:
+        addresses = _resolve_host_addresses(host)
+    except socket.gaierror as exc:
+        raise ToolFetchError(
+            f"fetch failed for {url}: could not resolve host: {exc}"
+        ) from exc
+    for ip_str in addresses:
+        if _is_disallowed_ip(ip_str):
+            raise ToolFetchError(
+                f"{url} resolves to a private/internal address ({ip_str}) and "
+                "cannot be fetched for a cloud Q&A tool call."
+            )
 
 
 def _redact_arguments(
@@ -265,6 +359,7 @@ def _fetch_web(
     just another fetch failure and is surfaced as :class:`ToolFetchError`
     like any other, never leaked to the caller as a raw ``ValueError``.
     """
+    _refuse_private_web_destination(external_id)
     _log_tool_fetch(
         conn,
         external_id=external_id,
