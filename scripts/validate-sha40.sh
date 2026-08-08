@@ -23,10 +23,30 @@
 # Usage: scripts/validate-sha40.sh <field-name> <value>
 #
 # Exit 0 -> <value> is exactly 40 lowercase hex characters. Prints nothing.
-# Exit 1 -> <value> is NOT well-formed. Prints one diagnostic line to stderr
+# Exit 1 -> <value> is NOT well-formed (including empty/unset, which both
+#           callers can produce via `jq -r '... // empty'` when the metadata
+#           field was never written). Prints one diagnostic line to stderr
 #           naming the field, the bad value, and why -- the caller's job is
 #           to report this as MALFORMED, distinct from drift/mismatch, never
 #           to silently fold it into a drift/needs-rebase/bounce path.
+# Exit 2 -> the CALL is wrong (wrong argument count), never a verdict about
+#           the content. Same "exit 2 is the machine, never the content"
+#           convention as scripts/sweep-digest-id.sh / merge-precheck.sh
+#           (lode-9i2p). This distinction is load-bearing here: both callers
+#           react to a nonzero exit by reporting MALFORMED METADATA, so if a
+#           botched invocation also exited 1, a future edit that dropped an
+#           argument would make /land bounce an already-correct ticket while
+#           the real defect sat in the markdown call site. A caller seeing 2
+#           must fix its own invocation and report nothing about the field.
+#
+# Not sourced from scripts/gate-lib.sh (lode-pcee): that library exists to
+# print the multi-line "GATE COULD NOT RUN" advisory a branch-verdict gate
+# owes its caller, and its exit-2 cases are machine faults discovered
+# mid-run (docker missing, bd failing). This script runs no machine, reads
+# no state, and can fail only on its own argument list -- a one-line usage
+# message is the whole of what it has to say, so sourcing the library would
+# add a fail-closed source guard and an advisory contract to a pure regex
+# predicate. It still honors the 0/1/2 meanings the library standardizes.
 #
 # Deliberately does NOT check that the value is a real, reachable git object
 # -- that is a DIFFERENT question (drift: does it match the actual branch
@@ -35,11 +55,25 @@
 
 set -euo pipefail
 
-FIELD="${1:-}"
-VALUE="${2:-}"
+if [ "$#" -ne 2 ]; then
+  echo "validate-sha40.sh: usage: scripts/validate-sha40.sh <field-name> <value> (got $# args)" \
+    "-- this is a broken CALL, not a verdict about any metadata field; fix the invocation and do" \
+    "NOT report a malformed-SHA finding on its account." >&2
+  exit 2
+fi
 
-if [ -z "$FIELD" ] || [ -z "$VALUE" ]; then
-  echo "validate-sha40.sh: usage: scripts/validate-sha40.sh <field-name> <value>" >&2
+FIELD="$1"
+VALUE="$2"
+
+# An EMPTY value is a distinct condition from a usage error, and both callers
+# can produce it: they read the field with `jq -r '... // empty'`, which yields
+# "" when the metadata field was never written at all. Reporting that as a
+# usage error would send the reader to debug the call site instead of the
+# metadata; it is still exit 1, still never drift.
+if [ -z "$VALUE" ]; then
+  echo "validate-sha40.sh: MISSING: $FIELD is empty or unset in bd metadata -- there is no value" \
+    "to compare against a branch tip, so this is NOT drift. Re-derive it (e.g. \`git rev-parse" \
+    "<ref>\`) and write the field before re-running." >&2
   exit 1
 fi
 

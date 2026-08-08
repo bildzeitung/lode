@@ -78,16 +78,31 @@ def test_non_hex_characters_rejected() -> None:
     assert "MALFORMED" in result.stderr
 
 
-def test_empty_value_rejected_with_usage() -> None:
+def test_empty_value_reported_as_missing_not_usage() -> None:
+    """Both call sites read the field with `jq -r '... // empty'`, so an
+    unwritten `land_head`/`review_head` arrives here as "". That is a metadata
+    condition, not a call-site bug -- it must not be reported as a usage
+    error, and (like every rejection) must not read as drift."""
     result = _run("land_head", "")
     assert result.returncode == 1
-    assert "usage" in result.stderr
+    assert "MISSING" in result.stderr
+    assert "land_head" in result.stderr
+    assert "usage" not in result.stderr
+    assert "NOT drift" in result.stderr
 
 
-def test_missing_arguments_rejected_with_usage() -> None:
-    result = subprocess.run([str(SCRIPT)], capture_output=True, text=True, check=False)
-    assert result.returncode == 1
-    assert "usage" in result.stderr
+def test_wrong_argument_count_exits_2_not_1() -> None:
+    """A broken CALL is exit 2 ("the machine, never the content", lode-9i2p),
+    never exit 1. Load-bearing: both call sites react to a nonzero exit by
+    reporting MALFORMED METADATA, so a botched invocation exiting 1 would make
+    `/land` bounce an already-correct ticket over a defect in its own markdown."""
+    for argv in ([], ["land_head"], ["land_head", "a", "b"]):
+        result = subprocess.run(
+            [str(SCRIPT), *argv], capture_output=True, text=True, check=False
+        )
+        assert result.returncode == 2, argv
+        assert "usage" in result.stderr
+        assert "MALFORMED" not in result.stderr
 
 
 def test_does_not_check_object_existence() -> None:

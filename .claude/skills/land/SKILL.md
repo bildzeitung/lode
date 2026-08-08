@@ -548,28 +548,26 @@ MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true
   "DISABLED for this call (lode-67nk) -- land-lock.sh REFUSES it outright (exit 2, lode-yuwt)" \
   "rather than re-stamping blind, so this iteration simply does not heartbeat (|| true below)" >&2
 scripts/land-lock.sh heartbeat "$MY_TOKEN" || true
-bd show <id> --json     # read metadata.land_head and metadata.land_summary
+BD_JSON="$(bd show <id> --json)"     # read metadata.land_head and metadata.land_summary
+LAND_HEAD="$(jq -r '.[0].metadata.land_head // empty' <<<"$BD_JSON")"
+# Shape-check land_head BEFORE comparing it to anything (lode-xdg3, prose below).
+# Exit 1 = malformed/missing metadata; exit 2 = this call is broken, fix the
+# invocation and report nothing about the field.
+scripts/validate-sha40.sh land_head "$LAND_HEAD"
 git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on origin...
-# ...and origin/land/<id>'s tip SHA must equal metadata.land_head
+# ...and origin/land/<id>'s tip SHA must equal $LAND_HEAD
 ```
 
-**Before comparing `land_head` against the branch tip, check that it is even SHAPED like a SHA
-(lode-xdg3).** A `bd update --set-metadata land_head=...` call has no schema — a truncated or
-hand-retyped value (one hex digit short, say) writes just as cleanly as a real one, and a malformed
-value never equals a real branch tip either, so without this check it reads as ordinary drift and the
-branch is kicked back `needs-rebase` for no reason — a self-inflicted round trip on a branch that was
-already correct (the reproduction: a rebase pickup wrote a 39-character `land_head`, one digit short
-of the real tip). `scripts/validate-sha40.sh` is the shared predicate, also used by
-`code-reviewer.md`'s own `review_head` check, so both read sites can't drift on what "well-formed"
-means:
-
-```bash
-LAND_HEAD="$(bd show <id> --json | jq -r '.[0].metadata.land_head // empty')"
-scripts/validate-sha40.sh land_head "$LAND_HEAD" || {
-  echo "land: <id>'s metadata.land_head is MALFORMED, not drifted -- see the diagnostic above." \
-    "Report this as a malformed-SHA finding (below), never as drift/needs-rebase."
-}
-```
+**Why the shape check, before the comparison (lode-xdg3).** A `bd update --set-metadata
+land_head=...` call has no schema — a truncated or hand-retyped value (one hex digit short, say)
+writes just as cleanly as a real one, and a malformed value never equals a real branch tip either,
+so without this check it reads as ordinary drift and the branch is kicked back `needs-rebase` for no
+reason — a self-inflicted round trip on a branch that was already correct (the reproduction: a
+rebase pickup wrote a 39-character `land_head`, one digit short of the real tip).
+`scripts/validate-sha40.sh` is the shared predicate, also used by `code-reviewer.md`'s own
+`review_head` check, so both read sites can't drift on what "well-formed" means. It is called in the
+same fenced block that reads the value because shell state does not survive between blocks
+(lode-sfnb); `tests/test_validate_sha40_call_sites.py` pins that both read sites keep calling it.
 
 A **missing branch** or a **SHA mismatch** is drift — treat it exactly like a review **bounce**
 (below): I will not land a branch I can't verify is the reviewed one. A **malformed `land_head`**

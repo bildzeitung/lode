@@ -254,24 +254,20 @@ exact remote name — see `.claude/skills/land/SKILL.md`; nothing for me to do e
 
 ```bash
 git rev-parse --abbrev-ref HEAD     # land/<id>--<worktree-suffix> — never trunk
-git rev-parse HEAD                  # compare against metadata.review_head from step 1
-```
-
-**Before treating a disagreement as drift, check that `review_head` is even SHAPED like a SHA
-(lode-xdg3)** — a hand-retyped or truncated value writes to bd metadata with no schema to catch it,
-and a malformed value never equals what I just checked out either, so without this check it would
-silently read as ordinary drift. Same shared predicate `/land`'s Section 2a uses for `land_head`, so
-the two read sites can't drift on what "well-formed" means. Re-derived fresh here from `bd show`
-(the fenced blocks in this cycle run as separate Bash invocations — shell state from step 1 does not
-survive between them, lode-sfnb), not carried over from step 1's variable:
-
-```bash
+git rev-parse HEAD                  # compare against $REVIEW_HEAD below
+# Re-derived fresh, not carried from step 1 — shell state does not survive
+# between fenced blocks (lode-sfnb) — and shape-checked BEFORE any comparison
+# (lode-xdg3). Exit 1 = malformed/missing metadata; exit 2 = this call is
+# broken, fix the invocation and report nothing about the field.
 REVIEW_HEAD="$(bd show <id> --json | jq -r '.[0].metadata.review_head // empty')"
-scripts/validate-sha40.sh review_head "$REVIEW_HEAD" || {
-  echo "MALFORMED review_head, not drift -- see the diagnostic above. Note this in my hand-off" \
-    "explicitly; do not read it as a genuine push-after-hand-off."
-}
+scripts/validate-sha40.sh review_head "$REVIEW_HEAD"
 ```
+
+**Why the shape check (lode-xdg3).** A hand-retyped or truncated value writes to bd metadata with no
+schema to catch it, and a malformed value never equals what I just checked out either, so without
+this check it would silently read as ordinary drift. Same shared predicate `/land`'s Section 2a uses
+for `land_head`, so the two read sites can't drift on what "well-formed" means;
+`tests/test_validate_sha40_call_sites.py` pins that both keep calling it.
 
 A mismatch against a **well-formed** `review_head` is **drift** — a push landed on `land/<id>` after
 the ticket was marked `ready-for-code-review` (or the ticket is a build-time-escalation re-entry with
