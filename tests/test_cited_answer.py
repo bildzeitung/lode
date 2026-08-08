@@ -610,20 +610,22 @@ def test_resolve_targets_batches_distinct_targets_into_two_queries(conn) -> None
         _external_context("s2", "delta body"),
         _external_context("s2", "delta body"),  # repeated target -- no extra round trip
     ]
-    calls: list[str] = []
-    real_execute = conn.execute
-
-    def counting_execute(sql, *args, **kwargs):
-        calls.append(sql)
-        return real_execute(sql, *args, **kwargs)
-
-    conn.execute = counting_execute
+    # sqlite3.Connection.execute is a read-only C-level attribute (can't be
+    # monkeypatched directly), so count round trips via the trace callback
+    # instead -- it fires once per statement actually sent to the engine.
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
     try:
         resolved = _resolve_targets(conn, context)
     finally:
-        conn.execute = real_execute
+        conn.set_trace_callback(None)
 
-    assert len(calls) == 2  # one versions/notes IN(...), one snapshots/externals IN(...)
+    resolution_calls = [
+        sql for sql in statements if "version_id IN" in sql or "snapshot_id IN" in sql
+    ]
+    assert (
+        len(resolution_calls) == 2
+    )  # one versions/notes IN(...), one snapshots/externals IN(...)
     assert resolved["v1"] == ("alpha body", False)
     assert resolved["v2"] == ("beta body", False)
     assert resolved["s1"] == ("gamma body", False)
