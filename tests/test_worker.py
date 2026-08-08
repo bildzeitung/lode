@@ -2756,7 +2756,7 @@ def test_drain_retries_a_failed_revision_probe_on_the_next_call(
 
     Two ``drain()`` calls against the SAME embedder instance simulate two
     poll passes of ``lode work --loop``/``--wait`` -- exactly the scenario
-    ``cli.py``'s ``work`` command sets up (one embedder constructed before the
+    ``cli/work.py``'s ``work`` command sets up (one embedder constructed before the
     polling loop, passed into every ``drain()`` call it makes).
 
     Counts calls rather than asserting via a raising stub -- the trap this
@@ -3719,7 +3719,7 @@ def test_worker_startup_resumes_batch_without_double_enqueue_or_resubmit(
 ) -> None:
     """End-to-end restart simulation (lode-i05.5).
 
-    Mirrors the exact sequence ``lode work`` runs at startup (``cli.py``):
+    Mirrors the exact sequence ``lode work`` runs at startup (``cli/work.py``):
     ``reconcile()`` first, then ``drain()``. A persisted batch handle from a
     prior (crashed/restarted) process must be resumed -- ingested and marked
     done -- with no resubmission, AND the enrich-gap reconcile step must not

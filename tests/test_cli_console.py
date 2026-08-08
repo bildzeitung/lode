@@ -11,7 +11,7 @@ The precise mechanism — what rich freezes at ``Console()`` construction vs.
 what stays live, with source-line refs and executed verification — is
 canonical in ``tests/conftest.py``'s scrub comment; see that for the "why".
 The consequence for THIS module: at module scope — ``console = Console()``
-in ``src/lode/cli.py`` — that construction happens at IMPORT time, not
+in ``src/lode/cli/__init__.py`` — that construction happens at IMPORT time, not
 per-invocation, so:
 
 * Colour is off under ``typer.testing.CliRunner`` today only because
@@ -28,7 +28,7 @@ per-invocation, so:
 The only way to actually exercise ``NO_COLOR`` detection is a FRESH
 SUBPROCESS that imports ``lode.cli`` with the target env already set, so the
 shared ``console`` re-detects from scratch. This module is that pattern, and
-it is proven non-vacuous by sabotaging the SUBJECT — ``src/lode/cli.py``'s
+it is proven non-vacuous by sabotaging the SUBJECT — ``src/lode/cli/__init__.py``'s
 shared ``console`` — in both directions (re-verified against rich 15.0.0
 during lode-xgaa's technical review):
 
@@ -41,13 +41,13 @@ during lode-xgaa's technical review):
 
 Sabotaging the subject is the demonstration that counts. Breaking the
 harness's own ``-c`` script fails the test too, but only circularly — it
-shows nothing about whether these tests reach ``cli.py``'s console at all.
+shows nothing about whether these tests reach ``cli/__init__.py``'s console at all.
 Any colour ticket (lode-l38d.4/.5/.6/.10) that asserts the ``NO_COLOR``
 negative path should copy this pattern rather than reinvent — or silently
 no-op — one of its own, and should re-run the two subject-sabotage checks
 above rather than trust that a green test exercised anything.
 This module docstring is the canonical, full statement of both consequences
-(``lode-3npn``) — ``src/lode/cli.py``'s ``console`` docstring and
+(``lode-3npn``) — ``src/lode/cli/__init__.py``'s ``console`` docstring and
 docs/stack.md's ``rich`` row each carry their own local design conclusion
 (why there is no test seam) plus a pointer here rather than restating them.
 """
@@ -114,7 +114,7 @@ def test_console_no_color_false_when_env_absent() -> None:
 def test_console_highlight_is_disabled() -> None:
     """``highlight=False`` (lode-re0s) is process-wide policy hoisted onto the
     shared ``console`` at construction, not left as a per-call-site kwarg —
-    see ``src/lode/cli.py``'s ``console`` docstring for the ReprHighlighter
+    see ``src/lode/cli/__init__.py``'s ``console`` docstring for the ReprHighlighter
     defect this closes (a plain string like a rendered date gets shredded
     into mismatched styled spans by rich's default highlighter, verified
     against rich 15.0.0).
@@ -129,7 +129,7 @@ def test_console_highlight_is_disabled() -> None:
     merged-with-defaults ``Theme``.
 
     NON-VACUOUSNESS, demonstrated by sabotaging the subject: reverting
-    ``cli.py``'s ``console = Console(theme=CLI_THEME, highlight=False)`` back
+    ``cli/__init__.py``'s ``console = Console(theme=CLI_THEME, highlight=False)`` back
     to ``Console(theme=CLI_THEME)`` (its pre-lode-re0s form) makes this test
     FAIL (verified manually against the installed rich 15.0.0).
     """
@@ -142,7 +142,7 @@ def test_err_console_highlight_is_disabled() -> None:
     """``highlight=False`` is a constructor kwarg on ``err_console`` too
     (lode-9jmv), mirroring the shared ``console`` above rather than being
     left as a per-call-site kwarg at its one ``print()`` call site — see
-    ``src/lode/cli.py``'s ``console`` docstring, which explicitly warns that
+    ``src/lode/cli/__init__.py``'s ``console`` docstring, which explicitly warns that
     "IF A SECOND Console IS EVER ADDED to this module... it MUST also pass
     highlight=False". ``err_console`` is that second Console (lode-l810).
 
@@ -152,7 +152,7 @@ def test_err_console_highlight_is_disabled() -> None:
     only accessor rich exposes for this flag.
 
     NON-VACUOUSNESS, demonstrated by sabotaging the subject: reverting
-    ``cli.py``'s ``err_console = Console(theme=CLI_THEME, stderr=True,
+    ``cli/__init__.py``'s ``err_console = Console(theme=CLI_THEME, stderr=True,
     highlight=False)`` back to ``Console(theme=CLI_THEME, stderr=True)``
     (its pre-lode-9jmv form) makes this test FAIL (verified manually
     against the installed rich 15.0.0).
