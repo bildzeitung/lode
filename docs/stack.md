@@ -818,14 +818,29 @@ with tool choice forced to `tool_name or output_schema.__name__` — the same fo
 `structured_call`'s enrichment branch already uses, now continuing the accumulated conversation
 instead of a single user turn.
 
-**`max_tokens`/`timeout_s` are budgets for the whole run, not one call each** — this ticket's
-acceptance criteria names this explicitly. They are the same two knobs `structured_call` already took
-per-call; no new config knob was added; a call site's existing `ModelTier`-resolved values (e.g.
-`qa.MAX_TOKENS`/`qa_call_timeout_s`, [configuration.md](configuration.md#models)) now bound the whole
-run instead of one call. `AnthropicProvider` implements this literally: each `messages.create` in the
-loop is sent the *remaining* wall-clock budget (`timeout_s` minus elapsed), and the run raises
-`LLMProviderError` rather than starting a further call once that budget is exhausted, instead of
-resetting the clock every turn.
+**`timeout_s` is a budget for the whole run; `max_tokens` deliberately is not.** No new config knob
+was added — these are the same two knobs `structured_call` already took, and a call site's existing
+`ModelTier`-resolved values (e.g. `qa.MAX_TOKENS`/`qa_call_timeout_s`,
+[configuration.md](configuration.md#models)) carry over unchanged.
+
+- **`timeout_s` — per-RUN, implemented literally.** `AnthropicProvider` sets one deadline at the top
+  of the run and sends each `messages.create` the *remaining* wall clock (`timeout_s` minus elapsed),
+  raising `LLMProviderError` rather than starting a further call once it is exhausted, instead of
+  resetting the clock every turn. A run therefore cannot outlive `timeout_s` however many turns it
+  takes.
+- **`max_tokens` — per-TURN, and it stays that way.** The ticket's acceptance criteria asked for both
+  budgets to be per-run; only `timeout_s` is, and this is the one place the implementation knowingly
+  departs from that wording. `max_tokens` is not a spend meter — it is Anthropic's hard cap on a
+  *single response*, so "per-run" could only be emulated by decrementing it against each turn's
+  `usage.output_tokens`. That emulation is worse than the problem: it silently shrinks the budget
+  available to the **final forced-schema turn**, so a run that narrated its way through several tool
+  calls would produce a truncated `_ClaimsEnvelope` and fail with the budget-exhausted diagnostic —
+  turning a cost overshoot into a wrong answer on the user-visible Q&A path. The real exposure is an
+  N-turn run emitting up to N × `max_tokens` output tokens.
+- **Why it is safe to leave open here.** Today no call site passes tools, so every run is exactly one
+  turn and the two readings coincide exactly. `lode-35nu.11.2` is the first ticket that can spend more
+  than one turn, and is the right place to settle whether the answer is a decremented budget, a
+  separate `max_output_tokens_per_run` knob, or simply a lower `max_tool_turns`.
 
 **Degenerate case, byte-for-byte (the acceptance bar every existing call site must clear)**: when
 `tools` is empty, **every** `LLMProvider` implementation is required to delegate straight to

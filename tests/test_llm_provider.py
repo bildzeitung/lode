@@ -538,15 +538,6 @@ def _tool_use_response(
     return response
 
 
-def _final_forced_response(payload: dict) -> object:
-    block = mock.MagicMock()
-    block.type = "tool_use"
-    block.input = payload
-    response = mock.MagicMock()
-    response.content = [block]
-    return response
-
-
 def test_run_tool_turns_with_empty_tools_delegates_to_structured_call() -> None:
     # lode-35nu.11.6 acceptance bar: the degenerate case is byte-for-byte
     # identical to calling structured_call directly -- no messages.create loop
@@ -584,7 +575,7 @@ def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> 
         name="lookup_widget", description="Look up a widget.", input_schema={}
     )
     free_turn = _tool_use_response("lookup_widget", {"id": "w-1"})
-    final_turn = _final_forced_response({"name": "widget", "count": 3})
+    final_turn = _tool_use_response("_Widget", {"name": "widget", "count": 3})
     client = mock.MagicMock()
     client.messages.create.side_effect = [free_turn, final_turn]
     provider = AnthropicProvider(client)
@@ -669,7 +660,7 @@ def test_run_tool_turns_forces_the_final_turn_when_the_model_never_calls_a_tool(
     text_block = mock.MagicMock()
     text_block.type = "text"
     text_only.content = [text_block]
-    final_turn = _final_forced_response({"name": "w", "count": 0})
+    final_turn = _tool_use_response("_Widget", {"name": "w", "count": 0})
     client = mock.MagicMock()
     client.messages.create.side_effect = [text_only, final_turn]
     provider = AnthropicProvider(client)
@@ -698,7 +689,7 @@ def test_run_tool_turns_stops_after_max_tool_turns_and_still_forces_the_final_tu
 ):
     tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
     always_calls_tool = _tool_use_response("lookup_widget", {"id": "w"})
-    final_turn = _final_forced_response({"name": "w", "count": 9})
+    final_turn = _tool_use_response("_Widget", {"name": "w", "count": 9})
     client = mock.MagicMock()
     # 2 free turns (max_tool_turns=2) always calling the tool, then the forced
     # final turn -- 3 calls total.
