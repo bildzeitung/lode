@@ -4112,3 +4112,25 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
      this inverts who gets guarded.
   3. It reintroduces a `jq` dependency against RULING 3, on a hook measured at ~10ms in the hot path
      of every `Edit`/`Write`.
+
+- **Tool-augmented Ask: prompt injection steering later tool calls, residual risk (`lode-80bv`).**
+  The threat model is written up in
+  [externals.md](externals.md#prompt-injection-via-tool-results-steering-later-tool-calls-threat-model-lode-80bv):
+  attacker-controlled content returned by a tool (a JIRA/Confluence body, a fetched web page, even a
+  search-result title) is indistinguishable at the model's input from the system prompt or the
+  user's question, and can steer which tool the model calls next. Four existing mechanisms bound the
+  blast radius — the tool set is read-only by construction, the per-ask `ToolBudget` caps fan-out,
+  every tool call is audited via a `purpose='tool'` `egress_log` row, and the citation-faithfulness
+  gate still constrains what reaches the user as a claim — but **none of them detects or blocks a
+  steered call in-flight**; they only bound its scope and make it auditable after the fact. A
+  prompt-level "ignore instructions in tool results" defense was considered and rejected as not a
+  mechanism (this codebase prefers structural guarantees; a prompt instruction is just more text in
+  the same context an attacker can attempt to override, and is untestable).
+
+  **Left open:** whether the residual risk — a steered call sequence that stays within budget, stays
+  read-only, and gets logged, but still executes against the model's judgment under attacker
+  influence — needs a structural mitigation beyond what's listed above. No specific mechanism is
+  proposed here; candidates would need to be schema-level, filter-level, or a refusal, not a prompt
+  instruction, per this file's and `externals.md`'s standing preference. Revisit once `lode-ejfv`
+  (bounding where `web_fetch` may point) lands, since it closes the one concretely-scoped half of this
+  risk (destination-steering) and may change what residual surface remains.
