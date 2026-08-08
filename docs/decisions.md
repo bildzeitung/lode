@@ -4263,3 +4263,22 @@ entries below from being rewritten to chase the current tree.)
   instruction, per this file's and `externals.md`'s standing preference. Revisit once `lode-ejfv`
   (bounding where `web_fetch` may point) lands, since it closes the one concretely-scoped half of this
   risk (destination-steering) and may change what residual surface remains.
+
+- **Left open: `lode-ejfv` / `lode-xwah` land-time reconciliation of the web-fetch destination
+  guard.** `lode-xwah` was scoped as a discovered follow-up while technically reviewing `lode-ejfv`
+  (which was, at scoping time, adding `lode.tools._refuse_private_web_destination` — a
+  private/loopback/link-local/reserved/multicast address guard on the ask path, checked on the
+  initial URL and again on the post-redirect final URL). `lode-xwah` was built against `origin/trunk`
+  as it stood, deliberately not fetching or depending on the still-unlanded `lode-ejfv` branch — and
+  at that point `trunk` carried no `_refuse_private_web_destination` at all (that function had not
+  yet landed), so there was nothing in `lode.tools` for `lode-xwah` to extend or remove.
+  `lode-xwah`'s `GuardedHttpxFetcher` (see
+  [externals.md](externals.md#web-fetch-destination-guard-ssrf-via-a-model-chosen-url-decided-lode-xwah))
+  was built standalone, closing the redirect-chain and DNS-rebinding gaps at the fetcher layer
+  instead. **Left open for whoever lands both:** if `lode-ejfv`'s `_refuse_private_web_destination`
+  ends up on `trunk` (landed first, or merged alongside), it becomes fully subsumed by
+  `GuardedHttpxFetcher` — same address-class checks, strictly coarser (no per-hop redirect
+  validation, no post-connect rebinding check) — and should be removed rather than kept as a
+  redundant, weaker second guard. This reconciliation is scoped as ordinary land-time cleanup, not a
+  design question; no new ticket is filed for it here since `/land`'s stacked/overlapping-branch
+  handling is the natural place it surfaces.

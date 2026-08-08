@@ -114,9 +114,12 @@ module.
 
 from __future__ import annotations
 
+import ipaddress
+import socket
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
+from urllib.parse import urlsplit
 
 import httpx
 import trafilatura
@@ -290,6 +293,188 @@ class HttpxFetcher:
             status_code=response.status_code,
             text=response.text,
         )
+
+
+class UnsafeWebDestinationError(FetchError):
+    """A fetch destination -- the initial URL, a redirect hop, or the actual
+    peer connected to -- is a private/loopback/link-local/reserved/multicast
+    address (lode-xwah).
+
+    Raised by :class:`GuardedHttpxFetcher` only; the base :class:`HttpxFetcher`
+    has no address policy at all. Non-retryable: an attacker-controlled
+    destination re-resolves to the same disallowed answer (or a differently
+    disallowed one) on retry, so :func:`fetch_and_extract` should tombstone
+    this the same way it tombstones :class:`TooManyRedirectsError`, never
+    treat it as transient.
+    """
+
+
+def _is_disallowed_address(addr_str: str) -> bool:
+    """Whether ``addr_str`` (a literal IPv4/IPv6 address) must never be fetched.
+
+    Fail-closed: an address this module cannot even parse is treated as
+    disallowed rather than let through unclassified.
+    """
+    try:
+        addr = ipaddress.ip_address(addr_str)
+    except ValueError:
+        return True
+    return (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_multicast
+        or addr.is_unspecified
+    )
+
+
+def _resolve_host_addresses(host: str, port: int) -> list[str]:
+    """Resolve ``host`` to every address it answers to right now.
+
+    A literal IP host (``http://127.0.0.1/...``) is returned as-is with no
+    DNS lookup -- both because none is needed and because a literal-IP host
+    can't rebind between two lookups the way a domain name can. A name is
+    resolved via :func:`socket.getaddrinfo`, the same resolver httpx's own
+    transport uses, so a public-then-private multi-answer response is
+    inspected in full rather than only its first answer.
+    """
+    try:
+        return [str(ipaddress.ip_address(host))]
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except OSError as exc:
+        raise UnsafeWebDestinationError(f"cannot resolve host {host!r}: {exc}") from exc
+    return [info[4][0] for info in infos]
+
+
+def _refuse_if_unsafe_host(url: str) -> None:
+    """Refuse ``url`` before it is ever fetched, if any resolved address is unsafe.
+
+    This is the redirect-chain half of the guard (lode-xwah): called on the
+    *original* URL and again on every redirect ``Location``, before that
+    hop's request is issued -- so a redirect straight at an internal address
+    never reaches the network at all, not merely fails to persist.
+    """
+    parts = urlsplit(url)
+    host = parts.hostname
+    if not host:
+        raise UnsafeWebDestinationError(f"no host in URL {url!r}")
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    for addr in _resolve_host_addresses(host, port):
+        if _is_disallowed_address(addr):
+            raise UnsafeWebDestinationError(
+                f"{url} resolves to disallowed address {addr}"
+            )
+
+
+def _refuse_if_unsafe_peer(response: httpx.Response) -> None:
+    """Refuse a response whose *actual* connected peer is unsafe.
+
+    This is the DNS-rebinding half of the guard (lode-xwah): the pre-hop
+    check in :func:`_refuse_if_unsafe_host` resolves the host itself, a
+    lookup a hostile short-TTL resolver can answer differently a moment
+    later when httpx's transport resolves the same host again for the real
+    connection. This checks the address httpx actually connected to
+    (``response.extensions['network_stream']``), so a rebind that fools the
+    pre-check is still caught before the response is used for anything.
+
+    When no ``network_stream`` extension is present (a non-default transport,
+    e.g. a test double), this is a no-op -- there is nothing to inspect, and
+    the pre-hop host check is still the guard's first line of defense.
+    """
+    network_stream = response.extensions.get("network_stream")
+    if network_stream is None:
+        return
+    server_addr = network_stream.get_extra_info("server_addr")
+    if not server_addr:
+        return
+    addr = server_addr[0]
+    if _is_disallowed_address(addr):
+        raise UnsafeWebDestinationError(
+            f"{response.url} actually connected to disallowed peer {addr}"
+        )
+
+
+class GuardedHttpxFetcher(HttpxFetcher):
+    """:class:`HttpxFetcher` for the ask path ONLY (lode-xwah): closes the two
+    gaps a model-chosen ``web_fetch`` destination could otherwise exploit that
+    the draw-down path's ``lode.tools`` guard does not close on its own --
+    see that module's history and ``docs/externals.md`` "Web-fetch destination
+    guard".
+
+    1. **Redirect chains.** Every hop's destination -- the original URL, and
+       every redirect ``Location`` -- is validated via
+       :func:`_refuse_if_unsafe_host` *before* that hop's request is issued.
+       Redirects are therefore followed manually here
+       (``follow_redirects=False`` passed to every per-hop client), never
+       left to httpx's own follower, which has no per-hop hook.
+    2. **DNS rebinding / TOCTOU.** Even a validated hop's *actual* connected
+       peer is re-checked post-connect via :func:`_refuse_if_unsafe_peer`,
+       since the pre-hop check's resolution and httpx's own transport
+       resolution are two separate lookups a hostile short-TTL resolver can
+       answer differently.
+
+    Constructed **only** by the ask path (:mod:`lode.tools`'s ``_fetch_web``)
+    and injected via the ``fetcher=`` seam :func:`fetch_and_extract` /
+    :func:`~lode.tools.fetch_for_ask` already thread -- the draw-down path,
+    and the JIRA/Confluence connectors, are unaffected (module docstring's
+    "whether redirects are followed at all" is exactly the kind of
+    per-connector delta :class:`HttpxFetcher` is built to let a subclass
+    override).
+    """
+
+    def __init__(self, settings: Settings | None = None, **kwargs: object) -> None:
+        # This subclass drives redirects itself -- overriding a caller-passed
+        # follow_redirects would silently defeat the whole guard, so it is
+        # not accepted as a kwarg here (HttpxFetcher.__init__'s signature
+        # still types it; passing it explicitly is simply not supported).
+        kwargs.pop("follow_redirects", None)
+        super().__init__(settings, follow_redirects=False, **kwargs)  # type: ignore[arg-type]
+
+    def fetch(self, url: str) -> RawResponse:
+        settings = self._settings
+        current_url = url
+        for _hop in range(settings.fetch_max_redirects + 1):
+            _refuse_if_unsafe_host(current_url)
+            response = self._get_one(current_url)
+            _refuse_if_unsafe_peer(response)
+
+            if classify_http_status(response.status_code) is HttpOutcome.TRANSIENT:
+                raise TransientFetchError(f"http {response.status_code}")
+
+            location = response.headers.get("location")
+            if 300 <= response.status_code < 400 and location:
+                current_url = str(response.url.join(location))
+                continue
+
+            return RawResponse(
+                final_url=str(response.url),
+                status_code=response.status_code,
+                text=response.text,
+            )
+        raise TooManyRedirectsError(
+            f"{url}: exceeded {settings.fetch_max_redirects} redirects"
+        )
+
+    def _get_one(self, url: str) -> httpx.Response:
+        settings = self._settings
+        try:
+            with httpx.Client(
+                follow_redirects=False,
+                timeout=settings.fetch_timeout_s,
+                headers=self._headers,
+                auth=self._auth,
+            ) as client:
+                return client.get(url)
+        except httpx.TimeoutException as exc:
+            raise TransientFetchError(f"timeout: {exc}") from exc
+        except httpx.NetworkError as exc:
+            raise TransientFetchError(f"network error: {exc}") from exc
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
+            raise TransientFetchError(f"http client error: {exc}") from exc
 
 
 def _extract(html: str) -> str | None:
