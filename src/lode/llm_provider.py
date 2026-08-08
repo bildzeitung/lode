@@ -142,12 +142,15 @@ against exactly; read that first for the *why*. This module owns the *what*:
   deadline is set once and each turn is sent only what remains, so a run
   cannot outlive it however many turns it takes. ``max_tokens`` is **not**
   decremented across turns -- it stays what it has always been, a per-response
-  output cap, applied to each turn. That asymmetry is deliberate and is the
-  one place this method departs from lode-35nu.11.6's acceptance wording; the
-  trade-off (a decremented ``max_tokens`` silently shrinks, and can truncate,
-  the final answer) is recorded in ``docs/stack.md`` "LLM provider seam" and
-  left to lode-35nu.11.2, which is the first ticket that can actually spend
-  more than one turn.
+  output cap, applied to each turn. That asymmetry is a DECIDED design choice
+  (maintainer, lode-3dh1), not a gap left over from lode-35nu.11.6's
+  acceptance wording: decrementing ``max_tokens`` against each turn's
+  ``usage.output_tokens`` was considered and rejected, because it silently
+  shrinks the budget left for the final forced-schema turn and can truncate
+  the answer. Total output spend for a run is instead bounded by the turn
+  count (``_DEFAULT_MAX_TOOL_TURNS``) -- see ``docs/stack.md`` "LLM provider
+  seam" / lode-3dh1 for the full write-up, and ``docs/decisions.md``
+  (lode-csl2) for the deferred, additive ``max_output_tokens_per_run`` knob.
 """
 
 from __future__ import annotations
@@ -388,9 +391,14 @@ class LLMProvider(Protocol):
         (``docs/configuration.md``): the deadline is set once and each turn is
         sent only the remaining wall clock. ``max_tokens`` is **not** spread
         across turns -- it stays a per-response output cap, applied to each
-        turn, so an N-turn run may emit up to N times it. See the module
-        docstring and ``docs/stack.md`` for why that asymmetry was left in
-        place rather than decremented.
+        turn, so a run may emit up to ``(max_tool_turns + 1) x max_tokens``
+        output tokens -- the ``+ 1`` being the final forced-schema turn, which
+        is spent after the free-turn loop and is not covered by
+        ``max_tool_turns``. That asymmetry is a DECIDED design choice
+        (maintainer, lode-3dh1), not an open gap: total output spend for a run
+        is bounded by the turn count rather than by decrementing
+        ``max_tokens``. See the module docstring and ``docs/stack.md`` for the
+        full rationale.
 
         **Degenerate case, byte-for-byte (acceptance bar):** when ``tools``
         is empty, a provider MUST delegate straight to :meth:`structured_call`

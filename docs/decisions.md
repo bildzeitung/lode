@@ -4056,6 +4056,18 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     [`scripts/trunk-write-guard.sh`](../scripts/trunk-write-guard.sh),
     `tests/test_trunk_write_guard.py`.
 
+- **2026-08-08 — DECIDED (maintainer, `lode-3dh1`): `run_tool_turns`' `max_tokens` stays per-TURN,
+  not per-run; total spend is bounded by `max_tool_turns` instead.** `lode-35nu.11.6`'s acceptance
+  criteria asked for both `max_tokens` and `timeout_s` to be per-run budgets; only `timeout_s` is.
+  Three options were weighed: (a) decrement `max_tokens` against each turn's `usage.output_tokens`;
+  (b) add a separate `max_output_tokens_per_run` knob; (c) accept per-turn `max_tokens` and bound
+  total spend via `max_tool_turns`. **Chosen: (c), now.** `max_tokens` is Anthropic's hard cap on a
+  single response, not a spend meter; (a) was rejected because decrementing it can truncate the
+  run's final forced-schema turn, converting a bounded cost overshoot into a wrong answer on the
+  user-visible Q&A path. (b) is deferred, not rejected, as a follow-up (`lode-csl2`) — additive on
+  top of (c) if it ever lands. The failure-mode chain behind rejecting (a), and the worst-case
+  arithmetic, are in the stack.md write-up and deliberately not restated here. Full write-up: [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116),
+  [configuration.md](configuration.md#models) (`_DEFAULT_MAX_TOOL_TURNS`).
 - **2026-08-08 — VERIFIED (`lode-lnvi` FINDING A smoke test): the `PreToolUse(Edit|Write)`
   trunk-write guard's `git rev-parse --abbrev-ref HEAD` correctly resolves the CALLING
   worktree-isolated subagent's cwd, not the main checkout.** A `coding` producer dispatched under
