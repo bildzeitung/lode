@@ -505,11 +505,8 @@ del _name
 # docstring, which are never imported anywhere -- every INTERNAL call site
 # reaches them via `cli.<name>` instead).
 #
-# `_retrieve` is NOT re-exported here (lode-z3es): it moved out of the cli
-# package entirely, to `lode.retrieval._retrieve` -- the composed pipeline
-# over that module's own primitives, with no CLI concern of any kind. Both
-# `lode ask` (`lode.cli.ask`) and the TUI's ask screen
-# (`lode.tui.services.ask`) import it from there directly.
+# `_retrieve` used to be re-exported here; it now lives in `lode.retrieval`
+# (lode-z3es), which every caller imports directly.
 from lode.cli.ask import (  # noqa: F401
     _ABSTAIN_LINE,
     _format_citation,
