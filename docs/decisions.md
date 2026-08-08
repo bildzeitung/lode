@@ -4093,6 +4093,69 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   the worktree copy of this file instead of the shared-checkout path"; that is the harness's own
   path-scoping for an isolated agent, unrelated to the `PreToolUse` trunk-write guard under test.)
 
+- **2026-08-08 (`lode-r9z0`) — shared helper for the batched polymorphic
+  `(version_id | snapshot_id)` target split: extracted for 2 of the 3 candidate sites; `trust_rank`
+  deliberately left alone.** `cited_answer._resolve_targets` (lode-ekqh) and
+  `citations_read.resolve_citations` (lode-35nu.1/.3) both partition a set of `target_version` ids
+  into note-side and external-side lists, then run one `versions JOIN notes ... IN(...)` query and
+  one `snapshots JOIN externals ... IN(...)` query. That shared shape — split ids already known to
+  belong to one side or the other, build the placeholder string, run the two queries — is now
+  `lode.target_rows.fetch_target_rows(conn, note_ids, external_ids, note_columns,
+  external_columns)`. Each caller still supplies its own `SELECT` column list and does its own
+  row -> result mapping (per the ticket's acceptance criteria); `cited_answer`'s `no_egress`/scope
+  composition is untouched — that logic runs on the caller's side of the helper boundary, not inside
+  it, and no generic `no_egress` seam was introduced (`docs/no_egress_scope`, `lode-35nu.11.8`
+  stays call-site-local).
+
+  `retrieval.trust_rank` (~:773) was evaluated as the third candidate the ticket named and was left
+  alone. **Precisely how much of it fits, since a vaguer "does not fit" would mislead the next
+  reader who reaches for this site:** `trust_rank`'s *external-side* query is byte-identical
+  (modulo whitespace) to the helper's external branch — same `FROM snapshots s JOIN externals e ON
+  e.external_id = s.external_id WHERE s.snapshot_id IN (...)`, differing only in its `SELECT` list
+  (`s.snapshot_id, e.head_snapshot_id`), which is exactly the part the helper parameterizes. That
+  half genuinely matches. Two things still make the site a non-fit as a whole:
+
+  1. **The note side is a different query.** `trust_rank` runs a bare `SELECT version_id FROM
+     versions WHERE version_id IN (...)` with **no `JOIN notes`** — it only needs to know whether
+     the id exists in `versions`. The helper hardcodes the `JOIN notes`, so it cannot serve it.
+  2. **There is no pre-split id list.** `trust_rank` hands the **full, unsplit** target-id list to
+     *both* queries, because classifying which table a target belongs to (owned note vs.
+     current/stale external) is the very thing it is computing — the split is its *output*, not its
+     input.
+
+  So adopting the helper at this site would mean calling it with an empty note-id list and an empty
+  note-column fragment to suppress half of it, then still hand-rolling the note-side query
+  separately — strictly worse than the ~4 lines of placeholder boilerplate it would save. Left
+  alone deliberately.
+
+  **Open, and deliberately not settled here:** whether a *different* seam — a helper taking the
+  whole SQL string with a `{placeholders}` slot plus one id sequence, owning only "skip if empty /
+  build placeholders / bind / fetchall" — would have fit all three sites without the hardcoded
+  `JOIN` or the table-alias coupling (callers must know `v`/`n`/`s`/`e` to write a column list).
+  This ticket's `design` field pinned the `(note_ids, external_ids, note_columns,
+  external_columns)` signature, so re-cutting the seam was out of its scope; the question is filed
+  as its own ticket rather than decided by silence. Related and also unaddressed: the `", ".join("?"
+  for _ in xs)` placeholder idiom is hand-rolled at ~14 sites across `retrieval.py`, `notes_read.py`,
+  `worker.py`, `enrichment_view.py` and `lexical.py`, in three different spellings — this ticket left
+  that count net-neutral (removed two copies, added two) rather than growing scope.
+
+  **The description's other open question — whether `cited_answer` and `citations_read` can share
+  a single read within one `ask()` call, instead of each re-fetching the same versions/snapshots
+  bodies (pre-send in `cited_answer._resolve_targets`, post-answer in
+  `citations_read.resolve_citations`) — is recorded here, not implemented.** The two reads happen at
+  genuinely different points in the pipeline and over different id sets: `_resolve_targets` runs
+  over every **retrieved** context item before the LLM call (to resolve `no_egress` for the egress
+  gate and populate the faithfulness gate's `bodies` map), while `resolve_citations` runs afterward
+  over only the **surviving, cited** targets (a strict subset, post-gate) to add as-of/identity
+  metadata for display. Unifying them would mean either widening `_resolve_targets`'s scope to also
+  compute identity/as-of for targets that might get dropped by the gate (wasted work on the common
+  case), or threading `_resolve_targets`'s already-fetched bodies dict through `ask()` into the
+  citations-read call (a cross-module data-passing change touching call signatures in both
+  `cited_answer.ask` and wherever `resolve_citations` is invoked) — bigger and riskier than this
+  ticket's stated scope of factoring out a query-shape helper. Leaning: **not worth it** unless a
+  profiling signal shows the duplicate read matters in practice; revisit then rather than
+  speculatively wiring it now.
+
 - **Update (`lode-5ido`, 2026-08-08) — `lode-p8zl` RULING 1's premise is stale, but its conclusion
   stands and the shipped design is UNCHANGED.** Claude Code's documented `PreToolUse` payload now
   carries `agent_id` and `agent_type` (present when the hook fires inside a subagent, or under
