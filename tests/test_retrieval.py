@@ -14,7 +14,6 @@ the dense vectors it produces share a direction with the matching query vector s
 cosine ranking is trivial to reason about.
 """
 
-import math
 from pathlib import Path
 
 import pytest
@@ -800,7 +799,9 @@ def test_pinned_note_context_returns_the_note_head_passages(repo, conn) -> None:
     assert items  # real chunking produced at least one passage
     assert all(item.tier is TrustTier.OWNED_NOTE for item in items)
     assert all(item.target_version == v for item in items)
-    assert all(item.score == math.inf for item in items)
+    # Pinning is positional, not scored -- 0.0 is the same "no upstream rank"
+    # value graph_expand's synthetic hits carry, never a sentinel.
+    assert all(item.score == 0.0 for item in items)
     # Every item cites a real row in ``passages`` -- not a fabricated one.
     passage_ids = {
         row[0]
@@ -834,6 +835,28 @@ def test_pinned_note_context_deleted_note_is_empty(repo, conn) -> None:
     # The tombstone head has no passages of its own (evicted, not re-derived
     # -- lode.lexical's own contract), so this correctly returns nothing to
     # pin rather than pinning stale, pre-delete content.
+    assert pinned_note_context(conn, "note-a") == []
+
+
+def test_pinned_note_context_fails_closed_on_a_tombstone_head_with_passages(
+    repo, conn
+) -> None:
+    """The live-head guard, not the eviction, is what excludes a deleted note.
+
+    Eviction is why the tombstone head has no passages today; force a passage
+    row onto the tombstone head anyway and the pin must STILL be empty, or the
+    one retrieval leg not scoped to ``live_head_versions``' allow-list would
+    surface deleted content ahead of everything else.
+    """
+    v = repo.save("note-a", "alpha").version_id
+    tombstone = repo.delete("note-a", parent=v).version_id
+    conn.execute(
+        "INSERT INTO passages (passage_id, target_version, ord, char_range, "
+        "text, parent_block) VALUES ('p-ghost', ?, 0, '0:5', 'alpha', 'alpha')",
+        (tombstone,),
+    )
+    conn.commit()
+
     assert pinned_note_context(conn, "note-a") == []
 
 

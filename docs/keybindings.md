@@ -179,7 +179,11 @@ screen-shadows-app mechanism (above): `EditScreen` and `VersionViewScreen` each 
 Screen-level `Binding("ctrl+l", "ask_about_note", "Ask")` — same key, same footer label, so nothing
 about the footer or the letter ledger changes — that simply resolves *first* while one of those
 screens is active and opens the note-scoped ask flow (the current note pinned as primary context)
-instead of the corpus-wide one. `AskScreen` itself gained an optional `note_id` constructor
+instead of the corpus-wide one. **The accepted cost of that shadow** (the `lode-olmi.6` trap
+above, in its mildest form): while one of those two screens is active, the *corpus-wide* Ask is no
+longer reachable in one key — Escape back to Browse first. Judged acceptable because both keys are
+the same action, differing only in scope, and "Ask" pressed from inside a note most plausibly means
+"ask about this note". `AskScreen` itself gained an optional `note_id` constructor
 parameter rather than becoming a second screen module — the zero-arg form (`SCREENS["ask"]`'s
 App-level push) is the unchanged corpus-wide behaviour. A future ticket needing a genuinely *new*
 action on one of these screens still faces the exhausted pool above; this one didn't need to.

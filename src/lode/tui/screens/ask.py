@@ -114,12 +114,8 @@ class AskScreen(Screen[None]):
 
     def __init__(self, note_id: str | None = None) -> None:
         super().__init__()
-        # "Ask about THIS note" (lode-35nu.11.3): when given, every question
-        # asked on this screen instance pins ``note_id``'s live head into the
-        # context ahead of normal retrieval (:func:`lode.tui.services.ask.run_ask`'s
-        # own ``pinned_note_id`` param). ``None`` (the App-level ``ctrl+l``
-        # push via the zero-arg ``SCREENS["ask"]`` registration) is exactly
-        # the prior, corpus-wide behaviour -- unchanged.
+        # The pin (lode-35nu.11.3) -- see this module's docstring. ``None`` is
+        # the unchanged corpus-wide behaviour.
         self._note_id = note_id
         # The late-write guard (lode-35nu.5's noted hazard).
         # ``@work(exclusive=True)`` cancels a stale worker's *task* but cannot

@@ -44,7 +44,6 @@ pipeline is the embedder's concern, distinct from the search node), so
 landed :meth:`VectorStore.search` signature and keeping this read side model-free.
 """
 
-import math
 import re
 import sqlite3
 from collections.abc import Collection
@@ -856,9 +855,20 @@ def pinned_note_context(conn: sqlite3.Connection, note_id: str) -> list[ContextI
     retrieval hit) rather than fabricating a synthetic passage, so every
     returned :class:`ContextItem` cites exactly like any other retrieval hit
     would. All items carry :data:`TrustTier.OWNED_NOTE` (correct — this is
-    the user's own note) and ``score=math.inf`` so a caller that merges them
-    ahead of a normal :func:`trust_rank` result sorts them first even within
-    that tier, without needing to know the upstream RRF scale.
+    the user's own note) and ``score=0.0``: pinning is **positional**, not
+    scored — the caller guarantees inclusion by where it puts these in the
+    list, and no ranking stage ever sees them. ``0.0`` is the same "no
+    upstream rank" value :func:`graph_expand` already uses for its own
+    synthetic hits; a sentinel like ``math.inf`` in a field documented as an
+    RRF score would only be a trap for a future stage that averages,
+    normalizes, or serializes it.
+
+    The head is read through the module's own :data:`_LIVE_HEAD_PREDICATE`,
+    exactly like :func:`live_head_versions`' allow-list — so a soft-deleted
+    note's tombstone head can never be pinned. Today that also falls out of
+    the tombstone simply having no passages of its own, but the pin is the
+    one leg not otherwise scoped to the live-head allow-list, and it must
+    fail closed on its own rather than on that coincidence.
 
     Returns ``[]`` for a note with no live head (deleted, or an unknown id)
     or a live head with no passages (not yet chunked) — the caller decides
@@ -866,7 +876,10 @@ def pinned_note_context(conn: sqlite3.Connection, note_id: str) -> list[ContextI
     what's pinnable right now."
     """
     row = conn.execute(
-        "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id,)
+        "SELECT n.head_version_id FROM notes n "
+        "JOIN versions v ON v.version_id = n.head_version_id "
+        f"WHERE n.note_id = ? AND {_LIVE_HEAD_PREDICATE}",
+        (note_id,),
     ).fetchone()
     if row is None or row[0] is None:
         return []
@@ -884,7 +897,7 @@ def pinned_note_context(conn: sqlite3.Connection, note_id: str) -> list[ContextI
             char_range=char_range,
             passage_text=text,
             parent_block=parent_block,
-            score=math.inf,
+            score=0.0,
         )
         for passage_id, char_range, text, parent_block in rows
     ]

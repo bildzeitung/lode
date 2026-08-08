@@ -174,11 +174,8 @@ class EditScreen(Screen[None]):
         Binding("ctrl+g", "inspect_selected", "Inspect"),
         Binding("ctrl+r", "view_content", "View"),
         Binding("ctrl+n", "open_link", "Link"),
-        # SCREEN-level, same key/label as LodeApp's App-level ctrl+l ("Ask")
-        # -- shadows it while this screen is active (docs/keybindings.md,
-        # "Screen-level shadows App-level on the same key"), so the footer
-        # entry is unchanged but the action opens the note-scoped ask flow
-        # instead of the corpus-wide one. No new letter spent (lode-35nu.11.3).
+        # Shadows LodeApp's App-level ctrl+l -- see action_ask_about_note
+        # below and docs/keybindings.md ("Two altitudes") (lode-35nu.11.3).
         Binding("ctrl+l", "ask_about_note", "Ask"),
     ]
 
@@ -297,6 +294,13 @@ class EditScreen(Screen[None]):
         Screen-level binding that resolves first (``docs/keybindings.md``).
         Pushes :class:`~lode.tui.screens.ask.AskScreen` with this note pinned
         as primary context; Escape from there pops back here unchanged.
+
+        What gets pinned is the note's **saved live head**, not this screen's
+        editor buffer -- unavoidable, not an oversight: every claim must cite
+        stored bytes to pass the faithfulness gate, and an unsaved buffer has
+        none. So an ask fired over unsaved edits answers about the last saved
+        version. Corpus-wide Ask (the App-level ``ctrl+l``) is one Escape
+        away, from Browse -- shadowed, not removed.
         """
         self.app.push_screen(AskScreen(note_id=self.note_id))
 
