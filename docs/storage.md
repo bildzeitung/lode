@@ -1317,10 +1317,13 @@ versions     version_id(=H(framed: note_id,parent,body)), note_id,
              parent_version_id, body, op(create|update|delete),
              purged_at?, created                                       # immutable, owned
 externals    external_id, source_type, head_snapshot_id, no_egress,    # logical identity
-             api_base?, created                                       # api_base: Atlassian
+             api_base?, discovered_via?, created                      # api_base: Atlassian
                                                                         # connectors only
                                                                         # (lode-gpzn.2), NULL
-                                                                        # for web
+                                                                        # for web. discovered_via:
+                                                                        # 'ask' | NULL=draw-down
+                                                                        # (lode-35nu.11.7), never
+                                                                        # branched on
 snapshots    snapshot_id(=H(framed: external_id,body)), external_id, body,
              raw_payload, fetched_at, status(ok|tombstone)             # immutable, mirrored
                                                                         # (fetched_at excepted: bumped
@@ -1341,14 +1344,43 @@ jobs         id, type(embed|enrich|refresh), target_version,           # async w
              attempts, last_error?, batch_handle?, claimed_at?,        #   lifecycle: pending->
              next_attempt_at, created                                  #   running->{done|failed->
                                                                        #   pending|dead}
-egress_log   id, ts, purpose(enrich|qa), model, provider?,             # cloud-egress audit trail
-             sent_targets(version_id|passage_id …), redactions         # provider: NULL=anthropic
+egress_log   id, ts, purpose(enrich|qa|tool), model?, provider?,       # cloud-egress audit trail
+             destination?, arguments?,                                # provider: NULL=anthropic;
+             sent_targets(version_id|passage_id …), redactions         # model/destination/arguments:
+                                                                        # see below (lode-35nu.11.7)
 ```
 
 `no_egress` on `notes`/`externals` marks content that is **indexed locally but never sent to the
 configured cloud LLM** (no enrichment, excluded from cloud Q&A context — see
 [externals.md](externals.md#privacy-consequence-of-aggregation)).
 `egress_log` records every time content leaves the box, so exposure is auditable.
+
+**`egress_log.purpose = 'tool'`, `destination`, `arguments` (schema only, `lode-35nu.11.7`)** — a
+tool-augmented Ask call (JIRA/Confluence/web query, `lode-35nu.11`) is cloud egress too, so it needs
+an audit row here, but it is not an LLM call: `model` (`NOT NULL` for every other purpose) has no
+meaning for it, so this ticket makes the column nullable. `destination` is where the call went — the
+API base / host it hit, not a model — and `arguments` is the call's arguments as sent
+(post-redaction), the tool-call analogue of `sent_targets`/`redactions` for an LLM send. Both are
+`NULL` for `purpose IN ('enrich', 'qa')`. This ticket adds the shape only — no code path writes a
+`purpose='tool'` row yet; that lands with the tool call itself (`lode-35nu.11.1`).
+
+**The first schema migration mechanism (`lode-35nu.11.7`).** Every migration before this one was a
+plain `ALTER TABLE … ADD COLUMN`, forward-applied by `lode.storage._apply_migrations` and made
+idempotent by catching the `OperationalError` a re-run raises. SQLite cannot `ALTER` a `CHECK`
+constraint or relax a column's `NOT NULL`, so admitting `'tool'` into `egress_log.purpose` and
+making `model` nullable needs a full table rebuild (create the new shape, copy every row across,
+drop the old table, rename) — not expressible as a bare `ADD COLUMN`, and not safely idempotent by
+the catch-and-ignore trick (a second run would just rebuild an already-correct table into itself,
+harmlessly, but there's no reason to pay for it). `lode.storage._apply_versioned_migrations` gates
+each such rebuild-shaped step behind SQLite's built-in `PRAGMA user_version` (an integer stored in
+the DB header, defaulting to `0`): a migration numbered *N* runs only while `user_version < N`, then
+bumps it to *N*. `init_db` stamps a brand-new database directly at the target version — its tables
+come out of `schema.sql` already in the final shape — and runs whichever pending versioned
+migrations a pre-existing database hasn't seen yet, in order, right after the existing
+`_apply_migrations` column-add pass (so a column that pass adds, e.g. `egress_log.provider`, is
+already present by the time a rebuild copies rows across). `externals.discovered_via` — an ordinary
+column add — rides in the same migration step rather than `_apply_migrations`, since it ships in the
+same version bump.
 
 The UI composes `content node + its annotations` at render time. Nothing is ever written back
 into `versions.body` / `snapshots.body`.

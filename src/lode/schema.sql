@@ -62,12 +62,22 @@ CREATE INDEX IF NOT EXISTS idx_versions_parent ON versions (parent_version_id);
 -- round-trip. NULL for every web external (external_id IS its own fetchable
 -- URL there, docs/externals.md "External identity") -- a general seam for any
 -- future non-URL-keyed connector, not Atlassian-specific machinery.
+-- discovered_via (lode-35nu.11.7, design pinned docs/externals.md "Ask-time
+-- snapshots"): how this external's first snapshot came to exist. 'ask' marks
+-- an external row created by the tool-augmented Ask path (lode-35nu.11.1);
+-- NULL means the existing draw-down origin (paste-triggered or backfill), the
+-- same NULL-means-default convention as annotations.provider above -- no
+-- backfill needed, every pre-existing row is implicitly draw-down. Written
+-- and displayed (Browse can filter, docs/externals.md), never branched on by
+-- retrieval or egress logic -- hence no CHECK; it is provenance, not a
+-- behavior switch.
 CREATE TABLE IF NOT EXISTS externals (
     external_id      TEXT PRIMARY KEY,
     source_type      TEXT NOT NULL,
     head_snapshot_id TEXT,
     no_egress        INTEGER NOT NULL DEFAULT 0 CHECK (no_egress IN (0, 1)),
     api_base         TEXT,
+    discovered_via   TEXT,
     created          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     FOREIGN KEY (head_snapshot_id) REFERENCES snapshots (snapshot_id)
         DEFERRABLE INITIALLY DEFERRED
@@ -301,17 +311,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_live ON jobs (
 
 -- egress_log — cloud-egress audit trail (docs/storage.md §8, externals.md
 -- privacy). One row per time content leaves the box, so exposure is auditable.
--- sent_targets / redactions are JSON summaries.
+-- sent_targets / redactions / arguments are JSON summaries.
 --
 -- provider (lode-568v.4, design pinned lode-568v.1): same treatment as
 -- annotations.provider above -- an audit trail's whole point is which vendor
 -- content went to, so it carries the same NULL-means-anthropic convention.
+--
+-- purpose='tool' / destination / arguments / model nullable (lode-35nu.11.7,
+-- schema only -- no writer yet, that is lode-35nu.11.1): a tool-augmented Ask
+-- call (JIRA/Confluence/web query) is also cloud egress and must be audited
+-- here, but it is not an LLM call, so `model` -- NOT NULL for every existing
+-- purpose -- has no meaning for it. destination is where the call went (the
+-- API base / host it hit, not a model); arguments is the call's arguments AS
+-- SENT (post-redaction), the tool-call analogue of sent_targets/redactions
+-- for an LLM send. Both are NULL for purpose IN ('enrich', 'qa'). SQLite
+-- cannot ALTER a CHECK constraint, so an existing DB's egress_log is rebuilt
+-- onto this shape by lode.storage's PRAGMA user_version migration, not a
+-- plain ALTER TABLE (docs/storage.md §8).
 CREATE TABLE IF NOT EXISTS egress_log (
     id           INTEGER PRIMARY KEY,
     ts           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    purpose      TEXT NOT NULL CHECK (purpose IN ('enrich', 'qa')),
-    model        TEXT NOT NULL,
+    purpose      TEXT NOT NULL CHECK (purpose IN ('enrich', 'qa', 'tool')),
+    model        TEXT,
     provider     TEXT,
+    destination  TEXT,
+    arguments    TEXT,
     sent_targets TEXT NOT NULL,
     redactions   TEXT
 );

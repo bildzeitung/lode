@@ -326,3 +326,184 @@ def test_provider_column_migrated_onto_pre_existing_annotations_and_egress_log(
     # Idempotent: re-running init_db on the migrated DB must not raise.
     conn2 = init_db(db)
     conn2.close()
+
+
+# ---------------------------------------------------------------------------
+# lode-35nu.11.7: egress_log rebuild (purpose='tool', destination, arguments,
+# model nullable) + externals.discovered_via
+# ---------------------------------------------------------------------------
+
+
+def _seed_pre_lode_35nu_11_7_db(db: Path) -> None:
+    """A DB shaped exactly like every deployment before this migration landed.
+
+    egress_log: purpose CHECK (enrich|qa) only, model NOT NULL, no destination/
+    arguments. externals: no discovered_via. Seeded with one row each so the
+    migration's data-preservation and rebuild behavior are actually exercised,
+    not just schema presence.
+    """
+    seed = sqlite3.connect(db)
+    seed.execute(
+        "CREATE TABLE egress_log ("
+        "  id INTEGER PRIMARY KEY,"
+        "  ts TEXT NOT NULL DEFAULT '2026-01-01T00:00:00.000Z',"
+        "  purpose TEXT NOT NULL CHECK (purpose IN ('enrich', 'qa')),"
+        "  model TEXT NOT NULL,"
+        "  provider TEXT,"
+        "  sent_targets TEXT NOT NULL,"
+        "  redactions TEXT"
+        ")"
+    )
+    seed.execute(
+        "INSERT INTO egress_log (purpose, model, sent_targets, redactions) "
+        "VALUES ('qa', 'claude-sonnet-4-6', '[\"ver-1\"]', '3')"
+    )
+    seed.execute(
+        "CREATE TABLE externals ("
+        "  external_id TEXT PRIMARY KEY,"
+        "  source_type TEXT NOT NULL,"
+        "  head_snapshot_id TEXT,"
+        "  no_egress INTEGER NOT NULL DEFAULT 0,"
+        "  api_base TEXT,"
+        "  created TEXT NOT NULL DEFAULT '2026-01-01T00:00:00.000Z'"
+        ")"
+    )
+    seed.execute(
+        "INSERT INTO externals (external_id, source_type) VALUES ('ext-1', 'web')"
+    )
+    seed.commit()
+    seed.close()
+
+
+def test_egress_log_rebuilt_onto_pre_existing_db_no_data_loss(tmp_path: Path) -> None:
+    """A pre-migration DB's egress_log/externals rows survive the rebuild.
+
+    Reproduces the acceptance criteria directly: an existing lode DB opens
+    cleanly and ends up with the new egress_log shape and
+    externals.discovered_via, with no data loss from the rebuild.
+    """
+    db = tmp_path / "lode.db"
+    _seed_pre_lode_35nu_11_7_db(db)
+
+    conn = init_db(db)
+    try:
+        egress_cols = {r[1] for r in conn.execute("PRAGMA table_info(egress_log)")}
+        assert {"destination", "arguments", "model"} <= egress_cols
+        externals_cols = {r[1] for r in conn.execute("PRAGMA table_info(externals)")}
+        assert "discovered_via" in externals_cols
+
+        # The pre-existing egress_log row survived the rebuild untouched.
+        row = conn.execute(
+            "SELECT purpose, model, sent_targets, redactions, destination, arguments "
+            "FROM egress_log WHERE sent_targets = '[\"ver-1\"]'"
+        ).fetchone()
+        assert row == ("qa", "claude-sonnet-4-6", '["ver-1"]', "3", None, None)
+
+        # The pre-existing externals row survived, discovered_via defaults NULL
+        # (draw-down origin) — never backfilled to a sentinel.
+        discovered_via = conn.execute(
+            "SELECT discovered_via FROM externals WHERE external_id = 'ext-1'"
+        ).fetchone()[0]
+        assert discovered_via is None
+    finally:
+        conn.close()
+
+
+def test_egress_log_migration_is_idempotent(tmp_path: Path) -> None:
+    db = tmp_path / "lode.db"
+    _seed_pre_lode_35nu_11_7_db(db)
+
+    init_db(db).close()
+    # Re-running init_db a second (and third) time must not raise, and must not
+    # duplicate or drop the already-migrated row.
+    init_db(db).close()
+    conn = init_db(db)
+    try:
+        count = conn.execute("SELECT count(*) FROM egress_log").fetchone()[0]
+        assert count == 1
+    finally:
+        conn.close()
+
+
+def test_fresh_and_migrated_db_have_identical_egress_log_and_externals_schema(
+    tmp_path: Path,
+) -> None:
+    fresh_conn = init_db(tmp_path / "fresh.db")
+    try:
+        fresh_egress = {
+            (r[1], r[2], r[3])
+            for r in fresh_conn.execute("PRAGMA table_info(egress_log)")
+        }
+        fresh_externals = {
+            (r[1], r[2], r[3])
+            for r in fresh_conn.execute("PRAGMA table_info(externals)")
+        }
+    finally:
+        fresh_conn.close()
+
+    migrated_db = tmp_path / "migrated.db"
+    _seed_pre_lode_35nu_11_7_db(migrated_db)
+    migrated_conn = init_db(migrated_db)
+    try:
+        migrated_egress = {
+            (r[1], r[2], r[3])
+            for r in migrated_conn.execute("PRAGMA table_info(egress_log)")
+        }
+        migrated_externals = {
+            (r[1], r[2], r[3])
+            for r in migrated_conn.execute("PRAGMA table_info(externals)")
+        }
+    finally:
+        migrated_conn.close()
+
+    assert fresh_egress == migrated_egress
+    assert fresh_externals == migrated_externals
+
+
+def test_egress_log_accepts_tool_purpose_with_destination_and_arguments(
+    tmp_path: Path,
+) -> None:
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        conn.execute(
+            "INSERT INTO egress_log (purpose, destination, arguments, sent_targets) "
+            "VALUES ('tool', 'https://acme.atlassian.net', '{\"jql\": \"x\"}', '[]')"
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT purpose, model, destination, arguments FROM egress_log "
+            "WHERE purpose = 'tool'"
+        ).fetchone()
+        assert row == ("tool", None, "https://acme.atlassian.net", '{"jql": "x"}')
+    finally:
+        conn.close()
+
+
+def test_egress_log_still_rejects_bad_purpose(tmp_path: Path) -> None:
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO egress_log (purpose, model, sent_targets) "
+                "VALUES ('bogus', 'claude-sonnet-4-6', '[]')"
+            )
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+def test_existing_qa_enrich_egress_log_insert_unchanged(tmp_path: Path) -> None:
+    """Existing purpose='qa'/'enrich' writers (egress.log_egress) are unaffected."""
+    from lode.egress import log_egress
+
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        log_id = log_egress(conn, "qa", "claude-sonnet-4-6", ["ver-1"], redactions=2)
+        row = conn.execute(
+            "SELECT purpose, model, sent_targets, redactions FROM egress_log "
+            "WHERE id = ?",
+            (log_id,),
+        ).fetchone()
+        assert row == ("qa", "claude-sonnet-4-6", '["ver-1"]', "2")
+    finally:
+        conn.close()
