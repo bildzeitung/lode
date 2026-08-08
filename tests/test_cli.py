@@ -2293,6 +2293,33 @@ def test_egress_rejects_unknown_purpose(tmp_path: Path) -> None:
     assert result.exit_code != 0
 
 
+def test_egress_lists_a_tool_row_whose_model_is_null(tmp_path: Path) -> None:
+    """A purpose='tool' row has no model (lode-35nu.11.7) and must still list.
+
+    The schema admits a NULL model for a tool call, so the listing's column
+    padding has to survive one -- no writer produces such a row yet
+    (lode-35nu.11.1 does), which is exactly why it needs a test now rather than
+    a TypeError later.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO egress_log (purpose, destination, arguments, "
+                "sent_targets) VALUES ('tool', 'https://acme.atlassian.net', "
+                "'{\"jql\": \"x\"}', '[]')"
+            )
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["egress", "--db", str(db_path)])
+    assert result.exit_code == 0, result.stdout
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    assert len(lines) == 1
+    assert "tool" in lines[0]
+
+
 # --- lode no-egress (the no-egress-tier control surface, lode-w0h.7) --------
 
 
