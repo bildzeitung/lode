@@ -33,6 +33,12 @@ disposes of the ``~`` Sphinx "show only the last component" prefix cleanly:
 it is stripped before the ``lode.`` prefix check, so ``:func:`~lode.cli.
 _tabular_table``` is treated identically to the unprefixed form.
 
+This scoping covers RESOLUTION only. The wrapped-role check below is
+deliberately repo-wide: a role split across a line break is a syntax defect
+that stops Sphinx resolving it and hides it from ``grep`` no matter who owns
+the symbol, so ``:func:`httpx.<newline>get``` hard-fails too. Ownership is a
+question about whether we can check a symbol exists; wrapping is not.
+
 RESOLUTION ALGORITHM: a dotted path ``lode.cli._short_date`` is resolved by
 importing the longest importable *module* prefix, then walking the
 remaining dotted segments as attribute access from there. This is
@@ -105,8 +111,11 @@ _ROLE_RE = re.compile(
 class RefFinding:
     """One reported ref, carrying its own wording in ``reason`` -- mirrors
     ``check_links.py``'s ``LinkError``. The two finding kinds differ only in
-    that wording; which list a finding lands in, not its type, is what
-    separates a hard failure from a warning."""
+    that wording. Since lode-hg49 BOTH kinds hard-fail, so which list a
+    finding lands in no longer decides severity -- it decides only how the
+    findings are grouped and counted in ``main()``'s report. The split is
+    kept over one flat list because list membership is a typed discriminator
+    the callers (and tests) can rely on, where ``reason`` is free text."""
 
     path: Path
     line_no: int
@@ -250,18 +259,21 @@ def main(
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
     unresolved, wrapped = check(target_root)
-    if unresolved or wrapped:
+    # Each kind prints its own findings immediately followed by its own
+    # count -- interleaving the two loops first would detach every count
+    # from the lines it counts whenever both kinds fire at once.
+    if wrapped:
         for ref in wrapped:
             print(str(ref), file=sys.stderr)
+        print(f"\n{len(wrapped)} line-wrapped reference(s) found", file=sys.stderr)
+    if unresolved:
         for ref in unresolved:
             print(str(ref), file=sys.stderr)
-        if wrapped:
-            print(f"\n{len(wrapped)} line-wrapped reference(s) found", file=sys.stderr)
-        if unresolved:
-            print(
-                f"\n{len(unresolved)} unresolved docstring reference(s) found",
-                file=sys.stderr,
-            )
+        print(
+            f"\n{len(unresolved)} unresolved docstring reference(s) found",
+            file=sys.stderr,
+        )
+    if wrapped or unresolved:
         raise typer.Exit(1)
     print(
         "OK: every symbol-naming Sphinx role naming a lode.* symbol under "
