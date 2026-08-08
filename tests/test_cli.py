@@ -2003,6 +2003,7 @@ def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
     from rich.console import Console
 
     from lode.cli import CLI_THEME
+    from lode.cli import status as cli_status
 
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
@@ -2019,7 +2020,7 @@ def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
 
     buf = io.StringIO()
     monkeypatch.setattr(
-        cli,
+        cli_status,
         "console",
         Console(theme=CLI_THEME, force_terminal=True, width=100, file=buf),
     )
