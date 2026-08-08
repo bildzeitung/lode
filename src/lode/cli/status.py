@@ -5,12 +5,16 @@ import logging
 from enum import Enum
 from pathlib import Path
 
-# tests/test_cli.py's test_status_dead_line_is_uniformly_danger_not_repr_
-# highlighted patches this module's own `console` name directly (lode-nftw)
-# -- `monkeypatch.setattr(lode.cli.status, "console", ...)` -- so `console`
-# is imported plainly here like every other command module's; there is no
-# `cli.console` package-wide indirection left to preserve.
+# Load-bearing: `model_cache_dir`, `_resolve_settings`, `_cold_model_cache` and
+# `provider_identity` below are rebound AS NAMES on the `lode.cli` package by
+# tests, so they must be looked up through it at call time -- see `lode.cli`'s
+# module docstring.
 from lode import cli
+
+# `console` is NOT one of those: it is imported plainly here, like every other
+# command module. The one test that substitutes a Console for it rebinds it on
+# THIS module's namespace (lode-nftw) -- see
+# tests/test_cli.py::test_status_dead_line_is_uniformly_danger_not_repr_highlighted.
 from lode.cli import _DbOption, _open_db, _tabular_table, app, console
 from lode.config import Settings, default_db_path, lance_dir
 from lode.enrichment_view import stale_enrichment_heads

@@ -2003,6 +2003,10 @@ def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
     from rich.console import Console
 
     from lode.cli import CLI_THEME
+
+    # The rebind below targets THIS module's `console` name, not the package's
+    # (lode-nftw) -- status.py imports `console` plainly, so its own namespace
+    # is the only binding a substitute Console can reach.
     from lode.cli import status as cli_status
 
     db_path = tmp_path / "lode.db"
