@@ -552,8 +552,11 @@ BD_JSON="$(bd show <id> --json)"     # read metadata.land_head and metadata.land
 LAND_HEAD="$(jq -r '.[0].metadata.land_head // empty' <<<"$BD_JSON")"
 # Shape-check land_head BEFORE comparing it to anything (lode-xdg3, prose below).
 # Exit 1 = malformed/missing metadata; exit 2 = this call is broken, fix the
-# invocation and report nothing about the field.
-scripts/validate-sha40.sh land_head "$LAND_HEAD"
+# invocation and report nothing about the field. `|| exit $?` is load-bearing:
+# there is no `set -e` here, so without it the block would run the drift
+# comparison below on a value the check just rejected -- the exact thing the
+# check exists to prevent -- while preserving the 1-vs-2 exit distinction.
+scripts/validate-sha40.sh land_head "$LAND_HEAD" || exit $?
 git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on origin...
 # ...and origin/land/<id>'s tip SHA must equal $LAND_HEAD
 ```
@@ -561,9 +564,10 @@ git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on origi
 **Why the shape check, before the comparison (lode-xdg3).** A `bd update --set-metadata
 land_head=...` call has no schema — a truncated or hand-retyped value (one hex digit short, say)
 writes just as cleanly as a real one, and a malformed value never equals a real branch tip either,
-so without this check it reads as ordinary drift and the branch is kicked back `needs-rebase` for no
-reason — a self-inflicted round trip on a branch that was already correct (the reproduction: a
-rebase pickup wrote a 39-character `land_head`, one digit short of the real tip).
+so without this check it reads as ordinary drift and the branch is thrown back on that basis — for
+this section, a **bounce** (the disposition the next paragraph gives drift), which supersedes the
+ticket and drops the branch: a self-inflicted rebuild of work that was already correct (the
+reproduction: a rebase pickup wrote a 39-character `land_head`, one digit short of the real tip).
 `scripts/validate-sha40.sh` is the shared predicate, also used by `code-reviewer.md`'s own
 `review_head` check, so both read sites can't drift on what "well-formed" means. It is called in the
 same fenced block that reads the value because shell state does not survive between blocks
@@ -572,10 +576,26 @@ same fenced block that reads the value because shell state does not survive betw
 A **missing branch** or a **SHA mismatch** is drift — treat it exactly like a review **bounce**
 (below): I will not land a branch I can't verify is the reviewed one. A **malformed `land_head`**
 (the check above failed) is a **distinct** outcome — neither drift nor a real mismatch, since there
-is no well-formed value to compare in the first place. Treat it as a **bounce** too (the ticket needs
-a human-clean re-write of the field before it can be re-verified), but say so explicitly in the bounce
-findings — "malformed land_head metadata, not drift" — so the follow-up ticket and the next producer
-aren't sent chasing a phantom rebase.
+is no well-formed value to compare in the first place — and it is an
+**[escalate](#escalate--genuine-decision)**, never a bounce and never an in-pass repair
+(DECISION, human, `lode-xdg3`). Concretely: **keep `origin/land/<id>`** (no delete, no supersede, no
+rebuild ticket), **land nothing from it this pass**, label the ticket `land-escalated`, and say
+explicitly in the escalation findings — "malformed `land_head` metadata, not drift" — what the human
+owes: **re-derive** the value mechanically per
+[`docs/conventions.md`](../../../docs/conventions.md)'s "Derive identifiers, never retype them" fiat
+(`git rev-parse` / `git ls-remote` — never retyped, `lode-fpmi`), re-write the field, and re-enter the
+ticket per the [re-entry table](#re-entry-per-escalating-source--re-enter-at-the-gate-that-escalated)
+(this gate escalated and the resolution needs no branch edit, so it re-enters at `ready-for-land`).
+
+**Why escalate rather than bounce or repair.** A corrupt hand-off record means **no drift evidence
+exists at all** — and whether the branch is nonetheless the reviewed one is a *human* judgement,
+which is exactly what escalation is for. Bouncing would `bd supersede` the ticket, open a rebuild
+ticket and **delete** `land/<id>` — destroying the very branch whose field the remedy above asks a
+human to re-write, rebuilding a reviewed, correct branch over one mistyped hex digit. Repairing it
+in-pass (re-deriving from `git ls-remote` and continuing) is worse still: `land_head` records **what
+the reviewer saw**, so re-deriving it yields the *current* tip and the subsequent comparison becomes
+tip == tip — vacuously true. That does not fix the drift check, it deletes it while leaving it green,
+and it is the only disposition that can let genuinely unreviewed drift reach `trunk`.
 
 ### 2b. Cheap conflict precheck — does it still merge onto `trunk`?
 
@@ -2247,6 +2267,7 @@ a later gate taking the resolution on faith.
 | `coding` rebase-pickup conflict                                              | (a)  | `needs-rebase`          |
 | `coding` build-time clarification                                            | (a)  | `ready-for-code-review` |
 | `/land` combined re-gate (defect already on `trunk`)                         | (d)  | `ready-for-code-review` |
+| `/land` §2a malformed `land_head` metadata (`lode-xdg3`)                     | (a)  | `ready-for-land`        |
 
 The two `land-review` rows are written as an explicit **no branch edit / a branch edit** pair so they
 cannot both match one escalation: every `land-review` escalation matches exactly one of them, decided

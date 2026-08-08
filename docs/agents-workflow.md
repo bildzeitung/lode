@@ -1975,6 +1975,23 @@ reported as **malformed**, distinct from **drift** — the caller never derives 
 unreviewed push" narrative from a value that was never well-formed enough to compare in the first
 place.
 
+**The disposition a malformed value earns is ESCALATE — not a bounce, not an in-pass repair**
+(DECISION, human, 2026-08-08, `lode-xdg3`). `/land` keeps `origin/land/<id>`, lands nothing from it
+that pass, labels the ticket `land-escalated`, and reports "malformed `land_head` metadata, not
+drift"; a human re-derives the value mechanically (`git rev-parse` / `git ls-remote`, per
+[`docs/conventions.md`](conventions.md)'s "Derive identifiers, never retype them", `lode-fpmi`),
+re-writes the field, and re-enters the ticket at `ready-for-land`. The reasoning: a corrupt hand-off
+record means **no drift evidence exists**, and whether the branch is trustworthy anyway is a human
+judgement. Bouncing would supersede the ticket and **delete** the branch whose field the remedy asks
+a human to re-write — rebuilding reviewed, correct work over one mistyped hex digit. Repairing it
+in-pass is worse: `land_head` records *what the reviewer saw*, so re-deriving it from the remote
+yields the current tip and makes the comparison tip == tip — vacuously green, the drift check
+deleted rather than fixed, and the only route by which genuinely unreviewed drift could reach
+`trunk`. `code-reviewer` is unaffected by this arm: it reviews the tip it checked out either way and
+merely labels the finding "malformed `review_head` metadata" instead of "drift".
+[`/land`'s Section 2a](../.claude/skills/land/SKILL.md#2a-re-validate-that-beads-and-git-havent-drifted)
+carries the operative wording; the two files must not diverge on this taxonomy.
+
 **Why a read-time check, not a write-time reject (the ticket's option (b)).** The value is written by
 several sites across `coding.md`, `code-reviewer.md`, and `/land`'s own rebase-pickup refresh — every
 one of them already derives the value mechanically (`$(git rev-parse HEAD)`), per
@@ -2008,7 +2025,7 @@ tests plus a markdown coverage gate (`tests/test_land_skill_guard_coverage.py`, 
 metadata condition, reported as MISSING rather than as a usage error), and **2 for a broken call**
 (wrong argument count). That last distinction is load-bearing rather than decorative: both call sites
 react to a nonzero exit by reporting malformed metadata, so if a botched invocation also exited 1, a
-future edit that dropped an argument would make `/land` bounce an already-correct ticket while the
+future edit that dropped an argument would make `/land` escalate an already-correct ticket while the
 real defect sat in the markdown. `validate-sha40.sh` does not source
 [`scripts/gate-lib.sh`](../scripts/gate-lib.sh) (lode-pcee requires saying so): that library exists to
 emit the multi-line "GATE COULD NOT RUN" advisory a branch-verdict gate owes its caller, and its

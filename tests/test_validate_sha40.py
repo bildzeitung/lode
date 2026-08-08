@@ -6,9 +6,11 @@ branch tip. Nothing in the pipeline would have caught it: `/land`'s Section
 2a precheck and `code-reviewer.md`'s own `review_head` check both compare
 the recorded value against the *actual* branch tip purely to detect DRIFT (a
 push after the ticket was marked ready) -- a malformed value never equals a
-real SHA either, so it would have been silently misread as drift and kicked
-the branch back `needs-rebase` for no reason, on a branch that was already
-correct.
+real SHA either, so it would have been silently misread as drift -- which in
+Section 2a means a BOUNCE: the ticket superseded and the branch deleted, on
+a branch that was already correct. (A malformed value is instead an
+ESCALATE there, lode-xdg3: branch kept, nothing lands, a human re-derives
+and re-writes the field.)
 
 `scripts/validate-sha40.sh` gives both read sites one shared, tested
 predicate: is this value even shaped like a full 40-lowercase-hex git SHA,
@@ -95,7 +97,7 @@ def test_wrong_argument_count_exits_2_not_1() -> None:
     """A broken CALL is exit 2 ("the machine, never the content", lode-9i2p),
     never exit 1. Load-bearing: both call sites react to a nonzero exit by
     reporting MALFORMED METADATA, so a botched invocation exiting 1 would make
-    `/land` bounce an already-correct ticket over a defect in its own markdown."""
+    `/land` escalate an already-correct ticket over a defect in its own markdown."""
     for argv in ([], ["land_head"], ["land_head", "a", "b"]):
         result = subprocess.run(
             [str(SCRIPT), *argv], capture_output=True, text=True, check=False

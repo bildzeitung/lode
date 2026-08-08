@@ -13,8 +13,11 @@
 # caught it: /land's Section 2a precheck compares metadata.land_head against
 # the actual `origin/land/<id>` tip purely to detect DRIFT (a push after the
 # ticket was marked ready), and a malformed value never equals a real SHA
-# either, so it would have been kicked back `needs-rebase` for no reason --
-# a self-inflicted round trip on a branch that was already correct. The
+# either, so it would have been thrown back as drift -- which in Section 2a
+# means a BOUNCE: the ticket superseded and the branch deleted, rebuilding
+# work that was already correct. A malformed value is instead an ESCALATE
+# there (lode-xdg3): the branch is kept, nothing lands, a human re-derives
+# and re-writes the field. The
 # analogous read site is code-reviewer.md's own review_head comparison. This
 # script gives both read sites (and any write site that wants to validate
 # before writing) one shared, tested predicate rather than each re-deriving
@@ -35,7 +38,7 @@
 #           (lode-9i2p). This distinction is load-bearing here: both callers
 #           react to a nonzero exit by reporting MALFORMED METADATA, so if a
 #           botched invocation also exited 1, a future edit that dropped an
-#           argument would make /land bounce an already-correct ticket while
+#           argument would make /land escalate an already-correct ticket while
 #           the real defect sat in the markdown call site. A caller seeing 2
 #           must fix its own invocation and report nothing about the field.
 #

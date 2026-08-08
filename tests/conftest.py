@@ -1663,13 +1663,14 @@ SWEEP_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
 #: roots, so the constant belongs here for the same reason the skill ones do.
 CODE_REVIEWER_AGENT = _CHECKOUT_ROOT / ".claude" / "agents" / "code-reviewer.md"
 
-#: The code-reviewer agent doc's text, read once per session -- same rationale
-#: as :data:`LAND_SKILL_TEXT`.
-CODE_REVIEWER_AGENT_TEXT = CODE_REVIEWER_AGENT.read_text(encoding="utf-8")
-
-#: :func:`bash_fence_blocks` applied to :data:`CODE_REVIEWER_AGENT_TEXT` once
-#: per session. See :data:`LAND_SKILL_TEXT` for why this is cached at all.
-CODE_REVIEWER_AGENT_BLOCKS = bash_fence_blocks(CODE_REVIEWER_AGENT_TEXT)
+#: :func:`bash_fence_blocks` over :data:`CODE_REVIEWER_AGENT`, once per session.
+#: See :data:`LAND_SKILL_TEXT` for why this is cached at all. No separate
+#: ``_TEXT`` constant: unlike ``LAND_SKILL_TEXT`` (several modules read the raw
+#: prose), nothing needs the text itself yet, so the read is inlined here rather
+#: than exported dead.
+CODE_REVIEWER_AGENT_BLOCKS = bash_fence_blocks(
+    CODE_REVIEWER_AGENT.read_text(encoding="utf-8")
+)
 
 #: The sweep skill doc's text, read once per session rather than once per test
 #: (lode-pxwn) -- the same fix LAND_SKILL_TEXT above applied to LAND_SKILL.

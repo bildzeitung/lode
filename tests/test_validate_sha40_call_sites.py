@@ -7,8 +7,9 @@ inside markdown agent instructions, which no other gate parses. Without this
 file, deleting the two-line check from `.claude/skills/land/SKILL.md` or
 `.claude/agents/code-reviewer.md` leaves the whole suite green while the
 pipeline silently returns to the exact lode-r9z0 behaviour the ticket exists to
-prevent: a truncated `land_head` misread as drift, bouncing an already-correct
-branch to `needs-rebase`.
+prevent: a truncated `land_head` misread as drift, which in Section 2a bounces
+an already-correct branch (superseding its ticket and deleting the branch)
+instead of escalating it for a human to re-derive the field (lode-xdg3).
 
 This is the second half of the split `scripts/assert-main-checkout.sh` already
 uses -- script-behaviour tests plus a markdown coverage gate
@@ -16,15 +17,18 @@ uses -- script-behaviour tests plus a markdown coverage gate
 this ticket added. It is also the ticket's own option (c), which the design
 note argued neither for nor against.
 
-The gate is deliberately shaped around the *hazard*, not around the current
-text: it finds any fenced bash block that reads one of these metadata fields
-and requires the validator call in THAT SAME BLOCK. Same-block is not a style
-preference -- shell state does not survive between fenced blocks (lode-sfnb),
-so a check one block later would be reading an unset variable.
+Within each rostered file the gate is shaped around the *hazard*, not around
+the current text: it finds any fenced bash block that reads one of these
+metadata fields and requires the validator call in THAT SAME BLOCK. Same-block
+is not a style preference -- shell state does not survive between fenced blocks
+(lode-sfnb), so a check one block later would be reading an unset variable. The
+roster of files itself is still hand-maintained; see :data:`CALL_SITES` for why,
+and for the follow-up that would replace it with a hazard-keyed glob.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -45,21 +49,26 @@ def _read_sites(blocks: list[str], field: str) -> list[str]:
     return [b for b in blocks if f"metadata.{field}" in b and "jq" in b]
 
 
-def _call_sites() -> list[tuple[str, list[str]]]:
-    return [
-        (".claude/skills/land/SKILL.md", LAND_SKILL_BLOCKS),
-        (".claude/agents/code-reviewer.md", CODE_REVIEWER_AGENT_BLOCKS),
-    ]
+#: The markdown files whose fenced bash compares one of :data:`DRIFT_FIELDS`
+#: against a real branch tip. A hand-maintained roster rather than a glob over
+#: `.claude/**/*.md`: `.claude/skills/code/SKILL.md` also reads
+#: `metadata.review_head` in a fenced block, but only as a non-emptiness check,
+#: never a tip comparison, so a corpus-wide scan on the field name alone would
+#: demand a spurious validator call there. Widening this to a glob keyed on the
+#: actual hazard (field read *and* compared to a tip) is filed as lode-rby4;
+#: until then a new read site must be added here by hand.
+CALL_SITES: list[tuple[str, list[str]]] = [
+    (".claude/skills/land/SKILL.md", LAND_SKILL_BLOCKS),
+    (".claude/agents/code-reviewer.md", CODE_REVIEWER_AGENT_BLOCKS),
+]
 
 
-@pytest.mark.parametrize(
-    ("name", "field"), [("land", "land_head"), ("cr", "review_head")]
-)
-def test_the_expected_read_site_still_exists(name: str, field: str) -> None:
+@pytest.mark.parametrize("field", DRIFT_FIELDS)
+def test_the_expected_read_site_still_exists(field: str) -> None:
     """Non-vacuity: if the read itself is renamed away, this whole gate would
     pass by finding nothing to check. Pins that each field is still read
     exactly once, in exactly one file."""
-    found = [path for path, blocks in _call_sites() if _read_sites(blocks, field)]
+    found = [path for path, blocks in CALL_SITES if _read_sites(blocks, field)]
     assert len(found) == 1, (
         f"expected exactly one file reading metadata.{field} in a fenced bash "
         f"block, found {found} -- if a read site was added or moved, extend "
@@ -71,7 +80,7 @@ def test_every_drift_field_read_is_shape_checked_in_the_same_block() -> None:
     """The gate proper. A block that reads `land_head`/`review_head` must call
     the validator on it before that value can reach a drift comparison."""
     unguarded: list[str] = []
-    for path, blocks in _call_sites():
+    for path, blocks in CALL_SITES:
         for field in DRIFT_FIELDS:
             for block in _read_sites(blocks, field):
                 if VALIDATOR not in block:
@@ -90,7 +99,7 @@ def test_validator_is_called_on_the_value_that_was_read() -> None:
     """A call passing the wrong variable would satisfy the gate above while
     validating nothing. Pins that the field name and the shell variable the
     read assigned both appear on the validator's own line."""
-    for path, blocks in _call_sites():
+    for path, blocks in CALL_SITES:
         for field in DRIFT_FIELDS:
             for block in _read_sites(blocks, field):
                 var = field.upper()
@@ -106,8 +115,6 @@ def test_validator_is_called_on_the_value_that_was_read() -> None:
 
 def test_validator_script_is_executable() -> None:
     """Both call sites invoke it as a bare path, not via `bash <path>`."""
-    import os
-
     script = REPO_ROOT / VALIDATOR
     assert script.exists(), f"{VALIDATOR} is missing"
     assert os.access(script, os.X_OK), f"{VALIDATOR} is not executable"
