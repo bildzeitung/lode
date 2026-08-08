@@ -4080,3 +4080,44 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   `Edit` via the main-checkout path, rather than the worktree-prefixed path, was refused with "Edit
   the worktree copy of this file instead of the shared-checkout path"; that is the harness's own
   path-scoping for an isolated agent, unrelated to the `PreToolUse` trunk-write guard under test.)
+
+- **2026-08-08 (`lode-r9z0`) — shared helper for the batched polymorphic
+  `(version_id | snapshot_id)` target split: extracted for 2 of the 3 candidate sites; `trust_rank`
+  deliberately left alone.** `cited_answer._resolve_targets` (lode-ekqh) and
+  `citations_read.resolve_citations` (lode-35nu.1/.3) both partition a set of `target_version` ids
+  into note-side and external-side lists, then run one `versions JOIN notes ... IN(...)` query and
+  one `snapshots JOIN externals ... IN(...)` query. That shared shape — split ids already known to
+  belong to one side or the other, build the placeholder string, run the two queries — is now
+  `lode.target_rows.fetch_target_rows(conn, note_ids, external_ids, note_columns,
+  external_columns)`. Each caller still supplies its own `SELECT` column list and does its own
+  row -> result mapping (per the ticket's acceptance criteria); `cited_answer`'s `no_egress`/scope
+  composition is untouched — that logic runs on the caller's side of the helper boundary, not inside
+  it, and no generic `no_egress` seam was introduced (`docs/no_egress_scope`, `lode-35nu.11.8`
+  stays call-site-local).
+
+  `retrieval.trust_rank` (~:773) was evaluated as the third candidate the ticket named and does
+  **not** fit this shape, so it was left alone rather than forced onto the helper: `trust_rank`
+  looks up the **full, unsplit** target-id list against *both* `versions` and `snapshots` at once
+  (`WHERE version_id IN (all_targets)` and separately `WHERE snapshot_id IN (all_targets)`) —
+  because classifying which table a target belongs to (owned note vs. current/stale external) is
+  the very thing `trust_rank` is computing, there is no pre-split id list to hand the helper. Forcing
+  a shared "split ids, then IN(...) pair" abstraction onto a caller that has nothing to pre-split
+  would be exactly the speculative-abstraction failure mode `CLAUDE.md` warns against, not a genuine
+  fit.
+
+  **The description's other open question — whether `cited_answer` and `citations_read` can share
+  a single read within one `ask()` call, instead of each re-fetching the same versions/snapshots
+  bodies (pre-send in `cited_answer._resolve_targets`, post-answer in
+  `citations_read.resolve_citations`) — is recorded here, not implemented.** The two reads happen at
+  genuinely different points in the pipeline and over different id sets: `_resolve_targets` runs
+  over every **retrieved** context item before the LLM call (to resolve `no_egress` for the egress
+  gate and populate the faithfulness gate's `bodies` map), while `resolve_citations` runs afterward
+  over only the **surviving, cited** targets (a strict subset, post-gate) to add as-of/identity
+  metadata for display. Unifying them would mean either widening `_resolve_targets`'s scope to also
+  compute identity/as-of for targets that might get dropped by the gate (wasted work on the common
+  case), or threading `_resolve_targets`'s already-fetched bodies dict through `ask()` into the
+  citations-read call (a cross-module data-passing change touching call signatures in both
+  `cited_answer.ask` and wherever `resolve_citations` is invoked) — bigger and riskier than this
+  ticket's stated scope of factoring out a query-shape helper. Leaning: **not worth it** unless a
+  profiling signal shows the duplicate read matters in practice; revisit then rather than
+  speculatively wiring it now.
