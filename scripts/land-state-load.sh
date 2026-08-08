@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 #
-# Shared missing-vs-empty policy for /land's $STATE_DIR file loads (lode-dc4n).
+# Shared missing-vs-empty policy for a skill's scratch-file loads (lode-dc4n,
+# lode-3oik). Despite the name -- kept as-is rather than renamed, see the
+# lode-3oik entry in docs/decisions.md -- this script is NOT $STATE_DIR-
+# specific: it takes a plain path argument and is used by both `/land`
+# (`$STATE_DIR`, `.git/land-state/`) and `/sweep` (`$SWEEP_TMP`,
+# `${TMPDIR:-/tmp}/lode-sweep-state`).
 #
-# .claude/skills/land/SKILL.md reads files under $STATE_DIR (`.git/land-state/`)
-# at four call sites, encoding exactly TWO policies with FOUR different hand-
-# rolled spellings:
+# `/land`'s SKILL.md originally read files under $STATE_DIR at four call
+# sites, encoding exactly TWO policies with FOUR different hand-rolled
+# spellings:
 #
 #   1. Section 3 first-pass accepted:  cat || { <diagnostic>; exit 1; }   missing fatal, empty OK
 #   2. Section 3 isolation accepted:   cat || exit 1  +  [ -n ... ] || exit 1   both fatal (lode-0jan)
@@ -16,6 +21,11 @@
 # later. This script makes the policy a visible ARGUMENT instead of a
 # spelling a future editor has to pick from by guess, and gives it shellcheck
 # + unit tests instead of living only in a markdown fence no gate parses.
+#
+# lode-3oik adopted this for five more sites in `/sweep`'s SKILL.md, all on
+# the "default" policy. A caller that does NOT adopt it explains why at its
+# own call site -- that reasoning is about the caller, not about this script,
+# so do not accumulate it here.
 #
 # Usage: scripts/land-state-load.sh <file> [--require-nonempty] [-- <context line>...]
 #
