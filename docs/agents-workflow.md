@@ -2607,13 +2607,20 @@ carries the hand-off and something else consumes the label —
 occasional race. This was harmless in practice — `code-reviewer` checks out `origin/land/<id>`, never
 `review_head`, and only compares the two to detect drift — but a reviewer trained to expect a spurious
 mismatch here is a reviewer that will also discount a *genuine* one. **Fixed by narrowing what counts
-as drift, not by trying to keep `review_head` fresh:** `code-reviewer`'s drift check (`.claude/agents/code-reviewer.md`, step 2) now
-distinguishes an exact match, a mismatch where `review_head` is an **ancestor** of the fetched tip
-(expected — the normal shape of an exit (d) re-entry, not drift), and a genuine mismatch (a push
-`review_head` doesn't account for — real drift, still noted). Keeping `review_head` itself unwritten
-on this path is deliberate: chasing every place that could advance `land/<id>` after the label is set
-(a human's amendment, or `code-reviewer`'s own re-review) into a metadata-refresh discipline is more
-places to forget than fixing the one comparison that consumes the field.
+as drift, not by trying to keep `review_head` fresh:** `code-reviewer`'s drift check
+([`code-reviewer.md`](../.claude/agents/code-reviewer.md), step 2) now asks one question — is
+`review_head` an **ancestor** of the fetched tip? Yes means the branch only moved forward: not drift,
+not noted. No means history was rewritten, so commits `review_head` accounted for may be *gone* rather
+than superseded: real drift, still noted. Keeping `review_head` itself unwritten on this path is
+deliberate — the field is *provenance*, not a review boundary, so there is nothing to keep fresh.
+
+**What the ancestor arm gives up.** It cannot separate an exit (d) re-entry from a fast-forward push of
+never-reviewed commits — both leave `review_head` an ancestor — so silencing the first silences the
+second. Accepted: the drift note never gated anything, and `code-reviewer` reviews **`trunk...HEAD`**,
+the whole branch, never `review_head...HEAD`, so commits pushed on top are reviewed either way. What
+survives is the one case where that reasoning fails — a rewrite, where content is *removed* rather than
+added. Narrowing the signal to exactly that case is what keeps it credible, which was the ticket's
+actual complaint.
 
 ### Isolating `land-review` dispatches (lode-g387)
 
