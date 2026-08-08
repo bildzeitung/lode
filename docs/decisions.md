@@ -4362,3 +4362,13 @@ entries below from being rewritten to chase the current tree.)
   `len(ids)`, and that `fetch_by_ids` never accepts anything but a fixed literal `sql` string — there
   is no path from caller- or user-supplied data into the SQL text itself, only into the bound `?`
   values).
+
+- **Update (lode-8n4k, 2026-08-08) — correcting a "checks out" overclaim near lode-2m89's entry
+  above.** That entry's line "it is what the reviewer checks out and compares against for drift" is
+  half right and half wrong: `code-reviewer` fetches and checks out `origin/land/<id>` directly (per
+  `code-reviewer.md` step 2 and `.claude/skills/code/SKILL.md:249`), **never** `review_head` — the
+  "compares against for drift" half is correct, "checks out" is not. `review_head` is a provenance /
+  drift-comparison note, not a review boundary — the doctrine `lode-9b5n` establishes explicitly.
+  `.claude/agents/coding.md:78` carried the same wrong claim and has been corrected directly (an
+  ordinary file, not append-only). Per this file's own append-only preamble, the entry above is left
+  as originally written; this marker is the correction.
