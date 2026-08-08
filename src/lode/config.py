@@ -1015,7 +1015,7 @@ def model_cache_dir() -> Path:
 #: ``sources.hf``/``model_file``. ``tests/test_model_cache_identity.py``
 #: asserts this dict still matches the installed fastembed's
 #: ``list_supported_models()`` -- that test may import fastembed; this module
-#: and ``cli.models``'s cold-cache probe must not.
+#: and ``cli.status``'s cold-cache probe must not.
 _MODEL_CACHE_IDENTITY: dict[str, tuple[str, str]] = {
     "nomic-ai/nomic-embed-text-v1.5": (
         "nomic-ai/nomic-embed-text-v1.5",
