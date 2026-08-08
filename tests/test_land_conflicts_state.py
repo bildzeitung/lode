@@ -270,7 +270,7 @@ def test_empty_accepted_falls_through_missing_accepted_still_aborts() -> None:
     load_pos = site.index('ACCEPTED=$(cat "$STATE_DIR/accepted")')
     missing_line = site[load_pos : load_pos + 200]
     assert "exit 1" in missing_line, (
-        "a failed `cat \"$STATE_DIR/accepted\"` (the file is MISSING -- 3a's "
+        'a failed `cat "$STATE_DIR/accepted"` (the file is MISSING -- 3a\'s '
         "precompute never ran) no longer aborts the pass -- lode-sfnb's "
         "silent-failure guard has regressed"
     )
