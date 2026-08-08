@@ -1,20 +1,22 @@
 """Nox sessions for lode's dev loop.
 
 Two entry points are REQUIRED before any merge (CLAUDE.md) -- a narrower claim
-than "runs by default": a bare ``nox`` invocation actually runs all FOUR
+than "runs by default": a bare ``nox`` invocation actually runs all FIVE
 sessions in ``nox.options.sessions`` below (``fix``, ``tests``, ``shellcheck``,
-``linkcheck``), but CLAUDE.md's merge gate only names these two:
+``linkcheck``, ``docstringcheck``), but CLAUDE.md's merge gate only names these two:
 
     nox -t fix      ruff format + ruff check --fix   (the pre-merge fixer)
     nox -s tests    pytest                           (the test gate — the FULL suite,
                                                         every test, no marker filter;
                                                         this is what /land re-gates with)
 
-The other two sessions in the default set, not required-before-merge by name
+The other three sessions in the default set, not required-before-merge by name
 but still part of a bare ``nox`` run:
 
-    nox -s shellcheck   lint every tracked shell script (--severity=warning)
-    nox -s linkcheck    verify every relative markdown link in docs/ and .claude/ resolves (lode-dkdg)
+    nox -s shellcheck      lint every tracked shell script (--severity=warning)
+    nox -s linkcheck       verify every relative markdown link in docs/ and .claude/ resolves (lode-dkdg)
+    nox -s docstringcheck  verify every symbol-naming Sphinx role naming a lode.* symbol
+                             in src/ and tests/ resolves to a real symbol (lode-8oeu)
 
 Plus FIVE opt-in sessions that are **not** in the default set:
 
@@ -144,7 +146,7 @@ GATE_MACHINE_FAULT = 2
 
 # A bare ``nox`` runs only the offline, keyless gates; ``eval`` (network + an API
 # key) and ``build`` (packaging, not a code gate) stay explicit, never a default.
-nox.options.sessions = ["fix", "tests", "shellcheck", "linkcheck"]
+nox.options.sessions = ["fix", "tests", "shellcheck", "linkcheck", "docstringcheck"]
 
 # The project's own venv, always at this fixed location relative to this file
 # (CLAUDE.md: "The venv lives at ./venv (repo root)").
@@ -286,6 +288,28 @@ def linkcheck(session: nox.Session) -> None:
     an ambient interpreter would not have the project's deps (e.g. ``typer``).
     """
     session.run(_venv_tool(session, "python"), "scripts/check_links.py")
+
+
+@nox.session
+def docstringcheck(session: nox.Session) -> None:
+    """Verify every symbol-naming Sphinx role (``:func:``, ``:class:``,
+    ``:data:``, ``:meth:``, ``:attr:``, ``:mod:``, ``:exc:``, ``:obj:``) naming
+    a ``lode.*`` symbol in a docstring/comment under ``src/`` or ``tests/``
+    resolves to a real symbol (lode-8oeu).
+
+    A single rename (``lode-ekqh``) left four dangling refs across two
+    branches that merged in the same ``/land`` pass, caught only by a hand
+    sweep (``lode-2hfd``) -- one of the four had never named a real symbol
+    at all. ``scripts/check_links.py``/``linkcheck`` is markdown-only and
+    does not reach these. Hard gate, in the default offline set alongside
+    ``linkcheck`` -- pure Python, no Docker, no network; imports the real
+    ``lode`` package to resolve refs, which the shared ``./venv`` already
+    has installed editable (same as ``tests``).
+
+    Resolves ``python`` through ``_venv_tool`` (lode-0yfn) — an ambient
+    interpreter would not have ``lode`` (or ``typer``) installed.
+    """
+    session.run(_venv_tool(session, "python"), "scripts/check_docstring_refs.py")
 
 
 @nox.session

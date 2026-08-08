@@ -43,7 +43,7 @@ class ConfigScreen(Screen[None]):
     :func:`~lode.config.knob_rows` into a ``DataTable`` — the "TUI uses a table"
     half of lode-juz8.6's widened contract; the CLI renders the identical row
     data as a terminal-width-aware rich ``Table`` instead
-    (:func:`lode.cli._config_knob_table`, lode-l38d.4). Escape pops back to
+    (:func:`lode.cli.config._config_knob_table`, lode-l38d.4). Escape pops back to
     whichever screen was active before.
     """
 

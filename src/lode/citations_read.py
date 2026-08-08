@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from lode.notes_read import first_line
+from lode.target_rows import fetch_target_rows
 
 if TYPE_CHECKING:
     from lode.answer import Support
@@ -52,7 +53,11 @@ def resolve_citations(
     Two queries total -- one ``IN (...)`` over every distinct cited
     ``version_id``, one over every distinct cited ``snapshot_id`` -- so a
     multi-claim answer costs a fixed two round-trips regardless of citation
-    count (the ticket's "a single batched query" acceptance line). The as-of
+    count (the ticket's "a single batched query" acceptance line). The
+    batched pair itself is :func:`lode.target_rows.fetch_target_rows`, the
+    same shared shape :func:`lode.cited_answer._resolve_targets` uses
+    (lode-r9z0); this function keeps its own column list and its own
+    row -> result mapping. The as-of
     stamp rides along on the same rows the identity comes from (a note version
     is stamped at write time, ``versions.created``; an external snapshot at
     fetch time, ``snapshots.fetched_at``), so it costs no extra query.
@@ -73,41 +78,33 @@ def resolve_citations(
     bodies: dict[str, str] = {}
 
     version_ids = tuple({s.version_id for s in supports if s.version_id is not None})
-    if version_ids:
-        placeholders = ",".join("?" for _ in version_ids)
-        rows = conn.execute(
-            "SELECT v.version_id, v.note_id, v.body, v.created, n.head_version_id "
-            "FROM versions v JOIN notes n ON n.note_id = v.note_id "
-            f"WHERE v.version_id IN ({placeholders})",
-            version_ids,
-        ).fetchall()
-        for version_id, note_id, body, created, head_version_id in rows:
-            identities[version_id] = CitationIdentity(
-                title=first_line(body),
-                is_head=version_id == head_version_id,
-                note_id=note_id,
-            )
-            as_of[version_id] = created
-            bodies[version_id] = body
-
     snapshot_ids = tuple({s.snapshot_id for s in supports if s.snapshot_id is not None})
-    if snapshot_ids:
-        placeholders = ",".join("?" for _ in snapshot_ids)
-        rows = conn.execute(
-            "SELECT s.snapshot_id, s.external_id, s.body, s.fetched_at, "
-            "e.head_snapshot_id "
-            "FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
-            f"WHERE s.snapshot_id IN ({placeholders})",
-            snapshot_ids,
-        ).fetchall()
-        for snapshot_id, external_id, body, fetched_at, head_snapshot_id in rows:
-            identities[snapshot_id] = CitationIdentity(
-                title=first_line(body),
-                is_head=snapshot_id == head_snapshot_id,
-                external_id=external_id,
-            )
-            as_of[snapshot_id] = fetched_at
-            bodies[snapshot_id] = body
+
+    version_rows, snapshot_rows = fetch_target_rows(
+        conn,
+        version_ids,
+        snapshot_ids,
+        "v.version_id, v.note_id, v.body, v.created, n.head_version_id",
+        "s.snapshot_id, s.external_id, s.body, s.fetched_at, e.head_snapshot_id",
+    )
+
+    for version_id, note_id, body, created, head_version_id in version_rows:
+        identities[version_id] = CitationIdentity(
+            title=first_line(body),
+            is_head=version_id == head_version_id,
+            note_id=note_id,
+        )
+        as_of[version_id] = created
+        bodies[version_id] = body
+
+    for snapshot_id, external_id, body, fetched_at, head_snapshot_id in snapshot_rows:
+        identities[snapshot_id] = CitationIdentity(
+            title=first_line(body),
+            is_head=snapshot_id == head_snapshot_id,
+            external_id=external_id,
+        )
+        as_of[snapshot_id] = fetched_at
+        bodies[snapshot_id] = body
 
     for support in supports:
         as_of.setdefault(support.target_id, None)

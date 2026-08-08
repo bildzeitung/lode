@@ -2004,6 +2004,11 @@ def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
 
     from lode.cli import CLI_THEME
 
+    # The rebind below targets THIS module's `console` name, not the package's
+    # (lode-nftw) -- status.py imports `console` plainly, so its own namespace
+    # is the only binding a substitute Console can reach.
+    from lode.cli import status as cli_status
+
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -2019,7 +2024,7 @@ def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
 
     buf = io.StringIO()
     monkeypatch.setattr(
-        cli,
+        cli_status,
         "console",
         Console(theme=CLI_THEME, force_terminal=True, width=100, file=buf),
     )
@@ -2363,6 +2368,82 @@ def test_egress_lists_a_tool_row_whose_model_is_null(tmp_path: Path) -> None:
     lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
     assert len(lines) == 1
     assert "tool" in lines[0]
+
+
+def test_egress_purpose_tool_filter_and_destination_arguments(tmp_path: Path) -> None:
+    """--purpose tool narrows to exactly the tool rows and renders dest/args.
+
+    Seeds an enrich/qa pair (_seed_egress) plus a purpose='tool' row so the
+    filter has non-tool rows to exclude, then asserts the surviving row's
+    destination/arguments render (lode-l87l acceptance #1/#2).
+    """
+    db_path = tmp_path / "lode.db"
+    _seed_egress(db_path)
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO egress_log (purpose, destination, arguments, "
+                "sent_targets) VALUES ('tool', 'https://acme.atlassian.net', "
+                "'{\"jql\": \"x\"}', '[]')"
+            )
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["egress", "--purpose", "tool", "--db", str(db_path)])
+    assert result.exit_code == 0, result.stdout
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    assert len(lines) == 1
+    assert "enrich" not in result.stdout
+    assert "qa" not in result.stdout
+    assert "destination: https://acme.atlassian.net" in lines[0]
+    assert 'arguments: {"jql": "x"}' in lines[0]
+
+
+def test_egress_purpose_tool_round_trips_a_row_written_by_fetch_for_ask(
+    tmp_path: Path,
+) -> None:
+    """A real ``tools.fetch_for_ask`` write is filterable via ``--purpose tool``.
+
+    End-to-end check that the writer (lode.tools, lode-35nu.11.1) and the
+    reader (this ticket, lode-l87l) agree on the row shape -- not just a
+    hand-inserted row.
+    """
+    from lode.drawdown import SOURCE_TYPE_WEB
+    from lode.tools import fetch_for_ask
+    from lode.webfetch import RawResponse
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    url = "https://example.com/article"
+    try:
+
+        class _StubFetcher:
+            def fetch(self, target_url: str) -> RawResponse:
+                return RawResponse(
+                    final_url=target_url,
+                    status_code=200,
+                    text="<html><body><article><p>"
+                    + ("Real article content. " * 20)
+                    + "</p></article></body></html>",
+                )
+
+        fetch_for_ask(
+            conn,
+            url,
+            SOURCE_TYPE_WEB,
+            fetcher=_StubFetcher(),
+            settings=load_settings(),
+        )
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["egress", "--purpose", "tool", "--db", str(db_path)])
+    assert result.exit_code == 0, result.stdout
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    assert len(lines) == 1
+    assert "tool" in lines[0]
+    assert f"destination: {url}" in lines[0]
 
 
 # --- lode no-egress (the no-egress-tier control surface, lode-w0h.7) --------

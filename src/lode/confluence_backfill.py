@@ -113,7 +113,7 @@ def register() -> None:
 
     Deliberately a **function**, not a bare module-level
     ``register_backfill(...)`` statement: ``lode backfill`` (``src/lode/
-    cli.py``) calls this explicitly on every invocation, because a bare
+    cli/backfill.py``) calls this explicitly on every invocation, because a bare
     module-level call would only ever fire once per process (Python's
     import caching means the module body doesn't re-execute on a second
     ``import``) — which is fine for a script that runs once, but not for a

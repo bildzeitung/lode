@@ -1,6 +1,6 @@
 """Live markdown syntax colouring in the four note-body TextAreas (lode-ev5j.2, lode-ngk2).
 
-Covers the shared helper :func:`lode.tui.screens._markdown_area.markdown_text_area`:
+Covers the shared helper :func:`lode.tui.screens._markdown_area._markdown_text_area`:
 graceful degradation when the tree-sitter markdown grammar is unavailable, that
 each of the four named screens' body ``TextArea`` actually constructs with
 ``language="markdown"`` (and that :class:`~lode.tui.screens.reconcile.
