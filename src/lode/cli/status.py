@@ -44,6 +44,7 @@ class EgressPurpose(str, Enum):
 
     enrich = "enrich"
     qa = "qa"
+    tool = "tool"
 
 
 def _short(target_version: str) -> str:

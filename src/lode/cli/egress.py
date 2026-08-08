@@ -24,7 +24,11 @@ def egress(
     A straight answer to "what of mine has gone to the cloud, and when?"
     (see docs/externals.md "Egress log"). One row per cloud send, oldest
     first: id, timestamp, purpose, model, the ids of what was sent, and
-    which redactions were applied. --purpose narrows to enrich or qa sends.
+    which redactions were applied. --purpose narrows to enrich, qa, or tool
+    sends. A purpose='tool' row (lode.tools.fetch_for_ask) has no model or
+    sent_targets/redactions -- it instead carries the call's destination
+    (the API base/host hit) and its arguments as sent (post-redaction),
+    appended after the redactions field.
     """
     conn = _open_db(db)
     try:
@@ -36,15 +40,29 @@ def egress(
         typer.echo("no egress")
         return
 
-    for log_id, ts, log_purpose, model, sent_targets, redactions in rows:
+    for (
+        log_id,
+        ts,
+        log_purpose,
+        model,
+        sent_targets,
+        redactions,
+        destination,
+        arguments,
+    ) in rows:
         # model is NULL for a purpose='tool' row (lode-35nu.11.7): a tool call is
         # cloud egress but not an LLM call, so there is no model to name. Format
         # it as "-" rather than letting f-string padding raise on None.
-        typer.echo(
+        line = (
             f"{log_id}  {ts}  {log_purpose:<7} {model or '-':<20}  "
             f"sent: {_format_sent(sent_targets)}  "
             f"redactions: {_format_redactions(redactions)}"
         )
+        if log_purpose == "tool":
+            line += (
+                f"  destination: {destination or '-'}  arguments: {arguments or '-'}"
+            )
+        typer.echo(line)
 
 
 @app.command(name="no-egress")

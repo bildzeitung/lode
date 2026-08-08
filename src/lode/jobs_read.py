@@ -52,17 +52,20 @@ def list_jobs(
 
 def list_egress(
     conn: sqlite3.Connection, purpose: str | None = None
-) -> list[tuple[int, str, str, str, str, str | None]]:
+) -> list[tuple[int, str, str, str, str, str | None, str | None, str | None]]:
     """Every egress send (or every send of ``purpose``), each as ``(id, ts,
-    purpose, model, sent_targets, redactions)`` -- ``lode egress``'s read."""
+    purpose, model, sent_targets, redactions, destination, arguments)`` --
+    ``lode egress``'s read. ``destination``/``arguments`` are NULL for
+    ``purpose`` in ('enrich', 'qa') and populated for ``purpose='tool'``
+    (lode-l87l; schema/writer since lode-35nu.11.7/.11.1)."""
     if purpose is None:
         return conn.execute(
-            "SELECT id, ts, purpose, model, sent_targets, redactions "
-            "FROM egress_log ORDER BY id"
+            "SELECT id, ts, purpose, model, sent_targets, redactions, "
+            "destination, arguments FROM egress_log ORDER BY id"
         ).fetchall()
     return conn.execute(
-        "SELECT id, ts, purpose, model, sent_targets, redactions "
-        "FROM egress_log WHERE purpose = ? ORDER BY id",
+        "SELECT id, ts, purpose, model, sent_targets, redactions, "
+        "destination, arguments FROM egress_log WHERE purpose = ? ORDER BY id",
         (purpose,),
     ).fetchall()
 
