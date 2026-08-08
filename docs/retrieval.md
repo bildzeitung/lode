@@ -106,6 +106,26 @@ user's own words are highest-trust; externals corroborate, they do not override.
 
 ---
 
+## Pinned-note context is deliberately unbounded (lode-ol2v)
+
+"Ask about THIS note" (`lode.retrieval.pinned_note_context`, lode-35nu.11.3) pins **every** live-head
+passage of the note ahead of normal corpus retrieval, bypassing `retrieval_top_k` / `rerank_keep_n` —
+on purpose. The entry point's own design intent is that the pinned note is "primary context rather
+than competing for retrieval rank"; capping it would silently drop passages from the very note the
+user chose to ask about, which defeats the guarantee the feature exists to make. So: **no cap**, and
+no knob — the prompt cost grows with note length, which is the expected shape for "ask about this
+note" (a note long enough for this to matter is long enough that the user is deliberately trading
+prompt size for completeness).
+
+What *is* fixed is the redundant half of that cost. Small-to-big sends each hit's `parent_block`, so
+passages chunked from the same block used to send that block's text once per passage sharing it —
+pure waste, no completeness benefit. The **egress boundary** (`cited_answer.ask`) is where that is
+deduped, not the retrieval layer: retrieval must keep every `ContextItem` distinct, since each
+carries its own `char_range` and that is what pins a citation's offset. The dedup's safety argument
+lives next to the code in `cited_answer.ask`.
+
+---
+
 ## Faithfulness: verify citations, don't just require them
 
 The primary bet is *cited* Q&A, and the stated value is "hallucinated synthesis is worse than none"
