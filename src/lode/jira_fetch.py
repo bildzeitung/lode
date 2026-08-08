@@ -295,7 +295,12 @@ def search_jira_issues(
     ``nextPageToken`` -- there is no ``total``/``startAt`` any more -- see
     ``bd lode-6nwu``'s design field.)
 
-    Raises :class:`JiraSearchError` on any non-OK response; never persists
+    Raises :class:`JiraSearchError` on any non-OK **or malformed** response
+    -- the same shape as :func:`lode.confluence.search_confluence_pages`, and
+    load-bearing rather than cosmetic: :func:`lode.tool_dispatch.make_tool_result`
+    turns this exception into an error string the model sees, whereas a raw
+    ``json.JSONDecodeError`` would escape the tool-result callback and abort
+    the whole ``run_tool_turns`` run. Never persists
     anything (unlike :func:`fetch_jira_issue`, a search result has no
     identity to snapshot -- ``docs/externals.md`` "A query result has no
     identity").
@@ -313,9 +318,17 @@ def search_jira_issues(
         raise JiraSearchError(
             f"jira search failed for {query!r}: http_{response.status_code}"
         )
-    payload = json.loads(response.text)
+    try:
+        payload = json.loads(response.text)
+    except json.JSONDecodeError as exc:
+        raise JiraSearchError(
+            f"jira search returned a malformed response for {query!r}: {exc}"
+        ) from exc
     hits: list[JiraSearchHit] = []
     for issue in payload.get("issues") or []:
+        key = issue.get("key")
+        if key is None:
+            continue
         summary = ((issue.get("fields") or {}).get("summary")) or ""
-        hits.append(JiraSearchHit(external_id=issue["key"], title=summary))
+        hits.append(JiraSearchHit(external_id=str(key), title=summary))
     return hits

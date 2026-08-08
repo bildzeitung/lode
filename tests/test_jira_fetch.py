@@ -521,3 +521,35 @@ class TestSearchJiraIssues:
         search_jira_issues("q", _API_BASE, max_results=5, fetcher=fetcher)
         (called_url,) = fetcher.calls
         assert "maxResults=5" in called_url
+
+    def test_malformed_response_raises_search_error(self) -> None:
+        # Same shape as confluence.search_confluence_pages, and load-bearing:
+        # tool_dispatch.make_tool_result converts JiraSearchError into an
+        # error string for the model, but a raw json.JSONDecodeError would
+        # escape the tool_result callback and abort the whole ask.
+        fetcher = _QueueFetcher(
+            [
+                RawResponse(
+                    final_url=f"{_API_BASE}/rest/api/3/search/jql",
+                    status_code=200,
+                    text="<html>not json</html>",
+                )
+            ]
+        )
+        with pytest.raises(JiraSearchError):
+            search_jira_issues("q", _API_BASE, fetcher=fetcher)
+
+    def test_issue_without_a_key_is_skipped_not_a_keyerror(self) -> None:
+        # Mirrors search_confluence_pages' `id is None -> continue` guard: a
+        # KeyError here would escape make_tool_result the same way.
+        payload = {
+            "issues": [
+                {"fields": {"summary": "no key"}},
+                {"key": "ABC-9", "fields": {"summary": "has key"}},
+            ]
+        }
+        fetcher = _QueueFetcher(
+            [_response(payload, url=f"{_API_BASE}/rest/api/3/search/jql")]
+        )
+        hits = search_jira_issues("q", _API_BASE, fetcher=fetcher)
+        assert [(h.external_id, h.title) for h in hits] == [("ABC-9", "has key")]

@@ -556,7 +556,14 @@ class Settings(BaseModel):
         "synthesis call. Off by default -- notes-only behaviour is unchanged "
         "either way, since lode.tool_dispatch.build_ask_tools returns no "
         "tools at all while this is False, regardless of what a caller "
-        "passes as answer_question's own tools_enabled argument.",
+        "passes as answer_question's own tools_enabled argument. "
+        "NOT YET REACHABLE FROM A REAL 'lode ask': cited_answer.ask -- the "
+        "single path both the CLI and the TUI take -- does not pass "
+        "tools_enabled to qa.answer_question, so turning this on has no "
+        "effect on a real ask today. This ticket ships the substrate; "
+        "lode-8vvp wires the production path (and makes a "
+        "tool-fetched snapshot gate-eligible). Until then this flag is "
+        "exercised only from the qa layer directly.",
     )
     ask_tool_budget: int = _knob(
         6,

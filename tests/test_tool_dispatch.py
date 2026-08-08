@@ -25,7 +25,7 @@ from lode.tool_dispatch import (
     build_ask_tools,
     make_tool_result,
 )
-from lode.webfetch import RawResponse
+from lode.webfetch import RawResponse, TransientFetchError
 
 _JIRA_BASE = "https://acme.atlassian.net"
 _CONFLUENCE_BASE = "https://acme.atlassian.net"
@@ -70,19 +70,9 @@ def _confluence_settings(**overrides) -> Settings:
     return Settings(**fields)
 
 
-class _StubSearchFetcher:
-    """Stub Fetcher for a single-request search call."""
+class _StubFetcher:
+    """Stub Fetcher for a single-request call (search or web fetch alike)."""
 
-    def __init__(self, response: RawResponse) -> None:
-        self._response = response
-        self.calls: list[str] = []
-
-    def fetch(self, url: str) -> RawResponse:
-        self.calls.append(url)
-        return self._response
-
-
-class _StubWebFetcher:
     def __init__(self, response: RawResponse) -> None:
         self._response = response
         self.calls: list[str] = []
@@ -172,7 +162,7 @@ class TestToolBudget:
 class TestDispatchSearchJira:
     def test_returns_id_and_title_only(self, conn) -> None:
         payload = {"issues": [{"key": "ABC-1", "fields": {"summary": "First"}}]}
-        fetcher = _StubSearchFetcher(
+        fetcher = _StubFetcher(
             RawResponse(
                 final_url=f"{_JIRA_BASE}/rest/api/3/search/jql",
                 status_code=200,
@@ -191,7 +181,7 @@ class TestDispatchSearchJira:
     def test_writes_egress_row_before_request_with_empty_sent_targets(
         self, conn
     ) -> None:
-        fetcher = _StubSearchFetcher(
+        fetcher = _StubFetcher(
             RawResponse(
                 final_url=f"{_JIRA_BASE}/rest/api/3/search/jql",
                 status_code=200,
@@ -220,7 +210,7 @@ class TestDispatchSearchJira:
                 {"key": "OPEN-1", "fields": {"summary": "Open issue"}},
             ]
         }
-        fetcher = _StubSearchFetcher(
+        fetcher = _StubFetcher(
             RawResponse(
                 final_url=f"{_JIRA_BASE}/rest/api/3/search/jql",
                 status_code=200,
@@ -249,7 +239,7 @@ class TestDispatchSearchJira:
         )
         conn.commit()
         payload = {"issues": [{"key": "SEC-2", "fields": {"summary": "Hidden"}}]}
-        fetcher = _StubSearchFetcher(
+        fetcher = _StubFetcher(
             RawResponse(
                 final_url=f"{_JIRA_BASE}/rest/api/3/search/jql",
                 status_code=200,
@@ -265,7 +255,7 @@ class TestDispatchSearchJira:
         assert result == []
 
     def test_empty_query_is_refused_without_a_request(self, conn) -> None:
-        fetcher = _StubSearchFetcher(
+        fetcher = _StubFetcher(
             RawResponse(final_url="unused", status_code=200, text="{}")
         )
         settings = _jira_settings()
@@ -279,7 +269,7 @@ class TestDispatchSearchJira:
         assert fetcher.calls == []
 
     def test_search_failure_returns_error_string_not_an_exception(self, conn) -> None:
-        fetcher = _StubSearchFetcher(
+        fetcher = _StubFetcher(
             RawResponse(
                 final_url=f"{_JIRA_BASE}/rest/api/3/search/jql",
                 status_code=410,
@@ -294,11 +284,46 @@ class TestDispatchSearchJira:
         result = tool_result(SEARCH_JIRA, {"query": "q"})
         assert result.startswith("error:")
 
+    def test_malformed_search_response_returns_error_not_an_exception(
+        self, conn
+    ) -> None:
+        # A 200 carrying non-JSON (proxy interstitial, HTML error page) must
+        # reach the model as an error string. A raw json.JSONDecodeError here
+        # would escape the tool_result callback and abort the whole
+        # run_tool_turns run -- i.e. the entire ask -- not just this call.
+        fetcher = _StubFetcher(
+            RawResponse(
+                final_url=f"{_JIRA_BASE}/rest/api/3/search/jql",
+                status_code=200,
+                text="<html>not json</html>",
+            )
+        )
+        tool_result = make_tool_result(
+            conn, ToolBudget(max_calls=5), _jira_settings(), jira_fetcher=fetcher
+        )
+
+        assert tool_result(SEARCH_JIRA, {"query": "q"}).startswith("error:")
+
+    def test_transient_fetch_error_returns_error_not_an_exception(self, conn) -> None:
+        # 408/429/5xx/network/timeout surface as TransientFetchError straight
+        # out of the connector's fetcher; the search legs deliberately do not
+        # convert them, so make_tool_result must. Same blast radius as above:
+        # unhandled, a routine 429 would kill the whole ask.
+        class _Boom:
+            def fetch(self, url: str) -> RawResponse:
+                raise TransientFetchError("http 429")
+
+        tool_result = make_tool_result(
+            conn, ToolBudget(max_calls=5), _jira_settings(), jira_fetcher=_Boom()
+        )
+
+        assert tool_result(SEARCH_JIRA, {"query": "q"}).startswith("error:")
+
 
 class TestDispatchFetch:
     def test_web_fetch_persists_a_citable_snapshot(self, conn) -> None:
         url = "https://example.com/article"
-        fetcher = _StubWebFetcher(
+        fetcher = _StubFetcher(
             RawResponse(final_url=url, status_code=200, text=_ARTICLE_HTML)
         )
         settings = Settings(ask_tools_enabled=True)
@@ -363,6 +388,34 @@ class TestDispatchFetch:
             tool_result(FETCH, {"source_type": "jira", "external_id": "ABC-1"})
         )
         assert result["snapshot_id"]
+        assert fetcher.calls[0] == (
+            f"{_JIRA_BASE}/rest/api/3/issue/ABC-1?expand=renderedFields"
+        )
+
+    def test_trailing_slash_on_jira_base_url_does_not_double_the_separator(
+        self, conn
+    ) -> None:
+        # fetch_jira_issue interpolates api_base straight into its URL without
+        # stripping (unlike confluence._build_url), so the dispatch layer must
+        # strip -- exactly as the search leg already does.
+        class _Capture:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def fetch(self, url):
+                self.calls.append(url)
+                return RawResponse(final_url=url, status_code=404, text="nope")
+
+        fetcher = _Capture()
+        settings = _jira_settings(jira_base_url=f"{_JIRA_BASE}/")
+        tool_result = make_tool_result(
+            conn, ToolBudget(max_calls=5), settings, jira_fetcher=fetcher
+        )
+
+        tool_result(FETCH, {"source_type": "jira", "external_id": "ABC-1"})
+
+        assert fetcher.calls[0].startswith(f"{_JIRA_BASE}/rest/api/3/issue/")
+        assert "//rest/api/3" not in fetcher.calls[0]
 
     def test_unsupported_source_type_is_refused_without_dispatch(self, conn) -> None:
         settings = Settings(ask_tools_enabled=True)
@@ -373,7 +426,7 @@ class TestDispatchFetch:
 
     def test_fetch_failure_returns_error_string_not_an_exception(self, conn) -> None:
         url = "https://example.com/gone"
-        fetcher = _StubWebFetcher(
+        fetcher = _StubFetcher(
             RawResponse(final_url=url, status_code=404, text="not found")
         )
         settings = Settings(ask_tools_enabled=True)
@@ -387,7 +440,7 @@ class TestDispatchFetch:
 
 class TestSharedBudget:
     def test_search_and_fetch_share_one_counter(self, conn) -> None:
-        search_fetcher = _StubSearchFetcher(
+        search_fetcher = _StubFetcher(
             RawResponse(
                 final_url=f"{_JIRA_BASE}/rest/api/3/search/jql",
                 status_code=200,

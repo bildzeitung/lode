@@ -253,9 +253,14 @@ site composes it with its own per-row flag itself, rather than reimplementing th
 
 ## Tool-augmented Ask (lode-8hsk / lode-35nu.11.2)
 
+**Status: an off-by-default substrate, not yet the production path.** Everything below is real and
+tested at the `lode.qa` layer, but `cited_answer.ask` — what `lode ask` and the TUI actually call —
+does not pass `tools_enabled` through, so no knob here changes a real ask today. `lode-8vvp` wires
+the production path and decides which tool-fetched snapshots become gate-eligible.
+
 | Knob | Kind | Default | Notes |
 |---|---|---|---|
-| `ask_tools_enabled` | runtime | `false` | Feature flag: offer the read-only `search_jira`/`search_confluence`/`fetch` tools to the Q&A synthesis call. Off by default — `lode.tool_dispatch.build_ask_tools` returns `()` regardless of what a caller passes as `answer_question`'s own `tools_enabled` argument, so notes-only behaviour is unchanged either way. |
+| `ask_tools_enabled` | runtime | `false` | Feature flag: offer the read-only `search_jira`/`search_confluence`/`fetch` tools to the Q&A synthesis call. Off by default — `lode.tool_dispatch.build_ask_tools` returns `()` regardless of what a caller passes as `answer_question`'s own `tools_enabled` argument, so notes-only behaviour is unchanged either way. **Not yet reachable from a real `lode ask`** — `cited_answer.ask` (the single path both the CLI and the TUI take) does not pass `tools_enabled` to `qa.answer_question`, so turning this on has no effect on a real ask today. lode-8hsk ships the substrate; `lode-8vvp` wires the production path (and makes a tool-fetched snapshot gate-eligible). Until then the flag is exercised only from the `qa` layer directly. |
 | `ask_tool_budget` | runtime | `6` | Per-ask tool-call budget — search and fetch share **one** counter (`lode.tool_dispatch.ToolBudget`), enforced before each dispatch; a call past the budget is refused (the model is told so, via the tool result text) rather than dispatched. Distinct from `_DEFAULT_MAX_TOOL_TURNS` above (a provider-level free-turn cap — one turn is not assumed to be one tool call). |
 
 **Tool set.** `search_jira`/`search_confluence` return **identifiers and titles only** —

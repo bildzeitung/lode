@@ -82,7 +82,7 @@ from lode.drawdown import SOURCE_TYPE_CONFLUENCE, SOURCE_TYPE_JIRA, SOURCE_TYPE_
 from lode.jira_fetch import JiraSearchError, search_jira_issues
 from lode.llm_provider import ToolSpec
 from lode.tools import ToolFetchError, fetch_for_ask, log_tool_egress, no_egress_denied
-from lode.webfetch import Fetcher
+from lode.webfetch import Fetcher, FetchError
 
 #: Tool names -- the wire names offered to the model and matched in dispatch.
 SEARCH_JIRA = "search_jira"
@@ -257,10 +257,24 @@ def make_tool_result(
             return _BUDGET_EXHAUSTED_MESSAGE
         try:
             if name == SEARCH_JIRA:
-                return _dispatch_search_jira(conn, tool_input, settings, jira_fetcher)
+                return _dispatch_search(
+                    conn,
+                    tool_input,
+                    settings,
+                    jira_fetcher,
+                    api_base=settings.jira_base_url,
+                    source_type=SOURCE_TYPE_JIRA,
+                    search_fn=search_jira_issues,
+                )
             if name == SEARCH_CONFLUENCE:
-                return _dispatch_search_confluence(
-                    conn, tool_input, settings, confluence_fetcher
+                return _dispatch_search(
+                    conn,
+                    tool_input,
+                    settings,
+                    confluence_fetcher,
+                    api_base=settings.confluence_base_url,
+                    source_type=SOURCE_TYPE_CONFLUENCE,
+                    search_fn=search_confluence_pages,
                 )
             if name == FETCH:
                 return _dispatch_fetch(
@@ -271,7 +285,21 @@ def make_tool_result(
                     confluence_fetcher=confluence_fetcher,
                     web_fetcher=web_fetcher,
                 )
-        except (JiraSearchError, ConfluenceSearchError, ToolFetchError) as exc:
+        except (
+            JiraSearchError,
+            ConfluenceSearchError,
+            ToolFetchError,
+            FetchError,
+        ) as exc:
+            # FetchError covers the SEARCH legs specifically: a 408/429/5xx,
+            # network error or timeout surfaces as TransientFetchError (and a
+            # redirect loop as TooManyRedirectsError) straight out of the
+            # connector's fetcher, which search_jira_issues /
+            # search_confluence_pages deliberately do not convert. The fetch
+            # leg needs no such arm -- fetch_for_ask already folds FetchError
+            # into ToolFetchError itself. Without this, a routine 429 during a
+            # search would abort the entire run_tool_turns run (and so the
+            # whole ask) instead of telling the model the call failed.
             return f"error: {exc}"
         raise AssertionError(
             f"unexpected tool call {name!r}({tool_input!r}) -- not one of the "
@@ -281,54 +309,42 @@ def make_tool_result(
     return _tool_result
 
 
-def _dispatch_search_jira(
+def _dispatch_search(
     conn: sqlite3.Connection,
     tool_input: dict[str, Any],
     settings: Settings,
     fetcher: Fetcher | None,
+    *,
+    api_base: str,
+    source_type: str,
+    search_fn: Callable[..., list[Any]],
 ) -> str:
+    """The one search leg, shared by ``search_jira`` and ``search_confluence``.
+
+    The two connectors differ only in which base URL, source type, and search
+    function they use; everything the *ticket* cares about -- the pre-request
+    ``purpose='tool'`` egress row, the ``no_egress`` drop-whole filter, and
+    the ids+titles-only JSON shape -- is identical, and is written once here
+    so the two can never drift apart.
+    """
     query = str(tool_input.get("query") or "").strip()
     if not query:
         return "error: query must be non-empty"
-    api_base = settings.jira_base_url.rstrip("/")
+    api_base = api_base.rstrip("/")
     log_tool_egress(
         conn,
         destination=api_base,
         arguments={"query": query},
         settings=settings,
     )
-    hits = search_jira_issues(query, api_base, fetcher=fetcher, settings=settings)
-    hits = [
-        h
-        for h in hits
-        if not no_egress_denied(conn, h.external_id, SOURCE_TYPE_JIRA, settings)
-    ]
-    return json.dumps([{"external_id": h.external_id, "title": h.title} for h in hits])
-
-
-def _dispatch_search_confluence(
-    conn: sqlite3.Connection,
-    tool_input: dict[str, Any],
-    settings: Settings,
-    fetcher: Fetcher | None,
-) -> str:
-    query = str(tool_input.get("query") or "").strip()
-    if not query:
-        return "error: query must be non-empty"
-    api_base = settings.confluence_base_url.rstrip("/")
-    log_tool_egress(
-        conn,
-        destination=api_base,
-        arguments={"query": query},
-        settings=settings,
+    hits = search_fn(query, api_base, fetcher=fetcher, settings=settings)
+    return json.dumps(
+        [
+            {"external_id": h.external_id, "title": h.title}
+            for h in hits
+            if not no_egress_denied(conn, h.external_id, source_type, settings)
+        ]
     )
-    hits = search_confluence_pages(query, api_base, fetcher=fetcher, settings=settings)
-    hits = [
-        h
-        for h in hits
-        if not no_egress_denied(conn, h.external_id, SOURCE_TYPE_CONFLUENCE, settings)
-    ]
-    return json.dumps([{"external_id": h.external_id, "title": h.title} for h in hits])
 
 
 def _dispatch_fetch(
@@ -358,9 +374,13 @@ def _dispatch_fetch(
     # search call above already used to build its own request; a fetch of an
     # id already drawn down still works identically either way (fetch_for_ask
     # prefers an explicit api_base over the row's when both are available).
+    # rstrip'd on the same terms as the search legs above: fetch_jira_issue
+    # interpolates api_base straight into its URL without stripping (unlike
+    # confluence._build_url, which strips defensively), so a jira_base_url
+    # carrying a trailing slash would otherwise produce a double slash.
     api_base = {
-        SOURCE_TYPE_JIRA: settings.jira_base_url or None,
-        SOURCE_TYPE_CONFLUENCE: settings.confluence_base_url or None,
+        SOURCE_TYPE_JIRA: settings.jira_base_url.rstrip("/") or None,
+        SOURCE_TYPE_CONFLUENCE: settings.confluence_base_url.rstrip("/") or None,
     }.get(source_type)
     snapshot_id = fetch_for_ask(
         conn,
