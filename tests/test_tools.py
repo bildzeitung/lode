@@ -393,12 +393,17 @@ class TestFetchForAskEgressAudit:
         assert len(rows) == 1
         assert rows[0][0] == "tool"
 
-    def test_arguments_are_redacted_before_storage(self, conn) -> None:
-        """The stored argument must not contain the secret the URL carried.
+    def test_arguments_and_destination_are_redacted_before_storage(self, conn) -> None:
+        """Neither stored column may contain the secret the URL carried.
 
         Uses an AWS access-key id, one of the default
         ``redact_before_egress_patterns`` seed patterns, so this asserts the
         redaction actually fired rather than merely that a value was stored.
+
+        ``destination`` matters as much as ``arguments``: on the web leg the two
+        hold the same URL, so redacting only the argument would durably persist
+        the secret in the column beside it -- and that column is read out by
+        ``lode egress`` (lode-l87l), backups, and any direct sqlite3 query.
         """
         secret = "AKIAIOSFODNN7EXAMPLE"
         secret_url = f"https://example.com/x?k={secret}"
@@ -413,9 +418,11 @@ class TestFetchForAskEgressAudit:
 
         rows = _tool_egress_rows(conn)
         assert len(rows) == 1
-        arguments = json.loads(rows[0][3])
+        destination, arguments = rows[0][2], json.loads(rows[0][3])
         assert secret not in arguments["url"]
         assert arguments["url"].startswith("https://example.com/x?k=")
+        assert secret not in destination
+        assert destination.startswith("https://example.com/x?k=")
 
     def test_unparseable_redirect_target_is_a_tool_fetch_error_and_still_audited(
         self, conn

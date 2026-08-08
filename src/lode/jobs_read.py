@@ -58,15 +58,11 @@ def list_egress(
     ``lode egress``'s read. ``destination``/``arguments`` are NULL for
     ``purpose`` in ('enrich', 'qa') and populated for ``purpose='tool'``
     (lode-l87l; schema/writer since lode-35nu.11.7/.11.1)."""
-    if purpose is None:
-        return conn.execute(
-            "SELECT id, ts, purpose, model, sent_targets, redactions, "
-            "destination, arguments FROM egress_log ORDER BY id"
-        ).fetchall()
+    where, params = ("", ()) if purpose is None else ("WHERE purpose = ? ", (purpose,))
     return conn.execute(
         "SELECT id, ts, purpose, model, sent_targets, redactions, "
-        "destination, arguments FROM egress_log WHERE purpose = ? ORDER BY id",
-        (purpose,),
+        f"destination, arguments FROM egress_log {where}ORDER BY id",
+        params,
     ).fetchall()
 
 

@@ -25,10 +25,10 @@ def egress(
     (see docs/externals.md "Egress log"). One row per cloud send, oldest
     first: id, timestamp, purpose, model, the ids of what was sent, and
     which redactions were applied. --purpose narrows to enrich, qa, or tool
-    sends. A purpose='tool' row (lode.tools.fetch_for_ask) has no model or
-    sent_targets/redactions -- it instead carries the call's destination
-    (the API base/host hit) and its arguments as sent (post-redaction),
-    appended after the redactions field.
+    sends. A purpose='tool' row (lode.tools.fetch_for_ask) has no model -- a
+    tool call is egress but not an LLM call -- and additionally carries the
+    call's destination (the URL/API base hit) and its arguments as sent,
+    both post-redaction and both appended after the redactions field.
     """
     conn = _open_db(db)
     try:
