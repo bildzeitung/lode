@@ -41,7 +41,12 @@ path; :func:`trust_rank` tiers it :data:`TrustTier.STALE_EXTERNAL` only in the
 The query vector for the dense leg is the caller's (the ``emb(q)`` node in the
 pipeline is the embedder's concern, distinct from the search node), so
 :func:`vector_search` takes an already-embedded ``query_vector`` — mirroring the
-landed :meth:`VectorStore.search` signature and keeping this read side model-free.
+landed :meth:`VectorStore.search` signature and keeping the search legs model-free.
+
+Alongside those primitives this module also owns the **composed** pipeline that
+runs them end to end, :func:`_retrieve` (lode-z3es) — the single entry point both
+``lode ask`` and the TUI's ask screen call. It is the one place the embedder is
+defaulted, so the search legs above stay model-free while the composition does not.
 """
 
 import re
@@ -49,13 +54,19 @@ import sqlite3
 from collections.abc import Collection
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Protocol
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
 
 import networkx as nx
 
 from lode.config import Settings, model_cache_dir
 from lode.lexical import LexicalHit, LexicalIndex
 from lode.vectorstore import VectorHit, VectorStore
+
+if TYPE_CHECKING:
+    # Type-only, so this module's import stays free of a dependency on
+    # lode.embedding (mirrors _retrieve's own deferred runtime import below).
+    from lode.embedding import Embedder
 
 #: Word-token pattern for turning a natural-language question into FTS5 terms.
 #: ``\w+`` runs (letters/digits/underscore) are the terms; everything else
@@ -913,3 +924,56 @@ def _in_clause(column: str, values: Collection[str]) -> str:
     """
     quoted = ", ".join(f"'{value}'" for value in values)
     return f"{column} IN ({quoted})"
+
+
+def _retrieve(
+    conn: sqlite3.Connection,
+    question: str,
+    *,
+    lance_dir: str | Path,
+    embedder: Embedder | None = None,
+    settings: Settings | None = None,
+) -> list[ContextItem]:
+    """Build the trust-ranked Q&A context for ``question`` — the full read pipeline (E4).
+
+    The composed pipeline over this module's own primitives, and the single entry
+    point both ``lode ask`` (:mod:`lode.cli.ask`) and the TUI's ask screen
+    (:mod:`lode.tui.services.ask`) call to assemble a Q&A context.
+
+    The full read side (``docs/retrieval.md`` "The v1 retrieval pipeline"): lexical
+    search (FTS5/BM25, heads only) and the dense leg (cosine ANN over the LanceDB
+    store under ``lance_dir``, the question embedded query-side via
+    ``embedder.embed_query``) each capped at ``retrieval_top_k``, fused app-side
+    (:func:`reciprocal_rank_fusion`), re-scored by the toggleable cross-encoder
+    stage (:func:`rerank`, gated on ``Settings.rerank_enabled``), expanded
+    small-to-big to each hit's parent block (:func:`expand_parents`), traversed
+    one graph hop from each seed note (:func:`graph_expand`, GraphRAG), and
+    finally ordered by the trust gradient (:func:`trust_rank`). RRF scores a
+    passage present in one leg from that leg alone, so a passage matched only by
+    the dense leg still reaches the Q&A context (lode-bkc). A question with no
+    word tokens skips the lexical leg, but the dense leg still runs.
+
+    ``embedder`` defaults to the pinned local ONNX model
+    (:class:`lode.embedding.FastEmbedEmbedder`); tests inject a stub so the gate
+    stays offline.
+    """
+    # Imported here, not at module scope, to keep this module's import free of a
+    # dependency on lode.embedding. Note the ONNX/fastembed weights are NOT loaded
+    # by this import either way -- FastEmbedEmbedder loads them lazily on first
+    # use, so the instant capture path pays for them only if it embeds.
+    from lode.embedding import FastEmbedEmbedder
+
+    settings = settings or Settings()
+    match = build_match_query(question)
+    lexical = lexical_search(conn, match, k=settings.retrieval_top_k) if match else []
+
+    embedder = embedder or FastEmbedEmbedder(settings)
+    query_vector = embedder.embed_query(question)
+    store = VectorStore(lance_dir, settings)
+    vector = vector_search(store, conn, query_vector, k=settings.retrieval_top_k)
+
+    fused = reciprocal_rank_fusion(lexical, vector, k=settings.rrf_k)
+    top = rerank(conn, question, fused[: settings.retrieval_top_k], settings=settings)
+    expanded = expand_parents(conn, top)
+    graphed = graph_expand(conn, expanded, settings=settings)
+    return trust_rank(conn, graphed).context
