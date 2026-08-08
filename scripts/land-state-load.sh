@@ -19,28 +19,39 @@
 #
 # Usage: scripts/land-state-load.sh <file> [--require-nonempty] [-- <context line>...]
 #
-# Reads <file> and prints its content to stdout unchanged (the caller's own
-# `$(...)` capture strips only the trailing newline, same as every inline
-# `cat` this replaces).
+# Reads <file> and prints its content to stdout, normalized to exactly one
+# trailing newline (not byte-exact passthrough: the content is captured into a
+# shell variable, which strips trailing newlines, and one is re-added). Every
+# call site word-splits the result, so that normalization is invisible to all
+# of them -- but do not describe this as a `cat` passthrough to a future
+# consumer that does not word-split.
 #
 # Exit 0 -> the file was readable, and (unless --require-nonempty) it may be
 #           empty or whitespace-only. Content on stdout.
 # Exit 1 -> the file could not be read at all (missing, unreadable, or a
-#           directory in its place -- the underlying `cat` failure is
-#           captured and its own stderr text is included below), OR
+#           directory in its place -- `cat`'s OWN error goes straight to this
+#           script's stderr, i.e. the caller's, immediately BEFORE the
+#           diagnostic below; that is exactly what the inline `cat`s this
+#           replaces did, and why nothing here captures or re-prints it), OR
 #           --require-nonempty was given and the file read clean but came
-#           back empty/whitespace-only. Either way: a diagnostic to stderr,
-#           nothing to stdout.
+#           back empty. Either way: a diagnostic to stderr, nothing to stdout.
 #
-# This is deliberately exit 1, never 2: unlike scripts/merge-precheck.sh or
-# scripts/validate-mermaid.sh, there is no calling SCRIPT here to classify
-# the code programmatically -- every call site is an agent-executed skill
-# fence in .claude/skills/land/SKILL.md, reading stderr directly. gate-lib.sh's
-# own header covers this split explicitly ("WHY THIS EXIT-2 CONVENTION BINDS
-# scripts/*.sh AND NOT AGENT-EXECUTED SKILL FENCES") -- this script is a
-# scripts/*.sh file called ONLY from such fences, so it keeps their existing
-# exit-1 convention rather than introducing a 2 no caller here would ever
-# distinguish from 1.
+# WHAT "EMPTY" MEANS UNDER --require-nonempty, precisely: the content with
+# trailing newlines stripped (command substitution does that) must be a
+# non-empty string. So a file of only newlines IS empty; a file containing
+# spaces or tabs is NOT -- it passes. That is deliberately the exact
+# behaviour of the `[ -n "$(cat ...)" ]` this replaces at both --require-
+# nonempty call sites, so the retrofit is a pure refactor; do not "tighten"
+# it to trim spaces without going and checking what each call site would
+# then start rejecting. Pinned by tests/test_land_state_load.py.
+#
+# This is deliberately exit 1, never 2, and this script deliberately does NOT
+# source scripts/gate-lib.sh. Every call site is an agent-executed skill fence
+# in .claude/skills/land/SKILL.md, so there is no calling SCRIPT to classify
+# the code programmatically. The canonical statement of that split is
+# gate-lib.sh's own header ("WHY THIS EXIT-2 CONVENTION BINDS scripts/*.sh AND
+# NOT AGENT-EXECUTED SKILL FENCES", lode-vmnx), cross-referenced from
+# docs/agents-workflow.md -- not restated here.
 #
 # Two policies, one flag:
 #   (default)           missing -> fatal, empty -> OK (prints nothing, exit 0)
@@ -87,23 +98,22 @@ fail() {
   exit 1
 }
 
-# Guard mktemp the same way scripts/merge-precheck.sh does: an empty string
-# back from a failed mktemp would turn `2>"$errfile"` into `2>""`, an
-# ambiguous-redirect failure that fails the read for a reason unrelated to
-# the FILE this script was asked to load.
-errfile="$(mktemp 2>/dev/null)" || fail \
-  "could not create a temporary file (mktemp failed) -- usual causes: TMPDIR points at a nonexistent, full, or read-only filesystem."
-trap 'rm -f "$errfile"' EXIT
-
-content="$(cat "$file" 2>"$errfile")"
+# NOT redirected: `cat`'s own stderr ("No such file or directory", "Is a
+# directory", a permission message) is the only text naming WHICH of the three
+# read failures happened, and it reaches the operator by simply being left
+# alone -- this script's stderr is the caller's. Deliberately not captured into
+# a temp file and re-printed the way scripts/merge-precheck.sh does: that
+# script has to fold git's stderr into a structured banner a CALLING SCRIPT
+# classifies, which is exactly the situation the exit-1 note above says does
+# not exist here. The four inline `cat`s this replaces let it through the same
+# way ("cat prints the specific reason to this call's stderr, so the operator
+# sees which" -- SKILL.md, pre-lode-dc4n), so the operator's view is unchanged
+# apart from cat's line now sitting immediately above the banner instead of
+# inside it.
+content="$(cat "$file")"
 rc=$?
 if [ "$rc" -ne 0 ]; then
-  err="$(<"$errfile")"
-  msg="$file could not be read (missing, unreadable, or a directory in its place)."
-  if [ -n "$err" ]; then
-    msg="$msg cat's own error: $err"
-  fi
-  fail "$msg"
+  fail "$file could not be read (missing, unreadable, or a directory in its place -- see cat's own error just above)."
 fi
 
 if [ "$require_nonempty" = true ] && [ -z "$content" ]; then

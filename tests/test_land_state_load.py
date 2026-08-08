@@ -76,6 +76,30 @@ def test_empty_file_is_fatal_under_require_nonempty(tmp_path: Path) -> None:
     assert "missing or empty" in result.stderr
 
 
+def test_newlines_only_file_is_fatal_under_require_nonempty(tmp_path: Path) -> None:
+    """Trailing newlines are stripped by the command substitution, so a file of
+    only newlines reads back as the empty string and IS refused."""
+    f = tmp_path / "accepted"
+    f.write_text("\n\n\n")
+    result = _run(str(f), "--require-nonempty")
+    assert result.returncode == 1
+    assert "missing or empty" in result.stderr
+
+
+def test_spaces_only_file_passes_require_nonempty(tmp_path: Path) -> None:
+    """The exact behaviour of the `[ -n "$(cat ...)" ]` this script replaces at
+    both --require-nonempty call sites: only TRAILING NEWLINES are stripped, so
+    a file of spaces/tabs is non-empty and passes. Pinned so the refactor stays
+    a pure one -- tightening this to trim all whitespace would start rejecting
+    inputs the pre-lode-dc4n call sites accepted, at the kick-back site turning
+    a (degenerate but accepted) conflicts record into a refused pass."""
+    f = tmp_path / "conflicts"
+    f.write_text("   \t \n")
+    result = _run(str(f), "--require-nonempty")
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
 def test_nonempty_file_prints_content_under_either_policy(tmp_path: Path) -> None:
     f = tmp_path / "accepted"
     f.write_text("lode-aaaa\nlode-bbbb\n")

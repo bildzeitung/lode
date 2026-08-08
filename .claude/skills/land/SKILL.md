@@ -915,8 +915,15 @@ it at the one moment I do hold it, in the loop that was already iterating it, ex
 each merge message. `$LANDED` is better still — the merge loops **append** to it as each branch
 actually merges, so it is derived mechanically from what happened rather than recalled.
 
-**Every block below that loads one of these files asserts that it LOADED** — i.e. that the `cat`
-itself succeeded — per the governing rule above. `for id in $ACCEPTED` over an empty value iterates
+**Every block below that loads one of these files asserts that it LOADED** — i.e. that
+`scripts/land-state-load.sh` itself exited 0 — per the governing rule above. Since lode-dc4n every
+**cross-block** load goes through that one script, and the two policies it offers (default = missing
+fatal / empty OK; `--require-nonempty` = both fatal) are the *only* two: a new load site picks one by
+argument rather than by hand-rolling a fifth `cat` spelling. The `cat "$STATE_DIR/accepted"` in the
+block **above** is deliberately left alone and is not a counter-example — it re-reads the file that
+same block wrote two lines up, so there is no cross-block hand-off to assert and nothing a load
+failure there could mean other than "the write immediately above failed," which its own `printf`
+already reports. `for id in $ACCEPTED` over an empty value iterates
 **zero** times and exits 0: it merges nothing, closes nothing, and is indistinguishable *by its
 behaviour* from a clean pass with an empty queue. What the assertion separates is not that shape from
 a real merge, but its two **causes**: a file that was never written (3a never ran — the silent

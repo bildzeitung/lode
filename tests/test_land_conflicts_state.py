@@ -212,7 +212,9 @@ def test_kick_back_block_reads_conflicts_from_disk_not_a_bare_variable() -> None
     $STATE_DIR/conflicts/<id> on disk, in this same block, before the value is
     interpolated."""
     site = _kick_back_block()
-    assert 'CONFLICTS=$(scripts/land-state-load.sh "$STATE_DIR/conflicts/<id>"' in site, (
+    assert (
+        'CONFLICTS=$(scripts/land-state-load.sh "$STATE_DIR/conflicts/<id>"' in site
+    ), (
         "the kick-back block no longer reads $CONFLICTS back from "
         "$STATE_DIR/conflicts/<id> via scripts/land-state-load.sh -- it must not "
         "rely on a bash variable set in an earlier, separate Bash invocation "
@@ -288,11 +290,19 @@ def test_empty_accepted_falls_through_missing_accepted_still_aborts() -> None:
         "scripts/land-state-load.sh (lode-dc4n) -- lode-sfnb's silent-failure "
         "guard has regressed"
     )
-    load_pos = site.index('ACCEPTED=$(scripts/land-state-load.sh "$STATE_DIR/accepted"')
-    exit_pos = site.index("|| exit 1", load_pos)
-    assert exit_pos - load_pos < 200, (
-        "the land-state-load.sh call for $STATE_DIR/accepted is not immediately "
-        "followed by `|| exit 1` -- a failed (missing) load must abort the pass"
+    # EXACT, not a character-proximity check. lode-0jan's own technical review
+    # replaced a `< 200` proximity pin here with an exact one for precisely the
+    # reason it still holds: the same fence carries other `exit 1`s (the rc=2
+    # machine-fault arm), so a distance check stays green with the real handler
+    # deleted and an unrelated one nearby. Pin the whole call, continuation and
+    # handler included.
+    assert (
+        'ACCEPTED=$(scripts/land-state-load.sh "$STATE_DIR/accepted" -- \\\n'
+        '  "3a\'s precompute did not run. Landing nothing.") || exit 1'
+    ) in site, (
+        "the first-pass merge loop's land-state-load.sh call is no longer wired "
+        "to `|| exit 1` (or its context argument changed) -- a failed (missing) "
+        "load must abort the pass"
     )
 
     # This call site must use the DEFAULT policy (empty OK) -- never
