@@ -85,7 +85,12 @@ def test_script_allows_outside_any_git_repo(tmp_path: Path) -> None:
     empty = tmp_path / "not-a-repo"
     empty.mkdir()
     proc = subprocess.run(
-        [str(SCRIPT)], cwd=empty, capture_output=True, text=True, timeout=30, check=False
+        [str(SCRIPT)],
+        cwd=empty,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == ""
@@ -123,9 +128,13 @@ def test_hook_asks_on_trunk(tmp_path: Path) -> None:
     out = run_hook(
         hook,
         tool_name="Edit",
-        tool_input={"file_path": str(repo / "foo.md"), "old_string": "a", "new_string": "b"},
+        tool_input={
+            "file_path": str(repo / "foo.md"),
+            "old_string": "a",
+            "new_string": "b",
+        },
         cwd=repo,
-        project_dir=str(repo),
+        project_dir=str(REPO_ROOT),
     )
     assert out is not None
     assert out["permissionDecision"] == "ask"
@@ -134,14 +143,14 @@ def test_hook_asks_on_trunk(tmp_path: Path) -> None:
 
 def test_hook_allows_on_non_trunk_branch(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    _init_repo(repo, branch=".claude/worktrees/agent-xyz")
+    _init_repo(repo, branch="worktree-agent-xyz")
     hook = pretooluse_hook("trunk-write-guard.sh", matcher="Edit|Write")
     out = run_hook(
         hook,
         tool_name="Write",
         tool_input={"file_path": str(repo / "foo.md"), "content": "hi"},
         cwd=repo,
-        project_dir=str(repo),
+        project_dir=str(REPO_ROOT),
     )
     assert out is None
 

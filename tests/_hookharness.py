@@ -94,7 +94,9 @@ def run_hook(
     """
     if tool_input is None:
         tool_input = {"command": command if command is not None else ""}
-    payload = json.dumps({"session_id": "t", "tool_name": tool_name, "tool_input": tool_input})
+    payload = json.dumps(
+        {"session_id": "t", "tool_name": tool_name, "tool_input": tool_input}
+    )
     env: dict[str, str] | None = None
     if path is not None or project_dir is not None:
         env = dict(os.environ) if path is None else {"PATH": path}
