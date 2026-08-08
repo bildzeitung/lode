@@ -111,8 +111,10 @@ one of those exit sites (lode-0jan).** [Section 3](#3-batch-merge-the-accepted-s
 empty-`accepted` guard used to abort identically whether `$STATE_DIR/accepted` was **missing** (3a's
 precompute never ran — a real silent-failure shape, still aborted loudly, unchanged) or merely
 **empty** (every branch already left the set for a legitimate reason). The empty case is not a
-failure: the loop that reads `$ACCEPTED` correctly iterates zero times, the re-gate that follows is a
-no-op on an unchanged `trunk`, and the pass flows straight through to [Section
+failure: the loop that reads `$ACCEPTED` correctly iterates zero times, the re-gate that follows is
+*skipped* (`trunk` is unchanged, so there is nothing this pass introduced to gate — see that
+section's own note; it is skipped rather than merely harmless, since running it would cost a full
+suite for no new content), and the pass flows straight through to [Section
 4](#4-land-the-survivors) — which already handles an empty `$LANDED` correctly by construction (its
 own guard there makes the same missing-vs-empty distinction). This covers the `needs-rebase`-only
 case too, by the same route: a branch kicked back mid-loop is dropped from `$STATE_DIR/accepted`
@@ -913,10 +915,16 @@ it at the one moment I do hold it, in the loop that was already iterating it, ex
 each merge message. `$LANDED` is better still — the merge loops **append** to it as each branch
 actually merges, so it is derived mechanically from what happened rather than recalled.
 
-**Every block below that loads one of these files asserts that it loaded**, per the governing rule
-above. `for id in $ACCEPTED` over an empty value iterates **zero** times and exits 0: it would merge
-nothing, close nothing, and look exactly like a clean pass with an empty queue — the same silent
-shape this ticket exists to remove, in the one place `/land` writes `trunk`.
+**Every block below that loads one of these files asserts that it LOADED** — i.e. that the `cat`
+itself succeeded — per the governing rule above. `for id in $ACCEPTED` over an empty value iterates
+**zero** times and exits 0: it merges nothing, closes nothing, and is indistinguishable *by its
+behaviour* from a clean pass with an empty queue. What the assertion separates is not that shape from
+a real merge, but its two **causes**: a file that was never written (3a never ran — the silent
+failure, aborted loudly) from a file that was written empty (every branch legitimately left the set —
+allowed through, lode-0jan). Since lode-0jan the guards test only the former; do **not** re-add an
+`[ -n "$ACCEPTED" ]`/`[ -z "$ACCEPTED" ]` emptiness test to the first-pass merge loop on the strength
+of this paragraph — that conflates the two causes again, which is the whole defect lode-0jan fixed
+(pinned by `tests/test_land_conflicts_state.py::test_empty_accepted_falls_through_missing_accepted_still_aborts`).
 
 Before merging anything, unstage the passive jsonl export — unconditionally, without needing to know
 what staged it (see the reconciliation above: it is *not* the reads above, and the `bd dolt pull`
@@ -975,11 +983,18 @@ MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true
 # 3a's precompute not having run at all, the silent-failure shape lode-sfnb's governing rule (top)
 # exists to catch. An EMPTY file is a different, legitimate outcome (lode-0jan) -- every branch was
 # already bounced, escalated, held, or kicked back needs-rebase before this loop started -- and is
-# NOT refused: $ACCEPTED being empty makes the loop below iterate zero times, the re-gate after it a
-# no-op on unchanged trunk, and the pass falls through to Section 4 exactly as a real merge would.
+# NOT refused: $ACCEPTED being empty makes the loop below iterate zero times, the re-gate after it
+# SKIPPED (nothing merged, so there is nothing new to gate -- see that section's own note), and the
+# pass falls through to Section 4 exactly as a real merge would.
+#
+# The test is the `cat`'s OWN exit status, which is what makes the distinction reliable rather than
+# a string comparison on the contents: a missing file, an unreadable one, and a directory in its
+# place all fail the read (cat prints the specific reason to this call's stderr, so the operator sees
+# which), while a present-but-empty OR whitespace-only file reads clean and yields an empty
+# $ACCEPTED -- unquoted word-splitting in the `for` below then iterates zero times over either.
 ACCEPTED=$(cat "$STATE_DIR/accepted") || {
-  echo "GATE COULD NOT RUN: $STATE_DIR/accepted is missing -- 3a's precompute did not run." \
-    "Landing nothing." >&2
+  echo "GATE COULD NOT RUN: $STATE_DIR/accepted could not be read (missing, or unreadable -- see" \
+    "cat's own error above) -- 3a's precompute did not run. Landing nothing." >&2
   exit 1
 }
 
@@ -1034,7 +1049,18 @@ done
 
 Re-gate the combined result (this is a Python-gated repo where code changed; a **docs-only** merge
 set has no Python gate — skip nox, run `scripts/validate-mermaid.sh` only if a merged diff touched a
-`docs/` diagram):
+`docs/` diagram).
+
+**If the loop above merged NOTHING — `$STATE_DIR/landed` is empty, the all-bounced /
+all-`needs-rebase` pass lode-0jan lets through — skip this re-gate entirely and go straight to
+[Section 4](#4-land-the-survivors).** Local `trunk` is byte-identical to the `origin/trunk` Section 1
+fetched, whose content is by construction already gated (that is the premise every fresh agent
+worktree branches from), so there is nothing this pass introduced to certify. This is not a
+correctness nicety but a cost one: without it every all-bounced tick pays a full `nox -s tests` run
+to re-certify content `trunk` already carries, and any red it found could only be pre-existing
+breakage this pass neither caused nor could attribute to a branch. Nothing downstream needs
+special-casing: Section 4's reformat commit is already behind its own `git status --short` emptiness
+check, which a skipped `nox -t fix` leaves clean.
 
 ```bash
 . ./venv/bin/activate
@@ -1101,8 +1127,16 @@ it would mask the 2. Keep it there.
   [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check" \
     "is DISABLED for this call (lode-67nk)" >&2
   ACCEPTED=$(cat "$STATE_DIR/accepted") || exit 1
-  [ -n "$ACCEPTED" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/accepted is missing or empty." \
-    "Landing nothing." >&2; exit 1; }
+  # DELIBERATELY ASYMMETRIC with the first-pass loop above, which lode-0jan taught to let an EMPTY
+  # accepted set through: here an empty one is still refused. This block only runs on a RED combined
+  # re-gate, and a nothing-merged pass now skips that re-gate entirely (see its note above), so an
+  # empty set should be unreachable here -- which is exactly why it stays fatal rather than being
+  # relaxed for symmetry. If it ever does arrive, `trunk` is byte-identical to `origin/trunk`, so the
+  # red is attributable to no branch in this pass: nothing to isolate, nothing to bounce, and a loud
+  # stop is the only honest outcome. Do not "finish the job" by deleting this guard -- the two blocks
+  # are answering different questions.
+  [ -n "$ACCEPTED" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/accepted is missing or empty, on the" \
+    "isolation-replay path -- nothing to attribute this red to. Landing nothing." >&2; exit 1; }
   : > "$STATE_DIR/landed"    # the reset above discarded every merge the first-pass loop recorded --
                               # start the replay's record from empty so Section 4 closes only what
                               # THIS loop actually keeps merged

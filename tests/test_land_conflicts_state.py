@@ -164,19 +164,34 @@ def test_2b_precheck_persists_conflicts_to_the_state_dir() -> None:
     )
 
 
-def test_section_3_merge_loops_both_persist_conflicts_to_the_state_dir() -> None:
-    """Section 3 has TWO merge loops -- the first pass, and the
-    isolation-replay loop entered on a red combined re-gate. Both call
-    scripts/land-merge-one.sh and both must persist a real conflict's paths
-    the same way, or the isolation-replay path silently regresses even when
-    the first-pass loop is fixed."""
+def _merge_loop_blocks() -> list[str]:
+    """Section 3's two `land-merge-one.sh` fences, in document order: index 0 is
+    3a's first-pass merge loop, index 1 the isolation-replay copy entered only on
+    a red combined re-gate.
+
+    Document order is the only signal separating them (both call the same script
+    the same way), so this also polices the "exactly two" precondition itself --
+    a SKILL.md reshape that adds or drops a merge loop fails loudly here rather
+    than silently changing what its callers' pins mean. ONE locator, shared: a
+    second byte-identical copy would carry any locator bug into both, so it could
+    not act as the independent check such a copy is usually justified by.
+    """
     sites = [b for b in _skill_blocks() if "scripts/land-merge-one.sh" in b]
     assert len(sites) == 2, (
         f"expected exactly 2 fenced blocks calling land-merge-one.sh (Section 3's "
         f"two merge loops), found {len(sites)} -- this test's assumption about "
         "SKILL.md's structure has drifted; re-check by hand before adjusting the count"
     )
-    for i, site in enumerate(sites, start=1):
+    return sites
+
+
+def test_section_3_merge_loops_both_persist_conflicts_to_the_state_dir() -> None:
+    """Section 3 has TWO merge loops -- the first pass, and the
+    isolation-replay loop entered on a red combined re-gate. Both call
+    scripts/land-merge-one.sh and both must persist a real conflict's paths
+    the same way, or the isolation-replay path silently regresses even when
+    the first-pass loop is fixed."""
+    for i, site in enumerate(_merge_loop_blocks(), start=1):
         assert 'CONFLICTS_DIR="$STATE_DIR/conflicts"' in site, (
             f"merge loop #{i} no longer (re-)derives CONFLICTS_DIR"
         )
@@ -226,25 +241,6 @@ def test_kick_back_block_refuses_loudly_on_missing_or_empty_conflicts() -> None:
     )
 
 
-def _first_pass_merge_loop_block() -> str:
-    """The FIRST of Section 3's two `land-merge-one.sh` blocks -- 3a's initial
-    merge loop, as opposed to the isolation-replay copy entered only on a red
-    combined re-gate. Document order is the only distinguishing signal (both
-    call the same script the same way), so this asserts there are exactly two
-    such blocks and returns the earlier one -- the same precondition
-    `test_section_3_merge_loops_both_persist_conflicts_to_the_state_dir` polices,
-    duplicated here rather than shared so a locator bug in one test cannot mask
-    a regression the other is meant to catch.
-    """
-    sites = [b for b in _skill_blocks() if "scripts/land-merge-one.sh" in b]
-    assert len(sites) == 2, (
-        f"expected exactly 2 fenced blocks calling land-merge-one.sh (Section 3's "
-        f"two merge loops), found {len(sites)} -- this test's assumption about "
-        "SKILL.md's structure has drifted; re-check by hand before adjusting the count"
-    )
-    return sites[0]
-
-
 def test_empty_accepted_falls_through_missing_accepted_still_aborts() -> None:
     """lode-0jan: Section 3's first-pass merge loop must distinguish a MISSING
     `$STATE_DIR/accepted` (3a's precompute never ran -- lode-sfnb's silent-
@@ -257,33 +253,34 @@ def test_empty_accepted_falls_through_missing_accepted_still_aborts() -> None:
     Before this fix, both cases hit the same `[ -n "$ACCEPTED" ] || exit 1`
     guard and aborted identically -- this pins that the empty case no longer
     does, while the missing case (a failed `cat`) still does."""
-    site = _first_pass_merge_loop_block()
+    site = _merge_loop_blocks()[0]
 
-    # The missing case: `cat` on a nonexistent file fails, so `|| exit 1` (or
-    # an equivalent explicit failure) must still fire from that failure alone --
-    # NOT be gated behind a separate emptiness check that a legitimately empty
-    # (but present) file would also trip.
-    assert 'ACCEPTED=$(cat "$STATE_DIR/accepted")' in site, (
-        "the first-pass merge loop no longer loads $ACCEPTED from "
-        '"$STATE_DIR/accepted" the expected way -- re-check this pin by hand'
-    )
-    load_pos = site.index('ACCEPTED=$(cat "$STATE_DIR/accepted")')
-    missing_line = site[load_pos : load_pos + 200]
-    assert "exit 1" in missing_line, (
-        'a failed `cat "$STATE_DIR/accepted"` (the file is MISSING -- 3a\'s '
-        "precompute never ran) no longer aborts the pass -- lode-sfnb's "
-        "silent-failure guard has regressed"
+    # The missing case: the abort must hang off the LOAD's own exit status --
+    # `cat` failing (absent file, unreadable, a directory in its place) -- and
+    # not off a separate emptiness test that a legitimately empty-but-present
+    # file would also trip. Pinned as the exact `|| {` handler rather than
+    # "an `exit 1` somewhere near the load": the same fence carries other
+    # `exit 1`s (the rc=2 machine-fault arm), so a proximity check could stay
+    # green with this handler deleted.
+    assert 'ACCEPTED=$(cat "$STATE_DIR/accepted") || {' in site, (
+        "the first-pass merge loop no longer aborts on a failed "
+        '`cat "$STATE_DIR/accepted"` (the file is MISSING -- 3a\'s precompute '
+        "never ran) -- lode-sfnb's silent-failure guard has regressed"
     )
 
     # The empty case must NOT independently abort: no `[ -n "$ACCEPTED" ] ||
     # exit` (or equivalent) guard anywhere in this block. An empty-but-present
     # accepted set is legitimate and must fall through to the for loop below
     # (which correctly iterates zero times) rather than aborting the pass.
-    assert '[ -n "$ACCEPTED" ]' not in site, (
-        "the first-pass merge loop still guards on `$ACCEPTED` being non-empty -- "
-        "an empty-but-present $STATE_DIR/accepted (every branch bounced/escalated/"
-        "held/needs-rebased) must fall through to Section 4, not abort (lode-0jan)"
-    )
+    # Both spellings, so the guard cannot come back merely rephrased: the `-n
+    # ... || exit` form this fix removed, and its `-z ... && exit` inverse.
+    for emptiness_test in ('[ -n "$ACCEPTED" ]', '[ -z "$ACCEPTED" ]'):
+        assert emptiness_test not in site, (
+            f"the first-pass merge loop guards on `{emptiness_test}` -- an "
+            "empty-but-present $STATE_DIR/accepted (every branch bounced/"
+            "escalated/held/needs-rebased) must fall through to Section 4, "
+            "not abort (lode-0jan)"
+        )
 
 
 _REGATE = "nox -s tests"

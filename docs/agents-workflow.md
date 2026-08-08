@@ -3302,8 +3302,13 @@ assumption would not have closed it.
   silent-failure signal) or merely present-but-empty (every branch already left the set for a
   legitimate reason before the merge loop even started). Only the missing case still aborts. An empty
   one now falls through — the merge loop it guards iterates zero times either way, the re-gate that
-  follows is a no-op on an unchanged `trunk`, and the pass reaches Section 4's end-of-pass path exactly
-  as a real merge would, which already closes an empty `$LANDED` correctly by construction. This is
+  follows is skipped (nothing merged, so `trunk` is byte-identical to the already-gated `origin/trunk`
+  Section 1 fetched; skipped rather than merely harmless, since running it would spend a full suite
+  re-certifying content `trunk` already carries), and the pass reaches Section 4's end-of-pass path
+  exactly as a real merge would, which already closes an empty `$LANDED` correctly by construction.
+  Section 3's *isolation-replay* guard is deliberately left refusing an empty set: skipping the
+  re-gate should make that state unreachable, and if it arrives anyway the red is attributable to no
+  branch in the pass, so a loud stop is the honest outcome. This is
   narrowly scoped to that one outcome, not a new release call added at Section 3 or anywhere else — the
   rejection of per-exit-site releases in the paragraph above is unchanged and still governs every
   genuine abort.
