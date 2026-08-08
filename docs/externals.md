@@ -844,9 +844,13 @@ retrofitting it onto a path that by then has users.
 ### Egress log (auditability)
 
 Every time content leaves the box it is **logged**: timestamp, purpose (`enrich` | `qa` | `tool`),
-model, the `version_id`/`passage_id`s sent (for a tool call: the destination and the arguments, per
+model, the `version_id`/`passage_id`s sent (for a tool call: the destination and the arguments,
+**both stored post-redaction**, per
 [the section above](#tool-calls-are-egress-too-decided-lode-35nu115)), and which redactions were
-applied. This extends the provenance already on annotations into a straight answer to *"what of mine
+applied. The redaction of `destination` happens at the **writer**, not at display (`lode-l87l`): on
+the web leg `destination` is character-for-character the same URL as `arguments['url']`, so a
+display-side fix would leave the secret at rest in the DB — see
+[storage.md](storage.md#data-shape-sketch). This extends the provenance already on annotations into a straight answer to *"what of mine
 has gone to the cloud, and when?"* Cheap to keep, high-trust, and the natural audit surface if a
 sensitive note is ever suspected of having leaked.
 

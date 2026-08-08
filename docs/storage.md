@@ -1381,10 +1381,22 @@ meaning for it, so this ticket makes the column nullable **only for a tool call*
 LLM send always records which model it went to. Relaxing the column to plain nullable would have
 dropped that enforcement for `enrich`/`qa` as well, which an audit trail cannot afford.
 `destination` is where the call went — the
-API base / host it hit, not a model — and `arguments` is the call's arguments as sent
-(post-redaction), the tool-call analogue of `sent_targets`/`redactions` for an LLM send. Both are
-`NULL` for `purpose IN ('enrich', 'qa')`. This ticket adds the shape only — no code path writes a
-`purpose='tool'` row yet; that lands with the tool call itself (`lode-35nu.11.1`).
+API base / host it hit, not a model — **also post-redaction** (`lode-l87l`), and `arguments` is the
+call's arguments as sent (post-redaction), the tool-call analogue of `sent_targets`/`redactions` for
+an LLM send. Both are `NULL` for `purpose IN ('enrich', 'qa')`. This ticket adds the shape only — no
+code path writes a `purpose='tool'` row yet; that lands with the tool call itself
+(`lode-35nu.11.1`).
+
+**Why `destination` is redacted at the writer, not at display (`lode-l87l`).** On the web leg
+`destination` is character-for-character the same URL as `arguments['url']`, so redacting only the
+argument would persist the very secret the audit row reports as stripped. `lode.tools._log_tool_fetch`
+therefore applies `redact_before_egress` to `destination` **before the INSERT**: a display-side fix
+would leave the secret at rest in the DB, where `lode egress` is only one of several readers —
+backups, exports and any direct `sqlite3` query see the column regardless. The redacted
+`destination`'s span count is deliberately **not** added to the per-target `redactions` total, since
+on the web leg that would double-count the same URL's secrets, already counted via the argument.
+Forward-only: rows written before `lode-l87l` are not backfilled (no release ever shipped the
+`purpose='tool'` write path, so there is no downstream copy to redact).
 
 **The first schema migration mechanism (`lode-35nu.11.7`).** Every migration before this one was a
 plain `ALTER TABLE … ADD COLUMN`, forward-applied by `lode.storage._apply_migrations` and made
