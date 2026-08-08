@@ -15,7 +15,7 @@ but still part of a bare ``nox`` run:
 
     nox -s shellcheck      lint every tracked shell script (--severity=warning)
     nox -s linkcheck       verify every relative markdown link in docs/ and .claude/ resolves (lode-dkdg)
-    nox -s docstringcheck  verify every :func:/:class:/:data:/:meth: role naming a lode.* symbol
+    nox -s docstringcheck  verify every symbol-naming Sphinx role naming a lode.* symbol
                              in src/ and tests/ resolves to a real symbol (lode-8oeu)
 
 Plus FIVE opt-in sessions that are **not** in the default set:
@@ -292,8 +292,9 @@ def linkcheck(session: nox.Session) -> None:
 
 @nox.session
 def docstringcheck(session: nox.Session) -> None:
-    """Verify every ``:func:``/``:class:``/``:data:``/``:meth:`` role naming a
-    ``lode.*`` symbol in a docstring/comment under ``src/`` or ``tests/``
+    """Verify every symbol-naming Sphinx role (``:func:``, ``:class:``,
+    ``:data:``, ``:meth:``, ``:attr:``, ``:mod:``, ``:exc:``, ``:obj:``) naming
+    a ``lode.*`` symbol in a docstring/comment under ``src/`` or ``tests/``
     resolves to a real symbol (lode-8oeu).
 
     A single rename (``lode-ekqh``) left four dangling refs across two

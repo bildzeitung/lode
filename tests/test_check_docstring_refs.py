@@ -159,6 +159,24 @@ class TestCheck:
         unresolved, _wrapped = check(tmp_path)
         assert unresolved == []
 
+    def test_every_symbol_naming_role_is_gated(self, tmp_path):
+        # Not just the four roles lode-8oeu's text enumerated. :mod: and
+        # :attr: carry the largest and second-largest bodies of lode.* refs
+        # in the repo; a role the regex misses is a SILENT pass, which is
+        # the failure mode that makes a green gate a lie rather than a
+        # nuisance. Pin all eight so a future narrowing fails loudly.
+        roles = ("func", "class", "data", "meth", "attr", "mod", "exc", "obj")
+        body = "\n".join(
+            f"# {_role(kind, f'lode.timestamps.not_real_{kind}')}" for kind in roles
+        )
+        _write(tmp_path, "src/pkg/a.py", body + "\n")
+        _git_init(tmp_path)
+
+        unresolved, _wrapped = check(tmp_path)
+        assert {ref.ref for ref in unresolved} == {
+            f"lode.timestamps.not_real_{kind}" for kind in roles
+        }
+
     def test_only_scans_src_and_tests_dirs(self, tmp_path):
         bad_role = _role("func", "lode.timestamps.definitely_not_real")
         _write(tmp_path, "scripts/other.py", f'"""Bad: {bad_role}."""\n')

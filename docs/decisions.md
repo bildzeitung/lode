@@ -40,11 +40,19 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
 - **Docstring `:func:`/`:class:`/`:data:`/`:meth:` ref gate — scope, wrapped-ref disposition, and
   wiring (`lode-8oeu`).** `lode-2hfd`'s sweep found four dangling Sphinx-role refs (one of which had
   never named a real symbol) surviving a rename across two branches that landed in the same `/land`
-  pass, plus a second, independent defect class: 77 refs in `src/`/`tests/` LINE-WRAPPED mid-role
+  pass, plus a second, independent defect class: 31 `:func:` refs in `src/`/`tests/` LINE-WRAPPED mid-role
   (Sphinx cannot resolve a role containing a newline, and the wrap also hides the ref from the
   `grep -rn <name>` a rename normally relies on — exactly how one of the four dangling refs was
   missed). `scripts/check_docstring_refs.py` / `nox -s docstringcheck` closes this:
-  1. **Scope: only `lode.*`-prefixed refs are resolved.** A role naming a third-party or stdlib
+  1. **Scope: every symbol-naming role, but only `lode.*`-prefixed refs are resolved.** The roles
+     covered are `:func:`, `:class:`, `:data:`, `:meth:`, `:attr:`, `:mod:`, `:exc:`, `:obj:` —
+     deliberately wider than the four this ticket enumerated. `:mod:` alone is the largest body of
+     refs in the repo and is exactly what a module *move* breaks (the same class of event that
+     motivated the gate), and `:attr:` is semantically identical to the covered `:data:`; gating
+     four of the eight would have left ~209 of ~1124 `lode.*` refs unchecked while reading as
+     "docstring refs are checked" — a false negative, which is worse than a false positive because
+     it manufactures confidence. Widening cost nothing: the resolver already handled bare-module
+     paths and the repo reports zero unresolved refs under the wider set. A role naming a third-party or stdlib
      symbol (`:func:`httpx.get``) is skipped outright rather than attempted-resolve-if-importable —
      simpler, and there is no value in this gate reasoning about symbols it doesn't own. A leading
      `~` (Sphinx's "show only the last component" prefix) is stripped before the scope check, so
@@ -57,19 +65,23 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
      `Settings.jira_base_url` — is special-cased as a valid terminal match; without that, both read
      as false-positive dangling refs, which is exactly the kind of noise that gets a gate disabled
      within a week.
-  3. **Wrapped refs are reported, not hard-failed, and the 77 pre-existing wrapped sites are NOT
+  3. **Wrapped refs are reported, not hard-failed, and the pre-existing wrapped sites are NOT
      mechanically unwrapped as part of this ticket.** A wrapped-but-otherwise-correct ref is not a
      correctness bug this gate needs to block a merge over — the whitespace-normalize-before-resolve
      step already makes it resolve identically to its unwrapped form, so the *reference* is not
      broken from this gate's point of view even though it will not render as a Sphinx cross-link.
      Reporting it (as a `WARNING:` line, non-fatal) keeps future renames grep-safe going forward
-     without taking on a 77-site mechanical reformatting pass that touches no behavior. If wrapped
+     without taking on a mechanical reformatting pass that touches no behavior (31 sites by
+     lode-2hfd's `:func:`-only count; more under the wider role set above — the gate prints the live
+     count on every run rather than pinning a number here that goes stale). If wrapped
      refs keep recurring, hard-failing on them (or unwrapping the backlog) is a small follow-up, not
-     a redesign.
+     a redesign. **Known cost, filed as a follow-up:** those warnings print on every green
+     `nox` run, so a genuinely new wrapped ref is indistinguishable from the backlog in that
+     output — a warning that always fires trains readers to ignore the channel.
   4. **Wired as a nox session (`docstringcheck`) in the DEFAULT set, hard-fail on any unresolved
      `lode.*` ref** — mirrors `linkcheck`'s placement (pure Python, no Docker/network) rather than a
      pytest test or a pre-commit hook, so it runs on every bare `nox` the same as the markdown-link
-     gate it complements. It reports zero unresolved refs against trunk as of this ticket (five
+     gate it complements. It reports zero unresolved refs against trunk as of this ticket (four
      genuine dangling refs found and fixed while building it: `lode.versions.version_ids` — never a
      function, a local variable inside `purge()` — repointed at `lode.versions.purge`;
      `lode.tui.dates._parse` — a name from before the shared `lode.timestamps.parse_stamp` helper

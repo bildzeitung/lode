@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Verify every Sphinx-style ``:func:``/``:class:``/``:data:``/``:meth:`` role
-naming a ``lode.*`` symbol in a docstring or comment under ``src/`` or
-``tests/`` resolves to a real, importable symbol (lode-8oeu).
+"""Verify every Sphinx-style symbol-naming role -- ``:func:``, ``:class:``,
+``:data:``, ``:meth:``, ``:attr:``, ``:mod:``, ``:exc:``, ``:obj:`` -- naming a
+``lode.*`` symbol in a docstring or comment under ``src/`` or ``tests/``
+resolves to a real, importable symbol (lode-8oeu).
 
 Nothing gated this before: ``scripts/check_links.py`` is markdown-only. A
 single rename (``lode-ekqh``, ``cited_answer._resolve_target`` ->
@@ -46,8 +47,13 @@ reject every such re-exported ref as a false positive.
 WRAPPED-REF DISPOSITION (lode-8oeu, acceptance criterion 3): this gate
 reports every wrapped ref it finds (even when it resolves) but does not
 hard-fail on wrapping alone, and this pass does not mechanically unwrap the
-31 pre-existing wrapped sites found by lode-2hfd's sweep -- see
-``docs/decisions.md`` for the recorded reasoning.
+pre-existing wrapped sites -- see ``docs/decisions.md`` for the recorded
+reasoning. The count is printed live on every run rather than hard-typed
+here -- a hand-typed count in a file whose whole job is stopping stale
+references is the wrong thing to carry, and this one would already have gone
+stale twice: lode-2hfd's sweep counted 31 wrapped sites by looking at
+``:func:`` alone, and the number rose again when this gate widened past the
+four roles that ticket enumerated.
 
 ``docs/decisions.md``'s own append-only exemption from pointer sweeps does
 not interact with this gate at all: this gate only ever reads ``src/`` and
@@ -81,27 +87,36 @@ SCAN_DIRS = ("src", "tests")
 # A Sphinx cross-reference role naming a Python symbol. DOTALL so the
 # backtick-delimited target can itself span a line-wrap -- catching that is
 # the whole point; whitespace inside is normalized below, not here.
-_ROLE_RE = re.compile(r":(?:func|class|data|meth):`([^`]*)`", re.DOTALL)
+#
+# ALL the symbol-naming roles this repo writes, deliberately -- not just the
+# four the ticket enumerated. ``:mod:`` (193 sites) is the single largest body
+# of refs in the repo and is exactly what a module MOVE breaks, which is the
+# same class of event that motivated this gate; ``:attr:`` (71) is
+# semantically identical to the covered ``:data:``. Gating four of the eight
+# would have left 209 of the 1124 ``lode.*`` refs silently unchecked while
+# reading as "docstring refs are checked" -- a false negative, which is worse
+# than a false positive here because it manufactures confidence. Widening
+# costs nothing: ``resolve_ref`` already resolves bare-module paths, and the
+# repo reports zero unresolved refs under the wider set.
+_ROLE_RE = re.compile(
+    r":(?:func|class|data|meth|attr|mod|exc|obj):`([^`]*)`", re.DOTALL
+)
 
 
 @dataclass(frozen=True)
-class UnresolvedRef:
+class RefFinding:
+    """One reported ref, carrying its own wording in ``reason`` -- mirrors
+    ``check_links.py``'s ``LinkError``. The two finding kinds differ only in
+    that wording; which list a finding lands in, not its type, is what
+    separates a hard failure from a warning."""
+
     path: Path
     line_no: int
     ref: str
+    reason: str
 
     def __str__(self) -> str:
-        return f"{self.path}:{self.line_no}: unresolved reference -> {self.ref}"
-
-
-@dataclass(frozen=True)
-class WrappedRef:
-    path: Path
-    line_no: int
-    ref: str
-
-    def __str__(self) -> str:
-        return f"{self.path}:{self.line_no}: line-wrapped reference -> {self.ref}"
+        return f"{self.path}:{self.line_no}: {self.reason} -> {self.ref}"
 
 
 def _tracked_python_files(root: Path) -> list[Path]:
@@ -193,9 +208,9 @@ def _refs_in_file(text: str) -> list[tuple[int, str]]:
     ]
 
 
-def check(root: Path) -> tuple[list[UnresolvedRef], list[WrappedRef]]:
-    unresolved: list[UnresolvedRef] = []
-    wrapped: list[WrappedRef] = []
+def check(root: Path) -> tuple[list[RefFinding], list[RefFinding]]:
+    unresolved: list[RefFinding] = []
+    wrapped: list[RefFinding] = []
     for source in _tracked_python_files(root):
         try:
             text = source.read_text(encoding="utf-8", errors="replace")
@@ -204,11 +219,15 @@ def check(root: Path) -> tuple[list[UnresolvedRef], list[WrappedRef]]:
         for line_no, raw in _refs_in_file(text):
             normalized = normalize_ref(raw)
             if "\n" in raw:
-                wrapped.append(WrappedRef(source, line_no, normalized))
+                wrapped.append(
+                    RefFinding(source, line_no, normalized, "line-wrapped reference")
+                )
             if not normalized.startswith("lode."):
                 continue  # third-party/stdlib -- out of scope, see module docstring
             if not resolve_ref(normalized):
-                unresolved.append(UnresolvedRef(source, line_no, normalized))
+                unresolved.append(
+                    RefFinding(source, line_no, normalized, "unresolved reference")
+                )
     return unresolved, wrapped
 
 
@@ -221,13 +240,17 @@ def main(
         ),
     ] = None,
 ) -> None:
-    """Fail if any ``:func:``/``:class:``/``:data:``/``:meth:`` role naming a
+    """Fail if any symbol-naming Sphinx role (see ``_ROLE_RE``) naming a
     ``lode.*`` symbol under ``src/`` or ``tests/`` does not resolve. A
     line-wrapped role is reported as a warning (not a failure) whether or
     not it resolves -- see the module docstring's WRAPPED-REF DISPOSITION."""
     target_root = (root or REPO_ROOT).resolve()
-    if str(target_root) not in sys.path:
-        sys.path.insert(0, str(target_root / "src"))
+    # Test the entry actually inserted, not a different one -- ``--root``'s
+    # tree must win over any ambient ``lode``, and the guard has to be able
+    # to observe that it already has.
+    src_dir = str(target_root / "src")
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
     unresolved, wrapped = check(target_root)
     for ref in wrapped:
         print(f"WARNING: {ref}", file=sys.stderr)
@@ -241,7 +264,7 @@ def main(
         raise typer.Exit(1)
     suffix = f" ({len(wrapped)} line-wrapped ref(s) warned above)" if wrapped else ""
     print(
-        "OK: every :func:/:class:/:data:/:meth: role naming a lode.* symbol under "
+        "OK: every symbol-naming Sphinx role naming a lode.* symbol under "
         f"src/ and tests/ resolves{suffix}"
     )
 
