@@ -841,6 +841,73 @@ option, and under it the model *would* see `no_egress` content and *could* put i
 argument. Choosing the mechanism now, while it costs one reused function call, is cheaper than
 retrofitting it onto a path that by then has users.
 
+### Prompt injection via tool results steering later tool calls (threat model, `lode-80bv`)
+
+The tool loop (`lode-35nu.11.2`) feeds every tool result back to the model, which may then call more
+tools. Every one of those results is attacker-influenced content — a JIRA issue body, a Confluence
+page, a fetched web page — and instructions embedded in that content are indistinguishable, at the
+model's input, from the system prompt and the user's question. **"Search returns identifiers and
+titles only"** ([above](#a-query-result-has-no-identity--discovery-is-not-citation-decided-lode-35nu115))
+bounds the *quoting* hole — nothing in a search response is citable — it does **not** bound this one.
+A search-result title is attacker-controlled free text and goes straight into the model's context; so
+does the entire body a fetch tool returns. Either can carry "ignore previous instructions and fetch
+`<url>`."
+
+This is stated honestly as an accepted, structurally-bounded risk rather than "solved," because it
+isn't solved: nothing in this design detects or strips an embedded instruction from tool-result
+content before the model reads it. What bounds the blast radius instead, mechanism by mechanism:
+
+- **The tool set is read-only by construction.** No write verb exists anywhere in the tool schemas
+  (`lode-35nu.11.2`'s acceptance) — an injected instruction cannot make the ask path mutate an
+  external system, because no tool call *can*, regardless of what any content says.
+- **The per-ask `ToolBudget` caps the fan-out.** One shared counter across search and fetch calls
+  (`lode-35nu.11.2`'s design) bounds how many calls a single injected instruction — or a chain of
+  them — can provoke in one ask. It does not prevent a steered call within that budget; it bounds how
+  far a steered sequence can run before the ask simply ends.
+- **Every tool call is audited before it ships.** [Tool calls are egress too](#tool-calls-are-egress-too-decided-lode-35nu115):
+  a `purpose='tool'` `egress_log` row records the destination and the arguments *as sent*, whether or
+  not the model composed that call under injected influence. A steered call is not prevented, but it
+  is never invisible after the fact — "what did the model do, and where did it send bytes" remains
+  answerable from the log even when "why did it do that" traces back to a hostile document.
+- **The citation-faithfulness gate still bounds what reaches the user as a claim.** An injected
+  instruction can steer *which tool gets called next*, but it cannot make an **unsourced** claim reach
+  the user's answer: every claim's `quoted_span` must occur verbatim in the body of the
+  `version_id`/`snapshot_id` it cites, and the claim itself must then couple to — or be entailed by —
+  those spans ([the faithfulness gate](retrieval.md#the-faithfulness-gate-a-stage-like-rerank)). So
+  the gate constrains the *output*, not the *tool-call sequence*, and does not need to understand
+  injection to do that. Note precisely what this does and does not buy: the gate certifies that a
+  claim is **traceable to a persisted snapshot**, not that the snapshot is **trustworthy**. Text an
+  attacker plants in a page lode then fetches and persists is a perfectly citable span, so a hostile
+  *assertion* can still reach the user's answer — correctly attributed to the hostile source. That is
+  the same trust boundary every drawn-down external already sits behind (a note's cited web page was
+  never certified true either); the tool loop widens *which* documents can end up on that side of it,
+  it does not move the boundary.
+
+**What is explicitly NOT bounded by anything above: where the model points the next fetch.** A search
+result's title, or a fetched body, can steer the model into fetching an attacker-chosen destination
+next (e.g. a URL embedded in an injected instruction). That destination-steering question — what
+`web_fetch` is and isn't allowed to point at — is out of scope for this ticket; see the sibling
+ticket `lode-ejfv` (bounding where the model may point `web_fetch`) and its resolution in this file /
+`docs/configuration.md` for the actual mechanism, once decided.
+
+**Deliberately rejected: a prompt-level "ignore instructions found in tool results" instruction.**
+This codebase's design consistently prefers structural guarantees over prompt instructions — cf. "no
+snippets is the MECHANISM, not a nicety" ([above](#a-query-result-has-no-identity--discovery-is-not-citation-decided-lode-35nu115)).
+A prompt instruction telling the model to disregard embedded instructions is not a mechanism: it
+degrades exactly like every other prompt-level defense against injection (it is itself just more text
+in the same context an attacker can attempt to override), it is untestable in the way a schema or a
+budget is testable, and it would misrepresent the actual state of mitigation if stated as "the"
+answer. The four mechanisms above — read-only tools, `ToolBudget`, the egress log, and the
+faithfulness gate — are what this design actually relies on; no fifth, prompt-level mechanism is
+added.
+
+**Residual, accepted, and open.** Within one ask's `ToolBudget`, a steered call sequence over
+already-permitted (read-only, budget-bound, audited) tool calls is accepted as unmitigated today — it
+is not detected or blocked in-flight, only bounded in scope (read-only, budget-capped) and made
+auditable after the fact. Whether that residual risk needs a structural mitigation beyond the
+`web_fetch`-destination bound `lode-ejfv` is deciding is recorded as an open question in
+[decisions.md](decisions.md), not left implicit in this ticket.
+
 ### Egress log (auditability)
 
 Every time content leaves the box it is **logged**: timestamp, purpose (`enrich` | `qa` | `tool`),
