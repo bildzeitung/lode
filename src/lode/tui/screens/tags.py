@@ -284,24 +284,23 @@ class TagsScreen(Screen[None]):
         Two or more selected tags that legitimately never co-occur on any
         note is a real (correct) outcome of the AND/intersection semantics,
         not a bug -- but a silently empty table reads as one. When the
-        selection is non-empty and the result is, this shows one explanatory
-        row (key=None -- :meth:`on_data_table_row_selected` already guards on
-        a non-``None`` row key, so it can't be opened as a note) instead of
-        leaving the table blank with no explanation (lode-35nu.7).
+        selection is non-empty and the result is, :attr:`~lode.tui.widgets.
+        lode_data_table.LodeDataTable.empty_message` paints the explanation
+        directly into the table's own empty canvas rather than adding a
+        ``key=None`` sentinel row (lode-t7pw; originally lode-35nu.7) -- no
+        real row is added, so ``row_count`` stays ``0`` and there's nothing
+        for the cursor to land on or for :meth:`on_data_table_row_selected`
+        to guard against.
         """
         table = self.query_one(f"#{NOTES_TABLE_ID}", LodeDataTable)
         table.clear(columns=True)
         table.add_columns("Id", "Date", "Version", "Summary")
         rows = list_notes_with_all_tags(self.app.db_path, self._selected)
-        if not rows and self._selected:
-            table.add_row(
-                "",
-                "",
-                "",
-                Text("No notes carry every selected tag together."),
-                key=None,
-            )
-            return
+        table.empty_message = (
+            "No notes carry every selected tag together."
+            if not rows and self._selected
+            else None
+        )
         for row in rows:
             table.add_row(
                 short_note_id(row.note_id),

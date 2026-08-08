@@ -876,6 +876,88 @@ explicitly rule out the two the `lode-ska2` incident's agent reached for instead
 `lode-nt98`/`lode-ivth` shipped at and was accepted on; it is not a stronger guarantee than that
 precedent, and this doc does not claim it is.
 
+### Isolation guard: mid-session re-assertion (lode-6wgc)
+
+**A new and more severe variant of the isolation-guard family above — the worktree is provisioned
+correctly, passes both guards, and is then destroyed *mid-session*.** During a bare `/code` fan-out
+(cap 5), the `coding` builder dispatched at `lode-e6s1` had its launch worktree
+(`.claude/worktrees/agent-a5046a8a1a14aaf53`) **deleted from disk while it was actively working in
+it**. Its own background job logged `FileNotFoundError: [Errno 2] No such file or directory` for that
+path; the agent then found `pwd == /home/dmklein/PROJECTS/lode` and `HEAD == trunk`. This differs from
+`lode-ska2`/`lode-jk44` (no worktree handed over at dispatch) and `lode-nt98` (a *wrong*, recycled
+worktree handed over at dispatch): both of those are dispatch-time faults the step-3/step-1 guards
+catch before any work starts. This one happened **after** both guards had already passed — the
+merge-base/isolation checks run once, at the start of the cycle, and have no way to observe a worktree
+vanishing an arbitrary number of steps later.
+
+**Consequence.** The agent's cwd silently became the repo root, on `trunk`. Any `Edit`/`Write`/`nox` it
+ran next would have mutated `trunk` directly — CLAUDE.md's top-of-file non-negotiable. In this
+instance nothing was lost: the agent noticed (`pwd` and `HEAD` both read wrong) and stopped, full
+stop, having made no changes or commits yet. That outcome depended entirely on the agent noticing —
+the same "luck-adjacent, not mechanical" gap `lode-ska2` closed for the dispatch-time case was still
+open here for the mid-session case.
+
+**Leading hypothesis, unconfirmed: resume-then-reap.** The affected agent had been resumed once via
+`SendMessage` — it had stalled on a backgrounded gate (`lode-95o`), was resumed to re-run the gate in
+the foreground, and the worktree vanished during that resumed turn. Whether the harness reaps a launch
+worktree on some resume paths is a harness-internal question this repo cannot test or instrument from
+inside; it is **left open** in `docs/decisions.md` rather than asserted as fact. Two further open
+questions from the same incident — whether fan-out concurrency (5 agents at cap) was a factor, and
+whether the reclaim path some other component drives could be implicated — were checked and **ruled
+out** for this incident specifically: `/code`'s own end-of-pass reclaim block had not run at all, and
+in any case it only ever matches `land/<id>--*` branch names, never `worktree-agent-*` — so this was
+not a case of a live reclaim colliding with an in-progress build.
+
+**Fix shipped by this ticket: a cheap re-assertion of `scripts/isolation-guard.sh`, not a periodic
+daemon.** The existing guard script (unchanged) is re-run at the two highest-value checkpoints in
+`coding.md` and `code-reviewer.md`, at the two points where a worktree that vanished since the last
+check would otherwise cause real damage. For the **builder** those are the first mutating
+`Edit`/`Write` of the task, and the first `git commit` — the commit is the higher-consequence of the
+two by a wide margin, because in this failure mode it does not error, it *succeeds against the main
+checkout on `trunk`*, which is CLAUDE.md's top-of-file non-negotiable and is far harder to undo than
+the in-place reformat `nox -t fix` performs immediately afterwards (one guard ahead of the commit
+covers both). For the **reviewer**, whose cycle has no commit-to-`trunk` exposure of the same shape,
+they are the first mutating write and the gate loop.
+
+Each checkpoint substitutes the toplevel **inline** —
+`"$(git rev-parse --show-toplevel)/scripts/isolation-guard.sh"` — rather than carrying a `$TOP`
+assigned by an earlier step's block. Fenced blocks run as separate `Bash` invocations and shell state
+does not survive between them (lode-lv04): a carried-over `$TOP` expands to empty, the guard path
+resolves to `/scripts/isolation-guard.sh`, and the checkpoint then hard-stops **every** task
+unconditionally — a guard that fires on a legitimately-clean worktree is strictly worse than no guard,
+since the reliable way to make agents ignore a safety check is to make it cry wolf on every run.
+`tests/test_skill_bash_state.py` gates this mechanically, and caught exactly this defect in this
+ticket's own first draft during technical review.
+
+`recycled-worktree-guard.sh` is deliberately **not** re-run at these checkpoints — its failure mode is
+destructive repair (`reset --hard` + `clean -fd`), appropriate once, as a precondition, but wrong to
+invoke mid-session against a tree that may hold real uncommitted work from *this* session.
+
+**What this fix does not claim.** It does not identify or fix whatever harness mechanism destroyed the
+worktree — that remains outside this repo's visibility and stays an open question in
+`docs/decisions.md`. It narrows the exposure window (dispatch-time check → first-mutation check → first
+gate-loop check, rather than dispatch-time check alone) without eliminating it: a worktree destroyed
+between a checkpoint and the tool call it guards is still a live gap. The mechanical stop-on-failure
+behavior this ticket adds is the same "stop and report, never self-rescue" contract as the
+dispatch-time guards — it makes noticing mechanical at two more points, it does not make the
+underlying harness fault impossible.
+
+**It was, at the time this ticket landed, explicitly not the structurally correct altitude — that gap
+is now closed by `lode-p8zl`.** Checkpoints in a markdown instruction file depend on the agent
+choosing to run them; the mechanism that closes this class of gap *by construction* is a
+`PreToolUse` hook in `.claude/settings.json`, which fires on every matching tool call and needs no
+agent cooperation — the same graduation this repo already made for the gh-write and SHA-fabrication
+guards. `isolation-guard.sh` was already an executable 0/1/2 script with the right exit semantics, so
+the body existed; what this ticket's own scope could not settle were two real design questions (the
+guard would also fire in the *main* session, where working on `trunk` is legitimate for the doc-only
+`--no-verify` path CLAUDE.md sanctions, and a fourth hook compounds the deny-everything failure mode
+if its prerequisites are missing). That was a **deferral on stated grounds, not a rejection**, filed
+as `lode-p8zl` — which escalated both questions for a maintainer ruling and then shipped
+`scripts/trunk-write-guard.sh`: a `PreToolUse(Edit|Write)` hook, gated on the current BRANCH (not an
+attempt to disambiguate subagent from main session — the payload cannot support that), returning
+`permissionDecision: "ask"` rather than `"deny"` when `HEAD` is `trunk`, and needing no `jq`. Full
+rulings and rationale: [`docs/decisions.md`](decisions.md) (search "lode-p8zl").
+
 ### Precondition guards (the 0/1/2 family) (lode-t6ni)
 
 lode now has **three** sibling precondition guards under `scripts/`:
@@ -2043,6 +2125,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured), pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
 | Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr) |
 | Isolation guard | builder, reviewer, and `land-review` all run `scripts/isolation-guard.sh` (lode-ska2) as their FIRST action, before even the recycled-worktree guard — the harness has been observed handing a dispatched agent NO worktree at all (cwd on the main checkout, on `trunk`); a failure is a hard stop, never a self-provisioned `git worktree add` — [full account above](#isolation-guard-lode-ska2--lode-jk44) (lode-ska2, lode-jk44) |
+| Isolation guard (mid-session) | builder and reviewer also re-run `scripts/isolation-guard.sh` immediately before their first mutating `Edit`/`Write`, and again before the builder's first `git commit` / the reviewer's gate loop — a worktree can pass both start-of-cycle guards and still be destroyed mid-session (observed under a resumed `SendMessage` turn), after which a `git commit` silently lands **on `trunk`**. The toplevel is substituted inline, never carried across fenced blocks (lode-lv04). A markdown checkpoint is a mitigation, not the structurally correct altitude — a `PreToolUse` hook is that altitude, and it now ships as `scripts/trunk-write-guard.sh` (lode-p8zl, [below](#isolation-guard-mid-session-re-assertion-lode-6wgc)) — [full account above](#isolation-guard-mid-session-re-assertion-lode-6wgc) (lode-6wgc) |
 | Recycled-worktree guard | **Canonical row (lode-zt62) — `coding.md`'s and `code-reviewer.md`'s quick cards link here rather than restate it.** Builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>` — the ref belongs to another ticket), resets onto `origin/trunk` HEAD (never bare local `trunk`, which `/land` can leave carrying un-pushed, un-gated merges for its whole merge window — lode-isl3) — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. `git clean -fd` then runs **unconditionally**, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef` was investigated (lode-r7ow) and its reuse semantics found to be a documented, mechanism-level match for the recycling; the human decision to switch it has since been made and applied — it is now the explicit `"fresh"` (lode-jzbz), not the harness default by omission — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow, lode-jzbz, lode-3v1p, lode-isl3, lode-ivth) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
 | Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |

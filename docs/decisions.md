@@ -3951,3 +3951,107 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     section-specific reasoning. Its stated sequencing blocker is cleared — `lode-lrg2` is closed.
   - **SEQUENCING (binding):** `lode-3k6x` and `lode-mm73` both edit §2b and must be built in
     sequence, not in parallel.
+
+- **2026-08-07 — Open: does the harness reap a launch worktree on resume via `SendMessage`?
+  (`lode-6wgc`)** During a bare `/code` fan-out (cap 5), a `coding` producer's launch worktree was
+  deleted from disk *while the agent was actively working in it*, silently dropping its cwd onto the
+  main checkout on `trunk`. The agent noticed (`pwd`/`HEAD` both read wrong) and stopped before
+  touching anything, but that outcome was luck-adjacent, not guaranteed. The leading hypothesis —
+  the worktree vanished during a turn the agent had been *resumed into* via `SendMessage`, after
+  stalling on a backgrounded gate (`lode-95o`) — is **unconfirmed and left open**: it requires
+  harness-side instrumentation this repo has no way to add or inspect from inside a session. Checked
+  and ruled out for this specific incident: fan-out reclaim (`/code`'s end-of-pass block hadn't run,
+  and only ever matches `land/<id>--*` names, never `worktree-agent-*`) and a concurrent `/land` pass
+  (none was running). **Mitigation shipped by `lode-6wgc`** (not a fix for the hypothesis above, which
+  remains open): `coding.md` and `code-reviewer.md` now re-run `scripts/isolation-guard.sh`
+  immediately before their first mutating `Edit`/`Write`, and again before the builder's first
+  `git commit` (the highest-consequence step — in this failure mode the commit *succeeds*, against
+  `trunk`) / the reviewer's gate loop, narrowing — not eliminating — the window in which a worktree
+  can vanish undetected. A markdown checkpoint is not the structurally correct altitude for this: a
+  `PreToolUse` hook needs no agent cooperation, and is deferred on stated grounds (it would also fire
+  in the main session's sanctioned `trunk` workflows) to `lode-p8zl`. Full write-up:
+  [agents-workflow.md](agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc).
+  Revisit if this recurs with better evidence, or if a harness changelog ever documents worktree
+  lifecycle behavior across `SendMessage` resumes.
+- **Tool-augmented Ask: identity, persistence, and egress — DECIDED (maintainer, 2026-08-07,
+  `lode-35nu.11.5`).** `/challenge` established that `lode-35nu.11`'s settled "snapshot-then-cite"
+  constraint rested on an assumption the schema does not support, and blocked the whole `.11`
+  sub-tree on three coupled questions. All three are now answered; the durable write-ups are
+  [externals.md](externals.md#a-query-result-has-no-identity--discovery-is-not-citation-decided-lode-35nu115)
+  and [retrieval.md](retrieval.md#tool-augmented-ask-the-tool-path-is-the-draw-down-path). Recorded
+  here for the *reasoning and the rejected alternatives*, which the design docs deliberately do not
+  carry:
+  - **Q1, external identity for a query result — DECIDED: split discovery from citation.** Neither
+    option as filed was taken. **Rejected: minting an identity for query results** — content-address
+    the result set and a fresh primary key churns on every run, destroying the one-node-per-source
+    dedup `external_id` exists to provide; query-address it and you get one durable row whose
+    content silently mutates, destroying `snapshot_id`'s immutability. The instability of a query's
+    result set defeats both directions, which is why no scheme was salvageable. **Rejected:
+    addressable resource fetches only** — provably safe, but it leaves the model able to fetch only
+    what it already knows the key of, which is most of the value of tools gone. **Taken:** a search
+    tool is allowed but returns only identifiers and titles, never body text, is never persisted and
+    never citable; the model then fetches the named resources, whose `external_id`s already exist
+    and are already valid. The no-body-text rule is the load-bearing part — it is what makes the
+    faithfulness gate unroutable-around, since there is nothing in a search response to quote. Net
+    effect: `.11.2`'s identity work disappears entirely and the gate is untouched.
+  - **Q2, ephemeral vs. corpus-visible — DECIDED: first-class rows plus a `discovered_via = 'ask'`
+    provenance marker, and no note→external edge.** Under Q1 every persisted snapshot is of a real
+    addressable resource, structurally identical to what draw-down already writes. **Rejected: a
+    marked ephemeral class with its own lifecycle/GC** — it buys a second lifecycle and a second
+    code path to distinguish rows that are byte-for-byte the same kind of object. **Rejected: fully
+    first-class with no marker** — zero new mechanism, but asking a question would silently enroll
+    sources with no way to tell which arrived that way. `.11.1`'s dedupe criterion needs no new
+    build: `external_id` dedup gives one node per resource and `snapshot_id = H(external_id ‖ body)`
+    makes an identical refetch free.
+  - **Q3, egress on tool-call arguments — DECIDED: log every tool call, redact its arguments through
+    the existing gate, forbid a `no_egress` destination.** **The ticket's stated threat was corrected
+    rather than accepted:** it claimed the model could compose a search string out of a `no_egress`
+    note's content, but `no_egress` material is excluded from cloud Q&A context, so the cloud model
+    never receives it and cannot compose from it — the described leak is not reachable today.
+    **Rejected accordingly: forbidding tools whenever `no_egress` material is in context** — it
+    guards a path the architecture already closes, and would disable tools in exactly the sessions
+    where the user holds sensitive notes. **Rejected: log-only** — it satisfies the audit rule but
+    leaves nothing in place for the future it must survive. What is real and drove the decision:
+    (a) the audit gap is independent of any threat model — a tool call ships bytes to a third party
+    and [storage.md](storage.md) §8 requires one row per egress, so `purpose = 'tool'` is added
+    regardless of who composed the string; (b) the *user's own question text* is unredacted and
+    reaches a tool argument, a path that predates tools but now forwards to a second party; and
+    (c) the **Local-LLM fallback for `no_egress` notes** entry near the top of this file — a live
+    future option — **would** make the original threat real, so choosing the mechanism now, at the
+    cost of one reused `gate_qa_egress` call, beats retrofitting it later onto a path with users.
+    Reusing the existing gate rather than writing a second redactor is deliberate: a divergent second
+    implementation becomes a correctness hazard the moment either side is tuned.
+  - **Consequence for the sub-tree:** `.11.1` loses its identity work and keeps its dedupe criterion
+    (already satisfied); `.11.2` narrows to "search returns ids/titles, fetch returns bodies". Both
+    were rewritten to match before either was built, as `.11.5`'s acceptance required.
+
+- **2026-08-08 — DECIDED (maintainer, `/sweep` escalation walk-through): the two design questions
+  `lode-p8zl` escalated when investigating a `PreToolUse` worktree-isolation hook.** `lode-6wgc`'s
+  markdown-checkpoint mitigation for a mid-session worktree loss depends on the agent choosing to
+  re-run `scripts/isolation-guard.sh`; the structurally correct altitude — a hook that fires on
+  every matching tool call with no agent cooperation — was deferred to `lode-p8zl` because it raised
+  two unresolved questions. Both are now settled; the shipped guard is
+  [`scripts/trunk-write-guard.sh`](../scripts/trunk-write-guard.sh).
+  - **RULING 1 (subagent-vs-main-session disambiguation) — do NOT attempt it.** The documented
+    `PreToolUse` payload carries no agent-role field, and a stranded subagent and a legitimate
+    main-session `trunk` edit both resolve to the same checkout root — there is no way to tell them
+    apart from inside a hook. **Taken:** gate on the BRANCH instead, which IS derivable
+    (`git rev-parse --abbrev-ref HEAD`, root resolved via `CLAUDE_PROJECT_DIR` falling back to
+    `git rev-parse --show-toplevel`, matching all three shipped guards), and return
+    `permissionDecision: "ask"` — deliberately NOT `"deny"` — when the branch is `trunk`. A human at
+    the terminal can approve the prompt and proceed; a dispatched subagent cannot approve anything
+    and is stopped. Human presence becomes the discriminator without the payload ever encoding it.
+  - **RULING 2 (which `CLAUDE.md` passage is authoritative) — the STOP banner governs AUTHORING
+    file changes; "Workflow gotchas" describes MERGE/LAND mechanics** (how to commit without
+    dragging `.beads/issues.jsonl` along), not a parallel authoring path. The banner was never
+    literally absolute in practice — `/land` writes `trunk` every pass and `/sweep` pushes it — but
+    under an `"ask"` decision the tension is moot operationally: the doc-only `--no-verify` path
+    still works, it just costs one confirmation.
+  - **RULING 3 (the missing-prerequisite failure mode, `lode-p8zl`'s original design question 2) —
+    does not arise.** A branch-name guard needs NO `jq` — it never parses `tool_input` — so unlike
+    the three shipped `PreToolUse(Bash)` guards it adds nothing to the `lode-oii9`
+    deny-everything-when-`jq`-is-missing surface.
+  - Full account, the hook's own header, and the test suite:
+    [agents-workflow.md](agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc),
+    [`scripts/trunk-write-guard.sh`](../scripts/trunk-write-guard.sh),
+    `tests/test_trunk_write_guard.py`.

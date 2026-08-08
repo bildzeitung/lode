@@ -528,6 +528,7 @@ from lode.cli.status import (  # noqa: F401
     _cache_hit,
     _cold_model_cache,
     _enrichment_model_stale,
+    _lexical_gap_count,
     _model_cache_probe,
     _model_revision_status,
     _short,

@@ -82,6 +82,39 @@ def test_locate_span_returns_none_for_an_absent_span() -> None:
     assert locate_span("rerank ON by default", BODY) is None
 
 
+def test_locate_span_defaults_to_the_leftmost_occurrence() -> None:
+    """No ``hint`` -- the original behavior, and every pre-existing caller's
+    expectation -- keeps picking the first (leftmost) occurrence."""
+    body = "one OAuth two OAuth three"
+    start, _ = locate_span("OAuth", body)
+    assert start == body.index("OAuth")
+
+
+def test_locate_span_hint_picks_the_nearest_occurrence() -> None:
+    """A repeated span is genuinely ambiguous without a hint (lode-hruz) --
+    given one, the occurrence nearest it is returned, not the leftmost."""
+    body = "one OAuth two OAuth three"
+    first = body.index("OAuth")
+    second = body.index("OAuth", first + 1)
+
+    start, _ = locate_span("OAuth", body, hint=second)
+
+    assert start == second
+    assert start != first
+
+
+def test_locate_span_hint_also_disambiguates_a_whitespace_reflowed_span() -> None:
+    body = "one\nrerank OFF\ntwo\nrerank\tOFF\nthree"
+    first = body.index("rerank OFF")
+    second = body.index("rerank\tOFF")
+
+    start, end = locate_span("rerank OFF", body, hint=second)
+
+    assert body[start:end] == "rerank\tOFF"
+    assert start == second
+    assert start != first
+
+
 def test_normalize_whitespace_collapses_and_strips() -> None:
     assert normalize_whitespace("  a\t b\n\nc  ") == "a b c"
 
@@ -178,6 +211,25 @@ def test_all_glue_claim_is_not_coupled() -> None:
 
 def test_coupling_is_case_insensitive() -> None:
     assert _coupled("RERANK OFF", "rerank off in the skeleton")
+
+
+def test_compound_identifier_fragment_couples_known_fail_open_exposure() -> None:
+    """Known, explicitly accepted exposure (lode-1qxy, docs/retrieval.md): ``_WORD``
+    splits hyphenated compounds, so a span's compound identifier contributes bare
+    fragments to the accepting set -- a claim naming only a fragment of the span's
+    compound still couples. This is the fail-*open* direction (a spurious coupling
+    HIT returns True and bypasses NLI), not the harmless miss direction.
+
+    This test is a canary, not a specification: it pins *today's* accepted
+    behavior. If ``_WORD`` is ever tightened -- here or as a side effect of
+    unrelated tokenizer work -- this test will fail and must be updated
+    deliberately, alongside the docs/retrieval.md decision note, not silently.
+    """
+    # The span's "maxmemory-policy" splits into a bare "policy" token, which
+    # spuriously supplies the claim's payload.
+    assert _coupled("the policy is allkeys-lru", "maxmemory-policy allkeys-lru")
+    # Same mechanism: the claim names only the "DNS" fragment of the span's "DNS-01".
+    assert _coupled("the check uses DNS", "the check uses DNS-01 validation")
 
 
 def test_negated_span_is_not_coupled() -> None:

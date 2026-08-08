@@ -562,21 +562,49 @@ def test_large_git_command_carrying_a_sha_does_not_take_seconds() -> None:
     ~150ms with LC_ALL=C, ~4x that without it (quadratic under UTF-8) -- well under 8 KB, the
     largest single bd/git field this repo's own DB or git history has ever held is ~5 KB, so an
     8 KB real-world command is already a generous stress fixture, not a realistic one.
+
+    lode-vaxe: this test no longer DETECTS the LC_ALL=C regression -- a bare wall-clock
+    threshold is load-dependent by construction (under `pytest -n 8` alongside other agents'
+    gates the old `elapsed < 0.5` measured 0.749s and failed, then passed 3/3 in isolation).
+    That regression is a source-text fact, so
+    test_split_unquoted_pins_the_c_locale asserts it directly. What survives here is a
+    generous, scheduler-tolerant ceiling (~15x the unloaded measurement) as a backstop for a
+    *different*, unforeseen slowdown in this path.
     """
     command = f"git commit -m 'landed {REAL_SHA} : " + ("landing notes. " * 500) + "'"
     assert 7_000 < len(command) < 16_384, (
         "fixture must stay comfortably under the scan cap while still exercising a "
         "multi-KB real command"
     )
+
     start = time.monotonic()
     decision = _script_decision(command)
     elapsed = time.monotonic() - start
     assert decision is None, (
         "a REAL sha in a command under the scan cap must still be allowed"
     )
-    assert elapsed < 0.5, (
+    assert elapsed < 2.0, (
         f"guard took {elapsed:.3f}s on an under-cap git command carrying a real SHA -- "
-        "`local LC_ALL=C` in _split_unquoted regressed (lode-dia6 review)"
+        "well past even generous scheduler noise; something beyond the LC_ALL=C "
+        "regression (checked directly by test_split_unquoted_pins_the_c_locale) is "
+        "slow here"
+    )
+
+
+def test_split_unquoted_pins_the_c_locale() -> None:
+    """`local LC_ALL=C` must stay inside `_split_unquoted`'s own body (lode-dia6 review):
+    without it `${s:i:1}` is O(i) under a UTF-8 locale, making the per-character loop
+    quadratic and the guard seconds-slow on a multi-KB command. This is the direct,
+    load-independent detector for that regression (lode-vaxe); the timing test above is
+    only a coarse backstop for a *different* slowdown."""
+    lines = (REPO_ROOT / "scripts" / "shell-quote-split.sh").read_text().splitlines()
+    start = lines.index("_split_unquoted() {")
+    body = lines[start + 1 : lines.index("}", start)]
+    # Line-exact, not a substring: a commented-out `# local LC_ALL=C`, or the string
+    # appearing inside some other statement, must NOT satisfy this check.
+    assert "local LC_ALL=C" in [line.strip() for line in body], (
+        "`local LC_ALL=C` is missing from _split_unquoted -- restore it rather than "
+        "widening any timing ceiling"
     )
 
 

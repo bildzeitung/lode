@@ -21,7 +21,10 @@ Accordingly this module deliberately never reads a version/snapshot body; whethe
 a ``quoted_span`` actually occurs in its cited target is the span check's job.
 """
 
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 
 class Support(BaseModel):
@@ -51,6 +54,28 @@ class Support(BaseModel):
         min_length=1,
         description="Verbatim text copied from the cited target.",
     )
+    body_offset: Annotated[int | None, SkipJsonSchema()] = Field(
+        default=None,
+        ge=0,
+        description="App-side only: stamped after the faithfulness gate.",
+    )
+    """Char offset of this span's occurrence in the cited body, when known (lode-hruz).
+
+    App-side only: never supplied by the model (the LLM has no notion of body
+    offsets), stamped after the gate by ``cited_answer._stamp_body_offsets``
+    against the retrieved passage the span actually came from, which overwrites
+    whatever the model put here. It disambiguates *which* occurrence a repeated
+    ``quoted_span`` renders context from; ``None`` when no retrieved passage
+    matched, in which case renderers fall back to the first occurrence.
+
+    It rides on this model rather than a parallel app-side type because
+    ``Support`` is what every consumer already threads through. ``Support``
+    doubles as the structured-output response shape (``qa._ClaimsEnvelope``),
+    so ``SkipJsonSchema`` drops this app-side field from the JSON schema handed
+    to the provider while leaving it a normal field everywhere else -- the
+    invariant rests on the type, not on prose (lode-9nmk). The ``description``
+    is for readers of this class; the model never sees the field.
+    """
 
     @model_validator(mode="after")
     def _exactly_one_target(self) -> Support:

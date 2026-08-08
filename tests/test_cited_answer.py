@@ -12,6 +12,7 @@ faithfulness gate and egress precondition run with no network and no credentials
   the gate verifies only against the egress-cleared targets' stored bodies.
 """
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -163,6 +164,108 @@ def test_surviving_claim_renders_with_its_citation(conn) -> None:
     assert claim.text == "lode is event-sourced."
     assert claim.support[0].version_id == "v1"
     assert claim.support[0].quoted_span == "lode is event-sourced"
+
+
+def test_surviving_claim_stamps_body_offset_from_its_own_retrieved_passage(
+    conn,
+) -> None:
+    """``OAuth`` occurs twice in the body, but the only retrieved passage for this
+    target covers the SECOND occurrence's section -- so the stamped
+    ``Support.body_offset`` (lode-hruz) must point there, not the leftmost."""
+    second_block = "gamma OAuth delta"
+    body = "alpha OAuth beta" + ("x" * 40) + second_block
+    second_offset = body.index("OAuth", body.index("OAuth") + 1)
+    second_start = body.index(second_block)
+    _insert_note(conn, note_id="n1", version_id="v1", body=body)
+    client = _FakeClient([_note_claim("uses OAuth", "OAuth", "v1")])
+    context = [
+        ContextItem(
+            tier=TrustTier.OWNED_NOTE,
+            passage_id="p-v1-1",
+            target_version="v1",
+            char_range=f"{second_start}:{len(body)}",
+            passage_text=second_block,
+            parent_block=body,
+            score=0.9,
+        ),
+    ]
+
+    answer = ask(conn, "q", context, provider=AnthropicProvider(client))
+
+    assert not answer.abstained
+    (claim,) = answer.claims
+    assert claim.support[0].body_offset == second_offset
+    assert second_offset != body.index("OAuth")  # sanity: not merely the leftmost
+
+
+def test_surviving_claim_leaves_body_offset_unset_when_no_passage_contains_it(
+    conn,
+) -> None:
+    """A citation whose span isn't inside any single retrieved passage's own
+    range (only the larger ``parent_block``) gets no offset -- the renderer
+    falls back to its first-occurrence behavior, same as before lode-hruz."""
+    body = "lode is event-sourced and append-only."
+    _insert_note(conn, note_id="n1", version_id="v1", body=body)
+    client = _FakeClient(
+        [_note_claim("lode is event-sourced.", "lode is event-sourced", "v1")]
+    )
+
+    answer = ask(
+        conn,
+        "How is lode stored?",
+        [_note_context("v1", body)],  # char_range="0:5" -- too narrow to contain it
+        provider=AnthropicProvider(client),
+    )
+
+    assert not answer.abstained
+    (claim,) = answer.claims
+    assert claim.support[0].body_offset is None
+
+
+def test_body_offset_disambiguates_a_whitespace_reflowed_occurrence(conn) -> None:
+    """The gate accepts a whitespace-reflowed quote, so the stamping must too:
+    the model quotes the span flat, but the passage it was actually retrieved
+    from carries it reflowed -- an exact-substring containment test would blind
+    the offset to exactly the class of citation lode-35nu.3 cared about."""
+    second_block = " gamma rotates\nhourly delta"
+    body = "alpha rotates hourly beta" + ("x" * 40) + second_block
+    second_start = len(body) - len(second_block)
+    _insert_note(conn, note_id="n1", version_id="v1", body=body)
+    client = _FakeClient([_note_claim("rotates hourly.", "rotates hourly", "v1")])
+    context = [
+        ContextItem(
+            tier=TrustTier.OWNED_NOTE,
+            passage_id="p-v1-1",
+            target_version="v1",
+            char_range=f"{second_start}:{len(body)}",
+            passage_text=second_block,
+            parent_block=body,
+            score=0.9,
+        ),
+    ]
+
+    answer = ask(conn, "q", context, provider=AnthropicProvider(client))
+
+    (claim,) = answer.claims
+    assert claim.support[0].body_offset == body.index("rotates\nhourly")
+
+
+def test_unparseable_char_range_is_skipped_rather_than_raising(conn) -> None:
+    """``passages.char_range`` is nullable (``schema.sql``), and the stamping runs
+    *after* the gate -- a range that doesn't parse must cost the offset, never
+    the whole answer."""
+    body = "lode is event-sourced and append-only."
+    _insert_note(conn, note_id="n1", version_id="v1", body=body)
+    client = _FakeClient(
+        [_note_claim("lode is event-sourced.", "lode is event-sourced", "v1")]
+    )
+    item = replace(_note_context("v1", body), char_range="")
+
+    answer = ask(conn, "q", [item], provider=AnthropicProvider(client))
+
+    assert not answer.abstained
+    (claim,) = answer.claims
+    assert claim.support[0].body_offset is None
 
 
 def test_fabricated_claim_is_dropped_and_abstains(conn) -> None:

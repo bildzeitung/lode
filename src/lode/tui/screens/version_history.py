@@ -68,6 +68,11 @@ class VersionHistoryScreen(Screen[None]):
     def on_mount(self) -> None:
         table = self.query_one(f"#{HISTORY_TABLE_ID}", LodeDataTable)
         table.add_columns("Date", "Version", "Op")
+        # A note always has at least one version (its creation), so this is
+        # not expected to ever actually render empty -- set for consistency
+        # with the other bare-blank tables (lode-ligf) rather than a case
+        # this screen can genuinely reach.
+        table.empty_message = "No version history for this note."
         for row in list_versions(self.app.db_path, self.note_id):
             table.add_row(
                 format_adaptive_date(row.created),
