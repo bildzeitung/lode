@@ -148,6 +148,15 @@ def ask(
     inject to keep the gate offline.
     """
     passages: list[QaPassage] = []
+    # Multiple ContextItems can share a parent_block (several passages chunked
+    # from the same block, or -- guaranteed by lode-35nu.11.3's unbounded pin,
+    # see docs/retrieval.md "Pinned-note context is deliberately unbounded" --
+    # a long pinned note). Sending that block's text to the model once per
+    # sharing item is pure duplicate egress cost with no completeness benefit:
+    # the citation offset comes from the item's own char_range, not from the
+    # QaPassage text, so a (target_id, text) duplicate is safe to drop before
+    # it ever reaches the send (lode-ol2v).
+    seen_passages: set[tuple[str, str]] = set()
     # Verify spans only against bodies the model was eligible to see: a no_egress
     # body (withheld from the send) and an unresolved target are kept out of the
     # map, so a claim citing content the model never received fails closed, just
@@ -156,14 +165,17 @@ def ask(
     for item in context:
         is_external = item.tier in _EXTERNAL_TIERS
         body, no_egress = _resolve_target(conn, item.target_version, is_external)
-        passages.append(
-            QaPassage(
-                target_id=item.target_version,
-                text=item.parent_block,
-                no_egress=no_egress,
-                is_external=is_external,
+        key = (item.target_version, item.parent_block)
+        if key not in seen_passages:
+            seen_passages.add(key)
+            passages.append(
+                QaPassage(
+                    target_id=item.target_version,
+                    text=item.parent_block,
+                    no_egress=no_egress,
+                    is_external=is_external,
+                )
             )
-        )
         if body is not None and not no_egress:
             bodies[item.target_version] = body
 
