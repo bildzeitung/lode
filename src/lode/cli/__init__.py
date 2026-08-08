@@ -39,16 +39,14 @@ free before the split. This is a deliberate, narrow exception; every other
 cross-command helper (``_open_db``, ``SafeTable``, ...) is imported
 normally, since nothing patches those by name.
 
-``console`` belongs on the patched list above, not with the plain imports --
-``tests/test_cli.py``'s ``test_status_dead_line_is_uniformly_danger_not_repr_highlighted``
-does ``monkeypatch.setattr(cli, "console", ...)``, a full name-rebind, to make
-a synthetic ``force_terminal`` console observable under the suite. But it is
-patched at exactly ONE call site: ``lode.cli.status`` (the module that test
-exercises), which must therefore keep reaching it as ``cli.console`` for that
-patch to have any effect. Every OTHER module (``verify``, ``config``,
-``notes``, ...) imports ``console`` normally -- nothing rebinds the name for
-them, so ``from lode.cli import console`` and a bare ``console.print(...)``
-is correct there.
+``console`` is a seventh name-rebound case, but a narrower one, which is why
+it is not listed among the six above: only ``lode.cli.status`` is exercised
+under a ``monkeypatch.setattr(cli, "console", ...)``
+(``tests/test_cli.py``'s
+``test_status_dead_line_is_uniformly_danger_not_repr_highlighted``, which
+swaps in a ``force_terminal`` Console to make colour observable under the
+suite). So ``status`` alone must call it as ``cli.console``; every other
+module imports it plainly and calls a bare ``console.print(...)``.
 
 **``time`` and ``uuid`` are patched DIFFERENTLY from each other, and the
 difference decides the call-site form -- do not unify them.**
