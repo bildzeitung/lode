@@ -838,14 +838,14 @@ was added — these are the same two knobs `structured_call` already took, and a
   budget-exhausted diagnostic — turning a cost overshoot into a wrong answer on the user-visible Q&A
   path. Instead, total spend for a run is bounded by the turn count
   ([`_DEFAULT_MAX_TOOL_TURNS`](configuration.md#models) = 8) rather than by decrementing `max_tokens`:
-  the worst case is `max_tool_turns × max_tokens` output tokens per run — a bound, which is the
-  property that matters, and 8 turns of narration is already pathological.
+  the worst case is `(max_tool_turns + 1) × max_tokens` output tokens per run — the `+ 1` is the
+  final forced-schema turn, spent *after* the free-turn loop and not covered by the constant, so the
+  ceiling at today's default is 9 × `max_tokens`. A bound is the property that matters here.
 - **A separate per-run ceiling remains available, deferred not rejected.** A dedicated
   `max_output_tokens_per_run` knob is the principled fix if real cost pressure ever shows up, and
-  choosing (c) above does not preclude adding it later — it would be additive. Building it now would
-  be machinery for a pressure nobody has measured, so it is filed as a follow-up (`lode-csl2`) rather
-  than built here. Today no call site passes tools, so every `run_tool_turns` run is exactly one turn
-  and the per-turn/per-run readings coincide exactly regardless of which knob eventually lands.
+  bounding by turn count does not preclude adding it later — it would be additive. Building it now
+  would be machinery for a pressure nobody has measured, so it is filed as a follow-up (`lode-csl2`)
+  rather than built here.
 
 **Degenerate case, byte-for-byte (the acceptance bar every existing call site must clear)**: when
 `tools` is empty, **every** `LLMProvider` implementation is required to delegate straight to

@@ -4062,12 +4062,9 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   Three options were weighed: (a) decrement `max_tokens` against each turn's `usage.output_tokens`;
   (b) add a separate `max_output_tokens_per_run` knob; (c) accept per-turn `max_tokens` and bound
   total spend via `max_tool_turns`. **Chosen: (c), now.** `max_tokens` is Anthropic's hard cap on a
-  single response, not a spend meter, and (a) was rejected because decrementing it shrinks the
-  budget left for the run's final forced-schema turn — a run that narrated through several tool
-  calls would truncate its `_ClaimsEnvelope` and fail with the budget-exhausted diagnostic, turning
-  a bounded cost overshoot into a wrong answer on the user-visible Q&A path. (b) is deferred, not
-  rejected, as a follow-up (`lode-csl2`) — the principled ceiling if real cost pressure is ever
-  measured, and additive on top of (c) if it lands later. Worst case under (c) is
-  `max_tool_turns × max_tokens` output tokens per run (8× today's default) — a bound, which is the
-  property that matters. Full write-up: [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116),
+  single response, not a spend meter; (a) was rejected because decrementing it can truncate the
+  run's final forced-schema turn, converting a bounded cost overshoot into a wrong answer on the
+  user-visible Q&A path. (b) is deferred, not rejected, as a follow-up (`lode-csl2`) — additive on
+  top of (c) if it ever lands. The failure-mode chain behind rejecting (a), and the worst-case
+  arithmetic, are in the stack.md write-up and deliberately not restated here. Full write-up: [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116),
   [configuration.md](configuration.md#models) (`_DEFAULT_MAX_TOOL_TURNS`).

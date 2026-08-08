@@ -391,11 +391,14 @@ class LLMProvider(Protocol):
         (``docs/configuration.md``): the deadline is set once and each turn is
         sent only the remaining wall clock. ``max_tokens`` is **not** spread
         across turns -- it stays a per-response output cap, applied to each
-        turn, so an N-turn run may emit up to N times it. That asymmetry is a
-        DECIDED design choice (maintainer, lode-3dh1), not an open gap: total
-        output spend for a run is bounded instead by the turn count
-        (``max_tool_turns``). See the module docstring and ``docs/stack.md``
-        for the full rationale.
+        turn, so a run may emit up to ``(max_tool_turns + 1) x max_tokens``
+        output tokens -- the ``+ 1`` being the final forced-schema turn, which
+        is spent after the free-turn loop and is not covered by
+        ``max_tool_turns``. That asymmetry is a DECIDED design choice
+        (maintainer, lode-3dh1), not an open gap: total output spend for a run
+        is bounded by the turn count rather than by decrementing
+        ``max_tokens``. See the module docstring and ``docs/stack.md`` for the
+        full rationale.
 
         **Degenerate case, byte-for-byte (acceptance bar):** when ``tools``
         is empty, a provider MUST delegate straight to :meth:`structured_call`
