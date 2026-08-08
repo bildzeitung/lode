@@ -150,7 +150,9 @@ def test_silent_deletion_of_an_entire_entry_is_denied(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path, BASE_TEXT)
     base = _git(repo, "rev-parse", "HEAD").stdout.strip()
 
-    deleted = "# Decisions\n\n- **Entry one.** Some settled fact, decided a while ago.\n"
+    deleted = (
+        "# Decisions\n\n- **Entry one.** Some settled fact, decided a while ago.\n"
+    )
     _write_and_commit(repo, deleted, "delete entry two")
 
     result = _run(repo, base)
