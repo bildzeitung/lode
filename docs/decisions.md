@@ -4112,3 +4112,18 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
      this inverts who gets guarded.
   3. It reintroduces a `jq` dependency against RULING 3, on a hook measured at ~10ms in the hot path
      of every `Edit`/`Write`.
+
+- **2026-08-08 — VERIFIED (`lode-6nwu`): `GET /rest/api/3/search` was removed by Atlassian on
+  2025-05-01 and now returns HTTP 410 Gone; the replacement is `GET`/`POST /rest/api/3/search/jql`.**
+  Flagged during `lode-35nu.11.2`'s technical review as an unverified risk (no live JIRA instance was
+  reachable from that review worktree). Confirmed against Atlassian's own Confluence KB article
+  ("Run JQL search query using Jira Cloud REST API") and the Atlassian developer changelog
+  (`CHANGE-2046`), corroborated by multiple community/GitHub reports of production clients hitting the
+  410. Request shape is essentially unchanged (`jql`, `maxResults`, `fields`); the response shape
+  changes in one load-bearing way — pagination moves from `startAt`/`total` to a `nextPageToken`, so a
+  caller must stop on the token's absence rather than on a total count. **No code in this repo is
+  affected today**: `jira_search` does not currently exist on `trunk` — the branch that introduced it
+  (`lode-35nu.11.2`) was bounced by `/land`'s semantic review and deleted; its rebuild is tracked
+  separately as `lode-8hsk` (open). This finding is cross-posted onto `lode-8hsk` so that rebuild
+  targets `/rest/api/3/search/jql` with `nextPageToken`-based pagination from the start, rather than
+  reintroducing a dead-on-arrival endpoint. Full finding: `bd show lode-6nwu --design`.
