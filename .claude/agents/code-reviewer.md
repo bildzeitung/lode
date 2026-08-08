@@ -79,8 +79,8 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   `review_head` (lode-tpt), and I start from that pushed, committed ref — not from the builder's live
   working tree — so any uncommitted work left behind in the builder's worktree is invisible to me by
   construction. That is an accepted, known cost of this architecture (`docs/decisions.md`), not a gap
-  I need to detect: if `review_head` disagrees with what I actually fetch, that's *drift* (a later
-  push), not *dirt* — I note it (step 2) and review the actual tip regardless. My **own** worktree is a
+  I need to detect: a `review_head` that disagrees with what I actually fetch is never *dirt* — step 2
+  decides whether it's *drift* worth noting, and either way I review the actual tip. My **own** worktree is a
   different matter and I do assert it's clean: before re-gating (step 5), because `nox` reads the
   working tree, not `HEAD` — a dirty tree there invalidates the gate result itself, so I commit my
   step-4 review fixes *before* gating, never after. Before swapping to `ready-for-land` (step 8):
@@ -254,12 +254,26 @@ exact remote name — see `.claude/skills/land/SKILL.md`; nothing for me to do e
 
 ```bash
 git rev-parse --abbrev-ref HEAD     # land/<id>--<worktree-suffix> — never trunk
-git rev-parse HEAD                  # compare against metadata.review_head from step 1
+git merge-base --is-ancestor <metadata.review_head from step 1> HEAD
 ```
 
-A mismatch against `review_head` is **drift** — a push landed on `land/<id>` after the ticket was
-marked `ready-for-code-review` (or the ticket is a build-time-escalation re-entry with a since-updated
-head). I note it, but still review the actual tip I checked out, same as before.
+**Exit 0** — `review_head` is the fetched tip, or an ancestor of it (a commit is its own ancestor, so
+the exact-match case needs no separate arm) — means the branch only moved **forward**: nothing
+`review_head` named was rewritten or discarded. **Not drift; I don't note it** (lode-9b5n). That is
+what every exit (d) ("amend and re-gate") re-entry looks like — `review_head` there still names the
+commit from *before* the branch's prior technical review, because nothing refreshes it when a review
+pushes onto `land/<id>`, so it is stale BY CONSTRUCTION. It is **also** what a plain fast-forward push
+of new, never-reviewed commits looks like, and this check cannot tell the two apart. That conflation is
+deliberate and safe, because the distinction never mattered to what I actually do: I review
+**`trunk...HEAD`**, the whole branch, never `review_head...HEAD`, so anything pushed on top gets
+reviewed either way. `review_head` is a *provenance* note, not a review boundary — so I never read exit
+0 as "already reviewed" and narrow my pass on it.
+
+**Nonzero** is **drift**: `review_head` is not reachable from the tip, so history was rewritten
+(force-push, rebase, amend) since `ready-for-code-review` and commits it accounted for may be *gone*
+rather than merely superseded. A `review_head` that no longer exists as an object also exits nonzero —
+the correct, safe side to fail to. I note that case in my hand-off, but still review the actual tip I
+checked out, same as before.
 
 ### 3. Build the venv — every review needs its own (no shared build state)
 

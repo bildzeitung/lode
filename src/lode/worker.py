@@ -145,6 +145,7 @@ from lode.config import Settings
 from lode.config import lance_dir as _lance_dir
 from lode.ids import short_version_id
 from lode.progress import op_progress
+from lode.sql_ids import placeholders
 
 if TYPE_CHECKING:
     from lode.embedding import Embedder
@@ -418,7 +419,6 @@ def _claim_one(
     """
     if not types:
         return None
-    placeholders = ", ".join("?" for _ in types)
     params: list[object] = [now, *types]
     version_clause = ""
     if target_version is not None:
@@ -427,7 +427,7 @@ def _claim_one(
     row = conn.execute(
         f"SELECT id FROM jobs "
         f"WHERE status = 'pending' AND next_attempt_at <= ? "
-        f"AND type IN ({placeholders}) "
+        f"AND type IN ({placeholders(len(types))}) "
         f"{version_clause}"
         # Tie-break by ``id``, not ``created``: ``jobs.id`` is INTEGER PRIMARY
         # KEY (a rowid alias), so it *is* insertion order and cannot go backward
@@ -989,9 +989,8 @@ def _batch_submit_enrich(
         submitted = sum(
             1
             for row in conn.execute(
-                "SELECT id FROM jobs WHERE id IN ({}) AND batch_handle IS NOT NULL".format(
-                    ",".join("?" * len(job_ids))
-                ),
+                f"SELECT id FROM jobs WHERE id IN ({placeholders(len(job_ids))}) "
+                "AND batch_handle IS NOT NULL",
                 job_ids,
             ).fetchall()
         )
@@ -1350,17 +1349,16 @@ def _embed_handler(
     again would just re-write identical FTS rows (idempotent), but dropping it
     is cleaner and keeps this handler model-bearing-only.
 
-    **Post-embed re-enrich gate for a snapshot target (lode-w0h.5):** after
-    the vector leg above, :func:`lode.externals.gate_reenrich` is called
-    unconditionally on the same ``target_version``. It is a no-op (returns
-    ``None``) for a note ``version_id`` — this handler runs for both note
-    versions and external snapshots polymorphically (:func:`lode.embedding.
-    embed`'s ``_version_body`` already resolves either), and the gate itself
-    checks whether ``target_version`` is a live snapshot before doing
-    anything. For a snapshot, it decides — now that this snapshot's own
-    vectors exist — whether the change is material enough to enqueue an
-    ``enrich`` job, or should instead carry the predecessor's enrichment
-    forward. See that function's docstring for the full decision.
+    **Post-embed re-enrich gate for a snapshot target (lode-w0h.5):** after the vector
+    leg above, :func:`lode.externals.gate_reenrich` is called unconditionally on the
+    same ``target_version``. It is a no-op (returns ``None``) for a note ``version_id``
+    — this handler runs for both note versions and external snapshots polymorphically
+    (:func:`lode.embedding.embed`'s ``_version_body`` already resolves either), and the
+    gate itself checks whether ``target_version`` is a live snapshot before doing
+    anything. For a snapshot, it decides — now that this snapshot's own vectors exist —
+    whether the change is material enough to enqueue an ``enrich`` job, or should
+    instead carry the predecessor's enrichment forward. See that function's docstring
+    for the full decision.
 
     Returns a one-line human-readable outcome (lode-1gr.4), e.g. ``"embedded
     <short-id>: 3 passages"``, optionally suffixed with the gate's own outcome
@@ -1462,21 +1460,20 @@ def _refresh_handler(
 ) -> str | None:
     """Refresh handler: fetch + ingest a web draw-down source (lode-w0h.3).
 
-    Dispatches to :func:`lode.drawdown.refresh_external`, passing no
-    ``fetcher`` override — production always resolves to the real
-    :class:`~lode.webfetch.HttpxFetcher` (:func:`lode.webfetch.
-    fetch_and_extract`'s own default when none is given). ``target_version``
-    is the job's canonical ``external_id`` (a directly-fetchable URL, not a
-    note version — the ``jobs.target_version`` column is a polymorphic
-    string, not FK'd to ``versions``). Deferred import mirrors
-    :func:`_embed_handler`/:func:`_enrich_handler`: the ``httpx``/
-    ``trafilatura`` cost stays off code paths that never draw down a URL.
+    Dispatches to :func:`lode.drawdown.refresh_external`, passing no ``fetcher``
+    override — production always resolves to the real
+    :class:`~lode.webfetch.HttpxFetcher` (:func:`lode.webfetch.fetch_and_extract`'s own
+    default when none is given). ``target_version`` is the job's canonical
+    ``external_id`` (a directly-fetchable URL, not a note version — the
+    ``jobs.target_version`` column is a polymorphic string, not FK'd to ``versions``).
+    Deferred import mirrors :func:`_embed_handler`/:func:`_enrich_handler`: the
+    ``httpx``/ ``trafilatura`` cost stays off code paths that never draw down a URL.
 
-    The ``db_path`` parameter is accepted but unused, like the enrich
-    handler's: draw-down writes only to the SQLite DB (``externals`` /
-    ``snapshots``), never to the LanceDB vector store directly (the
-    resulting ``embed`` job — enqueued by :func:`lode.externals.
-    ingest_snapshot` for an ``ok`` snapshot — is what reaches LanceDB).
+    The ``db_path`` parameter is accepted but unused, like the enrich handler's:
+    draw-down writes only to the SQLite DB (``externals`` / ``snapshots``), never to the
+    LanceDB vector store directly (the resulting ``embed`` job — enqueued by
+    :func:`lode.externals.ingest_snapshot` for an ``ok`` snapshot — is what reaches
+    LanceDB).
     """
     from lode.drawdown import refresh_external
 

@@ -45,6 +45,7 @@ from lode.retrieval import (
     trust_rank,
     vector_search,
 )
+from lode.sql_ids import fetch_by_ids
 from lode.storage import init_db
 from lode.timestamps import parse_stamp
 from lode.vectorstore import VectorStore
@@ -179,12 +180,12 @@ def _to_related_notes(
         return []
 
     target_versions = list({item.target_version for item in note_items})
-    placeholders = ", ".join("?" for _ in target_versions)
-    rows = conn.execute(
-        f"SELECT version_id, note_id, created FROM versions "
-        f"WHERE version_id IN ({placeholders})",
+    rows = fetch_by_ids(
+        conn,
         target_versions,
-    ).fetchall()
+        "SELECT version_id, note_id, created FROM versions "
+        "WHERE version_id IN ({placeholders})",
+    )
     by_version: dict[str, tuple[str, str]] = {row[0]: (row[1], row[2]) for row in rows}
 
     now = datetime.now(UTC)

@@ -342,15 +342,13 @@ class AskScreen(Screen[None]):
     def action_open_citation(self) -> None:
         """Ctrl+J: open the focused citation's exact cited version/snapshot.
 
-        Pushes :class:`~lode.tui.screens.version_view.VersionViewScreen` keyed
-        to the cited ``version_id`` (not the note's current head) for a note
-        citation, or :class:`~lode.tui.screens.snapshot_viewer.
-        SnapshotViewerScreen` keyed to the cited ``snapshot_id`` for an
-        external. Escape from either pops straight back to this screen,
-        which was never destroyed -- the answer is exactly as it was, not
-        re-queried. A no-op (with a notification) when there is nothing
-        navigable, e.g. no question has been asked yet or the answer
-        abstained.
+        Pushes :class:`~lode.tui.screens.version_view.VersionViewScreen` keyed to the
+        cited ``version_id`` (not the note's current head) for a note citation, or
+        :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` keyed to the
+        cited ``snapshot_id`` for an external. Escape from either pops straight back to
+        this screen, which was never destroyed -- the answer is exactly as it was, not
+        re-queried. A no-op (with a notification) when there is nothing navigable, e.g.
+        no question has been asked yet or the answer abstained.
         """
         targets = self._targets()
         if not targets or self._result is None:

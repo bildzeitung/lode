@@ -61,6 +61,7 @@ import networkx as nx
 
 from lode.config import Settings, model_cache_dir
 from lode.lexical import LexicalHit, LexicalIndex
+from lode.sql_ids import fetch_by_ids
 from lode.vectorstore import VectorHit, VectorStore
 
 if TYPE_CHECKING:
@@ -88,6 +89,12 @@ _QUERY_TOKEN = re.compile(r"\w+")
 #: Retrieval-local by design, and deliberately not shared further: ``reconcile``
 #: additionally guards on ``purged_at``, and ``notes_read`` / ``repository`` /
 #: ``tui.edit`` scope their own queries with their own copies.
+#:
+#: Both this and :data:`_LIVE_SNAPSHOT_PREDICATE` are spliced into SQL strings
+#: that :func:`lode.sql_ids.fetch_by_ids` then runs through :meth:`str.format`
+#: (in :func:`graph_expand`), so **neither may contain a ``{`` or ``}``** — a
+#: brace here would raise from ``format`` at runtime, not at lint. Both are
+#: brace-free today and there is no reason a live-row predicate would need one.
 _LIVE_HEAD_PREDICATE = "v.op != 'delete'"
 
 #: The external-side analogue of :data:`_LIVE_HEAD_PREDICATE`: a snapshot is
@@ -361,11 +368,11 @@ def _passage_texts(conn: sqlite3.Connection, passage_ids: list[str]) -> dict[str
     """
     if not passage_ids:
         return {}
-    placeholders = ", ".join("?" for _ in passage_ids)
-    rows = conn.execute(
-        f"SELECT passage_id, text FROM passages WHERE passage_id IN ({placeholders})",
+    rows = fetch_by_ids(
+        conn,
         passage_ids,
-    ).fetchall()
+        "SELECT passage_id, text FROM passages WHERE passage_id IN ({placeholders})",
+    )
     return {row[0]: row[1] for row in rows}
 
 
@@ -420,12 +427,12 @@ def expand_parents(conn: sqlite3.Connection, hits: list[FusedHit]) -> list[Expan
     """
     if not hits:
         return []
-    placeholders = ", ".join("?" for _ in hits)
-    rows = conn.execute(
-        f"SELECT passage_id, char_range, text, parent_block FROM passages "
-        f"WHERE passage_id IN ({placeholders})",
+    rows = fetch_by_ids(
+        conn,
         [hit.passage_id for hit in hits],
-    ).fetchall()
+        "SELECT passage_id, char_range, text, parent_block FROM passages "
+        "WHERE passage_id IN ({placeholders})",
+    )
     by_id = {row[0]: row for row in rows}
     expanded: list[ExpandedHit] = []
     for hit in hits:
@@ -522,12 +529,12 @@ def graph_expand(
     if not seed_versions:
         return hits
 
-    placeholders = ", ".join("?" for _ in seed_versions)
     seed_note_ids: set[str] = {
         row[0]
-        for row in conn.execute(
-            f"SELECT note_id FROM versions WHERE version_id IN ({placeholders})",
+        for row in fetch_by_ids(
+            conn,
             seed_versions,
+            "SELECT note_id FROM versions WHERE version_id IN ({placeholders})",
         )
     }
     if not seed_note_ids:
@@ -568,27 +575,28 @@ def graph_expand(
     # the DB. A reached id matching neither (a true concept label) has no content
     # to expand to and is silently dropped.
     reached_ids = list(reached)
-    placeholders = ", ".join("?" for _ in reached_ids)
     reached_notes: dict[str, str] = {
         row[0]: row[1]  # note_id -> head_version_id
-        for row in conn.execute(
+        for row in fetch_by_ids(
+            conn,
+            reached_ids,
             "SELECT n.note_id, n.head_version_id "
             "FROM notes n "
             "JOIN versions v ON v.version_id = n.head_version_id "
-            f"WHERE n.note_id IN ({placeholders}) "
+            "WHERE n.note_id IN ({placeholders}) "
             f"AND {_LIVE_HEAD_PREDICATE}",
-            reached_ids,
         )
     }
     reached_externals: dict[str, str] = {
         row[0]: row[1]  # external_id -> head_snapshot_id
-        for row in conn.execute(
+        for row in fetch_by_ids(
+            conn,
+            reached_ids,
             "SELECT e.external_id, e.head_snapshot_id "
             "FROM externals e "
             "JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id "
-            f"WHERE e.external_id IN ({placeholders}) "
+            "WHERE e.external_id IN ({placeholders}) "
             f"AND {_LIVE_SNAPSHOT_PREDICATE}",
-            reached_ids,
         )
     }
     if not reached_notes and not reached_externals:
@@ -597,12 +605,12 @@ def graph_expand(
     # Fetch passages for the head versions of reached notes and the head
     # snapshots of reached externals in one query.
     target_ids = list(reached_notes.values()) + list(reached_externals.values())
-    placeholders = ", ".join("?" for _ in target_ids)
-    passage_rows = conn.execute(
-        f"SELECT passage_id, target_version, char_range, text, parent_block "
-        f"FROM passages WHERE target_version IN ({placeholders})",
+    passage_rows = fetch_by_ids(
+        conn,
         target_ids,
-    ).fetchall()
+        "SELECT passage_id, target_version, char_range, text, parent_block "
+        "FROM passages WHERE target_version IN ({placeholders})",
+    )
     if not passage_rows:
         return hits
 
@@ -770,23 +778,24 @@ def trust_rank(conn: sqlite3.Connection, hits: list[ExpandedHit]) -> TrustRanked
     all_targets = {h.target_version for h in hits}
 
     target_list = list(all_targets)
-    placeholders = ", ".join("?" for _ in target_list)
 
     owned: set[str] = {
         row[0]
-        for row in conn.execute(
-            f"SELECT version_id FROM versions WHERE version_id IN ({placeholders})",
+        for row in fetch_by_ids(
+            conn,
             target_list,
+            "SELECT version_id FROM versions WHERE version_id IN ({placeholders})",
         )
     }
     # snapshot_id -> is it its external's current head? (current vs stale)
     snapshots: dict[str, bool] = {
         row[0]: row[0] == row[1]
-        for row in conn.execute(
-            f"SELECT s.snapshot_id, e.head_snapshot_id "
-            f"FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
-            f"WHERE s.snapshot_id IN ({placeholders})",
+        for row in fetch_by_ids(
+            conn,
             target_list,
+            "SELECT s.snapshot_id, e.head_snapshot_id "
+            "FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
+            "WHERE s.snapshot_id IN ({placeholders})",
         )
     }
 
@@ -921,6 +930,15 @@ def _in_clause(column: str, values: Collection[str]) -> str:
     hex version ids (``lode.hashing``), so inlining them needs no escaping — the
     same trusted-value assumption the landed vector store documents for its
     ``where`` predicate.
+
+    **Deliberately not :func:`lode.sql_ids.placeholders` / :func:`lode.sql_ids.fetch_by_ids`**,
+    the shared SQLite ``IN(...)`` primitives this module imports and uses
+    everywhere else (lode-oca9). Those bind every value as a ``?`` parameter;
+    LanceDB's ``where`` predicate is a filter *string* with no parameter
+    binding available at all, so this helper must inline its values as
+    literals. The two idioms coexist on purpose — inlining is safe *here* only
+    because of the hex-value assumption above, and is unsafe anywhere it does
+    not hold.
     """
     quoted = ", ".join(f"'{value}'" for value in values)
     return f"{column} IN ({quoted})"
