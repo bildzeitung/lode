@@ -34,6 +34,7 @@ from lode.llm_provider import (
     LLMProviderError,
     ModelTier,
     OpenAIProvider,
+    ToolSpec,
     build_provider,
     provider_identity,
 )
@@ -516,6 +517,327 @@ def test_effort_levels_match_the_installed_sdk_literal() -> None:
     # `effort: Optional[Literal[...]]` -- unwrap the Optional, then the Literal.
     literal, _none = typing.get_args(effort_hint)
     assert typing.get_args(literal) == _ANTHROPIC_EFFORT_LEVELS
+
+
+# ---------------------------------------------------------------------------
+# run_tool_turns (lode-35nu.11.6)
+# ---------------------------------------------------------------------------
+
+
+def _tool_use_response(name: str, tool_input: dict, block_id: str = "toolu_1") -> object:
+    block = mock.MagicMock()
+    block.type = "tool_use"
+    block.name = name
+    block.input = tool_input
+    block.id = block_id
+    response = mock.MagicMock()
+    response.content = [block]
+    response.stop_reason = "tool_use"
+    return response
+
+
+def _final_forced_response(payload: dict) -> object:
+    block = mock.MagicMock()
+    block.type = "tool_use"
+    block.input = payload
+    response = mock.MagicMock()
+    response.content = [block]
+    return response
+
+
+def test_run_tool_turns_with_empty_tools_delegates_to_structured_call() -> None:
+    # lode-35nu.11.6 acceptance bar: the degenerate case is byte-for-byte
+    # identical to calling structured_call directly -- no messages.create loop
+    # machinery engages at all.
+    client = mock.MagicMock()
+    client.messages.parse.return_value = SimpleNamespace(
+        parsed_output=_Widget(name="w", count=1)
+    )
+    provider = AnthropicProvider(client)
+
+    result = provider.run_tool_turns(
+        model="claude-sonnet-4-6",
+        reasoning_effort=None,
+        system="sys",
+        user_prompt="prompt",
+        tools=(),
+        tool_result=lambda name, args: pytest.fail("no tool should be called"),
+        output_schema=_Widget,
+        max_tokens=50,
+        timeout_s=7.0,
+    )
+
+    assert result == _Widget(name="w", count=1)
+    client.messages.create.assert_not_called()
+    kwargs = client.messages.parse.call_args.kwargs
+    assert kwargs["output_format"] is _Widget
+    assert kwargs["timeout"] == 7.0
+
+
+def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> None:
+    # The full run this ticket's acceptance criteria names: free tool turn ->
+    # tool result returned -> final forced-schema turn producing a validated
+    # output_schema instance.
+    tool = ToolSpec(
+        name="lookup_widget", description="Look up a widget.", input_schema={}
+    )
+    free_turn = _tool_use_response("lookup_widget", {"id": "w-1"})
+    final_turn = _final_forced_response({"name": "widget", "count": 3})
+    client = mock.MagicMock()
+    client.messages.create.side_effect = [free_turn, final_turn]
+    provider = AnthropicProvider(client)
+
+    calls: list[tuple[str, dict]] = []
+
+    def _tool_result(name: str, args: dict) -> str:
+        calls.append((name, args))
+        return "widget w-1 has count 3"
+
+    result = provider.run_tool_turns(
+        model="claude-sonnet-4-6",
+        reasoning_effort=None,
+        system="sys",
+        user_prompt="find widget w-1",
+        tools=(tool,),
+        tool_result=_tool_result,
+        output_schema=_Widget,
+        max_tokens=100,
+        timeout_s=30.0,
+        tool_name="extract_widget",
+        tool_description="Extract a widget.",
+    )
+
+    assert result == _Widget(name="widget", count=3)
+    assert calls == [("lookup_widget", {"id": "w-1"})]
+    assert client.messages.create.call_count == 2
+
+    free_kwargs = client.messages.create.call_args_list[0].kwargs
+    assert free_kwargs["tool_choice"] == {"type": "auto"}
+    assert free_kwargs["tools"] == [
+        {"name": "lookup_widget", "description": "Look up a widget.", "input_schema": {}}
+    ]
+    assert free_kwargs["messages"] == [{"role": "user", "content": "find widget w-1"}]
+
+    final_kwargs = client.messages.create.call_args_list[1].kwargs
+    assert final_kwargs["tool_choice"] == {"type": "tool", "name": "extract_widget"}
+    assert final_kwargs["tools"] == [
+        {
+            "name": "extract_widget",
+            "description": "Extract a widget.",
+            "input_schema": _Widget.model_json_schema(),
+        }
+    ]
+    final_messages = final_kwargs["messages"]
+    assert final_messages[0] == {"role": "user", "content": "find widget w-1"}
+    assert final_messages[1] == {"role": "assistant", "content": free_turn.content}
+    assert final_messages[2] == {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "content": "widget w-1 has count 3",
+            }
+        ],
+    }
+
+
+def test_run_tool_turns_forces_the_final_turn_when_the_model_never_calls_a_tool() -> None:
+    # The model may decline to call any tool on the first free turn -- the run
+    # still proceeds straight to the forced final turn.
+    tool = ToolSpec(name="lookup_widget", description="Look up a widget.", input_schema={})
+    text_only = mock.MagicMock()
+    text_block = mock.MagicMock()
+    text_block.type = "text"
+    text_only.content = [text_block]
+    final_turn = _final_forced_response({"name": "w", "count": 0})
+    client = mock.MagicMock()
+    client.messages.create.side_effect = [text_only, final_turn]
+    provider = AnthropicProvider(client)
+
+    result = provider.run_tool_turns(
+        model="claude-sonnet-4-6",
+        reasoning_effort=None,
+        system="sys",
+        user_prompt="p",
+        tools=(tool,),
+        tool_result=lambda name, args: pytest.fail("no tool should be called"),
+        output_schema=_Widget,
+        max_tokens=100,
+        timeout_s=30.0,
+    )
+
+    assert result == _Widget(name="w", count=0)
+    assert client.messages.create.call_count == 2
+    # No tool_name given -- forced tool name falls back to the schema name.
+    final_kwargs = client.messages.create.call_args_list[1].kwargs
+    assert final_kwargs["tool_choice"] == {"type": "tool", "name": "_Widget"}
+
+
+def test_run_tool_turns_stops_after_max_tool_turns_and_still_forces_the_final_turn() -> None:
+    tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
+    always_calls_tool = _tool_use_response("lookup_widget", {"id": "w"})
+    final_turn = _final_forced_response({"name": "w", "count": 9})
+    client = mock.MagicMock()
+    # 2 free turns (max_tool_turns=2) always calling the tool, then the forced
+    # final turn -- 3 calls total.
+    client.messages.create.side_effect = [
+        always_calls_tool,
+        always_calls_tool,
+        final_turn,
+    ]
+    provider = AnthropicProvider(client)
+
+    result = provider.run_tool_turns(
+        model="claude-sonnet-4-6",
+        reasoning_effort=None,
+        system="sys",
+        user_prompt="p",
+        tools=(tool,),
+        tool_result=lambda name, args: "ok",
+        output_schema=_Widget,
+        max_tokens=100,
+        timeout_s=30.0,
+        max_tool_turns=2,
+    )
+
+    assert result == _Widget(name="w", count=9)
+    assert client.messages.create.call_count == 3
+
+
+def test_run_tool_turns_raises_when_the_run_timeout_is_exhausted() -> None:
+    tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
+    client = mock.MagicMock()
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError, match="budget"):
+        provider.run_tool_turns(
+            model="claude-sonnet-4-6",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: "ok",
+            output_schema=_Widget,
+            max_tokens=100,
+            timeout_s=-1.0,
+        )
+    client.messages.create.assert_not_called()
+
+
+def test_run_tool_turns_wraps_a_bad_request_from_the_free_turn() -> None:
+    tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
+    client = mock.MagicMock()
+    bad_request = _anthropic_bad_request()
+    client.messages.create.side_effect = bad_request
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.run_tool_turns(
+            model="claude-haiku-4-5",
+            reasoning_effort="low",
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: "ok",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=30.0,
+        )
+    assert excinfo.value.provider == "anthropic"
+    assert excinfo.value.status_code == 400
+
+
+def test_run_tool_turns_wraps_a_bad_request_from_the_final_forced_turn() -> None:
+    tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
+    free_turn = _tool_use_response("lookup_widget", {"id": "w"})
+    bad_request = _anthropic_bad_request()
+    client = mock.MagicMock()
+    client.messages.create.side_effect = [free_turn, bad_request]
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.run_tool_turns(
+            model="claude-haiku-4-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: "ok",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=30.0,
+        )
+    assert excinfo.value.provider == "anthropic"
+    assert excinfo.value.status_code == 400
+
+
+def test_run_tool_turns_raises_when_the_final_turn_has_no_tool_use_block() -> None:
+    tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
+    free_turn = _tool_use_response("lookup_widget", {"id": "w"})
+    thinking_block = mock.MagicMock()
+    thinking_block.type = "thinking"
+    no_tool_use = mock.MagicMock()
+    no_tool_use.content = [thinking_block]
+    no_tool_use.stop_reason = "max_tokens"
+    client = mock.MagicMock()
+    client.messages.create.side_effect = [free_turn, no_tool_use]
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError, match="no tool_use block"):
+        provider.run_tool_turns(
+            model="claude-opus-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: "ok",
+            output_schema=_Widget,
+            max_tokens=2048,
+            timeout_s=30.0,
+        )
+
+
+def test_openai_run_tool_turns_with_empty_tools_delegates_to_structured_call() -> None:
+    client = _fake_responses_client(output_text='{"name": "w", "count": 1}')
+    provider = OpenAIProvider(client)
+
+    result = provider.run_tool_turns(
+        model="gpt-5.5",
+        reasoning_effort=None,
+        system="sys",
+        user_prompt="prompt",
+        tools=(),
+        tool_result=lambda name, args: pytest.fail("no tool should be called"),
+        output_schema=_Widget,
+        max_tokens=50,
+        timeout_s=7.0,
+    )
+
+    assert result == _Widget(name="w", count=1)
+
+
+def test_openai_run_tool_turns_with_tools_raises_the_documented_degradation() -> None:
+    # lode-35nu.11.6 provider-parity decision (docs/stack.md): Anthropic-only
+    # multi-turn tool use -- OpenAI/Azure raises rather than silently ignoring
+    # the tools it was asked to offer the model.
+    tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
+    client = mock.MagicMock()
+    provider = OpenAIProvider(client)
+
+    with pytest.raises(LLMProviderError, match="not implemented"):
+        provider.run_tool_turns(
+            model="gpt-5.5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: "ok",
+            output_schema=_Widget,
+            max_tokens=50,
+            timeout_s=7.0,
+        )
+    client.responses.create.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

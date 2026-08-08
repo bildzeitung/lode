@@ -108,6 +108,39 @@ against exactly; read that first for the *why*. This module owns the *what*:
   LLMAuthError)`` by this ticket so a missing OpenAI/Azure credential gets the
   same permanent-failure (no retry, no dead-letter) treatment
   ``lode-9yy`` already gives a missing Anthropic credential.
+
+**lode-35nu.11.6 (multi-turn tool-use):**
+
+- :class:`ToolSpec` + :meth:`LLMProvider.run_tool_turns` -- the seam's second
+  call surface, alongside :meth:`structured_call`: N free tool turns (the
+  model may call any of ``tools``, resolved via a caller-supplied
+  ``tool_result`` callback) followed by exactly one final FORCED-schema turn,
+  since free tool choice and a forced ``output_schema`` are mutually
+  exclusive within one call. This ticket adds the mechanism only -- it
+  defines no tool schemas (lode-35nu.11.2's job) and :mod:`lode.qa` calls it
+  with ``tools=()`` for now, so every provider's empty-``tools`` case MUST
+  delegate straight to :meth:`structured_call` -- the acceptance bar is
+  byte-for-byte unchanged behavior on every existing single-shot call site.
+- **Provider parity, settled here: Anthropic-only.**
+  :class:`AnthropicProvider.run_tool_turns` implements the real loop
+  (``messages.create`` with ``tool_choice={"type": "auto"}``, tool results fed
+  back as ``tool_result`` content blocks, then a forced final turn).
+  :class:`OpenAIProvider.run_tool_turns` implements only the degenerate
+  empty-``tools`` delegation; a non-empty ``tools`` raises
+  :class:`LLMProviderError` rather than silently ignoring the tools and
+  answering ungrounded. Rationale: the Responses API's function-calling shape
+  differs enough from :class:`OpenAIProvider.structured_call`'s
+  ``text.format`` json_schema mechanism (a genuine second implementation, not
+  a mechanical port), and this module's own OpenAIProvider was already built
+  and tested against mocked shapes with no live Azure endpoint available
+  (module docstring, "lode-568v.3") -- adding an unverified multi-turn
+  function-calling implementation on top compounds that risk for a path
+  nothing calls yet. Revisit once lode-35nu.11.2 defines real tools and an
+  OpenAI/Azure user actually needs this path; full rationale in
+  ``docs/stack.md`` "LLM provider seam" / lode-35nu.11.6.
+- ``max_tokens``/``timeout_s`` are budgets for the whole run, not one call
+  each -- the same two knobs :meth:`structured_call` already accepted
+  per-call, just spent across every turn a run makes (``docs/configuration.md``).
 """
 
 from __future__ import annotations
@@ -115,7 +148,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Iterator, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
@@ -266,6 +300,21 @@ class BatchResult:
     error: LLMProviderError | None  # set iff outcome != "succeeded"
 
 
+@dataclass(frozen=True)
+class ToolSpec:
+    """One tool the model may call during a :meth:`LLMProvider.run_tool_turns` run.
+
+    Deliberately minimal -- just the wire shape a provider needs to offer the
+    tool (``name``/``description``/JSON-Schema ``input_schema``). Domain tool
+    definitions (JIRA search, web fetch, ...) are lode-35nu.11.2's job, not
+    this ticket's; this module never constructs one itself.
+    """
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+
+
 class LLMProvider(Protocol):
     """The vendor-neutral seam every cloud-LLM call site goes through.
 
@@ -290,6 +339,48 @@ class LLMProvider(Protocol):
 
         Serves both the enrichment (forced tool-use, ``tool_name`` given) and
         Q&A (``messages.parse``, ``tool_name=None``) surfaces.
+        """
+        ...
+
+    def run_tool_turns(
+        self,
+        *,
+        model: str,
+        reasoning_effort: str | None,
+        system: str,
+        user_prompt: str,
+        tools: Sequence[ToolSpec],
+        tool_result: Callable[[str, dict[str, Any]], str],
+        output_schema: type[BaseModelT],
+        max_tokens: int,
+        timeout_s: float,
+        tool_name: str | None = None,
+        tool_description: str | None = None,
+        max_tool_turns: int = 8,
+    ) -> BaseModelT:
+        """N free tool turns, then one final FORCED-schema turn (lode-35nu.11.6).
+
+        Free tool choice and a forced structured-output schema are mutually
+        exclusive within a single call, so a run is: up to ``max_tool_turns``
+        turns where the model may freely call a tool from ``tools`` (each
+        ``tool_result(name, input)`` call resolves one, its return value fed
+        back as the tool result, until the model stops calling tools or the
+        turn budget is exhausted), followed by exactly one final call with
+        tool choice forced to ``output_schema`` -- identical in spirit to
+        :meth:`structured_call`'s forced-tool-use branch, but continuing the
+        accumulated conversation instead of a single user turn.
+
+        ``max_tokens``/``timeout_s`` are budgets for the **whole run**, not
+        one call each (``docs/configuration.md``) -- deliberately the same
+        two knobs :meth:`structured_call` already takes per-call, now spent
+        across every turn a run makes.
+
+        **Degenerate case, byte-for-byte (acceptance bar):** when ``tools``
+        is empty, a provider MUST delegate straight to :meth:`structured_call`
+        with the same arguments -- no loop machinery engages, so every
+        existing single-shot call site (:mod:`lode.enrich`, and
+        :mod:`lode.qa` until lode-35nu.11.2 wires real tools in) is
+        unaffected in behavior by this method's existence.
         """
         ...
 
@@ -705,6 +796,142 @@ class AnthropicProvider:
             )
         return parsed
 
+    def run_tool_turns(
+        self,
+        *,
+        model: str,
+        reasoning_effort: str | None,
+        system: str,
+        user_prompt: str,
+        tools: Sequence[ToolSpec],
+        tool_result: Callable[[str, dict[str, Any]], str],
+        output_schema: type[BaseModelT],
+        max_tokens: int,
+        timeout_s: float,
+        tool_name: str | None = None,
+        tool_description: str | None = None,
+        max_tool_turns: int = 8,
+    ) -> BaseModelT:
+        """lode-35nu.11.6 -- see :meth:`LLMProvider.run_tool_turns` for the shape.
+
+        Empty ``tools`` delegates straight to :meth:`structured_call`
+        (the degenerate, byte-for-byte case that acceptance requires). A
+        non-empty ``tools`` runs up to ``max_tool_turns`` free
+        (``tool_choice={"type": "auto"}``) ``messages.create`` turns --
+        feeding each tool_use block through ``tool_result`` and appending the
+        result as a ``tool_result`` content block -- then one final
+        ``messages.create`` with ``tool_choice`` forced to
+        ``tool_name or output_schema.__name__``, continuing the same message
+        history. ``max_tokens``/``timeout_s`` bound the whole run: each SDK
+        call is sent the *remaining* wall-clock budget, and the run raises
+        :class:`LLMProviderError` rather than starting a call once that
+        budget is exhausted.
+        """
+        if not tools:
+            return self.structured_call(
+                model=model,
+                reasoning_effort=reasoning_effort,
+                system=system,
+                user_prompt=user_prompt,
+                output_schema=output_schema,
+                max_tokens=max_tokens,
+                timeout_s=timeout_s,
+                tool_name=tool_name,
+                tool_description=tool_description,
+            )
+
+        import anthropic  # deferred -- lode-4q97; needed by the `except` below
+
+        effort_kwargs = _anthropic_effort_kwargs(reasoning_effort, model=model)
+        deadline = time.monotonic() + timeout_s
+        messages: list[dict[str, Any]] = [{"role": "user", "content": user_prompt}]
+        anthropic_tools = [
+            {
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.input_schema,
+            }
+            for t in tools
+        ]
+
+        def _remaining_or_raise(context: str) -> float:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LLMProviderError(
+                    f"run_tool_turns budget (timeout_s={timeout_s}) exhausted "
+                    f"before {context} (model={model})",
+                    provider="anthropic",
+                )
+            return remaining
+
+        for _ in range(max_tool_turns):
+            remaining = _remaining_or_raise("starting the next free tool turn")
+            try:
+                response = self._client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    system=system,
+                    tools=anthropic_tools,
+                    tool_choice={"type": "auto"},
+                    messages=messages,
+                    timeout=remaining,
+                    **effort_kwargs,
+                )
+            except anthropic.APIStatusError as exc:
+                raise _anthropic_error_from_exception(
+                    exc, context=f"model={model} (free tool turn)"
+                ) from exc
+            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+            if not tool_use_blocks:
+                break
+            messages.append({"role": "assistant", "content": response.content})
+            result_blocks = [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": tool_result(block.name, block.input),
+                }
+                for block in tool_use_blocks
+            ]
+            messages.append({"role": "user", "content": result_blocks})
+
+        remaining = _remaining_or_raise("starting the final forced-schema turn")
+        forced_tool_name = tool_name or output_schema.__name__
+        try:
+            response = self._client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=system,
+                tools=[
+                    {
+                        "name": forced_tool_name,
+                        "description": tool_description or "",
+                        "input_schema": output_schema.model_json_schema(),
+                    }
+                ],
+                tool_choice={"type": "tool", "name": forced_tool_name},
+                messages=messages,
+                timeout=remaining,
+                **effort_kwargs,
+            )
+        except anthropic.APIStatusError as exc:
+            raise _anthropic_error_from_exception(
+                exc, context=f"model={model} (final forced-schema turn)"
+            ) from exc
+        tool_block = next(
+            (b for b in response.content if b.type == "tool_use"), None
+        )
+        if tool_block is None:
+            raise LLMProviderError(
+                f"Anthropic response contained no tool_use block to decode "
+                f"into {output_schema.__name__} on run_tool_turns' final "
+                f"forced-schema turn (model={model}, max_tokens={max_tokens}, "
+                f"stop_reason={getattr(response, 'stop_reason', None)!r}) "
+                f"{_BUDGET_EXHAUSTED_HINT}",
+                provider="anthropic",
+            )
+        return output_schema.model_validate(tool_block.input)
+
     def submit_batch(
         self, requests: Sequence[BatchRequest], *, timeout_s: float
     ) -> str:
@@ -1112,6 +1339,51 @@ class OpenAIProvider:
                 f"schema: {exc}",
                 provider=self._provider_id,
             ) from exc
+
+    def run_tool_turns(
+        self,
+        *,
+        model: str,
+        reasoning_effort: str | None,
+        system: str,
+        user_prompt: str,
+        tools: Sequence[ToolSpec],
+        tool_result: Callable[[str, dict[str, Any]], str],
+        output_schema: type[BaseModelT],
+        max_tokens: int,
+        timeout_s: float,
+        tool_name: str | None = None,
+        tool_description: str | None = None,
+        max_tool_turns: int = 8,
+    ) -> BaseModelT:
+        """OpenAI/Azure degradation (lode-35nu.11.6, ``docs/stack.md``): the
+        empty-``tools`` case delegates to :meth:`structured_call`, matching
+        :class:`AnthropicProvider`; a non-empty ``tools`` is not supported by
+        this provider and raises :class:`LLMProviderError` rather than
+        silently answering without calling the tool the caller asked for.
+        See the module docstring's "lode-35nu.11.6" section for why.
+        """
+        del tool_result, max_tool_turns
+        if tools:
+            raise LLMProviderError(
+                "OpenAI/Azure multi-turn tool use is not implemented by this "
+                "seam (lode-35nu.11.6 -- Anthropic-only provider parity "
+                "decision, see docs/stack.md); only the empty-tools "
+                "degenerate case (equivalent to structured_call) is "
+                "supported for this provider.",
+                provider=self._provider_id,
+            )
+        return self.structured_call(
+            model=model,
+            reasoning_effort=reasoning_effort,
+            system=system,
+            user_prompt=user_prompt,
+            output_schema=output_schema,
+            max_tokens=max_tokens,
+            timeout_s=timeout_s,
+            tool_name=tool_name,
+            tool_description=tool_description,
+        )
 
     def submit_batch(
         self, requests: Sequence[BatchRequest], *, timeout_s: float

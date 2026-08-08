@@ -799,3 +799,60 @@ open:
   was available to verify the Responses API's actual runtime behavior end-to-end (only its installed
   SDK's *type shapes*, which were checked directly). The diagnostic logging above is the compensating
   control the challenge review asked for — a first real run's failure is diagnosable from logs alone.
+
+### 7. Multi-turn tool-use — `LLMProvider.run_tool_turns` (decided, lode-35nu.11.6)
+
+`structured_call` is single-shot: one system+user prompt, no message history, no way to return a
+tool *result* to the model. `lode-35nu.11` (Ask's read-only external-tool tree) needs a real loop —
+the model calls a tool, gets the result back, and may call another before finally answering. This
+ticket adds the seam **mechanism** only; it defines no tool schemas (`lode-35nu.11.2`'s job) and no
+call site passes real tools yet.
+
+**Shape**: `LLMProvider.run_tool_turns(*, …, tools: Sequence[ToolSpec], tool_result: Callable[[str,
+dict], str], output_schema, max_tokens, timeout_s, tool_name=None, tool_description=None,
+max_tool_turns=8) -> BaseModelT`. Free tool choice and a forced structured-output schema are mutually
+exclusive within one call, so a run is: up to `max_tool_turns` free turns (the model may call any
+tool in `tools`; each call is resolved via `tool_result(name, input)` and fed back as a tool result,
+until the model stops calling tools or the turn budget runs out), then **exactly one** final call
+with tool choice forced to `tool_name or output_schema.__name__` — the same forced-tool-use mechanism
+`structured_call`'s enrichment branch already uses, now continuing the accumulated conversation
+instead of a single user turn.
+
+**`max_tokens`/`timeout_s` are budgets for the whole run, not one call each** — this ticket's
+acceptance criteria names this explicitly. They are the same two knobs `structured_call` already took
+per-call; no new config knob was added; a call site's existing `ModelTier`-resolved values (e.g.
+`qa.MAX_TOKENS`/`qa_call_timeout_s`, [configuration.md](configuration.md#models)) now bound the whole
+run instead of one call. `AnthropicProvider` implements this literally: each `messages.create` in the
+loop is sent the *remaining* wall-clock budget (`timeout_s` minus elapsed), and the run raises
+`LLMProviderError` rather than starting a further call once that budget is exhausted, instead of
+resetting the clock every turn.
+
+**Degenerate case, byte-for-byte (the acceptance bar every existing call site must clear)**: when
+`tools` is empty, **every** `LLMProvider` implementation is required to delegate straight to
+`structured_call` with the same arguments — no loop machinery engages at all. `lode.qa._request_claims`
+is reshaped onto `run_tool_turns` by this ticket, called with `tools=()`, so its wire behavior is
+unchanged (still `messages.parse` for Anthropic); `lode.enrich` is untouched, still calling
+`structured_call` directly. This is what lets `lode-35nu.11.2` wire real tools into `qa.py` later
+without another reshape of this call site.
+
+**Provider parity, settled here: Anthropic-only.** `AnthropicProvider.run_tool_turns` implements the
+real loop above. `OpenAIProvider.run_tool_turns` implements only the empty-`tools` delegation; a
+non-empty `tools` raises `LLMProviderError` rather than silently answering without calling the tools
+it was asked to offer the model. Rationale:
+
+- The Responses API's function-calling shape is a genuinely different wire mechanism from
+  `OpenAIProvider.structured_call`'s `text.format` `json_schema` path (§2 & 3 above) — not a
+  mechanical port of the Anthropic loop, a second implementation with its own message-history and
+  tool-result encoding to get right.
+- `OpenAIProvider` was already built and accepted against **mocked** Responses-API response shapes
+  with no live Azure endpoint available to verify against (§ above, `decisions.md` `lode-568v.3`).
+  Stacking an unverified multi-turn function-calling implementation on top of that risk, for a code
+  path nothing calls yet (no tool schemas exist until `lode-35nu.11.2`), fails the same
+  cost/verifiability bar `lode-568v.3` itself was accepted under, for zero present behavioral gain.
+- The explicit-raise degradation (rather than silently ignoring `tools`) keeps a future OpenAI/Azure
+  caller from getting a plausible-looking but ungrounded answer when it thought a tool was in play —
+  it fails loud, at the seam, instead of producing a wrong result downstream.
+
+Revisit this decision once `lode-35nu.11.2` lands real tools and an OpenAI/Azure user actually needs
+this path — implementing `OpenAIProvider`'s real loop then is scoped as its own follow-up, not
+bundled into this ticket.
