@@ -257,9 +257,28 @@ git rev-parse --abbrev-ref HEAD     # land/<id>--<worktree-suffix> — never tru
 git rev-parse HEAD                  # compare against metadata.review_head from step 1
 ```
 
-A mismatch against `review_head` is **drift** — a push landed on `land/<id>` after the ticket was
-marked `ready-for-code-review` (or the ticket is a build-time-escalation re-entry with a since-updated
-head). I note it, but still review the actual tip I checked out, same as before.
+**Before treating a disagreement as drift, check that `review_head` is even SHAPED like a SHA
+(lode-xdg3)** — a hand-retyped or truncated value writes to bd metadata with no schema to catch it,
+and a malformed value never equals what I just checked out either, so without this check it would
+silently read as ordinary drift. Same shared predicate `/land`'s Section 2a uses for `land_head`, so
+the two read sites can't drift on what "well-formed" means. Re-derived fresh here from `bd show`
+(the fenced blocks in this cycle run as separate Bash invocations — shell state from step 1 does not
+survive between them, lode-sfnb), not carried over from step 1's variable:
+
+```bash
+REVIEW_HEAD="$(bd show <id> --json | jq -r '.[0].metadata.review_head // empty')"
+scripts/validate-sha40.sh review_head "$REVIEW_HEAD" || {
+  echo "MALFORMED review_head, not drift -- see the diagnostic above. Note this in my hand-off" \
+    "explicitly; do not read it as a genuine push-after-hand-off."
+}
+```
+
+A mismatch against a **well-formed** `review_head` is **drift** — a push landed on `land/<id>` after
+the ticket was marked `ready-for-code-review` (or the ticket is a build-time-escalation re-entry with
+a since-updated head). I note it, but still review the actual tip I checked out, same as before. A
+**malformed** `review_head` (the check above failed) is a distinct condition, not drift — I still
+review the tip I checked out exactly the same way, but I note "malformed review_head metadata" in my
+hand-off rather than "drift", so nobody chases a phantom push that never happened.
 
 ### 3. Build the venv — every review needs its own (no shared build state)
 

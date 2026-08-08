@@ -553,8 +553,31 @@ git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on origi
 # ...and origin/land/<id>'s tip SHA must equal metadata.land_head
 ```
 
+**Before comparing `land_head` against the branch tip, check that it is even SHAPED like a SHA
+(lode-xdg3).** A `bd update --set-metadata land_head=...` call has no schema — a truncated or
+hand-retyped value (one hex digit short, say) writes just as cleanly as a real one, and a malformed
+value never equals a real branch tip either, so without this check it reads as ordinary drift and the
+branch is kicked back `needs-rebase` for no reason — a self-inflicted round trip on a branch that was
+already correct (the reproduction: a rebase pickup wrote a 39-character `land_head`, one digit short
+of the real tip). `scripts/validate-sha40.sh` is the shared predicate, also used by
+`code-reviewer.md`'s own `review_head` check, so both read sites can't drift on what "well-formed"
+means:
+
+```bash
+LAND_HEAD="$(bd show <id> --json | jq -r '.[0].metadata.land_head // empty')"
+scripts/validate-sha40.sh land_head "$LAND_HEAD" || {
+  echo "land: <id>'s metadata.land_head is MALFORMED, not drifted -- see the diagnostic above." \
+    "Report this as a malformed-SHA finding (below), never as drift/needs-rebase."
+}
+```
+
 A **missing branch** or a **SHA mismatch** is drift — treat it exactly like a review **bounce**
-(below): I will not land a branch I can't verify is the reviewed one.
+(below): I will not land a branch I can't verify is the reviewed one. A **malformed `land_head`**
+(the check above failed) is a **distinct** outcome — neither drift nor a real mismatch, since there
+is no well-formed value to compare in the first place. Treat it as a **bounce** too (the ticket needs
+a human-clean re-write of the field before it can be re-verified), but say so explicitly in the bounce
+findings — "malformed land_head metadata, not drift" — so the follow-up ticket and the next producer
+aren't sent chasing a phantom rebase.
 
 ### 2b. Cheap conflict precheck — does it still merge onto `trunk`?
 
