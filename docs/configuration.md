@@ -247,7 +247,7 @@ world, because a candidate is only ever parsed once a rule of its own `source_ty
 default empty rule set there is nothing to fail.
 
 **Not a generic seam.** `no_egress` is read by SQL `JOIN` at two call sites —
-`cited_answer._resolve_target` and `enrich._resolve_enrich_target` — so a config predicate cannot
+`cited_answer._resolve_targets` and `enrich._resolve_enrich_target` — so a config predicate cannot
 live inside the join. `lode.no_egress_scope.is_no_egress_scoped` is the one shared predicate; each
 site composes it with its own per-row flag itself, rather than reimplementing the match.
 

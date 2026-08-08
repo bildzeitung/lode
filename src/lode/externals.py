@@ -509,7 +509,7 @@ def set_no_egress(
     immediately; only the next enrich/Q&A egress send excludes it (via
     :func:`lode.egress.partition_egress`, consumed generically by
     :func:`lode.enrich.enrich_version` and :func:`lode.cited_answer.ask`
-    through :func:`lode.cited_answer._resolve_target`'s ``externals`` join —
+    through :func:`lode.cited_answer._resolve_targets`'s ``externals`` join —
     no separate wiring needed here).
 
     **"Generically" means the COLUMN, not a seam.** Each send path reads

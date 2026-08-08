@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 import typer
 
 from lode import cli
-from lode.cli import app
+from lode.cli import app, console
 from lode.config import (
     CONFLUENCE_EMAIL_ENV,
     CONFLUENCE_TOKEN_ENV,
@@ -141,7 +141,7 @@ def _run_verify(
     off ``credentials`` here, so it can never reach stdout.
     """
     if jira == confluence:
-        cli.console.print(
+        console.print(
             "exactly one of --jira or --confluence is required",
             style="danger",
             markup=False,
@@ -166,23 +166,23 @@ def _run_verify(
     # credentials already in hand above.
     active = enabled and credentials is not None
 
-    cli.console.print(f"{connector}_enabled: {enabled}")
+    console.print(f"{connector}_enabled: {enabled}")
     email_source = _credential_source(email_env, config_email)
     token_source = _credential_source(token_env, config_token)
     if credentials is not None:
-        cli.console.print(
+        console.print(
             f"credentials: resolved -- email {credentials.email!r} "
             f"({email_source}), token ({token_source}, value redacted)",
             markup=False,
             highlight=False,
         )
     else:
-        cli.console.print(
+        console.print(
             f"credentials: unresolved -- email {email_source}, token {token_source}",
             markup=False,
             highlight=False,
         )
-    cli.console.print(
+    console.print(
         f"{connector}_base_url: "
         f"{configured_base or '(not set -- will infer from link)'}",
         markup=False,
@@ -195,7 +195,7 @@ def _run_verify(
             reasons.append(f"{connector}_enabled is False")
         if credentials is None:
             reasons.append("credentials are unresolved")
-        cli.console.print(
+        console.print(
             f"{connector} connector is inactive: " + "; ".join(reasons),
             style="danger",
             markup=False,
@@ -205,7 +205,7 @@ def _run_verify(
 
     base_url, base_source = _resolve_verify_base_url(connector, configured_base, arg)
     if base_url is None:
-        cli.console.print(
+        console.print(
             f"no base URL available -- set {connector}_base_url in config.toml, "
             f"or pass a sample {connector} URL as the positional argument",
             style="danger",
@@ -213,7 +213,7 @@ def _run_verify(
             highlight=False,
         )
         return 1
-    cli.console.print(
+    console.print(
         f"base_url: {base_url} ({base_source})", markup=False, highlight=False
     )
 
@@ -227,7 +227,7 @@ def _run_verify(
     try:
         response = probe_fetcher.fetch(myself_url)
     except TransientFetchError as exc:
-        cli.console.print(
+        console.print(
             f"tenant unreachable right now: {exc}",
             style="danger",
             markup=False,
@@ -235,7 +235,7 @@ def _run_verify(
         )
         return 1
     except TooManyRedirectsError:
-        cli.console.print(
+        console.print(
             f"base URL misconfigured: too many redirects fetching {myself_url}",
             style="danger",
             markup=False,
@@ -248,7 +248,7 @@ def _run_verify(
         # Defensive: a conforming Fetcher already raises TransientFetchError
         # for this before returning a RawResponse; kept for a
         # non-conforming injected fetcher (e.g. a test stub).
-        cli.console.print(
+        console.print(
             f"tenant unreachable right now (http {response.status_code})",
             style="danger",
             markup=False,
@@ -257,7 +257,7 @@ def _run_verify(
         return 1
     if outcome is HttpOutcome.TOMBSTONE:
         if response.status_code in (401, 403):
-            cli.console.print(
+            console.print(
                 f"credentials rejected (http {response.status_code}) -- check "
                 "the configured email/token",
                 style="danger",
@@ -265,14 +265,14 @@ def _run_verify(
                 highlight=False,
             )
         elif response.status_code == 404:
-            cli.console.print(
+            console.print(
                 f"endpoint not found (http 404) -- check {connector}_base_url",
                 style="danger",
                 markup=False,
                 highlight=False,
             )
         else:
-            cli.console.print(
+            console.print(
                 f"unexpected response (http {response.status_code}) from {myself_url}",
                 style="danger",
                 markup=False,
@@ -284,7 +284,7 @@ def _run_verify(
         display_name = json.loads(response.text).get("displayName") or "(unknown)"
     except json.JSONDecodeError:
         display_name = "(unknown)"
-    cli.console.print(
+    console.print(
         f"{connector} connector verified -- authenticated as {display_name!r}",
         style="ok",
         markup=False,
@@ -294,7 +294,7 @@ def _run_verify(
     if arg and arg.strip():
         external_id = _extract_verify_external_id(connector, arg)
         if external_id is None:
-            cli.console.print(
+            console.print(
                 f"content dry-run: could not parse an issue key/page id from {arg!r}",
                 markup=False,
                 highlight=False,
@@ -317,7 +317,7 @@ def _run_verify(
                 # transient blip on this second call, after auth already
                 # succeeded, is reported and shrugged off exactly like a
                 # tombstone rather than crashing the command with a traceback.
-                cli.console.print(
+                console.print(
                     f"content dry-run ({external_id}): tenant unreachable "
                     f"right now ({exc})",
                     style="danger",
@@ -326,14 +326,14 @@ def _run_verify(
                 )
             else:
                 if content_result.status is FetchStatus.OK:
-                    cli.console.print(
+                    console.print(
                         f"content dry-run ({external_id}): OK",
                         style="ok",
                         markup=False,
                         highlight=False,
                     )
                 else:
-                    cli.console.print(
+                    console.print(
                         f"content dry-run ({external_id}): tombstoned "
                         f"({content_result.tombstone_reason})",
                         style="danger",
