@@ -147,6 +147,7 @@ from lode.webfetch import (
     FetchError,
     FetchResult,
     FetchStatus,
+    GuardedHttpxFetcher,
     fetch_and_extract,
 )
 
@@ -421,6 +422,14 @@ def _fetch_web(
     :class:`ValueError` (an unparseable port, a malformed IPv6 host); that is
     just another fetch failure and is surfaced as :class:`ToolFetchError`
     like any other, never leaked to the caller as a raw ``ValueError``.
+
+    Defaults ``fetcher`` to a fresh :class:`~lode.webfetch.GuardedHttpxFetcher`
+    when the caller passes none -- this is the ask path, and the ask path is
+    the *only* place :class:`~lode.webfetch.GuardedHttpxFetcher` is ever
+    constructed (lode-xwah). A caller that injects its own ``fetcher`` (every
+    test, and any future production seam) still gets exactly what it passed,
+    unguarded or not -- this default only fills the gap production leaves
+    open when nothing is injected.
     """
     _refuse_private_web_destination(external_id)
     log_tool_egress(
@@ -431,6 +440,7 @@ def _fetch_web(
         settings=settings,
         redaction_key=external_id,
     )
+    fetcher = fetcher or GuardedHttpxFetcher(settings)
     try:
         result = fetch_and_extract(external_id, fetcher=fetcher, settings=settings)
         final_external_id = canonicalize_url(result.final_url, settings)

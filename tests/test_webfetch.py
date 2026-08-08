@@ -8,6 +8,7 @@ the async queue's retry machinery. All tests use a stub :class:`~lode.webfetch.F
 so the gate never makes a real network request.
 """
 
+import socket
 from typing import Self
 
 import httpx
@@ -16,10 +17,12 @@ import pytest
 from lode.config import load_settings
 from lode.webfetch import (
     FetchStatus,
+    GuardedHttpxFetcher,
     HttpxFetcher,
     RawResponse,
     TooManyRedirectsError,
     TransientFetchError,
+    UnsafeWebDestinationError,
     fetch_and_extract,
 )
 
@@ -512,3 +515,372 @@ class TestHttpxFetcher:
         user_agent = captured["headers"]["User-Agent"]
         assert user_agent.startswith("lode-webfetch/")
         assert "+" not in user_agent
+
+
+class _GuardedFakeResponse:
+    """Stands in for an httpx.Response, with the bits GuardedHttpxFetcher reads.
+
+    ``url`` is a real ``httpx.URL`` (not a bare string) so ``.join(location)``
+    behaves exactly as it does against a real response. ``server_addr``
+    defaults to a public address so the fail-closed peer check in
+    :func:`lode.webfetch._refuse_if_unsafe_peer` passes; pass
+    ``server_addr=None`` to model a response with no ``network_stream``
+    extension at all, and ``peer_oserror=True`` to model httpcore raising
+    ``OSError`` from ``get_extra_info`` on a released socket.
+
+    ``read()``/``close()`` mirror the streaming API
+    :meth:`~lode.webfetch.GuardedHttpxFetcher._get_one` drives, and ``reads``
+    records their ordering against the peer check so a test can assert the
+    body was never pulled from a refused peer.
+    """
+
+    def __init__(
+        self,
+        status_code: int,
+        url: str,
+        *,
+        text: str = "",
+        location: str | None = None,
+        server_addr: str | None = "93.184.216.34",
+        peer_oserror: bool = False,
+    ) -> None:
+        self.status_code = status_code
+        self.url = httpx.URL(url)
+        self.text = text
+        self.headers = {"location": location} if location else {}
+        self.read_count = 0
+        self.closed = False
+        extensions: dict = {}
+        if server_addr is not None or peer_oserror:
+            extensions["network_stream"] = _FakeNetworkStream(
+                server_addr, oserror=peer_oserror
+            )
+        self.extensions = extensions
+
+    def read(self) -> bytes:
+        self.read_count += 1
+        return self.text.encode()
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeNetworkStream:
+    def __init__(self, server_addr: str | None, *, oserror: bool = False) -> None:
+        self._server_addr = server_addr
+        self._oserror = oserror
+
+    def get_extra_info(self, name: str):
+        if self._oserror:
+            raise OSError(9, "Bad file descriptor")
+        if name == "server_addr" and self._server_addr is not None:
+            return (self._server_addr, 0)
+        return None
+
+
+def _guarded_fake_client_cls(responses: list, calls: list) -> type:
+    """Stand in for ``httpx.Client``, answering ``responses`` in order.
+
+    ``calls`` records every URL a request was actually issued against -- the
+    assertion surface for "a redirect to an internal address does not issue
+    the request at all" (a refused hop must never appear here). The
+    ``build_request``/``send(stream=True)`` pair mirrors the real API
+    :meth:`~lode.webfetch.GuardedHttpxFetcher._get_one` uses, so these tests
+    exercise the production code path rather than a shape only the double has.
+    """
+
+    class _FakeClient:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def build_request(self, method: str, url: str):
+            return (method, url)
+
+        def send(self, request, *, stream: bool = False):
+            assert stream is True, (
+                "_get_one must stream so the peer is checked pre-body"
+            )
+            calls.append(request[1])
+            return responses[len(calls) - 1]
+
+    return _FakeClient
+
+
+class TestGuardedHttpxFetcher:
+    """Exercises the redirect-chain + DNS-rebinding closure (lode-xwah), offline.
+
+    Every test drives GuardedHttpxFetcher through a monkeypatched httpx.Client
+    (no real socket ever opens) plus, where DNS matters, a monkeypatched
+    socket.getaddrinfo -- the same offline-fixture convention TestHttpxFetcher
+    above uses.
+    """
+
+    def test_literal_private_initial_url_is_refused_before_any_request(
+        self, monkeypatch
+    ):
+        """A literal loopback/private host needs no DNS -- refused immediately."""
+        calls: list = []
+        monkeypatch.setattr(httpx, "Client", _guarded_fake_client_cls([], calls))
+        fetcher = GuardedHttpxFetcher(load_settings())
+
+        with pytest.raises(UnsafeWebDestinationError):
+            fetcher.fetch("http://127.0.0.1/admin")
+
+        assert calls == []
+
+    def test_public_url_with_no_redirect_is_returned(self, monkeypatch):
+        response = _GuardedFakeResponse(200, "http://93.184.216.34/", text="ok")
+        calls: list = []
+        monkeypatch.setattr(
+            httpx, "Client", _guarded_fake_client_cls([response], calls)
+        )
+        fetcher = GuardedHttpxFetcher(load_settings())
+
+        result = fetcher.fetch("http://93.184.216.34/")
+
+        assert result.status_code == 200
+        assert result.text == "ok"
+        assert calls == ["http://93.184.216.34/"]
+
+    def test_redirect_to_private_address_never_issues_that_hop(self, monkeypatch):
+        """The core acceptance case: a redirect at an internal address is
+        refused before its own request goes out -- not merely discarded after.
+        """
+        first = _GuardedFakeResponse(
+            302, "http://93.184.216.34/", location="http://127.0.0.1/admin"
+        )
+        calls: list = []
+        monkeypatch.setattr(httpx, "Client", _guarded_fake_client_cls([first], calls))
+        fetcher = GuardedHttpxFetcher(load_settings())
+
+        with pytest.raises(UnsafeWebDestinationError):
+            fetcher.fetch("http://93.184.216.34/")
+
+        # Only the first (allowed) hop's request was ever issued -- the
+        # refused second hop never reached the fake transport at all.
+        assert calls == ["http://93.184.216.34/"]
+
+    def test_redirect_chain_to_public_addresses_is_followed(self, monkeypatch):
+        first = _GuardedFakeResponse(
+            302, "http://93.184.216.34/", location="http://93.184.216.35/final"
+        )
+        second = _GuardedFakeResponse(200, "http://93.184.216.35/final", text="landed")
+        calls: list = []
+        monkeypatch.setattr(
+            httpx, "Client", _guarded_fake_client_cls([first, second], calls)
+        )
+        fetcher = GuardedHttpxFetcher(load_settings())
+
+        result = fetcher.fetch("http://93.184.216.34/")
+
+        assert result.status_code == 200
+        assert result.final_url == "http://93.184.216.35/final"
+        assert calls == ["http://93.184.216.34/", "http://93.184.216.35/final"]
+
+    def test_too_many_redirects_raises(self, monkeypatch):
+        settings = load_settings(fetch_max_redirects=1)
+        hop0 = _GuardedFakeResponse(
+            302, "http://93.184.216.34/", location="http://93.184.216.35/"
+        )
+        hop1 = _GuardedFakeResponse(
+            302, "http://93.184.216.35/", location="http://93.184.216.36/"
+        )
+        calls: list = []
+        monkeypatch.setattr(
+            httpx, "Client", _guarded_fake_client_cls([hop0, hop1], calls)
+        )
+        fetcher = GuardedHttpxFetcher(settings)
+
+        with pytest.raises(TooManyRedirectsError):
+            fetcher.fetch("http://93.184.216.34/")
+
+    def test_dns_rebinding_is_caught_via_actual_connected_peer(self, monkeypatch):
+        """A domain name that resolves PUBLIC at the pre-hop check but whose
+        connection actually lands on a private peer (simulating a short-TTL
+        rebind between the two separate lookups) is still refused -- and the
+        response is never returned to the caller.
+        """
+        monkeypatch.setattr(
+            socket,
+            "getaddrinfo",
+            lambda *a, **k: [(socket.AF_INET, None, 6, "", ("93.184.216.34", 0))],
+        )
+        response = _GuardedFakeResponse(
+            200, "http://rebind.example.com/", text="secret", server_addr="127.0.0.1"
+        )
+        calls: list = []
+        monkeypatch.setattr(
+            httpx, "Client", _guarded_fake_client_cls([response], calls)
+        )
+        fetcher = GuardedHttpxFetcher(load_settings())
+
+        with pytest.raises(UnsafeWebDestinationError):
+            fetcher.fetch("http://rebind.example.com/")
+
+    def test_public_peer_matching_public_host_is_returned(self, monkeypatch):
+        """A response whose network_stream extension confirms a PUBLIC peer
+        passes through normally -- the peer check is not a no-op that always
+        refuses when the extension is present.
+        """
+        monkeypatch.setattr(
+            socket,
+            "getaddrinfo",
+            lambda *a, **k: [(socket.AF_INET, None, 6, "", ("93.184.216.34", 0))],
+        )
+        response = _GuardedFakeResponse(
+            200,
+            "http://example.com/",
+            text="ok",
+            server_addr="93.184.216.34",
+        )
+        calls: list = []
+        monkeypatch.setattr(
+            httpx, "Client", _guarded_fake_client_cls([response], calls)
+        )
+        fetcher = GuardedHttpxFetcher(load_settings())
+
+        result = fetcher.fetch("http://example.com/")
+
+        assert result.text == "ok"
+
+    def test_unresolvable_host_is_refused_fail_closed(self, monkeypatch):
+        def _raise(*a, **k):
+            raise socket.gaierror("name or service not known")
+
+        monkeypatch.setattr(socket, "getaddrinfo", _raise)
+        fetcher = GuardedHttpxFetcher(load_settings())
+
+        with pytest.raises(UnsafeWebDestinationError):
+            fetcher.fetch("http://does-not-resolve.example.com/")
+
+    @pytest.mark.parametrize("status_code", [408, 429, 500])
+    def test_transient_status_codes_raise(self, monkeypatch, status_code):
+        response = _GuardedFakeResponse(status_code, "http://93.184.216.34/")
+        calls: list = []
+        monkeypatch.setattr(
+            httpx, "Client", _guarded_fake_client_cls([response], calls)
+        )
+        fetcher = GuardedHttpxFetcher(load_settings())
+
+        with pytest.raises(TransientFetchError, match=str(status_code)):
+            fetcher.fetch("http://93.184.216.34/")
+
+    def test_follow_redirects_kwarg_cannot_be_overridden(self):
+        """Passing follow_redirects=True must not defeat manual per-hop control.
+
+        This is a defense-in-depth guard against a future caller accidentally
+        (or maliciously) re-enabling httpx's own follower and bypassing the
+        per-hop checks entirely -- verified via the private attribute
+        HttpxFetcher.__init__ actually sets.
+        """
+        fetcher = GuardedHttpxFetcher(load_settings(), follow_redirects=True)
+
+        assert fetcher._follow_redirects is False
+
+    @pytest.mark.parametrize(
+        "address",
+        [
+            "100.64.1.1",  # RFC 6598 carrier-grade NAT -- ipaddress flags nothing
+            "fec0::1",  # RFC 3879 IPv6 site-local -- ipaddress reports is_global
+            "::ffff:127.0.0.1",  # IPv4-mapped loopback
+            "::ffff:169.254.169.254",  # IPv4-mapped cloud metadata
+            "169.254.169.254",
+            "10.0.0.1",
+            "224.0.0.1",
+            "0.0.0.0",
+            "::1",
+        ],
+    )
+    def test_internal_address_families_are_all_refused(self, monkeypatch, address):
+        """Every range the guard claims to cover is actually covered.
+
+        The first three entries are the interesting ones: no ``ipaddress``
+        attribute flags them, so an attribute-only check lets them straight
+        through to an internal host (lode-xwah review).
+        """
+        monkeypatch.setattr(
+            socket,
+            "getaddrinfo",
+            lambda *a, **k: [(socket.AF_INET, None, 6, "", (address, 0))],
+        )
+        calls: list = []
+        monkeypatch.setattr(httpx, "Client", _guarded_fake_client_cls([], calls))
+        fetcher = GuardedHttpxFetcher(load_settings())
+
+        with pytest.raises(UnsafeWebDestinationError):
+            fetcher.fetch("http://internal.example.com/")
+
+        assert calls == []
+
+    @pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://example.com/x"])
+    def test_non_http_scheme_is_refused(self, monkeypatch, url):
+        """A non-http(s) hop is refused outright, not left to httpx to reject
+        as a (retryable) transient client error.
+        """
+        calls: list = []
+        monkeypatch.setattr(httpx, "Client", _guarded_fake_client_cls([], calls))
+        fetcher = GuardedHttpxFetcher(load_settings())
+
+        with pytest.raises(UnsafeWebDestinationError, match="scheme"):
+            fetcher.fetch(url)
+
+        assert calls == []
+
+    def test_unverifiable_peer_fails_closed_when_extension_is_absent(self, monkeypatch):
+        """No ``network_stream`` means the peer cannot be verified -- refuse."""
+        response = _GuardedFakeResponse(
+            200, "http://93.184.216.34/", text="ok", server_addr=None
+        )
+        calls: list = []
+        monkeypatch.setattr(
+            httpx, "Client", _guarded_fake_client_cls([response], calls)
+        )
+        fetcher = GuardedHttpxFetcher(load_settings())
+
+        with pytest.raises(UnsafeWebDestinationError):
+            fetcher.fetch("http://93.184.216.34/")
+
+    def test_unverifiable_peer_fails_closed_on_oserror(self, monkeypatch):
+        """httpcore raises OSError from get_extra_info once the socket is
+        released; an unverifiable peer is refused, never waved through.
+        """
+        response = _GuardedFakeResponse(200, "http://93.184.216.34/", text="ok")
+        response.extensions["network_stream"] = _FakeNetworkStream(None, oserror=True)
+        calls: list = []
+        monkeypatch.setattr(
+            httpx, "Client", _guarded_fake_client_cls([response], calls)
+        )
+        fetcher = GuardedHttpxFetcher(load_settings())
+
+        with pytest.raises(UnsafeWebDestinationError):
+            fetcher.fetch("http://93.184.216.34/")
+
+    def test_refused_peer_body_is_never_read(self, monkeypatch):
+        """The peer check runs on the still-streaming response, so a rebound
+        connection's body never crosses the wire at all.
+        """
+        monkeypatch.setattr(
+            socket,
+            "getaddrinfo",
+            lambda *a, **k: [(socket.AF_INET, None, 6, "", ("93.184.216.34", 0))],
+        )
+        response = _GuardedFakeResponse(
+            200, "http://rebind.example.com/", text="secret", server_addr="127.0.0.1"
+        )
+        calls: list = []
+        monkeypatch.setattr(
+            httpx, "Client", _guarded_fake_client_cls([response], calls)
+        )
+        fetcher = GuardedHttpxFetcher(load_settings())
+
+        with pytest.raises(UnsafeWebDestinationError):
+            fetcher.fetch("http://rebind.example.com/")
+
+        assert response.read_count == 0
+        assert response.closed is True

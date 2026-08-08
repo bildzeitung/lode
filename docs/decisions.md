@@ -4319,6 +4319,36 @@ entries below from being rewritten to chase the current tree.)
   (bounding where `web_fetch` may point) lands, since it closes the one concretely-scoped half of this
   risk (destination-steering) and may change what residual surface remains.
 
+- **Left open: `lode-ejfv` / `lode-xwah` land-time reconciliation of the web-fetch destination
+  guard.** `lode-xwah` was scoped as a discovered follow-up while technically reviewing `lode-ejfv`
+  (which was, at scoping time, adding `lode.tools._refuse_private_web_destination` — a
+  private/loopback/link-local/reserved/multicast address guard on the ask path, checked on the
+  initial URL and again on the post-redirect final URL). `lode-xwah` was built against `origin/trunk`
+  as it stood, deliberately not fetching or depending on the still-unlanded `lode-ejfv` branch — and
+  at that point `trunk` carried no `_refuse_private_web_destination` at all (that function had not
+  yet landed), so there was nothing in `lode.tools` for `lode-xwah` to extend or remove.
+  `lode-xwah`'s `GuardedHttpxFetcher` (see
+  [externals.md](externals.md#web-fetch-destination-guard-ssrf-via-a-model-chosen-url-decided-lode-xwah))
+  was built standalone, closing the redirect-chain and DNS-rebinding gaps at the fetcher layer
+  instead. **Left open for whoever lands both:** if `lode-ejfv`'s `_refuse_private_web_destination`
+  ends up on `trunk` (landed first, or merged alongside), the two guards overlap heavily —
+  `GuardedHttpxFetcher` is strictly stronger on the two axes this ticket was scoped for (per-hop
+  redirect validation, post-connect rebinding check) and, after this branch's technical review, now
+  matches `lode-ejfv`'s address coverage exactly (CGNAT `100.64.0.0/10`, IPv6 site-local `fec0::/10`,
+  IPv4-mapped unwrapping, and the `http`/`https` scheme allowlist — all of which the branch as first
+  built was *missing*, and all of which `lode-ejfv`'s own review had already added on its side).
+  **Correction to this entry's first draft:** it asserted the `lode.tools` guard would be "fully
+  subsumed" and should simply be removed. That was wrong twice over — at the time it was written the
+  fetcher-layer guard was materially *weaker* on address coverage and had no scheme check at all; and
+  even now one gap remains structural rather than incidental: `_fetch_web` installs
+  `GuardedHttpxFetcher` **only when the caller injects no `fetcher`**, so a caller that injects its
+  own gets no address policy whatsoever, while a `lode.tools`-level check runs unconditionally. The
+  real open question for whoever lands both is therefore *which layer owns the policy* — delete the
+  `lode.tools` guard and accept that the injection seam is unguarded (defensible: today only tests
+  inject), or keep it as the injection-proof outer check and let the fetcher own only the per-hop and
+  rebinding halves. Not a mechanical cleanup, but still not a blocker for either branch; no new
+  ticket is filed here since `/land`'s stacked/overlapping-branch handling is where it surfaces.
+
 - **2026-08-08 (`lode-oca9`) — re-cut the batched `IN(...)` seam left open by `lode-r9z0`; both
   candidates adopted.** `lode-r9z0`'s entry above filed, but deliberately did not settle, two
   questions: whether a whole-SQL-plus-`{placeholders}`-slot seam would fit all three candidate call
