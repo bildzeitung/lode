@@ -327,7 +327,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_live ON jobs (
 -- for an LLM send. Both are NULL for purpose IN ('enrich', 'qa'). SQLite
 -- cannot ALTER a CHECK constraint, so an existing DB's egress_log is rebuilt
 -- onto this shape by lode.storage's PRAGMA user_version migration, not a
--- plain ALTER TABLE (docs/storage.md §8).
+-- plain ALTER TABLE (docs/storage.md §8). `model` is nullable only FOR a tool
+-- call: the table-level CHECK below keeps the pre-lode-35nu.11.7 guarantee that
+-- an LLM send always records which model it went to -- relaxing the column to
+-- plain NULL-able would have dropped that enforcement for 'enrich'/'qa' too,
+-- which an audit trail cannot afford.
 CREATE TABLE IF NOT EXISTS egress_log (
     id           INTEGER PRIMARY KEY,
     ts           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -337,5 +341,6 @@ CREATE TABLE IF NOT EXISTS egress_log (
     destination  TEXT,
     arguments    TEXT,
     sent_targets TEXT NOT NULL,
-    redactions   TEXT
+    redactions   TEXT,
+    CHECK (purpose = 'tool' OR model IS NOT NULL)
 );

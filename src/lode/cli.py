@@ -2059,8 +2059,11 @@ def egress(
         return
 
     for log_id, ts, log_purpose, model, sent_targets, redactions in rows:
+        # model is NULL for a purpose='tool' row (lode-35nu.11.7): a tool call is
+        # cloud egress but not an LLM call, so there is no model to name. Format
+        # it as "-" rather than letting f-string padding raise on None.
         typer.echo(
-            f"{log_id}  {ts}  {log_purpose:<7} {model:<20}  "
+            f"{log_id}  {ts}  {log_purpose:<7} {model or '-':<20}  "
             f"sent: {_format_sent(sent_targets)}  "
             f"redactions: {_format_redactions(redactions)}"
         )

@@ -1358,7 +1358,11 @@ configured cloud LLM** (no enrichment, excluded from cloud Q&A context — see
 **`egress_log.purpose = 'tool'`, `destination`, `arguments` (schema only, `lode-35nu.11.7`)** — a
 tool-augmented Ask call (JIRA/Confluence/web query, `lode-35nu.11`) is cloud egress too, so it needs
 an audit row here, but it is not an LLM call: `model` (`NOT NULL` for every other purpose) has no
-meaning for it, so this ticket makes the column nullable. `destination` is where the call went — the
+meaning for it, so this ticket makes the column nullable **only for a tool call** — a table-level
+`CHECK (purpose = 'tool' OR model IS NOT NULL)` keeps the guarantee the old `NOT NULL` gave, that an
+LLM send always records which model it went to. Relaxing the column to plain nullable would have
+dropped that enforcement for `enrich`/`qa` as well, which an audit trail cannot afford.
+`destination` is where the call went — the
 API base / host it hit, not a model — and `arguments` is the call's arguments as sent
 (post-redaction), the tool-call analogue of `sent_targets`/`redactions` for an LLM send. Both are
 `NULL` for `purpose IN ('enrich', 'qa')`. This ticket adds the shape only — no code path writes a
@@ -1381,6 +1385,27 @@ migrations a pre-existing database hasn't seen yet, in order, right after the ex
 already present by the time a rebuild copies rows across). `externals.discovered_via` — an ordinary
 column add — rides in the same migration step rather than `_apply_migrations`, since it ships in the
 same version bump.
+
+The two mechanisms are not peers going forward: `user_version` stepping subsumes what
+`_apply_migrations` does, so a **new** migration belongs in `_VERSIONED_MIGRATIONS` — including a
+plain `ADD COLUMN`, which gets a run-once gate there instead of a swallowed error on every open.
+`_apply_migrations` stays only to carry databases already in the field past the column adds that
+predate versioning; it is closed to new entries.
+
+One consequence to know when reading a migrated DB: physical **column order** can differ from a
+freshly-created one, because `ALTER TABLE … ADD COLUMN` can only append (`externals.discovered_via`
+lands before `created` in `schema.sql`, after it on a migrated DB — as `api_base` and
+`annotations.provider` already do). Types, constraints, defaults, indexes and CHECKs are identical,
+which is what "identical schema" means here; nothing reads these tables positionally.
+
+Each versioned step runs inside its own `SAVEPOINT`, so the migration and its `user_version` bump
+commit or roll back **as one unit**: a crash partway through a table rebuild leaves the database
+exactly as it was, still below that version, and the next open simply retries it. The savepoint is
+what makes that a guarantee rather than an accident — without it, whether a rebuild is atomic would
+depend on whether some earlier statement in `init_db` happened to leave a transaction open, which is
+a CPython implicit-`BEGIN` detail that has already changed once (3.12). `SAVEPOINT` rather than
+`BEGIN` because it is correct either way: it nests inside an open transaction and starts one when
+there is none.
 
 The UI composes `content node + its annotations` at render time. Nothing is ever written back
 into `versions.body` / `snapshots.body`.

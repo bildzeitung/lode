@@ -29,10 +29,15 @@ such step behind SQLite's built-in ``PRAGMA user_version`` (an integer stored in
 the DB header, defaulting to 0) — a migration numbered *N* runs only while
 ``user_version < N``, and bumps it to *N* immediately after (lode-35nu.11.7, the
 first user of this mechanism: the ``egress_log`` rebuild for ``purpose='tool'``).
-A brand-new database is created directly at :data:`_SCHEMA_VERSION` — its tables
-come out of ``schema.sql`` already in the target shape, so replaying the
-rebuild steps would be redundant (and, for a plain ``ADD COLUMN`` step, would
-error on the column already existing).
+Each step is atomic with its own version bump; :func:`init_db` decides which
+databases run them at all.
+
+The two mechanisms are not peers going forward: ``user_version`` stepping
+subsumes what :func:`_apply_migrations` does, so :data:`_VERSIONED_MIGRATIONS`
+is where a **new** migration belongs — including a plain ``ADD COLUMN``, which
+gets a run-once gate there instead of a swallowed error on every open.
+:func:`_apply_migrations` stays only to carry the databases already in the field
+past the column adds that predate versioning; it is closed to new entries.
 """
 
 import sqlite3
@@ -115,12 +120,30 @@ def _migrate_v1_egress_log_tool_purpose(conn: sqlite3.Connection) -> None:
     (where the call went) and ``arguments`` (as sent, post-redaction) are new,
     always-nullable columns — NULL for every existing ``enrich``/``qa`` row,
     which carries no data loss since neither concept applies to an LLM call.
+    ``model`` goes nullable only *for a tool call*: the table-level
+    ``CHECK (purpose = 'tool' OR model IS NOT NULL)`` preserves the guarantee the
+    old ``NOT NULL`` gave for ``enrich``/``qa``, which an audit trail cannot
+    afford to drop.
+
+    The DDL below is deliberately a literal, not derived from
+    :func:`schema_sql` — a migration is pinned to the shape *this version*
+    produced, so a later ticket editing ``schema.sql`` must not retroactively
+    change what v1 builds. While v1 is the newest step the two are necessarily
+    identical (``tests/test_storage.py`` asserts it); once a v2 lands, this
+    literal freezes and that identity assertion follows the newest step
+    instead.
 
     Runs strictly after :func:`_apply_migrations`, so ``egress_log.provider``
     (lode-568v.4) is already present on the source table by the time this reads
     it. ``externals.discovered_via`` is an ordinary column add and does not need
     a rebuild — folded in here rather than into ``_apply_migrations`` because it
     ships in the same ticket/version step as the audit-trail change above.
+
+    ``egress_log`` carries no index, no trigger, and is the target of no foreign
+    key (checked against ``schema.sql``), so the ``DROP``/``RENAME`` below needs
+    no index/trigger recreation and is unaffected by the connection's
+    ``PRAGMA foreign_keys = ON``. A future rebuild of a table that *is* referenced
+    must re-check both before reusing this shape.
     """
     conn.execute(
         "CREATE TABLE egress_log_new ("
@@ -132,7 +155,8 @@ def _migrate_v1_egress_log_tool_purpose(conn: sqlite3.Connection) -> None:
         "    destination  TEXT,"
         "    arguments    TEXT,"
         "    sent_targets TEXT NOT NULL,"
-        "    redactions   TEXT"
+        "    redactions   TEXT,"
+        "    CHECK (purpose = 'tool' OR model IS NOT NULL)"
         ")"
     )
     conn.execute(
@@ -144,6 +168,14 @@ def _migrate_v1_egress_log_tool_purpose(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE egress_log")
     conn.execute("ALTER TABLE egress_log_new RENAME TO egress_log")
 
+    # The catch-and-ignore guard is load-bearing, not belt-and-braces: the
+    # user_version gate makes this run once per database, but `externals` may
+    # already carry the column at that point. init_db runs executescript BEFORE
+    # the migrations, so any table a partially-populated database was missing is
+    # created fresh -- in the *target* shape, discovered_via included -- and the
+    # ADD COLUMN then hits a duplicate. Removing this raises on exactly that
+    # case (proven by the pre-existing migration fixtures in
+    # tests/test_storage.py, which seed a jobs table and nothing else).
     try:
         conn.execute("ALTER TABLE externals ADD COLUMN discovered_via TEXT")
     except sqlite3.OperationalError:
@@ -165,15 +197,32 @@ docstring). Ordered ascending; each entry runs once, the first time
 def _apply_versioned_migrations(conn: sqlite3.Connection) -> None:
     """Run any pending entry in :data:`_VERSIONED_MIGRATIONS`, bumping ``user_version``.
 
-    Only reached for a *pre-existing* database (see :func:`init_db`) — a fresh
-    one is stamped straight at :data:`_SCHEMA_VERSION` since its tables already
-    come out of ``schema.sql`` in the target shape.
+    Only reached for a *pre-existing* database — :func:`init_db` explains why a
+    fresh one is stamped straight at :data:`_SCHEMA_VERSION` instead.
+
+    Each step runs inside its own ``SAVEPOINT``, so a migration and its
+    ``user_version`` bump commit or roll back as one unit: a crash partway
+    through a table rebuild leaves the database exactly as it was, still below
+    that version, and the next open retries it from the top. The savepoint is
+    what makes that a *guarantee* rather than a side effect of CPython's
+    implicit-``BEGIN`` rules (which already changed once, in 3.12) — without it,
+    whether the rebuild is atomic depends on whether some earlier statement in
+    :func:`init_db` happened to leave a transaction open. ``SAVEPOINT`` is the
+    right primitive rather than ``BEGIN`` precisely because it is correct either
+    way: it nests inside an open transaction and starts one when there is none.
     """
     (current,) = conn.execute("PRAGMA user_version").fetchone()
     for version, migrate in _VERSIONED_MIGRATIONS:
         if current < version:
-            migrate(conn)
-            conn.execute(f"PRAGMA user_version = {version}")
+            conn.execute("SAVEPOINT lode_migration")
+            try:
+                migrate(conn)
+                conn.execute(f"PRAGMA user_version = {version}")
+            except BaseException:
+                conn.execute("ROLLBACK TO lode_migration")
+                raise
+            finally:
+                conn.execute("RELEASE lode_migration")
             current = version
 
 
@@ -193,6 +242,17 @@ def init_db(db_path: str | Path) -> sqlite3.Connection:
     :data:`_VERSIONED_MIGRATIONS` would be redundant (and, for a plain column
     add, would error on the column already existing). A pre-existing database
     instead runs whichever of those migrations it hasn't seen yet.
+    ``user_version`` cannot make this call on its own — it is ``0`` both for a
+    fresh file and for every database written before the mechanism existed,
+    which is exactly the pair that must be told apart.
+
+    The probe keys on ``notes`` specifically, not "has any table at all":
+    ``notes`` is the oldest table in the schema, so every real deployment has
+    one, while a *partially* populated database (some tables, e.g. a test
+    fixture seeding only ``jobs``) is better treated as fresh — the tables it
+    lacks are about to be created in the target shape anyway. A versioned
+    migration must still tolerate meeting a table already in that shape; see
+    :func:`_migrate_v1_egress_log_tool_purpose`.
     """
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
