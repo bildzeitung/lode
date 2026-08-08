@@ -400,7 +400,7 @@ def test_external_snapshot_cited_via_snapshot_id(conn) -> None:
 
 def test_no_egress_external_kept_off_cloud_and_surfaced_as_withheld(conn) -> None:
     # Same enforcement path as the note case, exercised over an external
-    # snapshot (lode-w0h.7): _resolve_target's externals join resolves
+    # snapshot (lode-w0h.7): _resolve_targets' externals join resolves
     # no_egress for a snapshot_id target exactly like it does for a note's
     # version_id, so a withheld external never reaches the cloud context and
     # is cited as present-but-withheld -- while staying locally retrievable
@@ -439,7 +439,7 @@ def test_no_egress_external_kept_off_cloud_and_surfaced_as_withheld(conn) -> Non
 def test_no_egress_scope_withholds_already_captured_external_web_host(conn) -> None:
     """A URL-host scope rule withholds an already-captured 'web' external at
     its next send, with no per-row flag set and no migration/backfill
-    (lode-35nu.11.8, cited_answer._resolve_target site).
+    (lode-35nu.11.8, cited_answer._resolve_targets site).
     """
     from lode.no_egress_scope import NoEgressScopeRule
 
@@ -589,3 +589,60 @@ def test_ask_honors_configured_entailment_threshold(conn) -> None:
     )
     assert not lax.abstained
     assert lax.claims[0].text == "rerank is on"
+
+
+def test_resolve_targets_batches_distinct_targets_into_two_queries(conn) -> None:
+    """cited_answer._resolve_targets resolves every distinct note target and every
+    distinct external target in one round trip each -- at most two DB queries for
+    target resolution regardless of how many context items (or repeated targets)
+    are in play (lode-ekqh)."""
+    from lode.cited_answer import _resolve_targets
+
+    _insert_note(conn, note_id="n1", version_id="v1", body="alpha body")
+    _insert_note(conn, note_id="n2", version_id="v2", body="beta body")
+    _insert_external(conn, external_id="EXT-1", snapshot_id="s1", body="gamma body")
+    _insert_external(conn, external_id="EXT-2", snapshot_id="s2", body="delta body")
+    context = [
+        _note_context("v1", "alpha body"),
+        _note_context("v1", "alpha body"),  # repeated target -- no extra round trip
+        _note_context("v2", "beta body"),
+        _external_context("s1", "gamma body"),
+        _external_context("s2", "delta body"),
+        _external_context("s2", "delta body"),  # repeated target -- no extra round trip
+    ]
+    calls: list[str] = []
+    real_execute = conn.execute
+
+    def counting_execute(sql, *args, **kwargs):
+        calls.append(sql)
+        return real_execute(sql, *args, **kwargs)
+
+    conn.execute = counting_execute
+    try:
+        resolved = _resolve_targets(conn, context)
+    finally:
+        conn.execute = real_execute
+
+    assert len(calls) == 2  # one versions/notes IN(...), one snapshots/externals IN(...)
+    assert resolved["v1"] == ("alpha body", False)
+    assert resolved["v2"] == ("beta body", False)
+    assert resolved["s1"] == ("gamma body", False)
+    assert resolved["s2"] == ("delta body", False)
+
+
+def test_ask_treats_a_target_absent_from_the_store_as_no_egress_false(conn) -> None:
+    """A cited target with no matching row (deleted, or never captured) must still
+    resolve to a ``None`` body and ``no_egress=False`` -- the same safe default a
+    per-target lookup returned before batching, so the gate fails the claim closed
+    without ever treating the missing target as withheld."""
+    client = _FakeClient([_note_claim("ghost claim", "ghost body", "missing-v")])
+
+    answer = ask(
+        conn,
+        "q",
+        [_note_context("missing-v", "ghost body")],
+        provider=AnthropicProvider(client),
+    )
+
+    assert answer.abstained  # span can't verify against a body that was never resolved
+    assert answer.withheld_citations == ()  # not withheld -- simply unresolved
