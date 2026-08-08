@@ -26,7 +26,6 @@ the ticket's acceptance surface.
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,12 +34,10 @@ from typing import TYPE_CHECKING
 from lode.citations_read import CitationIdentity, resolve_citations
 from lode.config import Settings, lance_dir
 from lode.faithfulness import locate_span, normalize_whitespace
-from lode.lexical import LexicalCacheBackend
-from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
-from lode.tui.services.capture import EmptyCaptureError
-from lode.tui.services.reconcile import Conflict, conflict_from_error
-from lode.versions import HeadConflictError, SaveResult
+from lode.tui.services.capture import save_capture
+from lode.tui.services.reconcile import Conflict
+from lode.versions import SaveResult
 
 if TYPE_CHECKING:
     from lode.answer import Support
@@ -186,45 +183,47 @@ def save_ask_answer_as_note(
 ) -> SaveResult | Conflict:
     """Save a user-confirmed ask answer as a brand-new note (lode-35nu.11.4).
 
-    The source note the question was pinned to is never touched -- this
-    drives the exact same capture write path
-    :func:`~lode.tui.services.capture.save_capture` does
-    (:meth:`~lode.repository.Repository.save` behind the capture-path cache
-    composite, no AI call anywhere in this path), mints a fresh ``uuid4``
-    note id, and then adds exactly ONE ``source='user'`` note->note edge from
-    the new note back to ``source_note_id``, in a second transaction on the
-    same connection right after the save commits. This is the only edge this
-    function ever inserts -- the new note's own citations/URLs, if any,
-    become ordinary note->external edges strictly through
+    The source note the question was pinned to is never touched. The note
+    itself is written by :func:`~lode.tui.services.capture.save_capture` --
+    CALLED, not re-implemented, so the capture write path (fresh ``uuid4``
+    note id, :meth:`~lode.repository.Repository.save` behind the capture-path
+    cache composite, "no AI call anywhere in this path", the empty-body
+    refusal and the CAS-reject routing) has exactly one body and cannot drift
+    between the two screens that reach it. This function adds only what
+    capture has no notion of: exactly ONE ``source='user'`` note->note edge
+    from the new note back to ``source_note_id``. That is the only edge it
+    ever inserts -- the new note's own citations/URLs, if any, become
+    ordinary note->external edges strictly through
     :meth:`~lode.repository.Repository.save`'s own
     :func:`lode.drawdown.detect_and_enqueue_drawdown` call, exactly as for
     any other captured note; this function introduces no second edge-minting
     path and no citation handling of its own (the ticket's own acceptance
     wording).
 
-    Raises :class:`~lode.tui.services.capture.EmptyCaptureError` on an
-    empty/whitespace-only body -- unreachable from the confirm flow in
-    practice (there is always rendered answer text to confirm), but handled
-    rather than assumed away, mirroring :func:`~lode.tui.services.capture.save_capture`.
-    A CAS reject on the fresh note id (practically unreachable -- a ``uuid4``
-    has nothing to collide with) is handed to
-    :func:`~lode.tui.services.reconcile.conflict_from_error`, same as
-    capture; on a conflict, no edge is written either -- there is no new
-    note yet to link.
-    """
-    if not body.strip():
-        raise EmptyCaptureError("refusing to save an empty note")
+    **The edge is a second transaction, after the note's own save has
+    committed** -- ``Repository.save`` owns its ``with conn:`` boundary and
+    this reaches past it rather than widening it. The residue if the process
+    dies between the two commits is therefore an ordinary note with no link
+    back to its source: visible in Browse, editable, deletable, and never a
+    dangling edge pointing at a note that does not exist (which is why the
+    save goes first). Accepted rather than fixed here -- making it atomic
+    means changing ``Repository.save``'s signature, well outside this
+    feature.
 
-    settings = settings or Settings()
-    note_id = str(uuid.uuid4())
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    Raises :class:`~lode.tui.services.capture.EmptyCaptureError` (from
+    ``save_capture``) on an empty/whitespace-only body -- unreachable from
+    the confirm flow in practice, since there is always rendered answer text
+    to confirm. A CAS reject (practically unreachable -- a ``uuid4`` has
+    nothing to collide with) returns the
+    :class:`~lode.tui.services.reconcile.Conflict` ``save_capture`` produces,
+    and no edge is written either: there is no new note to link.
+    """
+    result = save_capture(db_path, body, settings=settings)
+    if isinstance(result, Conflict):
+        return result
+
     conn = init_db(db_path)
     try:
-        repo = Repository(conn, cache=CompositeCache([LexicalCacheBackend(conn)]))
-        try:
-            result = repo.save(note_id, body, settings=settings)
-        except HeadConflictError as exc:
-            return conflict_from_error(db_path, exc)
         with conn:
             conn.execute(
                 "INSERT INTO edges "

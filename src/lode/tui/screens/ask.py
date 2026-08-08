@@ -113,18 +113,11 @@ class AskScreen(Screen[None]):
         # ledger had left unclaimed -- confirmed free against Input.BINDINGS,
         # textual.keys.KEY_ALIASES, and every other screen's own BINDINGS.
         Binding("ctrl+j", "open_citation", "Open citation"),
-        # ctrl+s: "Save as note" (lode-35nu.11.4). Confirmed free against
-        # ``Input.BINDINGS`` (the question field's own builtins -- see the
-        # module-level import comment near ``on_input_submitted``), against
-        # ``textual.keys.KEY_ALIASES``, and against ``App.BINDINGS``'s
-        # ``priority=True`` reservations -- unlike the exhausted global
-        # letter ledger ``docs/keybindings.md`` tracks for TextArea-bearing
-        # screens, this Screen's only text-entry widget is an ``Input`` (no
-        # TextArea), and ``ctrl+s`` is not one of its builtins, so it is free
-        # here even though it is already spent on ``EditScreen``/
-        # ``CaptureScreen`` -- those are different screens, never active at
-        # the same time as this one. Reuses "Ctrl+S = Save" mnemonically,
-        # the same convention those two screens already use.
+        # ctrl+s: "Save as note" (lode-35nu.11.4). Free here despite being
+        # spent on EditScreen/CaptureScreen -- this screen bears no TextArea,
+        # only an Input, whose builtins exclude it. The full clearance (all
+        # three traps, and why reusing the "Ctrl+S = Save" mnemonic is
+        # deliberate) is recorded once in docs/keybindings.md's ledger.
         Binding("ctrl+s", "save_as_note", "Save as note"),
     ]
 
@@ -406,8 +399,14 @@ class AskScreen(Screen[None]):
         notified rather than routed to the reconcile screen: there is no
         user-typed buffer to preserve here, just the same already-on-screen
         answer, safe to let the user retry.
+
+        The ``_note_id`` re-check is a type narrow, not a second guard --
+        :meth:`action_save_as_note` already refused a corpus-wide ask, and
+        the field is fixed at construction. ``_result`` is deliberately NOT
+        re-checked: a modal blocks input, so no new question can have landed
+        while this callback was pending.
         """
-        if not confirmed or self._note_id is None or self._result is None:
+        if not confirmed or self._note_id is None:
             return
         result = save_ask_answer_as_note(
             self.app.db_path,
