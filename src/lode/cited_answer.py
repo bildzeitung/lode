@@ -54,6 +54,7 @@ from lode.egress import WithheldCitation
 from lode.faithfulness import EntailmentScorer, locate_span
 from lode.gate import apply_gate
 from lode.llm_provider import LLMProvider
+from lode.no_egress_scope import NoEgressScopeRule, is_no_egress_scoped
 from lode.qa import QaPassage, QaResult, answer_question
 from lode.retrieval import ContextItem, TrustTier
 
@@ -147,6 +148,7 @@ def ask(
     same step-3 entailment seam :func:`lode.gate.apply_gate` exposes, which tests
     inject to keep the gate offline.
     """
+    settings = settings or Settings()
     passages: list[QaPassage] = []
     # Verify spans only against bodies the model was eligible to see: a no_egress
     # body (withheld from the send) and an unresolved target are kept out of the
@@ -155,7 +157,9 @@ def ask(
     bodies: dict[str, str] = {}
     for item in context:
         is_external = item.tier in _EXTERNAL_TIERS
-        body, no_egress = _resolve_target(conn, item.target_version, is_external)
+        body, no_egress = _resolve_target(
+            conn, item.target_version, is_external, settings.no_egress_scopes
+        )
         passages.append(
             QaPassage(
                 target_id=item.target_version,
@@ -236,7 +240,10 @@ def _stamp_body_offsets(
 
 
 def _resolve_target(
-    conn: sqlite3.Connection, target_version: str, is_external: bool
+    conn: sqlite3.Connection,
+    target_version: str,
+    is_external: bool,
+    no_egress_scopes: Sequence[NoEgressScopeRule] = (),
 ) -> tuple[str | None, bool]:
     """Resolve a cited target's stored body and no_egress flag from the store.
 
@@ -247,21 +254,30 @@ def _resolve_target(
     ``(body, no_egress)``; a target absent from the store resolves to a ``None``
     body (the gate then fails any claim citing it closed) and a safe ``no_egress``
     default.
+
+    For an external target, the returned ``no_egress`` composes the per-row
+    ``externals.no_egress`` flag with ``no_egress_scopes`` (lode-35nu.11.8) --
+    either denying is a denial. Note-side targets have no ``external_id`` and
+    no scope concept, so they are unaffected.
     """
     if is_external:
         row = conn.execute(
-            "SELECT s.body, e.no_egress FROM snapshots s "
+            "SELECT s.body, e.no_egress, e.external_id, e.source_type FROM snapshots s "
             "JOIN externals e ON e.external_id = s.external_id "
             "WHERE s.snapshot_id = ?",
             (target_version,),
         ).fetchone()
-    else:
-        row = conn.execute(
-            "SELECT v.body, n.no_egress FROM versions v "
-            "JOIN notes n ON n.note_id = v.note_id "
-            "WHERE v.version_id = ?",
-            (target_version,),
-        ).fetchone()
+        if row is None:
+            return None, False
+        body, no_egress, external_id, source_type = row
+        scoped = is_no_egress_scoped(external_id, source_type, list(no_egress_scopes))
+        return body, bool(no_egress) or scoped
+    row = conn.execute(
+        "SELECT v.body, n.no_egress FROM versions v "
+        "JOIN notes n ON n.note_id = v.note_id "
+        "WHERE v.version_id = ?",
+        (target_version,),
+    ).fetchone()
     if row is None:
         return None, False
     body, no_egress = row

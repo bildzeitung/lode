@@ -91,12 +91,14 @@ def _insert_note(conn, *, note_id, version_id, body, no_egress=False) -> None:
     conn.commit()
 
 
-def _insert_external(conn, *, external_id, snapshot_id, body, no_egress=False) -> None:
+def _insert_external(
+    conn, *, external_id, snapshot_id, body, no_egress=False, source_type="web"
+) -> None:
     """Seed one external + its head snapshot, optionally no_egress."""
     conn.execute(
         "INSERT INTO externals (external_id, source_type, no_egress) "
-        "VALUES (?, 'web', ?)",
-        (external_id, int(no_egress)),
+        "VALUES (?, ?, ?)",
+        (external_id, source_type, int(no_egress)),
     )
     conn.execute(
         "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
@@ -433,6 +435,102 @@ def test_no_egress_external_kept_off_cloud_and_surfaced_as_withheld(conn) -> Non
     assert "public runbook" in prompt  # the sendable external did go out
     assert [c.target_id for c in answer.withheld_citations] == ["s-secret"]
     assert answer.withheld_citations[0].note == WITHHELD_CITATION
+
+
+def test_no_egress_scope_withholds_already_captured_external_web_host(conn) -> None:
+    """A URL-host scope rule withholds an already-captured 'web' external at
+    its next send, with no per-row flag set and no migration/backfill
+    (lode-35nu.11.8, cited_answer._resolve_target site).
+    """
+    from lode.no_egress_scope import NoEgressScopeRule
+
+    settings = Settings(
+        no_egress_scopes=[
+            NoEgressScopeRule(source_type="web", match="internal.example.com")
+        ]
+    )
+    _insert_external(
+        conn,
+        external_id="https://internal.example.com/secret-runbook",
+        snapshot_id="s-secret",
+        body="internal creds runbook",
+    )
+    client = _FakeClient([])
+
+    answer = ask(
+        conn,
+        "q",
+        [_external_context("s-secret", "internal creds runbook")],
+        provider=AnthropicProvider(client),
+        settings=settings,
+    )
+
+    prompt = _user_prompt(client)
+    assert "internal creds runbook" not in prompt
+    assert [c.target_id for c in answer.withheld_citations] == ["s-secret"]
+    # No write performed to the row by the scope rule.
+    row = conn.execute(
+        "SELECT no_egress FROM externals WHERE "
+        "external_id = 'https://internal.example.com/secret-runbook'"
+    ).fetchone()
+    assert row[0] == 0
+
+
+def test_no_egress_scope_removed_immediately_unwithholds(conn) -> None:
+    """Removing a scope rule un-withholds immediately -- no migration needed."""
+    _insert_external(
+        conn,
+        external_id="https://internal.example.com/runbook",
+        snapshot_id="s1",
+        body="the runbook says rotate the certs.",
+    )
+    claim = Claim(
+        text="rotate the certs.",
+        support=[Support(snapshot_id="s1", quoted_span="rotate the certs")],
+    )
+    client = _FakeClient([claim])
+
+    # No scope rule configured -- the previously-covered external now sends.
+    answer = ask(
+        conn,
+        "q",
+        [_external_context("s1", "the runbook says rotate the certs.")],
+        provider=AnthropicProvider(client),
+        settings=Settings(no_egress_scopes=[]),
+    )
+
+    prompt = _user_prompt(client)
+    assert "rotate the certs" in prompt
+    assert answer.withheld_citations == ()
+
+
+def test_no_egress_scope_composes_with_per_row_flag(conn) -> None:
+    """Per-row flag denies even when no scope rule matches (either denying denies)."""
+    from lode.no_egress_scope import NoEgressScopeRule
+
+    settings = Settings(
+        no_egress_scopes=[NoEgressScopeRule(source_type="jira", match="OTHER")]
+    )
+    _insert_external(
+        conn,
+        external_id="https://internal.example.com/runbook",
+        snapshot_id="s1",
+        body="secret runbook",
+        no_egress=True,
+    )
+    client = _FakeClient([])
+
+    answer = ask(
+        conn,
+        "q",
+        [_external_context("s1", "secret runbook")],
+        provider=AnthropicProvider(client),
+        settings=settings,
+    )
+
+    prompt = _user_prompt(client)
+    assert "secret runbook" not in prompt
+    assert [c.target_id for c in answer.withheld_citations] == ["s1"]
 
 
 def test_gate_cited_answer_composes_survivors_with_withheld() -> None:

@@ -35,6 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from lode.llm_provider import EFFORT_LEVELS_BY_PROVIDER, ModelTier
 from lode.lock import lock_path
+from lode.no_egress_scope import NoEgressScopeRule
 
 # --- Atlassian connector credential env vars (lode-gpzn.1) --------------------
 # Documented, env-var-PRIMARY resolution for the JIRA/Confluence Cloud Basic-auth
@@ -532,6 +533,21 @@ class Settings(BaseModel):
         "High-precision secret regexes kept out of the local vector/FTS index; "
         "iterate from real misses. Drives lode.redact.",
     )
+    no_egress_scopes: list[NoEgressScopeRule] = _knob(
+        [],
+        Kind.RUNTIME,
+        "no_egress SCOPE rules (lode-35nu.11.8): each entry covers every "
+        "external whose (source_type, external_id) matches, including one "
+        "with no externals row yet -- evaluated live, never materialized "
+        "onto a row. source_type='jira': match is a project key, matched "
+        "against the issue-key prefix. source_type='web': match is a URL "
+        "host, matched exactly. source_type='confluence' is REJECTED at "
+        "load (see the field validator below) -- drawdown.py's "
+        "_CONFLUENCE_PAGE_RE discards the space key at detection time, so a "
+        "space-scoped rule is structurally unmatchable, not just unbuilt. "
+        "Composes with the per-row externals.no_egress flag: either denying "
+        "is a denial.",
+    )
 
     # --- Models ---------------------------------------------------------------
     embedding_model: str = _knob(
@@ -613,6 +629,35 @@ class Settings(BaseModel):
             except re.error as exc:
                 raise ValueError(f"invalid redaction regex {pattern!r}: {exc}") from exc
         return patterns
+
+    @field_validator("no_egress_scopes")
+    @classmethod
+    def _no_egress_scopes_reject_confluence(
+        cls, rules: list[NoEgressScopeRule]
+    ) -> list[NoEgressScopeRule]:
+        """Fail loudly at load on a ``source_type="confluence"`` scope rule.
+
+        Confluence space-key scoping is structurally impossible under the
+        current data model -- ``drawdown.py``'s ``_CONFLUENCE_PAGE_RE``
+        discards the space key at detection time, so ``external_id`` for a
+        Confluence external carries only the numeric page id, never the
+        space. A rule that could never match anything would otherwise
+        silently match nothing with no signal (rejected explicitly by this
+        ticket's acceptance criteria, ``lode-35nu.11.8``) -- so it is refused
+        here rather than accepted as a documented no-op. See
+        ``docs/externals.md`` "No-egress scope rules" for the full rationale.
+        """
+        for rule in rules:
+            if rule.source_type == "confluence":
+                raise ValueError(
+                    "no_egress_scopes: source_type='confluence' is not "
+                    "supported -- Confluence space-key scoping is "
+                    "structurally impossible (the space key is discarded at "
+                    "detection time and stored nowhere; see "
+                    "docs/externals.md 'No-egress scope rules'). Supported "
+                    "source_type values: 'jira', 'web'."
+                )
+        return rules
 
     @field_validator("jira_base_url", "confluence_base_url")
     @classmethod
