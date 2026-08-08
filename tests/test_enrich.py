@@ -130,6 +130,7 @@ def _insert_external(
     body: str = "This is a test snapshot about Python authentication.",
     status: str = "ok",
     no_egress: int = 0,
+    source_type: str = "web",
 ) -> None:
     """Insert an externals + snapshots row pair and set the head pointer.
 
@@ -140,8 +141,8 @@ def _insert_external(
     with conn:
         conn.execute(
             "INSERT INTO externals (external_id, source_type, no_egress) "
-            "VALUES (?, 'web', ?)",
-            (external_id, no_egress),
+            "VALUES (?, ?, ?)",
+            (external_id, source_type, no_egress),
         )
         conn.execute(
             "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
@@ -718,6 +719,62 @@ def test_enrich_version_skips_no_egress_external(
     assert result is None
     client.messages.create.assert_not_called()
     assert conn.execute("SELECT COUNT(*) FROM annotations").fetchone()[0] == 0
+
+
+def test_enrich_version_skips_no_egress_scoped_jira_external(
+    conn: sqlite3.Connection,
+) -> None:
+    """A config scope rule withholds an ALREADY-CAPTURED external with no
+    per-row flag set and no migration/backfill (lode-35nu.11.8) -- the row's
+    own no_egress stays 0, unwritten by the rule.
+    """
+    from lode.no_egress_scope import NoEgressScopeRule
+
+    settings = Settings(
+        no_egress_scopes=[NoEgressScopeRule(source_type="jira", match="SECRET")]
+    )
+    _insert_external(
+        conn, external_id="SECRET-1", snapshot_id="snap-1", source_type="jira"
+    )
+    client = _fake_client(EnrichmentResult())
+
+    result = enrich_version(
+        conn, "snap-1", settings, provider=AnthropicProvider(client)
+    )
+
+    assert result is None
+    client.messages.create.assert_not_called()
+    # No write performed to the row by the scope rule -- still unset.
+    row = conn.execute(
+        "SELECT no_egress FROM externals WHERE external_id = 'SECRET-1'"
+    ).fetchone()
+    assert row[0] == 0
+
+
+def test_enrich_version_scope_composes_with_per_row_flag(
+    conn: sqlite3.Connection,
+) -> None:
+    """Per-row flag true, scope false -- still withheld (either denying denies)."""
+    from lode.no_egress_scope import NoEgressScopeRule
+
+    settings = Settings(
+        no_egress_scopes=[NoEgressScopeRule(source_type="jira", match="OTHER")]
+    )
+    _insert_external(
+        conn,
+        external_id="SECRET-1",
+        snapshot_id="snap-1",
+        source_type="jira",
+        no_egress=1,
+    )
+    client = _fake_client(EnrichmentResult())
+
+    result = enrich_version(
+        conn, "snap-1", settings, provider=AnthropicProvider(client)
+    )
+
+    assert result is None
+    client.messages.create.assert_not_called()
 
 
 def test_enrich_version_skips_tombstone_snapshot(
