@@ -524,7 +524,9 @@ def test_effort_levels_match_the_installed_sdk_literal() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _tool_use_response(name: str, tool_input: dict, block_id: str = "toolu_1") -> object:
+def _tool_use_response(
+    name: str, tool_input: dict, block_id: str = "toolu_1"
+) -> object:
     block = mock.MagicMock()
     block.type = "tool_use"
     block.name = name
@@ -605,6 +607,11 @@ def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> 
         timeout_s=30.0,
         tool_name="extract_widget",
         tool_description="Extract a widget.",
+        # One free turn only -- the loop otherwise asks again after a tool
+        # result to see whether the model wants another tool, which needs a
+        # third mock response; max_tool_turns=1 isolates exactly the shape
+        # this test asserts (one tool call, then the forced final turn).
+        max_tool_turns=1,
     )
 
     assert result == _Widget(name="widget", count=3)
@@ -614,9 +621,17 @@ def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> 
     free_kwargs = client.messages.create.call_args_list[0].kwargs
     assert free_kwargs["tool_choice"] == {"type": "auto"}
     assert free_kwargs["tools"] == [
-        {"name": "lookup_widget", "description": "Look up a widget.", "input_schema": {}}
+        {
+            "name": "lookup_widget",
+            "description": "Look up a widget.",
+            "input_schema": {},
+        }
     ]
-    assert free_kwargs["messages"] == [{"role": "user", "content": "find widget w-1"}]
+    # `messages` is the same list object mutated in place across turns (the
+    # mock stores it by reference), so only its first element is a stable
+    # snapshot of what the free turn actually saw -- its full final shape is
+    # asserted via `final_kwargs["messages"]` below instead.
+    assert free_kwargs["messages"][0] == {"role": "user", "content": "find widget w-1"}
 
     final_kwargs = client.messages.create.call_args_list[1].kwargs
     assert final_kwargs["tool_choice"] == {"type": "tool", "name": "extract_widget"}
@@ -642,10 +657,14 @@ def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> 
     }
 
 
-def test_run_tool_turns_forces_the_final_turn_when_the_model_never_calls_a_tool() -> None:
+def test_run_tool_turns_forces_the_final_turn_when_the_model_never_calls_a_tool() -> (
+    None
+):
     # The model may decline to call any tool on the first free turn -- the run
     # still proceeds straight to the forced final turn.
-    tool = ToolSpec(name="lookup_widget", description="Look up a widget.", input_schema={})
+    tool = ToolSpec(
+        name="lookup_widget", description="Look up a widget.", input_schema={}
+    )
     text_only = mock.MagicMock()
     text_block = mock.MagicMock()
     text_block.type = "text"
@@ -674,7 +693,9 @@ def test_run_tool_turns_forces_the_final_turn_when_the_model_never_calls_a_tool(
     assert final_kwargs["tool_choice"] == {"type": "tool", "name": "_Widget"}
 
 
-def test_run_tool_turns_stops_after_max_tool_turns_and_still_forces_the_final_turn() -> None:
+def test_run_tool_turns_stops_after_max_tool_turns_and_still_forces_the_final_turn() -> (
+    None
+):
     tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
     always_calls_tool = _tool_use_response("lookup_widget", {"id": "w"})
     final_turn = _final_forced_response({"name": "w", "count": 9})
@@ -795,6 +816,7 @@ def test_run_tool_turns_raises_when_the_final_turn_has_no_tool_use_block() -> No
             output_schema=_Widget,
             max_tokens=2048,
             timeout_s=30.0,
+            max_tool_turns=1,  # isolate the one free turn + forced final turn
         )
 
 

@@ -918,9 +918,7 @@ class AnthropicProvider:
             raise _anthropic_error_from_exception(
                 exc, context=f"model={model} (final forced-schema turn)"
             ) from exc
-        tool_block = next(
-            (b for b in response.content if b.type == "tool_use"), None
-        )
+        tool_block = next((b for b in response.content if b.type == "tool_use"), None)
         if tool_block is None:
             raise LLMProviderError(
                 f"Anthropic response contained no tool_use block to decode "
