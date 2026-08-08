@@ -234,6 +234,10 @@ action on one of these screens still faces the exhausted pool above; this one di
 | | | `up` | Move the focused-citation cursor to the previous citation (`show=False` — hidden the same way `BrowseScreen`'s own arrow-key row navigation is; the status line above the footer shows the current one) | |
 | | | `down` | Move the focused-citation cursor to the next citation (`show=False`, same reasoning) | |
 | | | `ctrl+j` | Open the focused citation's cited version/snapshot (`lode-35nu.4`) | |
+| | | `ctrl+s` | Save the current answer as a new note (`lode-35nu.11.4`, per-note ask only) | |
+| `SaveAsNoteConfirmScreen` | `screens/save_as_note_confirm.py` | `y` | Yes, save | — |
+| | | `n` | No, cancel | |
+| | | `escape` | Cancel (`show=False`) | |
 | `ConfigScreen` | `screens/config.py` | `escape` | Back | — |
 | `ReconcileScreen` | `screens/reconcile.py` | `r` | Re-apply | read-only diff |
 | | | `d` | Discard | |
@@ -299,6 +303,20 @@ Two things this claim did *not* clear, recorded so the next reader doesn't re-de
   already unreachable app-wide, before and after this ticket. The residual is narrower — on that
   configuration, Return in the question field would additionally fire "open citation". Accepted as
   the known cost of spending the last risk-flagged letter; revisit if the letter pool is widened.
+
+**`lode-35nu.11.4` claims `ctrl+s` on `AskScreen`, without widening the global letter ledger.**
+The ledger above tracks `ctrl+<letter>` collisions against `TextArea`'s builtins (the trap that
+motivated the whole doc), but `AskScreen` composes no `TextArea` — only an `Input` (the question
+field), whose own builtins (`ctrl+a/e/w/u/k/x/c/v/d`, plus `ctrl+left`/`ctrl+right`/`ctrl+shift+*`)
+do not include `ctrl+s`; confirmed against `Input.BINDINGS` directly (Textual 8.2.8), same as every
+`ctrl+<letter>` claim above. `ctrl+s` is already spent on `EditScreen`/`CaptureScreen` ("Save") —
+reused here on purpose rather than avoided, since it is the identical action (confirm-and-save) on
+a screen that is never active at the same time as either of those two, so there is no collision to
+resolve, only a mnemonic to reuse. Confirmed against `KEY_ALIASES` (no entry) and `App.BINDINGS`'s
+`priority=True` reservations (none) too. Gated at the call site to a per-note ask with a
+non-abstained answer on screen (`AskScreen._note_id is not None` — a source note to link the new
+note back to is what the feature needs); a no-op notification otherwise, same pattern as `ctrl+j`'s
+own "no citation to open" guard.
 
 ## Resolved collisions (history, for context)
 
