@@ -155,6 +155,9 @@ class _ClaimsEnvelope(BaseModel):
     decoded through this single-field envelope and unwrapped to ``Answer``.
     Reuses :class:`lode.answer.Claim` so the schema stays pinned to the landed
     claims/support shape -- this module owns the call, not the answer shape.
+    ``Support.body_offset`` is app-side only and is dropped from the generated
+    schema by ``SkipJsonSchema`` on the field itself (lode-9nmk), so nothing
+    here has to mirror or strip it.
     """
 
     model_config = ConfigDict(extra="forbid")
