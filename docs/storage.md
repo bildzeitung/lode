@@ -464,9 +464,27 @@ annotation, which the head-pointer comparison flags for re-derivation. So:
   mirrors the worker handler-registry shape; the Phase-A ``embed_gap`` step is registered at module
   load; E7 appends the enrich-gap step; `lode-w0h.6` appends the `refresh_stale` step — the web
   connector's refresh policy, re-enqueueing a `refresh` job for any external past its TTL
-  (`docs/externals.md` "Refresh policy"). Each step uses `enqueue_derive_jobs` with `ON CONFLICT DO
-  NOTHING` (the ``idx_jobs_live`` live-job index), so running it repeatedly enqueues no
-  duplicates. Runs at the start of each `lode work` drain pass (startup + every ``--loop`` tick).
+  (`docs/externals.md` "Refresh policy"). `embed_gap`, `enrich_gap`, and `refresh_stale` each use
+  `enqueue_derive_jobs` with `ON CONFLICT DO NOTHING` (the ``idx_jobs_live`` live-job index), so
+  running any of them repeatedly enqueues no duplicates. Runs at the start of each `lode work` drain
+  pass (startup + every ``--loop`` tick).
+  - **`lexical_gap` (lode-cyly) is the one step that does not fit this shape.** It finds live NOTE
+    heads with zero `passages_fts` rows and heals them **inline, synchronously, model-free** — no
+    job row is enqueued at all — because chunking + the FTS5 write are cheap, local, and need no
+    embedder, driving `LexicalCacheBackend.index()` directly (the same seam `Repository.save`
+    already drives on every capture). Its idempotence therefore does **not** come from
+    `idx_jobs_live` (there is no job to dedupe) — it comes from `replace_passages`'s per-
+    `target_version` delete-then-insert, so re-running the step on an already-healed head is a
+    no-op write, not a skip. Scope is notes-only, and its gap predicate deliberately checks
+    `purged_at IS NULL` (unlike `lode reindex-lexical`'s own purged-head exception) — this step
+    exists to keep *live* search coverage complete, not to backfill a version a user has already
+    asked to forget. `lode status` surfaces the same count via a shared predicate
+    (`lode.reconcile._LEXICAL_GAP_FROM`, read by both `lexical_gap_heads` and the SQL-only
+    `lexical_gap_count`), so the healer and the hint can never disagree.
+  - **`reconcile()`'s returned total (and the `reconcile[%s]` log line) means "gaps handled," not
+    "jobs enqueued."** Before `lexical_gap`, every step's count was job rows enqueued; now one step's
+    count is gaps healed synchronously with no row at all. Anything reading the total as queue depth
+    is wrong.
 - **Single owner** (the startup advisory lock, above) is what lets a one-claimer SQLite queue stay
   correct with no distributed locking.
 - **The embedder is owned by the run, not by the job** (`lode-j5r2`). `drain()` hands every `embed`

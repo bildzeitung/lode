@@ -88,6 +88,7 @@ from lode.notes_read import (
     list_notes,
     list_notes_conn,
 )
+from lode.reconcile import lexical_gap_count
 from lode.repository import AmbiguousNoteIdError, CompositeCache, Repository
 from lode.storage import init_db
 from lode.timestamps import parse_stamp
@@ -1517,6 +1518,37 @@ def _enrichment_model_stale(
         return False
 
 
+def _lexical_gap_count(db: Path | None) -> int:
+    """Count of live note heads with zero ``passages_fts`` rows right now (lode-cyly).
+
+    Reads :func:`lode.reconcile.lexical_gap_count` -- the identical predicate
+    the ``lexical_gap`` reconcile step heals from -- so this count can never
+    disagree with what the next reconcile pass (worker startup, or the start
+    of any ``--loop``/``--wait`` drain tick) is about to fix. It is a plain
+    read only: unlike the reconcile step itself, this probe never calls
+    :class:`~lode.lexical.LexicalCacheBackend` and never writes anything --
+    ``lode status`` reports health, it does not perform repair.
+
+    Opens its own connection, mirroring :func:`_enrichment_model_stale`'s
+    independent-connection convention (this runs after ``status``'s own
+    early connection has already closed).
+
+    Never raises: any failure (a locked DB, an unexpectedly old schema, a
+    failed connection open) is reported as ``0`` -- this can only ever add a
+    hint line to ``lode status``, never fail the command, mirroring the
+    other status-hint probes' non-fatal contract.
+    """
+    try:
+        conn = _open_db(db)
+        try:
+            return lexical_gap_count(conn)
+        finally:
+            conn.close()
+    except Exception:
+        log.debug("_lexical_gap_count: probe failed", exc_info=True)
+        return 0
+
+
 @app.command()
 def status(db: _DbOption = None) -> None:
     """Show work-queue health: job counts, dead-letters, an egress summary, and what needs your attention.
@@ -1538,7 +1570,10 @@ def status(db: _DbOption = None) -> None:
     configured enrichment_llm or the currently active provider
     (lode-14jr/lode-o9k3/lode-568v.6 -- no drift counterpart; see
     docs/configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745
-    for why), or an explicit
+    for why), flag any live note head missing its lexical (FTS5) index rows
+    -- the same signal the ``lexical_gap`` reconcile step self-heals on its
+    own schedule, surfaced here as a count so a user isn't waiting on that
+    schedule blind (lode-cyly) -- or an explicit
     "No action needed." if none of those apply. Dead-letter jobs get no hint
     -- they are already listed above with their errors, and won't be
     retried.
@@ -1685,6 +1720,10 @@ def status(db: _DbOption = None) -> None:
         enrichment_stale = _enrichment_model_stale(
             db, settings.enrichment_llm.model, provider_identity(settings)
         )
+    # Independent of `settings` (the query needs none), unlike the three
+    # probes above -- but still non-fatal (returns 0 on any failure) and run
+    # in the same "outside any try, own connection" style, per lode-cyly.
+    lexical_gaps = _lexical_gap_count(db)
     console.print()
     # markup stays ON here -- these strings are author-written, not DB-derived,
     # so the [warn]/[ok] tags are the point. highlight stays OFF for the same
@@ -1723,12 +1762,21 @@ def status(db: _DbOption = None) -> None:
             "'lode reenrich' to make it consistent again.",
             highlight=False,
         )
+    if lexical_gaps:
+        console.print(
+            f"[warn]Action needed:[/warn] {lexical_gaps} live note head(s) "
+            "have no lexical (FTS5) index rows -- run 'lode reindex-lexical' to "
+            "make them keyword-findable now, or wait for 'lode work' to heal "
+            "them automatically on its next reconcile pass.",
+            highlight=False,
+        )
     if (
         pending_or_failed == 0
         and not cache_cold
         and not revision_mixed
         and not revision_drift
         and not enrichment_stale
+        and not lexical_gaps
     ):
         console.print("[ok]No action needed.[/ok]", highlight=False)
 
@@ -3201,6 +3249,11 @@ def work(
                         # idempotent by the live-job partial unique index
                         # (lode-i05.4). ``settings`` reaches every scan step —
                         # see reconcile.StepFn (lode-09n).
+                        #
+                        # ``gap`` is "gaps HANDLED", not queue depth (lode-cyly):
+                        # the lexical_gap step heals inline and enqueues nothing,
+                        # so a nonzero count here does not imply drain() has work.
+                        # The outstanding-jobs report below is the queue signal.
                         gap = _reconcile(conn, settings)
                         if gap:
                             typer.echo(f"reconciled {gap} gap version(s)")
