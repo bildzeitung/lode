@@ -270,7 +270,7 @@ def _resolve_target(
         if row is None:
             return None, False
         body, no_egress, external_id, source_type = row
-        scoped = is_no_egress_scoped(external_id, source_type, list(no_egress_scopes))
+        scoped = is_no_egress_scoped(external_id, source_type, no_egress_scopes)
         return body, bool(no_egress) or scoped
     row = conn.execute(
         "SELECT v.body, n.no_egress FROM versions v "

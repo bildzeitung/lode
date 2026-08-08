@@ -35,7 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from lode.llm_provider import EFFORT_LEVELS_BY_PROVIDER, ModelTier
 from lode.lock import lock_path
-from lode.no_egress_scope import NoEgressScopeRule
+from lode.no_egress_scope import SCOPED_SOURCE_TYPES, NoEgressScopeRule
 
 # --- Atlassian connector credential env vars (lode-gpzn.1) --------------------
 # Documented, env-var-PRIMARY resolution for the JIRA/Confluence Cloud Basic-auth
@@ -632,22 +632,32 @@ class Settings(BaseModel):
 
     @field_validator("no_egress_scopes")
     @classmethod
-    def _no_egress_scopes_reject_confluence(
+    def _no_egress_scopes_must_be_matchable(
         cls, rules: list[NoEgressScopeRule]
     ) -> list[NoEgressScopeRule]:
-        """Fail loudly at load on a ``source_type="confluence"`` scope rule.
+        """Fail loudly at load on any scope rule that could never match.
 
-        Confluence space-key scoping is structurally impossible under the
-        current data model -- ``drawdown.py``'s ``_CONFLUENCE_PAGE_RE``
-        discards the space key at detection time, so ``external_id`` for a
-        Confluence external carries only the numeric page id, never the
-        space. A rule that could never match anything would otherwise
-        silently match nothing with no signal (rejected explicitly by this
-        ticket's acceptance criteria, ``lode-35nu.11.8``) -- so it is refused
-        here rather than accepted as a documented no-op. See
-        ``docs/externals.md`` "No-egress scope rules" for the full rationale.
+        One governing rule, three cases: a privacy rule that silently matches
+        nothing is worse than no rule at all, because the user believes they
+        are covered. This ticket's acceptance criteria forbid it explicitly
+        (``lode-35nu.11.8``), so an empty ``match``, an unsupported
+        ``source_type``, and ``source_type="confluence"`` are all refused here
+        rather than accepted as silent no-ops.
+
+        Confluence gets its own message because its reason is structural, not
+        a typo: ``drawdown.py``'s ``_CONFLUENCE_PAGE_RE`` discards the space
+        key at detection time, so ``external_id`` for a Confluence external
+        carries only the numeric page id and a space-scoped rule has nothing
+        to match against. See ``docs/externals.md`` "No-egress scope rules".
         """
         for rule in rules:
+            if not rule.match.strip():
+                raise ValueError(
+                    "no_egress_scopes: 'match' must not be empty -- an empty "
+                    "rule cannot express any scope, and a privacy rule that "
+                    "matches nothing must fail loudly at load rather than "
+                    "silently withhold nothing."
+                )
             if rule.source_type == "confluence":
                 raise ValueError(
                     "no_egress_scopes: source_type='confluence' is not "
@@ -656,6 +666,13 @@ class Settings(BaseModel):
                     "detection time and stored nowhere; see "
                     "docs/externals.md 'No-egress scope rules'). Supported "
                     "source_type values: 'jira', 'web'."
+                )
+            if rule.source_type not in SCOPED_SOURCE_TYPES:
+                raise ValueError(
+                    f"no_egress_scopes: unsupported source_type "
+                    f"{rule.source_type!r} -- a rule declared for it could "
+                    f"never match any external. Supported source_type "
+                    f"values: {', '.join(repr(t) for t in SCOPED_SOURCE_TYPES)}."
                 )
         return rules
 

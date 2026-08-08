@@ -215,10 +215,17 @@ match = "internal.example.com"   # exact URL host, not a host+path prefix
 
 - `source_type = "jira"` — `match` is a JIRA project key, matched against the project-key prefix of
   a candidate JIRA issue key (`externals.external_id` for `source_type='jira'` is the issue key
-  itself, e.g. `"PROJ-123"`).
-- `source_type = "web"` — `match` is a URL host, matched **exactly** (host-only, not a host+path
-  prefix — the simplest shape that satisfies this ticket's acceptance; a path-prefix variant is a
-  documented future option if ever needed, not built speculatively).
+  itself, e.g. `"PROJ-123"`). The **whole** key boundary must line up: rule `PROJ` covers `PROJ-123`
+  but not `PROJECT-1`. Matched **case-insensitively** — `drawdown.py`'s `_JIRA_ISSUE_RE` preserves
+  whatever case the pasted URL used, so `/browse/proj-123` persists `"proj-123"`.
+- `source_type = "web"` — `match` is a URL **host**, matched **exactly** (host-only, not a host+path
+  prefix, and not a suffix — `example.com` covers `example.com` but neither `evil-example.com` nor
+  `sub.example.com`; a path-prefix variant is a documented future option if ever needed, not built
+  speculatively). The comparison is against the parsed host, so userinfo, a non-default port, host
+  case, and a trailing root dot cannot slip content past a rule
+  (`https://user@Internal.Example.com:8443/x` is covered by `internal.example.com`). Rule and
+  candidate are both lowercased and stripped of a trailing dot, so a rule written
+  `Internal.Example.com.` still works.
 - `source_type = "confluence"` is **rejected at config-load time** with a clear
   `ValidationError` naming the reason. Confluence space-key scoping is structurally impossible under
   the current data model: `drawdown.py`'s `_CONFLUENCE_PAGE_RE` persists only the numeric page id
@@ -230,6 +237,14 @@ match = "internal.example.com"   # exact URL host, not a host+path prefix
 
 **Composition with the per-row flag:** both are evaluated, and either denying is a denial — a scope
 rule never overrides an explicit per-row `--clear`, and a per-row flag never overrides a scope rule.
+
+**Fail-closed, in both places.** A rule that could never match anything is refused at load with a
+`ValidationError` — an empty `match`, an unsupported `source_type`, or `confluence` — because a
+privacy rule that silently matches nothing is worse than no rule at all: the user believes they are
+covered. At evaluation time, if matching a rule raises (an unparseable candidate `external_id`, say),
+the candidate is treated as **scoped and withheld** rather than allowed. That never withholds the
+world, because a candidate is only ever parsed once a rule of its own `source_type` exists — with the
+default empty rule set there is nothing to fail.
 
 **Not a generic seam.** `no_egress` is read by SQL `JOIN` at two call sites —
 `cited_answer._resolve_target` and `enrich._resolve_enrich_target` — so a config predicate cannot

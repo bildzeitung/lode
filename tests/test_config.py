@@ -313,6 +313,18 @@ def test_no_egress_scopes_rejects_confluence_at_load() -> None:
         Settings(no_egress_scopes=[{"source_type": "confluence", "match": "SPACE"}])
 
 
+def test_no_egress_scopes_rejects_unsupported_source_type() -> None:
+    """Same governing rule as the confluence case: a privacy rule that could
+    never match must fail loudly at load, not silently withhold nothing."""
+    with pytest.raises(ValidationError, match="unsupported source_type"):
+        Settings(no_egress_scopes=[{"source_type": "gitlab", "match": "PROJ"}])
+
+
+def test_no_egress_scopes_rejects_empty_match() -> None:
+    with pytest.raises(ValidationError, match="must not be empty"):
+        Settings(no_egress_scopes=[{"source_type": "web", "match": "  "}])
+
+
 # --- reasoning_effort validated against llm_provider at load (lode-tvps) ----
 
 

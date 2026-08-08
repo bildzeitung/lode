@@ -470,7 +470,7 @@ def _resolve_enrich_target(
     ).fetchone()
     if row is not None:
         body, status, external_id, no_egress, source_type = row
-        scoped = is_no_egress_scoped(external_id, source_type, list(no_egress_scopes))
+        scoped = is_no_egress_scoped(external_id, source_type, no_egress_scopes)
         return _EnrichTarget(
             external_id, body, bool(no_egress) or scoped, status != "tombstone"
         )
