@@ -942,16 +942,21 @@ behavior this ticket adds is the same "stop and report, never self-rescue" contr
 dispatch-time guards — it makes noticing mechanical at two more points, it does not make the
 underlying harness fault impossible.
 
-**And it is explicitly not the structurally correct altitude.** Checkpoints in a markdown instruction
-file depend on the agent choosing to run them; the mechanism that would close this class of gap *by
-construction* is a `PreToolUse` hook in `.claude/settings.json`, which fires on every matching tool
-call and needs no agent cooperation — the same graduation this repo already made for the gh-write and
-SHA-fabrication guards. `isolation-guard.sh` is already an executable 0/1/2 script with the right exit
-semantics, so the body exists. It was not done here because it raises real design questions this
-ticket's scope could not settle (the guard would also fire in the *main* session, where working on
-`trunk` is legitimate for the doc-only `--no-verify` path CLAUDE.md sanctions, and a fourth hook
-compounds the deny-everything failure mode if its prerequisites are missing). That is a **deferral on
-stated grounds, not a rejection**, and it is filed as `lode-p8zl` — a follow-up, not a loose end.
+**It was, at the time this ticket landed, explicitly not the structurally correct altitude — that gap
+is now closed by `lode-p8zl`.** Checkpoints in a markdown instruction file depend on the agent
+choosing to run them; the mechanism that closes this class of gap *by construction* is a
+`PreToolUse` hook in `.claude/settings.json`, which fires on every matching tool call and needs no
+agent cooperation — the same graduation this repo already made for the gh-write and SHA-fabrication
+guards. `isolation-guard.sh` was already an executable 0/1/2 script with the right exit semantics, so
+the body existed; what this ticket's own scope could not settle were two real design questions (the
+guard would also fire in the *main* session, where working on `trunk` is legitimate for the doc-only
+`--no-verify` path CLAUDE.md sanctions, and a fourth hook compounds the deny-everything failure mode
+if its prerequisites are missing). That was a **deferral on stated grounds, not a rejection**, filed
+as `lode-p8zl` — which escalated both questions for a maintainer ruling and then shipped
+`scripts/trunk-write-guard.sh`: a `PreToolUse(Edit|Write)` hook, gated on the current BRANCH (not an
+attempt to disambiguate subagent from main session — the payload cannot support that), returning
+`permissionDecision: "ask"` rather than `"deny"` when `HEAD` is `trunk`, and needing no `jq`. Full
+rulings and rationale: [`docs/decisions.md`](decisions.md) (search "lode-p8zl").
 
 ### Precondition guards (the 0/1/2 family) (lode-t6ni)
 
@@ -2120,7 +2125,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured), pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
 | Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr) |
 | Isolation guard | builder, reviewer, and `land-review` all run `scripts/isolation-guard.sh` (lode-ska2) as their FIRST action, before even the recycled-worktree guard — the harness has been observed handing a dispatched agent NO worktree at all (cwd on the main checkout, on `trunk`); a failure is a hard stop, never a self-provisioned `git worktree add` — [full account above](#isolation-guard-lode-ska2--lode-jk44) (lode-ska2, lode-jk44) |
-| Isolation guard (mid-session) | builder and reviewer also re-run `scripts/isolation-guard.sh` immediately before their first mutating `Edit`/`Write`, and again before the builder's first `git commit` / the reviewer's gate loop — a worktree can pass both start-of-cycle guards and still be destroyed mid-session (observed under a resumed `SendMessage` turn), after which a `git commit` silently lands **on `trunk`**. The toplevel is substituted inline, never carried across fenced blocks (lode-lv04). A markdown checkpoint is a mitigation, not the structurally correct altitude — a `PreToolUse` hook is, deferred on stated grounds to `lode-p8zl` — [full account above](#isolation-guard-mid-session-re-assertion-lode-6wgc) (lode-6wgc) |
+| Isolation guard (mid-session) | builder and reviewer also re-run `scripts/isolation-guard.sh` immediately before their first mutating `Edit`/`Write`, and again before the builder's first `git commit` / the reviewer's gate loop — a worktree can pass both start-of-cycle guards and still be destroyed mid-session (observed under a resumed `SendMessage` turn), after which a `git commit` silently lands **on `trunk`**. The toplevel is substituted inline, never carried across fenced blocks (lode-lv04). A markdown checkpoint is a mitigation, not the structurally correct altitude — a `PreToolUse` hook is that altitude, and it now ships as `scripts/trunk-write-guard.sh` (lode-p8zl, [below](#isolation-guard-mid-session-re-assertion-lode-6wgc)) — [full account above](#isolation-guard-mid-session-re-assertion-lode-6wgc) (lode-6wgc) |
 | Recycled-worktree guard | **Canonical row (lode-zt62) — `coding.md`'s and `code-reviewer.md`'s quick cards link here rather than restate it.** Builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>` — the ref belongs to another ticket), resets onto `origin/trunk` HEAD (never bare local `trunk`, which `/land` can leave carrying un-pushed, un-gated merges for its whole merge window — lode-isl3) — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. `git clean -fd` then runs **unconditionally**, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef` was investigated (lode-r7ow) and its reuse semantics found to be a documented, mechanism-level match for the recycling; the human decision to switch it has since been made and applied — it is now the explicit `"fresh"` (lode-jzbz), not the harness default by omission — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow, lode-jzbz, lode-3v1p, lode-isl3, lode-ivth) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
 | Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |
