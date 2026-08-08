@@ -6,6 +6,12 @@ including the dataclass/pydantic-field special case), and ``check`` (the
 tracked-file walk) -- plus one end-to-end regression against a synthetic
 fixture tree so a real dangling ref, a real re-export path, and a real
 line-wrapped-but-correct ref are all covered together.
+
+Fixture role text is assembled via ``_role`` rather than written as a literal
+``:func:`...``` substring anywhere in THIS file -- this file is itself under
+``tests/`` and therefore in-scope for ``nox -s docstringcheck``'s own scan of
+the real repo; a literal fixture role would self-match as a (bogus)
+unresolved or line-wrapped reference in this file's own source text.
 """
 
 from __future__ import annotations
@@ -23,6 +29,15 @@ check_docstring_refs = load_module_from_path(
 check = check_docstring_refs.check
 normalize_ref = check_docstring_refs.normalize_ref
 resolve_ref = check_docstring_refs.resolve_ref
+
+
+def _role(kind: str, target: str) -> str:
+    """Assemble a ``:kind:`target``` role string at RUNTIME so the literal
+    substring never appears in this file's own source (see module
+    docstring)."""
+    colon = ":"
+    backtick = "`"
+    return colon + kind + colon + backtick + target + backtick
 
 
 def _git_init(root: Path) -> None:
@@ -82,11 +97,8 @@ class TestResolveRef:
 
 class TestCheck:
     def test_clean_tree_has_no_unresolved_refs(self, tmp_path):
-        _write(
-            tmp_path,
-            "src/pkg/a.py",
-            '"""See :func:`lode.timestamps.parse_stamp`."""\n',
-        )
+        role = _role("func", "lode.timestamps.parse_stamp")
+        _write(tmp_path, "src/pkg/a.py", f'"""See {role}."""\n')
         _git_init(tmp_path)
 
         unresolved, wrapped = check(tmp_path)
@@ -94,11 +106,8 @@ class TestCheck:
         assert wrapped == []
 
     def test_dangling_lode_ref_is_reported(self, tmp_path):
-        _write(
-            tmp_path,
-            "src/pkg/a.py",
-            '"""See :func:`lode.timestamps.this_symbol_was_renamed_away`."""\n',
-        )
+        role = _role("func", "lode.timestamps.this_symbol_was_renamed_away")
+        _write(tmp_path, "src/pkg/a.py", f'"""See {role}."""\n')
         _git_init(tmp_path)
 
         unresolved, _wrapped = check(tmp_path)
@@ -107,10 +116,12 @@ class TestCheck:
         assert unresolved[0].line_no == 1
 
     def test_third_party_ref_is_never_flagged(self, tmp_path):
+        func_role = _role("func", "httpx.get")
+        class_role = _role("class", "pathlib.Path")
         _write(
             tmp_path,
             "src/pkg/a.py",
-            '"""See :func:`httpx.get` and :class:`pathlib.Path`, neither ours."""\n',
+            f'"""See {func_role} and {class_role}, neither ours."""\n',
         )
         _git_init(tmp_path)
 
@@ -118,11 +129,8 @@ class TestCheck:
         assert unresolved == []
 
     def test_wrapped_but_resolvable_ref_is_warned_not_failed(self, tmp_path):
-        _write(
-            tmp_path,
-            "src/pkg/a.py",
-            '"""See :func:`lode.timestamps.\n    parse_stamp` for the real thing."""\n',
-        )
+        role = _role("func", "lode.timestamps.\n    parse_stamp")
+        _write(tmp_path, "src/pkg/a.py", f'"""See {role} for the real thing."""\n')
         _git_init(tmp_path)
 
         unresolved, wrapped = check(tmp_path)
@@ -131,11 +139,8 @@ class TestCheck:
         assert wrapped[0].ref == "lode.timestamps.parse_stamp"
 
     def test_wrapped_and_dangling_ref_is_both_warned_and_failed(self, tmp_path):
-        _write(
-            tmp_path,
-            "src/pkg/a.py",
-            '"""See :func:`lode.timestamps.\n    not_a_real_symbol` (also broken)."""\n',
-        )
+        role = _role("func", "lode.timestamps.\n    not_a_real_symbol")
+        _write(tmp_path, "src/pkg/a.py", f'"""See {role} (also broken)."""\n')
         _git_init(tmp_path)
 
         unresolved, wrapped = check(tmp_path)
@@ -143,25 +148,20 @@ class TestCheck:
         assert len(wrapped) == 1
 
     def test_untracked_python_file_is_not_scanned(self, tmp_path):
-        _write(tmp_path, "src/pkg/a.py", '"""OK: :func:`lode.timestamps.parse_stamp`."""\n')
+        ok_role = _role("func", "lode.timestamps.parse_stamp")
+        _write(tmp_path, "src/pkg/a.py", f'"""OK: {ok_role}."""\n')
         _git_init(tmp_path)
         # Untracked -- must not be swept in, mirroring check_links.py's
         # git-ls-files scoping (scratch/gitignored files stay invisible).
-        _write(
-            tmp_path,
-            "src/pkg/scratch.py",
-            '"""Bad: :func:`lode.timestamps.definitely_not_real`."""\n',
-        )
+        bad_role = _role("func", "lode.timestamps.definitely_not_real")
+        _write(tmp_path, "src/pkg/scratch.py", f'"""Bad: {bad_role}."""\n')
 
         unresolved, _wrapped = check(tmp_path)
         assert unresolved == []
 
     def test_only_scans_src_and_tests_dirs(self, tmp_path):
-        _write(
-            tmp_path,
-            "scripts/other.py",
-            '"""Bad: :func:`lode.timestamps.definitely_not_real`."""\n',
-        )
+        bad_role = _role("func", "lode.timestamps.definitely_not_real")
+        _write(tmp_path, "scripts/other.py", f'"""Bad: {bad_role}."""\n')
         _git_init(tmp_path)
 
         unresolved, _wrapped = check(tmp_path)

@@ -117,9 +117,7 @@ def _tracked_python_files(root: Path) -> list[Path]:
         text=True,
         check=True,
     ).stdout
-    return sorted(
-        root / rel for rel in out.split() if rel.endswith(".py")
-    )
+    return sorted(root / rel for rel in out.split() if rel.endswith(".py"))
 
 
 def normalize_ref(raw: str) -> str:
@@ -129,7 +127,7 @@ def normalize_ref(raw: str) -> str:
     line-wrapped-but-otherwise-correct ref resolve identically to its
     unwrapped form."""
     collapsed = re.sub(r"\s+", "", raw)
-    return collapsed[1:] if collapsed.startswith("~") else collapsed
+    return collapsed.removeprefix("~")
 
 
 def _has_declared_field(obj: object, name: str) -> bool:
@@ -143,7 +141,9 @@ def _has_declared_field(obj: object, name: str) -> bool:
     disabled."""
     if not isinstance(obj, type):
         return False
-    if dataclasses.is_dataclass(obj) and any(f.name == name for f in dataclasses.fields(obj)):
+    if dataclasses.is_dataclass(obj) and any(
+        f.name == name for f in dataclasses.fields(obj)
+    ):
         return True
     model_fields = getattr(obj, "model_fields", None)
     return isinstance(model_fields, dict) and name in model_fields
@@ -188,7 +188,8 @@ def _refs_in_file(text: str) -> list[tuple[int, str]]:
     line -- correct for a wrapped ref too, since that's where a human
     reading the file sees the reference start."""
     return [
-        (text.count("\n", 0, m.start()) + 1, m.group(1)) for m in _ROLE_RE.finditer(text)
+        (text.count("\n", 0, m.start()) + 1, m.group(1))
+        for m in _ROLE_RE.finditer(text)
     ]
 
 
@@ -233,7 +234,10 @@ def main(
     if unresolved:
         for ref in unresolved:
             print(str(ref), file=sys.stderr)
-        print(f"\n{len(unresolved)} unresolved docstring reference(s) found", file=sys.stderr)
+        print(
+            f"\n{len(unresolved)} unresolved docstring reference(s) found",
+            file=sys.stderr,
+        )
         raise typer.Exit(1)
     suffix = f" ({len(wrapped)} line-wrapped ref(s) warned above)" if wrapped else ""
     print(
