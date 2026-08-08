@@ -65,6 +65,17 @@ DeleteConfirmScreen {
     padding: 1 2;
 }
 
+/* Related-notes panel (lode-35nu.10) -- INVARIANT: exactly one row per note,
+ * at any terminal width. RelatedNotesPanel.on_mount pins a fixed height of
+ * related_notes_limit + header + focus-border rows, and that arithmetic is
+ * exact only while no note line wraps; delete these two declarations and the
+ * tail of the list silently goes off screen. Full reasoning, the 80x24
+ * measurement, and the rejected alternatives: docs/tui.md. */
+RelatedNotesPanel {
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
 /* Related-notes panel (lode-olmi.9) -- a visible border once Ctrl+F moves
  * focus onto it, so "you can now step through results" has an on-screen cue
  * rather than relying purely on the in-text "▸" selection marker. */
