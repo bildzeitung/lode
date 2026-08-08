@@ -4080,3 +4080,22 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   `Edit` via the main-checkout path, rather than the worktree-prefixed path, was refused with "Edit
   the worktree copy of this file instead of the shared-checkout path"; that is the harness's own
   path-scoping for an isolated agent, unrelated to the `PreToolUse` trunk-write guard under test.)
+
+- **Update (`lode-5ido`, 2026-08-08): `lode-p8zl` RULING 1's premise is stale — Claude Code's
+  documented `PreToolUse` payload now carries `agent_id` and `agent_type` (plus common fields `cwd`
+  and `permission_mode`) when the hook fires inside a subagent, so subagent-vs-main-session dispatch
+  IS mechanically distinguishable from inside a hook. The claim above that "the documented
+  `PreToolUse` payload carries no agent-role field" no longer holds. **The premise being stale does
+  not make the conclusion wrong: the shipped design in
+  [`scripts/trunk-write-guard.sh`](../scripts/trunk-write-guard.sh) is UNCHANGED** — it still gates on
+  the branch name and returns `"ask"`, never `"deny"`, regardless of `agent_type`. Reading
+  `agent_type` to make the guard a hard `"deny"` for subagents and silent for the main session was
+  considered and is REJECTED, for three reasons, so it is not re-proposed:
+  1. `"ask"` is recoverable, `"deny"` is not. A hard deny wedges a dispatched producer mid-pipeline
+     with no path forward — the exact failure mode `lode-lnvi` FINDING A existed to rule out,
+     reintroduced deliberately.
+  2. Silent-for-main removes the backstop precisely where it is most needed. CLAUDE.md's worktree
+     rule is aimed at the human/main session; subagents already work in worktrees by construction, so
+     this inverts who gets guarded.
+  3. It reintroduces a `jq` dependency against RULING 3, on a hook measured at ~10ms in the hot path
+     of every `Edit`/`Write`.
