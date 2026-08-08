@@ -100,14 +100,27 @@ lode-cp4o (closed 2026-08-07 — the number stays 1800s permanently).
 **What I need to know to run the pass:** the lock is released explicitly at exactly two sites below —
 the empty-queue exit in [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin) and the end
 of a full pass in [Section 4](#4-land-the-survivors). **Every other way a pass stops leaves the lock
-held until it ages out** after `LAND_LOCK_STALE_SECONDS` (default 1800s/30min) — and that is not a
-short list of exotic machine faults: it includes a pass in which **every** branch was kicked back
-`needs-rebase` or bounced, which stops at [Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)'s
-empty-`accepted` guard and never reaches Section 4. Such a pass is routine, so a following tick
-skipping with "another /land appears to still be running" is expected behaviour, **not** evidence of a
-second lander. Adding release calls per exit site was deliberately rejected — a TTL that asks nothing
-of any exit site cannot be silently broken by a future "stop the pass" that forgets to release, which
-is the same reasoning the pass-start `git reset --hard` uses in Section 1.
+held until it ages out** after `LAND_LOCK_STALE_SECONDS` (default 1800s/30min) — genuine machine
+faults (an exit-2 stop, an isolation-replay baseline red, a crash) age out this way, and that is
+correct: a TTL that asks nothing of any exit site cannot be silently broken by a future "stop the
+pass" that forgets to release, which is the same reasoning the pass-start `git reset --hard` uses in
+Section 1. Adding release calls per exit site was deliberately rejected on that basis, and still is.
+
+**A pass in which every branch was bounced, escalated, held, or kicked back `needs-rebase` is NOT
+one of those exit sites (lode-0jan).** [Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)'s
+empty-`accepted` guard used to abort identically whether `$STATE_DIR/accepted` was **missing** (3a's
+precompute never ran — a real silent-failure shape, still aborted loudly, unchanged) or merely
+**empty** (every branch already left the set for a legitimate reason). The empty case is not a
+failure: the loop that reads `$ACCEPTED` correctly iterates zero times, the re-gate that follows is a
+no-op on an unchanged `trunk`, and the pass flows straight through to [Section
+4](#4-land-the-survivors) — which already handles an empty `$LANDED` correctly by construction (its
+own guard there makes the same missing-vs-empty distinction). This covers the `needs-rebase`-only
+case too, by the same route: a branch kicked back mid-loop is dropped from `$STATE_DIR/accepted`
+before the re-gate runs, so an all-`needs-rebase` pass converges on the same empty-but-present file
+and the same fall-through. This is the **narrow** fix: one specific outcome (an empty-but-present
+accepted set) stops being treated as an exit at all and instead flows into the pass's existing single
+end-of-pass path — it is not a scattering of release calls across every exit site, and the rejection
+above still stands for every genuine abort.
 
 Before doing anything else, take the local lock. If another `/land` is still running on this machine
 (a long pass overrunning a `/loop` tick), **skip this tick cleanly and exit 0** — do not queue, do
@@ -958,11 +971,17 @@ MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true
 [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
   "DISABLED for this call (lode-67nk)" >&2
 
-# Load 3a's accepted set from disk, and REFUSE to continue if it did not load: iterating zero times
-# would land nothing while exiting 0, indistinguishable from a clean pass (governing rule, top).
-ACCEPTED=$(cat "$STATE_DIR/accepted") || exit 1
-[ -n "$ACCEPTED" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/accepted is missing or empty --" \
-  "3a's precompute did not run. Landing nothing." >&2; exit 1; }
+# Load 3a's accepted set from disk, and REFUSE to continue if the FILE never got written: that is
+# 3a's precompute not having run at all, the silent-failure shape lode-sfnb's governing rule (top)
+# exists to catch. An EMPTY file is a different, legitimate outcome (lode-0jan) -- every branch was
+# already bounced, escalated, held, or kicked back needs-rebase before this loop started -- and is
+# NOT refused: $ACCEPTED being empty makes the loop below iterate zero times, the re-gate after it a
+# no-op on unchanged trunk, and the pass falls through to Section 4 exactly as a real merge would.
+ACCEPTED=$(cat "$STATE_DIR/accepted") || {
+  echo "GATE COULD NOT RUN: $STATE_DIR/accepted is missing -- 3a's precompute did not run." \
+    "Landing nothing." >&2
+  exit 1
+}
 
 for id in $ACCEPTED; do
   # Same idiom as Section 2b's merge-precheck.sh call, for the same reason: a command substitution

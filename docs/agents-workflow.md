@@ -3292,9 +3292,21 @@ assumption would not have closed it.
   fail against when the record is simply absent.
 
   **Release reaches only two sites** — Section 1's empty-queue exit and the end of Section 4 — as a
-  latency optimization; every other stop, *including the routine pass in which every branch was kicked
-  back `needs-rebase` or bounced*, waits the window out. Deliberate: a TTL that asks nothing of any exit
-  site cannot rot as exits are added, the same reasoning as the pass-start `reset --hard` below.
+  latency optimization; every genuine abort (an exit-2 machine fault, an isolation-replay baseline red,
+  a crash) waits the window out. Deliberate: a TTL that asks nothing of any exit site cannot rot as
+  exits are added, the same reasoning as the pass-start `reset --hard` below.
+
+  **A pass in which every branch was bounced, escalated, held, or kicked back `needs-rebase` is NOT
+  one of those waits-it-out stops (lode-0jan).** It used to be: Section 3's empty-`accepted` guard
+  aborted identically whether `$STATE_DIR/accepted` was missing (3a's precompute never ran — a real
+  silent-failure signal) or merely present-but-empty (every branch already left the set for a
+  legitimate reason before the merge loop even started). Only the missing case still aborts. An empty
+  one now falls through — the merge loop it guards iterates zero times either way, the re-gate that
+  follows is a no-op on an unchanged `trunk`, and the pass reaches Section 4's end-of-pass path exactly
+  as a real merge would, which already closes an empty `$LANDED` correctly by construction. This is
+  narrowly scoped to that one outcome, not a new release call added at Section 3 or anywhere else — the
+  rejection of per-exit-site releases in the paragraph above is unchanged and still governs every
+  genuine abort.
 - **A failed `acquire` is signposted, not re-printed (lode-119w).** `land-lock.sh` exits 1 for both a
   transient "another /land appears to still be running" and a permanent per-machine MACHINE FAULT
   (`flock` missing, `rev-parse` failure, an unwritable lock dir), and every caller collapses non-zero to
