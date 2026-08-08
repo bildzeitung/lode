@@ -509,12 +509,12 @@ def set_no_egress(
     immediately; only the next enrich/Q&A egress send excludes it (via
     :func:`lode.egress.partition_egress`, consumed generically by
     :func:`lode.enrich.enrich_version` and :func:`lode.cited_answer.ask`
-    through :func:`lode.cited_answer._resolve_target`'s ``externals`` join —
+    through :func:`lode.cited_answer._resolve_targets`'s ``externals`` join —
     no separate wiring needed here).
 
     **"Generically" means the COLUMN, not a seam.** Each send path reads
     ``externals.no_egress`` in its own SQL join — :func:`lode.cited_answer.
-    _resolve_target` and :func:`lode.enrich._resolve_target` — so flipping
+    _resolve_targets` and :func:`lode.enrich._resolve_enrich_target` — so flipping
     the column is indeed the only step needed *for a row that exists*, and
     nothing else has to be taught about it. What that does **not** provide
     is a hook: there is no single function through which an egress verdict

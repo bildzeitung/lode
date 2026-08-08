@@ -91,12 +91,13 @@ def _insert_note(conn, *, note_id, version_id, body, no_egress=False) -> None:
     conn.commit()
 
 
-def _insert_external(conn, *, external_id, snapshot_id, body, no_egress=False) -> None:
+def _insert_external(
+    conn, *, external_id, snapshot_id, body, no_egress=False, source_type="web"
+) -> None:
     """Seed one external + its head snapshot, optionally no_egress."""
     conn.execute(
-        "INSERT INTO externals (external_id, source_type, no_egress) "
-        "VALUES (?, 'web', ?)",
-        (external_id, int(no_egress)),
+        "INSERT INTO externals (external_id, source_type, no_egress) VALUES (?, ?, ?)",
+        (external_id, source_type, int(no_egress)),
     )
     conn.execute(
         "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
@@ -164,6 +165,54 @@ def test_surviving_claim_renders_with_its_citation(conn) -> None:
     assert claim.text == "lode is event-sourced."
     assert claim.support[0].version_id == "v1"
     assert claim.support[0].quoted_span == "lode is event-sourced"
+
+
+def test_passages_sharing_a_parent_block_send_it_only_once(conn) -> None:
+    # Two ContextItems chunked from the same parent_block (distinct passage_id /
+    # char_range, same target + same parent_block text) must not duplicate that
+    # text in the send -- the citation offset comes from the item's own
+    # char_range, not from how many times its parent_block was sent (lode-ol2v).
+    body = "lode is event-sourced and append-only."
+    _insert_note(conn, note_id="n1", version_id="v1", body=body)
+    client = _FakeClient([])
+    dup_a = _note_context("v1", body)
+    dup_b = replace(dup_a, passage_id="p-v1-second", char_range="5:10")
+
+    ask(
+        conn,
+        "How is lode stored?",
+        [dup_a, dup_b],
+        provider=AnthropicProvider(client),
+    )
+
+    prompt = _user_prompt(client)
+    assert prompt.count(body) == 1
+
+
+def test_deduped_passage_still_contributes_its_char_range_to_the_offset(conn) -> None:
+    # The dedup is only safe because body_offset stamping reads the UN-deduped
+    # `context`. Here the item whose parent_block reaches the model does NOT
+    # contain the cited span in its own char_range -- only the item dropped as a
+    # duplicate does -- so the stamped offset proves the dropped item's range
+    # still counts (lode-ol2v).
+    second_block = "gamma OAuth delta"
+    body = "alpha beta" + ("x" * 40) + second_block
+    second_start = body.index(second_block)
+    _insert_note(conn, note_id="n1", version_id="v1", body=body)
+    client = _FakeClient([_note_claim("uses OAuth", "OAuth", "v1")])
+    kept = _note_context("v1", body)  # char_range "0:5" -- does not contain the span
+    dropped = replace(
+        kept,
+        passage_id="p-v1-2",
+        char_range=f"{second_start}:{len(body)}",
+        passage_text=second_block,
+    )
+
+    answer = ask(conn, "q", [kept, dropped], provider=AnthropicProvider(client))
+
+    assert _user_prompt(client).count(body) == 1  # the duplicate was dropped
+    (claim,) = answer.claims
+    assert claim.support[0].body_offset == body.index("OAuth")
 
 
 def test_surviving_claim_stamps_body_offset_from_its_own_retrieved_passage(
@@ -399,7 +448,7 @@ def test_external_snapshot_cited_via_snapshot_id(conn) -> None:
 
 def test_no_egress_external_kept_off_cloud_and_surfaced_as_withheld(conn) -> None:
     # Same enforcement path as the note case, exercised over an external
-    # snapshot (lode-w0h.7): _resolve_target's externals join resolves
+    # snapshot (lode-w0h.7): _resolve_targets' externals join resolves
     # no_egress for a snapshot_id target exactly like it does for a note's
     # version_id, so a withheld external never reaches the cloud context and
     # is cited as present-but-withheld -- while staying locally retrievable
@@ -433,6 +482,102 @@ def test_no_egress_external_kept_off_cloud_and_surfaced_as_withheld(conn) -> Non
     assert "public runbook" in prompt  # the sendable external did go out
     assert [c.target_id for c in answer.withheld_citations] == ["s-secret"]
     assert answer.withheld_citations[0].note == WITHHELD_CITATION
+
+
+def test_no_egress_scope_withholds_already_captured_external_web_host(conn) -> None:
+    """A URL-host scope rule withholds an already-captured 'web' external at
+    its next send, with no per-row flag set and no migration/backfill
+    (lode-35nu.11.8, cited_answer._resolve_targets site).
+    """
+    from lode.no_egress_scope import NoEgressScopeRule
+
+    settings = Settings(
+        no_egress_scopes=[
+            NoEgressScopeRule(source_type="web", match="internal.example.com")
+        ]
+    )
+    _insert_external(
+        conn,
+        external_id="https://internal.example.com/secret-runbook",
+        snapshot_id="s-secret",
+        body="internal creds runbook",
+    )
+    client = _FakeClient([])
+
+    answer = ask(
+        conn,
+        "q",
+        [_external_context("s-secret", "internal creds runbook")],
+        provider=AnthropicProvider(client),
+        settings=settings,
+    )
+
+    prompt = _user_prompt(client)
+    assert "internal creds runbook" not in prompt
+    assert [c.target_id for c in answer.withheld_citations] == ["s-secret"]
+    # No write performed to the row by the scope rule.
+    row = conn.execute(
+        "SELECT no_egress FROM externals WHERE "
+        "external_id = 'https://internal.example.com/secret-runbook'"
+    ).fetchone()
+    assert row[0] == 0
+
+
+def test_no_egress_scope_removed_immediately_unwithholds(conn) -> None:
+    """Removing a scope rule un-withholds immediately -- no migration needed."""
+    _insert_external(
+        conn,
+        external_id="https://internal.example.com/runbook",
+        snapshot_id="s1",
+        body="the runbook says rotate the certs.",
+    )
+    claim = Claim(
+        text="rotate the certs.",
+        support=[Support(snapshot_id="s1", quoted_span="rotate the certs")],
+    )
+    client = _FakeClient([claim])
+
+    # No scope rule configured -- the previously-covered external now sends.
+    answer = ask(
+        conn,
+        "q",
+        [_external_context("s1", "the runbook says rotate the certs.")],
+        provider=AnthropicProvider(client),
+        settings=Settings(no_egress_scopes=[]),
+    )
+
+    prompt = _user_prompt(client)
+    assert "rotate the certs" in prompt
+    assert answer.withheld_citations == ()
+
+
+def test_no_egress_scope_composes_with_per_row_flag(conn) -> None:
+    """Per-row flag denies even when no scope rule matches (either denying denies)."""
+    from lode.no_egress_scope import NoEgressScopeRule
+
+    settings = Settings(
+        no_egress_scopes=[NoEgressScopeRule(source_type="jira", match="OTHER")]
+    )
+    _insert_external(
+        conn,
+        external_id="https://internal.example.com/runbook",
+        snapshot_id="s1",
+        body="secret runbook",
+        no_egress=True,
+    )
+    client = _FakeClient([])
+
+    answer = ask(
+        conn,
+        "q",
+        [_external_context("s1", "secret runbook")],
+        provider=AnthropicProvider(client),
+        settings=settings,
+    )
+
+    prompt = _user_prompt(client)
+    assert "secret runbook" not in prompt
+    assert [c.target_id for c in answer.withheld_citations] == ["s1"]
 
 
 def test_gate_cited_answer_composes_survivors_with_withheld() -> None:
@@ -492,3 +637,116 @@ def test_ask_honors_configured_entailment_threshold(conn) -> None:
     )
     assert not lax.abstained
     assert lax.claims[0].text == "rerank is on"
+
+
+def test_resolve_targets_batches_distinct_targets_into_two_queries(conn) -> None:
+    """cited_answer._resolve_targets resolves every distinct note target and every
+    distinct external target in one round trip each -- at most two DB queries for
+    target resolution regardless of how many context items (or repeated targets)
+    are in play (lode-ekqh)."""
+    from lode.cited_answer import _resolve_targets
+
+    _insert_note(conn, note_id="n1", version_id="v1", body="alpha body")
+    _insert_note(conn, note_id="n2", version_id="v2", body="beta body")
+    _insert_external(conn, external_id="EXT-1", snapshot_id="s1", body="gamma body")
+    _insert_external(conn, external_id="EXT-2", snapshot_id="s2", body="delta body")
+    context = [
+        _note_context("v1", "alpha body"),
+        _note_context("v1", "alpha body"),  # repeated target -- no extra round trip
+        _note_context("v2", "beta body"),
+        _external_context("s1", "gamma body"),
+        _external_context("s2", "delta body"),
+        _external_context("s2", "delta body"),  # repeated target -- no extra round trip
+    ]
+    # sqlite3.Connection.execute is a read-only C-level attribute (can't be
+    # monkeypatched directly), so count round trips via the trace callback
+    # instead -- it fires once per statement actually sent to the engine.
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        resolved = _resolve_targets(conn, context)
+    finally:
+        conn.set_trace_callback(None)
+
+    # Count EVERY statement the call issued, not just the IN(...) ones: a filter
+    # keyed on "IN" would silently drop a reintroduced per-target
+    # "WHERE version_id = ?" fallback and still pass, which is the exact
+    # regression this test exists to catch.
+    assert len(statements) <= 2, statements
+    assert resolved["v1"] == ("alpha body", False)
+    assert resolved["v2"] == ("beta body", False)
+    assert resolved["s1"] == ("gamma body", False)
+    assert resolved["s2"] == ("delta body", False)
+
+
+def test_ask_treats_a_target_absent_from_the_store_as_no_egress_false(conn) -> None:
+    """A cited target with no matching row (deleted, or never captured) must still
+    resolve to a ``None`` body and ``no_egress=False`` -- the same safe default a
+    per-target lookup returned before batching, so the gate fails the claim closed
+    without ever treating the missing target as withheld."""
+    client = _FakeClient([_note_claim("ghost claim", "ghost body", "missing-v")])
+
+    answer = ask(
+        conn,
+        "q",
+        [_note_context("missing-v", "ghost body")],
+        provider=AnthropicProvider(client),
+    )
+
+    assert answer.abstained  # span can't verify against a body that was never resolved
+    assert answer.withheld_citations == ()  # not withheld -- simply unresolved
+
+
+def test_batched_resolution_composes_no_egress_per_target_not_across_the_batch(
+    conn,
+) -> None:
+    """Batching resolves many targets in one query but must still compose no_egress
+    from EACH target's OWN row (lode-ekqh over lode-35nu.11.8): one scope-matched
+    external, one per-row-flagged external, one clean external of the same
+    source_type, and a clean note all ride the same two IN(...) queries -- the two
+    denials must withhold only themselves, and must not leak onto their neighbours.
+    """
+    from lode.cited_answer import _resolve_targets
+    from lode.no_egress_scope import NoEgressScopeRule
+
+    settings = Settings(
+        no_egress_scopes=[
+            NoEgressScopeRule(source_type="web", match="internal.example.com")
+        ]
+    )
+    _insert_external(
+        conn,
+        external_id="https://internal.example.com/runbook",
+        snapshot_id="s-scoped",
+        body="scoped secret",
+    )
+    _insert_external(
+        conn,
+        external_id="https://public.example.com/flagged",
+        snapshot_id="s-flagged",
+        body="flagged secret",
+        no_egress=True,
+    )
+    _insert_external(
+        conn,
+        external_id="https://public.example.com/open",
+        snapshot_id="s-open",
+        body="public external body",
+    )
+    _insert_note(conn, note_id="n-open", version_id="v-open", body="open note body")
+
+    resolved = _resolve_targets(
+        conn,
+        [
+            _external_context("s-scoped", "scoped secret"),
+            _external_context("s-flagged", "flagged secret"),
+            _external_context("s-open", "public external body"),
+            _note_context("v-open", "open note body"),
+        ],
+        settings.no_egress_scopes,
+    )
+
+    assert resolved["s-scoped"] == ("scoped secret", True)  # host rule, no row flag
+    assert resolved["s-flagged"] == ("flagged secret", True)  # row flag, no host rule
+    assert resolved["s-open"] == ("public external body", False)  # neither
+    assert resolved["v-open"] == ("open note body", False)  # notes have no scope

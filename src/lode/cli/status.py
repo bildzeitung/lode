@@ -5,6 +5,13 @@ import logging
 from enum import Enum
 from pathlib import Path
 
+# Printing here goes through ``cli.console``, NOT a plain
+# ``from lode.cli import console`` -- this is the one module a test rebinds the
+# name for (``tests/test_cli.py``'s
+# ``test_status_dead_line_is_uniformly_danger_not_repr_highlighted``), and a
+# plain import would freeze a reference the rebind can never reach, silently
+# capturing nothing. Every other command module imports ``console`` plainly;
+# see ``lode.cli``'s module docstring (lode-1bfn).
 from lode import cli
 from lode.cli import _DbOption, _open_db, _tabular_table, app
 from lode.config import Settings, default_db_path, lance_dir

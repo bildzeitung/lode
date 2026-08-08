@@ -384,7 +384,7 @@ def _version_body(conn: sqlite3.Connection, target_version: str) -> str:
     """Return the body of ``target_version``; raise ``KeyError`` if absent.
 
     ``target_version`` is polymorphic — a note ``version_id`` or an external
-    ``snapshot_id`` (mirrors :func:`lode.cited_answer._resolve_target`'s
+    ``snapshot_id`` (mirrors :func:`lode.cited_answer._resolve_targets`'s
     versions-then-snapshots resolution, adapted here to take just the id: an
     embed job is enqueued on ``target_version`` alone, with no ``is_external``
     flag riding along, so this tries ``versions`` first and falls back to

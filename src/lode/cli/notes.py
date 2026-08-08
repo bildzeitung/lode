@@ -5,8 +5,7 @@ from typing import Annotated
 import typer
 from rich.markup import escape
 
-from lode import cli
-from lode.cli import _DbOption, _short_date, app
+from lode.cli import _DbOption, _short_date, app, console
 from lode.config import default_db_path
 from lode.notes_read import list_deleted_notes, list_notes
 
@@ -55,7 +54,7 @@ def notes_(
     marker = " [deleted]" if deleted else ""
     for i, row in enumerate(rows):
         if i:
-            cli.console.print()
+            console.print()
         # ``row.summary`` is unescaped user/AI text and may itself contain
         # "[...]" (markdown links, code, etc.) -- escape it so it can never
         # be mistaken for markup and corrupt the row or the styles around it.
@@ -82,7 +81,7 @@ def notes_(
         # flag here: rich's ReprHighlighter would otherwise shred the date
         # and recolour numbers/IPs/etc. inside the user's own summary text.
         # The theme styles are the ONLY colour this row should carry.
-        cli.console.print(
+        console.print(
             f"[note_id]{row.note_id}[/note_id]  "
             f"[date]{_short_date(row.created)}[/date]  "
             f"{escape(row.summary + marker)}",

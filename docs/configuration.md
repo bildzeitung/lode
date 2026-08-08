@@ -189,8 +189,67 @@ Presence is computed from the env var / the resolver's inputs, not read back off
 | Knob | Kind | Default | Notes |
 |---|---|---|---|
 | `no_egress` (per note / source) | runtime | off | Indexed locally, never sent to the configured cloud LLM (no enrichment, excluded from cloud Q&A; cited as "withheld"). ([externals.md](externals.md#privacy-consequence-of-aggregation)) |
+| `no_egress_scopes` | runtime | `[]` | Declarative no_egress SCOPE rules (lode-35nu.11.8) — see below. |
 | Redact-before-egress pattern set | runtime | high-precision seed | Secret patterns stripped before content is sent to the configured cloud LLM; iterate from real misses. ([decisions.md](decisions.md)) |
 | Redact-before-index pattern set | runtime | high-precision seed | Secret patterns kept out of the local vector/FTS index. |
+
+### `no_egress_scopes`: scope-level no_egress rules (decided, lode-35nu.11.8)
+
+The per-row `externals.no_egress` flag (`lode no-egress <external_id>`) can only mark a resource that
+already has an `externals` row — it structurally cannot cover an external a tool has not fetched yet.
+`no_egress_scopes` closes that gap: a list of declarative rules, each `{source_type, match}`,
+evaluated **live** against a candidate `(external_id, source_type)` pair — no row required, and
+**never materialized onto a row**. Adding a rule covers every matching external immediately
+(already-captured or not); removing one un-withholds immediately. Neither direction backfills or
+migrates any `externals` row.
+
+```toml
+[[no_egress_scopes]]
+source_type = "jira"
+match = "PROJ"        # JIRA project key -- matches issue keys "PROJ-<number>"
+
+[[no_egress_scopes]]
+source_type = "web"
+match = "internal.example.com"   # exact URL host, not a host+path prefix
+```
+
+- `source_type = "jira"` — `match` is a JIRA project key, matched against the project-key prefix of
+  a candidate JIRA issue key (`externals.external_id` for `source_type='jira'` is the issue key
+  itself, e.g. `"PROJ-123"`). The **whole** key boundary must line up: rule `PROJ` covers `PROJ-123`
+  but not `PROJECT-1`. Matched **case-insensitively** — `drawdown.py`'s `_JIRA_ISSUE_RE` preserves
+  whatever case the pasted URL used, so `/browse/proj-123` persists `"proj-123"`.
+- `source_type = "web"` — `match` is a URL **host**, matched **exactly** (host-only, not a host+path
+  prefix, and not a suffix — `example.com` covers `example.com` but neither `evil-example.com` nor
+  `sub.example.com`; a path-prefix variant is a documented future option if ever needed, not built
+  speculatively). The comparison is against the parsed host, so userinfo, a non-default port, host
+  case, and a trailing root dot cannot slip content past a rule
+  (`https://user@Internal.Example.com:8443/x` is covered by `internal.example.com`). Rule and
+  candidate are both lowercased and stripped of a trailing dot, so a rule written
+  `Internal.Example.com.` still works.
+- `source_type = "confluence"` is **rejected at config-load time** with a clear
+  `ValidationError` naming the reason. Confluence space-key scoping is structurally impossible under
+  the current data model: `drawdown.py`'s `_CONFLUENCE_PAGE_RE` persists only the numeric page id
+  into `externals.external_id`; the space key is discarded at detection time and stored nowhere, so a
+  space-scoped rule would have no space information to ever match against — not merely unimplemented.
+  Accepting such a rule as a silent no-op was explicitly rejected (human decision, `lode-35nu.11.8`):
+  a rule that can never match must fail loudly at load, not match nothing with no signal. See
+  [externals.md](externals.md#no-egress-scope-rules-decided-lode-35nu118) for the full write-up.
+
+**Composition with the per-row flag:** both are evaluated, and either denying is a denial — a scope
+rule never overrides an explicit per-row `--clear`, and a per-row flag never overrides a scope rule.
+
+**Fail-closed, in both places.** A rule that could never match anything is refused at load with a
+`ValidationError` — an empty `match`, an unsupported `source_type`, or `confluence` — because a
+privacy rule that silently matches nothing is worse than no rule at all: the user believes they are
+covered. At evaluation time, if matching a rule raises (an unparseable candidate `external_id`, say),
+the candidate is treated as **scoped and withheld** rather than allowed. That never withholds the
+world, because a candidate is only ever parsed once a rule of its own `source_type` exists — with the
+default empty rule set there is nothing to fail.
+
+**Not a generic seam.** `no_egress` is read by SQL `JOIN` at two call sites —
+`cited_answer._resolve_targets` and `enrich._resolve_enrich_target` — so a config predicate cannot
+live inside the join. `lode.no_egress_scope.is_no_egress_scoped` is the one shared predicate; each
+site composes it with its own per-row flag itself, rather than reimplementing the match.
 
 ## Models
 
@@ -206,6 +265,7 @@ Presence is computed from the env var / the resolver's inputs, not read back off
 | Q&A LLM (`qa_llm`) | runtime | Claude Sonnet 4.6 (default provider) | Default interactive synthesis model. A `ModelTier`, same shape as Enrichment LLM — `model` is likewise interpreted against the active `llm_provider` (an Azure/OpenAI deployment name under `llm_provider = "openai"`). `max_tokens`, when set, overrides [`qa.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (8192). Answer-time only, persists nothing — recorded default, no provenance machinery. |
 | Q&A "think harder" (`qa_think_harder_llm`) | runtime | Opus 5 (toggle, default provider) | Higher-quality, higher-cost synthesis on demand. A `ModelTier`, same provider-relative interpretation as the two knobs above — "think harder" can be a deployment swap (today's Anthropic Sonnet→Opus default), a `reasoning_effort` bump, a `max_tokens` override, or any combination, on the same deployment. Answer-time only, persists nothing — recorded default, no provenance machinery. |
 | Q&A call timeout (`qa_call_timeout_s`) | runtime | `300s` | Budget for the Q&A synthesis call (`qa.py`, routed through `LLMProvider.run_tool_turns` — `lode-35nu.11.6`), split off `enrich_call_timeout_s` (`lode-wfyx`) — [below](#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx). **Per-RUN, not per-call** (`lode-35nu.11.6`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)): today `qa.py` passes no tools, so a "run" is exactly one call and this is unchanged from before; once a future ticket wires real tools in, this same value bounds the whole free-tool-turns-then-forced-answer run, not each turn individually. **Derived, not a measured p95.** Does not reach `enrich.py`'s three call sites — those stay on `enrich_call_timeout_s` (120s) unchanged, and are unaffected by this ticket (still calling `structured_call` directly). The derivation, the retained SDK retry-on-timeout it was chosen alongside, and the `ModelTier.max_tokens` override that invalidates it are all in the write-up linked above, deliberately not restated here. |
+| Max free tool turns (`_DEFAULT_MAX_TOOL_TURNS`) | build | `8` | Not a `Settings` knob — an internal constant (`src/lode/llm_provider.py`) bounding `LLMProvider.run_tool_turns`'s free-tool-choice phase. This is the mechanism that bounds a run's **total** output-token spend: `max_tokens` is per-**turn**, not per-run — a deliberate asymmetry with `qa_call_timeout_s` above, decided rather than left open (`lode-3dh1`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)) — so the worst case for one `run_tool_turns` call is `(max_tool_turns + 1) × max_tokens` output tokens — **9×** today's per-tier `max_tokens` default, not 8×, because this constant bounds only the *free* tool turns and the final forced-schema turn is spent on top. Lower this (or override the `max_tool_turns` parameter at a call site) to tighten that bound; a separate per-run token ceiling was considered and deferred, not built (`lode-csl2`). Why per-turn was chosen over decrementing, and the rejected alternative, are in the write-up linked above — deliberately not restated here. |
 | HF probe timeout (`hf_probe_timeout_s`) | runtime | `5s` | Per-call timeout passed to `huggingface_hub.model_info()` by the indexing-side revision probe (`resolve_model_revision`, below). Bounds a black-holed network to this instead of the OS TCP connect timeout, which the probe used to block for before falling back to `model_revision = NULL` anyway (`lode-w5nr`). Matches `httpx`'s own default rather than the Fetch timeout below (`10s`, web content fetches) — this is a small metadata GET, not a page fetch. Bounds the probe only, **not** `fastembed`'s weights download (next section). What a float timeout actually bounds in `httpx`, with the measurement: `docs/decisions.md`, the `lode-w5nr` entry. |
 
 The **local** models — embedder, [reranker](#retrieval-and-ranking), [faithfulness NLI](#faithfulness-gate) — all run **in-process on the ONNX runtime via `fastembed`** (no model server/daemon, **not Ollama**). The **only** remote models are the enrichment + Q&A LLMs — Anthropic by default, or an OpenAI/Azure deployment under `llm_provider = "openai"` ([LLM provider seam](stack.md#llm-provider-seam-decided-lode-568v1)). See [stack.md](stack.md).

@@ -127,7 +127,10 @@ def partition_egress[T](items: Iterable[T]) -> EgressDecision[T]:
 
 
 QA_PURPOSE = "qa"
-"""``egress_log.purpose`` for a Q&A send (the schema CHECK allows ``enrich``/``qa``)."""
+"""``egress_log.purpose`` for a Q&A send (the schema CHECK allows ``enrich``/``qa``/``tool``)."""
+
+TOOL_PURPOSE = "tool"
+"""``egress_log.purpose`` for a tool-augmented Ask fetch (``lode-35nu.11.1``, :mod:`lode.tools`)."""
 
 
 class EgressPassage(Withholdable, Protocol):
@@ -182,11 +185,13 @@ class QaEgress:
 def log_egress(
     conn: sqlite3.Connection,
     purpose: str,
-    model: str,
+    model: str | None,
     sent_targets: Iterable[str],
     redactions: object | None = None,
     *,
     provider: str | None = None,
+    destination: str | None = None,
+    arguments: object | None = None,
 ) -> int:
     """Write one ``egress_log`` row and return its id (``docs/storage.md`` §8).
 
@@ -201,16 +206,28 @@ def log_egress(
     lode-568v.1), so it defaults to ``None`` here, which is also the correct
     value today since Q&A is Anthropic-only regardless. Commits before
     returning.
+
+    ``model`` is ``str | None`` -- ``None`` only ever legal for ``purpose=
+    'tool'`` (schema CHECK, ``lode-35nu.11.7``: ``purpose = 'tool' OR model IS
+    NOT NULL``), since a tool call has no destination model. ``destination``
+    (the API base / host the call went to) and ``arguments`` (the call's
+    arguments as sent, post-redaction, JSON-summarized like ``redactions``)
+    are the tool-call analogue of ``sent_targets``/``redactions`` for an LLM
+    send (``lode-35nu.11.1``, :mod:`lode.tools`); both stay ``None`` for
+    ``purpose`` in ``('enrich', 'qa')``.
     """
     cur = conn.execute(
-        "INSERT INTO egress_log (purpose, model, provider, sent_targets, redactions) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO egress_log "
+        "(purpose, model, provider, sent_targets, redactions, destination, arguments) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             purpose,
             model,
             provider,
             json.dumps(list(sent_targets)),
             None if redactions is None else json.dumps(redactions),
+            destination,
+            None if arguments is None else json.dumps(arguments),
         ),
     )
     conn.commit()

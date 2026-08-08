@@ -36,8 +36,17 @@ therefore does ``from lode import cli`` and calls ``cli.<name>(...)`` --
 looking the name up through the package's OWN namespace at call time, the
 same live-binding indirection this single flat module gave every call for
 free before the split. This is a deliberate, narrow exception; every other
-cross-command helper (``_open_db``, ``console``, ``SafeTable``, ...) is
-imported normally, since nothing patches those by name.
+cross-command helper (``_open_db``, ``SafeTable``, ...) is imported
+normally, since nothing patches those by name.
+
+``console`` is a seventh name-rebound case, but a narrower one, which is why
+it is not listed among the six above: only ``lode.cli.status`` is exercised
+under a ``monkeypatch.setattr(cli, "console", ...)``
+(``tests/test_cli.py``'s
+``test_status_dead_line_is_uniformly_danger_not_repr_highlighted``, which
+swaps in a ``force_terminal`` Console to make colour observable under the
+suite). So ``status`` alone must call it as ``cli.console``; every other
+module imports it plainly and calls a bare ``console.print(...)``.
 
 **``time`` and ``uuid`` are patched DIFFERENTLY from each other, and the
 difference decides the call-site form -- do not unify them.**
@@ -146,7 +155,10 @@ CLI_THEME = Theme(CLI_STYLES)
 #:
 #: ``highlight=False`` (lode-re0s) is process-wide colour POLICY -- see
 #: ``tests/test_cli_console.py`` for the full rationale; every command below
-#: relies on it rather than passing the flag per call site.
+#: relies on it rather than passing the flag per call site. IF A SECOND
+#: Console IS EVER ADDED to this module (as ``err_console`` below already
+#: has been -- lode-l810), it MUST also pass ``highlight=False``, for the
+#: same reason.
 console = Console(theme=CLI_THEME, highlight=False)
 
 #: A STDERR twin of ``console`` above (lode-l810) -- same theme, same
@@ -500,26 +512,17 @@ for _name in _COMMAND_MODULES:
 del _name
 
 # --- backward-compatible re-exports ------------------------------------------
-# A handful of names other packages (lode.tui.services.ask's deferred
-# `from lode.cli import _retrieve`) or tests still reach as `lode.cli.<name>`.
-# Plain re-exports (unlike the call-through-the-package names documented in
-# this module's own docstring, which are never imported anywhere -- every
-# INTERNAL call site reaches them via `cli.<name>` instead).
+# A handful of names tests still reach as `lode.cli.<name>`. Plain re-exports
+# (unlike the call-through-the-package names documented in this module's own
+# docstring, which are never imported anywhere -- every INTERNAL call site
+# reaches them via `cli.<name>` instead).
 #
-# `_retrieve` REACHES LESS FAR THAN IT DID (lode-35nu.9). It is defined in
-# `lode.cli.ask` and re-exported here, so `monkeypatch.setattr("lode.cli.
-# ._retrieve", ...)` (tests/test_tui_ask.py) still reaches
-# `lode.tui.services.ask.run_ask`, which resolves it lazily at call time.
-# It no longer reaches the `lode ask` COMMAND: that calls its own module
-# global in `lode.cli.ask`, which this rebind does not touch. Before the
-# split both lived in one namespace and one patch covered both. Nothing
-# depends on the wider reach today; a test that needs the command's
-# retrieval faked must patch `lode.cli.ask._retrieve` instead.
+# `_retrieve` used to be re-exported here; it now lives in `lode.retrieval`
+# (lode-z3es), which every caller imports directly.
 from lode.cli.ask import (  # noqa: F401
     _ABSTAIN_LINE,
     _format_citation,
     _format_cited_answer,
-    _retrieve,
 )
 from lode.cli.models import _FASTEMBED_EXHAUSTED_SOURCES, _warm  # noqa: F401
 from lode.cli.status import (  # noqa: F401

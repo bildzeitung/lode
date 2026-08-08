@@ -5,7 +5,7 @@ app needed, mirroring ``tests/test_tui_capture.py``'s split): the rendered
 ask result shows cited claims with their as-of/version provenance, withheld
 markers surface rather than vanish, and an ungrounded question renders the
 honest abstention line. :func:`run_ask` is proven to wire the exact same
-seams ``lode ask`` drives (``lode.cli._retrieve`` + ``lode.cited_answer.ask``,
+seams ``lode ask`` drives (``lode.retrieval._retrieve`` + ``lode.cited_answer.ask``,
 mocked here the same way ``tests/test_cli.py``'s ``ask`` tests keep the gate
 offline) rather than re-implementing retrieval, and to resolve each surviving
 citation's as-of timestamp from the store.
@@ -31,7 +31,10 @@ from lode.tui.services.ask import (
     citation_targets,
     render_ask_result,
     run_ask,
+    save_ask_answer_as_note,
 )
+from lode.tui.services.capture import EmptyCaptureError
+from lode.tui.services.reconcile import Conflict
 from lode.versions import save
 
 
@@ -318,7 +321,7 @@ def test_run_ask_wires_retrieve_and_gate_then_resolves_as_of(
         assert context == []
         return canned_answer
 
-    monkeypatch.setattr("lode.cli._retrieve", _stub_retrieve)
+    monkeypatch.setattr("lode.retrieval._retrieve", _stub_retrieve)
     monkeypatch.setattr("lode.cited_answer.ask", _stub_ask)
 
     result = run_ask(db_path, "what did we decide about auth?", settings=Settings())
@@ -357,7 +360,8 @@ def test_run_ask_reports_stages_in_order_via_on_stage(
     )
 
     monkeypatch.setattr(
-        "lode.cli._retrieve", lambda conn, question, *, lance_dir, settings=None: []
+        "lode.retrieval._retrieve",
+        lambda conn, question, *, lance_dir, settings=None: [],
     )
     monkeypatch.setattr(
         "lode.cited_answer.ask",
@@ -435,7 +439,7 @@ def test_run_ask_with_pinned_note_id_prepends_pinned_context(
         captured["context"] = context
         return canned_answer
 
-    monkeypatch.setattr("lode.cli._retrieve", _stub_retrieve)
+    monkeypatch.setattr("lode.retrieval._retrieve", _stub_retrieve)
     monkeypatch.setattr("lode.cited_answer.ask", _stub_ask)
 
     run_ask(
@@ -481,7 +485,7 @@ def test_run_ask_with_pinned_note_id_dedupes_against_retrieval(
         captured["context"] = context
         return CitedAnswer(claims=(), withheld_citations=())
 
-    monkeypatch.setattr("lode.cli._retrieve", _stub_retrieve)
+    monkeypatch.setattr("lode.retrieval._retrieve", _stub_retrieve)
     monkeypatch.setattr("lode.cited_answer.ask", _stub_ask)
 
     run_ask(
@@ -599,3 +603,124 @@ def test_citation_targets_excludes_an_identity_with_neither_note_nor_external() 
     )
 
     assert citation_targets(result) == []
+
+
+# ---------------------------------------------------------------------------
+# save_ask_answer_as_note (lode-35nu.11.4) -- accepting an ask answer creates
+# a FRESH note through the standard capture path, linked back to the source
+# note by a note->note edge; the source note itself is never touched.
+# ---------------------------------------------------------------------------
+
+
+def test_save_ask_answer_as_note_creates_a_new_note_via_the_capture_path(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "source-note", "the source note's original body")
+    finally:
+        conn.close()
+
+    result = save_ask_answer_as_note(
+        db_path,
+        source_note_id="source-note",
+        body="We chose OAuth for service auth.",
+        settings=Settings(),
+    )
+
+    assert not isinstance(result, Conflict)
+    assert result.op == "create"
+    assert result.note_id != "source-note"
+
+    conn = init_db(db_path)
+    try:
+        (body,) = conn.execute(
+            "SELECT body FROM versions WHERE version_id = ?", (result.version_id,)
+        ).fetchone()
+        assert body == "We chose OAuth for service auth."
+    finally:
+        conn.close()
+
+
+def test_save_ask_answer_as_note_never_mutates_the_source_note(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        source_result = save(conn, "source-note", "the source note's original body")
+    finally:
+        conn.close()
+
+    save_ask_answer_as_note(
+        db_path,
+        source_note_id="source-note",
+        body="a fresh proposed answer",
+        settings=Settings(),
+    )
+
+    conn = init_db(db_path)
+    try:
+        version_id, body = conn.execute(
+            "SELECT version_id, body FROM notes JOIN versions "
+            "ON notes.head_version_id = versions.version_id "
+            "WHERE notes.note_id = ?",
+            ("source-note",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    # Source note's head is unmoved and byte-for-byte unchanged.
+    assert version_id == source_result.version_id
+    assert body == "the source note's original body"
+
+
+def test_save_ask_answer_as_note_links_a_note_to_note_edge_back_to_the_source(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "source-note", "the source note's original body")
+    finally:
+        conn.close()
+
+    result = save_ask_answer_as_note(
+        db_path,
+        source_note_id="source-note",
+        body="a fresh proposed answer",
+        settings=Settings(),
+    )
+    assert not isinstance(result, Conflict)
+
+    conn = init_db(db_path)
+    try:
+        edges = conn.execute(
+            "SELECT from_id, to_id, source, status FROM edges "
+            "WHERE from_id = ? AND to_id = ?",
+            (result.note_id, "source-note"),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert len(edges) == 1
+    (from_id, to_id, source, status) = edges[0]
+    assert from_id == result.note_id
+    assert to_id == "source-note"
+    assert source == "user"
+    assert status == "fresh"
+
+
+def test_save_ask_answer_as_note_refuses_an_empty_body(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "source-note", "body")
+    finally:
+        conn.close()
+
+    with pytest.raises(EmptyCaptureError):
+        save_ask_answer_as_note(
+            db_path, source_note_id="source-note", body="   ", settings=Settings()
+        )

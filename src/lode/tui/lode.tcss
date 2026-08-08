@@ -65,6 +65,22 @@ DeleteConfirmScreen {
     padding: 1 2;
 }
 
+/* Save-ask-answer-as-note confirm (lode-35nu.11.4) -- same larger, scrollable
+ * popup treatment as #enrichment-inspector-dialog above, since the preview is
+ * an answer's full rendered text and can run longer than the terminal
+ * height. */
+SaveAsNoteConfirmScreen {
+    align: center middle;
+}
+
+#save-as-note-confirm-dialog {
+    width: 80%;
+    height: 80%;
+    border: thick $primary;
+    background: $panel;
+    padding: 1 2;
+}
+
 /* Related-notes panel (lode-35nu.10) -- INVARIANT: exactly one row per note,
  * at any terminal width. RelatedNotesPanel.on_mount pins a fixed height of
  * related_notes_limit + header + focus-border rows, and that arithmetic is

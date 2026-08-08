@@ -49,7 +49,7 @@ from rich.console import Console
 from rich.table import Table
 from typer.testing import CliRunner
 
-from lode import __version__, cli, config
+from lode import __version__, cli, config, retrieval
 from lode.answer import Claim, Support
 from lode.auth import AuthError
 from lode.cited_answer import CitedAnswer
@@ -2630,7 +2630,7 @@ def test_notes_colours_id_and_date_through_the_shared_theme_and_escapes_summary(
     pytest's default capture replaced stdout before ``lode.cli`` was imported,
     and ``pytest -s`` from a real terminal freezes it the other way. See
     tests/test_cli_console.py, which refutes that claim at length, and
-    ``cli.py``'s ``console`` docstring.
+    ``cli/__init__.py``'s ``console`` docstring.
 
     So this test asserts the two things it genuinely can: that ``notes_``
     hands rich the ``[note_id]``/``[date]`` style names (captured in-process),
@@ -4586,7 +4586,7 @@ def test_ambiguous_prefix_rows_render_like_notes_through_err_console(
     hoisted onto ``err_console``'s constructor, lode-9jmv, and pinned by
     ``test_cli_console.py``'s ``test_err_console_highlight_is_disabled``.)
 
-    Rationale for soft_wrap lives at the cli.py call site, deliberately not
+    Rationale for soft_wrap lives at the ``cli/__init__.py`` call site, deliberately not
     restated here (see notes_'s equivalent pin).
     """
     db_path = tmp_path / "lode.db"
@@ -4989,7 +4989,7 @@ def test_retrieve_dense_leg_surfaces_a_vector_only_match(tmp_path: Path) -> None
 
         # A lexically disjoint question: the lexical leg matches nothing, so only the
         # dense leg can surface this note.
-        context = cli._retrieve(
+        context = retrieval._retrieve(
             conn,
             "unrelated wording entirely",
             lance_dir=lance_dir,
@@ -5045,15 +5045,16 @@ class _TwoDirEmbedder:
 def test_retrieve_wires_rerank_and_reorders_by_cross_encoder_score(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """cli._retrieve calls rerank() between RRF and expand_parents (lode-vtf).
+    """retrieval._retrieve calls rerank() between RRF and expand_parents (lode-vtf).
 
     Two notes are indexed through the dense leg with orthogonal vectors so RRF
     ranks the 'first' passage ahead of the 'second' one by construction (see
     ``_TwoDirEmbedder``). A stubbed cross-encoder — injected via
     ``lode.retrieval.FastEmbedCrossEncoder``, the seam ``rerank()`` falls back to
     when no scorer is passed — scores the 'second' passage higher. Asserting the
-    live ``_retrieve`` path (not just ``lode.retrieval``'s own unit tests) returns
-    'second' ahead of 'first' proves rerank actually fires from cli.py.
+    live ``_retrieve`` path (not just ``rerank()``'s own unit tests) returns
+    'second' ahead of 'first' proves rerank actually fires from
+    ``lode.retrieval._retrieve``'s composed pipeline.
     """
     settings = load_settings(embedding_vector_dim=2)
     db_path = tmp_path / "lode.db"
@@ -5096,7 +5097,7 @@ def test_retrieve_wires_rerank_and_reorders_by_cross_encoder_score(
         # Lexically disjoint from both bodies: no passages_fts rows exist anyway
         # (versions.save bypasses the LexicalCacheBackend), so only the dense leg
         # — and then rerank — determines the order.
-        context = cli._retrieve(
+        context = retrieval._retrieve(
             conn,
             "unrelated wording entirely",
             lance_dir=lance_dir,
@@ -5153,7 +5154,7 @@ def test_retrieve_respects_rerank_disabled_setting(
                 > 0
             )
 
-        context = cli._retrieve(
+        context = retrieval._retrieve(
             conn,
             "unrelated wording entirely",
             lance_dir=lance_dir,
@@ -5169,7 +5170,7 @@ def test_retrieve_respects_rerank_disabled_setting(
 def test_retrieve_wires_graph_expand_and_includes_linked_note(
     tmp_path: Path,
 ) -> None:
-    """cli._retrieve calls graph_expand() after expand_parents (lode-vtf).
+    """retrieval._retrieve calls graph_expand() after expand_parents (lode-vtf).
 
     note-a is the only note directly retrievable (dense leg); note-b is reachable
     only via an AI-inferred edge from note-a and is deliberately never indexed
@@ -5215,7 +5216,7 @@ def test_retrieve_wires_graph_expand_and_includes_linked_note(
         )
         conn.commit()
 
-        context = cli._retrieve(
+        context = retrieval._retrieve(
             conn,
             "unrelated wording entirely",
             lance_dir=lance_dir,
@@ -5605,7 +5606,7 @@ def test_config_output_has_no_ansi_when_piped(tmp_path: Path) -> None:
 # `cli.SafeTable.add_row` itself so a future table cannot reintroduce the bug
 # by forgetting to wrap. Three tests below: (1) the guard itself, proven
 # non-vacuous by a same-input control against plain `rich.table.Table`; (2) a
-# structural test that fails for ANY table in cli.py built via bare `Table(`
+# structural test that fails for ANY table in the cli package built via bare `Table(`
 # instead of `SafeTable(`; (3) the full CLI-level round trip named in the
 # ticket's acceptance criteria.
 
@@ -5638,7 +5639,7 @@ def test_every_cli_table_construction_routes_through_safe_table() -> None:
     # Structural guard (the ticket's own acceptance criterion: "a test fails
     # for ANY table that passes a bare str, so a future third table cannot
     # silently reintroduce the character drop"). Enforced here by making it
-    # IMPOSSIBLE to construct a plain rich.table.Table anywhere in cli.py
+    # IMPOSSIBLE to construct a plain rich.table.Table anywhere in the cli package
     # outside SafeTable's own class body -- a bare-str cell is only ever
     # dangerous on an unguarded Table, so barring the construction bars the
     # whole defect class regardless of how a future call site writes its
@@ -6124,7 +6125,7 @@ def _patch_cli_clock_past_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
     (lode-e8lo): it is order-proof only by luck, because ``work()`` happens to call
     ``time.monotonic()`` for the deadline before anything else reachable from it does. A
     ``time.monotonic()`` added anywhere upstream of that read -- e.g. inside
-    ``cli._resolve_settings()`` (``src/lode/cli.py``, called before the deadline calc, in
+    ``cli._resolve_settings()`` (``src/lode/cli/__init__.py``, called before the deadline calc, in
     ``cli``'s own namespace) -- would consume call #1 itself, making call #2 the deadline
     instead; the counter's "call #1 is special" premise would then be exactly backwards,
     and the loop would spin forever rather than time out.
@@ -6973,6 +6974,6 @@ def test_huggingface_hub_still_declares_httpx_as_its_transport() -> None:
         "(fastembed itself never declared httpx). If the hub has switched "
         "transports, that arm is dead and 'lode models pull' now tracebacks on "
         "the no-network path instead. TO FIX: catch the new transport's "
-        "exception in _warm() (src/lode/cli.py), and re-point this canary at "
+        "exception in _warm() (src/lode/cli/models.py), and re-point this canary at "
         "the new dependency."
     )

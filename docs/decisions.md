@@ -4055,3 +4055,60 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     [agents-workflow.md](agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc),
     [`scripts/trunk-write-guard.sh`](../scripts/trunk-write-guard.sh),
     `tests/test_trunk_write_guard.py`.
+
+- **2026-08-08 — DECIDED (maintainer, `lode-3dh1`): `run_tool_turns`' `max_tokens` stays per-TURN,
+  not per-run; total spend is bounded by `max_tool_turns` instead.** `lode-35nu.11.6`'s acceptance
+  criteria asked for both `max_tokens` and `timeout_s` to be per-run budgets; only `timeout_s` is.
+  Three options were weighed: (a) decrement `max_tokens` against each turn's `usage.output_tokens`;
+  (b) add a separate `max_output_tokens_per_run` knob; (c) accept per-turn `max_tokens` and bound
+  total spend via `max_tool_turns`. **Chosen: (c), now.** `max_tokens` is Anthropic's hard cap on a
+  single response, not a spend meter; (a) was rejected because decrementing it can truncate the
+  run's final forced-schema turn, converting a bounded cost overshoot into a wrong answer on the
+  user-visible Q&A path. (b) is deferred, not rejected, as a follow-up (`lode-csl2`) — additive on
+  top of (c) if it ever lands. The failure-mode chain behind rejecting (a), and the worst-case
+  arithmetic, are in the stack.md write-up and deliberately not restated here. Full write-up: [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116),
+  [configuration.md](configuration.md#models) (`_DEFAULT_MAX_TOOL_TURNS`).
+- **2026-08-08 — VERIFIED (`lode-lnvi` FINDING A smoke test): the `PreToolUse(Edit|Write)`
+  trunk-write guard's `git rev-parse --abbrev-ref HEAD` correctly resolves the CALLING
+  worktree-isolated subagent's cwd, not the main checkout.** A `coding` producer dispatched under
+  `isolation: "worktree"` into its own `.claude/worktrees/agent-<hash>` (branch
+  `worktree-agent-<hash>`, confirmed off `trunk` via `git rev-parse --abbrev-ref HEAD` before any
+  edit) made a live `Edit` tool call against this very file, in-session, while building `lode-lnvi`.
+  No `permissionDecision: "ask"` prompt appeared — the hook subprocess evaluated `HEAD` inside the
+  worktree, saw a non-`trunk` branch, and printed nothing (allow), exactly as
+  `scripts/trunk-write-guard.sh` intends. This closes the open harness question `lode-p8zl`
+  FINDING A raised: hook subprocesses inherit the calling (sub)agent's cwd, including under
+  `isolation: "worktree"` dispatch — they do not fall back to the main checkout. No wedge risk; no
+  revert needed. **What the null result does and does not prove:** the practical question — does the
+  hook wedge every dispatched `Edit`/`Write` repo-wide? — is settled outright, since a wedge would
+  have surfaced as a blocked tool call. The stronger claim, that the hook *fired* and read `HEAD` in
+  the worktree, rests additionally on the wiring, re-confirmed at technical review:
+  `.claude/settings.json` registers the `Edit|Write` matcher, and its command uses
+  `CLAUDE_PROJECT_DIR` only to *locate* the script — it never `cd`s, so the script's `git rev-parse`
+  runs in whatever cwd the hook subprocess inherits. The one reading a null result cannot exclude is
+  that `PreToolUse` hooks never fire on subagent tool calls at all; the positive control that would
+  (observing the `"ask"` prompt from a checkout actually on `trunk`) was not run, since it requires
+  writing from the main checkout. (One separate, harness-level guard fired instead — attempting the
+  `Edit` via the main-checkout path, rather than the worktree-prefixed path, was refused with "Edit
+  the worktree copy of this file instead of the shared-checkout path"; that is the harness's own
+  path-scoping for an isolated agent, unrelated to the `PreToolUse` trunk-write guard under test.)
+
+- **Update (`lode-5ido`, 2026-08-08) — `lode-p8zl` RULING 1's premise is stale, but its conclusion
+  stands and the shipped design is UNCHANGED.** Claude Code's documented `PreToolUse` payload now
+  carries `agent_id` and `agent_type` (present when the hook fires inside a subagent, or under
+  `--agent`), alongside the common fields `cwd` and `permission_mode`, so subagent-vs-main-session
+  dispatch IS mechanically distinguishable from inside a hook. The claim above that "the documented
+  `PreToolUse` payload carries no agent-role field" no longer holds. The premise being stale does
+  not make the conclusion wrong:
+  [`scripts/trunk-write-guard.sh`](../scripts/trunk-write-guard.sh) is untouched by this entry — it
+  still gates on the branch name and returns `"ask"`, never `"deny"`, regardless of `agent_type`.
+  Reading `agent_type` to make the guard a hard `"deny"` for subagents and silent for the main
+  session was considered and is REJECTED, for three reasons, so it is not re-proposed:
+  1. `"ask"` is recoverable, `"deny"` is not. A hard deny wedges a dispatched producer mid-pipeline
+     with no path forward — the exact failure mode `lode-lnvi` FINDING A existed to rule out,
+     reintroduced deliberately.
+  2. Silent-for-main removes the backstop precisely where it is most needed. CLAUDE.md's worktree
+     rule is aimed at the human/main session; subagents already work in worktrees by construction, so
+     this inverts who gets guarded.
+  3. It reintroduces a `jq` dependency against RULING 3, on a hook measured at ~10ms in the hot path
+     of every `Edit`/`Write`.
