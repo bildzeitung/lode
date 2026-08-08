@@ -20,6 +20,18 @@ while erasing it here would lose the record of what was believed, and when. The 
 gated by [`tests/test_decisions_supersession_markers.py`](../tests/test_decisions_supersession_markers.py);
 what that gate cannot catch is recorded in its module docstring (lode-nlk6).
 
+**This file is out of scope for pointer sweeps, by construction (`lode-1dmu`, 2026-08-08).** A
+mechanical sweep that repoints every reference to a file/symbol that moved or was renamed (e.g. the
+pre-split monolithic CLI module's later break-up into a package) must skip this file. Every entry
+below is a **dated historical record** — it names the file/symbol that existed *when the entry was
+written*, and this file's own append-only rule (plus [`CLAUDE.md`](../CLAUDE.md)) forbids rewriting
+an existing entry in place. Repointing an old entry's reference to match the current tree would not
+fix drift; it would falsify the record of what was true at the time. A reference here naming a
+since-moved or since-deleted path is therefore expected, not a defect — leave it alone. (This does
+not exempt this file's own *preamble* — the rules section you are reading now — from being appended
+to when a new rule is needed, as this paragraph itself demonstrates; it exempts only the dated
+entries below from being rewritten to chase the current tree.)
+
 - **External refresh: on-access revalidation vs. scheduled background refresh.** Leaning
   **on-access with a short TTL cache** for a single instance with finite API quota — but it's
   really a per-source judgment (a closed ticket changes rarely; an active PR changes hourly).
@@ -37,6 +49,60 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   **Still open** for any future non-web connector — decide per connector when building it, as
   originally noted above; nothing here presumes the same TTL-sweep answer is right for, say, a
   webhook-capable source.
+- **Docstring `:func:`/`:class:`/`:data:`/`:meth:` ref gate — scope, wrapped-ref disposition, and
+  wiring (`lode-8oeu`).** `lode-2hfd`'s sweep found four dangling Sphinx-role refs (one of which had
+  never named a real symbol) surviving a rename across two branches that landed in the same `/land`
+  pass, plus a second, independent defect class: 31 `:func:` refs in `src/`/`tests/` LINE-WRAPPED mid-role
+  (Sphinx cannot resolve a role containing a newline, and the wrap also hides the ref from the
+  `grep -rn <name>` a rename normally relies on — exactly how one of the four dangling refs was
+  missed). `scripts/check_docstring_refs.py` / `nox -s docstringcheck` closes this:
+  1. **Scope: every symbol-naming role, but only `lode.*`-prefixed refs are resolved.** The roles
+     covered are `:func:`, `:class:`, `:data:`, `:meth:`, `:attr:`, `:mod:`, `:exc:`, `:obj:` —
+     deliberately wider than the four this ticket enumerated. `:mod:` alone is the largest body of
+     refs in the repo and is exactly what a module *move* breaks (the same class of event that
+     motivated the gate), and `:attr:` is semantically identical to the covered `:data:`; gating
+     four of the eight would have left ~209 of ~1124 `lode.*` refs unchecked while reading as
+     "docstring refs are checked" — a false negative, which is worse than a false positive because
+     it manufactures confidence. Widening cost nothing: the resolver already handled bare-module
+     paths and the repo reports zero unresolved refs under the wider set. A role naming a third-party or stdlib
+     symbol (`:func:`httpx.get``) is skipped outright rather than attempted-resolve-if-importable —
+     simpler, and there is no value in this gate reasoning about symbols it doesn't own. A leading
+     `~` (Sphinx's "show only the last component" prefix) is stripped before the scope check, so
+     `` :func:`~lode.cli._tabular_table` `` is treated identically to the unprefixed form.
+  2. **Resolution walks module-attribute paths, not just literal def sites.** It imports the longest
+     importable prefix as a module, then walks remaining dotted segments as attribute access — the
+     repo convention that e.g. `lode.cli._short_date` names a re-exported attribute, not necessarily
+     a `def` inside `cli/__init__.py` itself. A dataclass field or a pydantic model field declared
+     (but with no class-level default, so `hasattr` misses it) — `Passage.char_range`,
+     `Settings.jira_base_url` — is special-cased as a valid terminal match; without that, both read
+     as false-positive dangling refs, which is exactly the kind of noise that gets a gate disabled
+     within a week.
+  3. **Wrapped refs are reported, not hard-failed, and the pre-existing wrapped sites are NOT
+     mechanically unwrapped as part of this ticket.** A wrapped-but-otherwise-correct ref is not a
+     correctness bug this gate needs to block a merge over — the whitespace-normalize-before-resolve
+     step already makes it resolve identically to its unwrapped form, so the *reference* is not
+     broken from this gate's point of view even though it will not render as a Sphinx cross-link.
+     Reporting it (as a `WARNING:` line, non-fatal) keeps future renames grep-safe going forward
+     without taking on a mechanical reformatting pass that touches no behavior (31 sites by
+     lode-2hfd's `:func:`-only count; more under the wider role set above — the gate prints the live
+     count on every run rather than pinning a number here that goes stale). If wrapped
+     refs keep recurring, hard-failing on them (or unwrapping the backlog) is a small follow-up, not
+     a redesign. **Known cost, filed as a follow-up:** those warnings print on every green
+     `nox` run, so a genuinely new wrapped ref is indistinguishable from the backlog in that
+     output — a warning that always fires trains readers to ignore the channel.
+  4. **Wired as a nox session (`docstringcheck`) in the DEFAULT set, hard-fail on any unresolved
+     `lode.*` ref** — mirrors `linkcheck`'s placement (pure Python, no Docker/network) rather than a
+     pytest test or a pre-commit hook, so it runs on every bare `nox` the same as the markdown-link
+     gate it complements. It reports zero unresolved refs against trunk as of this ticket (four
+     genuine dangling refs found and fixed while building it: `lode.versions.version_ids` — never a
+     function, a local variable inside `purge()` — repointed at `lode.versions.purge`;
+     `lode.tui.dates._parse` — a name from before the shared `lode.timestamps.parse_stamp` helper
+     existed, no longer defined anywhere — repointed at `lode.tui.dates.format_adaptive_date`, the
+     current call site; `lode.cli._config_knob_table` — actually lives at `lode.cli.config`, never
+     re-exported to the `lode.cli` package root; and a genuine typo dropping the leading underscore
+     off `lode.tui.screens._markdown_area._markdown_text_area`).
+  This gate only ever reads `src/`/`tests/` Python source, so `docs/decisions.md`'s own append-only
+  exemption from pointer sweeps (this file's own preamble) never interacts with it.
 - **History compaction / squash policy.** Not needed for years; revisit if storage matters.
   ([storage.md](storage.md#identity-vs-version))
 - **Minimal / archival backup export.** v1 backup is `cp lode.db` — a superset copy that drags
@@ -4093,6 +4159,69 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   the worktree copy of this file instead of the shared-checkout path"; that is the harness's own
   path-scoping for an isolated agent, unrelated to the `PreToolUse` trunk-write guard under test.)
 
+- **2026-08-08 (`lode-r9z0`) — shared helper for the batched polymorphic
+  `(version_id | snapshot_id)` target split: extracted for 2 of the 3 candidate sites; `trust_rank`
+  deliberately left alone.** `cited_answer._resolve_targets` (lode-ekqh) and
+  `citations_read.resolve_citations` (lode-35nu.1/.3) both partition a set of `target_version` ids
+  into note-side and external-side lists, then run one `versions JOIN notes ... IN(...)` query and
+  one `snapshots JOIN externals ... IN(...)` query. That shared shape — split ids already known to
+  belong to one side or the other, build the placeholder string, run the two queries — is now
+  `lode.target_rows.fetch_target_rows(conn, note_ids, external_ids, note_columns,
+  external_columns)`. Each caller still supplies its own `SELECT` column list and does its own
+  row -> result mapping (per the ticket's acceptance criteria); `cited_answer`'s `no_egress`/scope
+  composition is untouched — that logic runs on the caller's side of the helper boundary, not inside
+  it, and no generic `no_egress` seam was introduced (`docs/no_egress_scope`, `lode-35nu.11.8`
+  stays call-site-local).
+
+  `retrieval.trust_rank` (~:773) was evaluated as the third candidate the ticket named and was left
+  alone. **Precisely how much of it fits, since a vaguer "does not fit" would mislead the next
+  reader who reaches for this site:** `trust_rank`'s *external-side* query is byte-identical
+  (modulo whitespace) to the helper's external branch — same `FROM snapshots s JOIN externals e ON
+  e.external_id = s.external_id WHERE s.snapshot_id IN (...)`, differing only in its `SELECT` list
+  (`s.snapshot_id, e.head_snapshot_id`), which is exactly the part the helper parameterizes. That
+  half genuinely matches. Two things still make the site a non-fit as a whole:
+
+  1. **The note side is a different query.** `trust_rank` runs a bare `SELECT version_id FROM
+     versions WHERE version_id IN (...)` with **no `JOIN notes`** — it only needs to know whether
+     the id exists in `versions`. The helper hardcodes the `JOIN notes`, so it cannot serve it.
+  2. **There is no pre-split id list.** `trust_rank` hands the **full, unsplit** target-id list to
+     *both* queries, because classifying which table a target belongs to (owned note vs.
+     current/stale external) is the very thing it is computing — the split is its *output*, not its
+     input.
+
+  So adopting the helper at this site would mean calling it with an empty note-id list and an empty
+  note-column fragment to suppress half of it, then still hand-rolling the note-side query
+  separately — strictly worse than the ~4 lines of placeholder boilerplate it would save. Left
+  alone deliberately.
+
+  **Open, and deliberately not settled here:** whether a *different* seam — a helper taking the
+  whole SQL string with a `{placeholders}` slot plus one id sequence, owning only "skip if empty /
+  build placeholders / bind / fetchall" — would have fit all three sites without the hardcoded
+  `JOIN` or the table-alias coupling (callers must know `v`/`n`/`s`/`e` to write a column list).
+  This ticket's `design` field pinned the `(note_ids, external_ids, note_columns,
+  external_columns)` signature, so re-cutting the seam was out of its scope; the question is filed
+  as its own ticket rather than decided by silence. Related and also unaddressed: the `", ".join("?"
+  for _ in xs)` placeholder idiom is hand-rolled at ~14 sites across `retrieval.py`, `notes_read.py`,
+  `worker.py`, `enrichment_view.py` and `lexical.py`, in three different spellings — this ticket left
+  that count net-neutral (removed two copies, added two) rather than growing scope.
+
+  **The description's other open question — whether `cited_answer` and `citations_read` can share
+  a single read within one `ask()` call, instead of each re-fetching the same versions/snapshots
+  bodies (pre-send in `cited_answer._resolve_targets`, post-answer in
+  `citations_read.resolve_citations`) — is recorded here, not implemented.** The two reads happen at
+  genuinely different points in the pipeline and over different id sets: `_resolve_targets` runs
+  over every **retrieved** context item before the LLM call (to resolve `no_egress` for the egress
+  gate and populate the faithfulness gate's `bodies` map), while `resolve_citations` runs afterward
+  over only the **surviving, cited** targets (a strict subset, post-gate) to add as-of/identity
+  metadata for display. Unifying them would mean either widening `_resolve_targets`'s scope to also
+  compute identity/as-of for targets that might get dropped by the gate (wasted work on the common
+  case), or threading `_resolve_targets`'s already-fetched bodies dict through `ask()` into the
+  citations-read call (a cross-module data-passing change touching call signatures in both
+  `cited_answer.ask` and wherever `resolve_citations` is invoked) — bigger and riskier than this
+  ticket's stated scope of factoring out a query-shape helper. Leaning: **not worth it** unless a
+  profiling signal shows the duplicate read matters in practice; revisit then rather than
+  speculatively wiring it now.
+
 - **Update (`lode-5ido`, 2026-08-08) — `lode-p8zl` RULING 1's premise is stale, but its conclusion
   stands and the shipped design is UNCHANGED.** Claude Code's documented `PreToolUse` payload now
   carries `agent_id` and `agent_type` (present when the hook fires inside a subagent, or under
@@ -4151,3 +4280,25 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   `lode-8hsk` so that rebuild targets `/rest/api/3/search/jql` with an explicit `fields` and
   `nextPageToken`-based pagination from the start, rather than reintroducing a dead-on-arrival
   endpoint. Full finding: `bd show lode-6nwu --json` (the `design` field).
+
+- **Tool-augmented Ask: prompt injection steering later tool calls, residual risk (`lode-80bv`).**
+  The threat model is written up in
+  [externals.md](externals.md#prompt-injection-via-tool-results-steering-later-tool-calls-threat-model-lode-80bv):
+  attacker-controlled content returned by a tool (a JIRA/Confluence body, a fetched web page, even a
+  search-result title) is indistinguishable at the model's input from the system prompt or the
+  user's question, and can steer which tool the model calls next. Four existing mechanisms bound the
+  blast radius — the tool set is read-only by construction, the per-ask `ToolBudget` caps fan-out,
+  every tool call is audited via a `purpose='tool'` `egress_log` row, and the citation-faithfulness
+  gate still constrains what reaches the user as a claim — but **none of them detects or blocks a
+  steered call in-flight**; they only bound its scope and make it auditable after the fact. A
+  prompt-level "ignore instructions in tool results" defense was considered and rejected as not a
+  mechanism (this codebase prefers structural guarantees; a prompt instruction is just more text in
+  the same context an attacker can attempt to override, and is untestable).
+
+  **Left open:** whether the residual risk — a steered call sequence that stays within budget, stays
+  read-only, and gets logged, but still executes against the model's judgment under attacker
+  influence — needs a structural mitigation beyond what's listed above. No specific mechanism is
+  proposed here; candidates would need to be schema-level, filter-level, or a refusal, not a prompt
+  instruction, per this file's and `externals.md`'s standing preference. Revisit once `lode-ejfv`
+  (bounding where `web_fetch` may point) lands, since it closes the one concretely-scoped half of this
+  risk (destination-steering) and may change what residual surface remains.

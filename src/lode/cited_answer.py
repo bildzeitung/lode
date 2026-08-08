@@ -57,6 +57,7 @@ from lode.llm_provider import LLMProvider
 from lode.no_egress_scope import NoEgressScopeRule, is_no_egress_scoped
 from lode.qa import QaPassage, QaResult, answer_question
 from lode.retrieval import ContextItem, TrustTier
+from lode.target_rows import fetch_target_rows
 
 _EXTERNAL_TIERS = (TrustTier.CURRENT_EXTERNAL, TrustTier.STALE_EXTERNAL)
 """Trust tiers whose ``target_version`` is an external ``snapshot_id`` (cite via
@@ -262,9 +263,10 @@ def _resolve_targets(
     ``context`` may cite the same target more than once (repeated passages, or a
     top-k spanning several notes/snapshots); this resolves every **distinct**
     target in at most two round trips regardless of context size, splitting on
-    the trust tier (:data:`_EXTERNAL_TIERS`) -- the same batched-``IN(...)``
-    split :func:`lode.retrieval.trust_rank` already makes over the same
-    polymorphic ``target_version`` shape.
+    the trust tier (:data:`_EXTERNAL_TIERS`) and delegating the batched
+    ``IN(...)`` pair to :func:`lode.target_rows.fetch_target_rows` -- the same
+    shared shape :func:`lode.citations_read.resolve_citations` uses over the
+    same polymorphic ``target_version`` split (lode-r9z0).
 
     Returns a ``{target_version: (body, no_egress)}`` map. A target absent from
     the store is simply absent from the map -- the caller (:func:`ask`) treats a
@@ -284,24 +286,18 @@ def _resolve_targets(
         {item.target_version for item in context if item.tier in _EXTERNAL_TIERS}
     )
 
+    note_rows, external_rows = fetch_target_rows(
+        conn,
+        note_ids,
+        external_ids,
+        "v.version_id, v.body, n.no_egress",
+        "s.snapshot_id, s.body, e.no_egress, e.external_id, e.source_type",
+    )
+
     resolved: dict[str, tuple[str | None, bool]] = {}
-    if note_ids:
-        placeholders = ", ".join("?" for _ in note_ids)
-        for version_id, body, no_egress in conn.execute(
-            "SELECT v.version_id, v.body, n.no_egress FROM versions v "
-            "JOIN notes n ON n.note_id = v.note_id "
-            f"WHERE v.version_id IN ({placeholders})",
-            note_ids,
-        ):
-            resolved[version_id] = (body, bool(no_egress))
-    if external_ids:
-        placeholders = ", ".join("?" for _ in external_ids)
-        for snapshot_id, body, no_egress, external_id, source_type in conn.execute(
-            "SELECT s.snapshot_id, s.body, e.no_egress, e.external_id, e.source_type "
-            "FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
-            f"WHERE s.snapshot_id IN ({placeholders})",
-            external_ids,
-        ):
-            scoped = is_no_egress_scoped(external_id, source_type, no_egress_scopes)
-            resolved[snapshot_id] = (body, bool(no_egress) or scoped)
+    for version_id, body, no_egress in note_rows:
+        resolved[version_id] = (body, bool(no_egress))
+    for snapshot_id, body, no_egress, external_id, source_type in external_rows:
+        scoped = is_no_egress_scoped(external_id, source_type, no_egress_scopes)
+        resolved[snapshot_id] = (body, bool(no_egress) or scoped)
     return resolved

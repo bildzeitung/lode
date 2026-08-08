@@ -174,7 +174,7 @@ def _list_notes(
     ``created`` (e.g. ``ORDER BY n.created DESC, n.rowid DESC``) only helps
     the tie case -- when ``created`` values differ but are simply wrong, the
     tiebreaker never runs and the wrong order ships anyway (verified). The
-    fix mirrors :func:`lode.versions.version_ids` (docs/storage.md, lode-t1y):
+    fix mirrors :func:`lode.versions.purge` (docs/storage.md, lode-t1y):
     drop ``created`` from the sort key entirely and order by ``rowid``
     (insertion order) alone, immune to wall-clock jitter either way. Opposite
     *direction* from that precedent, deliberately: a version chain needs
@@ -231,7 +231,7 @@ def search_notes(db_path: Path, query_text: str) -> list[NoteRow]:
     **Known limitation, not fixed here:** a note saved before the lexical leg
     landed and never since backfilled is not in ``passages_fts`` and quietly
     won't surface here -- run ``lode reindex-lexical`` (lode-x9lu) to backfill
-    it; ``cli.py``'s ``reembed`` explicitly leaves FTS untouched. Recorded as
+    it; ``cli/reembed.py``'s ``reembed`` explicitly leaves FTS untouched. Recorded as
     a build requirement on lode-35nu.6, not resolved by it.
     """
     conn = init_db(db_path)

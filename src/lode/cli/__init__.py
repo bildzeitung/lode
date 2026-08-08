@@ -37,16 +37,11 @@ looking the name up through the package's OWN namespace at call time, the
 same live-binding indirection this single flat module gave every call for
 free before the split. This is a deliberate, narrow exception; every other
 cross-command helper (``_open_db``, ``SafeTable``, ...) is imported
-normally, since nothing patches those by name.
-
-``console`` is a seventh name-rebound case, but a narrower one, which is why
-it is not listed among the six above: only ``lode.cli.status`` is exercised
-under a ``monkeypatch.setattr(cli, "console", ...)``
-(``tests/test_cli.py``'s
-``test_status_dead_line_is_uniformly_danger_not_repr_highlighted``, which
-swaps in a ``force_terminal`` Console to make colour observable under the
-suite). So ``status`` alone must call it as ``cli.console``; every other
-module imports it plainly and calls a bare ``console.print(...)``.
+normally, since nothing patches those by name **on this package**. That
+qualifier is the whole distinction: a name a test rebinds on the SUBMODULE
+that consumes it (as ``tests/test_cli.py`` does for ``lode.cli.status``'s
+``console``, lode-nftw) needs no package indirection at all -- the plain
+import is already the patch target.
 
 **``time`` and ``uuid`` are patched DIFFERENTLY from each other, and the
 difference decides the call-site form -- do not unify them.**
@@ -151,14 +146,27 @@ CLI_THEME = Theme(CLI_STYLES)
 #: hand-rolled per command. Deliberately **no test seam** (no
 #: ``force_terminal``, no accessor to monkeypatch) — see docs/stack.md and
 #: ``tests/test_cli_console.py``'s module docstring for the freeze-vs-live
-#: mechanism this relies on.
+#: mechanism this relies on. That is a statement about THIS object: a test
+#: needing a substitute Console rebinds the ``console`` NAME on the single
+#: command submodule it exercises (``lode.cli.status``, lode-nftw), so no
+#: seam on the shared object is required.
 #:
-#: ``highlight=False`` (lode-re0s) is process-wide colour POLICY -- see
-#: ``tests/test_cli_console.py`` for the full rationale; every command below
-#: relies on it rather than passing the flag per call site. IF A SECOND
-#: Console IS EVER ADDED to this module (as ``err_console`` below already
-#: has been -- lode-l810), it MUST also pass ``highlight=False``, for the
-#: same reason.
+#: ``highlight=False`` (lode-re0s) is process-wide colour POLICY: rich's
+#: default ``ReprHighlighter`` runs over every plain string rendered
+#: through a ``Console``, injecting ``repr.*`` styles absent from
+#: :data:`CLI_STYLES` -- a rendered date like ``2026-07-16 14:32`` gets
+#: shredded into bold-cyan ``repr.number`` numerals and a bold-green
+#: ``repr.ipv6`` time (yes, the clock reads as an IPv6 address), with the
+#: separators left unstyled between them (verified against rich 15.0.0 --
+#: ``ReprHighlighter()("2026-07-16 14:32").spans``). ``Table`` rendering
+#: never runs this highlighter over cell text, so there is no blast
+#: radius there, and a per-call
+#: ``highlight=True`` still works where wanted -- nothing is foreclosed.
+#: So this Console hoists ``highlight=False`` once at construction instead
+#: of leaving it a per-call-site kwarg, and every command below relies on
+#: that. IF A SECOND Console IS EVER ADDED to this module (as
+#: ``err_console`` below already has been -- lode-l810), it MUST also pass
+#: ``highlight=False``, for the same reason.
 console = Console(theme=CLI_THEME, highlight=False)
 
 #: A STDERR twin of ``console`` above (lode-l810) -- same theme, same

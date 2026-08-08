@@ -600,7 +600,7 @@ charged against `attempts`, must reach the operator directly. Everything else is
 Two call sites *inside the queue machinery* read that roster wider: `drain`'s two
 *batch pre-step* `try`s (`_batch_collect_enrich`'s, `lode-knnt`, and
 `_batch_submit_enrich`'s, `lode-2mnj`) both catch bare `Exception`, not just the
-named taxonomy — see "must not starve the credential-free work" below. (`cli.py`'s
+named taxonomy — see "must not starve the credential-free work" below. (`cli/work.py`'s
 own catch is wider still, but it decides only how an already-escaped error is
 *rendered*, not job accounting — see the `lode work` bullet below.) `run_one` and
 `_batch_submit_enrich` *itself* keep the narrow pair deliberately for their own
@@ -1381,10 +1381,22 @@ meaning for it, so this ticket makes the column nullable **only for a tool call*
 LLM send always records which model it went to. Relaxing the column to plain nullable would have
 dropped that enforcement for `enrich`/`qa` as well, which an audit trail cannot afford.
 `destination` is where the call went — the
-API base / host it hit, not a model — and `arguments` is the call's arguments as sent
-(post-redaction), the tool-call analogue of `sent_targets`/`redactions` for an LLM send. Both are
-`NULL` for `purpose IN ('enrich', 'qa')`. This ticket adds the shape only — no code path writes a
-`purpose='tool'` row yet; that lands with the tool call itself (`lode-35nu.11.1`).
+API base / host it hit, not a model — **also post-redaction** (`lode-l87l`), and `arguments` is the
+call's arguments as sent (post-redaction), the tool-call analogue of `sent_targets`/`redactions` for
+an LLM send. Both are `NULL` for `purpose IN ('enrich', 'qa')`. This ticket adds the shape only — no
+code path writes a `purpose='tool'` row yet; that lands with the tool call itself
+(`lode-35nu.11.1`).
+
+**Why `destination` is redacted at the writer, not at display (`lode-l87l`).** On the web leg
+`destination` is character-for-character the same URL as `arguments['url']`, so redacting only the
+argument would persist the very secret the audit row reports as stripped. `lode.tools._log_tool_fetch`
+therefore applies `redact_before_egress` to `destination` **before the INSERT**: a display-side fix
+would leave the secret at rest in the DB, where `lode egress` is only one of several readers —
+backups, exports and any direct `sqlite3` query see the column regardless. The redacted
+`destination`'s span count is deliberately **not** added to the per-target `redactions` total, since
+on the web leg that would double-count the same URL's secrets, already counted via the argument.
+Forward-only: rows written before `lode-l87l` are not backfilled (no release ever shipped the
+`purpose='tool'` write path, so there is no downstream copy to redact).
 
 **The first schema migration mechanism (`lode-35nu.11.7`).** Every migration before this one was a
 plain `ALTER TABLE … ADD COLUMN`, forward-applied by `lode.storage._apply_migrations` and made
@@ -1458,7 +1470,7 @@ is appending one engine to the composite at the wiring point, and every engine �
 its own. Fan-out runs only after the irreplaceable write commits, so a failing engine costs a
 rebuild, never data (lode-1f9).
 
-**Capture-path cache composition (settled lode-xyb):** the `CompositeCache` wired into `cli.py add`
+**Capture-path cache composition (settled lode-xyb):** the `CompositeCache` wired into `cli/add.py`'s `add`
 contains **only the `LexicalCacheBackend`** — the model-free FTS leg. `LexicalCacheBackend.index()`
 calls `chunk()` (deterministic, no model) and writes both the `passages` rows (structure, char_range,
 parent_block — needed by `expand_parents` on the read side) and the `passages_fts` FTS5 rows

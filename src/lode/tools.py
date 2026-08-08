@@ -94,7 +94,7 @@ from lode.egress import TOOL_PURPOSE, log_egress
 from lode.externals import IngestResult, ingest_snapshot
 from lode.jira_fetch import fetch_jira_issue
 from lode.no_egress_scope import is_no_egress_scoped
-from lode.redact import redact_before_egress_counting
+from lode.redact import redact_before_egress, redact_before_egress_counting
 from lode.webfetch import (
     Fetcher,
     FetchError,
@@ -185,6 +185,16 @@ def _log_tool_fetch(
     sent for web, the ``api_base`` for JIRA/Confluence. A redirect that
     resolves elsewhere is handled by :func:`_fetch_web`'s post-fetch
     re-check, not by rewriting this row.
+
+    ``destination`` is redacted on the same terms as the arguments (lode-l87l).
+    On the web leg it is character-for-character the ``{"url": ...}`` argument,
+    so redacting one copy and persisting the other raw would durably store the
+    very secret the audit row reports as stripped -- and ``egress_log`` is read
+    by more than one surface (``lode egress`` renders the column since
+    lode-l87l; sqlite3, backups and exports see it regardless). Its span count
+    is deliberately NOT added to the per-target total: on the web leg that
+    would double-count the same URL's secrets, which are already counted via
+    the argument.
     """
     redacted_arguments, redaction_count = _redact_arguments(arguments, settings)
     log_egress(
@@ -193,7 +203,7 @@ def _log_tool_fetch(
         None,
         [external_id],
         {external_id: redaction_count} if redaction_count else None,
-        destination=destination,
+        destination=redact_before_egress(destination, settings),
         arguments=redacted_arguments,
     )
 

@@ -5,7 +5,7 @@ format -- ``%Y-%m-%dT%H:%M:%S.%fZ`` (:mod:`lode.worker`/:mod:`lode.versions`)
 -- and every human-facing surface that displays a note's timestamp needs to
 parse that stamp back into an aware-UTC :class:`~datetime.datetime` before
 converting to local time or bucketing it. Three call sites
-(:func:`lode.cli._short_date`, :func:`lode.tui.dates._parse`,
+(:func:`lode.cli._short_date`, :func:`lode.tui.dates.format_adaptive_date`,
 :func:`lode.tui.services.related.humanize_age`) each carried their own verbatim
 ``datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=...)``
 copy, so a stamp-format change would have needed the same edit three times.
