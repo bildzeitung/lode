@@ -953,7 +953,7 @@ def model_cache_dir() -> Path:
 #: ``sources.hf``/``model_file``. ``tests/test_model_cache_identity.py``
 #: asserts this dict still matches the installed fastembed's
 #: ``list_supported_models()`` -- that test may import fastembed; this module
-#: and ``cli.py``'s cold-cache probe must not.
+#: and ``cli.models``'s cold-cache probe must not.
 _MODEL_CACHE_IDENTITY: dict[str, tuple[str, str]] = {
     "nomic-ai/nomic-embed-text-v1.5": (
         "nomic-ai/nomic-embed-text-v1.5",
@@ -987,7 +987,7 @@ def hf_hub_offline() -> bool:
     Shared by :mod:`lode.cli` (:func:`_warm`'s offline/cold-cache branch,
     ``lode-96t``) and :mod:`lode.embedding` (:func:`resolve_model_revision`'s
     offline short-circuit, ``lode-r4r2``) -- moved here rather than kept as a
-    ``cli.py``-private helper once a second module needed the identical
+    ``cli.models``-private helper once a second module needed the identical
     check.
     """
     return os.environ.get("HF_HUB_OFFLINE", "").strip().upper() in {

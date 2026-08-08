@@ -600,7 +600,7 @@ charged against `attempts`, must reach the operator directly. Everything else is
 Two call sites *inside the queue machinery* read that roster wider: `drain`'s two
 *batch pre-step* `try`s (`_batch_collect_enrich`'s, `lode-knnt`, and
 `_batch_submit_enrich`'s, `lode-2mnj`) both catch bare `Exception`, not just the
-named taxonomy — see "must not starve the credential-free work" below. (`cli.py`'s
+named taxonomy — see "must not starve the credential-free work" below. (`cli/work.py`'s
 own catch is wider still, but it decides only how an already-escaped error is
 *rendered*, not job accounting — see the `lode work` bullet below.) `run_one` and
 `_batch_submit_enrich` *itself* keep the narrow pair deliberately for their own
@@ -1458,7 +1458,7 @@ is appending one engine to the composite at the wiring point, and every engine �
 its own. Fan-out runs only after the irreplaceable write commits, so a failing engine costs a
 rebuild, never data (lode-1f9).
 
-**Capture-path cache composition (settled lode-xyb):** the `CompositeCache` wired into `cli.py add`
+**Capture-path cache composition (settled lode-xyb):** the `CompositeCache` wired into `cli/add.py`'s `add`
 contains **only the `LexicalCacheBackend`** — the model-free FTS leg. `LexicalCacheBackend.index()`
 calls `chunk()` (deterministic, no model) and writes both the `passages` rows (structure, char_range,
 parent_block — needed by `expand_parents` on the read side) and the `passages_fts` FTS5 rows

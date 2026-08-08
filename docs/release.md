@@ -20,7 +20,7 @@ GitHub release. This is the design record for epic `lode-0ru`.
   metadata, so `lode version` always reports a real scm-derived version — something like
   `0.1.dev4+g<sha>` between releases, and the exact tag (e.g. `0.1.0`) on a release commit.
 
-`lode version` (`src/lode/cli.py`) and its test (`tests/test_cli.py`) need no changes — both key
+`lode version` (`src/lode/cli/version.py`) and its test (`tests/test_cli.py`) need no changes — both key
 off `__version__`, which now resolves dynamically instead of a hardcoded string.
 
 ## Tag format
