@@ -20,6 +20,18 @@ while erasing it here would lose the record of what was believed, and when. The 
 gated by [`tests/test_decisions_supersession_markers.py`](../tests/test_decisions_supersession_markers.py);
 what that gate cannot catch is recorded in its module docstring (lode-nlk6).
 
+**This file is out of scope for pointer sweeps, by construction (`lode-1dmu`, 2026-08-08).** A
+mechanical sweep that repoints every reference to a file/symbol that moved or was renamed (e.g. the
+pre-split monolithic CLI module's later break-up into a package) must skip this file. Every entry
+below is a **dated historical record** — it names the file/symbol that existed *when the entry was
+written*, and this file's own append-only rule (plus [`CLAUDE.md`](../CLAUDE.md)) forbids rewriting
+an existing entry in place. Repointing an old entry's reference to match the current tree would not
+fix drift; it would falsify the record of what was true at the time. A reference here naming a
+since-moved or since-deleted path is therefore expected, not a defect — leave it alone. (This does
+not exempt this file's own *preamble* — the rules section you are reading now — from being appended
+to when a new rule is needed, as this paragraph itself demonstrates; it exempts only the dated
+entries below from being rewritten to chase the current tree.)
+
 - **External refresh: on-access revalidation vs. scheduled background refresh.** Leaning
   **on-access with a short TTL cache** for a single instance with finite API quota — but it's
   really a per-source judgment (a closed ticket changes rarely; an active PR changes hourly).

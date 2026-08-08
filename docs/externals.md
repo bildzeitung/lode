@@ -308,7 +308,7 @@ A connector's routing changes over time — the flagship case: a URL drew down t
 web path (login page => tombstone, or a plain scrape) before a connector like Atlassian
 (`lode-gpzn`) existed or was flagged on, and should now route through that connector's structured
 fetch instead. **`lode backfill`** is the CLI command that re-runs draw-down for a connector's
-already-processed links under **current** routing — `lode.backfill`, `src/lode/cli.py`.
+already-processed links under **current** routing — `lode.backfill`, `src/lode/cli/backfill.py`.
 
 **A framework, not a sweep.** This ticket builds only the command + a registry seam each connector
 plugs its own backfill logic into (`lode.backfill.register_backfill`, mirroring
@@ -359,7 +359,7 @@ detection `detect_and_enqueue_drawdown` already runs on a fresh paste, reused ra
 re-derived) filtered to a Confluence-shaped match, then composes the four shared pieces above.
 Reusing `_classify_atlassian` also means the handler automatically honors the connector's own
 active-flag gate: with Confluence flagged off, no match is ever found and the backfill is a no-op,
-exactly like a fresh paste under the same settings. `lode backfill` (`src/lode/cli.py`) registers
+exactly like a fresh paste under the same settings. `lode backfill` (`src/lode/cli/backfill.py`) registers
 it explicitly on **every invocation** — not via a bare module-level `register_backfill(...)` call
 at import time, which would only ever fire once per process (Python's import caching) and cannot
 be relied on to survive an in-process test suite that deliberately clears the registry before each

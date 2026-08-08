@@ -10,7 +10,7 @@ retries, then claim+run ready pending jobs until none remain and exit.
 - ``embed`` — registered now; runs the **vector-only** path
   (:func:`lode.embedding.embed`: chunk + embed + LanceDB vectors). The FTS
   lexical leg is **not here** (lode-xyb): the synchronous
-  :class:`~lode.lexical.LexicalCacheBackend` in ``cli.py add`` writes
+  :class:`~lode.lexical.LexicalCacheBackend` in ``cli/add.py``'s ``add`` writes
   ``passages`` + ``passages_fts`` right after the version commits.  Idempotent:
   the same head version can be re-embedded and converges to the same state.
 - ``enrich`` — registered (lode-npx.1); the **fallback** handler for any
@@ -1344,7 +1344,7 @@ def _embed_handler(
     the version's vectors in LanceDB.
 
     The FTS leg is **not here** (lode-xyb): the synchronous
-    :class:`~lode.lexical.LexicalCacheBackend` injected into ``cli.py add``
+    :class:`~lode.lexical.LexicalCacheBackend` injected into ``cli/add.py``'s ``add``
     writes ``passages`` + ``passages_fts`` right after the version commits, so
     the note is keyword-findable before this handler runs.  The handler running
     again would just re-write identical FTS rows (idempotent), but dropping it
