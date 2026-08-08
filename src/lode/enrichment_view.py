@@ -90,7 +90,7 @@ from pathlib import Path
 from typing import Literal
 
 from lode.display import display_annotations, display_edges
-from lode.sql_ids import placeholders as _placeholders
+from lode.sql_ids import placeholders
 from lode.storage import init_db
 
 #: The three enrichment states an :class:`EnrichmentView` can report --
@@ -441,7 +441,7 @@ def _has_enrich_job(
     """Does the head version carry a ``type='enrich'`` job in any of ``statuses``?"""
     (found,) = conn.execute(
         "SELECT EXISTS(SELECT 1 FROM jobs WHERE type = 'enrich' "
-        f"AND target_version = ? AND status IN ({_placeholders(len(statuses))}))",
+        f"AND target_version = ? AND status IN ({placeholders(len(statuses))}))",
         (head_version_id, *statuses),
     ).fetchone()
     return bool(found)

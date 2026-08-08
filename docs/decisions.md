@@ -4222,6 +4222,15 @@ entries below from being rewritten to chase the current tree.)
   profiling signal shows the duplicate read matters in practice; revisit then rather than
   speculatively wiring it now.
 
+  **Update (`lode-oca9`, 2026-08-08) — both "open" questions above are now SETTLED, and this
+  entry's shipped artifact no longer exists.** The whole-SQL-plus-`{placeholders}`-slot seam this
+  entry filed as open was built and does fit all three sites, `trust_rank` included;
+  `lode.target_rows.fetch_target_rows` is retired and replaced by `lode.sql_ids`
+  (`fetch_by_ids` + `placeholders`), and the ~14-site hand-rolled placeholder idiom is retired too.
+  Every reference above to `lode.target_rows`, to the `v`/`n`/`s`/`e` alias contract, and to
+  `trust_rank` being a non-fit describes the state as of `lode-r9z0` and is preserved as the record,
+  not as current fact. Full write-up: the `lode-oca9` entry at the end of this file.
+
 - **Update (`lode-5ido`, 2026-08-08) — `lode-p8zl` RULING 1's premise is stale, but its conclusion
   stands and the shipped design is UNCHANGED.** Claude Code's documented `PreToolUse` payload now
   carries `agent_id` and `agent_type` (present when the hook fires inside a subagent, or under

@@ -89,6 +89,12 @@ _QUERY_TOKEN = re.compile(r"\w+")
 #: Retrieval-local by design, and deliberately not shared further: ``reconcile``
 #: additionally guards on ``purged_at``, and ``notes_read`` / ``repository`` /
 #: ``tui.edit`` scope their own queries with their own copies.
+#:
+#: Both this and :data:`_LIVE_SNAPSHOT_PREDICATE` are spliced into SQL strings
+#: that :func:`lode.sql_ids.fetch_by_ids` then runs through :meth:`str.format`
+#: (in :func:`graph_expand`), so **neither may contain a ``{`` or ``}``** — a
+#: brace here would raise from ``format`` at runtime, not at lint. Both are
+#: brace-free today and there is no reason a live-row predicate would need one.
 _LIVE_HEAD_PREDICATE = "v.op != 'delete'"
 
 #: The external-side analogue of :data:`_LIVE_HEAD_PREDICATE`: a snapshot is
@@ -924,6 +930,15 @@ def _in_clause(column: str, values: Collection[str]) -> str:
     hex version ids (``lode.hashing``), so inlining them needs no escaping — the
     same trusted-value assumption the landed vector store documents for its
     ``where`` predicate.
+
+    **Deliberately not :func:`lode.sql_ids.placeholders` / :func:`lode.sql_ids.fetch_by_ids`**,
+    the shared SQLite ``IN(...)`` primitives this module imports and uses
+    everywhere else (lode-oca9). Those bind every value as a ``?`` parameter;
+    LanceDB's ``where`` predicate is a filter *string* with no parameter
+    binding available at all, so this helper must inline its values as
+    literals. The two idioms coexist on purpose — inlining is safe *here* only
+    because of the hex-value assumption above, and is unsafe anywhere it does
+    not hold.
     """
     quoted = ", ".join(f"'{value}'" for value in values)
     return f"{column} IN ({quoted})"

@@ -145,7 +145,7 @@ from lode.config import Settings
 from lode.config import lance_dir as _lance_dir
 from lode.ids import short_version_id
 from lode.progress import op_progress
-from lode.sql_ids import placeholders as _placeholders
+from lode.sql_ids import placeholders
 
 if TYPE_CHECKING:
     from lode.embedding import Embedder
@@ -427,7 +427,7 @@ def _claim_one(
     row = conn.execute(
         f"SELECT id FROM jobs "
         f"WHERE status = 'pending' AND next_attempt_at <= ? "
-        f"AND type IN ({_placeholders(len(types))}) "
+        f"AND type IN ({placeholders(len(types))}) "
         f"{version_clause}"
         # Tie-break by ``id``, not ``created``: ``jobs.id`` is INTEGER PRIMARY
         # KEY (a rowid alias), so it *is* insertion order and cannot go backward
@@ -989,7 +989,8 @@ def _batch_submit_enrich(
         submitted = sum(
             1
             for row in conn.execute(
-                f"SELECT id FROM jobs WHERE id IN ({_placeholders(len(job_ids))}) AND batch_handle IS NOT NULL",
+                f"SELECT id FROM jobs WHERE id IN ({placeholders(len(job_ids))}) "
+                "AND batch_handle IS NOT NULL",
                 job_ids,
             ).fetchall()
         )

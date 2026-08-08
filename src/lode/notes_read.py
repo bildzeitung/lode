@@ -73,7 +73,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lode.lexical import LexicalIndex, build_match_query
-from lode.sql_ids import placeholders as _placeholders
+from lode.sql_ids import placeholders
 from lode.storage import init_db
 
 #: Soft cap on how many passage rows :func:`_search_notes` reads back from
@@ -272,7 +272,7 @@ def _search_notes(conn: sqlite3.Connection, query_text: str) -> list[NoteRow]:
         return []
     matched = _list_notes(
         conn,
-        extra_where=f"AND n.note_id IN ({_placeholders(len(ranked_note_ids))}) ",
+        extra_where=f"AND n.note_id IN ({placeholders(len(ranked_note_ids))}) ",
         params=ranked_note_ids,
     )
     rank = {note_id: index for index, note_id in enumerate(ranked_note_ids)}
@@ -420,7 +420,7 @@ def candidate_rows_conn(
         for note_id, created, head_version_id, body, op in conn.execute(
             "SELECT n.note_id, n.created, n.head_version_id, v.body, v.op "
             "FROM notes n JOIN versions v ON v.version_id = n.head_version_id "
-            f"WHERE n.note_id IN ({_placeholders(len(note_ids))})",
+            f"WHERE n.note_id IN ({placeholders(len(note_ids))})",
             tuple(note_ids),
         )
     }

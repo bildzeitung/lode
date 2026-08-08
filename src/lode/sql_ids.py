@@ -66,6 +66,17 @@ def fetch_by_ids(
     bound value count are the same expression (``len(ids)``), so they cannot
     drift out of sync.
 
+    Because :meth:`str.format` owns the whole string, ``sql`` must contain
+    **no brace other than the one ``{placeholders}`` slot** -- a caller
+    splicing a fragment that carries a stray ``{`` (or a second
+    ``{placeholders}``) is a programming error, and every such shape fails
+    loudly rather than silently mis-forming a query: a stray ``{`` raises
+    ``ValueError``, an unknown ``{name}`` ``KeyError``, a bare ``{}``
+    ``IndexError``, and a second ``{placeholders}`` slot doubles the
+    placeholder count against an unchanged bound tuple, which SQLite rejects
+    with ``ProgrammingError: Incorrect number of bindings supplied``. None of
+    these can reach the database as a valid-but-wrong statement.
+
     Returns ``[]`` without touching the connection when ``ids`` is empty (an
     empty ``IN ()`` is invalid SQL and would also be a wasted round trip) --
     the same short-circuit every hand-rolled site already applied.
