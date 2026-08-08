@@ -49,13 +49,21 @@ import sqlite3
 from collections.abc import Collection
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Protocol
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
 
 import networkx as nx
 
 from lode.config import Settings, model_cache_dir
 from lode.lexical import LexicalHit, LexicalIndex
 from lode.vectorstore import VectorHit, VectorStore
+
+if TYPE_CHECKING:
+    # Type-only: importing lode.embedding at module scope would pull in the
+    # ONNX/fastembed stack for every caller of this module, including the
+    # instant capture path, which never needs it (mirrors _retrieve's own
+    # deferred runtime import below).
+    from lode.embedding import Embedder
 
 #: Word-token pattern for turning a natural-language question into FTS5 terms.
 #: ``\w+`` runs (letters/digits/underscore) are the terms; everything else
@@ -822,6 +830,59 @@ def trust_rank(conn: sqlite3.Connection, hits: list[ExpandedHit]) -> TrustRanked
     # Stable sort by tier: preserves the upstream best-first order within a tier.
     context.sort(key=lambda item: item.tier)
     return TrustRankedContext(context=context, withheld=withheld)
+
+
+def _retrieve(
+    conn: sqlite3.Connection,
+    question: str,
+    *,
+    lance_dir: str | Path,
+    embedder: Embedder | None = None,
+    settings: Settings | None = None,
+) -> list[ContextItem]:
+    """Build the trust-ranked Q&A context for ``question`` — the full read pipeline (E4).
+
+    The full read side (``docs/retrieval.md`` "The v1 retrieval pipeline"): lexical
+    search (FTS5/BM25, heads only) and the dense leg (cosine ANN over the LanceDB
+    store under ``lance_dir``, the question embedded query-side via
+    ``embedder.embed_query``) each capped at ``retrieval_top_k``, fused app-side
+    (:func:`reciprocal_rank_fusion`), re-scored by the toggleable cross-encoder
+    stage (:func:`rerank`, gated on ``Settings.rerank_enabled``), expanded
+    small-to-big to each hit's parent block (:func:`expand_parents`), traversed
+    one graph hop from each seed note (:func:`graph_expand`, GraphRAG), and
+    finally ordered by the trust gradient (:func:`trust_rank`). RRF scores a
+    passage present in one leg from that leg alone, so a passage matched only by
+    the dense leg still reaches the Q&A context (lode-bkc). A question with no
+    word tokens skips the lexical leg, but the dense leg still runs.
+
+    ``embedder`` defaults to the pinned local ONNX model
+    (:class:`lode.embedding.FastEmbedEmbedder`); tests inject a stub so the gate
+    stays offline.
+
+    The composed pipeline over this module's own primitives -- moved here from
+    the cli package, which it had no CLI concern of any kind (lode-z3es); both
+    ``lode ask`` (:mod:`lode.cli.ask`) and the TUI's ask screen
+    (:mod:`lode.tui.services.ask`) call it directly.
+    """
+    # Imported here, not at module scope: the vector store's own module is already
+    # imported above, but the embedder pulls in the ONNX/fastembed stack, which the
+    # instant capture path never loads.
+    from lode.embedding import FastEmbedEmbedder
+
+    settings = settings or Settings()
+    match = build_match_query(question)
+    lexical = lexical_search(conn, match, k=settings.retrieval_top_k) if match else []
+
+    embedder = embedder or FastEmbedEmbedder(settings)
+    query_vector = embedder.embed_query(question)
+    store = VectorStore(lance_dir, settings)
+    vector = vector_search(store, conn, query_vector, k=settings.retrieval_top_k)
+
+    fused = reciprocal_rank_fusion(lexical, vector, k=settings.rrf_k)
+    top = rerank(conn, question, fused[: settings.retrieval_top_k], settings=settings)
+    expanded = expand_parents(conn, top)
+    graphed = graph_expand(conn, expanded, settings=settings)
+    return trust_rank(conn, graphed).context
 
 
 def _classify(

@@ -1,13 +1,14 @@
 """Ask-path wiring + rendering for the TUI's ask screen (lode-mkc.2).
 
 Wires the exact same seams ``lode ask`` drives -- the read pipeline
-(:func:`lode.cli._retrieve`) to build a trust-ranked context, then the cited
-Q&A loop (:func:`lode.cited_answer.ask`, which synthesizes structured claims
-and runs the faithfulness gate **before display**) -- rather than
-re-implementing retrieval or the gate. It reuses ``cli._retrieve`` verbatim
-(the same seam ``tests/test_cli.py`` reaches into directly) instead of
-duplicating the read pipeline's composition a third time (``lode.eval.harness``
-already keeps its own deliberately-narrower copy for deterministic scoring).
+(:func:`lode.retrieval._retrieve`) to build a trust-ranked context, then the
+cited Q&A loop (:func:`lode.cited_answer.ask`, which synthesizes structured
+claims and runs the faithfulness gate **before display**) -- rather than
+re-implementing retrieval or the gate. It reuses ``retrieval._retrieve``
+verbatim (the same seam ``tests/test_cli.py`` reaches into directly) instead
+of duplicating the read pipeline's composition a third time
+(``lode.eval.harness`` already keeps its own deliberately-narrower copy for
+deterministic scoring).
 
 Each surviving citation's **as-of** provenance and note/external identity are
 resolved by :func:`lode.citations_read.resolve_citations`, which owns that SQL
@@ -106,7 +107,7 @@ def run_ask(
     """Run the cited Q&A loop for ``question`` and resolve citation provenance.
 
     Drives ``lode ask``'s own pipeline start to finish: retrieve
-    (:func:`lode.cli._retrieve`) -> synthesize + gate
+    (:func:`lode.retrieval._retrieve`) -> synthesize + gate
     (:func:`lode.cited_answer.ask`) -> resolve as-of provenance for each
     surviving citation. Raises :class:`lode.auth.AuthError` on unresolved
     Anthropic credentials, same as the CLI -- the screen catches it and
@@ -121,13 +122,14 @@ def run_ask(
     in-flight UI feedback (the TUI's ask screen) supplies one that marshals
     onto whatever thread it needs.
 
-    Imports the retrieval/Q&A stack here, not at module scope: ``cli._retrieve``
-    pulls in the vector stack (pyarrow) and ``cited_answer`` pulls in the
-    Anthropic SDK, neither of which the capture path -- or merely importing
-    this module to register the ask screen in ``LodeApp.SCREENS`` -- may load.
+    Imports the retrieval/Q&A stack here, not at module scope:
+    ``retrieval._retrieve`` pulls in the vector stack (pyarrow) and
+    ``cited_answer`` pulls in the Anthropic SDK, neither of which the capture
+    path -- or merely importing this module to register the ask screen in
+    ``LodeApp.SCREENS`` -- may load.
     """
     from lode import cited_answer
-    from lode.cli import _retrieve
+    from lode.retrieval import _retrieve
 
     settings = settings or Settings()
     db_path.parent.mkdir(parents=True, exist_ok=True)

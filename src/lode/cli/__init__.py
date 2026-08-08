@@ -500,26 +500,20 @@ for _name in _COMMAND_MODULES:
 del _name
 
 # --- backward-compatible re-exports ------------------------------------------
-# A handful of names other packages (lode.tui.services.ask's deferred
-# `from lode.cli import _retrieve`) or tests still reach as `lode.cli.<name>`.
-# Plain re-exports (unlike the call-through-the-package names documented in
-# this module's own docstring, which are never imported anywhere -- every
-# INTERNAL call site reaches them via `cli.<name>` instead).
+# A handful of names tests still reach as `lode.cli.<name>`. Plain re-exports
+# (unlike the call-through-the-package names documented in this module's own
+# docstring, which are never imported anywhere -- every INTERNAL call site
+# reaches them via `cli.<name>` instead).
 #
-# `_retrieve` REACHES LESS FAR THAN IT DID (lode-35nu.9). It is defined in
-# `lode.cli.ask` and re-exported here, so `monkeypatch.setattr("lode.cli.
-# ._retrieve", ...)` (tests/test_tui_ask.py) still reaches
-# `lode.tui.services.ask.run_ask`, which resolves it lazily at call time.
-# It no longer reaches the `lode ask` COMMAND: that calls its own module
-# global in `lode.cli.ask`, which this rebind does not touch. Before the
-# split both lived in one namespace and one patch covered both. Nothing
-# depends on the wider reach today; a test that needs the command's
-# retrieval faked must patch `lode.cli.ask._retrieve` instead.
+# `_retrieve` is NOT re-exported here (lode-z3es): it moved out of the cli
+# package entirely, to `lode.retrieval._retrieve` -- the composed pipeline
+# over that module's own primitives, with no CLI concern of any kind. Both
+# `lode ask` (`lode.cli.ask`) and the TUI's ask screen
+# (`lode.tui.services.ask`) import it from there directly.
 from lode.cli.ask import (  # noqa: F401
     _ABSTAIN_LINE,
     _format_citation,
     _format_cited_answer,
-    _retrieve,
 )
 from lode.cli.models import _FASTEMBED_EXHAUSTED_SOURCES, _warm  # noqa: F401
 from lode.cli.status import (  # noqa: F401

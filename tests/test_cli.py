@@ -49,7 +49,7 @@ from rich.console import Console
 from rich.table import Table
 from typer.testing import CliRunner
 
-from lode import __version__, cli, config
+from lode import __version__, cli, config, retrieval
 from lode.answer import Claim, Support
 from lode.auth import AuthError
 from lode.cited_answer import CitedAnswer
@@ -4891,7 +4891,7 @@ def test_retrieve_dense_leg_surfaces_a_vector_only_match(tmp_path: Path) -> None
 
         # A lexically disjoint question: the lexical leg matches nothing, so only the
         # dense leg can surface this note.
-        context = cli._retrieve(
+        context = retrieval._retrieve(
             conn,
             "unrelated wording entirely",
             lance_dir=lance_dir,
@@ -4947,7 +4947,7 @@ class _TwoDirEmbedder:
 def test_retrieve_wires_rerank_and_reorders_by_cross_encoder_score(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """cli._retrieve calls rerank() between RRF and expand_parents (lode-vtf).
+    """retrieval._retrieve calls rerank() between RRF and expand_parents (lode-vtf).
 
     Two notes are indexed through the dense leg with orthogonal vectors so RRF
     ranks the 'first' passage ahead of the 'second' one by construction (see
@@ -4998,7 +4998,7 @@ def test_retrieve_wires_rerank_and_reorders_by_cross_encoder_score(
         # Lexically disjoint from both bodies: no passages_fts rows exist anyway
         # (versions.save bypasses the LexicalCacheBackend), so only the dense leg
         # — and then rerank — determines the order.
-        context = cli._retrieve(
+        context = retrieval._retrieve(
             conn,
             "unrelated wording entirely",
             lance_dir=lance_dir,
@@ -5055,7 +5055,7 @@ def test_retrieve_respects_rerank_disabled_setting(
                 > 0
             )
 
-        context = cli._retrieve(
+        context = retrieval._retrieve(
             conn,
             "unrelated wording entirely",
             lance_dir=lance_dir,
@@ -5071,7 +5071,7 @@ def test_retrieve_respects_rerank_disabled_setting(
 def test_retrieve_wires_graph_expand_and_includes_linked_note(
     tmp_path: Path,
 ) -> None:
-    """cli._retrieve calls graph_expand() after expand_parents (lode-vtf).
+    """retrieval._retrieve calls graph_expand() after expand_parents (lode-vtf).
 
     note-a is the only note directly retrievable (dense leg); note-b is reachable
     only via an AI-inferred edge from note-a and is deliberately never indexed
@@ -5117,7 +5117,7 @@ def test_retrieve_wires_graph_expand_and_includes_linked_note(
         )
         conn.commit()
 
-        context = cli._retrieve(
+        context = retrieval._retrieve(
             conn,
             "unrelated wording entirely",
             lance_dir=lance_dir,

@@ -5,7 +5,7 @@ app needed, mirroring ``tests/test_tui_capture.py``'s split): the rendered
 ask result shows cited claims with their as-of/version provenance, withheld
 markers surface rather than vanish, and an ungrounded question renders the
 honest abstention line. :func:`run_ask` is proven to wire the exact same
-seams ``lode ask`` drives (``lode.cli._retrieve`` + ``lode.cited_answer.ask``,
+seams ``lode ask`` drives (``lode.retrieval._retrieve`` + ``lode.cited_answer.ask``,
 mocked here the same way ``tests/test_cli.py``'s ``ask`` tests keep the gate
 offline) rather than re-implementing retrieval, and to resolve each surviving
 citation's as-of timestamp from the store.
@@ -317,7 +317,7 @@ def test_run_ask_wires_retrieve_and_gate_then_resolves_as_of(
         assert context == []
         return canned_answer
 
-    monkeypatch.setattr("lode.cli._retrieve", _stub_retrieve)
+    monkeypatch.setattr("lode.retrieval._retrieve", _stub_retrieve)
     monkeypatch.setattr("lode.cited_answer.ask", _stub_ask)
 
     result = run_ask(db_path, "what did we decide about auth?", settings=Settings())
@@ -356,7 +356,8 @@ def test_run_ask_reports_stages_in_order_via_on_stage(
     )
 
     monkeypatch.setattr(
-        "lode.cli._retrieve", lambda conn, question, *, lance_dir, settings=None: []
+        "lode.retrieval._retrieve",
+        lambda conn, question, *, lance_dir, settings=None: [],
     )
     monkeypatch.setattr(
         "lode.cited_answer.ask",
