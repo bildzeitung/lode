@@ -206,7 +206,7 @@ from lode.enrich import EnrichmentResult
 #: pytest silently reddens every test asserting plain, uncoloured CLI output, on an
 #: otherwise-unmodified tree -- OBSERVED landing a real /land pass (lode-kq4v).
 #:
-#: MECHANISM -- CANONICAL (lode-qv91): ``docs/stack.md``'s ``rich`` row, ``src/lode/cli.py``'s
+#: MECHANISM -- CANONICAL (lode-qv91): ``docs/stack.md``'s ``rich`` row, ``src/lode/cli/__init__.py``'s
 #: ``console`` docstring and ``tests/test_cli_console.py``'s module docstring all point HERE
 #: rather than restating this, so keep it here and keep it precise.
 #: Verified by execution against the installed rich (15.0.0), and stated precisely
@@ -823,7 +823,7 @@ class _OfflineQueryEmbedder:
     It mirrors the real class's whole **duck-typed** surface, not just the two
     :class:`~lode.embedding.Embedder` protocol methods, because lode probes the
     rest by ``hasattr``: ``warm()`` is what ``lode models pull`` calls
-    (``cli.py``), ``model_revision()`` is what ``embedding.py``'s
+    (``cli/models.py``), ``model_revision()`` is what ``embedding.py``'s
     ``_embedder_model_revision`` duck-types on to stamp provenance on written
     vectors, and ``reset_revision_probe()`` is what ``worker.drain()`` calls
     once per pass to retry a failed probe (``lode-fxse``). Omitting any of
