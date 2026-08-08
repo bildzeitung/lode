@@ -4,28 +4,18 @@ Relocated out of ``lode.cli`` (the ticket's "no bare SQL in the cli
 package") -- every query ``lode status``/``lode jobs``/``lode egress``/
 ``lode work --wait`` used to run inline lives here instead, unchanged; the
 CLI commands themselves are dispatch-only callers of these functions.
+
+Readers here return bare positional tuples; :func:`list_egress` alone returns a
+NamedTuple (:class:`EgressRow`). That asymmetry is deliberate, not an unfinished
+sweep (lode-kl1i): it is the only reader wide enough (8 columns, 3 of them
+nullable) that its caller needed a multi-line destructure, and the only one
+whose caller branches on one field to decide whether two others are meaningful.
+Do not convert the 2-to-6-column readers for symmetry -- and do not copy their
+bare-tuple shape into a new wide one.
 """
 
 import sqlite3
 from typing import NamedTuple
-
-
-class EgressRow(NamedTuple):
-    """One ``egress_log`` row -- ``list_egress``'s self-describing return type.
-
-    ``destination``/``arguments`` are NULL for ``purpose`` in ('enrich', 'qa')
-    and populated for ``purpose='tool'`` (lode-l87l; schema/writer since
-    lode-35nu.11.7/.11.1).
-    """
-
-    id: int
-    ts: str
-    purpose: str
-    model: str | None
-    sent_targets: str
-    redactions: str | None
-    destination: str | None
-    arguments: str | None
 
 
 def job_status_counts(conn: sqlite3.Connection) -> dict[str, int]:
@@ -69,18 +59,43 @@ def list_jobs(
     ).fetchall()
 
 
+class EgressRow(NamedTuple):
+    """One ``egress_log`` row -- ``list_egress``'s self-describing return type.
+
+    ``destination``/``arguments`` are NULL for ``purpose`` in ('enrich', 'qa')
+    and populated for ``purpose='tool'`` (lode-l87l; schema/writer since
+    lode-35nu.11.7/.11.1).
+
+    Field order is load-bearing: :func:`list_egress` builds these positionally
+    from the row, so this declaration must stay in lockstep with that
+    function's ``SELECT`` column order (which is why it is declared here,
+    immediately above it, rather than at module top).
+    """
+
+    id: int
+    ts: str
+    purpose: str
+    model: str | None
+    sent_targets: str
+    redactions: str | None
+    destination: str | None
+    arguments: str | None
+
+
 def list_egress(
     conn: sqlite3.Connection, purpose: str | None = None
 ) -> list[EgressRow]:
     """Every egress send (or every send of ``purpose``), each as an
     :class:`EgressRow` -- ``lode egress``'s read."""
     where, params = ("", ()) if purpose is None else ("WHERE purpose = ? ", (purpose,))
-    rows = conn.execute(
-        "SELECT id, ts, purpose, model, sent_targets, redactions, "
-        f"destination, arguments FROM egress_log {where}ORDER BY id",
-        params,
-    ).fetchall()
-    return [EgressRow(*row) for row in rows]
+    return [
+        EgressRow(*row)
+        for row in conn.execute(
+            "SELECT id, ts, purpose, model, sent_targets, redactions, "
+            f"destination, arguments FROM egress_log {where}ORDER BY id",
+            params,
+        )
+    ]
 
 
 def outstanding_jobs(conn: sqlite3.Connection) -> list[tuple[int, str, str, str]]:
