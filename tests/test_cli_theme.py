@@ -7,7 +7,7 @@ Unlike ``NO_COLOR``/TTY detection (see tests/test_cli_console.py), a
 environment detection frozen at ``Console()`` construction -- so asserting
 it in-process (no subprocess needed) exercises the real thing.
 
-NON-VACUOUSNESS, demonstrated by sabotaging the SUBJECT (``src/lode/cli.py``)
+NON-VACUOUSNESS, demonstrated by sabotaging the SUBJECT (``src/lode/cli/__init__.py``)
 rather than by argument -- the bar tests/test_cli_console.py set after
 lode-xgaa. Re-verified against rich 15.0.0 during this ticket's technical
 review:
@@ -25,7 +25,7 @@ coverage: ``table.header`` is a deliberate restatement of rich's own default
 (``DEFAULT_STYLES["table.header"]`` is already ``bold``) and ``Theme``
 inherits rich's defaults, so ``CLI_THEME.styles["table.header"]`` and
 ``console.get_style("table.header")`` both resolve to ``Style(bold=True)``
-whether or not ``cli.py`` declares it. No assertion against the constructed
+whether or not ``cli/__init__.py`` declares it. No assertion against the constructed
 ``Theme``/``Console`` can tell the two apart -- ``Theme.__init__`` copies
 ``DEFAULT_STYLES`` and ``.update()``s over it, destroying the declaration.
 That is why the first test asserts ``CLI_STYLES``, the declaration the

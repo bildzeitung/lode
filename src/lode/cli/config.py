@@ -1,7 +1,7 @@
 """``lode config`` -- show the resolved on-disk locations and every runtime/tune knob."""
 
 from lode import cli
-from lode.cli import SafeTable, _DbOption, _tabular_table, app
+from lode.cli import SafeTable, _DbOption, _tabular_table, app, console
 from lode.config import config_rows, default_db_path, knob_rows
 
 
@@ -91,6 +91,6 @@ def config(db: _DbOption = None) -> None:
     width, wrapping long values within their column instead of running off
     the edge.
     """
-    cli.console.print(_config_path_table(config_rows(db or default_db_path())))
-    cli.console.print()
-    cli.console.print(_config_knob_table(knob_rows(cli._resolve_settings())))
+    console.print(_config_path_table(config_rows(db or default_db_path())))
+    console.print()
+    console.print(_config_knob_table(knob_rows(cli._resolve_settings())))

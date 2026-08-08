@@ -448,7 +448,7 @@ def test_external_snapshot_cited_via_snapshot_id(conn) -> None:
 
 def test_no_egress_external_kept_off_cloud_and_surfaced_as_withheld(conn) -> None:
     # Same enforcement path as the note case, exercised over an external
-    # snapshot (lode-w0h.7): _resolve_target's externals join resolves
+    # snapshot (lode-w0h.7): _resolve_targets' externals join resolves
     # no_egress for a snapshot_id target exactly like it does for a note's
     # version_id, so a withheld external never reaches the cloud context and
     # is cited as present-but-withheld -- while staying locally retrievable
@@ -487,7 +487,7 @@ def test_no_egress_external_kept_off_cloud_and_surfaced_as_withheld(conn) -> Non
 def test_no_egress_scope_withholds_already_captured_external_web_host(conn) -> None:
     """A URL-host scope rule withholds an already-captured 'web' external at
     its next send, with no per-row flag set and no migration/backfill
-    (lode-35nu.11.8, cited_answer._resolve_target site).
+    (lode-35nu.11.8, cited_answer._resolve_targets site).
     """
     from lode.no_egress_scope import NoEgressScopeRule
 
@@ -637,3 +637,116 @@ def test_ask_honors_configured_entailment_threshold(conn) -> None:
     )
     assert not lax.abstained
     assert lax.claims[0].text == "rerank is on"
+
+
+def test_resolve_targets_batches_distinct_targets_into_two_queries(conn) -> None:
+    """cited_answer._resolve_targets resolves every distinct note target and every
+    distinct external target in one round trip each -- at most two DB queries for
+    target resolution regardless of how many context items (or repeated targets)
+    are in play (lode-ekqh)."""
+    from lode.cited_answer import _resolve_targets
+
+    _insert_note(conn, note_id="n1", version_id="v1", body="alpha body")
+    _insert_note(conn, note_id="n2", version_id="v2", body="beta body")
+    _insert_external(conn, external_id="EXT-1", snapshot_id="s1", body="gamma body")
+    _insert_external(conn, external_id="EXT-2", snapshot_id="s2", body="delta body")
+    context = [
+        _note_context("v1", "alpha body"),
+        _note_context("v1", "alpha body"),  # repeated target -- no extra round trip
+        _note_context("v2", "beta body"),
+        _external_context("s1", "gamma body"),
+        _external_context("s2", "delta body"),
+        _external_context("s2", "delta body"),  # repeated target -- no extra round trip
+    ]
+    # sqlite3.Connection.execute is a read-only C-level attribute (can't be
+    # monkeypatched directly), so count round trips via the trace callback
+    # instead -- it fires once per statement actually sent to the engine.
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        resolved = _resolve_targets(conn, context)
+    finally:
+        conn.set_trace_callback(None)
+
+    # Count EVERY statement the call issued, not just the IN(...) ones: a filter
+    # keyed on "IN" would silently drop a reintroduced per-target
+    # "WHERE version_id = ?" fallback and still pass, which is the exact
+    # regression this test exists to catch.
+    assert len(statements) <= 2, statements
+    assert resolved["v1"] == ("alpha body", False)
+    assert resolved["v2"] == ("beta body", False)
+    assert resolved["s1"] == ("gamma body", False)
+    assert resolved["s2"] == ("delta body", False)
+
+
+def test_ask_treats_a_target_absent_from_the_store_as_no_egress_false(conn) -> None:
+    """A cited target with no matching row (deleted, or never captured) must still
+    resolve to a ``None`` body and ``no_egress=False`` -- the same safe default a
+    per-target lookup returned before batching, so the gate fails the claim closed
+    without ever treating the missing target as withheld."""
+    client = _FakeClient([_note_claim("ghost claim", "ghost body", "missing-v")])
+
+    answer = ask(
+        conn,
+        "q",
+        [_note_context("missing-v", "ghost body")],
+        provider=AnthropicProvider(client),
+    )
+
+    assert answer.abstained  # span can't verify against a body that was never resolved
+    assert answer.withheld_citations == ()  # not withheld -- simply unresolved
+
+
+def test_batched_resolution_composes_no_egress_per_target_not_across_the_batch(
+    conn,
+) -> None:
+    """Batching resolves many targets in one query but must still compose no_egress
+    from EACH target's OWN row (lode-ekqh over lode-35nu.11.8): one scope-matched
+    external, one per-row-flagged external, one clean external of the same
+    source_type, and a clean note all ride the same two IN(...) queries -- the two
+    denials must withhold only themselves, and must not leak onto their neighbours.
+    """
+    from lode.cited_answer import _resolve_targets
+    from lode.no_egress_scope import NoEgressScopeRule
+
+    settings = Settings(
+        no_egress_scopes=[
+            NoEgressScopeRule(source_type="web", match="internal.example.com")
+        ]
+    )
+    _insert_external(
+        conn,
+        external_id="https://internal.example.com/runbook",
+        snapshot_id="s-scoped",
+        body="scoped secret",
+    )
+    _insert_external(
+        conn,
+        external_id="https://public.example.com/flagged",
+        snapshot_id="s-flagged",
+        body="flagged secret",
+        no_egress=True,
+    )
+    _insert_external(
+        conn,
+        external_id="https://public.example.com/open",
+        snapshot_id="s-open",
+        body="public external body",
+    )
+    _insert_note(conn, note_id="n-open", version_id="v-open", body="open note body")
+
+    resolved = _resolve_targets(
+        conn,
+        [
+            _external_context("s-scoped", "scoped secret"),
+            _external_context("s-flagged", "flagged secret"),
+            _external_context("s-open", "public external body"),
+            _note_context("v-open", "open note body"),
+        ],
+        settings.no_egress_scopes,
+    )
+
+    assert resolved["s-scoped"] == ("scoped secret", True)  # host rule, no row flag
+    assert resolved["s-flagged"] == ("flagged secret", True)  # row flag, no host rule
+    assert resolved["s-open"] == ("public external body", False)  # neither
+    assert resolved["v-open"] == ("open note body", False)  # notes have no scope

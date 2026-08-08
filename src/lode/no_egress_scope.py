@@ -14,7 +14,7 @@ deliberate -- the decided design's whole point (``docs/decisions.md``,
 ``lode-35nu.11.8``).
 
 **Not a generic seam.** ``no_egress`` is read by SQL ``JOIN`` at two call
-sites -- :func:`lode.cited_answer._resolve_target` and
+sites -- :func:`lode.cited_answer._resolve_targets` and
 :func:`lode.enrich._resolve_enrich_target` -- and a config predicate cannot
 live inside a SQL join. :func:`is_no_egress_scoped` is the one shared
 predicate; each site composes it with its own per-row flag itself (either

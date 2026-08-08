@@ -404,10 +404,11 @@ def test_gate4_fts_findable_before_lode_work(
     (FTS5) is synchronous and model-free, so a just-saved note is
     keyword-findable BEFORE any async embedding runs.  This is the regression
     that x6r.5 introduced: it removed ``_embed_inline`` which was the only FTS
-    write, and cli.py add was building ``Repository(conn)`` with NullCache, so
-    ``cache.index()`` was a no-op and the note was never indexed synchronously.
+    write, and ``cli/add.py``'s ``add`` was building ``Repository(conn)`` with
+    NullCache, so ``cache.index()`` was a no-op and the note was never indexed
+    synchronously.
 
-    After lode-xyb: cli.py add injects
+    After lode-xyb: ``cli/add.py``'s ``add`` injects
     ``CompositeCache([LexicalCacheBackend(conn)])`` so ``Repository.save``
     calls ``LexicalCacheBackend.index()`` right after the version commits —
     writing ``passages`` + ``passages_fts`` without any model — and ``lode ask``

@@ -335,7 +335,7 @@ synthesis sees them.
 externals/snapshots path (content-addressed body, `fetched_at`, provenance, `no_egress` evaluated)
 **before** it is handed to synthesis, reusing `lode.drawdown` / `lode.externals` rather than
 inventing a second snapshot writer. Synthesis then cites it by `snapshot_id` like any other
-external, `cited_answer._resolve_target` verifies spans against stored bytes, and **all five gate
+external, `cited_answer._resolve_targets` verifies spans against stored bytes, and **all five gate
 steps run unmodified.** The cost is a write per fetched resource, and it is accepted.
 
 Three consequences of that constraint are settled in

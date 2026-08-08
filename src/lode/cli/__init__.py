@@ -36,8 +36,17 @@ therefore does ``from lode import cli`` and calls ``cli.<name>(...)`` --
 looking the name up through the package's OWN namespace at call time, the
 same live-binding indirection this single flat module gave every call for
 free before the split. This is a deliberate, narrow exception; every other
-cross-command helper (``_open_db``, ``console``, ``SafeTable``, ...) is
-imported normally, since nothing patches those by name.
+cross-command helper (``_open_db``, ``SafeTable``, ...) is imported
+normally, since nothing patches those by name.
+
+``console`` is a seventh name-rebound case, but a narrower one, which is why
+it is not listed among the six above: only ``lode.cli.status`` is exercised
+under a ``monkeypatch.setattr(cli, "console", ...)``
+(``tests/test_cli.py``'s
+``test_status_dead_line_is_uniformly_danger_not_repr_highlighted``, which
+swaps in a ``force_terminal`` Console to make colour observable under the
+suite). So ``status`` alone must call it as ``cli.console``; every other
+module imports it plainly and calls a bare ``console.print(...)``.
 
 **``time`` and ``uuid`` are patched DIFFERENTLY from each other, and the
 difference decides the call-site form -- do not unify them.**

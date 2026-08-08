@@ -722,7 +722,7 @@ def test_reconcile_threads_settings_to_refresh_stale_step(
     back to its own default ``Settings()`` — a caller-supplied override (e.g.
     from ``load_settings()``) never reached ``refresh_ttl_s``. This exercises
     the *default* ``_STEPS`` registry (not an injected step list) so it
-    covers the exact path ``lode work`` (``cli.py``) drives.
+    covers the exact path ``lode work`` (``cli/work.py``) drives.
     """
     # 120s old — well within Settings()'s (much larger) default TTL, but past
     # a short caller-supplied override, so this only shows up as a refresh gap

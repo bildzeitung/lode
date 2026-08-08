@@ -323,8 +323,9 @@ class TestBareDocAnchorRefs:
         """The fence rule must NOT leak to non-markdown sources. A Python
         docstring can legitimately open a ``` block (a fence-shaped line at
         the start of a line, which is what _FENCE_RE actually matches) and
-        still cite a doc anchor after it -- noxfile.py and src/lode/cli.py
-        both carry real docstring citations today. Skipping fenced lines
+        still cite a doc anchor after it -- noxfile.py and src/lode/cli/
+        (e.g. reembed.py, reenrich.py, status.py) both carry real docstring
+        citations today. Skipping fenced lines
         there would silently DROP a real citation -- and worse, an ODD
         number of fence-shaped lines in a non-markdown file would leave
         the walker "inside a fence" for the whole remainder of the file,
