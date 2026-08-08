@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""Verify every Sphinx-style ``:func:``/``:class:``/``:data:``/``:meth:`` role
+naming a ``lode.*`` symbol in a docstring or comment under ``src/`` or
+``tests/`` resolves to a real, importable symbol (lode-8oeu).
+
+Nothing gated this before: ``scripts/check_links.py`` is markdown-only. A
+single rename (``lode-ekqh``, ``cited_answer._resolve_target`` ->
+``_resolve_targets``) left FOUR dangling refs across two branches that
+merged in the same ``/land`` pass (``lode-2hfd``), and only a hand sweep
+caught them -- one of the four had never named a real symbol at all.
+
+That same sweep found a second, independent defect class: refs
+LINE-WRAPPED mid-role, e.g.::
+
+    :func:`lode.cited_answer.
+    _resolve_targets`
+
+Sphinx cannot resolve a role containing a newline + indentation, so these
+are already broken as cross-references regardless of whether the symbol
+exists -- and they are invisible to the ``grep -rn <name>`` a rename
+normally relies on, which is *exactly* how ``lode-2hfd``'s wrapped site was
+missed. This gate normalizes intra-role whitespace before resolving (so a
+wrapped-but-correct ref like the one above is not a false positive), and
+separately reports every wrapped ref as its own finding.
+
+SCOPE DECISION (recorded in ``docs/decisions.md``, lode-8oeu): only roles
+naming a ``lode.*`` symbol are resolved. A role naming anything else (a
+stdlib or third-party symbol, e.g. ``:func:`httpx.get```) is silently
+skipped -- this repo's docstrings write those routinely, and there is no
+value in this gate reasoning about symbols it doesn't own. This also
+disposes of the ``~`` Sphinx "show only the last component" prefix cleanly:
+it is stripped before the ``lode.`` prefix check, so ``:func:`~lode.cli.
+_tabular_table``` is treated identically to the unprefixed form.
+
+RESOLUTION ALGORITHM: a dotted path ``lode.cli._short_date`` is resolved by
+importing the longest importable *module* prefix, then walking the
+remaining dotted segments as attribute access from there. This is
+deliberate, not incidental -- this repo's own convention is that a
+``lode.mod.symbol`` ref names a MODULE-ATTRIBUTE path, not necessarily a
+literal ``def``/``class`` site: ``lode.cli._short_date`` resolves because
+``cli/__init__.py`` re-exports it via ``from lode.timestamps import
+_short_date``-style imports, not because it is defined in ``cli/__init__.py``
+itself. A plain "does this exact file define this exact name" check would
+reject every such re-exported ref as a false positive.
+
+WRAPPED-REF DISPOSITION (lode-8oeu, acceptance criterion 3): this gate
+reports every wrapped ref it finds (even when it resolves) but does not
+hard-fail on wrapping alone, and this pass does not mechanically unwrap the
+31 pre-existing wrapped sites found by lode-2hfd's sweep -- see
+``docs/decisions.md`` for the recorded reasoning.
+
+``docs/decisions.md``'s own append-only exemption from pointer sweeps does
+not interact with this gate at all: this gate only ever reads ``src/`` and
+``tests/`` Python source, never ``docs/`` prose.
+
+Usage::
+
+    python scripts/check_docstring_refs.py            # scan this checkout's src/ + tests/
+    python scripts/check_docstring_refs.py --root DIR  # scan a different tree (tests)
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import importlib
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Annotated
+
+import typer
+
+app = typer.Typer(add_completion=False)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+SCAN_DIRS = ("src", "tests")
+
+# A Sphinx cross-reference role naming a Python symbol. DOTALL so the
+# backtick-delimited target can itself span a line-wrap -- catching that is
+# the whole point; whitespace inside is normalized below, not here.
+_ROLE_RE = re.compile(r":(?:func|class|data|meth):`([^`]*)`", re.DOTALL)
+
+
+@dataclass(frozen=True)
+class UnresolvedRef:
+    path: Path
+    line_no: int
+    ref: str
+
+    def __str__(self) -> str:
+        return f"{self.path}:{self.line_no}: unresolved reference -> {self.ref}"
+
+
+@dataclass(frozen=True)
+class WrappedRef:
+    path: Path
+    line_no: int
+    ref: str
+
+    def __str__(self) -> str:
+        return f"{self.path}:{self.line_no}: line-wrapped reference -> {self.ref}"
+
+
+def _tracked_python_files(root: Path) -> list[Path]:
+    """Every ``*.py`` file git tracks under ``src/`` and ``tests/`` --
+    mirrors ``check_links.py``'s ``git ls-files`` scoping so scratch or
+    gitignored files never enter this gate."""
+    existing_dirs = [d for d in SCAN_DIRS if (root / d).is_dir()]
+    if not existing_dirs:
+        return []
+    out = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--", *existing_dirs],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return sorted(
+        root / rel for rel in out.split() if rel.endswith(".py")
+    )
+
+
+def normalize_ref(raw: str) -> str:
+    """Collapse a role's raw backtick content down to a single dotted path --
+    strips a leading ``~`` (Sphinx's "display only the last component"
+    marker) and removes ALL internal whitespace, which is what makes a
+    line-wrapped-but-otherwise-correct ref resolve identically to its
+    unwrapped form."""
+    collapsed = re.sub(r"\s+", "", raw)
+    return collapsed[1:] if collapsed.startswith("~") else collapsed
+
+
+def _has_declared_field(obj: object, name: str) -> bool:
+    """True if ``name`` is a dataclass field or a pydantic model field
+    DECLARED on class ``obj``, even though neither shows up via ``hasattr``
+    unless it also carries a default. Both are real, common in this repo
+    (:class:`lode.chunking.Passage` is a frozen dataclass; ``Settings`` in
+    :mod:`lode.config` is a pydantic ``BaseSettings``) -- without this, a
+    perfectly valid ``:data:`Passage.char_range``` reads as a false-positive
+    dangling ref, which is exactly the kind of noise that gets a gate
+    disabled."""
+    if not isinstance(obj, type):
+        return False
+    if dataclasses.is_dataclass(obj) and any(f.name == name for f in dataclasses.fields(obj)):
+        return True
+    model_fields = getattr(obj, "model_fields", None)
+    return isinstance(model_fields, dict) and name in model_fields
+
+
+def resolve_ref(dotted: str) -> bool:
+    """True if ``dotted`` (already normalized) names a real, importable
+    ``lode.*`` symbol. Imports the longest importable prefix as a module,
+    then walks any remaining dotted segments as attribute access -- so a
+    module-attribute re-export path (``lode.cli._short_date``, exported by
+    ``cli/__init__.py`` rather than defined there) resolves correctly. A
+    segment that misses ``hasattr`` but names a declared dataclass/pydantic
+    field (see ``_has_declared_field``) still counts -- there is nothing
+    further to descend into past it, so it's treated as a terminal match."""
+    parts = dotted.split(".")
+    module = None
+    split_at = 0
+    for i in range(len(parts), 0, -1):
+        candidate = ".".join(parts[:i])
+        try:
+            module = importlib.import_module(candidate)
+            split_at = i
+            break
+        except ImportError:
+            continue
+    if module is None:
+        return False
+    obj: object = module
+    for part in parts[split_at:]:
+        if hasattr(obj, part):
+            obj = getattr(obj, part)
+        elif _has_declared_field(obj, part):
+            obj = object()  # a field, not a live attribute -- nothing to descend into
+        else:
+            return False
+    return True
+
+
+def _refs_in_file(text: str) -> list[tuple[int, str]]:
+    """``(line_no, raw_backtick_content)`` for every ``:func:``/``:class:``/
+    ``:data:``/``:meth:`` role in ``text``. ``line_no`` is the role's OPENING
+    line -- correct for a wrapped ref too, since that's where a human
+    reading the file sees the reference start."""
+    return [
+        (text.count("\n", 0, m.start()) + 1, m.group(1)) for m in _ROLE_RE.finditer(text)
+    ]
+
+
+def check(root: Path) -> tuple[list[UnresolvedRef], list[WrappedRef]]:
+    unresolved: list[UnresolvedRef] = []
+    wrapped: list[WrappedRef] = []
+    for source in _tracked_python_files(root):
+        try:
+            text = source.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line_no, raw in _refs_in_file(text):
+            normalized = normalize_ref(raw)
+            if "\n" in raw:
+                wrapped.append(WrappedRef(source, line_no, normalized))
+            if not normalized.startswith("lode."):
+                continue  # third-party/stdlib -- out of scope, see module docstring
+            if not resolve_ref(normalized):
+                unresolved.append(UnresolvedRef(source, line_no, normalized))
+    return unresolved, wrapped
+
+
+@app.command()
+def main(
+    root: Annotated[
+        Path | None,
+        typer.Option(
+            "--root", help="Repo root to scan (defaults to this checkout's root)."
+        ),
+    ] = None,
+) -> None:
+    """Fail if any ``:func:``/``:class:``/``:data:``/``:meth:`` role naming a
+    ``lode.*`` symbol under ``src/`` or ``tests/`` does not resolve. A
+    line-wrapped role is reported as a warning (not a failure) whether or
+    not it resolves -- see the module docstring's WRAPPED-REF DISPOSITION."""
+    target_root = (root or REPO_ROOT).resolve()
+    if str(target_root) not in sys.path:
+        sys.path.insert(0, str(target_root / "src"))
+    unresolved, wrapped = check(target_root)
+    for ref in wrapped:
+        print(f"WARNING: {ref}", file=sys.stderr)
+    if unresolved:
+        for ref in unresolved:
+            print(str(ref), file=sys.stderr)
+        print(f"\n{len(unresolved)} unresolved docstring reference(s) found", file=sys.stderr)
+        raise typer.Exit(1)
+    suffix = f" ({len(wrapped)} line-wrapped ref(s) warned above)" if wrapped else ""
+    print(
+        "OK: every :func:/:class:/:data:/:meth: role naming a lode.* symbol under "
+        f"src/ and tests/ resolves{suffix}"
+    )
+
+
+if __name__ == "__main__":
+    app()

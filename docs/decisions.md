@@ -37,6 +37,48 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   **Still open** for any future non-web connector — decide per connector when building it, as
   originally noted above; nothing here presumes the same TTL-sweep answer is right for, say, a
   webhook-capable source.
+- **Docstring `:func:`/`:class:`/`:data:`/`:meth:` ref gate — scope, wrapped-ref disposition, and
+  wiring (`lode-8oeu`).** `lode-2hfd`'s sweep found four dangling Sphinx-role refs (one of which had
+  never named a real symbol) surviving a rename across two branches that landed in the same `/land`
+  pass, plus a second, independent defect class: 77 refs in `src/`/`tests/` LINE-WRAPPED mid-role
+  (Sphinx cannot resolve a role containing a newline, and the wrap also hides the ref from the
+  `grep -rn <name>` a rename normally relies on — exactly how one of the four dangling refs was
+  missed). `scripts/check_docstring_refs.py` / `nox -s docstringcheck` closes this:
+  1. **Scope: only `lode.*`-prefixed refs are resolved.** A role naming a third-party or stdlib
+     symbol (`:func:`httpx.get``) is skipped outright rather than attempted-resolve-if-importable —
+     simpler, and there is no value in this gate reasoning about symbols it doesn't own. A leading
+     `~` (Sphinx's "show only the last component" prefix) is stripped before the scope check, so
+     `` :func:`~lode.cli._tabular_table` `` is treated identically to the unprefixed form.
+  2. **Resolution walks module-attribute paths, not just literal def sites.** It imports the longest
+     importable prefix as a module, then walks remaining dotted segments as attribute access — the
+     repo convention that e.g. `lode.cli._short_date` names a re-exported attribute, not necessarily
+     a `def` inside `cli/__init__.py` itself. A dataclass field or a pydantic model field declared
+     (but with no class-level default, so `hasattr` misses it) — `Passage.char_range`,
+     `Settings.jira_base_url` — is special-cased as a valid terminal match; without that, both read
+     as false-positive dangling refs, which is exactly the kind of noise that gets a gate disabled
+     within a week.
+  3. **Wrapped refs are reported, not hard-failed, and the 77 pre-existing wrapped sites are NOT
+     mechanically unwrapped as part of this ticket.** A wrapped-but-otherwise-correct ref is not a
+     correctness bug this gate needs to block a merge over — the whitespace-normalize-before-resolve
+     step already makes it resolve identically to its unwrapped form, so the *reference* is not
+     broken from this gate's point of view even though it will not render as a Sphinx cross-link.
+     Reporting it (as a `WARNING:` line, non-fatal) keeps future renames grep-safe going forward
+     without taking on a 77-site mechanical reformatting pass that touches no behavior. If wrapped
+     refs keep recurring, hard-failing on them (or unwrapping the backlog) is a small follow-up, not
+     a redesign.
+  4. **Wired as a nox session (`docstringcheck`) in the DEFAULT set, hard-fail on any unresolved
+     `lode.*` ref** — mirrors `linkcheck`'s placement (pure Python, no Docker/network) rather than a
+     pytest test or a pre-commit hook, so it runs on every bare `nox` the same as the markdown-link
+     gate it complements. It reports zero unresolved refs against trunk as of this ticket (five
+     genuine dangling refs found and fixed while building it: `lode.versions.version_ids` — never a
+     function, a local variable inside `purge()` — repointed at `lode.versions.purge`;
+     `lode.tui.dates._parse` — a name from before the shared `lode.timestamps.parse_stamp` helper
+     existed, no longer defined anywhere — repointed at `lode.tui.dates.format_adaptive_date`, the
+     current call site; `lode.cli._config_knob_table` — actually lives at `lode.cli.config`, never
+     re-exported to the `lode.cli` package root; and a genuine typo dropping the leading underscore
+     off `lode.tui.screens._markdown_area._markdown_text_area`).
+  This gate only ever reads `src/`/`tests/` Python source, so `docs/decisions.md`'s own append-only
+  exemption from pointer sweeps (this file's own preamble) never interacts with it.
 - **History compaction / squash policy.** Not needed for years; revisit if storage matters.
   ([storage.md](storage.md#identity-vs-version))
 - **Minimal / archival backup export.** v1 backup is `cp lode.db` — a superset copy that drags
