@@ -2538,14 +2538,17 @@ pass, and every resolution **removes `land-escalated`** so a surfacer's queue ca
 instead of growing monotonically. Exactly four exits, lettered (a)–(d) (full mechanics in
 [`land/SKILL.md`](../.claude/skills/land/SKILL.md#resolving-a-land-escalated-branch)):
 
-- **Land as-is** — the **branch is unchanged** (this exit is exactly the "it's fine as-is" case); the
+- **(a) Land as-is** — the **branch is unchanged** (this exit is exactly the "it's fine as-is" case); the
   human **writes the decision into the ticket** (edits the acceptance criteria / description to remove
   the ambiguity `land-review` flagged), *then* swaps the label back to `ready-for-land`. A bare label
   swap with nothing else changed is **not** a valid transition: `/land`'s next pass just re-dispatches
   `land-review`, which hits the same ambiguity and escalates again. There is deliberately **no
   "human-blessed" bypass label** — `land-review` stays authoritative on re-review; forcing a land past
   its objection is an out-of-band manual act, not a designed fast-path.
-- **Amend and re-gate** — has **two triggers** (`lode-wp2r`'s original, widened by `lode-2m93`):
+- **(b) Rebuild** — handled exactly like a `land-review` bounce: `bd supersede` the original onto a new
+  ticket carrying the human's decision, and drop the branch.
+- **(c) Drop** — `bd close` the ticket with a reason, and GC the branch.
+- **(d) Amend and re-gate** — has **two triggers** (`lode-wp2r`'s original, widened by `lode-2m93`):
   - `lode-wp2r`'s original trigger: `land-review` already **accepted** the branch and it merges clean,
     but `/land`'s **combined re-gate** went red on a defect in code **already on `trunk`**, not in the
     branch.
@@ -2560,9 +2563,6 @@ instead of growing monotonically. Exactly four exits, lettered (a)–(d) (full m
   (trigger 1) or is still willing to re-review after a small fix (trigger 2), which is the wrong
   instrument. So the human amends the branch with a small, scoped fix and re-enters it at
   `ready-for-code-review` — see the per-source table below for why that gate, not `ready-for-land`.
-- **Rebuild** — handled exactly like a `land-review` bounce: `bd supersede` the original onto a new
-  ticket carrying the human's decision, and drop the branch.
-- **Drop** — `bd close` the ticket with a reason, and GC the branch.
 
 These resolve the label as `/land` sets it — `land-review` semantic-review escalations re-enter at
 either `ready-for-land` (land as-is, branch unchanged) or `ready-for-code-review` (amend and re-gate,

@@ -2218,14 +2218,18 @@ DECISION (human, 2026-07-08, `lode-08g`): whichever gate could not resolve the a
 that re-runs once the ambiguity is resolved — the same gate, against the now-unambiguous ticket, never
 a later gate taking the resolution on faith.
 
-| escalated by                                         | exit | re-entry label          |
-|------------------------------------------------------|------|-------------------------|
-| `/land` semantic review (`land-review`)              | (a)  | `ready-for-land`        |
-| `/land` semantic review + on-branch edit required    | (d)  | `ready-for-code-review` |
-| `code-reviewer` technical review                     | (a)  | `ready-for-code-review` |
-| `coding` rebase-pickup conflict                      | (a)  | `needs-rebase`          |
-| `coding` build-time clarification                    | (a)  | `ready-for-code-review` |
-| `/land` combined re-gate (defect already on `trunk`) | (d)  | `ready-for-code-review` |
+| escalated by                                                                 | exit | re-entry label          |
+|------------------------------------------------------------------------------|------|-------------------------|
+| `/land` semantic review (`land-review`), resolution needs **no** branch edit | (a)  | `ready-for-land`        |
+| `/land` semantic review (`land-review`), resolution needs **a** branch edit  | (d)  | `ready-for-code-review` |
+| `code-reviewer` technical review                                             | (a)  | `ready-for-code-review` |
+| `coding` rebase-pickup conflict                                              | (a)  | `needs-rebase`          |
+| `coding` build-time clarification                                            | (a)  | `ready-for-code-review` |
+| `/land` combined re-gate (defect already on `trunk`)                         | (d)  | `ready-for-code-review` |
+
+The two `land-review` rows are written as an explicit **no branch edit / a branch edit** pair so they
+cannot both match one escalation: every `land-review` escalation matches exactly one of them, decided
+by the human's resolution.
 
 The exit column names which resolution applies (`lode-08g` for the exit (a) rows, `lode-wp2r` for the
 unwidened exit (d) row, `lode-2m93` for the new `land-review` + on-branch-edit exit (d) row). What
