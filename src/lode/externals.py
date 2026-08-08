@@ -512,6 +512,18 @@ def set_no_egress(
     through :func:`lode.cited_answer._resolve_target`'s ``externals`` join —
     no separate wiring needed here).
 
+    **"Generically" means the COLUMN, not a seam.** Each send path reads
+    ``externals.no_egress`` in its own SQL join — :func:`lode.cited_answer.
+    _resolve_target` and :func:`lode.enrich._resolve_target` — so flipping
+    the column is indeed the only step needed *for a row that exists*, and
+    nothing else has to be taught about it. What that does **not** provide
+    is a hook: there is no single function through which an egress verdict
+    flows, so a rule that cannot be expressed as a column value — anything
+    evaluated rather than stored, e.g. a scope rule matching an
+    ``external_id`` that has no row yet — has no join to live in and must
+    be applied at each site that produces the boolean. Read this before
+    assuming a predicate can be added in one place.
+
     Returns ``True`` if ``external_id`` had a row to flip, ``False`` if no
     such external exists (the caller — :mod:`lode.cli` — turns that into a
     clean "no such external source" error rather than silently no-opping).
