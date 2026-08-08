@@ -47,7 +47,8 @@ DECISIONS = REPO_ROOT / "docs" / "decisions.md"
 _OFF_PATTERNS: dict[str, re.Pattern[str]] = {
     "stale-flag keyword opening a bold span, blockquote, or parenthetical": re.compile(
         r"(?:\*\*|\(|^\s*>\s*\**)"
-        r"(?:Superseded|Falsified|Obsolete|Retracted|Outdated|Amendment|AMENDMENT)\b"
+        r"(?:Superseded|Falsified|FALSIFIED|Obsolete|OBSOLETE|Retracted|RETRACTED"
+        r"|Outdated|OUTDATED|Amendment|AMENDMENT)\b"
     ),
     "ALL-CAPS 'SUPERSEDED' marker keyword": re.compile(r"\bSUPERSEDED\b"),
     "'<claim> is falsified by <id>' sentence": re.compile(r"is falsified by lode-"),
@@ -125,6 +126,10 @@ def test_off_pattern_scan_catches_a_reintroduced_marker() -> None:
         "  *(Itself since SUPERSEDED by lode-zzzz -- the italic aside.)*",
         "- **(Retracted, lode-zzzz: a shape lode-ur6o never encountered.)**",
         "**AMENDMENT (`lode-zzzz`):** the exact lode-hg49 lead-in shape (lode-125q).",
+        "**RETRACTED (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
+        "**OBSOLETE (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
+        "**FALSIFIED (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
+        "**OUTDATED (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
     ]
     caught = _off_pattern_markers(reintroduced)
 
