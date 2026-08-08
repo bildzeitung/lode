@@ -343,6 +343,16 @@ def _seed_pre_lode_35nu_11_7_db(db: Path) -> None:
     not just schema presence.
     """
     seed = sqlite3.connect(db)
+    # init_db's is_fresh check keys off the notes table -- a real pre-existing
+    # DB always has one; without it here the fixture would misreport as fresh
+    # and skip the migration entirely.
+    seed.execute(
+        "CREATE TABLE notes ("
+        "  note_id TEXT PRIMARY KEY,"
+        "  head_version_id TEXT,"
+        "  created TEXT NOT NULL DEFAULT '2026-01-01T00:00:00.000Z'"
+        ")"
+    )
     seed.execute(
         "CREATE TABLE egress_log ("
         "  id INTEGER PRIMARY KEY,"
