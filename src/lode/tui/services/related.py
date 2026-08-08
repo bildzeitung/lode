@@ -12,7 +12,7 @@ dense (LanceDB) legs, app-side RRF fusion, small-to-big parent expansion, one
 graph hop (:func:`lode.retrieval.graph_expand` — GraphRAG,
 ``docs/externals.md``), and the trust gradient
 (:func:`lode.retrieval.trust_rank`) — the exact same building blocks
-``lode.cli._retrieve`` assembles for ``lode ask``. The cross-encoder rerank
+``lode.retrieval._retrieve`` assembles for ``lode ask``. The cross-encoder rerank
 stage is deliberately skipped here: it loads a second on-box model and adds
 latency this passive, every-few-keystrokes pass does not need to pay, and
 skipping it does not touch the seam (``lode.retrieval.rerank`` stays wired for

@@ -291,6 +291,40 @@ def test_azure_openai_api_version_alone_is_fine() -> None:
     assert s.azure_openai_endpoint == ""
 
 
+def test_no_egress_scopes_default_empty() -> None:
+    assert Settings().no_egress_scopes == []
+
+
+def test_no_egress_scopes_accepts_jira_and_web_rules() -> None:
+    s = Settings(
+        no_egress_scopes=[
+            {"source_type": "jira", "match": "PROJ"},
+            {"source_type": "web", "match": "internal.example.com"},
+        ]
+    )
+    assert [r.source_type for r in s.no_egress_scopes] == ["jira", "web"]
+
+
+def test_no_egress_scopes_rejects_confluence_at_load() -> None:
+    """Confluence space-key scoping is structurally impossible (lode-35nu.11.8,
+    docs/externals.md): a rule is rejected at config-load with a clear error
+    rather than silently accepted as a no-op."""
+    with pytest.raises(ValidationError, match="confluence"):
+        Settings(no_egress_scopes=[{"source_type": "confluence", "match": "SPACE"}])
+
+
+def test_no_egress_scopes_rejects_unsupported_source_type() -> None:
+    """Same governing rule as the confluence case: a privacy rule that could
+    never match must fail loudly at load, not silently withhold nothing."""
+    with pytest.raises(ValidationError, match="unsupported source_type"):
+        Settings(no_egress_scopes=[{"source_type": "gitlab", "match": "PROJ"}])
+
+
+def test_no_egress_scopes_rejects_empty_match() -> None:
+    with pytest.raises(ValidationError, match="must not be empty"):
+        Settings(no_egress_scopes=[{"source_type": "web", "match": "  "}])
+
+
 # --- reasoning_effort validated against llm_provider at load (lode-tvps) ----
 
 

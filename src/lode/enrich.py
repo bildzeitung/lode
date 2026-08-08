@@ -65,6 +65,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -81,6 +82,7 @@ from lode.llm_provider import (
     build_provider,
     provider_identity,
 )
+from lode.no_egress_scope import NoEgressScopeRule, is_no_egress_scoped
 from lode.redact import redact_before_egress_counting
 
 # `lode.llm_provider`'s own `import anthropic` is deferred inside
@@ -419,7 +421,9 @@ class _EnrichTarget:
 
 
 def _resolve_enrich_target(
-    conn: sqlite3.Connection, version_id: str
+    conn: sqlite3.Connection,
+    version_id: str,
+    no_egress_scopes: Sequence[NoEgressScopeRule] = (),
 ) -> _EnrichTarget | None:
     """Resolve ``version_id`` to its owner, body, ``no_egress``, and liveness.
 
@@ -435,6 +439,11 @@ def _resolve_enrich_target(
     set), or for a snapshot's link-rot tombstone (``status='tombstone'``,
     ``src/lode/schema.sql``) -- the three "this exists but there's nothing to
     enrich" cases callers gate on before ever calling Haiku.
+
+    For an external target, ``no_egress`` composes the per-row
+    ``externals.no_egress`` flag with ``no_egress_scopes`` (lode-35nu.11.8) --
+    either denying is a denial. Note-side targets have no ``external_id`` and
+    no scope concept, so they are unaffected.
     """
     row = conn.execute(
         """
@@ -452,7 +461,7 @@ def _resolve_enrich_target(
 
     row = conn.execute(
         """
-        SELECT s.body, s.status, e.external_id, e.no_egress
+        SELECT s.body, s.status, e.external_id, e.no_egress, e.source_type
         FROM snapshots s
         JOIN externals e ON e.external_id = s.external_id
         WHERE s.snapshot_id = ?
@@ -460,8 +469,11 @@ def _resolve_enrich_target(
         (version_id,),
     ).fetchone()
     if row is not None:
-        body, status, external_id, no_egress = row
-        return _EnrichTarget(external_id, body, bool(no_egress), status != "tombstone")
+        body, status, external_id, no_egress, source_type = row
+        scoped = is_no_egress_scoped(external_id, source_type, no_egress_scopes)
+        return _EnrichTarget(
+            external_id, body, bool(no_egress) or scoped, status != "tombstone"
+        )
 
     return None
 
@@ -497,7 +509,7 @@ def enrich_version(
         (credential-resolved via :func:`~lode.llm_provider.build_provider` if
         omitted). Inject in tests to avoid a live API call.
     """
-    target = _resolve_enrich_target(conn, version_id)
+    target = _resolve_enrich_target(conn, version_id, settings.no_egress_scopes)
 
     if target is None:
         log.warning(
@@ -664,7 +676,7 @@ def submit_enrich_batch(
     redactions: dict[str, int] = {}
 
     for job_id, version_id in job_rows:
-        target = _resolve_enrich_target(conn, version_id)
+        target = _resolve_enrich_target(conn, version_id, settings.no_egress_scopes)
 
         if target is None:
             log.warning(
@@ -853,7 +865,7 @@ def collect_enrich_batch(
             # submit and collect is rare enough that writing its last
             # enrichment result is harmless, and re-gating here would need
             # its own dead-code path with no test coverage to justify it).
-            target = _resolve_enrich_target(conn, version_id)
+            target = _resolve_enrich_target(conn, version_id, settings.no_egress_scopes)
             if target is None:
                 log.warning(
                     "collect_enrich_batch: version %s disappeared after batch ended",

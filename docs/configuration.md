@@ -189,8 +189,67 @@ Presence is computed from the env var / the resolver's inputs, not read back off
 | Knob | Kind | Default | Notes |
 |---|---|---|---|
 | `no_egress` (per note / source) | runtime | off | Indexed locally, never sent to the configured cloud LLM (no enrichment, excluded from cloud Q&A; cited as "withheld"). ([externals.md](externals.md#privacy-consequence-of-aggregation)) |
+| `no_egress_scopes` | runtime | `[]` | Declarative no_egress SCOPE rules (lode-35nu.11.8) — see below. |
 | Redact-before-egress pattern set | runtime | high-precision seed | Secret patterns stripped before content is sent to the configured cloud LLM; iterate from real misses. ([decisions.md](decisions.md)) |
 | Redact-before-index pattern set | runtime | high-precision seed | Secret patterns kept out of the local vector/FTS index. |
+
+### `no_egress_scopes`: scope-level no_egress rules (decided, lode-35nu.11.8)
+
+The per-row `externals.no_egress` flag (`lode no-egress <external_id>`) can only mark a resource that
+already has an `externals` row — it structurally cannot cover an external a tool has not fetched yet.
+`no_egress_scopes` closes that gap: a list of declarative rules, each `{source_type, match}`,
+evaluated **live** against a candidate `(external_id, source_type)` pair — no row required, and
+**never materialized onto a row**. Adding a rule covers every matching external immediately
+(already-captured or not); removing one un-withholds immediately. Neither direction backfills or
+migrates any `externals` row.
+
+```toml
+[[no_egress_scopes]]
+source_type = "jira"
+match = "PROJ"        # JIRA project key -- matches issue keys "PROJ-<number>"
+
+[[no_egress_scopes]]
+source_type = "web"
+match = "internal.example.com"   # exact URL host, not a host+path prefix
+```
+
+- `source_type = "jira"` — `match` is a JIRA project key, matched against the project-key prefix of
+  a candidate JIRA issue key (`externals.external_id` for `source_type='jira'` is the issue key
+  itself, e.g. `"PROJ-123"`). The **whole** key boundary must line up: rule `PROJ` covers `PROJ-123`
+  but not `PROJECT-1`. Matched **case-insensitively** — `drawdown.py`'s `_JIRA_ISSUE_RE` preserves
+  whatever case the pasted URL used, so `/browse/proj-123` persists `"proj-123"`.
+- `source_type = "web"` — `match` is a URL **host**, matched **exactly** (host-only, not a host+path
+  prefix, and not a suffix — `example.com` covers `example.com` but neither `evil-example.com` nor
+  `sub.example.com`; a path-prefix variant is a documented future option if ever needed, not built
+  speculatively). The comparison is against the parsed host, so userinfo, a non-default port, host
+  case, and a trailing root dot cannot slip content past a rule
+  (`https://user@Internal.Example.com:8443/x` is covered by `internal.example.com`). Rule and
+  candidate are both lowercased and stripped of a trailing dot, so a rule written
+  `Internal.Example.com.` still works.
+- `source_type = "confluence"` is **rejected at config-load time** with a clear
+  `ValidationError` naming the reason. Confluence space-key scoping is structurally impossible under
+  the current data model: `drawdown.py`'s `_CONFLUENCE_PAGE_RE` persists only the numeric page id
+  into `externals.external_id`; the space key is discarded at detection time and stored nowhere, so a
+  space-scoped rule would have no space information to ever match against — not merely unimplemented.
+  Accepting such a rule as a silent no-op was explicitly rejected (human decision, `lode-35nu.11.8`):
+  a rule that can never match must fail loudly at load, not match nothing with no signal. See
+  [externals.md](externals.md#no-egress-scope-rules-decided-lode-35nu118) for the full write-up.
+
+**Composition with the per-row flag:** both are evaluated, and either denying is a denial — a scope
+rule never overrides an explicit per-row `--clear`, and a per-row flag never overrides a scope rule.
+
+**Fail-closed, in both places.** A rule that could never match anything is refused at load with a
+`ValidationError` — an empty `match`, an unsupported `source_type`, or `confluence` — because a
+privacy rule that silently matches nothing is worse than no rule at all: the user believes they are
+covered. At evaluation time, if matching a rule raises (an unparseable candidate `external_id`, say),
+the candidate is treated as **scoped and withheld** rather than allowed. That never withholds the
+world, because a candidate is only ever parsed once a rule of its own `source_type` exists — with the
+default empty rule set there is nothing to fail.
+
+**Not a generic seam.** `no_egress` is read by SQL `JOIN` at two call sites —
+`cited_answer._resolve_target` and `enrich._resolve_enrich_target` — so a config predicate cannot
+live inside the join. `lode.no_egress_scope.is_no_egress_scoped` is the one shared predicate; each
+site composes it with its own per-row flag itself, rather than reimplementing the match.
 
 ## Models
 

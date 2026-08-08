@@ -757,7 +757,7 @@ and is still sent to the configured cloud LLM at enrichment/Q&A time:
 
 ### No-egress tier (for genuinely sensitive notes/sources)
 
-A note — or an external source (a specific repo / ticket project) — can be marked **`no_egress`**:
+A note, or a **specific already-captured** external source, can be marked **`no_egress`**:
 
 - still **captured, chunked, embedded, and locally retrievable** (keyword + vector);
 - **never sent to the configured cloud LLM** — no enrichment, and **excluded from cloud Q&A context**;
@@ -767,9 +767,39 @@ A note — or an external source (a specific repo / ticket project) — can be m
 
 This keeps work secrets *in* the KB and retrievable while guaranteeing they never reach the cloud.
 
-The control surface for an external source is `lode no-egress <external_id>` (`--clear` to undo it),
-which flips `externals.no_egress`; every send path (enrichment, Q&A) reads the flag generically off
-the row, so setting it is the only step needed (lode-w0h.7).
+The control surface for one already-captured external is `lode no-egress <external_id>` (`--clear` to
+undo it), which flips `externals.no_egress`; every send path (enrichment, Q&A) reads the flag off the
+row, so setting it is the only step needed **for a row that already exists** (lode-w0h.7). This is a
+**resource-level** control — one `external_id`, one row. Marking a whole **source** — a repo, a ticket
+project, a host — broader than any single resource is a separate mechanism, [scope
+rules](#no-egress-scope-rules-decided-lode-35nu118), below.
+
+### No-egress scope rules (decided, `lode-35nu.11.8`)
+
+The per-row flag above cannot cover an external that has **no row yet** — exactly the resources a
+fetch/search tool exists to reach (`lode-35nu.11.1`/`.2`). `no_egress_scopes`
+([configuration.md](configuration.md#no_egress_scopes-scope-level-no_egress-rules-decided-lode-35nu118))
+is a declarative, config-held rule set — JIRA project key or URL host — evaluated **live** against a
+candidate `(external_id, source_type)` at decision time, with no row required and no write to
+`externals` ever performed. Rules compose with the per-row flag (either denying is a denial); an
+already-captured external newly covered by a rule is withheld starting at its next send, with no
+migration or backfill.
+
+**Confluence space-key scoping is out of scope (human decision).** The obvious rule shape for
+Confluence would be a space key, matched the same way a JIRA project key is matched against an issue
+key. It cannot be built without a schema change: `drawdown.py`'s `_CONFLUENCE_PAGE_RE` persists only
+the numeric page id into `externals.external_id`, deliberately discarding the space key at detection
+time (see that regex's own comment) — confirmed by grepping every Confluence code path
+(`drawdown.py`, `confluence.py`, `confluence_backfill.py`): the space key is never persisted anywhere,
+on the `externals` row or otherwise. A space-scoped rule therefore has no space information to ever
+match against, for a captured **or** not-yet-seen Confluence external alike — a structural limitation
+of the current data model, not a missing wiring pass. Closing it needs either a `space_key` column on
+`externals` (a schema change out of scope here, and not depended on) or a richer predicate signature a
+future tool call site could supply space info through (considered and explicitly declined — see
+`lode-35nu.11.8`'s notes; the general mechanism is not built speculatively). Because a `confluence`
+scope rule can never match anything, `Settings` **rejects** one at config-load time with a clear error
+rather than accepting it as a silent no-op — see the field validator on `Settings.no_egress_scopes`.
+JIRA project-key and URL-host scoping are unaffected and fully supported today.
 
 ### Tool calls are egress too (decided, `lode-35nu.11.5`)
 
