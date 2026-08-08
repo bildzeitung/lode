@@ -4113,17 +4113,41 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   3. It reintroduces a `jq` dependency against RULING 3, on a hook measured at ~10ms in the hot path
      of every `Edit`/`Write`.
 
-- **2026-08-08 — VERIFIED (`lode-6nwu`): `GET /rest/api/3/search` was removed by Atlassian on
-  2025-05-01 and now returns HTTP 410 Gone; the replacement is `GET`/`POST /rest/api/3/search/jql`.**
-  Flagged during `lode-35nu.11.2`'s technical review as an unverified risk (no live JIRA instance was
-  reachable from that review worktree). Confirmed against Atlassian's own Confluence KB article
-  ("Run JQL search query using Jira Cloud REST API") and the Atlassian developer changelog
-  (`CHANGE-2046`), corroborated by multiple community/GitHub reports of production clients hitting the
-  410. Request shape is essentially unchanged (`jql`, `maxResults`, `fields`); the response shape
-  changes in one load-bearing way — pagination moves from `startAt`/`total` to a `nextPageToken`, so a
-  caller must stop on the token's absence rather than on a total count. **No code in this repo is
-  affected today**: `jira_search` does not currently exist on `trunk` — the branch that introduced it
-  (`lode-35nu.11.2`) was bounced by `/land`'s semantic review and deleted; its rebuild is tracked
-  separately as `lode-8hsk` (open). This finding is cross-posted onto `lode-8hsk` so that rebuild
-  targets `/rest/api/3/search/jql` with `nextPageToken`-based pagination from the start, rather than
-  reintroducing a dead-on-arrival endpoint. Full finding: `bd show lode-6nwu --design`.
+- **2026-08-08 — VERIFIED (`lode-6nwu`): `GET`/`POST /rest/api/3/search` is being retired under
+  Atlassian `CHANGE-2046` and returns HTTP 410 Gone on migrated Jira Cloud instances; the replacement
+  is `GET`/`POST /rest/api/3/search/jql`.** Flagged during `lode-35nu.11.2`'s technical review as an
+  unverified risk (no live JIRA instance was reachable from that review worktree). Verified against
+  the live Jira Cloud v3 OpenAPI spec (`developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json`
+  — the document the REST reference renders from), Atlassian's Confluence KB article "Run JQL search
+  query using Jira Cloud REST API", and `CHANGE-2046`.
+  - **Retirement is phased, not a single date.** Deprecation announced 2024-10-31; deprecation period
+    ended 2025-05-01; hybrid phase 2025-05-05 → 2025-07-31; shutdown 2025-08-01 → 2025-10-31, rolled
+    out progressively by region. The old paths are *still present* in today's spec, flagged
+    `deprecated: true` with the summary "Currently being removed", and 410 is **not** a documented
+    response code for them — the 410 is observed real-world behaviour on already-migrated instances,
+    not API contract. Do not record "removed on 2025-05-01" as a fact; the honest statement is
+    "deprecated under CHANGE-2046, phased out through 2025-10-31, 410 on migrated instances".
+    `CHANGE-2046` also covers `POST .../search/id` and `POST .../expression/eval`, not just `/search`.
+  - **The request shape is NOT unchanged, and the difference is load-bearing for lode.** `/search/jql`
+    documents "By default, this resource returns IDs only" — `fields` now defaults to `id`, where the
+    old endpoint defaulted to navigable fields. A caller that omits `fields` gets back no `summary` at
+    all. Since lode's search tools are specified to return *identifiers and titles only, enforced by
+    the request shape*, the rebuild must send `fields` explicitly (`summary`) — this is the single
+    most likely migration bug. Also gone: `startAt` and `validateQuery`. `jql` must now be a
+    *bounded* query (a bare `order by key desc` is rejected). `maxResults` still defaults to 50 but
+    the server may return fewer per page than requested and caps a full traversal at ~5000 issues, so
+    a short page does **not** mean the last page.
+  - **Pagination is cursor-based.** The response (`SearchAndReconcileResults`) carries `isLast`,
+    `issues`, `names`, `nextPageToken`, `schema`, `warnings` — there is no `total` and no `startAt`.
+    Terminate the loop on the **absence** of `nextPageToken` (documented: the field is omitted on the
+    last page); tokens expire after 7 days. `isLast` does exist (added 2025-06, `JRACLOUD-94648`) but
+    is the weaker signal — treat it as a secondary check, not the stop condition. For a count there is
+    only `POST /rest/api/3/search/approximate-count`, which is approximate as named. `warnings` is
+    documented as experimental and behind a feature flag — do not depend on it.
+
+  **No code in this repo is affected today**: `jira_search` does not currently exist on `trunk` — the
+  branch that introduced it (`lode-35nu.11.2`) was bounced by `/land`'s semantic review and deleted;
+  its rebuild is tracked separately as `lode-8hsk` (open). This finding is cross-posted onto
+  `lode-8hsk` so that rebuild targets `/rest/api/3/search/jql` with an explicit `fields` and
+  `nextPageToken`-based pagination from the start, rather than reintroducing a dead-on-arrival
+  endpoint. Full finding: `bd show lode-6nwu --json` (the `design` field).
