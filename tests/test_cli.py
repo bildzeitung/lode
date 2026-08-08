@@ -5052,8 +5052,9 @@ def test_retrieve_wires_rerank_and_reorders_by_cross_encoder_score(
     ``_TwoDirEmbedder``). A stubbed cross-encoder — injected via
     ``lode.retrieval.FastEmbedCrossEncoder``, the seam ``rerank()`` falls back to
     when no scorer is passed — scores the 'second' passage higher. Asserting the
-    live ``_retrieve`` path (not just ``lode.retrieval``'s own unit tests) returns
-    'second' ahead of 'first' proves rerank actually fires from ``lode.retrieval``.
+    live ``_retrieve`` path (not just ``rerank()``'s own unit tests) returns
+    'second' ahead of 'first' proves rerank actually fires from
+    ``lode.retrieval._retrieve``'s composed pipeline.
     """
     settings = load_settings(embedding_vector_dim=2)
     db_path = tmp_path / "lode.db"
