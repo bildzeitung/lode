@@ -34,6 +34,7 @@ from lode.storage import init_db
 from lode.tui.app import LodeApp
 from lode.tui.screens.ask import CITATION_STATUS_ID, QUESTION_ID, RESULTS_ID, AskScreen
 from lode.tui.screens.capture import CaptureScreen
+from lode.tui.screens.edit import EditScreen
 from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
 from lode.tui.screens.version_view import VersionViewScreen
 from lode.tui.services.ask import STAGE_RETRIEVING, AskResult, CitationIdentity
@@ -60,6 +61,100 @@ def test_ctrl_l_pushes_the_ask_screen_from_the_default_screen(tmp_path: Path) ->
             assert isinstance(app.screen, AskScreen)
 
     asyncio.run(_drive())
+
+
+def test_ctrl_l_from_edit_screen_opens_ask_scoped_to_this_note(
+    tmp_path: Path,
+) -> None:
+    """lode-35nu.11.3: EditScreen's own Screen-level ``ctrl+l`` shadows the
+    App-level one and opens the note-scoped ask flow, not the corpus-wide one.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "hello world")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[bool, str | None]:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, EditScreen)
+            await pilot.press("ctrl+l")
+            await pilot.pause()
+            is_ask = isinstance(app.screen, AskScreen)
+            note_id = app.screen._note_id if is_ask else None
+            return is_ask, note_id
+
+    is_ask, note_id = asyncio.run(_drive())
+
+    assert is_ask
+    assert note_id == "note-a"
+
+
+def test_ctrl_l_from_version_view_screen_opens_ask_scoped_to_this_note(
+    tmp_path: Path,
+) -> None:
+    """lode-35nu.11.3: same shadowing on VersionViewScreen -- pins the NOTE
+    (its live head), not the specific (possibly non-head) version being read.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "v1 body").version_id
+        save(conn, "note-a", "v2 body", parent=head)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[bool, str | None]:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("ctrl+h")
+            await pilot.pause()
+            await pilot.press("down")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, VersionViewScreen)
+            await pilot.press("ctrl+l")
+            await pilot.pause()
+            is_ask = isinstance(app.screen, AskScreen)
+            note_id = app.screen._note_id if is_ask else None
+            return is_ask, note_id
+
+    is_ask, note_id = asyncio.run(_drive())
+
+    assert is_ask
+    assert note_id == "note-a"
+
+
+def test_ctrl_l_from_default_screen_is_still_corpus_wide_unaffected(
+    tmp_path: Path,
+) -> None:
+    """Acceptance: "Corpus-wide Ask behaviour is unchanged" -- the App-level
+    ``ctrl+l`` (no note pinned) still reaches Ask from a screen that doesn't
+    shadow it, e.g. CaptureScreen (the app's default screen).
+    """
+    app = LodeApp(db_path=tmp_path / "lode.db")
+
+    async def _drive() -> tuple[bool, str | None]:
+        async with app.run_test() as pilot:
+            assert isinstance(app.screen, CaptureScreen)
+            await pilot.press("ctrl+l")
+            await pilot.pause()
+            is_ask = isinstance(app.screen, AskScreen)
+            note_id = app.screen._note_id if is_ask else None
+            return is_ask, note_id
+
+    is_ask, note_id = asyncio.run(_drive())
+
+    assert is_ask
+    assert note_id is None
 
 
 def test_ctrl_a_is_not_bound_app_level_because_text_widgets_swallow_it() -> None:

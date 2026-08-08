@@ -3218,9 +3218,13 @@ def test_edit_footer_fits_100_columns_with_every_binding_visible(
 
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 7 screen-level + 5 App-level bindings stay visible (none hidden via
+    # All 8 screen-level + 4 App-level bindings stay visible (none hidden via
     # show=False); "View content" -> "View" (lode-uczx), "Related" -> "Rel"
-    # and "History" -> "Hist" (lode-ev5j.3, to make room for the new "Link").
+    # and "History" -> "Hist" (lode-ev5j.3, to make room for "Link"). "Ask" is
+    # now a SCREEN-level binding here too (lode-35nu.11.3, same key/label as
+    # the App-level one it shadows -- docs/keybindings.md), so it renders in
+    # binding-declaration order right after "Link" rather than at the tail
+    # with the other App-level entries.
     assert descriptions == [
         "Save",
         "Back",
@@ -3229,9 +3233,9 @@ def test_edit_footer_fits_100_columns_with_every_binding_visible(
         "Inspect",
         "View",
         "Link",
+        "Ask",
         "Quit",
         "Cfg",
         "Browse",
         "Tags",
-        "Ask",
     ]

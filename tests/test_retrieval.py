@@ -33,6 +33,7 @@ from lode.retrieval import (
     graph_expand,
     lexical_search,
     live_head_versions,
+    pinned_note_context,
     reciprocal_rank_fusion,
     rerank,
     trust_rank,
@@ -785,6 +786,97 @@ def test_trust_rank_withholds_unclassifiable_hit_instead_of_dropping(
 def test_trust_rank_of_no_hits_is_empty(conn) -> None:
     ranked = trust_rank(conn, [])
     assert ranked.context == [] and ranked.withheld == []
+
+
+# --- pinned_note_context: "Ask about THIS note" (lode-35nu.11.3) -------------
+
+
+def test_pinned_note_context_returns_the_note_head_passages(repo, conn) -> None:
+    v = repo.save("note-a", "alpha beta gamma").version_id
+
+    items = pinned_note_context(conn, "note-a")
+
+    assert items  # real chunking produced at least one passage
+    assert all(item.tier is TrustTier.OWNED_NOTE for item in items)
+    assert all(item.target_version == v for item in items)
+    # Pinning is positional, not scored -- 0.0 is the same "no upstream rank"
+    # value graph_expand's synthetic hits carry, never a sentinel.
+    assert all(item.score == 0.0 for item in items)
+    # Every item cites a real row in ``passages`` -- not a fabricated one.
+    passage_ids = {
+        row[0]
+        for row in conn.execute(
+            "SELECT passage_id FROM passages WHERE target_version = ?", (v,)
+        )
+    }
+    assert {item.passage_id for item in items} == passage_ids
+
+
+def test_pinned_note_context_reflects_the_live_head_not_a_stale_version(
+    repo, conn
+) -> None:
+    a1 = repo.save("note-a", "alpha").version_id
+    a2 = repo.save("note-a", "delta", parent=a1).version_id
+
+    items = pinned_note_context(conn, "note-a")
+
+    assert items
+    assert all(item.target_version == a2 for item in items)  # the live head, not a1
+
+
+def test_pinned_note_context_unknown_note_is_empty(conn) -> None:
+    assert pinned_note_context(conn, "no-such-note") == []
+
+
+def test_pinned_note_context_deleted_note_is_empty(repo, conn) -> None:
+    v = repo.save("note-a", "alpha").version_id
+    repo.delete("note-a", parent=v)
+
+    # The tombstone head has no passages of its own (evicted, not re-derived
+    # -- lode.lexical's own contract), so this correctly returns nothing to
+    # pin rather than pinning stale, pre-delete content.
+    assert pinned_note_context(conn, "note-a") == []
+
+
+def test_pinned_note_context_fails_closed_on_a_tombstone_head_with_passages(
+    repo, conn
+) -> None:
+    """The live-head guard, not the eviction, is what excludes a deleted note.
+
+    Eviction is why the tombstone head has no passages today; force a passage
+    row onto the tombstone head anyway and the pin must STILL be empty, or the
+    one retrieval leg not scoped to ``live_head_versions``' allow-list would
+    surface deleted content ahead of everything else.
+    """
+    v = repo.save("note-a", "alpha").version_id
+    tombstone = repo.delete("note-a", parent=v).version_id
+    conn.execute(
+        "INSERT INTO passages (passage_id, target_version, ord, char_range, "
+        "text, parent_block) VALUES ('p-ghost', ?, 0, '0:5', 'alpha', 'alpha')",
+        (tombstone,),
+    )
+    conn.commit()
+
+    assert pinned_note_context(conn, "note-a") == []
+
+
+def test_pinned_note_context_note_with_no_passages_yet_is_empty(conn) -> None:
+    # A note row with a head_version_id pointing at a version that was never
+    # indexed (no LexicalCacheBackend driving this save) -- the read side
+    # makes no claim about *why* nothing is pinnable, only that nothing is.
+    conn.execute(
+        "INSERT INTO notes (note_id, head_version_id, created) "
+        "VALUES ('note-a', NULL, '2026-01-01T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO versions (version_id, note_id, parent_version_id, body, "
+        "op, created) VALUES ('v1', 'note-a', NULL, 'alpha', 'create', "
+        "'2026-01-01T00:00:00Z')"
+    )
+    conn.execute("UPDATE notes SET head_version_id = 'v1' WHERE note_id = 'note-a'")
+    conn.commit()
+
+    assert pinned_note_context(conn, "note-a") == []
 
 
 # --- build_match_query: natural-language question -> FTS5 MATCH --------------
