@@ -20,6 +20,7 @@ from pathlib import Path
 
 from _gitrepo import _git
 from conftest import load_module_from_path
+from typer.testing import CliRunner
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -29,6 +30,7 @@ check_docstring_refs = load_module_from_path(
 check = check_docstring_refs.check
 normalize_ref = check_docstring_refs.normalize_ref
 resolve_ref = check_docstring_refs.resolve_ref
+app = check_docstring_refs.app
 
 
 def _role(kind: str, target: str) -> str:
@@ -128,7 +130,9 @@ class TestCheck:
         unresolved, _wrapped = check(tmp_path)
         assert unresolved == []
 
-    def test_wrapped_but_resolvable_ref_is_warned_not_failed(self, tmp_path):
+    def test_wrapped_but_resolvable_ref_is_reported_separately(self, tmp_path):
+        # `check()` only classifies -- whether a wrapped ref hard-fails is
+        # main()'s call (see TestMain below, lode-hg49).
         role = _role("func", "lode.timestamps.\n    parse_stamp")
         _write(tmp_path, "src/pkg/a.py", f'"""See {role} for the real thing."""\n')
         _git_init(tmp_path)
@@ -138,7 +142,7 @@ class TestCheck:
         assert len(wrapped) == 1
         assert wrapped[0].ref == "lode.timestamps.parse_stamp"
 
-    def test_wrapped_and_dangling_ref_is_both_warned_and_failed(self, tmp_path):
+    def test_wrapped_and_dangling_ref_are_both_reported(self, tmp_path):
         role = _role("func", "lode.timestamps.\n    not_a_real_symbol")
         _write(tmp_path, "src/pkg/a.py", f'"""See {role} (also broken)."""\n')
         _git_init(tmp_path)
@@ -184,3 +188,32 @@ class TestCheck:
 
         unresolved, _wrapped = check(tmp_path)
         assert unresolved == []
+
+
+class TestMain:
+    """End-to-end CLI coverage for the lode-hg49 disposition change: a
+    wrapped-but-resolvable ref now HARD-FAILS main(), not just gets
+    reported by check() -- exercised via CliRunner against ``--root``
+    rather than importing/calling main() directly, so the exit code is the
+    real one Typer produces."""
+
+    runner = CliRunner()
+
+    def test_clean_tree_exits_zero(self, tmp_path):
+        role = _role("func", "lode.timestamps.parse_stamp")
+        _write(tmp_path, "src/pkg/a.py", f'"""See {role}."""\n')
+        _git_init(tmp_path)
+
+        result = self.runner.invoke(app, ["--root", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "resolves and none is line-wrapped" in result.stdout
+
+    def test_wrapped_but_resolvable_ref_hard_fails(self, tmp_path):
+        role = _role("func", "lode.timestamps.\n    parse_stamp")
+        _write(tmp_path, "src/pkg/a.py", f'"""See {role} for the real thing."""\n')
+        _git_init(tmp_path)
+
+        result = self.runner.invoke(app, ["--root", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "line-wrapped reference" in result.output
+        assert "1 line-wrapped reference(s) found" in result.output
