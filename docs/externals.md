@@ -870,11 +870,18 @@ content before the model reads it. What bounds the blast radius instead, mechani
   is never invisible after the fact — "what did the model do, and where did it send bytes" remains
   answerable from the log even when "why did it do that" traces back to a hostile document.
 - **The citation-faithfulness gate still bounds what reaches the user as a claim.** An injected
-  instruction can steer *which tool gets called next*, but it cannot make a fabricated claim reach the
-  user's answer: every cited claim must be a verbatim span of a persisted snapshot
-  ([the faithfulness gate](retrieval.md#the-faithfulness-gate-a-stage-like-rerank)), so the gate
-  constrains the *output*, not the *tool-call sequence*, and does not need to understand injection to
-  do that.
+  instruction can steer *which tool gets called next*, but it cannot make an **unsourced** claim reach
+  the user's answer: every claim's `quoted_span` must occur verbatim in the body of the
+  `version_id`/`snapshot_id` it cites, and the claim itself must then couple to — or be entailed by —
+  those spans ([the faithfulness gate](retrieval.md#the-faithfulness-gate-a-stage-like-rerank)). So
+  the gate constrains the *output*, not the *tool-call sequence*, and does not need to understand
+  injection to do that. Note precisely what this does and does not buy: the gate certifies that a
+  claim is **traceable to a persisted snapshot**, not that the snapshot is **trustworthy**. Text an
+  attacker plants in a page lode then fetches and persists is a perfectly citable span, so a hostile
+  *assertion* can still reach the user's answer — correctly attributed to the hostile source. That is
+  the same trust boundary every drawn-down external already sits behind (a note's cited web page was
+  never certified true either); the tool loop widens *which* documents can end up on that side of it,
+  it does not move the boundary.
 
 **What is explicitly NOT bounded by anything above: where the model points the next fetch.** A search
 result's title, or a fetched body, can steer the model into fetching an attacker-chosen destination
