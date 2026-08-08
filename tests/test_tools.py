@@ -272,6 +272,36 @@ class TestFetchForAskNoEgress:
         assert fetcher.calls == []
         assert _tool_egress_rows(conn) == []
 
+    def test_redirect_to_a_scoped_host_persists_nothing(self, conn) -> None:
+        """Redirect laundering: an unscoped start URL hopping to a scoped host.
+
+        The request to the *starting* host has already gone out by the time
+        the final URL is known, so this cannot be refused pre-fetch -- but
+        nothing may be persisted under the scoped final id, and the audit row
+        for the call that was made must still exist.
+        """
+        final_url = "https://secret.example.org/leaked"
+        fetcher = _StubFetcher(
+            response=RawResponse(
+                final_url=final_url, status_code=200, text=_ARTICLE_HTML
+            )
+        )
+        settings = Settings(
+            no_egress_scopes=[
+                NoEgressScopeRule(source_type="web", match="secret.example.org")
+            ]
+        )
+
+        with pytest.raises(ToolFetchError):
+            fetch_for_ask(
+                conn, _URL, SOURCE_TYPE_WEB, fetcher=fetcher, settings=settings
+            )
+
+        assert _snapshot_row(conn, final_url) is None
+        assert _externals_row(conn, final_url) is None
+        assert _externals_row(conn, _URL) is None
+        assert len(_tool_egress_rows(conn)) == 1
+
     def test_scope_rule_refuses_a_never_before_seen_jira_issue(self, conn) -> None:
         """The case the per-row flag structurally cannot cover: no externals
         row exists at all yet."""
@@ -364,25 +394,53 @@ class TestFetchForAskEgressAudit:
         assert rows[0][0] == "tool"
 
     def test_arguments_are_redacted_before_storage(self, conn) -> None:
-        secret_url = "https://example.com/x?token=sk-supersecretvalue1234567890"
+        """The stored argument must not contain the secret the URL carried.
+
+        Uses an AWS access-key id, one of the default
+        ``redact_before_egress_patterns`` seed patterns, so this asserts the
+        redaction actually fired rather than merely that a value was stored.
+        """
+        secret = "AKIAIOSFODNN7EXAMPLE"
+        secret_url = f"https://example.com/x?k={secret}"
         fetcher = _StubFetcher(
             response=RawResponse(
                 final_url=secret_url, status_code=200, text=_ARTICLE_HTML
             )
         )
-        settings = load_settings()
-        # canonicalize_url will strip nothing here since token isn't a
-        # tracking param; use whatever redact_before_egress_patterns matches
-        # by default -- fall back to asserting redaction ran without pinning
-        # a specific pattern the settings might not include by default.
         fetch_for_ask(
-            conn, secret_url, SOURCE_TYPE_WEB, fetcher=fetcher, settings=settings
+            conn, secret_url, SOURCE_TYPE_WEB, fetcher=fetcher, settings=load_settings()
         )
 
         rows = _tool_egress_rows(conn)
         assert len(rows) == 1
         arguments = json.loads(rows[0][3])
-        assert arguments["url"]  # argument was recorded regardless
+        assert secret not in arguments["url"]
+        assert arguments["url"].startswith("https://example.com/x?k=")
+
+    def test_unparseable_redirect_target_is_a_tool_fetch_error_and_still_audited(
+        self, conn
+    ) -> None:
+        """A server-supplied final_url that canonicalize_url cannot parse.
+
+        The request already went out, so the audit row must exist; and the
+        ValueError canonicalize_url raises must surface as ToolFetchError,
+        not leak out of fetch_for_ask raw.
+        """
+        fetcher = _StubFetcher(
+            response=RawResponse(
+                final_url="http://example.com:notaport/x",
+                status_code=200,
+                text=_ARTICLE_HTML,
+            )
+        )
+        with pytest.raises(ToolFetchError):
+            fetch_for_ask(
+                conn, _URL, SOURCE_TYPE_WEB, fetcher=fetcher, settings=load_settings()
+            )
+
+        assert len(_tool_egress_rows(conn)) == 1
+        assert _snapshot_row(conn, _URL) is None
+        assert _externals_row(conn, _URL) is None
 
 
 # ---------------------------------------------------------------------------

@@ -40,6 +40,16 @@ This module owns the **fetch-path** egress obligations only:
    a tool call's arguments). A **refused** call never reaches the network, so
    it writes no row — nothing was sent for the audit trail to cover.
 
+   The row is written **before** the request goes out, not after — the same
+   ordering :func:`lode.egress.gate_qa_egress` uses for a Q&A send, and for
+   the same reason. Logging afterwards makes the audit trail conditional on
+   the fetch returning control normally, so *any* unexpected failure between
+   the request and the log (a fetch unit raising something outside
+   :class:`~lode.webfetch.FetchError`, an unparseable server-supplied
+   redirect target, the process dying) silently loses the row for bytes that
+   already left the box. ``docs/storage.md`` §8's rule is one audit row per
+   egress; only pre-write makes that hold unconditionally.
+
 ## Failure semantics (human decision, ``lode-35nu.11.5`` /challenge 2nd pass)
 
 **A fetch that fails on the ask path is never persisted.** No ``snapshots``
@@ -104,12 +114,14 @@ class ToolFetchError(Exception):
     """An ask-time fetch was refused or failed; nothing was persisted.
 
     Raised instead of returning any citable result -- see the module
-    docstring's "Failure semantics" section. The message is safe to relay to
-    the model as the tool's error result: it never carries the fetch
-    unit's raw exception text (that could echo response bodies), only a
-    short, fixed description plus the machine-readable reason tag the fetch
-    unit itself produced (e.g. ``"http_403"``), the same convention
-    :mod:`lode.drawdown` already uses for surfacing tombstone reasons.
+    docstring's "Failure semantics" section. The message is intended to be
+    relayed to the model as the tool's error result, so it carries only the
+    ``external_id`` plus a short diagnostic: either the machine-readable
+    reason tag the fetch unit produced (e.g. ``"http_403"``, the same
+    convention :mod:`lode.drawdown` uses for tombstone reasons) or the
+    :class:`~lode.webfetch.FetchError`'s own message, which by construction
+    is a status/timeout/network summary (``webfetch``'s raise sites) and
+    never a response body.
     """
 
 
@@ -163,12 +175,16 @@ def _log_tool_fetch(
     arguments: dict[str, str],
     settings: Settings,
 ) -> None:
-    """Write the ``purpose='tool'`` audit row for a fetch actually attempted.
+    """Write the ``purpose='tool'`` audit row for a fetch about to be attempted.
 
-    Called once per network attempt this module makes -- regardless of
-    whether that attempt ultimately succeeds, tombstones, or raises -- since
-    the arguments left the box the moment the request was sent, not only on
-    success (module docstring, egress section item 2).
+    Called once per network attempt this module makes, **immediately before**
+    the request goes out -- so the row exists regardless of whether that
+    attempt then succeeds, tombstones, or raises anything at all (module
+    docstring, egress section item 2). ``destination`` is the endpoint the
+    request is aimed at, which is all that is knowable pre-send: the URL as
+    sent for web, the ``api_base`` for JIRA/Confluence. A redirect that
+    resolves elsewhere is handled by :func:`_fetch_web`'s post-fetch
+    re-check, not by rewriting this row.
     """
     redacted_arguments, redaction_count = _redact_arguments(arguments, settings)
     log_egress(
@@ -243,28 +259,24 @@ def _fetch_web(
     :attr:`~lode.webfetch.FetchResult.final_url`, same as the draw-down
     path) -- the no_egress check is re-run against that final id before
     persisting, so a redirect can never be used to fetch a scoped/flagged
-    destination under cover of an unscoped starting URL.
+    destination under cover of an unscoped starting URL. ``final_url`` is
+    server-supplied, so canonicalizing it can raise
+    :class:`ValueError` (an unparseable port, a malformed IPv6 host); that is
+    just another fetch failure and is surfaced as :class:`ToolFetchError`
+    like any other, never leaked to the caller as a raw ``ValueError``.
     """
-    try:
-        result = fetch_and_extract(external_id, fetcher=fetcher, settings=settings)
-    except FetchError as exc:
-        _log_tool_fetch(
-            conn,
-            external_id=external_id,
-            destination=external_id,
-            arguments={"url": external_id},
-            settings=settings,
-        )
-        raise ToolFetchError(f"fetch failed for {external_id}: {exc}") from exc
-
-    final_external_id = canonicalize_url(result.final_url, settings)
     _log_tool_fetch(
         conn,
         external_id=external_id,
-        destination=final_external_id,
+        destination=external_id,
         arguments={"url": external_id},
         settings=settings,
     )
+    try:
+        result = fetch_and_extract(external_id, fetcher=fetcher, settings=settings)
+        final_external_id = canonicalize_url(result.final_url, settings)
+    except (FetchError, ValueError) as exc:
+        raise ToolFetchError(f"fetch failed for {external_id}: {exc}") from exc
 
     if final_external_id != external_id and _no_egress_denied(
         conn, final_external_id, SOURCE_TYPE_WEB, settings
@@ -311,18 +323,6 @@ def _fetch_atlassian(
     fetch_fn = (
         fetch_jira_issue if source_type == SOURCE_TYPE_JIRA else fetch_confluence_page
     )
-    try:
-        result = fetch_fn(external_id, api_base, fetcher=fetcher, settings=settings)
-    except FetchError as exc:
-        _log_tool_fetch(
-            conn,
-            external_id=external_id,
-            destination=api_base,
-            arguments={"external_id": external_id, "api_base": api_base},
-            settings=settings,
-        )
-        raise ToolFetchError(f"fetch failed for {external_id}: {exc}") from exc
-
     _log_tool_fetch(
         conn,
         external_id=external_id,
@@ -330,6 +330,11 @@ def _fetch_atlassian(
         arguments={"external_id": external_id, "api_base": api_base},
         settings=settings,
     )
+    try:
+        result = fetch_fn(external_id, api_base, fetcher=fetcher, settings=settings)
+    except FetchError as exc:
+        raise ToolFetchError(f"fetch failed for {external_id}: {exc}") from exc
+
     return _ingest_or_raise(conn, external_id, source_type, result, settings=settings)
 
 
