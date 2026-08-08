@@ -112,19 +112,17 @@ user's own words are highest-trust; externals corroborate, they do not override.
 passage of the note ahead of normal corpus retrieval, bypassing `retrieval_top_k` / `rerank_keep_n` —
 on purpose. The entry point's own design intent is that the pinned note is "primary context rather
 than competing for retrieval rank"; capping it would silently drop passages from the very note the
-user chose to ask about, which defeats the guarantee the feature exists to make. So: **no cap**. The
-cost is accepted and is linear in note length — one prompt payload per passage — which is the
-expected shape for "ask about this note" (a note long enough for this to matter is long enough that
-the user is deliberately trading prompt size for completeness).
+user chose to ask about, which defeats the guarantee the feature exists to make. So: **no cap**, and
+no knob — the prompt cost grows with note length, which is the expected shape for "ask about this
+note" (a note long enough for this to matter is long enough that the user is deliberately trading
+prompt size for completeness).
 
-What *is* fixed is the redundant half of the cost: `cited_answer.ask` used to build one
-`QaPassage(text=item.parent_block)` per `ContextItem`, so passages chunked from the same block sent
-that block's text to the model once per passage sharing it — pure waste, no completeness benefit,
-since the citation offset still comes from the individual `ContextItem`, not from the `QaPassage` sent
-to the model. `ask` now dedupes passages by `(target_id, text)` before sending — first occurrence
-wins — which drops the duplicate egress cost for both pinned and ordinary retrieval context alike,
-without touching the citation/body-offset machinery (keyed off the original `ContextItem`s, which are
-unchanged and un-deduped).
+What *is* fixed is the redundant half of that cost. Small-to-big sends each hit's `parent_block`, so
+passages chunked from the same block used to send that block's text once per passage sharing it —
+pure waste, no completeness benefit. The **egress boundary** (`cited_answer.ask`) is where that is
+deduped, not the retrieval layer: retrieval must keep every `ContextItem` distinct, since each
+carries its own `char_range` and that is what pins a citation's offset. The dedup's safety argument
+lives next to the code in `cited_answer.ask`.
 
 ---
 

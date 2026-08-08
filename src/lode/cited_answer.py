@@ -148,13 +148,15 @@ def ask(
     inject to keep the gate offline.
     """
     passages: list[QaPassage] = []
-    # Multiple ContextItems can share a parent_block (several passages chunked
-    # from the same block, or -- guaranteed by lode-35nu.11.3's unbounded pin,
-    # see docs/retrieval.md "Pinned-note context is deliberately unbounded" --
-    # a long pinned note). Sending that block's text to the model once per
-    # sharing item is pure duplicate egress cost with no completeness benefit:
-    # the citation offset comes from the item's own char_range, not from the
-    # QaPassage text, so a (target_id, text) duplicate is safe to drop before
+    # Several ContextItems can be chunked from the same parent_block -- most
+    # often under lode-35nu.11.3's unbounded pin, which prepends EVERY live-head
+    # passage of one note (docs/retrieval.md "Pinned-note context is deliberately
+    # unbounded"). Sending that block's text once per sharing item is pure
+    # duplicate egress cost with no completeness benefit: nothing downstream is
+    # positional in `passages` (the egress gate, the is_external map and the
+    # bodies map are all keyed by target_id) and the citation offset is stamped
+    # from the item's own char_range over the un-deduped `context`, not from the
+    # QaPassage text -- so a (target_id, text) duplicate is safe to drop before
     # it ever reaches the send (lode-ol2v).
     seen_passages: set[tuple[str, str]] = set()
     # Verify spans only against bodies the model was eligible to see: a no_egress

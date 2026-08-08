@@ -188,6 +188,32 @@ def test_passages_sharing_a_parent_block_send_it_only_once(conn) -> None:
     assert prompt.count(body) == 1
 
 
+def test_deduped_passage_still_contributes_its_char_range_to_the_offset(conn) -> None:
+    # The dedup is only safe because body_offset stamping reads the UN-deduped
+    # `context`. Here the item whose parent_block reaches the model does NOT
+    # contain the cited span in its own char_range -- only the item dropped as a
+    # duplicate does -- so the stamped offset proves the dropped item's range
+    # still counts (lode-ol2v).
+    second_block = "gamma OAuth delta"
+    body = "alpha beta" + ("x" * 40) + second_block
+    second_start = body.index(second_block)
+    _insert_note(conn, note_id="n1", version_id="v1", body=body)
+    client = _FakeClient([_note_claim("uses OAuth", "OAuth", "v1")])
+    kept = _note_context("v1", body)  # char_range "0:5" -- does not contain the span
+    dropped = replace(
+        kept,
+        passage_id="p-v1-2",
+        char_range=f"{second_start}:{len(body)}",
+        passage_text=second_block,
+    )
+
+    answer = ask(conn, "q", [kept, dropped], provider=AnthropicProvider(client))
+
+    assert _user_prompt(client).count(body) == 1  # the duplicate was dropped
+    (claim,) = answer.claims
+    assert claim.support[0].body_offset == body.index("OAuth")
+
+
 def test_surviving_claim_stamps_body_offset_from_its_own_retrieved_passage(
     conn,
 ) -> None:
