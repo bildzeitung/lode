@@ -4095,15 +4095,37 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   it, and no generic `no_egress` seam was introduced (`docs/no_egress_scope`, `lode-35nu.11.8`
   stays call-site-local).
 
-  `retrieval.trust_rank` (~:773) was evaluated as the third candidate the ticket named and does
-  **not** fit this shape, so it was left alone rather than forced onto the helper: `trust_rank`
-  looks up the **full, unsplit** target-id list against *both* `versions` and `snapshots` at once
-  (`WHERE version_id IN (all_targets)` and separately `WHERE snapshot_id IN (all_targets)`) —
-  because classifying which table a target belongs to (owned note vs. current/stale external) is
-  the very thing `trust_rank` is computing, there is no pre-split id list to hand the helper. Forcing
-  a shared "split ids, then IN(...) pair" abstraction onto a caller that has nothing to pre-split
-  would be exactly the speculative-abstraction failure mode `CLAUDE.md` warns against, not a genuine
-  fit.
+  `retrieval.trust_rank` (~:773) was evaluated as the third candidate the ticket named and was left
+  alone. **Precisely how much of it fits, since a vaguer "does not fit" would mislead the next
+  reader who reaches for this site:** `trust_rank`'s *external-side* query is byte-identical
+  (modulo whitespace) to the helper's external branch — same `FROM snapshots s JOIN externals e ON
+  e.external_id = s.external_id WHERE s.snapshot_id IN (...)`, differing only in its `SELECT` list
+  (`s.snapshot_id, e.head_snapshot_id`), which is exactly the part the helper parameterizes. That
+  half genuinely matches. Two things still make the site a non-fit as a whole:
+
+  1. **The note side is a different query.** `trust_rank` runs a bare `SELECT version_id FROM
+     versions WHERE version_id IN (...)` with **no `JOIN notes`** — it only needs to know whether
+     the id exists in `versions`. The helper hardcodes the `JOIN notes`, so it cannot serve it.
+  2. **There is no pre-split id list.** `trust_rank` hands the **full, unsplit** target-id list to
+     *both* queries, because classifying which table a target belongs to (owned note vs.
+     current/stale external) is the very thing it is computing — the split is its *output*, not its
+     input.
+
+  So adopting the helper at this site would mean calling it with an empty note-id list and an empty
+  note-column fragment to suppress half of it, then still hand-rolling the note-side query
+  separately — strictly worse than the ~4 lines of placeholder boilerplate it would save. Left
+  alone deliberately.
+
+  **Open, and deliberately not settled here:** whether a *different* seam — a helper taking the
+  whole SQL string with a `{placeholders}` slot plus one id sequence, owning only "skip if empty /
+  build placeholders / bind / fetchall" — would have fit all three sites without the hardcoded
+  `JOIN` or the table-alias coupling (callers must know `v`/`n`/`s`/`e` to write a column list).
+  This ticket's `design` field pinned the `(note_ids, external_ids, note_columns,
+  external_columns)` signature, so re-cutting the seam was out of its scope; the question is filed
+  as its own ticket rather than decided by silence. Related and also unaddressed: the `", ".join("?"
+  for _ in xs)` placeholder idiom is hand-rolled at ~14 sites across `retrieval.py`, `notes_read.py`,
+  `worker.py`, `enrichment_view.py` and `lexical.py`, in three different spellings — this ticket left
+  that count net-neutral (removed two copies, added two) rather than growing scope.
 
   **The description's other open question — whether `cited_answer` and `citations_read` can share
   a single read within one `ask()` call, instead of each re-fetching the same versions/snapshots

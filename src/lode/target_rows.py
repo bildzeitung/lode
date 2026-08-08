@@ -19,17 +19,15 @@ Deliberately **not** shared here: any per-row post-processing (e.g.
 ``no_egress`` composition with a scope ruleset) stays in the caller, since
 that logic is call-site-specific and, per ``docs/no_egress_scope``, must not
 grow a generic seam. ``lode.retrieval.trust_rank`` was evaluated as a third
-caller (lode-r9z0's acceptance names it as an option) but does not fit this
-shape: it looks up the **full**, unsplit target-id list against *both*
-tables at once, because classifying which table a target belongs to is
-exactly what it is computing -- there is nothing to pre-split. It is left
-alone rather than forced onto this helper.
+caller and left alone; the full rationale (and the part of its shape that
+*does* match) is in ``docs/decisions.md`` under lode-r9z0, not restated here.
 """
 
 from __future__ import annotations
 
 import sqlite3
 from collections.abc import Sequence
+from typing import Any
 
 
 def fetch_target_rows(
@@ -38,16 +36,29 @@ def fetch_target_rows(
     external_ids: Sequence[str],
     note_columns: str,
     external_columns: str,
-) -> tuple[list[tuple], list[tuple]]:
+) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]:
     """Run the batched note/external ``IN(...)`` pair, columns supplied by the caller.
 
     ``note_ids`` are looked up as ``versions.version_id`` (joined to
-    ``notes``); ``external_ids`` as ``snapshots.snapshot_id`` (joined to
-    ``externals``). ``note_columns``/``external_columns`` are raw SQL
-    fragments for each query's ``SELECT`` list (e.g.
-    ``"v.version_id, v.body, n.no_egress"``) -- callers alias the tables
-    ``v``/``n`` (note side) and ``s``/``e`` (external side), matching the
-    ``JOIN`` this function issues.
+    ``notes``); ``external_ids`` are ``snapshots.snapshot_id`` values, *not*
+    ``externals.external_id`` -- they are named for the side of the split
+    they select, and ``e.external_id`` is a distinct column on the same row.
+
+    ``note_columns``/``external_columns`` are raw SQL fragments for each
+    query's ``SELECT`` list (e.g. ``"v.version_id, v.body, n.no_egress"``) --
+    callers alias the tables ``v``/``n`` (note side) and ``s``/``e``
+    (external side), matching the ``JOIN`` this function issues.
+
+    **These two fragments are interpolated into the SQL, not bound.** They
+    must be fixed literals written at the call site; never pass a value
+    derived from note content, an external's body, config, or any other
+    caller-supplied or user-supplied data through them. The *ids* are always
+    parameterized (``?`` placeholders, bound below) and carry no such
+    restriction -- the column lists are the only injection surface here, and
+    keeping them literal is what closes it.
+
+    The row tuples are shaped by whatever the caller asked for, so the return
+    is deliberately ``tuple[Any, ...]``: the arity cannot be known here.
 
     Either id sequence may be empty, in which case that query is skipped
     entirely (an empty ``IN ()`` is invalid SQL and would also be a wasted
@@ -55,7 +66,7 @@ def fetch_target_rows(
     ``fetchall()`` tuples for each query, in no particular order -- callers
     map rows back to their own result shape.
     """
-    note_rows: list[tuple] = []
+    note_rows: list[tuple[Any, ...]] = []
     if note_ids:
         placeholders = ", ".join("?" for _ in note_ids)
         note_rows = conn.execute(
@@ -65,7 +76,7 @@ def fetch_target_rows(
             tuple(note_ids),
         ).fetchall()
 
-    external_rows: list[tuple] = []
+    external_rows: list[tuple[Any, ...]] = []
     if external_ids:
         placeholders = ", ".join("?" for _ in external_ids)
         external_rows = conn.execute(
