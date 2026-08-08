@@ -51,10 +51,10 @@ not a second full backfill sweep finding the link again).
 
 Every write goes through :mod:`lode.backfill`'s four shared pieces
 (:func:`~lode.backfill.mint_external`, :func:`~lode.backfill.repoint_edges`,
-:func:`~lode.backfill.needs_refresh`, :func:`~lode.backfill.enqueue_fresh_refresh`) — this module owns only the Confluence-specific
-detection step, per the framework's "reused, not reimplemented per
-connector" contract (docs/externals.md "Backfill: per-connector
-re-draw-down").
+:func:`~lode.backfill.needs_refresh`, :func:`~lode.backfill.enqueue_fresh_refresh`) —
+this module owns only the Confluence-specific detection step, per the framework's
+"reused, not reimplemented per connector" contract (docs/externals.md "Backfill:
+per-connector re-draw-down").
 """
 
 from __future__ import annotations

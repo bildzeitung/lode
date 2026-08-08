@@ -26,12 +26,12 @@ reads -- both live in :mod:`lode.notes_read`, not here, matching that
 module's existing "screens own no read logic of their own" convention
 (:mod:`lode.tui.screens.browse`'s own docstring).
 
-**Selecting a note opens the editor (consistent with lode-olmi.2's intent).**
-Row-select on the bottom panel pushes :class:`~lode.tui.screens.edit.EditScreen` directly -- this ticket's own acceptance criterion, independent
-of whether/when lode-olmi.2 itself (retiring Browse's own read-only
-``NoteViewScreen``) lands; Escape from the pushed ``EditScreen`` pops back to
-this screen via Textual's ordinary screen-stack pop, same as everywhere else
-in the TUI.
+**Selecting a note opens the editor (consistent with lode-olmi.2's intent).** Row-select
+on the bottom panel pushes :class:`~lode.tui.screens.edit.EditScreen` directly -- this
+ticket's own acceptance criterion, independent of whether/when lode-olmi.2 itself
+(retiring Browse's own read-only ``NoteViewScreen``) lands; Escape from the pushed
+``EditScreen`` pops back to this screen via Textual's ordinary screen-stack pop, same as
+everywhere else in the TUI.
 
 **Tag selection survives a round-trip to the editor.** Both panels reload on
 :meth:`~textual.screen.Screen.on_screen_resume` (fires on the initial
@@ -45,18 +45,18 @@ empty; the tag *list* itself is still rebuilt every resume (a tag can appear
 or disappear between visits), dropping only a selected value that no longer
 exists.
 
-**Multi-column grid, native scroll-paging (lode-l38d.9).** The tag panel
-used to be a ``SelectionList`` -- a built-in checkbox multi-select, but
-inherently single-column, one tag per row. With tag counts scaling with
-corpus size (an LLM-enriched note can carry several, and ``list_tags`` --
-:func:`lode.notes_read.list_tags` -- returns every distinct tag, unbounded),
-a single narrow scrolling column wasted the terminal's width. ``SelectionList``
-cannot do columns, so the tag panel is now a plain :class:`~textual.widgets.DataTable` (``cursor_type="cell"``, ``show_header=False``) rendering
-``"[x] tag"``/``"[ ] tag"`` cells in as many equal-width columns as the
-terminal fits, laid out row-major (fill left-to-right, then down) and rebuilt
-on both :meth:`on_screen_resume` and :meth:`on_resize` --
-:meth:`~lode.tui.screens.browse.BrowseScreen.on_resize` is the established
-pattern this mirrors.
+**Multi-column grid, native scroll-paging (lode-l38d.9).** The tag panel used to be a
+``SelectionList`` -- a built-in checkbox multi-select, but inherently single-column, one
+tag per row. With tag counts scaling with corpus size (an LLM-enriched note can carry
+several, and ``list_tags`` -- :func:`lode.notes_read.list_tags` -- returns every
+distinct tag, unbounded), a single narrow scrolling column wasted the terminal's width.
+``SelectionList`` cannot do columns, so the tag panel is now a plain
+:class:`~textual.widgets.DataTable` (``cursor_type="cell"``, ``show_header=False``)
+rendering ``"[x] tag"``/``"[ ] tag"`` cells in as many equal-width columns as the
+terminal fits, laid out row-major (fill left-to-right, then down) and rebuilt on both
+:meth:`on_screen_resume` and :meth:`on_resize` --
+:meth:`~lode.tui.screens.browse.BrowseScreen.on_resize` is the established pattern this
+mirrors.
 
 Multi-select is hand-rolled on top of the plain grid (``SelectionList``'s own
 toggle logic goes with it): ``space`` toggles the tag under the cursor
@@ -111,11 +111,11 @@ _CELL_PADDING = 2
 def _tag_grid_layout(tags: list[str], available_width: int) -> tuple[int, int]:
     """How many equal-width columns of ``tags`` fit in ``available_width``.
 
-    Every column is sized to the *widest* tag (plus the checkbox prefix) so
-    the grid stays visually aligned -- the same "natural width, uniform
-    across the row" choice :meth:`~lode.tui.screens.browse.BrowseScreen._reload_rows` makes for its own columns. Always returns at least one
-    column, even for an empty tag list or a not-yet-laid-out (zero-width)
-    table -- a 0-column grid can't render.
+    Every column is sized to the *widest* tag (plus the checkbox prefix) so the grid
+    stays visually aligned -- the same "natural width, uniform across the row" choice
+    :meth:`~lode.tui.screens.browse.BrowseScreen._reload_rows` makes for its own
+    columns. Always returns at least one column, even for an empty tag list or a
+    not-yet-laid-out (zero-width) table -- a 0-column grid can't render.
     """
     max_tag_len = max((len(tag) for tag in tags), default=0)
     column_width = max_tag_len + _CHECKBOX_PREFIX_WIDTH
@@ -278,15 +278,14 @@ class TagsScreen(Screen[None]):
         see :meth:`_tag_cell_text`'s docstring for why a bare ``str`` cell is
         unsafe.
 
-        Two or more selected tags that legitimately never co-occur on any
-        note is a real (correct) outcome of the AND/intersection semantics,
-        not a bug -- but a silently empty table reads as one. When the
-        selection is non-empty and the result is, :attr:`~lode.tui.widgets.lode_data_table.LodeDataTable.empty_message` paints the explanation
-        directly into the table's own empty canvas rather than adding a
-        ``key=None`` sentinel row (lode-t7pw; originally lode-35nu.7) -- no
-        real row is added, so ``row_count`` stays ``0`` and there's nothing
-        for the cursor to land on or for :meth:`on_data_table_row_selected`
-        to guard against.
+        Two or more selected tags that legitimately never co-occur on any note is a real
+        (correct) outcome of the AND/intersection semantics, not a bug -- but a silently
+        empty table reads as one. When the selection is non-empty and the result is,
+        :attr:`~lode.tui.widgets.lode_data_table.LodeDataTable.empty_message` paints the
+        explanation directly into the table's own empty canvas rather than adding a
+        ``key=None`` sentinel row (lode-t7pw; originally lode-35nu.7) -- no real row is
+        added, so ``row_count`` stays ``0`` and there's nothing for the cursor to land
+        on or for :meth:`on_data_table_row_selected` to guard against.
         """
         table = self.query_one(f"#{NOTES_TABLE_ID}", LodeDataTable)
         table.clear(columns=True)

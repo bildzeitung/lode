@@ -77,23 +77,33 @@ entries below from being rewritten to chase the current tree.)
      `Settings.jira_base_url` — is special-cased as a valid terminal match; without that, both read
      as false-positive dangling refs, which is exactly the kind of noise that gets a gate disabled
      within a week.
-  3. **Wrapped refs were originally reported, not hard-failed, with the pre-existing wrapped sites
-     NOT mechanically unwrapped.** A wrapped-but-otherwise-correct ref is not a correctness bug this
-     gate needs to block a merge over — the whitespace-normalize-before-resolve step already makes
-     it resolve identically to its unwrapped form, so the *reference* is not broken from this gate's
-     point of view even though it will not render as a Sphinx cross-link. Reporting it (as a
-     `WARNING:` line, non-fatal) kept future renames grep-safe going forward without taking on a
-     mechanical reformatting pass that touches no behavior (31 sites by lode-2hfd's `:func:`-only
-     count; 81 under the wider role set above). **Known cost, filed as `lode-hg49`:** those warnings
-     printed on every green `nox` run, so a genuinely new wrapped ref was indistinguishable from the
-     backlog in that output — a warning that always fires trains readers to ignore the channel.
-     **AMENDMENT (`lode-hg49`):** the 81 pre-existing wrapped sites (30 files) were mechanically
-     unwrapped in one pass — prose-only, no behavior change, every formerly-wrapped ref still
-     resolves identically since the normalize step was already collapsing its whitespace before
-     resolving. With the backlog at zero, the gate now **hard-fails on any wrapped role**, the same
-     as an unresolved one, instead of the summary-only or baseline-hard-fail alternatives that ticket
-     also considered — unwrapping the (small, one-time) backlog let the gate become a clean binary
-     rule with no ongoing count to track or baseline to maintain.
+  3. **Wrapped refs are reported, not hard-failed, and the pre-existing wrapped sites are NOT
+     mechanically unwrapped as part of this ticket.** A wrapped-but-otherwise-correct ref is not a
+     correctness bug this gate needs to block a merge over — the whitespace-normalize-before-resolve
+     step already makes it resolve identically to its unwrapped form, so the *reference* is not
+     broken from this gate's point of view even though it will not render as a Sphinx cross-link.
+     Reporting it (as a `WARNING:` line, non-fatal) keeps future renames grep-safe going forward
+     without taking on a mechanical reformatting pass that touches no behavior (31 sites by
+     lode-2hfd's `:func:`-only count; more under the wider role set above — the gate prints the live
+     count on every run rather than pinning a number here that goes stale). If wrapped
+     refs keep recurring, hard-failing on them (or unwrapping the backlog) is a small follow-up, not
+     a redesign. **Known cost, filed as a follow-up:** those warnings print on every green
+     `nox` run, so a genuinely new wrapped ref is indistinguishable from the backlog in that
+     output — a warning that always fires trains readers to ignore the channel.
+
+     **Update (lode-hg49, 2026-08-08)** — the "known cost" above was filed as `lode-hg49` and is now
+     resolved by taking the third option that entry called a small follow-up: the **81** pre-existing
+     wrapped sites (30 files) were mechanically unwrapped in one pass, and with the backlog at zero
+     the gate now **hard-fails on any wrapped role**, the same as an unresolved one. Two claims above
+     are therefore stale: wrapped refs are no longer merely reported, and the gate no longer prints a
+     live wrapped count (there is nothing left to count, so the `OK:` line states the invariant
+     instead). Chosen over the two alternatives `lode-hg49` also listed — summary-only output, and a
+     hard-fail above a pinned baseline count — because unwrapping a small, one-time backlog buys a
+     clean binary rule with no baseline number to maintain, whereas both alternatives keep the
+     backlog *and* add ongoing bookkeeping. The unwrap was prose-only: verified by re-parsing all 30
+     files and confirming the AST is unchanged once docstrings are blanked, and that the whole file
+     content is byte-identical modulo whitespace, so no code, comment text, or non-docstring string
+     literal moved.
   4. **Wired as a nox session (`docstringcheck`) in the DEFAULT set, hard-fail on any unresolved
      `lode.*` ref** — mirrors `linkcheck`'s placement (pure Python, no Docker/network) rather than a
      pytest test or a pre-commit hook, so it runs on every bare `nox` the same as the markdown-link

@@ -1,9 +1,10 @@
 """An existing note's live head, loaded editable (lode-0wj.6, extracted lode-s5kp.1).
 
 Split out of :mod:`lode.tui.screens.browse` per the one-Screen-per-module fiat
-(``docs/conventions.md``). Pushed from :meth:`~lode.tui.screens.browse.BrowseScreen.on_data_table_row_selected` -- Enter, or a mouse click, on a row
-(lode-olmi.2): editing an existing note *is* the point of opening it, so
-there is no separate read-only detour first. Escape returns to
+(``docs/conventions.md``). Pushed from
+:meth:`~lode.tui.screens.browse.BrowseScreen.on_data_table_row_selected` -- Enter, or a
+mouse click, on a row (lode-olmi.2): editing an existing note *is* the point of opening
+it, so there is no separate read-only detour first. Escape returns to
 :class:`~lode.tui.screens.browse.BrowseScreen`.
 
 Saving reparents the buffer onto the loaded head via the CAS path
@@ -83,25 +84,23 @@ screen binds beyond Escape uses a ``Ctrl+``-prefixed (or otherwise
 non-printable) key for exactly this reason -- see ``docs/keybindings.md``.
 
 **Content viewer, Ctrl+R not bare ``v`` (lode-0sjj).**
-:meth:`EditScreen.action_view_content` resolves this note's external edges
-the same way :meth:`~lode.tui.screens.browse.BrowseScreen.action_view_content` does (via the shared
+:meth:`EditScreen.action_view_content` resolves this note's external edges the same way
+:meth:`~lode.tui.screens.browse.BrowseScreen.action_view_content` does (via the shared
 :func:`~lode.tui.screens._content_view._view_note_external_content`) and pushes
 :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` (zero/one) or
 :class:`~lode.tui.screens.external_picker.ExternalPickerScreen` (many).
-``BrowseScreen``'s binding for the identical feature is bare ``v`` -- safe
-there because its focused widget is a ``DataTable``, not an editable
-``TextArea``. Here the body is editable, so the literal ``v`` key
-lode-olmi.8's design named would just type a letter, exactly the
-``Ctrl+H``/``Ctrl+G`` trap above; a human resolved this 2026-07-15 as a
-Ctrl-prefixed key, consistent with every other action on this screen.
-``Ctrl+R`` ("retrieved") was checked against all three traps
-``docs/keybindings.md`` catalogs before landing on it: it is not one of
-``TextArea``'s own builtin bindings (``ctrl+a/e/w/d/x/c/v/u/k/z/y``, see
-that doc's table), Textual's ``KEY_ALIASES`` does not alias it to a
-non-printable key (unlike ``ctrl+i`` -> ``tab``, ``ctrl+m`` -> ``enter``),
-and it is not one of ``App``'s own ``priority=True`` reservations (unlike
-``ctrl+p``, the command palette) -- confirmed empirically, not just by
-inspection, the same standard ``Ctrl+G``'s own candidates were held to.
+``BrowseScreen``'s binding for the identical feature is bare ``v`` -- safe there because
+its focused widget is a ``DataTable``, not an editable ``TextArea``. Here the body is
+editable, so the literal ``v`` key lode-olmi.8's design named would just type a letter,
+exactly the ``Ctrl+H``/``Ctrl+G`` trap above; a human resolved this 2026-07-15 as a
+Ctrl-prefixed key, consistent with every other action on this screen. ``Ctrl+R``
+("retrieved") was checked against all three traps ``docs/keybindings.md`` catalogs
+before landing on it: it is not one of ``TextArea``'s own builtin bindings
+(``ctrl+a/e/w/d/x/c/v/u/k/z/y``, see that doc's table), Textual's ``KEY_ALIASES`` does
+not alias it to a non-printable key (unlike ``ctrl+i`` -> ``tab``, ``ctrl+m`` ->
+``enter``), and it is not one of ``App``'s own ``priority=True`` reservations (unlike
+``ctrl+p``, the command palette) -- confirmed empirically, not just by inspection, the
+same standard ``Ctrl+G``'s own candidates were held to.
 
 **Import cycle, dissolved (lode-s5kp.1, lode-2zj0).**
 :class:`~lode.tui.screens.browse.BrowseScreen` imports :class:`EditScreen`
@@ -247,11 +246,11 @@ class EditScreen(Screen[None]):
     def action_inspect_selected(self) -> None:
         """Ctrl+G: open this note's enrichment inspector modal (lode-g5es).
 
-        Mirrors :meth:`~lode.tui.screens.browse.BrowseScreen.action_inspect_selected` -- same modal, same glance-and-dismiss
-        contract, keyed to ``self.note_id`` directly (this screen always has
-        exactly one note loaded, unlike Browse's table, which needs the
-        highlighted row). See this class's docstring for why ``Ctrl+G``
-        rather than bare ``i``, ``Ctrl+I``, or ``Ctrl+P``.
+        Mirrors :meth:`~lode.tui.screens.browse.BrowseScreen.action_inspect_selected` --
+        same modal, same glance-and-dismiss contract, keyed to ``self.note_id`` directly
+        (this screen always has exactly one note loaded, unlike Browse's table, which
+        needs the highlighted row). See this class's docstring for why ``Ctrl+G`` rather
+        than bare ``i``, ``Ctrl+I``, or ``Ctrl+P``.
         """
         self.app.push_screen(EnrichmentModalScreen(self.note_id))
 

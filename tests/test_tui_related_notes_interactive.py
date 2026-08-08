@@ -3,13 +3,14 @@
 Covers the acceptance criterion straight: the passive panel
 (:class:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel`) is made interactive
 without disturbing its existing debounce/render behavior (that's
-``tests/test_tui_related.py``, ``tests/test_tui_edit_related_notes.py``, and
-the related-notes bits of ``tests/test_tui_app.py``/
-``tests/test_tui_capture_save_and_new.py`` -- untouched here). This file adds:
-stepping through :attr:`RelatedNotesPanel._related` with Up/Down once the
-panel holds focus, opening :class:`~lode.tui.screens.related_note_modal.RelatedNoteModalScreen` for the selected note with Enter, Ctrl+F moving focus
-onto the panel from each composing screen, and the modal's highlighted-context
-rendering itself (:meth:`RelatedNoteModalScreen._highlighted_body`).
+``tests/test_tui_related.py``, ``tests/test_tui_edit_related_notes.py``, and the
+related-notes bits of ``tests/test_tui_app.py``/
+``tests/test_tui_capture_save_and_new.py`` -- untouched here). This file adds: stepping
+through :attr:`RelatedNotesPanel._related` with Up/Down once the panel holds focus,
+opening :class:`~lode.tui.screens.related_note_modal.RelatedNoteModalScreen` for the
+selected note with Enter, Ctrl+F moving focus onto the panel from each composing screen,
+and the modal's highlighted-context rendering itself
+(:meth:`RelatedNoteModalScreen._highlighted_body`).
 """
 
 import asyncio

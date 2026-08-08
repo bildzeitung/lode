@@ -1,15 +1,15 @@
 """Live markdown syntax colouring in the four note-body TextAreas (lode-ev5j.2, lode-ngk2).
 
 Covers the shared helper :func:`lode.tui.screens._markdown_area._markdown_text_area`:
-graceful degradation when the tree-sitter markdown grammar is unavailable, that
-each of the four named screens' body ``TextArea`` actually constructs with
-``language="markdown"`` (and that :class:`~lode.tui.screens.reconcile.ReconcileScreen`'s diff view, deliberately excluded, does not), and that the
-built-in highlighter's private ``_highlights`` channel holds the expected
-entries for a fixture buffer covering the agreed stock block-grammar token set
-(headings, heading markers, fenced code, fence delimiters, list markers,
-block-quote markers, thematic breaks, backslash escapes, and reference-style
-links -- lode-ev5j.1's spike found inline ``[text](url)`` links unreachable on
-this grammar, so they're deliberately not asserted here).
+graceful degradation when the tree-sitter markdown grammar is unavailable, that each of
+the four named screens' body ``TextArea`` actually constructs with
+``language="markdown"`` (and that :class:`~lode.tui.screens.reconcile.ReconcileScreen`'s
+diff view, deliberately excluded, does not), and that the built-in highlighter's private
+``_highlights`` channel holds the expected entries for a fixture buffer covering the
+agreed stock block-grammar token set (headings, heading markers, fenced code, fence
+delimiters, list markers, block-quote markers, thematic breaks, backslash escapes, and
+reference-style links -- lode-ev5j.1's spike found inline ``[text](url)`` links
+unreachable on this grammar, so they're deliberately not asserted here).
 """
 
 from __future__ import annotations

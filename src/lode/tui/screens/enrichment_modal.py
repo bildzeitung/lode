@@ -2,9 +2,10 @@
 
 Split out of :mod:`lode.tui.screens.browse` per the one-Screen-per-module fiat
 (``docs/conventions.md``). Pushed from
-:meth:`~lode.tui.screens.browse.BrowseScreen.action_inspect_selected` via
-``i`` on the highlighted row, and from :meth:`~lode.tui.screens.edit.EditScreen.action_inspect_selected` via ``Ctrl+G``, both keyed to a
-``note_id``.
+:meth:`~lode.tui.screens.browse.BrowseScreen.action_inspect_selected` via ``i`` on the
+highlighted row, and from
+:meth:`~lode.tui.screens.edit.EditScreen.action_inspect_selected` via ``Ctrl+G``, both
+keyed to a ``note_id``.
 """
 
 from __future__ import annotations
@@ -40,28 +41,28 @@ INSPECTOR_EMBED_ID = "inspector-embed"
 class EnrichmentModalScreen(ModalScreen[None]):
     """A glance-and-dismiss popup over one note's full enrichment (lode-ay5.2).
 
-    Pushed from :meth:`~lode.tui.screens.browse.BrowseScreen.action_inspect_selected` via ``i`` on the highlighted row, and from
-    :meth:`~lode.tui.screens.edit.EditScreen.action_inspect_selected` via
-    ``Ctrl+G``, both keyed to a ``note_id``. Renders :func:`lode.enrichment_view.enrichment_view` verbatim -- summary, tags, entities,
-    inferred edges (reason+confidence+stale), embed status, and the
-    three-valued ``enrichment_state`` -- with **no** DB access or display
-    policy of its own; this screen only shapes the already-decided fields
-    into widgets. The ``_item_text``/``_items_line``/``_edges_text`` helpers
-    in :mod:`~lode.tui.screens._browse_render` (lode-s5kp.4) do the one bit
-    of real work this modal owns: styling ``stale`` dim instead of
-    string-sniffing a suffix (lode-0qc; see ``docs/storage.md``'s
-    "Enrichment view-model" section).
+    Pushed from :meth:`~lode.tui.screens.browse.BrowseScreen.action_inspect_selected`
+    via ``i`` on the highlighted row, and from
+    :meth:`~lode.tui.screens.edit.EditScreen.action_inspect_selected` via ``Ctrl+G``,
+    both keyed to a ``note_id``. Renders :func:`lode.enrichment_view.enrichment_view`
+    verbatim -- summary, tags, entities, inferred edges (reason+confidence+stale), embed
+    status, and the three-valued ``enrichment_state`` -- with **no** DB access or
+    display policy of its own; this screen only shapes the already-decided fields into
+    widgets. The ``_item_text``/``_items_line``/``_edges_text`` helpers in
+    :mod:`~lode.tui.screens._browse_render` (lode-s5kp.4) do the one bit of real work
+    this modal owns: styling ``stale`` dim instead of string-sniffing a suffix
+    (lode-0qc; see ``docs/storage.md``'s "Enrichment view-model" section).
 
-    Content lives in a :class:`~textual.containers.VerticalScroll` (not a
-    fixed :class:`~textual.containers.Vertical`, unlike
-    :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`'s small
-    fixed dialog) so a note with many tags/entities/edges scrolls within the
-    popup rather than overflowing or truncating. ``Esc`` pops back to
-    whichever screen pushed it -- the same one-level-at-a-time contract every
-    other screen in this cluster already uses. Like ``DiscardConfirmScreen``,
-    this is a bare ``ModalScreen`` pushed directly (not a :data:`~lode.tui.app.LodeApp.SCREENS` entry): it dims the screen underneath for free via
-    ``ModalScreen``'s own ``DEFAULT_CSS``, and ``lode.tcss`` adds only sizing
-    and centering for :data:`INSPECTOR_DIALOG_ID`.
+    Content lives in a :class:`~textual.containers.VerticalScroll` (not a fixed
+    :class:`~textual.containers.Vertical`, unlike
+    :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`'s small fixed
+    dialog) so a note with many tags/entities/edges scrolls within the popup rather than
+    overflowing or truncating. ``Esc`` pops back to whichever screen pushed it -- the
+    same one-level-at-a-time contract every other screen in this cluster already uses.
+    Like ``DiscardConfirmScreen``, this is a bare ``ModalScreen`` pushed directly (not a
+    :data:`~lode.tui.app.LodeApp.SCREENS` entry): it dims the screen underneath for free
+    via ``ModalScreen``'s own ``DEFAULT_CSS``, and ``lode.tcss`` adds only sizing and
+    centering for :data:`INSPECTOR_DIALOG_ID`.
     """
 
     # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare

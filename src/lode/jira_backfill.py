@@ -14,19 +14,20 @@ auth-fronted JIRA instance — a login-page scrape that tombstoned. That link's
 not the semantic issue key the connector now uses
 (:mod:`lode.drawdown`'s "Atlassian link detection" — owner decision 3).
 
-:func:`_jira_backfill` re-runs :func:`lode.drawdown._classify_atlassian` — the
-exact same synchronous, network-free classifier :func:`lode.drawdown.detect_and_enqueue_drawdown` itself uses at paste time — against every existing
-explicit (``source='user'``) edge's ``quoted_text`` (the literal originally-
-pasted URL, preserved verbatim by :func:`lode.drawdown._repoint_edges` across
-any prior repoint). This is deliberate reuse, not a second, drifting copy of
-the JIRA URL-matching rules: the backfill must classify a link *exactly* the
-way live draw-down would, "under CURRENT connector routing" (the framework's
-own charter, ``lode.backfill``'s module docstring) — including the current
-flag/credential state (:func:`lode.config.jira_active`) and the current
-``jira_base_url``/inferred-``*.atlassian.net`` host rule. A link that still
-doesn't classify (flag off, no credentials, non-Atlassian host, or an
-Atlassian host with no ``/browse/{KEY}`` shape) is left untouched — exactly
-what live draw-down would do with it today.
+:func:`_jira_backfill` re-runs :func:`lode.drawdown._classify_atlassian` — the exact
+same synchronous, network-free classifier
+:func:`lode.drawdown.detect_and_enqueue_drawdown` itself uses at paste time — against
+every existing explicit (``source='user'``) edge's ``quoted_text`` (the literal
+originally- pasted URL, preserved verbatim by :func:`lode.drawdown._repoint_edges`
+across any prior repoint). This is deliberate reuse, not a second, drifting copy of the
+JIRA URL-matching rules: the backfill must classify a link *exactly* the way live
+draw-down would, "under CURRENT connector routing" (the framework's own charter,
+``lode.backfill``'s module docstring) — including the current flag/credential state
+(:func:`lode.config.jira_active`) and the current
+``jira_base_url``/inferred-``*.atlassian.net`` host rule. A link that still doesn't
+classify (flag off, no credentials, non-Atlassian host, or an Atlassian host with no
+``/browse/{KEY}`` shape) is left untouched — exactly what live draw-down would do with
+it today.
 
 ## Composed entirely from the framework's shared plumbing
 
@@ -45,7 +46,9 @@ silently losing track of it once the first pass repoints it away from
 ``'web'``. Two consequences:
 
 - **First migration**: ``link.external_id`` (still the old canonicalized URL)
-  differs from the freshly classified semantic key, so :func:`~lode.backfill.mint_external` + :func:`~lode.backfill.repoint_edges` run once; the fresh,
+  differs from the freshly classified semantic key, so
+  :func:`~lode.backfill.mint_external` + :func:`~lode.backfill.repoint_edges` run once;
+  the fresh,
   never-tombstoned identity always passes :func:`~lode.backfill.needs_refresh`
   (owner decision D — no override needed here).
 - **Later re-run**: ``link.external_id`` already equals the semantic key, so

@@ -19,25 +19,23 @@ def reenrich(db: _DbOption = None) -> None:
     expensive; this only force-enqueues the heads that actually need it
     (``docs/storage.md#re-enriching-the-corpus-deliberately-targeted-lode-14jr``).
 
-    **Stale means "disagrees with the currently configured `enrichment_llm`
-    OR the currently active provider," detected by the exact same query
-    ``lode status``'s hint reads** (:func:`lode.enrichment_view.stale_enrichment_heads`, shared with
-    :func:`lode.cli.status._enrichment_model_stale`, lode-o9k3/lode-568v.6 --
-    so "status says clean" and "reenrich has work" cannot disagree). A live
-    head -- every note's current ``head_version_id`` and every external's
-    current ``head_snapshot_id``, mirroring
-    :func:`lode.retrieval.live_head_versions`'s notes-UNION-externals scope --
+    **Stale means "disagrees with the currently configured `enrichment_llm` OR the
+    currently active provider," detected by the exact same query ``lode status``'s hint
+    reads** (:func:`lode.enrichment_view.stale_enrichment_heads`, shared with
+    :func:`lode.cli.status._enrichment_model_stale`, lode-o9k3/lode-568v.6 -- so "status
+    says clean" and "reenrich has work" cannot disagree). A live head -- every note's
+    current ``head_version_id`` and every external's current ``head_snapshot_id``,
+    mirroring :func:`lode.retrieval.live_head_versions`'s notes-UNION-externals scope --
     is force-enqueued only if it has at least one ``'ai'`` annotation
     (``source_version`` = the head id) whose ``model`` column differs from
-    ``settings.enrichment_llm``, or whose ``provider`` column disagrees with
-    the currently active provider (:func:`lode.llm_provider.provider_identity`),
-    right now. Provider awareness closes the gap where the same
-    model/deployment string means a different vendor across a provider
-    switch -- the ``model`` comparison alone would miss that (lode-568v.6). A
-    head with **no** ai annotations at all is not stale -- it is simply
-    unenriched, which the passive reconciliation scan's ``enrich_gap`` step
-    already covers on its own, ordinary schedule; duplicating that here would
-    only re-enqueue work ``lode work`` was already going to do.
+    ``settings.enrichment_llm``, or whose ``provider`` column disagrees with the
+    currently active provider (:func:`lode.llm_provider.provider_identity`), right now.
+    Provider awareness closes the gap where the same model/deployment string means a
+    different vendor across a provider switch -- the ``model`` comparison alone would
+    miss that (lode-568v.6). A head with **no** ai annotations at all is not stale -- it
+    is simply unenriched, which the passive reconciliation scan's ``enrich_gap`` step
+    already covers on its own, ordinary schedule; duplicating that here would only
+    re-enqueue work ``lode work`` was already going to do.
 
     **``no_egress`` content is never swept in, even if its stored annotations
     happen to be stale.** Unlike embedding, enrichment leaves the box (a
