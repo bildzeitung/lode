@@ -35,12 +35,12 @@ from lode.tui.app import LodeApp
 from lode.tui.screens.ask import CITATION_STATUS_ID, QUESTION_ID, RESULTS_ID, AskScreen
 from lode.tui.screens.capture import CaptureScreen
 from lode.tui.screens.edit import EditScreen
-from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
-from lode.tui.screens.version_view import VersionViewScreen
 from lode.tui.screens.save_as_note_confirm import (
     SAVE_AS_NOTE_PREVIEW_ID,
     SaveAsNoteConfirmScreen,
 )
+from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
+from lode.tui.screens.version_view import VersionViewScreen
 from lode.tui.services.ask import STAGE_RETRIEVING, AskResult, CitationIdentity
 from lode.versions import save
 
@@ -903,7 +903,9 @@ def _canned_answer() -> AskResult:
             withheld_citations=(),
         ),
         as_of={"v1": "2026-06-18T00:00:00.000Z"},
-        identities={"v1": CitationIdentity(note_id="n1", title="Note One", is_head=True)},
+        identities={
+            "v1": CitationIdentity(note_id="n1", title="Note One", is_head=True)
+        },
     )
 
 
