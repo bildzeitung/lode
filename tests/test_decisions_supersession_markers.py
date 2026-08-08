@@ -32,16 +32,13 @@ exact failure the preamble's own sentence forbids. Every check here keys on
 an artifact a *marker* leaves behind (an off-pattern keyword, a wrapped id,
 the preamble's own wording); a silent rewrite is the ABSENCE of a correction,
 so it leaves nothing for any of them to key on and every check here stays
-green. That gap is real but is NOT closed in this module -- a full-history
-replay was tried by hand against this repo's own git log and rejected (even
-with a word-set heuristic tolerating ordinary paragraph rewrapping, dozens of
-commits made since the append-only convention itself was established still
-flag). Instead, `scripts/check-decisions-no-silent-rewrite.sh` +
-`tests/test_decisions_no_silent_rewrite_guard.py` diff a SPECIFIC base..head
-range of docs/decisions.md's git history and fail on any pre-existing,
-non-blank line that vanished -- a narrower scope than this module's
-whole-file text scans, deliberately, since a single branch's diff is not
-reflow-prone the way the full repo history is.
+green. That gap is real but is NOT closed in this module: it is closed by
+`scripts/check-decisions-no-silent-rewrite.sh` +
+`tests/test_decisions_no_silent_rewrite_guard.py`, which diff a SPECIFIC
+base...head range of docs/decisions.md's git history and fail on any
+pre-existing, non-blank line that vanished. That guard is scoped to one
+branch's diff, deliberately and for reasons of its own -- see its header,
+not a restatement here.
 """
 
 from __future__ import annotations

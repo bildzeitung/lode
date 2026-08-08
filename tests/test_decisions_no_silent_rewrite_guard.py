@@ -16,15 +16,10 @@ place" means for a dated, append-only log (docs/decisions.md's own
 preamble: a correction is "a new entry, or a marker appended to the
 existing one, never a silent rewrite").
 
-SCOPE, deliberately: base..head, not full repository history. A full-history
-replay was tried (by hand, against this repo's own git log) and rejected --
-even with a word-set heuristic meant to tolerate ordinary paragraph
-rewrapping, dozens of commits made since the append-only convention itself
-was established (lode-ur6o) still flag, because reflow legitimately moves
-words across line boundaries. A single branch's diff against its merge base
-is not reflow-prone the way 250 historical commits are, so the strict,
-no-heuristic form is the right size for the check this ticket actually
-needs: catching a rewrite inside ONE review's diff, at review/land time.
+SCOPE is base...head, not full repository history, and the exit-2 arm comes
+from the shared gate_could_not_run (scripts/gate-lib.sh, lode-9i2p) -- both
+are the script's own contract; see its header and docs/decisions.md
+(search "lode-rl6s") rather than a third retelling here.
 
 All tests below run the ACTUAL script against real throwaway git repos built
 in `tmp_path` -- no fake git, no mocked subprocess -- per the lode-verb
@@ -40,7 +35,6 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import pytest
 from _gitrepo import _git
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -272,8 +266,64 @@ def test_offenders_are_printed_one_per_line_without_the_diff_marker(
         )
 
 
-@pytest.mark.parametrize("nargs", [3])
-def test_too_many_arguments_is_a_usage_fault(tmp_path: Path, nargs: int) -> None:
+def test_base_ahead_of_head_does_not_flag_the_bases_own_new_lines(
+    tmp_path: Path,
+) -> None:
+    """The comparison is three-dot (merge base), not two-dot.
+
+    At review/land time the branch under review is routinely BEHIND
+    origin/trunk, which appends to docs/decisions.md on nearly every land. A
+    two-dot `git diff <base> <head>` reports every line the BASE gained and
+    the head lacks as REMOVED -- spurious offenders for entries the branch
+    never touched. Sabotage proof: swapping the script's '...' back to a
+    two-dot comparison turns this test red.
+    """
+    repo = _init_repo(tmp_path, BASE_TEXT)
+    fork_point = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    # The branch: an innocent append, nothing removed.
+    _git(repo, "checkout", "-q", "-b", "branch")
+    _write_and_commit(
+        repo,
+        BASE_TEXT + "- **Entry three.** Appended by the branch.\n",
+        "branch appends entry three",
+    )
+    branch_head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    # Meanwhile trunk moves ahead with an append of its own.
+    _git(repo, "checkout", "-q", "trunk")
+    _git(repo, "reset", "-q", "--hard", fork_point)
+    _write_and_commit(
+        repo,
+        BASE_TEXT + "- **Entry four.** Appended by trunk after the fork.\n",
+        "trunk appends entry four",
+    )
+
+    result = _run(repo, "trunk", branch_head)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == ""
+
+
+def test_removed_line_starting_with_two_dashes_is_still_flagged(
+    tmp_path: Path,
+) -> None:
+    """A removed content line beginning with '-- ' renders as '--- ...' in a
+    default diff and would be mistaken for the '--- a/<path>' file header by
+    a naive '^-' scan -- failing OPEN on exactly what is being guarded.
+    Sabotage proof: reverting to a '^-' scan with a '^--- ' skip turns this
+    test red."""
+    base_text = BASE_TEXT + "-- a continuation dash line, original wording.\n"
+    repo = _init_repo(tmp_path, base_text)
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    _write_and_commit(repo, BASE_TEXT, "silently drop the dash line")
+
+    result = _run(repo, base)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "original wording" in result.stdout
+
+
+def test_too_many_arguments_is_a_usage_fault(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path, BASE_TEXT)
     base = _git(repo, "rev-parse", "HEAD").stdout.strip()
     result = _run(repo, base, "HEAD", "extra-arg")
