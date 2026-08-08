@@ -42,6 +42,12 @@ class VersionViewScreen(Screen[None]):
     BINDINGS: ClassVar = [
         Binding("escape", "app.pop_screen", "Back"),
         Binding("ctrl+n", "open_link", "Link"),
+        # SCREEN-level, same key/label as LodeApp's App-level ctrl+l ("Ask")
+        # -- shadows it while this screen is active (docs/keybindings.md,
+        # "Screen-level shadows App-level on the same key"), so the footer
+        # entry is unchanged but the action opens the note-scoped ask flow
+        # instead of the corpus-wide one. No new letter spent (lode-35nu.11.3).
+        Binding("ctrl+l", "ask_about_note", "Ask"),
     ]
 
     def __init__(self, note_id: str, version_id: str) -> None:
@@ -70,3 +76,25 @@ class VersionViewScreen(Screen[None]):
         """
         text_area = self.query_one(f"#{VERSION_BODY_ID}", TextArea)
         open_link_under_cursor(self, text_area)
+
+    def action_ask_about_note(self) -> None:
+        """Ctrl+L: open Ask, scoped to this note (lode-35nu.11.3).
+
+        Shadows ``LodeApp``'s own App-level ``ctrl+l`` ("Ask", corpus-wide)
+        while this screen is active -- same key, same footer label, just a
+        Screen-level binding that resolves first (``docs/keybindings.md``).
+        Pins the *note*, not this specific (possibly non-head) version --
+        matching :func:`lode.retrieval.pinned_note_context`'s own contract,
+        which reads the note's live head. Escape from the pushed
+        :class:`~lode.tui.screens.ask.AskScreen` pops back here unchanged.
+
+        Method-local import: :mod:`lode.tui.screens.ask` itself imports
+        :class:`VersionViewScreen` at module scope (for its own
+        citation-navigation push), so a top-level import the other way here
+        would form a cycle -- mirrors the same dissolved-cycle technique
+        :class:`~lode.tui.screens.edit.EditScreen`'s docstring documents
+        ("Import cycle, dissolved").
+        """
+        from lode.tui.screens.ask import AskScreen
+
+        self.app.push_screen(AskScreen(note_id=self.note_id))

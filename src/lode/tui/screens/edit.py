@@ -131,6 +131,7 @@ from textual.widgets import Header, TextArea
 from lode.tui.screens._content_view import _view_note_external_content
 from lode.tui.screens._link_open import open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
+from lode.tui.screens.ask import AskScreen
 from lode.tui.screens.discard_confirm import DiscardConfirmScreen
 from lode.tui.screens.enrichment_modal import EnrichmentModalScreen
 from lode.tui.screens.reconcile import ReconcileScreen
@@ -173,6 +174,12 @@ class EditScreen(Screen[None]):
         Binding("ctrl+g", "inspect_selected", "Inspect"),
         Binding("ctrl+r", "view_content", "View"),
         Binding("ctrl+n", "open_link", "Link"),
+        # SCREEN-level, same key/label as LodeApp's App-level ctrl+l ("Ask")
+        # -- shadows it while this screen is active (docs/keybindings.md,
+        # "Screen-level shadows App-level on the same key"), so the footer
+        # entry is unchanged but the action opens the note-scoped ask flow
+        # instead of the corpus-wide one. No new letter spent (lode-35nu.11.3).
+        Binding("ctrl+l", "ask_about_note", "Ask"),
     ]
 
     def __init__(self, note_id: str) -> None:
@@ -281,6 +288,17 @@ class EditScreen(Screen[None]):
         """
         text_area = self.query_one(f"#{EDIT_BODY_ID}", TextArea)
         open_link_under_cursor(self, text_area)
+
+    def action_ask_about_note(self) -> None:
+        """Ctrl+L: open Ask, scoped to this note (lode-35nu.11.3).
+
+        Shadows ``LodeApp``'s own App-level ``ctrl+l`` ("Ask", corpus-wide)
+        while this screen is active -- same key, same footer label, just a
+        Screen-level binding that resolves first (``docs/keybindings.md``).
+        Pushes :class:`~lode.tui.screens.ask.AskScreen` with this note pinned
+        as primary context; Escape from there pops back here unchanged.
+        """
+        self.app.push_screen(AskScreen(note_id=self.note_id))
 
     def action_save(self) -> None:
         """Ctrl+S: append a new version onto this note's chain, or explain why not."""

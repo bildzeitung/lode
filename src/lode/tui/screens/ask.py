@@ -21,6 +21,25 @@ or the cited snapshot via
 :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` for an
 external. Escape from either of those pops back to this screen, which was
 never destroyed, so the answer is exactly as it was -- no re-query.
+
+**"Ask about THIS note" (lode-35nu.11.3).** The constructor's optional
+``note_id`` pins that note as primary Q&A context
+(:func:`lode.tui.services.ask.run_ask`'s own ``pinned_note_id``), rather than
+letting it compete for retrieval rank like every other note. There is no
+separate screen for this -- ``docs/conventions.md``'s one-Screen-per-module
+fiat governs a *class*, and this is the same class, the same pipeline, the
+same gate, and the same grouped/cited rendering, parameterized; a second
+near-identical screen module would just be this one's logic forked in two.
+The zero-arg form (the App-level ``ctrl+l`` binding, via the ``SCREENS["ask"]``
+name-string push in :mod:`lode.tui.app`) is exactly the prior corpus-wide
+behaviour, unaffected. :class:`~lode.tui.screens.edit.EditScreen` and
+:class:`~lode.tui.screens.version_view.VersionViewScreen` each add their own
+SCREEN-level ``Binding("ctrl+l", ...)`` that pushes ``AskScreen(note_id=...)``
+-- Textual resolves a keypress screen-first (``docs/keybindings.md``,
+"Screen-level shadows App-level on the same key"), so the same key, and the
+same "Ask" footer label, simply opens the note-scoped flow instead while one
+of those screens is active, with **no new letter spent** against the
+already-exhausted ``ctrl+<letter>`` pool that doc's own ledger tracks.
 """
 
 from __future__ import annotations
@@ -93,8 +112,15 @@ class AskScreen(Screen[None]):
         Binding("ctrl+j", "open_citation", "Open citation"),
     ]
 
-    def __init__(self) -> None:
+    def __init__(self, note_id: str | None = None) -> None:
         super().__init__()
+        # "Ask about THIS note" (lode-35nu.11.3): when given, every question
+        # asked on this screen instance pins ``note_id``'s live head into the
+        # context ahead of normal retrieval (:func:`lode.tui.services.ask.run_ask`'s
+        # own ``pinned_note_id`` param). ``None`` (the App-level ``ctrl+l``
+        # push via the zero-arg ``SCREENS["ask"]`` registration) is exactly
+        # the prior, corpus-wide behaviour -- unchanged.
+        self._note_id = note_id
         # The late-write guard (lode-35nu.5's noted hazard).
         # ``@work(exclusive=True)`` cancels a stale worker's *task* but cannot
         # preempt a blocking call already in flight inside it, so a superseded
@@ -142,6 +168,11 @@ class AskScreen(Screen[None]):
         yield LodeFooter()
 
     def on_mount(self) -> None:
+        if self._note_id is not None:
+            # Full 36-char id, same as EditScreen/VersionViewScreen's own
+            # sub_title -- selectable/copyable, no width budget to protect
+            # here the way Browse's abbreviated Id column has.
+            self.sub_title = f"about this note ({self._note_id})"
         self.query_one(f"#{QUESTION_ID}", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -186,7 +217,11 @@ class AskScreen(Screen[None]):
 
         try:
             result = run_ask(
-                app.db_path, question, settings=app.settings, on_stage=_on_stage
+                app.db_path,
+                question,
+                settings=app.settings,
+                on_stage=_on_stage,
+                pinned_note_id=self._note_id,
             )
         except AuthError as err:
             self.app.call_from_thread(self._finish, generation, _PLACEHOLDER, None)

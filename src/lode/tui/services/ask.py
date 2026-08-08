@@ -102,6 +102,7 @@ def run_ask(
     think_harder: bool = False,
     settings: Settings | None = None,
     on_stage: OnStage | None = None,
+    pinned_note_id: str | None = None,
 ) -> AskResult:
     """Run the cited Q&A loop for ``question`` and resolve citation provenance.
 
@@ -121,6 +122,17 @@ def run_ask(
     in-flight UI feedback (the TUI's ask screen) supplies one that marshals
     onto whatever thread it needs.
 
+    ``pinned_note_id`` (lode-35nu.11.3, "Ask about THIS note") pins one note's
+    live-head passages into the context ahead of the normal retrieval result,
+    via :func:`lode.retrieval.pinned_note_context` -- "the note is pinned as
+    primary context rather than competing for retrieval rank" (the ticket's
+    own words). Normal corpus-wide retrieval still runs unchanged underneath
+    it (so a per-note ask can still cite *other* related notes/externals);
+    the pinned passages are just guaranteed present and ordered first,
+    deduplicated against anything retrieval also found by ``passage_id``.
+    ``None`` (the default) is the exact previous behaviour -- corpus-wide Ask
+    is unaffected.
+
     Imports the retrieval/Q&A stack here, not at module scope: ``cli._retrieve``
     pulls in the vector stack (pyarrow) and ``cited_answer`` pulls in the
     Anthropic SDK, neither of which the capture path -- or merely importing
@@ -128,6 +140,7 @@ def run_ask(
     """
     from lode import cited_answer
     from lode.cli import _retrieve
+    from lode.retrieval import pinned_note_context
 
     settings = settings or Settings()
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,6 +151,12 @@ def run_ask(
         context = _retrieve(
             conn, question, lance_dir=lance_dir(db_path), settings=settings
         )
+        if pinned_note_id is not None:
+            pinned = pinned_note_context(conn, pinned_note_id)
+            pinned_ids = {item.passage_id for item in pinned}
+            context = pinned + [
+                item for item in context if item.passage_id not in pinned_ids
+            ]
         report(STAGE_SYNTHESIZING)
         answer = cited_answer.ask(
             conn, question, context, think_harder=think_harder, settings=settings
