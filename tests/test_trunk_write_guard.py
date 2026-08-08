@@ -61,6 +61,9 @@ def _init_repo(path: Path, *, branch: str) -> None:
 
 
 def test_script_asks_on_trunk(tmp_path: Path) -> None:
+    # The `returncode == 0` assertions here and in the two tests below are load-bearing, not
+    # boilerplate: a PreToolUse hook exiting non-zero is itself a defect (see the script header),
+    # so the exit-0 invariant is covered on the ask path, the allow path, and the no-repo path.
     repo = tmp_path / "repo"
     _init_repo(repo, branch="trunk")
     proc = subprocess.run(
@@ -94,28 +97,6 @@ def test_script_allows_outside_any_git_repo(tmp_path: Path) -> None:
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == ""
-
-
-def test_script_always_exits_zero_regardless_of_verdict(tmp_path: Path) -> None:
-    # A PreToolUse hook exiting non-zero is itself a defect (see script docstring) -- assert this
-    # holds on both the ask path and the silent-allow path.
-    repo = tmp_path / "repo"
-    _init_repo(repo, branch="trunk")
-    ask = subprocess.run(
-        [str(SCRIPT)], cwd=repo, capture_output=True, text=True, timeout=30, check=False
-    )
-    assert ask.returncode == 0
-
-    _init_repo(tmp_path / "repo2", branch="feature")
-    allow = subprocess.run(
-        [str(SCRIPT)],
-        cwd=tmp_path / "repo2",
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert allow.returncode == 0
 
 
 # --- hook-level (through the committed .claude/settings.json wrapper, via /bin/sh) -------------
@@ -177,9 +158,9 @@ def test_hook_falls_through_when_script_missing(tmp_path: Path) -> None:
 
 
 def test_wrapper_is_posix_shell_compatible() -> None:
-    # dash (the harness's actual PreToolUse interpreter, lode-9gm2) rejects bash-only syntax
-    # with "Bad substitution" -- run the wrapper one-liner through dash directly on an empty
-    # stdin payload from outside any lode checkout to prove it never uses bash-only constructs.
+    # dash (the harness's actual PreToolUse interpreter, lode-9gm2) rejects bash-only syntax --
+    # parse the wrapper one-liner with `sh -n` (syntax check only, nothing is executed) to prove
+    # it never uses bash-only constructs. The two hook-level tests above cover it *executing*.
     hook = pretooluse_hook("trunk-write-guard.sh", matcher="Edit|Write")
     proc = subprocess.run(
         [SH, "-n", "-c", hook], capture_output=True, text=True, timeout=30, check=False
