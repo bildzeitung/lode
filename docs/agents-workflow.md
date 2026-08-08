@@ -2599,6 +2599,22 @@ carries the hand-off and something else consumes the label —
    way it looks for `needs-rebase`, and dispatches a `code-reviewer` at each — mirroring the
    `needs-rebase` sweep exactly, just one gate earlier in the pipeline.
 
+**`review_head` is stale BY CONSTRUCTION on an exit (d) re-entry (lode-9b5n).** A ticket reaching exit
+(d) has already been through `code-reviewer` once, so `metadata.review_head` still names the
+*pre*-technical-review commit — nothing refreshes it when a review pushes further commits onto
+`land/<id>`. Re-entering at `ready-for-code-review` therefore hands the next `code-reviewer` a
+`review_head` that necessarily disagrees with the fetched tip, on every exit (d) re-entry, not just an
+occasional race. This was harmless in practice — `code-reviewer` checks out `origin/land/<id>`, never
+`review_head`, and only compares the two to detect drift — but a reviewer trained to expect a spurious
+mismatch here is a reviewer that will also discount a *genuine* one. **Fixed by narrowing what counts
+as drift, not by trying to keep `review_head` fresh:** `code-reviewer`'s drift check (`.claude/agents/code-reviewer.md`, step 2) now
+distinguishes an exact match, a mismatch where `review_head` is an **ancestor** of the fetched tip
+(expected — the normal shape of an exit (d) re-entry, not drift), and a genuine mismatch (a push
+`review_head` doesn't account for — real drift, still noted). Keeping `review_head` itself unwritten
+on this path is deliberate: chasing every place that could advance `land/<id>` after the label is set
+(a human's amendment, or `code-reviewer`'s own re-review) into a metadata-refresh discipline is more
+places to forget than fixing the one comparison that consumes the field.
+
 ### Isolating `land-review` dispatches (lode-g387)
 
 `/land` runs on **trunk, in the main checkout** — the same working tree its Section 3 batch-merges

@@ -254,12 +254,28 @@ exact remote name — see `.claude/skills/land/SKILL.md`; nothing for me to do e
 
 ```bash
 git rev-parse --abbrev-ref HEAD     # land/<id>--<worktree-suffix> — never trunk
-git rev-parse HEAD                  # compare against metadata.review_head from step 1
+FETCHED_HEAD=$(git rev-parse HEAD)
+REVIEW_HEAD=<metadata.review_head from step 1>
+if [ "$FETCHED_HEAD" = "$REVIEW_HEAD" ]; then
+  : # exact match -- no drift
+elif git merge-base --is-ancestor "$REVIEW_HEAD" "$FETCHED_HEAD"; then
+  : # review_head is an ANCESTOR of the fetched tip: this branch already went through a technical
+    # review once, and I'm seeing the tip that review pushed -- not drift. This is the normal shape
+    # of an exit (d) ("amend and re-gate") re-entry (lode-9b5n): review_head still names the commit
+    # from BEFORE the branch's prior technical review, because nothing refreshes it when the branch
+    # advances during a review pass -- so it is stale BY CONSTRUCTION on every such re-entry, not
+    # evidence of an unaccounted-for push.
+else
+  : # DRIFT -- review_head is neither the fetched tip nor an ancestor of it: a push landed on
+    # land/<id> since ready-for-code-review that review_head does not account for.
+fi
 ```
 
-A mismatch against `review_head` is **drift** — a push landed on `land/<id>` after the ticket was
-marked `ready-for-code-review` (or the ticket is a build-time-escalation re-entry with a since-updated
-head). I note it, but still review the actual tip I checked out, same as before.
+A mismatch that is **not** an ancestor relationship is **drift** — a push landed on `land/<id>` after
+the ticket was marked `ready-for-code-review`, and `review_head` does not account for it. I note that
+case in my hand-off, but still review the actual tip I checked out, same as before. A mismatch where
+`review_head` **is** an ancestor of the fetched tip is expected and not worth noting as drift — it is
+the state every exit (d) re-entry starts from, not a sign of an unaccounted-for push (lode-9b5n).
 
 ### 3. Build the venv — every review needs its own (no shared build state)
 
