@@ -157,9 +157,12 @@ CLI_THEME = Theme(CLI_STYLES)
 #: default ``ReprHighlighter`` runs over every plain string rendered
 #: through a ``Console``, injecting ``repr.*`` styles absent from
 #: :data:`CLI_STYLES` -- a rendered date like ``2026-07-16 14:32`` gets
-#: shredded into bold-cyan numerals, dim dashes, and a bold-green time
-#: (verified against rich 15.0.0). ``Table`` rendering never runs this
-#: highlighter, so there is no blast radius there, and a per-call
+#: shredded into bold-cyan ``repr.number`` numerals and a bold-green
+#: ``repr.ipv6`` time (yes, the clock reads as an IPv6 address), with the
+#: separators left unstyled between them (verified against rich 15.0.0 --
+#: ``ReprHighlighter()("2026-07-16 14:32").spans``). ``Table`` rendering
+#: never runs this highlighter over cell text, so there is no blast
+#: radius there, and a per-call
 #: ``highlight=True`` still works where wanted -- nothing is foreclosed.
 #: So this Console hoists ``highlight=False`` once at construction instead
 #: of leaving it a per-call-site kwarg, and every command below relies on
