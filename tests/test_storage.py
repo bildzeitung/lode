@@ -6,11 +6,18 @@ fresh WAL DB, and a round-trip insert/select on notes+versions succeeds.
 
 import sqlite3
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
+from lode import storage
 from lode.jobs import now_iso
-from lode.storage import init_db, schema_sql
+from lode.storage import (
+    _SCHEMA_VERSION,
+    _migrate_v1_egress_log_tool_purpose,
+    init_db,
+    schema_sql,
+)
 from lode.worker import _claim_one
 
 # Every table in the docs/storage.md §8 data shape.
@@ -326,3 +333,313 @@ def test_provider_column_migrated_onto_pre_existing_annotations_and_egress_log(
     # Idempotent: re-running init_db on the migrated DB must not raise.
     conn2 = init_db(db)
     conn2.close()
+
+
+# ---------------------------------------------------------------------------
+# lode-35nu.11.7: egress_log rebuild (purpose='tool', destination, arguments,
+# model nullable) + externals.discovered_via
+# ---------------------------------------------------------------------------
+
+
+def _seed_pre_lode_35nu_11_7_db(db: Path) -> None:
+    """A DB shaped exactly like every deployment before this migration landed.
+
+    egress_log: purpose CHECK (enrich|qa) only, model NOT NULL, no destination/
+    arguments. externals: no discovered_via. Seeded with one row each so the
+    migration's data-preservation and rebuild behavior are actually exercised,
+    not just schema presence.
+
+    The DDL below is the *verbatim* pre-change ``schema.sql`` text for these
+    tables -- real ``strftime`` defaults, the ``no_egress`` CHECK, the deferred
+    FK -- not a convenient paraphrase. That matters because
+    ``test_fresh_and_migrated_db_have_identical_egress_log_and_externals_schema``
+    compares defaults and constraints: a fixture that swapped in literal
+    timestamp defaults would report a fresh/migrated mismatch that no real
+    deployment has, and hiding that would mean weakening the comparison instead
+    of the fixture.
+    """
+    seed = sqlite3.connect(db)
+    # init_db's is_fresh check keys off the notes table -- a real pre-existing
+    # DB always has one; without it here the fixture would misreport as fresh
+    # and skip the migration entirely.
+    seed.execute(
+        "CREATE TABLE notes ("
+        "  note_id TEXT PRIMARY KEY,"
+        "  head_version_id TEXT,"
+        "  created TEXT NOT NULL DEFAULT '2026-01-01T00:00:00.000Z'"
+        ")"
+    )
+    seed.execute(
+        "CREATE TABLE egress_log ("
+        "    id           INTEGER PRIMARY KEY,"
+        "    ts           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),"
+        "    purpose      TEXT NOT NULL CHECK (purpose IN ('enrich', 'qa')),"
+        "    model        TEXT NOT NULL,"
+        "    provider     TEXT,"
+        "    sent_targets TEXT NOT NULL,"
+        "    redactions   TEXT"
+        ")"
+    )
+    seed.execute(
+        "INSERT INTO egress_log (purpose, model, sent_targets, redactions) "
+        "VALUES ('qa', 'claude-sonnet-4-6', '[\"ver-1\"]', '3')"
+    )
+    seed.execute(
+        "CREATE TABLE externals ("
+        "    external_id      TEXT PRIMARY KEY,"
+        "    source_type      TEXT NOT NULL,"
+        "    head_snapshot_id TEXT,"
+        "    no_egress        INTEGER NOT NULL DEFAULT 0 CHECK (no_egress IN (0, 1)),"
+        "    api_base         TEXT,"
+        "    created          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),"
+        "    FOREIGN KEY (head_snapshot_id) REFERENCES snapshots (snapshot_id)"
+        "        DEFERRABLE INITIALLY DEFERRED"
+        ")"
+    )
+    seed.execute(
+        "INSERT INTO externals (external_id, source_type) VALUES ('ext-1', 'web')"
+    )
+    seed.commit()
+    seed.close()
+
+
+def test_egress_log_rebuilt_onto_pre_existing_db_no_data_loss(tmp_path: Path) -> None:
+    """A pre-migration DB's egress_log/externals rows survive the rebuild.
+
+    Reproduces the acceptance criteria directly: an existing lode DB opens
+    cleanly and ends up with the new egress_log shape and
+    externals.discovered_via, with no data loss from the rebuild.
+    """
+    db = tmp_path / "lode.db"
+    _seed_pre_lode_35nu_11_7_db(db)
+
+    conn = init_db(db)
+    try:
+        egress_cols = {r[1] for r in conn.execute("PRAGMA table_info(egress_log)")}
+        assert {"destination", "arguments", "model"} <= egress_cols
+        externals_cols = {r[1] for r in conn.execute("PRAGMA table_info(externals)")}
+        assert "discovered_via" in externals_cols
+
+        # The pre-existing egress_log row survived the rebuild untouched.
+        row = conn.execute(
+            "SELECT purpose, model, sent_targets, redactions, destination, arguments "
+            "FROM egress_log WHERE sent_targets = '[\"ver-1\"]'"
+        ).fetchone()
+        assert row == ("qa", "claude-sonnet-4-6", '["ver-1"]', "3", None, None)
+
+        # The pre-existing externals row survived, discovered_via defaults NULL
+        # (draw-down origin) — never backfilled to a sentinel.
+        discovered_via = conn.execute(
+            "SELECT discovered_via FROM externals WHERE external_id = 'ext-1'"
+        ).fetchone()[0]
+        assert discovered_via is None
+    finally:
+        conn.close()
+
+
+def test_egress_log_migration_is_idempotent(tmp_path: Path) -> None:
+    db = tmp_path / "lode.db"
+    _seed_pre_lode_35nu_11_7_db(db)
+
+    init_db(db).close()
+    # Re-running init_db a second (and third) time must not raise, and must not
+    # duplicate or drop the already-migrated row.
+    init_db(db).close()
+    conn = init_db(db)
+    try:
+        count = conn.execute("SELECT count(*) FROM egress_log").fetchone()[0]
+        assert count == 1
+    finally:
+        conn.close()
+
+
+def _structural_fingerprint(conn: sqlite3.Connection, table: str) -> tuple:
+    """Everything about ``table``'s shape that two DBs must agree on.
+
+    Every ``PRAGMA table_info`` field -- declared type, NOT NULL, DEFAULT and
+    primary-key flag, not just a subset -- plus every index and trigger attached
+    to the table.
+
+    Keyed by column NAME, deliberately dropping ``cid``: physical column order
+    legitimately differs between a fresh DB and a migrated one, because
+    ``ALTER TABLE … ADD COLUMN`` can only append. ``externals.discovered_via``
+    lands before ``created`` in ``schema.sql`` and after it on a migrated DB --
+    as ``api_base`` and ``annotations.provider`` already do from the older
+    migration mechanism. That is a pre-existing property of column-add
+    migrations, not something this ticket introduced, and nothing reads these
+    tables positionally (every query in ``src/lode`` names its columns).
+
+    CHECK constraints are invisible to all of these pragmas, so they are covered
+    behaviourally instead (see
+    :func:`_assert_egress_log_check_constraints_hold`) -- a fingerprint
+    comparison alone would pass on a table that had silently lost the CHECKs the
+    rebuild exists to install.
+    """
+    columns = {r[1]: tuple(r[2:]) for r in conn.execute(f"PRAGMA table_info({table})")}
+    indexes = tuple(
+        sorted(
+            (r[1], r[2], r[3])
+            for r in conn.execute(f"PRAGMA index_list({table})").fetchall()
+        )
+    )
+    triggers = tuple(
+        sorted(
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                "AND tbl_name = ?",
+                (table,),
+            ).fetchall()
+        )
+    )
+    return (columns, indexes, triggers)
+
+
+def _assert_egress_log_check_constraints_hold(conn: sqlite3.Connection) -> None:
+    """The CHECKs the rebuild exists to install actually bind on ``conn``.
+
+    Invisible to every PRAGMA, so asserted by behaviour: 'tool' admitted with a
+    NULL model, the purpose enum still closed, and an LLM send still forced to
+    name its model.
+    """
+    conn.execute(
+        "INSERT INTO egress_log (purpose, destination, arguments, sent_targets) "
+        "VALUES ('tool', 'https://acme.atlassian.net', '{\"jql\": \"x\"}', '[]')"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO egress_log (purpose, model, sent_targets) "
+            "VALUES ('bogus', 'claude-sonnet-4-6', '[]')"
+        )
+    # model stays mandatory for a real LLM send -- the pre-migration NOT NULL
+    # guarantee is narrowed to purpose='tool', not dropped.
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO egress_log (purpose, model, sent_targets) "
+            "VALUES ('qa', NULL, '[]')"
+        )
+    conn.rollback()
+
+
+def test_fresh_and_migrated_db_have_identical_egress_log_and_externals_schema(
+    tmp_path: Path,
+) -> None:
+    """A migrated DB is structurally indistinguishable from a freshly-created one.
+
+    The acceptance criterion is "a fresh DB and a migrated DB have identical
+    schemas", so this compares the full structural fingerprint (all of
+    table_info, plus indexes and triggers) and the schema version stamp, and
+    exercises the CHECK constraints -- which no pragma exposes -- on *both*
+    sides.
+    """
+    fresh_conn = init_db(tmp_path / "fresh.db")
+    try:
+        fresh = (
+            _structural_fingerprint(fresh_conn, "egress_log"),
+            _structural_fingerprint(fresh_conn, "externals"),
+        )
+        fresh_version = fresh_conn.execute("PRAGMA user_version").fetchone()[0]
+        _assert_egress_log_check_constraints_hold(fresh_conn)
+    finally:
+        fresh_conn.close()
+
+    migrated_db = tmp_path / "migrated.db"
+    _seed_pre_lode_35nu_11_7_db(migrated_db)
+    migrated_conn = init_db(migrated_db)
+    try:
+        migrated = (
+            _structural_fingerprint(migrated_conn, "egress_log"),
+            _structural_fingerprint(migrated_conn, "externals"),
+        )
+        migrated_version = migrated_conn.execute("PRAGMA user_version").fetchone()[0]
+        _assert_egress_log_check_constraints_hold(migrated_conn)
+    finally:
+        migrated_conn.close()
+
+    assert fresh == migrated
+    assert fresh_version == migrated_version == _SCHEMA_VERSION
+
+
+def test_migration_is_atomic_when_a_step_fails(tmp_path: Path) -> None:
+    """A rebuild that dies partway leaves the DB exactly as it was.
+
+    The savepoint in ``_apply_versioned_migrations`` is the whole guarantee: the
+    half-rebuilt table must not survive, ``user_version`` must not advance, and
+    the original rows must still be there -- so the next open simply retries.
+    """
+    db = tmp_path / "lode.db"
+    _seed_pre_lode_35nu_11_7_db(db)
+
+    def _explode(conn: sqlite3.Connection) -> None:
+        _migrate_v1_egress_log_tool_purpose(conn)
+        raise RuntimeError("simulated crash partway through the migration")
+
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        with (
+            mock.patch.object(storage, "_VERSIONED_MIGRATIONS", [(1, _explode)]),
+            pytest.raises(RuntimeError),
+        ):
+            storage._apply_versioned_migrations(conn)
+        conn.commit()
+
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 0
+        # No half-built table left behind, and the pre-migration shape intact.
+        leftovers = [
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name LIKE 'egress%'"
+            )
+        ]
+        assert leftovers == ["egress_log"]
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(egress_log)")}
+        assert "destination" not in cols
+        assert conn.execute("SELECT count(*) FROM egress_log").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+    # And the retry on the next open succeeds normally.
+    retried = init_db(db)
+    try:
+        assert retried.execute("PRAGMA user_version").fetchone()[0] == _SCHEMA_VERSION
+        assert retried.execute("SELECT count(*) FROM egress_log").fetchone()[0] == 1
+    finally:
+        retried.close()
+
+
+def test_egress_log_accepts_tool_purpose_with_destination_and_arguments(
+    tmp_path: Path,
+) -> None:
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        conn.execute(
+            "INSERT INTO egress_log (purpose, destination, arguments, sent_targets) "
+            "VALUES ('tool', 'https://acme.atlassian.net', '{\"jql\": \"x\"}', '[]')"
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT purpose, model, destination, arguments FROM egress_log "
+            "WHERE purpose = 'tool'"
+        ).fetchone()
+        assert row == ("tool", None, "https://acme.atlassian.net", '{"jql": "x"}')
+    finally:
+        conn.close()
+
+
+def test_existing_qa_enrich_egress_log_insert_unchanged(tmp_path: Path) -> None:
+    """Existing purpose='qa'/'enrich' writers (egress.log_egress) are unaffected."""
+    from lode.egress import log_egress
+
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        log_id = log_egress(conn, "qa", "claude-sonnet-4-6", ["ver-1"], redactions=2)
+        row = conn.execute(
+            "SELECT purpose, model, sent_targets, redactions FROM egress_log "
+            "WHERE id = ?",
+            (log_id,),
+        ).fetchone()
+        assert row == ("qa", "claude-sonnet-4-6", '["ver-1"]', "2")
+    finally:
+        conn.close()

@@ -58,6 +58,7 @@ from lode.tui.screens.snapshot_viewer import (
 )
 from lode.tui.screens.version_history import HISTORY_TABLE_ID, VersionHistoryScreen
 from lode.tui.screens.version_view import VERSION_BODY_ID, VersionViewScreen
+from lode.tui.widgets.lode_data_table import LodeDataTable
 from lode.versions import save
 
 
@@ -577,6 +578,36 @@ def test_version_history_includes_the_head_row(tmp_path: Path) -> None:
     row_count = asyncio.run(_drive())
 
     assert row_count == 1
+
+
+def test_version_history_table_sets_empty_message(tmp_path: Path) -> None:
+    """VersionHistoryScreen sets ``empty_message`` on mount (lode-ligf).
+
+    A note always has at least one version, so this table is never actually
+    reached empty in practice -- the assertion is that the attribute is
+    configured at all, matching the other bare-blank tables' adoption.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "only version")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str | None:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("ctrl+h")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{HISTORY_TABLE_ID}", LodeDataTable)
+            return table.empty_message
+
+    empty_message = asyncio.run(_drive())
+
+    assert empty_message == "No version history for this note."
 
 
 def test_long_summary_is_capped_at_one_line_not_wrapped_unbounded(
@@ -1364,6 +1395,50 @@ def test_i_on_an_empty_browse_list_is_a_no_op_not_a_crash(tmp_path: Path) -> Non
     stayed_on_browse = asyncio.run(_drive())
 
     assert stayed_on_browse
+
+
+def test_no_notes_at_all_shows_a_distinct_empty_message(tmp_path: Path) -> None:
+    """Fresh install / everything tombstoned: distinct copy from a
+    quick-search-matched-nothing empty result (lode-ligf)."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[int, str | None]:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{TABLE_ID}", LodeDataTable)
+            return table.row_count, table.empty_message
+
+    row_count, empty_message = asyncio.run(_drive())
+
+    assert row_count == 0
+    assert empty_message == "No notes yet."
+
+
+def test_quick_search_matching_nothing_shows_a_distinct_empty_message(
+    tmp_path: Path,
+) -> None:
+    """A quick search that narrows to zero BM25 matches gets its own
+    explanation, distinct from the no-notes-at-all case (lode-ligf)."""
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes_indexed(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[int, str | None]:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("s")
+            await _press_and_settle(pilot, *"zzzznomatch")
+            table = app.screen.query_one(f"#{TABLE_ID}", LodeDataTable)
+            return table.row_count, table.empty_message
+
+    row_count, empty_message = asyncio.run(_drive())
+
+    assert row_count == 0
+    assert empty_message == "No notes match 'zzzznomatch'."
 
 
 # ---------------------------------------------------------------------------
@@ -2550,6 +2625,62 @@ def test_v_with_many_externals_opens_the_picker_first(tmp_path: Path) -> None:
     assert body_text == "body b"
 
 
+def test_external_picker_table_sets_empty_message(tmp_path: Path) -> None:
+    """ExternalPickerScreen sets ``empty_message`` on mount (lode-ligf).
+
+    This screen is only ever pushed with >1 external (the "many" branch of
+    the zero/one/many addressing rule), so the table is never actually
+    reached empty in practice -- the assertion is that the attribute is
+    configured at all, matching the other bare-blank tables' adoption.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(
+            conn, "note-a", "see https://a.example.com/ and https://b.example.com/"
+        ).version_id
+        _insert_external(
+            conn, external_id="https://a.example.com/", snapshot_id="snap-empty-a"
+        )
+        _insert_external(
+            conn, external_id="https://b.example.com/", snapshot_id="snap-empty-b"
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="https://a.example.com/",
+            source_version=head,
+            source="user",
+            reason="pasted URL",
+            confidence=1.0,
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="https://b.example.com/",
+            source_version=head,
+            source="user",
+            reason="pasted URL",
+            confidence=1.0,
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str | None:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("v")
+            await pilot.pause()
+            assert isinstance(app.screen, ExternalPickerScreen)
+            table = app.screen.query_one(f"#{EXTERNAL_PICKER_TABLE_ID}", LodeDataTable)
+            return table.empty_message
+
+    empty_message = asyncio.run(_drive())
+
+    assert empty_message == "No externals for this note."
+
+
 def test_external_picker_source_type_with_brackets_renders_literally(
     tmp_path: Path,
 ) -> None:
@@ -3087,9 +3218,13 @@ def test_edit_footer_fits_100_columns_with_every_binding_visible(
 
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 7 screen-level + 5 App-level bindings stay visible (none hidden via
+    # All 8 screen-level + 4 App-level bindings stay visible (none hidden via
     # show=False); "View content" -> "View" (lode-uczx), "Related" -> "Rel"
-    # and "History" -> "Hist" (lode-ev5j.3, to make room for the new "Link").
+    # and "History" -> "Hist" (lode-ev5j.3, to make room for "Link"). "Ask" is
+    # now a SCREEN-level binding here too (lode-35nu.11.3, same key/label as
+    # the App-level one it shadows -- docs/keybindings.md), so it renders in
+    # binding-declaration order right after "Link" rather than at the tail
+    # with the other App-level entries.
     assert descriptions == [
         "Save",
         "Back",
@@ -3098,9 +3233,9 @@ def test_edit_footer_fits_100_columns_with_every_binding_visible(
         "Inspect",
         "View",
         "Link",
+        "Ask",
         "Quit",
         "Cfg",
         "Browse",
         "Tags",
-        "Ask",
     ]

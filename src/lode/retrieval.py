@@ -855,6 +855,65 @@ def _classify(
     return None
 
 
+def pinned_note_context(conn: sqlite3.Connection, note_id: str) -> list[ContextItem]:
+    """Every one of ``note_id``'s live-head passages, guaranteed context (lode-35nu.11.3).
+
+    "Ask about THIS note" pins the note as *primary* context "rather than
+    competing for retrieval rank" (the ticket's own words) — this is the
+    guarantee that makes that true: it reads the note's already-chunked
+    passages straight from the ``passages`` table (the same rows
+    :func:`expand_parents` resolves ``passage_id`` against for a normal
+    retrieval hit) rather than fabricating a synthetic passage, so every
+    returned :class:`ContextItem` cites exactly like any other retrieval hit
+    would. All items carry :data:`TrustTier.OWNED_NOTE` (correct — this is
+    the user's own note) and ``score=0.0``: pinning is **positional**, not
+    scored — the caller guarantees inclusion by where it puts these in the
+    list, and no ranking stage ever sees them. ``0.0`` is the same "no
+    upstream rank" value :func:`graph_expand` already uses for its own
+    synthetic hits; a sentinel like ``math.inf`` in a field documented as an
+    RRF score would only be a trap for a future stage that averages,
+    normalizes, or serializes it.
+
+    The head is read through the module's own :data:`_LIVE_HEAD_PREDICATE`,
+    exactly like :func:`live_head_versions`' allow-list — so a soft-deleted
+    note's tombstone head can never be pinned. Today that also falls out of
+    the tombstone simply having no passages of its own, but the pin is the
+    one leg not otherwise scoped to the live-head allow-list, and it must
+    fail closed on its own rather than on that coincidence.
+
+    Returns ``[]`` for a note with no live head (deleted, or an unknown id)
+    or a live head with no passages (not yet chunked) — the caller decides
+    what an empty pin means, this function makes no claim beyond "here is
+    what's pinnable right now."
+    """
+    row = conn.execute(
+        "SELECT n.head_version_id FROM notes n "
+        "JOIN versions v ON v.version_id = n.head_version_id "
+        f"WHERE n.note_id = ? AND {_LIVE_HEAD_PREDICATE}",
+        (note_id,),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return []
+    head_version_id: str = row[0]
+    rows = conn.execute(
+        "SELECT passage_id, char_range, text, parent_block FROM passages "
+        "WHERE target_version = ? ORDER BY ord",
+        (head_version_id,),
+    ).fetchall()
+    return [
+        ContextItem(
+            tier=TrustTier.OWNED_NOTE,
+            passage_id=passage_id,
+            target_version=head_version_id,
+            char_range=char_range,
+            passage_text=text,
+            parent_block=parent_block,
+            score=0.0,
+        )
+        for passage_id, char_range, text, parent_block in rows
+    ]
+
+
 def _in_clause(column: str, values: Collection[str]) -> str:
     """A ``<column> IN ('a', 'b', ...)`` predicate over content-address hex values.
 

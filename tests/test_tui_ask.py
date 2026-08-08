@@ -20,6 +20,7 @@ from lode.citations_read import CitationIdentity
 from lode.cited_answer import CitedAnswer
 from lode.config import Settings
 from lode.egress import WithheldCitation
+from lode.retrieval import pinned_note_context
 from lode.storage import init_db
 from lode.tui.services.ask import (
     ABSTAIN_LINE,
@@ -385,6 +386,115 @@ def test_run_ask_with_no_on_stage_is_unaffected() -> None:
     import inspect
 
     assert inspect.signature(run_ask).parameters["on_stage"].default is None
+
+
+def test_run_ask_pinned_note_id_default_is_none_and_unaffected() -> None:
+    """lode-35nu.11.3: the default is every existing caller/test's exact prior
+    behaviour -- corpus-wide Ask never passes this.
+    """
+    import inspect
+
+    assert inspect.signature(run_ask).parameters["pinned_note_id"].default is None
+
+
+def test_run_ask_with_pinned_note_id_prepends_pinned_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-35nu.11.3: the pinned note's own passages lead the context handed
+    to synthesis, ahead of whatever normal corpus retrieval also found --
+    "pinned as primary context rather than competing for retrieval rank."
+    Normal retrieval still runs underneath (a per-note ask can still cite
+    other notes/externals) -- its hit for a *different* note survives.
+    """
+    from lode.lexical import LexicalCacheBackend
+    from lode.repository import CompositeCache, Repository
+    from lode.retrieval import ContextItem, TrustTier
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    repo = Repository(conn, CompositeCache([LexicalCacheBackend(conn)]))
+    pinned_version = repo.save("note-pinned", "the pinned note's own body").version_id
+    conn.close()
+
+    canned_answer = CitedAnswer(claims=(), withheld_citations=())
+    captured: dict[str, object] = {}
+
+    def _stub_retrieve(conn, question, *, lance_dir, settings=None):
+        return [
+            ContextItem(
+                tier=TrustTier.OWNED_NOTE,
+                passage_id="other-note-passage",
+                target_version="other-note-version",
+                char_range="0:5",
+                passage_text="other note's text",
+                parent_block="other note's text",
+                score=1.0,
+            )
+        ]
+
+    def _stub_ask(conn, question, context, *, think_harder=False, settings=None):
+        captured["context"] = context
+        return canned_answer
+
+    monkeypatch.setattr("lode.retrieval._retrieve", _stub_retrieve)
+    monkeypatch.setattr("lode.cited_answer.ask", _stub_ask)
+
+    run_ask(
+        db_path,
+        "what does this note say?",
+        settings=Settings(),
+        pinned_note_id="note-pinned",
+    )
+
+    context = captured["context"]
+    assert context  # not empty
+    # The pinned note's own passage(s) lead, followed by the normal
+    # retrieval hit for the other note -- neither dropped, pinned first.
+    assert context[0].target_version == pinned_version
+    assert context[0].tier is TrustTier.OWNED_NOTE
+    assert context[-1].target_version == "other-note-version"
+
+
+def test_run_ask_with_pinned_note_id_dedupes_against_retrieval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If normal retrieval independently found the same passage the pin would
+    add, the pinned copy wins and it is not duplicated in the context.
+    """
+    from lode.lexical import LexicalCacheBackend
+    from lode.repository import CompositeCache, Repository
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    repo = Repository(conn, CompositeCache([LexicalCacheBackend(conn)]))
+    repo.save("note-pinned", "the pinned note's own body")
+    pinned = pinned_note_context(conn, "note-pinned")
+    assert pinned  # sanity: real chunking produced at least one passage
+    conn.close()
+
+    captured: dict[str, object] = {}
+
+    def _stub_retrieve(conn, question, *, lance_dir, settings=None):
+        # Normal retrieval also happens to surface the same passage.
+        return [pinned[0]]
+
+    def _stub_ask(conn, question, context, *, think_harder=False, settings=None):
+        captured["context"] = context
+        return CitedAnswer(claims=(), withheld_citations=())
+
+    monkeypatch.setattr("lode.retrieval._retrieve", _stub_retrieve)
+    monkeypatch.setattr("lode.cited_answer.ask", _stub_ask)
+
+    run_ask(
+        db_path,
+        "what does this note say?",
+        settings=Settings(),
+        pinned_note_id="note-pinned",
+    )
+
+    context = captured["context"]
+    passage_ids = [item.passage_id for item in context]
+    assert passage_ids.count(pinned[0].passage_id) == 1
 
 
 # ---------------------------------------------------------------------------

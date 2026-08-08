@@ -1713,6 +1713,15 @@ def test_status_no_enrichment_hint_when_all_one_model_matches_config(
         )
         conn.commit()
         _write_ai_annotation(conn, "note-1", "ver-1", Settings().enrichment_llm.model)
+        # This test bypasses Repository.save (direct row inserts), so it must
+        # also seed the passages_fts row save would have written synchronously
+        # -- otherwise the lode-cyly lexical-gap hint correctly fires for it,
+        # sinking this test's "No action needed." assertion.
+        conn.execute(
+            "INSERT INTO passages_fts (passage_id, target_version, text) "
+            "VALUES ('p-1', 'ver-1', 'body')"
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -1904,6 +1913,68 @@ def test_status_hints_enrichment_stale_on_provider_switch_alone(
     assert "disagree with the currently" in result.stdout
     assert "configured enrichment_llm" in result.stdout
     assert "No action needed." not in result.stdout
+
+
+def test_status_hints_lexical_gap(tmp_path: Path, warm_model_cache: None) -> None:
+    """A live note head with no passages_fts rows surfaces a lexical-gap hint (lode-cyly)."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "1 live note head(s) have no lexical" in result.stdout
+    assert "reindex-lexical" in result.stdout
+    assert "No action needed." not in result.stdout
+
+
+def test_status_no_lexical_gap_hint_when_fts_rows_present(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    """A note head with a passages_fts row already present stays quiet."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.execute(
+            "INSERT INTO passages_fts (passage_id, target_version, text) "
+            "VALUES ('p-1', 'ver-1', 'body')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "lexical" not in result.stdout
+    assert "No action needed." in result.stdout
+
+
+def test_lexical_gap_count_is_never_fatal(tmp_path: Path) -> None:
+    """A directory in place of the db file: sqlite3 can't open it -- must swallow, not propagate."""
+    not_a_db = tmp_path / "not-a-db"
+    not_a_db.mkdir()
+    assert cli._lexical_gap_count(not_a_db) == 0
 
 
 def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
@@ -2265,6 +2336,33 @@ def test_egress_rejects_unknown_purpose(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     result = runner.invoke(app, ["egress", "--purpose", "bogus", "--db", str(db_path)])
     assert result.exit_code != 0
+
+
+def test_egress_lists_a_tool_row_whose_model_is_null(tmp_path: Path) -> None:
+    """A purpose='tool' row has no model (lode-35nu.11.7) and must still list.
+
+    The schema admits a NULL model for a tool call, so the listing's column
+    padding has to survive one -- no writer produces such a row yet
+    (lode-35nu.11.1 does), which is exactly why it needs a test now rather than
+    a TypeError later.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO egress_log (purpose, destination, arguments, "
+                "sent_targets) VALUES ('tool', 'https://acme.atlassian.net', "
+                "'{\"jql\": \"x\"}', '[]')"
+            )
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["egress", "--db", str(db_path)])
+    assert result.exit_code == 0, result.stdout
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    assert len(lines) == 1
+    assert "tool" in lines[0]
 
 
 # --- lode no-egress (the no-egress-tier control surface, lode-w0h.7) --------

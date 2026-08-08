@@ -168,10 +168,25 @@ claimed (above); `ctrl+n` is now claimed too, at the **Screen** level — `EditS
 `VersionViewScreen`, `SnapshotViewerScreen` (`lode-ev5j.3`), and `CaptureScreen` (`lode-5ill`,
 below) all share the same open-link-under-cursor binding. **`ctrl+j` is now claimed too** — at the
 **Screen** level, by `AskScreen` (`lode-35nu.4`, below), for "open the focused citation's cited
-version/snapshot". **No formally-safe letter is left** for the next ticket that needs a new
+version/snapshot". **No formally-safe letter is left** for the next ticket that needs a *new*
 App-level (or Screen-level) key — see the "No function keys" section's letter-space accounting
 above for how to widen the pool (a fresh `ctrl+<letter>` audit, or reclaiming one already spent on
 a feature that no longer needs it) before landing one.
+
+**`lode-35nu.11.3` needed a per-note ask entry point and spent no new letter at all.** Rather than
+widen the pool, it reused the existing App-level `ctrl+l` ("Ask") via the documented
+screen-shadows-app mechanism (above): `EditScreen` and `VersionViewScreen` each declare their own
+Screen-level `Binding("ctrl+l", "ask_about_note", "Ask")` — same key, same footer label, so nothing
+about the footer or the letter ledger changes — that simply resolves *first* while one of those
+screens is active and opens the note-scoped ask flow (the current note pinned as primary context)
+instead of the corpus-wide one. **The accepted cost of that shadow** (the `lode-olmi.6` trap
+above, in its mildest form): while one of those two screens is active, the *corpus-wide* Ask is no
+longer reachable in one key — Escape back to Browse first. Judged acceptable because both keys are
+the same action, differing only in scope, and "Ask" pressed from inside a note most plausibly means
+"ask about this note". `AskScreen` itself gained an optional `note_id` constructor
+parameter rather than becoming a second screen module — the zero-arg form (`SCREENS["ask"]`'s
+App-level push) is the unchanged corpus-wide behaviour. A future ticket needing a genuinely *new*
+action on one of these screens still faces the exhausted pool above; this one didn't need to.
 
 ### Screen-level
 
@@ -180,6 +195,7 @@ a feature that no longer needs it) before landing one.
 | `VersionHistoryScreen` | `screens/version_history.py` | `escape` | Back | — |
 | `VersionViewScreen` | `screens/version_view.py` | `escape` | Back | read-only |
 | | | `ctrl+n` | Open link under cursor | |
+| | | `ctrl+l` | Ask about this note (`lode-35nu.11.3`, shadows the App-level `ctrl+l`) | |
 | `EnrichmentModalScreen` | `screens/enrichment_modal.py` | `escape` | Back | — |
 | `DeleteConfirmScreen` | `screens/delete_confirm.py` | `y` | Yes, delete | — |
 | | | `n` | No, cancel | |
@@ -205,6 +221,7 @@ a feature that no longer needs it) before landing one.
 | | | `ctrl+g` | Inspect (enrichment modal) | |
 | | | `ctrl+r` | View retrieved content | |
 | | | `ctrl+n` | Open link under cursor | |
+| | | `ctrl+l` | Ask about this note (`lode-35nu.11.3`, shadows the App-level `ctrl+l`) | |
 | `DiscardConfirmScreen` | `screens/discard_confirm.py` | `s` | Save & quit | — |
 | | | `d` | Discard & quit | |
 | | | `c` | Cancel | |

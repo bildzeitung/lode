@@ -24,6 +24,15 @@
           }
         ],
         "matcher": "Bash"
+      },
+      {
+        "hooks": [
+          {
+            "command": "ROOT=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}\"; SCRIPT=\"$ROOT/scripts/trunk-write-guard.sh\"; [ -n \"$ROOT\" ] && [ -x \"$SCRIPT\" ] && bash \"$SCRIPT\"; exit 0",
+            "type": "command"
+          }
+        ],
+        "matcher": "Edit|Write"
       }
     ],
     "PreCompact": [

@@ -321,6 +321,27 @@ bd show <id> --json | jq -r '.[0].design // empty'
 
 ### 5. Implement
 
+**Re-assert isolation before the first mutating write (lode-6wgc).** Step 3's guards run once, before
+work starts, so they cannot catch a launch worktree that vanishes *mid-session* — observed, with the
+agent's cwd silently falling back to the main checkout on `trunk` ([full
+account](../../docs/agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc)). Re-run
+the same 0/1/2 precondition immediately before the first `Edit`/`Write` of the task:
+
+```bash
+"$(git rev-parse --show-toplevel)/scripts/isolation-guard.sh" || {
+  echo "STOP: isolation guard failed mid-session (lode-6wgc) -- my launch worktree is gone or my" \
+    "cwd has moved off it since step 3. Do NOT edit, write, or run nox. Report to the operator."
+  exit 1
+}
+```
+
+The toplevel is substituted inline, never carried in a variable from step 3 — each fenced block is a
+separate `Bash` invocation and shell state does not survive between them (lode-lv04, gated by
+`tests/test_skill_bash_state.py`). On failure the response is identical to step 3's: hard stop, no
+`EnterWorktree` retry, no self-provisioned `git worktree add` — report the exact diagnostic and let
+the operator decide. (I do **not** re-run `recycled-worktree-guard.sh` here — that guard's failure
+mode is destructive repair, appropriate as a one-time precondition, not as a mid-session recheck.)
+
 - **Create new files with the `Write` tool**, not `bash` heredocs/echo (a `\n#` in a quoted bash
   arg — comments, section headers — trips a security prompt; Write avoids it).
 - Match the surrounding code's idiom, naming, and comment density, and honor the coding-style fiats
@@ -396,6 +417,20 @@ Full contract: [docs/agents-workflow.md — Stacked land
 branches](../../docs/agents-workflow.md#stacked-land-branches-lode-02v).
 
 ### 6. Commit implementation work (granular, attributed)
+
+**Re-assert isolation once more before the first `git commit` (lode-6wgc)** — same one-liner as step
+5. This is the checkpoint that matters most: if the worktree vanished during step 5, `git commit`
+here does not fail, it succeeds *against the main checkout on `trunk`* — the one outcome CLAUDE.md
+calls non-negotiable, and far harder to undo than the in-place reformat `nox -t fix` does next. One
+guard placed here covers both this commit and the gate loop that immediately follows.
+
+```bash
+"$(git rev-parse --show-toplevel)/scripts/isolation-guard.sh" || {
+  echo "STOP: isolation guard failed mid-session (lode-6wgc) -- do NOT commit or run nox against" \
+    "this cwd; a commit here could land on trunk. Report to the operator."
+  exit 1
+}
+```
 
 Commit after each completed unit of work, inside the worktree, with a clear message ending in:
 
@@ -913,6 +948,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Default branch | `trunk` (never edit, never land directly — the lander owns it) |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured); I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
 | Worktree lock | `git worktree lock` it before step 4 (first action inside the worktree), `git worktree unlock` right after my first commit (end of step 6) — closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep (lode-oqr) |
+| Isolation guard (mid-session) | re-run the same script immediately before my first mutating `Edit`/`Write` (step 5) and again before my first `git commit` (step 6) — a worktree can pass step 3's guards and still be destroyed mid-session, and a commit made after that lands **on `trunk`**; same stop-and-report contract, and the toplevel is substituted inline, never carried across fenced blocks (lode-6wgc) |
 | Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST executable action, before even the recycled-worktree guard — the harness has handed a dispatched agent NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |

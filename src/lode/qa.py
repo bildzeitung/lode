@@ -38,6 +38,13 @@ Claude. Structured decoding uses **structured outputs + Pydantic** (the same
 convention as the enrichment LLM, ``docs/stack.md``), reusing the landed
 :class:`lode.answer.Claim` so the schema stays pinned to the verifiable
 claims/support shape.
+
+**lode-35nu.11.6:** the call is routed through
+:meth:`~lode.llm_provider.LLMProvider.run_tool_turns` with an empty ``tools``
+list -- byte-for-byte identical to the direct :meth:`structured_call` this
+replaced (every provider's empty-``tools`` case is required to delegate
+straight to it). This ticket wires no tools in; a future ticket
+(lode-35nu.11.2) can pass real ones here without another reshape.
 """
 
 from __future__ import annotations
@@ -155,6 +162,9 @@ class _ClaimsEnvelope(BaseModel):
     decoded through this single-field envelope and unwrapped to ``Answer``.
     Reuses :class:`lode.answer.Claim` so the schema stays pinned to the landed
     claims/support shape -- this module owns the call, not the answer shape.
+    ``Support.body_offset`` is app-side only and is dropped from the generated
+    schema by ``SkipJsonSchema`` on the field itself (lode-9nmk), so nothing
+    here has to mirror or strip it.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -242,6 +252,21 @@ def answer_question(
     )
 
 
+def _no_tools_configured(name: str, tool_input: dict) -> str:  # pragma: no cover
+    """``tool_result`` callback for the (currently empty) ``tools`` list below.
+
+    Never actually invoked: :meth:`~lode.llm_provider.LLMProvider.run_tool_turns`
+    is required to delegate straight to ``structured_call`` when ``tools`` is
+    empty, engaging no loop machinery at all (lode-35nu.11.6). This stub exists
+    only so a future regression that starts calling it fails loudly rather than
+    silently swallowing a tool call.
+    """
+    raise AssertionError(
+        f"unexpected tool call {name!r}({tool_input!r}) -- lode-35nu.11.6 wires "
+        "no tools into the Q&A synthesis path yet (lode-35nu.11.2)"
+    )
+
+
 def _request_claims(
     provider: LLMProvider,
     model: str,
@@ -255,22 +280,27 @@ def _request_claims(
     """Make the structured-output call and return the decoded claims envelope.
 
     Routed through the :class:`~lode.llm_provider.LLMProvider` seam
-    (lode-568v.2) -- ``provider.structured_call`` with no ``tool_name`` uses
-    ``messages.parse`` with an ``output_format`` Pydantic model for
-    :class:`~lode.llm_provider.AnthropicProvider`, so the SDK validates the
-    response against the claims schema and returns a typed instance
-    (``docs/stack.md`` "structured outputs + Pydantic"), byte-for-byte
-    identical to the direct SDK call this replaced.
+    (lode-568v.2) via :meth:`~lode.llm_provider.LLMProvider.run_tool_turns`
+    (lode-35nu.11.6) with an empty ``tools`` list -- every provider's
+    empty-``tools`` case is required to delegate straight to
+    ``structured_call`` (``messages.parse`` with an ``output_format`` Pydantic
+    model for :class:`~lode.llm_provider.AnthropicProvider`), so this call is
+    byte-for-byte identical to calling ``structured_call`` directly, as it did
+    before this ticket. ``run_tool_turns`` is the seam this path is reshaped
+    onto so a future ticket (lode-35nu.11.2) can pass real tools here without
+    another reshape; no tool schemas are defined by this ticket.
     """
     sources = "\n\n".join(
         _render_source(send, is_external.get(send.target_id, False)) for send in sent
     )
     user_prompt = f"QUESTION:\n{question}\n\nSOURCES:\n{sources}"
-    return provider.structured_call(
+    return provider.run_tool_turns(
         model=model,
         reasoning_effort=reasoning_effort,
         system=_SYSTEM_PROMPT,
         user_prompt=user_prompt,
+        tools=(),
+        tool_result=_no_tools_configured,
         output_schema=_ClaimsEnvelope,
         max_tokens=max_tokens,
         timeout_s=timeout_s,

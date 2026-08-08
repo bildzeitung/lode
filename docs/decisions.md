@@ -3952,6 +3952,27 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   - **SEQUENCING (binding):** `lode-3k6x` and `lode-mm73` both edit §2b and must be built in
     sequence, not in parallel.
 
+- **2026-08-07 — Open: does the harness reap a launch worktree on resume via `SendMessage`?
+  (`lode-6wgc`)** During a bare `/code` fan-out (cap 5), a `coding` producer's launch worktree was
+  deleted from disk *while the agent was actively working in it*, silently dropping its cwd onto the
+  main checkout on `trunk`. The agent noticed (`pwd`/`HEAD` both read wrong) and stopped before
+  touching anything, but that outcome was luck-adjacent, not guaranteed. The leading hypothesis —
+  the worktree vanished during a turn the agent had been *resumed into* via `SendMessage`, after
+  stalling on a backgrounded gate (`lode-95o`) — is **unconfirmed and left open**: it requires
+  harness-side instrumentation this repo has no way to add or inspect from inside a session. Checked
+  and ruled out for this specific incident: fan-out reclaim (`/code`'s end-of-pass block hadn't run,
+  and only ever matches `land/<id>--*` names, never `worktree-agent-*`) and a concurrent `/land` pass
+  (none was running). **Mitigation shipped by `lode-6wgc`** (not a fix for the hypothesis above, which
+  remains open): `coding.md` and `code-reviewer.md` now re-run `scripts/isolation-guard.sh`
+  immediately before their first mutating `Edit`/`Write`, and again before the builder's first
+  `git commit` (the highest-consequence step — in this failure mode the commit *succeeds*, against
+  `trunk`) / the reviewer's gate loop, narrowing — not eliminating — the window in which a worktree
+  can vanish undetected. A markdown checkpoint is not the structurally correct altitude for this: a
+  `PreToolUse` hook needs no agent cooperation, and is deferred on stated grounds (it would also fire
+  in the main session's sanctioned `trunk` workflows) to `lode-p8zl`. Full write-up:
+  [agents-workflow.md](agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc).
+  Revisit if this recurs with better evidence, or if a harness changelog ever documents worktree
+  lifecycle behavior across `SendMessage` resumes.
 - **Tool-augmented Ask: identity, persistence, and egress — DECIDED (maintainer, 2026-08-07,
   `lode-35nu.11.5`).** `/challenge` established that `lode-35nu.11`'s settled "snapshot-then-cite"
   constraint rested on an assumption the schema does not support, and blocked the whole `.11`
@@ -4003,3 +4024,34 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   - **Consequence for the sub-tree:** `.11.1` loses its identity work and keeps its dedupe criterion
     (already satisfied); `.11.2` narrows to "search returns ids/titles, fetch returns bodies". Both
     were rewritten to match before either was built, as `.11.5`'s acceptance required.
+
+- **2026-08-08 — DECIDED (maintainer, `/sweep` escalation walk-through): the two design questions
+  `lode-p8zl` escalated when investigating a `PreToolUse` worktree-isolation hook.** `lode-6wgc`'s
+  markdown-checkpoint mitigation for a mid-session worktree loss depends on the agent choosing to
+  re-run `scripts/isolation-guard.sh`; the structurally correct altitude — a hook that fires on
+  every matching tool call with no agent cooperation — was deferred to `lode-p8zl` because it raised
+  two unresolved questions. Both are now settled; the shipped guard is
+  [`scripts/trunk-write-guard.sh`](../scripts/trunk-write-guard.sh).
+  - **RULING 1 (subagent-vs-main-session disambiguation) — do NOT attempt it.** The documented
+    `PreToolUse` payload carries no agent-role field, and a stranded subagent and a legitimate
+    main-session `trunk` edit both resolve to the same checkout root — there is no way to tell them
+    apart from inside a hook. **Taken:** gate on the BRANCH instead, which IS derivable
+    (`git rev-parse --abbrev-ref HEAD`, root resolved via `CLAUDE_PROJECT_DIR` falling back to
+    `git rev-parse --show-toplevel`, matching all three shipped guards), and return
+    `permissionDecision: "ask"` — deliberately NOT `"deny"` — when the branch is `trunk`. A human at
+    the terminal can approve the prompt and proceed; a dispatched subagent cannot approve anything
+    and is stopped. Human presence becomes the discriminator without the payload ever encoding it.
+  - **RULING 2 (which `CLAUDE.md` passage is authoritative) — the STOP banner governs AUTHORING
+    file changes; "Workflow gotchas" describes MERGE/LAND mechanics** (how to commit without
+    dragging `.beads/issues.jsonl` along), not a parallel authoring path. The banner was never
+    literally absolute in practice — `/land` writes `trunk` every pass and `/sweep` pushes it — but
+    under an `"ask"` decision the tension is moot operationally: the doc-only `--no-verify` path
+    still works, it just costs one confirmation.
+  - **RULING 3 (the missing-prerequisite failure mode, `lode-p8zl`'s original design question 2) —
+    does not arise.** A branch-name guard needs NO `jq` — it never parses `tool_input` — so unlike
+    the three shipped `PreToolUse(Bash)` guards it adds nothing to the `lode-oii9`
+    deny-everything-when-`jq`-is-missing surface.
+  - Full account, the hook's own header, and the test suite:
+    [agents-workflow.md](agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc),
+    [`scripts/trunk-write-guard.sh`](../scripts/trunk-write-guard.sh),
+    `tests/test_trunk_write_guard.py`.

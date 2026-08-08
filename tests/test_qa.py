@@ -23,6 +23,7 @@ from lode.qa import (
     OPUS_MODEL,
     SONNET_MODEL,
     QaPassage,
+    _ClaimsEnvelope,
     answer_question,
 )
 from lode.storage import init_db
@@ -382,3 +383,22 @@ def test_empty_answer_is_valid(conn) -> None:
         conn, "q", [QaPassage("v1", "text")], provider=AnthropicProvider(client)
     )
     assert result.answer.claims == []
+
+
+def test_body_offset_is_absent_from_the_provider_schema() -> None:
+    # Support.body_offset is an app-side field (stamped after the faithfulness
+    # gate, never supplied by the model), but Support also doubles as the
+    # structured-output response shape, so SkipJsonSchema on the field must
+    # keep it out of the schema handed to the provider entirely, as a
+    # *property* (lode-9nmk) -- not merely describe it as "leave unset". The
+    # anthropic SDK derives the wire schema from model_json_schema()
+    # (anthropic/lib/_parse/_transform.py), so this is the schema actually
+    # sent. Doc prose elsewhere in the schema may still mention the field name,
+    # so this checks property keys rather than the raw dump.
+    schema = _ClaimsEnvelope.model_json_schema()
+    all_defs = {"": schema, **schema.get("$defs", {})}
+    properties = {k for d in all_defs.values() for k in d.get("properties", {})}
+    assert "body_offset" not in properties
+    # ...and the model-supplied fields are all still there, so this cannot pass
+    # by the schema having quietly lost its Support definition.
+    assert {"version_id", "snapshot_id", "quoted_span", "text", "support"} <= properties
