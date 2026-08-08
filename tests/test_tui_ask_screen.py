@@ -37,6 +37,10 @@ from lode.tui.screens.capture import CaptureScreen
 from lode.tui.screens.edit import EditScreen
 from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
 from lode.tui.screens.version_view import VersionViewScreen
+from lode.tui.screens.save_as_note_confirm import (
+    SAVE_AS_NOTE_PREVIEW_ID,
+    SaveAsNoteConfirmScreen,
+)
 from lode.tui.services.ask import STAGE_RETRIEVING, AskResult, CitationIdentity
 from lode.versions import save
 
@@ -518,6 +522,7 @@ def test_footer_shows_each_action_once_with_no_duplicate_quit(
     assert descriptions == [
         "Back",
         "Open citation",
+        "Save as note",
         "Quit",
         "Cfg",
         "Browse",
@@ -876,3 +881,255 @@ def test_a_new_question_clears_the_previous_answers_citation_status(
 
     assert cleared == ""
     assert repopulated != ""
+
+
+# ---------------------------------------------------------------------------
+# Save as note (lode-35nu.11.4) -- accepting an ask answer creates a fresh
+# note through the standard capture path, linked back to the source note by
+# a note->note edge; the source note itself is never touched. Reachable only
+# from a per-note ask (there is no source note to link back to otherwise).
+# ---------------------------------------------------------------------------
+
+
+def _canned_answer() -> AskResult:
+    return AskResult(
+        answer=CitedAnswer(
+            claims=(
+                Claim(
+                    text="We chose OAuth for service auth.",
+                    support=[Support(version_id="v1", quoted_span="use OAuth")],
+                ),
+            ),
+            withheld_citations=(),
+        ),
+        as_of={"v1": "2026-06-18T00:00:00.000Z"},
+        identities={"v1": CitationIdentity(note_id="n1", title="Note One", is_head=True)},
+    )
+
+
+def test_ctrl_s_with_no_source_note_is_a_no_op_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Corpus-wide Ask (no pinned note) has nothing to link an edge back to."""
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+    monkeypatch.setattr(
+        "lode.tui.screens.ask.run_ask",
+        lambda db_path, question, **kwargs: _canned_answer(),
+    )
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            question_input = app.screen.query_one(f"#{QUESTION_ID}")
+            question_input.value = "what did we decide about auth?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            # Still on AskScreen -- nothing pushed, no crash.
+            assert isinstance(app.screen, AskScreen)
+
+    asyncio.run(_drive())
+
+
+def test_ctrl_s_with_no_answer_yet_is_a_no_op_notification(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "hello world")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            app.push_screen(AskScreen(note_id="note-a"))
+            await pilot.pause()
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            assert isinstance(app.screen, AskScreen)
+
+    asyncio.run(_drive())
+
+
+def test_ctrl_s_with_an_abstained_answer_is_a_no_op_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "hello world")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+    abstained = AskResult(answer=CitedAnswer(claims=(), withheld_citations=()))
+    monkeypatch.setattr(
+        "lode.tui.screens.ask.run_ask", lambda db_path, question, **kwargs: abstained
+    )
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            app.push_screen(AskScreen(note_id="note-a"))
+            await pilot.pause()
+            question_input = app.screen.query_one(f"#{QUESTION_ID}")
+            question_input.value = "anything at all?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            assert isinstance(app.screen, AskScreen)
+
+    asyncio.run(_drive())
+
+
+def test_ctrl_s_from_a_per_note_ask_pushes_the_confirm_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "hello world")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+    monkeypatch.setattr(
+        "lode.tui.screens.ask.run_ask",
+        lambda db_path, question, **kwargs: _canned_answer(),
+    )
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            app.push_screen(AskScreen(note_id="note-a"))
+            await pilot.pause()
+            question_input = app.screen.query_one(f"#{QUESTION_ID}")
+            question_input.value = "what did we decide about auth?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            results_text = app.screen.query_one(f"#{RESULTS_ID}").content
+
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            assert isinstance(app.screen, SaveAsNoteConfirmScreen)
+            preview = app.screen.query_one(f"#{SAVE_AS_NOTE_PREVIEW_ID}").content
+            return results_text + "|" + preview
+
+    rendered = asyncio.run(_drive())
+    results_text, preview = rendered.split("|", 1)
+    # The preview is exactly what was on screen -- byte-for-byte.
+    assert preview == results_text
+
+
+def test_confirming_save_as_note_creates_a_new_note_linked_to_the_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "hello world")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+    monkeypatch.setattr(
+        "lode.tui.screens.ask.run_ask",
+        lambda db_path, question, **kwargs: _canned_answer(),
+    )
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            app.push_screen(AskScreen(note_id="note-a"))
+            await pilot.pause()
+            question_input = app.screen.query_one(f"#{QUESTION_ID}")
+            question_input.value = "what did we decide about auth?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            assert isinstance(app.screen, SaveAsNoteConfirmScreen)
+            await pilot.press("y")
+            await pilot.pause()
+            # Back on AskScreen, the modal popped itself via dismiss.
+            assert isinstance(app.screen, AskScreen)
+
+    asyncio.run(_drive())
+
+    conn = init_db(db_path)
+    try:
+        (source_head,) = conn.execute(
+            "SELECT head_version_id FROM notes WHERE note_id = ?", ("note-a",)
+        ).fetchone()
+        (source_body,) = conn.execute(
+            "SELECT body FROM versions WHERE version_id = ?", (source_head,)
+        ).fetchone()
+        (note_count,) = conn.execute("SELECT COUNT(*) FROM notes").fetchone()
+        edges = conn.execute(
+            "SELECT from_id, to_id, source, status FROM edges WHERE to_id = ?",
+            ("note-a",),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    # Source note untouched.
+    assert source_body == "hello world"
+    # Exactly one new note created (the source + the new one).
+    assert note_count == 2
+    # Exactly one note->note edge, back to the source.
+    assert len(edges) == 1
+    from_id, to_id, edge_source, status = edges[0]
+    assert from_id != "note-a"
+    assert to_id == "note-a"
+    assert edge_source == "user"
+    assert status == "fresh"
+
+
+def test_declining_save_as_note_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "hello world")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+    monkeypatch.setattr(
+        "lode.tui.screens.ask.run_ask",
+        lambda db_path, question, **kwargs: _canned_answer(),
+    )
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            app.push_screen(AskScreen(note_id="note-a"))
+            await pilot.pause()
+            question_input = app.screen.query_one(f"#{QUESTION_ID}")
+            question_input.value = "what did we decide about auth?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            assert isinstance(app.screen, SaveAsNoteConfirmScreen)
+            await pilot.press("n")
+            await pilot.pause()
+            assert isinstance(app.screen, AskScreen)
+
+    asyncio.run(_drive())
+
+    conn = init_db(db_path)
+    try:
+        (note_count,) = conn.execute("SELECT COUNT(*) FROM notes").fetchone()
+        (edge_count,) = conn.execute("SELECT COUNT(*) FROM edges").fetchone()
+    finally:
+        conn.close()
+
+    assert note_count == 1, "no new note on decline"
+    assert edge_count == 0, "no edge on decline"

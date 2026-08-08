@@ -31,7 +31,10 @@ from lode.tui.services.ask import (
     citation_targets,
     render_ask_result,
     run_ask,
+    save_ask_answer_as_note,
 )
+from lode.tui.services.capture import EmptyCaptureError
+from lode.tui.services.reconcile import Conflict
 from lode.versions import save
 
 
@@ -599,3 +602,124 @@ def test_citation_targets_excludes_an_identity_with_neither_note_nor_external() 
     )
 
     assert citation_targets(result) == []
+
+
+# ---------------------------------------------------------------------------
+# save_ask_answer_as_note (lode-35nu.11.4) -- accepting an ask answer creates
+# a FRESH note through the standard capture path, linked back to the source
+# note by a note->note edge; the source note itself is never touched.
+# ---------------------------------------------------------------------------
+
+
+def test_save_ask_answer_as_note_creates_a_new_note_via_the_capture_path(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "source-note", "the source note's original body")
+    finally:
+        conn.close()
+
+    result = save_ask_answer_as_note(
+        db_path,
+        source_note_id="source-note",
+        body="We chose OAuth for service auth.",
+        settings=Settings(),
+    )
+
+    assert not isinstance(result, Conflict)
+    assert result.op == "create"
+    assert result.note_id != "source-note"
+
+    conn = init_db(db_path)
+    try:
+        (body,) = conn.execute(
+            "SELECT body FROM versions WHERE version_id = ?", (result.version_id,)
+        ).fetchone()
+        assert body == "We chose OAuth for service auth."
+    finally:
+        conn.close()
+
+
+def test_save_ask_answer_as_note_never_mutates_the_source_note(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        source_result = save(conn, "source-note", "the source note's original body")
+    finally:
+        conn.close()
+
+    save_ask_answer_as_note(
+        db_path,
+        source_note_id="source-note",
+        body="a fresh proposed answer",
+        settings=Settings(),
+    )
+
+    conn = init_db(db_path)
+    try:
+        version_id, body = conn.execute(
+            "SELECT version_id, body FROM notes JOIN versions "
+            "ON notes.head_version_id = versions.version_id "
+            "WHERE notes.note_id = ?",
+            ("source-note",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    # Source note's head is unmoved and byte-for-byte unchanged.
+    assert version_id == source_result.version_id
+    assert body == "the source note's original body"
+
+
+def test_save_ask_answer_as_note_links_a_note_to_note_edge_back_to_the_source(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "source-note", "the source note's original body")
+    finally:
+        conn.close()
+
+    result = save_ask_answer_as_note(
+        db_path,
+        source_note_id="source-note",
+        body="a fresh proposed answer",
+        settings=Settings(),
+    )
+    assert not isinstance(result, Conflict)
+
+    conn = init_db(db_path)
+    try:
+        edges = conn.execute(
+            "SELECT from_id, to_id, source, status FROM edges "
+            "WHERE from_id = ? AND to_id = ?",
+            (result.note_id, "source-note"),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert len(edges) == 1
+    (from_id, to_id, source, status) = edges[0]
+    assert from_id == result.note_id
+    assert to_id == "source-note"
+    assert source == "user"
+    assert status == "fresh"
+
+
+def test_save_ask_answer_as_note_refuses_an_empty_body(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "source-note", "body")
+    finally:
+        conn.close()
+
+    with pytest.raises(EmptyCaptureError):
+        save_ask_answer_as_note(
+            db_path, source_note_id="source-note", body="   ", settings=Settings()
+        )

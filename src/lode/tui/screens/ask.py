@@ -54,6 +54,7 @@ from textual.screen import Screen
 from textual.timer import Timer
 from textual.widgets import Header, Input
 
+from lode.tui.screens.save_as_note_confirm import SaveAsNoteConfirmScreen
 from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
 from lode.tui.screens.version_view import VersionViewScreen
 from lode.tui.services.ask import (
@@ -61,7 +62,9 @@ from lode.tui.services.ask import (
     citation_targets,
     render_ask_result,
     run_ask,
+    save_ask_answer_as_note,
 )
+from lode.tui.services.reconcile import Conflict
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.widgets.lode_static import LodeStatic
 
@@ -110,6 +113,19 @@ class AskScreen(Screen[None]):
         # ledger had left unclaimed -- confirmed free against Input.BINDINGS,
         # textual.keys.KEY_ALIASES, and every other screen's own BINDINGS.
         Binding("ctrl+j", "open_citation", "Open citation"),
+        # ctrl+s: "Save as note" (lode-35nu.11.4). Confirmed free against
+        # ``Input.BINDINGS`` (the question field's own builtins -- see the
+        # module-level import comment near ``on_input_submitted``), against
+        # ``textual.keys.KEY_ALIASES``, and against ``App.BINDINGS``'s
+        # ``priority=True`` reservations -- unlike the exhausted global
+        # letter ledger ``docs/keybindings.md`` tracks for TextArea-bearing
+        # screens, this Screen's only text-entry widget is an ``Input`` (no
+        # TextArea), and ``ctrl+s`` is not one of its builtins, so it is free
+        # here even though it is already spent on ``EditScreen``/
+        # ``CaptureScreen`` -- those are different screens, never active at
+        # the same time as this one. Reuses "Ctrl+S = Save" mnemonically,
+        # the same convention those two screens already use.
+        Binding("ctrl+s", "save_as_note", "Save as note"),
     ]
 
     def __init__(self, note_id: str | None = None) -> None:
@@ -142,6 +158,12 @@ class AskScreen(Screen[None]):
         # ``_citation_idx`` is which target Up/Down/Ctrl+J currently act on.
         self._result: AskResult | None = None
         self._citation_idx = 0
+        # The last rendered answer text (lode-35nu.11.4) -- exactly what
+        # ``RESULTS_ID`` shows. Kept alongside ``_result`` rather than
+        # re-rendered on demand so the confirm-preview and the note body
+        # that gets saved are byte-for-byte the same text the user just
+        # looked at, not a fresh render that could in principle drift.
+        self._rendered_text = _PLACEHOLDER
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -276,6 +298,7 @@ class AskScreen(Screen[None]):
         results = self.query_one(f"#{RESULTS_ID}", LodeStatic)
         results.update(text)
         self._result = result
+        self._rendered_text = text
         self._citation_idx = 0
         self._update_citation_status()
 
@@ -346,3 +369,53 @@ class AskScreen(Screen[None]):
             self.app.push_screen(VersionViewScreen(identity.note_id, target_id))
         else:
             self.app.push_screen(SnapshotViewerScreen(target_id))
+
+    def action_save_as_note(self) -> None:
+        """Ctrl+S: preview-and-confirm saving the current answer as a new note (lode-35nu.11.4).
+
+        Only reachable for a per-note ask (:attr:`_note_id` set -- see the
+        module docstring's "Ask about THIS note" section): the new note's
+        note->note edge needs a source note to link back to, and corpus-wide
+        Ask has none. A no-op (with a notification) when there is no
+        confirmable answer yet -- no question asked, still in flight, an
+        abstention (nothing was actually answered), or a corpus-wide ask.
+        Pushes :class:`~lode.tui.screens.save_as_note_confirm.SaveAsNoteConfirmScreen`
+        with the exact text currently on screen; the LLM never writes on its
+        own, this only ever fires from the user's own explicit Yes.
+        """
+        if self._note_id is None:
+            self.notify(
+                "save as note needs a source note -- ask about a note first",
+                severity="warning",
+            )
+            return
+        if self._result is None or self._result.answer.abstained:
+            self.notify("no answer to save yet", severity="warning")
+            return
+        self.app.push_screen(
+            SaveAsNoteConfirmScreen(self._rendered_text), self._on_save_as_note_confirm
+        )
+
+    def _on_save_as_note_confirm(self, confirmed: bool | None) -> None:
+        """Act on the confirm modal's answer: save-through-capture, or leave untouched.
+
+        Rejecting (``False``/``None``, e.g. Escape) writes nothing at all --
+        no new note, no edge, no version. A CAS reject on the fresh note id
+        (:class:`~lode.tui.services.reconcile.Conflict`, practically
+        unreachable -- a fresh ``uuid4`` has nothing to collide with) is
+        notified rather than routed to the reconcile screen: there is no
+        user-typed buffer to preserve here, just the same already-on-screen
+        answer, safe to let the user retry.
+        """
+        if not confirmed or self._note_id is None or self._result is None:
+            return
+        result = save_ask_answer_as_note(
+            self.app.db_path,
+            source_note_id=self._note_id,
+            body=self._rendered_text,
+            settings=self.app.settings,
+        )
+        if isinstance(result, Conflict):
+            self.notify("could not save -- please try again", severity="error")
+            return
+        self.notify("saved as a new note")
