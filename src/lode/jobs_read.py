@@ -7,6 +7,25 @@ CLI commands themselves are dispatch-only callers of these functions.
 """
 
 import sqlite3
+from typing import NamedTuple
+
+
+class EgressRow(NamedTuple):
+    """One ``egress_log`` row -- ``list_egress``'s self-describing return type.
+
+    ``destination``/``arguments`` are NULL for ``purpose`` in ('enrich', 'qa')
+    and populated for ``purpose='tool'`` (lode-l87l; schema/writer since
+    lode-35nu.11.7/.11.1).
+    """
+
+    id: int
+    ts: str
+    purpose: str
+    model: str | None
+    sent_targets: str
+    redactions: str | None
+    destination: str | None
+    arguments: str | None
 
 
 def job_status_counts(conn: sqlite3.Connection) -> dict[str, int]:
@@ -52,18 +71,16 @@ def list_jobs(
 
 def list_egress(
     conn: sqlite3.Connection, purpose: str | None = None
-) -> list[tuple[int, str, str, str, str, str | None, str | None, str | None]]:
-    """Every egress send (or every send of ``purpose``), each as ``(id, ts,
-    purpose, model, sent_targets, redactions, destination, arguments)`` --
-    ``lode egress``'s read. ``destination``/``arguments`` are NULL for
-    ``purpose`` in ('enrich', 'qa') and populated for ``purpose='tool'``
-    (lode-l87l; schema/writer since lode-35nu.11.7/.11.1)."""
+) -> list[EgressRow]:
+    """Every egress send (or every send of ``purpose``), each as an
+    :class:`EgressRow` -- ``lode egress``'s read."""
     where, params = ("", ()) if purpose is None else ("WHERE purpose = ? ", (purpose,))
-    return conn.execute(
+    rows = conn.execute(
         "SELECT id, ts, purpose, model, sent_targets, redactions, "
         f"destination, arguments FROM egress_log {where}ORDER BY id",
         params,
     ).fetchall()
+    return [EgressRow(*row) for row in rows]
 
 
 def outstanding_jobs(conn: sqlite3.Connection) -> list[tuple[int, str, str, str]]:
