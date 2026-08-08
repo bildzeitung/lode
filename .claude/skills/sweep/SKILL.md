@@ -385,10 +385,9 @@ SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocat
 # step never ran this pass, and continuing on a phantom-empty queue would risk deleting real
 # escalations from the digest (§5's hard precondition, in reverse).
 #
-# scripts/land-state-load.sh (lode-dc4n, adopted here lode-3oik) makes this the "missing fatal,
-# empty OK" default policy explicit -- these three sites always had that exact policy (a bare
-# `cat ... || { echo ...; exit 1; }`, no emptiness check), so this is a pure retrofit, not a
-# policy change.
+# scripts/land-state-load.sh (lode-dc4n) makes that the "missing fatal, empty OK" default policy,
+# which is what all three sites already had; do not add --require-nonempty, an empty queue is the
+# ordinary healthy case (lode-3oik).
 ESCALATED="$(scripts/land-state-load.sh "$SWEEP_TMP/escalated" -- \
   "§1 did not run this pass")" || exit 1
 HUMAN="$(scripts/land-state-load.sh "$SWEEP_TMP/human" -- \
@@ -467,8 +466,8 @@ fi
 # first of several duplicates (§4's `N > 1` anomaly) or yield "null" when none exists (§4's
 # `N == 0`). Quote its stderr rather than re-deriving a cause of my own.
 DIGEST_ID="$(scripts/sweep-digest-id.sh)" || exit 1
-# scripts/land-state-load.sh (lode-3oik): same default policy (missing fatal, empty OK) this site
-# always had -- a bare `cat ... || { echo ...; exit 1; }`, no emptiness check.
+# Default policy (missing fatal, empty OK) -- what this site always had; do not add
+# --require-nonempty, an empty $CURRENT is legitimate (lode-3oik).
 CURRENT="$(scripts/land-state-load.sh "$SWEEP_TMP/current" -- \
   "§3 did not run this pass")" || exit 1
 
@@ -577,8 +576,8 @@ there is no digest read left in this block:
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
 
-# scripts/land-state-load.sh (lode-3oik): same default policy (missing fatal, empty OK) this site
-# always had -- a bare `cat ... || { echo ...; exit 1; }`, no emptiness check.
+# Default policy (missing fatal, empty OK) -- what this site always had; do not add
+# --require-nonempty, an empty $CURRENT is legitimate (lode-3oik).
 CURRENT="$(scripts/land-state-load.sh "$SWEEP_TMP/current" -- \
   "§3 did not run this pass")" || exit 1
 # Existence, not content: the awk below reads $SWEEP_TMP/new_ids as a file, so
@@ -649,14 +648,9 @@ SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocat
 # content, possibly legitimately empty). One variable makes the three mutually exclusive by
 # construction, so no combination has to be ruled out in prose.
 #
-# lode-3oik: deliberately NOT retrofitted onto scripts/land-state-load.sh. That script's two
-# policies both treat a missing file as FATAL (exit 1); these two reads treat a missing file as a
-# non-fatal, distinguishable third state (`missing`, set in the `else` branch below) that the rest
-# of this block and §8 handle explicitly -- there is no land-state-load.sh policy that matches
-# "missing is not an error." The `2>/dev/null` here is unchanged and still means exactly what it
-# always did: a missing file makes the `if` condition false (DEFERRED_STATE=missing) without a
-# spurious "No such file or directory" on this call's stderr, since that path is an expected,
-# routine outcome here -- not a failure to surface, unlike every other $SWEEP_TMP site above.
+# lode-3oik: NOT retrofitted onto scripts/land-state-load.sh -- a missing $SWEEP_TMP/deferred is a
+# non-fatal third state, which neither of that script's two policies expresses (both exit 1 on
+# missing). Rationale: docs/decisions.md, lode-3oik.
 if DEFERRED="$(cat "$SWEEP_TMP/deferred" 2>/dev/null)"; then
   DEFERRED_STATE=ok
   [ "$DEFERRED" = "SWEEP-QUERY-ERROR" ] && DEFERRED_STATE=error
@@ -664,6 +658,8 @@ else
   DEFERRED_STATE=missing
 fi
 
+# lode-3oik: NOT retrofitted onto scripts/land-state-load.sh -- a missing $SWEEP_TMP/stranded is a
+# non-fatal third state, same reason as the deferred read above.
 if STRANDED="$(cat "$SWEEP_TMP/stranded" 2>/dev/null)"; then
   STRANDED_STATE=ok
   [ "$STRANDED" = "SWEEP-QUERY-ERROR" ] && STRANDED_STATE=error

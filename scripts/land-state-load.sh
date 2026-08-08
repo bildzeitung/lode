@@ -22,14 +22,10 @@
 # spelling a future editor has to pick from by guess, and gives it shellcheck
 # + unit tests instead of living only in a markdown fence no gate parses.
 #
-# lode-3oik adopted this for `/sweep`'s SKILL.md, which has a larger cluster
-# of five sites all matching the "default" policy (missing fatal, empty OK).
-# TWO of `/sweep`'s $SWEEP_TMP reads (the deferred/stranded loads later in
-# that skill) are DELIBERATELY NOT retrofitted onto this script -- they treat
-# a missing file as a non-fatal, distinguishable THIRD state (alongside
-# present-ok and present-error), which neither of this script's two policies
-# expresses (both exit 1 on missing). See the one-line notes at those two
-# call sites in .claude/skills/sweep/SKILL.md.
+# lode-3oik adopted this for five more sites in `/sweep`'s SKILL.md, all on
+# the "default" policy. A caller that does NOT adopt it explains why at its
+# own call site -- that reasoning is about the caller, not about this script,
+# so do not accumulate it here.
 #
 # Usage: scripts/land-state-load.sh <file> [--require-nonempty] [-- <context line>...]
 #
