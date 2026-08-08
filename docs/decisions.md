@@ -4263,3 +4263,47 @@ entries below from being rewritten to chase the current tree.)
   instruction, per this file's and `externals.md`'s standing preference. Revisit once `lode-ejfv`
   (bounding where `web_fetch` may point) lands, since it closes the one concretely-scoped half of this
   risk (destination-steering) and may change what residual surface remains.
+
+- **2026-08-08 (`lode-oca9`) — re-cut the batched `IN(...)` seam left open by `lode-r9z0`; both
+  candidates adopted.** `lode-r9z0`'s entry above filed, but deliberately did not settle, two
+  questions: whether a whole-SQL-plus-`{placeholders}`-slot seam would fit all three candidate call
+  sites without the hardcoded `JOIN`/table-alias coupling `fetch_target_rows` had, and whether the
+  ~14-site hand-rolled `", ".join("?" for _ in xs)` idiom was worth a shared builder. Both: yes.
+
+  `lode.target_rows.fetch_target_rows(conn, note_ids, external_ids, note_columns,
+  external_columns)` is retired. `lode.sql_ids` replaces it with two independent primitives:
+  `placeholders(n)` (a plain `", ".join("?" for _ in range(n))`, taking a count so it composes with
+  callers that build a larger SQL string around the `IN (...)` fragment) and `fetch_by_ids(conn, ids,
+  sql)` (skip-if-empty / fill the caller's one `{placeholders}` slot via `str.format` / bind `ids` as
+  `?` params / `fetchall()`, over a **whole, fixed SQL string written at the call site** — no
+  hardcoded `JOIN`, no implicit table-alias contract, and the raw-SQL column-fragment parameter
+  `fetch_target_rows` had is gone entirely: every caller now writes its own complete `SELECT ... FROM
+  ... JOIN ... WHERE ... IN ({placeholders})` text). Because `fetch_by_ids` takes one id list and one
+  SQL string, a caller needing two round trips (the note/external split `cited_answer._resolve_targets`
+  and `citations_read.resolve_citations` both do) calls it twice — this reads as two visible calls at
+  the call site instead of one call returning a 2-tuple, which is the trade this shape makes for
+  dropping the hardcoded pairing.
+
+  This also unblocked the third candidate `lode-r9z0` evaluated and left alone: **`retrieval.trust_rank`
+  now uses `fetch_by_ids` too**, for both its note-side bare `SELECT version_id FROM versions WHERE
+  version_id IN (...)` (no `JOIN`, which is exactly why the old helper could not serve it — the new
+  one has no `JOIN` to not serve) and its external-side query, unsplit over the **same** full target
+  list for both calls (classifying which table a target belongs to is `trust_rank`'s output, not its
+  input — the old helper needed the split as *input*, which `trust_rank` could not supply; the new
+  seam does not require a split at all).
+
+  `retrieval.expand_parents`, `retrieval._passage_texts`, and three more `IN(...)` fetches inside
+  `retrieval.graph_expand` were also switched to `fetch_by_ids` (id-only fetches, no other bound
+  params in the query) while touching the file. The `~14` hand-rolled sites the description counted
+  are retired via the second primitive, `placeholders(n)`, at every site that could not be a bare
+  `fetch_by_ids` call because the query mixes an id-list `IN (...)` with other bound params or other
+  `WHERE` clauses: `notes_read.py` (two sites), `worker.py` (two sites), `enrichment_view.py` (one
+  site), `lexical.py` (one site). `retrieval._in_clause` is untouched, per the description's explicit
+  carve-out — it inlines quoted hex literals for a LanceDB where-predicate with no parameter binding
+  available, a different problem this module does not try to solve.
+
+  Existing tests pass unchanged; :mod:`lode.sql_ids` gets its own direct unit tests (empty-id
+  short-circuit, placeholder count matches bound value count by construction since both derive from
+  `len(ids)`, and that `fetch_by_ids` never accepts anything but a fixed literal `sql` string — there
+  is no path from caller- or user-supplied data into the SQL text itself, only into the bound `?`
+  values).

@@ -36,6 +36,7 @@ from dataclasses import dataclass
 
 from lode.chunking import Passage, chunk
 from lode.config import Settings
+from lode.sql_ids import placeholders as _placeholders
 
 #: The FTS5 virtual table holding one row per passage (``schema.sql``). Keyed for
 #: replacement by the UNINDEXED ``target_version`` column; ``text`` is indexed.
@@ -183,8 +184,7 @@ class LexicalIndex:
             versions = list(target_versions)
             if not versions:
                 return []
-            placeholders = ", ".join("?" for _ in versions)
-            sql += f" AND target_version IN ({placeholders})"
+            sql += f" AND target_version IN ({_placeholders(len(versions))})"
             params.extend(versions)
         sql += " ORDER BY score LIMIT ?"
         params.append(k)

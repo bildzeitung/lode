@@ -57,7 +57,7 @@ from lode.llm_provider import LLMProvider
 from lode.no_egress_scope import NoEgressScopeRule, is_no_egress_scoped
 from lode.qa import QaPassage, QaResult, answer_question
 from lode.retrieval import ContextItem, TrustTier
-from lode.target_rows import fetch_target_rows
+from lode.sql_ids import fetch_by_ids
 
 _EXTERNAL_TIERS = (TrustTier.CURRENT_EXTERNAL, TrustTier.STALE_EXTERNAL)
 """Trust tiers whose ``target_version`` is an external ``snapshot_id`` (cite via
@@ -263,10 +263,10 @@ def _resolve_targets(
     ``context`` may cite the same target more than once (repeated passages, or a
     top-k spanning several notes/snapshots); this resolves every **distinct**
     target in at most two round trips regardless of context size, splitting on
-    the trust tier (:data:`_EXTERNAL_TIERS`) and delegating the batched
-    ``IN(...)`` pair to :func:`lode.target_rows.fetch_target_rows` -- the same
-    shared shape :func:`lode.citations_read.resolve_citations` uses over the
-    same polymorphic ``target_version`` split (lode-r9z0).
+    the trust tier (:data:`_EXTERNAL_TIERS`) and delegating each ``IN(...)``
+    fetch to :func:`lode.sql_ids.fetch_by_ids` -- the same shared primitive
+    :func:`lode.citations_read.resolve_citations` uses over the same
+    polymorphic ``target_version`` split (lode-r9z0, re-cut lode-oca9).
 
     Returns a ``{target_version: (body, no_egress)}`` map. A target absent from
     the store is simply absent from the map -- the caller (:func:`ask`) treats a
@@ -286,12 +286,19 @@ def _resolve_targets(
         {item.target_version for item in context if item.tier in _EXTERNAL_TIERS}
     )
 
-    note_rows, external_rows = fetch_target_rows(
+    note_rows = fetch_by_ids(
         conn,
         note_ids,
+        "SELECT v.version_id, v.body, n.no_egress FROM versions v "
+        "JOIN notes n ON n.note_id = v.note_id "
+        "WHERE v.version_id IN ({placeholders})",
+    )
+    external_rows = fetch_by_ids(
+        conn,
         external_ids,
-        "v.version_id, v.body, n.no_egress",
-        "s.snapshot_id, s.body, e.no_egress, e.external_id, e.source_type",
+        "SELECT s.snapshot_id, s.body, e.no_egress, e.external_id, e.source_type "
+        "FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
+        "WHERE s.snapshot_id IN ({placeholders})",
     )
 
     resolved: dict[str, tuple[str | None, bool]] = {}
