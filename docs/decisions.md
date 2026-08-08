@@ -4055,3 +4055,28 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     [agents-workflow.md](agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc),
     [`scripts/trunk-write-guard.sh`](../scripts/trunk-write-guard.sh),
     `tests/test_trunk_write_guard.py`.
+
+- **2026-08-08 — VERIFIED (`lode-lnvi` FINDING A smoke test): the `PreToolUse(Edit|Write)`
+  trunk-write guard's `git rev-parse --abbrev-ref HEAD` correctly resolves the CALLING
+  worktree-isolated subagent's cwd, not the main checkout.** A `coding` producer dispatched under
+  `isolation: "worktree"` into its own `.claude/worktrees/agent-<hash>` (branch
+  `worktree-agent-<hash>`, confirmed off `trunk` via `git rev-parse --abbrev-ref HEAD` before any
+  edit) made a live `Edit` tool call against this very file, in-session, while building `lode-lnvi`.
+  No `permissionDecision: "ask"` prompt appeared — the hook subprocess evaluated `HEAD` inside the
+  worktree, saw a non-`trunk` branch, and printed nothing (allow), exactly as
+  `scripts/trunk-write-guard.sh` intends. This closes the open harness question `lode-p8zl`
+  FINDING A raised: hook subprocesses inherit the calling (sub)agent's cwd, including under
+  `isolation: "worktree"` dispatch — they do not fall back to the main checkout. No wedge risk; no
+  revert needed. **What the null result does and does not prove:** the practical question — does the
+  hook wedge every dispatched `Edit`/`Write` repo-wide? — is settled outright, since a wedge would
+  have surfaced as a blocked tool call. The stronger claim, that the hook *fired* and read `HEAD` in
+  the worktree, rests additionally on the wiring, re-confirmed at technical review:
+  `.claude/settings.json` registers the `Edit|Write` matcher, and its command uses
+  `CLAUDE_PROJECT_DIR` only to *locate* the script — it never `cd`s, so the script's `git rev-parse`
+  runs in whatever cwd the hook subprocess inherits. The one reading a null result cannot exclude is
+  that `PreToolUse` hooks never fire on subagent tool calls at all; the positive control that would
+  (observing the `"ask"` prompt from a checkout actually on `trunk`) was not run, since it requires
+  writing from the main checkout. (One separate, harness-level guard fired instead — attempting the
+  `Edit` via the main-checkout path, rather than the worktree-prefixed path, was refused with "Edit
+  the worktree copy of this file instead of the shared-checkout path"; that is the harness's own
+  path-scoping for an isolated agent, unrelated to the `PreToolUse` trunk-write guard under test.)
