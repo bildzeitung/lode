@@ -217,7 +217,7 @@ def fetch_for_ask(
     "Identity is not this module's problem".
 
     Returns the resulting ``snapshot_id``, a first-class citation target
-    :func:`lode.cited_answer._resolve_target` can verify a span against like
+    :func:`lode.cited_answer._resolve_targets` can verify a span against like
     any other external. Raises :class:`ToolFetchError` -- persisting
     **nothing** -- when the destination is ``no_egress`` (per-row flag or
     scope rule) or the fetch itself fails; see the module docstring's

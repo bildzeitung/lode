@@ -1,7 +1,7 @@
 """Tests for lode.tools -- snapshot-then-cite ask-time fetch (lode-35nu.11.1).
 
 Covers the ticket's acceptance criteria: an ask-time fetch produces a citable
-snapshot reachable by _resolve_target-style lookups; repeated identical fetches
+snapshot reachable by _resolve_targets-style lookups; repeated identical fetches
 dedup on the existing external_id/snapshot_id machinery; discovered_via='ask'
 is stamped on first snapshot only, with no note->external edge; a no_egress
 destination (per-row flag or lode-35nu.11.8 scope rule, including a
@@ -102,7 +102,7 @@ class TestFetchForAskWeb:
         status, body = _snapshot_row(conn, _URL)
         assert status == "ok"
         assert "Real article content" in body
-        # Reachable the same way cited_answer._resolve_target reaches it.
+        # Reachable the same way cited_answer._resolve_targets reaches it.
         (found_body,) = conn.execute(
             "SELECT body FROM snapshots WHERE snapshot_id = ?", (snapshot_id,)
         ).fetchone()
