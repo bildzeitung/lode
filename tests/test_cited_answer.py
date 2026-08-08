@@ -620,12 +620,11 @@ def test_resolve_targets_batches_distinct_targets_into_two_queries(conn) -> None
     finally:
         conn.set_trace_callback(None)
 
-    resolution_calls = [
-        sql for sql in statements if "version_id IN" in sql or "snapshot_id IN" in sql
-    ]
-    assert (
-        len(resolution_calls) == 2
-    )  # one versions/notes IN(...), one snapshots/externals IN(...)
+    # Count EVERY statement the call issued, not just the IN(...) ones: a filter
+    # keyed on "IN" would silently drop a reintroduced per-target
+    # "WHERE version_id = ?" fallback and still pass, which is the exact
+    # regression this test exists to catch.
+    assert len(statements) <= 2, statements
     assert resolved["v1"] == ("alpha body", False)
     assert resolved["v2"] == ("beta body", False)
     assert resolved["s1"] == ("gamma body", False)
@@ -648,3 +647,58 @@ def test_ask_treats_a_target_absent_from_the_store_as_no_egress_false(conn) -> N
 
     assert answer.abstained  # span can't verify against a body that was never resolved
     assert answer.withheld_citations == ()  # not withheld -- simply unresolved
+
+
+def test_batched_resolution_composes_no_egress_per_target_not_across_the_batch(
+    conn,
+) -> None:
+    """Batching resolves many targets in one query but must still compose no_egress
+    from EACH target's OWN row (lode-ekqh over lode-35nu.11.8): one scope-matched
+    external, one per-row-flagged external, one clean external of the same
+    source_type, and a clean note all ride the same two IN(...) queries -- the two
+    denials must withhold only themselves, and must not leak onto their neighbours.
+    """
+    from lode.cited_answer import _resolve_targets
+    from lode.no_egress_scope import NoEgressScopeRule
+
+    settings = Settings(
+        no_egress_scopes=[
+            NoEgressScopeRule(source_type="web", match="internal.example.com")
+        ]
+    )
+    _insert_external(
+        conn,
+        external_id="https://internal.example.com/runbook",
+        snapshot_id="s-scoped",
+        body="scoped secret",
+    )
+    _insert_external(
+        conn,
+        external_id="https://public.example.com/flagged",
+        snapshot_id="s-flagged",
+        body="flagged secret",
+        no_egress=True,
+    )
+    _insert_external(
+        conn,
+        external_id="https://public.example.com/open",
+        snapshot_id="s-open",
+        body="public external body",
+    )
+    _insert_note(conn, note_id="n-open", version_id="v-open", body="open note body")
+
+    resolved = _resolve_targets(
+        conn,
+        [
+            _external_context("s-scoped", "scoped secret"),
+            _external_context("s-flagged", "flagged secret"),
+            _external_context("s-open", "public external body"),
+            _note_context("v-open", "open note body"),
+        ],
+        settings.no_egress_scopes,
+    )
+
+    assert resolved["s-scoped"] == ("scoped secret", True)  # host rule, no row flag
+    assert resolved["s-flagged"] == ("flagged secret", True)  # row flag, no host rule
+    assert resolved["s-open"] == ("public external body", False)  # neither
+    assert resolved["v-open"] == ("open note body", False)  # notes have no scope

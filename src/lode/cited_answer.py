@@ -247,12 +247,10 @@ def _resolve_targets(
 
     ``context`` may cite the same target more than once (repeated passages, or a
     top-k spanning several notes/snapshots); this resolves every **distinct**
-    target in at most two round trips regardless of context size -- one
-    ``versions JOIN notes`` query for the distinct note ``version_id`` targets
-    (``item.tier`` not in :data:`_EXTERNAL_TIERS`), one ``snapshots JOIN
-    externals`` query for the distinct external ``snapshot_id`` targets --
-    mirroring the batched-``IN(...)`` idiom :func:`lode.retrieval._expand_graph`
-    already uses for the same polymorphic ``target_version`` shape.
+    target in at most two round trips regardless of context size, splitting on
+    the trust tier (:data:`_EXTERNAL_TIERS`) -- the same batched-``IN(...)``
+    split :func:`lode.retrieval.trust_rank` already makes over the same
+    polymorphic ``target_version`` shape.
 
     Returns a ``{target_version: (body, no_egress)}`` map. A target absent from
     the store is simply absent from the map -- the caller (:func:`ask`) treats a
@@ -276,8 +274,8 @@ def _resolve_targets(
     if note_ids:
         placeholders = ", ".join("?" for _ in note_ids)
         for version_id, body, no_egress in conn.execute(
-            f"SELECT v.version_id, v.body, n.no_egress FROM versions v "
-            f"JOIN notes n ON n.note_id = v.note_id "
+            "SELECT v.version_id, v.body, n.no_egress FROM versions v "
+            "JOIN notes n ON n.note_id = v.note_id "
             f"WHERE v.version_id IN ({placeholders})",
             note_ids,
         ):
@@ -285,8 +283,8 @@ def _resolve_targets(
     if external_ids:
         placeholders = ", ".join("?" for _ in external_ids)
         for snapshot_id, body, no_egress, external_id, source_type in conn.execute(
-            f"SELECT s.snapshot_id, s.body, e.no_egress, e.external_id, e.source_type "
-            f"FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
+            "SELECT s.snapshot_id, s.body, e.no_egress, e.external_id, e.source_type "
+            "FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
             f"WHERE s.snapshot_id IN ({placeholders})",
             external_ids,
         ):
