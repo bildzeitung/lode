@@ -897,6 +897,62 @@ one gets no address policy at all, whereas the `lode.tools`-level check runs reg
 lands both decides: delete it, or keep it as the injection-proof outer check. See
 `docs/decisions.md` for the open reconciliation item.
 
+### Web-fetch destination guard (decided, `lode-ejfv`)
+
+Discovered while reviewing tool-augmented Ask (`lode-35nu.11.2`): before that ticket, every URL lode
+fetched originated from something the **user** wrote (a link pasted into a note, drawn down by
+`lode.drawdown`). With `web_fetch` exposed to the Q&A loop, the destination is chosen by an **LLM**
+whose context can include attacker-influenced content — a fetched page, a JIRA ticket body. Two
+consequences: (1) the destination is otherwise unconstrained — `no_egress_scopes` is a *deny* list,
+so it only covers hosts the user thought to name, and a model steered by fetched content could be
+pointed at an internal address (`169.254.169.254`, `localhost`, an intranet host) from the user's own
+network position; (2) there is an exfiltration *shape* (content encoded into a chosen URL), not just
+a read — already audited via the `purpose='tool'` egress-log row (detection, not prevention).
+
+**Decided: a private/loopback/link-local/reserved/multicast address guard on the `web_fetch`
+destination, scoped to the ask path's `SOURCE_TYPE_WEB` leg only** (`lode.tools._refuse_private_web_destination`).
+The initial destination's scheme is restricted to `http`/`https` and its resolved IP address(es) are
+checked against those ranges — refused, with nothing fetched and no `externals` row minted, **before**
+any network call, mirroring the `no_egress` check's ordering and rationale immediately above.
+JIRA/Confluence fetches are not in scope: their destination is a configured `api_base`, not a
+model-chosen host.
+
+Alternatives considered and rejected:
+
+- **An allowlist of hosts/schemes for `web_fetch`.** Rejected as the wrong shape for a
+  general-purpose research tool — it would need constant maintenance as the user's browsing needs
+  change, and does nothing an address-range guard doesn't already cover for the concrete threat (an
+  internal address, not an untrusted-but-public one).
+- **Requiring a `web_fetch` destination to already have an `externals` row** (tools may only
+  re-read what the corpus already knows; discovery stays JIRA/Confluence-only). Rejected — it removes
+  the entire point of exposing `web_fetch` to Ask (discovering and citing a **new** web source
+  mid-question), for a threat the address-range guard already closes more narrowly.
+- **Accepting the risk, with `Settings.tools_enabled=False`-by-default as the whole mitigation.**
+  Rejected as too weak given the mitigation is cheap and the risk (SSRF against a cloud-metadata
+  endpoint or the local network) is concrete and severe *whenever a user does opt in* — a default-off
+  flag protects users who never turn tools on, not the ones the feature is for.
+
+**Two known residual gaps, left open.** Both are tracked in [decisions.md](decisions.md), and
+together they mean this guard raises the cost of the direct attack rather than making the ask path
+SSRF-proof — it is worth stating that plainly rather than letting the mechanism read as a solved
+problem:
+
+1. **Redirect chains.** The guard validates the initial destination, and again the **final** URL
+   before the snapshot is persisted (same place the `no_egress` re-check happens). What it cannot do
+   is stop the intermediate request: `lode.webfetch`'s fetcher follows redirects transparently inside
+   one `httpx` client call with no per-hop validation hook, so a public, allowed host can still cause
+   the client to *issue* a GET against an internal address. The final-URL check keeps that response
+   from being persisted as a citable snapshot or returned to the model, so the vector is a **blind**
+   fetch, not a read-and-exfiltrate. Closing it fully needs per-hop validation inside `lode.webfetch`.
+2. **TOCTOU / DNS rebinding.** The guard resolves the hostname, then `httpx` resolves it *again* when
+   it makes the request. A hostile resolver serving a short TTL can answer the guard with a public
+   address and the client with a private one, defeating the check outright. This is the standard,
+   well-known limitation of validating a destination by hostname. Closing it requires pinning the
+   validated IP for the connection (a custom transport dialing the resolved address with the original
+   `Host` header) — a `lode.webfetch`-wide change, deliberately out of this ticket's scope. It is
+   nonetheless the *cheaper* of the two attacks to mount, so it is recorded as a peer of the redirect
+   gap rather than a footnote to it.
+
 ### Prompt injection via tool results steering later tool calls (threat model, `lode-80bv`)
 
 The tool loop (`lode-35nu.11.2`) feeds every tool result back to the model, which may then call more

@@ -38,32 +38,30 @@ RELATED_MODAL_BODY_ID = "related-note-modal-body"
 class RelatedNoteModalScreen(ModalScreen[None]):
     """A glance-and-dismiss popup showing one related note's matched context.
 
-    Pushed by :meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel.
-    action_open_selected` (lode-olmi.9) for the currently selected
-    :class:`~lode.tui.services.related.RelatedNote`. Lives in its own module here
-    under :mod:`lode.tui.screens` (lode-s5kp.3), per the
-    one-Screen/Widget-per-module fiat (``docs/conventions.md``) — previously
-    co-located inside :mod:`lode.tui.widgets.related_notes_panel` alongside
-    :class:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel` itself. The
-    import stays one-directional even split across modules: the panel
-    imports this screen to push it, and this screen never imports the panel
-    back (it only takes a plain :class:`~lode.tui.services.related.RelatedNote` value),
-    so there was never a cycle to avoid by co-locating the two — same
-    "self-contained, any screen can compose it" stance the panel's own module
-    docstring takes for the panel itself.
+    Pushed by
+    :meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel.action_open_selected`
+    (lode-olmi.9) for the currently selected
+    :class:`~lode.tui.services.related.RelatedNote`. Lives in its own module here under
+    :mod:`lode.tui.screens` (lode-s5kp.3), per the one-Screen/Widget-per-module fiat
+    (``docs/conventions.md``) — previously co-located inside
+    :mod:`lode.tui.widgets.related_notes_panel` alongside
+    :class:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel` itself. The import
+    stays one-directional even split across modules: the panel imports this screen to
+    push it, and this screen never imports the panel back (it only takes a plain
+    :class:`~lode.tui.services.related.RelatedNote` value), so there was never a cycle
+    to avoid by co-locating the two — same "self-contained, any screen can compose it"
+    stance the panel's own module docstring takes for the panel itself.
 
-    **Highlighted context = the matched passage span, not the whole note**
-    (the design question the ticket posed, decided in ``--design``): loads
-    the note's *exact* ``target_version`` body via :func:`lode.notes_read.
-    version_body` — not a current-live-head lookup — because ``char_range``
-    is only guaranteed valid against the precise version it was computed
-    from; the note's live head can have moved on since. The ``[start:end)``
-    slice is styled ``reverse`` in the surrounding body
-    (:meth:`_highlighted_body`) via a plain Rich
-    :class:`~rich.text.Text` object (not ``markup=True`` on the ``Static`` —
-    verbatim note text commonly contains bracket sequences Textual would
-    otherwise parse as console markup, the same ``markup=False`` reasoning
-    the panel itself already relies on, lode-mkc.3).
+    **Highlighted context = the matched passage span, not the whole note** (the design
+    question the ticket posed, decided in ``--design``): loads the note's *exact*
+    ``target_version`` body via :func:`lode.notes_read.version_body` — not a
+    current-live-head lookup — because ``char_range`` is only guaranteed valid against
+    the precise version it was computed from; the note's live head can have moved on
+    since. The ``[start:end)`` slice is styled ``reverse`` in the surrounding body
+    (:meth:`_highlighted_body`) via a plain Rich :class:`~rich.text.Text` object (not
+    ``markup=True`` on the ``Static`` — verbatim note text commonly contains bracket
+    sequences Textual would otherwise parse as console markup, the same ``markup=False``
+    reasoning the panel itself already relies on, lode-mkc.3).
     """
 
     # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare

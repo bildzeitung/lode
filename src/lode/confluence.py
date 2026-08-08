@@ -31,14 +31,15 @@ Confluence-specific branch needed there.
   extractor the web path and the JIRA unit (lode-gpzn.3) both use — turns it
   into ``clean_text`` with no Confluence-specific extraction code at all.
   The full raw JSON response (not just the ``body.view`` fragment) is kept
-  as ``raw_payload`` for provenance, mirroring :attr:`~lode.webfetch.
-  FetchResult.raw_html`'s field on the web leg even though what it holds
+  as ``raw_payload`` for provenance, mirroring
+  :attr:`~lode.webfetch.FetchResult.raw_html`'s field on the web leg even though what it
+  holds
   here is JSON, not HTML.
 - **(C) Classification:** every HTTP outcome is classified via the shared,
   connector-neutral :func:`lode.fetch_outcome.classify_http_status`
   (lode-gpzn.13) — 401/403/404 (and any other non-408/429 4xx) tombstone;
-  429/any 5xx/network/timeout raise :class:`~lode.webfetch.
-  TransientFetchError`, riding the worker's existing attempts/backoff/
+  429/any 5xx/network/timeout raise :class:`~lode.webfetch.TransientFetchError`, riding
+  the worker's existing attempts/backoff/
   dead-letter machinery exactly like the web and JIRA legs. No local
   reimplementation of the status-code mapping.
 - **Injectable offline seam:** :func:`fetch_confluence_page` accepts a
@@ -138,10 +139,9 @@ def fetch_confluence_page(
 ) -> FetchResult:
     """Fetch one Confluence Cloud page and extract it into a :class:`~lode.webfetch.FetchResult`.
 
-    Pure function, no DB writes — mirrors :func:`lode.webfetch.
-    fetch_and_extract`'s contract exactly, so :func:`lode.externals.
-    ingest_fetch_result` consumes the result unchanged. See the module
-    docstring for the full design.
+    Pure function, no DB writes — mirrors :func:`lode.webfetch.fetch_and_extract`'s
+    contract exactly, so :func:`lode.externals.ingest_fetch_result` consumes the result
+    unchanged. See the module docstring for the full design.
 
     1. Rebuild the request URL from ``external_id`` (semantic page id) +
        ``api_base`` (:func:`_build_url`).
@@ -150,8 +150,9 @@ def fetch_confluence_page(
        not supplied — raises :class:`RuntimeError` if credentials are
        unresolved, since a caller reaching this function is expected to have
        already checked :func:`lode.config.confluence_active`).
-    3. Classify the response status via :func:`~lode.fetch_outcome.
-       classify_http_status`. A conforming ``fetcher`` already raises
+    3. Classify the response status via
+    :func:`~lode.fetch_outcome.classify_http_status`. A conforming ``fetcher`` already
+    raises
        :class:`~lode.webfetch.TransientFetchError` for 408/429/5xx/network
        conditions before returning (see :class:`HttpxConfluenceFetcher`), so
        this only ever needs to turn a non-OK *returned* status (401/403/404/
