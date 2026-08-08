@@ -4362,3 +4362,25 @@ entries below from being rewritten to chase the current tree.)
   `len(ids)`, and that `fetch_by_ids` never accepts anything but a fixed literal `sql` string — there
   is no path from caller- or user-supplied data into the SQL text itself, only into the bound `?`
   values).
+
+- **2026-08-08 (`lode-125q`) — closed off-pattern-keyword blind spot (1) in
+  `tests/test_decisions_supersession_markers.py`; blind spot (2) filed as its own ticket, not folded
+  in.** `lode-hg49`'s review had to hand-restore a `docs/decisions.md` entry that a prior commit
+  silently rewrote in place using a bold-span lead-in beginning with the word AMENDMENT —
+  structurally identical to the Retracted/lode-x bold-parenthetical shape the gate's own docstring
+  says a *new* shape should catch, but `_OFF_PATTERNS`' keyword alternation had no
+  `Amendment`/`AMENDMENT` entry, so it slipped through. Fixed: `Amendment`/`AMENDMENT` added to the
+  alternation (both cases, matching the alternation's existing all-caps precedent for the analogous
+  stale-flag keyword), with a sabotage-test line using the exact `lode-hg49` lead-in shape proving
+  the scan now fires. Checked first that no legitimate `docs/decisions.md` prose opens a bold span,
+  parenthetical, or blockquote with that word (one hit, `charter amendment` — ordinary lowercase
+  mid-sentence narrative, untouched by the case-sensitive, span-anchored pattern).
+
+  That leaves blind spot (2) — `lode-nlk6`'s documented limitation that no check here can detect a
+  *silent* in-place rewrite, since every check keys on an artifact a marker leaves behind and a
+  silent rewrite leaves nothing to key on. It has now bitten once for real (the `lode-hg49` incident
+  above). **Deliberately not folded into this ticket**: closing it means diffing an entry's text
+  against its own git history, a materially different and more expensive check than the text-scan
+  fix above, and worth its own acceptance criteria and non-vacuity proof rather than being rushed in
+  alongside a keyword-list tweak. Filed as `lode-rl6s` (`discovered-from lode-125q`, independently
+  buildable — not blocked on anything).
