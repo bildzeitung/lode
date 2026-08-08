@@ -567,8 +567,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   recording that metadata entirely; that gap is fixed in `coding.md`, but the guard stays as
   defense-in-depth for tickets escalated before the fix landed. (The guard used to key on
   `review_worktree` under the earlier `git -C` architecture; the fetch-and-checkout architecture never
-  opens that worktree at all, so `review_head` — the field the reviewer actually uses to check out and
-  detect drift — is the correct thing to require instead, lode-k5e.)
+  opens that worktree at all, so `review_head` — the field the reviewer actually reads, to detect
+  drift against the `origin/land/<id>` tip it checks out — is the correct thing to require instead
+  (lode-k5e).)
 - Producers do all repo mutation inside `isolation: "worktree"` worktrees and push to
   `origin/land/<id>`; **nothing merges and nothing the author wrote is reviewed by its author.** The
   main session stays on `trunk` and never edits files here. Landing those branches is `/land`'s job,

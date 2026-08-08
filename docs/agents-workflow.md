@@ -2586,8 +2586,9 @@ closed by lode-t83):** re-entering at `ready-for-code-review` is only a real re-
 carries the hand-off and something else consumes the label —
 
 1. A `coding` build-time escalation used to skip recording `review_head` entirely (it only wrote that
-   metadata in the green hand-off path). A re-entered ticket therefore had nothing for `code-reviewer`
-   to check out. **Fixed:** the build-time escalation now records `review_head` against the
+   metadata in the green hand-off path). A re-entered ticket therefore tripped the sweep's own
+   non-empty-`review_head` guard, with nothing recorded for `code-reviewer` to compare the fetched
+   `origin/land/<id>` tip against. **Fixed:** the build-time escalation now records `review_head` against the
    reverted-to-green commit at escalation time, even though it doesn't set the label itself — so the
    field is already there the moment a human applies `ready-for-code-review`. (At the time this fix
    landed the escalation also recorded `review_worktree`/`review_branch`; both are retired outright as

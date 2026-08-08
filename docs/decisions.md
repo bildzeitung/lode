@@ -4363,12 +4363,16 @@ entries below from being rewritten to chase the current tree.)
   is no path from caller- or user-supplied data into the SQL text itself, only into the bound `?`
   values).
 
-- **Update (lode-8n4k, 2026-08-08) — correcting a "checks out" overclaim near lode-2m89's entry
-  above.** That entry's line "it is what the reviewer checks out and compares against for drift" is
-  half right and half wrong: `code-reviewer` fetches and checks out `origin/land/<id>` directly (per
-  `code-reviewer.md` step 2 and `.claude/skills/code/SKILL.md:249`), **never** `review_head` — the
-  "compares against for drift" half is correct, "checks out" is not. `review_head` is a provenance /
-  drift-comparison note, not a review boundary — the doctrine `lode-9b5n` establishes explicitly.
-  `.claude/agents/coding.md:78` carried the same wrong claim and has been corrected directly (an
-  ordinary file, not append-only). Per this file's own append-only preamble, the entry above is left
-  as originally written; this marker is the correction.
+- **Update (lode-8n4k, 2026-08-08) — a "checks out" overclaim in lode-2m89's entry above.** That
+  entry says it twice — "it's what it actually checks out and diffs for drift", and "it is what the
+  reviewer checks out and compares against for drift" — and both are half wrong. `code-reviewer`
+  fetches and checks out `origin/land/<id>` (per `.claude/agents/code-reviewer.md` step 2 and
+  `.claude/skills/code/SKILL.md`'s dispatch prompt), **never** `review_head`: the drift-comparison
+  half is right, the checkout half is not. `review_head` is a provenance / drift-comparison note, not
+  a review boundary (lode-9b5n). Three operational files carried the same wrong claim and are
+  corrected in place (ordinary files, not append-only): `.claude/agents/coding.md`'s
+  never-hand-off-a-dirty-worktree bullet, `.claude/skills/code/SKILL.md`'s stranded-review-sweep
+  bullet, and `docs/agents-workflow.md`'s exit-(a) re-entry gap 1. What the coding.md correction does
+  **not** change: uncommitted, or committed-but-unpushed, work is still silently **dropped** — only
+  the stated reason was wrong. Per this file's append-only preamble the entry above is left as
+  written; this marker is the correction.
