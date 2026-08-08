@@ -4396,3 +4396,31 @@ entries below from being rewritten to chase the current tree.)
   fix above, and worth its own acceptance criteria and non-vacuity proof rather than being rushed in
   alongside a keyword-list tweak. Filed as `lode-rl6s` (`discovered-from lode-125q`, independently
   buildable — not blocked on anything).
+
+- **2026-08-08 (`lode-rl6s`) — closed blind spot (2) with a scoped, per-diff check, not a
+  full-history one.** `lode-nlk6`'s documented limitation: no check in
+  `tests/test_decisions_supersession_markers.py` can detect a *silent* in-place rewrite of an
+  existing entry, since every check there keys on an artifact a marker *leaves behind* and a
+  silent rewrite is the absence of one. A **full-history replay** (walk every commit that ever
+  touched this file, fail if any diff removes a previously-committed non-blank line) was tried by
+  hand against this repo's own git log and rejected: even with a word-set heuristic meant to
+  tolerate ordinary paragraph rewrapping (a later append widening a paragraph legitimately shifts
+  word-wrap boundaries), dozens of commits made *after* the append-only convention itself was
+  established (`lode-ur6o`) still flagged — full-history enforcement would ship permanently red
+  with heavy false-positive noise, not a usable gate.
+
+  Shipped instead: `scripts/check-decisions-no-silent-rewrite.sh <base-ref> [<head-ref>]`, a
+  **scoped, per-diff** check — `git diff <base> <head> -- docs/decisions.md`, fail if any hunk
+  removes a pre-existing non-blank line. No heuristic needed at this narrower scope: a single
+  branch's diff against its merge base is not reflow-prone the way 250 historical commits are, so
+  the strict form is the right size for the check actually needed — catching a rewrite inside
+  *one* review's diff, at review/land time (e.g. `merge-base origin/trunk HEAD`..`HEAD`). This is
+  the "documented git-history-diffing check" alternative the ticket's own acceptance criteria
+  named, not the heavier per-entry content-hash mechanism it also named — that heavier mechanism
+  remains unbuilt; revisit only if the scoped check proves insufficient in practice.
+  `tests/test_decisions_no_silent_rewrite_guard.py` drives the script against synthetic throwaway
+  git repos (ordinary append allowed, an appended correction marker in the sanctioned shape
+  allowed, a silent in-place reword or an outright entry deletion denied, both sabotage-proven). The script is not
+  wired into any automatic gate (no natural default base ref exists inside an isolated worktree,
+  and CI wiring was out of this ticket's scope) — it is a tool for a reviewer/lander to run
+  deliberately against the branch under review, per its own header comment.

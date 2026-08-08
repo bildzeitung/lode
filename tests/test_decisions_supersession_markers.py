@@ -25,15 +25,23 @@ Both scans are module-level helpers taking their lines as a parameter, so the
 sabotage tests below can prove each actually fires on a violation rather than
 passing vacuously -- same shape as tests/test_keybindings_doc.py.
 
-KNOWN LIMITATION (lode-nlk6): no check here -- neither scan, nor the
+FORMER KNOWN LIMITATION (lode-nlk6), now covered by a SEPARATE mechanism
+(lode-rl6s): none of the checks in THIS module -- neither scan, nor the
 preamble-states-the-rule check -- can detect a SILENT IN-PLACE REWRITE, the
-exact failure the preamble's own sentence forbids. Every check keys on an
-artifact a *marker* leaves behind (an off-pattern keyword, a wrapped id, the
-preamble's own wording); a silent rewrite is the ABSENCE of a correction, so
-it leaves nothing for any of them to key on and every check stays green. This
-is a limit of THIS GATE, not a hole in the convention: the convention still
-binds. Closing it would mean diffing an entry against its own git history, a
-materially different and more expensive check than the text scans below.
+exact failure the preamble's own sentence forbids. Every check here keys on
+an artifact a *marker* leaves behind (an off-pattern keyword, a wrapped id,
+the preamble's own wording); a silent rewrite is the ABSENCE of a correction,
+so it leaves nothing for any of them to key on and every check here stays
+green. That gap is real but is NOT closed in this module -- a full-history
+replay was tried by hand against this repo's own git log and rejected (even
+with a word-set heuristic tolerating ordinary paragraph rewrapping, dozens of
+commits made since the append-only convention itself was established still
+flag). Instead, `scripts/check-decisions-no-silent-rewrite.sh` +
+`tests/test_decisions_no_silent_rewrite_guard.py` diff a SPECIFIC base..head
+range of docs/decisions.md's git history and fail on any pre-existing,
+non-blank line that vanished -- a narrower scope than this module's
+whole-file text scans, deliberately, since a single branch's diff is not
+reflow-prone the way the full repo history is.
 """
 
 from __future__ import annotations
