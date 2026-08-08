@@ -384,18 +384,17 @@ SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocat
 # Load §1/§2's results back from disk and assert each one loaded -- a missing file means that
 # step never ran this pass, and continuing on a phantom-empty queue would risk deleting real
 # escalations from the digest (§5's hard precondition, in reverse).
-ESCALATED="$(cat "$SWEEP_TMP/escalated")" || {
-  echo "GATE COULD NOT RUN: $SWEEP_TMP/escalated missing -- §1 did not run this pass" >&2
-  exit 1
-}
-HUMAN="$(cat "$SWEEP_TMP/human")" || {
-  echo "GATE COULD NOT RUN: $SWEEP_TMP/human missing -- §1 did not run this pass" >&2
-  exit 1
-}
-CLOSABLE="$(cat "$SWEEP_TMP/closable")" || {
-  echo "GATE COULD NOT RUN: $SWEEP_TMP/closable missing -- §2 did not run this pass" >&2
-  exit 1
-}
+#
+# scripts/land-state-load.sh (lode-dc4n, adopted here lode-3oik) makes this the "missing fatal,
+# empty OK" default policy explicit -- these three sites always had that exact policy (a bare
+# `cat ... || { echo ...; exit 1; }`, no emptiness check), so this is a pure retrofit, not a
+# policy change.
+ESCALATED="$(scripts/land-state-load.sh "$SWEEP_TMP/escalated" -- \
+  "§1 did not run this pass")" || exit 1
+HUMAN="$(scripts/land-state-load.sh "$SWEEP_TMP/human" -- \
+  "§1 did not run this pass")" || exit 1
+CLOSABLE="$(scripts/land-state-load.sh "$SWEEP_TMP/closable" -- \
+  "§2 did not run this pass")" || exit 1
 
 CURRENT=$(printf '%s\n%s\n%s\n' "$ESCALATED" "$HUMAN" "$CLOSABLE" | sed '/^$/d' | sort -u -t$'\t' -k1,1)
 printf '%s' "$CURRENT" > "$SWEEP_TMP/current"
@@ -468,10 +467,10 @@ fi
 # first of several duplicates (§4's `N > 1` anomaly) or yield "null" when none exists (§4's
 # `N == 0`). Quote its stderr rather than re-deriving a cause of my own.
 DIGEST_ID="$(scripts/sweep-digest-id.sh)" || exit 1
-CURRENT="$(cat "$SWEEP_TMP/current")" || {
-  echo "GATE COULD NOT RUN: $SWEEP_TMP/current missing -- §3 did not run this pass" >&2
-  exit 1
-}
+# scripts/land-state-load.sh (lode-3oik): same default policy (missing fatal, empty OK) this site
+# always had -- a bare `cat ... || { echo ...; exit 1; }`, no emptiness check.
+CURRENT="$(scripts/land-state-load.sh "$SWEEP_TMP/current" -- \
+  "§3 did not run this pass")" || exit 1
 
 LAST_BODY=$(bd show "$DIGEST_ID" --json | jq -r '.[0].description')
 LAST_IDS=$(printf '%s\n' "$LAST_BODY" | grep '^SWEEP-ITEM' | awk '{print $2}' | sort -u)
@@ -578,10 +577,10 @@ there is no digest read left in this block:
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
 
-CURRENT="$(cat "$SWEEP_TMP/current")" || {
-  echo "GATE COULD NOT RUN: $SWEEP_TMP/current missing -- §3 did not run this pass" >&2
-  exit 1
-}
+# scripts/land-state-load.sh (lode-3oik): same default policy (missing fatal, empty OK) this site
+# always had -- a bare `cat ... || { echo ...; exit 1; }`, no emptiness check.
+CURRENT="$(scripts/land-state-load.sh "$SWEEP_TMP/current" -- \
+  "§3 did not run this pass")" || exit 1
 # Existence, not content: the awk below reads $SWEEP_TMP/new_ids as a file, so
 # nothing here needs its value in a variable. An ABSENT file means §5 never ran
 # this pass and is a hard stop; a file that exists but is EMPTY is the ordinary
@@ -649,6 +648,15 @@ SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocat
 # pass), `error` (it ran, but its query failed -- the SWEEP-QUERY-ERROR sentinel), or `ok` (real
 # content, possibly legitimately empty). One variable makes the three mutually exclusive by
 # construction, so no combination has to be ruled out in prose.
+#
+# lode-3oik: deliberately NOT retrofitted onto scripts/land-state-load.sh. That script's two
+# policies both treat a missing file as FATAL (exit 1); these two reads treat a missing file as a
+# non-fatal, distinguishable third state (`missing`, set in the `else` branch below) that the rest
+# of this block and §8 handle explicitly -- there is no land-state-load.sh policy that matches
+# "missing is not an error." The `2>/dev/null` here is unchanged and still means exactly what it
+# always did: a missing file makes the `if` condition false (DEFERRED_STATE=missing) without a
+# spurious "No such file or directory" on this call's stderr, since that path is an expected,
+# routine outcome here -- not a failure to surface, unlike every other $SWEEP_TMP site above.
 if DEFERRED="$(cat "$SWEEP_TMP/deferred" 2>/dev/null)"; then
   DEFERRED_STATE=ok
   [ "$DEFERRED" = "SWEEP-QUERY-ERROR" ] && DEFERRED_STATE=error

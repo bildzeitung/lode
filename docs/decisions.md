@@ -4396,3 +4396,36 @@ entries below from being rewritten to chase the current tree.)
   fix above, and worth its own acceptance criteria and non-vacuity proof rather than being rushed in
   alongside a keyword-list tweak. Filed as `lode-rl6s` (`discovered-from lode-125q`, independently
   buildable — not blocked on anything).
+
+- **2026-08-08 (`lode-3oik`) — adopted `scripts/land-state-load.sh` (`lode-dc4n`) for `/sweep`'s
+  `$SWEEP_TMP` load cluster; kept the script's name rather than renaming it.** `.claude/skills/
+  sweep/SKILL.md` had five `$SWEEP_TMP` reads hand-rolling the exact same "missing fatal, empty OK"
+  default policy `land-state-load.sh` already made explicit for `/land`'s `$STATE_DIR` reads — §3's
+  `$ESCALATED`/`$HUMAN`/`$CLOSABLE`, §6's prep and §7's re-derivation of `$CURRENT`. All five were
+  retrofitted onto the shared script with no `--require-nonempty`, preserving that exact policy
+  (verified site by site against the pre-retrofit text before editing, not assumed).
+
+  **Naming decision:** keep `scripts/land-state-load.sh`'s name, don't rename it to something
+  generic like `scripts/state-file-load.sh`. The script already took a plain path argument and was
+  never actually `$STATE_DIR`-specific — only its name and header comment implied that. Renaming
+  would touch two existing test modules (`tests/test_land_conflicts_state.py`,
+  `tests/test_land_state_load.py`) plus every call site in both `/land`'s and now `/sweep`'s
+  SKILL.md, for a purely cosmetic gain; the header comment carries the de-scoping note instead
+  (`scripts/land-state-load.sh`'s own top-of-file comment, updated by this ticket).
+
+  **Two `$SWEEP_TMP` sites deliberately NOT retrofitted:** §8's `deferred`/`stranded` reads
+  (`cat "$SWEEP_TMP/deferred" 2>/dev/null` / `cat "$SWEEP_TMP/stranded" 2>/dev/null`, each inside an
+  `if VAR="$(...)"; then ... else STATE=missing; fi`). These do not map onto either of
+  `land-state-load.sh`'s two policies: both of that script's policies treat a missing file as
+  **fatal** (exit 1), while these two sites treat a missing file as a **non-fatal, expected third
+  state** — `§2a`/`§2b`'s corresponding block simply hasn't run yet this pass, which is routine, not
+  an error, and §8 must still finish (publish the digest) either way. Their pre-existing
+  `2>/dev/null` behaviour — silently continue past a missing file rather than surface `cat`'s own
+  stderr — is preserved unchanged; only a one-line note was added at each site (and pinned by
+  `tests/test_sweep_state_load.py`) explaining why they're out of scope, per this ticket's
+  acceptance criteria.
+
+  Mirrors `lode-dc4n`'s own consolidation for `/land`'s four `$STATE_DIR` sites; the hazard named
+  there (a future editor silently flipping a load's missing-vs-empty policy during a mechanical
+  retrofit) is exactly why every retrofitted site above was checked against its pre-change text
+  first, and why the two out-of-scope sites got an explicit note instead of a silent skip.
