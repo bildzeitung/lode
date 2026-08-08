@@ -505,9 +505,11 @@ branching from `trunk` and merging the base in, as `coding.md` instructs) puts t
 *both* branches' first-parent spines — the direction test finds it on both sides, matches neither
 half of the `&&` condition, and emits no edge at all. Detection (the off-trunk-merge-base test) still
 correctly flags the pair as related; only the *direction* is silently lost. `coding.md`'s sanctioned
-build flow (branch from `trunk`, merge the base in) never produces this shape, so it is not a live
-trigger under the current architecture — same status as the force-push gap above: a defense against a
-future or off-process deviation, not something this ticket builds a general fix for.
+build flow (branch from `trunk`, merge the base in) never produces this shape, but a producer HAS 
+deviated from it — OBSERVED 2026-08-07, `land/lode-35nu.9` branched directly off `land/lode-kuc7`,
+detected as related and silently given no direction — so unlike the force-push gap above this is a
+LIVE trigger, not merely a defense against a future or off-process deviation, not something this
+ticket builds a general fix for.
 
 **And note it is not distinguishable from a sibling pair by signature alone**: both show up as "related
 (off-trunk merge-base) but no edge." That is exactly why this stays a *documented gap* rather than

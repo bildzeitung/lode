@@ -74,6 +74,62 @@ head lives on someone else's server and changes without telling you.** Consequen
 - One canonical node per `external_id` with many edges — never five copies of a ticket linked
   from five notes. Dedup on `external_id`; version on `snapshot_id`.
 
+### A query result has no identity — discovery is not citation (decided, `lode-35nu.11.5`)
+
+Tool-augmented Ask ([`lode-35nu.11`](retrieval.md#tool-augmented-ask-the-tool-path-is-the-draw-down-path)) lets the
+LLM reach live external systems mid-answer, and the settled constraint there is that **every cited
+tool result is persisted as an external snapshot before synthesis**, so the faithfulness gate
+verifies spans against stored bytes exactly as it does for any other external. That constraint
+collides with this section: `external_id` is a primary key that is either a fetchable URL (web,
+above) or a semantic key — issue key / page id ([Atlassian](#semantic-external_id-not-a-url-locked-decision-3--refinement-a),
+`lode-gpzn.2`, with `api_base` carrying the rebuild base). **"JIRA search for X" is neither.**
+
+Both obvious escapes are wrong. Minting an identity for query results — content-addressing the
+result set, or query-addressing it — fails on the same fact from two directions: a query's results
+change underneath you, so content-addressing churns a fresh primary key on every run (defeating the
+one-node-per-source dedup this whole section exists to guarantee), while query-addressing yields one
+durable row whose content silently mutates (defeating `snapshot_id`'s immutability). And banning
+query tools outright would leave the model able to fetch only what it already knows the key of,
+which is most of the value gone.
+
+So the resolution is neither: **split discovery from citation.**
+
+- A **search/query tool is allowed**, and returns **only identifiers and titles — never body text.**
+  Its output is never written to `externals`, never given a `snapshot_id`, and is never a citation
+  target. It is navigation, not evidence. Returning no body text is not a nicety — it is the
+  mechanism: there is nothing in a search result the model *could* quote, so the faithfulness gate
+  cannot be routed around by citing a search response.
+- A **fetch tool** then retrieves the specific resources those identifiers name. Those *are*
+  addressable — their `external_id`s are exactly the ones this section already defines — so they
+  land on the existing draw-down path with a valid primary key, and are cited by `snapshot_id`
+  like anything else.
+
+The consequence worth stating plainly: **no new identity scheme is introduced, and the faithfulness
+gate is untouched.** The question "what is the `external_id` of a search?" is not answered — it is
+deleted, by never persisting a search.
+
+### Ask-time snapshots are first-class, with a provenance marker (decided, `lode-35nu.11.5`)
+
+Because of the rule above, every snapshot the Ask path writes is a snapshot of a real addressable
+resource — byte-for-byte the same object `lode.drawdown` already produces when a note links that
+ticket. Giving those rows a separate "ephemeral" class with its own lifecycle and GC would mean
+maintaining a second lifecycle and a second code path to distinguish rows that are *structurally
+identical*, so they are **ordinary `externals`/`snapshots` rows**, visible to Browse, reconcile,
+staleness scanning and re-embedding like any other.
+
+Two qualifications keep that from being a silent corpus mutation:
+
+- **`discovered_via = 'ask'`** is recorded on the `externals` row, so Browse can filter and the
+  origin of a row is never a mystery. It is a provenance marker only — nothing branches on it.
+- **No note→external edge is created.** Asking a question is not an assertion that the answer's
+  sources belong to any note, so nothing links these rows into the [graph](#edges-explicit-vs-inferred).
+  They are reachable and retrievable; they are not claimed by a note.
+
+The dedup requirement this raises is already satisfied by existing machinery, with nothing new to
+build: repeated asks about the same resource dedup on `external_id` (one node), and an identical
+refetch is free because [`snapshot_id = H(external_id ‖ body)`](#snapshot-churn-decouple-new-snapshot-from-re-enrich)
+yields the same hash and no new row.
+
 ### URL canonicalization (decided, `lode-w0h.3`; userinfo stripped, `lode-0as`)
 
 For a web source, `external_id` **is** its canonical URL string — not a hash — so this
@@ -715,13 +771,54 @@ The control surface for an external source is `lode no-egress <external_id>` (`-
 which flips `externals.no_egress`; every send path (enrichment, Q&A) reads the flag generically off
 the row, so setting it is the only step needed (lode-w0h.7).
 
+### Tool calls are egress too (decided, `lode-35nu.11.5`)
+
+Tool-augmented Ask opens a send path the two redactions above do not cover. `gate_qa_egress`
+(`lode.egress`) guards the synthesis **send** — the passages going to the model. It does not guard
+what the model then puts *into a tool call*: a search string or an issue key composed by the model
+and shipped to a third-party API is content leaving the box through a path with no gate and no
+[egress-log](#egress-log-auditability) row.
+
+**First, the correction to the threat as originally filed.** The motivating worry was "the model
+composes a search string out of a `no_egress` note's content." That specific leak is **not reachable
+today**, and the doc should not imply it is: `no_egress` material is excluded from cloud Q&A context
+(above), so the cloud model never receives it and cannot compose anything from it. Banning tools
+outright whenever `no_egress` material is *in the corpus* — the strictest option considered — was
+therefore rejected as guarding a path the architecture already closes, at the cost of disabling
+tools in exactly the sessions where the user has sensitive notes, which is most of them.
+
+What is real, and what the decided mechanism actually covers:
+
+- **The audit gap stands on its own, whoever composed the string.** A tool call ships bytes to a
+  third-party service. [storage.md](storage.md)'s one-audit-row-per-egress rule applies, and today
+  no row is written. **Every tool call writes an `egress_log` row** — `purpose = 'tool'`, the tool
+  invoked, the destination `external_id`/service, the arguments as sent, and any redactions applied.
+  This is required independent of any threat model; it is what makes *"what of mine has gone to the
+  cloud, and when?"* remain a true claim once tools exist.
+- **The user's own question text is unredacted** and reaches both the model and any tool argument
+  derived from it. That path predates tools — it is Ask's existing surface — but a tool call
+  forwards it to a *second* party. So **`gate_qa_egress`'s redaction runs over tool arguments**, not
+  just over passages. Reusing the existing gate rather than writing a second one is the point: the
+  secret patterns it strips are the same patterns, and a divergent second redactor would be a
+  correctness hazard the moment either side is tuned.
+- **A tool call whose destination source is itself `no_egress` is forbidden.** The flag already
+  means "this source's content never goes to the cloud"; querying it live and feeding the result to
+  cloud synthesis would launder exactly what the flag forbids.
+
+**Why redaction is specified even though the composed-from-`no_egress` leak is unreachable:** a
+[local-LLM fallback synthesizing over withheld notes](decisions.md) is an explicitly-live future
+option, and under it the model *would* see `no_egress` content and *could* put it in a tool
+argument. Choosing the mechanism now, while it costs one reused function call, is cheaper than
+retrofitting it onto a path that by then has users.
+
 ### Egress log (auditability)
 
-Every time content leaves the box it is **logged**: timestamp, purpose (`enrich` | `qa`), model,
-the `version_id`/`passage_id`s sent, and which redactions were applied. This extends the provenance
-already on annotations into a straight answer to *"what of mine has gone to the cloud, and when?"*
-Cheap to keep, high-trust, and the natural audit surface if a sensitive note is ever suspected of
-having leaked.
+Every time content leaves the box it is **logged**: timestamp, purpose (`enrich` | `qa` | `tool`),
+model, the `version_id`/`passage_id`s sent (for a tool call: the destination and the arguments, per
+[the section above](#tool-calls-are-egress-too-decided-lode-35nu115)), and which redactions were
+applied. This extends the provenance already on annotations into a straight answer to *"what of mine
+has gone to the cloud, and when?"* Cheap to keep, high-trust, and the natural audit surface if a
+sensitive note is ever suspected of having leaked.
 
 ### Local-at-rest
 

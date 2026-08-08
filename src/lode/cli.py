@@ -46,6 +46,7 @@ from rich.theme import Theme
 # non-deterministic run to run).
 import lode.jira_backfill  # noqa: F401
 from lode import __version__, versions
+from lode.citations_read import resolve_citations
 from lode.config import (
     CONFLUENCE_EMAIL_ENV,
     CONFLUENCE_TOKEN_ENV,
@@ -586,12 +587,12 @@ def ask(
         # Resolve each surviving citation's as-of provenance while conn is still
         # open (docs/externals.md "Every AI claim from an external must cite
         # 'as of fetched_at'") -- a note's is its version's write time, an
-        # external's its snapshot's fetch time (:func:`_resolve_as_of`).
-        as_of = {
-            support.target_id: _resolve_as_of(conn, support)
-            for claim in answer.claims
-            for support in claim.support
-        }
+        # external's its snapshot's fetch time
+        # (:func:`lode.citations_read.resolve_citations`, shared with the TUI's
+        # ask screen, lode-kuc7). Only the as_of half is used here; identities
+        # is discarded -- the terminal `ask` output doesn't render titles.
+        supports = [support for claim in answer.claims for support in claim.support]
+        as_of, _identities, _bodies = resolve_citations(conn, supports)
     except (AuthError, LLMProviderError) as err:
         # `ask` is one-shot with no retry machinery, so every provider failure
         # ends the command -- both the credential case and any other
@@ -672,7 +673,8 @@ def _format_cited_answer(
 
     Each surviving claim prints its text followed by one indented citation line per
     support — its ``version_id`` / ``snapshot_id``, its resolved as-of provenance
-    (``as_of``, keyed by :attr:`Support.target_id` — :func:`_resolve_as_of`), and the
+    (``as_of``, keyed by :attr:`Support.target_id` —
+    :func:`lode.citations_read.resolve_citations`), and the
     verbatim span. ``docs/externals.md`` ("Every AI claim from an external must cite
     'as of fetched_at'") is why this line is never omitted, note citation or
     external. When the answer abstained (no claim survived the gate) the honest
@@ -709,30 +711,6 @@ def _format_citation(support: Support, as_of: str | None) -> str:
         target = f"snapshot_id {support.snapshot_id}"
     provenance = f"{target}, as of {as_of}" if as_of else f"{target}, as of unknown"
     return f'  - {provenance}  "{support.quoted_span}"'
-
-
-def _resolve_as_of(conn: sqlite3.Connection, support: Support) -> str | None:
-    """Resolve one citation's as-of provenance from the store.
-
-    A note ``version_id``'s as-of is its write time (``versions.created``); an
-    external ``snapshot_id``'s is its fetch time (``snapshots.fetched_at`` —
-    ``docs/externals.md`` "Every AI claim from an external must cite 'as of
-    fetched_at'"). Mirrors :func:`lode.tui.services.ask._resolve_as_of`, which the TUI ask
-    screen uses for the same lookup. Returns ``None`` for a target absent from the
-    store (practically unreachable — the faithfulness gate already verified the
-    span against the stored body — but handled rather than assumed away).
-    """
-    if support.version_id is not None:
-        row = conn.execute(
-            "SELECT created FROM versions WHERE version_id = ?",
-            (support.version_id,),
-        ).fetchone()
-    else:
-        row = conn.execute(
-            "SELECT fetched_at FROM snapshots WHERE snapshot_id = ?",
-            (support.snapshot_id,),
-        ).fetchone()
-    return row[0] if row is not None else None
 
 
 @app.command()

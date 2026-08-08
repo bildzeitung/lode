@@ -45,12 +45,13 @@ printing the abstention line or the cited claims -- belongs to the ``lode ask`` 
 
 import sqlite3
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from lode.answer import Claim
+from lode.answer import Claim, Support
+from lode.chunking import parse_char_range
 from lode.config import Settings
 from lode.egress import WithheldCitation
-from lode.faithfulness import EntailmentScorer
+from lode.faithfulness import EntailmentScorer, locate_span
 from lode.gate import apply_gate
 from lode.llm_provider import LLMProvider
 from lode.qa import QaPassage, QaResult, answer_question
@@ -174,7 +175,64 @@ def ask(
         provider=provider,
         settings=settings,
     )
-    return gate_cited_answer(result, bodies, scorer=scorer, settings=settings)
+    cited = gate_cited_answer(result, bodies, scorer=scorer, settings=settings)
+    return replace(cited, claims=_stamp_body_offsets(cited.claims, context, bodies))
+
+
+def _stamp_body_offsets(
+    claims: tuple[Claim, ...],
+    context: Sequence[ContextItem],
+    bodies: Mapping[str, str],
+) -> tuple[Claim, ...]:
+    """Disambiguate a repeated ``quoted_span`` by locating it in its own retrieved passage (lode-hruz).
+
+    A claim's ``Support`` carries no offset from the LLM -- it only echoes back
+    ``version_id``/``snapshot_id`` + verbatim text -- so when the same span text
+    occurs more than once in the cited body, which occurrence the model actually
+    saw is otherwise lost. Each retrieved :class:`~lode.retrieval.ContextItem`
+    DOES know its own precise char offset (``body[start:end] == item.passage_text``,
+    ``chunking.py``), so this searches each retrieved passage's own slice of the
+    body and stamps ``Support.body_offset`` with the first hit -- via
+    :func:`~lode.faithfulness.locate_span`, so a whitespace-reflowed quote (which
+    the gate accepts, and which is the common case off a multi-line body) is
+    disambiguated too, not just an exact one.
+
+    Every surviving support is rewritten, so a ``body_offset`` the model invented
+    (``Support`` is also the response schema) can never survive to a renderer.
+    ``body_offset`` is left ``None`` -- renderer falls back to the first
+    occurrence, as before lode-hruz -- when no retrieved passage for the target
+    contains the span, e.g. it only appears in the larger ``parent_block``.
+    """
+    if not claims:
+        return claims
+
+    passage_ranges: dict[str, list[tuple[int, int]]] = {}
+    for item in context:
+        bounds = parse_char_range(item.char_range)
+        if bounds is not None:
+            passage_ranges.setdefault(item.target_version, []).append(bounds)
+
+    def offset_for(support: Support) -> int | None:
+        body = bodies.get(support.target_id)
+        if body is None:
+            return None
+        for start, end in passage_ranges.get(support.target_id, ()):
+            located = locate_span(support.quoted_span, body[start:end])
+            if located is not None:
+                return start + located[0]
+        return None
+
+    return tuple(
+        claim.model_copy(
+            update={
+                "support": [
+                    support.model_copy(update={"body_offset": offset_for(support)})
+                    for support in claim.support
+                ]
+            }
+        )
+        for claim in claims
+    )
 
 
 def _resolve_target(
