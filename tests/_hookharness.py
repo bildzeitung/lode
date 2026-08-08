@@ -33,18 +33,22 @@ SETTINGS = Path(__file__).resolve().parent.parent / ".claude" / "settings.json"
 SH = shutil.which("sh") or "/bin/sh"
 
 
-def pretooluse_hook(match_substring: str) -> str:
-    """The single `PreToolUse(Bash)` hook whose command contains `match_substring`, read from
+def pretooluse_hook(match_substring: str, *, matcher: str = "Bash") -> str:
+    """The single `PreToolUse(<matcher>)` hook whose command contains `match_substring`, read from
     the committed `.claude/settings.json`. Fails loudly unless exactly one hook matches -- this
     is a test precondition, not a runtime guard, so an ambiguous or missing match is a bug in the
     test itself, not something to tolerate silently.
+
+    `matcher` defaults to `"Bash"` -- lode's first three PreToolUse guards were all Bash-matched.
+    `scripts/trunk-write-guard.sh` (lode-p8zl) is matched on `"Edit|Write"` instead, since it
+    needs no `tool_input` at all and fires on Edit/Write tool calls directly.
     """
     settings = json.loads(SETTINGS.read_text())
     pre_tool_use = settings["hooks"]["PreToolUse"]
     matching = [
         h["command"]
         for entry in pre_tool_use
-        if entry.get("matcher") == "Bash"
+        if entry.get("matcher") == matcher
         for h in entry["hooks"]
         if match_substring in h.get("command", "")
     ]
@@ -56,32 +60,41 @@ def pretooluse_hook(match_substring: str) -> str:
 
 def run_hook(
     hook: str,
-    command: str,
+    command: str | None = None,
     *,
+    tool_name: str = "Bash",
+    tool_input: dict | None = None,
     path: str | None = None,
     cwd: Path | None = None,
     project_dir: str | None = None,
 ) -> dict | None:
     """Run `hook` (a PreToolUse shell one-liner, as returned by `pretooluse_hook`) against a
-    synthetic Bash-tool-call payload carrying `command`; return its `hookSpecificOutput`, or
-    `None` if the hook fell through silently (no decision).
+    synthetic tool-call payload; return its `hookSpecificOutput`, or `None` if the hook fell
+    through silently (no decision).
 
     Driven through **`/bin/sh -c`** (dash on Linux), never `bash -c` -- see the module docstring.
+
+    `command`, when given, builds a `Bash` tool payload with `tool_input: {"command": command}` --
+    the original, still-default shape all three Bash-matched guards use. `tool_name`/`tool_input`,
+    when given instead, build an arbitrary payload -- used by `scripts/trunk-write-guard.sh`'s
+    tests (lode-p8zl), whose guard reads no `tool_input` at all and only needs a plausible
+    Edit/Write payload shape to drive.
 
     `path`, when given, overrides `PATH` for the subprocess only -- used to simulate a jq-less
     machine (lode-oii9) without touching the real `PATH` of the process running the test. `sh`
     itself is invoked by its resolved path so a stripped `PATH` cannot make it unresolvable.
 
     `cwd`, when given, overrides the subprocess's working directory -- used by guards (like
-    lode-fpmi's) whose logic depends on `git rev-parse --show-toplevel` resolving a real repo.
+    lode-fpmi's and lode-p8zl's) whose logic depends on `git rev-parse --show-toplevel` resolving
+    a real repo.
 
     `project_dir`, when given, sets `CLAUDE_PROJECT_DIR` -- used by the guards that resolve a
     helper script under it (lode-obox), to point them at a directory where that script is
     missing or non-executable and check they fail closed.
     """
-    payload = json.dumps(
-        {"session_id": "t", "tool_name": "Bash", "tool_input": {"command": command}}
-    )
+    if tool_input is None:
+        tool_input = {"command": command if command is not None else ""}
+    payload = json.dumps({"session_id": "t", "tool_name": tool_name, "tool_input": tool_input})
     env: dict[str, str] | None = None
     if path is not None or project_dir is not None:
         env = dict(os.environ) if path is None else {"PATH": path}
