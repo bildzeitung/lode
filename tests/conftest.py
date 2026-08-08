@@ -618,7 +618,7 @@ def _reset_jobs_clock_anchor() -> None:
     ``tests/test_cli.py``'s ``test_work_wait_times_out_naming_outstanding_jobs``
     and ``test_work_wait_does_not_duplicate_the_one_shot_outstanding_line`` both
     did ``monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)``. Because
-    ``lode/cli.py`` does a plain ``import time``, ``cli.time`` IS the shared
+    ``lode/cli/__init__.py`` does a plain ``import time``, ``cli.time`` IS the shared
     ``time`` module object, not a module-local alias -- so that patch was
     PROCESS-GLOBAL and reached ``lode.jobs`` (which also does a plain
     ``import time``) too, not just ``lode.cli``. Both now rebind the *name*

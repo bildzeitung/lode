@@ -12,7 +12,7 @@ copy, so a stamp-format change would have needed the same edit three times.
 
 This module lives outside both :mod:`lode.cli` and the :mod:`lode.tui`
 package so every call site can share one helper without a cyclic or
-backwards import -- ``cli.py`` must not import from ``tui``, so neither
+backwards import -- ``lode.cli`` must not import from ``tui``, so neither
 ``lode.cli`` nor ``lode.tui.dates`` is a valid home for the shared parse.
 """
 

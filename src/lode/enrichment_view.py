@@ -479,3 +479,106 @@ def _enrichment_state(
     ) and not _has_ai_output(conn, note_id, head_version_id):
         return "failed"
     return "ready"
+
+
+def raw_snapshot_payload(conn: sqlite3.Connection, snapshot_id: str) -> str | None:
+    """Fetch one snapshot's raw HTML payload, or ``None`` if absent (nullable, schema.sql).
+
+    Relocated from ``lode.cli`` (lode-35nu.9, "no bare SQL in the cli
+    package"): ``lode dump-html``'s read.
+    """
+    row = conn.execute(
+        "SELECT raw_payload FROM snapshots WHERE snapshot_id = ?",
+        (snapshot_id,),
+    ).fetchone()
+    return row[0] if row else None
+
+
+#: The live-head (notes UNION externals) scan `lode reenrich` force-enqueues
+#: from -- shared with `stale_enrichment_heads` below so "status says clean"
+#: and "reenrich has work" read the identical query, never a
+#: separately-maintained approximation. Four positional `?` placeholders, two
+#: per UNION branch: (model, provider) each -- see `stale_enrichment_heads`.
+#: The provider comparison uses `IS NOT` rather than `!=` because it must stay
+#: NULL-safe both ways: a stored `NULL` means "anthropic" by convention
+#: (lode-568v.4's `provider_identity`), and the current provider is itself
+#: `NULL` while the active provider is anthropic -- plain `!=` against a NULL
+#: operand is never true in SQL, which would silently exempt every
+#: anthropic-vs-anthropic row (the common case today) from ever comparing
+#: equal, and non-equal, correctly (lode-568v.6).
+#:
+#: Relocated from ``lode.cli`` (lode-35nu.9, "no bare SQL in the cli
+#: package") -- unchanged, still shared by ``lode status``'s hint
+#: (:func:`lode.cli.status._enrichment_model_stale`) and ``lode reenrich``.
+STALE_ENRICHMENT_LIVE_HEADS_SQL = """
+    SELECT DISTINCT n.head_version_id
+    FROM notes n
+    JOIN versions v ON v.version_id = n.head_version_id
+    WHERE n.head_version_id IS NOT NULL
+      AND v.op != 'delete'
+      AND v.purged_at IS NULL
+      AND n.no_egress = 0
+      AND EXISTS (
+          SELECT 1 FROM annotations a
+          WHERE a.source = 'ai'
+            AND a.source_version = n.head_version_id
+            AND a.model IS NOT NULL
+            AND (a.model != ? OR a.provider IS NOT ?)
+      )
+    UNION
+    SELECT DISTINCT e.head_snapshot_id
+    FROM externals e
+    JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id
+    WHERE e.head_snapshot_id IS NOT NULL
+      AND s.status != 'tombstone'
+      AND e.no_egress = 0
+      AND EXISTS (
+          SELECT 1 FROM annotations a
+          WHERE a.source = 'ai'
+            AND a.source_version = e.head_snapshot_id
+            AND a.model IS NOT NULL
+            AND (a.model != ? OR a.provider IS NOT ?)
+      )
+"""
+
+
+def stale_enrichment_heads(
+    conn: sqlite3.Connection, enrichment_llm: str, current_provider: str | None
+) -> list[str]:
+    """Live head ids (notes UNION externals) whose recorded AI annotations disagree with `enrichment_llm` or `current_provider`.
+
+    Relocated from ``lode.cli`` (lode-35nu.9, "no bare SQL in the cli
+    package") -- unchanged. The exact scan ``lode reenrich`` force-enqueues
+    from (docs/storage.md#re-enriching-the-corpus-deliberately-targeted-lode-14jr):
+    a live head -- not soft-deleted/tombstoned, not purged, ``no_egress = 0``
+    -- carrying at least one ``'ai'`` annotation whose ``model`` differs from
+    `enrichment_llm`, OR whose ``provider`` differs from `current_provider`,
+    right now. A head with no ``'ai'`` annotation at all is unenriched, not
+    stale -- reconcile's ``enrich_gap`` step owns that case, not this one.
+
+    `current_provider` follows the same ``None`` == "anthropic" convention
+    :func:`lode.llm_provider.provider_identity` writes at enrichment time
+    (lode-568v.4/lode-568v.6): pass its return value, not
+    ``settings.llm_provider`` directly, so a stored ``NULL`` (an
+    anthropic-produced row, pre-seam or post-) compares equal to a currently-
+    anthropic config, and a provider switch -- same model/deployment string,
+    different vendor -- is legible as stale even though ``model`` alone
+    wouldn't catch it.
+
+    Shared by ``lode status``'s hint
+    (:func:`lode.cli.status._enrichment_model_stale`) and ``lode reenrich``
+    itself so "status says clean" and "reenrich has work" cannot disagree --
+    they are, structurally, the same read.
+    """
+    return [
+        row[0]
+        for row in conn.execute(
+            STALE_ENRICHMENT_LIVE_HEADS_SQL,
+            (
+                enrichment_llm,
+                current_provider,
+                enrichment_llm,
+                current_provider,
+            ),
+        ).fetchall()
+    ]

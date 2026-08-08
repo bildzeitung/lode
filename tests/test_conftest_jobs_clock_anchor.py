@@ -1,7 +1,7 @@
 """Regression test for conftest.py's ``_reset_jobs_clock_anchor`` autouse fixture (lode-x10m).
 
 lode-x10m: ``tests/test_cli.py``'s two ``work --wait`` tests USED TO do
-``monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)``. Because ``src/lode/cli.py``
+``monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)``. Because ``lode/cli/__init__.py``
 does a plain ``import time``, ``cli.time`` IS the shared ``time`` module object, so that patch
 was PROCESS-GLOBAL and reached ``src/lode/jobs.py``'s ``now()``, which ratchets the module-global
 ``jobs._now_epoch`` forward by hours-to-days. ``monkeypatch`` reverts ``time.monotonic`` but not

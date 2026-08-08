@@ -1711,7 +1711,8 @@ do.
 **Provider is part of the same identity, not a second check (lode-568v.6).** `annotations.provider`
 (written since `lode-568v.4`) can disagree with the active provider even while `model` matches — the
 same model/deployment string can name different vendors across a provider switch, so `model` alone
-would silently miss that case. `_STALE_ENRICHMENT_LIVE_HEADS_SQL` (`src/lode/cli.py`) therefore treats
+would silently miss that case. `STALE_ENRICHMENT_LIVE_HEADS_SQL` (`src/lode/enrichment_view.py`, relocated out of the CLI by
+`lode-35nu.9`) therefore treats
 an `'ai'` annotation as stale if `model != enrichment_llm` **or** `provider` disagrees with the
 currently active provider — compared with SQL's NULL-safe `IS NOT`, not `!=`, in both directions: a
 stored `NULL` means "anthropic" by convention (`lode.llm_provider.provider_identity`), and the current
@@ -1748,7 +1749,8 @@ manifest to reconcile.
 
 **`lode status`'s hint reads this exact query (decided, lode-o9k3; provider-aware since lode-568v.6).**
 The stale-detection scan above is not just conceptually mirrored by the `lode status` hint —
-`src/lode/cli.py`'s `_enrichment_model_stale` calls the identical `_stale_enrichment_heads` this
+`src/lode/cli/status.py`'s `_enrichment_model_stale` calls the identical
+`lode.enrichment_view.stale_enrichment_heads` this
 command force-enqueues from, and fires whenever that list is non-empty. This replaced an earlier,
 looser `lode status` check
 (a plain `COUNT(DISTINCT model) > 1` scan over the whole `annotations` table, unscoped to live heads)

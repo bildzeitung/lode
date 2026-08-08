@@ -549,9 +549,10 @@ def read_snapshot(db_path: Path, snapshot_id: str) -> SnapshotRow | None:
 
     Feeds :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` (lode-0sjj):
     a plain ``snapshot_id`` lookup, the read-side counterpart to
-    :func:`lode.cli.dump_html`'s (lode-olmi.7) ``raw_payload`` SELECT. That
-    query now has a name of its own -- ``cli._raw_payload`` (lode-l38d.8,
-    which needed it on two paths) -- but it stays private to ``cli.py``: it
+    ``lode dump-html``'s (lode-olmi.7) ``raw_payload`` SELECT. That query now
+    has a name of its own -- :func:`lode.enrichment_view.raw_snapshot_payload`
+    (lode-l38d.8, which needed it on two paths; relocated out of the cli
+    package by lode-35nu.9) -- but it stays a distinct read: it
     takes the open ``conn`` that command already holds and returns only
     ``raw_payload``, where this returns a whole :class:`SnapshotRow` from a
     ``db_path``. A later refactor could still unify the two, on the
@@ -679,3 +680,64 @@ def _list_notes_with_all_tags(
         exists_clause * len(tag_list),
         [json.dumps(tag) for tag in tag_list],
     )
+
+
+def note_head_op_and_parent(
+    conn: sqlite3.Connection, note_id: str
+) -> tuple[str, str | None] | None:
+    """A resolved note's head ``(op, parent_version_id)`` -- ``lode recover``'s read.
+
+    Relocated from ``lode.cli`` (lode-35nu.9, "no bare SQL in the cli
+    package"): ``recover`` uses this to confirm the head is actually a
+    tombstone (``op == 'delete'``) before repointing the note past it, and to
+    find what to repoint TO (the tombstone's own ``parent_version_id``).
+    Returns ``None`` for a note_id with no matching row (unreachable via a
+    prefix ``repo.resolve_note_prefix`` already resolved, but handled rather
+    than assumed away, mirroring that command's own defensive fetch).
+    """
+    row = conn.execute(
+        "SELECT v.op, v.parent_version_id FROM notes n "
+        "JOIN versions v ON v.version_id = n.head_version_id "
+        "WHERE n.note_id = ?",
+        (note_id,),
+    ).fetchone()
+    return (row[0], row[1]) if row is not None else None
+
+
+def note_head_created_body_op(
+    conn: sqlite3.Connection, note_id: str
+) -> tuple[str, str, str] | None:
+    """A resolved note's head ``(created, body, op)`` -- ``lode show``'s read.
+
+    Relocated from ``lode.cli`` (lode-35nu.9, "no bare SQL in the cli
+    package"). Returns ``None`` for a note_id with no matching row
+    (unreachable via a prefix ``repo.resolve_note_prefix`` already resolved,
+    but handled rather than assumed away, mirroring that command's own
+    defensive fetch).
+    """
+    row = conn.execute(
+        "SELECT v.created, v.body, v.op FROM notes n "
+        "JOIN versions v ON v.version_id = n.head_version_id "
+        "WHERE n.note_id = ?",
+        (note_id,),
+    ).fetchone()
+    return (row[0], row[1], row[2]) if row is not None else None
+
+
+def live_note_heads_with_body(
+    conn: sqlite3.Connection,
+) -> list[tuple[str, str, str]]:
+    """Every live (non-deleted) note head's ``(note_id, version_id, body)``.
+
+    Relocated from ``lode.cli`` (lode-35nu.9, "no bare SQL in the cli
+    package"): ``lode reindex-lexical``'s full read -- rebuilds
+    ``passages_fts`` for each row this returns. Deliberately ``op != 'delete'``
+    only, no ``purged_at`` guard -- a hard-purged head is still live (its body
+    is the ``[purged ...]`` marker) and must still be reindexed; see that
+    command's own docstring for why.
+    """
+    return conn.execute(
+        "SELECT n.note_id, n.head_version_id, v.body FROM notes n "
+        "JOIN versions v ON v.version_id = n.head_version_id "
+        "WHERE v.op != 'delete'"
+    ).fetchall()
