@@ -4370,11 +4370,23 @@ entries below from being rewritten to chase the current tree.)
   structurally identical to the Retracted/lode-x bold-parenthetical shape the gate's own docstring
   says a *new* shape should catch, but `_OFF_PATTERNS`' keyword alternation had no
   `Amendment`/`AMENDMENT` entry, so it slipped through. Fixed: `Amendment`/`AMENDMENT` added to the
-  alternation (both cases, matching the alternation's existing all-caps precedent for the analogous
-  stale-flag keyword), with a sabotage-test line using the exact `lode-hg49` lead-in shape proving
-  the scan now fires. Checked first that no legitimate `docs/decisions.md` prose opens a bold span,
+  alternation, with a sabotage-test line using the exact `lode-hg49` lead-in shape proving the scan
+  now fires. Checked first that no legitimate `docs/decisions.md` prose opens a bold span,
   parenthetical, or blockquote with that word (one hit, `charter amendment` — ordinary lowercase
-  mid-sentence narrative, untouched by the case-sensitive, span-anchored pattern).
+  mid-sentence narrative, matched by neither the case-sensitive keyword nor the span anchor).
+
+  **Both cases had to be listed explicitly, and the alternation must stay case-SENSITIVE.**
+  Case-insensitivity is not an option: it would false-positive on ordinary parenthesised lowercase
+  narrative such as "(superseded -- see below)", which
+  `test_off_pattern_scan_ignores_lowercase_narrative_prose` already pins. Two consequences worth
+  knowing (`lode-125q`'s review): (a) the alternation's other four keywords still carry only their
+  TitleCase form — the all-caps stale-flag keyword that *is* covered is covered by a **separate**
+  `_OFF_PATTERNS` entry, not by the alternation — so an all-caps RETRACTED/OBSOLETE/FALSIFIED/
+  OUTDATED lead-in remains uncaught, the same bug class as this one, tracked as `lode-bv9o`;
+  (b) that separate bare-word entry makes the all-caps spelling of that one keyword unwriteable
+  *anywhere* in this file, prose about the gate included — which is why this paragraph spells it
+  around rather than quoting it, and why an entry documenting these shapes must describe them rather
+  than reproduce them verbatim.
 
   That leaves blind spot (2) — `lode-nlk6`'s documented limitation that no check here can detect a
   *silent* in-place rewrite, since every check keys on an artifact a marker leaves behind and a
