@@ -151,12 +151,16 @@ def reconcile(
     *,
     steps: list[tuple[str, StepFn]] | None = None,
 ) -> int:
-    """Run all registered scan steps; return the total count of gap versions found.
+    """Run all registered scan steps; return the total count of gaps **handled**.
 
     Each step queries for a specific gap (e.g. "head version with no passages")
-    and calls :func:`lode.jobs.enqueue_derive_jobs` for each gap version via
-    ``ON CONFLICT DO NOTHING``, so the scan is safe to run at any time and any
-    frequency.
+    and deals with it. Most steps do that by calling
+    :func:`lode.jobs.enqueue_derive_jobs` for each gap version via
+    ``ON CONFLICT DO NOTHING``; ``lexical_gap`` (lode-cyly) instead heals its
+    gaps **inline**, enqueueing nothing at all. Either way the scan is safe to
+    run at any time and any frequency, and the returned total is "gaps dealt
+    with", never queue depth — see :data:`StepFn` and ``docs/storage.md``
+    ("Shape: a durable jobs table + a reconciliation safety net").
 
     ``settings`` is resolved once — the caller's instance, or a fresh
     ``Settings()`` default if omitted, mirroring :func:`lode.worker.drain`'s

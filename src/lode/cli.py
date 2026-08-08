@@ -3249,6 +3249,11 @@ def work(
                         # idempotent by the live-job partial unique index
                         # (lode-i05.4). ``settings`` reaches every scan step —
                         # see reconcile.StepFn (lode-09n).
+                        #
+                        # ``gap`` is "gaps HANDLED", not queue depth (lode-cyly):
+                        # the lexical_gap step heals inline and enqueues nothing,
+                        # so a nonzero count here does not imply drain() has work.
+                        # The outstanding-jobs report below is the queue signal.
                         gap = _reconcile(conn, settings)
                         if gap:
                             typer.echo(f"reconciled {gap} gap version(s)")
