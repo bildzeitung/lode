@@ -61,6 +61,8 @@ from __future__ import annotations
 import html as html_lib
 import json
 import logging
+from dataclasses import dataclass
+from urllib.parse import quote
 
 import httpx
 
@@ -231,3 +233,102 @@ def fetch_jira_issue(
         http_status=response.status_code,
         tombstone_reason=None,
     )
+
+
+# ---------------------------------------------------------------------------
+# JIRA search (lode-8hsk) -- ids + titles only, targeting the CHANGE-2046
+# replacement endpoint (verified finding, bd lode-6nwu).
+# ---------------------------------------------------------------------------
+
+
+class JiraSearchError(Exception):
+    """A JIRA search request failed; carries no results (nothing to persist)."""
+
+
+@dataclass(frozen=True)
+class JiraSearchHit:
+    """One JIRA search result: an identifier and a title, nothing else.
+
+    Deliberately shaped to make a body/snippet field impossible, not merely
+    absent -- the acceptance criterion this ticket names ("Search tools
+    return identifiers and titles ONLY ... asserted ... that the schema
+    makes one impossible rather than merely absent").
+    """
+
+    external_id: str
+    title: str
+
+
+def _jql_escape(text: str) -> str:
+    """Escape free text for embedding inside a JQL double-quoted string literal."""
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def search_jira_issues(
+    query: str,
+    api_base: str,
+    *,
+    max_results: int = 25,
+    fetcher: Fetcher | None = None,
+    settings: Settings | None = None,
+) -> list[JiraSearchHit]:
+    """Search JIRA issues by free text; returns identifiers and titles only.
+
+    Targets ``GET /rest/api/3/search/jql`` -- the CHANGE-2046 replacement for
+    the retired ``GET/POST /rest/api/3/search``, which this module never
+    calls (verified finding, bd ``lode-6nwu``). Two migration traps that
+    finding names, both handled here:
+
+    - ``fields`` is passed **explicitly** as ``summary``. ``/search/jql``
+      documents "By default, this resource returns IDs only" -- omitting
+      ``fields`` would silently degrade this function's ids+titles contract
+      to ids alone.
+    - ``jql`` is always a **bounded** query (a ``text ~ "..."`` clause over
+      the caller's ``query``, never a bare/unfiltered JQL string) --
+      ``/search/jql`` rejects an unbounded ``jql``.
+
+    Fetches a **single page** (``maxResults`` capped at ``max_results``) --
+    a tool-search call is not a full corpus traversal, so this never follows
+    ``nextPageToken``; a caller wanting more/different results asks a
+    narrower query. (Full pagination contract for a future full-traversal
+    caller, if one is ever built: terminate on the *absence* of
+    ``nextPageToken`` -- there is no ``total``/``startAt`` any more -- see
+    ``bd lode-6nwu``'s design field.)
+
+    Raises :class:`JiraSearchError` on any non-OK **or malformed** response
+    -- the same shape as :func:`lode.confluence.search_confluence_pages`, and
+    load-bearing rather than cosmetic: :func:`lode.tool_dispatch.make_tool_result`
+    turns this exception into an error string the model sees, whereas a raw
+    ``json.JSONDecodeError`` would escape the tool-result callback and abort
+    the whole ``run_tool_turns`` run. Never persists
+    anything (unlike :func:`fetch_jira_issue`, a search result has no
+    identity to snapshot -- ``docs/externals.md`` "A query result has no
+    identity").
+    """
+    settings = settings or Settings()
+    fetcher = fetcher or _default_fetcher(settings, query)
+    api_base = api_base.rstrip("/")
+    jql = f'text ~ "{_jql_escape(query)}" ORDER BY updated DESC'
+    url = (
+        f"{api_base}/rest/api/3/search/jql"
+        f"?jql={quote(jql, safe='')}&maxResults={max_results}&fields=summary"
+    )
+    response = fetcher.fetch(url)
+    if classify_http_status(response.status_code) is not HttpOutcome.OK:
+        raise JiraSearchError(
+            f"jira search failed for {query!r}: http_{response.status_code}"
+        )
+    try:
+        payload = json.loads(response.text)
+    except json.JSONDecodeError as exc:
+        raise JiraSearchError(
+            f"jira search returned a malformed response for {query!r}: {exc}"
+        ) from exc
+    hits: list[JiraSearchHit] = []
+    for issue in payload.get("issues") or []:
+        key = issue.get("key")
+        if key is None:
+            continue
+        summary = ((issue.get("fields") or {}).get("summary")) or ""
+        hits.append(JiraSearchHit(external_id=str(key), title=summary))
+    return hits

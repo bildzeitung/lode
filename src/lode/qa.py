@@ -43,8 +43,18 @@ claims/support shape.
 :meth:`~lode.llm_provider.LLMProvider.run_tool_turns` with an empty ``tools``
 list -- byte-for-byte identical to the direct :meth:`structured_call` this
 replaced (every provider's empty-``tools`` case is required to delegate
-straight to it). This ticket wires no tools in; a future ticket
-(lode-35nu.11.2) can pass real ones here without another reshape.
+straight to it). That ticket wired no tools in on its own.
+
+**lode-8hsk:** ``tools_enabled=True`` now wires real tools in --
+:func:`lode.tool_dispatch.build_ask_tools`' read-only search/fetch set --
+through the same seam, with no reshape. The system prompt's tool-awareness is
+derived from whether the resulting ``tools`` tuple is non-empty, never from a
+second flag: :data:`_SYSTEM_PROMPT` (notes-only) is sent whenever ``tools``
+ends up empty -- either ``tools_enabled=False`` or
+``settings.ask_tools_enabled=False`` collapses to that same empty tuple --
+and stays byte-for-byte what it was before this ticket, so that path is
+unchanged. :data:`_SYSTEM_PROMPT_WITH_TOOLS` is sent only when ``tools`` is
+non-empty.
 """
 
 from __future__ import annotations
@@ -58,7 +68,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from lode.answer import Answer, Claim
 from lode.config import Settings
 from lode.egress import RedactedSend, WithheldCitation, gate_qa_egress
-from lode.llm_provider import LLMProvider, build_provider
+from lode.llm_provider import LLMProvider, ToolSpec, build_provider
+from lode.tool_dispatch import ToolBudget, build_ask_tools, make_tool_result
+from lode.webfetch import Fetcher
 
 #: Default Q&A model -- Claude Sonnet 4.6 (``docs/stack.md`` "Q&A LLM"). Mirrors
 #: :attr:`lode.config.Settings.qa_llm`'s default; the live value always comes
@@ -118,6 +130,9 @@ OPUS_MODEL = "claude-opus-5"
 #: ``docs/configuration.md`` "Models" for the decision.
 MAX_TOKENS = 8192
 
+#: Notes-only prompt (no tools offered). Byte-for-byte unchanged from before
+#: lode-8hsk, asserted by test_qa.py -- the tools_enabled=False /
+#: ask_tools_enabled=False path must reproduce today's behaviour exactly.
 _SYSTEM_PROMPT = (
     "You answer questions strictly from the SOURCES provided, which are passages "
     "from the user's personal knowledge base. Return a list of factual claims. "
@@ -132,6 +147,35 @@ _SYSTEM_PROMPT = (
     "that source's text. Assert only what the sources support. If the sources do "
     "not answer the question, return no claims. Never use knowledge beyond the "
     "sources."
+)
+
+#: Tool-aware prompt, sent only when a non-empty ``tools`` tuple is offered
+#: (lode-8hsk). Keeps the verbatim-span rule and the never-from-model-
+#: knowledge rule intact -- the faithfulness gate downstream is unmodified
+#: and must still pass -- while permitting the one path _SYSTEM_PROMPT
+#: forbade: calling a tool, and citing what it returns.
+_SYSTEM_PROMPT_WITH_TOOLS = (
+    "You answer questions from the SOURCES provided, which are passages from "
+    "the user's personal knowledge base, and from the read-only search/fetch "
+    "tools available to you. Return a list of factual claims. Every claim "
+    "must carry the verbatim evidence it rests on, pinned to a specific "
+    "source:\n"
+    '- for a source with kind="note", cite its id in the support\'s version_id '
+    "field;\n"
+    '- for a source with kind="external", cite its id in the support\'s '
+    "snapshot_id field;\n"
+    "- a snapshot_id returned by a fetch tool call is also a legitimate "
+    "citation target for the support's snapshot_id field -- it is verified "
+    "against the fetched content the same way any other external is;\n"
+    "- set exactly one of version_id or snapshot_id per support, never both.\n"
+    "Each quoted_span must be copied verbatim -- character for character -- "
+    "from that source's text, or from a tool result you fetched. Assert only "
+    "what the sources, or a tool result you fetched, support. If the SOURCES "
+    "provided do not answer the question, you may call a search tool to find "
+    "a relevant identifier and then fetch it before answering. If, after "
+    "that, neither the sources nor anything you fetched answers the "
+    "question, return no claims. Never use knowledge beyond what the sources "
+    "or your tool results actually show."
 )
 
 
@@ -200,8 +244,12 @@ def answer_question(
     passages: Iterable[QaPassage],
     *,
     think_harder: bool = False,
+    tools_enabled: bool = False,
     provider: LLMProvider | None = None,
     settings: Settings | None = None,
+    jira_fetcher: Fetcher | None = None,
+    confluence_fetcher: Fetcher | None = None,
+    web_fetcher: Fetcher | None = None,
 ) -> QaResult:
     """Ask Claude for structured, cited claims answering ``question``.
 
@@ -215,6 +263,17 @@ def answer_question(
     payloads it returns are sent. The structured response is decoded with
     Pydantic into :class:`lode.answer.Answer` (claims each pinned to a verbatim
     span of a cited target).
+
+    ``tools_enabled`` (lode-8hsk) offers :func:`lode.tool_dispatch.build_ask_tools`'
+    read-only search/fetch tool set through
+    :meth:`~lode.llm_provider.LLMProvider.run_tool_turns`' free-tool-turn loop --
+    ``build_ask_tools`` itself still returns ``()`` when
+    ``settings.ask_tools_enabled`` is ``False``, so a caller passing
+    ``tools_enabled=True`` against a config with the feature flag off gets the
+    unchanged notes-only path regardless (module docstring). The per-ask
+    tool-call budget (``settings.ask_tool_budget``) is created fresh per call.
+    ``jira_fetcher``/``confluence_fetcher``/``web_fetcher`` are test/offline
+    seams passed straight through to :func:`~lode.tool_dispatch.make_tool_result`.
 
     ``settings`` defaults to :class:`~lode.config.Settings`' own defaults when
     omitted (same pattern as :func:`lode.redact.redact_before_egress_counting`).
@@ -233,6 +292,8 @@ def answer_question(
 
     egress = gate_qa_egress(conn, model, passages, settings)
 
+    tools = build_ask_tools(settings) if tools_enabled else ()
+
     provider = provider or build_provider(settings)
     envelope = _request_claims(
         provider,
@@ -243,6 +304,12 @@ def answer_question(
         egress.sent,
         is_external,
         settings.qa_call_timeout_s,
+        tools,
+        conn=conn,
+        settings=settings,
+        jira_fetcher=jira_fetcher,
+        confluence_fetcher=confluence_fetcher,
+        web_fetcher=web_fetcher,
     )
     return QaResult(
         answer=Answer(envelope.claims),
@@ -253,7 +320,7 @@ def answer_question(
 
 
 def _no_tools_configured(name: str, tool_input: dict) -> str:  # pragma: no cover
-    """``tool_result`` callback for the (currently empty) ``tools`` list below.
+    """``tool_result`` callback used only when ``tools`` is empty.
 
     Never actually invoked: :meth:`~lode.llm_provider.LLMProvider.run_tool_turns`
     is required to delegate straight to ``structured_call`` when ``tools`` is
@@ -262,8 +329,9 @@ def _no_tools_configured(name: str, tool_input: dict) -> str:  # pragma: no cove
     silently swallowing a tool call.
     """
     raise AssertionError(
-        f"unexpected tool call {name!r}({tool_input!r}) -- lode-35nu.11.6 wires "
-        "no tools into the Q&A synthesis path yet (lode-35nu.11.2)"
+        f"unexpected tool call {name!r}({tool_input!r}) -- tools is empty for "
+        "this run_tool_turns call, so run_tool_turns should never have reached "
+        "a tool_result callback at all (lode-35nu.11.6's empty-tools contract)"
     )
 
 
@@ -276,31 +344,56 @@ def _request_claims(
     sent: tuple[RedactedSend, ...],
     is_external: dict[str, bool],
     timeout_s: float,
+    tools: tuple[ToolSpec, ...],
+    *,
+    conn: sqlite3.Connection,
+    settings: Settings,
+    jira_fetcher: Fetcher | None,
+    confluence_fetcher: Fetcher | None,
+    web_fetcher: Fetcher | None,
 ) -> _ClaimsEnvelope:
     """Make the structured-output call and return the decoded claims envelope.
 
     Routed through the :class:`~lode.llm_provider.LLMProvider` seam
     (lode-568v.2) via :meth:`~lode.llm_provider.LLMProvider.run_tool_turns`
-    (lode-35nu.11.6) with an empty ``tools`` list -- every provider's
-    empty-``tools`` case is required to delegate straight to
-    ``structured_call`` (``messages.parse`` with an ``output_format`` Pydantic
-    model for :class:`~lode.llm_provider.AnthropicProvider`), so this call is
-    byte-for-byte identical to calling ``structured_call`` directly, as it did
-    before this ticket. ``run_tool_turns`` is the seam this path is reshaped
-    onto so a future ticket (lode-35nu.11.2) can pass real tools here without
-    another reshape; no tool schemas are defined by this ticket.
+    (lode-35nu.11.6). An empty ``tools`` -- every provider's empty-``tools``
+    case is required to delegate straight to ``structured_call``
+    (``messages.parse`` with an ``output_format`` Pydantic model for
+    :class:`~lode.llm_provider.AnthropicProvider`) -- is byte-for-byte
+    identical to calling ``structured_call`` directly, as it did before
+    lode-35nu.11.6. A non-empty ``tools`` (lode-8hsk) runs the free-tool-turn
+    loop instead, dispatching each call through
+    :func:`~lode.tool_dispatch.make_tool_result` with a fresh
+    :class:`~lode.tool_dispatch.ToolBudget` (``settings.ask_tool_budget``, one
+    counter shared by search and fetch). The system prompt is chosen from
+    whether ``tools`` is non-empty, never from a separate flag (module
+    docstring).
     """
     sources = "\n\n".join(
         _render_source(send, is_external.get(send.target_id, False)) for send in sent
     )
     user_prompt = f"QUESTION:\n{question}\n\nSOURCES:\n{sources}"
+    if tools:
+        budget = ToolBudget(max_calls=settings.ask_tool_budget)
+        tool_result = make_tool_result(
+            conn,
+            budget,
+            settings,
+            jira_fetcher=jira_fetcher,
+            confluence_fetcher=confluence_fetcher,
+            web_fetcher=web_fetcher,
+        )
+        system = _SYSTEM_PROMPT_WITH_TOOLS
+    else:
+        tool_result = _no_tools_configured
+        system = _SYSTEM_PROMPT
     return provider.run_tool_turns(
         model=model,
         reasoning_effort=reasoning_effort,
-        system=_SYSTEM_PROMPT,
+        system=system,
         user_prompt=user_prompt,
-        tools=(),
-        tool_result=_no_tools_configured,
+        tools=tools,
+        tool_result=tool_result,
         output_schema=_ClaimsEnvelope,
         max_tokens=max_tokens,
         timeout_s=timeout_s,

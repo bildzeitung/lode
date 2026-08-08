@@ -67,6 +67,7 @@ Confluence-specific branch needed there.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from urllib.parse import quote
 
 from lode.config import AtlassianCredentials, Settings, resolve_confluence_credentials
@@ -235,7 +236,100 @@ def fetch_confluence_page(
     )
 
 
+# ---------------------------------------------------------------------------
+# Confluence search (lode-8hsk) -- ids + titles only, CQL text search.
+# ---------------------------------------------------------------------------
+
+
+class ConfluenceSearchError(Exception):
+    """A Confluence search request failed; carries no results (nothing to persist)."""
+
+
+@dataclass(frozen=True)
+class ConfluenceSearchHit:
+    """One Confluence search result: an identifier and a title, nothing else.
+
+    Mirrors :class:`lode.jira_fetch.JiraSearchHit` -- see its docstring for
+    why the shape makes a body/snippet field impossible, not merely absent.
+    """
+
+    external_id: str
+    title: str
+
+
+def _cql_escape(text: str) -> str:
+    """Escape free text for embedding inside a CQL double-quoted string literal."""
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def search_confluence_pages(
+    query: str,
+    api_base: str,
+    *,
+    max_results: int = 25,
+    fetcher: Fetcher | None = None,
+    settings: Settings | None = None,
+) -> list[ConfluenceSearchHit]:
+    """Search Confluence pages by free text; returns identifiers and titles only.
+
+    ``GET {api_base}/wiki/rest/api/content/search?cql=...`` -- ``type=page``
+    scoped (excludes blogposts/attachments/comments) with a free-text
+    ``text ~ "..."`` clause built from ``query``, CQL-escaped
+    (:func:`_cql_escape`). Single page (``limit`` capped at ``max_results``)
+    -- a tool-search call, not a full-space traversal.
+
+    Raises :class:`ConfluenceSearchError` on any non-OK or malformed
+    response; never persists anything -- unlike :func:`fetch_confluence_page`,
+    a search result has no identity to snapshot (``docs/externals.md`` "A
+    query result has no identity").
+    """
+    settings = settings or Settings()
+    api_base = api_base.rstrip("/")
+    if fetcher is None:
+        credentials = resolve_confluence_credentials(settings)
+        if credentials is None:
+            raise ConfluenceSearchError(
+                "search_confluence_pages: Confluence Cloud credentials are "
+                "unresolved -- the caller should have already checked "
+                "lode.config.confluence_active() before reaching this unit"
+            )
+        fetcher = HttpxConfluenceFetcher(credentials, settings)
+
+    cql = f'type=page AND text ~ "{_cql_escape(query)}"'
+    url = (
+        f"{api_base}/wiki/rest/api/content/search"
+        f"?cql={quote(cql, safe='')}&limit={max_results}"
+    )
+    response = fetcher.fetch(url)
+    if classify_http_status(response.status_code) is not HttpOutcome.OK:
+        raise ConfluenceSearchError(
+            f"confluence search failed for {query!r}: http_{response.status_code}"
+        )
+    try:
+        payload = json.loads(response.text)
+        results = payload.get("results") or []
+    except json.JSONDecodeError as exc:
+        raise ConfluenceSearchError(
+            f"confluence search returned a malformed response for {query!r}: {exc}"
+        ) from exc
+
+    hits: list[ConfluenceSearchHit] = []
+    for result in results:
+        page_id = result.get("id")
+        if page_id is None:
+            continue
+        hits.append(
+            ConfluenceSearchHit(
+                external_id=str(page_id), title=result.get("title") or ""
+            )
+        )
+    return hits
+
+
 __all__ = [
+    "ConfluenceSearchError",
+    "ConfluenceSearchHit",
     "HttpxConfluenceFetcher",
     "fetch_confluence_page",
+    "search_confluence_pages",
 ]
