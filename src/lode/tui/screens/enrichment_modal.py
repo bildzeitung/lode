@@ -3,8 +3,7 @@
 Split out of :mod:`lode.tui.screens.browse` per the one-Screen-per-module fiat
 (``docs/conventions.md``). Pushed from
 :meth:`~lode.tui.screens.browse.BrowseScreen.action_inspect_selected` via
-``i`` on the highlighted row, and from :meth:`~lode.tui.screens.edit.
-EditScreen.action_inspect_selected` via ``Ctrl+G``, both keyed to a
+``i`` on the highlighted row, and from :meth:`~lode.tui.screens.edit.EditScreen.action_inspect_selected` via ``Ctrl+G``, both keyed to a
 ``note_id``.
 """
 
@@ -41,11 +40,9 @@ INSPECTOR_EMBED_ID = "inspector-embed"
 class EnrichmentModalScreen(ModalScreen[None]):
     """A glance-and-dismiss popup over one note's full enrichment (lode-ay5.2).
 
-    Pushed from :meth:`~lode.tui.screens.browse.BrowseScreen.
-    action_inspect_selected` via ``i`` on the highlighted row, and from
+    Pushed from :meth:`~lode.tui.screens.browse.BrowseScreen.action_inspect_selected` via ``i`` on the highlighted row, and from
     :meth:`~lode.tui.screens.edit.EditScreen.action_inspect_selected` via
-    ``Ctrl+G``, both keyed to a ``note_id``. Renders :func:`lode.
-    enrichment_view.enrichment_view` verbatim -- summary, tags, entities,
+    ``Ctrl+G``, both keyed to a ``note_id``. Renders :func:`lode.enrichment_view.enrichment_view` verbatim -- summary, tags, entities,
     inferred edges (reason+confidence+stale), embed status, and the
     three-valued ``enrichment_state`` -- with **no** DB access or display
     policy of its own; this screen only shapes the already-decided fields
@@ -62,8 +59,7 @@ class EnrichmentModalScreen(ModalScreen[None]):
     popup rather than overflowing or truncating. ``Esc`` pops back to
     whichever screen pushed it -- the same one-level-at-a-time contract every
     other screen in this cluster already uses. Like ``DiscardConfirmScreen``,
-    this is a bare ``ModalScreen`` pushed directly (not a :data:`~lode.tui.app.
-    LodeApp.SCREENS` entry): it dims the screen underneath for free via
+    this is a bare ``ModalScreen`` pushed directly (not a :data:`~lode.tui.app.LodeApp.SCREENS` entry): it dims the screen underneath for free via
     ``ModalScreen``'s own ``DEFAULT_CSS``, and ``lode.tcss`` adds only sizing
     and centering for :data:`INSPECTOR_DIALOG_ID`.
     """

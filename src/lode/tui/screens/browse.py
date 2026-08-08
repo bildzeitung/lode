@@ -1,8 +1,7 @@
 """The browse screen (lode-0wj.5) -- list live notes, pick one to edit.
 
 ``docs/design.md``'s post-E11 feedback: a way to see what you've captured
-without leaving the terminal. Reached from :class:`~lode.tui.screens.capture.
-CaptureScreen` via the app-level ``Ctrl+B`` binding (:mod:`lode.tui.app`, the
+without leaving the terminal. Reached from :class:`~lode.tui.screens.capture.CaptureScreen` via the app-level ``Ctrl+B`` binding (:mod:`lode.tui.app`, the
 same "reachable from anywhere" convention ``Ctrl+O``'s config screen already
 uses). This screen owns no read logic of its own -- it only renders the rows
 :func:`lode.notes_read.list_notes` returns into a ``DataTable`` (Id | Date |
@@ -35,8 +34,7 @@ again (a fresh ``Ctrl+B``, or popping back from ``EditScreen``), not only on
 first mount.
 
 **View prior versions (lode-0wj.7, moved lode-olmi.2).** ``Ctrl+H`` on
-``EditScreen`` pushes :class:`~lode.tui.screens.version_history.
-VersionHistoryScreen` -- a Date | Version | Op table over the note's whole
+``EditScreen`` pushes :class:`~lode.tui.screens.version_history.VersionHistoryScreen` -- a Date | Version | Op table over the note's whole
 chain, newest (the head) first; selecting a row there pushes
 :class:`~lode.tui.screens.version_view.VersionViewScreen`, a read-only view
 of that exact version's body. See those two modules' own docstrings for the
@@ -91,8 +89,7 @@ implement the shared zero/one/many addressing rule both this screen's and
 disambiguation (lode-olmi.7) on purpose, so the CLI and TUI can't drift onto
 two different rules for the same question: zero externals notifies ``'no
 retrieved content for this note'``; exactly one pushes the viewer directly;
-more than one pushes :class:`~lode.tui.screens.external_picker.
-ExternalPickerScreen` first, a DataTable-then-select list (mirroring
+more than one pushes :class:`~lode.tui.screens.external_picker.ExternalPickerScreen` first, a DataTable-then-select list (mirroring
 ``VersionHistoryScreen``'s own pattern above) showing each candidate's
 source_type/snapshot id/fetched_at/state -- the same fields
 :func:`~lode.tui.screens._browse_render._external_text` already renders --

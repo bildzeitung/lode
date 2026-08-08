@@ -90,8 +90,7 @@ def reanchor_annotations(
     annotations are never touched.
 
     Does **not** commit — the caller owns the transaction boundary, so this can
-    be composed into a larger atomic write (e.g. :meth:`lode.repository.
-    Repository.save`, which runs this inside its own ``with conn:``). A caller
+    be composed into a larger atomic write (e.g. :meth:`lode.repository.Repository.save`, which runs this inside its own ``with conn:``). A caller
     invoking this standalone is responsible for committing afterward.
 
     :param conn: Open SQLite connection.
@@ -151,8 +150,7 @@ def reanchor_edges(
     back. ``source='user'`` edges are never touched.
 
     Does **not** commit — the caller owns the transaction boundary, so this can
-    be composed into a larger atomic write (e.g. :meth:`lode.repository.
-    Repository.save`, which runs this inside its own ``with conn:``). A caller
+    be composed into a larger atomic write (e.g. :meth:`lode.repository.Repository.save`, which runs this inside its own ``with conn:``). A caller
     invoking this standalone is responsible for committing afterward.
 
     :param conn: Open SQLite connection.

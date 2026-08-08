@@ -344,8 +344,7 @@ class AskScreen(Screen[None]):
 
         Pushes :class:`~lode.tui.screens.version_view.VersionViewScreen` keyed
         to the cited ``version_id`` (not the note's current head) for a note
-        citation, or :class:`~lode.tui.screens.snapshot_viewer.
-        SnapshotViewerScreen` keyed to the cited ``snapshot_id`` for an
+        citation, or :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` keyed to the cited ``snapshot_id`` for an
         external. Escape from either pops straight back to this screen,
         which was never destroyed -- the answer is exactly as it was, not
         re-queried. A no-op (with a notification) when there is nothing

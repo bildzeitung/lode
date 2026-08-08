@@ -61,8 +61,7 @@ tombstone: a draw-down failure is revisiting a source already in the corpus,
 whereas a source discovered mid-question that fails to fetch was never in
 the corpus and must not enter it as a dead row. It also closes a real hole a
 tombstone would reopen: a tombstone is a genuine snapshot with a genuine
-``snapshot_id`` and an inspectable body (:func:`lode.externals.
-tombstone_body`), so the model could quote it and the faithfulness gate
+``snapshot_id`` and an inspectable body (:func:`lode.externals.tombstone_body`), so the model could quote it and the faithfulness gate
 would pass the quote for content that was never actually fetched.
 
 ## Fetch timeout (build-time decision, this ticket)

@@ -21,8 +21,7 @@ def reenrich(db: _DbOption = None) -> None:
 
     **Stale means "disagrees with the currently configured `enrichment_llm`
     OR the currently active provider," detected by the exact same query
-    ``lode status``'s hint reads** (:func:`lode.enrichment_view.
-    stale_enrichment_heads`, shared with
+    ``lode status``'s hint reads** (:func:`lode.enrichment_view.stale_enrichment_heads`, shared with
     :func:`lode.cli.status._enrichment_model_stale`, lode-o9k3/lode-568v.6 --
     so "status says clean" and "reenrich has work" cannot disagree). A live
     head -- every note's current ``head_version_id`` and every external's

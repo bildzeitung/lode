@@ -1,8 +1,7 @@
 """A note's version chain, newest (the head) first (lode-0wj.7, extracted lode-s5kp.1).
 
 Split out of :mod:`lode.tui.screens.browse` per the one-Screen-per-module fiat
-(``docs/conventions.md``). Pushed from :class:`~lode.tui.screens.edit.
-EditScreen` via ``Ctrl+H`` (moved from the now-retired read-only note view,
+(``docs/conventions.md``). Pushed from :class:`~lode.tui.screens.edit.EditScreen` via ``Ctrl+H`` (moved from the now-retired read-only note view,
 lode-olmi.2). Each row is one version (Date | Version | Op, mirroring
 :class:`~lode.tui.screens.browse.BrowseScreen`'s own column style); selecting
 one pushes :class:`~lode.tui.screens.version_view.VersionViewScreen`, a
@@ -39,8 +38,7 @@ class VersionHistoryScreen(Screen[None]):
     (moved from the now-retired read-only note view, lode-olmi.2). Each row is
     one version (Date | Version | Op, mirroring
     :class:`~lode.tui.screens.browse.BrowseScreen`'s own column style);
-    selecting one pushes :class:`~lode.tui.screens.version_view.
-    VersionViewScreen`, a read-only view of that exact version's body --
+    selecting one pushes :class:`~lode.tui.screens.version_view.VersionViewScreen`, a read-only view of that exact version's body --
     deliberately every row, including the current head, rather than filtering
     it out: picking the head row just shows the same body ``EditScreen``
     already has loaded, which is harmless and avoids an off-by-one special

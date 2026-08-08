@@ -85,8 +85,7 @@ def _cache_hit(hf_source: str, model_file: str) -> bool:
     """Is ``model_file`` inside ``hf_source`` actually cached and complete?
 
     Thin wrapper over ``huggingface_hub.try_to_load_from_cache`` -- the
-    supported, network-free cache query -- against :func:`lode.config.
-    model_cache_dir`. Deliberately NOT a ``Path.iterdir()``/dir-exists check:
+    supported, network-free cache query -- against :func:`lode.config.model_cache_dir`. Deliberately NOT a ``Path.iterdir()``/dir-exists check:
     HuggingFace's downloader creates ``models--X/blobs/`` with an
     ``.incomplete`` file *before* a download finishes, so a dir-exists probe
     reads an INTERRUPTED ``lode models pull`` as warm (verified empirically --
@@ -218,8 +217,7 @@ def _model_revision_status(
     Per ``lode-crh8.1``'s decision (``docs/storage.md``
     #model-provenance-the-embedder-revision-manifest-decided-lode-crh81) the
     "manifest" is the aggregate of the per-vector ``model_revision`` field
-    already on every ``embeddings`` row (:meth:`lode.vectorstore.VectorStore.
-    model_revisions`), not a separate committed artifact -- this reads that
+    already on every ``embeddings`` row (:meth:`lode.vectorstore.VectorStore.model_revisions`), not a separate committed artifact -- this reads that
     aggregate and compares it against a fresh live probe.
 
     - ``mixed`` — the live store currently holds more than one distinct
@@ -282,8 +280,7 @@ def _enrichment_model_stale(
     string can mean different providers, so a provider switch alone -- with
     ``enrichment_llm`` held constant -- must also mark the corpus stale. Pass
     :func:`lode.llm_provider.provider_identity`'s return value here, never
-    ``settings.llm_provider`` directly -- see :func:`~lode.enrichment_view.
-    stale_enrichment_heads` for why.
+    ``settings.llm_provider`` directly -- see :func:`~lode.enrichment_view.stale_enrichment_heads` for why.
 
     Reads :func:`lode.enrichment_view.stale_enrichment_heads` -- the
     identical, live-head-scoped query ``lode reenrich`` force-enqueues from

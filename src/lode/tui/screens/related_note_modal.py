@@ -38,8 +38,7 @@ RELATED_MODAL_BODY_ID = "related-note-modal-body"
 class RelatedNoteModalScreen(ModalScreen[None]):
     """A glance-and-dismiss popup showing one related note's matched context.
 
-    Pushed by :meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel.
-    action_open_selected` (lode-olmi.9) for the currently selected
+    Pushed by :meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel.action_open_selected` (lode-olmi.9) for the currently selected
     :class:`~lode.tui.services.related.RelatedNote`. Lives in its own module here
     under :mod:`lode.tui.screens` (lode-s5kp.3), per the
     one-Screen/Widget-per-module fiat (``docs/conventions.md``) — previously
@@ -54,8 +53,7 @@ class RelatedNoteModalScreen(ModalScreen[None]):
 
     **Highlighted context = the matched passage span, not the whole note**
     (the design question the ticket posed, decided in ``--design``): loads
-    the note's *exact* ``target_version`` body via :func:`lode.notes_read.
-    version_body` — not a current-live-head lookup — because ``char_range``
+    the note's *exact* ``target_version`` body via :func:`lode.notes_read.version_body` — not a current-live-head lookup — because ``char_range``
     is only guaranteed valid against the precise version it was computed
     from; the note's live head can have moved on since. The ``[start:end)``
     slice is styled ``reverse`` in the surrounding body

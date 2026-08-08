@@ -1354,8 +1354,7 @@ def _embed_handler(
     the vector leg above, :func:`lode.externals.gate_reenrich` is called
     unconditionally on the same ``target_version``. It is a no-op (returns
     ``None``) for a note ``version_id`` — this handler runs for both note
-    versions and external snapshots polymorphically (:func:`lode.embedding.
-    embed`'s ``_version_body`` already resolves either), and the gate itself
+    versions and external snapshots polymorphically (:func:`lode.embedding.embed`'s ``_version_body`` already resolves either), and the gate itself
     checks whether ``target_version`` is a live snapshot before doing
     anything. For a snapshot, it decides — now that this snapshot's own
     vectors exist — whether the change is material enough to enqueue an
@@ -1464,8 +1463,7 @@ def _refresh_handler(
 
     Dispatches to :func:`lode.drawdown.refresh_external`, passing no
     ``fetcher`` override — production always resolves to the real
-    :class:`~lode.webfetch.HttpxFetcher` (:func:`lode.webfetch.
-    fetch_and_extract`'s own default when none is given). ``target_version``
+    :class:`~lode.webfetch.HttpxFetcher` (:func:`lode.webfetch.fetch_and_extract`'s own default when none is given). ``target_version``
     is the job's canonical ``external_id`` (a directly-fetchable URL, not a
     note version — the ``jobs.target_version`` column is a polymorphic
     string, not FK'd to ``versions``). Deferred import mirrors
@@ -1475,8 +1473,7 @@ def _refresh_handler(
     The ``db_path`` parameter is accepted but unused, like the enrich
     handler's: draw-down writes only to the SQLite DB (``externals`` /
     ``snapshots``), never to the LanceDB vector store directly (the
-    resulting ``embed`` job — enqueued by :func:`lode.externals.
-    ingest_snapshot` for an ``ok`` snapshot — is what reaches LanceDB).
+    resulting ``embed`` job — enqueued by :func:`lode.externals.ingest_snapshot` for an ``ok`` snapshot — is what reaches LanceDB).
     """
     from lode.drawdown import refresh_external
 

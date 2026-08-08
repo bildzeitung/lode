@@ -15,8 +15,7 @@ not the semantic issue key the connector now uses
 (:mod:`lode.drawdown`'s "Atlassian link detection" — owner decision 3).
 
 :func:`_jira_backfill` re-runs :func:`lode.drawdown._classify_atlassian` — the
-exact same synchronous, network-free classifier :func:`lode.drawdown.
-detect_and_enqueue_drawdown` itself uses at paste time — against every existing
+exact same synchronous, network-free classifier :func:`lode.drawdown.detect_and_enqueue_drawdown` itself uses at paste time — against every existing
 explicit (``source='user'``) edge's ``quoted_text`` (the literal originally-
 pasted URL, preserved verbatim by :func:`lode.drawdown._repoint_edges` across
 any prior repoint). This is deliberate reuse, not a second, drifting copy of
@@ -46,8 +45,7 @@ silently losing track of it once the first pass repoints it away from
 ``'web'``. Two consequences:
 
 - **First migration**: ``link.external_id`` (still the old canonicalized URL)
-  differs from the freshly classified semantic key, so :func:`~lode.backfill.
-  mint_external` + :func:`~lode.backfill.repoint_edges` run once; the fresh,
+  differs from the freshly classified semantic key, so :func:`~lode.backfill.mint_external` + :func:`~lode.backfill.repoint_edges` run once; the fresh,
   never-tombstoned identity always passes :func:`~lode.backfill.needs_refresh`
   (owner decision D — no override needed here).
 - **Later re-run**: ``link.external_id`` already equals the semantic key, so

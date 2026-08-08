@@ -1,8 +1,7 @@
 """An existing note's live head, loaded editable (lode-0wj.6, extracted lode-s5kp.1).
 
 Split out of :mod:`lode.tui.screens.browse` per the one-Screen-per-module fiat
-(``docs/conventions.md``). Pushed from :meth:`~lode.tui.screens.browse.
-BrowseScreen.on_data_table_row_selected` -- Enter, or a mouse click, on a row
+(``docs/conventions.md``). Pushed from :meth:`~lode.tui.screens.browse.BrowseScreen.on_data_table_row_selected` -- Enter, or a mouse click, on a row
 (lode-olmi.2): editing an existing note *is* the point of opening it, so
 there is no separate read-only detour first. Escape returns to
 :class:`~lode.tui.screens.browse.BrowseScreen`.
@@ -85,8 +84,7 @@ non-printable) key for exactly this reason -- see ``docs/keybindings.md``.
 
 **Content viewer, Ctrl+R not bare ``v`` (lode-0sjj).**
 :meth:`EditScreen.action_view_content` resolves this note's external edges
-the same way :meth:`~lode.tui.screens.browse.BrowseScreen.
-action_view_content` does (via the shared
+the same way :meth:`~lode.tui.screens.browse.BrowseScreen.action_view_content` does (via the shared
 :func:`~lode.tui.screens._content_view._view_note_external_content`) and pushes
 :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` (zero/one) or
 :class:`~lode.tui.screens.external_picker.ExternalPickerScreen` (many).
@@ -249,8 +247,7 @@ class EditScreen(Screen[None]):
     def action_inspect_selected(self) -> None:
         """Ctrl+G: open this note's enrichment inspector modal (lode-g5es).
 
-        Mirrors :meth:`~lode.tui.screens.browse.BrowseScreen.
-        action_inspect_selected` -- same modal, same glance-and-dismiss
+        Mirrors :meth:`~lode.tui.screens.browse.BrowseScreen.action_inspect_selected` -- same modal, same glance-and-dismiss
         contract, keyed to ``self.note_id`` directly (this screen always has
         exactly one note loaded, unlike Browse's table, which needs the
         highlighted row). See this class's docstring for why ``Ctrl+G``

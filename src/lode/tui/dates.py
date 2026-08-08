@@ -1,8 +1,7 @@
 """Adaptive human-readable date formatting for the browse screen (lode-1gr.8).
 
 ``notes.created`` / ``versions.created`` are full ISO-8601 UTC timestamps
-(the shared ``%Y-%m-%dT%H:%M:%S.%fZ`` stamp :mod:`lode.worker`/:mod:`lode.
-versions` write) -- exact and sortable, but a lot of characters to spend on
+(the shared ``%Y-%m-%dT%H:%M:%S.%fZ`` stamp :mod:`lode.worker`/:mod:`lode.versions` write) -- exact and sortable, but a lot of characters to spend on
 every row of :class:`~lode.tui.screens.browse.BrowseScreen`'s Date column
 (and its version-history sibling) when most of that precision is noise to a
 human scanning the list. This module's :func:`format_adaptive_date` buckets a

@@ -2,23 +2,18 @@
 
 Extracted from :mod:`lode.tui.screens.browse`. ``_resolve_externals`` and
 ``_view_note_external_content`` implement the shared zero/one/many
-addressing rule both :meth:`~lode.tui.screens.browse.BrowseScreen.
-action_view_content` and :meth:`~lode.tui.screens.edit.EditScreen.
-action_view_content` push through (lode-0sjj) -- mirroring ``lode
+addressing rule both :meth:`~lode.tui.screens.browse.BrowseScreen.action_view_content` and :meth:`~lode.tui.screens.edit.EditScreen.action_view_content` push through (lode-0sjj) -- mirroring ``lode
 dump-html``'s CLI disambiguation (lode-olmi.7) on purpose, so the CLI and TUI
 can't drift onto two different rules for the same question: zero externals
 notifies ``'no retrieved content for this note'``; exactly one pushes
 :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` directly;
-more than one pushes :class:`~lode.tui.screens.external_picker.
-ExternalPickerScreen` first, which pushes the viewer itself once a row is
+more than one pushes :class:`~lode.tui.screens.external_picker.ExternalPickerScreen` first, which pushes the viewer itself once a row is
 chosen.
 
 **Why a leaf module, not left in ``browse.py`` (lode-s5kp.1's original
-call).** Before this, ``browse.py`` imported :class:`~lode.tui.screens.edit.
-EditScreen` (to push it on row-select) while ``edit.py`` needed to reach
+call).** Before this, ``browse.py`` imported :class:`~lode.tui.screens.edit.EditScreen` (to push it on row-select) while ``edit.py`` needed to reach
 back into ``browse._view_note_external_content`` -- a cycle, broken only by
-a method-local import inside :meth:`~lode.tui.screens.edit.EditScreen.
-action_view_content`. Both functions are leaf-eligible: a generic
+a method-local import inside :meth:`~lode.tui.screens.edit.EditScreen.action_view_content`. Both functions are leaf-eligible: a generic
 ``Screen[None]`` signature, and they depend only on
 :func:`~lode.enrichment_view.enrichment_view`,
 :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen`, and
@@ -75,13 +70,10 @@ def _resolve_externals(db_path: Path, note_id: str) -> list[ExternalView]:
 def _view_note_external_content(screen: Screen[None], note_id: str) -> None:
     """Resolve *note_id*'s externals and push the right viewer (lode-0sjj).
 
-    Shared by :meth:`~lode.tui.screens.browse.BrowseScreen.
-    action_view_content` (bare ``v``) and :meth:`~lode.tui.screens.edit.
-    EditScreen.action_view_content` (a Ctrl-prefixed key) so the zero/one/many
+    Shared by :meth:`~lode.tui.screens.browse.BrowseScreen.action_view_content` (bare ``v``) and :meth:`~lode.tui.screens.edit.EditScreen.action_view_content` (a Ctrl-prefixed key) so the zero/one/many
     addressing rule lives in exactly one place -- mirroring ``lode
     dump-html``'s CLI disambiguation (lode-olmi.7) on purpose. Zero externals
-    notifies cleanly; exactly one pushes :class:`~lode.tui.screens.
-    snapshot_viewer.SnapshotViewerScreen` directly; more than one pushes
+    notifies cleanly; exactly one pushes :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` directly; more than one pushes
     :class:`~lode.tui.screens.external_picker.ExternalPickerScreen` first,
     which pushes the viewer itself once a row is chosen.
     """

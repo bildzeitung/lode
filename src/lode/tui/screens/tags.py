@@ -27,8 +27,7 @@ module's existing "screens own no read logic of their own" convention
 (:mod:`lode.tui.screens.browse`'s own docstring).
 
 **Selecting a note opens the editor (consistent with lode-olmi.2's intent).**
-Row-select on the bottom panel pushes :class:`~lode.tui.screens.edit.
-EditScreen` directly -- this ticket's own acceptance criterion, independent
+Row-select on the bottom panel pushes :class:`~lode.tui.screens.edit.EditScreen` directly -- this ticket's own acceptance criterion, independent
 of whether/when lode-olmi.2 itself (retiring Browse's own read-only
 ``NoteViewScreen``) lands; Escape from the pushed ``EditScreen`` pops back to
 this screen via Textual's ordinary screen-stack pop, same as everywhere else
@@ -52,8 +51,7 @@ inherently single-column, one tag per row. With tag counts scaling with
 corpus size (an LLM-enriched note can carry several, and ``list_tags`` --
 :func:`lode.notes_read.list_tags` -- returns every distinct tag, unbounded),
 a single narrow scrolling column wasted the terminal's width. ``SelectionList``
-cannot do columns, so the tag panel is now a plain :class:`~textual.widgets.
-DataTable` (``cursor_type="cell"``, ``show_header=False``) rendering
+cannot do columns, so the tag panel is now a plain :class:`~textual.widgets.DataTable` (``cursor_type="cell"``, ``show_header=False``) rendering
 ``"[x] tag"``/``"[ ] tag"`` cells in as many equal-width columns as the
 terminal fits, laid out row-major (fill left-to-right, then down) and rebuilt
 on both :meth:`on_screen_resume` and :meth:`on_resize` --
@@ -115,8 +113,7 @@ def _tag_grid_layout(tags: list[str], available_width: int) -> tuple[int, int]:
 
     Every column is sized to the *widest* tag (plus the checkbox prefix) so
     the grid stays visually aligned -- the same "natural width, uniform
-    across the row" choice :meth:`~lode.tui.screens.browse.BrowseScreen.
-    _reload_rows` makes for its own columns. Always returns at least one
+    across the row" choice :meth:`~lode.tui.screens.browse.BrowseScreen._reload_rows` makes for its own columns. Always returns at least one
     column, even for an empty tag list or a not-yet-laid-out (zero-width)
     table -- a 0-column grid can't render.
     """
@@ -284,8 +281,7 @@ class TagsScreen(Screen[None]):
         Two or more selected tags that legitimately never co-occur on any
         note is a real (correct) outcome of the AND/intersection semantics,
         not a bug -- but a silently empty table reads as one. When the
-        selection is non-empty and the result is, :attr:`~lode.tui.widgets.
-        lode_data_table.LodeDataTable.empty_message` paints the explanation
+        selection is non-empty and the result is, :attr:`~lode.tui.widgets.lode_data_table.LodeDataTable.empty_message` paints the explanation
         directly into the table's own empty canvas rather than adding a
         ``key=None`` sentinel row (lode-t7pw; originally lode-35nu.7) -- no
         real row is added, so ``row_count`` stays ``0`` and there's nothing

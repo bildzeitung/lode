@@ -1,8 +1,7 @@
 """A read-only view of one specific version's body (lode-0wj.7, extracted lode-s5kp.1).
 
 Split out of :mod:`lode.tui.screens.browse` per the one-Screen-per-module fiat
-(``docs/conventions.md``). Pushed by :class:`~lode.tui.screens.version_history.
-VersionHistoryScreen` on row-select, keyed to that exact ``version_id`` --
+(``docs/conventions.md``). Pushed by :class:`~lode.tui.screens.version_history.VersionHistoryScreen` on row-select, keyed to that exact ``version_id`` --
 deliberately every row, including the current head, rather than filtering it
 out: picking the head row just shows the same body
 :class:`~lode.tui.screens.edit.EditScreen` already has loaded, which is
@@ -32,8 +31,7 @@ VERSION_BODY_ID = "version-view-body"
 class VersionViewScreen(Screen[None]):
     """A read-only view of one specific (possibly non-head) version's body.
 
-    Pushed from :class:`~lode.tui.screens.version_history.
-    VersionHistoryScreen` on row-select. Escape pops back to that history
+    Pushed from :class:`~lode.tui.screens.version_history.VersionHistoryScreen` on row-select. Escape pops back to that history
     list -- one level at a time, same as everywhere else in this module.
     """
 

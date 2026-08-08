@@ -22,16 +22,14 @@ but left this view-model's ``tags`` strictly note_id-scoped (built from
 :func:`~lode.display.display_annotations`, which only ever reads rows whose
 ``target`` is the note's own id) -- so a note could match an external-only
 tag filter yet show no trace of that tag once opened. :func:`_inherited_tag_items`
-closes that gap with the same resolution :func:`lode.notes_read.
-_list_notes_with_all_tags` uses (a fresh note->external edge), appended to
+closes that gap with the same resolution :func:`lode.notes_read._list_notes_with_all_tags` uses (a fresh note->external edge), appended to
 ``tags`` and flagged ``inherited=True`` rather than merged in
 indistinguishably -- the whole point being to make which-is-which legible,
 exactly the way ``stale`` is already carried as data and rendered
 per-consumer, not baked into the value string.
 
 **Content** is built ENTIRELY on :mod:`lode.display` --
-:func:`~lode.display.display_annotations` / :func:`~lode.display.
-display_edges`, the shared stale-display policy (lode-npx.4) -- so
+:func:`~lode.display.display_annotations` / :func:`~lode.display.display_edges`, the shared stale-display policy (lode-npx.4) -- so
 tombstones and hidden-assertive items are dropped and stale items are
 flagged exactly the way every other consumer already sees them. Content is
 note_id-scoped (spans every version in the chain) and is **never** suppressed

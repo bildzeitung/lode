@@ -13,8 +13,7 @@ write path. It writes the ``externals``/``snapshots`` rows, enqueues the
 ``embed`` derive job so the async worker can index the snapshot's vector leg
 (:func:`lode.embedding.embed`, which resolves a ``snapshot_id`` target
 polymorphically — ``lode-c5l``), and drives the **synchronous** FTS leg
-itself (:func:`_index_snapshot_fts`) the same way :meth:`lode.repository.
-Repository.save` drives :class:`~lode.repository.CacheBackend` for owned
+itself (:func:`_index_snapshot_fts`) the same way :meth:`lode.repository.Repository.save` drives :class:`~lode.repository.CacheBackend` for owned
 notes — so a freshly ingested ``ok`` snapshot is a direct keyword hit the
 instant :func:`ingest_snapshot` returns, and a direct vector hit once the
 embed worker drains. The allow-list union that admits a snapshot's current
@@ -38,8 +37,7 @@ never touched by the note-side redaction either.
 
 ## Dedup and head-move (docs/externals.md "Snapshot churn")
 
-``snapshot_id = H(framed(external_id) ‖ framed(body))`` (:func:`lode.hashing.
-content_snapshot_id`) makes an *identical* refetch free: recomputing the same
+``snapshot_id = H(framed(external_id) ‖ framed(body))`` (:func:`lode.hashing.content_snapshot_id`) makes an *identical* refetch free: recomputing the same
 external's same body yields the same id, so :func:`ingest_snapshot` writes no
 new row and enqueues no job — exactly the no-op-dedup shape
 :func:`lode.versions._save_core` uses for an unchanged note body, but keyed
@@ -105,8 +103,7 @@ size was dropped because it has no defined ordering relative to the async
 embed job the similarity signal already depends on. Below
 ``settings.reenrichment_materiality_threshold`` the change is immaterial: no
 ``enrich`` job is enqueued, and the predecessor's AI-derived annotations/edges
-are carried forward by *re-anchoring* them (:func:`lode.staleness.
-reanchor_annotations` / ``reanchor_edges``) to the new snapshot — the same
+are carried forward by *re-anchoring* them (:func:`lode.staleness.reanchor_annotations` / ``reanchor_edges``) to the new snapshot — the same
 quoted-text mechanism :meth:`lode.repository.Repository.save` already uses
 for a note update, reused here rather than duplicated. At/above the
 threshold — or when there is no predecessor vector to compare against at all
@@ -116,8 +113,7 @@ enqueued for the new ``snapshot_id``.
 
 The ``enrich`` job this enqueues resolves polymorphically (lode-7qi):
 :func:`lode.enrich.enrich_version` (and the Batches API route,
-:func:`~lode.enrich.submit_enrich_batch` / :func:`~lode.enrich.
-collect_enrich_batch`, which actually claims a pending ``enrich`` job first
+:func:`~lode.enrich.submit_enrich_batch` / :func:`~lode.enrich.collect_enrich_batch`, which actually claims a pending ``enrich`` job first
 in production) resolve ``target_version`` against ``versions``/``notes``
 first, falling back to ``snapshots``/``externals`` — the same blind
 resolution :func:`lode.embedding._version_body` already uses for the
@@ -249,8 +245,7 @@ def ingest_snapshot(
     — but for a successful (``"ok"``) refetch, the existing head row's
     ``fetched_at`` is bumped forward to :func:`lode.jobs.now_iso` (``lode-
     9tj4``): this is the one deliberate, forward-only exception to
-    ``snapshots``' otherwise-immutable columns, and it exists so :func:`lode.
-    worker._refresh_dead_letter_hook`'s late-success guard has *something to
+    ``snapshots``' otherwise-immutable columns, and it exists so :func:`lode.worker._refresh_dead_letter_hook`'s late-success guard has *something to
     see* when a refresh successfully revalidates unchanged content — see
     ``docs/storage.md``'s "The guard's blind spot" section for the full
     story and the immutability ruling. A repeated identical ``"tombstone"``
@@ -275,8 +270,7 @@ def ingest_snapshot(
     (status-gated) embed enqueue run in one ``with conn:`` transaction, so a
     crash between steps never leaves an ``ok`` snapshot without its derive
     job or a head pointing at a row that was never committed. The FTS write
-    runs **after** that transaction commits (mirroring :meth:`lode.
-    repository.Repository.save`'s cache-after-commit ordering) — the cache
+    runs **after** that transaction commits (mirroring :meth:`lode.repository.Repository.save`'s cache-after-commit ordering) — the cache
     is regenerable, so it is deliberately kept out of the irreplaceable
     write's atomic scope, but the embed enqueue stays inside it since
     nothing currently re-discovers a snapshot with no derive job the way
@@ -513,8 +507,7 @@ def set_no_egress(
     no separate wiring needed here).
 
     **"Generically" means the COLUMN, not a seam.** Each send path reads
-    ``externals.no_egress`` in its own SQL join — :func:`lode.cited_answer.
-    _resolve_targets` and :func:`lode.enrich._resolve_enrich_target` — so flipping
+    ``externals.no_egress`` in its own SQL join — :func:`lode.cited_answer._resolve_targets` and :func:`lode.enrich._resolve_enrich_target` — so flipping
     the column is indeed the only step needed *for a row that exists*, and
     nothing else has to be taught about it. What that does **not** provide
     is a hook: there is no single function through which an egress verdict
@@ -546,8 +539,7 @@ def _mean_pool(vectors: list[list[float]]) -> list[float]:
     """Elementwise mean of ``vectors`` — a document-level stand-in for a snapshot.
 
     ``vectors`` must be non-empty and share one dimension (both true of any
-    set of passage vectors returned by :meth:`lode.vectorstore.VectorStore.
-    vectors_for` for a single ``target_version``, since the pinned
+    set of passage vectors returned by :meth:`lode.vectorstore.VectorStore.vectors_for` for a single ``target_version``, since the pinned
     ``embedding_vector_dim`` fixes the width for the whole table).
     """
     dim = len(vectors[0])

@@ -681,8 +681,7 @@ def test_summary_with_brackets_renders_literally_not_as_rich_markup(
 ) -> None:
     """A note summary containing ``[...]`` renders literally (lode-ix4i).
 
-    Regression test for the same hazard :class:`~lode.tui.screens.tags.
-    TagsScreen`'s checkbox cells had before lode-7abi: the Summary column was
+    Regression test for the same hazard :class:`~lode.tui.screens.tags.TagsScreen`'s checkbox cells had before lode-7abi: the Summary column was
     a bare ``str`` cell, which a ``DataTable`` renders through Rich console
     *markup*, silently eating a bracketed substring like ``[draft]``. Prints
     the actual cell object (now a :class:`~rich.text.Text`, never

@@ -19,8 +19,7 @@ the tiny window between a version write and its enqueue (see ``docs/storage.md``
   status is the reliable proxy for "vector leg completed."
   Excludes soft-deleted (``op='delete'``) and purged (``purged_at IS NOT NULL``)
   heads. **Snapshot arm (lode-621):** the same gap query also covers each
-  external's current ``head_snapshot_id`` — mirroring :func:`lode.retrieval.
-  live_head_versions`'s notes-UNION-externals shape — since lode-w0h.8 made a
+  external's current ``head_snapshot_id`` — mirroring :func:`lode.retrieval.live_head_versions`'s notes-UNION-externals shape — since lode-w0h.8 made a
   snapshot a first-class retrieval candidate with its own async vector leg. A
   tombstone snapshot (no body to embed) and a superseded (non-head) snapshot are
   excluded, matching what ``live_head_versions`` itself admits. **Dead-letter
@@ -64,8 +63,7 @@ the tiny window between a version write and its enqueue (see ``docs/storage.md``
   revalidation" (``docs/decisions.md`` "External refresh") — see the step's
   own docstring and ``docs/externals.md`` "Refresh policy" for why a periodic
   TTL sweep was chosen over a true on-access hook, and why a tombstoned
-  external is deliberately excluded. Rides :func:`lode.drawdown.
-  refresh_external` unchanged (already registered in :mod:`lode.worker` as
+  external is deliberately excluded. Rides :func:`lode.drawdown.refresh_external` unchanged (already registered in :mod:`lode.worker` as
   the ``refresh`` handler) — this step adds only staleness detection +
   scheduling, never a second fetch path.
 

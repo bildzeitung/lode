@@ -56,8 +56,7 @@ focus onto it deliberately; nothing here changes what happens while the body
 still holds focus (the passive debounce/render path above is untouched).
 Highlighted context is the exact matched passage span — ``RelatedNote.
 char_range`` (:mod:`lode.tui.services.related`) offsets into the exact ``version_id``
-the retrieval pipeline matched, looked up via :func:`lode.notes_read.
-version_body` (not the note's possibly-since-edited live head) — not the
+the retrieval pipeline matched, looked up via :func:`lode.notes_read.version_body` (not the note's possibly-since-edited live head) — not the
 whole note passively dumped; see
 :class:`~lode.tui.screens.related_note_modal.RelatedNoteModalScreen` (its own
 module, per the one-Screen/Widget-per-module fiat, lode-s5kp.3).
@@ -294,8 +293,7 @@ class RelatedNotesPanel(Static):
         exit path of every screen that composes this widget (capture *and*
         :class:`~lode.tui.screens.edit.EditScreen`) -- catches all of them
         uniformly. Purely a timer-lifecycle efficiency cleanup: a post-
-        teardown firing was already harmless (:func:`lode.tui.services.related.
-        find_related_notes`'s ``db_path.exists()`` guard, lode-e1s) and its
+        teardown firing was already harmless (:func:`lode.tui.services.related.find_related_notes`'s ``db_path.exists()`` guard, lode-e1s) and its
         result was always discarded here (nothing left mounted to render
         into) -- this just stops the wasted embed + FTS5 + LanceDB pass from
         running at all -- but only for the part that *can* be stopped: a pass

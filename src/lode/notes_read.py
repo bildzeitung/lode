@@ -121,8 +121,7 @@ def list_notes(db_path: Path) -> list[NoteRow]:
     """Return every live note, newest-first, for the browse screen's table.
 
     Opens its own short-lived connection (:func:`lode.storage.init_db`), same
-    convention as :func:`lode.tui.services.capture.save_capture` / :func:`lode.tui.services.ask.
-    run_ask` -- this is a plain top-level read, not tied to any open
+    convention as :func:`lode.tui.services.capture.save_capture` / :func:`lode.tui.services.ask.run_ask` -- this is a plain top-level read, not tied to any open
     connection a caller might hold. A caller that already holds one wants
     :func:`list_notes_conn` instead.
     """
@@ -580,8 +579,7 @@ def _visible_tag_where(prefix: str = "") -> str:
     tombstone, never a real tag) without importing that target-scoped helper
     -- the same "reimplement the one filter this module needs" convention
     :func:`list_notes` already uses for its own ``op != 'delete'`` guard. Tags
-    are never hidden for staleness alone (unlike :data:`lode.display.
-    ASSERTIVE_KINDS`) -- ``docs/storage.md``'s stale-display policy shows a
+    are never hidden for staleness alone (unlike :data:`lode.display.ASSERTIVE_KINDS`) -- ``docs/storage.md``'s stale-display policy shows a
     stale tag flagged, not hidden -- so this is the only check needed.
     ``prefix`` (e.g. ``"a."``) lets the same fragment work unqualified (the
     top-level ``annotations`` scan in :func:`_list_tags`) or against a table
@@ -624,8 +622,7 @@ def list_notes_with_all_tags(db_path: Path, tags: Collection[str]) -> list[NoteR
     means no filter at all, so this returns exactly what :func:`list_notes`
     does (every live note, newest-first). Each selected tag narrows the set
     further via its own ``EXISTS`` clause matched against the tag's *exact*
-    JSON-encoded payload -- the same equality :func:`lode.curation.
-    is_annotation_suppressed` uses for a single tag, just repeated once per
+    JSON-encoded payload -- the same equality :func:`lode.curation.is_annotation_suppressed` uses for a single tag, just repeated once per
     tag so a note only qualifies when *every* clause finds a live
     (non-tombstone) row for it.
 
