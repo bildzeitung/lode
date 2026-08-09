@@ -1980,10 +1980,10 @@ def test_slash_opens_a_hidden_search_box_and_focuses_it(tmp_path: Path) -> None:
     assert focused_after
 
 
-def test_incremental_search_forward_jumps_to_the_next_matching_summary(
+def test_incremental_search_jumps_to_the_first_matching_summary(
     tmp_path: Path,
 ) -> None:
-    """'/' then typing scans DOWNWARD from the cursor's current row."""
+    """'/' then typing scans from the top for the first matching row."""
     db_path = tmp_path / "lode.db"
     _seed_four_notes(db_path)
     app = LodeApp(db_path=db_path)
@@ -1999,13 +1999,15 @@ def test_incremental_search_forward_jumps_to_the_next_matching_summary(
 
     cursor_row = asyncio.run(_drive())
 
-    assert cursor_row == 2  # beta widget, skipping gamma on the way down
+    assert cursor_row == 2  # beta widget -- gamma (row 1) doesn't match "beta"
 
 
-def test_incremental_search_backward_jumps_to_the_previous_matching_summary(
+def test_incremental_search_restarts_from_the_top_every_keystroke(
     tmp_path: Path,
 ) -> None:
-    """'?' then typing scans UPWARD from the cursor's current row."""
+    """'/' always scans from row 0, even when the cursor already sits on a
+    matching row -- search direction is retired, "continue from the cursor"
+    no longer exists (lode-2bt3.1)."""
     db_path = tmp_path / "lode.db"
     _seed_four_notes(db_path)
     app = LodeApp(db_path=db_path)
@@ -2014,38 +2016,17 @@ def test_incremental_search_backward_jumps_to_the_previous_matching_summary(
         async with app.run_test() as pilot:
             await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
-            await pilot.press("down", "down", "down")
-            assert table.cursor_row == 3  # now on alpha, the bottom row
-            await pilot.press("question_mark")
-            await _press_and_settle(pilot, *"beta")
-            return table.cursor_row
-
-    cursor_row = asyncio.run(_drive())
-
-    assert cursor_row == 2  # beta widget, one row up
-
-
-def test_incremental_search_wraps_around_when_scanning_forward(
-    tmp_path: Path,
-) -> None:
-    """Downward search from the bottom row wraps back to the top to find a match."""
-    db_path = tmp_path / "lode.db"
-    _seed_four_notes(db_path)
-    app = LodeApp(db_path=db_path)
-
-    async def _drive() -> int:
-        async with app.run_test() as pilot:
-            await pilot.press("ctrl+b")
-            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
-            await pilot.press("down", "down", "down")
-            assert table.cursor_row == 3  # alpha, the bottom row
+            await pilot.press("down", "down")
+            assert table.cursor_row == 2  # beta widget -- itself a match for "widget"
             await pilot.press("slash")
-            await _press_and_settle(pilot, *"delta")
+            await _press_and_settle(pilot, *"widget")
             return table.cursor_row
 
     cursor_row = asyncio.run(_drive())
 
-    assert cursor_row == 0  # delta report -- only reachable by wrapping past the end
+    assert (
+        cursor_row == 1
+    )  # gamma widget -- the topmost match, not the cursor's own row
 
 
 def test_incremental_search_matches_case_insensitively(tmp_path: Path) -> None:
@@ -3139,10 +3120,13 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     # ...and it fits WITHOUT Textual collapsing the gutters to get there.
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 8 screen-level + 5 App-level bindings stay visible (none hidden via
+    # All 7 screen-level + 5 App-level bindings stay visible (none hidden via
     # show=False) -- restored to full words at the new 100-column bound
     # (lode-35nu.6's own quick-search entry is the one exception -- see the
     # inline comment on it below for why it's a single letter, not a word).
+    # "Up" (question_mark/search_backward) is gone -- search direction is
+    # retired (lode-2bt3.1), freeing a footer slot on the screen that had
+    # zero headroom left.
     assert descriptions == [
         "Back",
         "Inspect",
@@ -3150,7 +3134,6 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
         "Delete",
         "Expand",
         "Find",
-        "Up",
         "S",  # BM25 quick search (lode-35nu.6) -- see BrowseScreen.BINDINGS'
         # own comment for why this one stays a single letter
         "Quit",

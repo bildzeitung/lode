@@ -136,12 +136,12 @@ Rejected alternatives, so the question isn't reopened:
 
 **The bracketed-key style (`[d]elete`, `[i]nspect`, `E[x]pand`) is ruled out, permanently.** It
 needs the binding's key letter to literally appear inside its own description, which only
-single-letter bindings have — counted across the app's real binding set: `BrowseScreen` has 4 of 7
-(`i`/`v`/`d`/`x`; not `escape`/`slash`/`question_mark`), `ReconcileScreen` has 2 of 2 (`r`/`d`), and
-every other screen (`CaptureScreen`, `EditScreen`, `ConfigScreen`, `AskScreen`, `TagsScreen`,
+single-letter bindings have — counted across the app's real binding set: `BrowseScreen` has 5 of 7
+(`i`/`v`/`d`/`x`/`s`; not `escape`/`slash` — `question_mark`/search-backward retired, `lode-2bt3.1`),
+`ReconcileScreen` has 2 of 2 (`r`/`d`), and every other screen (`CaptureScreen`, `EditScreen`, `ConfigScreen`, `AskScreen`, `TagsScreen`,
 `VersionHistoryScreen`, `VersionViewScreen`, `ExternalPickerScreen`) has **zero** — all `ctrl+`
 combos or `escape`, per the no-function-key / no-bare-printable-key-on-an-editable-widget policy
-`docs/keybindings.md` documents. Styling only the ~6 bindings out of ~40 that qualify would leave
+`docs/keybindings.md` documents. Styling only the ~7 bindings out of ~40 that qualify would leave
 two visual idioms in one footer bar — *more* drift than a plain, uniform description list, which is
 the exact bug the shared `LodeFooter` widget exists to eliminate. Do not reopen this a fourth time.
 

@@ -205,8 +205,7 @@ action on one of these screens still faces the exhausted pool above; this one di
 | | | `v` | View retrieved content | |
 | | | `d` | Delete | |
 | | | `x` | Expand/collapse summary | |
-| | | `slash` | Search forward | |
-| | | `question_mark` | Search backward | |
+| | | `slash` | Search (restarts from the top each keystroke, `lode-2bt3.1`) | search direction retired (`lode-2bt3.1`) — `?` is now unbound on every screen |
 | | | `s` | Quick search (BM25, narrows the list, `lode-35nu.6`) | distinct from `slash`'s scan-and-highlight |
 | `ExternalPickerScreen` | `screens/external_picker.py` | `escape` | Back | — (DataTable) |
 | `TagsScreen` | `screens/tags.py` | `escape` | Back | — (DataTable grid, `lode-l38d.9`) |
