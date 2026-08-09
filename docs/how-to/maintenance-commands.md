@@ -1,4 +1,9 @@
-# lode — Maintenance commands: `reembed`, `reenrich`, `reindex-lexical`
+# How to fix a stale index: `reembed`, `reenrich`, `reindex-lexical`
+
+> The full mechanism and its rationale live in
+> [`storage.md`](../storage.md#re-embedding-the-corpus-deliberately-lode-g2747) and
+> [`storage.md`](../storage.md#re-enriching-the-corpus-deliberately-targeted-lode-14jr). This
+> guide is only *which command fixes which signal*.
 
 Three commands force regeneration of derived index state after something outside your notes
 changed — an embedder or enrichment-LLM upgrade, a cache eviction, or an index-time bug. `lode
@@ -11,7 +16,8 @@ should already be enough — this page exists for the fuller "what does it actua
 **`lode status` signal:** "the index is mixed" (more than one model revision is live) or "the
 embedder's cached weights have moved past the revision your vectors were embedded with."
 
-**What it does:** enqueues a fresh `embed` job for *every* live head, unconditionally — there's no
+**What it does:** enqueues a fresh `embed` job for *every* live head — every note's current version
+and every external's current snapshot — unconditionally. There's no
 whole-corpus-vs-targeted flag, because the triggering event (a model or cache change) is itself
 corpus-wide, not per-note. It rebuilds vectors in place rather than building a parallel index and
 swapping it in.
@@ -60,15 +66,16 @@ model-free path the reconcile step already uses in-process; there's no `lode wor
 there's nothing left to drain once the command returns.
 
 **What it does NOT touch:** externals. External snapshot FTS rows are written at fetch time by the
-externals ingest path, not by this command, which only walks notes/versions. It also deliberately
-skips the `purged_at` guard every other regeneration path applies — a purged note's `[purged ...]`
-marker body is still re-indexed, unlike its embed/enrich counterparts, so a purge doesn't leave a
-stale, findable-by-keyword ghost of the original content behind.
+externals ingest path, not by this command, which only walks notes/versions. Purged notes are the
+one deliberate exception to "skip purged content": a hard purge already re-indexes the surviving
+`[purged ...]` marker body, so this command re-indexes that marker too rather than skipping it —
+which keeps it faithful to the save path it exists to reproduce. It never re-indexes the purged
+content itself; that is gone.
 
 ## Summary
 
 | Command | Triggering `lode status` signal | Scope | Queues (`lode work`) or executes now |
 |---|---|---|---|
-| `lode reembed` | index mixed / revision drift | every live head, all sources | queues `embed` jobs |
-| `lode reenrich` | enrichment-LLM mismatch | only heads with stale annotations, notes+externals, excludes `no_egress` | queues `enrich` jobs |
-| `lode reindex-lexical` | missing lexical (FTS5) rows | every live *note* head (not externals) | executes immediately, no queue |
+| `lode reembed` | index mixed / revision drift | every live head — notes + externals | queues `embed` jobs |
+| `lode reenrich` | enrichment-LLM mismatch | only live heads with stale annotations — notes + externals, excluding `no_egress` | queues `enrich` jobs |
+| `lode reindex-lexical` | missing lexical (FTS5) rows | every live note head — notes only | executes immediately, no queue |
