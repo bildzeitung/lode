@@ -440,7 +440,7 @@ App-level footer slot (`Help`) and paid for it by hiding `Quit`.
   Inspect/Delete/Find/Quick which apply to the primary read/search/delete workflow every session. That
   recovers the width to un-abbreviate `"S"` → `"Quick"` (not `"Search"` — this screen already has
   `"Find"` for `/`'s scan, and a second `"Search"` label would read as a duplicate) and `"View"` →
-  `"View content"`. MEASURED: 97/100, `hscroll=False` (7 App-level `Help` label included). Un-hiding
+  `"View content"`. MEASURED: 97/100, `hscroll=False` (the App-level `Help` label's ~7 columns included). Un-hiding
   `Expand` at full length reopens the overflow: 106/100 with `hscroll=True` (confirmed, not assumed).
 - **`EditScreen`** — `"View content"` (`ctrl+r`, view externally-retrieved content) and `"Link"`
   (`ctrl+n`, open URL under cursor) are now hidden: both apply only to a subset of notes (an
@@ -472,8 +472,12 @@ repeatedly is retired there).
 tests were renamed `..._with_every_shown_binding_visible` (from `..._with_every_binding_visible`)
 and now assert only that every SHOWN binding fits in 100 columns without `hscroll`; the guarantee
 that every HIDDEN binding stays reachable is `tests/test_tui_help_screen.py`'s anti-drift gate's job
-(it already runs against `BrowseScreen` as its representative screen, `show=False` entries included),
-not duplicated in the footer tests.
+(parametrized over both screens that hide anything — `BrowseScreen` and `EditScreen` — `show=False`
+entries included), not duplicated in the footer tests. That parametrization is this ticket's own
+review finding: the gate previously ran against `BrowseScreen` alone as "the representative screen",
+which was sound only while no Screen-level binding anywhere was hidden; the moment `EditScreen`
+started hiding `ctrl+r`/`ctrl+n`, "the gate covers it" stopped being true for that screen until the
+gate visited it.
 
 ## Resolved collisions (history, for context)
 

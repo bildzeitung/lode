@@ -185,7 +185,9 @@ class EditScreen(Screen[None]):
     # shared App-level label, not because this screen needs it kept short.
     #
     # MEASURED (2026-08-09, post-lode-2bt3.2 trunk, 100-column pilot,
-    # tests/test_tui_edit_screen.py's own harness): with "View content" and
+    # tests/test_tui_browse_screen.py's own harness -- this screen's footer
+    # test lives there alongside BrowseScreen's, not in
+    # tests/test_tui_edit_screen.py): with "View content" and
     # "Link" hidden and "Related"/"History" restored, this screen's footer
     # (6 shown screen-level + 4 App-level, including Help) consumes 89/100
     # columns, hscroll=False -- 11 columns' slack, intentionally not spent

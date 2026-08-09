@@ -331,8 +331,9 @@ class BrowseScreen(Screen[None]):
     #
     # MEASURED (2026-08-09, post-lode-2bt3.2 trunk, 100-column pilot,
     # tests/test_tui_browse_screen.py's own harness): with "Expand" hidden
-    # and the two labels above restored, this screen's footer (7 shown
-    # screen-level + 5 App-level, including Help) consumes 97/100 columns,
+    # and the two labels above restored, this screen's footer (6 of the 7
+    # screen-level bindings shown + 5 App-level, including Help) consumes
+    # 97/100 columns,
     # hscroll=False -- 3 columns' slack. Un-hiding "Expand" at its full label
     # back in blows the budget (106/100, hscroll=True) -- confirmed, not
     # assumed.

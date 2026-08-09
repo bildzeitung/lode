@@ -180,11 +180,14 @@ module carry it, not anything the shared footer widget does.
 **What the 100-column footer tests now assert.** Before this ticket, "every binding visible" was the
 only honest assertion a footer test could make, because a hidden binding really would have been
 undiscoverable. Now that a hidden binding is guaranteed reachable via the overlay
-(`tests/test_tui_help_screen.py`'s anti-drift gate, which already runs against `BrowseScreen` as its
-representative screen), `tests/test_tui_browse_screen.py`'s Browse/Edit footer tests assert instead
+(`tests/test_tui_help_screen.py`'s anti-drift gate, parametrized over every screen that hides
+anything — `BrowseScreen` and `EditScreen` today), `tests/test_tui_browse_screen.py`'s Browse/Edit
+footer tests assert instead
 that every **shown** binding fits in 100 columns without `show_horizontal_scrollbar` — renamed
 `..._with_every_shown_binding_visible` to say so — and rely on the anti-drift gate, not a duplicate
-per-screen assertion, to guarantee every hidden one stays reachable.
+per-screen assertion, to guarantee every hidden one stays reachable. **A screen that starts hiding
+a binding must be added to that gate's parametrize list in the same diff** — the delegation above is
+only honest for screens the gate actually visits.
 
 Rejected alternatives, so the question isn't reopened:
 

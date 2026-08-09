@@ -3096,8 +3096,8 @@ def test_bare_v_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
 # visible" was the only honest assertion, because a hidden binding would
 # have been undiscoverable. lode-2bt3.2 shipped the keybinding help overlay
 # (Ctrl+_/'?'), which lists every binding on a screen INCLUDING show=False
-# ones (tests/test_tui_help_screen.py's own anti-drift gate, run against
-# this exact screen), so a footer entry hidden here is still fully live and
+# ones (tests/test_tui_help_screen.py's own anti-drift gate, parametrized
+# over this exact screen), so a footer entry hidden here is still fully live and
 # one keypress away -- the footer is a hint surface now, not the contract
 # (docs/tui.md). This test's own semantics change accordingly: it asserts
 # every SHOWN binding fits (the layout guarantee this test has always made
@@ -3180,8 +3180,9 @@ def test_browse_footer_fits_100_columns_with_every_shown_binding_visible(
 # WHAT "EVERY BINDING" MEANS, CHANGED HERE (lode-2bt3.3) -- same change as
 # BrowseScreen's footer test above: this asserts every SHOWN binding fits;
 # every HIDDEN one stays reachable via the help overlay
-# (tests/test_tui_help_screen.py's own anti-drift gate covers that
-# generically, not duplicated here).
+# (tests/test_tui_help_screen.py's own anti-drift gate, which is
+# parametrized over EditScreen as well as BrowseScreen precisely because
+# this ticket made this screen hide bindings too -- not duplicated here).
 # ---------------------------------------------------------------------------
 
 
@@ -3212,8 +3213,10 @@ def test_edit_footer_fits_100_columns_with_every_shown_binding_visible(
 
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # 6 of the 8 screen-level bindings stay shown, plus 3 shown App-level
-    # ones. "Related"/"History" restored to full words (lode-2bt3.3);
+    # 6 of the 8 screen-level bindings stay shown, plus 4 shown App-level
+    # ones (the App-level ctrl+l is shadowed by this screen's own "Ask", so
+    # it renders once, at screen level).
+    # "Related"/"History" restored to full words (lode-2bt3.3);
     # "View content"/"Link" now hidden instead (see the block comment
     # above). "Ask" is a SCREEN-level binding here too (lode-35nu.11.3, same
     # key/label as the App-level one it shadows -- docs/keybindings.md), so
