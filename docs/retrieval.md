@@ -163,8 +163,8 @@ answer = [
 > each one — was proposed and rejected. **Reason:** self-reported confidence contradicts
 > verify-don't-trust, the same principle the faithfulness gate below exists to enforce — a model
 > asserting its own reliability is exactly the kind of claim the gate refuses to take on trust, so
-> asking the model to grade itself would reintroduce, inside the schema, the very trust the gate is
-> built to remove downstream. Claim **grouping** is not requested from the model either; it is
+> asking the model to grade itself reintroduces inside the schema the trust the gate removes
+> downstream. Claim **grouping** is not requested from the model either; it is
 > derived app-side from resolved note identity (lode-35nu.1) instead. The schema above —
 > claim text plus pinned, verbatim evidence — is deliberately the full extent of what the model is
 > asked to assert.
