@@ -4620,3 +4620,11 @@ entries below from being rewritten to chase the current tree.)
   wholesale regardless of what `review_head` names, so a forward push is harmless to it. Recorded in
   `docs/agents-workflow.md` so a later pass does not "harmonize" the two comparisons and reintroduce
   the hole this decision closes.
+
+- **2026-08-09 (`lode-35nu.2`, WONT-DO, pointer only) — no per-claim LLM self-reported annotation or
+  confidence in the Q&A answer schema.** Recorded in full in
+  [`docs/retrieval.md`](retrieval.md#make-the-answer-schema-verifiable): self-reported confidence
+  contradicts verify-don't-trust, the principle the faithfulness gate exists to enforce, and answer
+  grouping is derived app-side from resolved note identity (`lode-35nu.1`) rather than requested
+  from the model. This is settled, not open — the entry here is a pointer for anyone scanning this
+  log, not the primary record.

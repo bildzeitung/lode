@@ -158,6 +158,17 @@ answer = [
 ]
 ```
 
+> **WONT-DO (lode-35nu.2): no per-claim LLM self-reported annotation or confidence.** A richer
+> answer schema — the Q&A LLM itself grouping claims and/or attaching a confidence/annotation to
+> each one — was proposed and rejected. **Reason:** self-reported confidence contradicts
+> verify-don't-trust, the same principle the faithfulness gate below exists to enforce — a model
+> asserting its own reliability is exactly the kind of claim the gate refuses to take on trust, so
+> asking the model to grade itself would reintroduce, inside the schema, the very trust the gate is
+> built to remove downstream. Claim **grouping** is not requested from the model either; it is
+> derived app-side from resolved note identity (lode-35nu.1) instead. The schema above —
+> claim text plus pinned, verbatim evidence — is deliberately the full extent of what the model is
+> asked to assert.
+
 ### The faithfulness gate (a stage, like rerank)
 
 Runs app-side, after the Q&A LLM returns and before display:
