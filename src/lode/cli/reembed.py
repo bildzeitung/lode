@@ -5,7 +5,19 @@ import typer
 from lode.cli import _DbOption, _open_db, app
 
 
-@app.command()
+@app.command(
+    help=(
+        "Force a fresh embed job for every live note/external head.\n\n"
+        "Run it when 'lode status' says the index is mixed, or that the "
+        "embedder's cached weights have moved past your vectors' revision. "
+        "Whole-corpus, not targeted -- a model/cache change affects "
+        "everything at once.\n\n"
+        "Only queues the jobs -- run 'lode work' (or 'lode work --wait') to "
+        "actually re-embed. Safe to re-run; resume an interrupted run with "
+        "'lode work', not by re-running this. Embedder only, no lexical/FTS "
+        "or enrichment effect. See docs/how-to/maintenance-commands.md."
+    )
+)
 def reembed(db: _DbOption = None) -> None:
     """Force a fresh embed job for every live head (lode-g274.7).
 

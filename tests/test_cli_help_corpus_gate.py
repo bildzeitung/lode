@@ -142,14 +142,6 @@ runner = CliRunner()
 #: from this dict -- that is lode-ii25.2 through .7's job, not this
 #: ticket's.
 ALLOWLIST: dict[str, str] = {
-    "reembed": (
-        "No help= yet (lode-ii25.x); the full docstring renders as --help "
-        "-- Sphinx roles, RST backticks, bd ids, and well over 12 lines."
-    ),
-    "reenrich": (
-        "No help= yet (lode-ii25.x); the full docstring renders as --help "
-        "-- Sphinx roles, RST backticks, bd ids, and well over 12 lines."
-    ),
     "models pull": (
         "No help= yet (lode-ii25.x); the full docstring renders as --help, "
         "cites lode-r4r2/lode-j5r2, and exceeds 12 lines."
