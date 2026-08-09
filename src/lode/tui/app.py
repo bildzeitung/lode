@@ -79,6 +79,7 @@ from lode.tui.screens.ask import AskScreen
 from lode.tui.screens.browse import BrowseScreen
 from lode.tui.screens.capture import CaptureScreen
 from lode.tui.screens.config import ConfigScreen
+from lode.tui.screens.help import HelpScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 from lode.tui.screens.tags import TagsScreen
 
@@ -118,10 +119,25 @@ class LodeApp(App[str | None]):
         "reconcile": ReconcileScreen,
         "browse": BrowseScreen,
         "tags": TagsScreen,
+        "help": HelpScreen,
     }
+    #: HelpScreen (lode-2bt3.2), like ReconcileScreen above, needs a
+    #: constructed argument (the pre-push binding snapshot -- see
+    #: action_show_help) -- pushed via a built instance, never the bare
+    #: name; still registered here for discoverability, same convention.
 
     BINDINGS: ClassVar = [
-        Binding("ctrl+q", "quit", "Quit", priority=True),
+        # Quit's footer entry is dropped (lode-2bt3.2, resolving the ticket's
+        # own circular-dependency decision #10) to pay for the new Help
+        # binding below without exceeding the 100-column footer budget:
+        # ctrl+q is well known and Escape is an additional route out on most
+        # screens, so hiding it from the footer costs little. The binding
+        # itself stays fully live (priority=True, unchanged) -- only
+        # show=False changes. This is a small, targeted pull-forward of
+        # lode-2bt3.3's general per-screen footer-priority mechanism, not a
+        # substitute for it; that ticket must re-verify this call once the
+        # full mechanism exists (see docs/keybindings.md).
+        Binding("ctrl+q", "quit", "Quit", priority=True, show=False),
         # "Cfg" stays abbreviated (lode-uczx, amending lode-l38d.3's original
         # rationale). lode's minimum supported terminal width is 100 columns
         # (docs/tui.md), not 80 -- so "buy width for one screen" is no longer
@@ -153,6 +169,26 @@ class LodeApp(App[str | None]):
         # ctrl+a rule is enforced by tests/test_tui_ask_screen.py, not by this
         # comment -- a later ticket that re-binds it fails there.
         Binding("ctrl+l", "push_screen('ask')", "Ask"),
+        # The keybinding help overlay (lode-2bt3.2). ``Ctrl+_`` -- Textual's
+        # name for the 0x1f byte terminals emit for Ctrl+/ (the same
+        # physical key as '?') -- rather than the unavailable ``Ctrl+?``
+        # (terminals cannot encode ctrl+shift+/ as a distinct byte; verified
+        # against textual 8.2.8's Keys vocabulary, which has no such entry).
+        # Not a ctrl-letter, so it doesn't draw on the exhausted letter-space
+        # this file's own "No formally-safe letter left" note above
+        # documents; not a function key, so lode-juz8.1's ban stands
+        # untouched. A REAL, visible App-level binding (not show=False) --
+        # the overlay is a first-class, discoverable affordance, per the
+        # ticket's own decision. Full rationale, the terminal-arrival
+        # verification, and the footer-width measurement:
+        # docs/keybindings.md.
+        Binding("ctrl+underscore", "show_help", "Help"),
+        # '?' is a convenience alias for the same action, reachable wherever
+        # no TextArea/Input holds focus (freed by lode-2bt3.1). Hidden --
+        # "Help" is already shown via the Ctrl+_ entry above; a duplicate
+        # footer slot for the same action would waste the width lode-2bt3.2
+        # dropping "Quit" just bought back.
+        Binding("?", "show_help", "Help", show=False),
     ]
 
     def __init__(
@@ -185,6 +221,20 @@ class LodeApp(App[str | None]):
             confirm_quit()
             return
         self.exit()
+
+    def action_show_help(self) -> None:
+        """Ctrl+_ / '?': push the keybinding help overlay (lode-2bt3.2).
+
+        Snapshots ``self.screen.active_bindings`` -- the active screen's own
+        bindings merged with this app's, exactly what Textual's own
+        ``BindingsTable`` would read -- **before** pushing
+        :class:`~lode.tui.screens.help.HelpScreen`. Reading it any later
+        (from inside the pushed modal) would see only the modal's own
+        near-empty bindings instead, since ``Screen._modal_binding_chain``
+        stops at the last modal on the stack. See that module's docstring
+        for the full mechanism.
+        """
+        self.push_screen(HelpScreen(self.screen.active_bindings))
 
 
 def run(*, db_path: Path | None = None, settings: Settings | None = None) -> str | None:

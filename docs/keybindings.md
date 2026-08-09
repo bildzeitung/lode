@@ -157,11 +157,13 @@ tree by `lode-pijc`.
 
 | Key | Action | Notes |
 |---|---|---|
-| `ctrl+q` | Quit | `priority=True` — always wins, even over a Screen binding |
+| `ctrl+q` | Quit | `priority=True` — always wins, even over a Screen binding. Hidden from the footer (`show=False`, `lode-2bt3.2`) to make room for the new Help entry below — the binding itself is unchanged and fully live; see "The keybinding help overlay" section for why |
 | `ctrl+o` | Show Config | "Options" — rekeyed off the function key `f2` by `lode-juz8.1` |
 | `ctrl+b` | Show Browse | "Browse" — rekeyed off the function key `f3` by `lode-juz8.1` |
 | `ctrl+t` | Show Tags | "Tags" — rekeyed off the function key `f5` by `lode-juz8.1` (itself a land-time rekey off `f4` — see the history below) |
 | `ctrl+l` | Show Ask | Claimed by `lode-11io` — the mnemonic `ctrl+a` is NOT available (a `TextArea`/`Input` builtin, cursor-to-line-start); confirmed against all three traps below and against every screen's own `BINDINGS` |
+| `ctrl+underscore` | Show keybinding help overlay | Claimed by `lode-2bt3.2` — see "The keybinding help overlay" section below |
+| `?` (hidden, `show=False`) | Show keybinding help overlay | Same action as `ctrl+underscore`; convenience-only, reachable wherever no `TextArea`/`Input` holds focus (freed by `lode-2bt3.1`) |
 
 No App-level function keys remain — see the "No function keys" policy above. `ctrl+l` is now
 claimed (above); `ctrl+n` is now claimed too, at the **Screen** level — `EditScreen`,
@@ -205,7 +207,7 @@ action on one of these screens still faces the exhausted pool above; this one di
 | | | `v` | View retrieved content | |
 | | | `d` | Delete | |
 | | | `x` | Expand/collapse summary | |
-| | | `slash` | Search (restarts from the top each keystroke, `lode-2bt3.1`) | search direction retired (`lode-2bt3.1`) — `?` is now unbound on every screen |
+| | | `slash` | Search (restarts from the top each keystroke, `lode-2bt3.1`) | search direction retired (`lode-2bt3.1`) — `?` was unbound on every screen until `lode-2bt3.2` claimed it App-level for the help overlay |
 | | | `s` | Quick search (BM25, narrows the list, `lode-35nu.6`) | distinct from `slash`'s scan-and-highlight |
 | `ExternalPickerScreen` | `screens/external_picker.py` | `escape` | Back | — (DataTable) |
 | `TagsScreen` | `screens/tags.py` | `escape` | Back | — (DataTable grid, `lode-l38d.9`) |
@@ -244,6 +246,8 @@ action on one of these screens still faces the exhausted pool above; this one di
 | | | `down` | Select next related | |
 | | | `enter` | Open selected (modal) | |
 | `RelatedNoteModalScreen` | `screens/related_note_modal.py` | `escape` | Back | — |
+| `HelpScreen` | `screens/help.py` | `escape` | Close (`show=False` — footerless, `lode-2bt3.2`) | — |
+| | | `?` | Close (`show=False`, same reason) | |
 
 `ctrl+s` on `EditScreen`/`CaptureScreen` already predates this doc and is the precedent
 `lode-olmi.2`'s `Ctrl+H`, `lode-g5es`'s `Ctrl+G`, `lode-0sjj`'s `Ctrl+R`, and `lode-ev5j.3`'s
@@ -316,6 +320,97 @@ resolve, only a mnemonic to reuse. Confirmed against `KEY_ALIASES` (no entry) an
 non-abstained answer on screen (`AskScreen._note_id is not None` — a source note to link the new
 note back to is what the feature needs); a no-op notification otherwise, same pattern as `ctrl+j`'s
 own "no citation to open" guard.
+
+## The keybinding help overlay (`lode-2bt3.2`)
+
+**The problem: `?` is printable, so it cannot reach the three text-entry
+screens.** `CaptureScreen`, `EditScreen`, and `AskScreen` each focus an
+editable `TextArea`/`Input` by default, and (per the "hard rule" above) a
+focused text-entry widget consumes any `is_printable` keypress as a literal
+character before it can ever reach a Screen- or App-level binding. A bare
+`?` binding would therefore be silently unreachable from the exact three
+screens a user spends the most time on — confirmed empirically
+(`tests/test_tui_help_screen.py::test_question_mark_is_swallowed_as_a_literal_character_on_capture`).
+
+**The fix: `Ctrl+Underscore`, not the unavailable `Ctrl+?`.** The obvious
+mnemonic, `Ctrl+?`, does not exist in Textual's `Keys` vocabulary — terminals
+cannot encode `Ctrl+Shift+/` as a distinct byte, confirmed against the
+installed textual 8.2.8 (`textual.keys.Keys` has no `ControlQuestionMark`
+entry). The substitute is `Ctrl+Underscore` (`Keys.ControlUnderscore =
+"ctrl+underscore"`) — Textual's name for the `0x1f` byte terminals emit for
+`Ctrl+/` (the same physical key as `?`, on virtually every keyboard layout,
+since `_` sits on the shifted `-`/`/`-adjacent row and terminals encode the
+control-modified byte independent of the shift state). **Terminal-arrival
+verification (per the ticket's own requirement):** confirmed at the
+ANSI-sequence-table level rather than against a live terminal (no
+interactive terminal is available in this build environment) —
+`textual/_ansi_sequences.py` maps the raw byte `"\x1f"` directly to
+`(Keys.ControlUnderscore,)`, which is the standard, universal `xterm`/`vt100`
+encoding for `Ctrl+/` (also documented as "Also for Ctrl-hyphen" in that same
+table) — not something Textual invented or that varies meaningfully by
+terminal emulator. If a specific terminal is later found not to deliver this
+byte, escalate rather than silently falling back to a letter (none are left
+— see the "No function keys" section's letter-space accounting above).
+
+Neither a ctrl-*letter* (so it doesn't draw on the exhausted letter-space
+this doc's own ledger tracks) nor a function key (so `lode-juz8.1`'s ban
+stands untouched) — `Ctrl+Underscore` was unbound anywhere in lode before
+this ticket.
+
+**Both keys, one action.** `LodeApp.BINDINGS` binds `ctrl+underscore` (shown
+in the footer) and `?` (hidden, `show=False`) to the same
+`action_show_help`. `?` still works as a convenience wherever no
+`TextArea`/`Input` holds focus (`BrowseScreen`, `TagsScreen`, `ConfigScreen`,
+…) — freed for this by `lode-2bt3.1` retiring search-direction. Screens with
+an editable body reach the overlay only via `Ctrl+Underscore`.
+
+**A real, visible App-level binding — not `show=False`.** The overlay is
+a first-class, discoverable affordance by design (the whole point of the
+ticket); it is not buried behind its own undiscoverable key.
+
+**Paid for by demoting Quit's footer entry, not by widening the footer
+budget.** An App-level binding renders in *every* screen's footer (this
+doc's own `ctrl+l`/"Ask" history documents the same +7-column cost pattern),
+and `EditScreen`/`BrowseScreen` were already the tightest of the ten
+footer-bearing screens with little slack left. Rather than shorten more
+labels, this ticket drops `ctrl+q`'s "Quit" footer entry (`show=False` —
+the binding itself is unchanged, still `priority=True` and fully live):
+`Ctrl+Q` is well known, and Escape is an additional route out on most
+screens, so hiding it from the footer costs little. This is a small,
+targeted pull-forward of `lode-2bt3.3`'s general per-screen footer-priority
+mechanism (not a substitute for it — that ticket must re-verify this call
+once the full mechanism exists), using the one mechanism (`show=False`) that
+ticket is expected to generalize.
+
+**Footer-width measurements (100 columns, every screen re-measured against
+the real pilot after this change):**
+
+| Screen | Before (`Quit` shown, no `Help`) | After (`Quit` hidden, `Help` shown) |
+|---|---|---|
+| `CaptureScreen` | — | 84/100 |
+| `BrowseScreen` | — | 94/100 |
+| `EditScreen` | 98/100 (tightest of the ten) | 98/100 (unchanged — one drop pays for one add) |
+| `AskScreen` | — | 81/100 |
+
+No screen needed a label shortened; dropping `Quit` almost exactly offsets
+adding `Help` on every footer, since both render as a 1-2 character key
+display plus a 4-5 character label.
+
+**Content and shape.** `HelpScreen` (`src/lode/tui/screens/help.py`)
+composes Textual's own shipped `BindingsTable`
+(`textual.widgets._key_panel`) — the ticket's own review (bd notes,
+criticisms 1/2/7) found that hand-rolling the screen/app binding merge, the
+screen-shadows-app resolution, and the namespace grouping would reinvent
+already-correct framework machinery, so this module writes only the open
+key, a one-property override to defeat `ModalScreen`'s binding-chain
+truncation (`HelpScreen.active_bindings`, overriding `Screen`'s own property
+to return a snapshot captured *before* the modal was pushed — see that
+module's docstring), and styling. Inclusion rule: exclude
+`binding.system` only, matching `BindingsTable`'s own filter — no
+lode-specific narrowing layered on top, which is also what keeps
+`tests/test_tui_help_screen.py`'s anti-drift test bounded and implementable.
+A `ModalScreen`, footerless (dismisses on Escape/`?`, no other standing
+action) per docs/tui.md's modal rule.
 
 ## Resolved collisions (history, for context)
 

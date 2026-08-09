@@ -143,6 +143,44 @@ SnapshotViewerScreen {
     border: solid $primary;
 }
 
+/* Keybinding help overlay (lode-2bt3.2) -- same larger, scrollable popup
+ * treatment as #enrichment-inspector-dialog above (the binding list can run
+ * longer than the terminal height). BindingsTable's own component-class
+ * styling (key/description/divider/header) is normally supplied by
+ * Textual's KeyPanel wrapper (textual/widgets/_key_panel.py); reproduced
+ * here directly since HelpScreen composes BindingsTable on its own, not via
+ * KeyPanel -- same declarations KeyPanel's own DEFAULT_CSS uses. */
+HelpScreen {
+    align: center middle;
+}
+
+#help-dialog {
+    width: 80%;
+    height: 80%;
+    border: thick $primary;
+    background: $panel;
+    padding: 1 2;
+}
+
+HelpScreen BindingsTable > .bindings-table--key {
+    color: $text-accent;
+    text-style: bold;
+    padding: 0 1;
+}
+
+HelpScreen BindingsTable > .bindings-table--description {
+    color: $foreground;
+}
+
+HelpScreen BindingsTable > .bindings-table--divider {
+    color: transparent;
+}
+
+HelpScreen BindingsTable > .bindings-table--header {
+    color: $text-primary;
+    text-style: underline;
+}
+
 /* Every DataTable gets a bounded height structurally (lode-efn2), rather
  * than requiring each screen's author to remember a per-id 1fr rule -- that
  * per-id mechanism had to be applied twice, each time only after a bug

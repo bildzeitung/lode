@@ -3120,13 +3120,15 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     # ...and it fits WITHOUT Textual collapsing the gutters to get there.
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 7 screen-level + 5 App-level bindings stay visible (none hidden via
-    # show=False) -- restored to full words at the new 100-column bound
-    # (lode-35nu.6's own quick-search entry is the one exception -- see the
-    # inline comment on it below for why it's a single letter, not a word).
-    # "Up" (question_mark/search_backward) is gone -- search direction is
-    # retired (lode-2bt3.1), freeing a footer slot on the screen that had
-    # zero headroom left.
+    # All 7 screen-level + 5 shown App-level bindings stay visible -- restored
+    # to full words at the new 100-column bound (lode-35nu.6's own
+    # quick-search entry is the one exception -- see the inline comment on it
+    # below for why it's a single letter, not a word). "Up"
+    # (question_mark/search_backward) is gone -- search direction is retired
+    # (lode-2bt3.1), freeing a footer slot on the screen that had zero
+    # headroom left. "Quit" is now hidden (show=False, lode-2bt3.2 -- see
+    # docs/keybindings.md); "Help" (Ctrl+_, lode-2bt3.2's keybinding overlay)
+    # takes its slot instead -- MEASURED at 94/100.
     assert descriptions == [
         "Back",
         "Inspect",
@@ -3136,11 +3138,11 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
         "Find",
         "S",  # BM25 quick search (lode-35nu.6) -- see BrowseScreen.BINDINGS'
         # own comment for why this one stays a single letter
-        "Quit",
         "Cfg",
         "Browse",
         "Tags",
         "Ask",
+        "Help",
     ]
 
 
@@ -3200,13 +3202,17 @@ def test_edit_footer_fits_100_columns_with_every_binding_visible(
 
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 8 screen-level + 4 App-level bindings stay visible (none hidden via
-    # show=False); "View content" -> "View" (lode-uczx), "Related" -> "Rel"
-    # and "History" -> "Hist" (lode-ev5j.3, to make room for "Link"). "Ask" is
-    # now a SCREEN-level binding here too (lode-35nu.11.3, same key/label as
-    # the App-level one it shadows -- docs/keybindings.md), so it renders in
+    # All 8 screen-level + 3 shown App-level bindings stay visible; "View
+    # content" -> "View" (lode-uczx), "Related" -> "Rel" and "History" ->
+    # "Hist" (lode-ev5j.3, to make room for "Link"). "Ask" is now a
+    # SCREEN-level binding here too (lode-35nu.11.3, same key/label as the
+    # App-level one it shadows -- docs/keybindings.md), so it renders in
     # binding-declaration order right after "Link" rather than at the tail
-    # with the other App-level entries.
+    # with the other App-level entries. "Quit" is now hidden (show=False,
+    # lode-2bt3.2); "Help" (Ctrl+_, lode-2bt3.2's keybinding overlay) takes
+    # its slot at the tail instead -- MEASURED at 98/100 (this screen's own
+    # tight budget, see the block comment above, is unaffected: one drop pays
+    # for one add).
     assert descriptions == [
         "Save",
         "Back",
@@ -3216,8 +3222,8 @@ def test_edit_footer_fits_100_columns_with_every_binding_visible(
         "View",
         "Link",
         "Ask",
-        "Quit",
         "Cfg",
         "Browse",
         "Tags",
+        "Help",
     ]
