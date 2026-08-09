@@ -32,9 +32,15 @@ globs -- ``tests/test_skill_bash_state.py``,
 ``sorted(SKILLS_DIR.glob('*/SKILL.md')) + sorted(AGENTS_DIR.glob('*.md'))``.
 The read/compare predicate below (:data:`TIP_COMPARISON_MARKERS`) is what
 keeps that widening from producing a false positive: it excludes
-``.claude/skills/code/SKILL.md``'s own ``metadata.review_head`` read (line
-241), which is only a non-emptiness check, never a tip comparison. Only
-:data:`DRIFT_FIELDS` remains hand-maintained.
+``.claude/skills/code/SKILL.md``'s own ``metadata.review_head`` read, which is
+only a non-emptiness check, never a tip comparison.
+
+What that trades, honestly: the hand-maintained *file roster* is gone, but
+:data:`DRIFT_FIELDS` and :data:`TIP_COMPARISON_MARKERS` are both still hand-
+maintained. The win is not "nothing is hand-maintained" -- it is that what
+remains is keyed on the hazard (which fields drift, which verbs compare a tip)
+rather than on which files happen to contain it today, so a read site added to
+a *new* file is caught without editing this test.
 """
 
 from __future__ import annotations
@@ -57,8 +63,8 @@ VALIDATOR = "scripts/validate-sha40.sh"
 
 #: The metadata fields whose value is compared against a real branch tip to
 #: detect drift -- exactly the comparison a malformed value corrupts. Read as
-#: `.[0].metadata.<field>` out of `bd show --json` at every site. This is the
-#: one input left hand-maintained; everything else below is derived.
+#: `.[0].metadata.<field>` out of `bd show --json` at every site. Hand-
+#: maintained, as is :data:`TIP_COMPARISON_MARKERS`; the *file roster* is not.
 DRIFT_FIELDS = ("land_head", "review_head")
 
 #: Markers that, co-occurring with a `metadata.<field>` read in the SAME
@@ -67,13 +73,20 @@ DRIFT_FIELDS = ("land_head", "review_head")
 #: itself. `.claude/skills/code/SKILL.md`'s `metadata.review_head` read is a
 #: non-emptiness check only and carries none of these, so it is correctly
 #: excluded rather than demanding a spurious validator call there.
-TIP_COMPARISON_MARKERS = ("git rev-parse", "git ls-remote", "origin/land")
-
-
-def _corpus_files() -> list[Path]:
-    """Every markdown file the repo's other gates treat as agent-instruction
-    corpus, in the same order they use: SKILL.md docs, then agent defs."""
-    return sorted(SKILLS_DIR.glob("*/SKILL.md")) + sorted(AGENTS_DIR.glob("*.md"))
+#:
+#: `git merge-base` is listed because it is the comparison `code-reviewer.md`
+#: actually performs on `review_head`. Without it that block matched only on an
+#: incidental `git rev-parse --abbrev-ref HEAD` line that exists for an
+#: unrelated branch-name check -- so deleting that line would have silently
+#: dropped a genuine call site out of the gate. Prefer over-inclusion here: a
+#: spurious marker match only demands a validator call that is harmless to add,
+#: whereas a missing one un-guards a real read.
+TIP_COMPARISON_MARKERS = (
+    "git rev-parse",
+    "git ls-remote",
+    "git merge-base",
+    "origin/land",
+)
 
 
 def _read_sites(blocks: list[str], field: str) -> list[str]:
@@ -89,20 +102,16 @@ def _read_sites(blocks: list[str], field: str) -> list[str]:
     ]
 
 
-def _call_sites() -> list[tuple[str, list[str]]]:
-    """(relative path, fenced-bash-blocks) for every file in the corpus,
-    computed once at import time -- the hazard-keyed replacement for the old
-    hand-maintained roster."""
-    return [
-        (
-            str(path.relative_to(REPO_ROOT)),
-            bash_fence_blocks(path.read_text(encoding="utf-8")),
-        )
-        for path in _corpus_files()
-    ]
-
-
-CALL_SITES: list[tuple[str, list[str]]] = _call_sites()
+#: (relative path, fenced-bash-blocks) for every file in the corpus -- the
+#: hazard-keyed replacement for the old hand-maintained roster. SKILL.md docs
+#: then agent defs, the same order the sibling gates use.
+CALL_SITES: list[tuple[str, list[str]]] = [
+    (
+        str(path.relative_to(REPO_ROOT)),
+        bash_fence_blocks(path.read_text(encoding="utf-8")),
+    )
+    for path in sorted(SKILLS_DIR.glob("*/SKILL.md")) + sorted(AGENTS_DIR.glob("*.md"))
+]
 
 
 @pytest.mark.parametrize("field", DRIFT_FIELDS)
@@ -112,9 +121,12 @@ def test_the_expected_read_site_still_exists(field: str) -> None:
     compared to a tip) at least once somewhere in the corpus.
 
     Deliberately "at least one", not "exactly one file" (lode-rby4): a strict
-    single-file assertion would forbid a legitimate second guarded read
-    inside a rostered file, or a new read site outside the old two-file
-    roster, from ever existing.
+    single-file assertion would forbid a legitimate second guarded read from
+    ever existing. No signal is lost: "exactly one" existed for non-vacuity,
+    which "at least one" still provides, and its incidental coverage job
+    (noticing a new read site) is now done properly by
+    :func:`test_every_drift_field_read_is_shape_checked_in_the_same_block`,
+    which guards the whole corpus rather than merely reporting on it.
     """
     found = [path for path, blocks in CALL_SITES if _read_sites(blocks, field)]
     assert found, (
