@@ -2024,7 +2024,9 @@ def test_incremental_search_restarts_from_the_top_every_keystroke(
 
     cursor_row = asyncio.run(_drive())
 
-    assert cursor_row == 1  # gamma widget -- the topmost match, not the cursor's own row
+    assert (
+        cursor_row == 1
+    )  # gamma widget -- the topmost match, not the cursor's own row
 
 
 def test_incremental_search_matches_case_insensitively(tmp_path: Path) -> None:
