@@ -139,20 +139,20 @@ is; it is simplest to notify and reload the table, which already reflects the
 current state either way. Declining the confirm, or an empty table, is a
 no-op.
 
-**Progressive incremental search (lode-olmi.4).** ``/`` opens a one-line
-:class:`~textual.widgets.Input` at the bottom of the screen (hidden the rest
-of the time via ``display = False``, so it claims no vertical space when
-closed); each keystroke re-scans the table **from the cursor's current row**
-for the next row whose Summary cell contains the typed query as a
+**Progressive incremental search (lode-olmi.4, direction retired lode-2bt3.1).**
+``/`` opens a one-line :class:`~textual.widgets.Input` at the bottom of the
+screen (hidden the rest of the time via ``display = False``, so it claims no
+vertical space when closed); each keystroke re-scans the table **from the
+top** for the first row whose Summary cell contains the typed query as a
 case-insensitive substring -- the match target settled with the user
 2026-07-14, deliberately the visible Summary text rather than the full note
-body, since that's the same text the row already shows. ``?`` opens the same
-box but scans upward instead of downward. Scanning from the *current* row
-(not a remembered start-of-search anchor) on every keystroke, rather than
-restarting from wherever the box was opened, is what makes "wrapping if
-needed" alone sufficient to still reach an earlier match after the query has
-grown past it: the wrap covers the whole table either way, so nothing further
-back is ever unreachable. Escape closes the box and leaves the cursor at
+body, since that's the same text the row already shows. There is no longer a
+search *direction*: ``?``/search-backward is retired (lode-2bt3.1, freeing
+``?`` for the in-app help overlay, lode-2bt3.2), and ``/`` always restarts
+from row 0 rather than continuing forward from wherever the cursor currently
+sits -- scanning from a fixed start on every keystroke means "wrapping" is no
+longer a distinct case: a forward scan from the top already reaches every
+row in one pass. Escape closes the box and leaves the cursor at
 whatever row the search last landed on (the same "keep the current
 selection" contract, not a revert-on-cancel); Enter does the same, just
 spelled as a confirm rather than a dismiss. An empty query is a no-op --
@@ -311,11 +311,11 @@ class BrowseScreen(Screen[None]):
     # minimum supported terminal width is 100 columns (docs/tui.md) -- and
     # the full words fit comfortably within it. "S" (bare `s`, lode-35nu.6) is
     # the BM25 quick search, distinct from "Find" ('/', lode-olmi.4's summary
-    # scan) -- an 8th entry blew the 100-column budget at any label longer
-    # than one character (measured: "Qk" alone still triggered
-    # show_horizontal_scrollbar at exactly 100 consumed columns), so this one
-    # stays a single letter mirroring its own key, same terseness as "Up"/
-    # "Cfg" elsewhere in this same bar.
+    # scan). "?"/search-backward (lode-2bt3.1) is retired -- search direction
+    # doesn't exist any more, '/' always restarts from the top -- which also
+    # frees a footer slot on the screen with zero headroom left at the
+    # 100-column bound (see the epic, lode-2bt3, and its .2 for what claims
+    # '?' next).
     BINDINGS: ClassVar = [
         Binding("escape", "dismiss_screen", "Back"),
         Binding("i", "inspect_selected", "Inspect"),
@@ -323,16 +323,11 @@ class BrowseScreen(Screen[None]):
         Binding("d", "delete_selected", "Delete"),
         Binding("x", "toggle_summary", "Expand"),
         Binding("slash", "search_forward", "Find"),
-        Binding("question_mark", "search_backward", "Up"),
         Binding("s", "quick_search", "S"),
     ]
 
     def __init__(self) -> None:
         super().__init__()
-        #: Which way the last-opened search box scans (lode-olmi.4): +1 for
-        #: ``/`` (downward), -1 for ``?`` (upward). Set in :meth:`_open_search`,
-        #: read by :meth:`_seek_match` on every keystroke.
-        self._search_direction = 1
         #: Whether the search box is currently open -- read by
         #: :meth:`action_dismiss_screen` to decide what Escape means right now
         #: (close the search box vs. pop back to capture).
@@ -629,14 +624,10 @@ class BrowseScreen(Screen[None]):
         self._reload_rows()
 
     def action_search_forward(self) -> None:
-        """``/``: open the progressive search box, scanning downward (lode-olmi.4)."""
-        self._open_search(direction=1)
+        """``/``: open the progressive search box, restarting from the top (lode-2bt3.1)."""
+        self._open_search()
 
-    def action_search_backward(self) -> None:
-        """``?``: open the progressive search box, scanning upward (lode-olmi.4)."""
-        self._open_search(direction=-1)
-
-    def _open_search(self, *, direction: int) -> None:
+    def _open_search(self) -> None:
         table = self.query_one(f"#{TABLE_ID}", LodeDataTable)
         if table.row_count == 0:
             return
@@ -645,7 +636,6 @@ class BrowseScreen(Screen[None]):
         # keeps its filter, exactly as Escape on it would.
         if self._quick_search_open:
             self._close_quick_search()
-        self._search_direction = direction
         self._search_open = True
         search_input = self.query_one(f"#{SEARCH_INPUT_ID}", Input)
         search_input.value = ""
@@ -668,14 +658,14 @@ class BrowseScreen(Screen[None]):
             self._close_quick_search()
 
     def _seek_match(self, query: str) -> None:
-        """Move the cursor to the closest row (in ``_search_direction``) whose
-        Summary contains ``query``, case-insensitive, wrapping if needed.
+        """Move the cursor to the first row (scanning from the top) whose
+        Summary contains ``query``, case-insensitive (lode-2bt3.1).
 
         An empty query is a no-op (acceptance criteria) -- returns immediately
-        rather than "matching" every row. Scanning starts at ``offset=0`` (the
-        cursor's own current row), so a query that already matches where the
-        cursor sits leaves it in place instead of jumping to the *next*
-        occurrence.
+        rather than "matching" every row. Every keystroke restarts the scan at
+        row 0 rather than continuing from wherever the cursor currently sits,
+        so the same query always lands on the same row regardless of where
+        the cursor was when the box opened.
         """
         if not query:
             return
@@ -684,10 +674,7 @@ class BrowseScreen(Screen[None]):
         if row_count == 0:
             return
         needle = query.lower()
-        start = table.cursor_row
-        direction = self._search_direction
-        for offset in range(row_count):
-            candidate = (start + offset * direction) % row_count
+        for candidate in range(row_count):
             summary = str(table.get_row_at(candidate)[3])
             if needle in summary.lower():
                 table.move_cursor(row=candidate)
