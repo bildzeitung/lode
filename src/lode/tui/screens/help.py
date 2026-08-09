@@ -15,10 +15,10 @@ mechanism below, and styling.
 **Content is derived, never a parallel list** -- ``BindingsTable`` reads
 ``self.screen.active_bindings`` at render time, so a binding this overlay
 doesn't yet know about is a bug in the *snapshot*, never a missed
-transcription. ``tests/test_tui_help_screen.py``'s anti-drift test pins this:
-it asserts against a representative screen's real ``BINDINGS`` plus the
-app's, so a future binding added without touching this module fails the
-suite.
+transcription. ``tests/test_tui_help_screen.py``'s anti-drift test pins that
+snapshot: it asserts the overlay's binding set against a representative
+screen's real ``BINDINGS`` plus the app's, so a regression in the capture
+below -- the one way this overlay *can* go lossy -- fails the suite.
 
 **ModalScreen truncates the binding chain (bd notes, criticism 4/11).**
 ``Screen._modal_binding_chain`` stops at the last modal on the stack, so a
@@ -77,10 +77,6 @@ class HelpScreen(ModalScreen[None]):
     def active_bindings(self) -> dict[str, ActiveBinding]:  # type: ignore[override]
         """The screen-underneath's bindings, captured before this modal was
         pushed -- see the module docstring for why this override exists.
-        Overriding this single property (rather than anything on the
-        ``BindingsTable`` widget) is what lets the stock, unmodified widget
-        read it back through its own normal ``self.screen.active_bindings``
-        access.
         """
         return self._snapshot
 

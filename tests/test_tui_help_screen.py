@@ -7,8 +7,11 @@ where ``?`` alone cannot reach it -- the ticket's own "open problem"),
 dismisses on Escape/``?`` and returns focus to the underlying screen
 unchanged, and -- the anti-drift gate -- that its snapshot genuinely covers
 every live ``Binding`` on a representative screen plus the app, INCLUDING
-``show=False`` ones, so a future binding added without touching
-``lode.tui.screens.help``/``lode.tui.app`` fails this suite.
+``show=False`` ones. Content is *derived*, so drift cannot take the shape of
+a missed transcription; what the gate actually pins is the snapshot
+mechanism itself -- if the pre-push capture ever regresses (say a refactor
+drops ``HelpScreen.active_bindings``), the overlay silently narrows to its
+own dismiss key and this suite fails.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from textual.keys import _character_to_key
+from textual.binding import BindingsMap
 
 from lode.storage import init_db
 from lode.tui.app import LodeApp
@@ -220,16 +223,12 @@ def test_overlay_snapshot_covers_every_browse_and_app_binding_incl_hidden(
 
     # Punctuation keys are stored on Binding.key verbatim ("?") but
     # active_bindings' dict keys are Textual's own normalized key names
-    # ("question_mark") -- the same single-character normalization
-    # Binding.__post_init__ applies internally (textual.binding, via
-    # textual.keys._character_to_key). Multi-character key names (ctrl+q,
-    # escape, ...) are untouched by it.
-    def _normalized(key: str) -> str:
-        return _character_to_key(key) if len(key) == 1 else key
-
-    expected_keys = {_normalized(binding.key) for binding in BrowseScreen.BINDINGS} | {
-        _normalized(binding.key) for binding in LodeApp.BINDINGS
-    }
+    # ("question_mark"). Rather than re-implement that normalization here,
+    # feed each BINDINGS list through the same public BindingsMap Textual
+    # builds internally and read its already-normalized keys back.
+    expected_keys = set(BindingsMap(iter(BrowseScreen.BINDINGS)).key_to_bindings) | set(
+        BindingsMap(iter(LodeApp.BINDINGS)).key_to_bindings
+    )
 
     missing = expected_keys - snapshot.keys()
     assert not missing, (
@@ -239,10 +238,14 @@ def test_overlay_snapshot_covers_every_browse_and_app_binding_incl_hidden(
     )
 
     # show=False bindings MUST still be listed -- that's the entire point
-    # (the ticket's own words). Ctrl+Q's footer entry was hidden by this
-    # same ticket (lode-2bt3.2), but the binding itself is unchanged.
+    # (the ticket's own words). '?' is this ticket's own permanently hidden
+    # binding, so it carries that assertion; ctrl+q is asserted on membership
+    # and action only, deliberately NOT on show=False, since lode-2bt3.3 may
+    # legitimately restore its footer entry and that must not fail a
+    # help-overlay drift test (the footer tests own that decision).
+    assert snapshot["question_mark"].binding.show is False
+    assert snapshot["question_mark"].binding.action == "show_help"
     assert "ctrl+q" in snapshot
-    assert snapshot["ctrl+q"].binding.show is False
     assert snapshot["ctrl+q"].binding.action == "quit"
 
 
@@ -276,8 +279,7 @@ def test_edit_screen_shadow_hides_the_shadowed_app_level_ask_entry(
 
     snapshot = asyncio.run(_drive())
 
-    active = snapshot["ctrl+l"]
-    assert active.node is EditScreen or isinstance(active.node, EditScreen), (
+    assert isinstance(snapshot["ctrl+l"].node, EditScreen), (
         "the App-level ctrl+l should be shadowed by EditScreen's own"
     )
 
