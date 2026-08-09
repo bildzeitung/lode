@@ -6,34 +6,23 @@ corpus (``docs/decisions.md``, entry ``lode-t6o1``; epic ``lode-t6o1``'s Design
 field). This module is *only* the chunker; building/querying the FTS5 index is
 ``lode-t6o1.2``.
 
-**ONE rule, not two** (the decided shape -- a two-rule design was ``/challenge``d
-and refuted on measurement; do not re-derive it, see the decision record above):
+**ONE boundary rule** (the decided shape; the rationale and the refuted two-rule
+alternative live in the decision record cited above -- do not re-derive them):
+split at the deepest ATX heading level present in the file, or at top-level
+``- `` bullets in a file with no headings at all (``docs/decisions.md``). A
+post-pass hard-splits any unit still over :data:`MAX_UNIT_BYTES` at the next
+rung down -- heading -> bullet -> blank-line-delimited paragraph.
 
-1. ``boundary`` = the deepest ATX heading level present in the file (h3 if any,
-   else h2, else h1).
-2. A file with no recurring heading at all (``docs/decisions.md``) splits at
-   top-level ``- `` bullets instead.
-3. Post-pass: any unit still over :data:`MAX_UNIT_BYTES` is hard-split at the
-   next boundary down -- heading-split units re-split by bullet, bullet-split
-   units (already the deepest rule) re-split by blank-line-delimited paragraph.
-   A unit that is still oversized after a paragraph split (nothing smaller to
-   split by) is emitted as-is; this has not occurred against the real corpus,
-   which is why the invariant is asserted by a test rather than merely hoped
-   for.
+Boundary detection is **fence-aware**: a ``## `` or ``- `` inside a fenced code
+block is someone's example, not document structure. See :func:`_fence_flags`.
 
-**Fence-aware.** A ``## `` or ``- `` line inside a fenced code block (opened by
-a line starting with ` ``` ` or ``~~~``) is never treated as a boundary -- it is
-sample markdown/shell inside someone's example, not real document structure.
-The measurement pass that produced the epic's size numbers used fence tracking;
-a non-fence-aware chunker produces different (wrong) units.
+Units tile each file exactly: line numbers are 1-based, inclusive on both ends,
+gapless and non-overlapping, so ``"\\n".join(text.splitlines()[u.line_lo - 1 :
+u.line_hi]) == u.body`` and a caller can ``Read`` precisely that range.
 
-Line numbers are 1-based and inclusive on both ends, and are exact: for a unit
-``u``, ``"\\n".join(path.read_text().splitlines()[u.line_lo - 1 : u.line_hi])
-== u.body`` -- a caller can ``Read`` exactly that range.
-
-Each file is also tagged :func:`classify`-ied as ``"decision-record"`` or
-``"reference/process"`` (consumed by the ``--class`` filter in the CLI ticket,
-``lode-t6o1.2``) -- per the decision record's explicit split, not a guess.
+Each file is also :func:`classify`-ied as ``"decision-record"`` or
+``"reference/process"``, consumed by the ``--class`` filter in the CLI ticket
+(``lode-t6o1.3``) -- per the decision record's explicit split, not a guess.
 """
 
 from __future__ import annotations
@@ -47,7 +36,7 @@ from pathlib import Path
 #: this many UTF-8 encoded bytes. Asserted by a test over the real corpus.
 MAX_UNIT_BYTES = 16384
 
-_FENCE_RE = re.compile(r"^(```|~~~)")
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 _HEADING_RE = re.compile(r"^(#{1,6})\s")
 _BULLET_RE = re.compile(r"^-\s")
 
@@ -83,16 +72,40 @@ def classify(path: Path | str) -> str:
 def _fence_flags(lines: list[str]) -> list[bool]:
     """Per-line: is this line's content inside a fenced code block?
 
-    The fence-delimiter line itself (the ``` opener/closer) is reported as
-    *not* inside the fence -- it can't be a heading/bullet anyway, so this
-    only matters for readability of the flag list.
+    Follows CommonMark's closing rule rather than a bare toggle: a fence is
+    closed only by a run of the **same** marker character that is at least as
+    long as the opener. Getting this wrong is silently catastrophic -- a ``~~~``
+    shown as an example inside a ``` block, or a ```` ```` ```` wrapper around a
+    ``` block (both routine in these docs), would close the fence early and
+    leave the rest of the file mis-flagged, collapsing it into one giant unit.
+    A leading indent is allowed: fences nested in a list item are real fences.
+
+    The opening delimiter line is reported as *not* inside the fence; the
+    closing one *is*. Neither can be a heading or a bullet, so the distinction
+    does not affect boundary detection.
+
+    THIRD HOME of these rules, deliberately (lode-t6o1.1). ``tests/conftest.py``
+    (``fence_scan``) owns them for the test-side gates and ``scripts/
+    check_links.py`` (``_content_lines``) for the repo-tooling side -- two homes
+    split by the import boundary, since production code cannot import from
+    ``tests/``. This module is a third, on the ``src/`` side of that boundary,
+    and is outside the reach of ``tests/test_no_private_fence_state_machine.py``
+    (which scans only ``tests/`` and ``scripts/``). That gate exists because
+    five separate tickets each drifted a private fence toggle from the shared
+    rule; a follow-up ticket tracks hosting ONE importable parser.
     """
     flags = []
-    in_fence = False
+    open_marker: str | None = None
     for line in lines:
-        flags.append(in_fence)
-        if _FENCE_RE.match(line):
-            in_fence = not in_fence
+        flags.append(open_marker is not None)
+        m = _FENCE_RE.match(line)
+        if not m:
+            continue
+        marker = m.group(1)
+        if open_marker is None:
+            open_marker = marker
+        elif marker[0] == open_marker[0] and len(marker) >= len(open_marker):
+            open_marker = None
     return flags
 
 
@@ -131,6 +144,21 @@ def _split_range(
     return ranges
 
 
+def _bullet_boundary(
+    lines: list[str], fence_flags: list[bool]
+) -> Callable[[int], bool]:
+    """Predicate: is line ``i`` an unfenced top-level ``- `` bullet?
+
+    One definition, used by both callers -- the primary rule for a file with no
+    headings at all, and the next rung down when a heading unit is oversized.
+    """
+
+    def is_bullet(i: int) -> bool:
+        return not fence_flags[i] and bool(_BULLET_RE.match(lines[i]))
+
+    return is_bullet
+
+
 def _unit_bytes(lines: list[str], line_lo: int, line_hi: int) -> int:
     return len("\n".join(lines[line_lo - 1 : line_hi]).encode("utf-8"))
 
@@ -151,11 +179,9 @@ def _hard_split(
         return [(line_lo, line_hi)]
 
     if try_bullet:
-
-        def bullet_boundary(i: int) -> bool:
-            return not fence_flags[i] and bool(_BULLET_RE.match(lines[i]))
-
-        sub_ranges = _split_range(lines, line_lo, line_hi, bullet_boundary)
+        sub_ranges = _split_range(
+            lines, line_lo, line_hi, _bullet_boundary(lines, fence_flags)
+        )
         if len(sub_ranges) > 1:
             out: list[tuple[int, int]] = []
             for slo, shi in sub_ranges:
@@ -164,26 +190,21 @@ def _hard_split(
         # No bullets in range: fall through to paragraph splitting below.
 
     def paragraph_boundary(i: int) -> bool:
-        if fence_flags[i] or lines[i].strip() == "":
+        # i == 0 is excluded rather than special-cased: _split_range already
+        # emits everything before the first boundary as its own leading range,
+        # so the result is identical either way -- and `lines[i - 1]` on i == 0
+        # would wrap around to the last line of the file.
+        if i == 0 or fence_flags[i] or lines[i].strip() == "":
             return False
-        if i == 0:
-            return True
-        prev_blank = lines[i - 1].strip() == "" and not fence_flags[i - 1]
-        return prev_blank
+        return lines[i - 1].strip() == "" and not fence_flags[i - 1]
 
-    sub_ranges = _split_range(lines, line_lo, line_hi, paragraph_boundary)
-    if len(sub_ranges) > 1:
-        out = []
-        for slo, shi in sub_ranges:
-            # Nothing smaller than a paragraph to split by; recursing here
-            # only re-checks size (try_bullet=False keeps it in the paragraph
-            # branch) and terminates, since a range with no further paragraph
-            # boundary returns itself unchanged from _split_range above.
-            out.extend(_hard_split(lines, fence_flags, slo, shi, try_bullet=False))
-        return out
-    # No paragraph boundary either (a single oversized paragraph/line): emit
-    # as-is. Has not been observed against the real corpus.
-    return [(line_lo, line_hi)]
+    # Terminal rung: nothing smaller than a paragraph to split by, so no
+    # recursion. Each sub-range starts AT a paragraph boundary and contains no
+    # other, so re-entering here could only ever return it unchanged. A range
+    # with no paragraph boundary at all (one unbroken oversized paragraph or
+    # line) comes back from _split_range as itself and is emitted as-is -- the
+    # documented last resort; not observed against the real corpus.
+    return _split_range(lines, line_lo, line_hi, paragraph_boundary)
 
 
 def chunk_file(path: Path | str, text: str) -> list[Unit]:
@@ -203,9 +224,7 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
             m = _HEADING_RE.match(lines[i])
             return bool(m) and len(m.group(1)) == deepest
     else:
-
-        def primary_boundary(i: int) -> bool:
-            return not fence_flags[i] and bool(_BULLET_RE.match(lines[i]))
+        primary_boundary = _bullet_boundary(lines, fence_flags)
 
     ranges = _split_range(lines, 1, n, primary_boundary)
 
@@ -225,7 +244,7 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
                 path=str(path),
                 line_lo=lo,
                 line_hi=hi,
-                first_line=body_lines[0] if body_lines else "",
+                first_line=body_lines[0],  # lo <= hi always, so never empty
                 body=body,
                 doc_class=doc_class,
             )
