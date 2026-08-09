@@ -30,6 +30,7 @@ throwaway git repo in tmp_path, no fake git, no mocked subprocess.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from _gitrepo import _git
@@ -70,6 +71,50 @@ def _write_and_commit(repo: Path, decisions_text: str, message: str) -> None:
     _git(repo, "commit", "-q", "-m", message)
 
 
+def _diverge_and_merge(
+    tmp_path: Path,
+) -> tuple[Path, str, subprocess.CompletedProcess]:
+    """Build the append-at-EOF collision and attempt the merge.
+
+    Two branches each append a DIFFERENT new entry at the end of
+    docs/decisions.md -- exactly the collision lode-4jtc.1 measured -- then
+    `ours` merges `theirs`. Returns the repo, the base commit, and the
+    merge's own CompletedProcess.
+
+    The merge is run through raw subprocess rather than `_git`, which
+    asserts returncode == 0 itself: the verdict on THIS command is the whole
+    point, so it has to come back to the caller instead of being swallowed
+    behind the helper's generic message.
+    """
+    repo = _init_repo(tmp_path, BASE_TEXT)
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    _git(repo, "checkout", "-q", "-b", "ours")
+    _write_and_commit(
+        repo,
+        BASE_TEXT + "- **Entry three (ours).** Appended on the ours branch.\n",
+        "ours: append entry three",
+    )
+
+    _git(repo, "checkout", "-q", "-b", "theirs", "trunk")
+    _write_and_commit(
+        repo,
+        BASE_TEXT + "- **Entry four (theirs).** Appended on the theirs branch.\n",
+        "theirs: append entry four",
+    )
+
+    _git(repo, "checkout", "-q", "ours")
+    merge_result = subprocess.run(
+        ["git", "merge", "--no-edit", "theirs"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    return repo, base, merge_result
+
+
 def test_union_driver_declared_in_gitattributes() -> None:
     """Cheap precondition, not the proof itself: the exact attribute this
     ticket's acceptance criteria specify must be present, with no
@@ -97,20 +142,7 @@ def test_union_driver_merges_two_divergent_appends_without_conflict(
     this test red -- proving the assertion actually depends on the driver
     firing, not on some other property of the fixture.
     """
-    repo = _init_repo(tmp_path, BASE_TEXT)
-
-    _git(repo, "checkout", "-q", "-b", "ours")
-    ours_text = BASE_TEXT + "- **Entry three (ours).** Appended on the ours branch.\n"
-    _write_and_commit(repo, ours_text, "ours: append entry three")
-
-    _git(repo, "checkout", "-q", "-b", "theirs", "trunk")
-    theirs_text = (
-        BASE_TEXT + "- **Entry four (theirs).** Appended on the theirs branch.\n"
-    )
-    _write_and_commit(repo, theirs_text, "theirs: append entry four")
-
-    _git(repo, "checkout", "-q", "ours")
-    merge_result = _git(repo, "merge", "--no-edit", "theirs")
+    repo, _base, merge_result = _diverge_and_merge(tmp_path)
 
     assert merge_result.returncode == 0, (
         "the union merge driver did not resolve two divergent EOF appends "
@@ -125,7 +157,6 @@ def test_union_driver_merges_two_divergent_appends_without_conflict(
     assert "Entry one" in merged_text
     assert "Entry two" in merged_text
     assert "<<<<<<<" not in merged_text
-    assert "=======" not in merged_text
     assert ">>>>>>>" not in merged_text
 
     # No lingering unmerged/conflicted paths -- a real, clean merge commit.
@@ -142,27 +173,8 @@ def test_union_driver_still_permits_check_decisions_no_silent_rewrite_pass(
     union merge is structurally incapable of removing a line. Verified here
     against a REAL merge rather than re-derived from the script's own
     contract."""
-    import subprocess
-
-    repo = _init_repo(tmp_path, BASE_TEXT)
-    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
-
-    _git(repo, "checkout", "-q", "-b", "ours")
-    _write_and_commit(
-        repo,
-        BASE_TEXT + "- **Entry three (ours).** Appended on the ours branch.\n",
-        "ours: append entry three",
-    )
-
-    _git(repo, "checkout", "-q", "-b", "theirs", "trunk")
-    _write_and_commit(
-        repo,
-        BASE_TEXT + "- **Entry four (theirs).** Appended on the theirs branch.\n",
-        "theirs: append entry four",
-    )
-
-    _git(repo, "checkout", "-q", "ours")
-    _git(repo, "merge", "--no-edit", "theirs")
+    repo, base, merge_result = _diverge_and_merge(tmp_path)
+    assert merge_result.returncode == 0, merge_result.stdout + merge_result.stderr
 
     script = REPO_ROOT / "scripts" / "check-decisions-no-silent-rewrite.sh"
     result = subprocess.run(

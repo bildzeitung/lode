@@ -1,13 +1,6 @@
-# docs/decisions.md is a dated, append-only log (see its own preamble). Every
-# branch that records a decision appends at EOF, so two concurrent branches
-# conflict there BY CONSTRUCTION, independent of content -- measured to be
-# the single biggest cause of /land conflicts (lode-4jtc.1). git's built-in
-# 'union' merge driver takes both sides' added lines and drops nothing that
-# existed in the base, which is exactly the guarantee an append-only file
-# needs and exactly what that file's no-silent-rewrite rule already requires.
-# No merge.union.driver entry is needed in any .git/config -- 'union' is a
-# NAME git recognizes natively, so this committed file is sufficient on its
-# own and travels on the git wire like any other tracked content. See
-# docs/decisions.md (search "lode-4jtc.1") for the full rationale, the
-# rejected alternatives, and the accepted failure mode this introduces.
+# docs/decisions.md is an append-only log, so two concurrent branches conflict
+# at EOF by construction; git's built-in 'union' driver keeps both sides and
+# drops nothing (no .git/config entry needed -- 'union' is recognized natively).
+# Rationale, measurements, rejected alternatives and the accepted failure mode:
+# docs/decisions.md, search "lode-4jtc.1".
 docs/decisions.md merge=union

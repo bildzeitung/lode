@@ -4730,4 +4730,10 @@ entries below from being rewritten to chase the current tree.)
   union merge silently accepts both sides with nothing flagging the combination for human review —
   correct, and the entire point, for an ordinary append-only log, but two branches appending
   *contradictory* entries about the same decision will both survive with nothing catching it.
-  Accepted deliberately as cheaper than the append-at-EOF conflict rate this replaces.
+  Accepted deliberately as cheaper than the append-at-EOF conflict rate this replaces. The same
+  mechanism has a second, sharper edge worth naming (noted at technical review): union resolves an
+  overlap by keeping BOTH sides, so if two branches ever edit the *same* pre-existing region — which
+  this file's append-only rule forbids, but which the correction-marker convention does occasionally
+  license — the merged result silently carries both variants of that region, duplicated. Nothing
+  catches it: `check-decisions-no-silent-rewrite.sh` fires only on a line *disappearing*, and
+  duplication removes nothing. The mitigation is the append-only rule itself, not a gate.
