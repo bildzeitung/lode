@@ -151,6 +151,14 @@ against exactly; read that first for the *why*. This module owns the *what*:
   count (``_DEFAULT_MAX_TOOL_TURNS``) -- see ``docs/stack.md`` "LLM provider
   seam" / lode-3dh1 for the full write-up, and ``docs/decisions.md``
   (lode-csl2) for the deferred, additive ``max_output_tokens_per_run`` knob.
+- ``AnthropicProvider.run_tool_turns`` logs (``INFO``, this module's logger)
+  the completed run's total output-token spend -- free turns plus the
+  unconditional final forced-schema turn -- next to the
+  ``(max_tool_turns + 1) x max_tokens`` worst-case bound, so the GAP between
+  real spend and the bound is readable without arithmetic (lode-9594). This
+  is the measurement lode-csl2's deferral trigger waits on: purely
+  observational, never blocks or fails a run, and a logging/accumulation
+  failure is swallowed rather than raised.
 """
 
 from __future__ import annotations
@@ -709,6 +717,7 @@ class AnthropicProvider:
         timeout: float,
         effort_kwargs: Mapping[str, Any],
         where: str = "",
+        on_usage: Callable[[int], None] | None = None,
     ) -> BaseModelT:
         """One forced-tool-use ``messages.create`` decoded into ``output_schema``.
 
@@ -724,6 +733,12 @@ class AnthropicProvider:
         No ``thinking`` is ever sent here (lode-d1sr): the enrichment tier
         predates thinking-on-by-default. That is a model property, NOT a
         consequence of forced tool use -- see the class docstring.
+
+        ``on_usage``, if given, is called with this turn's
+        ``usage.output_tokens`` once the response arrives (lode-9594) --
+        :meth:`run_tool_turns` uses it to accumulate the final forced-schema
+        turn's spend into its own per-run total. A callback failure is
+        logged and swallowed, never allowed to fail the turn.
         """
         import anthropic  # deferred -- lode-4q97; needed by the `except` below
 
@@ -750,6 +765,13 @@ class AnthropicProvider:
             raise _anthropic_error_from_exception(
                 exc, context=f"model={model}{where}"
             ) from exc
+        if on_usage is not None:
+            # lode-9594 -- measurement only, never fatal to the run: a bad
+            # accumulator must not turn a successful call into an error.
+            try:
+                on_usage(getattr(response.usage, "output_tokens", 0) or 0)
+            except Exception:  # noqa: BLE001 -- measurement must never break a run
+                _log.debug("run_tool_turns usage callback failed", exc_info=True)
         tool_block = next((b for b in response.content if b.type == "tool_use"), None)
         if tool_block is None:
             # A response that spent its whole budget inside thinking carries no
@@ -928,6 +950,8 @@ class AnthropicProvider:
                 )
             return remaining
 
+        total_output_tokens = 0
+
         for _ in range(max_tool_turns):
             remaining = _remaining_or_raise("starting the next free tool turn")
             try:
@@ -945,6 +969,13 @@ class AnthropicProvider:
                 raise _anthropic_error_from_exception(
                     exc, context=f"model={model} (free tool turn)"
                 ) from exc
+            # lode-9594 -- measurement only, never fatal to the run: this
+            # feeds the per-run total logged below, comparing against
+            # lode-csl2's (max_tool_turns + 1) x max_tokens worst-case bound.
+            try:
+                total_output_tokens += getattr(response.usage, "output_tokens", 0) or 0
+            except Exception:  # noqa: BLE001 -- measurement must never break a run
+                _log.debug("run_tool_turns usage accumulation failed", exc_info=True)
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
             if not tool_use_blocks:
                 break
@@ -960,7 +991,12 @@ class AnthropicProvider:
             messages.append({"role": "user", "content": result_blocks})
 
         remaining = _remaining_or_raise("starting the final forced-schema turn")
-        return self._forced_schema_turn(
+
+        def _accumulate(output_tokens: int) -> None:
+            nonlocal total_output_tokens
+            total_output_tokens += output_tokens
+
+        result = self._forced_schema_turn(
             model=model,
             system=system,
             messages=messages,
@@ -971,7 +1007,28 @@ class AnthropicProvider:
             timeout=remaining,
             effort_kwargs=effort_kwargs,
             where=" on run_tool_turns' final forced-schema turn",
+            on_usage=_accumulate,
         )
+        # lode-9594 -- log the completed run's total output-token spend
+        # (free turns + the unconditional final forced-schema turn) next to
+        # the worst-case bound it should be compared against, so the GAP
+        # between real spend and (max_tool_turns + 1) x max_tokens is
+        # readable without arithmetic. This is observational only: it never
+        # blocks or fails a run, and a logging failure here is swallowed.
+        try:
+            worst_case_bound = (max_tool_turns + 1) * max_tokens
+            _log.info(
+                "run_tool_turns spent %d output tokens (worst-case bound "
+                "%d = (max_tool_turns=%d + 1) x max_tokens=%d, model=%s)",
+                total_output_tokens,
+                worst_case_bound,
+                max_tool_turns,
+                max_tokens,
+                model,
+            )
+        except Exception:  # noqa: BLE001 -- measurement must never break a run
+            _log.debug("run_tool_turns spend logging failed", exc_info=True)
+        return result
 
     def submit_batch(
         self, requests: Sequence[BatchRequest], *, timeout_s: float

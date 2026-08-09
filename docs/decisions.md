@@ -4830,3 +4830,19 @@ entries below from being rewritten to chase the current tree.)
   can dispatch merge drivers with no working tree required. The `git-merge-tree` man page's silence
   on this is a documentation gap in git itself, not a caveat that applies to lode. No change is
   needed to `scripts/merge-precheck.sh`.
+
+- **2026-08-09 — IMPLEMENTED (`lode-9594`): `AnthropicProvider.run_tool_turns` now logs each
+  completed run's total output-token spend, purely observational, no new config knob.** Filed to
+  give `lode-csl2`'s deferral trigger — "do not build until a human un-defers this with evidence of
+  real cost pressure" — something that can actually fire. The completed run logs (`INFO`,
+  `lode.llm_provider`'s logger) the sum of `usage.output_tokens` across the free-turn loop and the
+  unconditional final forced-schema turn, alongside the `(max_tool_turns + 1) x max_tokens`
+  worst-case bound from the `lode-3dh1` decision above, so the GAP between real spend and the bound
+  is readable without arithmetic and without a second lookup. **Chose observational-only, no
+  `docs/configuration.md` row:** a log line is the whole ask — comparing several runs' log output is
+  enough to judge the gap, and a knob here would be exactly the "telemetry subsystem nobody asked
+  for" `lode-9594`'s own text warns against (citing `lode-m73d`'s reverted per-run JSON store as the
+  cautionary precedent). Never blocks or fails a run: both the per-turn accumulation and the final
+  log call are wrapped, and any failure is swallowed (logged at `DEBUG`), never raised. Full
+  implementation: `src/lode/llm_provider.py` (`run_tool_turns`, `_forced_schema_turn`'s new
+  `on_usage` callback parameter).
