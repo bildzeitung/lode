@@ -25,10 +25,9 @@ def _format_outstanding(jobs: list[tuple[int, str, str, str]]) -> str:
 @app.command(
     help=(
         "Drain the async work queue once and exit.\n\n"
-        "--loop / --watch keeps polling forever instead, sleeping --interval "
-        "seconds between passes. --wait / --until-done blocks until the "
-        "queue is fully drained (or a bounded timeout elapses) instead of "
-        "you having to re-run this by hand."
+        "Run it when 'lode status' reports jobs pending or failed, to make "
+        "enrichment and embeddings land now. One pass by default; --loop "
+        "and --wait keep going instead, on the schedules below."
     )
 )
 def work(
@@ -54,7 +53,7 @@ def work(
         typer.Option(
             "--wait",
             "--until-done",
-            help="Block until the queue drains or a timeout elapses.",
+            help="Block until drained; exits non-zero on timeout.",
         ),
     ] = False,
 ) -> None:

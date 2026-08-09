@@ -74,8 +74,7 @@ def _render_external(external: ExternalView) -> str:
         "Show a note's head body plus its derived enrichment.\n\n"
         "Prints the body, then summary, tags, entities, inferred edges "
         "(with reason/confidence), embedding status, and an overall "
-        "enrichment status. TARGET is a note id or unambiguous prefix, "
-        "resolved the same way 'purge' resolves one."
+        "enrichment status. A deleted note still shows, marked as such."
     ),
 )
 def show_(
