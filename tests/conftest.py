@@ -193,13 +193,23 @@ import lode
 from lode import jobs
 from lode.config import model_cache_dir
 
-#: Imported eagerly, not under TYPE_CHECKING: this file has no ``from __future__ import
-#: annotations``, so _make_batch_result's parameter annotation is evaluated at def time.
-#: This DOES make ``lode.enrich`` resident from collection onward -- which is safe, and does
-#: not weaken lode-4q97: the tests asserting an embed-only drain never imports the SDK go
-#: through the ``forget_sdk_imports`` fixture, whose whole purpose is evicting this graph
-#: first (see its docstring). ``lode.enrich`` itself keeps ``import anthropic`` deferred, so
-#: the SDK is still not pulled at collection -- verified, not assumed.
+#: Imported eagerly, not deferred behind TYPE_CHECKING (lode-t402): on this repo's Python
+#: (>=3.14, PEP 649/749) annotations are evaluated LAZILY by default, so
+#: ``_make_batch_result``'s ``enrichment: EnrichmentResult`` parameter annotation would NOT
+#: force this import at def time even if it were deferred -- that is not why it is eager.
+#: It stays eager because a deferred import buys nothing here: MEASURED incrementally on top
+#: of the ``import lode`` / ``from lode import jobs`` / ``from lode.config import
+#: model_cache_dir`` this file already does above, ``import lode.enrich`` costs ~9ms and
+#: 5 additional modules (``lode.curation``, ``lode.egress``, ``lode.ids``, ``lode.redact``,
+#: itself) -- negligible, because the expensive part of its import graph (pydantic and
+#: friends) is already resident from the baseline imports. Contrast ``lode.webfetch``/
+#: ``lode.tool_dispatch`` below, which are NOT already resident -- see that block for the
+#: cost that earns those two a TYPE_CHECKING-only import. This DOES make
+#: ``lode.enrich`` resident from collection onward -- which is safe, and does not weaken
+#: lode-4q97: the tests asserting an embed-only drain never imports the SDK go through the
+#: ``forget_sdk_imports`` fixture, whose whole purpose is evicting this graph first (see its
+#: docstring). ``lode.enrich`` itself keeps ``import anthropic`` deferred, so the SDK is
+#: still not pulled at collection -- verified, not assumed.
 from lode.enrich import EnrichmentResult
 
 #: NOT imported at runtime, deliberately (lode-pw9o): ``lode.tool_dispatch`` and
