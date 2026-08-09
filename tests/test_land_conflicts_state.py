@@ -205,15 +205,25 @@ def test_kick_back_block_reads_conflicts_from_disk_not_a_bare_variable() -> None
     """The exact regression lode-rfon fixed: the 'Needs rebase -- kick back'
     block interpolated a bare $CONFLICTS into a bd --append-notes without ever
     setting it IN THAT SAME BLOCK. It is a separate Bash invocation from every
-    producer above, so a bare $CONFLICTS there is always empty."""
+    producer above, so a bare $CONFLICTS there is always empty.
+
+    lode-dc4n retargeted the read itself onto scripts/land-state-load.sh, but
+    the invariant this test pins is unchanged: the read must still be FROM
+    $STATE_DIR/conflicts/<id> on disk, in this same block, before the value is
+    interpolated."""
     site = _kick_back_block()
-    assert 'CONFLICTS=$(cat "$STATE_DIR/conflicts/<id>"' in site, (
+    assert (
+        'CONFLICTS=$(scripts/land-state-load.sh "$STATE_DIR/conflicts/<id>"' in site
+    ), (
         "the kick-back block no longer reads $CONFLICTS back from "
-        "$STATE_DIR/conflicts/<id> -- it must not rely on a bash variable set in "
-        "an earlier, separate Bash invocation (lode-rfon)"
+        "$STATE_DIR/conflicts/<id> via scripts/land-state-load.sh -- it must not "
+        "rely on a bash variable set in an earlier, separate Bash invocation "
+        "(lode-rfon)"
     )
 
-    read_pos = site.index('CONFLICTS=$(cat "$STATE_DIR/conflicts/<id>"')
+    read_pos = site.index(
+        'CONFLICTS=$(scripts/land-state-load.sh "$STATE_DIR/conflicts/<id>"'
+    )
     update_pos = site.index("bd update <id> --remove-label ready-for-land")
     assert read_pos < update_pos, (
         "the kick-back block reads $CONFLICTS from disk AFTER the bd update call "
@@ -223,21 +233,28 @@ def test_kick_back_block_reads_conflicts_from_disk_not_a_bare_variable() -> None
 
 def test_kick_back_block_refuses_loudly_on_missing_or_empty_conflicts() -> None:
     """Acceptance criterion (lode-rfon): an empty/missing conflicts record
-    must be LOUD, never a kick-back note with a blank paths section."""
+    must be LOUD, never a kick-back note with a blank paths section.
+
+    lode-dc4n moved the loudness itself into scripts/land-state-load.sh
+    (its own "STATE LOAD FAILED" diagnostic to stderr) -- what this block must
+    still do is pass --require-nonempty (so an EMPTY record is refused, not
+    just a missing one) and exit before the bd update call on failure."""
     site = _kick_back_block()
-    assert "GATE COULD NOT RUN" in site, (
-        "the kick-back block has no loud failure message for a missing/empty "
-        "conflicts record -- a blank $CONFLICTS could silently reach the "
-        "--append-notes text again"
+    assert "--require-nonempty" in site, (
+        "the kick-back block's land-state-load.sh call dropped --require-nonempty "
+        "-- an empty (but present) conflicts record would silently be treated as "
+        "success, reaching the --append-notes text with a blank paths section"
     )
 
-    guard_pos = site.index("GATE COULD NOT RUN")
+    load_pos = site.index(
+        'CONFLICTS=$(scripts/land-state-load.sh "$STATE_DIR/conflicts/<id>"'
+    )
     update_pos = site.index("bd update <id> --remove-label ready-for-land")
-    exit_pos = site.index("exit 1", guard_pos)
-    assert guard_pos < exit_pos < update_pos, (
-        "the loud failure guard does not exit BEFORE the bd update call -- a "
-        "missing/empty conflicts record could still produce a kick-back note "
-        "with a blank paths section"
+    exit_pos = site.index("|| exit 1", load_pos)
+    assert load_pos < exit_pos < update_pos, (
+        "the land-state-load.sh call's failure is not wired to exit BEFORE the "
+        "bd update call -- a missing/empty conflicts record could still produce "
+        "a kick-back note with a blank paths section"
     )
 
 
@@ -252,20 +269,49 @@ def test_empty_accepted_falls_through_missing_accepted_still_aborts() -> None:
 
     Before this fix, both cases hit the same `[ -n "$ACCEPTED" ] || exit 1`
     guard and aborted identically -- this pins that the empty case no longer
-    does, while the missing case (a failed `cat`) still does."""
+    does, while the missing case (a failed load) still does.
+
+    lode-dc4n retargeted the load itself onto scripts/land-state-load.sh
+    (default policy: missing fatal, empty OK) -- the missing-vs-empty
+    distinction this test pins now lives in that shared script rather than
+    inline `cat`/`[ -n ... ]` shell, but the invariant is unchanged: this
+    call site must not pass --require-nonempty (that's the OTHER policy,
+    used by the isolation-replay call site and the kick-back one)."""
     site = _merge_loop_blocks()[0]
 
-    # The missing case: the abort must hang off the LOAD's own exit status --
-    # `cat` failing (absent file, unreadable, a directory in its place) -- and
-    # not off a separate emptiness test that a legitimately empty-but-present
-    # file would also trip. Pinned as the exact `|| {` handler rather than
-    # "an `exit 1` somewhere near the load": the same fence carries other
-    # `exit 1`s (the rc=2 machine-fault arm), so a proximity check could stay
-    # green with this handler deleted.
-    assert 'ACCEPTED=$(cat "$STATE_DIR/accepted") || {' in site, (
-        "the first-pass merge loop no longer aborts on a failed "
-        '`cat "$STATE_DIR/accepted"` (the file is MISSING -- 3a\'s precompute '
-        "never ran) -- lode-sfnb's silent-failure guard has regressed"
+    # The missing case: the abort must hang off the LOAD's own exit status,
+    # via scripts/land-state-load.sh -- not off a separate emptiness test that
+    # a legitimately empty-but-present file would also trip. Pinned as the
+    # exact call + `|| exit 1` rather than "an `exit 1` somewhere near the
+    # load": the same fence carries other `exit 1`s (the rc=2 machine-fault
+    # arm), so a proximity check could stay green with this handler deleted.
+    assert 'ACCEPTED=$(scripts/land-state-load.sh "$STATE_DIR/accepted"' in site, (
+        "the first-pass merge loop no longer loads $STATE_DIR/accepted via "
+        "scripts/land-state-load.sh (lode-dc4n) -- lode-sfnb's silent-failure "
+        "guard has regressed"
+    )
+    # EXACT, not a character-proximity check. lode-0jan's own technical review
+    # replaced a `< 200` proximity pin here with an exact one for precisely the
+    # reason it still holds: the same fence carries other `exit 1`s (the rc=2
+    # machine-fault arm), so a distance check stays green with the real handler
+    # deleted and an unrelated one nearby. Pin the whole call, continuation and
+    # handler included.
+    assert (
+        'ACCEPTED=$(scripts/land-state-load.sh "$STATE_DIR/accepted" -- \\\n'
+        '  "3a\'s precompute did not run. Landing nothing.") || exit 1'
+    ) in site, (
+        "the first-pass merge loop's land-state-load.sh call is no longer wired "
+        "to `|| exit 1` (or its context argument changed) -- a failed (missing) "
+        "load must abort the pass"
+    )
+
+    # This call site must use the DEFAULT policy (empty OK) -- never
+    # --require-nonempty, which is the isolation-replay/kick-back policy.
+    assert "--require-nonempty" not in site, (
+        "the first-pass merge loop's land-state-load.sh call passes "
+        "--require-nonempty -- an empty-but-present $STATE_DIR/accepted (every "
+        "branch bounced/escalated/held/needs-rebased) must fall through to "
+        "Section 4, not abort (lode-0jan)"
     )
 
     # The empty case must NOT independently abort: no `[ -n "$ACCEPTED" ] ||

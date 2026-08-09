@@ -2586,8 +2586,9 @@ closed by lode-t83):** re-entering at `ready-for-code-review` is only a real re-
 carries the hand-off and something else consumes the label —
 
 1. A `coding` build-time escalation used to skip recording `review_head` entirely (it only wrote that
-   metadata in the green hand-off path). A re-entered ticket therefore had nothing for `code-reviewer`
-   to check out. **Fixed:** the build-time escalation now records `review_head` against the
+   metadata in the green hand-off path). A re-entered ticket therefore tripped the sweep's own
+   non-empty-`review_head` guard, with nothing recorded for `code-reviewer` to compare the fetched
+   `origin/land/<id>` tip against. **Fixed:** the build-time escalation now records `review_head` against the
    reverted-to-green commit at escalation time, even though it doesn't set the label itself — so the
    field is already there the moment a human applies `ready-for-code-review`. (At the time this fix
    landed the escalation also recorded `review_worktree`/`review_branch`; both are retired outright as
@@ -3335,6 +3336,24 @@ assumption would not have closed it.
   narrowly scoped to that one outcome, not a new release call added at Section 3 or anywhere else — the
   rejection of per-exit-site releases in the paragraph above is unchanged and still governs every
   genuine abort.
+
+  **The missing-vs-empty policy is now a shared script, not four hand-rolled spellings
+  (lode-dc4n).** The distinction above is load-bearing but was, immediately after lode-0jan, encoded
+  four different ways across `land/SKILL.md` — two policies, four spellings, one of which (Section
+  4's `landed` load) carried the same policy as Section 3's with *no diagnostic at all*, so the
+  loud/silent asymmetry lode-0jan fixed still existed one section later.
+  [`scripts/land-state-load.sh`](../scripts/land-state-load.sh) makes the policy a visible
+  **argument**: bare = missing fatal / empty OK, `--require-nonempty` = both fatal, with any
+  arguments after `--` appended to the diagnostic so a site can still say *why* its load mattered.
+  All four sites now call it, unchanged in behaviour — including the `[ -n "$(cat …)" ]` notion of
+  "empty" (trailing newlines stripped, so a newlines-only file is empty but a spaces-only one is
+  not), pinned deliberately by `tests/test_land_state_load.py` so the retrofit stays a pure one. Not
+  a `gate-lib.sh` consumer, for the reason the lode-vmnx paragraph above already states: every call
+  site is an agent-executed skill fence, so exit 1 is the right code and there is no calling script
+  to classify a 2. **Deliberately scoped to `land/SKILL.md`**: `.claude/skills/sweep/SKILL.md` has
+  its own cluster of `$SWEEP_TMP` loads with the identical two policies, left alone here and tracked
+  separately — the script takes a plain path, so adopting it there is a call-site change, but the
+  `$STATE_DIR`-flavoured name would want revisiting first.
 - **A failed `acquire` is signposted, not re-printed (lode-119w).** `land-lock.sh` exits 1 for both a
   transient "another /land appears to still be running" and a permanent per-machine MACHINE FAULT
   (`flock` missing, `rev-parse` failure, an unwritable lock dir), and every caller collapses non-zero to

@@ -4265,6 +4265,45 @@ entries below from being rewritten to chase the current tree.)
   3. It reintroduces a `jq` dependency against RULING 3, on a hook measured at ~10ms in the hot path
      of every `Edit`/`Write`.
 
+- **2026-08-08 — VERIFIED (`lode-6nwu`): `GET`/`POST /rest/api/3/search` is being retired under
+  Atlassian `CHANGE-2046` and returns HTTP 410 Gone on migrated Jira Cloud instances; the replacement
+  is `GET`/`POST /rest/api/3/search/jql`.** Flagged during `lode-35nu.11.2`'s technical review as an
+  unverified risk (no live JIRA instance was reachable from that review worktree). Verified against
+  the live Jira Cloud v3 OpenAPI spec (`developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json`
+  — the document the REST reference renders from), Atlassian's Confluence KB article "Run JQL search
+  query using Jira Cloud REST API", and `CHANGE-2046`.
+  - **Retirement is phased, not a single date.** Deprecation announced 2024-10-31; deprecation period
+    ended 2025-05-01; hybrid phase 2025-05-05 → 2025-07-31; shutdown 2025-08-01 → 2025-10-31, rolled
+    out progressively by region. The old paths are *still present* in today's spec, flagged
+    `deprecated: true` with the summary "Currently being removed", and 410 is **not** a documented
+    response code for them — the 410 is observed real-world behaviour on already-migrated instances,
+    not API contract. Do not record "removed on 2025-05-01" as a fact; the honest statement is
+    "deprecated under CHANGE-2046, phased out through 2025-10-31, 410 on migrated instances".
+    `CHANGE-2046` also covers `POST .../search/id` and `POST .../expression/eval`, not just `/search`.
+  - **The request shape is NOT unchanged, and the difference is load-bearing for lode.** `/search/jql`
+    documents "By default, this resource returns IDs only" — `fields` now defaults to `id`, where the
+    old endpoint defaulted to navigable fields. A caller that omits `fields` gets back no `summary` at
+    all. Since lode's search tools are specified to return *identifiers and titles only, enforced by
+    the request shape*, the rebuild must send `fields` explicitly (`summary`) — this is the single
+    most likely migration bug. Also gone: `startAt` and `validateQuery`. `jql` must now be a
+    *bounded* query (a bare `order by key desc` is rejected). `maxResults` still defaults to 50 but
+    the server may return fewer per page than requested and caps a full traversal at ~5000 issues, so
+    a short page does **not** mean the last page.
+  - **Pagination is cursor-based.** The response (`SearchAndReconcileResults`) carries `isLast`,
+    `issues`, `names`, `nextPageToken`, `schema`, `warnings` — there is no `total` and no `startAt`.
+    Terminate the loop on the **absence** of `nextPageToken` (documented: the field is omitted on the
+    last page); tokens expire after 7 days. `isLast` does exist (added 2025-06, `JRACLOUD-94648`) but
+    is the weaker signal — treat it as a secondary check, not the stop condition. For a count there is
+    only `POST /rest/api/3/search/approximate-count`, which is approximate as named. `warnings` is
+    documented as experimental and behind a feature flag — do not depend on it.
+
+  **No code in this repo is affected today**: `jira_search` does not currently exist on `trunk` — the
+  branch that introduced it (`lode-35nu.11.2`) was bounced by `/land`'s semantic review and deleted;
+  its rebuild is tracked separately as `lode-8hsk` (open). This finding is cross-posted onto
+  `lode-8hsk` so that rebuild targets `/rest/api/3/search/jql` with an explicit `fields` and
+  `nextPageToken`-based pagination from the start, rather than reintroducing a dead-on-arrival
+  endpoint. Full finding: `bd show lode-6nwu --json` (the `design` field).
+
 - **Open (`lode-ejfv`, 2026-08-08) — the web_fetch destination guard closes the direct case only;
   redirect chains and DNS rebinding stay open.**
   [`docs/externals.md`](externals.md#web-fetch-destination-guard-decided-lode-ejfv) decided a
@@ -4319,6 +4358,36 @@ entries below from being rewritten to chase the current tree.)
   (bounding where `web_fetch` may point) lands, since it closes the one concretely-scoped half of this
   risk (destination-steering) and may change what residual surface remains.
 
+- **Left open: `lode-ejfv` / `lode-xwah` land-time reconciliation of the web-fetch destination
+  guard.** `lode-xwah` was scoped as a discovered follow-up while technically reviewing `lode-ejfv`
+  (which was, at scoping time, adding `lode.tools._refuse_private_web_destination` — a
+  private/loopback/link-local/reserved/multicast address guard on the ask path, checked on the
+  initial URL and again on the post-redirect final URL). `lode-xwah` was built against `origin/trunk`
+  as it stood, deliberately not fetching or depending on the still-unlanded `lode-ejfv` branch — and
+  at that point `trunk` carried no `_refuse_private_web_destination` at all (that function had not
+  yet landed), so there was nothing in `lode.tools` for `lode-xwah` to extend or remove.
+  `lode-xwah`'s `GuardedHttpxFetcher` (see
+  [externals.md](externals.md#web-fetch-destination-guard-ssrf-via-a-model-chosen-url-decided-lode-xwah))
+  was built standalone, closing the redirect-chain and DNS-rebinding gaps at the fetcher layer
+  instead. **Left open for whoever lands both:** if `lode-ejfv`'s `_refuse_private_web_destination`
+  ends up on `trunk` (landed first, or merged alongside), the two guards overlap heavily —
+  `GuardedHttpxFetcher` is strictly stronger on the two axes this ticket was scoped for (per-hop
+  redirect validation, post-connect rebinding check) and, after this branch's technical review, now
+  matches `lode-ejfv`'s address coverage exactly (CGNAT `100.64.0.0/10`, IPv6 site-local `fec0::/10`,
+  IPv4-mapped unwrapping, and the `http`/`https` scheme allowlist — all of which the branch as first
+  built was *missing*, and all of which `lode-ejfv`'s own review had already added on its side).
+  **Correction to this entry's first draft:** it asserted the `lode.tools` guard would be "fully
+  subsumed" and should simply be removed. That was wrong twice over — at the time it was written the
+  fetcher-layer guard was materially *weaker* on address coverage and had no scheme check at all; and
+  even now one gap remains structural rather than incidental: `_fetch_web` installs
+  `GuardedHttpxFetcher` **only when the caller injects no `fetcher`**, so a caller that injects its
+  own gets no address policy whatsoever, while a `lode.tools`-level check runs unconditionally. The
+  real open question for whoever lands both is therefore *which layer owns the policy* — delete the
+  `lode.tools` guard and accept that the injection seam is unguarded (defensible: today only tests
+  inject), or keep it as the injection-proof outer check and let the fetcher own only the per-hop and
+  rebinding halves. Not a mechanical cleanup, but still not a blocker for either branch; no new
+  ticket is filed here since `/land`'s stacked/overlapping-branch handling is where it surfaces.
+
 - **2026-08-08 (`lode-oca9`) — re-cut the batched `IN(...)` seam left open by `lode-r9z0`; both
   candidates adopted.** `lode-r9z0`'s entry above filed, but deliberately did not settle, two
   questions: whether a whole-SQL-plus-`{placeholders}`-slot seam would fit all three candidate call
@@ -4362,6 +4431,20 @@ entries below from being rewritten to chase the current tree.)
   `len(ids)`, and that `fetch_by_ids` never accepts anything but a fixed literal `sql` string — there
   is no path from caller- or user-supplied data into the SQL text itself, only into the bound `?`
   values).
+
+- **Update (lode-8n4k, 2026-08-08) — a "checks out" overclaim in lode-2m89's entry above.** That
+  entry says it twice — "it's what it actually checks out and diffs for drift", and "it is what the
+  reviewer checks out and compares against for drift" — and both are half wrong. `code-reviewer`
+  fetches and checks out `origin/land/<id>` (per `.claude/agents/code-reviewer.md` step 2 and
+  `.claude/skills/code/SKILL.md`'s dispatch prompt), **never** `review_head`: the drift-comparison
+  half is right, the checkout half is not. `review_head` is a provenance / drift-comparison note, not
+  a review boundary (lode-9b5n). Three operational files carried the same wrong claim and are
+  corrected in place (ordinary files, not append-only): `.claude/agents/coding.md`'s
+  never-hand-off-a-dirty-worktree bullet, `.claude/skills/code/SKILL.md`'s stranded-review-sweep
+  bullet, and `docs/agents-workflow.md`'s exit-(a) re-entry gap 1. What the coding.md correction does
+  **not** change: uncommitted, or committed-but-unpushed, work is still silently **dropped** — only
+  the stated reason was wrong. Per this file's append-only preamble the entry above is left as
+  written; this marker is the correction.
 
 - **2026-08-08 (`lode-125q`) — closed off-pattern-keyword blind spot (1) in
   `tests/test_decisions_supersession_markers.py`; blind spot (2) filed as its own ticket, not folded
@@ -4407,3 +4490,36 @@ entries below from being rewritten to chase the current tree.)
   otherwise have satisfied while another matched none. Case sensitivity is unchanged and still
   load-bearing. Consequence (b) is unaffected — the bare-word entry stands (it now merely overlaps
   the group for that one keyword), and that spelling remains unwriteable anywhere in this file.
+
+- **2026-08-08 (`lode-3oik`) — adopted `scripts/land-state-load.sh` (`lode-dc4n`) for `/sweep`'s
+  `$SWEEP_TMP` load cluster; kept the script's name rather than renaming it.** `.claude/skills/
+  sweep/SKILL.md` had five `$SWEEP_TMP` reads hand-rolling the exact same "missing fatal, empty OK"
+  default policy `land-state-load.sh` already made explicit for `/land`'s `$STATE_DIR` reads — §3's
+  `$ESCALATED`/`$HUMAN`/`$CLOSABLE`, §6's prep and §7's re-derivation of `$CURRENT`. All five were
+  retrofitted onto the shared script with no `--require-nonempty`, preserving that exact policy
+  (verified site by site against the pre-retrofit text before editing, not assumed).
+
+  **Naming decision:** keep `scripts/land-state-load.sh`'s name, don't rename it to something
+  generic like `scripts/state-file-load.sh`. The script already took a plain path argument and was
+  never actually `$STATE_DIR`-specific — only its name and header comment implied that. Renaming
+  would touch two existing test modules (`tests/test_land_conflicts_state.py`,
+  `tests/test_land_state_load.py`) plus every call site in both `/land`'s and now `/sweep`'s
+  SKILL.md, for a purely cosmetic gain; the header comment carries the de-scoping note instead
+  (`scripts/land-state-load.sh`'s own top-of-file comment, updated by this ticket).
+
+  **Two `$SWEEP_TMP` sites deliberately NOT retrofitted:** §8's `deferred`/`stranded` reads
+  (`cat "$SWEEP_TMP/deferred" 2>/dev/null` / `cat "$SWEEP_TMP/stranded" 2>/dev/null`, each inside an
+  `if VAR="$(...)"; then ... else STATE=missing; fi`). These do not map onto either of
+  `land-state-load.sh`'s two policies: both of that script's policies treat a missing file as
+  **fatal** (exit 1), while these two sites treat a missing file as a **non-fatal, expected third
+  state** — `§2a`/`§2b`'s corresponding block simply hasn't run yet this pass, which is routine, not
+  an error, and §8 must still finish (publish the digest) either way. Their pre-existing
+  `2>/dev/null` behaviour — silently continue past a missing file rather than surface `cat`'s own
+  stderr — is preserved unchanged; only a one-line note was added at each site (and pinned by
+  `tests/test_sweep_state_load.py`) explaining why they're out of scope, per this ticket's
+  acceptance criteria.
+
+  Mirrors `lode-dc4n`'s own consolidation for `/land`'s four `$STATE_DIR` sites; the hazard named
+  there (a future editor silently flipping a load's missing-vs-empty policy during a mechanical
+  retrofit) is exactly why every retrofitted site above was checked against its pre-change text
+  first, and why the two out-of-scope sites got an explicit note instead of a silent skip.

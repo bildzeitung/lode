@@ -15,9 +15,11 @@ import pytest
 
 from lode.config import AtlassianCredentials, load_settings
 from lode.confluence import (
+    ConfluenceSearchError,
     HttpxConfluenceFetcher,
     _build_url,
     fetch_confluence_page,
+    search_confluence_pages,
 )
 from lode.webfetch import FetchStatus, RawResponse, TransientFetchError
 
@@ -331,3 +333,112 @@ class TestHttpxConfluenceFetcher:
 
         with pytest.raises(TransientFetchError):
             fetcher.fetch("http://127.0.0.1:1/wiki/rest/api/content/1")
+
+
+# ---------------------------------------------------------------------------
+# search_confluence_pages (lode-8hsk) -- ids + titles only, CQL text search
+# ---------------------------------------------------------------------------
+
+
+class TestSearchConfluencePages:
+    def test_hits_return_id_and_title_only(self) -> None:
+        payload = {
+            "results": [
+                {"id": "111", "title": "Runbook A"},
+                {"id": "222", "title": "Runbook B"},
+            ]
+        }
+        fetcher = _StubFetcher(
+            response=RawResponse(
+                final_url=f"{_API_BASE}/wiki/rest/api/content/search",
+                status_code=200,
+                text=json.dumps(payload),
+            )
+        )
+
+        hits = search_confluence_pages("runbook", _API_BASE, fetcher=fetcher)
+
+        assert [(h.external_id, h.title) for h in hits] == [
+            ("111", "Runbook A"),
+            ("222", "Runbook B"),
+        ]
+        assert not hasattr(hits[0], "body")
+        assert not hasattr(hits[0], "snippet")
+
+    def test_request_targets_the_cql_search_endpoint_scoped_to_pages(self) -> None:
+        fetcher = _StubFetcher(
+            response=RawResponse(
+                final_url=f"{_API_BASE}/wiki/rest/api/content/search",
+                status_code=200,
+                text=json.dumps({"results": []}),
+            )
+        )
+        search_confluence_pages("widget deploy", _API_BASE, fetcher=fetcher)
+        (called_url,) = fetcher.calls
+        assert called_url.startswith(f"{_API_BASE}/wiki/rest/api/content/search?cql=")
+        assert "type%3Dpage" in called_url or "type=page" in called_url
+
+    def test_query_text_is_cql_escaped(self) -> None:
+        fetcher = _StubFetcher(
+            response=RawResponse(
+                final_url=f"{_API_BASE}/wiki/rest/api/content/search",
+                status_code=200,
+                text=json.dumps({"results": []}),
+            )
+        )
+        search_confluence_pages('say "hi"', _API_BASE, fetcher=fetcher)
+        (called_url,) = fetcher.calls
+        from urllib.parse import unquote
+
+        assert '\\"hi\\"' in unquote(called_url)
+
+    def test_api_base_trailing_slash_is_stripped(self) -> None:
+        fetcher = _StubFetcher(
+            response=RawResponse(
+                final_url=f"{_API_BASE}/wiki/rest/api/content/search",
+                status_code=200,
+                text=json.dumps({"results": []}),
+            )
+        )
+        search_confluence_pages("q", f"{_API_BASE}/", fetcher=fetcher)
+        (called_url,) = fetcher.calls
+        assert "//wiki" not in called_url
+
+    def test_non_ok_response_raises_search_error(self) -> None:
+        fetcher = _StubFetcher(
+            response=RawResponse(
+                final_url=f"{_API_BASE}/wiki/rest/api/content/search",
+                status_code=403,
+                text="forbidden",
+            )
+        )
+        with pytest.raises(ConfluenceSearchError):
+            search_confluence_pages("q", _API_BASE, fetcher=fetcher)
+
+    def test_malformed_response_raises_search_error(self) -> None:
+        fetcher = _StubFetcher(
+            response=RawResponse(
+                final_url=f"{_API_BASE}/wiki/rest/api/content/search",
+                status_code=200,
+                text="not json",
+            )
+        )
+        with pytest.raises(ConfluenceSearchError):
+            search_confluence_pages("q", _API_BASE, fetcher=fetcher)
+
+    def test_max_results_is_sent_as_limit(self) -> None:
+        fetcher = _StubFetcher(
+            response=RawResponse(
+                final_url=f"{_API_BASE}/wiki/rest/api/content/search",
+                status_code=200,
+                text=json.dumps({"results": []}),
+            )
+        )
+        search_confluence_pages("q", _API_BASE, max_results=5, fetcher=fetcher)
+        (called_url,) = fetcher.calls
+        assert "limit=5" in called_url
+
+    def test_unresolved_credentials_raise_search_error(self) -> None:
+        settings = load_settings(confluence_enabled=True)
+        with pytest.raises(ConfluenceSearchError):
+            search_confluence_pages("q", _API_BASE, settings=settings)
