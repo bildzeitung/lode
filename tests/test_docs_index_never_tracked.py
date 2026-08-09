@@ -79,14 +79,22 @@ def _load_build_module() -> object:
 # --- 1. No index artifact is git-tracked -----------------------------------
 
 
-def test_no_index_artifact_is_git_tracked() -> None:
-    tracked = subprocess.run(
-        ["git", "ls-files"],
-        cwd=REPO_ROOT,
+def _tracked_paths() -> list[str]:
+    return subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files"],
         capture_output=True,
         text=True,
         check=True,
     ).stdout.splitlines()
+
+
+def test_no_index_artifact_is_git_tracked() -> None:
+    tracked = _tracked_paths()
+    # Non-vacuity pin (the sibling gates' `bd_lines > 0` move): without it, a
+    # `git ls-files` that ever returned nothing -- wrong checkout, a future
+    # pathspec filter -- would make this gate pass green forever with nothing
+    # noticing.
+    assert tracked, "git ls-files returned no paths -- this gate would be vacuous"
     offenders = _find_index_artifacts(tracked)
     assert offenders == [], (
         f"docs-index artifact(s) committed to git: {offenders} -- the index "
@@ -106,6 +114,15 @@ def test_gate_catches_any_committed_sqlite_artifact_by_suffix() -> None:
     scan isn't keyed to today's exact filename."""
     tracked = ["docs/design.md", ".lode/cache.db"]
     assert _find_index_artifacts(tracked) == [".lode/cache.db"]
+
+
+def test_gate_composes_real_discovery_with_the_match() -> None:
+    """The two sabotage checks above drive the matcher with a hand-built list,
+    which proves the matcher but not the *gate*. This one appends a synthetic
+    offender to the REAL `git ls-files` output, so discovery and matching are
+    exercised together -- the arrangement the live check actually runs."""
+    tracked = [*_tracked_paths(), ".lode/docs-index.sqlite3"]
+    assert _find_index_artifacts(tracked) == [".lode/docs-index.sqlite3"]
 
 
 # --- 2. The build target resolves outside the worktree ---------------------
