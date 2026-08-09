@@ -331,11 +331,11 @@ class TestBareDocAnchorRefs:
     def test_anchor_less_reference_does_not_swallow_trailing_word_char(self, tmp_path):
         """A `<page>.mdx`-shaped token must not be matched as if it were the
         plain `<page>.md` reference with a stray trailing 'x' -- the trailing
-        `(?![\\w-])` guard is what prevents that. Assert via the
-        walked-then-resolved target text, not error count alone, so a
-        false-positive truncated match would be caught even though the real
-        file doesn't exist either way. (Written without a contiguous literal
-        `docs/*.md` example -- see the `_DOCS` split's comment above.)"""
+        `(?![\\w-])` guard is what prevents that. Nothing in this fixture is a
+        citation, so the gate must report NOTHING: without the guard the regex
+        matches a truncated `<page>.md`, which does not exist and so surfaces
+        as an error here. (Written without a contiguous literal `docs/*.md`
+        example -- see the `_DOCS` split's comment above.)"""
         _write(
             tmp_path,
             "scripts/foo.sh",
@@ -343,9 +343,7 @@ class TestBareDocAnchorRefs:
         )
         _git_init(tmp_path)
 
-        errors = check(tmp_path)
-
-        assert errors == [] or all(e.target != f"{_DOCS}/foo.md" for e in errors)
+        assert check(tmp_path) == []
 
     def test_scan_dirs_files_are_excluded_from_the_bare_pass(self, tmp_path):
         """The two passes must not both claim the same file. Asserted on the
