@@ -10,7 +10,16 @@ from lode.config import default_db_path
 from lode.notes_read import list_deleted_notes, list_notes
 
 
-@app.command(name="notes")
+@app.command(
+    name="notes",
+    help=(
+        "List notes -- live by default, tombstoned with --deleted.\n\n"
+        "One row per note, newest first: its full id (copy-pasteable "
+        'straight into "lode purge"), a short date, and its summary. '
+        "Under --deleted each row carries a trailing marker, so it still "
+        'reads as a tombstone once copied out for "lode recover".'
+    ),
+)
 def notes_(
     deleted: Annotated[
         bool,
