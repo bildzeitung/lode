@@ -118,12 +118,76 @@ leave alone, so it was closed rather than deferred. When adding a new modal, ask
 does it have a standing action worth keeping visible, or is it a glance-and-dismiss popup? The
 latter stays bare.
 
-Both of those flags are load-bearing at the 100-column bound, and neither is the `show=False`
-binding-hiding that `lode-l38d.3` ruled out and this epic has held to since: `compact=True` only
-trims Textual's per-entry padding, and `show_command_palette=False` drops only the footer's
-auto-added "^p palette" icon — `ctrl+p` still opens the palette (verified), and the palette was
-never one of lode's declared `BINDINGS`. Measured costs of dropping either, plus the tests that
-enforce it, are in [`lode.tui.widgets.lode_footer`](../src/lode/tui/widgets/lode_footer.py)'s docstring.
+Both of those flags are load-bearing at the 100-column bound, and neither is the same lever as
+per-screen footer priority (`show=False` on a `Binding`, below): `compact=True` only trims Textual's
+per-entry padding, and `show_command_palette=False` drops only the footer's auto-added "^p palette"
+icon — `ctrl+p` still opens the palette (verified), and the palette was never one of lode's declared
+`BINDINGS`. Measured costs of dropping either, plus the tests that enforce it, are in
+[`lode.tui.widgets.lode_footer`](../src/lode/tui/widgets/lode_footer.py)'s docstring.
+
+### The footer is a hint surface, not the complete binding contract (`lode-2bt3.3`)
+
+**The footer lists a screen's *most-used* bindings, legibly labelled — it does not enumerate every
+live binding.** That is a deliberate redefinition, not the original design: every footer-bearing
+screen once showed every one of its own bindings, full stop, because the footer was the *only* place
+a binding could be discovered — hiding one would have made it invisible, full stop. `lode-l38d.3`
+ruled out `Binding(show=False)` on exactly that ground, and every footer ticket since held to it.
+
+**That ground is gone as of `lode-2bt3.2`.** The in-app keybinding help overlay (`Ctrl+_`/`?`,
+`src/lode/tui/screens/help.py`) lists every binding on the active screen plus the App-level ones,
+`show=False` entries included — its own anti-drift test (`tests/test_tui_help_screen.py`) pins that
+the listing is derived from the live `Binding` objects, not a parallel list that can drift. A binding
+hidden from the footer is therefore still real, still documented, and one keypress away — the
+overlay is the complete binding contract now; the footer is a hint, sized to the terminal's 100-column
+floor, of the bindings a screen expects to be reached for most often.
+
+**The abbreviate-an-existing-label pattern is retired.** For three tickets running
+(`lode-uczx`/`lode-ev5j.3`/`lode-11io`), the way a screen paid for a new App-level binding's ~7-column
+footer-wide cost was shortening one of its own labels — `"View content"` → `"View"`, `"Related"` →
+`"Rel"`, `"History"` → `"Hist"`, `"Insp"`/`"Del"`/`"Exp"` before that. It worked, and it was also
+strictly a stopgap: each round left the labels a little less legible and the next ticket a little
+less room, with no floor except "however short a word can get and still be a word." `lode-2bt3.3`
+spends the recovered budget paying those abbreviations *back* (`"Rel"` → `"Related"`, `"Hist"` →
+`"History"`, `"S"` → `"Quick"`, `"View"` → `"View content"` on `BrowseScreen`/`EditScreen`) rather
+than shortening further, and the mechanism that pays for new bindings going forward is per-screen
+priority, not the next abbreviation: **a screen that needs to make room for a new binding hides its
+least-needed existing entry (`Binding(show=False)`) rather than truncating a label.** Do not
+reintroduce label-shortening as a width lever — reach for `show=False` instead, and record which
+entry was hidden and why (least-needed, not merely smallest) at the `BINDINGS` declaration site.
+
+**Choosing what to hide is a judgment call per screen, not a formula.** `lode-2bt3.3`'s two worked
+examples: `BrowseScreen` hides `"Expand"` (`toggle_summary`) — a reversible, non-destructive display
+toggle, learned once and rarely revisited, unlike Inspect/Delete/Find/Quick which sit on the primary
+read/search/delete path every session. `EditScreen` hides `"View content"` (view externally-retrieved
+content) and `"Link"` (open URL under cursor) — both apply only to a subset of notes (an
+externally-sourced note; a note whose cursor sits on a URL), not to every note this screen edits, unlike
+Save/Back/Related/History/Inspect/Ask. Full reasoning and the measured column counts:
+`docs/keybindings.md`'s "Per-screen footer priority" section, and the `BINDINGS` block comments in
+`src/lode/tui/screens/browse.py` / `edit.py`.
+
+**An App-level binding is judged against the tightest screen, and which screen that is can change.**
+`"Cfg"` stayed abbreviated through `lode-uczx`/`lode-11io` because `EditScreen` was the tightest
+footer; `lode-2bt3.3` re-measured it and found `EditScreen` now has slack (its own hides recovered
+more than restoring "Related"/"History" spent) while `BrowseScreen` — after paying for its own
+un-abbreviation — is the new tightest: swapping in `"Config"` lands `BrowseScreen` at exactly 100/100
+with `show_horizontal_scrollbar` flipping `True`. `"Cfg"` stays abbreviated. A future ticket
+restoring it must re-measure the *current* tightest screen, not assume it's still `EditScreen`.
+
+**`LodeFooter` itself needed no change.** Textual's stock `Footer` already honours a `Binding`'s
+`show=` flag; per-screen priority is entirely a matter of which `BINDINGS` entries in each screen
+module carry it, not anything the shared footer widget does.
+
+**What the 100-column footer tests now assert.** Before this ticket, "every binding visible" was the
+only honest assertion a footer test could make, because a hidden binding really would have been
+undiscoverable. Now that a hidden binding is guaranteed reachable via the overlay
+(`tests/test_tui_help_screen.py`'s anti-drift gate, parametrized over every screen that hides
+anything — `BrowseScreen` and `EditScreen` today), `tests/test_tui_browse_screen.py`'s Browse/Edit
+footer tests assert instead
+that every **shown** binding fits in 100 columns without `show_horizontal_scrollbar` — renamed
+`..._with_every_shown_binding_visible` to say so — and rely on the anti-drift gate, not a duplicate
+per-screen assertion, to guarantee every hidden one stays reachable. **A screen that starts hiding
+a binding must be added to that gate's parametrize list in the same diff** — the delegation above is
+only honest for screens the gate actually visits.
 
 Rejected alternatives, so the question isn't reopened:
 

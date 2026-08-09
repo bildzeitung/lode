@@ -206,7 +206,7 @@ action on one of these screens still faces the exhausted pool above; this one di
 | | | `i` | Inspect | |
 | | | `v` | View retrieved content | |
 | | | `d` | Delete | |
-| | | `x` | Expand/collapse summary | |
+| | | `x` | Expand/collapse summary (hidden from the footer, `show=False`, `lode-2bt3.3`) | |
 | | | `slash` | Search (restarts from the top each keystroke, `lode-2bt3.1`) | search direction retired (`lode-2bt3.1`) — `?` was unbound on every screen until `lode-2bt3.2` claimed it App-level for the help overlay |
 | | | `s` | Quick search (BM25, narrows the list, `lode-35nu.6`) | distinct from `slash`'s scan-and-highlight |
 | `ExternalPickerScreen` | `screens/external_picker.py` | `escape` | Back | — (DataTable) |
@@ -220,8 +220,8 @@ action on one of these screens still faces the exhausted pool above; this one di
 | | | `ctrl+f` | Focus related-notes panel | |
 | | | `ctrl+h` | Show version history | |
 | | | `ctrl+g` | Inspect (enrichment modal) | |
-| | | `ctrl+r` | View retrieved content | |
-| | | `ctrl+n` | Open link under cursor | |
+| | | `ctrl+r` | View retrieved content (hidden from the footer, `show=False`, `lode-2bt3.3`) | |
+| | | `ctrl+n` | Open link under cursor (hidden from the footer, `show=False`, `lode-2bt3.3`) | |
 | | | `ctrl+l` | Ask about this note (`lode-35nu.11.3`, shadows the App-level `ctrl+l`) | |
 | `DiscardConfirmScreen` | `screens/discard_confirm.py` | `s` | Save & quit | — |
 | | | `d` | Discard & quit | |
@@ -396,6 +396,11 @@ No screen needed a label shortened; dropping `Quit` almost exactly offsets
 adding `Help` on every footer, since both render as a 1-2 character key
 display plus a 4-5 character label.
 
+(Historical snapshot as of this ticket. `BrowseScreen`'s 94/100 and
+`EditScreen`'s 98/100 above have since moved to 97/100 and 89/100
+respectively — see "Per-screen footer priority" below for `lode-2bt3.3`'s
+current numbers and what changed to get there.)
+
 **Content and shape.** `HelpScreen` (`src/lode/tui/screens/help.py`)
 composes Textual's own shipped `BindingsTable`
 (`textual.widgets._key_panel`) — the ticket's own review (bd notes,
@@ -411,6 +416,68 @@ lode-specific narrowing layered on top, which is also what keeps
 `tests/test_tui_help_screen.py`'s anti-drift test bounded and implementable.
 A `ModalScreen`, footerless (dismisses on Escape/`?`, no other standing
 action) per docs/tui.md's modal rule.
+
+## Per-screen footer priority — the footer becomes a hint surface (`lode-2bt3.3`)
+
+**The payoff of `lode-2bt3.2`'s overlay.** `lode-wk4x` rejected per-screen footer priority because
+it "silently hides bindings" — valid only while no fallback discovery surface existed. With the
+help overlay in place (`Ctrl+_`/`?`, lists every binding on a screen INCLUDING `show=False` ones,
+`tests/test_tui_help_screen.py`'s own anti-drift gate), a footer entry hidden via `Binding(show=False)`
+is still fully live and one keypress away — hiding it from the footer is no longer lossy.
+
+**The mechanism is the one `lode-2bt3.2` already used to hide `Quit` — generalized, not
+reinvented.** No new machinery: `Binding(show=False)` at the declaration site, per binding, per
+screen. `LodeFooter` (`src/lode/tui/widgets/lode_footer.py`) needed zero changes — Textual's stock
+`Footer` already honours `show=`; this ticket is entirely a matter of which `BINDINGS` entries carry
+the flag and what their labels say.
+
+**Re-measured from post-`lode-2bt3.2` trunk (not an earlier snapshot), per the ticket's own note that
+the un-abbreviation budget is tighter than its description assumed** — `lode-2bt3.2` already spent one
+App-level footer slot (`Help`) and paid for it by hiding `Quit`.
+
+- **`BrowseScreen`** — `Expand` (`x`, `toggle_summary`) is now hidden: a reversible, non-destructive
+  display toggle, the least-needed reminder of the screen's seven bindings once learned, unlike
+  Inspect/Delete/Find/Quick which apply to the primary read/search/delete workflow every session. That
+  recovers the width to un-abbreviate `"S"` → `"Quick"` (not `"Search"` — this screen already has
+  `"Find"` for `/`'s scan, and a second `"Search"` label would read as a duplicate) and `"View"` →
+  `"View content"`. MEASURED: 97/100, `hscroll=False` (the App-level `Help` label's ~7 columns included). Un-hiding
+  `Expand` at full length reopens the overflow: 106/100 with `hscroll=True` (confirmed, not assumed).
+- **`EditScreen`** — `"View content"` (`ctrl+r`, view externally-retrieved content) and `"Link"`
+  (`ctrl+n`, open URL under cursor) are now hidden: both apply only to a subset of notes (an
+  externally-retrieved note; a note whose cursor sits on a URL) rather than every note this screen
+  edits, unlike Save/Back/Related/History/Inspect/Ask. That recovers enough width to restore
+  `"Rel"` → `"Related"` and `"Hist"` → `"History"` in full. MEASURED: 89/100, `hscroll=False` (11
+  columns' slack, deliberately not spent further — see `"Cfg"` below). Un-hiding `"View content"`
+  alone at full length reopens the overflow: 105/100 with `hscroll=True` (confirmed, not assumed).
+- **`"Cfg"` → `"Config"`, RE-EXAMINED against `EditScreen` as the ticket instructed, and now
+  RE-PINNED against `BrowseScreen` instead.** `Cfg` is an App-level binding, so any label change
+  there renders in every footer-bearing screen, not just `EditScreen`. `EditScreen` itself now has
+  11 columns' slack and could absorb `"Config"` alone — but `BrowseScreen`, at 97/100 after its own
+  un-abbreviation above, cannot: swapping in `"Config"` measures exactly 100/100 with
+  `show_horizontal_scrollbar` flipping to `True` (fails the "fits without hscroll" bar). `"Cfg"`
+  therefore stays abbreviated — not because `EditScreen` needs it short any more, but because the
+  binding-declaration comment in `src/lode/tui/app.py` is the single source of truth for an
+  App-level label and it now names `BrowseScreen`, not `EditScreen`, as the constraint. A future
+  ticket that wants to restore it must re-measure `BrowseScreen`'s footer, not just `EditScreen`'s.
+- **`Quit`'s demotion — RE-VERIFIED, not inherited**, per `lode-2bt3.2`'s own note that this ticket
+  must re-check the call once the general mechanism exists. The reasoning is unchanged: `Ctrl+Q` is
+  one of the most universally-known TUI conventions, Escape covers the same ground on most screens,
+  and the help overlay lists it regardless of footer visibility. It stays hidden.
+
+**The footer is a hint surface, not the binding contract — see `docs/tui.md`'s footer section for
+the redefinition** (the abbreviate-an-existing-label pattern this doc's own history above documents
+repeatedly is retired there).
+
+**Test-gate semantics changed to match.** `tests/test_tui_browse_screen.py`'s Browse/Edit footer
+tests were renamed `..._with_every_shown_binding_visible` (from `..._with_every_binding_visible`)
+and now assert only that every SHOWN binding fits in 100 columns without `hscroll`; the guarantee
+that every HIDDEN binding stays reachable is `tests/test_tui_help_screen.py`'s anti-drift gate's job
+(parametrized over both screens that hide anything — `BrowseScreen` and `EditScreen` — `show=False`
+entries included), not duplicated in the footer tests. That parametrization is this ticket's own
+review finding: the gate previously ran against `BrowseScreen` alone as "the representative screen",
+which was sound only while no Screen-level binding anywhere was hidden; the moment `EditScreen`
+started hiding `ctrl+r`/`ctrl+n`, "the gate covers it" stopped being true for that screen until the
+gate visited it.
 
 ## Resolved collisions (history, for context)
 

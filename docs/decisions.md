@@ -4737,3 +4737,96 @@ entries below from being rewritten to chase the current tree.)
   license — the merged result silently carries both variants of that region, duplicated. Nothing
   catches it: `check-decisions-no-silent-rewrite.sh` fires only on a line *disappearing*, and
   duplication removes nothing. The mitigation is the append-only rule itself, not a gate.
+
+- **Recording the rejected alternatives, the non-impact and the ours-side-only caveat for the union
+  merge driver (`lode-fp9l`, 2026-08-09).** Follow-up to the entry directly above (`lode-4jtc.1`),
+  which landed as-is by maintainer decision (`/land` exit (a), 2026-08-09) with its RECORDING
+  acceptance criteria short. This entry closes that gap; it makes no functional change to the driver,
+  the `.gitattributes` rule, or the gate test.
+
+  **Rejected candidates**, sourced from the `/challenge` of the parent epic (`lode-4jtc`), which is
+  where the lettered candidate list lives (it was never copied into `lode-4jtc.1`'s own ticket text —
+  the earlier entry's silence on this was the ticket's omission, not the build's):
+    - **(a) One file per decision.** Rejected: carries a migration, and the migration's cost input
+      was understated by 2x — the epic's own reference audit said "~31 scripts/tests/noxfile
+      reference [decisions.md]"; the actual measured count on `/challenge` was 66.
+    - **(b) Chronological sharding** (splitting the log into dated shard files). Rejected for the
+      same understated migration cost as (a), and additionally: sharding only *reduces* the
+      probability that two concurrent branches collide on the same shard — it does not remove the
+      collision by construction the way a union merge driver does.
+    - **(c) Union merge driver.** ACCEPTED — the mechanism `lode-4jtc.1` built. Scoped to axis 1
+      (the write-concurrency/landing-conflict cost) only: **candidate (c) does not solve axis 2** of
+      the parent epic (`lode-4jtc`), the lookup/retrieval cost of a large flat file, which moved to
+      its own epic `lode-t6o1` — entirely unblocked by and unrelated to this candidate.
+    - **(d) Dogfood lode's own retrieval/embedding pipeline as the lookup index for axis 2** (an
+      axis-2 candidate, listed for completeness; the axis-2 epic rejected it for the same reason).
+      Rejected on a circular dependency: "what did we decide about retrieval" must stay answerable
+      while retrieval itself is mid-refactor or broken.
+    - **(e) Do nothing.** Rejected on the measured trend: the conflict rate on this file tripled from
+      15% (July) to 48% (first nine days of August), on two inputs — file size and `/land`
+      parallelism — that both only grow.
+
+  **The `.gitattributes` pointer.** The header comment `.gitattributes` carries (added by
+  `lode-4jtc.1`) reads "Rationale, measurements, rejected alternatives and the accepted failure mode:
+  docs/decisions.md, search `lode-4jtc.1`" — at the time it was written, no rejected-alternatives
+  content existed under that search term. The rejected-candidates list above, appended to the
+  `lode-4jtc.1` entry's own search anchor, makes that pointer resolve to real content. The pointer
+  itself is unchanged — it was correct in intent, just early; nothing needed deleting.
+
+  **The 66-file non-impact, re-confirmed against the tree as it stands now (`lode-fp9l`,
+  2026-08-09).** `lode-4jtc.1`'s branch diff was exactly 3 files — `.gitattributes`,
+  `docs/decisions.md`, `tests/test_decisions_union_merge_driver.py` — and it changed neither the
+  path nor the shape of `docs/decisions.md`, so not one referencing file needed updating. Read
+  `lode-4jtc.1`'s "zero of the 66 referencing files touched" as *no reference needed changing*,
+  **not** as *the diff avoided the referencing set*: 2 of those 3 files do themselves contain the
+  string `docs/decisions.md` — the log itself, and the gate test that branch added. Re-measured now
+  with a plain recursive grep for the literal string `docs/decisions.md` across `.py`/`.sh`/`.md`
+  files (repo root, excluding `.git`, `venv`, and `.claude/worktrees`): **65 files** contain the
+  string, of which **1 is `docs/decisions.md` itself** — so **64 files** reference it externally.
+  The `/challenge`-era figure was 66 (45 `.py`/`.sh` + 21 `.md`); the same split now is 48 + 17.
+  Deliberately not force-matched: the gap is organic churn over the intervening tickets, and the
+  older 66 was a raw file count that would have included `docs/decisions.md` itself — so its
+  comparable modern figure is the 65, not the 64. Either way the finding holds: this entry's own
+  diff (this file only) touches none of the 64.
+
+  **Why the marker-gate cross-check was not re-run (`lode-4jtc.1`'s AC3).** This is accepted
+  reasoning carried over from `lode-4jtc.1`'s own record, not a verification performed by this
+  ticket: a union merge operates at hunk granularity — it emits the "ours" block, then the "theirs"
+  block, with no interleaving — so a supersession marker (a `**Update (<id>[, <date>])**` line) can
+  never be split across the two sides of a merge. `tests/test_decisions_supersession_markers.py`
+  scans for marker shape within a single contiguous block of text; a union merge cannot produce a
+  malformed marker that this test would newly catch, because it cannot produce a split marker at
+  all. This is the identical reasoning that makes
+  [`scripts/check-decisions-no-silent-rewrite.sh`](../scripts/check-decisions-no-silent-rewrite.sh)
+  structurally incapable of failing under a union merge (that gate fires only when a pre-existing
+  line *disappears*, and a union merge cannot remove a line) — both gates are immune for the same
+  structural reason.
+
+  **The ours-side-only caveat — operationally load-bearing for the *next* union-merge path, not just
+  this one.** Measured 2026-08-09 on git 2.43.0: the `merge=union` driver only takes effect when
+  `.gitattributes` declaring it is present on the **OURS** side of the merge. With a base that lacks
+  `.gitattributes`, a branch that adds `.gitattributes` (declaring the driver) and also appends
+  content, merging against a trunk that appended independently — both `git merge-tree` and a real
+  `git merge` **CONFLICT**, with markers, exactly as if no driver existed. This is why landing
+  `lode-4jtc.1` itself was a one-shot exception: it hit this conflict on its own way in (trunk had no
+  root `.gitattributes` at all before it), and every merge *after* `lode-4jtc.1` landed gets the
+  driver's benefit, because from then on `.gitattributes` is present on `trunk` — the OURS side of
+  every subsequent merge. **Anyone adding a new `merge=union` path for a different file will hit this
+  same one-shot conflict on the introducing branch** — the branch that adds the new
+  `.gitattributes` line does not itself benefit from the very rule it introduces; only merges after
+  it lands do.
+
+  **Withdrawal of `lode-4jtc.1`'s escalation-note "SEPARATE INCIDENTAL FINDING."** That note claimed
+  `git merge-tree`-style dry-run prechecks (as used by `/land`'s 2b cheap precheck,
+  [`scripts/merge-precheck.sh`](../scripts/merge-precheck.sh)) do **not** honour `.gitattributes`
+  merge drivers, and proposed filing it as a follow-up ticket. **This claim is FALSE and must not be
+  filed.** Measured 2026-08-09 on git 2.43.0: `git merge-tree --write-tree` **does** honour
+  `.gitattributes` merge drivers — a throwaway repo with `docs/decisions.md merge=union` declared in
+  the merge base, and two divergent appends on either side, produced a clean (exit 0) `merge-tree`
+  result with both appends present and no conflict markers. This is by design and not
+  version-fragile: `merge-tree` runs on `merge-ort`, and `merge-ort` in current upstream master
+  (2.52) carries `initialize_attr_index()`, which synthesizes a fake index containing only attribute
+  information from the `.gitattributes` blobs present in the merge trees, precisely so `ll_merge()`
+  can dispatch merge drivers with no working tree required. The `git-merge-tree` man page's silence
+  on this is a documentation gap in git itself, not a caveat that applies to lode. No change is
+  needed to `scripts/merge-precheck.sh`.

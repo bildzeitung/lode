@@ -169,46 +169,53 @@ def _dump_all_notes(
         typer.echo("no external HTML captured for any note")
 
 
-@app.command(name="dump-html")
+@app.command(
+    name="dump-html",
+    help=(
+        "Print a note's captured external HTML (or write it to a file).\n\n"
+        "With one external, prints it immediately; with more than one, "
+        "lists them for SELECTOR to pick by index or URL. --all dumps every "
+        "note's external(s) instead of one TARGET; --file writes to disk "
+        "(see --dir) instead of stdout."
+    ),
+)
 def dump_html(
     target: Annotated[
         str | None,
         typer.Argument(
-            help="Note id, or an unambiguous prefix of one, to dump an external "
-            "for. Required unless --all is given; conflicts with --all."
+            help="Note id, or an unambiguous prefix of one. Required unless "
+            "--all is given; conflicts with --all."
         ),
     ] = None,
     selector: Annotated[
         str | None,
         typer.Argument(
-            help="Which external to dump when the note has more than one: its "
-            "1-based listing index, or its external id (URL) verbatim. "
-            "Conflicts with --all."
+            help="1-based listing index or external id (URL), to disambiguate "
+            "a note with more than one external. Conflicts with --all."
         ),
     ] = None,
     all_notes: Annotated[
         bool,
         typer.Option(
             "--all",
-            help="Dump every live note's dumpable external(s) instead of one "
-            "target. Conflicts with an explicit target/selector.",
+            help="Bulk mode: every live note's external(s). Conflicts with an "
+            "explicit target/selector.",
         ),
     ] = False,
     file: Annotated[
         bool,
         typer.Option(
             "--file",
-            help="Write dump(s) to per-note file(s) (named <note-id>-NNNN.dmp, "
-            "see --dir) instead of printing to stdout. Valid with or without "
-            "--all.",
+            help="Write to per-note file(s) named <note-id>-NNNN.dmp (see "
+            "--dir) instead of stdout. Valid with or without --all.",
         ),
     ] = False,
     dir_: Annotated[
         Path | None,
         typer.Option(
             "--dir",
-            help="Directory to write files into with --file (created if "
-            "absent). Default: the current directory. Only valid with --file.",
+            help="Output directory for --file (created if absent). Default: "
+            "the current directory. Only valid with --file.",
         ),
     ] = None,
     db: _DbOption = None,

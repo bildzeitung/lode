@@ -3066,11 +3066,11 @@ def test_bare_v_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # Compact footer bar (lode-l38d.3, widget lode-uczx) -- BrowseScreen.BINDINGS
-# renders 7 entries plus 4 App-level ones (LodeApp.BINDINGS) in one footer
-# line; with the original, full-length descriptions that overflowed the
-# 80-column bound this screen was originally sized to and Textual clipped
-# the tail. The fix stays inside the stock Footer (compact=True +
-# show_command_palette=False), now baked into the shared
+# renders 6 SHOWN entries plus 5 shown App-level ones (LodeApp.BINDINGS) in
+# one footer line; with the original, full-length descriptions that
+# overflowed the 80-column bound this screen was originally sized to and
+# Textual clipped the tail. The fix stays inside the stock Footer
+# (compact=True + show_command_palette=False), now baked into the shared
 # :class:`~lode.tui.widgets.lode_footer.LodeFooter` every screen composes instead of
 # repeating the two flags per call site.
 #
@@ -3090,10 +3090,25 @@ def test_bare_v_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
 # compact, no show_command_palette=False) and these same restored labels
 # measures consumed=123/hscroll=True at 100 columns -- both this assert and
 # the hscroll one would have caught it.
+#
+# WHAT "EVERY BINDING" MEANS, CHANGED HERE (lode-2bt3.3). Before this
+# ticket, the footer WAS the complete binding contract -- "every binding
+# visible" was the only honest assertion, because a hidden binding would
+# have been undiscoverable. lode-2bt3.2 shipped the keybinding help overlay
+# (Ctrl+_/'?'), which lists every binding on a screen INCLUDING show=False
+# ones (tests/test_tui_help_screen.py's own anti-drift gate, parametrized
+# over this exact screen), so a footer entry hidden here is still fully live and
+# one keypress away -- the footer is a hint surface now, not the contract
+# (docs/tui.md). This test's own semantics change accordingly: it asserts
+# every SHOWN binding fits (the layout guarantee this test has always made
+# and still must -- a screen whose shown entries overflow 100 columns is
+# still a bug), and relies on test_tui_help_screen.py's anti-drift gate,
+# not a duplicate assertion here, to guarantee every HIDDEN binding
+# (including "Expand" below) stays reachable via the overlay.
 # ---------------------------------------------------------------------------
 
 
-def test_browse_footer_fits_100_columns_with_every_binding_visible(
+def test_browse_footer_fits_100_columns_with_every_shown_binding_visible(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "lode.db"
@@ -3120,24 +3135,23 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     # ...and it fits WITHOUT Textual collapsing the gutters to get there.
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 7 screen-level + 5 shown App-level bindings stay visible -- restored
-    # to full words at the new 100-column bound (lode-35nu.6's own
-    # quick-search entry is the one exception -- see the inline comment on it
-    # below for why it's a single letter, not a word). "Up"
-    # (question_mark/search_backward) is gone -- search direction is retired
-    # (lode-2bt3.1), freeing a footer slot on the screen that had zero
-    # headroom left. "Quit" is now hidden (show=False, lode-2bt3.2 -- see
-    # docs/keybindings.md); "Help" (Ctrl+_, lode-2bt3.2's keybinding overlay)
-    # takes its slot instead -- MEASURED at 94/100.
+    # 6 of the 7 screen-level bindings stay shown, plus 5 shown App-level
+    # ones. "Up" (question_mark/search_backward) is gone -- search direction
+    # is retired (lode-2bt3.1). "Quit" is hidden (show=False, lode-2bt3.2,
+    # re-verified by lode-2bt3.3 -- see docs/keybindings.md); "Help" (Ctrl+_,
+    # lode-2bt3.2's keybinding overlay) takes its slot instead. lode-2bt3.3:
+    # "Expand" (toggle_summary) is now hidden too -- see BrowseScreen's own
+    # BINDINGS comment for why it is the least-needed reminder of the
+    # seven -- which pays for "View" -> "View content" and "S" -> "Quick"
+    # being un-abbreviated. MEASURED at 97/100.
     assert descriptions == [
         "Back",
         "Inspect",
-        "View",
+        "View content",
         "Delete",
-        "Expand",
         "Find",
-        "S",  # BM25 quick search (lode-35nu.6) -- see BrowseScreen.BINDINGS'
-        # own comment for why this one stays a single letter
+        "Quick",  # BM25 quick search (lode-35nu.6) -- see BrowseScreen.BINDINGS'
+        # own comment for why this label and not "Search"
         "Cfg",
         "Browse",
         "Tags",
@@ -3147,35 +3161,32 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
 
 
 # ---------------------------------------------------------------------------
-# EditScreen footer (lode-uczx, folding in lode-3aen) -- the only one of the
-# ten footer-bearing screens that actually clipped at the new 100-column
-# bound: full labels rendered 131 columns' worth of content (measured
-# against the pre-fix bare ``Footer()``, below), which two prior footer
-# tickets (lode-l38d.3, lode-3rvw) walked past without a guard test on this
-# screen. "View content" -> "View" plus the shared LodeFooter's compact
-# style is what brings it in under 100.
+# EditScreen footer (lode-uczx, folding in lode-3aen) -- long the tightest of
+# the eleven footer-bearing screens, previously kept under 100 columns by
+# shortening labels ("View content"->"View", "Related"->"Rel",
+# "History"->"Hist") as new App-level bindings landed.
 #
-# Confirmed non-vacuous: pushing this screen with the pre-fix bare
-# ``Footer()`` and the original "View content" label measures
-# consumed=131/hscroll=True at 100 columns -- both asserts below would have
-# caught it.
+# lode-2bt3.3 retires that pattern here: per-screen footer priority
+# (Binding show=False, honest now that lode-2bt3.2's help overlay lists
+# every binding, shown or not) replaces "shorten a label" as how this screen
+# pays for width. "Related"/"History" are restored to full words; "View
+# content" (view external content) and "Link" (open URL under cursor) are
+# hidden instead, as the least-needed reminders -- both apply only to a
+# subset of notes rather than every note this screen edits. See
+# EditScreen's own BINDINGS comment (src/lode/tui/screens/edit.py) for the
+# full reasoning, including why "Cfg" (App-level) stays abbreviated even
+# though this screen itself now has slack to spare.
 #
-# lode-11io: the App-level "Ask" binding (ctrl+l) renders in every screen's
-# footer too, taking this screen -- the tightest of the ten -- from 90/100 to
-# 97/100 (measured; this is exactly the 3 columns of slack app.py's own "Cfg"
-# rationale comment reserved room for, by keeping "Cfg" abbreviated rather
-# than restoring "Config").
-#
-# lode-ev5j.3: the new Ctrl+N "Link" binding (open-link-under-cursor) reopened
-# this budget -- MEASURED at 105/100 with "Related"/"History" still
-# full-length, the first clip since lode-uczx. Closed by shortening those two
-# labels ("Related" -> "Rel", "History" -> "Hist") to 98/100 (measured; see
-# EditScreen's own BINDINGS comment in src/lode/tui/screens/edit.py for why
-# those two and not "Inspect"/"View").
+# WHAT "EVERY BINDING" MEANS, CHANGED HERE (lode-2bt3.3) -- same change as
+# BrowseScreen's footer test above: this asserts every SHOWN binding fits;
+# every HIDDEN one stays reachable via the help overlay
+# (tests/test_tui_help_screen.py's own anti-drift gate, which is
+# parametrized over EditScreen as well as BrowseScreen precisely because
+# this ticket made this screen hide bindings too -- not duplicated here).
 # ---------------------------------------------------------------------------
 
 
-def test_edit_footer_fits_100_columns_with_every_binding_visible(
+def test_edit_footer_fits_100_columns_with_every_shown_binding_visible(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "lode.db"
@@ -3202,25 +3213,23 @@ def test_edit_footer_fits_100_columns_with_every_binding_visible(
 
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 8 screen-level + 3 shown App-level bindings stay visible; "View
-    # content" -> "View" (lode-uczx), "Related" -> "Rel" and "History" ->
-    # "Hist" (lode-ev5j.3, to make room for "Link"). "Ask" is now a
-    # SCREEN-level binding here too (lode-35nu.11.3, same key/label as the
-    # App-level one it shadows -- docs/keybindings.md), so it renders in
-    # binding-declaration order right after "Link" rather than at the tail
-    # with the other App-level entries. "Quit" is now hidden (show=False,
-    # lode-2bt3.2); "Help" (Ctrl+_, lode-2bt3.2's keybinding overlay) takes
-    # its slot at the tail instead -- MEASURED at 98/100 (this screen's own
-    # tight budget, see the block comment above, is unaffected: one drop pays
-    # for one add).
+    # 6 of the 8 screen-level bindings stay shown, plus 4 shown App-level
+    # ones (the App-level ctrl+l is shadowed by this screen's own "Ask", so
+    # it renders once, at screen level).
+    # "Related"/"History" restored to full words (lode-2bt3.3);
+    # "View content"/"Link" now hidden instead (see the block comment
+    # above). "Ask" is a SCREEN-level binding here too (lode-35nu.11.3, same
+    # key/label as the App-level one it shadows -- docs/keybindings.md), so
+    # it renders in binding-declaration order right after "Inspect" rather
+    # than at the tail with the other App-level entries. "Quit" is hidden
+    # (show=False, lode-2bt3.2, re-verified by lode-2bt3.3); "Help" (Ctrl+_)
+    # takes its slot at the tail instead -- MEASURED at 89/100.
     assert descriptions == [
         "Save",
         "Back",
-        "Rel",
-        "Hist",
+        "Related",
+        "History",
         "Inspect",
-        "View",
-        "Link",
         "Ask",
         "Cfg",
         "Browse",
