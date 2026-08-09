@@ -157,11 +157,7 @@ ALLOWLIST: dict[str, str] = {
     "add": "No help= yet (lode-ii25.x); the full docstring exceeds 12 lines.",
     "recover": "No help= yet (lode-ii25.x); the full docstring exceeds 12 lines.",
     "notes": "No help= yet (lode-ii25.x); the full docstring exceeds 12 lines.",
-    "show": "No help= yet (lode-ii25.x); the full docstring exceeds 12 lines.",
-    "dump-html": "No help= yet (lode-ii25.x); the full docstring exceeds 12 lines.",
     "config": "No help= yet (lode-ii25.x); the full docstring exceeds 12 lines.",
-    "verify": "No help= yet (lode-ii25.x); the full docstring exceeds 12 lines.",
-    "work": "No help= yet (lode-ii25.x); the full docstring exceeds 12 lines.",
 }
 
 
