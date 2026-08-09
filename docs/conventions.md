@@ -33,6 +33,29 @@ This holds for *every* parameter, including the `bool`/`str` ones ruff's B008 do
 lint's own blind spot is what made the file inconsistent in the first place
 ([`stack.md`](stack.md#ruffs-lint-rule-set-settled-lode-cs5u), `lode-up58`).
 
+## Typer: user-facing help via `help=`, rationale in the docstring
+
+Every registered command that carries more than a one-line docstring passes its user-facing text as
+`help=` on its own `.command(...)` decorator (sub-apps included). The docstring stays as the
+maintainer's design record; `help=` is what `--help` prints. **The docstring is left VERBATIM** —
+never edited, not even to strip markup or a bd id from its first line. Every conforming diff is
+purely additive: one `help=` argument, zero docstring bytes touched.
+
+The `help=` text:
+
+- Answers **"when do I run this?"** — name the signal that should send someone here (e.g. `lode
+  status`'s "Action needed" line) where one exists.
+- Is **hard-bounded, test-enforced length** — rendered at `COLUMNS=80`: at most 12 lines for a
+  command `help=`, at most 3 for an option/argument `help=`. The gate is a pytest corpus scan
+  (`lode-ii25.9`) with a human-vetted allowlist escape hatch — each exemption entry in the gate test
+  carries a reason.
+- Has a **first line that stands alone** as a plain one-line sentence — Typer derives the
+  `lode --help` list summary (`short_help`) from it.
+- Uses **`\n\n` for paragraph breaks only, never a single `\n`** (Rich does not rewrap inside a
+  paragraph, so source-line wrapping renders ragged at other widths).
+- Contains **no Sphinx roles, RST backticks, bd issue ids, or test names**. It may cite a `docs/`
+  page as a footnote, never as something load-bearing for the decision to run the command.
+
 ## Derive identifiers, never retype them
 
 A long opaque identifier — a full git SHA, a bd issue id, a `.claude/worktrees/` hash — is never
