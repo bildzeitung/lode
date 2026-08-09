@@ -1294,7 +1294,7 @@ class StubWebFetcher:
         return self._response
 
 
-def _tool_use_block(name: str, input: dict, id: str) -> mock.MagicMock:  # noqa: A002
+def _tool_use_block(name: str, input: dict, id: str) -> mock.MagicMock:
     """Build a duck-typed ``tool_use`` content block (the shape
     lode.llm_provider's reader expects: .type/.name/.input/.id).
 
