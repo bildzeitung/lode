@@ -310,6 +310,12 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
 # gutter) -- comfortably under the bound, no label shortening needed.
 # Re-verified independently during the lode-5ill technical review.
 #
+# lode-2bt3.2: the App-level "Quit" entry is dropped from the footer
+# (show=False; ctrl+q stays fully live) to pay for the new App-level "Help"
+# entry (Ctrl+_/'?', the keybinding help overlay) without exceeding the
+# 100-column budget -- MEASURED: still 84/100, unchanged, since one drop
+# almost exactly offsets one add. See docs/keybindings.md.
+#
 # TRAP (lode-3rvw review): show_horizontal_scrollbar is necessary but NOT
 # sufficient, so this test does not rely on it alone. Textual separates the
 # FooterKeys with 1-column gutters, and when the bar overflows only SLIGHTLY
@@ -349,22 +355,24 @@ def test_capture_footer_fits_100_columns_with_every_binding_visible(
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     # ...and it fits WITHOUT Textual collapsing the gutters to get there.
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 4 screen-level + 5 App-level bindings stay visible (none hidden via
-    # show=False) -- only their description text was shortened, and ctrl+s
-    # keeps its full "Save & new" (lode-bsmc: folded onto ctrl+s from the now-
-    # retired ctrl+n) so it cannot read as a discard-and-restart. "Link" is
+    # All 4 screen-level + 5 shown App-level bindings stay visible (Quit is
+    # now hidden via show=False -- see the block comment above -- so 6
+    # App-level bindings exist but only 5 render), and ctrl+s keeps its full
+    # "Save & new" (lode-bsmc: folded onto ctrl+s from the now-retired
+    # ctrl+n) so it cannot read as a discard-and-restart. "Link" is
     # lode-5ill's Ctrl+N open-link, reclaiming that same freed letter for a
-    # different action -- widths measured in the block comment above.
+    # different action. "Help" is lode-2bt3.2's Ctrl+_ keybinding overlay --
+    # widths measured in the block comment above.
     assert descriptions == [
         "Save & new",
         "Discard",
         "Related",
         "Link",
-        "Quit",
         "Cfg",
         "Browse",
         "Tags",
         "Ask",
+        "Help",
     ]
 
 

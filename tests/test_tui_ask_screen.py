@@ -523,13 +523,16 @@ def test_footer_shows_each_action_once_with_no_duplicate_quit(
         "Back",
         "Open citation",
         "Save as note",
-        "Quit",
         "Cfg",
         "Browse",
         "Tags",
         "Ask",
+        "Help",
     ]
-    assert descriptions.count("Quit") == 1
+    # "Quit" is hidden from the footer entirely now (show=False, lode-2bt3.2
+    # -- see docs/keybindings.md), so there is no "duplicate Quit" question
+    # left to ask; the invariant this test pins is now simply its absence.
+    assert descriptions.count("Quit") == 0
 
 
 # ---------------------------------------------------------------------------
