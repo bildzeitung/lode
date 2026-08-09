@@ -14,6 +14,7 @@ faithfulness gate and egress precondition run with no network and no credentials
 
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
@@ -25,6 +26,8 @@ from lode.llm_provider import AnthropicProvider
 from lode.qa import SONNET_MODEL, QaResult
 from lode.retrieval import ContextItem, TrustTier
 from lode.storage import init_db
+from lode.tool_dispatch import FETCH
+from lode.webfetch import RawResponse
 
 
 class _FakeMessages:
@@ -750,3 +753,159 @@ def test_batched_resolution_composes_no_egress_per_target_not_across_the_batch(
     assert resolved["s-flagged"] == ("flagged secret", True)  # row flag, no host rule
     assert resolved["s-open"] == ("public external body", False)  # neither
     assert resolved["v-open"] == ("open note body", False)  # notes have no scope
+
+
+class _QueueWebFetcher:
+    """Stub Fetcher (lode.webfetch.Fetcher protocol) returning one canned response."""
+
+    def __init__(self, response: RawResponse) -> None:
+        self._response = response
+        self.calls: list[str] = []
+
+    def fetch(self, url: str) -> RawResponse:
+        self.calls.append(url)
+        return self._response
+
+
+def test_ask_passes_tools_enabled_through_to_answer_question(conn) -> None:
+    """lode-8vvp layer 1: cited_answer.ask must pass tools_enabled=True to
+    qa.answer_question -- this is the fix for the bug that made
+    ask_tools_enabled inert on a real 'lode ask'. A regression that drops the
+    argument (or reverts to the old default of False) fails this test."""
+    with mock.patch("lode.cited_answer.answer_question") as mocked:
+        mocked.return_value = QaResult(
+            answer=Answer([]),
+            withheld_citations=(),
+            model=SONNET_MODEL,
+            egress_log_id=1,
+        )
+        ask(conn, "q", [], provider=AnthropicProvider(_FakeClient([])))
+
+    (_call,) = mocked.call_args_list
+    assert _call.kwargs["tools_enabled"] is True
+
+
+def test_end_to_end_tool_turn_cites_a_fetched_snapshot_at_the_ask_layer(
+    conn,
+) -> None:
+    """lode-8vvp's headline acceptance criterion, demonstrated at the
+    cited_answer.ask layer (not only lode.qa.answer_question, lode-8hsk's own
+    end-to-end test).
+
+    A real 'lode ask' with settings.ask_tools_enabled=True answers a question
+    requiring a live lookup: a stub provider drives a free tool turn (fetch)
+    -> tool_result -> final forced-schema turn, producing a claim whose
+    support cites the snapshot the fetch tool persisted. That snapshot has NO
+    entry in the context-derived bodies map (nothing in ``context`` cites it)
+    -- it only reaches the gate because cited_answer.ask resolves
+    QaResult.tool_snapshot_ids into the bodies map. The UNMODIFIED
+    faithfulness gate then verifies the claim against those bytes and lets it
+    survive -- the answer does not abstain.
+    """
+    settings = Settings(ask_tools_enabled=True)
+    url = "https://example.com/live-incident"
+    html = (
+        "<html><body><article><p>"
+        + ("Prod incident postmortem details. " * 20)
+        + "</p></article></body></html>"
+    )
+    web_fetcher = _QueueWebFetcher(
+        RawResponse(final_url=url, status_code=200, text=html)
+    )
+
+    fetch_block = mock.MagicMock()
+    fetch_block.type = "tool_use"
+    fetch_block.name = FETCH
+    fetch_block.input = {"source_type": "web", "external_id": url}
+    fetch_block.id = "toolu_1"
+    free_turn_response = mock.MagicMock()
+    free_turn_response.content = [fetch_block]
+    free_turn_response.stop_reason = "tool_use"
+
+    quoted_span = "Prod incident postmortem details."
+
+    text_block = mock.MagicMock()
+    text_block.type = "text"
+    second_free_turn_response = mock.MagicMock()
+    second_free_turn_response.content = [text_block]
+    second_free_turn_response.stop_reason = "end_turn"
+
+    _responses = [free_turn_response, second_free_turn_response]
+
+    def _create_side_effect(**_kwargs):
+        if _responses:
+            return _responses.pop(0)
+        snapshot_id, body = conn.execute(
+            "SELECT snapshot_id, body FROM snapshots WHERE external_id = ?",
+            (url,),
+        ).fetchone()
+        assert quoted_span in body
+        claim_block = mock.MagicMock()
+        claim_block.type = "tool_use"
+        claim_block.name = "_ClaimsEnvelope"
+        claim_block.input = {
+            "claims": [
+                {
+                    "text": quoted_span,
+                    "support": [
+                        {"snapshot_id": snapshot_id, "quoted_span": quoted_span}
+                    ],
+                }
+            ]
+        }
+        claim_block.id = "toolu_2"
+        response = mock.MagicMock()
+        response.content = [claim_block]
+        response.stop_reason = "tool_use"
+        return response
+
+    client = mock.MagicMock()
+    client.messages.create.side_effect = _create_side_effect
+
+    answer = ask(
+        conn,
+        "What happened in the prod incident?",
+        [],  # no retrieved context at all -- the citation is purely tool-sourced
+        provider=AnthropicProvider(client),
+        settings=settings,
+        web_fetcher=web_fetcher,
+    )
+
+    assert web_fetcher.calls == [url]
+    assert not answer.abstained
+    (claim,) = answer.claims
+    (support,) = claim.support
+    assert support.snapshot_id
+    assert support.version_id is None
+
+
+def test_ask_tools_enabled_false_reproduces_notes_only_prompt_byte_for_byte(
+    conn,
+) -> None:
+    """settings.ask_tools_enabled=False (the default) must send the exact same
+    system prompt as before lode-8vvp/lode-8hsk -- lode.qa._SYSTEM_PROMPT --
+    even though cited_answer.ask now always passes tools_enabled=True: the
+    knob alone must decide, via lode.tool_dispatch.build_ask_tools collapsing
+    to (), never a caller-side conditional.
+
+    This pins the ASK layer's half: the wire's system prompt is qa._SYSTEM_PROMPT
+    and the call went through the empty-tools structured_call path at all (a
+    non-empty tool set routes through messages.create, so _FakeMessages.parse
+    would never be called and the single-call unpack below would fail). That
+    _SYSTEM_PROMPT is itself byte-for-byte the pre-lode-8hsk notes-only prompt is
+    pinned separately, against a frozen literal, by test_qa.py."""
+    from lode.qa import _SYSTEM_PROMPT
+
+    body = "lode ships rerank OFF in the walking skeleton."
+    client = _FakeClient([_note_claim("rerank is off", "rerank OFF", "v1")])
+
+    ask(
+        conn,
+        "q",
+        [_note_context("v1", body)],
+        provider=AnthropicProvider(client),
+        settings=Settings(ask_tools_enabled=False),
+    )
+
+    (call,) = client.messages.calls
+    assert call["system"] == _SYSTEM_PROMPT

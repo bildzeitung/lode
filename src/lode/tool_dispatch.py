@@ -241,6 +241,7 @@ def make_tool_result(
     jira_fetcher: Fetcher | None = None,
     confluence_fetcher: Fetcher | None = None,
     web_fetcher: Fetcher | None = None,
+    fetched_snapshot_ids: set[str] | None = None,
 ) -> Callable[[str, dict[str, Any]], str]:
     """Build the ``tool_result`` callback :meth:`LLMProvider.run_tool_turns` calls.
 
@@ -250,7 +251,22 @@ def make_tool_result(
     :func:`~lode.tools.fetch_for_ask` -- production leaves them ``None`` and
     each connector builds its own default authenticated fetcher, exactly as
     those functions already do on their own.
+
+    ``fetched_snapshot_ids`` (lode-8vvp) is an optional caller-owned sink: every
+    ``snapshot_id`` a successful ``fetch`` call persists via
+    :func:`~lode.tools.fetch_for_ask` is added to it, in place, as the calls
+    happen. This is the return channel a model-issued tool call otherwise has
+    no way to surface past its own JSON string result --
+    :func:`lode.qa.answer_question` passes its own set here and hands the
+    accumulated ids back on :class:`~lode.qa.QaResult` so
+    :func:`lode.cited_answer.ask` can resolve them into the faithfulness
+    gate's ``bodies`` map. Left ``None`` (the default), the ids are collected
+    into a throwaway set the caller never sees -- the option exists for
+    callers with no use for them (the tool-dispatch unit tests), so the
+    collection itself stays unconditional below rather than becoming a
+    branch at the persist site.
     """
+    sink = set() if fetched_snapshot_ids is None else fetched_snapshot_ids
 
     def _tool_result(name: str, tool_input: dict[str, Any]) -> str:
         if not budget.consume():
@@ -284,6 +300,7 @@ def make_tool_result(
                     jira_fetcher=jira_fetcher,
                     confluence_fetcher=confluence_fetcher,
                     web_fetcher=web_fetcher,
+                    fetched_snapshot_ids=sink,
                 )
         except (
             JiraSearchError,
@@ -355,6 +372,7 @@ def _dispatch_fetch(
     jira_fetcher: Fetcher | None,
     confluence_fetcher: Fetcher | None,
     web_fetcher: Fetcher | None,
+    fetched_snapshot_ids: set[str],
 ) -> str:
     source_type = str(tool_input.get("source_type") or "")
     external_id = str(tool_input.get("external_id") or "")
@@ -390,6 +408,8 @@ def _dispatch_fetch(
         fetcher=fetcher,
         settings=settings,
     )
+    if fetched_snapshot_ids is not None:
+        fetched_snapshot_ids.add(snapshot_id)
     return json.dumps({"snapshot_id": snapshot_id})
 
 
