@@ -52,7 +52,6 @@ import pytest
 from conftest import markdown_corpus_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CLAUDE_DIR = REPO_ROOT / ".claude"
 
 VALIDATOR = "scripts/validate-sha40.sh"
 

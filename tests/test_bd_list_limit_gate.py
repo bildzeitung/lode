@@ -189,8 +189,11 @@ SH_GLOB_DIRS = [REPO_ROOT / "scripts", REPO_ROOT / ".claude"]
 
 # Markdown that a Claude Code agent executes bash out of: skills and subagent
 # definitions alike (see the module docstring's scan-surface section). Local
-# alias onto conftest's shared source of truth, kept so this module's own
-# monkeypatch target (below) still binds.
+# alias onto conftest's shared source of truth, kept because the module
+# docstring and the tests below refer to the scan surface by this name.
+# Rebind it (never mutate it in place) if a test ever needs a narrower
+# surface -- the list object itself is shared with conftest and every other
+# module that aliases it.
 MD_GLOBS = MARKDOWN_CORPUS_GLOBS
 
 # `bd`, then zero or more `-flag [value]` groups (tolerating a quoted or bare value),

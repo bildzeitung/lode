@@ -1807,12 +1807,19 @@ AGENTS_DIR = _CHECKOUT_ROOT / ".claude" / "agents"
 #: definition under ``.claude/agents``. The single source of truth for the
 #: scan surface -- :func:`markdown_corpus_files` below is its flattened,
 #: sorted-per-glob-then-concatenated view. A module that needs its own
-#: monkeypatch target keeps a local alias bound to this list (e.g.
-#: ``MD_GLOBS = MARKDOWN_CORPUS_GLOBS``) rather than redefining the pairs.
-MARKDOWN_CORPUS_GLOBS: list[tuple[Path, str]] = [
+#: monkeypatch target keeps a local alias bound to this tuple (e.g.
+#: ``SCAN_GLOBS = MARKDOWN_CORPUS_GLOBS``, rebound by ``monkeypatch.setattr``)
+#: rather than redefining the pairs.
+#:
+#: A ``tuple``, not a ``list``, for the same reason
+#: :func:`markdown_corpus_blocks` returns tuples: every aliasing module shares
+#: this one object, so an in-place ``append``/``remove`` anywhere would
+#: silently change the scan surface for the whole session. Rebinding an alias
+#: is the supported narrowing; mutating is now a ``TypeError``.
+MARKDOWN_CORPUS_GLOBS: tuple[tuple[Path, str], ...] = (
     (SKILLS_DIR, "*/SKILL.md"),
     (AGENTS_DIR, "*.md"),
-]
+)
 
 
 def markdown_corpus_files() -> list[Path]:
@@ -1821,11 +1828,10 @@ def markdown_corpus_files() -> list[Path]:
     ``sorted(SKILLS_DIR.glob(...)) + sorted(AGENTS_DIR.glob(...))`` produced,
     preserved so no consumer's iteration order shifts.
 
-    Not cached: cheap (a directory listing), and re-globbing per call keeps
-    this usable from a test that legitimately wants a fresh read (e.g. after
-    writing a file into a monkeypatched root). Contrast
-    :func:`markdown_corpus_blocks` below, which IS cached because it also
-    reads and fence-parses file content -- the expensive, worth-caching part.
+    Not cached: it is a pair of directory listings, cheap enough that a shared
+    cache would buy nothing. Contrast :func:`markdown_corpus_blocks` below,
+    which IS cached because it also reads and fence-parses file content -- the
+    expensive, worth-caching part.
     """
     files: list[Path] = []
     for base, pattern in MARKDOWN_CORPUS_GLOBS:
@@ -1836,13 +1842,20 @@ def markdown_corpus_files() -> list[Path]:
 @functools.cache
 def markdown_corpus_blocks() -> tuple[tuple[Path, tuple[str, ...]], ...]:
     """(path, fenced-bash-blocks) for every file in :data:`MARKDOWN_CORPUS_GLOBS`,
-    in :func:`markdown_corpus_files` order -- read and fence-parsed ONCE per
-    session, not once per importing gate (lode-2evf). Before this,
-    ``tests/test_validate_sha40_call_sites.py`` alone re-read and re-fence-
-    parsed the ~174KB ``land/SKILL.md`` and ``code-reviewer.md`` at import
-    time, files this module already caches individually as
-    :data:`LAND_SKILL_BLOCKS`/:data:`CODE_REVIEWER_AGENT_BLOCKS` precisely to
-    avoid that repeated cost.
+    in :func:`markdown_corpus_files` order -- the whole-corpus read and
+    fence-parse happens ONCE per session here, however many gates want it,
+    instead of once per importing gate (lode-2evf). Before this,
+    ``tests/test_validate_sha40_call_sites.py`` re-read and re-fence-parsed
+    the whole corpus at import time on its own.
+
+    Scope of the win, stated honestly: this deduplicates the *whole-corpus*
+    passes onto one cache. The per-file constants below
+    (:data:`LAND_SKILL_BLOCKS`, :data:`CODE_REVIEWER_AGENT_BLOCKS`,
+    :data:`SWEEP_SKILL_BLOCKS`) still read and parse their three files
+    separately, because their consumers want a single named file (and, for
+    the ``_TEXT`` constants, raw text this blocks-only cache cannot serve).
+    Folding those onto a shared cached corpus is follow-up work, not done
+    here.
 
     Returns tuples, not lists -- ``@functools.cache`` hands every caller the
     same object, and a mutable ``list`` result would let one caller's mutation
