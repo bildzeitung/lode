@@ -4703,3 +4703,31 @@ entries below from being rewritten to chase the current tree.)
   question can be settled empirically once the tool exists. Non-goal, inherited and unchanged: no
   existing entry in this file is rewritten, compacted or moved — this work changes how entries are
   **found**, never what they say.
+
+- **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
+  decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent
+  of content. Measured by replaying every merge in history that touches this file with `git
+  merge-tree --write-tree --name-only`: 66 merges touch it, 23 (35%) genuinely conflict on it; the
+  rate tripled from 15% in July to 48% in the first nine days of August. A committed root
+  `.gitattributes` now declares `docs/decisions.md merge=union` — git's built-in `union` merge
+  driver, which needs no per-machine `merge.union.driver` entry in `.git/config` anywhere, so the
+  committed file is sufficient on its own and travels on the git wire exactly like code. Verified
+  lossless against a real conflicting merge from history (`b63ce7e`, `land/lode-d7pm` vs
+  `origin/trunk`): all lines either side added survive, zero pre-existing base lines dropped, no
+  conflict markers left behind — and it cannot fail
+  [`scripts/check-decisions-no-silent-rewrite.sh`](../scripts/check-decisions-no-silent-rewrite.sh)
+  (which fires only when a pre-existing non-blank line disappears; a union merge is structurally
+  incapable of removing a line) or
+  [`tests/test_decisions_supersession_markers.py`](../tests/test_decisions_supersession_markers.py)'s
+  marker-shape scans (union merges at hunk granularity, so a marker cannot be split across sides). A
+  gate, [`tests/test_decisions_union_merge_driver.py`](../tests/test_decisions_union_merge_driver.py),
+  proves the driver is actually IN EFFECT — it builds two real diverging commits that each append a
+  different entry, runs an actual `git merge`, and asserts a clean result with both entries and no
+  conflict markers — rather than only grepping `.gitattributes` for the string, which would pass
+  vacuously on a typo'd or unrecognized driver name. This does **not** solve axis 2 of the parent
+  epic (`lode-4jtc`) — the lookup/retrieval cost of a large flat file — which moved to its own epic;
+  this ticket is scoped to the landing-conflict axis only. **The new failure mode this introduces:** a
+  union merge silently accepts both sides with nothing flagging the combination for human review —
+  correct, and the entire point, for an ordinary append-only log, but two branches appending
+  *contradictory* entries about the same decision will both survive with nothing catching it.
+  Accepted deliberately as cheaper than the append-at-EOF conflict rate this replaces.
