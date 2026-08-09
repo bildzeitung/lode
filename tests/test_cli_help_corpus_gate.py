@@ -187,12 +187,26 @@ def _iter_leaf_commands() -> Iterator[_Command]:
     yield from _walk(top, top_ctx, ())
 
 
+#: Strips ANSI SGR escapes (e.g. ``\x1b[1m``) from rendered ``--help`` output.
+#: Rich's own terminal-color detection (not this gate's ``env=``) decides
+#: whether to emit these -- notably it treats the ``GITHUB_ACTIONS`` env var
+#: as a color-capable terminal even though ``CliRunner`` capture is not a
+#: TTY, so CI runs render colored output this gate never sees locally. The
+#: escapes are zero-width once stripped, so the COLUMNS=80 line-length rules
+#: below are unaffected either way.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
 def _render_help(command: _Command) -> str:
-    result = runner.invoke(app, [*command.args, "--help"], env={"COLUMNS": COLUMNS})
+    result = runner.invoke(
+        app,
+        [*command.args, "--help"],
+        env={"COLUMNS": COLUMNS, "NO_COLOR": "1", "TERM": "dumb"},
+    )
     assert result.exit_code == 0, (
         f"lode {command.name} --help exited {result.exit_code}:\n{result.output}"
     )
-    return result.output
+    return _ANSI_ESCAPE_RE.sub("", result.output)
 
 
 def _command_help_body(output: str) -> list[str]:
@@ -201,9 +215,11 @@ def _command_help_body(output: str) -> list[str]:
     blank lines -- paragraph breaks -- are kept; they are still rendered
     lines occupying vertical space)."""
     lines = output.splitlines()
-    usage_idx = next(
+    usage_candidates = [
         i for i, line in enumerate(lines) if line.strip().startswith("Usage:")
-    )
+    ]
+    assert usage_candidates, f"no 'Usage:' line in rendered help:\n{output}"
+    usage_idx = usage_candidates[0]
     panel_starts = [i for i, line in enumerate(lines) if line.strip().startswith("╭")]
     end_idx = panel_starts[0] if panel_starts else len(lines)
     body = lines[usage_idx + 1 : end_idx]
