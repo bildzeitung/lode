@@ -25,8 +25,7 @@ the rendered output against all six rules.
 
 ## Why this doesn't fix any command's help text
 
-lode-ii25.2 through lode-ii25.7 (sibling tickets, one of which --
-lode-ii25.10 -- builds concurrently with this one) are the ones that add an
+lode-ii25.2 through lode-ii25.7 (sibling tickets) are the ones that add an
 explicit, short ``help=`` to each command going forward. Until a given
 command gets one, Typer renders its full maintainer docstring as the
 ``--help`` text -- which is exactly what ``docs/conventions.md`` documents
@@ -41,10 +40,10 @@ first written, not later.
 SABOTAGE-VERIFIED (matching the precedent in ``tests/test_bd_list_limit_gate.py``
 and ``tests/test_validate_sha40_call_sites.py``): removing an entry from
 :data:`ALLOWLIST` while its command's help still violates a rule fails this
-test -- confirmed by hand during development (add a fresh ``lode-XXXX``
-token to a clean command's docstring with the corresponding allowlist entry
-absent; the gate turned red; reverted before landing). The assertions below
-are not vacuous.
+test -- re-confirmed at technical review by deleting the ``add`` and
+``status`` entries in-memory, which surfaced ``rule 5 (command help 16 lines
+> 12)`` and four ``status`` violations respectively. The assertions below are
+not vacuous.
 
 ## Rendered-output parsing, not source parsing
 
@@ -75,10 +74,10 @@ piece of this file worth documenting carefully:
 
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
+from functools import cache
 
 import click
 import typer.main
@@ -114,6 +113,21 @@ MAX_OPTION_HELP_LINES = 3
 #: column), every continuation observed sits at >=20.
 _ENTRY_INDENT_THRESHOLD = 10
 
+#: The pinned render width. Passed as ``env=`` on every ``CliRunner.invoke``
+#: (see :func:`_render_help`), which is hermetic on its own -- verified by
+#: rendering under an ambient ``COLUMNS=200`` (still 80-column output), and
+#: that the env value genuinely DRIVES the width rather than coinciding with
+#: rich's 80-column non-tty default (rendering at 40/120/200 produced 40/120/
+#: 200-column output). Deliberately NOT also written to ``os.environ``: that
+#: would leak an unrestored global into the rest of the pytest session (and
+#: across xdist workers) for no added guarantee.
+#:
+#: This does NOT contradict ``tests/conftest.py``'s ``set_console_width``
+#: fixture, whose docstring records that ``env={"COLUMNS": ...}`` has no
+#: effect. That note is about ``lode.cli``'s own long-lived ``console``
+#: singleton, which bakes its width at import time; the help text measured
+#: here is rendered by Typer's OWN rich console, constructed fresh per
+#: invocation, so it reads the environment every time.
 COLUMNS = "80"
 
 runner = CliRunner()
@@ -272,9 +286,9 @@ def _rule_1_to_4_violations(text: str) -> list[str]:
     return violations
 
 
-def _all_violations(command: _Command, output: str) -> list[str]:
-    """Every rule violation found in ``command``'s rendered ``--help``."""
-    violations = list(_rule_1_to_4_violations(output))
+def _all_violations(output: str) -> list[str]:
+    """Every rule violation found in a command's rendered ``--help``."""
+    violations = _rule_1_to_4_violations(output)
 
     body = _command_help_body(output)
     if len(body) > MAX_COMMAND_HELP_LINES:
@@ -312,18 +326,25 @@ def _all_violations(command: _Command, output: str) -> list[str]:
     return violations
 
 
+@cache
+def _violations_by_command() -> dict[str, list[str]]:
+    """``{command name: its rule violations}`` for every registered command.
+
+    Cached because both gates below need the same table, and rendering
+    ``--help`` for the whole corpus twice is pure waste.
+    """
+    return {c.name: _all_violations(_render_help(c)) for c in _iter_leaf_commands()}
+
+
 def test_every_registered_command_help_obeys_the_help_rules_or_is_allowlisted() -> None:
-    os.environ["COLUMNS"] = COLUMNS  # belt-and-suspenders; env= on invoke() is primary
-    commands = list(_iter_leaf_commands())
-    assert commands, "no commands discovered -- the walk itself is broken"
+    by_command = _violations_by_command()
+    assert by_command, "no commands discovered -- the walk itself is broken"
 
     unexplained: list[str] = []
-    for command in commands:
-        output = _render_help(command)
-        violations = _all_violations(command, output)
-        if violations and command.name not in ALLOWLIST:
+    for name, violations in by_command.items():
+        if violations and name not in ALLOWLIST:
             unexplained.append(
-                f"{command.name!r}: {'; '.join(violations)} "
+                f"{name!r}: {'; '.join(violations)} "
                 "(not in ALLOWLIST -- add an entry with a reason, or fix the "
                 "help text)"
             )
@@ -347,18 +368,16 @@ def test_allowlist_entries_still_have_a_command_that_violates_something() -> Non
     entry for a command that no longer violates any rule (its help= was
     fixed by a sibling ticket) should be removed -- otherwise a future
     regression on that same command could slip back in unnoticed, since the
-    entry would silently keep excusing it. This does not fail the BUILD gate
-    above; it is a separate, softer signal surfaced as its own test so
-    hygiene drift shows up without blocking anyone on unrelated deletions.
+    entry would silently keep excusing it. Split out as its own test purely so
+    the failure names the hygiene problem ("remove this stale entry") rather
+    than being conflated with the gate above ("this command's help violates a
+    rule") -- both are ordinary asserts and both fail the suite.
     """
-    commands = {c.name: c for c in _iter_leaf_commands()}
+    by_command = _violations_by_command()
     stale = []
     for name in ALLOWLIST:
-        command = commands.get(name)
-        if command is None:
+        if name not in by_command:
             stale.append(f"{name!r}: no such command registered any more")
-            continue
-        output = _render_help(command)
-        if not _all_violations(command, output):
+        elif not by_command[name]:
             stale.append(f"{name!r}: no longer violates any rule -- remove this entry")
     assert not stale, "\n".join(stale)
