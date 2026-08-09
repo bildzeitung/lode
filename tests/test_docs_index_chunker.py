@@ -1,4 +1,4 @@
-"""Tests for lode.docs_index_chunker -- the docs/ lookup index chunker (lode-t6o1.1).
+"""Tests for scripts/docs_index_chunker.py -- the docs/ lookup index chunker (lode-t6o1.1).
 
 Covers the acceptance criteria: max(unit_bytes) <= 16384 over the REAL docs/
 corpus (not a fixture), fence-awareness, decisions.md's bullet-based split with
@@ -13,15 +13,23 @@ gate that fails on the next doc added teaches nothing.
 import functools
 from pathlib import Path
 
-from lode.docs_index_chunker import (
-    MAX_UNIT_BYTES,
-    Unit,
-    chunk_corpus,
-    chunk_file,
-    classify,
-)
+from conftest import load_module_from_path
 
-DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# scripts/ isn't an installed package, so load by file path via the shared
+# helper (tests/conftest.py) -- same as tests/test_check_links.py and
+# tests/test_check_docstring_refs.py, the two other repo-tooling CLIs.
+_chunker = load_module_from_path(
+    "docs_index_chunker", REPO_ROOT / "scripts" / "docs_index_chunker.py"
+)
+MAX_UNIT_BYTES = _chunker.MAX_UNIT_BYTES
+Unit = _chunker.Unit
+chunk_corpus = _chunker.chunk_corpus
+chunk_file = _chunker.chunk_file
+classify = _chunker.classify
+
+DOCS_DIR = REPO_ROOT / "docs"
 
 
 def _bytes(u: Unit) -> int:
