@@ -191,7 +191,9 @@ def _iter_leaf_commands() -> Iterator[_Command]:
         if hasattr(cmd, "list_commands"):
             for name in cmd.list_commands(ctx):
                 sub = cmd.get_command(ctx, name)
-                assert sub is not None, f"registered but unresolvable: {prefix + (name,)}"
+                assert sub is not None, (
+                    f"registered but unresolvable: {prefix + (name,)}"
+                )
                 sub_ctx = click.Context(sub, parent=ctx, info_name=name)
                 yield from _walk(sub, sub_ctx, prefix + (name,))
         else:
@@ -214,7 +216,9 @@ def _command_help_body(output: str) -> list[str]:
     blank lines -- paragraph breaks -- are kept; they are still rendered
     lines occupying vertical space)."""
     lines = output.splitlines()
-    usage_idx = next(i for i, line in enumerate(lines) if line.strip().startswith("Usage:"))
+    usage_idx = next(
+        i for i, line in enumerate(lines) if line.strip().startswith("Usage:")
+    )
     panel_starts = [i for i, line in enumerate(lines) if line.strip().startswith("╭")]
     end_idx = panel_starts[0] if panel_starts else len(lines)
     body = lines[usage_idx + 1 : end_idx]
@@ -240,7 +244,7 @@ def _panel_entries(output: str) -> list[list[str]]:
             while i < len(lines) and not lines[i].strip().startswith("╰"):
                 line = lines[i]
                 inner = line[1:-1] if line.startswith("│") else line
-                content = inner[1:] if inner.startswith(" ") else inner
+                content = inner.removeprefix(" ")
                 indent = len(content) - len(content.lstrip(" "))
                 if indent <= _ENTRY_INDENT_THRESHOLD or current is None:
                     if current is not None:
