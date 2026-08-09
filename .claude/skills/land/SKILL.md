@@ -2365,6 +2365,28 @@ bd update <id> --remove-label land-escalated --add-label <ready-for-code-review|
 scripts/bd-dolt-push.sh
 ```
 
+**Re-entering at `ready-for-code-review` (the `code-reviewer` and `coding` build-time rows above)
+MUST also (re)write `metadata.review_head` as part of this same resolution, before publishing
+(lode-uomo).** This hand-edit happens outside any `/code` run, and nothing else on this path forces
+that field to exist — `/code` step 1's stranded-review sweep will not dispatch a `code-reviewer`
+until a non-empty `review_head` can be established (deliberately: it will not guess a head to
+review), so omitting this step used to strand the ticket at `ready-for-code-review` forever,
+`in_progress` and unreturned by `bd ready`, invisible to everything except a repeated "needs a human"
+line in `/code`'s own report every pass. (OBSERVED: `lode-1fzq` — resolved by hand exactly like this,
+after the omission had already stranded it.) Step 1 now derives the field itself from the live
+`origin/land/<id>` tip when it's missing, but that is a **backstop**, not a substitute: set it here,
+at resolution time, same as the build-time escalation path already does on the agent side
+(`coding.md`, `lode-t83` Gap 1). Validate before writing, exactly as the backstop does — an
+`ls-remote` that resolves nothing prints nothing, and an unguarded write would put an *empty*
+`review_head` on the ticket, re-creating the very state this step exists to prevent:
+
+```bash
+SHA="$(git ls-remote origin "refs/heads/land/<id>" | cut -f1)"
+scripts/validate-sha40.sh review_head "$SHA" && bd update <id> --set-metadata review_head="$SHA"
+  # --set-metadata (upsert), NOT --metadata (a full-blob replace that silently drops
+  # land_head/land_summary/other keys already on the ticket)
+```
+
 **The build-time case is the deliberately arguable one, decided rather than left implicit.** A
 build-time escalation means the producer stopped mid-build, so its branch is green-but-possibly
 **incomplete** and never reached `ready-for-code-review` on its own. Re-entering it there hands the

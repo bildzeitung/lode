@@ -2670,8 +2670,8 @@ per-source table in
 [`land/SKILL.md`](../.claude/skills/land/SKILL.md#re-entry-per-escalating-source--re-enter-at-the-gate-that-escalated)
 (`lode-08g`, extended by `lode-wp2r`, further extended by `lode-2m93`).
 
-**Making the `ready-for-code-review` re-entry executable (lode-08g's decision had two gaps; both
-closed by lode-t83):** re-entering at `ready-for-code-review` is only a real re-entry if something
+**Making the `ready-for-code-review` re-entry executable (lode-08g's decision had two gaps, both
+closed by lode-t83; a third, on the human hand-edit path, closed by lode-uomo):** re-entering at `ready-for-code-review` is only a real re-entry if something
 carries the hand-off and something else consumes the label —
 
 1. A `coding` build-time escalation used to skip recording `review_head` entirely (it only wrote that
@@ -2688,6 +2688,19 @@ carries the hand-off and something else consumes the label —
    sweep gained a sibling step that looks for `ready-for-code-review` + `in_progress` tickets the same
    way it looks for `needs-rebase`, and dispatches a `code-reviewer` at each — mirroring the
    `needs-rebase` sweep exactly, just one gate earlier in the pipeline.
+3. Gap 1's fix covered the *agent-side* setter only. A human resolving `land-escalated` by exit (a)
+   re-adds `ready-for-code-review` by hand, outside any `/code` run, and nothing there forced
+   `review_head` to be (re)written — so a resolution that omitted it still tripped the sweep's guard
+   and stranded the ticket permanently (OBSERVED: `lode-1fzq`). **Fixed on both sides (lode-uomo):**
+   the resolution procedure in
+   [`land/SKILL.md`](../.claude/skills/land/SKILL.md#resolving-a-land-escalated-branch) now *requires*
+   writing `review_head` from the live `origin/land/<id>` tip (validated with
+   `scripts/validate-sha40.sh`) as part of the same resolution, and `/code`'s step-1 sweep derives the
+   same value itself as a backstop when the field is missing — dispatching only if the ref actually
+   resolves, and still reporting the ticket as needing a human when no head can be established at all.
+   A derived value equals the tip by construction, so the reviewer's drift comparison is uninformative
+   for such a ticket (harmless: the reviewer reads `trunk...HEAD`, never `review_head...HEAD` — see
+   lode-9b5n immediately below); that is why the resolution-time write, not the backstop, is the norm.
 
 **`review_head` is stale BY CONSTRUCTION on an exit (d) re-entry (lode-9b5n).** A ticket reaching exit
 (d) has already been through `code-reviewer` once, so `metadata.review_head` still names the

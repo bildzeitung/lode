@@ -1080,7 +1080,7 @@ def test_every_skill_and_agent_file_is_covered() -> None:
     assert "skills/land/SKILL.md" in scanned, scanned
     assert "agents/coding.md" in scanned, scanned
     # code/SKILL.md earns its own entry: it is the ONE real file whose every
-    # fence opens off column 0 -- five plainly indented, three indented AND
+    # fence opens off column 0 -- six plainly indented, three indented AND
     # blockquoted, one blockquoted only (lode-wroz) -- so it is the only one of
     # the three whose entry here goes red if `bash_fence_blocks` ever regresses
     # to a column-0 `line.startswith("```")` scanner (lode-ovgs). land/SKILL.md and
@@ -1092,21 +1092,21 @@ def test_every_skill_and_agent_file_is_covered() -> None:
 
 def test_code_skill_blockquoted_blocks_are_visible_and_clean() -> None:
     """Sabotage-verified against the REAL file, not a synthetic snippet (lode-wroz's
-    acceptance criteria). `code/SKILL.md` carries nine bash blocks; four open with a
-    blockquoted fence (~lines 65, 292, 324, 367) and were invisible to `_bash_blocks`
+    acceptance criteria). `code/SKILL.md` carries ten bash blocks; four open with a
+    blockquoted fence (~lines 65, 307, 339, 388) and were invisible to `_bash_blocks`
     before this fix. Both regressions were re-measured against this exact file rather
     than estimated: drop the blockquote strip from `bash_fence_blocks` and
-    `len(blocks) == 9` fails at **5**; regress it further to the pre-lode-ovgs column-0
+    `len(blocks) == 10` fails at **6**; regress it further to the pre-lode-ovgs column-0
     `line.startswith("```")` scanner and it fails at **0**.
 
-    The count alone is not enough -- a delimiters-only strip also parses to 9, measured.
+    The count alone is not enough -- a delimiters-only strip also parses to 10, measured.
     The load-bearing assertion is the last one: block 0 (~lines 65-68) is the real
     `$REPO_ROOT` assign-then-use pair the synthetic
     `test_blockquoted_fence_content_lines_are_also_unmarked` above covers in miniature,
     and it reports `{"REPO_ROOT"}` rather than `set()` under that partial fix."""
     text = (SKILLS_DIR / "code" / "SKILL.md").read_text(encoding="utf-8")
     blocks = _bash_blocks(text)
-    assert len(blocks) == 9, blocks
+    assert len(blocks) == 10, blocks
     assert "REPO_ROOT" in blocks[0], blocks[0]
     assert _violations_in_block(blocks[0]) == set(), blocks[0]
 
