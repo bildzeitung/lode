@@ -47,6 +47,14 @@ def test_fence_flags_indented_fence() -> None:
     assert fence_flags(lines) == [False, False, True, True]
 
 
+def test_fence_flags_closer_with_trailing_content_is_not_a_close() -> None:
+    """``fence_flags`` shares :func:`closes_fence` with ``fence_scan``, so a
+    marker run carrying trailing content is content, not a close (CommonMark).
+    Pins the rule the two consumers must agree on."""
+    lines = ["```", "```python", "still inside", "```", "out"]
+    assert fence_flags(lines) == [False, True, True, True, False]
+
+
 def test_fence_flags_unterminated_fence_stays_open() -> None:
     lines = ["```", "still inside"]
     assert fence_flags(lines) == [False, True]

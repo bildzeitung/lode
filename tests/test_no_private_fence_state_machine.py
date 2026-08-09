@@ -49,7 +49,16 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCAN_DIRS = (REPO_ROOT / "tests", REPO_ROOT / "scripts", REPO_ROOT / "src" / "lode")
-EXEMPT = {REPO_ROOT / "tests" / "conftest.py"}
+#: The sanctioned homes, and the only ones: ``fence_scan`` for the test side,
+#: ``fence_parsing`` for the importable primitive (lode-ee7b). ``fence_parsing``
+#: is listed even though its current regex-based shape is invisible to the
+#: detector anyway -- so that the exemption this module's docstring and failure
+#: message both CLAIM is mechanically real, and rewriting the one home in the
+#: ``startswith`` idiom cannot make it fail its own gate.
+EXEMPT = {
+    REPO_ROOT / "tests" / "conftest.py",
+    REPO_ROOT / "src" / "lode" / "fence_parsing.py",
+}
 
 
 def _contains_fence_literal(node: ast.AST) -> bool:
@@ -140,9 +149,9 @@ def _scan_paths() -> list[Path]:
 
 def test_no_private_fence_toggle_state_machine_outside_conftest() -> None:
     """THE GATE: every module under tests/*.py, scripts/*.py, and
-    src/lode/*.py, except tests/conftest.py (the one sanctioned home,
-    ``fence_scan``), must be free of a private fence-toggle open/close state
-    machine."""
+    src/lode/*.py, except the two sanctioned homes (tests/conftest.py's
+    ``fence_scan`` and src/lode/fence_parsing.py's primitives), must be free
+    of a private fence-toggle open/close state machine."""
     offenders: list[str] = []
     for path in _scan_paths():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -271,7 +280,13 @@ def test_scan_dirs_covers_src_lode(tmp_path, monkeypatch) -> None:
     gate's own SCAN_DIRS at a throwaway tree standing in for src/lode/,
     holding the exact pre-lode-jm4a shape from
     ``test_gate_sabotage_catches_the_pre_lode_jm4a_shape`` above, rather than
-    mutating the real src/lode/ tree the gate itself is running from."""
+    mutating the real src/lode/ tree the gate itself is running from.
+
+    The monkeypatched half alone would stay green if ``src/lode`` were dropped
+    from ``SCAN_DIRS`` again -- it only proves ``_scan_paths`` globs whatever it
+    is handed -- so the widening itself is asserted directly first."""
+    assert REPO_ROOT / "src" / "lode" in SCAN_DIRS
+
     gate = sys.modules[__name__]
 
     fake_src_lode = tmp_path / "src_lode"

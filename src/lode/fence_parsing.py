@@ -14,10 +14,10 @@ one-way dependency tests/ already has on src/ anyway (pytest's own
 ``sys.path`` setup makes ``src/`` importable from ``tests/``).
 
 Before this module, the same three rules were independently hand-rolled
-THREE times: ``tests/conftest.py``'s ``fence_scan`` (test-side gates),
+TWICE: in ``tests/conftest.py``'s ``fence_scan`` (test-side gates) and in
 ``src/lode/docs_index_chunker.py``'s former ``_fence_flags`` (the docs-index
-chunker), and none in ``scripts/check_links.py`` -- ``check_links.py``'s own
-``_content_lines`` deliberately implements a DIFFERENT, simpler rule (toggles
+chunker). ``scripts/check_links.py`` is a third fence scanner but not a third
+copy: its ``_content_lines`` deliberately implements a DIFFERENT, simpler rule (toggles
 on ANY fence-looking line, regardless of marker character or length) and is
 NOT a consumer of this module; see its own docstring for why.
 
@@ -38,13 +38,6 @@ import re
 #: (leading whitespace already removed by the caller), since a fence may be
 #: indented -- e.g. nested under a markdown list item.
 _FENCE_MARKER_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
-
-#: A fence delimiter matched directly against a line's LEADING whitespace --
-#: for a caller that only needs a per-line "is this a fence delimiter at all"
-#: boolean flag and does not otherwise strip the line first (docs_index_chunker's
-#: use). Equivalent to stripping and running ``_FENCE_MARKER_RE`` at the start
-#: of the (possibly indented) run.
-_FENCE_LINE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 
 
 def match_fence_marker(stripped: str) -> tuple[str, str] | None:
@@ -76,17 +69,26 @@ def fence_flags(lines: list[str]) -> list[bool]:
     does that itself before consulting :func:`match_fence_marker` /
     :func:`closes_fence` directly, since the strip changes what "stripped"
     means per line.
+
+    Built on the two primitives above rather than on a private regex of its
+    own: a second copy of the marker alternation *inside* the one sanctioned
+    home is exactly the drift this module exists to end, and the AST gate
+    cannot see it here (regex-shaped machines are a documented detector blind
+    spot). One consequence, deliberate: a would-be closer carrying trailing
+    content (```` ```python ````) is content, not a close -- CommonMark's rule,
+    and the rule ``fence_scan`` has always applied. Measured against the real
+    ``docs/`` corpus: unit count unchanged.
     """
     flags = []
     open_marker: str | None = None
     for line in lines:
         flags.append(open_marker is not None)
-        m = _FENCE_LINE_RE.match(line)
-        if not m:
+        stripped = line.strip()
+        if open_marker is not None:
+            if closes_fence(stripped, open_marker):
+                open_marker = None
             continue
-        marker = m.group(1)
-        if open_marker is None:
-            open_marker = marker
-        elif marker[0] == open_marker[0] and len(marker) >= len(open_marker):
-            open_marker = None
+        m = match_fence_marker(stripped)
+        if m:
+            open_marker = m[0]
     return flags
