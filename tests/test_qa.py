@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from conftest import fake_tool_turn_client
 
 from lode.answer import Answer, Claim, Support
 from lode.config import Settings
@@ -32,7 +33,6 @@ from lode.qa import (
 )
 from lode.storage import init_db
 from lode.tool_dispatch import FETCH
-from lode.webfetch import RawResponse
 
 
 class _FakeMessages:
@@ -511,18 +511,6 @@ def test_tools_enabled_with_no_connector_active_still_sends_tool_aware_prompt(
     assert [t["name"] for t in free_kwargs["tools"]] == [FETCH]
 
 
-class _QueueWebFetcher:
-    """Stub Fetcher (lode.webfetch.Fetcher protocol) returning one canned response."""
-
-    def __init__(self, response: RawResponse) -> None:
-        self._response = response
-        self.calls: list[str] = []
-
-    def fetch(self, url: str) -> RawResponse:
-        self.calls.append(url)
-        return self._response
-
-
 def test_end_to_end_tool_turn_cites_a_fetched_snapshot_the_unmodified_gate_verifies(
     conn,
 ) -> None:
@@ -542,65 +530,8 @@ def test_end_to_end_tool_turn_cites_a_fetched_snapshot_the_unmodified_gate_verif
         + ("Prod incident postmortem details. " * 20)
         + "</p></article></body></html>"
     )
-    web_fetcher = _QueueWebFetcher(
-        RawResponse(final_url=url, status_code=200, text=html)
-    )
-
-    fetch_block = mock.MagicMock()
-    fetch_block.type = "tool_use"
-    fetch_block.name = FETCH
-    fetch_block.input = {"source_type": "web", "external_id": url}
-    fetch_block.id = "toolu_1"
-    free_turn_response = mock.MagicMock()
-    free_turn_response.content = [fetch_block]
-    free_turn_response.stop_reason = "tool_use"
-
     quoted_span = "Prod incident postmortem details."
-
-    # Second free turn: the model calls no further tool -- breaks the
-    # free-tool-turn loop so the run proceeds to the final forced-schema turn
-    # (rather than the loop's default max_tool_turns=8 asking again).
-    text_block = mock.MagicMock()
-    text_block.type = "text"
-    second_free_turn_response = mock.MagicMock()
-    second_free_turn_response.content = [text_block]
-    second_free_turn_response.stop_reason = "end_turn"
-
-    _responses = [free_turn_response, second_free_turn_response]
-
-    def _create_side_effect(**_kwargs):
-        if _responses:
-            return _responses.pop(0)
-        # Third call, the final forced-schema turn: the fetch has already run
-        # (first free turn) and persisted a snapshot by now -- read it back
-        # to build a claim that cites the real snapshot_id, the same way a
-        # model would echo back what the tool_result told it.
-        snapshot_id, body = conn.execute(
-            "SELECT snapshot_id, body FROM snapshots WHERE external_id = ?",
-            (url,),
-        ).fetchone()
-        assert quoted_span in body
-        claim_block = mock.MagicMock()
-        claim_block.type = "tool_use"
-        claim_block.name = "_ClaimsEnvelope"
-        claim_block.input = {
-            "claims": [
-                {
-                    "text": quoted_span,
-                    "support": [
-                        {"snapshot_id": snapshot_id, "quoted_span": quoted_span}
-                    ],
-                }
-            ]
-        }
-        claim_block.id = "toolu_2"
-        response = mock.MagicMock()
-        response.content = [claim_block]
-        response.stop_reason = "tool_use"
-        return response
-
-    client = mock.MagicMock()
-    client.messages.create.side_effect = _create_side_effect
+    client, web_fetcher = fake_tool_turn_client(conn, url, html, quoted_span)
 
     result = answer_question(
         conn,

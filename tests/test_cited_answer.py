@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from conftest import fake_tool_turn_client
 
 from lode.answer import Answer, Claim, Support
 from lode.cited_answer import CitedAnswer, ask, gate_cited_answer
@@ -26,8 +27,6 @@ from lode.llm_provider import AnthropicProvider
 from lode.qa import SONNET_MODEL, QaResult
 from lode.retrieval import ContextItem, TrustTier
 from lode.storage import init_db
-from lode.tool_dispatch import FETCH
-from lode.webfetch import RawResponse
 
 
 class _FakeMessages:
@@ -755,18 +754,6 @@ def test_batched_resolution_composes_no_egress_per_target_not_across_the_batch(
     assert resolved["v-open"] == ("open note body", False)  # notes have no scope
 
 
-class _QueueWebFetcher:
-    """Stub Fetcher (lode.webfetch.Fetcher protocol) returning one canned response."""
-
-    def __init__(self, response: RawResponse) -> None:
-        self._response = response
-        self.calls: list[str] = []
-
-    def fetch(self, url: str) -> RawResponse:
-        self.calls.append(url)
-        return self._response
-
-
 def test_ask_passes_tools_enabled_through_to_answer_question(conn) -> None:
     """lode-8vvp layer 1: cited_answer.ask must pass tools_enabled=True to
     qa.answer_question -- this is the fix for the bug that made
@@ -809,58 +796,8 @@ def test_end_to_end_tool_turn_cites_a_fetched_snapshot_at_the_ask_layer(
         + ("Prod incident postmortem details. " * 20)
         + "</p></article></body></html>"
     )
-    web_fetcher = _QueueWebFetcher(
-        RawResponse(final_url=url, status_code=200, text=html)
-    )
-
-    fetch_block = mock.MagicMock()
-    fetch_block.type = "tool_use"
-    fetch_block.name = FETCH
-    fetch_block.input = {"source_type": "web", "external_id": url}
-    fetch_block.id = "toolu_1"
-    free_turn_response = mock.MagicMock()
-    free_turn_response.content = [fetch_block]
-    free_turn_response.stop_reason = "tool_use"
-
     quoted_span = "Prod incident postmortem details."
-
-    text_block = mock.MagicMock()
-    text_block.type = "text"
-    second_free_turn_response = mock.MagicMock()
-    second_free_turn_response.content = [text_block]
-    second_free_turn_response.stop_reason = "end_turn"
-
-    _responses = [free_turn_response, second_free_turn_response]
-
-    def _create_side_effect(**_kwargs):
-        if _responses:
-            return _responses.pop(0)
-        snapshot_id, body = conn.execute(
-            "SELECT snapshot_id, body FROM snapshots WHERE external_id = ?",
-            (url,),
-        ).fetchone()
-        assert quoted_span in body
-        claim_block = mock.MagicMock()
-        claim_block.type = "tool_use"
-        claim_block.name = "_ClaimsEnvelope"
-        claim_block.input = {
-            "claims": [
-                {
-                    "text": quoted_span,
-                    "support": [
-                        {"snapshot_id": snapshot_id, "quoted_span": quoted_span}
-                    ],
-                }
-            ]
-        }
-        claim_block.id = "toolu_2"
-        response = mock.MagicMock()
-        response.content = [claim_block]
-        response.stop_reason = "tool_use"
-        return response
-
-    client = mock.MagicMock()
-    client.messages.create.side_effect = _create_side_effect
+    client, web_fetcher = fake_tool_turn_client(conn, url, html, quoted_span)
 
     answer = ask(
         conn,
