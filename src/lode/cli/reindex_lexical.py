@@ -13,7 +13,7 @@ from lode.notes_read import live_note_heads_with_body
         "Optional: run it when 'lode status' flags a lexical-index gap. "
         "'lode work' closes the same gap on its own next reconcile pass, so "
         "this just does it sooner. Safe to re-run any time; external "
-        "snapshots are left untouched."
+        "snapshots are left untouched. See docs/how-to/maintenance-commands.md."
     )
 )
 def reindex_lexical(db: _DbOption = None) -> None:
