@@ -74,9 +74,8 @@ _chunker = _load_chunker()
 Unit = _chunker.Unit
 chunk_corpus = _chunker.chunk_corpus
 
-#: Repo-root-relative default corpus dir, resolved by the caller normally --
-#: exposed as a constant only so tests and the future CLI (lode-t6o1.3) don't
-#: each hand-roll the same `Path(__file__).resolve().parent.parent / "docs"`.
+#: Default corpus dir, exported so the future query CLI (lode-t6o1.3) doesn't
+#: hand-roll the same `Path(__file__).resolve().parent.parent / "docs"`.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DOCS_DIR = REPO_ROOT / "docs"
 
@@ -91,13 +90,19 @@ def cache_db_path() -> Path:
     """The on-disk index location: always OUTSIDE the repo worktree.
 
     ``$XDG_CACHE_HOME/lode/docs-index.sqlite3`` if ``XDG_CACHE_HOME`` is set
-    (non-empty), else ``~/.cache/lode/docs-index.sqlite3`` -- the standard
-    XDG Base Directory fallback. Neither path can resolve inside a git
+    to an ABSOLUTE path, else ``~/.cache/lode/docs-index.sqlite3`` -- the
+    standard XDG Base Directory fallback. Neither path can resolve inside a git
     worktree under normal operation, which is the structural half of the
     never-tracked constraint (the gate-test half is ``lode-t6o1.4``).
+
+    The absoluteness check is not pedantry about the spec (which does say a
+    non-absolute value must be ignored): a relative ``XDG_CACHE_HOME`` is
+    resolved against the *current* directory, so for a process running in the
+    checkout it would place the index INSIDE the worktree -- defeating the
+    structural half of the constraint this function exists to provide.
     """
-    xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
-    base = Path(xdg_cache_home) if xdg_cache_home else Path.home() / ".cache"
+    xdg_cache_home = Path(os.environ.get("XDG_CACHE_HOME") or "")
+    base = xdg_cache_home if xdg_cache_home.is_absolute() else Path.home() / ".cache"
     return base / "lode" / "docs-index.sqlite3"
 
 
@@ -135,10 +140,10 @@ def build_index(
         conn.executemany(
             "INSERT INTO units (path, line_lo, line_hi, first_line, body, doc_class) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            [
+            (
                 (u.path, u.line_lo, u.line_hi, u.first_line, u.body, u.doc_class)
                 for u in units
-            ],
+            ),
         )
         conn.commit()
     except BaseException:

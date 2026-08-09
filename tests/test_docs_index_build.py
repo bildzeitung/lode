@@ -11,6 +11,7 @@ import sqlite3
 import time
 from pathlib import Path
 
+import pytest
 from conftest import load_module_from_path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -36,6 +37,21 @@ def test_cache_db_path_resolves_outside_the_worktree() -> None:
     checkout."""
     path = cache_db_path()
     assert not path.is_relative_to(REPO_ROOT)
+
+
+def test_relative_xdg_cache_home_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A relative XDG_CACHE_HOME resolves against the CWD, so honouring one
+    inside the checkout would place the index in the worktree and defeat the
+    structural half of the never-tracked constraint. Spec-correct too: XDG
+    says a non-absolute value must be ignored."""
+    monkeypatch.setenv("XDG_CACHE_HOME", "relative-cache")
+    assert cache_db_path() == Path.home() / ".cache" / "lode" / "docs-index.sqlite3"
+
+    monkeypatch.setenv("XDG_CACHE_HOME", "")
+    assert cache_db_path() == Path.home() / ".cache" / "lode" / "docs-index.sqlite3"
+
+    monkeypatch.setenv("XDG_CACHE_HOME", "/abs/cache")
+    assert cache_db_path() == Path("/abs/cache/lode/docs-index.sqlite3")
 
 
 def test_build_index_queryable_and_covers_real_corpus(tmp_path: Path) -> None:
@@ -81,16 +97,28 @@ def test_build_index_rebuilds_from_scratch_every_call(tmp_path: Path) -> None:
 
 def test_build_index_measured_time_is_fast(tmp_path: Path) -> None:
     """Freshness call from docs/decisions.md (lode-t6o1): no cache is correct
-    because a full rebuild is cheap. The revisit trigger is ~500 ms; this
-    pins an order-of-magnitude ceiling well under it rather than the exact
-    26-35 ms figure measured during the epic's /challenge, which will drift
-    as docs/ grows -- pinning the mechanism (fast), not today's number."""
+    because a full rebuild is cheap. Measured 83-118 ms on an unloaded dev box.
+
+    The ceiling here is deliberately NOT the ~500 ms design revisit trigger.
+    A bare wall-clock assertion is load-dependent by construction, and this
+    suite runs under `pytest -n 8`: the identical `elapsed < 0.5` shape in
+    tests/test_sha_fabrication_guard.py measured 0.749s under parallel load
+    and flaked, passing 3/3 in isolation (lode-vaxe) -- so 0.5 s against a
+    ~95 ms operation is a known-flaky margin, not a safe one. What is pinned
+    instead is a scheduler-tolerant backstop (~20x the unloaded measurement)
+    that still catches an order-of-magnitude regression. The ~500 ms design
+    trigger stays a MEASURED figure recorded on the ticket and in
+    build_index's docstring, per the acceptance criterion; it is not
+    something a parallel test suite can honestly assert."""
     db_path = tmp_path / "docs-index.sqlite3"
     start = time.monotonic()
     conn = build_index(DEFAULT_DOCS_DIR, db_path=db_path)
     elapsed = time.monotonic() - start
     conn.close()
-    assert elapsed < 0.5
+    assert elapsed < 2.0, (
+        f"docs/ index build took {elapsed:.3f}s -- far past even generous "
+        "scheduler noise; the no-cache freshness call assumes a cheap rebuild"
+    )
 
 
 def test_no_import_of_lodes_own_retrieval_pipeline() -> None:
