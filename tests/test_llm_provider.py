@@ -8,6 +8,7 @@ build_provider's provider resolution for both providers.
 """
 
 import json
+import logging
 from collections.abc import Callable, Iterator
 from types import SimpleNamespace
 from typing import ClassVar
@@ -524,17 +525,23 @@ def test_effort_levels_match_the_installed_sdk_literal() -> None:
 
 
 def _tool_use_response(
-    name: str, tool_input: dict, block_id: str = "toolu_1"
+    name: str, tool_input: dict, block_id: str = "toolu_1", output_tokens: int = 10
 ) -> object:
     """Wrap ``conftest._tool_use_block`` in a free-tool-turn response
     (``.content``/``.stop_reason``). The response-wrapping form stays local to
     this module rather than moving into conftest.py, since no other test
     module needs it (lode-j5o1) -- see ``_tool_use_block``'s docstring.
+
+    ``output_tokens`` (default 10, arbitrary but nonzero) backs
+    ``response.usage.output_tokens`` -- lode-9594's per-run spend
+    accumulation reads this real int rather than an auto-created MagicMock
+    attribute.
     """
     block = _tool_use_block(name=name, tool_input=tool_input, block_id=block_id)
     response = mock.MagicMock()
     response.content = [block]
     response.stop_reason = "tool_use"
+    response.usage = mock.MagicMock(output_tokens=output_tokens)
     return response
 
 
@@ -646,6 +653,44 @@ def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> 
             }
         ],
     }
+
+
+def test_run_tool_turns_logs_total_output_tokens_against_the_worst_case_bound(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # lode-9594 -- the measurement lode-csl2's deferral trigger waits on: a
+    # completed run logs its total output-token spend (free turn +
+    # unconditional final forced-schema turn) next to the
+    # (max_tool_turns + 1) x max_tokens worst-case bound.
+    tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
+    free_turn = _tool_use_response("lookup_widget", {"id": "w"}, output_tokens=40)
+    final_turn = _tool_use_response(
+        "_Widget", {"name": "w", "count": 1}, output_tokens=25
+    )
+    client = mock.MagicMock()
+    client.messages.create.side_effect = [free_turn, final_turn]
+    provider = AnthropicProvider(client)
+
+    with caplog.at_level(logging.INFO, logger="lode.llm_provider"):
+        result = provider.run_tool_turns(
+            model="claude-sonnet-4-6",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: "ok",
+            output_schema=_Widget,
+            max_tokens=100,
+            timeout_s=30.0,
+            max_tool_turns=1,
+        )
+
+    assert result == _Widget(name="w", count=1)
+    [record] = [r for r in caplog.records if "run_tool_turns spent" in r.message]
+    assert record.message == (
+        "run_tool_turns spent 65 output tokens (worst-case bound 200 = "
+        "(max_tool_turns=1 + 1) x max_tokens=100, model=claude-sonnet-4-6)"
+    )
 
 
 def test_run_tool_turns_forces_the_final_turn_when_the_model_never_calls_a_tool() -> (

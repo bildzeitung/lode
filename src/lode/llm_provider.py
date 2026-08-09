@@ -151,6 +151,10 @@ against exactly; read that first for the *why*. This module owns the *what*:
   count (``_DEFAULT_MAX_TOOL_TURNS``) -- see ``docs/stack.md`` "LLM provider
   seam" / lode-3dh1 for the full write-up, and ``docs/decisions.md``
   (lode-csl2) for the deferred, additive ``max_output_tokens_per_run`` knob.
+  ``AnthropicProvider.run_tool_turns`` logs each completed run's total
+  output-token spend next to that bound, so the GAP is readable without
+  arithmetic -- the evidence lode-csl2's deferral trigger waits on
+  (lode-9594; ``docs/decisions.md``).
 """
 
 from __future__ import annotations
@@ -481,6 +485,17 @@ def _anthropic_effort_kwargs(
 _BUDGET_EXHAUSTED_HINT = "-- typically the whole output budget was consumed by thinking"
 
 
+def _output_tokens(response: Any) -> int:
+    """``response.usage.output_tokens`` as an int, 0 when absent or not an int.
+
+    Total by construction (lode-9594): measurement must never break a run,
+    and an accessor that cannot raise is how that is guaranteed here -- so
+    there is no ``except`` for an accounting bug to hide in.
+    """
+    value = getattr(getattr(response, "usage", None), "output_tokens", 0)
+    return value if isinstance(value, int) else 0
+
+
 def _anthropic_error_from_exception(
     exc: anthropic.APIStatusError, *, context: str
 ) -> LLMProviderError:
@@ -709,8 +724,12 @@ class AnthropicProvider:
         timeout: float,
         effort_kwargs: Mapping[str, Any],
         where: str = "",
-    ) -> BaseModelT:
+    ) -> tuple[BaseModelT, int]:
         """One forced-tool-use ``messages.create`` decoded into ``output_schema``.
+
+        Returns the decoded model and this turn's ``usage.output_tokens``
+        (lode-9594) -- :meth:`run_tool_turns` folds the second element into
+        its per-run spend total; :meth:`structured_call` discards it.
 
         The single implementation of Anthropic's forced-schema wire shape,
         shared by :meth:`structured_call`'s ``tool_name is not None`` branch
@@ -724,6 +743,7 @@ class AnthropicProvider:
         No ``thinking`` is ever sent here (lode-d1sr): the enrichment tier
         predates thinking-on-by-default. That is a model property, NOT a
         consequence of forced tool use -- see the class docstring.
+
         """
         import anthropic  # deferred -- lode-4q97; needed by the `except` below
 
@@ -765,7 +785,7 @@ class AnthropicProvider:
                 f"{_BUDGET_EXHAUSTED_HINT}",
                 provider="anthropic",
             )
-        return output_schema.model_validate(tool_block.input)
+        return output_schema.model_validate(tool_block.input), _output_tokens(response)
 
     def structured_call(
         self,
@@ -787,7 +807,7 @@ class AnthropicProvider:
         # rather than `None`. See `_anthropic_effort_kwargs`.
         effort_kwargs = _anthropic_effort_kwargs(reasoning_effort, model=model)
         if tool_name is not None:
-            return self._forced_schema_turn(
+            parsed, _output_tokens_spent = self._forced_schema_turn(
                 model=model,
                 system=system,
                 messages=[{"role": "user", "content": user_prompt}],
@@ -798,6 +818,9 @@ class AnthropicProvider:
                 timeout=timeout_s,
                 effort_kwargs=effort_kwargs,
             )
+            # Single-call path: no multi-turn bound to compare a spend
+            # total against, so the count is discarded here (lode-9594).
+            return parsed
 
         # `thinking` is never sent here (lode-3dlt, superseding lode-d1sr's
         # unconditional `disabled` pin) -- an explicit `disabled` 400s on
@@ -928,6 +951,8 @@ class AnthropicProvider:
                 )
             return remaining
 
+        total_output_tokens = 0
+
         for _ in range(max_tool_turns):
             remaining = _remaining_or_raise("starting the next free tool turn")
             try:
@@ -945,6 +970,9 @@ class AnthropicProvider:
                 raise _anthropic_error_from_exception(
                     exc, context=f"model={model} (free tool turn)"
                 ) from exc
+            # lode-9594 -- feeds the per-run total logged below, compared
+            # against lode-csl2's (max_tool_turns + 1) x max_tokens bound.
+            total_output_tokens += _output_tokens(response)
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
             if not tool_use_blocks:
                 break
@@ -960,7 +988,8 @@ class AnthropicProvider:
             messages.append({"role": "user", "content": result_blocks})
 
         remaining = _remaining_or_raise("starting the final forced-schema turn")
-        return self._forced_schema_turn(
+
+        result, final_turn_output_tokens = self._forced_schema_turn(
             model=model,
             system=system,
             messages=messages,
@@ -972,6 +1001,23 @@ class AnthropicProvider:
             effort_kwargs=effort_kwargs,
             where=" on run_tool_turns' final forced-schema turn",
         )
+        total_output_tokens += final_turn_output_tokens
+        # lode-9594 -- the completed run's total spend (free turns + the
+        # unconditional final forced-schema turn) logged next to the bound it
+        # should be compared against, so the GAP against
+        # (max_tool_turns + 1) x max_tokens is readable without arithmetic.
+        # Nothing here can raise: every operand is an int via
+        # `_output_tokens`, and logging swallows its own handler errors.
+        _log.info(
+            "run_tool_turns spent %d output tokens (worst-case bound "
+            "%d = (max_tool_turns=%d + 1) x max_tokens=%d, model=%s)",
+            total_output_tokens,
+            (max_tool_turns + 1) * max_tokens,
+            max_tool_turns,
+            max_tokens,
+            model,
+        )
+        return result
 
     def submit_batch(
         self, requests: Sequence[BatchRequest], *, timeout_s: float
