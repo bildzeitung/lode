@@ -4480,6 +4480,17 @@ entries below from being rewritten to chase the current tree.)
   alongside a keyword-list tweak. Filed as `lode-rl6s` (`discovered-from lode-125q`, independently
   buildable — not blocked on anything).
 
+  **Update (`lode-bv9o`, 2026-08-08):** consequence (a) is closed. The alternation now carries both
+  the TitleCase and the all-caps spelling of *every* keyword in it, and — on this ticket's review —
+  derives the two spellings from a single keyword tuple instead of listing each twice by hand, so
+  the "both cases, never lowercase" rule is stated once and the next keyword cannot land
+  half-applied the way this one and `lode-125q` each did. Non-vacuity is per keyword: dropping any
+  one all-caps variant makes the sabotage test go red, and that test now checks each shape
+  line-by-line rather than by a total count, which a single line matching two patterns could
+  otherwise have satisfied while another matched none. Case sensitivity is unchanged and still
+  load-bearing. Consequence (b) is unaffected — the bare-word entry stands (it now merely overlaps
+  the group for that one keyword), and that spelling remains unwriteable anywhere in this file.
+
 - **2026-08-08 (`lode-rl6s`) — closed blind spot (2) with a scoped, per-diff check, not a
   full-history one.** `lode-nlk6`'s documented limitation: no check in
   `tests/test_decisions_supersession_markers.py` can detect a *silent* in-place rewrite of an

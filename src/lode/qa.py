@@ -229,13 +229,20 @@ class QaResult:
     ``withheld_citations`` are the ``no_egress`` items kept off-cloud, surfaced as
     "present, withheld from cloud synthesis". ``model`` is the tier actually used
     (Sonnet or Opus); ``egress_log_id`` is the audit row the gate wrote for the
-    send.
+    send. ``tool_snapshot_ids`` (lode-8vvp) are the ``snapshot_id``s a ``fetch``
+    tool call persisted during this run (empty when ``tools_enabled`` is
+    ``False``, or when the model called no ``fetch`` tool) -- the return
+    channel :func:`lode.cited_answer.ask` reads to resolve a tool-fetched
+    snapshot into the faithfulness gate's ``bodies`` map, since
+    :func:`_resolve_targets` there only knows about the retrieved
+    ``context``, not what a tool call fetched live mid-run.
     """
 
     answer: Answer
     withheld_citations: tuple[WithheldCitation, ...]
     model: str
     egress_log_id: int
+    tool_snapshot_ids: frozenset[str] = frozenset()
 
 
 def answer_question(
@@ -293,6 +300,10 @@ def answer_question(
     egress = gate_qa_egress(conn, model, passages, settings)
 
     tools = build_ask_tools(settings) if tools_enabled else ()
+    # Mutated in place by make_tool_result's fetch dispatch, below -- the only
+    # way a tool call's snapshot_id makes it back out of the free-tool-turn
+    # loop to this call's own return value (lode-8vvp).
+    fetched_snapshot_ids: set[str] = set()
 
     provider = provider or build_provider(settings)
     envelope = _request_claims(
@@ -310,12 +321,14 @@ def answer_question(
         jira_fetcher=jira_fetcher,
         confluence_fetcher=confluence_fetcher,
         web_fetcher=web_fetcher,
+        fetched_snapshot_ids=fetched_snapshot_ids,
     )
     return QaResult(
         answer=Answer(envelope.claims),
         withheld_citations=egress.withheld_citations,
         model=model,
         egress_log_id=egress.egress_log_id,
+        tool_snapshot_ids=frozenset(fetched_snapshot_ids),
     )
 
 
@@ -351,6 +364,7 @@ def _request_claims(
     jira_fetcher: Fetcher | None,
     confluence_fetcher: Fetcher | None,
     web_fetcher: Fetcher | None,
+    fetched_snapshot_ids: set[str],
 ) -> _ClaimsEnvelope:
     """Make the structured-output call and return the decoded claims envelope.
 
@@ -382,6 +396,7 @@ def _request_claims(
             jira_fetcher=jira_fetcher,
             confluence_fetcher=confluence_fetcher,
             web_fetcher=web_fetcher,
+            fetched_snapshot_ids=fetched_snapshot_ids,
         )
         system = _SYSTEM_PROMPT_WITH_TOOLS
     else:

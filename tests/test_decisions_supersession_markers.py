@@ -49,11 +49,33 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DECISIONS = REPO_ROOT / "docs" / "decisions.md"
 
+# Marker vocabulary, matched in TitleCase and ALL-CAPS but deliberately NOT
+# lowercase: a case-insensitive group false-positives on ordinary parenthesised
+# narrative such as "(superseded -- see below)", which
+# test_off_pattern_scan_ignores_lowercase_narrative_prose pins. Both spellings
+# are DERIVED from this one tuple rather than typed out twice, so the rule is
+# stated once and a keyword cannot land half-applied -- which is exactly how
+# lode-125q and lode-bv9o each arrived, one case variant at a time.
+_MARKER_KEYWORDS = (
+    "Superseded",
+    "Falsified",
+    "Obsolete",
+    "Retracted",
+    "Outdated",
+    "Amendment",
+)
+_MARKER_ALTERNATION = "|".join(
+    spelling for keyword in _MARKER_KEYWORDS for spelling in (keyword, keyword.upper())
+)
+
 _OFF_PATTERNS: dict[str, re.Pattern[str]] = {
     "stale-flag keyword opening a bold span, blockquote, or parenthetical": re.compile(
-        r"(?:\*\*|\(|^\s*>\s*\**)"
-        r"(?:Superseded|Falsified|Obsolete|Retracted|Outdated|Amendment|AMENDMENT)\b"
+        rf"(?:\*\*|\(|^\s*>\s*\**)(?:{_MARKER_ALTERNATION})\b"
     ),
+    # Deliberately NOT anchored to a bold span/parenthetical: this one keyword
+    # is banned outright, anywhere on a line. It therefore overlaps the group
+    # above (a span-anchored occurrence matches both, and is reported twice) --
+    # harmless, since every consumer asks only whether a line matched at all.
     "ALL-CAPS 'SUPERSEDED' marker keyword": re.compile(r"\bSUPERSEDED\b"),
     "'<claim> is falsified by <id>' sentence": re.compile(r"is falsified by lode-"),
 }
@@ -130,12 +152,19 @@ def test_off_pattern_scan_catches_a_reintroduced_marker() -> None:
         "  *(Itself since SUPERSEDED by lode-zzzz -- the italic aside.)*",
         "- **(Retracted, lode-zzzz: a shape lode-ur6o never encountered.)**",
         "**AMENDMENT (`lode-zzzz`):** the exact lode-hg49 lead-in shape (lode-125q).",
+        "**RETRACTED (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
+        "**OBSOLETE (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
+        "**FALSIFIED (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
+        "**OUTDATED (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
     ]
-    caught = _off_pattern_markers(reintroduced)
+    # Scanned one line at a time on purpose: a whole-list count can be met by
+    # one line matching two patterns while another matches none, which would
+    # silently mask a dropped keyword. Per-line, each shape must stand alone.
+    missed = [line for line in reintroduced if not _off_pattern_markers([line])]
 
-    assert len(caught) >= len(reintroduced), (
-        "the off-pattern scan no longer flags every off-pattern shape -- it "
-        f"caught {len(caught)} of {len(reintroduced)}:\n" + "\n".join(caught)
+    assert not missed, (
+        "the off-pattern scan no longer flags every off-pattern shape -- these "
+        "went unnoticed:\n" + "\n".join(missed)
     )
 
 
