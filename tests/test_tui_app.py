@@ -332,29 +332,25 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
 # ---------------------------------------------------------------------------
 
 
-def test_capture_footer_fits_100_columns_with_every_binding_visible(
+def test_capture_footer_shows_every_binding_visible(
     tmp_path: Path,
 ) -> None:
+    """Per-screen "descriptions" pin only; width/hscroll moved to
+    ``tests/test_tui_footer_width_corpus.py`` (lode-2rv2)."""
     db_path = tmp_path / "lode.db"
     init_db(db_path).close()
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> tuple[bool, list[str], int]:
+    async def _drive() -> list[str]:
         async with app.run_test(size=(100, 24)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, CaptureScreen)
             footer = app.screen.query_one(Footer)
             keys = [c for c in footer.children if isinstance(c, FooterKey)]
-            descriptions = [c.description for c in keys]
-            # Natural width, immune to the gutter squeeze described above.
-            consumed = sum(k.region.width for k in keys) + (len(keys) - 1)
-            return footer.show_horizontal_scrollbar, descriptions, consumed
+            return [c.description for c in keys]
 
-    has_hscroll, descriptions, consumed = asyncio.run(_drive())
+    descriptions = asyncio.run(_drive())
 
-    assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
-    # ...and it fits WITHOUT Textual collapsing the gutters to get there.
-    assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
     # All 4 screen-level + 5 shown App-level bindings stay visible (Quit is
     # now hidden via show=False -- see the block comment above -- so 6
     # App-level bindings exist but only 5 render), and ctrl+s keeps its full

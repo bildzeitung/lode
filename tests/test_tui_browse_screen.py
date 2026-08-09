@@ -3108,9 +3108,11 @@ def test_bare_v_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_browse_footer_fits_100_columns_with_every_shown_binding_visible(
+def test_browse_footer_shows_every_shown_binding_visible(
     tmp_path: Path,
 ) -> None:
+    """Per-screen "descriptions" pin only; width/hscroll moved to
+    ``tests/test_tui_footer_width_corpus.py`` (lode-2rv2)."""
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -3119,22 +3121,16 @@ def test_browse_footer_fits_100_columns_with_every_shown_binding_visible(
         conn.close()
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> tuple[bool, list[str], int]:
+    async def _drive() -> list[str]:
         async with app.run_test(size=(100, 24)) as pilot:
             await pilot.press("ctrl+b")
             await pilot.pause()
             footer = app.screen.query_one(Footer)
             keys = [c for c in footer.children if isinstance(c, FooterKey)]
-            descriptions = [c.description for c in keys]
-            # Natural width, immune to the gutter-squeeze trap described above.
-            consumed = sum(k.region.width for k in keys) + (len(keys) - 1)
-            return footer.show_horizontal_scrollbar, descriptions, consumed
+            return [c.description for c in keys]
 
-    has_hscroll, descriptions, consumed = asyncio.run(_drive())
+    descriptions = asyncio.run(_drive())
 
-    assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
-    # ...and it fits WITHOUT Textual collapsing the gutters to get there.
-    assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
     # 6 of the 7 screen-level bindings stay shown, plus 5 shown App-level
     # ones. "Up" (question_mark/search_backward) is gone -- search direction
     # is retired (lode-2bt3.1). "Quit" is hidden (show=False, lode-2bt3.2,
@@ -3186,9 +3182,11 @@ def test_browse_footer_fits_100_columns_with_every_shown_binding_visible(
 # ---------------------------------------------------------------------------
 
 
-def test_edit_footer_fits_100_columns_with_every_shown_binding_visible(
+def test_edit_footer_shows_every_shown_binding_visible(
     tmp_path: Path,
 ) -> None:
+    """Per-screen "descriptions" pin only; width/hscroll moved to
+    ``tests/test_tui_footer_width_corpus.py`` (lode-2rv2)."""
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -3197,7 +3195,7 @@ def test_edit_footer_fits_100_columns_with_every_shown_binding_visible(
         conn.close()
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> tuple[bool, list[str], int]:
+    async def _drive() -> list[str]:
         async with app.run_test(size=(100, 24)) as pilot:
             await pilot.press("ctrl+b")
             await pilot.press("enter")
@@ -3205,14 +3203,10 @@ def test_edit_footer_fits_100_columns_with_every_shown_binding_visible(
             assert isinstance(app.screen, EditScreen)
             footer = app.screen.query_one(Footer)
             keys = [c for c in footer.children if isinstance(c, FooterKey)]
-            descriptions = [c.description for c in keys]
-            consumed = sum(k.region.width for k in keys) + (len(keys) - 1)
-            return footer.show_horizontal_scrollbar, descriptions, consumed
+            return [c.description for c in keys]
 
-    has_hscroll, descriptions, consumed = asyncio.run(_drive())
+    descriptions = asyncio.run(_drive())
 
-    assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
-    assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
     # 6 of the 8 screen-level bindings stay shown, plus 4 shown App-level
     # ones (the App-level ctrl+l is shadowed by this screen's own "Ask", so
     # it renders once, at screen level).
