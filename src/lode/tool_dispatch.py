@@ -260,9 +260,13 @@ def make_tool_result(
     :func:`lode.qa.answer_question` passes its own set here and hands the
     accumulated ids back on :class:`~lode.qa.QaResult` so
     :func:`lode.cited_answer.ask` can resolve them into the faithfulness
-    gate's ``bodies`` map. Left ``None`` (the default), fetched ids are simply
-    not collected -- today's qa-layer-only callers are unaffected.
+    gate's ``bodies`` map. Left ``None`` (the default), the ids are collected
+    into a throwaway set the caller never sees -- the option exists for
+    callers with no use for them (the tool-dispatch unit tests), so the
+    collection itself stays unconditional below rather than becoming a
+    branch at the persist site.
     """
+    sink = set() if fetched_snapshot_ids is None else fetched_snapshot_ids
 
     def _tool_result(name: str, tool_input: dict[str, Any]) -> str:
         if not budget.consume():
@@ -296,7 +300,7 @@ def make_tool_result(
                     jira_fetcher=jira_fetcher,
                     confluence_fetcher=confluence_fetcher,
                     web_fetcher=web_fetcher,
-                    fetched_snapshot_ids=fetched_snapshot_ids,
+                    fetched_snapshot_ids=sink,
                 )
         except (
             JiraSearchError,
@@ -368,7 +372,7 @@ def _dispatch_fetch(
     jira_fetcher: Fetcher | None,
     confluence_fetcher: Fetcher | None,
     web_fetcher: Fetcher | None,
-    fetched_snapshot_ids: set[str] | None = None,
+    fetched_snapshot_ids: set[str],
 ) -> str:
     source_type = str(tool_input.get("source_type") or "")
     external_id = str(tool_input.get("external_id") or "")

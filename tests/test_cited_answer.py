@@ -752,6 +752,7 @@ def test_batched_resolution_composes_no_egress_per_target_not_across_the_batch(
     assert resolved["s-scoped"] == ("scoped secret", True)  # host rule, no row flag
     assert resolved["s-flagged"] == ("flagged secret", True)  # row flag, no host rule
     assert resolved["s-open"] == ("public external body", False)  # neither
+    assert resolved["v-open"] == ("open note body", False)  # notes have no scope
 
 
 class _QueueWebFetcher:
@@ -885,7 +886,14 @@ def test_ask_tools_enabled_false_reproduces_notes_only_prompt_byte_for_byte(
     system prompt as before lode-8vvp/lode-8hsk -- lode.qa._SYSTEM_PROMPT --
     even though cited_answer.ask now always passes tools_enabled=True: the
     knob alone must decide, via lode.tool_dispatch.build_ask_tools collapsing
-    to (), never a caller-side conditional."""
+    to (), never a caller-side conditional.
+
+    This pins the ASK layer's half: the wire's system prompt is qa._SYSTEM_PROMPT
+    and the call went through the empty-tools structured_call path at all (a
+    non-empty tool set routes through messages.create, so _FakeMessages.parse
+    would never be called and the single-call unpack below would fail). That
+    _SYSTEM_PROMPT is itself byte-for-byte the pre-lode-8hsk notes-only prompt is
+    pinned separately, against a frozen literal, by test_qa.py."""
     from lode.qa import _SYSTEM_PROMPT
 
     body = "lode ships rerank OFF in the walking skeleton."

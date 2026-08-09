@@ -364,7 +364,7 @@ def _request_claims(
     jira_fetcher: Fetcher | None,
     confluence_fetcher: Fetcher | None,
     web_fetcher: Fetcher | None,
-    fetched_snapshot_ids: set[str] | None = None,
+    fetched_snapshot_ids: set[str],
 ) -> _ClaimsEnvelope:
     """Make the structured-output call and return the decoded claims envelope.
 

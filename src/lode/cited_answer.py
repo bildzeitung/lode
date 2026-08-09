@@ -218,7 +218,7 @@ def ask(
         confluence_fetcher=confluence_fetcher,
         web_fetcher=web_fetcher,
     )
-    bodies.update(_resolve_tool_snapshots(conn, result.tool_snapshot_ids, bodies))
+    bodies.update(_resolve_tool_snapshots(conn, result.tool_snapshot_ids))
     cited = gate_cited_answer(result, bodies, scorer=scorer, settings=settings)
     return replace(cited, claims=_stamp_body_offsets(cited.claims, context, bodies))
 
@@ -282,7 +282,6 @@ def _stamp_body_offsets(
 def _resolve_tool_snapshots(
     conn: sqlite3.Connection,
     tool_snapshot_ids: frozenset[str],
-    already_resolved: Mapping[str, str],
 ) -> dict[str, str]:
     """Resolve the stored body of every tool-fetched snapshot, for the gate's bodies map.
 
@@ -296,15 +295,17 @@ def _resolve_tool_snapshots(
     scope rule), so there is no second no_egress check to apply here, unlike
     :func:`_resolve_targets`'s note/external split.
 
-    Skips any id already in ``already_resolved`` (harmless overlap -- a tool
-    could in principle fetch a target already present in ``context``) to avoid
-    a wasted round trip, and returns ``{}`` without touching the connection
-    when there is nothing new to resolve. A tool-fetched id absent from
+    One batched query, or none at all: :func:`lode.sql_ids.fetch_by_ids` owns
+    the empty-``ids`` short-circuit, so the overwhelmingly common case (the
+    feature flag off, or the model called no ``fetch`` tool) never touches the
+    connection. An id also present in the caller's ``context``-derived map is
+    NOT filtered out -- it would resolve to the same bytes, and the caller's
+    ``dict.update`` merges it harmlessly. A tool-fetched id absent from
     ``snapshots`` (should not happen -- ``fetch_for_ask`` always persists
     before returning the id) is simply absent from the returned map, the same
     fail-closed default :func:`_resolve_targets` uses.
     """
-    ids = sorted(set(tool_snapshot_ids) - already_resolved.keys())
+    ids = sorted(tool_snapshot_ids)
     rows = fetch_by_ids(
         conn,
         ids,
