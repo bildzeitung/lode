@@ -158,7 +158,7 @@ the same workaround `tests/test_bd_list_limit_gate.py` already carries on its ow
 from __future__ import annotations
 
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from pathlib import Path
 
 from conftest import (
@@ -381,7 +381,7 @@ def _unassigned_uses(block: str, *, known: Collection[str] = ()) -> set[str]:
     return (_used_vars(block) - set(known)) - _assigned_vars(block)
 
 
-def _blocks_for(path: Path) -> Collection[str]:
+def _blocks_for(path: Path) -> Sequence[str]:
     """Fenced bash blocks for `path` -- conftest's cached `markdown_corpus_blocks()`
     when `path` is one of the real shipped corpus files it covers, else a fresh
     read + parse (lode-es1i).
@@ -389,7 +389,12 @@ def _blocks_for(path: Path) -> Collection[str]:
     This fallback is the sabotage seam: `test_sabotaged_agent_file_is_caught_by_find_violations`
     and the `tmp_path`-sourced `_dead_allowlist_keys`/`_dead_known_env_vars` tests all
     pass synthetic paths that are never in `markdown_corpus_blocks()`, so they fall
-    through to the direct read every time -- unaffected by the cache."""
+    through to the direct read every time -- unaffected by the cache.
+
+    `Sequence`, not `Collection`: `find_violations` `enumerate`s the result and
+    reports the index as the BLOCK NUMBER in its failure message, so a stable
+    order is part of this contract, not an incidental property of the two
+    concrete types returned."""
     for corpus_path, blocks in markdown_corpus_blocks():
         if corpus_path == path:
             return blocks
@@ -1063,10 +1068,14 @@ def test_every_skill_and_agent_file_is_covered() -> None:
     writer of `trunk`. Per-variable allowlisting keeps every other block in the file
     covered. This pins that: every skill AND every agent file carrying bash blocks is
     actually parsed (lode-lv04 added the `.claude/agents/*.md` half)."""
+    # Iterates `_source_files()` -- the gate's OWN source list -- deliberately,
+    # not `markdown_corpus_blocks()` directly (lode-es1i review): the sabotage
+    # pin below documents that "`.claude/agents/*.md` being globbed at all" is
+    # THIS test's job, and that only holds while this test reads what the gate
+    # reads. Narrowing `_source_files()` back to skills-only must go red here.
+    # The cache win still lands, via `_blocks_for`.
     scanned = [
-        str(p.relative_to(CLAUDE_DIR))
-        for p, blocks in markdown_corpus_blocks()
-        if blocks
+        str(p.relative_to(CLAUDE_DIR)) for p in _source_files() if _blocks_for(p)
     ]
     assert "skills/land/SKILL.md" in scanned, scanned
     assert "agents/coding.md" in scanned, scanned

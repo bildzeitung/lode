@@ -1842,9 +1842,12 @@ def markdown_corpus_files() -> list[Path]:
 @functools.cache
 def markdown_corpus_text() -> tuple[tuple[Path, str], ...]:
     """(path, raw text) for every file in :data:`MARKDOWN_CORPUS_GLOBS`, in
-    :func:`markdown_corpus_files` order -- the whole-corpus READ happens ONCE
-    per session here, however many gates or per-file constants want it
-    (lode-es1i). :func:`markdown_corpus_blocks` below derives its
+    :func:`markdown_corpus_files` order -- every reader that comes through
+    this cache reads the corpus ONCE per session between them, however many
+    gates or per-file constants want it (lode-es1i). It is NOT true that the
+    corpus is read once per session unconditionally -- two gates still read
+    corpus files directly; see :func:`markdown_corpus_blocks`'s "scope of the
+    win" paragraph. :func:`markdown_corpus_blocks` below derives its
     fence-parsed view from this instead of reading the files itself, and the
     per-file ``_TEXT`` constants (:data:`LAND_SKILL_TEXT`,
     :data:`SWEEP_SKILL_TEXT`, and the read that backs
@@ -1874,19 +1877,23 @@ def markdown_corpus_blocks() -> tuple[tuple[Path, tuple[str, ...]], ...]:
     per-file constants below (:data:`LAND_SKILL_BLOCKS`,
     :data:`CODE_REVIEWER_AGENT_BLOCKS`, :data:`SWEEP_SKILL_BLOCKS`) now also
     derive their text from :func:`markdown_corpus_text` (via
-    :func:`_corpus_text`), so no module reads any of the three corpus files
-    outside these two caches. ``tests/test_skill_bash_state.py``'s four
-    whole-corpus scan sites (``find_violations``, ``_unfiltered_live_pairs``,
-    ``test_every_skill_and_agent_file_is_covered``) and
-    ``tests/test_bd_list_limit_gate.py``'s agent-definition ``bd`` line count
-    read this cache too, rather than their own read + fence-parse passes.
+    :func:`_corpus_text`), so no *blocks* view of the corpus is parsed outside
+    these two caches. ``tests/test_skill_bash_state.py``'s whole-corpus scan
+    sites and ``tests/test_bd_list_limit_gate.py``'s agent-definition ``bd``
+    line count read this cache too, rather than their own read + fence-parse
+    passes. (No inventory of those call sites here on purpose: naming
+    functions in other modules from conftest's docstring only drifts -- grep
+    for this function's name to get the live list.)
 
     Scope of the win, stated honestly: this still deduplicates only the
     fence-parsed *blocks* view. ``tests/test_bd_list_limit_gate.py::_scan_corpus``
     and ``tests/test_sweep_pipeline_label_roster_gate.py::_discover_add_label_sites``
     both need raw text with line offsets a blocks-only cache structurally
     cannot serve (the latter also monkeypatches its own root), so they still
-    read their files directly and are deliberately out of scope here.
+    call ``read_text`` on corpus files -- including all three named above --
+    directly. They are deliberately out of scope here, so "read once per
+    session" is true of the per-file constants and the whole-corpus gates
+    listed above, NOT of the repository's markdown files unconditionally.
 
     Returns tuples, not lists -- ``@functools.cache`` hands every caller the
     same object, and a mutable ``list`` result would let one caller's mutation
