@@ -1254,9 +1254,9 @@ def _make_batch_result(
     r.result.type = result_type
 
     if result_type == "succeeded":
-        # Only .type/.input are read on this path (see the module comment
-        # above); .name/.id get dummy values rather than optional params on
-        # _tool_use_block, since no caller here inspects them (lode-j5o1).
+        # lode.llm_provider.collect_batch reads only .type/.input off this
+        # block, so .name/.id get dummy values rather than becoming optional
+        # params on _tool_use_block (lode-j5o1).
         tool_block = _tool_use_block(
             name="", tool_input=enrichment.model_dump(), block_id=""
         )
