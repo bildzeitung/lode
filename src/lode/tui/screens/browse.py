@@ -302,7 +302,7 @@ _MIN_SUMMARY_WIDTH = 10
 class BrowseScreen(Screen[None]):
     """Id | Date | Version | Summary, newest-first, over every live note."""
 
-    # All of these plus the 4 App-level bindings (LodeApp.BINDINGS) render
+    # All of these plus the 5 App-level bindings (LodeApp.BINDINGS) render
     # in one footer line via the shared LodeFooter (lode-uczx) -- every
     # binding stays visible, none hidden via show=False (ruled out on
     # lode-l38d.3: the footer is the only surface these keys are
@@ -311,18 +311,20 @@ class BrowseScreen(Screen[None]):
     # minimum supported terminal width is 100 columns (docs/tui.md) -- and
     # the full words fit comfortably within it. "S" (bare `s`, lode-35nu.6) is
     # the BM25 quick search, distinct from "Find" ('/', lode-olmi.4's summary
-    # scan). "?"/search-backward (lode-2bt3.1) is retired -- search direction
-    # doesn't exist any more, '/' always restarts from the top -- which also
-    # frees a footer slot on the screen with zero headroom left at the
-    # 100-column bound (see the epic, lode-2bt3, and its .2 for what claims
-    # '?' next).
+    # scan); it stays a single letter mirroring its own key, same terseness as
+    # "Cfg" elsewhere in this same bar. That was forced when this list held 8
+    # entries: any label longer than one character blew the 100-column budget
+    # (measured on lode-35nu.6 -- "Qk" alone still triggered
+    # show_horizontal_scrollbar at exactly 100 consumed columns). Retiring
+    # "Up" (lode-2bt3.1) freed one slot, so re-measure before assuming "S" is
+    # still stuck at one character.
     BINDINGS: ClassVar = [
         Binding("escape", "dismiss_screen", "Back"),
         Binding("i", "inspect_selected", "Inspect"),
         Binding("v", "view_content", "View"),
         Binding("d", "delete_selected", "Delete"),
         Binding("x", "toggle_summary", "Expand"),
-        Binding("slash", "search_forward", "Find"),
+        Binding("slash", "search", "Find"),
         Binding("s", "quick_search", "S"),
     ]
 
@@ -623,11 +625,12 @@ class BrowseScreen(Screen[None]):
             )
         self._reload_rows()
 
-    def action_search_forward(self) -> None:
-        """``/``: open the progressive search box, restarting from the top (lode-2bt3.1)."""
-        self._open_search()
+    def action_search(self) -> None:
+        """``/``: open the progressive search box (lode-olmi.4).
 
-    def _open_search(self) -> None:
+        There is no direction to pick any more (lode-2bt3.1), so this takes no
+        argument -- every keystroke scans from row 0.
+        """
         table = self.query_one(f"#{TABLE_ID}", LodeDataTable)
         if table.row_count == 0:
             return
@@ -663,9 +666,8 @@ class BrowseScreen(Screen[None]):
 
         An empty query is a no-op (acceptance criteria) -- returns immediately
         rather than "matching" every row. Every keystroke restarts the scan at
-        row 0 rather than continuing from wherever the cursor currently sits,
-        so the same query always lands on the same row regardless of where
-        the cursor was when the box opened.
+        row 0, so the same query always lands on the same row regardless of
+        where the cursor happens to be.
         """
         if not query:
             return
@@ -704,7 +706,7 @@ class BrowseScreen(Screen[None]):
             self._close_search()
         self._quick_search_open = True
         quick_search_input = self.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
-        # Always starts blank (mirrors _open_search) -- setting .value fires
+        # Always starts blank (mirrors action_search) -- setting .value fires
         # Input.Changed, which clears any previous filter via
         # on_input_changed -> _current_rows, so reopening the box always
         # starts from the full list again rather than resuming a stale one.

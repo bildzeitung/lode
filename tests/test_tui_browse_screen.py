@@ -1980,7 +1980,7 @@ def test_slash_opens_a_hidden_search_box_and_focuses_it(tmp_path: Path) -> None:
     assert focused_after
 
 
-def test_incremental_search_forward_jumps_to_the_next_matching_summary(
+def test_incremental_search_jumps_to_the_first_matching_summary(
     tmp_path: Path,
 ) -> None:
     """'/' then typing scans from the top for the first matching row."""
@@ -1999,7 +1999,7 @@ def test_incremental_search_forward_jumps_to_the_next_matching_summary(
 
     cursor_row = asyncio.run(_drive())
 
-    assert cursor_row == 2  # beta widget, skipping gamma on the way down
+    assert cursor_row == 2  # beta widget -- gamma (row 1) doesn't match "beta"
 
 
 def test_incremental_search_restarts_from_the_top_every_keystroke(
