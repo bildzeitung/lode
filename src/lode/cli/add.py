@@ -14,7 +14,15 @@ from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
 
 
-@app.command()
+@app.command(
+    help=(
+        "Capture a note, enqueue its derive jobs, and fast-track enrichment.\n\n"
+        "The body comes from TEXT, or -- if omitted -- is read verbatim from "
+        "stdin. Saving makes the note keyword-findable immediately; tags, "
+        "entities, and inferred edges usually appear right away too, and "
+        'embedding always finishes asynchronously via "lode work".'
+    )
+)
 def add(
     text: Annotated[
         str | None,

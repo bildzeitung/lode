@@ -11,7 +11,14 @@ from lode.notes_read import note_head_op_and_parent
 from lode.repository import AmbiguousNoteIdError, CompositeCache, Repository
 
 
-@app.command()
+@app.command(
+    help=(
+        "Undo a soft-delete: repoint a tombstoned note's head past the tombstone.\n\n"
+        "TARGET may be a full id or an unambiguous prefix of one, and unlike "
+        '"purge"/"show" may also resolve to a tombstoned note. A note that is '
+        "not currently tombstoned errors clearly instead of doing nothing."
+    )
+)
 def recover(
     target: Annotated[
         str,
