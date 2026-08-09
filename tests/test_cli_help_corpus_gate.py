@@ -187,12 +187,36 @@ def _iter_leaf_commands() -> Iterator[_Command]:
     yield from _walk(top, top_ctx, ())
 
 
+#: Strips ANSI SGR escapes (e.g. ``\x1b[1m``) from rendered ``--help`` output.
+#: Rich emits these whenever its terminal-color detection says the output is
+#: color-capable -- notably it treats the ``GITHUB_ACTIONS`` env var as such
+#: even though ``CliRunner`` capture is not a TTY, so CI rendered colored
+#: output this gate never saw locally and every plain-text parser below
+#: (``Usage:``, the ``╭`` panel border, the indent heuristic) broke.
+#:
+#: This gate defends at BOTH layers deliberately, and they are not redundant:
+#: :func:`_render_help`'s ``env=`` asks Rich not to colorize in the first
+#: place (which also covers any non-SGR sequence a regex would miss), and
+#: this strip catches whatever Rich colorizes anyway if a future detection
+#: heuristic ignores that env -- exactly the surprise that caused this bug.
+#: Measured under ``GITHUB_ACTIONS=true``: ``COLUMNS`` alone leaves 5 SGR
+#: escapes, adding ``NO_COLOR=1`` leaves 3 (it drops color but not bold), and
+#: ``TERM=dumb`` leaves 0; no non-SGR sequence appears at any setting. The
+#: escapes are zero-width once stripped, so the COLUMNS=80 line-length rules
+#: below are unaffected either way.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
 def _render_help(command: _Command) -> str:
-    result = runner.invoke(app, [*command.args, "--help"], env={"COLUMNS": COLUMNS})
+    result = runner.invoke(
+        app,
+        [*command.args, "--help"],
+        env={"COLUMNS": COLUMNS, "NO_COLOR": "1", "TERM": "dumb"},
+    )
     assert result.exit_code == 0, (
         f"lode {command.name} --help exited {result.exit_code}:\n{result.output}"
     )
-    return result.output
+    return _ANSI_ESCAPE_RE.sub("", result.output)
 
 
 def _command_help_body(output: str) -> list[str]:
@@ -202,8 +226,9 @@ def _command_help_body(output: str) -> list[str]:
     lines occupying vertical space)."""
     lines = output.splitlines()
     usage_idx = next(
-        i for i, line in enumerate(lines) if line.strip().startswith("Usage:")
+        (i for i, line in enumerate(lines) if line.strip().startswith("Usage:")), None
     )
+    assert usage_idx is not None, f"no 'Usage:' line in rendered help:\n{output}"
     panel_starts = [i for i, line in enumerate(lines) if line.strip().startswith("╭")]
     end_idx = panel_starts[0] if panel_starts else len(lines)
     body = lines[usage_idx + 1 : end_idx]
