@@ -58,6 +58,7 @@ from lode.no_egress_scope import NoEgressScopeRule, is_no_egress_scoped
 from lode.qa import QaPassage, QaResult, answer_question
 from lode.retrieval import ContextItem, TrustTier
 from lode.sql_ids import fetch_by_ids
+from lode.webfetch import Fetcher
 
 _EXTERNAL_TIERS = (TrustTier.CURRENT_EXTERNAL, TrustTier.STALE_EXTERNAL)
 """Trust tiers whose ``target_version`` is an external ``snapshot_id`` (cite via
@@ -126,6 +127,9 @@ def ask(
     provider: LLMProvider | None = None,
     scorer: EntailmentScorer | None = None,
     settings: Settings | None = None,
+    jira_fetcher: Fetcher | None = None,
+    confluence_fetcher: Fetcher | None = None,
+    web_fetcher: Fetcher | None = None,
 ) -> CitedAnswer:
     """Answer ``question`` over the trust-ranked ``context``, gated before display.
 
@@ -138,8 +142,21 @@ def ask(
        no_egress** flag so a withheld note is kept off-cloud by the egress gate.
     2. **Synthesize** structured, cited claims (:func:`lode.qa.answer_question`),
        which runs the cloud-egress precondition before any byte reaches Claude.
+       ``tools_enabled=True`` is passed unconditionally (lode-8vvp) -- this is
+       the ONE production call both ``lode ask`` and the TUI ask service reach
+       -- but :func:`~lode.tool_dispatch.build_ask_tools` still returns ``()``
+       whenever ``settings.ask_tools_enabled`` is ``False``, so with the flag
+       off this is byte-for-byte the notes-only path it always was.
     3. **Gate** the claims before display (:func:`gate_cited_answer`) against the
        stored bodies of the **egress-cleared** targets, abstaining if none survive.
+       A snapshot a ``fetch`` tool call persisted mid-run has no entry in the
+       ``context``-derived bodies map (:func:`_resolve_targets` only knows what
+       was retrieved before synthesis started), so it is resolved separately
+       from :attr:`~lode.qa.QaResult.tool_snapshot_ids` and merged in --
+       unconditionally gate-eligible, since :func:`~lode.tools.fetch_for_ask`
+       already refuses to persist a no_egress destination at all (it raises
+       ``ToolFetchError`` instead), so every id it hands back is already
+       egress-cleared by construction.
 
     ``provider`` defaults to a credential-resolved
     :class:`~lode.llm_provider.LLMProvider` inside
@@ -147,7 +164,11 @@ def ask(
     ``settings`` is threaded into both the synthesis send and the gate, so the
     configured ``entailment_threshold`` is honored at step 3; ``scorer`` is the
     same step-3 entailment seam :func:`lode.gate.apply_gate` exposes, which tests
-    inject to keep the gate offline.
+    inject to keep the gate offline. ``jira_fetcher``/``confluence_fetcher``/
+    ``web_fetcher`` (lode-8vvp) are passed straight through to
+    :func:`lode.qa.answer_question` -- the same test/offline seams it already
+    exposes -- production leaves them ``None`` and each connector builds its
+    own default authenticated fetcher.
     """
     settings = settings or Settings()
     passages: list[QaPassage] = []
@@ -190,9 +211,14 @@ def ask(
         question,
         passages,
         think_harder=think_harder,
+        tools_enabled=True,
         provider=provider,
         settings=settings,
+        jira_fetcher=jira_fetcher,
+        confluence_fetcher=confluence_fetcher,
+        web_fetcher=web_fetcher,
     )
+    bodies.update(_resolve_tool_snapshots(conn, result.tool_snapshot_ids, bodies))
     cited = gate_cited_answer(result, bodies, scorer=scorer, settings=settings)
     return replace(cited, claims=_stamp_body_offsets(cited.claims, context, bodies))
 
@@ -251,6 +277,40 @@ def _stamp_body_offsets(
         )
         for claim in claims
     )
+
+
+def _resolve_tool_snapshots(
+    conn: sqlite3.Connection,
+    tool_snapshot_ids: frozenset[str],
+    already_resolved: Mapping[str, str],
+) -> dict[str, str]:
+    """Resolve the stored body of every tool-fetched snapshot, for the gate's bodies map.
+
+    ``tool_snapshot_ids`` (:attr:`lode.qa.QaResult.tool_snapshot_ids`) are
+    ``snapshot_id``s a ``fetch`` tool call persisted **during** synthesis --
+    :func:`_resolve_targets` cannot see them, since it only resolves the
+    retrieved ``context`` known **before** ``answer_question`` runs. Every id
+    here is already egress-cleared by construction:
+    :func:`lode.tools.fetch_for_ask` raises ``ToolFetchError`` instead of
+    persisting anything when the destination is ``no_egress`` (per-row flag or
+    scope rule), so there is no second no_egress check to apply here, unlike
+    :func:`_resolve_targets`'s note/external split.
+
+    Skips any id already in ``already_resolved`` (harmless overlap -- a tool
+    could in principle fetch a target already present in ``context``) to avoid
+    a wasted round trip, and returns ``{}`` without touching the connection
+    when there is nothing new to resolve. A tool-fetched id absent from
+    ``snapshots`` (should not happen -- ``fetch_for_ask`` always persists
+    before returning the id) is simply absent from the returned map, the same
+    fail-closed default :func:`_resolve_targets` uses.
+    """
+    ids = sorted(set(tool_snapshot_ids) - already_resolved.keys())
+    rows = fetch_by_ids(
+        conn,
+        ids,
+        "SELECT snapshot_id, body FROM snapshots WHERE snapshot_id IN ({placeholders})",
+    )
+    return dict(rows)
 
 
 def _resolve_targets(
