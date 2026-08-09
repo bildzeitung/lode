@@ -49,15 +49,10 @@ import os
 from pathlib import Path
 
 import pytest
-from conftest import bash_fence_blocks
+from conftest import markdown_corpus_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLAUDE_DIR = REPO_ROOT / ".claude"
-
-#: The same corpus every other markdown gate in this repo globs -- see the
-#: module docstring for the sibling gates this mirrors.
-SKILLS_DIR = CLAUDE_DIR / "skills"
-AGENTS_DIR = CLAUDE_DIR / "agents"
 
 VALIDATOR = "scripts/validate-sha40.sh"
 
@@ -104,13 +99,15 @@ def _read_sites(blocks: list[str], field: str) -> list[str]:
 
 #: (relative path, fenced-bash-blocks) for every file in the corpus -- the
 #: hazard-keyed replacement for the old hand-maintained roster. SKILL.md docs
-#: then agent defs, the same order the sibling gates use.
+#: then agent defs, the same order the sibling gates use -- conftest's cached
+#: :func:`markdown_corpus_blocks` already reads and fence-parses the whole
+#: corpus once per session (lode-2evf), so this module no longer re-reads and
+#: re-fence-parses the ~174KB ``land/SKILL.md``/``code-reviewer.md`` a second
+#: time on top of the ``LAND_SKILL_BLOCKS``/``CODE_REVIEWER_AGENT_BLOCKS``
+#: reads conftest already does for other consumers.
 CALL_SITES: list[tuple[str, list[str]]] = [
-    (
-        str(path.relative_to(REPO_ROOT)),
-        bash_fence_blocks(path.read_text(encoding="utf-8")),
-    )
-    for path in sorted(SKILLS_DIR.glob("*/SKILL.md")) + sorted(AGENTS_DIR.glob("*.md"))
+    (str(path.relative_to(REPO_ROOT)), list(blocks))
+    for path, blocks in markdown_corpus_blocks()
 ]
 
 

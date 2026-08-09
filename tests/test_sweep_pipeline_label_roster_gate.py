@@ -82,16 +82,15 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import SWEEP_SKILL_BLOCKS, only_block_with
+from conftest import MARKDOWN_CORPUS_GLOBS, SWEEP_SKILL_BLOCKS, only_block_with
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
-AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
 
 # Same scan surface as test_bd_list_limit_gate.py's MD_GLOBS: skills a Claude Code agent executes
 # bash out of, and subagent definitions (.claude/agents/*.md), which carry just as many operative
-# `bd update`/`bd label add` invocations as a SKILL.md.
-SCAN_GLOBS = [(SKILLS_DIR, "*/SKILL.md"), (AGENTS_DIR, "*.md")]
+# `bd update`/`bd label add` invocations as a SKILL.md. Local alias onto conftest's shared source
+# of truth, kept so this module's own monkeypatch target (below) still binds.
+SCAN_GLOBS = MARKDOWN_CORPUS_GLOBS
 
 _LABEL_TOKEN = r"[A-Za-z][A-Za-z0-9-]*"
 

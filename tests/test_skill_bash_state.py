@@ -161,12 +161,11 @@ import re
 from collections.abc import Collection
 from pathlib import Path
 
+from conftest import AGENTS_DIR, SKILLS_DIR
 from conftest import bash_fence_blocks as _bash_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLAUDE_DIR = REPO_ROOT / ".claude"
-SKILLS_DIR = CLAUDE_DIR / "skills"
-AGENTS_DIR = CLAUDE_DIR / "agents"
 
 # Bash's own positional/special parameters -- never "assigned" by any skill's own code,
 # so a use of one is never a finding.

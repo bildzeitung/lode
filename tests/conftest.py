@@ -167,6 +167,7 @@ beats catching it, and the guard still fails anything either one misses.
 
 import ast
 import asyncio
+import functools
 import importlib.util
 import ipaddress
 import logging
@@ -1790,6 +1791,70 @@ def _fenced_bash(markdown: str) -> str:
     and blind spots live next to :func:`bash_fence_blocks`, not here.
     """
     return "\n".join(bash_fence_blocks(markdown))
+
+
+#: The two roots every skill/agent-definition markdown corpus glob scans over.
+#: Was defined independently in several tests/ modules (byte-identical
+#: ``REPO_ROOT / ".claude" / "skills"`` / ``... / "agents"`` pairs) until
+#: lode-2evf hoisted them here -- a layout change needed each updated by hand,
+#: and conftest.py had no directory-level constants at all, only the
+#: per-file ones below (``LAND_SKILL``, ``CODE_REVIEWER_AGENT``, ...).
+SKILLS_DIR = _CHECKOUT_ROOT / ".claude" / "skills"
+AGENTS_DIR = _CHECKOUT_ROOT / ".claude" / "agents"
+
+#: (root, glob pattern) pairs covering the whole markdown corpus a Claude Code
+#: agent executes bash out of: every skill's ``SKILL.md`` and every subagent
+#: definition under ``.claude/agents``. The single source of truth for the
+#: scan surface -- :func:`markdown_corpus_files` below is its flattened,
+#: sorted-per-glob-then-concatenated view. A module that needs its own
+#: monkeypatch target keeps a local alias bound to this list (e.g.
+#: ``MD_GLOBS = MARKDOWN_CORPUS_GLOBS``) rather than redefining the pairs.
+MARKDOWN_CORPUS_GLOBS: list[tuple[Path, str]] = [
+    (SKILLS_DIR, "*/SKILL.md"),
+    (AGENTS_DIR, "*.md"),
+]
+
+
+def markdown_corpus_files() -> list[Path]:
+    """Every file in :data:`MARKDOWN_CORPUS_GLOBS`, sorted within each glob and
+    concatenated in glob order -- the exact ordering every prior hand-rolled
+    ``sorted(SKILLS_DIR.glob(...)) + sorted(AGENTS_DIR.glob(...))`` produced,
+    preserved so no consumer's iteration order shifts.
+
+    Not cached: cheap (a directory listing), and re-globbing per call keeps
+    this usable from a test that legitimately wants a fresh read (e.g. after
+    writing a file into a monkeypatched root). Contrast
+    :func:`markdown_corpus_blocks` below, which IS cached because it also
+    reads and fence-parses file content -- the expensive, worth-caching part.
+    """
+    files: list[Path] = []
+    for base, pattern in MARKDOWN_CORPUS_GLOBS:
+        files.extend(sorted(base.glob(pattern)))
+    return files
+
+
+@functools.cache
+def markdown_corpus_blocks() -> tuple[tuple[Path, tuple[str, ...]], ...]:
+    """(path, fenced-bash-blocks) for every file in :data:`MARKDOWN_CORPUS_GLOBS`,
+    in :func:`markdown_corpus_files` order -- read and fence-parsed ONCE per
+    session, not once per importing gate (lode-2evf). Before this,
+    ``tests/test_validate_sha40_call_sites.py`` alone re-read and re-fence-
+    parsed the ~174KB ``land/SKILL.md`` and ``code-reviewer.md`` at import
+    time, files this module already caches individually as
+    :data:`LAND_SKILL_BLOCKS`/:data:`CODE_REVIEWER_AGENT_BLOCKS` precisely to
+    avoid that repeated cost.
+
+    Returns tuples, not lists -- ``@functools.cache`` hands every caller the
+    same object, and a mutable ``list`` result would let one caller's mutation
+    corrupt every other reader's view (the same hazard the per-skill
+    ``_BLOCKS`` constants below narrow by staying at module scope; this one
+    is enforced structurally instead, since it fans out over an open-ended
+    file set rather than a fixed handful of named constants).
+    """
+    return tuple(
+        (path, tuple(bash_fence_blocks(path.read_text(encoding="utf-8"))))
+        for path in markdown_corpus_files()
+    )
 
 
 #: The land skill doc. Three of its readers parse its fenced bash blocks (via
