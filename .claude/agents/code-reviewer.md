@@ -359,25 +359,18 @@ recheck against a tree that may hold my own uncommitted review fixes.)
        scripts/check-decisions-no-silent-rewrite.sh origin/trunk
        ```
 
-       This closes the blind spot lode-nlk6 documented and lode-hg49 actually fell into — every
-       marker-shaped test in `tests/test_decisions_supersession_markers.py` keys on an artifact a
-       *correction* leaves behind, and a silent in-place rewrite of an existing entry leaves nothing
-       for any of them to key on. I already have both refs this review needs (`origin/trunk` from
-       step 2's fetch, `HEAD` from the checkout) and I'm already reasoning about `decisions.md`
-       conformance as part of this same pass, so this is the cheapest point to wire it in — chosen
-       deliberately over `land-review`'s precheck (catches it one gate later, and misses branches
-       whose review predates this wiring) and a dedicated `nox` session (has no natural base ref
-       inside an isolated worktree). The script resolves its own merge-base via a three-dot diff, so
-       `origin/trunk` is the correct argument even for a stacked branch — see the script's own header
-       before hand-computing anything.
-       - **Exit 0** — no pre-existing non-blank `decisions.md` line was silently removed. No action.
-       - **Exit 1** — a real finding, not gate noise: the printed `REMOVED:` lines name pre-existing
-         text that vanished without a correction marker. Judge it exactly like any other correctness
-         defect this pass turns up (fix directly per item 3 below, or escalate if it's a genuine call
-         only a human can make).
-       - **Exit 2** — a MACHINE fault (`gate_could_not_run`, lode-9i2p) — never read as "no rewrite
-         found." Note it explicitly in my hand-off and continue the rest of the review; it does not
-         block the parts of this pass that don't depend on it.
+       It catches what no marker-shaped test in `tests/test_decisions_supersession_markers.py` can:
+       a silent in-place rewrite of an existing entry (lode-nlk6's documented blind spot, which
+       lode-hg49 fell into). Pass `origin/trunk` as written — the script resolves its own merge base
+       and its header explains why hand-computing one is wrong. Why the wiring lives here rather
+       than in `land-review` or a `nox` session: `docs/decisions.md`, lode-d7pm.
+       - **Exit 0** — no action.
+       - **Exit 1** — a real finding: the printed `REMOVED:` lines name pre-existing text that
+         vanished without a correction marker. Judge it like any other defect this pass turns up
+         (fix directly per item 3 below, or escalate if it's a call only a human can make).
+       - **Exit 2** — a MACHINE fault (`gate_could_not_run`, lode-9i2p), never "no rewrite found."
+         Note it in my hand-off and carry on. Unlike step 5's `validate-mermaid.sh` exit 2, this one
+         does not block the `ready-for-land` swap on its own — it is a review aid, not a gate.
    This is genuinely my own judgment, and I am accountable for what it misses — not a lesser substitute
    for a missing tool. It has already caught a real, serious defect this way: on lode-nt98, this exact
    kind of reasoning (not a tool) caught a `git reset --hard` + `git clean -fd` that could have executed
