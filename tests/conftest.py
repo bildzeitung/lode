@@ -173,6 +173,7 @@ import logging
 import os
 import re
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -182,6 +183,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
+from typing import TYPE_CHECKING
 from unittest import mock
 
 import pytest
@@ -199,6 +201,18 @@ from lode.config import model_cache_dir
 #: first (see its docstring). ``lode.enrich`` itself keeps ``import anthropic`` deferred, so
 #: the SDK is still not pulled at collection -- verified, not assumed.
 from lode.enrich import EnrichmentResult
+
+#: NOT imported at runtime, deliberately (lode-pw9o): ``lode.tool_dispatch`` and
+#: ``lode.webfetch`` are needed only by ``fake_tool_turn_client`` below, and importing them
+#: at module scope costs ~0.8s and ~440 modules (``trafilatura`` -> ``lxml``/``justext``/
+#: ``htmldate``/``dateparser``, plus ``numpy``/``pyarrow``) at COLLECTION, in the one conftest
+#: every test module loads -- and again in each xdist worker. Measured, not assumed. They are
+#: imported inside the builder instead. The TYPE_CHECKING import below is free at runtime:
+#: on this repo's Python (>=3.14, PEP 649) annotations are evaluated lazily, so
+#: ``StubWebFetcher``'s ``RawResponse`` annotations never resolve the name unless something
+#: actually asks for them.
+if TYPE_CHECKING:
+    from lode.webfetch import RawResponse
 
 #: lode-kq4v: scrub ambient colour/tty-forcing env vars BEFORE any test module can import
 #: ``lode.cli`` and construct its shared ``console``/``err_console`` (see that module's
@@ -1236,6 +1250,127 @@ def _make_batch_result(
         r.result.message.content = [tool_block]
 
     return r
+
+
+# --- Shared Anthropic tool-turn fake + stub Fetcher (lode-pw9o) ------------
+#
+# tests/test_qa.py's and tests/test_cited_answer.py's end-to-end tool-turn
+# tests each drove an identical fetch -> tool_result -> forced-schema-turn
+# scenario against a real, unmodified answer_question()/ask() and the real
+# faithfulness gate: a fetch tool call persists a snapshot, a second free
+# turn ends the loop early, and the final turn echoes the snapshot_id back
+# into a claim exactly the way the model itself would from the tool_result.
+# The two copies were near-verbatim (~70 lines each, byte-identical stub
+# Fetcher) -- an SDK or run_tool_turns contract change (block
+# .type/.name/.input/.id, stop_reason values, the "second free turn ends the
+# loop" trick) needed both edited. Hoisted here so there is one copy; each
+# caller keeps its own final call (answer_question vs ask) and its own
+# assertions and comments, per the ticket's acceptance criteria.
+#
+# Placement matches fake_batch_client's / _make_batch_result's above, and for
+# the same reason: tests/_anthropic_rig.py exists for fakes built on a REAL
+# anthropic.Anthropic + httpx.MockTransport, whose dict payloads break when the
+# pinned SDK's required model fields change. This is duck-typed MagicMock -- no
+# SDK model validates it -- so it does not carry that fixture-drift mode. (The
+# block-shape coupling described above is real, but it is coupling to
+# lode.llm_provider's own reader, not to the SDK's models.)
+
+
+class StubWebFetcher:
+    """Stub Fetcher (lode.webfetch.Fetcher protocol) returning one canned response.
+
+    Not a queue despite the shape of its callers' scenario: it returns the SAME
+    response on every call, unbounded. ``tests/test_jira_fetch.py``'s
+    ``_QueueFetcher`` is the one that actually pops a list, if that is what you
+    need.
+    """
+
+    def __init__(self, response: RawResponse) -> None:
+        self._response = response
+        self.calls: list[str] = []
+
+    def fetch(self, url: str) -> RawResponse:
+        self.calls.append(url)
+        return self._response
+
+
+def fake_tool_turn_client(
+    conn: sqlite3.Connection, url: str, html: str, quoted_span: str
+) -> tuple[mock.MagicMock, StubWebFetcher]:
+    """Build the (client, web_fetcher) pair for the shared fetch-then-cite
+    tool-turn scenario.
+
+    ``client.messages.create`` is wired for exactly three calls:
+
+    1. a free tool turn that calls the fetch tool against ``url``;
+    2. a second free turn with no further tool call, ending the loop early
+       (rather than exhausting run_tool_turns' default max_tool_turns=8);
+    3. the final forced-schema turn, which reads the snapshot the fetch tool
+       just persisted back out of ``conn`` and echoes its snapshot_id into a
+       claim citing ``quoted_span`` -- the same way a real model would from
+       the tool_result content.
+
+    Pass the returned ``web_fetcher`` as the ``web_fetcher=`` kwarg so the
+    fetch tool call resolves ``html`` for ``url`` without a real network call.
+    """
+    # Deferred, not module-scope -- see the import note at the top of this file.
+    from lode.tool_dispatch import FETCH
+    from lode.webfetch import RawResponse
+
+    web_fetcher = StubWebFetcher(RawResponse(final_url=url, status_code=200, text=html))
+
+    fetch_block = mock.MagicMock()
+    fetch_block.type = "tool_use"
+    fetch_block.name = FETCH
+    fetch_block.input = {"source_type": "web", "external_id": url}
+    fetch_block.id = "toolu_1"
+    free_turn_response = mock.MagicMock()
+    free_turn_response.content = [fetch_block]
+    free_turn_response.stop_reason = "tool_use"
+
+    text_block = mock.MagicMock()
+    text_block.type = "text"
+    second_free_turn_response = mock.MagicMock()
+    second_free_turn_response.content = [text_block]
+    second_free_turn_response.stop_reason = "end_turn"
+
+    _responses = [free_turn_response, second_free_turn_response]
+
+    def _create_side_effect(**_kwargs):
+        if _responses:
+            return _responses.pop(0)
+        # Third call, the final forced-schema turn: the fetch has already run
+        # (first free turn) and persisted a snapshot by now -- read it back to
+        # build a claim that cites the real snapshot_id, the same way a model
+        # would echo back what the tool_result told it.
+        snapshot_id, body = conn.execute(
+            "SELECT snapshot_id, body FROM snapshots WHERE external_id = ?",
+            (url,),
+        ).fetchone()
+        assert quoted_span in body
+        claim_block = mock.MagicMock()
+        claim_block.type = "tool_use"
+        claim_block.name = "_ClaimsEnvelope"
+        claim_block.input = {
+            "claims": [
+                {
+                    "text": quoted_span,
+                    "support": [
+                        {"snapshot_id": snapshot_id, "quoted_span": quoted_span}
+                    ],
+                }
+            ]
+        }
+        claim_block.id = "toolu_2"
+        response = mock.MagicMock()
+        response.content = [claim_block]
+        response.stop_reason = "tool_use"
+        return response
+
+    client = mock.MagicMock()
+    client.messages.create.side_effect = _create_side_effect
+
+    return client, web_fetcher
 
 
 # --- Read noxfile.py's session set without executing it (lode-dis6) --------
