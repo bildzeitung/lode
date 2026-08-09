@@ -11,9 +11,10 @@ from lode.cli import _DbOption, _open_db, app
 @app.command(
     help=(
         "Re-run a connector's draw-down under current routing.\n\n"
-        "Run with no CONNECTOR argument (or --list) to see the registered "
-        "connector names. Try --dry-run first to see what would change "
-        "without writing anything."
+        "Run this when links you already captured should now resolve "
+        "differently -- typically after a connector that handles those URLs "
+        "became available. Pass no CONNECTOR to see the registered names, "
+        "and try --dry-run before a real pass."
     )
 )
 def backfill(
