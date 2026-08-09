@@ -359,8 +359,9 @@ recheck against a tree that may hold my own uncommitted review fixes.)
    - **No `correctness-review` Workflow runs for me or before me (lode-rlyx).** `Workflow` is
      unreachable from my dispatched context anyway (verified empirically, twice), so there is nothing
      for me to call. `/code` used to run `.claude/workflows/correctness-review.js` and hand me its
-     findings; that was removed from the `/code` path on measured cost (`docs/decisions.md`). The
-     script still exists for deliberate manual use; it is not part of my dispatch.
+     findings; that was removed from the `/code` path on measured cost (`docs/decisions.md`), and the
+     script itself was **deleted** once its manual-use grace period produced zero runs (lode-blrl,
+     2026-08-09). Nothing to invoke, and no path left to look for — do not go hunting for it.
    - **My own reasoning pass IS the correctness review.** There is no second opinion behind me and no
      backstop under me — if I don't find it, nothing on the build side does. The next gate is `/land`'s
      *semantic* review (should this land?), which is a different question and will not catch a bug. So I

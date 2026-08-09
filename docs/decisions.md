@@ -889,6 +889,77 @@ entries below from being rewritten to chase the current tree.)
   in the queue), and `/sweep` will list the five deferred tickets report-only each pass, which is the
   intended visibility.
 
+  **Update (lode-blrl, 2026-08-09) — FULLY RETIRED: the script is deleted from the tree, and the five
+  deferred tickets are closed. Everything above about the workflow being "kept on disk" and manually
+  invocable is now historical.** lode-rlyx kept it for deliberate manual use on the reasonable argument
+  that "a one-off review of a genuinely hairy diff" would justify it. **That did not happen.** In the
+  thirteen days between lode-rlyx (2026-07-27) and this entry, the preserved-run directory
+  (`~/.claude/projects/-home-dmklein-PROJECTS-lode/metrics/correctness-review/`) still held exactly the
+  three runs from 2026-07-25 — zero manual invocations. Retaining it was costing a live bug (`lode-eltr`),
+  four parked tickets, and a `/sweep` report line every pass, in exchange for a capability nobody reached
+  for. `.claude/workflows/correctness-review.js` is therefore removed; `.claude/workflows/` is now empty
+  and gone with it.
+
+  **One artifact, not two — worth recording, because it was not obvious.** There is no
+  `correctness-review` SKILL.md anywhere on disk and never was. The `correctness-review` entry that
+  appeared in a session's available-skills list was generated from the `meta` block *inside* the workflow
+  `.js` file, so deleting that single file removed both the Workflow and the apparent skill. Anyone
+  reconstructing this should not go looking for a second file to restore.
+
+  **Retrieval.** The full 29,680-byte source is one command away and always will be:
+  `git show 974f832246cd4d42ca002f5bc8e21c40ad2148a6:.claude/workflows/correctness-review.js`. That SHA
+  is the last commit that touched the file (lode-rlyx's own technical review). Deletion was chosen over
+  an `attic/` copy deliberately: a 30KB script no test guards and no doc owns reads as live-but-mysterious
+  to the next reader, whereas git is a perfectly good attic with a citation.
+
+  **Tickets closed with it (all five, reversing the "deferred rather than closed" disposition above):**
+  `lode-arx1` (gate on diff content — moot, gates a call that cannot happen), `lode-m73d` (per-run
+  telemetry — its acceptance criterion was "every invocation *from /code* leaves a record", and there are
+  none), `lode-lgvv` (mergeNearDuplicates under-merges), `lode-dwtp` (make the unverified path
+  demonstrable), and `lode-eltr` (no empty-range guard). **`lode-eltr` deserves its own note**: it was
+  briefly un-deferred *earlier in the same session* as this entry, on the correct-at-the-time reasoning
+  that the manual retrospective mode was the workflow's only surviving exposed path and its empty-range
+  fail-open therefore still bit. Full retirement removed that path minutes later, so it closed unbuilt.
+  The un-defer was not wrong on its own facts; it was overtaken. Recorded rather than folded silently
+  into the cleanup, per this file's append-only rule.
+
+  **`specs/11`–`specs/13` are KEPT, and stamped.** Each of the three runbooks carries its own
+  "Delete it once the result is recorded" exit condition, and every ticket they serve (`lode-905v`,
+  `lode-p5gf`, `lode-eohb`, `lode-wtwb`) is closed — so by their own terms they were already deletable,
+  independent of this retirement. They stay anyway (maintainer call): `specs/` is a numbered sequence and
+  a `10` → `14` hole is a worse artifact for a reader than three stale runbooks. Each now opens with a
+  **RETIRED — NOT EXECUTABLE** banner naming the deleted script and the retrieval SHA, so nobody follows
+  a step into a file that is gone.
+
+  **The bar for ever reconstructing this is now strictly higher than the one stated above, and that is
+  intended.** "What would actually meet that bar" named re-running `specs/11`/`specs/12` with per-side
+  token cost — which now presupposes reconstructing the script from the SHA first. A reconstruction is
+  therefore a deliberate project, not a low-friction experiment. The comparative bar itself is unchanged
+  and still binding: findings-per-token in the workflow's favour on diffs the reviewer alone had already
+  passed. The reviewer has to have *missed* something first.
+
+  **The `PreToolUse`-hook argument above is now moot, and no hook should be built.** That reasoning
+  turned on the forbidden call (`/code` Phase 2) and the deliberately retained one (a manual one-off)
+  being indistinguishable — same tool, same `scriptPath`, same session. With the script deleted there is
+  no legitimate call left to protect, but there is also nothing to fence: the `scriptPath` does not
+  resolve, so an attempt fails on its own. Enforcement stays instruction-only for the simpler reason that
+  the target no longer exists.
+
+  **`origin/land/lode-arx1` is DELETED, reversing the "deliberately left on origin" disposition above
+  (maintainer instruction, 2026-08-09).** That branch was kept as a design reference in case the workflow
+  was revived for manual use at scale. With the script deleted, it edits a `/code` Phase 2 block that no
+  longer exists, for a script that no longer exists — a reference to two absences. It was at
+  `157e44b20063e771676643a9a14111dd2ffb462b` and is gone from origin, which also retires the accepted
+  residue noted above: `/land` §1a no longer pays pairwise merge-base work for a parked branch on every
+  pass, forever.
+
+  **Do not read that SHA as a promise of retrievability.** Unlike the deleted *script*, whose bytes are
+  reachable from a commit on `trunk`'s own history, this commit is on no surviving ref — recording its id
+  does not make it durable, and it is GC-eligible. What the branch *did* is described in prose in this
+  thread, and that prose is the durable record; the branch content should be treated as gone. This is the
+  distinction to keep in mind before citing any SHA as an archive: a commit reachable from a permanent ref
+  is an archive, and a dangling one is a receipt.
+
   **Update (lode-vs7g): eliminating the collision (lode-em6v, above) closed the *invisible*-worktree
   half of the leak, but not the *proactive-cleanup* half.** lode-em6v's own acceptance criterion 1 —
   "a clean code-reviewer run and a clean rebase-pickup run leave NO worktree behind" — was satisfied
