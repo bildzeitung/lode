@@ -6,7 +6,9 @@
 > followed, so it was retired outright rather than kept as unreachable machinery. Every step below
 > refers to a script that no longer exists; none of it can be run as written. **lode-905v is closed.**
 > This file is kept only so `specs/` stays a gap-free numbered sequence — it is a historical record of
-> how the workflow was to be validated, not work to pick up. Full source if it is ever reconstructed:
+> how the workflow was to be validated, not work to pick up. **This supersedes the "delete it once the
+> result is recorded" exit condition below: do not delete this file.** Full source if it is ever
+> reconstructed:
 > `git show 974f832246cd4d42ca002f5bc8e21c40ad2148a6:.claude/workflows/correctness-review.js`.
 > Decision record: [`docs/decisions.md`](../docs/decisions.md).
 

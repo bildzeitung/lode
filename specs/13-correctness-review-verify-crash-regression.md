@@ -8,7 +8,8 @@
 > and its companion ticket `lode-dwtp` — filed to make this regression demonstrable on demand, which
 > Step 3 below records as INCONCLUSIVE — was closed unbuilt in the same retirement. This file is kept
 > only so `specs/` stays a gap-free numbered sequence — it is a historical record, not work to pick up.
-> Full source if it is ever reconstructed:
+> **This supersedes the "delete it once the result is recorded" exit condition below: do not delete this
+> file.** Full source if it is ever reconstructed:
 > `git show 974f832246cd4d42ca002f5bc8e21c40ad2148a6:.claude/workflows/correctness-review.js`.
 > Decision record: [`docs/decisions.md`](../docs/decisions.md).
 
