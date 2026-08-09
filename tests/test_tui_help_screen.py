@@ -227,9 +227,9 @@ def test_overlay_snapshot_covers_every_browse_and_app_binding_incl_hidden(
     def _normalized(key: str) -> str:
         return _character_to_key(key) if len(key) == 1 else key
 
-    expected_keys = {
-        _normalized(binding.key) for binding in BrowseScreen.BINDINGS
-    } | {_normalized(binding.key) for binding in LodeApp.BINDINGS}
+    expected_keys = {_normalized(binding.key) for binding in BrowseScreen.BINDINGS} | {
+        _normalized(binding.key) for binding in LodeApp.BINDINGS
+    }
 
     missing = expected_keys - snapshot.keys()
     assert not missing, (
@@ -277,9 +277,9 @@ def test_edit_screen_shadow_hides_the_shadowed_app_level_ask_entry(
     snapshot = asyncio.run(_drive())
 
     active = snapshot["ctrl+l"]
-    assert active.node is EditScreen or isinstance(
-        active.node, EditScreen
-    ), "the App-level ctrl+l should be shadowed by EditScreen's own"
+    assert active.node is EditScreen or isinstance(active.node, EditScreen), (
+        "the App-level ctrl+l should be shadowed by EditScreen's own"
+    )
 
 
 def test_help_screen_is_footerless(tmp_path: Path) -> None:
