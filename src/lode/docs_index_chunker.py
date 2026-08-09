@@ -32,11 +32,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from lode.fence_parsing import fence_flags as _shared_fence_flags
+
 #: The hard size invariant (docs/decisions.md, lode-t6o1): no unit may exceed
 #: this many UTF-8 encoded bytes. Asserted by a test over the real corpus.
 MAX_UNIT_BYTES = 16384
 
-_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 _HEADING_RE = re.compile(r"^(#{1,6})\s")
 _BULLET_RE = re.compile(r"^-\s")
 
@@ -84,29 +85,14 @@ def _fence_flags(lines: list[str]) -> list[bool]:
     closing one *is*. Neither can be a heading or a bullet, so the distinction
     does not affect boundary detection.
 
-    THIRD HOME of these rules, deliberately (lode-t6o1.1). ``tests/conftest.py``
-    (``fence_scan``) owns them for the test-side gates and ``scripts/
-    check_links.py`` (``_content_lines``) for the repo-tooling side -- two homes
-    split by the import boundary, since production code cannot import from
-    ``tests/``. This module is a third, on the ``src/`` side of that boundary,
-    and is outside the reach of ``tests/test_no_private_fence_state_machine.py``
-    (which scans only ``tests/`` and ``scripts/``). That gate exists because
-    five separate tickets each drifted a private fence toggle from the shared
-    rule; a follow-up ticket tracks hosting ONE importable parser.
+    A thin wrapper over :func:`lode.fence_parsing.fence_flags`, the ONE
+    importable home of these rules (``lode-ee7b``). Prior to that ticket this
+    was a private third copy of the same CommonMark rule set already
+    hand-rolled in ``tests/conftest.py`` (``fence_scan``) -- outside the reach
+    of ``tests/test_no_private_fence_state_machine.py``, which now also scans
+    ``src/*.py``.
     """
-    flags = []
-    open_marker: str | None = None
-    for line in lines:
-        flags.append(open_marker is not None)
-        m = _FENCE_RE.match(line)
-        if not m:
-            continue
-        marker = m.group(1)
-        if open_marker is None:
-            open_marker = marker
-        elif marker[0] == open_marker[0] and len(marker) >= len(open_marker):
-            open_marker = None
-    return flags
+    return _shared_fence_flags(lines)
 
 
 def _deepest_heading_level(lines: list[str], fence_flags: list[bool]) -> int:

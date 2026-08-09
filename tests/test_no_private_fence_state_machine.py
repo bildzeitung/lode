@@ -1,5 +1,6 @@
 """A mechanical, AST-based gate: no private fence-toggle state machine may
-survive outside tests/conftest.py (lode-k5qb).
+survive outside tests/conftest.py (lode-k5qb) or src/lode/fence_parsing.py
+(lode-ee7b).
 
 Five separate tickets (lode-ovgs, lode-p4qb, lode-kjei, lode-jm4a, plus the
 salvaged lode-oqqw) each ended with a PROSE claim in tests/conftest.py's
@@ -43,10 +44,11 @@ adversary.
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCAN_DIRS = (REPO_ROOT / "tests", REPO_ROOT / "scripts")
+SCAN_DIRS = (REPO_ROOT / "tests", REPO_ROOT / "scripts", REPO_ROOT / "src" / "lode")
 EXEMPT = {REPO_ROOT / "tests" / "conftest.py"}
 
 
@@ -137,9 +139,10 @@ def _scan_paths() -> list[Path]:
 
 
 def test_no_private_fence_toggle_state_machine_outside_conftest() -> None:
-    """THE GATE: every module under tests/*.py and scripts/*.py, except
-    tests/conftest.py (the one sanctioned home, ``fence_scan``), must be free
-    of a private fence-toggle open/close state machine."""
+    """THE GATE: every module under tests/*.py, scripts/*.py, and
+    src/lode/*.py, except tests/conftest.py (the one sanctioned home,
+    ``fence_scan``), must be free of a private fence-toggle open/close state
+    machine."""
     offenders: list[str] = []
     for path in _scan_paths():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -150,8 +153,9 @@ def test_no_private_fence_toggle_state_machine_outside_conftest() -> None:
     assert not offenders, (
         "private fence-toggle state machine(s) found outside tests/conftest.py: "
         f"{offenders} -- reuse tests/conftest.py's fence_scan/bash_fence_blocks "
+        "(tests/scripts) or src/lode/fence_parsing.py (src/) "
         "instead of hand-rolling a new open/close flag "
-        "(lode-ovgs, lode-p4qb, lode-kjei, lode-jm4a, lode-oqqw, lode-k5qb)"
+        "(lode-ovgs, lode-p4qb, lode-kjei, lode-jm4a, lode-oqqw, lode-k5qb, lode-ee7b)"
     )
 
 
@@ -259,3 +263,37 @@ def h(blocks):
 """
     tree = ast.parse(src)
     assert fence_toggle_findings(tree) == []
+
+
+def test_scan_dirs_covers_src_lode(tmp_path, monkeypatch) -> None:
+    """lode-ee7b AC4: the gate's scan is widened to cover src/*.py, and fails
+    on a newly introduced private fence toggle there -- proven by pointing the
+    gate's own SCAN_DIRS at a throwaway tree standing in for src/lode/,
+    holding the exact pre-lode-jm4a shape from
+    ``test_gate_sabotage_catches_the_pre_lode_jm4a_shape`` above, rather than
+    mutating the real src/lode/ tree the gate itself is running from."""
+    gate = sys.modules[__name__]
+
+    fake_src_lode = tmp_path / "src_lode"
+    fake_src_lode.mkdir()
+    (fake_src_lode / "offender.py").write_text(
+        """
+def f(text):
+    in_block = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_block = not in_block
+            continue
+"""
+    )
+    monkeypatch.setattr(gate, "SCAN_DIRS", (fake_src_lode,))
+    monkeypatch.setattr(gate, "EXEMPT", set())
+
+    offenders: list[str] = []
+    for path in gate._scan_paths():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        offenders.extend(fence_toggle_findings(tree))
+    assert offenders, (
+        "widened scan failed to catch a private toggle under a src/-style dir"
+    )

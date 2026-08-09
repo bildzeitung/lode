@@ -212,6 +212,7 @@ from lode.config import model_cache_dir
 #: docstring). ``lode.enrich`` itself keeps ``import anthropic`` deferred, so the SDK is
 #: still not pulled at collection -- verified, not assumed.
 from lode.enrich import EnrichmentResult
+from lode.fence_parsing import closes_fence, match_fence_marker
 
 #: NOT imported at runtime, deliberately (lode-pw9o): ``lode.tool_dispatch`` and
 #: ``lode.webfetch`` are needed only by ``fake_tool_turn_client`` below, and importing them
@@ -1532,26 +1533,15 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # `fence_scan` at all, and must not re-type the marker shape either -- lode-bi9h.)
 _BLOCKQUOTE_MARKER = re.compile(r"^[ \t]*>[ \t]?")
 
-# A fence marker: three-or-more backticks, or three-or-more tildes, plus
-# whatever info string follows (lode-p4qb). Deliberately the same ALTERNATION
-# as ``scripts/check_links.py``'s ``_FENCE_RE`` -- but re-declared, not
-# imported. TWO state machines consume a marker of this shape and they do not
-# agree. This one is `fence_scan` below, the single partitioner every test-side
-# consumer now runs through (lode-kjei folded tests/test_bd_list_limit_gate.py's
-# inline-span scan into it, so it no longer keeps a loop -- or an import of this
-# constant -- of its own). ``check_links.py`` toggles on ANY marker, so there a
-# ``~~~`` line does close a ```-opened block; do not read that one as
-# documentation for this one.
-_FENCE_MARKER_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
-
-
-def _closes_fence(stripped: str, fence: str) -> bool:
-    """Whether ``stripped`` closes an open ``fence`` -- CommonMark's closing
-    rule, stated in ``fence_scan``'s docstring below. Kept a named helper, though
-    ``fence_scan`` is now its only caller, because that docstring's
-    unterminated-fence and four-backtick rules cite it by name.
-    """
-    return len(stripped) >= len(fence) and set(stripped) == {fence[0]}
+# The fence-marker match and same-marker-at-least-as-long close rule are the
+# ONE importable CommonMark primitive (lode-ee7b, src/lode/fence_parsing.py)
+# -- consumed here, not re-implemented. ``fence_scan`` below adds the parts
+# that primitive deliberately leaves to its caller: blockquote-marker
+# stripping, info-string capture, block-ordinal numbering, and
+# unterminated-fence flushing. ``scripts/check_links.py``'s own
+# ``_content_lines`` is NOT a consumer of the same primitive -- it toggles on
+# ANY marker (no same-character/length close rule), a deliberately different,
+# simpler rule; see that module's docstring.
 
 
 def fence_scan(
@@ -1603,7 +1593,8 @@ def fence_scan(
     markdown files, measured, so this is hardening rather than a live-bug fix:
 
     * a FOUR-OR-MORE-backtick fence and a TILDE (``~~~bash``) fence are both
-      scanned (see ``_FENCE_MARKER_RE`` above), not silently skipped.
+      scanned (see :func:`lode.fence_parsing.match_fence_marker`), not
+      silently skipped.
     * a closing run must be the SAME character as the opening one and AT LEAST
       AS LONG (CommonMark), so a ```-prefixed line inside a four-backtick
       block is content, not a close -- which is the whole reason an author
@@ -1646,16 +1637,16 @@ def fence_scan(
         line = _BLOCKQUOTE_MARKER.sub("", raw_line, count=1)
         stripped = line.strip()
         if fence:
-            if _closes_fence(stripped, fence):
+            if closes_fence(stripped, fence):
                 fence = ""
                 info = None
                 continue
             yield (lineno, line, info, ordinal)
             continue
-        m = _FENCE_MARKER_RE.match(stripped)
-        if m:
-            fence = m.group(1)
-            info = m.group(2).strip()
+        marker_match = match_fence_marker(stripped)
+        if marker_match:
+            fence, raw_info = marker_match
+            info = raw_info.strip()
             ordinal += 1
             continue
         yield (lineno, line, None, ordinal)
