@@ -342,7 +342,15 @@ def _lexical_gap_count(db: Path | None) -> int:
         return 0
 
 
-@app.command()
+@app.command(
+    help=(
+        "Show work-queue health: job counts, dead-letters, and an egress summary.\n\n"
+        "Also checks whether anything needs your attention -- pending or failed "
+        "jobs, a cold model cache, mixed or drifted embedding revisions, stale "
+        "enrichment annotations, or missing lexical index rows -- and if so, "
+        "names the follow-up command to run."
+    )
+)
 def status(db: _DbOption = None) -> None:
     """Show work-queue health: job counts, dead-letters, an egress summary, and what needs your attention.
 
