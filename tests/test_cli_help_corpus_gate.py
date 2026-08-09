@@ -146,18 +146,10 @@ ALLOWLIST: dict[str, str] = {
         "No help= yet (lode-ii25.x); the full docstring renders as --help "
         "and exceeds 12 lines, and cites `lexical_gap`/(lode-...) ids."
     ),
-    "reembed": (
-        "No help= yet (lode-ii25.x); the full docstring renders as --help "
-        "-- Sphinx roles, RST backticks, bd ids, and well over 12 lines."
-    ),
     "reindex-lexical": (
         "No help= yet (lode-ii25.x); the full docstring renders as --help "
         "-- Sphinx roles, RST backticks, bd ids, a test name, and over 12 "
         "lines."
-    ),
-    "reenrich": (
-        "No help= yet (lode-ii25.x); the full docstring renders as --help "
-        "-- Sphinx roles, RST backticks, bd ids, and well over 12 lines."
     ),
     "backfill": (
         "No help= yet (lode-ii25.x); the full docstring renders as --help, "

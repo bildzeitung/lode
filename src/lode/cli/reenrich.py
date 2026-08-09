@@ -7,7 +7,20 @@ from lode.cli import _DbOption, _open_db, app
 from lode.enrichment_view import stale_enrichment_heads
 
 
-@app.command()
+@app.command(
+    help=(
+        "Force a fresh enrich job for every live head whose AI annotations "
+        "are stale.\n\n"
+        "Run it when 'lode status' says the enrichment store's AI "
+        "annotations disagree with the currently configured "
+        "enrichment_llm. Targeted, not whole-corpus -- unlike 'lode "
+        "reembed', since each re-enrich costs a cloud LLM call. Notes/"
+        "externals marked no_egress are never swept in.\n\n"
+        "Only queues the jobs -- run 'lode work' (or 'lode work --wait') to "
+        "actually re-enrich. Safe to re-run. See "
+        "docs/how-to/maintenance-commands.md."
+    )
+)
 def reenrich(db: _DbOption = None) -> None:
     """Force a fresh enrich job for every live head whose annotations are stale (lode-14jr).
 
