@@ -12,6 +12,7 @@ When you just want to *get a thing done*, start here.
 |---|---|
 | [config-change.md](config-change.md) | How do I change a config setting? Where's the file, what's the format, how do I check it took? |
 | [jira-setup.md](jira-setup.md) | How do I set up the JIRA (and Confluence) Cloud integration end to end? |
+| [maintenance-commands.md](maintenance-commands.md) | `lode status` flagged something stale — what do `reembed`, `reenrich`, and `reindex-lexical` actually do, and which one fixes it? |
 
 For standing lode up from a fresh clone (install, venv, issue DB, test suite), see
 [`onboarding.md`](../onboarding.md) — that's the install how-to and lives one level up
