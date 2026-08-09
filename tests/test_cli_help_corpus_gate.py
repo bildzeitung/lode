@@ -66,10 +66,20 @@ piece of this file worth documenting carefully:
   continuation line is indented all the way to the description column
   instead (empirically 20+ columns past the mandatory pad in every panel
   observed in this corpus). :data:`_ENTRY_INDENT_THRESHOLD` draws that line
-  with headroom on both sides -- verified against every panel this gate
-  currently walks (``tests/test_cli.py``'s own ``CliRunner`` precedent
-  confirms box rendering is stable across this repo's pinned rich/typer
-  versions).
+  with headroom on both sides -- verified against every ``Arguments``/
+  ``Options`` panel this gate walks (``tests/test_cli.py``'s own
+  ``CliRunner`` precedent confirms box rendering is stable across this
+  repo's pinned rich/typer versions).
+- **``Commands`` panels are a deliberate exception.** Since lode-g0ck the
+  walk also yields sub-app GROUP nodes, whose ``--help`` renders a
+  ``Commands`` panel. Rich indents a wrapped row there to the NAME column
+  (e.g. 6 columns for ``pull``), not to 20+, so the threshold above reads
+  such a continuation as a new entry and rule 5's 3-line cap under-counts
+  a long row. That is deliberate, not an oversight: a ``Commands`` row is
+  just the sub-command's own ``short_help``, and that sub-command is a
+  corpus member in its own right whose full help is measured directly by
+  rules 5 and 6 at its own node. Splitting the row costs no enforcement --
+  it only avoids charging one command's text against another's cap.
 """
 
 from __future__ import annotations
