@@ -150,11 +150,6 @@ ALLOWLIST: dict[str, str] = {
         "No help= yet (lode-ii25.x); the full docstring renders as --help "
         "-- Sphinx roles, RST backticks, bd ids, and well over 12 lines."
     ),
-    "reindex-lexical": (
-        "No help= yet (lode-ii25.x); the full docstring renders as --help "
-        "-- Sphinx roles, RST backticks, bd ids, a test name, and over 12 "
-        "lines."
-    ),
     "reenrich": (
         "No help= yet (lode-ii25.x); the full docstring renders as --help "
         "-- Sphinx roles, RST backticks, bd ids, and well over 12 lines."

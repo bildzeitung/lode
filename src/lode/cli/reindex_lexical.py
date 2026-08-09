@@ -7,7 +7,15 @@ from lode.lexical import LexicalCacheBackend
 from lode.notes_read import live_note_heads_with_body
 
 
-@app.command()
+@app.command(
+    help=(
+        "Rebuild the lexical search index for every live note head.\n\n"
+        "Optional: run it when 'lode status' flags a lexical-index gap. "
+        "'lode work' closes the same gap on its own next reconcile pass, so "
+        "this just does it sooner. Safe to re-run any time; external "
+        "snapshots are left untouched."
+    )
+)
 def reindex_lexical(db: _DbOption = None) -> None:
     """Rebuild ``passages_fts`` for every live NOTE head from its current body (lode-x9lu).
 
