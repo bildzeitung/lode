@@ -30,7 +30,7 @@ from _anthropic_rig import (
     _results_handler,
     _succeeded_payload,
 )
-from conftest import _make_batch_result, fake_batch_client
+from conftest import _make_batch_result, _tool_use_block, fake_batch_client
 from pydantic import ValidationError
 
 from lode.config import Settings
@@ -178,9 +178,7 @@ def _update_note(
 
 def _fake_client(result: EnrichmentResult) -> mock.MagicMock:
     """Mock Anthropic client that returns the given EnrichmentResult as a tool call."""
-    tool_block = mock.MagicMock()
-    tool_block.type = "tool_use"
-    tool_block.input = result.model_dump()
+    tool_block = _tool_use_block(name="", tool_input=result.model_dump(), block_id="")
 
     response = mock.MagicMock()
     response.content = [tool_block]

@@ -1254,9 +1254,12 @@ def _make_batch_result(
     r.result.type = result_type
 
     if result_type == "succeeded":
-        tool_block = mock.MagicMock()
-        tool_block.type = "tool_use"
-        tool_block.input = enrichment.model_dump()
+        # lode.llm_provider.collect_batch reads only .type/.input off this
+        # block, so .name/.id get dummy values rather than becoming optional
+        # params on _tool_use_block (lode-j5o1).
+        tool_block = _tool_use_block(
+            name="", tool_input=enrichment.model_dump(), block_id=""
+        )
         r.result.message.content = [tool_block]
 
     return r
@@ -1313,15 +1316,16 @@ def _tool_use_block(name: str, tool_input: dict, block_id: str) -> mock.MagicMoc
     """Build a duck-typed ``tool_use`` content block (the shape
     lode.llm_provider's reader expects: .type/.name/.input/.id).
 
-    Shared by ``fake_tool_turn_client`` below and by tests/test_qa.py's two
-    non-fetch tool-turn tests, so a block-shape change (an SDK or
-    run_tool_turns contract change) edits those in one place (lode-gyq3).
+    Shared by ``fake_tool_turn_client`` below, by tests/test_qa.py's two
+    non-fetch tool-turn tests, by ``_make_batch_result`` above, and by
+    tests/test_llm_provider.py / tests/test_enrich.py, so a block-shape change
+    (an SDK or run_tool_turns contract change) edits every caller in one place
+    (lode-gyq3, swept the rest of the way by lode-j5o1).
 
-    NOT yet the repo's only definition of this shape: ``_make_batch_result``
-    above and tests/test_llm_provider.py / tests/test_enrich.py still hand-roll
-    it, and test_llm_provider's ``_tool_use_response`` is a near-twin that also
-    wraps the response. Converting those is lode-j5o1, deliberately out of
-    lode-gyq3's scope -- do not read this helper as having finished that sweep.
+    tests/test_llm_provider.py's ``_tool_use_response`` wraps this in a
+    response object (``.content = [block]``, ``.stop_reason = "tool_use"``) --
+    that wrapping form stayed local rather than moving here, since no other
+    module needs it (lode-j5o1).
     """
     block = mock.MagicMock()
     block.type = "tool_use"

@@ -22,6 +22,7 @@ from _anthropic_rig import (
     _results_handler,
     _succeeded_payload,
 )
+from conftest import _text_block, _tool_use_block
 from pydantic import BaseModel, ValidationError
 
 from lode.config import Settings
@@ -105,9 +106,7 @@ def test_model_tier_is_frozen() -> None:
 
 
 def _fake_tool_use_client(payload: dict) -> mock.MagicMock:
-    tool_block = mock.MagicMock()
-    tool_block.type = "tool_use"
-    tool_block.input = payload
+    tool_block = _tool_use_block(name="", tool_input=payload, block_id="")
     response = mock.MagicMock()
     response.content = [tool_block]
     client = mock.MagicMock()
@@ -527,11 +526,12 @@ def test_effort_levels_match_the_installed_sdk_literal() -> None:
 def _tool_use_response(
     name: str, tool_input: dict, block_id: str = "toolu_1"
 ) -> object:
-    block = mock.MagicMock()
-    block.type = "tool_use"
-    block.name = name
-    block.input = tool_input
-    block.id = block_id
+    """Wrap ``conftest._tool_use_block`` in a free-tool-turn response
+    (``.content``/``.stop_reason``). The response-wrapping form stays local to
+    this module rather than moving into conftest.py, since no other test
+    module needs it (lode-j5o1) -- see ``_tool_use_block``'s docstring.
+    """
+    block = _tool_use_block(name=name, tool_input=tool_input, block_id=block_id)
     response = mock.MagicMock()
     response.content = [block]
     response.stop_reason = "tool_use"
@@ -657,9 +657,7 @@ def test_run_tool_turns_forces_the_final_turn_when_the_model_never_calls_a_tool(
         name="lookup_widget", description="Look up a widget.", input_schema={}
     )
     text_only = mock.MagicMock()
-    text_block = mock.MagicMock()
-    text_block.type = "text"
-    text_only.content = [text_block]
+    text_only.content = [_text_block()]
     final_turn = _tool_use_response("_Widget", {"name": "w", "count": 0})
     client = mock.MagicMock()
     client.messages.create.side_effect = [text_only, final_turn]
@@ -1420,9 +1418,7 @@ def test_collect_batch_substitutes_a_placeholder_when_only_custom_id_is_unusable
 
 
 def _succeeded_result(custom_id: str, payload: dict) -> mock.MagicMock:
-    tool_block = mock.MagicMock()
-    tool_block.type = "tool_use"
-    tool_block.input = payload
+    tool_block = _tool_use_block(name="", tool_input=payload, block_id="")
     result_obj = mock.MagicMock()
     result_obj.custom_id = custom_id
     result_obj.result.type = "succeeded"
