@@ -169,7 +169,7 @@ import pytest
 # imported below) and this file's own INLINE scan are built on it, so the two partition a
 # document's FENCES identically by construction -- one state machine, not two kept in sync
 # by hand (module docstring: "Blockquoted fences").
-from conftest import fence_scan
+from conftest import AGENTS_DIR, MARKDOWN_CORPUS_GLOBS, fence_scan
 
 # Reuse lode-x495's fence-extraction and comment-stripping rather than adding a second,
 # competing implementation of either -- this ticket's assertion (flag PRESENCE) is
@@ -179,8 +179,6 @@ from conftest import fence_scan
 from test_skill_bash_state import _bash_blocks, _strip_comment
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
-AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
 
 # Every tracked `.sh` file in this repo lives directly under one of these two
 # directories (pinned by `test_scan_scope_covers_every_tracked_sh_file`) -- the
@@ -190,8 +188,13 @@ AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
 SH_GLOB_DIRS = [REPO_ROOT / "scripts", REPO_ROOT / ".claude"]
 
 # Markdown that a Claude Code agent executes bash out of: skills and subagent
-# definitions alike (see the module docstring's scan-surface section).
-MD_GLOBS = [(SKILLS_DIR, "*/SKILL.md"), (AGENTS_DIR, "*.md")]
+# definitions alike (see the module docstring's scan-surface section). Local
+# alias onto conftest's shared source of truth, kept because the module
+# docstring and the tests below refer to the scan surface by this name.
+# Rebind it (never mutate it in place) if a test ever needs a narrower
+# surface -- the list object itself is shared with conftest and every other
+# module that aliases it.
+MD_GLOBS = MARKDOWN_CORPUS_GLOBS
 
 # `bd`, then zero or more `-flag [value]` groups (tolerating a quoted or bare value),
 # then a bare `list` token. See the module docstring's "The regex" section above for

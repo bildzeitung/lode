@@ -161,12 +161,11 @@ import re
 from collections.abc import Collection
 from pathlib import Path
 
+from conftest import AGENTS_DIR, SKILLS_DIR, markdown_corpus_files
 from conftest import bash_fence_blocks as _bash_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLAUDE_DIR = REPO_ROOT / ".claude"
-SKILLS_DIR = CLAUDE_DIR / "skills"
-AGENTS_DIR = CLAUDE_DIR / "agents"
 
 # Bash's own positional/special parameters -- never "assigned" by any skill's own code,
 # so a use of one is never a finding.
@@ -395,8 +394,13 @@ def _source_files() -> list[Path]:
     definition under `.claude/agents/*.md` (lode-lv04) -- both execute fenced bash
     the same way, block by block, under the same harness rule. `ALLOWLIST` keys are
     relative to `CLAUDE_DIR`, computed the same way at each call site, so a key can
-    never be ambiguous about which of the two roots it names."""
-    return sorted(SKILLS_DIR.glob("*/SKILL.md")) + sorted(AGENTS_DIR.glob("*.md"))
+    never be ambiguous about which of the two roots it names.
+
+    The traversal itself is conftest's :func:`markdown_corpus_files` -- this
+    module's hand-rolled `sorted(SKILLS_DIR.glob(...)) + sorted(AGENTS_DIR.glob(...))`
+    was one of the copies lode-2evf hoisted, and it produces the identical
+    per-glob-sorted, concatenated order."""
+    return markdown_corpus_files()
 
 
 # =====================================================================================

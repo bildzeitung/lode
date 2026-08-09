@@ -167,6 +167,7 @@ beats catching it, and the guard still fails anything either one misses.
 
 import ast
 import asyncio
+import functools
 import importlib.util
 import ipaddress
 import logging
@@ -1790,6 +1791,83 @@ def _fenced_bash(markdown: str) -> str:
     and blind spots live next to :func:`bash_fence_blocks`, not here.
     """
     return "\n".join(bash_fence_blocks(markdown))
+
+
+#: The two roots every skill/agent-definition markdown corpus glob scans over.
+#: Was defined independently in several tests/ modules (byte-identical
+#: ``REPO_ROOT / ".claude" / "skills"`` / ``... / "agents"`` pairs) until
+#: lode-2evf hoisted them here -- a layout change needed each updated by hand,
+#: and conftest.py had no directory-level constants at all, only the
+#: per-file ones below (``LAND_SKILL``, ``CODE_REVIEWER_AGENT``, ...).
+SKILLS_DIR = _CHECKOUT_ROOT / ".claude" / "skills"
+AGENTS_DIR = _CHECKOUT_ROOT / ".claude" / "agents"
+
+#: (root, glob pattern) pairs covering the whole markdown corpus a Claude Code
+#: agent executes bash out of: every skill's ``SKILL.md`` and every subagent
+#: definition under ``.claude/agents``. The single source of truth for the
+#: scan surface -- :func:`markdown_corpus_files` below is its flattened,
+#: sorted-per-glob-then-concatenated view. A module that needs its own
+#: monkeypatch target keeps a local alias bound to this tuple (e.g.
+#: ``SCAN_GLOBS = MARKDOWN_CORPUS_GLOBS``, rebound by ``monkeypatch.setattr``)
+#: rather than redefining the pairs.
+#:
+#: A ``tuple``, not a ``list``, for the same reason
+#: :func:`markdown_corpus_blocks` returns tuples: every aliasing module shares
+#: this one object, so an in-place ``append``/``remove`` anywhere would
+#: silently change the scan surface for the whole session. Rebinding an alias
+#: is the supported narrowing; mutating is now a ``TypeError``.
+MARKDOWN_CORPUS_GLOBS: tuple[tuple[Path, str], ...] = (
+    (SKILLS_DIR, "*/SKILL.md"),
+    (AGENTS_DIR, "*.md"),
+)
+
+
+def markdown_corpus_files() -> list[Path]:
+    """Every file in :data:`MARKDOWN_CORPUS_GLOBS`, sorted within each glob and
+    concatenated in glob order -- the exact ordering every prior hand-rolled
+    ``sorted(SKILLS_DIR.glob(...)) + sorted(AGENTS_DIR.glob(...))`` produced,
+    preserved so no consumer's iteration order shifts.
+
+    Not cached: it is a pair of directory listings, cheap enough that a shared
+    cache would buy nothing. Contrast :func:`markdown_corpus_blocks` below,
+    which IS cached because it also reads and fence-parses file content -- the
+    expensive, worth-caching part.
+    """
+    files: list[Path] = []
+    for base, pattern in MARKDOWN_CORPUS_GLOBS:
+        files.extend(sorted(base.glob(pattern)))
+    return files
+
+
+@functools.cache
+def markdown_corpus_blocks() -> tuple[tuple[Path, tuple[str, ...]], ...]:
+    """(path, fenced-bash-blocks) for every file in :data:`MARKDOWN_CORPUS_GLOBS`,
+    in :func:`markdown_corpus_files` order -- the whole-corpus read and
+    fence-parse happens ONCE per session here, however many gates want it,
+    instead of once per importing gate (lode-2evf). Before this,
+    ``tests/test_validate_sha40_call_sites.py`` re-read and re-fence-parsed
+    the whole corpus at import time on its own.
+
+    Scope of the win, stated honestly: this deduplicates the *whole-corpus*
+    passes onto one cache. The per-file constants below
+    (:data:`LAND_SKILL_BLOCKS`, :data:`CODE_REVIEWER_AGENT_BLOCKS`,
+    :data:`SWEEP_SKILL_BLOCKS`) still read and parse their three files
+    separately, because their consumers want a single named file (and, for
+    the ``_TEXT`` constants, raw text this blocks-only cache cannot serve).
+    Folding those onto a shared cached corpus is follow-up work, not done
+    here.
+
+    Returns tuples, not lists -- ``@functools.cache`` hands every caller the
+    same object, and a mutable ``list`` result would let one caller's mutation
+    corrupt every other reader's view (the same hazard the per-skill
+    ``_BLOCKS`` constants below narrow by staying at module scope; this one
+    is enforced structurally instead, since it fans out over an open-ended
+    file set rather than a fixed handful of named constants).
+    """
+    return tuple(
+        (path, tuple(bash_fence_blocks(path.read_text(encoding="utf-8"))))
+        for path in markdown_corpus_files()
+    )
 
 
 #: The land skill doc. Three of its readers parse its fenced bash blocks (via

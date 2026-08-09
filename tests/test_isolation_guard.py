@@ -34,6 +34,7 @@ from pathlib import Path
 
 import pytest
 from _gitrepo import _git
+from conftest import AGENTS_DIR
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "isolation-guard.sh"
@@ -188,7 +189,7 @@ def test_every_agent_definition_invokes_the_guard() -> None:
     reimplementation). If a future agent definition is genuinely exempt,
     this test is the place to record why.
     """
-    agent_defs = sorted((REPO_ROOT / ".claude" / "agents").glob("*.md"))
+    agent_defs = sorted(AGENTS_DIR.glob("*.md"))
     assert agent_defs, "no .claude/agents/*.md found -- has the layout moved?"
 
     missing = [
@@ -240,7 +241,7 @@ def test_every_agent_definition_pins_isolation_in_frontmatter() -> None:
     If a future agent definition is genuinely exempt (a read-only agent that
     must NOT get its own worktree, say), this test is the place to record why.
     """
-    agent_defs = sorted((REPO_ROOT / ".claude" / "agents").glob("*.md"))
+    agent_defs = sorted(AGENTS_DIR.glob("*.md"))
     assert agent_defs, "no .claude/agents/*.md found -- has the layout moved?"
 
     missing = [
