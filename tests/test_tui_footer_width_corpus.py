@@ -92,7 +92,7 @@ def _footer_bearing_screen_classes() -> dict[str, type[Screen]]:
                 continue  # inherits compose from elsewhere -- not this module's call
             try:
                 source = inspect.getsource(compose)
-            except (OSError, TypeError):
+            except OSError, TypeError:
                 continue
             if "LodeFooter()" in source:
                 found[f"{info.name}.{name}"] = obj
@@ -182,7 +182,9 @@ def test_every_footer_bearing_screen_has_a_registered_factory() -> None:
     """Non-vacuity + the drift gate itself: a new screen composing
     LodeFooter with no :data:`_FACTORIES` entry is caught HERE, not by the
     parametrized scan below silently having nothing to say about it."""
-    assert _DISCOVERED, "no footer-bearing screens discovered -- the walk itself is broken"
+    assert _DISCOVERED, (
+        "no footer-bearing screens discovered -- the walk itself is broken"
+    )
     missing = [
         qualname for qualname, cls in _DISCOVERED.items() if cls not in _FACTORIES
     ]
