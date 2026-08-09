@@ -4703,3 +4703,30 @@ entries below from being rewritten to chase the current tree.)
   question can be settled empirically once the tool exists. Non-goal, inherited and unchanged: no
   existing entry in this file is rewritten, compacted or moved — this work changes how entries are
   **found**, never what they say.
+
+  **Update (`lode-1fzq`, 2026-08-09, HUMAN DECISION) — the tooling lives in `scripts/`, not
+  `src/lode/`.** Neither the entry above nor the epic's Design field named a directory:
+  "standalone"/"independent" were said about the *mechanism* (stdlib `sqlite3`, not lode's
+  embedding/FTS pipeline) and about import dependency, never about filesystem placement, so
+  `lode-t6o1.1`'s initial `src/lode/docs_index_chunker.py` violated nothing decided — it defaulted
+  into a gap. Decided now, before `lode-t6o1.2` imports the chunker and the move gets expensive.
+  The chunker moves to `scripts/docs_index_chunker.py`; `lode-t6o1.2`/`.3` build there, and
+  `tests/test_docs_index_chunker.py` loads it via `conftest.load_module_from_path`, exactly as
+  `tests/test_check_links.py` and `tests/test_check_docstring_refs.py` already do.
+
+  **Why, in order of weight.** (1) The counter-position — `src/lode/` makes the tool
+  pip-installable, so agents on other machines get it without a repo checkout — does not survive:
+  the tool indexes `docs/*.md` **from the checkout**, so with no checkout there is nothing to
+  index and the installed module is inert. It was the only argument for `src/lode/`. (2) Exact
+  repo precedent: `scripts/check_links.py` and `scripts/check_docstring_refs.py` are Typer CLIs
+  that read this repo's own files, are driven from `noxfile.py`, and are tested from `tests/` —
+  and `lode-t6o1.5` wires this tool into [`CLAUDE.md`](../CLAUDE.md) as an agent workflow step,
+  the same category. (3) `src/lode/` is the shipped product package
+  (`[project.scripts] lode = lode.cli:app`), so placing it there installs a chunker for *this
+  repo's* `docs/` into every consumer's site-packages, adjacent to `src/lode/chunking.py`, lode's
+  real chunker for user notes — two chunking modules in one package, one of them dead weight for
+  every consumer. (4) The independence constraint gains **structural** backing rather than resting
+  on review discipline: from `src/lode/` an accidental `from .retrieval import ...` is one line
+  away and near-invisible in review; from `scripts/` it is a package-boundary crossing.
+
+  Recorded so `lode-t6o1.2`/`.3`/`.4`/`.5` do not re-litigate placement.
