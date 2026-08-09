@@ -133,25 +133,30 @@ class LodeApp(App[str | None]):
         # ctrl+q is well known and Escape is an additional route out on most
         # screens, so hiding it from the footer costs little. The binding
         # itself stays fully live (priority=True, unchanged) -- only
-        # show=False changes. This is a small, targeted pull-forward of
-        # lode-2bt3.3's general per-screen footer-priority mechanism, not a
-        # substitute for it; that ticket must re-verify this call once the
-        # full mechanism exists (see docs/keybindings.md).
+        # show=False changes.
+        #
+        # RE-VERIFIED, not inherited (lode-2bt3.3, as lode-2bt3.2 required):
+        # now that per-screen footer priority is a general mechanism and not
+        # a one-off, the same reasoning still holds -- ctrl+q is one of the
+        # most universally-known TUI conventions, Escape covers the same
+        # ground on most screens, and every screen's help overlay (Ctrl+_,
+        # below) lists it regardless. Dropping it stays the right call.
         Binding("ctrl+q", "quit", "Quit", priority=True, show=False),
-        # "Cfg" stays abbreviated (lode-uczx, amending lode-l38d.3's original
-        # rationale). lode's minimum supported terminal width is 100 columns
-        # (docs/tui.md), not 80 -- so "buy width for one screen" is no longer
-        # the reason: at 100 columns every one of the ten footer-bearing
-        # screens fits fine with "Config" spelled out. The real constraint is
-        # width reserved for the App-level Ask binding below (ctrl+l,
-        # lode-11io), measured to cost +7 columns wherever it lands, since an
-        # App-level binding renders in every screen's footer. EditScreen is
-        # the tightest of the ten (see lode.tui.screens.edit.EditScreen):
-        # with "Cfg" it lands at 97/100; with "Config" it would land at
-        # 100/100 -- zero slack. "Browse"/"Tags" already stay full words;
-        # they aren't the constraint. Do not restore "Config" without
-        # re-measuring EditScreen's footer against the Ask binding's real
-        # cost.
+        # "Cfg" stays abbreviated -- RE-MEASURED (lode-2bt3.3), not
+        # inherited, and the constraint that pins it has changed. It is an
+        # App-level binding, so it renders in every screen's footer;
+        # BrowseScreen is now the tightest of the eleven footer-bearing
+        # screens (lode-2bt3.3 recovered EditScreen's slack by hiding
+        # "View content"/"Link" there instead -- see
+        # lode.tui.screens.edit.EditScreen's own BINDINGS comment).
+        # MEASURED: swapping in "Config" lands BrowseScreen's footer at
+        # exactly 100/100 with show_horizontal_scrollbar flipping True (see
+        # lode.tui.screens.browse.BrowseScreen's own BINDINGS comment for
+        # that screen's full budget) -- fails the "fits without hscroll"
+        # bar, so "Cfg" stays. Do not restore "Config" without re-measuring
+        # BrowseScreen's footer, not just EditScreen's -- an App-level label
+        # change is judged against the tightest screen, and which screen
+        # that is can change ticket to ticket.
         # These four use Textual's own builtin push_screen(name) action
         # string (App.action_push_screen) rather than a one-line hand-rolled
         # action_show_* wrapper (lode-pijc) -- each wrapper did nothing but

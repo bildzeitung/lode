@@ -8,7 +8,15 @@ from lode import cli
 from lode.cli import _DbOption, _open_db, app
 
 
-@app.command()
+@app.command(
+    help=(
+        "Re-run a connector's draw-down under current routing.\n\n"
+        "Run this when links you already captured should now resolve "
+        "differently -- typically after a connector that handles those URLs "
+        "became available. Pass no CONNECTOR to see the registered names, "
+        "and try --dry-run before a real pass."
+    )
+)
 def backfill(
     connector: Annotated[
         str | None,
@@ -38,10 +46,8 @@ def backfill(
         typer.Option(
             "--retry-tombstoned",
             help=(
-                "Also re-enqueue a fresh refresh for a target whose head "
-                "snapshot already tombstoned on a prior backfill pass. Idempotent "
-                "re-run only -- never needed on a first migration, since a first "
-                "migration mints a brand-new, never-tombstoned target."
+                "Also retry a target whose head snapshot already tombstoned "
+                "on a prior backfill pass. Not needed on a first migration."
             ),
         ),
     ] = False,

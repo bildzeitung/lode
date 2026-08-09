@@ -344,7 +344,16 @@ def _run_verify(
     return 0
 
 
-@app.command()
+@app.command(
+    help=(
+        "Confirm a JIRA/Confluence connector is configured and reachable.\n\n"
+        "Requires exactly one of --jira/--confluence. Prints the resolved "
+        "config, makes one authenticated read-only request, and reports the "
+        "outcome. Writes nothing. Exit code 0 means verified; nonzero means "
+        "misconfigured, unreachable, or auth-failed -- usable as a "
+        "scriptable preflight gate."
+    )
+)
 def verify(
     jira: Annotated[
         bool, typer.Option("--jira", help="Verify the JIRA Cloud connector.")
@@ -358,9 +367,9 @@ def verify(
         typer.Argument(
             metavar="[ISSUE_OR_PAGE]",
             help=(
-                "Optional JIRA issue key/URL or Confluence page id/URL: also runs "
-                "a read-only content dry-run, and doubles as the base-URL source "
-                "when {connector}_base_url is not configured."
+                "JIRA issue key/URL or Confluence page id/URL: also runs a "
+                "content dry-run, and doubles as the base-URL source when "
+                "not configured."
             ),
         ),
     ] = None,

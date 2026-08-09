@@ -22,7 +22,14 @@ def _format_outstanding(jobs: list[tuple[int, str, str, str]]) -> str:
     )
 
 
-@app.command()
+@app.command(
+    help=(
+        "Drain the async work queue once and exit.\n\n"
+        "Run it when 'lode status' reports jobs pending or failed, to make "
+        "enrichment and embeddings land now. One pass by default; --loop "
+        "and --wait keep going instead, on the schedules below."
+    )
+)
 def work(
     db: _DbOption = None,
     loop: Annotated[
@@ -30,14 +37,14 @@ def work(
         typer.Option(
             "--loop",
             "--watch",
-            help="Poll continuously (same as --watch); sleep --interval seconds between passes.",
+            help="Keep polling forever, --interval seconds apart.",
         ),
     ] = False,
     interval: Annotated[
         float,
         typer.Option(
             "--interval",
-            help="Polling interval in seconds (--loop / --watch / --wait).",
+            help="Polling interval in seconds.",
             min=0.1,
         ),
     ] = 5.0,
@@ -46,16 +53,7 @@ def work(
         typer.Option(
             "--wait",
             "--until-done",
-            help=(
-                "Block, polling every --interval seconds, until the queue is "
-                "fully drained or a bounded timeout elapses (see "
-                "docs/configuration.md), whichever comes first. On timeout, "
-                "exits non-zero naming the still-pending/running jobs -- just "
-                "re-run 'lode work' (or --wait again) to keep collecting; a "
-                "large enrich batch can legitimately take a long time to land. "
-                "Mutually exclusive with --loop/--watch, which never exits on "
-                "its own."
-            ),
+            help="Block until drained; exits non-zero on timeout.",
         ),
     ] = False,
 ) -> None:
