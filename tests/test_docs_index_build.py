@@ -96,8 +96,6 @@ def test_build_index_measured_time_is_fast(tmp_path: Path) -> None:
 def test_no_import_of_lodes_own_retrieval_pipeline() -> None:
     """Independence constraint (epic lode-t6o1, SETTLED item 4): the build
     step must not import lode's own embedding/FTS retrieval code."""
-    source = (REPO_ROOT / "scripts" / "docs_index_build.py").read_text(
-        encoding="utf-8"
-    )
+    source = (REPO_ROOT / "scripts" / "docs_index_build.py").read_text(encoding="utf-8")
     for forbidden in ("lode.retrieval", "lode.embedding", "lode.vectorstore"):
         assert forbidden not in source
