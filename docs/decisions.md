@@ -945,6 +945,21 @@ entries below from being rewritten to chase the current tree.)
   resolve, so an attempt fails on its own. Enforcement stays instruction-only for the simpler reason that
   the target no longer exists.
 
+  **`origin/land/lode-arx1` is DELETED, reversing the "deliberately left on origin" disposition above
+  (maintainer instruction, 2026-08-09).** That branch was kept as a design reference in case the workflow
+  was revived for manual use at scale. With the script deleted, it edits a `/code` Phase 2 block that no
+  longer exists, for a script that no longer exists — a reference to two absences. It was at
+  `157e44b20063e771676643a9a14111dd2ffb462b` and is gone from origin, which also retires the accepted
+  residue noted above: `/land` §1a no longer pays pairwise merge-base work for a parked branch on every
+  pass, forever.
+
+  **Do not read that SHA as a promise of retrievability.** Unlike the deleted *script*, whose bytes are
+  reachable from a commit on `trunk`'s own history, this commit is on no surviving ref — recording its id
+  does not make it durable, and it is GC-eligible. What the branch *did* is described in prose in this
+  thread, and that prose is the durable record; the branch content should be treated as gone. This is the
+  distinction to keep in mind before citing any SHA as an archive: a commit reachable from a permanent ref
+  is an archive, and a dangling one is a receipt.
+
   **Update (lode-vs7g): eliminating the collision (lode-em6v, above) closed the *invisible*-worktree
   half of the leak, but not the *proactive-cleanup* half.** lode-em6v's own acceptance criterion 1 —
   "a clean code-reviewer run and a clean rebase-pickup run leave NO worktree behind" — was satisfied
