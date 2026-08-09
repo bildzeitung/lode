@@ -1655,6 +1655,23 @@ LAND_SKILL_BASH = "\n".join(LAND_SKILL_BLOCKS)
 #: file that landed after the first consolidation attempt was written.
 SWEEP_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
 
+#: The code-reviewer agent definition, derived the same way as LAND_SKILL /
+#: SWEEP_SKILL above. Added by lode-xdg3's technical review, whose
+#: ``tests/test_validate_sha40_call_sites.py`` is the first module to pin a
+#: fenced bash block in an ``.claude/agents/*.md`` file rather than a
+#: ``SKILL.md`` -- ``tests/test_no_hand_derived_skill_md_path.py`` covers both
+#: roots, so the constant belongs here for the same reason the skill ones do.
+CODE_REVIEWER_AGENT = _CHECKOUT_ROOT / ".claude" / "agents" / "code-reviewer.md"
+
+#: :func:`bash_fence_blocks` over :data:`CODE_REVIEWER_AGENT`, once per session.
+#: See :data:`LAND_SKILL_TEXT` for why this is cached at all. No separate
+#: ``_TEXT`` constant: unlike ``LAND_SKILL_TEXT`` (several modules read the raw
+#: prose), nothing needs the text itself yet, so the read is inlined here rather
+#: than exported dead.
+CODE_REVIEWER_AGENT_BLOCKS = bash_fence_blocks(
+    CODE_REVIEWER_AGENT.read_text(encoding="utf-8")
+)
+
 #: The sweep skill doc's text, read once per session rather than once per test
 #: (lode-pxwn) -- the same fix LAND_SKILL_TEXT above applied to LAND_SKILL.
 #: All five tests/test_sweep_*.py modules that previously called

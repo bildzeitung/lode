@@ -4579,3 +4579,44 @@ entries below from being rewritten to chase the current tree.)
   there (a future editor silently flipping a load's missing-vs-empty policy during a mechanical
   retrofit) is exactly why every retrofitted site above was checked against its pre-change text
   first, and why the two out-of-scope sites got an explicit note instead of a silent skip.
+
+- **2026-08-09 (`lode-xdg3` × `lode-9b5n`, DECISION human) — composed the shape check with the
+  ancestor comparison in `code-reviewer.md`'s `review_head` drift check, rather than treating them
+  as competing designs for the same comparison.** A prior escalation on this same branch had framed
+  lode-9b5n's `git merge-base --is-ancestor` rewrite (trunk) and lode-xdg3's
+  `scripts/validate-sha40.sh` shape check (this branch) as mutually exclusive: pick one comparison
+  style or the other. That framing was wrong — the two changes sit at different layers (lode-9b5n
+  changed the *comparison*; lode-xdg3 added a *precondition on the value*) and compose cleanly by
+  running the shape check first and the ancestor check only on a value that passes it.
+
+  **Measured evidence for why composing is not merely nicer but necessary** (run in this repo,
+  2026-08-09, trunk @ `4397abd`): `git merge-base --is-ancestor` resolves an unambiguous SHA
+  *prefix* exactly like any other git ref —
+
+  ```
+  git merge-base --is-ancestor <39-char truncation of HEAD> HEAD  -> exit 0
+  git merge-base --is-ancestor <8-char prefix of HEAD>      HEAD  -> exit 0
+  git merge-base --is-ancestor ''                           HEAD  -> exit 128
+  ```
+
+  — so a *truncated* `review_head` (the exact 39-character defect `lode-xdg3` was filed to catch)
+  exits 0 under the bare ancestor check and reads as FORWARD-ONLY, i.e. silently **not** drift.
+  Under the old exact-match comparison a truncated value at least failed loudly, as spurious drift.
+  Taking lode-9b5n's ancestor check without re-layering lode-xdg3's shape check in front of it does
+  not merely lose a nicety — it turns the drift check vacuously green against precisely the
+  corruption class this ticket exists to catch.
+
+  **Resulting taxonomy is three-way, not two:** MALFORMED (shape check fails — noted, not drift),
+  FORWARD-ONLY (well-formed and an ancestor of the fetched tip — not drift, lode-9b5n's fix),
+  UNREACHABLE (well-formed but not an ancestor — real drift, history was rewritten). Implemented in
+  `.claude/agents/code-reviewer.md` step 2 as `scripts/validate-sha40.sh review_head "$REVIEW_HEAD"
+  || exit $?` immediately before `git merge-base --is-ancestor "$REVIEW_HEAD" HEAD`.
+
+  **Deliberate asymmetry, left in place on purpose:** `/land`'s `land_head` check
+  (`.claude/skills/land/SKILL.md` §2a) stays exact-match rather than adopting the ancestor
+  comparison — it was not part of the lode-9b5n/lode-xdg3 conflict and the two read sites answer
+  different questions. `/land` lands *without* re-reviewing, so a forward push of never-reviewed
+  commits onto `land/<id>` genuinely is drift there; `code-reviewer` reviews `trunk...HEAD`
+  wholesale regardless of what `review_head` names, so a forward push is harmless to it. Recorded in
+  `docs/agents-workflow.md` so a later pass does not "harmonize" the two comparisons and reintroduce
+  the hole this decision closes.

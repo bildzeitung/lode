@@ -1943,6 +1943,95 @@ fixed by asserting the full four-name contract in the same block, pinned by a pa
 the identical fail-OPEN class `lode-dia6`'s own review closed for the functions, reopened one line
 lower down.
 
+### Validate `land_head`/`review_head` shape before trusting them as drift signals (lode-xdg3)
+
+**During the `/code` fan-out of 2026-08-08, a rebase pickup (`lode-r9z0`) wrote a 39-character
+`land_head` into bd metadata** — one hex digit short of the real branch tip
+(`fd94fe21caac7a1fb9259514973e99773c7e01f` instead of
+`fd94fe21caac7a1fb9259514973e99773c7e01ff`). Caught only because the orchestrating `/code` session
+happened to re-derive the SHA from `git ls-remote` to verify the hand-off — nothing in the pipeline
+itself would have caught it. The [fabricated-SHA guard](#guard-against-fabricated-shas-lode-fpmi)
+above does not help here either: `sha-fabrication-guard.sh` only scans for a *full* 40-hex run
+(`[0-9a-f]{40}`), so a 39-character value never even enters its match — a different failure mode
+(truncation/retyping-short) from the one that guard was built for (pattern-completing a short prefix
+to a full 40).
+
+**The consequence, if a malformed value reaches `/land` or `code-reviewer` unnoticed:** both agents
+compare the recorded `land_head`/`review_head` against the actual branch tip purely to detect
+*drift* (a push landed on the branch after the ticket was marked ready). A malformed value never
+equals a real SHA either, so it reads exactly like drift — sending an already-correct branch through
+`/land`'s Section 2a bounce path or being logged as spurious drift in a review, for no reason.
+
+**Fix: a shared shape check, run at both read sites, before the drift comparison.**
+[`scripts/validate-sha40.sh`](../scripts/validate-sha40.sh) (pinned by
+`tests/test_validate_sha40.py`) answers exactly one question — is this value even shaped like a full
+40-lowercase-hex git SHA — and deliberately does **not** check reachability (`git cat-file -e`); that
+is the fabrication guard's job, on a different channel (Bash tool calls), for a different failure
+mode (over-length pattern-completion, not truncation).
+[`/land`'s Section 2a](../.claude/skills/land/SKILL.md#2a-re-validate-that-beads-and-git-havent-drifted)
+and `code-reviewer.md`'s own `review_head`
+check (step 2) both call it before comparing against the real branch tip, so a malformed value is
+reported as **malformed**, distinct from **drift** — the caller never derives a "the branch has an
+unreviewed push" narrative from a value that was never well-formed enough to compare in the first
+place.
+
+**The disposition a malformed value earns is ESCALATE — not a bounce, not an in-pass repair**
+(DECISION, human, 2026-08-08, `lode-xdg3`). `/land` keeps `origin/land/<id>`, lands nothing from it
+that pass, labels the ticket `land-escalated`, and reports "malformed `land_head` metadata, not
+drift"; a human re-derives the value mechanically (`git rev-parse` / `git ls-remote`, per
+[`docs/conventions.md`](conventions.md)'s "Derive identifiers, never retype them", `lode-fpmi`),
+re-writes the field, and re-enters the ticket at `ready-for-land`. The reasoning: a corrupt hand-off
+record means **no drift evidence exists**, and whether the branch is trustworthy anyway is a human
+judgement. Bouncing would supersede the ticket and **delete** the branch whose field the remedy asks
+a human to re-write — rebuilding reviewed, correct work over one mistyped hex digit. Repairing it
+in-pass is worse: `land_head` records *what the reviewer saw*, so re-deriving it from the remote
+yields the current tip and makes the comparison tip == tip — vacuously green, the drift check
+deleted rather than fixed, and the only route by which genuinely unreviewed drift could reach
+`trunk`. `code-reviewer` is unaffected by this arm: it reviews the tip it checked out either way and
+merely labels the finding "malformed `review_head` metadata" instead of "drift".
+[`/land`'s Section 2a](../.claude/skills/land/SKILL.md#2a-re-validate-that-beads-and-git-havent-drifted)
+carries the operative wording; the two files must not diverge on this taxonomy.
+
+**Why a read-time check, not a write-time reject (the ticket's option (b)).** The value is written by
+several sites across `coding.md`, `code-reviewer.md`, and `/land`'s own rebase-pickup refresh — every
+one of them already derives the value mechanically (`$(git rev-parse HEAD)`), per
+[`docs/conventions.md`](conventions.md)'s "Derive identifiers, never retype them" fiat, so rewriting
+every write site to also call a validator before writing would duplicate that fiat's enforcement
+without adding a genuinely different backstop: a bug that corrupts the value between derivation and
+the `bd update` call (as `lode-r9z0`'s reproduction did) corrupts it the same way whether or not the
+write site itself re-checks its own local variable. Validating at the two **read** sites instead
+catches the same corruption **and** any other route a malformed value could reach bd metadata by
+(a hand edit, a bug in a future write site nobody added this check to) — one check, at the point the
+value actually gets *acted on*, rather than N checks at every place it could be written. This is the
+"cheapest thing that actually fires" the ticket's acceptance criteria asks for.
+
+**The ticket's option (c) — a test gate over the markdown roster — was taken too, and it is what
+makes this a mechanism rather than an instruction** (added in technical review, which found it
+missing and unargued). Both read sites are fenced bash inside markdown agent instructions, and no
+other gate parses those: with only `tests/test_validate_sha40.py` in place, deleting the two-line
+check from either file would leave the whole suite green while the pipeline silently returned to the
+lode-r9z0 behaviour this section exists to prevent. `tests/test_validate_sha40_call_sites.py` closes
+that — it finds any fenced block that reads `metadata.land_head`/`metadata.review_head` and requires
+the validator call *in that same block* (same-block because shell state does not survive between
+fenced blocks, lode-sfnb, so a check one block later would validate an unset variable), asserts the
+call is made on the variable that block actually assigned, and pins non-vacuity by requiring each
+field's read site to still exist. This is the same two-layer split
+[`scripts/assert-main-checkout.sh`](../scripts/assert-main-checkout.sh) already uses — script-behaviour
+tests plus a markdown coverage gate (`tests/test_land_skill_guard_coverage.py`, lode-2thl). Options
+(b) and (c) were never alternatives: (b) is rejected above on its merits, (c) is what gives (a) teeth.
+
+**Exit codes follow the 0/1/2 gate contract** (lode-9i2p): 0 well-formed, 1 malformed *or* missing
+(both callers read the field with `jq -r '... // empty'`, so an unwritten field arrives as `""` — a
+metadata condition, reported as MISSING rather than as a usage error), and **2 for a broken call**
+(wrong argument count). That last distinction is load-bearing rather than decorative: both call sites
+react to a nonzero exit by reporting malformed metadata, so if a botched invocation also exited 1, a
+future edit that dropped an argument would make `/land` escalate an already-correct ticket while the
+real defect sat in the markdown. `validate-sha40.sh` does not source
+[`scripts/gate-lib.sh`](../scripts/gate-lib.sh) (lode-pcee requires saying so): that library exists to
+emit the multi-line "GATE COULD NOT RUN" advisory a branch-verdict gate owes its caller, and its
+exit-2 cases are machine faults discovered mid-run; this script runs no machine and can fail only on
+its own argument list, so a one-line usage message is the whole of what it has to say.
+
 ### All three PreToolUse guards live in tested scripts, not inline config (2026-08-04)
 
 **No `PreToolUse(Bash)` guard keeps its scanning logic inline in `.claude/settings.json`.** Each of
@@ -2622,6 +2711,25 @@ the whole branch, never `review_head...HEAD`, so commits pushed on top are revie
 survives is the one case where that reasoning fails — a rewrite, where content is *removed* rather than
 added. Narrowing the signal to exactly that case is what keeps it credible, which was the ticket's
 actual complaint.
+
+**Composed with the shape check, not replaced by it (lode-9b5n × lode-xdg3, DECISION human
+2026-08-09).** These two changes sit at different layers, not two competing designs for the same
+comparison: lode-9b5n changed the *comparison* (exact-match → ancestor-check); lode-xdg3 added a
+*precondition on the value* (shape-check before comparing at all). Composing them is not optional —
+measured in this repo, `git merge-base --is-ancestor` resolves an unambiguous SHA *prefix* the same
+way any other git ref does, so a 39-character truncated `review_head` (`lode-xdg3`'s own motivating
+defect) exits 0 against the current tip and reads as FORWARD-ONLY, i.e. silently *not* drift — a
+strictly worse outcome than the old exact-match's spurious-but-loud drift flag. `code-reviewer.md`
+step 2 therefore runs `scripts/validate-sha40.sh` first and only reaches the ancestor check on a
+well-formed value, giving three outcomes instead of two: MALFORMED (shape check failed — noted, not
+drift), FORWARD-ONLY (well-formed and an ancestor — not drift, lode-9b5n's fix), UNREACHABLE
+(well-formed but not an ancestor — real drift, history was rewritten). `/land`'s `land_head` check
+(Section 2a above) stays exact-match rather than adopting the ancestor comparison: `/land` lands
+*without* re-reviewing, so a forward push of never-reviewed commits onto `land/<id>` is drift that
+matters there, whereas `code-reviewer` reviews `trunk...HEAD` wholesale and a forward push is
+harmless to it either way — the two read sites deliberately answer different questions with the same
+shape-check predicate, and collapsing them to one shared comparison would break one side or the
+other.
 
 ### Isolating `land-review` dispatches (lode-g387)
 
