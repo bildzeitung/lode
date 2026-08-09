@@ -4842,7 +4842,14 @@ entries below from being rewritten to chase the current tree.)
   `docs/configuration.md` row:** a log line is the whole ask — comparing several runs' log output is
   enough to judge the gap, and a knob here would be exactly the "telemetry subsystem nobody asked
   for" `lode-9594`'s own text warns against (citing `lode-m73d`'s reverted per-run JSON store as the
-  cautionary precedent). Never blocks or fails a run: both the per-turn accumulation and the final
-  log call are wrapped, and any failure is swallowed (logged at `DEBUG`), never raised. Full
-  implementation: `src/lode/llm_provider.py` (`run_tool_turns`, `_forced_schema_turn`'s new
-  `on_usage` callback parameter).
+  cautionary precedent). Never blocks or fails a run, but deliberately NOT by swallowing
+  accumulator exceptions — a silently-undercounting accumulator would be worse than no measurement,
+  since the whole point is to be trusted evidence. Instead the per-turn read goes through a total
+  function (`_output_tokens`: absent or non-int `usage.output_tokens` contributes 0, nothing can
+  raise), which also keeps the running total an `int` so the `INFO` call itself cannot fail on
+  formatting either — so there is no `try`/`except` on this path at all. **Anthropic
+  `run_tool_turns`-only BY CONSTRUCTION, not by oversight:** `structured_call` and
+  `OpenAIProvider` also spend tokens, but neither has a multi-turn bound to compare a total
+  against, and measuring them would need exactly the per-call aggregator this ticket rules out.
+  Full implementation: `src/lode/llm_provider.py` (`run_tool_turns`, plus `_forced_schema_turn`
+  now returning `(parsed, output_tokens)` so the final turn's spend folds in without a callback).
