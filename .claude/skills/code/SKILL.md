@@ -254,7 +254,12 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    ```
 
    If that resolves to a well-formed 40-hex SHA, write it and dispatch normally (below), same as if it
-   had been present all along. If the ref doesn't exist or is empty (no branch was ever pushed — the
+   had been present all along. Note what a derived value means downstream: it equals the tip by
+   construction, so the reviewer's `review_head`-vs-tip drift check is *uninformative* for this ticket
+   rather than meaningfully clean. That costs nothing — the reviewer reviews `trunk...HEAD` wholesale
+   regardless, never `review_head...HEAD` (lode-9b5n) — but it is why (b), the resolution-time write in
+   [`land/SKILL.md`](../land/SKILL.md#resolving-a-land-escalated-branch), stays the norm and this stays
+   the backstop. If the ref doesn't exist or is empty (no branch was ever pushed — the
    only way this can still happen is a build-time escalation predating the coding.md fix for
    lode-t83's Gap 1), still don't guess — leave the label alone and surface it in the final report as
    needing a human to re-escalate or rebuild instead. Otherwise dispatch a `code-reviewer`
