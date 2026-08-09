@@ -4754,16 +4754,14 @@ entries below from being rewritten to chase the current tree.)
       same understated migration cost as (a), and additionally: sharding only *reduces* the
       probability that two concurrent branches collide on the same shard — it does not remove the
       collision by construction the way a union merge driver does.
-    - **(c) Union merge driver.** ACCEPTED — this is the mechanism `lode-4jtc.1` built. Explicitly:
-      **candidate (c) does not solve axis 2** of the parent epic (`lode-4jtc`) — the lookup/retrieval
-      cost of a large flat file. Axis 2 moved to its own epic, `lode-t6o1`, entirely unblocked by and
-      unrelated to this candidate. (c) is scoped to axis 1 — the write-concurrency/landing-conflict
-      cost — only.
-    - **(d) Dogfood lode's own retrieval/embedding pipeline as the lookup index for axis 2** (named
-      here for completeness though it is an axis-2, not axis-1, candidate — the axis-2 epic
-      ultimately rejected it too, for the same reason surfaced during the `/challenge`): a circular
-      dependency — "what did we decide about retrieval" must stay answerable while retrieval itself
-      is mid-refactor or broken.
+    - **(c) Union merge driver.** ACCEPTED — the mechanism `lode-4jtc.1` built. Scoped to axis 1
+      (the write-concurrency/landing-conflict cost) only: **candidate (c) does not solve axis 2** of
+      the parent epic (`lode-4jtc`), the lookup/retrieval cost of a large flat file, which moved to
+      its own epic `lode-t6o1` — entirely unblocked by and unrelated to this candidate.
+    - **(d) Dogfood lode's own retrieval/embedding pipeline as the lookup index for axis 2** (an
+      axis-2 candidate, listed for completeness; the axis-2 epic rejected it for the same reason).
+      Rejected on a circular dependency: "what did we decide about retrieval" must stay answerable
+      while retrieval itself is mid-refactor or broken.
     - **(e) Do nothing.** Rejected on the measured trend: the conflict rate on this file tripled from
       15% (July) to 48% (first nine days of August), on two inputs — file size and `/land`
       parallelism — that both only grow.
@@ -4777,16 +4775,19 @@ entries below from being rewritten to chase the current tree.)
 
   **The 66-file non-impact, re-confirmed against the tree as it stands now (`lode-fp9l`,
   2026-08-09).** `lode-4jtc.1`'s branch diff was exactly 3 files — `.gitattributes`,
-  `docs/decisions.md`, `tests/test_decisions_union_merge_driver.py` — none of them among the files
-  that reference `docs/decisions.md`, so none of those references needed touching. Re-measured now
+  `docs/decisions.md`, `tests/test_decisions_union_merge_driver.py` — and it changed neither the
+  path nor the shape of `docs/decisions.md`, so not one referencing file needed updating. Read
+  `lode-4jtc.1`'s "zero of the 66 referencing files touched" as *no reference needed changing*,
+  **not** as *the diff avoided the referencing set*: 2 of those 3 files do themselves contain the
+  string `docs/decisions.md` — the log itself, and the gate test that branch added. Re-measured now
   with a plain recursive grep for the literal string `docs/decisions.md` across `.py`/`.sh`/`.md`
   files (repo root, excluding `.git`, `venv`, and `.claude/worktrees`): **65 files** contain the
-  string, of which **1 is `docs/decisions.md` itself** (it references its own past entries by
-  searching for their ticket ids, e.g. this very sentence) — so **64 files** reference it externally.
-  This differs from the `/challenge`-era count of 66 (organic drift over the intervening tickets, not
-  a discrepancy in method) and from `lode-4jtc.1`'s "none of them" framing only in that this recount
-  is a fresh grep against a moving tree, not a diff against `lode-4jtc.1`'s specific branch — the
-  substantive finding is unchanged: this entry's own diff (this file only) touches none of the 64.
+  string, of which **1 is `docs/decisions.md` itself** — so **64 files** reference it externally.
+  The `/challenge`-era figure was 66 (45 `.py`/`.sh` + 21 `.md`); the same split now is 48 + 17.
+  Deliberately not force-matched: the gap is organic churn over the intervening tickets, and the
+  older 66 was a raw file count that would have included `docs/decisions.md` itself — so its
+  comparable modern figure is the 65, not the 64. Either way the finding holds: this entry's own
+  diff (this file only) touches none of the 64.
 
   **Why the marker-gate cross-check was not re-run (`lode-4jtc.1`'s AC3).** This is accepted
   reasoning carried over from `lode-4jtc.1`'s own record, not a verification performed by this
@@ -4799,8 +4800,7 @@ entries below from being rewritten to chase the current tree.)
   [`scripts/check-decisions-no-silent-rewrite.sh`](../scripts/check-decisions-no-silent-rewrite.sh)
   structurally incapable of failing under a union merge (that gate fires only when a pre-existing
   line *disappears*, and a union merge cannot remove a line) — both gates are immune for the same
-  structural reason, and re-running either against a fresh merged result would not exercise any code
-  path the original `lode-4jtc.1` verification didn't already cover.
+  structural reason.
 
   **The ours-side-only caveat — operationally load-bearing for the *next* union-merge path, not just
   this one.** Measured 2026-08-09 on git 2.43.0: the `merge=union` driver only takes effect when
@@ -4813,9 +4813,8 @@ entries below from being rewritten to chase the current tree.)
   driver's benefit, because from then on `.gitattributes` is present on `trunk` — the OURS side of
   every subsequent merge. **Anyone adding a new `merge=union` path for a different file will hit this
   same one-shot conflict on the introducing branch** — the branch that adds the new
-  `.gitattributes` line does not itself benefit from the very rule it introduces; only merges after it
-  lands do. Worth knowing before assuming a new union-merge path is friction-free from its own first
-  landing.
+  `.gitattributes` line does not itself benefit from the very rule it introduces; only merges after
+  it lands do.
 
   **Withdrawal of `lode-4jtc.1`'s escalation-note "SEPARATE INCIDENTAL FINDING."** That note claimed
   `git merge-tree`-style dry-run prechecks (as used by `/land`'s 2b cheap precheck,
