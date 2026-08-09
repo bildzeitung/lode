@@ -4628,3 +4628,78 @@ entries below from being rewritten to chase the current tree.)
   grouping is derived app-side from resolved note identity (`lode-35nu.1`) rather than requested
   from the model. This is settled, not open — the entry here is a pointer for anyone scanning this
   log, not the primary record.
+
+- **2026-08-09 (`lode-t6o1`, HUMAN DECISION, `/challenge`d before recording) — `docs/` lookup
+  without loading: an on-demand, never-committed SQLite FTS5 index over `docs/*.md`, queried by a
+  standalone Typer CLI that returns pointers, not answers.** Closes axis 2 of the `lode-4jtc` split
+  (axis 1 — write concurrency on this file's EOF — was closed separately by a union merge driver in
+  `lode-4jtc.1`). The problem: this file measured 411 KB / 4630 lines on 2026-08-09 and grows ~4
+  commits/day under a strict append-only rule, so it cannot be pulled into an agent's context to
+  answer "what did we decide about X"; `agents-workflow.md` (305 KB) and `storage.md` (130 KB) carry
+  the same cost. Constraints settled *before* this entry and not re-litigated here: `docs/` stays
+  authoritative and an index may be **derived from** the record but never **become** it; Dolt/beads
+  are excluded as a home for the record; the index is never a tracked file; the mechanism is
+  independent of lode's own embedding/FTS retrieval pipeline (so "what did we decide about
+  retrieval" stays answerable while retrieval is mid-refactor); append-only history and the existing
+  gates survive.
+
+  **The four open questions, decided.** *Scope* — all 15 files of `docs/*.md`, because indexing cost
+  is measured identical at this size (28 ms for the whole 1.26 MB corpus) and answers live in
+  `agents-workflow.md`/`storage.md`/`stack.md` as often as here, so a decisions-only index would
+  answer wrong and silently. *Granularity* — **one** rule plus a size invariant: split at the
+  deepest heading level present in a file (h3 if any, else h2, else h1); a file with no recurring
+  heading splits at top-level `- ` bullets; then hard-split any unit over 16 KB at the next boundary
+  down. `max(unit_bytes) <= 16384` is asserted by a test. *Freshness* — full rebuild on every
+  invocation, no cache, built into a temp/XDG cache dir outside the worktree. *Consumption* — a
+  Typer CLI (per [`conventions.md`](conventions.md)) over stdlib `sqlite3` FTS5, no new
+  dependencies, returning ranked `file:line-range` + first-line + snippet; the caller then reads the
+  exact range itself, so it stays a lookup tool and never becomes a second Q&A system.
+
+  **What `/challenge` overturned, and why it is recorded rather than quietly fixed.** The shape as
+  first decided had **two** chunker rules — bullets for this file, "shallowest recurring heading"
+  everywhere else — on the reasoning that this file's single-heading shape made it a special case.
+  Measurement refuted that: at h2, `agents-workflow.md` yields a **172 KB** unit (mean 50 KB),
+  `storage.md` 64 KB, `configuration.md` 41 KB, `stack.md` 36 KB. A 172 KB retrievable unit is 42x a
+  bullet from this file and 42% of this whole file — retrieving it is *worse* than the problem the
+  work exists to solve. This file is the extreme end of a continuum, not an exception, so the
+  two-rule design would have fixed the loudest instance and shipped the same defect in four other
+  files. Hence the single rule + 16 KB invariant above. Descending to the deepest heading alone was
+  insufficient: it fixes `storage`/`configuration`/`stack`/`externals` (all <= 13.4 KB) but leaves
+  `agents-workflow.md` at 53 KB max, and this file's own bullets at 48.8 KB max / 556 lines — the
+  "~45 lines per bullet" figure is a mean that hides that outlier.
+
+  **Also rejected, with reasons.** *Uniform heading-chunking* — degenerates to one 411 KB unit on
+  precisely the file the work was filed about. *Fixed-size overlapping windows* — structure-agnostic
+  and one code path, but units stop aligning to decision boundaries, so results cite arbitrary line
+  ranges instead of "this decision". *A cache keyed on git HEAD + mtimes* — buys back a fraction of
+  the measured 26-35 ms and adds an invalidation failure mode. *A CI-built artifact* — needs an
+  untracked-but-reachable home, and goes stale against uncommitted local doc edits, which is exactly
+  when a mid-task agent needs it. *Returning full matching units* — partially recreates the load
+  problem; median unit is 2.5 KB and p90 8.2 KB, so following 3-5 pointers costs ~7-40 KB against
+  411 KB, a 10-50x saving that holds **only** because of the 16 KB invariant. *A skill or hook that
+  auto-queries mid-session* — injects retrieved doc text unasked and is a larger build than the
+  first increment needs.
+
+  **Two findings that became acceptance criteria rather than implementer's discretion.** (1) Raw
+  user input must never reach FTS5 `MATCH` unescaped: measured, `lode-nt98` fails with `no such
+  column: nt98` (the hyphen parses as a column filter), `what did we decide about /land?` is a
+  syntax error, and `push-vs-pull` fails the same way — so **every bd issue id**, the most natural
+  query key in this repo, errors on query one. Tokenizing and quoting each term as a phrase fixes
+  all three (verified: `lode-nt98` then correctly returns `agents-workflow.md`'s Recycled-worktree
+  guard). Each of those three inputs gets a regression test. (2) "The tool is actually used at least
+  once" was dropped as unfalsifiable — nobody can write that test or fail it — and replaced by a
+  concrete doc edit: [`CLAUDE.md`](../CLAUDE.md) names this tool as the *first* step for answering
+  "what did we decide about X", ahead of reading a doc, so reaching for it stops being an act of
+  discipline. The never-tracked constraint gets **both** enforcement mechanisms, not one: the index
+  builds only outside the worktree (structural), *and* a gate test asserts no index artifact is
+  git-tracked, in the shape of
+  [`tests/test_bd_list_limit_gate.py`](../tests/test_bd_list_limit_gate.py).
+
+  **Left open, deliberately.** Whether the reference/process docs (`keybindings`, `release`,
+  `onboarding`, `tui`, `editing`, `test-suite-audit`) dilute ranking for decision lookups was *not*
+  established — the "indexing cost is identical" argument is measured true but answers a different
+  question, since cost and precision are different axes. Rather than guess, each file is tagged at
+  index time as decision-record vs reference/process and exposed as a `--class` filter, so the
+  question can be settled empirically once the tool exists. Non-goal, inherited and unchanged: no
+  existing entry in this file is rewritten, compacted or moved — this work changes how entries are
+  **found**, never what they say.
