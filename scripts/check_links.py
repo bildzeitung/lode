@@ -232,7 +232,17 @@ def _content_lines(text: str) -> Iterator[tuple[int, str]]:
     ``tests/`` (lode-jm4a). The two do NOT agree on the rule, and are not meant
     to -- this one toggles on ANY fence marker (so a ``~~~`` line closes a
     ```-opened block) and does not strip blockquote markers; ``fence_scan``
-    does both differently. Do not read either as documentation for the other."""
+    does both differently. Do not read either as documentation for the other.
+
+    NOT a consumer of ``src/lode/fence_parsing.py`` (lode-ee7b), the ONE
+    importable home of the CommonMark same-marker/at-least-as-long-close fence
+    rule, even though this module *can* import from ``src/``: this function's
+    simpler ANY-marker-closes rule is a deliberate, documented divergence, not
+    an oversight -- unifying it would change behavior here (a real
+    ``~~~``-inside-``` `` example in these docs would newly toggle where it
+    doesn't today), which is exactly the kind of no-behaviour-change bar this
+    ticket held everywhere else.
+    """
     in_fence = False
     for line_no, line in enumerate(text.splitlines(), start=1):
         if _FENCE_RE.match(line):

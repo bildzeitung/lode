@@ -683,9 +683,9 @@ def test_four_backtick_fence_is_scanned_the_lode_p4qb_shape() -> None:
     survives as content rather than closing it early -- the two halves of the rule
     together, since a four-backtick fence exists precisely to hold such a line.
 
-    Sabotage recipe (each half, separately): in `_FENCE_MARKER_RE`, drop the `{3,}`
+    Sabotage recipe (each half, separately): in `lode.fence_parsing._FENCE_MARKER_RE`, drop the `{3,}`
     -> exact `{3}` and the open marker no longer matches, so
-    `_bash_blocks(markdown) == []`; or drop `_closes_fence`'s `len(stripped) >=
+    `_bash_blocks(markdown) == []`; or drop `lode.fence_parsing.closes_fence`'s `len(stripped) >=
     len(fence)` conjunct and the ``` content line closes the block early, so the
     `"```" in blocks[0]` assertion goes red."""
     markdown = '````bash\necho "$UNASSIGNED"\n```\necho done\n````\n'
@@ -703,9 +703,9 @@ def test_tilde_fence_is_scanned_and_backticks_do_not_close_it() -> None:
     half of the closing rule, which the four-backtick test above cannot reach (it only
     exercises the length half).
 
-    Sabotage recipe (each half, separately): in `_FENCE_MARKER_RE`, drop the `~{3,}`
+    Sabotage recipe (each half, separately): in `lode.fence_parsing._FENCE_MARKER_RE`, drop the `~{3,}`
     alternative and the open marker no longer matches, so
-    `_bash_blocks(markdown) == []`; or relax `_closes_fence`'s `set(stripped) ==
+    `_bash_blocks(markdown) == []`; or relax `lode.fence_parsing.closes_fence`'s `set(stripped) ==
     {fence[0]}` to accept any fence character and the ``` line closes the tilde block
     early, so the `"```" in blocks[0]` assertion goes red."""
     markdown = '~~~bash\necho "$UNASSIGNED"\n```\necho done\n~~~\n'
