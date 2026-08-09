@@ -203,8 +203,8 @@ from lode.config import model_cache_dir
 #: 5 additional modules (``lode.curation``, ``lode.egress``, ``lode.ids``, ``lode.redact``,
 #: itself) -- negligible, because the expensive part of its import graph (pydantic and
 #: friends) is already resident from the baseline imports. Contrast ``lode.webfetch``/
-#: ``lode.tool_dispatch`` below, which are NOT already resident and cost ~0.8s/~440 modules
-#: incrementally -- that's what earns those two a TYPE_CHECKING-only import. This DOES make
+#: ``lode.tool_dispatch`` below, which are NOT already resident -- see that block for the
+#: cost that earns those two a TYPE_CHECKING-only import. This DOES make
 #: ``lode.enrich`` resident from collection onward -- which is safe, and does not weaken
 #: lode-4q97: the tests asserting an embed-only drain never imports the SDK go through the
 #: ``forget_sdk_imports`` fixture, whose whole purpose is evicting this graph first (see its
