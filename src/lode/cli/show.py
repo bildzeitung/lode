@@ -68,7 +68,16 @@ def _render_external(external: ExternalView) -> str:
     )
 
 
-@app.command(name="show")
+@app.command(
+    name="show",
+    help=(
+        "Show a note's head body plus its derived enrichment.\n\n"
+        "Prints the body, then summary, tags, entities, inferred edges "
+        "(with reason/confidence), embedding status, and an overall "
+        "enrichment status. TARGET is a note id or unambiguous prefix, "
+        "resolved the same way 'purge' resolves one."
+    ),
+)
 def show_(
     target: Annotated[
         str, typer.Argument(help="Note id, or an unambiguous prefix of one, to show.")

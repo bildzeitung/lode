@@ -270,7 +270,7 @@ _DbOption = Annotated[
     Path | None,
     typer.Option(
         "--db",
-        help="SQLite database path (default: $LODE_HOME/lode.db, i.e. ~/.lode/lode.db).",
+        help="SQLite database path (default: $LODE_HOME/lode.db).",
     ),
 ]
 
