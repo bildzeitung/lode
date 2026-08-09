@@ -78,12 +78,14 @@ def _config_knob_table(rows: list[tuple[str, str, str]]) -> SafeTable:
     help=(
         "Show the resolved on-disk locations and every runtime/tune knob.\n\n"
         "A read-out of the single-root layout under $LODE_HOME (default "
-        "~/.lode): the root, the SQLite DB and its lock, the vector store, "
-        "the model-weights cache, the log directory, and whether a "
-        "config.toml is present. --db shifts the displayed DB (and its "
-        "lock and co-located vector store) to an explicit override.\n\n"
+        "~/.lode), so you can find, back up, or inspect lode's state: the "
+        "root, the SQLite DB and its lock, the vector store, the "
+        "model-weights cache, the log directory, and whether a config.toml "
+        "is present. --db shifts the displayed DB (and its lock and "
+        "co-located vector store) to an explicit override.\n\n"
         "Below the paths, a knob table lists every runtime/tune setting "
-        "with its currently resolved value."
+        "with its currently resolved value -- defaults, then config.toml, "
+        "then overrides -- even with no config.toml present."
     )
 )
 def config(db: _DbOption = None) -> None:
