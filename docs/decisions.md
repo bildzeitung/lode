@@ -4530,6 +4530,23 @@ entries below from being rewritten to chase the current tree.)
   under review, per its own header comment. A guard nothing runs is close to a guard that does not
   exist, so choosing an invocation point is filed as `lode-d7pm`, not left implicit here.
 
+- **2026-08-08 (`lode-d7pm`) — wired `scripts/check-decisions-no-silent-rewrite.sh` into the
+  code-reviewer's technical-review pass (`.claude/agents/code-reviewer.md` step 4), not
+  `land-review` and not a `nox` session.** Of the three candidates the ticket named: a `nox`
+  session was rejected first — it needs a base ref, and there is no natural default one inside an
+  isolated worktree (the same reason the script itself was never wired into an automatic gate).
+  Between the remaining two, the code-reviewer was chosen over `land-review`'s precheck because it
+  is cheaper (the reviewer already has both `origin/trunk` and `HEAD` in hand from its own step 2
+  fetch, and is already reasoning about `decisions.md` conformance as part of the same correctness
+  pass) and because it is the agent that would actually act on a finding — `land-review` catches
+  the same defect one gate later, and only for branches whose review predates this wiring, so it
+  is a worse *first* fit even though nothing prevents adding it as a second backstop later if the
+  reviewer proves an insufficient chokepoint. The invocation passes `origin/trunk` — never a
+  hand-computed merge-base — exactly as the script's own header prescribes, so a stacked branch
+  (`lode-02v`) is handled correctly by construction. Exit 2 is wired as a machine fault
+  (`gate_could_not_run`, `lode-9i2p`): the reviewer notes it in its hand-off and continues the rest
+  of the review rather than reading it as "no rewrite found."
+
 - **2026-08-08 (`lode-3oik`) — adopted `scripts/land-state-load.sh` (`lode-dc4n`) for `/sweep`'s
   `$SWEEP_TMP` load cluster; kept the script's name rather than renaming it.** `.claude/skills/
   sweep/SKILL.md` had five `$SWEEP_TMP` reads hand-rolling the exact same "missing fatal, empty OK"

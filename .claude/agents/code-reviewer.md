@@ -353,6 +353,24 @@ recheck against a tree that may hold my own uncommitted review fixes.)
        touches.
      - Read the diff's own test coverage specifically, not just trust the blanket `nox -s tests` in
        step 5 to have exercised the new failure modes.
+     - **If the diff touches `docs/decisions.md`, run the silent-rewrite guard (lode-d7pm):**
+
+       ```bash
+       scripts/check-decisions-no-silent-rewrite.sh origin/trunk
+       ```
+
+       It catches what no marker-shaped test in `tests/test_decisions_supersession_markers.py` can:
+       a silent in-place rewrite of an existing entry (lode-nlk6's documented blind spot, which
+       lode-hg49 fell into). Pass `origin/trunk` as written — the script resolves its own merge base
+       and its header explains why hand-computing one is wrong. Why the wiring lives here rather
+       than in `land-review` or a `nox` session: `docs/decisions.md`, lode-d7pm.
+       - **Exit 0** — no action.
+       - **Exit 1** — a real finding: the printed `REMOVED:` lines name pre-existing text that
+         vanished without a correction marker. Judge it like any other defect this pass turns up
+         (fix directly per item 3 below, or escalate if it's a call only a human can make).
+       - **Exit 2** — a MACHINE fault (`gate_could_not_run`, lode-9i2p), never "no rewrite found."
+         Note it in my hand-off and carry on. Unlike step 5's `validate-mermaid.sh` exit 2, this one
+         does not block the `ready-for-land` swap on its own — it is a review aid, not a gate.
    This is genuinely my own judgment, and I am accountable for what it misses — not a lesser substitute
    for a missing tool. It has already caught a real, serious defect this way: on lode-nt98, this exact
    kind of reasoning (not a tool) caught a `git reset --hard` + `git clean -fd` that could have executed
