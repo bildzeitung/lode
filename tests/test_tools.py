@@ -757,3 +757,32 @@ class TestFetchForAskAtlassian:
 def test_unsupported_source_type_raises_value_error(conn) -> None:
     with pytest.raises(ValueError, match="unsupported"):
         fetch_for_ask(conn, "x", "search-result", settings=load_settings())
+
+
+def test_web_leg_defaults_to_guarded_httpx_fetcher_when_none_injected(
+    conn, monkeypatch
+) -> None:
+    """The ask path -- and only the ask path -- constructs GuardedHttpxFetcher
+    when the caller passes no fetcher (lode-xwah). Every other test in this
+    file injects a stub explicitly and so never exercises this default; this
+    is the one test that pins the wiring itself, via a spy standing in for
+    GuardedHttpxFetcher (never touching the network).
+    """
+    from lode import tools as tools_module
+
+    captured: dict = {}
+
+    class _SpyGuardedFetcher:
+        def __init__(self, settings) -> None:
+            captured["settings"] = settings
+
+        def fetch(self, url: str) -> RawResponse:
+            return RawResponse(final_url=url, status_code=200, text=_ARTICLE_HTML)
+
+    monkeypatch.setattr(tools_module, "GuardedHttpxFetcher", _SpyGuardedFetcher)
+    settings = load_settings()
+
+    snapshot_id = fetch_for_ask(conn, _URL, SOURCE_TYPE_WEB, settings=settings)
+
+    assert snapshot_id
+    assert captured["settings"] is settings
