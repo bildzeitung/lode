@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from textual.binding import BindingsMap
 
 from lode.storage import init_db
@@ -190,16 +191,46 @@ def test_question_mark_also_dismisses_the_overlay(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # Anti-drift gate (the ticket's own acceptance criterion): a test fails if a
-# binding exists that the overlay does not surface. BrowseScreen is the
-# representative screen -- 6 non-priority Screen-level bindings, none
-# show=False, exercising the ordinary case; LodeApp contributes the
-# show=False case (Ctrl+Q, hidden from the footer since lode-2bt3.2 but
-# still fully live) and the shadow case is exercised separately below.
+# binding exists that the overlay does not surface. LodeApp contributes the
+# App-level show=False case (Ctrl+Q, hidden from the footer since lode-2bt3.2
+# but still fully live); the shadow case is exercised separately below.
+#
+# PARAMETRIZED OVER BOTH HIDING SCREENS (lode-2bt3.3's technical review).
+# This gate ran against BrowseScreen alone as "the representative screen",
+# which was sound while no Screen-level binding anywhere was show=False.
+# lode-2bt3.3 ends that: it hides "Expand" on BrowseScreen and "View
+# content"/"Link" on EditScreen, and -- crucially -- it DELETED those three
+# entries from the footer tests' `descriptions` asserts, citing this gate as
+# what still guarantees they stay reachable. For BrowseScreen that citation
+# was true; for EditScreen it was not, since this gate never visited that
+# screen, so ctrl+r/ctrl+n would have been asserted by nothing at all. Both
+# hiding screens are now covered here, which is the altitude the guarantee
+# belongs at -- a per-screen assertion duplicated back into the footer tests
+# is not.
 # ---------------------------------------------------------------------------
 
 
-def test_overlay_snapshot_covers_every_browse_and_app_binding_incl_hidden(
+@pytest.mark.parametrize(
+    ("screen_cls", "open_keys", "consumed_by_focus"),
+    [
+        (BrowseScreen, ("ctrl+b",), frozenset()),
+        # EditScreen focuses a TextArea, which consumes every printable key
+        # (TextArea.check_consume_key) -- so the App-level '?' convenience
+        # binding genuinely is not reachable there and Textual correctly
+        # drops it from active_bindings. That is lode-2bt3.2's own "open
+        # problem", verified empirically by that ticket and the whole reason
+        # Ctrl+_ exists as the reachable-everywhere binding; the overlay
+        # omitting an unreachable binding is correct, not drift. Asserted
+        # positively rather than merely excluded, below.
+        (EditScreen, ("ctrl+b", "enter"), frozenset({"question_mark"})),
+    ],
+    ids=["browse", "edit"],
+)
+def test_overlay_snapshot_covers_every_screen_and_app_binding_incl_hidden(
     tmp_path: Path,
+    screen_cls: type,
+    open_keys: tuple[str, ...],
+    consumed_by_focus: frozenset[str],
 ) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
@@ -211,9 +242,10 @@ def test_overlay_snapshot_covers_every_browse_and_app_binding_incl_hidden(
 
     async def _drive() -> dict:
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+b")
+            for key in open_keys:
+                await pilot.press(key)
             await pilot.pause()
-            assert isinstance(app.screen, BrowseScreen)
+            assert isinstance(app.screen, screen_cls)
             await pilot.press("ctrl+underscore")
             await pilot.pause()
             assert isinstance(app.screen, HelpScreen)
@@ -226,9 +258,10 @@ def test_overlay_snapshot_covers_every_browse_and_app_binding_incl_hidden(
     # ("question_mark"). Rather than re-implement that normalization here,
     # feed each BINDINGS list through the same public BindingsMap Textual
     # builds internally and read its already-normalized keys back.
-    expected_keys = set(BindingsMap(iter(BrowseScreen.BINDINGS)).key_to_bindings) | set(
-        BindingsMap(iter(LodeApp.BINDINGS)).key_to_bindings
-    )
+    expected_keys = (
+        set(BindingsMap(iter(screen_cls.BINDINGS)).key_to_bindings)
+        | set(BindingsMap(iter(LodeApp.BINDINGS)).key_to_bindings)
+    ) - consumed_by_focus
 
     missing = expected_keys - snapshot.keys()
     assert not missing, (
@@ -243,10 +276,24 @@ def test_overlay_snapshot_covers_every_browse_and_app_binding_incl_hidden(
     # and action only, deliberately NOT on show=False, since lode-2bt3.3 may
     # legitimately restore its footer entry and that must not fail a
     # help-overlay drift test (the footer tests own that decision).
-    assert snapshot["question_mark"].binding.show is False
-    assert snapshot["question_mark"].binding.action == "show_help"
+    if "question_mark" not in consumed_by_focus:
+        assert snapshot["question_mark"].binding.show is False
+        assert snapshot["question_mark"].binding.action == "show_help"
     assert "ctrl+q" in snapshot
     assert snapshot["ctrl+q"].binding.action == "quit"
+
+    # The other half of the consumed-by-focus story, asserted rather than
+    # merely excluded above: a binding the focused widget swallows really is
+    # absent from the snapshot (so the exemption is load-bearing, not a
+    # vacuous subtraction), and Ctrl+_ -- the binding that exists precisely
+    # because '?' cannot survive a focused TextArea -- is present on every
+    # screen either way.
+    for key in consumed_by_focus:
+        assert key not in snapshot, (
+            f"{key} was expected to be consumed by the focused widget on "
+            f"{screen_cls.__name__}, but the overlay listed it as reachable"
+        )
+    assert "ctrl+underscore" in snapshot
 
 
 def test_edit_screen_shadow_hides_the_shadowed_app_level_ask_entry(

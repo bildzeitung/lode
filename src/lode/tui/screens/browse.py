@@ -302,30 +302,49 @@ _MIN_SUMMARY_WIDTH = 10
 class BrowseScreen(Screen[None]):
     """Id | Date | Version | Summary, newest-first, over every live note."""
 
-    # All of these plus the 5 App-level bindings (LodeApp.BINDINGS) render
-    # in one footer line via the shared LodeFooter (lode-uczx) -- every
-    # binding stays visible, none hidden via show=False (ruled out on
-    # lode-l38d.3: the footer is the only surface these keys are
-    # discoverable on). Labels restored to full words (lode-uczx): the
-    # 80-column bound that forced "Insp"/"Del"/"Exp" is superseded -- lode's
-    # minimum supported terminal width is 100 columns (docs/tui.md) -- and
-    # the full words fit comfortably within it. "S" (bare `s`, lode-35nu.6) is
-    # the BM25 quick search, distinct from "Find" ('/', lode-olmi.4's summary
-    # scan); it stays a single letter mirroring its own key, same terseness as
-    # "Cfg" elsewhere in this same bar. That was forced when this list held 8
-    # entries: any label longer than one character blew the 100-column budget
-    # (measured on lode-35nu.6 -- "Qk" alone still triggered
-    # show_horizontal_scrollbar at exactly 100 consumed columns). Retiring
-    # "Up" (lode-2bt3.1) freed one slot, so re-measure before assuming "S" is
-    # still stuck at one character.
+    # All of these plus the 5 shown App-level bindings (LodeApp.BINDINGS)
+    # render in one footer line via the shared LodeFooter (lode-uczx).
+    #
+    # lode-l38d.3 ruled out show=False here on the grounds that "the footer
+    # is the only surface these keys are discoverable on" -- that objection
+    # no longer holds (lode-2bt3.2 shipped the keybinding help overlay, which
+    # lists every binding, shown or not) so per-screen footer priority
+    # (lode-2bt3.3) is honest rather than lossy: a hidden entry stays fully
+    # live and one keypress (Ctrl+_ or '?') away, just not repeated in the
+    # footer line.
+    #
+    # "Expand" (toggle_summary) is hidden here as the least-needed reminder
+    # of the seven: it is a pure display toggle (collapse/expand the Summary
+    # column), reversible, non-destructive, and used far less often than
+    # Inspect/View content/Delete/Find/Quick once a user has learned it once
+    # -- unlike those, forgetting the key costs a glance at the overlay, not
+    # a workflow it silently breaks.
+    #
+    # "S" -> "Quick" (lode-2bt3.3): un-abbreviated per the parent epic's
+    # retirement of the abbreviate-an-existing-label pattern. Not "Search" --
+    # this screen already has "Find" ('/', lode-olmi.4's summary scan) and a
+    # second "Search" label would read as a duplicate of it; "Quick" names
+    # what actually distinguishes this action (the BM25 quick-search box,
+    # lode-35nu.6) without claiming the word "Search" back. "View" ->
+    # "View content" (lode-uczx's original abbreviation) is restored in
+    # full.
+    #
+    # MEASURED (2026-08-09, post-lode-2bt3.2 trunk, 100-column pilot,
+    # tests/test_tui_browse_screen.py's own harness): with "Expand" hidden
+    # and the two labels above restored, this screen's footer (6 of the 7
+    # screen-level bindings shown + 5 App-level, including Help) consumes
+    # 97/100 columns,
+    # hscroll=False -- 3 columns' slack. Un-hiding "Expand" at its full label
+    # back in blows the budget (106/100, hscroll=True) -- confirmed, not
+    # assumed.
     BINDINGS: ClassVar = [
         Binding("escape", "dismiss_screen", "Back"),
         Binding("i", "inspect_selected", "Inspect"),
-        Binding("v", "view_content", "View"),
+        Binding("v", "view_content", "View content"),
         Binding("d", "delete_selected", "Delete"),
-        Binding("x", "toggle_summary", "Expand"),
+        Binding("x", "toggle_summary", "Expand", show=False),
         Binding("slash", "search", "Find"),
-        Binding("s", "quick_search", "S"),
+        Binding("s", "quick_search", "Quick"),
     ]
 
     def __init__(self) -> None:
