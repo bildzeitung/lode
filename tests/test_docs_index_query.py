@@ -8,8 +8,10 @@ question, and a hyphenated term must each return clean results -- never a
 sqlite3 error).
 """
 
+import sqlite3
 from pathlib import Path
 
+import pytest
 from conftest import load_module_from_path
 from typer.testing import CliRunner
 
@@ -27,6 +29,19 @@ query = _query_module.query
 app = _query_module.app
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _private_index_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect the index cache into this test's tmp_path.
+
+    query() builds through docs_index_build.cache_db_path(), which resolves
+    $XDG_CACHE_HOME at call time. Without this, every test in this file would
+    unlink and rebuild the developer's real ~/.cache/lode/docs-index.sqlite3
+    -- and under the suite's default `pytest -n 8` several workers would do
+    that to the SAME file concurrently. Added at technical review.
+    """
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
 
 
 def test_escape_query_wraps_every_token_as_a_quoted_phrase() -> None:
@@ -47,6 +62,61 @@ def test_escape_query_escapes_embedded_double_quotes() -> None:
 def test_escape_query_empty_input_yields_empty_string() -> None:
     assert _escape_query("") == ""
     assert _escape_query("   ") == ""
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '"',
+        'a"b',
+        "NEAR",
+        "NEAR(a b)",
+        "a OR b",
+        "*",
+        "a*",
+        "^caret",
+        "-",
+        "---",
+        "(",
+        "()",
+        "%",
+        "café ünïcode",
+        ";DROP TABLE units;",
+        "x" * 2000,
+        " ".join(f"w{i}" for i in range(500)),
+        "nul\x00byte",
+    ],
+)
+def test_escaped_query_never_errors_against_fts5(raw: str) -> None:
+    """No user string may reach MATCH as an operator, and none may raise --
+    probed beyond the three cited regressions at technical review. FTS5
+    operators, unbalanced quotes, unicode, NUL, and very long input all have
+    to parse as literal phrases.
+
+    Run against a throwaway in-memory table using the build module's OWN
+    schema, not a full corpus rebuild: the property under test is the FTS5
+    query grammar's reaction to the escaped string, and 19 real rebuilds
+    would cost ~2s for no extra coverage.
+    """
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.execute(_query_module._build._SCHEMA)
+        conn.execute(
+            "INSERT INTO units VALUES ('a.md', 1, 9, 'hi', 'hello NEAR OR', 'x')"
+        )
+        match = _escape_query(raw)
+        if not match:
+            return
+        conn.execute("SELECT path FROM units WHERE units MATCH ?", [match]).fetchall()
+    finally:
+        conn.close()
+
+
+def test_escape_query_drops_nul_bytes() -> None:
+    # sqlite3 binds str as a C string: a NUL anywhere in the MATCH argument
+    # truncates it mid-token and FTS5 raises "unterminated string".
+    assert _escape_query("nul\x00byte") == '"nulbyte"'
+    assert _escape_query("\x00") == ""
 
 
 def test_query_regression_bd_issue_id_returns_the_cited_unit() -> None:

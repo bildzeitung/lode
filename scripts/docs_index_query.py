@@ -35,8 +35,6 @@ import typer
 
 app = typer.Typer(add_completion=False)
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
 #: Chunker doc-class tags, in the order they're documented (docs/decisions.md,
 #: lode-t6o1's "Left open, deliberately" -- decision-record vs reference/process).
 _DOC_CLASSES = ("decision-record", "reference/process")
@@ -77,7 +75,6 @@ def _load_build() -> ModuleType:
 
 
 _build = _load_build()
-build_index = _build.build_index
 
 
 def _escape_query(raw: str) -> str:
@@ -86,8 +83,14 @@ def _escape_query(raw: str) -> str:
     See the module docstring for the measured failures this fixes and why.
     Returns the empty string for a raw query with no non-whitespace content
     (an all-whitespace or empty input has no terms to quote).
+
+    NUL bytes are dropped first. Quoting cannot save them: sqlite3 binds a
+    ``str`` as a C string, so a NUL anywhere in the MATCH argument truncates
+    it mid-token and FTS5 raises ``unterminated string`` -- verified at
+    technical review. Unreachable from argv (execve forbids NUL) but not from
+    a library caller, so it is handled here rather than assumed away.
     """
-    terms = raw.split()
+    terms = raw.replace("\x00", "").split()
     return " ".join('"' + term.replace('"', '""') + '"' for term in terms)
 
 
@@ -103,7 +106,6 @@ def query(
     raw_query: str,
     doc_class: str | None = None,
     limit: int = 5,
-    docs_dir: Path | None = None,
 ) -> list[tuple[str, int, int, str, str]]:
     """Run ``raw_query`` against a freshly built index and return the top
     ``limit`` hits, ranked by FTS5's ``bm25()``, as ``(path, line_lo,
@@ -113,18 +115,18 @@ def query(
     if not match:
         return []
 
-    conn = build_index(docs_dir if docs_dir is not None else _build.DEFAULT_DOCS_DIR)
+    conn = _build.build_index()
     try:
         sql = (
             "SELECT path, line_lo, line_hi, first_line, body FROM units "
             "WHERE units MATCH ?"
         )
-        params: list[str] = [match]
+        params: list[str | int] = [match]
         if doc_class is not None:
             sql += " AND doc_class = ?"
             params.append(doc_class)
         sql += " ORDER BY bm25(units) LIMIT ?"
-        params.append(str(limit))
+        params.append(limit)
         rows = conn.execute(sql, params).fetchall()
     finally:
         conn.close()
@@ -135,7 +137,18 @@ def query(
     ]
 
 
-@app.command()
+@app.command(
+    help=(
+        "Find where something is written down in docs/, without reading all "
+        "of docs/.\n\nRun this when you need the passage that settles a "
+        "question -- a decision id, a term, a phrase. It prints ranked "
+        "pointers (path:line_lo-line_hi), each with the unit's first line and "
+        "a short snippet, and nothing else: read the cited range yourself. It "
+        "never prints a whole unit and never writes prose of its own.\n\nThe "
+        "index is rebuilt from docs/ on every run, so results are never "
+        "stale."
+    )
+)
 def main(
     text: Annotated[
         str,
@@ -150,7 +163,11 @@ def main(
     ] = None,
     limit: Annotated[
         int,
-        typer.Option("--limit", help="Maximum number of ranked pointers to print."),
+        typer.Option(
+            "--limit",
+            min=1,
+            help="Maximum number of ranked pointers to print.",
+        ),
     ] = 5,
 ) -> None:
     """Query the docs/ lookup index and print ranked pointers, never answers.
