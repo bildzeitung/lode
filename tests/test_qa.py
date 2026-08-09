@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from conftest import fake_tool_turn_client
+from conftest import _text_block, _tool_use_block, fake_tool_turn_client
 
 from lode.answer import Answer, Claim, Support
 from lode.config import Settings
@@ -481,17 +481,11 @@ def test_tools_enabled_with_no_connector_active_still_sends_tool_aware_prompt(
     )
     # Free turn: the model calls no tool -- breaks the free-tool-turn loop
     # immediately (there is nothing to search/fetch for this test).
-    text_block = mock.MagicMock()
-    text_block.type = "text"
     free_turn_response = mock.MagicMock()
-    free_turn_response.content = [text_block]
+    free_turn_response.content = [_text_block()]
     free_turn_response.stop_reason = "end_turn"
     # Final forced-schema turn: an empty claims envelope.
-    envelope_block = mock.MagicMock()
-    envelope_block.type = "tool_use"
-    envelope_block.name = "_ClaimsEnvelope"
-    envelope_block.input = {"claims": []}
-    envelope_block.id = "toolu_1"
+    envelope_block = _tool_use_block("_ClaimsEnvelope", {"claims": []}, "toolu_1")
     final_response = mock.MagicMock()
     final_response.content = [envelope_block]
     final_response.stop_reason = "tool_use"
@@ -570,16 +564,10 @@ def test_deleting_the_tools_pass_through_would_break_the_end_to_end_test(
     """Regression guard named by the acceptance criteria: a test must fail if
     build_ask_tools' specs or tool_result stop reaching run_tool_turns."""
     settings = Settings(ask_tools_enabled=True)
-    text_block = mock.MagicMock()
-    text_block.type = "text"
     free_turn_response = mock.MagicMock()
-    free_turn_response.content = [text_block]
+    free_turn_response.content = [_text_block()]
     free_turn_response.stop_reason = "end_turn"
-    envelope_block = mock.MagicMock()
-    envelope_block.type = "tool_use"
-    envelope_block.name = "_ClaimsEnvelope"
-    envelope_block.input = {"claims": []}
-    envelope_block.id = "toolu_1"
+    envelope_block = _tool_use_block("_ClaimsEnvelope", {"claims": []}, "toolu_1")
     final_response = mock.MagicMock()
     final_response.content = [envelope_block]
     final_response.stop_reason = "tool_use"

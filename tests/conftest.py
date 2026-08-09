@@ -1294,6 +1294,27 @@ class StubWebFetcher:
         return self._response
 
 
+def _tool_use_block(name: str, input: dict, id: str) -> mock.MagicMock:  # noqa: A002
+    """Build a duck-typed ``tool_use`` content block (the shape
+    lode.llm_provider's reader expects: .type/.name/.input/.id).
+
+    Shared so a block-shape change (an SDK or run_tool_turns contract change)
+    needs editing in exactly one place, per lode-gyq3."""
+    block = mock.MagicMock()
+    block.type = "tool_use"
+    block.name = name
+    block.input = input
+    block.id = id
+    return block
+
+
+def _text_block() -> mock.MagicMock:
+    """Build a duck-typed ``text`` content block. See ``_tool_use_block``."""
+    block = mock.MagicMock()
+    block.type = "text"
+    return block
+
+
 def fake_tool_turn_client(
     conn: sqlite3.Connection, url: str, html: str, quoted_span: str
 ) -> tuple[mock.MagicMock, StubWebFetcher]:
@@ -1319,19 +1340,15 @@ def fake_tool_turn_client(
 
     web_fetcher = StubWebFetcher(RawResponse(final_url=url, status_code=200, text=html))
 
-    fetch_block = mock.MagicMock()
-    fetch_block.type = "tool_use"
-    fetch_block.name = FETCH
-    fetch_block.input = {"source_type": "web", "external_id": url}
-    fetch_block.id = "toolu_1"
+    fetch_block = _tool_use_block(
+        FETCH, {"source_type": "web", "external_id": url}, "toolu_1"
+    )
     free_turn_response = mock.MagicMock()
     free_turn_response.content = [fetch_block]
     free_turn_response.stop_reason = "tool_use"
 
-    text_block = mock.MagicMock()
-    text_block.type = "text"
     second_free_turn_response = mock.MagicMock()
-    second_free_turn_response.content = [text_block]
+    second_free_turn_response.content = [_text_block()]
     second_free_turn_response.stop_reason = "end_turn"
 
     _responses = [free_turn_response, second_free_turn_response]
@@ -1348,20 +1365,20 @@ def fake_tool_turn_client(
             (url,),
         ).fetchone()
         assert quoted_span in body
-        claim_block = mock.MagicMock()
-        claim_block.type = "tool_use"
-        claim_block.name = "_ClaimsEnvelope"
-        claim_block.input = {
-            "claims": [
-                {
-                    "text": quoted_span,
-                    "support": [
-                        {"snapshot_id": snapshot_id, "quoted_span": quoted_span}
-                    ],
-                }
-            ]
-        }
-        claim_block.id = "toolu_2"
+        claim_block = _tool_use_block(
+            "_ClaimsEnvelope",
+            {
+                "claims": [
+                    {
+                        "text": quoted_span,
+                        "support": [
+                            {"snapshot_id": snapshot_id, "quoted_span": quoted_span}
+                        ],
+                    }
+                ]
+            },
+            "toolu_2",
+        )
         response = mock.MagicMock()
         response.content = [claim_block]
         response.stop_reason = "tool_use"
