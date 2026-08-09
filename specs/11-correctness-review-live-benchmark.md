@@ -1,5 +1,15 @@
 # Live benchmark: correctness-review workflow vs a real `/code-review` (lode-905v)
 
+> **RETIRED — NOT EXECUTABLE (2026-08-09, lode-blrl).** The workflow this runbook drives,
+> `.claude/workflows/correctness-review.js`, has been **deleted from the tree**: `lode-rlyx` took it off
+> the `/code` path on measured cost, and it recorded **zero** manual runs in the thirteen days that
+> followed, so it was retired outright rather than kept as unreachable machinery. Every step below
+> refers to a script that no longer exists; none of it can be run as written. **lode-905v is closed.**
+> This file is kept only so `specs/` stays a gap-free numbered sequence — it is a historical record of
+> how the workflow was to be validated, not work to pick up. Full source if it is ever reconstructed:
+> `git show 974f832246cd4d42ca002f5bc8e21c40ad2148a6:.claude/workflows/correctness-review.js`.
+> Decision record: [`docs/decisions.md`](../docs/decisions.md).
+
 This is a **runbook**, not a feature spec. It exists so a human can finish the one
 acceptance item on **lode-905v** that no model context can do, and then hand the
 captured outputs to a fresh agent session to score. Delete it once the result is

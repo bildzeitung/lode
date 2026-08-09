@@ -442,9 +442,16 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    are not reproducible from this repo; the per-ticket evidence, their provenance, and the bar for ever
    reinstating this live in `docs/decisions.md` (lode-rlyx).
 
-   `.claude/workflows/correctness-review.js` is **kept on disk** for deliberate manual use — the
-   `specs/11`–`specs/13` runbooks reference it — but is off the automatic `/code` path. Do not put it
-   back without new evidence that it beats the reviewer's own pass per token.
+   `.claude/workflows/correctness-review.js` is **gone from the tree entirely** (lode-blrl, 2026-08-09).
+   `lode-rlyx` left it on disk for deliberate manual use; it recorded **zero** manual runs in the
+   thirteen days that followed, so it was fully retired rather than kept as unreachable machinery. There
+   is now no `correctness-review` Workflow and no `correctness-review` entry in a session's skill list —
+   that entry was generated from the `meta` block *inside* the deleted file, so one deletion removed
+   both surfaces. The `specs/11`–`specs/13` runbooks still reference the workflow and are stamped as
+   retired and unexecutable. Full source, if it is ever wanted again:
+   `git show 974f832246cd4d42ca002f5bc8e21c40ad2148a6:.claude/workflows/correctness-review.js`. Do not
+   reconstruct it without new evidence that it beats the reviewer's own pass per token
+   (`docs/decisions.md`).
 
    For every ticket that passes both checks: use the Agent tool with `subagent_type: "code-reviewer"`
    — **no call-site `isolation` option**, per the frontmatter sufficiency stated at Phase 1 above.
@@ -528,9 +535,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   `ready-for-code-review` — never in parallel with its own build. Don't dispatch a reviewer for a
   ticket that escalated at build time.
 - **Phase 2 runs NO `correctness-review` Workflow — the reviewer's own reasoned pass is the whole
-  correctness review (lode-rlyx, reversing lode-905v on measured cost).** The script stays on disk for
-  deliberate manual use; it is off the automatic path. Rationale and numbers:
-  [the Phase 2 note above](#no-correctness-workflow).
+  correctness review (lode-rlyx, reversing lode-905v on measured cost).** The script no longer exists —
+  it was deleted outright once its manual-use grace period produced zero runs (lode-blrl). Rationale,
+  numbers, and the retrieval SHA: [the Phase 2 note above](#no-correctness-workflow).
 - **`isolation: "worktree"` has been observed handing a dispatched agent a *recycled* worktree still
   checked out on a previous ticket's build branch, rather than a fresh one off `origin/trunk` HEAD** —
   confirmed for both a Phase 1 builder and a Phase 2 reviewer (lode-eshl's technical review; the eshl
