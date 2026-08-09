@@ -177,17 +177,14 @@ restoring it must re-measure the *current* tightest screen, not assume it's stil
 ticket, only three of the eleven footer-bearing screens (Capture/Browse/Edit) carried a hand-copied
 100-column footer-width test; the other eight could silently overflow the day the next App-level
 binding landed, with the next change re-measuring by hand and trusting a comment.
-`tests/test_tui_footer_width_corpus.py` closes that gap: it derives the footer-bearing screen set
-by scanning `lode.tui.screens` for every `Screen` subclass whose own `compose` calls `LodeFooter()`
-(the same `pkgutil` walk `test_no_screen_module_imports_the_stock_footer` uses, looking for the
-opposite signal), then parametrizes the 100-column/no-`show_horizontal_scrollbar` assertion over
-every one of them — so "which screen is tightest" is *read off* that scan's output, not claimed in
-prose. A screen that starts composing a footer with no registered test factory fails that file's own
-`test_every_footer_bearing_screen_has_a_registered_factory` loudly, rather than being silently
-unscanned the way the other eight were before this ticket. The three original hand-copied tests
-(`tests/test_tui_app.py`, `tests/test_tui_browse_screen.py`) are reduced to their per-screen
-`descriptions` pins — not derivable from a generic scan — since the width/hscroll assertion they
-also made is now the corpus scan's job.
+`tests/test_tui_footer_width_corpus.py` closes that gap: it *derives* the footer-bearing screen set
+by walking `lode.tui.screens` for the modules that import `LodeFooter`, then parametrizes the
+100-column/no-`show_horizontal_scrollbar` assertion over every screen it finds — so "which screen is
+tightest" is read off that scan's output, not claimed in prose. A new screen joins the corpus with no
+edit to the gate, and a screen the gate cannot yet build fails it loudly rather than being silently
+unscanned. The three original per-screen footer tests keep only their `descriptions` pins, which a
+generic scan cannot derive; the width half is now the corpus scan's job. Change a footer label and
+let that file, not this paragraph, tell you what it cost.
 
 **`LodeFooter` itself needed no change.** Textual's stock `Footer` already honours a `Binding`'s
 `show=` flag; per-screen priority is entirely a matter of which `BINDINGS` entries in each screen

@@ -3111,11 +3111,8 @@ def test_bare_v_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
 def test_browse_footer_shows_every_shown_binding_visible(
     tmp_path: Path,
 ) -> None:
-    """The width/hscroll half of this used to live here too (a hand-copied
-    ``_drive()``/``consumed`` harness) -- lode-2rv2's parametrized corpus
-    scan (``tests/test_tui_footer_width_corpus.py``) now covers BrowseScreen
-    along with the other ten footer-bearing screens, so only the per-screen
-    "descriptions" pin -- not derivable from a generic scan -- stays here."""
+    """Per-screen "descriptions" pin only; width/hscroll moved to
+    ``tests/test_tui_footer_width_corpus.py`` (lode-2rv2)."""
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -3188,11 +3185,8 @@ def test_browse_footer_shows_every_shown_binding_visible(
 def test_edit_footer_shows_every_shown_binding_visible(
     tmp_path: Path,
 ) -> None:
-    """The width/hscroll half of this used to live here too (a hand-copied
-    ``_drive()``/``consumed`` harness) -- lode-2rv2's parametrized corpus
-    scan (``tests/test_tui_footer_width_corpus.py``) now covers EditScreen
-    along with the other ten footer-bearing screens, so only the per-screen
-    "descriptions" pin -- not derivable from a generic scan -- stays here."""
+    """Per-screen "descriptions" pin only; width/hscroll moved to
+    ``tests/test_tui_footer_width_corpus.py`` (lode-2rv2)."""
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:

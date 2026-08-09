@@ -14,14 +14,26 @@ next ticket would have to re-measure by hand and trust a comment.
 
 :func:`_footer_bearing_screen_classes` walks :mod:`lode.tui.screens` the same
 mechanical way ``tests/test_tui_app.py``'s
-``test_no_screen_module_imports_the_stock_footer`` does (module-by-module,
-via ``pkgutil``), except it looks for the OPPOSITE signal: a screen class
-whose own ``compose`` calls ``LodeFooter()``. A screen that starts composing
-a footer is picked up automatically, with no edit to this file, the moment it
-lands -- and if this file has no factory registered for it yet (see
-:data:`_FACTORIES` below), :func:`test_every_footer_bearing_screen_has_a_registered_factory`
-fails LOUDLY naming it, rather than the corpus scan silently walking past it
-the way the three old hand-copied tests did for the other eight screens.
+``test_no_screen_module_imports_the_stock_footer`` does -- module-by-module
+via ``pkgutil``, then the same **object-identity** test on the module's own
+namespace -- except it looks for the OPPOSITE signal: ``module.LodeFooter is
+LodeFooter`` rather than ``module.Footer is Footer``. Identity, deliberately,
+and not a source-text scan for ``"LodeFooter()"`` inside ``compose``: a text
+scan silently drops a screen the day it writes ``LodeFooter(id=...)``, hoists
+the footer into a shared chrome helper, or inherits ``compose`` from a base
+class -- reopening exactly the silent-gap failure mode this ticket exists to
+close. Identity fails in the safe direction instead: a module that imports
+``LodeFooter`` without composing one is over-discovered, and over-discovery
+is loud (see below), never silent.
+
+A screen that starts composing a footer is picked up automatically, with no
+edit to this file, the moment it lands -- and if this file has no factory
+registered for it yet (see :data:`_FACTORIES` below),
+:func:`test_discovered_screens_and_factories_agree` fails LOUDLY naming it,
+rather than the corpus scan silently walking past it the way the three old
+hand-copied tests did for the other eight screens. That test is bidirectional,
+so the reverse -- a ``_FACTORIES`` entry the walk no longer discovers
+(renamed, footer removed, module deleted) -- is caught in the same breath.
 
 ## Building each screen
 
@@ -44,8 +56,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import inspect
 import pkgutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,6 +67,7 @@ from textual.widgets import Footer
 from textual.widgets._footer import FooterKey
 
 import lode.tui.screens
+from lode.externals import ingest_snapshot
 from lode.storage import init_db
 from lode.tui.app import LodeApp
 from lode.tui.screens.ask import AskScreen
@@ -69,32 +82,33 @@ from lode.tui.screens.tags import TagsScreen
 from lode.tui.screens.version_history import VersionHistoryScreen
 from lode.tui.screens.version_view import VersionViewScreen
 from lode.tui.services.reconcile import Conflict, write_draft
+from lode.tui.widgets.lode_footer import LodeFooter
 from lode.versions import save
 
 
 def _footer_bearing_screen_classes() -> dict[str, type[Screen]]:
-    """Every ``Screen`` subclass, defined directly in a ``lode.tui.screens``
-    module, whose own ``compose`` calls ``LodeFooter()`` -- keyed by
-    ``module.ClassName`` for a stable, readable parametrize id.
+    """Every ``Screen`` subclass defined directly in a ``lode.tui.screens``
+    module that imports :class:`LodeFooter` -- keyed by ``module.ClassName``
+    for a stable, readable parametrize id.
+
+    The membership signal is object identity on the module namespace, not a
+    source-text scan (see this file's docstring for why). ``docs/conventions``'
+    one-Screen-per-module fiat is what makes "the module imports it" and "this
+    screen composes it" the same statement; a module that imported it without
+    composing one would be over-discovered, and over-discovery fails loudly in
+    :func:`test_discovered_screens_and_factories_agree` rather than silently.
     """
     found: dict[str, type[Screen]] = {}
     for info in pkgutil.iter_modules(lode.tui.screens.__path__):
         module = importlib.import_module(f"lode.tui.screens.{info.name}")
+        if getattr(module, "LodeFooter", None) is not LodeFooter:
+            continue
         for name, obj in vars(module).items():
-            if not (
+            if (
                 isinstance(obj, type)
                 and issubclass(obj, Screen)
                 and obj.__module__ == module.__name__
             ):
-                continue
-            compose = obj.__dict__.get("compose")
-            if compose is None:
-                continue  # inherits compose from elsewhere -- not this module's call
-            try:
-                source = inspect.getsource(compose)
-            except OSError, TypeError:
-                continue
-            if "LodeFooter()" in source:
                 found[f"{info.name}.{name}"] = obj
     return found
 
@@ -114,29 +128,13 @@ def _seed(db_path: Path) -> _Ctx:
     conn = init_db(db_path)
     try:
         version_id = save(conn, "note-a", "hello world").version_id
-        conn.execute(
-            "INSERT INTO externals (external_id, source_type, no_egress) "
-            "VALUES (?, ?, ?)",
-            ("https://example.com/x", "web", 0),
-        )
-        conn.execute(
-            "INSERT INTO snapshots "
-            "(snapshot_id, external_id, body, raw_payload, status, fetched_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                "snap-1",
-                "https://example.com/x",
-                "body text",
-                None,
-                "ok",
-                "2026-07-08T00:00:00.000000Z",
-            ),
-        )
-        conn.execute(
-            "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
-            ("snap-1", "https://example.com/x"),
-        )
-        conn.commit()
+        # ingest_snapshot, not hand-rolled INSERTs: it owns the externals-row
+        # creation, the content-addressed snapshot_id, and the head move, so
+        # SnapshotViewerScreen is driven against the row shape production
+        # actually writes rather than a fabricated "snap-1".
+        ingested = ingest_snapshot(conn, "https://example.com/x", "web", "body text")
+        assert ingested is not None
+        snapshot_id = ingested.snapshot_id
     finally:
         conn.close()
     draft_path = write_draft(db_path, "note-a", "an unsaved edit")
@@ -152,16 +150,16 @@ def _seed(db_path: Path) -> _Ctx:
         db_path=db_path,
         note_id="note-a",
         version_id=version_id,
-        snapshot_id="snap-1",
+        snapshot_id=snapshot_id,
         conflict=conflict,
     )
 
 
 #: One factory per discovered footer-bearing screen class. A screen that
 #: starts composing a LodeFooter with no entry here fails
-#: ``test_every_footer_bearing_screen_has_a_registered_factory`` below --
-#: loudly, naming the class -- rather than being silently unscanned.
-_FACTORIES: dict[type[Screen], object] = {
+#: ``test_discovered_screens_and_factories_agree`` below -- loudly, naming the
+#: class -- rather than being silently unscanned.
+_FACTORIES: dict[type[Screen], Callable[[_Ctx], Screen]] = {
     CaptureScreen: lambda ctx: CaptureScreen(),
     ConfigScreen: lambda ctx: ConfigScreen(),
     AskScreen: lambda ctx: AskScreen(),
@@ -178,48 +176,42 @@ _FACTORIES: dict[type[Screen], object] = {
 _DISCOVERED = _footer_bearing_screen_classes()
 
 
-def test_every_footer_bearing_screen_has_a_registered_factory() -> None:
-    """Non-vacuity + the drift gate itself: a new screen composing
-    LodeFooter with no :data:`_FACTORIES` entry is caught HERE, not by the
-    parametrized scan below silently having nothing to say about it."""
+def test_discovered_screens_and_factories_agree() -> None:
+    """Non-vacuity + the drift gate itself, in both directions.
+
+    Forward: a new screen composing LodeFooter with no :data:`_FACTORIES`
+    entry is caught HERE, not by the parametrized scan below silently having
+    nothing to say about it. Reverse: an entry the walk no longer discovers
+    (renamed, footer removed, module deleted, or the walk itself broken) is a
+    stale entry -- the same hygiene ``test_cli_help_corpus_gate.py`` enforces
+    for its own allowlist.
+    """
     assert _DISCOVERED, (
         "no footer-bearing screens discovered -- the walk itself is broken"
     )
-    missing = [
+    missing = sorted(
         qualname for qualname, cls in _DISCOVERED.items() if cls not in _FACTORIES
-    ]
+    )
     assert not missing, (
         f"discovered footer-bearing screen(s) with no factory registered in "
         f"tests/test_tui_footer_width_corpus.py's _FACTORIES: {missing} -- "
         "add one so the 100-column scan covers it"
     )
-
-
-def test_factories_have_no_stale_entries() -> None:
-    """The mirror check: a class in ``_FACTORIES`` that the scan no longer
-    discovers (renamed, footer removed, module deleted) is a stale entry --
-    remove it, the same hygiene ``test_cli_help_corpus_gate.py`` enforces for
-    its own allowlist."""
-    discovered_classes = set(_DISCOVERED.values())
-    stale = [cls.__name__ for cls in _FACTORIES if cls not in discovered_classes]
+    stale = sorted(
+        cls.__name__ for cls in _FACTORIES if cls not in set(_DISCOVERED.values())
+    )
     assert not stale, f"stale _FACTORIES entries, no longer discovered: {stale}"
 
 
 @pytest.mark.parametrize(
-    "qualname,screen_cls",
-    sorted(_DISCOVERED.items()),
-    ids=[q for q, _ in sorted(_DISCOVERED.items())],
+    "screen_cls",
+    [cls for _, cls in sorted(_DISCOVERED.items())],
+    ids=sorted(_DISCOVERED),
 )
 def test_footer_bearing_screen_fits_100_columns(
-    tmp_path: Path, qualname: str, screen_cls: type[Screen]
+    tmp_path: Path, screen_cls: type[Screen]
 ) -> None:
-    del qualname  # carried only for the parametrize id
-    factory = _FACTORIES.get(screen_cls)
-    if factory is None:
-        pytest.fail(
-            f"{screen_cls.__name__} has no _FACTORIES entry -- see "
-            "test_every_footer_bearing_screen_has_a_registered_factory"
-        )
+    factory = _FACTORIES[screen_cls]
     db_path = tmp_path / "lode.db"
     ctx = _seed(db_path)
     app = LodeApp(db_path=db_path)
@@ -250,23 +242,21 @@ def test_footer_bearing_screen_fits_100_columns(
     )
 
 
-def test_no_footer_bearing_screen_module_missed_by_pkgutil() -> None:
-    """Sanity that the walk reaches every screen module on disk, not a
-    subset -- mirrors ``tests/test_cli_help_corpus_gate.py``'s own
-    "at least one top-level and one sub-app command are both discovered"
-    non-vacuity check. Pinned against every screen this ticket knew composed
-    a footer at write time; a screen legitimately dropping its footer later
-    is expected to shrink this set, not grow it silently."""
-    assert set(_DISCOVERED) >= {
-        "ask.AskScreen",
-        "browse.BrowseScreen",
-        "capture.CaptureScreen",
-        "config.ConfigScreen",
-        "edit.EditScreen",
-        "external_picker.ExternalPickerScreen",
-        "reconcile.ReconcileScreen",
-        "snapshot_viewer.SnapshotViewerScreen",
-        "tags.TagsScreen",
-        "version_history.VersionHistoryScreen",
-        "version_view.VersionViewScreen",
+def test_no_screen_module_missed_by_pkgutil() -> None:
+    """Sanity that the ``pkgutil`` walk reaches every screen module on disk,
+    not a subset -- mirrors ``tests/test_cli_help_corpus_gate.py``'s own
+    non-vacuity check. Derived from the directory listing rather than a
+    hand-typed screen list: the *membership* of the footer-bearing corpus is
+    already pinned bidirectionally against ``_FACTORIES`` above, so re-typing
+    those names here would be the hand-maintenance this file exists to end.
+    """
+    walked = {info.name for info in pkgutil.iter_modules(lode.tui.screens.__path__)}
+    on_disk = {
+        path.stem
+        for path in Path(lode.tui.screens.__path__[0]).glob("*.py")
+        if path.stem != "__init__"
     }
+    assert walked == on_disk, (
+        f"pkgutil walk disagrees with the screens directory: "
+        f"missed {sorted(on_disk - walked)}, invented {sorted(walked - on_disk)}"
+    )

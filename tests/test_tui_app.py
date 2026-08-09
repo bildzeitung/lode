@@ -335,11 +335,8 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
 def test_capture_footer_shows_every_binding_visible(
     tmp_path: Path,
 ) -> None:
-    """The width/hscroll half of this used to live here too (a hand-copied
-    ``_drive()``/``consumed`` harness) -- lode-2rv2's parametrized corpus
-    scan (``tests/test_tui_footer_width_corpus.py``) now covers CaptureScreen
-    along with the other ten footer-bearing screens, so only the per-screen
-    "descriptions" pin -- not derivable from a generic scan -- stays here."""
+    """Per-screen "descriptions" pin only; width/hscroll moved to
+    ``tests/test_tui_footer_width_corpus.py`` (lode-2rv2)."""
     db_path = tmp_path / "lode.db"
     init_db(db_path).close()
     app = LodeApp(db_path=db_path)
