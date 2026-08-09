@@ -841,6 +841,62 @@ option, and under it the model *would* see `no_egress` content and *could* put i
 argument. Choosing the mechanism now, while it costs one reused function call, is cheaper than
 retrofitting it onto a path that by then has users.
 
+### Web-fetch destination guard: SSRF via a model-chosen URL (decided, `lode-xwah`)
+
+The model-chosen `web_fetch` destination on the ask path (`lode.tools.fetch_for_ask`) is
+adversary-influenced in the same sense the tool arguments above are: whatever the model puts in the
+URL, this box issues a real HTTP request to. Beyond `no_egress` (which withholds a *known* sensitive
+source, not an arbitrary address) and beyond `is_no_egress_scoped` (a config-declared allow/deny
+list), nothing on trunk validated that the destination itself isn't an internal address until this
+ticket — `http://169.254.169.254/latest/meta-data/`-style cloud-metadata reads and `http://127.0.0.1:<port>/`
+reads of same-box services are both otherwise reachable.
+
+`lode.webfetch.GuardedHttpxFetcher` (an `HttpxFetcher` subclass, constructed **only** by
+`lode.tools._fetch_web` and injected via the `fetcher=` seam `fetch_for_ask` already threads — never
+the draw-down path, never JIRA/Confluence) closes two gaps a single pre-fetch address check cannot:
+
+1. **Redirect chains.** httpx's own follower has no per-hop hook, so an allowed public host's 3xx
+   response could still point the *next* request at an internal address without ever being
+   inspected. `GuardedHttpxFetcher` follows redirects manually (`follow_redirects=False` on every
+   per-hop client) and validates every hop's destination — the original URL, and every redirect
+   `Location` — **before** that hop's request is issued, not merely before its response is trusted.
+2. **DNS rebinding / TOCTOU.** The pre-hop check resolves the host itself; httpx's transport resolves
+   the same host again, separately, for the real connection. A hostile short-TTL resolver can answer
+   the two differently and defeat a pre-check-only guard outright — the cheaper of the two attacks
+   for an adversary who already controls the domain and its TTL, not a corner case. `GuardedHttpxFetcher`
+   additionally validates the address httpx **actually connected to**
+   (`response.extensions['network_stream'].get_extra_info('server_addr')`) after every hop, before
+   that hop's response is used for anything (followed as a redirect, or returned as the final
+   result) — so a rebind that fools the pre-check is still caught.
+
+An address is disallowed if it is private, loopback, link-local, reserved, multicast, or unspecified
+(`ipaddress.IPv4Address`/`IPv6Address`'s own classification), **plus** two ranges no `ipaddress`
+attribute flags and which are therefore live bypasses of the attribute check alone: `100.64.0.0/10`
+(RFC 6598 carrier-grade NAT — routinely a container or ISP-internal network) and `fec0::/10`
+(RFC 3879 deprecated IPv6 site-local, which `ipaddress` even reports as `is_global`). IPv4-mapped
+IPv6 addresses (`::ffff:127.0.0.1`) are unwrapped and judged as the IPv4 address they really are.
+The scheme is allowlisted to `http`/`https`. A host that fails to resolve at all, and a *peer* whose
+address cannot be read at all, are refused rather than passed through unclassified — fail-closed, the
+same posture `is_no_egress_scoped` takes. Fail-closed on the peer is only correct because the check
+runs on a **still-streaming** response: httpcore can only answer `get_extra_info('server_addr')`
+while the connection is live, so after a non-streaming read a `Connection: close` server's socket is
+already gone and the call raises `OSError`.
+
+**Relationship to `lode.tools._refuse_private_web_destination`.** A sibling ticket (`lode-ejfv`) was,
+at the time this ticket was scoped, adding a private-address guard directly in `lode.tools` (checked
+on the initial URL and again on the post-redirect final URL) — but had not yet landed on `trunk` when
+this ticket was built, so `trunk` carries no such function to remove or extend. `GuardedHttpxFetcher`
+was built standalone against `trunk` as it stood, per this ticket's own SHAPE decision to guard at
+the fetcher layer rather than extend a `lode.tools`-level check either way. **Land-time note:** if
+`lode-ejfv`'s `_refuse_private_web_destination` lands first or alongside this branch, its guard is
+strictly coarser on the axes this ticket was scoped for (initial-URL + final-URL only, no per-hop and
+no rebinding check) — but it is **not** simply redundant, and "delete it" is not automatically the
+right reconciliation. It covers one case `GuardedHttpxFetcher` structurally cannot: `_fetch_web`
+installs the guarded fetcher only when the caller injects *no* `fetcher`, so any caller that injects
+one gets no address policy at all, whereas the `lode.tools`-level check runs regardless. Whoever
+lands both decides: delete it, or keep it as the injection-proof outer check. See
+`docs/decisions.md` for the open reconciliation item.
+
 ### Web-fetch destination guard (decided, `lode-ejfv`)
 
 Discovered while reviewing tool-augmented Ask (`lode-35nu.11.2`): before that ticket, every URL lode

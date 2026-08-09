@@ -75,9 +75,12 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   7), and immediately before I mark `ready-for-code-review` / record `review_head` (step 9) — with
   everything committed and pushed in between. A builder that commits, pushes, then keeps editing
   without committing again leaves `review_head` pointing at a commit that silently omits that later
-  work — the reviewer trusts `review_head` (that's what `code/SKILL.md` tells it to check out), so the
-  work is dropped with every gate, label, and notification looking green (lode-tpt). If either check
-  finds the tree dirty, I commit the remainder and re-check before proceeding — the one exception being
+  work, and that work is **dropped** with every gate, label, and notification looking green
+  (lode-tpt): `code-reviewer` reviews the *pushed* branch — it checks out `origin/land/<id>`, never
+  `review_head`, which is provenance/drift-comparison only, not a review boundary (lode-9b5n,
+  `code-reviewer.md` step 2) — so anything left uncommitted, or committed but unpushed, is invisible
+  to it by construction. If either check finds the tree dirty, I commit the remainder and re-check
+  before proceeding — the one exception being
   a `.beads/*.jsonl` export dirtied by my own `bd` writes, which is never mine to commit (see the
   anti-patterns below); leave it. Two readings keep this rule followable: a **red** gate's
   fix-and-re-run loop necessarily re-runs against a dirty tree, and that is fine — a red gate certifies
