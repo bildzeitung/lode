@@ -40,27 +40,25 @@ draft clears the panel immediately without scheduling a pointless pass;
 user text and commonly contains bracket sequences Textual would otherwise
 parse as console markup, lode-mkc.3).
 
-**Interactive stepping + a highlighted-context modal (lode-olmi.9).** The
-panel is no longer purely passive: it is now focusable (:attr:`can_focus`) and
-binds Up/Down to move a selection cursor through :attr:`_related` and Enter to
-open :class:`~lode.tui.screens.related_note_modal.RelatedNoteModalScreen` for
-the selected note. These bindings only fire once the panel itself holds
-focus — Textual's stock ``TextArea`` already consumes bare Up/Down/Enter/Tab
-for cursor movement, newline insertion, and indentation while *it* holds
-focus, so identical bindings on the panel would be unreachable while the note
-body is being typed into. Each composing screen
+**Interactive stepping + a highlighted-context modal (lode-olmi.9).** The panel is no
+longer purely passive: it is now focusable (:attr:`can_focus`) and binds Up/Down to move
+a selection cursor through :attr:`_related` and Enter to open
+:class:`~lode.tui.screens.related_note_modal.RelatedNoteModalScreen` for the selected
+note. These bindings only fire once the panel itself holds focus — Textual's stock
+``TextArea`` already consumes bare Up/Down/Enter/Tab for cursor movement, newline
+insertion, and indentation while *it* holds focus, so identical bindings on the panel
+would be unreachable while the note body is being typed into. Each composing screen
 (:class:`~lode.tui.screens.capture.CaptureScreen`,
-:class:`~lode.tui.screens.edit.EditScreen`) therefore adds its own
-screen-level binding that calls this panel's inherited ``focus()`` to move
-focus onto it deliberately; nothing here changes what happens while the body
-still holds focus (the passive debounce/render path above is untouched).
-Highlighted context is the exact matched passage span — ``RelatedNote.
-char_range`` (:mod:`lode.tui.services.related`) offsets into the exact ``version_id``
-the retrieval pipeline matched, looked up via :func:`lode.notes_read.
-version_body` (not the note's possibly-since-edited live head) — not the
-whole note passively dumped; see
-:class:`~lode.tui.screens.related_note_modal.RelatedNoteModalScreen` (its own
-module, per the one-Screen/Widget-per-module fiat, lode-s5kp.3).
+:class:`~lode.tui.screens.edit.EditScreen`) therefore adds its own screen-level binding
+that calls this panel's inherited ``focus()`` to move focus onto it deliberately;
+nothing here changes what happens while the body still holds focus (the passive
+debounce/render path above is untouched). Highlighted context is the exact matched
+passage span — ``RelatedNote. char_range`` (:mod:`lode.tui.services.related`) offsets
+into the exact ``version_id`` the retrieval pipeline matched, looked up via
+:func:`lode.notes_read.version_body` (not the note's possibly-since-edited live head) —
+not the whole note passively dumped; see
+:class:`~lode.tui.screens.related_note_modal.RelatedNoteModalScreen` (its own module,
+per the one-Screen/Widget-per-module fiat, lode-s5kp.3).
 """
 
 from __future__ import annotations
@@ -283,27 +281,25 @@ class RelatedNotesPanel(Static):
         """Drop any scheduled/in-flight pass when this widget goes away (lode-ivu).
 
         :meth:`reset` is called explicitly only from
-        :meth:`~lode.tui.screens.capture.CaptureScreen.action_save`'s "Save &
-        New" -- every *other* way a composing screen goes away (the
-        quit/discard confirm's save-and-exit, Escape/Ctrl+Q discard,
-        :class:`~lode.tui.screens.edit.EditScreen`'s Ctrl+S save-and-pop, a
-        future navigation) left the debounce timer (and a since-started
-        worker) running unattended. Textual dispatches
-        ``Unmount`` to every mounted widget as a screen is popped or the app
-        exits, so this single hook -- not a cancel call duplicated into each
-        exit path of every screen that composes this widget (capture *and*
-        :class:`~lode.tui.screens.edit.EditScreen`) -- catches all of them
-        uniformly. Purely a timer-lifecycle efficiency cleanup: a post-
-        teardown firing was already harmless (:func:`lode.tui.services.related.
-        find_related_notes`'s ``db_path.exists()`` guard, lode-e1s) and its
-        result was always discarded here (nothing left mounted to render
-        into) -- this just stops the wasted embed + FTS5 + LanceDB pass from
-        running at all -- but only for the part that *can* be stopped: a pass
-        already inside :meth:`_search_related`'s ``asyncio.to_thread`` call
-        runs to completion regardless, and cancelling merely discards its
-        result. See :meth:`_cancel_related_pass` and docs/tui.md's
-        "RelatedNotesPanel's background pass" section for the
-        tolerate-the-straggler decision that accepts that residual.
+        :meth:`~lode.tui.screens.capture.CaptureScreen.action_save`'s "Save & New" --
+        every *other* way a composing screen goes away (the quit/discard confirm's
+        save-and-exit, Escape/Ctrl+Q discard,
+        :class:`~lode.tui.screens.edit.EditScreen`'s Ctrl+S save-and-pop, a future
+        navigation) left the debounce timer (and a since-started worker) running
+        unattended. Textual dispatches ``Unmount`` to every mounted widget as a screen
+        is popped or the app exits, so this single hook -- not a cancel call duplicated
+        into each exit path of every screen that composes this widget (capture *and*
+        :class:`~lode.tui.screens.edit.EditScreen`) -- catches all of them uniformly.
+        Purely a timer-lifecycle efficiency cleanup: a post- teardown firing was already
+        harmless (:func:`lode.tui.services.related.find_related_notes`'s
+        ``db_path.exists()`` guard, lode-e1s) and its result was always discarded here
+        (nothing left mounted to render into) -- this just stops the wasted embed + FTS5
+        + LanceDB pass from running at all -- but only for the part that *can* be
+        stopped: a pass already inside :meth:`_search_related`'s ``asyncio.to_thread``
+        call runs to completion regardless, and cancelling merely discards its result.
+        See :meth:`_cancel_related_pass` and docs/tui.md's "RelatedNotesPanel's
+        background pass" section for the tolerate-the-straggler decision that accepts
+        that residual.
         """
         self._cancel_related_pass()
 

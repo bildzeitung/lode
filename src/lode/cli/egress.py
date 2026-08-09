@@ -40,27 +40,19 @@ def egress(
         typer.echo("no egress")
         return
 
-    for (
-        log_id,
-        ts,
-        log_purpose,
-        model,
-        sent_targets,
-        redactions,
-        destination,
-        arguments,
-    ) in rows:
+    for row in rows:
         # model is NULL for a purpose='tool' row (lode-35nu.11.7): a tool call is
         # cloud egress but not an LLM call, so there is no model to name. Format
         # it as "-" rather than letting f-string padding raise on None.
         line = (
-            f"{log_id}  {ts}  {log_purpose:<7} {model or '-':<20}  "
-            f"sent: {_format_sent(sent_targets)}  "
-            f"redactions: {_format_redactions(redactions)}"
+            f"{row.id}  {row.ts}  {row.purpose:<7} {row.model or '-':<20}  "
+            f"sent: {_format_sent(row.sent_targets)}  "
+            f"redactions: {_format_redactions(row.redactions)}"
         )
-        if log_purpose == "tool":
+        if row.purpose == "tool":
             line += (
-                f"  destination: {destination or '-'}  arguments: {arguments or '-'}"
+                f"  destination: {row.destination or '-'}  "
+                f"arguments: {row.arguments or '-'}"
             )
         typer.echo(line)
 

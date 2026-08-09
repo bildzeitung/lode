@@ -79,8 +79,8 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   `review_head` (lode-tpt), and I start from that pushed, committed ref — not from the builder's live
   working tree — so any uncommitted work left behind in the builder's worktree is invisible to me by
   construction. That is an accepted, known cost of this architecture (`docs/decisions.md`), not a gap
-  I need to detect: if `review_head` disagrees with what I actually fetch, that's *drift* (a later
-  push), not *dirt* — I note it (step 2) and review the actual tip regardless. My **own** worktree is a
+  I need to detect: a `review_head` that disagrees with what I actually fetch is never *dirt* — step 2
+  decides whether it's *drift* worth noting, and either way I review the actual tip. My **own** worktree is a
   different matter and I do assert it's clean: before re-gating (step 5), because `nox` reads the
   working tree, not `HEAD` — a dirty tree there invalidates the gate result itself, so I commit my
   step-4 review fixes *before* gating, never after. Before swapping to `ready-for-land` (step 8):
@@ -254,27 +254,56 @@ exact remote name — see `.claude/skills/land/SKILL.md`; nothing for me to do e
 
 ```bash
 git rev-parse --abbrev-ref HEAD     # land/<id>--<worktree-suffix> — never trunk
-git rev-parse HEAD                  # compare against $REVIEW_HEAD below
 # Re-derived fresh, not carried from step 1 — shell state does not survive
 # between fenced blocks (lode-sfnb) — and shape-checked BEFORE any comparison
 # (lode-xdg3). Exit 1 = malformed/missing metadata; exit 2 = this call is
 # broken, fix the invocation and report nothing about the field.
 REVIEW_HEAD="$(bd show <id> --json | jq -r '.[0].metadata.review_head // empty')"
-scripts/validate-sha40.sh review_head "$REVIEW_HEAD"
+scripts/validate-sha40.sh review_head "$REVIEW_HEAD" || exit $?
+git merge-base --is-ancestor "$REVIEW_HEAD" HEAD
 ```
 
-**Why the shape check (lode-xdg3).** A hand-retyped or truncated value writes to bd metadata with no
-schema to catch it, and a malformed value never equals what I just checked out either, so without
-this check it would silently read as ordinary drift. Same shared predicate `/land`'s Section 2a uses
-for `land_head`, so the two read sites can't drift on what "well-formed" means;
-`tests/test_validate_sha40_call_sites.py` pins that both keep calling it.
+**Why the shape check runs first (lode-xdg3).** A hand-retyped or truncated value writes to bd
+metadata with no schema to catch it. Worse than merely failing to compare cleanly: `git
+merge-base --is-ancestor` resolves an unambiguous SHA *prefix* just like any other git ref, so a
+truncated `review_head` — the exact defect this ticket exists to catch — can still exit 0 against
+the current tip and read as "not drift". The shape check closes that hole by rejecting anything that
+isn't a full 40-hex SHA before the ancestor check ever runs. Same shared predicate `/land`'s Section
+2a uses for `land_head`, so the two read sites can't drift on what "well-formed" means;
+`tests/test_validate_sha40_call_sites.py` pins that both keep calling it. `|| exit $?` preserves the
+1-vs-2 exit distinction (there is no `set -e`) — same reasoning as the `land_head` call site.
 
-A mismatch against a **well-formed** `review_head` is **drift** — a push landed on `land/<id>` after
-the ticket was marked `ready-for-code-review` (or the ticket is a build-time-escalation re-entry with
-a since-updated head). I note it, but still review the actual tip I checked out, same as before. A
-**malformed** `review_head` (the check above failed) is a distinct condition, not drift — I still
-review the tip I checked out exactly the same way, but I note "malformed review_head metadata" in my
-hand-off rather than "drift", so nobody chases a phantom push that never happened.
+The comparison itself is a **three-way** taxonomy, not two:
+
+- **MALFORMED** — the shape check above failed (exit 1) or the invocation itself is broken (exit 2).
+  Not drift: I still review the tip I checked out exactly as before, but I note "malformed
+  review_head metadata" in my hand-off rather than "drift", so nobody chases a phantom push that
+  never happened.
+- **FORWARD-ONLY** — shape check passes and `git merge-base --is-ancestor` exits 0: `review_head` is
+  the fetched tip, or an ancestor of it (a commit is its own ancestor, so an exact match needs no
+  separate arm). The branch only moved **forward**; nothing `review_head` named was rewritten or
+  discarded. **Not drift; I don't note it** (lode-9b5n). This is what every exit (d) ("amend and
+  re-gate") re-entry looks like — `review_head` there still names the commit from *before* the
+  branch's prior technical review, because nothing refreshes it when a review pushes onto
+  `land/<id>`, so it is stale BY CONSTRUCTION. It is **also** what a plain fast-forward push of new,
+  never-reviewed commits looks like, and this check cannot tell the two apart. That conflation is
+  deliberate and safe, because the distinction never mattered to what I actually do: I review
+  **`trunk...HEAD`**, the whole branch, never `review_head...HEAD`, so anything pushed on top gets
+  reviewed either way. `review_head` is a *provenance* note, not a review boundary — so I never read
+  a FORWARD-ONLY result as "already reviewed" and narrow my pass on it.
+- **UNREACHABLE** — shape check passes but `git merge-base --is-ancestor` exits nonzero:
+  `review_head` is well-formed but not reachable from the tip, so history was rewritten (force-push,
+  rebase, amend) since `ready-for-code-review` and commits it accounted for may be *gone* rather than
+  merely superseded. This is **drift** — I note it in my hand-off, but still review the actual tip I
+  checked out, same as before.
+
+**Deliberate asymmetry — do not "fix" it.** `land_head` in `.claude/skills/land/SKILL.md` §2a stays
+**exact-match**, not ancestor-check, even though it shares the same shape-check predicate. `/land`
+lands *without* re-reviewing, so there a forward push of never-reviewed commits genuinely is drift
+that matters. Here, I review `trunk...HEAD` wholesale regardless of what `review_head` names, so a
+forward push is harmless to catch as drift — hence FORWARD-ONLY is deliberately *not* drift at this
+call site. The two read sites answer different questions with the same predicate; that is intentional
+and not something a future harmonization pass should collapse.
 
 ### 3. Build the venv — every review needs its own (no shared build state)
 

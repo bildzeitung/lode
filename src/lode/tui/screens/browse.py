@@ -1,12 +1,12 @@
 """The browse screen (lode-0wj.5) -- list live notes, pick one to edit.
 
-``docs/design.md``'s post-E11 feedback: a way to see what you've captured
-without leaving the terminal. Reached from :class:`~lode.tui.screens.capture.
-CaptureScreen` via the app-level ``Ctrl+B`` binding (:mod:`lode.tui.app`, the
-same "reachable from anywhere" convention ``Ctrl+O``'s config screen already
-uses). This screen owns no read logic of its own -- it only renders the rows
-:func:`lode.notes_read.list_notes` returns into a ``DataTable`` (Id | Date |
-Version | Summary, newest-first, live notes only) and reacts to a row select.
+``docs/design.md``'s post-E11 feedback: a way to see what you've captured without
+leaving the terminal. Reached from :class:`~lode.tui.screens.capture.CaptureScreen` via
+the app-level ``Ctrl+B`` binding (:mod:`lode.tui.app`, the same "reachable from
+anywhere" convention ``Ctrl+O``'s config screen already uses). This screen owns no read
+logic of its own -- it only renders the rows :func:`lode.notes_read.list_notes` returns
+into a ``DataTable`` (Id | Date | Version | Summary, newest-first, live notes only) and
+reacts to a row select.
 
 Selecting a row -- Enter, or a mouse click -- pushes
 :class:`~lode.tui.screens.edit.EditScreen` directly (lode-olmi.2): editing an
@@ -34,13 +34,12 @@ visible again" -- reloads the table every time browse becomes the top screen
 again (a fresh ``Ctrl+B``, or popping back from ``EditScreen``), not only on
 first mount.
 
-**View prior versions (lode-0wj.7, moved lode-olmi.2).** ``Ctrl+H`` on
-``EditScreen`` pushes :class:`~lode.tui.screens.version_history.
-VersionHistoryScreen` -- a Date | Version | Op table over the note's whole
-chain, newest (the head) first; selecting a row there pushes
-:class:`~lode.tui.screens.version_view.VersionViewScreen`, a read-only view
-of that exact version's body. See those two modules' own docstrings for the
-full detail (extracted lode-s5kp.1; previously part of this module).
+**View prior versions (lode-0wj.7, moved lode-olmi.2).** ``Ctrl+H`` on ``EditScreen``
+pushes :class:`~lode.tui.screens.version_history.VersionHistoryScreen` -- a Date |
+Version | Op table over the note's whole chain, newest (the head) first; selecting a row
+there pushes :class:`~lode.tui.screens.version_view.VersionViewScreen`, a read-only view
+of that exact version's body. See those two modules' own docstrings for the full detail
+(extracted lode-s5kp.1; previously part of this module).
 
 **Expose the note id (lode-1gr.2, moved lode-olmi.2).** Before this, nothing
 in the TUI showed a note's id, so a user could see a note in Browse but not
@@ -77,26 +76,25 @@ line showing that external's :class:`~lode.enrichment_view.ExternalView` --
 rendered by :func:`~lode.tui.screens._browse_render._external_text`. No
 second DB read, no second policy -- see that leaf module's own docstring.
 
-**Content viewer + 'v' addressing flow (lode-olmi.8's decision, lode-0sjj).**
-Neither this screen nor ``EditScreen`` could show a note's actually-retrieved
-external content before this -- the enrichment modal carries only
-:class:`~lode.enrichment_view.ExternalView` metadata (source_type, snapshot
-id, fetched_at, state), never the snapshot's stored ``body``/``raw_payload``.
-:class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` is the modal
-that reads them, keyed to one ``snapshot_id``.
+**Content viewer + 'v' addressing flow (lode-olmi.8's decision, lode-0sjj).** Neither
+this screen nor ``EditScreen`` could show a note's actually-retrieved external content
+before this -- the enrichment modal carries only
+:class:`~lode.enrichment_view.ExternalView` metadata (source_type, snapshot id,
+fetched_at, state), never the snapshot's stored ``body``/``raw_payload``.
+:class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` is the modal that reads
+them, keyed to one ``snapshot_id``.
 :func:`~lode.tui.screens._content_view._resolve_externals` +
-:func:`~lode.tui.screens._content_view._view_note_external_content`
-implement the shared zero/one/many addressing rule both this screen's and
-``EditScreen``'s bindings call into -- mirroring ``lode dump-html``'s CLI
-disambiguation (lode-olmi.7) on purpose, so the CLI and TUI can't drift onto
-two different rules for the same question: zero externals notifies ``'no
-retrieved content for this note'``; exactly one pushes the viewer directly;
-more than one pushes :class:`~lode.tui.screens.external_picker.
-ExternalPickerScreen` first, a DataTable-then-select list (mirroring
-``VersionHistoryScreen``'s own pattern above) showing each candidate's
-source_type/snapshot id/fetched_at/state -- the same fields
-:func:`~lode.tui.screens._browse_render._external_text` already renders --
-before the chosen row pushes the viewer.
+:func:`~lode.tui.screens._content_view._view_note_external_content` implement the shared
+zero/one/many addressing rule both this screen's and ``EditScreen``'s bindings call into
+-- mirroring ``lode dump-html``'s CLI disambiguation (lode-olmi.7) on purpose, so the
+CLI and TUI can't drift onto two different rules for the same question: zero externals
+notifies ``'no retrieved content for this note'``; exactly one pushes the viewer
+directly; more than one pushes
+:class:`~lode.tui.screens.external_picker.ExternalPickerScreen` first, a
+DataTable-then-select list (mirroring ``VersionHistoryScreen``'s own pattern above)
+showing each candidate's source_type/snapshot id/fetched_at/state -- the same fields
+:func:`~lode.tui.screens._browse_render._external_text` already renders -- before the
+chosen row pushes the viewer.
 
 **Dissolved the browse<->edit import cycle (lode-2zj0).** These two
 functions used to stay in this module rather than moving with the other

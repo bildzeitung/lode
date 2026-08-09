@@ -100,14 +100,29 @@ lode-cp4o (closed 2026-08-07 — the number stays 1800s permanently).
 **What I need to know to run the pass:** the lock is released explicitly at exactly two sites below —
 the empty-queue exit in [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin) and the end
 of a full pass in [Section 4](#4-land-the-survivors). **Every other way a pass stops leaves the lock
-held until it ages out** after `LAND_LOCK_STALE_SECONDS` (default 1800s/30min) — and that is not a
-short list of exotic machine faults: it includes a pass in which **every** branch was kicked back
-`needs-rebase` or bounced, which stops at [Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)'s
-empty-`accepted` guard and never reaches Section 4. Such a pass is routine, so a following tick
-skipping with "another /land appears to still be running" is expected behaviour, **not** evidence of a
-second lander. Adding release calls per exit site was deliberately rejected — a TTL that asks nothing
-of any exit site cannot be silently broken by a future "stop the pass" that forgets to release, which
-is the same reasoning the pass-start `git reset --hard` uses in Section 1.
+held until it ages out** after `LAND_LOCK_STALE_SECONDS` (default 1800s/30min) — genuine machine
+faults (an exit-2 stop, an isolation-replay baseline red, a crash) age out this way, and that is
+correct: a TTL that asks nothing of any exit site cannot be silently broken by a future "stop the
+pass" that forgets to release, which is the same reasoning the pass-start `git reset --hard` uses in
+Section 1. Adding release calls per exit site was deliberately rejected on that basis, and still is.
+
+**A pass in which every branch was bounced, escalated, held, or kicked back `needs-rebase` is NOT
+one of those exit sites (lode-0jan).** [Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)'s
+empty-`accepted` guard used to abort identically whether `$STATE_DIR/accepted` was **missing** (3a's
+precompute never ran — a real silent-failure shape, still aborted loudly, unchanged) or merely
+**empty** (every branch already left the set for a legitimate reason). The empty case is not a
+failure: the loop that reads `$ACCEPTED` correctly iterates zero times, the re-gate that follows is
+*skipped* (`trunk` is unchanged, so there is nothing this pass introduced to gate — see that
+section's own note; it is skipped rather than merely harmless, since running it would cost a full
+suite for no new content), and the pass flows straight through to [Section
+4](#4-land-the-survivors) — which already handles an empty `$LANDED` correctly by construction (its
+own guard there makes the same missing-vs-empty distinction). This covers the `needs-rebase`-only
+case too, by the same route: a branch kicked back mid-loop is dropped from `$STATE_DIR/accepted`
+before the re-gate runs, so an all-`needs-rebase` pass converges on the same empty-but-present file
+and the same fall-through. This is the **narrow** fix: one specific outcome (an empty-but-present
+accepted set) stops being treated as an exit at all and instead flows into the pass's existing single
+end-of-pass path — it is not a scattering of release calls across every exit site, and the rejection
+above still stands for every genuine abort.
 
 Before doing anything else, take the local lock. If another `/land` is still running on this machine
 (a long pass overrunning a `/loop` tick), **skip this tick cleanly and exit 0** — do not queue, do
@@ -573,6 +588,15 @@ reproduction: a rebase pickup wrote a 39-character `land_head`, one digit short 
 same fenced block that reads the value because shell state does not survive between blocks
 (lode-sfnb); `tests/test_validate_sha40_call_sites.py` pins that both read sites keep calling it.
 
+**Deliberate asymmetry — do not "harmonize" it.** This check is **exact-match**, not the
+ancestor-check `code-reviewer.md` uses for `review_head` (lode-9b5n / lode-xdg3 composition). The two
+read sites share the same shape-check predicate but answer different questions: `/land` lands
+**without** re-reviewing, so a forward push of never-reviewed commits onto `land/<id>` after
+`ready-for-land` genuinely is drift here; `code-reviewer` reviews `trunk...HEAD` wholesale regardless
+of what `review_head` names, so a forward push is harmless there. Collapsing this to one shared
+comparison would either miss real drift here or falsely flag every exit (d) re-entry there — see
+`docs/agents-workflow.md` and `docs/decisions.md` for the full reasoning.
+
 A **missing branch** or a **SHA mismatch** is drift — treat it exactly like a review **bounce**
 (below): I will not land a branch I can't verify is the reviewed one. A **malformed `land_head`**
 (the check above failed) is a **distinct** outcome — neither drift nor a real mismatch, since there
@@ -941,10 +965,23 @@ it at the one moment I do hold it, in the loop that was already iterating it, ex
 each merge message. `$LANDED` is better still — the merge loops **append** to it as each branch
 actually merges, so it is derived mechanically from what happened rather than recalled.
 
-**Every block below that loads one of these files asserts that it loaded**, per the governing rule
-above. `for id in $ACCEPTED` over an empty value iterates **zero** times and exits 0: it would merge
-nothing, close nothing, and look exactly like a clean pass with an empty queue — the same silent
-shape this ticket exists to remove, in the one place `/land` writes `trunk`.
+**Every block below that loads one of these files asserts that it LOADED** — i.e. that
+`scripts/land-state-load.sh` itself exited 0 — per the governing rule above. Since lode-dc4n every
+**cross-block** load goes through that one script, and the two policies it offers (default = missing
+fatal / empty OK; `--require-nonempty` = both fatal) are the *only* two: a new load site picks one by
+argument rather than by hand-rolling a fifth `cat` spelling. The `cat "$STATE_DIR/accepted"` in the
+block **above** is deliberately left alone and is not a counter-example — it re-reads the file that
+same block wrote two lines up, so there is no cross-block hand-off to assert and nothing a load
+failure there could mean other than "the write immediately above failed," which its own `printf`
+already reports. `for id in $ACCEPTED` over an empty value iterates
+**zero** times and exits 0: it merges nothing, closes nothing, and is indistinguishable *by its
+behaviour* from a clean pass with an empty queue. What the assertion separates is not that shape from
+a real merge, but its two **causes**: a file that was never written (3a never ran — the silent
+failure, aborted loudly) from a file that was written empty (every branch legitimately left the set —
+allowed through, lode-0jan). Since lode-0jan the guards test only the former; do **not** re-add an
+`[ -n "$ACCEPTED" ]`/`[ -z "$ACCEPTED" ]` emptiness test to the first-pass merge loop on the strength
+of this paragraph — that conflates the two causes again, which is the whole defect lode-0jan fixed
+(pinned by `tests/test_land_conflicts_state.py::test_empty_accepted_falls_through_missing_accepted_still_aborts`).
 
 Before merging anything, unstage the passive jsonl export — unconditionally, without needing to know
 what staged it (see the reconciliation above: it is *not* the reads above, and the `bd dolt pull`
@@ -999,11 +1036,22 @@ MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true
 [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
   "DISABLED for this call (lode-67nk)" >&2
 
-# Load 3a's accepted set from disk, and REFUSE to continue if it did not load: iterating zero times
-# would land nothing while exiting 0, indistinguishable from a clean pass (governing rule, top).
-ACCEPTED=$(cat "$STATE_DIR/accepted") || exit 1
-[ -n "$ACCEPTED" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/accepted is missing or empty --" \
-  "3a's precompute did not run. Landing nothing." >&2; exit 1; }
+# Load 3a's accepted set from disk, and REFUSE to continue if the FILE never got written: that is
+# 3a's precompute not having run at all, the silent-failure shape lode-sfnb's governing rule (top)
+# exists to catch. An EMPTY file is a different, legitimate outcome (lode-0jan) -- every branch was
+# already bounced, escalated, held, or kicked back needs-rebase before this loop started -- and is
+# NOT refused: $ACCEPTED being empty makes the loop below iterate zero times, the re-gate after it
+# SKIPPED (nothing merged, so there is nothing new to gate -- see that section's own note), and the
+# pass falls through to Section 4 exactly as a real merge would.
+#
+# scripts/land-state-load.sh (lode-dc4n) makes this the "missing fatal, empty OK" policy explicit
+# -- one of the two policies every $STATE_DIR load in this skill now shares, instead of a fourth
+# hand-rolled spelling. Its own exit status IS the missing-vs-empty discriminator: a missing file, an
+# unreadable one, and a directory in its place all fail the read and print a diagnostic to this
+# call's stderr, while a present-but-empty OR whitespace-only file reads clean and prints nothing --
+# unquoted word-splitting in the `for` below then iterates zero times over either.
+ACCEPTED=$(scripts/land-state-load.sh "$STATE_DIR/accepted" -- \
+  "3a's precompute did not run. Landing nothing.") || exit 1
 
 for id in $ACCEPTED; do
   # Same idiom as Section 2b's merge-precheck.sh call, for the same reason: a command substitution
@@ -1056,7 +1104,18 @@ done
 
 Re-gate the combined result (this is a Python-gated repo where code changed; a **docs-only** merge
 set has no Python gate — skip nox, run `scripts/validate-mermaid.sh` only if a merged diff touched a
-`docs/` diagram):
+`docs/` diagram).
+
+**If the loop above merged NOTHING — `$STATE_DIR/landed` is empty, the all-bounced /
+all-`needs-rebase` pass lode-0jan lets through — skip this re-gate entirely and go straight to
+[Section 4](#4-land-the-survivors).** Local `trunk` is byte-identical to the `origin/trunk` Section 1
+fetched, whose content is by construction already gated (that is the premise every fresh agent
+worktree branches from), so there is nothing this pass introduced to certify. This is not a
+correctness nicety but a cost one: without it every all-bounced tick pays a full `nox -s tests` run
+to re-certify content `trunk` already carries, and any red it found could only be pre-existing
+breakage this pass neither caused nor could attribute to a branch. Nothing downstream needs
+special-casing: Section 4's reformat commit is already behind its own `git status --short` emptiness
+check, which a skipped `nox -t fix` leaves clean.
 
 ```bash
 . ./venv/bin/activate
@@ -1122,9 +1181,17 @@ it would mask the 2. Keep it there.
   MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
   [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check" \
     "is DISABLED for this call (lode-67nk)" >&2
-  ACCEPTED=$(cat "$STATE_DIR/accepted") || exit 1
-  [ -n "$ACCEPTED" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/accepted is missing or empty." \
-    "Landing nothing." >&2; exit 1; }
+  # DELIBERATELY ASYMMETRIC with the first-pass loop above, which lode-0jan taught to let an EMPTY
+  # accepted set through: here an empty one is still refused (--require-nonempty). This block only
+  # runs on a RED combined re-gate, and a nothing-merged pass now skips that re-gate entirely (see its
+  # note above), so an empty set should be unreachable here -- which is exactly why it stays fatal
+  # rather than being relaxed for symmetry. If it ever does arrive, `trunk` is byte-identical to
+  # `origin/trunk`, so the red is attributable to no branch in this pass: nothing to isolate, nothing
+  # to bounce, and a loud stop is the only honest outcome. Do not "finish the job" by deleting this
+  # guard -- the two blocks are answering different questions; scripts/land-state-load.sh (lode-dc4n)
+  # is what makes that difference a single visible flag instead of two divergent hand-rolled loads.
+  ACCEPTED=$(scripts/land-state-load.sh "$STATE_DIR/accepted" --require-nonempty -- \
+    "isolation-replay path -- nothing to attribute this red to. Landing nothing.") || exit 1
   : > "$STATE_DIR/landed"    # the reset above discarded every merge the first-pass loop recorded --
                               # start the replay's record from empty so Section 4 closes only what
                               # THIS loop actually keeps merged
@@ -1297,9 +1364,13 @@ scripts/land-lock.sh heartbeat "$MY_TOKEN" || true
 # that is $ACCEPTED minus any mid-loop needs-rebase kick-backs; on the Red/isolation path the replay
 # loop truncated the file and re-recorded only the branches it kept merged, so bounced culprits and
 # held dependents are already excluded. An EMPTY file is legitimate (every branch kicked back or
-# bounced) and correctly closes nothing; a MISSING one means Section 3 never ran -- abort.
+# bounced) and correctly closes nothing; a MISSING one means Section 3 never ran -- abort loudly, same
+# policy and same shared script (scripts/land-state-load.sh, lode-dc4n) as the first-pass accepted
+# load above -- this used to be a bare `cat ... || exit 1` with no diagnostic at all, the one
+# $STATE_DIR load in the skill that dropped lode-0jan's loud/silent distinction one section later.
 STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation again
-LANDED=$(cat "$STATE_DIR/landed") || exit 1
+LANDED=$(scripts/land-state-load.sh "$STATE_DIR/landed" -- \
+  "Section 3 never ran (or never reached its end-of-loop write). Nothing to close.") || exit 1
 for id in $LANDED; do
   bd close "$id" --reason "Landed on trunk via /land (merge <sha>)"
   bd update "$id" --remove-label ready-for-land   # tidy the queue label off the (now closed) ticket --
@@ -1864,11 +1935,14 @@ paths section if that file is missing or empty:
 
 ```bash
 STATE_DIR="$(git rev-parse --git-dir)/land-state"     # re-derive -- fresh Bash invocation; the
-CONFLICTS=$(cat "$STATE_DIR/conflicts/<id>" 2>/dev/null)  # FILE under $STATE_DIR is what survived,
-                                                            # never a bash variable
-[ -n "$CONFLICTS" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/conflicts/<id> is missing or empty --" \
+                                                       # FILE under $STATE_DIR is what survived,
+                                                       # never a bash variable
+# scripts/land-state-load.sh --require-nonempty (lode-dc4n) -- same "missing or empty, both fatal"
+# policy as the isolation-replay accepted load above, and the same script; this used to be its own
+# fourth hand-rolled spelling (`cat ... 2>/dev/null` + a separate `[ -n ... ]` check).
+CONFLICTS=$(scripts/land-state-load.sh "$STATE_DIR/conflicts/<id>" --require-nonempty -- \
   "the producer site (2b's merge-precheck.sh call, or a Section-3 merge loop) did not persist the" \
-  "conflicting paths. Refusing to kick back with a blank paths section." >&2; exit 1; }
+  "conflicting paths. Refusing to kick back with a blank paths section.") || exit 1
 
 bd update <id> --remove-label ready-for-land --add-label needs-rebase \
   --append-notes "NEEDS REBASE (/land): origin/land/<id> no longer merges cleanly onto trunk @ $(git rev-parse --short origin/trunk).

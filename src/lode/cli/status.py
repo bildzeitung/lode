@@ -84,14 +84,13 @@ def _format_redactions(redactions: str | None) -> str:
 def _cache_hit(hf_source: str, model_file: str) -> bool:
     """Is ``model_file`` inside ``hf_source`` actually cached and complete?
 
-    Thin wrapper over ``huggingface_hub.try_to_load_from_cache`` -- the
-    supported, network-free cache query -- against :func:`lode.config.
-    model_cache_dir`. Deliberately NOT a ``Path.iterdir()``/dir-exists check:
-    HuggingFace's downloader creates ``models--X/blobs/`` with an
-    ``.incomplete`` file *before* a download finishes, so a dir-exists probe
-    reads an INTERRUPTED ``lode models pull`` as warm (verified empirically --
-    lode-l38d.6 review). ``try_to_load_from_cache`` resolves the actual
-    ``refs/snapshots`` chain HuggingFace's own loaders use, so a partial
+    Thin wrapper over ``huggingface_hub.try_to_load_from_cache`` -- the supported,
+    network-free cache query -- against :func:`lode.config.model_cache_dir`.
+    Deliberately NOT a ``Path.iterdir()``/dir-exists check: HuggingFace's downloader
+    creates ``models--X/blobs/`` with an ``.incomplete`` file *before* a download
+    finishes, so a dir-exists probe reads an INTERRUPTED ``lode models pull`` as warm
+    (verified empirically -- lode-l38d.6 review). ``try_to_load_from_cache`` resolves
+    the actual ``refs/snapshots`` chain HuggingFace's own loaders use, so a partial
     download correctly returns ``None`` here, not a false warm.
 
     Reaching ``try_to_load_from_cache`` costs ~110ms warm and adds ~123 modules
@@ -216,11 +215,11 @@ def _model_revision_status(
     """``(mixed, drift)`` for the embedder's live per-vector ``model_revision`` record.
 
     Per ``lode-crh8.1``'s decision (``docs/storage.md``
-    #model-provenance-the-embedder-revision-manifest-decided-lode-crh81) the
-    "manifest" is the aggregate of the per-vector ``model_revision`` field
-    already on every ``embeddings`` row (:meth:`lode.vectorstore.VectorStore.
-    model_revisions`), not a separate committed artifact -- this reads that
-    aggregate and compares it against a fresh live probe.
+    #model-provenance-the-embedder-revision-manifest-decided-lode-crh81) the "manifest"
+    is the aggregate of the per-vector ``model_revision`` field already on every
+    ``embeddings`` row (:meth:`lode.vectorstore.VectorStore.model_revisions`), not a
+    separate committed artifact -- this reads that aggregate and compares it against a
+    fresh live probe.
 
     - ``mixed`` — the live store currently holds more than one distinct
       ``model_revision`` for ``settings.embedding_model``: some passages were
@@ -277,13 +276,12 @@ def _enrichment_model_stale(
     for the recorded decision to replace (not supplement) that check with
     this one.
 
-    `current_provider` extends that same "identity, not just model string"
-    principle to the LLM vendor (lode-568v.6): the same model/deployment
-    string can mean different providers, so a provider switch alone -- with
-    ``enrichment_llm`` held constant -- must also mark the corpus stale. Pass
-    :func:`lode.llm_provider.provider_identity`'s return value here, never
-    ``settings.llm_provider`` directly -- see :func:`~lode.enrichment_view.
-    stale_enrichment_heads` for why.
+    `current_provider` extends that same "identity, not just model string" principle to
+    the LLM vendor (lode-568v.6): the same model/deployment string can mean different
+    providers, so a provider switch alone -- with ``enrichment_llm`` held constant --
+    must also mark the corpus stale. Pass :func:`lode.llm_provider.provider_identity`'s
+    return value here, never ``settings.llm_provider`` directly -- see
+    :func:`~lode.enrichment_view.stale_enrichment_heads` for why.
 
     Reads :func:`lode.enrichment_view.stale_enrichment_heads` -- the
     identical, live-head-scoped query ``lode reenrich`` force-enqueues from

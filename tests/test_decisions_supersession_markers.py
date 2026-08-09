@@ -25,15 +25,20 @@ Both scans are module-level helpers taking their lines as a parameter, so the
 sabotage tests below can prove each actually fires on a violation rather than
 passing vacuously -- same shape as tests/test_keybindings_doc.py.
 
-KNOWN LIMITATION (lode-nlk6): no check here -- neither scan, nor the
+FORMER KNOWN LIMITATION (lode-nlk6), now covered by a SEPARATE mechanism
+(lode-rl6s): none of the checks in THIS module -- neither scan, nor the
 preamble-states-the-rule check -- can detect a SILENT IN-PLACE REWRITE, the
-exact failure the preamble's own sentence forbids. Every check keys on an
-artifact a *marker* leaves behind (an off-pattern keyword, a wrapped id, the
-preamble's own wording); a silent rewrite is the ABSENCE of a correction, so
-it leaves nothing for any of them to key on and every check stays green. This
-is a limit of THIS GATE, not a hole in the convention: the convention still
-binds. Closing it would mean diffing an entry against its own git history, a
-materially different and more expensive check than the text scans below.
+exact failure the preamble's own sentence forbids. Every check here keys on
+an artifact a *marker* leaves behind (an off-pattern keyword, a wrapped id,
+the preamble's own wording); a silent rewrite is the ABSENCE of a correction,
+so it leaves nothing for any of them to key on and every check here stays
+green. That gap is real but is NOT closed in this module: it is closed by
+`scripts/check-decisions-no-silent-rewrite.sh` +
+`tests/test_decisions_no_silent_rewrite_guard.py`, which diff a SPECIFIC
+base...head range of docs/decisions.md's git history and fail on any
+pre-existing, non-blank line that vanished. That guard is scoped to one
+branch's diff, deliberately and for reasons of its own -- see its header,
+not a restatement here.
 """
 
 from __future__ import annotations
@@ -44,11 +49,33 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DECISIONS = REPO_ROOT / "docs" / "decisions.md"
 
+# Marker vocabulary, matched in TitleCase and ALL-CAPS but deliberately NOT
+# lowercase: a case-insensitive group false-positives on ordinary parenthesised
+# narrative such as "(superseded -- see below)", which
+# test_off_pattern_scan_ignores_lowercase_narrative_prose pins. Both spellings
+# are DERIVED from this one tuple rather than typed out twice, so the rule is
+# stated once and a keyword cannot land half-applied -- which is exactly how
+# lode-125q and lode-bv9o each arrived, one case variant at a time.
+_MARKER_KEYWORDS = (
+    "Superseded",
+    "Falsified",
+    "Obsolete",
+    "Retracted",
+    "Outdated",
+    "Amendment",
+)
+_MARKER_ALTERNATION = "|".join(
+    spelling for keyword in _MARKER_KEYWORDS for spelling in (keyword, keyword.upper())
+)
+
 _OFF_PATTERNS: dict[str, re.Pattern[str]] = {
     "stale-flag keyword opening a bold span, blockquote, or parenthetical": re.compile(
-        r"(?:\*\*|\(|^\s*>\s*\**)"
-        r"(?:Superseded|Falsified|Obsolete|Retracted|Outdated)\b"
+        rf"(?:\*\*|\(|^\s*>\s*\**)(?:{_MARKER_ALTERNATION})\b"
     ),
+    # Deliberately NOT anchored to a bold span/parenthetical: this one keyword
+    # is banned outright, anywhere on a line. It therefore overlaps the group
+    # above (a span-anchored occurrence matches both, and is reported twice) --
+    # harmless, since every consumer asks only whether a line matched at all.
     "ALL-CAPS 'SUPERSEDED' marker keyword": re.compile(r"\bSUPERSEDED\b"),
     "'<claim> is falsified by <id>' sentence": re.compile(r"is falsified by lode-"),
 }
@@ -124,12 +151,20 @@ def test_off_pattern_scan_catches_a_reintroduced_marker() -> None:
         "  **Superseded for the matching *shape* by the lode-zzzz entry below.**",
         "  *(Itself since SUPERSEDED by lode-zzzz -- the italic aside.)*",
         "- **(Retracted, lode-zzzz: a shape lode-ur6o never encountered.)**",
+        "**AMENDMENT (`lode-zzzz`):** the exact lode-hg49 lead-in shape (lode-125q).",
+        "**RETRACTED (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
+        "**OBSOLETE (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
+        "**FALSIFIED (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
+        "**OUTDATED (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
     ]
-    caught = _off_pattern_markers(reintroduced)
+    # Scanned one line at a time on purpose: a whole-list count can be met by
+    # one line matching two patterns while another matches none, which would
+    # silently mask a dropped keyword. Per-line, each shape must stand alone.
+    missed = [line for line in reintroduced if not _off_pattern_markers([line])]
 
-    assert len(caught) >= len(reintroduced), (
-        "the off-pattern scan no longer flags every off-pattern shape -- it "
-        f"caught {len(caught)} of {len(reintroduced)}:\n" + "\n".join(caught)
+    assert not missed, (
+        "the off-pattern scan no longer flags every off-pattern shape -- these "
+        "went unnoticed:\n" + "\n".join(missed)
     )
 
 

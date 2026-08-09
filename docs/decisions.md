@@ -90,6 +90,20 @@ entries below from being rewritten to chase the current tree.)
      a redesign. **Known cost, filed as a follow-up:** those warnings print on every green
      `nox` run, so a genuinely new wrapped ref is indistinguishable from the backlog in that
      output — a warning that always fires trains readers to ignore the channel.
+
+     **Update (lode-hg49, 2026-08-08)** — the "known cost" above was filed as `lode-hg49` and is now
+     resolved by taking the third option that entry called a small follow-up: the **81** pre-existing
+     wrapped sites (30 files) were mechanically unwrapped in one pass, and with the backlog at zero
+     the gate now **hard-fails on any wrapped role**, the same as an unresolved one. Two claims above
+     are therefore stale: wrapped refs are no longer merely reported, and the gate no longer prints a
+     live wrapped count (there is nothing left to count, so the `OK:` line states the invariant
+     instead). Chosen over the two alternatives `lode-hg49` also listed — summary-only output, and a
+     hard-fail above a pinned baseline count — because unwrapping a small, one-time backlog buys a
+     clean binary rule with no baseline number to maintain, whereas both alternatives keep the
+     backlog *and* add ongoing bookkeeping. The unwrap was prose-only: verified by re-parsing all 30
+     files and confirming the AST is unchanged once docstrings are blanked, and that the whole file
+     content is byte-identical modulo whitespace, so no code, comment text, or non-docstring string
+     literal moved.
   4. **Wired as a nox session (`docstringcheck`) in the DEFAULT set, hard-fail on any unresolved
      `lode.*` ref** — mirrors `linkcheck`'s placement (pure Python, no Docker/network) rather than a
      pytest test or a pre-commit hook, so it runs on every bare `nox` the same as the markdown-link
@@ -4222,6 +4236,15 @@ entries below from being rewritten to chase the current tree.)
   profiling signal shows the duplicate read matters in practice; revisit then rather than
   speculatively wiring it now.
 
+  **Update (`lode-oca9`, 2026-08-08) — both "open" questions above are now SETTLED, and this
+  entry's shipped artifact no longer exists.** The whole-SQL-plus-`{placeholders}`-slot seam this
+  entry filed as open was built and does fit all three sites, `trust_rank` included;
+  `lode.target_rows.fetch_target_rows` is retired and replaced by `lode.sql_ids`
+  (`fetch_by_ids` + `placeholders`), and the ~14-site hand-rolled placeholder idiom is retired too.
+  Every reference above to `lode.target_rows`, to the `v`/`n`/`s`/`e` alias contract, and to
+  `trust_rank` being a non-fit describes the state as of `lode-r9z0` and is preserved as the record,
+  not as current fact. Full write-up: the `lode-oca9` entry at the end of this file.
+
 - **Update (`lode-5ido`, 2026-08-08) — `lode-p8zl` RULING 1's premise is stale, but its conclusion
   stands and the shipped design is UNCHANGED.** Claude Code's documented `PreToolUse` payload now
   carries `agent_id` and `agent_type` (present when the hook fires inside a subagent, or under
@@ -4241,6 +4264,77 @@ entries below from being rewritten to chase the current tree.)
      this inverts who gets guarded.
   3. It reintroduces a `jq` dependency against RULING 3, on a hook measured at ~10ms in the hot path
      of every `Edit`/`Write`.
+
+- **2026-08-08 — VERIFIED (`lode-6nwu`): `GET`/`POST /rest/api/3/search` is being retired under
+  Atlassian `CHANGE-2046` and returns HTTP 410 Gone on migrated Jira Cloud instances; the replacement
+  is `GET`/`POST /rest/api/3/search/jql`.** Flagged during `lode-35nu.11.2`'s technical review as an
+  unverified risk (no live JIRA instance was reachable from that review worktree). Verified against
+  the live Jira Cloud v3 OpenAPI spec (`developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json`
+  — the document the REST reference renders from), Atlassian's Confluence KB article "Run JQL search
+  query using Jira Cloud REST API", and `CHANGE-2046`.
+  - **Retirement is phased, not a single date.** Deprecation announced 2024-10-31; deprecation period
+    ended 2025-05-01; hybrid phase 2025-05-05 → 2025-07-31; shutdown 2025-08-01 → 2025-10-31, rolled
+    out progressively by region. The old paths are *still present* in today's spec, flagged
+    `deprecated: true` with the summary "Currently being removed", and 410 is **not** a documented
+    response code for them — the 410 is observed real-world behaviour on already-migrated instances,
+    not API contract. Do not record "removed on 2025-05-01" as a fact; the honest statement is
+    "deprecated under CHANGE-2046, phased out through 2025-10-31, 410 on migrated instances".
+    `CHANGE-2046` also covers `POST .../search/id` and `POST .../expression/eval`, not just `/search`.
+  - **The request shape is NOT unchanged, and the difference is load-bearing for lode.** `/search/jql`
+    documents "By default, this resource returns IDs only" — `fields` now defaults to `id`, where the
+    old endpoint defaulted to navigable fields. A caller that omits `fields` gets back no `summary` at
+    all. Since lode's search tools are specified to return *identifiers and titles only, enforced by
+    the request shape*, the rebuild must send `fields` explicitly (`summary`) — this is the single
+    most likely migration bug. Also gone: `startAt` and `validateQuery`. `jql` must now be a
+    *bounded* query (a bare `order by key desc` is rejected). `maxResults` still defaults to 50 but
+    the server may return fewer per page than requested and caps a full traversal at ~5000 issues, so
+    a short page does **not** mean the last page.
+  - **Pagination is cursor-based.** The response (`SearchAndReconcileResults`) carries `isLast`,
+    `issues`, `names`, `nextPageToken`, `schema`, `warnings` — there is no `total` and no `startAt`.
+    Terminate the loop on the **absence** of `nextPageToken` (documented: the field is omitted on the
+    last page); tokens expire after 7 days. `isLast` does exist (added 2025-06, `JRACLOUD-94648`) but
+    is the weaker signal — treat it as a secondary check, not the stop condition. For a count there is
+    only `POST /rest/api/3/search/approximate-count`, which is approximate as named. `warnings` is
+    documented as experimental and behind a feature flag — do not depend on it.
+
+  **No code in this repo is affected today**: `jira_search` does not currently exist on `trunk` — the
+  branch that introduced it (`lode-35nu.11.2`) was bounced by `/land`'s semantic review and deleted;
+  its rebuild is tracked separately as `lode-8hsk` (open). This finding is cross-posted onto
+  `lode-8hsk` so that rebuild targets `/rest/api/3/search/jql` with an explicit `fields` and
+  `nextPageToken`-based pagination from the start, rather than reintroducing a dead-on-arrival
+  endpoint. Full finding: `bd show lode-6nwu --json` (the `design` field).
+
+- **Open (`lode-ejfv`, 2026-08-08) — the web_fetch destination guard closes the direct case only;
+  redirect chains and DNS rebinding stay open.**
+  [`docs/externals.md`](externals.md#web-fetch-destination-guard-decided-lode-ejfv) decided a
+  private/loopback/link-local/reserved/multicast address guard on the ask path's `web_fetch`
+  destination (`lode.tools._refuse_private_web_destination`), checked before any network call and
+  again on the post-redirect final URL before anything is persisted. Two vectors remain:
+  1. **Redirect chains.** `lode.webfetch` follows redirects transparently inside one `httpx` client
+     call with no per-hop hook, so an allowed public host can still make the client *issue* a GET at
+     an internal address. The final-URL re-check (added at technical review) stops that response
+     being persisted as a citable snapshot or reaching the model, so the vector is a **blind** fetch
+     rather than a read-and-exfiltrate. Fully closing it needs per-hop validation in `lode.webfetch`.
+  2. **TOCTOU / DNS rebinding.** The guard resolves the host; `httpx` resolves it again for the real
+     request. A hostile short-TTL resolver can answer the two differently and defeat the check
+     outright — the standard limitation of guarding a destination by hostname, and the *cheaper* of
+     the two attacks. Closing it needs the validated IP pinned for the connection (a custom transport
+     dialing the address with the original `Host` header).
+
+  Both fixes live in `lode.webfetch`, and both are deferred on **effort, not blast radius** — the
+  distinction matters, because "it would affect every connector" is the kind of rationale a later
+  reader accepts without re-examining. It would not: `HttpxFetcher` already documents "whether
+  redirects are followed at all" as one of its intended per-connector seams, and `fetch_for_ask`
+  already threads an injectable `fetcher=` through. A `GuardedHttpxFetcher(HttpxFetcher)`
+  constructed *only* by the ask path would close both gaps at the layer that can actually enforce
+  them, with the same scoping and no effect on drawdown/JIRA/Confluence. That is the shape the
+  follow-up should take, and it likely subsumes `lode.tools`' guard entirely.
+
+  Recorded explicitly so the guard is not mistaken for making the ask path SSRF-proof; it raises the
+  cost of the direct "point the tool at `169.254.169.254`" attack, which is what it was built to do.
+  Note that TOCTOU is bypassable by *precisely* the adversary in the stated threat model — one who
+  chooses the URL therefore controls the domain and its TTL — so the follow-up is load-bearing
+  rather than nice-to-have.
 
 - **Tool-augmented Ask: prompt injection steering later tool calls, residual risk (`lode-80bv`).**
   The threat model is written up in
@@ -4263,3 +4357,249 @@ entries below from being rewritten to chase the current tree.)
   instruction, per this file's and `externals.md`'s standing preference. Revisit once `lode-ejfv`
   (bounding where `web_fetch` may point) lands, since it closes the one concretely-scoped half of this
   risk (destination-steering) and may change what residual surface remains.
+
+- **Left open: `lode-ejfv` / `lode-xwah` land-time reconciliation of the web-fetch destination
+  guard.** `lode-xwah` was scoped as a discovered follow-up while technically reviewing `lode-ejfv`
+  (which was, at scoping time, adding `lode.tools._refuse_private_web_destination` — a
+  private/loopback/link-local/reserved/multicast address guard on the ask path, checked on the
+  initial URL and again on the post-redirect final URL). `lode-xwah` was built against `origin/trunk`
+  as it stood, deliberately not fetching or depending on the still-unlanded `lode-ejfv` branch — and
+  at that point `trunk` carried no `_refuse_private_web_destination` at all (that function had not
+  yet landed), so there was nothing in `lode.tools` for `lode-xwah` to extend or remove.
+  `lode-xwah`'s `GuardedHttpxFetcher` (see
+  [externals.md](externals.md#web-fetch-destination-guard-ssrf-via-a-model-chosen-url-decided-lode-xwah))
+  was built standalone, closing the redirect-chain and DNS-rebinding gaps at the fetcher layer
+  instead. **Left open for whoever lands both:** if `lode-ejfv`'s `_refuse_private_web_destination`
+  ends up on `trunk` (landed first, or merged alongside), the two guards overlap heavily —
+  `GuardedHttpxFetcher` is strictly stronger on the two axes this ticket was scoped for (per-hop
+  redirect validation, post-connect rebinding check) and, after this branch's technical review, now
+  matches `lode-ejfv`'s address coverage exactly (CGNAT `100.64.0.0/10`, IPv6 site-local `fec0::/10`,
+  IPv4-mapped unwrapping, and the `http`/`https` scheme allowlist — all of which the branch as first
+  built was *missing*, and all of which `lode-ejfv`'s own review had already added on its side).
+  **Correction to this entry's first draft:** it asserted the `lode.tools` guard would be "fully
+  subsumed" and should simply be removed. That was wrong twice over — at the time it was written the
+  fetcher-layer guard was materially *weaker* on address coverage and had no scheme check at all; and
+  even now one gap remains structural rather than incidental: `_fetch_web` installs
+  `GuardedHttpxFetcher` **only when the caller injects no `fetcher`**, so a caller that injects its
+  own gets no address policy whatsoever, while a `lode.tools`-level check runs unconditionally. The
+  real open question for whoever lands both is therefore *which layer owns the policy* — delete the
+  `lode.tools` guard and accept that the injection seam is unguarded (defensible: today only tests
+  inject), or keep it as the injection-proof outer check and let the fetcher own only the per-hop and
+  rebinding halves. Not a mechanical cleanup, but still not a blocker for either branch; no new
+  ticket is filed here since `/land`'s stacked/overlapping-branch handling is where it surfaces.
+
+- **2026-08-08 (`lode-oca9`) — re-cut the batched `IN(...)` seam left open by `lode-r9z0`; both
+  candidates adopted.** `lode-r9z0`'s entry above filed, but deliberately did not settle, two
+  questions: whether a whole-SQL-plus-`{placeholders}`-slot seam would fit all three candidate call
+  sites without the hardcoded `JOIN`/table-alias coupling `fetch_target_rows` had, and whether the
+  ~14-site hand-rolled `", ".join("?" for _ in xs)` idiom was worth a shared builder. Both: yes.
+
+  `lode.target_rows.fetch_target_rows(conn, note_ids, external_ids, note_columns,
+  external_columns)` is retired. `lode.sql_ids` replaces it with two independent primitives:
+  `placeholders(n)` (a plain `", ".join("?" for _ in range(n))`, taking a count so it composes with
+  callers that build a larger SQL string around the `IN (...)` fragment) and `fetch_by_ids(conn, ids,
+  sql)` (skip-if-empty / fill the caller's one `{placeholders}` slot via `str.format` / bind `ids` as
+  `?` params / `fetchall()`, over a **whole, fixed SQL string written at the call site** — no
+  hardcoded `JOIN`, no implicit table-alias contract, and the raw-SQL column-fragment parameter
+  `fetch_target_rows` had is gone entirely: every caller now writes its own complete `SELECT ... FROM
+  ... JOIN ... WHERE ... IN ({placeholders})` text). Because `fetch_by_ids` takes one id list and one
+  SQL string, a caller needing two round trips (the note/external split `cited_answer._resolve_targets`
+  and `citations_read.resolve_citations` both do) calls it twice — this reads as two visible calls at
+  the call site instead of one call returning a 2-tuple, which is the trade this shape makes for
+  dropping the hardcoded pairing.
+
+  This also unblocked the third candidate `lode-r9z0` evaluated and left alone: **`retrieval.trust_rank`
+  now uses `fetch_by_ids` too**, for both its note-side bare `SELECT version_id FROM versions WHERE
+  version_id IN (...)` (no `JOIN`, which is exactly why the old helper could not serve it — the new
+  one has no `JOIN` to not serve) and its external-side query, unsplit over the **same** full target
+  list for both calls (classifying which table a target belongs to is `trust_rank`'s output, not its
+  input — the old helper needed the split as *input*, which `trust_rank` could not supply; the new
+  seam does not require a split at all).
+
+  `retrieval.expand_parents`, `retrieval._passage_texts`, and three more `IN(...)` fetches inside
+  `retrieval.graph_expand` were also switched to `fetch_by_ids` (id-only fetches, no other bound
+  params in the query) while touching the file. The `~14` hand-rolled sites the description counted
+  are retired via the second primitive, `placeholders(n)`, at every site that could not be a bare
+  `fetch_by_ids` call because the query mixes an id-list `IN (...)` with other bound params or other
+  `WHERE` clauses: `notes_read.py` (two sites), `worker.py` (two sites), `enrichment_view.py` (one
+  site), `lexical.py` (one site). `retrieval._in_clause` is untouched, per the description's explicit
+  carve-out — it inlines quoted hex literals for a LanceDB where-predicate with no parameter binding
+  available, a different problem this module does not try to solve.
+
+  Existing tests pass unchanged; :mod:`lode.sql_ids` gets its own direct unit tests (empty-id
+  short-circuit, placeholder count matches bound value count by construction since both derive from
+  `len(ids)`, and that `fetch_by_ids` never accepts anything but a fixed literal `sql` string — there
+  is no path from caller- or user-supplied data into the SQL text itself, only into the bound `?`
+  values).
+
+- **Update (lode-8n4k, 2026-08-08) — a "checks out" overclaim in lode-2m89's entry above.** That
+  entry says it twice — "it's what it actually checks out and diffs for drift", and "it is what the
+  reviewer checks out and compares against for drift" — and both are half wrong. `code-reviewer`
+  fetches and checks out `origin/land/<id>` (per `.claude/agents/code-reviewer.md` step 2 and
+  `.claude/skills/code/SKILL.md`'s dispatch prompt), **never** `review_head`: the drift-comparison
+  half is right, the checkout half is not. `review_head` is a provenance / drift-comparison note, not
+  a review boundary (lode-9b5n). Three operational files carried the same wrong claim and are
+  corrected in place (ordinary files, not append-only): `.claude/agents/coding.md`'s
+  never-hand-off-a-dirty-worktree bullet, `.claude/skills/code/SKILL.md`'s stranded-review-sweep
+  bullet, and `docs/agents-workflow.md`'s exit-(a) re-entry gap 1. What the coding.md correction does
+  **not** change: uncommitted, or committed-but-unpushed, work is still silently **dropped** — only
+  the stated reason was wrong. Per this file's append-only preamble the entry above is left as
+  written; this marker is the correction.
+
+- **2026-08-08 (`lode-125q`) — closed off-pattern-keyword blind spot (1) in
+  `tests/test_decisions_supersession_markers.py`; blind spot (2) filed as its own ticket, not folded
+  in.** `lode-hg49`'s review had to hand-restore a `docs/decisions.md` entry that a prior commit
+  silently rewrote in place using a bold-span lead-in beginning with the word AMENDMENT —
+  structurally identical to the Retracted/lode-x bold-parenthetical shape the gate's own docstring
+  says a *new* shape should catch, but `_OFF_PATTERNS`' keyword alternation had no
+  `Amendment`/`AMENDMENT` entry, so it slipped through. Fixed: `Amendment`/`AMENDMENT` added to the
+  alternation, with a sabotage-test line using the exact `lode-hg49` lead-in shape proving the scan
+  now fires. Checked first that no legitimate `docs/decisions.md` prose opens a bold span,
+  parenthetical, or blockquote with that word (one hit, `charter amendment` — ordinary lowercase
+  mid-sentence narrative, matched by neither the case-sensitive keyword nor the span anchor).
+
+  **Both cases had to be listed explicitly, and the alternation must stay case-SENSITIVE.**
+  Case-insensitivity is not an option: it would false-positive on ordinary parenthesised lowercase
+  narrative such as "(superseded -- see below)", which
+  `test_off_pattern_scan_ignores_lowercase_narrative_prose` already pins. Two consequences worth
+  knowing (`lode-125q`'s review): (a) the alternation's other four keywords still carry only their
+  TitleCase form — the all-caps stale-flag keyword that *is* covered is covered by a **separate**
+  `_OFF_PATTERNS` entry, not by the alternation — so an all-caps RETRACTED/OBSOLETE/FALSIFIED/
+  OUTDATED lead-in remains uncaught, the same bug class as this one, tracked as `lode-bv9o`;
+  (b) that separate bare-word entry makes the all-caps spelling of that one keyword unwriteable
+  *anywhere* in this file, prose about the gate included — which is why this paragraph spells it
+  around rather than quoting it, and why an entry documenting these shapes must describe them rather
+  than reproduce them verbatim.
+
+  That leaves blind spot (2) — `lode-nlk6`'s documented limitation that no check here can detect a
+  *silent* in-place rewrite, since every check keys on an artifact a marker leaves behind and a
+  silent rewrite leaves nothing to key on. It has now bitten once for real (the `lode-hg49` incident
+  above). **Deliberately not folded into this ticket**: closing it means diffing an entry's text
+  against its own git history, a materially different and more expensive check than the text-scan
+  fix above, and worth its own acceptance criteria and non-vacuity proof rather than being rushed in
+  alongside a keyword-list tweak. Filed as `lode-rl6s` (`discovered-from lode-125q`, independently
+  buildable — not blocked on anything).
+
+  **Update (`lode-bv9o`, 2026-08-08):** consequence (a) is closed. The alternation now carries both
+  the TitleCase and the all-caps spelling of *every* keyword in it, and — on this ticket's review —
+  derives the two spellings from a single keyword tuple instead of listing each twice by hand, so
+  the "both cases, never lowercase" rule is stated once and the next keyword cannot land
+  half-applied the way this one and `lode-125q` each did. Non-vacuity is per keyword: dropping any
+  one all-caps variant makes the sabotage test go red, and that test now checks each shape
+  line-by-line rather than by a total count, which a single line matching two patterns could
+  otherwise have satisfied while another matched none. Case sensitivity is unchanged and still
+  load-bearing. Consequence (b) is unaffected — the bare-word entry stands (it now merely overlaps
+  the group for that one keyword), and that spelling remains unwriteable anywhere in this file.
+
+- **2026-08-08 (`lode-rl6s`) — closed blind spot (2) with a scoped, per-diff check, not a
+  full-history one.** `lode-nlk6`'s documented limitation: no check in
+  `tests/test_decisions_supersession_markers.py` can detect a *silent* in-place rewrite of an
+  existing entry, since every check there keys on an artifact a marker *leaves behind* and a
+  silent rewrite is the absence of one. A **full-history replay** (walk every commit that ever
+  touched this file, fail if any diff removes a previously-committed non-blank line) was tried by
+  hand against this repo's own git log and rejected: even with a word-set heuristic meant to
+  tolerate ordinary paragraph rewrapping (a later append widening a paragraph legitimately shifts
+  word-wrap boundaries), dozens of commits made *after* the append-only convention itself was
+  established (`lode-ur6o`) still flagged — full-history enforcement would ship permanently red
+  with heavy false-positive noise, not a usable gate.
+
+  Shipped instead: `scripts/check-decisions-no-silent-rewrite.sh <base-ref> [<head-ref>]`, a
+  **scoped, per-diff** check — `git diff <base>...<head> -- docs/decisions.md`, fail if any hunk
+  removes a pre-existing non-blank line. No heuristic needed at this narrower scope: a single
+  branch's diff against its merge base is not reflow-prone the way 250 historical commits are, so
+  the strict form is the right size for the check actually needed — catching a rewrite inside
+  *one* review's diff, at review/land time (`scripts/check-decisions-no-silent-rewrite.sh
+  origin/trunk`). The **three-dot** comparison is load-bearing: the branch under review is
+  routinely behind `origin/trunk`, which appends to this file on nearly every land, so a two-dot
+  `git diff <base> <head>` reports trunk's own new entries as removed — 12 spurious offenders on
+  this ticket's own branch, zero with three dots. That is the same permanent-noise failure that
+  sank the full-history option, reintroduced at branch scope; the caller passes an ordinary ref
+  and the script resolves the merge base itself. This is the "documented git-history-diffing
+  check" alternative the ticket's own acceptance criteria named, not the heavier per-entry
+  content-hash mechanism it also named — that heavier mechanism remains unbuilt; revisit only if
+  the scoped check proves insufficient in practice. Its exit-2 arm is the
+  shared `gate_could_not_run` from `scripts/gate-lib.sh` (`lode-9i2p`/`lode-090f`), not a fourth
+  hand-rolled copy of that idiom — so the script joins `tests/test_gate_lib.py`'s discovered
+  consumer sweep instead of sitting outside it.
+  `tests/test_decisions_no_silent_rewrite_guard.py` drives the script against synthetic throwaway
+  git repos (ordinary append allowed, an appended correction marker in the sanctioned shape
+  allowed, a base that has moved ahead allowed, a silent in-place reword or an outright entry
+  deletion denied, all sabotage-proven). The script is **not wired into any automatic gate** (no
+  natural default base ref exists inside an isolated worktree, and CI wiring was out of this
+  ticket's scope) — it is a tool for a reviewer/lander to run deliberately against the branch
+  under review, per its own header comment. A guard nothing runs is close to a guard that does not
+  exist, so choosing an invocation point is filed as `lode-d7pm`, not left implicit here.
+
+- **2026-08-08 (`lode-3oik`) — adopted `scripts/land-state-load.sh` (`lode-dc4n`) for `/sweep`'s
+  `$SWEEP_TMP` load cluster; kept the script's name rather than renaming it.** `.claude/skills/
+  sweep/SKILL.md` had five `$SWEEP_TMP` reads hand-rolling the exact same "missing fatal, empty OK"
+  default policy `land-state-load.sh` already made explicit for `/land`'s `$STATE_DIR` reads — §3's
+  `$ESCALATED`/`$HUMAN`/`$CLOSABLE`, §6's prep and §7's re-derivation of `$CURRENT`. All five were
+  retrofitted onto the shared script with no `--require-nonempty`, preserving that exact policy
+  (verified site by site against the pre-retrofit text before editing, not assumed).
+
+  **Naming decision:** keep `scripts/land-state-load.sh`'s name, don't rename it to something
+  generic like `scripts/state-file-load.sh`. The script already took a plain path argument and was
+  never actually `$STATE_DIR`-specific — only its name and header comment implied that. Renaming
+  would touch two existing test modules (`tests/test_land_conflicts_state.py`,
+  `tests/test_land_state_load.py`) plus every call site in both `/land`'s and now `/sweep`'s
+  SKILL.md, for a purely cosmetic gain; the header comment carries the de-scoping note instead
+  (`scripts/land-state-load.sh`'s own top-of-file comment, updated by this ticket).
+
+  **Two `$SWEEP_TMP` sites deliberately NOT retrofitted:** §8's `deferred`/`stranded` reads
+  (`cat "$SWEEP_TMP/deferred" 2>/dev/null` / `cat "$SWEEP_TMP/stranded" 2>/dev/null`, each inside an
+  `if VAR="$(...)"; then ... else STATE=missing; fi`). These do not map onto either of
+  `land-state-load.sh`'s two policies: both of that script's policies treat a missing file as
+  **fatal** (exit 1), while these two sites treat a missing file as a **non-fatal, expected third
+  state** — `§2a`/`§2b`'s corresponding block simply hasn't run yet this pass, which is routine, not
+  an error, and §8 must still finish (publish the digest) either way. Their pre-existing
+  `2>/dev/null` behaviour — silently continue past a missing file rather than surface `cat`'s own
+  stderr — is preserved unchanged; only a one-line note was added at each site (and pinned by
+  `tests/test_sweep_state_load.py`) explaining why they're out of scope, per this ticket's
+  acceptance criteria.
+
+  Mirrors `lode-dc4n`'s own consolidation for `/land`'s four `$STATE_DIR` sites; the hazard named
+  there (a future editor silently flipping a load's missing-vs-empty policy during a mechanical
+  retrofit) is exactly why every retrofitted site above was checked against its pre-change text
+  first, and why the two out-of-scope sites got an explicit note instead of a silent skip.
+
+- **2026-08-09 (`lode-xdg3` × `lode-9b5n`, DECISION human) — composed the shape check with the
+  ancestor comparison in `code-reviewer.md`'s `review_head` drift check, rather than treating them
+  as competing designs for the same comparison.** A prior escalation on this same branch had framed
+  lode-9b5n's `git merge-base --is-ancestor` rewrite (trunk) and lode-xdg3's
+  `scripts/validate-sha40.sh` shape check (this branch) as mutually exclusive: pick one comparison
+  style or the other. That framing was wrong — the two changes sit at different layers (lode-9b5n
+  changed the *comparison*; lode-xdg3 added a *precondition on the value*) and compose cleanly by
+  running the shape check first and the ancestor check only on a value that passes it.
+
+  **Measured evidence for why composing is not merely nicer but necessary** (run in this repo,
+  2026-08-09, trunk @ `4397abd`): `git merge-base --is-ancestor` resolves an unambiguous SHA
+  *prefix* exactly like any other git ref —
+
+  ```
+  git merge-base --is-ancestor <39-char truncation of HEAD> HEAD  -> exit 0
+  git merge-base --is-ancestor <8-char prefix of HEAD>      HEAD  -> exit 0
+  git merge-base --is-ancestor ''                           HEAD  -> exit 128
+  ```
+
+  — so a *truncated* `review_head` (the exact 39-character defect `lode-xdg3` was filed to catch)
+  exits 0 under the bare ancestor check and reads as FORWARD-ONLY, i.e. silently **not** drift.
+  Under the old exact-match comparison a truncated value at least failed loudly, as spurious drift.
+  Taking lode-9b5n's ancestor check without re-layering lode-xdg3's shape check in front of it does
+  not merely lose a nicety — it turns the drift check vacuously green against precisely the
+  corruption class this ticket exists to catch.
+
+  **Resulting taxonomy is three-way, not two:** MALFORMED (shape check fails — noted, not drift),
+  FORWARD-ONLY (well-formed and an ancestor of the fetched tip — not drift, lode-9b5n's fix),
+  UNREACHABLE (well-formed but not an ancestor — real drift, history was rewritten). Implemented in
+  `.claude/agents/code-reviewer.md` step 2 as `scripts/validate-sha40.sh review_head "$REVIEW_HEAD"
+  || exit $?` immediately before `git merge-base --is-ancestor "$REVIEW_HEAD" HEAD`.
+
+  **Deliberate asymmetry, left in place on purpose:** `/land`'s `land_head` check
+  (`.claude/skills/land/SKILL.md` §2a) stays exact-match rather than adopting the ancestor
+  comparison — it was not part of the lode-9b5n/lode-xdg3 conflict and the two read sites answer
+  different questions. `/land` lands *without* re-reviewing, so a forward push of never-reviewed
+  commits onto `land/<id>` genuinely is drift there; `code-reviewer` reviews `trunk...HEAD`
+  wholesale regardless of what `review_head` names, so a forward push is harmless to it. Recorded in
+  `docs/agents-workflow.md` so a later pass does not "harmonize" the two comparisons and reintroduce
+  the hole this decision closes.

@@ -12,13 +12,17 @@ network call is ever made and the gates run without credentials):
 """
 
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
 from lode.answer import Answer, Claim, Support
 from lode.config import Settings
+from lode.gate import apply_gate
 from lode.llm_provider import AnthropicProvider, ModelTier
 from lode.qa import (
+    _SYSTEM_PROMPT,
+    _SYSTEM_PROMPT_WITH_TOOLS,
     MAX_TOKENS,
     OPUS_MODEL,
     SONNET_MODEL,
@@ -27,6 +31,8 @@ from lode.qa import (
     answer_question,
 )
 from lode.storage import init_db
+from lode.tool_dispatch import FETCH
+from lode.webfetch import RawResponse
 
 
 class _FakeMessages:
@@ -402,3 +408,267 @@ def test_body_offset_is_absent_from_the_provider_schema() -> None:
     # ...and the model-supplied fields are all still there, so this cannot pass
     # by the schema having quietly lost its Support definition.
     assert {"version_id", "snapshot_id", "quoted_span", "text", "support"} <= properties
+
+
+# ---------------------------------------------------------------------------
+# Tool-augmented Ask (lode-8hsk)
+# ---------------------------------------------------------------------------
+
+# Byte-for-byte the pre-lode-8hsk constant -- pinned literally (not just
+# `qa._SYSTEM_PROMPT`, which would be a vacuous self-comparison) so an
+# accidental edit to the notes-only prompt fails this test.
+_ORIGINAL_NOTES_ONLY_PROMPT = (
+    "You answer questions strictly from the SOURCES provided, which are passages "
+    "from the user's personal knowledge base. Return a list of factual claims. "
+    "Every claim must carry the verbatim evidence it rests on, pinned to a "
+    "specific source:\n"
+    '- for a source with kind="note", cite its id in the support\'s version_id '
+    "field;\n"
+    '- for a source with kind="external", cite its id in the support\'s '
+    "snapshot_id field;\n"
+    "- set exactly one of version_id or snapshot_id per support, never both.\n"
+    "Each quoted_span must be copied verbatim -- character for character -- from "
+    "that source's text. Assert only what the sources support. If the sources do "
+    "not answer the question, return no claims. Never use knowledge beyond the "
+    "sources."
+)
+
+
+def test_notes_only_prompt_constant_is_byte_for_byte_unchanged() -> None:
+    assert _SYSTEM_PROMPT == _ORIGINAL_NOTES_ONLY_PROMPT
+
+
+def test_tools_disabled_by_default_sends_the_unchanged_notes_only_prompt(
+    conn,
+) -> None:
+    client = _FakeClient(_envelope([]))
+    answer_question(
+        conn, "q", [QaPassage("v1", "text")], provider=AnthropicProvider(client)
+    )
+    (call,) = client.messages.calls
+    assert call["system"] == _ORIGINAL_NOTES_ONLY_PROMPT
+
+
+def test_ask_tools_enabled_false_in_settings_ignores_tools_enabled_true(
+    conn,
+) -> None:
+    # Config flag off collapses build_ask_tools() to () regardless of the
+    # caller's own tools_enabled=True -- notes-only behaviour unchanged.
+    settings = Settings(ask_tools_enabled=False)
+    client = _FakeClient(_envelope([]))
+    answer_question(
+        conn,
+        "q",
+        [QaPassage("v1", "text")],
+        tools_enabled=True,
+        provider=AnthropicProvider(client),
+        settings=settings,
+    )
+    (call,) = client.messages.calls
+    assert call["system"] == _ORIGINAL_NOTES_ONLY_PROMPT
+
+
+def test_tools_enabled_with_no_connector_active_still_sends_tool_aware_prompt(
+    conn,
+) -> None:
+    # ask_tools_enabled=True with no JIRA/Confluence connector configured
+    # still offers the generic `fetch` tool -- tools is non-empty, so the
+    # tool-aware prompt (not notes-only) is selected.
+    settings = Settings(ask_tools_enabled=True)
+    client = mock.MagicMock()
+    client.messages.parse.side_effect = AssertionError(
+        "structured_call/.parse must not be used when tools is non-empty"
+    )
+    # Free turn: the model calls no tool -- breaks the free-tool-turn loop
+    # immediately (there is nothing to search/fetch for this test).
+    text_block = mock.MagicMock()
+    text_block.type = "text"
+    free_turn_response = mock.MagicMock()
+    free_turn_response.content = [text_block]
+    free_turn_response.stop_reason = "end_turn"
+    # Final forced-schema turn: an empty claims envelope.
+    envelope_block = mock.MagicMock()
+    envelope_block.type = "tool_use"
+    envelope_block.name = "_ClaimsEnvelope"
+    envelope_block.input = {"claims": []}
+    envelope_block.id = "toolu_1"
+    final_response = mock.MagicMock()
+    final_response.content = [envelope_block]
+    final_response.stop_reason = "tool_use"
+    client.messages.create.side_effect = [free_turn_response, final_response]
+
+    answer_question(
+        conn,
+        "q",
+        [QaPassage("v1", "text")],
+        tools_enabled=True,
+        provider=AnthropicProvider(client),
+        settings=settings,
+    )
+
+    free_kwargs = client.messages.create.call_args_list[0].kwargs
+    assert free_kwargs["system"] == _SYSTEM_PROMPT_WITH_TOOLS
+    assert [t["name"] for t in free_kwargs["tools"]] == [FETCH]
+
+
+class _QueueWebFetcher:
+    """Stub Fetcher (lode.webfetch.Fetcher protocol) returning one canned response."""
+
+    def __init__(self, response: RawResponse) -> None:
+        self._response = response
+        self.calls: list[str] = []
+
+    def fetch(self, url: str) -> RawResponse:
+        self.calls.append(url)
+        return self._response
+
+
+def test_end_to_end_tool_turn_cites_a_fetched_snapshot_the_unmodified_gate_verifies(
+    conn,
+) -> None:
+    """lode-8hsk's headline acceptance criterion.
+
+    A stub provider drives answer_question(tools_enabled=True) through a free
+    tool turn (fetch) -> tool_result -> final forced-schema turn, producing a
+    claim whose support cites the snapshot_id the fetch call wrote via
+    lode.tools.fetch_for_ask. The claim is then run through the UNMODIFIED
+    faithfulness gate (lode.gate.apply_gate) against the stored snapshot
+    bytes, and must survive.
+    """
+    settings = Settings(ask_tools_enabled=True)
+    url = "https://example.com/live-incident"
+    html = (
+        "<html><body><article><p>"
+        + ("Prod incident postmortem details. " * 20)
+        + "</p></article></body></html>"
+    )
+    web_fetcher = _QueueWebFetcher(
+        RawResponse(final_url=url, status_code=200, text=html)
+    )
+
+    fetch_block = mock.MagicMock()
+    fetch_block.type = "tool_use"
+    fetch_block.name = FETCH
+    fetch_block.input = {"source_type": "web", "external_id": url}
+    fetch_block.id = "toolu_1"
+    free_turn_response = mock.MagicMock()
+    free_turn_response.content = [fetch_block]
+    free_turn_response.stop_reason = "tool_use"
+
+    quoted_span = "Prod incident postmortem details."
+
+    # Second free turn: the model calls no further tool -- breaks the
+    # free-tool-turn loop so the run proceeds to the final forced-schema turn
+    # (rather than the loop's default max_tool_turns=8 asking again).
+    text_block = mock.MagicMock()
+    text_block.type = "text"
+    second_free_turn_response = mock.MagicMock()
+    second_free_turn_response.content = [text_block]
+    second_free_turn_response.stop_reason = "end_turn"
+
+    _responses = [free_turn_response, second_free_turn_response]
+
+    def _create_side_effect(**_kwargs):
+        if _responses:
+            return _responses.pop(0)
+        # Third call, the final forced-schema turn: the fetch has already run
+        # (first free turn) and persisted a snapshot by now -- read it back
+        # to build a claim that cites the real snapshot_id, the same way a
+        # model would echo back what the tool_result told it.
+        snapshot_id, body = conn.execute(
+            "SELECT snapshot_id, body FROM snapshots WHERE external_id = ?",
+            (url,),
+        ).fetchone()
+        assert quoted_span in body
+        claim_block = mock.MagicMock()
+        claim_block.type = "tool_use"
+        claim_block.name = "_ClaimsEnvelope"
+        claim_block.input = {
+            "claims": [
+                {
+                    "text": quoted_span,
+                    "support": [
+                        {"snapshot_id": snapshot_id, "quoted_span": quoted_span}
+                    ],
+                }
+            ]
+        }
+        claim_block.id = "toolu_2"
+        response = mock.MagicMock()
+        response.content = [claim_block]
+        response.stop_reason = "tool_use"
+        return response
+
+    client = mock.MagicMock()
+    client.messages.create.side_effect = _create_side_effect
+
+    result = answer_question(
+        conn,
+        "What happened in the prod incident?",
+        [],
+        tools_enabled=True,
+        provider=AnthropicProvider(client),
+        settings=settings,
+        web_fetcher=web_fetcher,
+    )
+
+    assert client.messages.create.call_count == 3
+    (claim,) = result.answer.claims
+    (support,) = claim.support
+    assert support.snapshot_id
+    assert support.version_id is None
+
+    # The claim's cited snapshot really was persisted by the fetch tool call
+    # -- readable the same way cited_answer._resolve_targets reads it.
+    (stored_body,) = conn.execute(
+        "SELECT body FROM snapshots WHERE snapshot_id = ?", (support.snapshot_id,)
+    ).fetchone()
+    assert quoted_span in stored_body
+
+    # The UNMODIFIED faithfulness gate verifies the claim against those
+    # stored bytes and lets it survive.
+    gate_result = apply_gate(result.answer, {support.snapshot_id: stored_body})
+    assert not gate_result.abstained
+    assert len(gate_result.surviving_claims) == 1
+    assert gate_result.surviving_claims[0].support[0].snapshot_id == support.snapshot_id
+
+
+def test_deleting_the_tools_pass_through_would_break_the_end_to_end_test(
+    conn,
+) -> None:
+    """Regression guard named by the acceptance criteria: a test must fail if
+    build_ask_tools' specs or tool_result stop reaching run_tool_turns."""
+    settings = Settings(ask_tools_enabled=True)
+    text_block = mock.MagicMock()
+    text_block.type = "text"
+    free_turn_response = mock.MagicMock()
+    free_turn_response.content = [text_block]
+    free_turn_response.stop_reason = "end_turn"
+    envelope_block = mock.MagicMock()
+    envelope_block.type = "tool_use"
+    envelope_block.name = "_ClaimsEnvelope"
+    envelope_block.input = {"claims": []}
+    envelope_block.id = "toolu_1"
+    final_response = mock.MagicMock()
+    final_response.content = [envelope_block]
+    final_response.stop_reason = "tool_use"
+
+    client = mock.MagicMock()
+    client.messages.parse.return_value = SimpleNamespace(parsed_output=_envelope([]))
+    client.messages.create.side_effect = [free_turn_response, final_response]
+
+    answer_question(
+        conn,
+        "q",
+        [QaPassage("v1", "text")],
+        tools_enabled=True,
+        provider=AnthropicProvider(client),
+        settings=settings,
+    )
+
+    # If build_ask_tools()/make_tool_result() stopped reaching run_tool_turns
+    # (i.e. answer_question silently fell back to an empty tools tuple), the
+    # provider would take the empty-tools .parse() path instead of .create() --
+    # this assertion is exactly what would then fail.
+    client.messages.create.assert_called()
+    client.messages.parse.assert_not_called()

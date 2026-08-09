@@ -548,6 +548,33 @@ class Settings(BaseModel):
         "Composes with the per-row externals.no_egress flag: either denying "
         "is a denial.",
     )
+    ask_tools_enabled: bool = _knob(
+        False,
+        Kind.RUNTIME,
+        "Feature flag (lode-8hsk / lode-35nu.11.2): offer the read-only "
+        "JIRA/Confluence search tools and the generic fetch tool to the Ask "
+        "synthesis call. Off by default -- notes-only behaviour is unchanged "
+        "either way, since lode.tool_dispatch.build_ask_tools returns no "
+        "tools at all while this is False, regardless of what a caller "
+        "passes as answer_question's own tools_enabled argument. "
+        "REACHABLE FROM A REAL 'lode ask' (lode-8vvp): cited_answer.ask -- "
+        "the single path both the CLI and the TUI take -- passes "
+        "tools_enabled=True unconditionally to qa.answer_question, so this "
+        "flag alone gates whether a real ask can call the tools; a snapshot "
+        "a fetch tool call persists mid-run is resolved into the "
+        "faithfulness gate's bodies map so a tool-cited claim can survive "
+        "the unmodified gate.",
+    )
+    ask_tool_budget: int = _knob(
+        6,
+        Kind.RUNTIME,
+        "Per-ask tool-call budget (lode-8hsk): search and fetch calls share "
+        "ONE counter, enforced by lode.tool_dispatch.ToolBudget -- a call "
+        "past the budget is refused (the model is told so) rather than "
+        "dispatched. Distinct from llm_provider._DEFAULT_MAX_TOOL_TURNS (a "
+        "provider-level free-turn cap, one call per turn is not assumed).",
+        gt=0,
+    )
 
     # --- Models ---------------------------------------------------------------
     embedding_model: str = _knob(

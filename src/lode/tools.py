@@ -52,18 +52,17 @@ This module owns the **fetch-path** egress obligations only:
 
 ## Failure semantics (human decision, ``lode-35nu.11.5`` /challenge 2nd pass)
 
-**A fetch that fails on the ask path is never persisted.** No ``snapshots``
-row, no ``externals`` row, no tombstone — :func:`fetch_for_ask` raises
-:class:`ToolFetchError` instead, for the caller (the tool-dispatch layer) to
-turn into an error the model sees. This is a deliberate divergence from the
-draw-down path (:func:`lode.drawdown.refresh_external`), which *does*
-tombstone: a draw-down failure is revisiting a source already in the corpus,
-whereas a source discovered mid-question that fails to fetch was never in
-the corpus and must not enter it as a dead row. It also closes a real hole a
-tombstone would reopen: a tombstone is a genuine snapshot with a genuine
-``snapshot_id`` and an inspectable body (:func:`lode.externals.
-tombstone_body`), so the model could quote it and the faithfulness gate
-would pass the quote for content that was never actually fetched.
+**A fetch that fails on the ask path is never persisted.** No ``snapshots`` row, no
+``externals`` row, no tombstone — :func:`fetch_for_ask` raises :class:`ToolFetchError`
+instead, for the caller (the tool-dispatch layer) to turn into an error the model sees.
+This is a deliberate divergence from the draw-down path
+(:func:`lode.drawdown.refresh_external`), which *does* tombstone: a draw-down failure is
+revisiting a source already in the corpus, whereas a source discovered mid-question that
+fails to fetch was never in the corpus and must not enter it as a dead row. It also
+closes a real hole a tombstone would reopen: a tombstone is a genuine snapshot with a
+genuine ``snapshot_id`` and an inspectable body (:func:`lode.externals.tombstone_body`),
+so the model could quote it and the faithfulness gate would pass the quote for content
+that was never actually fetched.
 
 ## Fetch timeout (build-time decision, this ticket)
 
@@ -76,11 +75,59 @@ tool loop already spending a Q&A budget, not the retry-friendly queue). A
 timeout and any other fetch failure are handed back to the model identically
 — both simply mean "could not retrieve this source right now" — via the same
 :class:`ToolFetchError`.
+
+## Web-fetch destination guard (decided, ``lode-ejfv``)
+
+``web_fetch``'s destination on the ask path is chosen by the model, whose
+context can include attacker-influenced content (a fetched page, a JIRA
+ticket body) — unlike every other fetch in this codebase, which always
+originates from something the *user* wrote. ``docs/externals.md``
+("Web-fetch destination guard") records the decision and the rejected
+alternatives; the short version: **the initial destination's resolved IP
+address is checked against private/loopback/link-local/reserved/multicast
+ranges (:func:`_refuse_private_web_destination`) before any network call and
+before any ``externals`` row is minted** — same ordering as the ``no_egress``
+check above, and the same reasoning: refusing must never leave a trace a
+later check would (wrongly) find absent. Scoped to ``SOURCE_TYPE_WEB``
+only — the JIRA/Confluence legs resolve to a configured ``api_base``, not a
+model-chosen host.
+
+The **final** URL after any redirect is re-checked the same way before the
+snapshot is persisted, alongside the ``no_egress`` re-check — see
+:func:`_fetch_web`.
+
+**Two known residual gaps, not closed here** (both recorded as open in
+``docs/decisions.md``):
+
+1. *Redirect chains.* :mod:`lode.webfetch` follows redirects transparently
+   inside one ``httpx`` client call with no per-hop hook, so a public,
+   allowed host can still make the client *issue* a request to a private
+   address mid-chain. The final-URL re-check keeps that response from being
+   persisted or returned to the model, leaving a blind fetch rather than a
+   read; closing it fully needs per-hop validation in :mod:`lode.webfetch`.
+2. *TOCTOU / DNS rebinding.* This guard resolves the host, and ``httpx``
+   then resolves it **again** for the actual request. A hostile resolver
+   answering with a short TTL can return a public address to the guard and a
+   private one to the client, defeating the check entirely. Closing it
+   requires pinning the validated address for the connection (a custom
+   transport that dials the resolved IP with the original ``Host`` header).
+   This is the standard, well-known limitation of address-guarding by
+   hostname — the guard raises the cost of the direct attack, it does not
+   make the path SSRF-proof.
+
+Both are deferred on effort, **not** blast radius: the right home for both is
+a ``HttpxFetcher`` subclass injected only by the ask path via the ``fetcher=``
+seam :func:`fetch_for_ask` already threads, which would leave the draw-down
+and JIRA/Confluence fetchers untouched. Tracked as ``lode-xwah``.
 """
 
 from __future__ import annotations
 
+import socket
 import sqlite3
+from collections.abc import Iterable
+from ipaddress import ip_address, ip_network
+from urllib.parse import urlsplit
 
 from lode.config import Settings
 from lode.confluence import fetch_confluence_page
@@ -93,13 +140,14 @@ from lode.drawdown import (
 from lode.egress import TOOL_PURPOSE, log_egress
 from lode.externals import IngestResult, ingest_snapshot
 from lode.jira_fetch import fetch_jira_issue
-from lode.no_egress_scope import is_no_egress_scoped
+from lode.no_egress_scope import is_no_egress_scoped, url_host
 from lode.redact import redact_before_egress, redact_before_egress_counting
 from lode.webfetch import (
     Fetcher,
     FetchError,
     FetchResult,
     FetchStatus,
+    GuardedHttpxFetcher,
     fetch_and_extract,
 )
 
@@ -125,7 +173,7 @@ class ToolFetchError(Exception):
     """
 
 
-def _no_egress_denied(
+def no_egress_denied(
     conn: sqlite3.Connection, external_id: str, source_type: str, settings: Settings
 ) -> bool:
     """Whether ``external_id`` must be refused -- per-row flag OR scope rule.
@@ -136,6 +184,11 @@ def _no_egress_denied(
     :func:`~lode.no_egress_scope.is_no_egress_scoped` is what lets this
     refuse a resource with **no** row yet -- the case a fetch tool exists to
     reach (``lode-35nu.11.8``).
+
+    Public (not ``_``-prefixed, lode-8hsk): :mod:`lode.tool_dispatch` reuses
+    this exact predicate to drop a no_egress search hit -- id and title
+    together -- before it ever reaches the model, rather than reimplementing
+    the per-row-flag-OR-scope-rule check a second time.
     """
     row = conn.execute(
         "SELECT no_egress FROM externals WHERE external_id = ?",
@@ -145,6 +198,83 @@ def _no_egress_denied(
     return row_denied or is_no_egress_scoped(
         external_id, source_type, settings.no_egress_scopes
     )
+
+
+def _resolve_host_addresses(host: str) -> list[str]:
+    """DNS-resolve ``host`` to its IP address strings -- a seam tests stub.
+
+    ``type=SOCK_STREAM`` because we only ever dial TCP, and because an
+    unhinted :func:`socket.getaddrinfo` returns every address once per
+    socket type, tripling the work below for no new information.
+    """
+    infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    return list(dict.fromkeys(info[4][0] for info in infos))
+
+
+#: Per IP version, the ranges that are *not* covered by any ``ipaddress``
+#: attribute but are still never a legitimate public ``web_fetch``
+#: destination. ``100.64.0.0/10`` is carrier-grade NAT (RFC 6598) -- routinely
+#: the address space of a container or ISP-internal network, and ``ipaddress``
+#: classifies it as neither private nor reserved. ``fec0::/10`` is deprecated
+#: IPv6 site-local (RFC 3879), which ``ipaddress`` likewise does not flag.
+#: Both were bypasses of the attribute check alone (lode-ejfv review).
+_EXTRA_DISALLOWED_NETWORKS = {
+    4: (ip_network("100.64.0.0/10"),),
+    6: (ip_network("fec0::/10"),),
+}
+
+
+def _is_disallowed_ip(ip_str: str) -> bool:
+    """Whether ``ip_str`` is private/loopback/link-local/reserved/multicast.
+
+    Covers the IPv4-mapped-IPv6 case (``::ffff:127.0.0.1``) by checking the
+    mapped v4 address too -- the plain IPv6 attributes alone don't see
+    through the mapping -- plus :data:`_EXTRA_DISALLOWED_NETWORKS`, the
+    internal ranges ``ipaddress`` has no attribute for.
+    """
+    addr = ip_address(ip_str)
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_multicast
+        or addr.is_unspecified
+        or any(addr in net for net in _EXTRA_DISALLOWED_NETWORKS[addr.version])
+    )
+
+
+def _refuse_private_web_destination(url: str) -> None:
+    """Refuse a ``web_fetch`` destination that isn't a public http(s) host.
+
+    Runs strictly before any network call and before any ``externals`` row
+    is minted (module docstring, "Web-fetch destination guard") -- the same
+    ordering :func:`no_egress_denied` uses. Raises :class:`ToolFetchError`
+    on a disallowed scheme, an unresolvable host, or a host that resolves to
+    a private/loopback/link-local/reserved/multicast address.
+    """
+    scheme = urlsplit(url).scheme
+    if scheme not in ("http", "https"):
+        raise ToolFetchError(f"{url}: scheme {scheme!r} is not permitted for web_fetch")
+    # Same host derivation the no_egress check one step earlier uses, so the
+    # two guards on this URL can never disagree about what host they judge.
+    host = url_host(url)
+    if not host:
+        raise ToolFetchError(f"{url}: no host to fetch")
+    try:
+        addresses = _resolve_host_addresses(host)
+    except socket.gaierror as exc:
+        raise ToolFetchError(
+            f"fetch failed for {url}: could not resolve host: {exc}"
+        ) from exc
+    for ip_str in addresses:
+        if _is_disallowed_ip(ip_str):
+            raise ToolFetchError(
+                f"{url} resolves to a private/internal address ({ip_str}) and "
+                "cannot be fetched for a cloud Q&A tool call."
+            )
 
 
 def _redact_arguments(
@@ -167,42 +297,60 @@ def _redact_arguments(
     return redacted, total
 
 
-def _log_tool_fetch(
+def log_tool_egress(
     conn: sqlite3.Connection,
     *,
-    external_id: str,
+    sent_targets: Iterable[str] = (),
     destination: str,
     arguments: dict[str, str],
     settings: Settings,
+    redaction_key: str | None = None,
 ) -> None:
-    """Write the ``purpose='tool'`` audit row for a fetch about to be attempted.
+    """Write the ``purpose='tool'`` audit row for a tool call about to be attempted.
 
-    Called once per network attempt this module makes, **immediately before**
-    the request goes out -- so the row exists regardless of whether that
-    attempt then succeeds, tombstones, or raises anything at all (module
+    Called once per network attempt a tool-dispatch call makes, **immediately
+    before** the request goes out -- so the row exists regardless of whether
+    that attempt then succeeds, tombstones, or raises anything at all (module
     docstring, egress section item 2). ``destination`` is the endpoint the
     request is aimed at, which is all that is knowable pre-send: the URL as
-    sent for web, the ``api_base`` for JIRA/Confluence. A redirect that
-    resolves elsewhere is handled by :func:`_fetch_web`'s post-fetch
-    re-check, not by rewriting this row.
+    sent for a web fetch, the ``api_base`` for JIRA/Confluence (fetch or
+    search alike). A redirect that resolves elsewhere is handled by
+    :func:`_fetch_web`'s post-fetch re-check, not by rewriting this row.
+
+    Public (lode-8hsk): :mod:`lode.tool_dispatch` reuses this exact writer
+    for the search legs, not just this module's own fetch legs -- one audit
+    row shape for every tool call, never a second writer. ``sent_targets`` is
+    the destination's ``external_id``(s) actually addressed; a **search**
+    call passes ``()`` (the default) -- a query has no resolved target yet,
+    per this ticket's carried-over design (a search result's id is never a
+    citation target either, ``docs/externals.md`` "A query result has no
+    identity"). ``redaction_key`` keys the per-target redaction-count summary
+    stored alongside ``arguments`` -- a fetch call passes its
+    ``external_id`` (matching :func:`fetch_for_ask`'s prior behaviour
+    exactly); a search call leaves it ``None`` since there is no target id to
+    key by, so no per-target breakdown is recorded (the redaction still
+    happens on ``arguments`` either way -- this only affects the summary
+    dict's key).
 
     ``destination`` is redacted on the same terms as the arguments (lode-l87l).
-    On the web leg it is character-for-character the ``{"url": ...}`` argument,
-    so redacting one copy and persisting the other raw would durably store the
-    very secret the audit row reports as stripped -- and ``egress_log`` is read
-    by more than one surface (``lode egress`` renders the column since
-    lode-l87l; sqlite3, backups and exports see it regardless). Its span count
-    is deliberately NOT added to the per-target total: on the web leg that
-    would double-count the same URL's secrets, which are already counted via
-    the argument.
+    On the web fetch leg it is character-for-character the ``{"url": ...}``
+    argument, so redacting one copy and persisting the other raw would
+    durably store the very secret the audit row reports as stripped -- and
+    ``egress_log`` is read by more than one surface (``lode egress`` renders
+    the column since lode-l87l; sqlite3, backups and exports see it
+    regardless). Its span count is deliberately NOT added to the per-target
+    total: on that leg that would double-count the same URL's secrets, which
+    are already counted via the argument.
     """
     redacted_arguments, redaction_count = _redact_arguments(arguments, settings)
     log_egress(
         conn,
         TOOL_PURPOSE,
         None,
-        [external_id],
-        {external_id: redaction_count} if redaction_count else None,
+        list(sent_targets),
+        {redaction_key: redaction_count}
+        if redaction_key is not None and redaction_count
+        else None,
         destination=redact_before_egress(destination, settings),
         arguments=redacted_arguments,
     )
@@ -237,7 +385,7 @@ def fetch_for_ask(
         raise ValueError(f"fetch_for_ask: unsupported source_type={source_type!r}")
     settings = settings or Settings()
 
-    if _no_egress_denied(conn, external_id, source_type, settings):
+    if no_egress_denied(conn, external_id, source_type, settings):
         raise ToolFetchError(
             f"{external_id} is no_egress (marked, or under a configured scope "
             "rule) and cannot be fetched for a cloud Q&A tool call."
@@ -274,27 +422,43 @@ def _fetch_web(
     :class:`ValueError` (an unparseable port, a malformed IPv6 host); that is
     just another fetch failure and is surfaced as :class:`ToolFetchError`
     like any other, never leaked to the caller as a raw ``ValueError``.
+
+    Defaults ``fetcher`` to a fresh :class:`~lode.webfetch.GuardedHttpxFetcher`
+    when the caller passes none -- this is the ask path, and the ask path is
+    the *only* place :class:`~lode.webfetch.GuardedHttpxFetcher` is ever
+    constructed (lode-xwah). A caller that injects its own ``fetcher`` (every
+    test, and any future production seam) still gets exactly what it passed,
+    unguarded or not -- this default only fills the gap production leaves
+    open when nothing is injected.
     """
-    _log_tool_fetch(
+    _refuse_private_web_destination(external_id)
+    log_tool_egress(
         conn,
-        external_id=external_id,
+        sent_targets=[external_id],
         destination=external_id,
         arguments={"url": external_id},
         settings=settings,
+        redaction_key=external_id,
     )
+    fetcher = fetcher or GuardedHttpxFetcher(settings)
     try:
         result = fetch_and_extract(external_id, fetcher=fetcher, settings=settings)
         final_external_id = canonicalize_url(result.final_url, settings)
     except (FetchError, ValueError) as exc:
         raise ToolFetchError(f"fetch failed for {external_id}: {exc}") from exc
 
-    if final_external_id != external_id and _no_egress_denied(
-        conn, final_external_id, SOURCE_TYPE_WEB, settings
-    ):
-        raise ToolFetchError(
-            f"{final_external_id} (redirected from {external_id}) is no_egress "
-            "and cannot be fetched for a cloud Q&A tool call."
-        )
+    if final_external_id != external_id:
+        # Re-guard the post-redirect destination; see the module docstring's
+        # "Web-fetch destination guard". Only when the redirect crossed to a
+        # different host -- a scheme/path-only redirect resolves to the host
+        # already cleared above, so re-resolving it would be pure extra DNS.
+        if url_host(final_external_id) != url_host(external_id):
+            _refuse_private_web_destination(final_external_id)
+        if no_egress_denied(conn, final_external_id, SOURCE_TYPE_WEB, settings):
+            raise ToolFetchError(
+                f"{final_external_id} (redirected from {external_id}) is "
+                "no_egress and cannot be fetched for a cloud Q&A tool call."
+            )
 
     return _ingest_or_raise(
         conn, final_external_id, SOURCE_TYPE_WEB, result, settings=settings
@@ -333,12 +497,13 @@ def _fetch_atlassian(
     fetch_fn = (
         fetch_jira_issue if source_type == SOURCE_TYPE_JIRA else fetch_confluence_page
     )
-    _log_tool_fetch(
+    log_tool_egress(
         conn,
-        external_id=external_id,
+        sent_targets=[external_id],
         destination=api_base,
         arguments={"external_id": external_id, "api_base": api_base},
         settings=settings,
+        redaction_key=external_id,
     )
     try:
         result = fetch_fn(external_id, api_base, fetcher=fetcher, settings=settings)
@@ -402,4 +567,9 @@ def _ingest_or_raise(
     return ingest.snapshot_id
 
 
-__all__ = ["ToolFetchError", "fetch_for_ask"]
+__all__ = [
+    "ToolFetchError",
+    "fetch_for_ask",
+    "log_tool_egress",
+    "no_egress_denied",
+]

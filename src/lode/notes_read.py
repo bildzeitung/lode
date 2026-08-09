@@ -73,6 +73,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lode.lexical import LexicalIndex, build_match_query
+from lode.sql_ids import placeholders
 from lode.storage import init_db
 
 #: Soft cap on how many passage rows :func:`_search_notes` reads back from
@@ -120,10 +121,10 @@ class NoteRow:
 def list_notes(db_path: Path) -> list[NoteRow]:
     """Return every live note, newest-first, for the browse screen's table.
 
-    Opens its own short-lived connection (:func:`lode.storage.init_db`), same
-    convention as :func:`lode.tui.services.capture.save_capture` / :func:`lode.tui.services.ask.
-    run_ask` -- this is a plain top-level read, not tied to any open
-    connection a caller might hold. A caller that already holds one wants
+    Opens its own short-lived connection (:func:`lode.storage.init_db`), same convention
+    as :func:`lode.tui.services.capture.save_capture` /
+    :func:`lode.tui.services.ask.run_ask` -- this is a plain top-level read, not tied to
+    any open connection a caller might hold. A caller that already holds one wants
     :func:`list_notes_conn` instead.
     """
     conn = init_db(db_path)
@@ -269,10 +270,9 @@ def _search_notes(conn: sqlite3.Connection, query_text: str) -> list[NoteRow]:
             ranked_note_ids.append(note_id)
     if not ranked_note_ids:
         return []
-    placeholders = ", ".join("?" for _ in ranked_note_ids)
     matched = _list_notes(
         conn,
-        extra_where=f"AND n.note_id IN ({placeholders}) ",
+        extra_where=f"AND n.note_id IN ({placeholders(len(ranked_note_ids))}) ",
         params=ranked_note_ids,
     )
     rank = {note_id: index for index, note_id in enumerate(ranked_note_ids)}
@@ -415,13 +415,12 @@ def candidate_rows_conn(
     """
     if not note_ids:
         return []
-    placeholders = ",".join("?" for _ in note_ids)
     found = {
         note_id: (created, head_version_id, body, op)
         for note_id, created, head_version_id, body, op in conn.execute(
             "SELECT n.note_id, n.created, n.head_version_id, v.body, v.op "
             "FROM notes n JOIN versions v ON v.version_id = n.head_version_id "
-            f"WHERE n.note_id IN ({placeholders})",
+            f"WHERE n.note_id IN ({placeholders(len(note_ids))})",
             tuple(note_ids),
         )
     }
@@ -575,18 +574,16 @@ def read_snapshot(db_path: Path, snapshot_id: str) -> SnapshotRow | None:
 def _visible_tag_where(prefix: str = "") -> str:
     """A live, visible ``kind='tag'`` row's ``WHERE`` fragment (lode-olmi.6).
 
-    Mirrors :func:`lode.display.classify_annotation_display`'s tombstone
-    exclusion (a ``source='user' AND status='orphaned'`` row is a curation
-    tombstone, never a real tag) without importing that target-scoped helper
-    -- the same "reimplement the one filter this module needs" convention
-    :func:`list_notes` already uses for its own ``op != 'delete'`` guard. Tags
-    are never hidden for staleness alone (unlike :data:`lode.display.
-    ASSERTIVE_KINDS`) -- ``docs/storage.md``'s stale-display policy shows a
-    stale tag flagged, not hidden -- so this is the only check needed.
-    ``prefix`` (e.g. ``"a."``) lets the same fragment work unqualified (the
-    top-level ``annotations`` scan in :func:`_list_tags`) or against a table
-    alias (the correlated ``EXISTS`` subquery in
-    :func:`_list_notes_with_all_tags`).
+    Mirrors :func:`lode.display.classify_annotation_display`'s tombstone exclusion (a
+    ``source='user' AND status='orphaned'`` row is a curation tombstone, never a real
+    tag) without importing that target-scoped helper -- the same "reimplement the one
+    filter this module needs" convention :func:`list_notes` already uses for its own
+    ``op != 'delete'`` guard. Tags are never hidden for staleness alone (unlike
+    :data:`lode.display.ASSERTIVE_KINDS`) -- ``docs/storage.md``'s stale-display policy
+    shows a stale tag flagged, not hidden -- so this is the only check needed.
+    ``prefix`` (e.g. ``"a."``) lets the same fragment work unqualified (the top-level
+    ``annotations`` scan in :func:`_list_tags`) or against a table alias (the correlated
+    ``EXISTS`` subquery in :func:`_list_notes_with_all_tags`).
     """
     return (
         f"{prefix}kind = 'tag' AND "
@@ -620,13 +617,12 @@ def _list_tags(conn: sqlite3.Connection) -> list[str]:
 def list_notes_with_all_tags(db_path: Path, tags: Collection[str]) -> list[NoteRow]:
     """Return every live note carrying **every** tag in ``tags`` (AND/intersection).
 
-    The Tags screen's (lode-olmi.6) bottom-panel filter: an empty ``tags``
-    means no filter at all, so this returns exactly what :func:`list_notes`
-    does (every live note, newest-first). Each selected tag narrows the set
-    further via its own ``EXISTS`` clause matched against the tag's *exact*
-    JSON-encoded payload -- the same equality :func:`lode.curation.
-    is_annotation_suppressed` uses for a single tag, just repeated once per
-    tag so a note only qualifies when *every* clause finds a live
+    The Tags screen's (lode-olmi.6) bottom-panel filter: an empty ``tags`` means no
+    filter at all, so this returns exactly what :func:`list_notes` does (every live
+    note, newest-first). Each selected tag narrows the set further via its own
+    ``EXISTS`` clause matched against the tag's *exact* JSON-encoded payload -- the same
+    equality :func:`lode.curation.is_annotation_suppressed` uses for a single tag, just
+    repeated once per tag so a note only qualifies when *every* clause finds a live
     (non-tombstone) row for it.
 
     A tag qualifies a note two ways (lode-35nu.7): directly, when the tag

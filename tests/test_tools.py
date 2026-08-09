@@ -45,6 +45,20 @@ def conn(tmp_path: Path):
         c.close()
 
 
+@pytest.fixture(autouse=True)
+def _stub_dns(monkeypatch):
+    """Every web_fetch destination in this module resolves to a genuinely
+    public, globally-routable address (93.184.216.34 -- example.com's own
+    real address; note TEST-NET-3/RFC 5737 ranges are classified
+    ``is_private`` by Python's ``ipaddress`` module, so they don't work here)
+    unless a test overrides this stub -- fetch_for_ask now does its own DNS
+    resolution for the SSRF guard (lode-ejfv), and this keeps the whole
+    suite network-free, per this module's own docstring."""
+    monkeypatch.setattr(
+        "lode.tools._resolve_host_addresses", lambda host: ["93.184.216.34"]
+    )
+
+
 class _StubFetcher:
     def __init__(self, response=None, responses=None, raises=None) -> None:
         self._response = response
@@ -356,6 +370,167 @@ class TestFetchForAskNoEgress:
 
 
 # ---------------------------------------------------------------------------
+# Web-fetch destination guard: refuse a model-chosen private/internal
+# address before any network call and before any externals row (lode-ejfv)
+# ---------------------------------------------------------------------------
+
+
+class TestFetchForAskPrivateDestinationGuard:
+    def test_loopback_address_refuses_before_any_fetch(self, conn, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "lode.tools._resolve_host_addresses", lambda host: ["127.0.0.1"]
+        )
+        url = "http://internal.example.com/"
+        fetcher = _StubFetcher(
+            response=RawResponse(final_url=url, status_code=200, text=_ARTICLE_HTML)
+        )
+
+        with pytest.raises(ToolFetchError):
+            fetch_for_ask(
+                conn, url, SOURCE_TYPE_WEB, fetcher=fetcher, settings=load_settings()
+            )
+
+        assert fetcher.calls == []
+        assert _tool_egress_rows(conn) == []
+        assert _externals_row(conn, url) is None
+
+    @pytest.mark.parametrize(
+        "address",
+        [
+            "169.254.169.254",  # cloud metadata endpoint (link-local)
+            "10.1.2.3",  # RFC1918 intranet
+            "::ffff:127.0.0.1",  # IPv4-mapped IPv6 loopback
+            "::1",  # IPv6 loopback
+            "fc00::1",  # IPv6 unique-local (ULA)
+            "fec0::1",  # deprecated IPv6 site-local -- no ipaddress attribute
+            "100.64.0.1",  # carrier-grade NAT (RFC 6598) -- likewise
+            "0.0.0.0",  # "this host"
+            "224.0.0.1",  # multicast
+        ],
+    )
+    def test_internal_ranges_refuse(self, conn, monkeypatch, address) -> None:
+        monkeypatch.setattr(
+            "lode.tools._resolve_host_addresses", lambda host: [address]
+        )
+        url = "http://internal.example.com/"
+        fetcher = _StubFetcher(
+            response=RawResponse(final_url=url, status_code=200, text=_ARTICLE_HTML)
+        )
+
+        with pytest.raises(ToolFetchError):
+            fetch_for_ask(
+                conn, url, SOURCE_TYPE_WEB, fetcher=fetcher, settings=load_settings()
+            )
+
+        assert fetcher.calls == []
+
+    def test_any_disallowed_address_in_a_multi_record_answer_refuses(
+        self, conn, monkeypatch
+    ) -> None:
+        """A host with both a public and a private A record is refused: the
+        guard must not be satisfiable by returning one good address."""
+        monkeypatch.setattr(
+            "lode.tools._resolve_host_addresses",
+            lambda host: ["93.184.216.34", "127.0.0.1"],
+        )
+        url = "http://split-horizon.example.com/"
+        fetcher = _StubFetcher(
+            response=RawResponse(final_url=url, status_code=200, text=_ARTICLE_HTML)
+        )
+
+        with pytest.raises(ToolFetchError):
+            fetch_for_ask(
+                conn, url, SOURCE_TYPE_WEB, fetcher=fetcher, settings=load_settings()
+            )
+
+        assert fetcher.calls == []
+
+    def test_redirect_to_private_address_is_not_persisted(
+        self, conn, monkeypatch
+    ) -> None:
+        """The initial host is public, but the server redirects to an internal
+        address. The GET cannot be prevented (httpx follows redirects inside
+        one client call -- the documented residual gap), but the response must
+        never be persisted as a citable snapshot or reach the model."""
+        final_url = "http://169.254.169.254/latest/meta-data/"
+
+        def _resolve(host: str) -> list[str]:
+            return (
+                ["169.254.169.254"] if host == "169.254.169.254" else ["93.184.216.34"]
+            )
+
+        monkeypatch.setattr("lode.tools._resolve_host_addresses", _resolve)
+        fetcher = _StubFetcher(
+            response=RawResponse(
+                final_url=final_url, status_code=200, text=_ARTICLE_HTML
+            )
+        )
+
+        with pytest.raises(ToolFetchError):
+            fetch_for_ask(
+                conn, _URL, SOURCE_TYPE_WEB, fetcher=fetcher, settings=load_settings()
+            )
+
+        assert _externals_row(conn, final_url) is None
+        assert _externals_row(conn, _URL) is None
+
+    def test_unresolvable_host_refuses_as_toolfetcherror(
+        self, conn, monkeypatch
+    ) -> None:
+        import socket
+
+        def _raise(host: str) -> list[str]:
+            raise socket.gaierror("nodename nor servname provided")
+
+        monkeypatch.setattr("lode.tools._resolve_host_addresses", _raise)
+        url = "http://does-not-resolve.example.invalid/"
+        fetcher = _StubFetcher(
+            response=RawResponse(final_url=url, status_code=200, text=_ARTICLE_HTML)
+        )
+
+        with pytest.raises(ToolFetchError):
+            fetch_for_ask(
+                conn, url, SOURCE_TYPE_WEB, fetcher=fetcher, settings=load_settings()
+            )
+
+        assert fetcher.calls == []
+
+    def test_disallowed_scheme_refuses_without_resolving(
+        self, conn, monkeypatch
+    ) -> None:
+        def _fail_if_called(host: str) -> list[str]:
+            raise AssertionError("must not resolve DNS for a disallowed scheme")
+
+        monkeypatch.setattr("lode.tools._resolve_host_addresses", _fail_if_called)
+        url = "file:///etc/passwd"
+        fetcher = _StubFetcher(
+            response=RawResponse(final_url=url, status_code=200, text=_ARTICLE_HTML)
+        )
+
+        with pytest.raises(ToolFetchError):
+            fetch_for_ask(
+                conn, url, SOURCE_TYPE_WEB, fetcher=fetcher, settings=load_settings()
+            )
+
+        assert fetcher.calls == []
+
+    def test_public_address_is_unaffected(self, conn) -> None:
+        """Sanity check: the default autouse DNS stub's genuinely public
+        address does not itself trip the guard -- covered implicitly by
+        every other passing test in this module, asserted directly here."""
+        fetcher = _StubFetcher(
+            response=RawResponse(final_url=_URL, status_code=200, text=_ARTICLE_HTML)
+        )
+
+        snapshot_id = fetch_for_ask(
+            conn, _URL, SOURCE_TYPE_WEB, fetcher=fetcher, settings=load_settings()
+        )
+
+        assert snapshot_id
+        assert fetcher.calls == [_URL]
+
+
+# ---------------------------------------------------------------------------
 # Egress audit: purpose='tool' row per attempted fetch, arguments redacted
 # ---------------------------------------------------------------------------
 
@@ -582,3 +757,32 @@ class TestFetchForAskAtlassian:
 def test_unsupported_source_type_raises_value_error(conn) -> None:
     with pytest.raises(ValueError, match="unsupported"):
         fetch_for_ask(conn, "x", "search-result", settings=load_settings())
+
+
+def test_web_leg_defaults_to_guarded_httpx_fetcher_when_none_injected(
+    conn, monkeypatch
+) -> None:
+    """The ask path -- and only the ask path -- constructs GuardedHttpxFetcher
+    when the caller passes no fetcher (lode-xwah). Every other test in this
+    file injects a stub explicitly and so never exercises this default; this
+    is the one test that pins the wiring itself, via a spy standing in for
+    GuardedHttpxFetcher (never touching the network).
+    """
+    from lode import tools as tools_module
+
+    captured: dict = {}
+
+    class _SpyGuardedFetcher:
+        def __init__(self, settings) -> None:
+            captured["settings"] = settings
+
+        def fetch(self, url: str) -> RawResponse:
+            return RawResponse(final_url=url, status_code=200, text=_ARTICLE_HTML)
+
+    monkeypatch.setattr(tools_module, "GuardedHttpxFetcher", _SpyGuardedFetcher)
+    settings = load_settings()
+
+    snapshot_id = fetch_for_ask(conn, _URL, SOURCE_TYPE_WEB, settings=settings)
+
+    assert snapshot_id
+    assert captured["settings"] is settings
