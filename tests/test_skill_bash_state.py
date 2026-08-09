@@ -161,7 +161,12 @@ import re
 from collections.abc import Collection
 from pathlib import Path
 
-from conftest import AGENTS_DIR, SKILLS_DIR, markdown_corpus_files
+from conftest import (
+    AGENTS_DIR,
+    SKILLS_DIR,
+    markdown_corpus_blocks,
+    markdown_corpus_files,
+)
 from conftest import bash_fence_blocks as _bash_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -376,14 +381,28 @@ def _unassigned_uses(block: str, *, known: Collection[str] = ()) -> set[str]:
     return (_used_vars(block) - set(known)) - _assigned_vars(block)
 
 
+def _blocks_for(path: Path) -> Collection[str]:
+    """Fenced bash blocks for `path` -- conftest's cached `markdown_corpus_blocks()`
+    when `path` is one of the real shipped corpus files it covers, else a fresh
+    read + parse (lode-es1i).
+
+    This fallback is the sabotage seam: `test_sabotaged_agent_file_is_caught_by_find_violations`
+    and the `tmp_path`-sourced `_dead_allowlist_keys`/`_dead_known_env_vars` tests all
+    pass synthetic paths that are never in `markdown_corpus_blocks()`, so they fall
+    through to the direct read every time -- unaffected by the cache."""
+    for corpus_path, blocks in markdown_corpus_blocks():
+        if corpus_path == path:
+            return blocks
+    return _bash_blocks(path.read_text(encoding="utf-8"))
+
+
 def find_violations(path: Path) -> list[tuple[int, str]]:
     """(block index, variable name) for every USE in a block that is not also
     ASSIGNED somewhere in that same block, excluding special/known-env vars.
     Order is block index ascending, then variable name -- deterministic for a
     stable, readable failure message."""
-    text = path.read_text(encoding="utf-8")
     violations: list[tuple[int, str]] = []
-    for i, block in enumerate(_bash_blocks(text)):
+    for i, block in enumerate(_blocks_for(path)):
         for var in sorted(_unassigned_uses(block, known=_KNOWN_ENV_VARS)):
             violations.append((i, var))
     return violations
@@ -742,8 +761,7 @@ def _unfiltered_live_pairs(
         sources = _source_files()
     pairs: set[tuple[Path, str]] = set()
     for source_md in sources:
-        text = source_md.read_text(encoding="utf-8")
-        for block in _bash_blocks(text):
+        for block in _blocks_for(source_md):
             for var in _unassigned_uses(block):
                 pairs.add((source_md, var))
     return pairs
@@ -1047,8 +1065,8 @@ def test_every_skill_and_agent_file_is_covered() -> None:
     actually parsed (lode-lv04 added the `.claude/agents/*.md` half)."""
     scanned = [
         str(p.relative_to(CLAUDE_DIR))
-        for p in _source_files()
-        if _bash_blocks(p.read_text(encoding="utf-8"))
+        for p, blocks in markdown_corpus_blocks()
+        if blocks
     ]
     assert "skills/land/SKILL.md" in scanned, scanned
     assert "agents/coding.md" in scanned, scanned

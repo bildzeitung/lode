@@ -1840,22 +1840,53 @@ def markdown_corpus_files() -> list[Path]:
 
 
 @functools.cache
+def markdown_corpus_text() -> tuple[tuple[Path, str], ...]:
+    """(path, raw text) for every file in :data:`MARKDOWN_CORPUS_GLOBS`, in
+    :func:`markdown_corpus_files` order -- the whole-corpus READ happens ONCE
+    per session here, however many gates or per-file constants want it
+    (lode-es1i). :func:`markdown_corpus_blocks` below derives its
+    fence-parsed view from this instead of reading the files itself, and the
+    per-file ``_TEXT`` constants (:data:`LAND_SKILL_TEXT`,
+    :data:`SWEEP_SKILL_TEXT`, and the read that backs
+    :data:`CODE_REVIEWER_AGENT_BLOCKS`) look their file up here via
+    :func:`_corpus_text` rather than calling ``read_text`` a second time.
+
+    Returns tuples, not lists, for the same reason :func:`markdown_corpus_blocks`
+    does -- see its docstring.
+    """
+    return tuple(
+        (path, path.read_text(encoding="utf-8")) for path in markdown_corpus_files()
+    )
+
+
+@functools.cache
 def markdown_corpus_blocks() -> tuple[tuple[Path, tuple[str, ...]], ...]:
     """(path, fenced-bash-blocks) for every file in :data:`MARKDOWN_CORPUS_GLOBS`,
-    in :func:`markdown_corpus_files` order -- the whole-corpus read and
-    fence-parse happens ONCE per session here, however many gates want it,
-    instead of once per importing gate (lode-2evf). Before this,
+    in :func:`markdown_corpus_files` order -- the whole-corpus fence-parse
+    happens ONCE per session here, however many gates want it, instead of
+    once per importing gate (lode-2evf). Before that,
     ``tests/test_validate_sha40_call_sites.py`` re-read and re-fence-parsed
     the whole corpus at import time on its own.
 
-    Scope of the win, stated honestly: this deduplicates the *whole-corpus*
-    passes onto one cache. The per-file constants below
-    (:data:`LAND_SKILL_BLOCKS`, :data:`CODE_REVIEWER_AGENT_BLOCKS`,
-    :data:`SWEEP_SKILL_BLOCKS`) still read and parse their three files
-    separately, because their consumers want a single named file (and, for
-    the ``_TEXT`` constants, raw text this blocks-only cache cannot serve).
-    Folding those onto a shared cached corpus is follow-up work, not done
-    here.
+    Derives from :func:`markdown_corpus_text` rather than reading files
+    itself, so the whole corpus is read exactly once per session regardless
+    of how many of the two caches a given test run touches (lode-es1i). The
+    per-file constants below (:data:`LAND_SKILL_BLOCKS`,
+    :data:`CODE_REVIEWER_AGENT_BLOCKS`, :data:`SWEEP_SKILL_BLOCKS`) now also
+    derive their text from :func:`markdown_corpus_text` (via
+    :func:`_corpus_text`), so no module reads any of the three corpus files
+    outside these two caches. ``tests/test_skill_bash_state.py``'s four
+    whole-corpus scan sites (``find_violations``, ``_unfiltered_live_pairs``,
+    ``test_every_skill_and_agent_file_is_covered``) and
+    ``tests/test_bd_list_limit_gate.py``'s agent-definition ``bd`` line count
+    read this cache too, rather than their own read + fence-parse passes.
+
+    Scope of the win, stated honestly: this still deduplicates only the
+    fence-parsed *blocks* view. ``tests/test_bd_list_limit_gate.py::_scan_corpus``
+    and ``tests/test_sweep_pipeline_label_roster_gate.py::_discover_add_label_sites``
+    both need raw text with line offsets a blocks-only cache structurally
+    cannot serve (the latter also monkeypatches its own root), so they still
+    read their files directly and are deliberately out of scope here.
 
     Returns tuples, not lists -- ``@functools.cache`` hands every caller the
     same object, and a mutable ``list`` result would let one caller's mutation
@@ -1865,8 +1896,26 @@ def markdown_corpus_blocks() -> tuple[tuple[Path, tuple[str, ...]], ...]:
     file set rather than a fixed handful of named constants).
     """
     return tuple(
-        (path, tuple(bash_fence_blocks(path.read_text(encoding="utf-8"))))
-        for path in markdown_corpus_files()
+        (path, tuple(bash_fence_blocks(text))) for path, text in markdown_corpus_text()
+    )
+
+
+def _corpus_text(path: Path) -> str:
+    """Look up ``path``'s content in :func:`markdown_corpus_text` -- the
+    per-file ``_TEXT`` constants below (and the inline
+    :data:`CODE_REVIEWER_AGENT_BLOCKS` read) use this instead of a second
+    ``path.read_text(...)`` against a file :func:`markdown_corpus_text`
+    already read (lode-es1i). Raises if ``path`` isn't covered by
+    :data:`MARKDOWN_CORPUS_GLOBS` -- every caller here is one of the three
+    fixed corpus files, so a miss means the glob and the constant have
+    drifted apart, not a normal runtime condition to swallow.
+    """
+    for corpus_path, text in markdown_corpus_text():
+        if corpus_path == path:
+            return text
+    raise LookupError(
+        f"{path} not covered by MARKDOWN_CORPUS_GLOBS -- markdown_corpus_text() "
+        "has no entry for it"
     )
 
 
@@ -1893,8 +1942,10 @@ LAND_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 #: calls :func:`bash_fence_blocks` directly on this text rather than going
 #: through :data:`LAND_SKILL_BLOCKS`/:data:`LAND_SKILL_BASH` below, since the
 #: point of that test is to exercise the parser, not to reuse a pre-parsed
-#: result.
-LAND_SKILL_TEXT = LAND_SKILL.read_text(encoding="utf-8")
+#: result. Sourced from :func:`markdown_corpus_text` via :func:`_corpus_text`
+#: rather than its own ``read_text`` call (lode-es1i) -- LAND_SKILL is one of
+#: the corpus files :func:`markdown_corpus_text` already reads.
+LAND_SKILL_TEXT = _corpus_text(LAND_SKILL)
 
 #: :func:`bash_fence_blocks` applied to :data:`LAND_SKILL_TEXT` once per
 #: session. See :data:`LAND_SKILL_TEXT` above for why this is cached at all.
@@ -1924,16 +1975,17 @@ CODE_REVIEWER_AGENT = _CHECKOUT_ROOT / ".claude" / "agents" / "code-reviewer.md"
 #: See :data:`LAND_SKILL_TEXT` for why this is cached at all. No separate
 #: ``_TEXT`` constant: unlike ``LAND_SKILL_TEXT`` (several modules read the raw
 #: prose), nothing needs the text itself yet, so the read is inlined here rather
-#: than exported dead.
-CODE_REVIEWER_AGENT_BLOCKS = bash_fence_blocks(
-    CODE_REVIEWER_AGENT.read_text(encoding="utf-8")
-)
+#: than exported dead. Sourced from :func:`markdown_corpus_text` via
+#: :func:`_corpus_text` rather than its own ``read_text`` call (lode-es1i).
+CODE_REVIEWER_AGENT_BLOCKS = bash_fence_blocks(_corpus_text(CODE_REVIEWER_AGENT))
 
 #: The sweep skill doc's text, read once per session rather than once per test
 #: (lode-pxwn) -- the same fix LAND_SKILL_TEXT above applied to LAND_SKILL.
 #: All five tests/test_sweep_*.py modules that previously called
 #: ``SWEEP_SKILL.read_text(encoding="utf-8")`` directly now read this instead.
-SWEEP_SKILL_TEXT = SWEEP_SKILL.read_text(encoding="utf-8")
+#: Sourced from :func:`markdown_corpus_text` via :func:`_corpus_text` rather
+#: than its own ``read_text`` call (lode-es1i).
+SWEEP_SKILL_TEXT = _corpus_text(SWEEP_SKILL)
 
 #: :func:`bash_fence_blocks` applied to :data:`SWEEP_SKILL_TEXT` once per
 #: session. See :data:`SWEEP_SKILL_TEXT` above for why this is cached at all.

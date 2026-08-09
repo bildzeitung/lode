@@ -169,7 +169,12 @@ import pytest
 # imported below) and this file's own INLINE scan are built on it, so the two partition a
 # document's FENCES identically by construction -- one state machine, not two kept in sync
 # by hand (module docstring: "Blockquoted fences").
-from conftest import AGENTS_DIR, MARKDOWN_CORPUS_GLOBS, fence_scan
+from conftest import (
+    AGENTS_DIR,
+    MARKDOWN_CORPUS_GLOBS,
+    fence_scan,
+    markdown_corpus_blocks,
+)
 
 # Reuse lode-x495's fence-extraction and comment-stripping rather than adding a second,
 # competing implementation of either -- this ticket's assertion (flag PRESENCE) is
@@ -751,10 +756,14 @@ def test_scan_scope_covers_agent_definitions() -> None:
     }
     assert ".claude/agents/coding.md" in scanned
     assert ".claude/agents/code-reviewer.md" in scanned
+    # Reads conftest's cached markdown_corpus_blocks() rather than re-globbing
+    # and re-reading .claude/agents/*.md itself (lode-es1i); AGENTS_DIR is one
+    # of the two roots that cache already covers.
     bd_lines = sum(
         1
-        for p in AGENTS_DIR.glob("*.md")
-        for block in _bash_blocks(p.read_text(encoding="utf-8"))
+        for p, blocks in markdown_corpus_blocks()
+        if p.parent == AGENTS_DIR
+        for block in blocks
         for line in block.splitlines()
         if re.search(r"\bbd\b", _strip_comment(line))
     )
