@@ -155,9 +155,18 @@ class _Command:
     args: tuple[str, ...]  # CLI args to reach it, e.g. ("models", "pull")
 
 
-def _iter_leaf_commands() -> Iterator[_Command]:
+def _iter_commands() -> Iterator[_Command]:
     """Walk ``app`` (and every sub-app) yielding one :class:`_Command` per
-    registered LEAF command -- never a group itself.
+    registered command node -- a sub-app GROUP itself (e.g. ``models``) as
+    well as every leaf command underneath it (e.g. ``models pull``).
+
+    ``lode models --help`` renders a ``Usage:`` line and panels exactly like
+    a leaf command's ``--help`` does, so a group's own ``help=`` text is
+    just as much a piece of user-facing ``--help`` output as any leaf's --
+    it also appears verbatim as a row in the top-level ``lode --help``
+    Commands panel. Previously this walk recursed THROUGH every group and
+    yielded only its leaves, so a group's ``help=`` was checked by no rule
+    here at all.
 
     Duck-typed on ``hasattr(cmd, "list_commands")`` rather than
     ``isinstance(cmd, click.Group)``: verified empirically that Typer's
@@ -174,6 +183,8 @@ def _iter_leaf_commands() -> Iterator[_Command]:
         cmd: click.Command, ctx: click.Context, prefix: tuple[str, ...]
     ) -> Iterator[_Command]:
         if hasattr(cmd, "list_commands"):
+            if prefix:
+                yield _Command(name=" ".join(prefix), args=prefix)
             for name in cmd.list_commands(ctx):
                 sub = cmd.get_command(ctx, name)
                 assert sub is not None, (
@@ -304,7 +315,7 @@ def _violations_by_command() -> dict[str, list[str]]:
     Cached because both gates below need the same table, and rendering
     ``--help`` for the whole corpus twice is pure waste.
     """
-    return {c.name: _all_violations(_render_help(c)) for c in _iter_leaf_commands()}
+    return {c.name: _all_violations(_render_help(c)) for c in _iter_commands()}
 
 
 def test_every_registered_command_help_obeys_the_help_rules_or_is_allowlisted() -> None:
@@ -325,12 +336,14 @@ def test_every_registered_command_help_obeys_the_help_rules_or_is_allowlisted() 
 
 def test_every_registered_command_is_reachable_including_sub_apps() -> None:
     """Non-vacuity for the walk itself: pins that at least one top-level
-    command and one sub-app command (``models pull``) are both discovered,
-    so a future refactor that silently stops walking into sub-apps (or
-    stops registering top-level commands) is caught here rather than by
-    the corpus gate quietly shrinking its own coverage."""
-    names = {c.name for c in _iter_leaf_commands()}
+    command, one sub-app GROUP (``models``), and one sub-app leaf command
+    (``models pull``) are all discovered, so a future refactor that
+    silently stops walking into sub-apps, stops yielding a group's own
+    node, or stops registering top-level commands is caught here rather
+    than by the corpus gate quietly shrinking its own coverage."""
+    names = {c.name for c in _iter_commands()}
     assert "add" in names
+    assert "models" in names
     assert "models pull" in names
 
 
