@@ -1254,6 +1254,11 @@ def _make_batch_result(
 
 # --- Shared Anthropic tool-turn fake + stub Fetcher (lode-pw9o) ------------
 #
+# Also holds the lower-level _tool_use_block/_text_block pair (lode-gyq3),
+# which is NOT tool-turn-specific: any test needing a duck-typed content block
+# should call those rather than hand-roll a MagicMock, even when it drives no
+# tool turn at all (both of test_qa.py's callers are non-fetch tests).
+#
 # tests/test_qa.py's and tests/test_cited_answer.py's end-to-end tool-turn
 # tests each drove an identical fetch -> tool_result -> forced-schema-turn
 # scenario against a real, unmodified answer_question()/ask() and the real
@@ -1294,17 +1299,25 @@ class StubWebFetcher:
         return self._response
 
 
-def _tool_use_block(name: str, input: dict, id: str) -> mock.MagicMock:
+def _tool_use_block(name: str, tool_input: dict, block_id: str) -> mock.MagicMock:
     """Build a duck-typed ``tool_use`` content block (the shape
     lode.llm_provider's reader expects: .type/.name/.input/.id).
 
-    Shared so a block-shape change (an SDK or run_tool_turns contract change)
-    needs editing in exactly one place, per lode-gyq3."""
+    Shared by ``fake_tool_turn_client`` below and by tests/test_qa.py's two
+    non-fetch tool-turn tests, so a block-shape change (an SDK or
+    run_tool_turns contract change) edits those in one place (lode-gyq3).
+
+    NOT yet the repo's only definition of this shape: ``_make_batch_result``
+    above and tests/test_llm_provider.py / tests/test_enrich.py still hand-roll
+    it, and test_llm_provider's ``_tool_use_response`` is a near-twin that also
+    wraps the response. Converting those is lode-j5o1, deliberately out of
+    lode-gyq3's scope -- do not read this helper as having finished that sweep.
+    """
     block = mock.MagicMock()
     block.type = "tool_use"
     block.name = name
-    block.input = input
-    block.id = id
+    block.input = tool_input
+    block.id = block_id
     return block
 
 
