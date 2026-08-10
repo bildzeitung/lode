@@ -298,9 +298,9 @@ class BrowseScreen(Screen[None]):
     # footer line.
     #
     # "Expand" (toggle_summary) is hidden here as the least-needed reminder
-    # of the seven: it is a pure display toggle (collapse/expand the Summary
+    # of the six: it is a pure display toggle (collapse/expand the Summary
     # column), reversible, non-destructive, and used far less often than
-    # Inspect/View content/Delete/Find/Quick once a user has learned it once
+    # Inspect/View content/Delete/Search once a user has learned it once
     # -- unlike those, forgetting the key costs a glance at the overlay, not
     # a workflow it silently breaks.
     #
@@ -311,14 +311,15 @@ class BrowseScreen(Screen[None]):
     # "View content" (lode-uczx's original abbreviation) is restored in
     # full.
     #
-    # MEASURED (2026-08-09, post-lode-2bt3.2 trunk, 100-column pilot,
-    # tests/test_tui_browse_screen.py's own harness): with "Expand" hidden
-    # and the two labels above restored, this screen's footer (6 of the 7
-    # screen-level bindings shown + 5 App-level, including Help) consumes
-    # 97/100 columns,
-    # hscroll=False -- 3 columns' slack. Un-hiding "Expand" at its full label
-    # back in blows the budget (106/100, hscroll=True) -- confirmed, not
-    # assumed.
+    # MEASURED (2026-08-10, lode-wdm0's technical review, 100-column pilot):
+    # with "Expand" hidden, this screen's footer (5 of the 6 screen-level
+    # bindings shown + 5 App-level, including Help) consumes 91/100 columns,
+    # hscroll=False. The previous measurement -- 97/100, and 106/100 with
+    # "Expand" un-hidden -- was taken on 2026-08-09, before lode-wdm0 retired
+    # the seventh binding ("Find") and relabelled "Quick" to "Search"; it is
+    # the historical record of lode-2bt3.3's own call, not current fact. The
+    # live gate is tests/test_tui_footer_width_corpus.py (consumed <= 100,
+    # hscroll False), not this number.
     BINDINGS: ClassVar = [
         Binding("escape", "dismiss_screen", "Back"),
         Binding("i", "inspect_selected", "Inspect"),

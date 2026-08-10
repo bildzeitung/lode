@@ -148,7 +148,8 @@ footer-wide cost was shortening one of its own labels — `"View content"` → `
 strictly a stopgap: each round left the labels a little less legible and the next ticket a little
 less room, with no floor except "however short a word can get and still be a word." `lode-2bt3.3`
 spends the recovered budget paying those abbreviations *back* (`"Rel"` → `"Related"`, `"Hist"` →
-`"History"`, `"S"` → `"Quick"`, `"View"` → `"View content"` on `BrowseScreen`/`EditScreen`) rather
+`"History"`, `"S"` → `"Quick"` (relabelled again to `"Search"` once `lode-wdm0` left one search on
+the screen), `"View"` → `"View content"` on `BrowseScreen`/`EditScreen`) rather
 than shortening further, and the mechanism that pays for new bindings going forward is per-screen
 priority, not the next abbreviation: **a screen that needs to make room for a new binding hides its
 least-needed existing entry (`Binding(show=False)`) rather than truncating a label.** Do not
@@ -157,9 +158,10 @@ entry was hidden and why (least-needed, not merely smallest) at the `BINDINGS` d
 
 **Choosing what to hide is a judgment call per screen, not a formula.** `lode-2bt3.3`'s two worked
 examples: `BrowseScreen` hides `"Expand"` (`toggle_summary`) — a reversible, non-destructive display
-toggle, learned once and rarely revisited, unlike Inspect/Delete/Search/Quick (at the time, "Find"
-and "Quick" — the "Find" scan search on `slash` was later retired outright, `lode-wdm0`, leaving
-plain `"Search"` bound to `slash`) which sit on the primary read/search/delete path every session.
+toggle, learned once and rarely revisited, unlike Inspect/Delete/Find/Quick — as those labels read at
+the time; `lode-wdm0` has since retired the `"Find"` scan search on `slash` outright and relabelled
+the surviving BM25 search `"Search"`, so the live set is Inspect/Delete/Search — which sit on the
+primary read/search/delete path every session.
 `EditScreen` hides `"View content"` (view externally-retrieved
 content) and `"Link"` (open URL under cursor) — both apply only to a subset of notes (an
 externally-sourced note; a note whose cursor sits on a URL), not to every note this screen edits, unlike

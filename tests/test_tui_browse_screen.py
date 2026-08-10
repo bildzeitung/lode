@@ -2105,6 +2105,46 @@ def test_selection_stays_put_across_open_filter_and_close(
     assert after_close == after_clear  # closing the box keeps the selection
 
 
+def test_selection_survives_a_filter_that_keeps_the_highlighted_note(
+    tmp_path: Path,
+) -> None:
+    """The load-bearing half of the selection-stability contract (lode-wdm0).
+
+    :func:`test_selection_stays_put_across_open_filter_and_close` filters to a
+    query the highlighted note does *not* match, so the cursor has nowhere to
+    stay and the assertion there is really "it lands on the sole match" -- a
+    weaker proxy. This is the case the contract is actually about: the
+    highlighted note is still in the narrowed result, so it must remain
+    highlighted rather than snapping to the BM25 top hit.
+    """
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes_indexed(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[str | None, str | None, int, str | None]:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            await pilot.press("down")  # row 1 -- gamma, which matches "widget"
+            before = _highlighted_note_id(table)
+            await pilot.press("slash")
+            await _press_and_settle(pilot, *"widget")
+            after_filter = _highlighted_note_id(table)
+            narrowed_count = table.row_count
+            quick_input = app.screen.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
+            quick_input.value = ""  # back to the unfiltered list
+            await pilot.pause()
+            after_clear = _highlighted_note_id(table)
+            return before, after_filter, narrowed_count, after_clear
+
+    before, after_filter, narrowed_count, after_clear = asyncio.run(_drive())
+
+    assert before == "note-gamma"
+    assert narrowed_count == 3  # alpha/beta/gamma -- delta ("report") drops out
+    assert after_filter == "note-gamma"  # kept, wherever BM25 ranked it
+    assert after_clear == "note-gamma"  # and kept again in the unfiltered list
+
+
 def test_reopening_the_quick_search_box_starts_blank(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     _seed_four_notes_indexed(db_path)
@@ -2161,8 +2201,8 @@ def test_search_box_stays_on_screen_when_the_notes_list_overflows_the_viewport(
             await pilot.pause()
             await pilot.press("slash")
             await pilot.pause()
-            search_input = app.screen.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
-            region = search_input.region
+            quick_input = app.screen.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
+            region = quick_input.region
             return region.y, region.bottom, region.right, region.x
 
     top, bottom, right, left = asyncio.run(_drive())
