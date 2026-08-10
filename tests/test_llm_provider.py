@@ -360,6 +360,47 @@ def test_structured_call_raises_when_the_forced_tool_use_response_has_no_tool_us
     assert excinfo.value.provider == "anthropic"
 
 
+def test_structured_call_names_context_window_exceeded_on_the_forced_tool_use_branch() -> (
+    None
+):
+    # lode-cai6: anthropic SDK 0.119.0 added stop_reason="model_context_window_
+    # exceeded", a distinct cause from "max_tokens" -- the *input* no longer
+    # fits the context window, so shrinking max_tokens can't help. Mirrors
+    # test_structured_call_raises_when_the_forced_tool_use_response_has_no_
+    # tool_use_block above, but asserts the message names the overflow (and
+    # its remedy) instead of the generic thinking-budget hint.
+    thinking_block = mock.MagicMock()
+    thinking_block.type = "thinking"
+    response = mock.MagicMock()
+    response.content = [thinking_block]
+    response.stop_reason = "model_context_window_exceeded"
+    client = mock.MagicMock()
+    client.messages.create.return_value = response
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.structured_call(
+            model="claude-opus-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=2048,
+            timeout_s=1.0,
+            tool_name="extract_widget",
+            tool_description="Extract a widget.",
+        )
+
+    message = str(excinfo.value)
+    assert "no tool_use block" in message
+    assert "stop_reason='model_context_window_exceeded'" in message
+    # Names the cause and the actionable remedy -- not the max_tokens hint.
+    assert "context window" in message
+    assert "shrink the retrieved context or user_prompt" in message
+    assert "typically the whole output budget was consumed by thinking" not in message
+    assert excinfo.value.provider == "anthropic"
+
+
 def test_structured_call_wraps_a_bad_request_from_the_messages_parse_branch() -> None:
     # Same failure mode as the forced-tool-use test above, on the Q&A branch.
     client = mock.MagicMock()

@@ -484,6 +484,32 @@ def _anthropic_effort_kwargs(
 #: sourced here because they are far apart and a reword would otherwise drift.
 _BUDGET_EXHAUSTED_HINT = "-- typically the whole output budget was consumed by thinking"
 
+#: Same three call sites, but for ``stop_reason="model_context_window_exceeded"``
+#: (anthropic SDK 0.119.0+, lode-cai6) -- a distinct cause from the output-budget
+#: exhaustion above: the *input* (system + user_prompt + tool results so far)
+#: no longer fits the model's context window, so growing ``max_tokens`` cannot
+#: help. Names the actionable knob: shrink what's being sent, not the output
+#: budget.
+_CONTEXT_WINDOW_EXCEEDED_HINT = (
+    "-- the input (prompt + retrieved context) exceeded the model's context "
+    "window; shrink the retrieved context or user_prompt, not max_tokens"
+)
+
+
+def _budget_hint(stop_reason: str | None) -> str:
+    """Pick the right "why is the block missing" hint for ``stop_reason``.
+
+    ``model_context_window_exceeded`` gets its own diagnostic --
+    :data:`_CONTEXT_WINDOW_EXCEEDED_HINT` -- because its remedy (shrink the
+    input) is the opposite of the ``max_tokens`` remedy (this function's
+    default, :data:`_BUDGET_EXHAUSTED_HINT`, which is about the *output*
+    budget). Anything else falls back to the ``max_tokens`` hint, unchanged
+    from before this branch existed.
+    """
+    if stop_reason == "model_context_window_exceeded":
+        return _CONTEXT_WINDOW_EXCEEDED_HINT
+    return _BUDGET_EXHAUSTED_HINT
+
 
 def _output_tokens(response: Any) -> int:
     """``response.usage.output_tokens`` as an int, 0 when absent or not an int.
@@ -777,12 +803,13 @@ class AnthropicProvider:
             # a raw StopIteration here instead of the LLMProviderError every
             # caller of this seam expects (lode-jgus). Why that is now
             # reachable: the class docstring.
+            stop_reason = getattr(response, "stop_reason", None)
             raise LLMProviderError(
                 f"Anthropic response contained no tool_use block to decode "
                 f"into {output_schema.__name__}{where} (model={model}, "
                 f"max_tokens={max_tokens}, "
-                f"stop_reason={getattr(response, 'stop_reason', None)!r}) "
-                f"{_BUDGET_EXHAUSTED_HINT}",
+                f"stop_reason={stop_reason!r}) "
+                f"{_budget_hint(stop_reason)}",
                 provider="anthropic",
             )
         return output_schema.model_validate(tool_block.input), _output_tokens(response)
@@ -872,12 +899,13 @@ class AnthropicProvider:
             # lode-3dlt stopped pinning thinking off. Unguarded, that None
             # escapes under this method's ``-> BaseModelT`` annotation and
             # fails as an AttributeError inside :func:`lode.qa.answer_question`.
+            stop_reason = getattr(response, "stop_reason", None)
             raise LLMProviderError(
                 f"Anthropic response contained no text block to decode into "
                 f"{output_schema.__name__} (model={model}, "
                 f"max_tokens={max_tokens}, "
-                f"stop_reason={getattr(response, 'stop_reason', None)!r}) "
-                f"{_BUDGET_EXHAUSTED_HINT}",
+                f"stop_reason={stop_reason!r}) "
+                f"{_budget_hint(stop_reason)}",
                 provider="anthropic",
             )
         return parsed
@@ -1176,6 +1204,7 @@ class AnthropicProvider:
                     # docstring); name the same model/stop_reason that branch
                     # does, or the failure is undiagnosable.
                     message = result.result.message
+                    batch_stop_reason = getattr(message, "stop_reason", None)
                     results.append(
                         BatchResult(
                             custom_id=custom_id,
@@ -1184,9 +1213,8 @@ class AnthropicProvider:
                             error=LLMProviderError(
                                 f"no tool_use block in batch result "
                                 f"(model={getattr(message, 'model', None)!r}, "
-                                f"stop_reason="
-                                f"{getattr(message, 'stop_reason', None)!r}) "
-                                f"{_BUDGET_EXHAUSTED_HINT}",
+                                f"stop_reason={batch_stop_reason!r}) "
+                                f"{_budget_hint(batch_stop_reason)}",
                                 provider="anthropic",
                             ),
                         )
