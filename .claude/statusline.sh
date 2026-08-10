@@ -77,13 +77,11 @@ fi
 # `bd list` costs ~0.85s; the statusline re-renders far too often to pay that
 # synchronously, so read from a short-lived cache refreshed in the background.
 # We cache ALL open issues (one call) and count by stage. `build:` means
-# "claimed (in_progress), not yet handed off to any pipeline stage" -- it
-# excludes the full /sweep SKILL.md SS2b roster (sweep-digest, which is
-# permanently in_progress by design, plus ready-for-code-review/ready-for-land/
-# needs-rebase, which are in_progress but already own their own segment below)
-# so the pipeline segments stay mutually exclusive: a ticket counts in exactly
-# one of build/review/land/rebase, never build AND its own stage. Zero-count
-# stages are omitted.
+# "claimed (in_progress), not yet handed off to any pipeline stage": it excludes
+# the full /sweep SKILL.md §2b roster (sweep-digest, permanently in_progress by
+# design, plus ready-for-code-review/ready-for-land/needs-rebase, which are also
+# in_progress but already own their own segment below), so a ticket counts in
+# exactly one of build/review/land/rebase. Zero-count stages are omitted.
 #
 # `--limit 0` is load-bearing, not noise (lode-9bbq). The canonical reason, the
 # bd 1.1.0 measurements, and why this is HARDENING rather than a live fix all
