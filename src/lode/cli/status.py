@@ -21,7 +21,7 @@ from lode.enrichment_view import stale_enrichment_heads
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.jobs_read import dead_letter_jobs, egress_purpose_counts, job_status_counts
 from lode.reconcile import lexical_gap_count
-from lode.worker import dead_letter_recovery
+from lode.worker import dead_letter_recovery, dead_letter_remediation
 
 log = logging.getLogger(__name__)
 
@@ -457,7 +457,12 @@ def status(db: _DbOption = None) -> None:
     dead_types = {job_type for _, job_type, _, _ in dead_letters}
     dead_recoveries = {t: dead_letter_recovery(t) for t in dead_types}
     dead_self_healing = "self_healing" in dead_recoveries.values()
-    dead_tombstoned = "terminal" in dead_recoveries.values()
+    # Terminal types are kept as a SET, not just a bool: the hint below prints
+    # one line per terminal type, each carrying that type's own registered
+    # remediation advice (lode-tr3i) -- recovery advice is type-specific and
+    # must not be inherited across types.
+    dead_terminal_types = {t for t, r in dead_recoveries.items() if r == "terminal"}
+    dead_tombstoned = bool(dead_terminal_types)
     dead_unknown_type = any(
         r not in ("self_healing", "terminal") for r in dead_recoveries.values()
     )
@@ -654,11 +659,20 @@ def status(db: _DbOption = None) -> None:
             "'lode reembed'/'lode reenrich' to force it.",
             highlight=False,
         )
-    if dead_tombstoned:
+    for job_type in sorted(dead_terminal_types):
+        # The per-type recovery advice comes from the registration site
+        # (worker.register_dead_letter(..., remediation=...)), so no job-type
+        # name appears here: a new terminal type gets its own advice with no
+        # edit to this file, and one that declares none gets the generic
+        # fallback rather than inheriting another type's (lode-tr3i).
+        advice = dead_letter_remediation(job_type) or (
+            "check the per-job error text above and re-run the originating "
+            "action to force a retry."
+        )
         console.print(
-            "[warn]Action needed:[/warn] a dead-lettered refresh job is a "
-            "permanent failure record (tombstoned) -- it will not be retried "
-            "automatically; re-add the URL to force a fresh draw-down.",
+            f"[warn]Action needed:[/warn] a dead-lettered {job_type} job is a "
+            f"permanent failure record -- it will not be retried "
+            f"automatically; {advice}",
             highlight=False,
         )
     if dead_unknown_type:
@@ -676,8 +690,9 @@ def status(db: _DbOption = None) -> None:
         and not revision_drift
         and not enrichment_stale
         and not lexical_gaps
-        # Every dead-letter now trips one of the three hints above, so a
-        # non-empty dead set is exactly
+        # Every dead-letter still trips one of the hints above (terminal
+        # splits into a refresh-specific and a generic arm, but the union is
+        # unchanged), so a non-empty dead set is exactly
         # `dead_self_healing or dead_tombstoned or dead_unknown_type`.
         and not dead_letters
     ):

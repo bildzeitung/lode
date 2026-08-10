@@ -59,6 +59,8 @@ from lode.worker import (
     _reclaim_stale_running,
     _reset_retryable,
     claim_and_run_one,
+    dead_letter_recovery,
+    dead_letter_remediation,
     drain,
     run_one,
 )
@@ -4057,3 +4059,50 @@ def test_reclaim_dead_letter_hook_survives_a_backward_clock_step(
         "SELECT COUNT(*) FROM snapshots WHERE external_id = ?", (external_id,)
     ).fetchone()
     assert snapshot_count == 1
+
+
+# ---------------------------------------------------------------------------
+# dead_letter_recovery -- the shared job-type recovery taxonomy (lode-tr3i)
+# ---------------------------------------------------------------------------
+
+
+def test_dead_letter_recovery_terminal_for_registered_dead_letter_hook() -> None:
+    # `refresh` is the one type with a registered dead-letter hook today, so
+    # it classifies terminal -- derived from the hook registry, not a
+    # hardcoded name.
+    assert dead_letter_recovery("refresh") == "terminal"
+
+
+def test_dead_letter_recovery_self_healing_for_derive_types() -> None:
+    for job_type in jobs.DERIVE_JOB_TYPES:
+        assert dead_letter_recovery(job_type) == "self_healing"
+
+
+def test_dead_letter_recovery_unclassified_for_registered_but_untaxonomized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A type with a run handler but neither a dead-letter hook nor DERIVE
+    # membership: registered, but not classified for dead-letter recovery.
+    # This arm has no real occupant today, so it must be exercised by
+    # registering one -- otherwise the CLI's "unclassified" hint arm is dead
+    # code nothing proves.
+    job_type = "some_future_job_type"
+    assert dead_letter_recovery(job_type) is None  # precondition: unregistered
+    monkeypatch.setitem(_REGISTRY, job_type, lambda conn, tv, db, s: None)
+    assert dead_letter_recovery(job_type) == "unclassified"
+
+
+def test_dead_letter_recovery_none_for_unknown_type() -> None:
+    assert dead_letter_recovery("not_a_job_type_at_all") is None
+
+
+def test_dead_letter_remediation_comes_from_the_registration_site() -> None:
+    # refresh declares its own advice at register_dead_letter(); a type that
+    # declared none returns None so a renderer falls back to generic text
+    # rather than inheriting refresh's URL-specific advice (lode-tr3i).
+    advice = dead_letter_remediation("refresh")
+    assert advice is not None
+    assert "re-add the URL" in advice
+    assert "[" not in advice  # plain prose -- no console markup in this layer
+    assert dead_letter_remediation("embed") is None
+    assert dead_letter_remediation("not_a_job_type_at_all") is None

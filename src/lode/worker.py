@@ -138,7 +138,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from lode import jobs
 from lode.config import Settings
@@ -208,9 +208,34 @@ DeadLetterFn = Callable[[sqlite3.Connection, str, str, str | None, Settings], No
 _DEAD_LETTER_HOOKS: dict[str, DeadLetterFn] = {}
 
 
-def register_dead_letter(job_type: str, hook: DeadLetterFn) -> None:
-    """Register ``hook`` to run once when a ``job_type`` job reaches ``'dead'``."""
+#: Per-type recovery advice for a terminal (dead-letter-hooked) job type, in
+#: plain prose — the clause a presentation layer appends to its own "this will
+#: not be retried automatically" sentence (lode-tr3i). Declared at the
+#: registration site, next to the hook whose behavior it describes, so that
+#: adding a terminal job type needs no edit in any renderer: a type that
+#: registers no advice simply gets the renderer's generic fallback rather than
+#: inheriting some other type's (``refresh``'s "re-add the URL" is wrong advice
+#: for a type that is not a URL fetch — the inheritance lode-tix0 removed).
+#: NO console markup here: this module knows nothing about how it is displayed.
+_DEAD_LETTER_REMEDIATION: dict[str, str] = {}
+
+
+def register_dead_letter(
+    job_type: str, hook: DeadLetterFn, remediation: str | None = None
+) -> None:
+    """Register ``hook`` to run once when a ``job_type`` job reaches ``'dead'``.
+
+    ``remediation`` is optional plain-prose recovery advice for the user (see
+    :data:`_DEAD_LETTER_REMEDIATION`); omitting it costs only hint specificity.
+    """
     _DEAD_LETTER_HOOKS[job_type] = hook
+    if remediation is not None:
+        _DEAD_LETTER_REMEDIATION[job_type] = remediation
+
+
+def dead_letter_remediation(job_type: str) -> str | None:
+    """Recovery advice for a terminal ``job_type``, or ``None`` if it declared none."""
+    return _DEAD_LETTER_REMEDIATION.get(job_type)
 
 
 #: Recovery classification for a dead-lettered job type (lode-tr3i), shared by
@@ -230,7 +255,7 @@ def register_dead_letter(job_type: str, hook: DeadLetterFn) -> None:
 #: - ``None`` -- not even a registered run handler; a type this worker
 #:   doesn't know about at all (should not occur given the ``jobs.type``
 #:   schema CHECK, but a caller reading raw rows should not assume it can't).
-DeadLetterRecovery = str
+DeadLetterRecovery = Literal["terminal", "self_healing", "unclassified"]
 
 
 def dead_letter_recovery(job_type: str) -> DeadLetterRecovery | None:
@@ -1669,4 +1694,11 @@ def _refresh_dead_letter_hook(
 
 
 # Register the refresh dead-letter hook on module load.
-register_dead_letter("refresh", _refresh_dead_letter_hook)
+register_dead_letter(
+    "refresh",
+    _refresh_dead_letter_hook,
+    remediation=(
+        "the external's head snapshot is tombstoned -- re-add the URL to "
+        "force a fresh draw-down."
+    ),
+)

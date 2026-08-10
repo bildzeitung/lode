@@ -984,6 +984,34 @@ def test_status_dead_line_is_danger_for_unknown_dead_letter_type(
     assert "\x1b[1;31m" in dead_line()
 
 
+def test_status_hints_non_refresh_terminal_dead_letter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
+) -> None:
+    # A future job type that registers its OWN dead-letter hook classifies
+    # terminal, but "re-add the URL" is refresh-specific advice that would be
+    # wrong for it -- it gets the generic terminal hint instead (lode-tr3i;
+    # this is the inheritance lode-tix0 removed, and classifying by hook
+    # registry must not quietly reintroduce it).
+    from lode import worker
+
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    monkeypatch.setitem(
+        worker._DEAD_LETTER_HOOKS,
+        "some_future_job_type",
+        lambda conn, tv, eid, claimed_at, s: None,
+    )
+    _patch_dead_letters(monkeypatch, "some_future_job_type")
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    # Whitespace-normalized: rich hard-wraps the hint at this console width.
+    flat = " ".join(result.stdout.split())
+    assert "a dead-lettered some_future_job_type job is a permanent failure" in flat
+    assert "re-add the URL" not in result.stdout
+    assert "doesn't recognize" not in result.stdout
+    assert "self-healing" not in result.stdout
+
+
 def test_status_hints_cold_model_cache(tmp_path: Path) -> None:
     # A fresh $LODE_HOME with no models/ dir at all -- every resolved model
     # is missing its cache subdir, so the probe must call this cold and hint
