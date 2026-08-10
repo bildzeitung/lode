@@ -76,19 +76,16 @@ fi
 # --- Fleet pipeline counts (A) ----------------------------------------------
 # `bd list` costs ~0.85s; the statusline re-renders far too often to pay that
 # synchronously, so read from a short-lived cache refreshed in the background.
-# We cache ALL open issues (one call) and count by stage. The invariant is
-# MUTUAL EXCLUSION: no ticket is ever counted in two segments. `build:` means
-# "claimed (in_progress) and matched by no other segment", so its exclusion is
-# DERIVED from the sibling segments' own predicates (is_review/is_land/
-# is_rebase/is_human below, plus the never-rendered is_digest bookkeeping
-# predicate -- the /sweep digest is permanently in_progress by design). It is
-# NOT a label list copied from /sweep SKILL.md §2b: there is no second roster
-# here to drift against that one. The siblings are exclusive of each other by
-# the write side's discipline, not by anything here -- /land swaps pipeline
-# labels atomically (--remove-label X --add-label Y) and escalation opens a
-# SEPARATE `human` decision ticket rather than adding `human` to the escalated
-# one -- so this renderer does not re-assert that upstream guarantee.
-# Zero-count stages are omitted.
+# We cache ALL open issues (one call) and classify each into AT MOST ONE stage,
+# under one invariant: no ticket is ever counted in two segments (lode-9hqr).
+# The `stage` def below is a single if/elif ladder rather than five independent
+# predicates plus a complement, so mutual exclusion is structural and costs
+# LESS code, not more: `build:` is the ladder's fallthrough (claimed, handed
+# off to nothing later), so there is no roster of sibling labels for it to
+# exclude and nothing here to drift against /sweep SKILL.md §2b. The write side
+# already keeps the siblings apart (/land swaps pipeline labels atomically,
+# --remove-label X --add-label Y); the ladder means this renderer stays correct
+# without depending on that. Zero-count stages are omitted.
 #
 # `--limit 0` is load-bearing, not noise (lode-9bbq). The canonical reason, the
 # bd 1.1.0 measurements, and why this is HARDENING rather than a live fix all
@@ -119,19 +116,21 @@ if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
     if [ -s "$cache" ]; then
         counts=$(jq -r '
             def hasl($l): ((.labels // []) | index($l)) != null;
-            def is_review: hasl("ready-for-code-review");
-            def is_land:   hasl("ready-for-land");
-            def is_rebase: hasl("needs-rebase");
-            def is_human:  hasl("human") or hasl("land-escalated");
-            def is_digest: hasl("sweep-digest");
-            def is_build:  .status=="in_progress"
-                and ((is_review or is_land or is_rebase or is_human or is_digest) | not);
-            [ ([.[] | select(is_build)]  | length),
-              ([.[] | select(is_review)] | length),
-              ([.[] | select(is_land)]   | length),
-              ([.[] | select(is_rebase)] | length),
-              ([.[] | select(is_human)]  | length)
-            ] | join(" ")
+            # First matching arm wins; order IS the precedence rule. A ticket
+            # waiting on a human outranks any pipeline label it still carries,
+            # and the /sweep digest (permanently in_progress by design) maps to
+            # no segment at all. Emitting nothing means "counted nowhere".
+            def stage:
+                if   hasl("sweep-digest")                    then empty
+                elif hasl("human") or hasl("land-escalated") then "human"
+                elif hasl("needs-rebase")                    then "rebase"
+                elif hasl("ready-for-land")                  then "land"
+                elif hasl("ready-for-code-review")           then "review"
+                elif .status == "in_progress"                then "build"
+                else empty end;
+            reduce (.[] | stage) as $s ({}; .[$s] += 1)
+            | [ (.build // 0), (.review // 0), (.land // 0),
+                (.rebase // 0), (.human // 0) ] | join(" ")
         ' "$cache" 2>/dev/null)
         if [ -n "$counts" ]; then
             read -r build review land rebase human <<< "$counts"
