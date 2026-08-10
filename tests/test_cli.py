@@ -857,7 +857,11 @@ def test_status_hints_self_healing_dead_letters(
     assert "'lode work'" in result.stdout
     assert "'lode reembed'" in result.stdout
     assert "'lode reenrich'" in result.stdout
-    assert "tombstoned" not in result.stdout
+    # lode-tix0: the self-healing hint now names the excluded-from-reconcile
+    # cases (which mention "tombstoned" as one of several excluded states)
+    # as a caveat -- it must NOT be confused with the refresh-specific
+    # "permanent failure record" hint below, which is what actually matters.
+    assert "permanent failure record" not in result.stdout
     assert "No action needed." not in result.stdout
 
 
@@ -891,8 +895,26 @@ def test_status_hints_both_self_healing_and_tombstoned_dead_letters(
     assert "tombstoned" in result.stdout
 
 
+# jobs.type carries a schema-level CHECK (type IN ('embed', 'enrich',
+# 'refresh')) -- an unrecognized type can never actually reach the DB today,
+# by design. The whole point of lode-tix0's fallback arm is to be correct
+# on the day someone widens that CHECK to add a new type WITHOUT also
+# remembering to touch this file's hint logic -- so these two tests
+# monkeypatch `dead_letter_jobs` itself to simulate that future state,
+# rather than trying to smuggle an unknown type past a constraint that
+# exists specifically to prevent it.
+def _patch_dead_letters(monkeypatch: pytest.MonkeyPatch, job_type: str) -> None:
+    from lode.cli import status as cli_status
+
+    monkeypatch.setattr(
+        cli_status,
+        "dead_letter_jobs",
+        lambda conn: [("job-1", job_type, "ver-eeeeeeeeeeeeeeee", "boom")],
+    )
+
+
 def test_status_hints_unknown_dead_letter_type(
-    tmp_path: Path, warm_model_cache: None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
 ) -> None:
     # A dead-lettered job of a type this file doesn't recognize (neither
     # embed/enrich nor refresh) must get its own generic, non-misleading
@@ -900,7 +922,8 @@ def test_status_hints_unknown_dead_letter_type(
     # text, which would be wrong advice for a type that isn't a URL fetch at
     # all (lode-tix0).
     db_path = tmp_path / "lode.db"
-    _insert_dead_job(db_path, "some_future_job_type", "ver-eeeeeeeeeeeeeeee")
+    init_db(db_path).close()
+    _patch_dead_letters(monkeypatch, "some_future_job_type")
     result = runner.invoke(app, ["status", "--db", str(db_path)])
     assert result.exit_code == 0
     assert "doesn't recognize" in result.stdout
@@ -923,7 +946,8 @@ def test_status_dead_line_is_danger_for_unknown_dead_letter_type(
     from lode.cli import status as cli_status
 
     db_path = tmp_path / "lode.db"
-    _insert_dead_job(db_path, "some_future_job_type", "ver-eeeeeeeeeeeeeeee")
+    init_db(db_path).close()
+    _patch_dead_letters(monkeypatch, "some_future_job_type")
 
     buf = io.StringIO()
     monkeypatch.setattr(

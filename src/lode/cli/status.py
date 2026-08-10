@@ -456,7 +456,9 @@ def status(db: _DbOption = None) -> None:
     dead_self_healing = bool(dead_types & _SELF_HEALING_DEAD_LETTER_TYPES)
     dead_tombstoned = bool(dead_types & _KNOWN_TOMBSTONED_DEAD_LETTER_TYPES)
     dead_unknown_type = bool(
-        dead_types - _SELF_HEALING_DEAD_LETTER_TYPES - _KNOWN_TOMBSTONED_DEAD_LETTER_TYPES
+        dead_types
+        - _SELF_HEALING_DEAD_LETTER_TYPES
+        - _KNOWN_TOMBSTONED_DEAD_LETTER_TYPES
     )
     dead_style = (
         "danger"
