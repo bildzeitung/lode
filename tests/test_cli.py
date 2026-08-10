@@ -806,37 +806,89 @@ def test_status_summarizes_jobs_egress_and_dead_letters(
     assert "dead-letters (dead jobs): 1" in result.stdout
     assert "(enrich) target=ver-bbbbbbbb…: RateLimitError" in result.stdout
     # Action hint: 1 pending job -> a hint to drain the queue (lode-l38d.6).
-    assert "run 'lode work'" in result.stdout
-    # No dead-letter hint: dead jobs are already listed above with their
-    # errors and 'lode work' will not retry them (retries exhausted) -- they
-    # get colour instead of a hint (lode-l38d.6's explicit exclusion).
+    assert "run 'lode work' to drain the queue" in result.stdout
+    # The single dead job is an 'enrich' (self-healing) -- lode-8vcq gives it
+    # its own dead-letter hint too, distinct from (and in addition to) the
+    # pending-job hint above; both are expected to fire together here.
     hint_lines = [ln for ln in result.stdout.splitlines() if "Action needed" in ln]
-    assert hint_lines  # the pending-job hint above did fire
-    assert not any("dead" in ln.lower() for ln in hint_lines)
+    assert any("self-healing" in ln for ln in hint_lines)
 
 
-def test_status_no_hint_when_only_dead_letters_present(
-    tmp_path: Path, warm_model_cache: None
-) -> None:
-    # Dead-letters alone (no pending/failed, warm cache) must not trip the
-    # 'lode work' hint -- 'lode work' cannot retry an exhausted dead-letter,
-    # so a hint here would suggest a command that cannot help (lode-l38d.6).
-    db_path = tmp_path / "lode.db"
+def _insert_dead_job(db_path: Path, job_type: str, target_version: str) -> None:
     conn = init_db(db_path)
     try:
         with conn:
             conn.execute(
                 "INSERT INTO jobs "
                 "(type, target_version, status, attempts, last_error, next_attempt_at) "
-                "VALUES ('enrich', 'ver-cccccccccccccccc', 'dead', 3, 'boom', ?)",
-                (now_iso(),),
+                "VALUES (?, ?, 'dead', 3, 'boom', ?)",
+                (job_type, target_version, now_iso()),
             )
     finally:
         conn.close()
+
+
+def test_status_no_pending_hint_when_only_dead_letters_present(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # Dead-letters alone (no pending/failed, warm cache) must not trip the
+    # 'lode work' PENDING/FAILED hint -- that hint is specifically about jobs
+    # 'lode work' can still retry, which a dead-lettered job is not
+    # (lode-l38d.6). It's still expected to trip its own dead-letter hint
+    # (lode-8vcq) -- that's covered by the arm-specific tests below, not here.
+    db_path = tmp_path / "lode.db"
+    _insert_dead_job(db_path, "enrich", "ver-cccccccccccccccc")
     result = runner.invoke(app, ["status", "--db", str(db_path)])
     assert result.exit_code == 0
-    assert "Action needed" not in result.stdout
-    assert "No action needed." in result.stdout
+    assert "run 'lode work' to drain the queue" not in result.stdout
+
+
+def test_status_hints_self_healing_dead_letters(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # A dead-lettered embed/enrich job self-heals on the next reconciliation
+    # scan -- the footer must say so and name 'lode work'/'lode
+    # reembed'/'lode reenrich', not stay silent (lode-8vcq, acceptance #1).
+    db_path = tmp_path / "lode.db"
+    _insert_dead_job(db_path, "enrich", "ver-cccccccccccccccc")
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert "self-healing" in result.stdout
+    assert "'lode work'" in result.stdout
+    assert "'lode reembed'" in result.stdout
+    assert "'lode reenrich'" in result.stdout
+    assert "tombstoned" not in result.stdout
+    assert "No action needed." not in result.stdout
+
+
+def test_status_hints_tombstoned_dead_letter(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # A dead-lettered refresh job is a permanent tombstone, not self-healing
+    # -- the footer must say so and point at re-adding the URL, distinct
+    # from the self-healing hint (lode-8vcq, acceptance #2).
+    db_path = tmp_path / "lode.db"
+    _insert_dead_job(db_path, "refresh", "ver-dddddddddddddddd")
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert "tombstoned" in result.stdout
+    assert "re-add the URL" in result.stdout
+    assert "self-healing" not in result.stdout
+    assert "No action needed." not in result.stdout
+
+
+def test_status_hints_both_self_healing_and_tombstoned_dead_letters(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # Both hints fire together when both kinds of dead-letter are present
+    # (lode-8vcq, acceptance #3).
+    db_path = tmp_path / "lode.db"
+    _insert_dead_job(db_path, "enrich", "ver-cccccccccccccccc")
+    _insert_dead_job(db_path, "refresh", "ver-dddddddddddddddd")
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert "self-healing" in result.stdout
+    assert "tombstoned" in result.stdout
 
 
 def test_status_hints_cold_model_cache(tmp_path: Path) -> None:
@@ -1997,6 +2049,13 @@ def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
     make colour observable at all. Without that, any assertion here is vacuous.
     Proved non-vacuous by sabotage: dropping `highlight=False` from the
     dead-letters print turns this red assertion cyan and the test fails.
+
+    Seeds a ``refresh`` dead-letter, not ``enrich`` -- lode-8vcq softened an
+    ALL-self-healing (embed/enrich) dead set to `warn`, so `danger` is only
+    still guaranteed for a set containing a terminal (``refresh``) job; that
+    softening is covered separately by
+    ``test_status_hints_self_healing_dead_letters`` and its sibling below,
+    not here. This test's job is only the highlight=False regression.
     """
     import io
 
@@ -2016,7 +2075,7 @@ def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
             conn.execute(
                 "INSERT INTO jobs "
                 "(type, target_version, status, attempts, last_error, next_attempt_at) "
-                "VALUES ('enrich', 'ver-cccccccccccccccc', 'dead', 3, 'boom', ?)",
+                "VALUES ('refresh', 'ver-cccccccccccccccc', 'dead', 3, 'boom', ?)",
                 (now_iso(),),
             )
     finally:
@@ -2035,6 +2094,41 @@ def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
     # bold red (danger) present, bold cyan (repr.number) absent.
     assert "\x1b[1;31m" in dead_line
     assert "\x1b[1;36m" not in dead_line
+
+
+def test_status_dead_line_softens_to_warn_when_only_self_healing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
+) -> None:
+    """lode-8vcq, acceptance #5: an ALL-self-healing dead set (embed/enrich,
+    no terminal ``refresh``) renders `warn` (yellow), not `danger` (bold
+    red) -- the uniform danger red is what made these look ominous despite
+    needing no user action. Deliberately updates the uniformity
+    ``test_status_dead_line_is_uniformly_danger_not_repr_highlighted`` used
+    to pin, per that ticket's own acceptance criterion.
+    """
+    import io
+
+    from rich.console import Console
+
+    from lode.cli import CLI_THEME
+    from lode.cli import status as cli_status
+
+    db_path = tmp_path / "lode.db"
+    _insert_dead_job(db_path, "enrich", "ver-cccccccccccccccc")
+
+    buf = io.StringIO()
+    monkeypatch.setattr(
+        cli_status,
+        "console",
+        Console(theme=CLI_THEME, force_terminal=True, width=100, file=buf),
+    )
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+
+    dead_line = next(ln for ln in buf.getvalue().splitlines() if "dead-letters" in ln)
+    # plain yellow (warn), not bold red (danger).
+    assert "\x1b[33m" in dead_line
+    assert "\x1b[1;31m" not in dead_line
 
 
 def _write_fake_cache_hit(home: Path, hf_source: str, model_file: str) -> None:

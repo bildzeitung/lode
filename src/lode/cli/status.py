@@ -24,6 +24,18 @@ from lode.reconcile import lexical_gap_count
 
 log = logging.getLogger(__name__)
 
+#: Dead-lettered ``embed``/``enrich`` jobs are NOT terminal in practice --
+#: reconcile.py's gap sweep re-enqueues them on its next scan regardless of
+#: prior dead-letters (the ``idx_jobs_live`` unique index is scoped to
+#: pending/running precisely so that's legal, docs/storage.md:552) -- so a
+#: dead-letter of one of these types self-heals without user action, and
+#: ``lode work``/``lode reembed``/``lode reenrich`` force it now (lode-8vcq).
+#: Everything else (currently just ``refresh``) is deliberately terminal: the
+#: worker's terminal-transition hook (lode-at8) tombstones the head and
+#: reconcile excludes tombstoned heads from re-enqueue on purpose
+#: (reconcile.py:429) -- recovery there means the user re-pasting the URL.
+_SELF_HEALING_DEAD_LETTER_TYPES = frozenset({"embed", "enrich"})
+
 
 class JobStatus(str, Enum):
     """The ``jobs.status`` enum from ``schema.sql`` — accepted by ``--status``.
@@ -374,10 +386,12 @@ def status(db: _DbOption = None) -> None:
     for why), flag any live note head missing its lexical (FTS5) index rows
     -- the same signal the ``lexical_gap`` reconcile step self-heals on its
     own schedule, surfaced here as a count so a user isn't waiting on that
-    schedule blind (lode-cyly) -- or an explicit
-    "No action needed." if none of those apply. Dead-letter jobs get no hint
-    -- they are already listed above with their errors, and won't be
-    retried.
+    schedule blind (lode-cyly), flag dead-lettered embed/enrich jobs as
+    self-healing (they clear on the next reconciliation scan; 'lode work'
+    drains them, 'lode reembed'/'lode reenrich' force it now) and a
+    dead-lettered refresh job as a permanent failure record (re-add the URL
+    to retry) -- or an explicit "No action needed." if none of those apply
+    (lode-8vcq).
     """
     db_path = db or default_db_path()
     conn = _open_db(db)
@@ -394,7 +408,19 @@ def status(db: _DbOption = None) -> None:
     # filtered to status='dead'), so carrying both invited the table and the
     # prose line below to disagree with nothing but a comment promising they
     # can't. One value instead makes that structural.
-    dead_style = "danger" if dead_letters else None
+    #
+    # Severity genuinely differs by job type (lode-8vcq): a dead-lettered
+    # embed/enrich job self-heals on the next reconciliation scan, so a set
+    # of dead-letters that is ENTIRELY self-healing softens to `warn` rather
+    # than `danger` -- the uniform danger red is what made these "look
+    # ominous" (the reported complaint) despite needing no action. A single
+    # dead-lettered refresh job (a permanent tombstone, no self-heal) is
+    # enough to keep the whole line/table cell at `danger`.
+    dead_has_terminal = any(
+        job_type not in _SELF_HEALING_DEAD_LETTER_TYPES
+        for _, job_type, _, _ in dead_letters
+    )
+    dead_style = "danger" if dead_has_terminal else "warn" if dead_letters else None
 
     # No header_style= here: rich's Table already defaults it to "table.header",
     # the name CLI_STYLES declares (see the palette comment above), so passing it
@@ -456,10 +482,16 @@ def status(db: _DbOption = None) -> None:
         highlight=False,
     )
     for job_id, job_type, target_version, last_error in dead_letters:
+        # Per-job line mirrors the same self-healing/terminal split as
+        # dead_style above, rather than a single style shared across every
+        # row -- a mixed dead set (e.g. one dead refresh, one dead embed)
+        # should not paint the self-healing job as ominously as the
+        # terminal one.
+        job_style = "warn" if job_type in _SELF_HEALING_DEAD_LETTER_TYPES else "danger"
         console.print(
             f"  job {job_id} ({job_type}) target={_short(target_version)}: "
             f"{last_error or 'no error recorded'}",
-            style="danger",
+            style=job_style,
             markup=False,
             highlight=False,
         )
@@ -519,6 +551,16 @@ def status(db: _DbOption = None) -> None:
     # probes above -- but still non-fatal (returns 0 on any failure) and run
     # in the same "outside any try, own connection" style, per lode-cyly.
     lexical_gaps = _lexical_gap_count(db)
+    # Partition the already-fetched dead_letters by the same self-healing
+    # split dead_style used above -- no new query (lode-8vcq's design note).
+    dead_self_healing = any(
+        job_type in _SELF_HEALING_DEAD_LETTER_TYPES
+        for _, job_type, _, _ in dead_letters
+    )
+    dead_tombstoned = any(
+        job_type not in _SELF_HEALING_DEAD_LETTER_TYPES
+        for _, job_type, _, _ in dead_letters
+    )
     console.print()
     # markup stays ON here -- these strings are author-written, not DB-derived,
     # so the [warn]/[ok] tags are the point. highlight stays OFF for the same
@@ -565,6 +607,21 @@ def status(db: _DbOption = None) -> None:
             "them automatically on its next reconcile pass.",
             highlight=False,
         )
+    if dead_self_healing:
+        console.print(
+            "[warn]Action needed:[/warn] some dead-lettered jobs (embed/enrich) "
+            "are self-healing -- the next reconciliation scan will re-enqueue "
+            "them on its own; run 'lode work' to drain them now, or "
+            "'lode reembed'/'lode reenrich' to force it.",
+            highlight=False,
+        )
+    if dead_tombstoned:
+        console.print(
+            "[warn]Action needed:[/warn] a dead-lettered refresh job is a "
+            "permanent failure record (tombstoned) -- it will not be retried "
+            "automatically; re-add the URL to force a fresh draw-down.",
+            highlight=False,
+        )
     if (
         pending_or_failed == 0
         and not cache_cold
@@ -572,5 +629,7 @@ def status(db: _DbOption = None) -> None:
         and not revision_drift
         and not enrichment_stale
         and not lexical_gaps
+        and not dead_self_healing
+        and not dead_tombstoned
     ):
         console.print("[ok]No action needed.[/ok]", highlight=False)
