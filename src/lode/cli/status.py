@@ -21,6 +21,7 @@ from lode.enrichment_view import stale_enrichment_heads
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.jobs_read import dead_letter_jobs, egress_purpose_counts, job_status_counts
 from lode.reconcile import lexical_gap_count
+from lode.worker import dead_letter_recovery, dead_letter_remediation
 
 log = logging.getLogger(__name__)
 
@@ -49,21 +50,13 @@ log = logging.getLogger(__name__)
 #: worker's terminal-transition hook (lode-at8) tombstones the head and
 #: reconcile excludes tombstoned heads from re-enqueue on purpose
 #: (reconcile.py:429) -- recovery there means the user re-pasting the URL.
-#: That terminal set is a POSITIVE allowlist of *known* job types, not the
-#: complement of this one -- see ``_KNOWN_TOMBSTONED_DEAD_LETTER_TYPES``
-#: below for why that distinction matters for a job type this file does not
-#: know about yet.
-_SELF_HEALING_DEAD_LETTER_TYPES = frozenset({"embed", "enrich"})
-
-#: The refresh-specific "tombstoned, re-add the URL" hint text is only true
-#: for a ``refresh`` dead-letter -- it is NOT the safe default for anything
-#: that merely isn't embed/enrich. So this is a POSITIVE allowlist, not the
-#: complement of the set above: a future job type would otherwise silently
-#: inherit refresh's remediation text (re-add a URL that may not even apply
-#: to it). Anything outside BOTH sets gets its own generic fallback hint
-#: below, so every dead-letter type still gets a non-misleading hint rather
-#: than silence (lode-tix0).
-_KNOWN_TOMBSTONED_DEAD_LETTER_TYPES = frozenset({"refresh"})
+#:
+#: The classification itself (self-healing / terminal / unclassified) is NOT
+#: declared here -- it's asked of :func:`lode.worker.dead_letter_recovery`
+#: (lode-tr3i), which derives it from the same registries that decide the
+#: worker's actual runtime behavior (``DERIVE_JOB_TYPES``, the dead-letter
+#: hook registry). That keeps this file from needing its own edit every time
+#: a job type is added to the schema CHECK + given a worker registration.
 
 
 class JobStatus(str, Enum):
@@ -457,13 +450,21 @@ def status(db: _DbOption = None) -> None:
     # the action-hint footer far below, so the style and the hints cannot
     # disagree about which arm a dead set falls in (no new query -- the
     # already-fetched rows carry job_type, per lode-8vcq's design note).
+    # Classification itself is asked of worker.dead_letter_recovery (lode-tr3i)
+    # rather than declared here; "unclassified" and unregistered (None) both
+    # fall to the same conservative "unknown" hint arm below -- neither is a
+    # confirmed self-heal.
     dead_types = {job_type for _, job_type, _, _ in dead_letters}
-    dead_self_healing = bool(dead_types & _SELF_HEALING_DEAD_LETTER_TYPES)
-    dead_tombstoned = bool(dead_types & _KNOWN_TOMBSTONED_DEAD_LETTER_TYPES)
-    dead_unknown_type = bool(
-        dead_types
-        - _SELF_HEALING_DEAD_LETTER_TYPES
-        - _KNOWN_TOMBSTONED_DEAD_LETTER_TYPES
+    dead_recoveries = {t: dead_letter_recovery(t) for t in dead_types}
+    dead_self_healing = "self_healing" in dead_recoveries.values()
+    # Terminal types are kept as a SET, not just a bool: the hint below prints
+    # one line per terminal type, each carrying that type's own registered
+    # remediation advice (lode-tr3i) -- recovery advice is type-specific and
+    # must not be inherited across types.
+    dead_terminal_types = {t for t, r in dead_recoveries.items() if r == "terminal"}
+    dead_tombstoned = bool(dead_terminal_types)
+    dead_unknown_type = any(
+        r not in ("self_healing", "terminal") for r in dead_recoveries.values()
     )
     dead_style = (
         "danger"
@@ -536,7 +537,7 @@ def status(db: _DbOption = None) -> None:
         # Per-row severity, so a mixed dead set (one dead refresh, one dead
         # embed) doesn't paint the self-healing row as ominously as the
         # terminal one.
-        job_style = "warn" if job_type in _SELF_HEALING_DEAD_LETTER_TYPES else "danger"
+        job_style = "warn" if dead_recoveries[job_type] == "self_healing" else "danger"
         console.print(
             f"  job {job_id} ({job_type}) target={_short(target_version)}: "
             f"{last_error or 'no error recorded'}",
@@ -658,11 +659,20 @@ def status(db: _DbOption = None) -> None:
             "'lode reembed'/'lode reenrich' to force it.",
             highlight=False,
         )
-    if dead_tombstoned:
+    for job_type in sorted(dead_terminal_types):
+        # The per-type recovery advice comes from the registration site
+        # (worker.register_dead_letter(..., remediation=...)), so no job-type
+        # name appears here: a new terminal type gets its own advice with no
+        # edit to this file, and one that declares none gets the generic
+        # fallback rather than inheriting another type's (lode-tr3i).
+        advice = dead_letter_remediation(job_type) or (
+            "check the per-job error text above and re-run the originating "
+            "action to force a retry."
+        )
         console.print(
-            "[warn]Action needed:[/warn] a dead-lettered refresh job is a "
-            "permanent failure record (tombstoned) -- it will not be retried "
-            "automatically; re-add the URL to force a fresh draw-down.",
+            f"[warn]Action needed:[/warn] a dead-lettered {job_type} job is a "
+            f"permanent failure record -- it will not be retried "
+            f"automatically; {advice}",
             highlight=False,
         )
     if dead_unknown_type:
@@ -680,8 +690,9 @@ def status(db: _DbOption = None) -> None:
         and not revision_drift
         and not enrichment_stale
         and not lexical_gaps
-        # Every dead-letter now trips one of the three hints above, so a
-        # non-empty dead set is exactly
+        # Every dead-letter still trips one of the hints above (terminal
+        # splits into a refresh-specific and a generic arm, but the union is
+        # unchanged), so a non-empty dead set is exactly
         # `dead_self_healing or dead_tombstoned or dead_unknown_type`.
         and not dead_letters
     ):

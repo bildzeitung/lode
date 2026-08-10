@@ -1150,6 +1150,25 @@ entries below from being rewritten to chase the current tree.)
   this: "is the underlying content still valid and cheap to retry?" → sweep; "is retrying pointless and
   the interesting fact is that it's permanently dead?" → terminal-transition hook.
 
+- **Dead-letter recovery classification lives in `worker`, and the per-type *remediation prose* lives
+  at the registration site (lode-tr3i, decided 2026-08-10).** `src/lode/cli/status.py` used to declare
+  both halves of the taxonomy as its own frozensets (`{embed, enrich}` self-healing, `{refresh}`
+  terminal), so adding a job type meant editing four places. Settled: `worker.dead_letter_recovery(
+  job_type)` returns `"terminal" | "self_healing" | "unclassified" | None`, derived from the registries
+  that already decide runtime behavior (`_DEAD_LETTER_HOOKS`, `jobs.DERIVE_JOB_TYPES`, `_REGISTRY`) —
+  no hand-listed table, and `None`/`"unclassified"` both fall to the renderer's conservative
+  "unknown, needs manual follow-up" arm rather than a safe-looking default. **The review's addition:**
+  classifying by registry alone would have made *every* terminal type inherit `refresh`'s "re-add the
+  URL" hint — exactly the inheritance lode-tix0 removed, reintroduced one layer up. So the advice
+  itself is declared with the hook: `register_dead_letter(job_type, hook, remediation=...)` records
+  plain prose (no console markup — `worker` knows nothing about rendering) which `status.py` reads via
+  `dead_letter_remediation()`. A terminal type that declares no advice gets the renderer's generic
+  fallback. Net: adding a job type needs the schema `CHECK` plus a worker registration and nothing
+  else; no job-type name remains in the CLI's dead-letter hint logic. **Known residual:** the
+  self-healing hint's prose still names `embed`/`enrich` and `lode reembed`/`lode reenrich` — that
+  hint is irreducibly type-specific (its `no_egress` caveat is enrich-only), so it was deliberately
+  left alone rather than half-genericized.
+
 - **`/land`'s worktree backstop 1 predicate widened from "merged into trunk" to "merged into trunk OR
   captured on origin" (lode-amif, a residual gap surfaced by lode-vs7g's own review).** lode-vs7g made
   `/code`'s orchestrating session eagerly reclaim a reviewer's / rebase-pickup's launch worktree right
