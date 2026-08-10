@@ -23,27 +23,27 @@ This gate walks EVERY registered command reachable from the top-level
 pull``), invokes ``--help`` through Typer's own ``CliRunner``, and checks
 the rendered output against all six rules.
 
-## Why this doesn't fix any command's help text
+## The allowlist, and why it is empty
 
-lode-ii25.2 through lode-ii25.7 (sibling tickets) are the ones that add an
-explicit, short ``help=`` to each command going forward. Until a given
-command gets one, Typer renders its full maintainer docstring as the
-``--help`` text -- which is exactly what ``docs/conventions.md`` documents
-these six rules were written FOR, not a symptom this gate should paper over.
-So :data:`ALLOWLIST` below is pre-seeded with every command that violates
-any rule TODAY, each with a one-line reason (no config file, no marker
-comment in CLI source -- this reviewed diff is the entire vetting
-mechanism, matching the escape-hatch shape ``docs/conventions.md`` itself
-prescribes). A command is added here for VIOLATING rules the day it was
-first written, not later.
+:data:`ALLOWLIST` is the human-vetted escape hatch ``docs/conventions.md``
+prescribes: one entry per command that violates a rule, each with a one-line
+reason (no config file, no marker comment in CLI source -- the reviewed diff
+that adds an entry is the entire vetting mechanism). A command earns an entry
+for VIOLATING rules the day it was first written, not later; adding a
+rule-conformant ``help=`` is what removes it.
+
+It is currently **empty**: lode-ii25.2 through lode-ii25.11 gave every
+registered command an explicit, conformant ``help=``, so no command needs an
+exemption. Empty is the healthy state, not a disabled gate -- an empty
+allowlist means the gate below excuses nothing at all.
 
 SABOTAGE-VERIFIED (matching the precedent in ``tests/test_bd_list_limit_gate.py``
-and ``tests/test_validate_sha40_call_sites.py``): removing an entry from
-:data:`ALLOWLIST` while its command's help still violates a rule fails this
-test -- re-confirmed at technical review by deleting the ``add`` and
-``status`` entries in-memory, which surfaced ``rule 5 (command help 16 lines
-> 12)`` and four ``status`` violations respectively. The assertions below are
-not vacuous.
+and ``tests/test_validate_sha40_call_sites.py``): the assertions here are not
+vacuous. Re-confirmed at technical review, with the allowlist empty, by
+lowering :data:`MAX_COMMAND_HELP_LINES` to 5 in-memory -- which surfaced rule-5
+violations on twelve commands (``ask``, ``config``, ``models pull``, ...) that
+this gate passes at the real cap. So the walk genuinely renders and measures
+the whole corpus rather than silently discovering nothing.
 
 ## Rendered-output parsing, not source parsing
 
@@ -145,18 +145,12 @@ runner = CliRunner()
 
 #: Every command that violates one or more of the six rules above TODAY,
 #: because it has no explicit ``help=`` yet and Typer is rendering its full
-#: maintainer docstring instead (see the module docstring's "Why this
-#: doesn't fix any command's help text"). Keyed by the command's full,
-#: space-joined name (``"models pull"`` for a sub-app command). Adding
-#: an explicit, rule-conformant ``help=`` to a command is what removes it
-#: from this dict -- that is lode-ii25.2 through .7's job, not this
-#: ticket's.
-ALLOWLIST: dict[str, str] = {
-    "models pull": (
-        "No help= yet (lode-ii25.x); the full docstring renders as --help, "
-        "cites lode-r4r2/lode-j5r2, and exceeds 12 lines."
-    ),
-}
+#: maintainer docstring instead (see the module docstring's "The allowlist,
+#: and why it is empty"). Keyed by the command's full, space-joined name
+#: (``"models pull"`` for a sub-app command). Adding an explicit,
+#: rule-conformant ``help=`` to a command is what removes it from this dict.
+#: Empty today: every registered command has one.
+ALLOWLIST: dict[str, str] = {}
 
 
 @dataclass(frozen=True)
