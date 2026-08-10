@@ -76,8 +76,14 @@ fi
 # --- Fleet pipeline counts (A) ----------------------------------------------
 # `bd list` costs ~0.85s; the statusline re-renders far too often to pay that
 # synchronously, so read from a short-lived cache refreshed in the background.
-# We cache ALL open issues (one call) and count by stage: in_progress = build,
-# then the workflow labels. Zero-count stages are omitted.
+# We cache ALL open issues (one call) and count by stage. `build:` means
+# "claimed (in_progress), not yet handed off to any pipeline stage" -- it
+# excludes the full /sweep SKILL.md SS2b roster (sweep-digest, which is
+# permanently in_progress by design, plus ready-for-code-review/ready-for-land/
+# needs-rebase, which are in_progress but already own their own segment below)
+# so the pipeline segments stay mutually exclusive: a ticket counts in exactly
+# one of build/review/land/rebase, never build AND its own stage. Zero-count
+# stages are omitted.
 #
 # `--limit 0` is load-bearing, not noise (lode-9bbq). The canonical reason, the
 # bd 1.1.0 measurements, and why this is HARDENING rather than a live fix all
@@ -108,7 +114,9 @@ if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
     if [ -s "$cache" ]; then
         counts=$(jq -r '
             def hasl($l): ((.labels // []) | index($l)) != null;
-            [ ([.[] | select(.status=="in_progress")]                       | length),
+            def in_pipeline: hasl("sweep-digest") or hasl("ready-for-code-review")
+                or hasl("ready-for-land") or hasl("needs-rebase");
+            [ ([.[] | select(.status=="in_progress" and (in_pipeline | not))]  | length),
               ([.[] | select(hasl("ready-for-code-review"))]                | length),
               ([.[] | select(hasl("ready-for-land"))]                       | length),
               ([.[] | select(hasl("needs-rebase"))]                         | length),
