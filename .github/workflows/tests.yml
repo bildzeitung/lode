@@ -182,11 +182,11 @@ jobs:
         # (lode-qxdn.2 design notes) -- do not drop it.
         #
         # Split into restore + save (below) rather than the single
-        # actions/cache@v4 step: GitHub only runs a step's post action (which
-        # is where actions/cache@v4 saves) if the job reaches that point in
+        # actions/cache@v6 step: GitHub only runs a step's post action (which
+        # is where actions/cache@v6 saves) if the job reaches that point in
         # its normal reverse-order unwind -- if `nox -s tests` fails, the job
         # is marked failed and post steps of already-run actions are skipped,
-        # so a single actions/cache@v4 step would silently skip saving on
+        # so a single actions/cache@v6 step would silently skip saving on
         # every red run. That is exactly backwards: the run most likely to be
         # red (a fresh model pin, a flake) is also the one most likely to be
         # cold, so every retry would re-download 1.6GB until one run goes
@@ -197,7 +197,7 @@ jobs:
         # in that job are skipped." An explicit save step with `if: always()`
         # is the documented workaround.
         id: restore_model_cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ env.LODE_HOME }}/models
           key: ${{ steps.model_cache.outputs.key }}
@@ -231,7 +231,7 @@ jobs:
         # content, so re-saving is wasted work and (per action version) a
         # same-key save error.
         if: ${{ !cancelled() && steps.restore_model_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ env.LODE_HOME }}/models
           key: ${{ steps.restore_model_cache.outputs.cache-primary-key }}
