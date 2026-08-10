@@ -213,6 +213,45 @@ def register_dead_letter(job_type: str, hook: DeadLetterFn) -> None:
     _DEAD_LETTER_HOOKS[job_type] = hook
 
 
+#: Recovery classification for a dead-lettered job type (lode-tr3i), shared by
+#: any presentation layer that needs to explain a ``'dead'`` row instead of
+#: re-declaring its own copy of this taxonomy:
+#:
+#: - ``"terminal"`` -- a dead-letter hook is registered for the type
+#:   (:func:`register_dead_letter`); recovery needs user action (e.g.
+#:   ``refresh``'s tombstone + re-add-the-URL).
+#: - ``"self_healing"`` -- the type derives from a note version
+#:   (:data:`lode.jobs.DERIVE_JOB_TYPES`) and has no dead-letter hook; the
+#:   next reconciliation gap-sweep re-enqueues it on its own (not a universal
+#:   guarantee -- see the caller's own caveats, docs/storage.md:552).
+#: - ``"unclassified"`` -- has a registered run handler
+#:   (:func:`registered_types`) but matches neither of the above: a job type
+#:   this module hasn't classified for dead-letter recovery yet.
+#: - ``None`` -- not even a registered run handler; a type this worker
+#:   doesn't know about at all (should not occur given the ``jobs.type``
+#:   schema CHECK, but a caller reading raw rows should not assume it can't).
+DeadLetterRecovery = str
+
+
+def dead_letter_recovery(job_type: str) -> DeadLetterRecovery | None:
+    """Classify ``job_type``'s dead-letter recovery: terminal / self_healing / unclassified / None.
+
+    Single source of truth for "is this dead-letter terminal, self-healing,
+    or unclassified" -- derived from the same registries that already decide
+    the worker's actual runtime behavior (:data:`_DEAD_LETTER_HOOKS`,
+    :data:`lode.jobs.DERIVE_JOB_TYPES`, :func:`registered_types`), so a new
+    job type is classified correctly the moment it's registered here, with no
+    edit required in any presentation layer.
+    """
+    if job_type in _DEAD_LETTER_HOOKS:
+        return "terminal"
+    if job_type in jobs.DERIVE_JOB_TYPES:
+        return "self_healing"
+    if job_type in _REGISTRY:
+        return "unclassified"
+    return None
+
+
 def _run_dead_letter_hook(
     conn: sqlite3.Connection,
     job_type: str,

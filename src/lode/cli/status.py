@@ -21,6 +21,7 @@ from lode.enrichment_view import stale_enrichment_heads
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.jobs_read import dead_letter_jobs, egress_purpose_counts, job_status_counts
 from lode.reconcile import lexical_gap_count
+from lode.worker import dead_letter_recovery
 
 log = logging.getLogger(__name__)
 
@@ -49,21 +50,13 @@ log = logging.getLogger(__name__)
 #: worker's terminal-transition hook (lode-at8) tombstones the head and
 #: reconcile excludes tombstoned heads from re-enqueue on purpose
 #: (reconcile.py:429) -- recovery there means the user re-pasting the URL.
-#: That terminal set is a POSITIVE allowlist of *known* job types, not the
-#: complement of this one -- see ``_KNOWN_TOMBSTONED_DEAD_LETTER_TYPES``
-#: below for why that distinction matters for a job type this file does not
-#: know about yet.
-_SELF_HEALING_DEAD_LETTER_TYPES = frozenset({"embed", "enrich"})
-
-#: The refresh-specific "tombstoned, re-add the URL" hint text is only true
-#: for a ``refresh`` dead-letter -- it is NOT the safe default for anything
-#: that merely isn't embed/enrich. So this is a POSITIVE allowlist, not the
-#: complement of the set above: a future job type would otherwise silently
-#: inherit refresh's remediation text (re-add a URL that may not even apply
-#: to it). Anything outside BOTH sets gets its own generic fallback hint
-#: below, so every dead-letter type still gets a non-misleading hint rather
-#: than silence (lode-tix0).
-_KNOWN_TOMBSTONED_DEAD_LETTER_TYPES = frozenset({"refresh"})
+#:
+#: The classification itself (self-healing / terminal / unclassified) is NOT
+#: declared here -- it's asked of :func:`lode.worker.dead_letter_recovery`
+#: (lode-tr3i), which derives it from the same registries that decide the
+#: worker's actual runtime behavior (``DERIVE_JOB_TYPES``, the dead-letter
+#: hook registry). That keeps this file from needing its own edit every time
+#: a job type is added to the schema CHECK + given a worker registration.
 
 
 class JobStatus(str, Enum):
@@ -457,13 +450,16 @@ def status(db: _DbOption = None) -> None:
     # the action-hint footer far below, so the style and the hints cannot
     # disagree about which arm a dead set falls in (no new query -- the
     # already-fetched rows carry job_type, per lode-8vcq's design note).
+    # Classification itself is asked of worker.dead_letter_recovery (lode-tr3i)
+    # rather than declared here; "unclassified" and unregistered (None) both
+    # fall to the same conservative "unknown" hint arm below -- neither is a
+    # confirmed self-heal.
     dead_types = {job_type for _, job_type, _, _ in dead_letters}
-    dead_self_healing = bool(dead_types & _SELF_HEALING_DEAD_LETTER_TYPES)
-    dead_tombstoned = bool(dead_types & _KNOWN_TOMBSTONED_DEAD_LETTER_TYPES)
-    dead_unknown_type = bool(
-        dead_types
-        - _SELF_HEALING_DEAD_LETTER_TYPES
-        - _KNOWN_TOMBSTONED_DEAD_LETTER_TYPES
+    dead_recoveries = {t: dead_letter_recovery(t) for t in dead_types}
+    dead_self_healing = "self_healing" in dead_recoveries.values()
+    dead_tombstoned = "terminal" in dead_recoveries.values()
+    dead_unknown_type = any(
+        r not in ("self_healing", "terminal") for r in dead_recoveries.values()
     )
     dead_style = (
         "danger"
@@ -536,7 +532,7 @@ def status(db: _DbOption = None) -> None:
         # Per-row severity, so a mixed dead set (one dead refresh, one dead
         # embed) doesn't paint the self-healing row as ominously as the
         # terminal one.
-        job_style = "warn" if job_type in _SELF_HEALING_DEAD_LETTER_TYPES else "danger"
+        job_style = "warn" if dead_recoveries[job_type] == "self_healing" else "danger"
         console.print(
             f"  job {job_id} ({job_type}) target={_short(target_version)}: "
             f"{last_error or 'no error recorded'}",
