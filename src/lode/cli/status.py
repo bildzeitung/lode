@@ -359,8 +359,8 @@ def _lexical_gap_count(db: Path | None) -> int:
         "Show work-queue health: job counts, dead-letters, and an egress summary.\n\n"
         "Also checks whether anything needs your attention -- pending or failed "
         "jobs, a cold model cache, mixed or drifted embedding revisions, stale "
-        "enrichment annotations, or missing lexical index rows -- and if so, "
-        "names the follow-up command to run."
+        "enrichment annotations, missing lexical index rows, or dead-lettered "
+        "jobs -- and if so, names the follow-up command to run."
     )
 )
 def status(db: _DbOption = None) -> None:
@@ -416,11 +416,14 @@ def status(db: _DbOption = None) -> None:
     # ominous" (the reported complaint) despite needing no action. A single
     # dead-lettered refresh job (a permanent tombstone, no self-heal) is
     # enough to keep the whole line/table cell at `danger`.
-    dead_has_terminal = any(
-        job_type not in _SELF_HEALING_DEAD_LETTER_TYPES
-        for _, job_type, _, _ in dead_letters
-    )
-    dead_style = "danger" if dead_has_terminal else "warn" if dead_letters else None
+    # Both halves of the partition are computed once, here, and reused by the
+    # action-hint footer far below, so the style and the hints cannot disagree
+    # about which arm a dead set falls in (no new query -- the already-fetched
+    # rows carry job_type, per lode-8vcq's design note).
+    dead_types = {job_type for _, job_type, _, _ in dead_letters}
+    dead_self_healing = bool(dead_types & _SELF_HEALING_DEAD_LETTER_TYPES)
+    dead_tombstoned = bool(dead_types - _SELF_HEALING_DEAD_LETTER_TYPES)
+    dead_style = "danger" if dead_tombstoned else "warn" if dead_self_healing else None
 
     # No header_style= here: rich's Table already defaults it to "table.header",
     # the name CLI_STYLES declares (see the palette comment above), so passing it
@@ -482,10 +485,8 @@ def status(db: _DbOption = None) -> None:
         highlight=False,
     )
     for job_id, job_type, target_version, last_error in dead_letters:
-        # Per-job line mirrors the same self-healing/terminal split as
-        # dead_style above, rather than a single style shared across every
-        # row -- a mixed dead set (e.g. one dead refresh, one dead embed)
-        # should not paint the self-healing job as ominously as the
+        # Per-row severity, so a mixed dead set (one dead refresh, one dead
+        # embed) doesn't paint the self-healing row as ominously as the
         # terminal one.
         job_style = "warn" if job_type in _SELF_HEALING_DEAD_LETTER_TYPES else "danger"
         console.print(
@@ -551,16 +552,6 @@ def status(db: _DbOption = None) -> None:
     # probes above -- but still non-fatal (returns 0 on any failure) and run
     # in the same "outside any try, own connection" style, per lode-cyly.
     lexical_gaps = _lexical_gap_count(db)
-    # Partition the already-fetched dead_letters by the same self-healing
-    # split dead_style used above -- no new query (lode-8vcq's design note).
-    dead_self_healing = any(
-        job_type in _SELF_HEALING_DEAD_LETTER_TYPES
-        for _, job_type, _, _ in dead_letters
-    )
-    dead_tombstoned = any(
-        job_type not in _SELF_HEALING_DEAD_LETTER_TYPES
-        for _, job_type, _, _ in dead_letters
-    )
     console.print()
     # markup stays ON here -- these strings are author-written, not DB-derived,
     # so the [warn]/[ok] tags are the point. highlight stays OFF for the same
@@ -629,7 +620,8 @@ def status(db: _DbOption = None) -> None:
         and not revision_drift
         and not enrichment_stale
         and not lexical_gaps
-        and not dead_self_healing
-        and not dead_tombstoned
+        # Every dead-letter now trips one of the two hints above, so a
+        # non-empty dead set is exactly `dead_self_healing or dead_tombstoned`.
+        and not dead_letters
     ):
         console.print("[ok]No action needed.[/ok]", highlight=False)

@@ -2069,17 +2069,7 @@ def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
     from lode.cli import status as cli_status
 
     db_path = tmp_path / "lode.db"
-    conn = init_db(db_path)
-    try:
-        with conn:
-            conn.execute(
-                "INSERT INTO jobs "
-                "(type, target_version, status, attempts, last_error, next_attempt_at) "
-                "VALUES ('refresh', 'ver-cccccccccccccccc', 'dead', 3, 'boom', ?)",
-                (now_iso(),),
-            )
-    finally:
-        conn.close()
+    _insert_dead_job(db_path, "refresh", "ver-cccccccccccccccc")
 
     buf = io.StringIO()
     monkeypatch.setattr(
