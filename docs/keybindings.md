@@ -350,12 +350,14 @@ interactive terminal is available in this build environment) —
 `(Keys.ControlUnderscore,)`, which is the standard, universal `xterm`/`vt100`
 encoding for `Ctrl+/` (also documented as "Also for Ctrl-hyphen" in that same
 table) — not something Textual invented or that varies meaningfully by
-terminal emulator. **This table-level check is correct as far as it goes,
-but is now KNOWN-INSUFFICIENT, not merely unverified** — it only covers the
-byte a terminal sends when no keyboard protocol renegotiates the wire
-underneath it; see `lode-av50` below for the protocol-level gap it cannot
-see and does not need correcting for (the byte-level mapping was never
-wrong).
+terminal emulator. **This table-level check was correct as far as it goes,
+but incomplete** — it only covers the byte a terminal sends when no
+keyboard protocol renegotiates the wire underneath it. `lode-av50` found
+that gap (the Kitty keyboard protocol, negotiated by iTerm2 3.5+ on macOS,
+replaces the legacy byte with a different escape sequence for this combo)
+and has since closed it with a live-terminal observation — see "Protocol-
+level failure: the Kitty keyboard protocol" below. The byte-level mapping
+above was never wrong; it simply wasn't the whole picture.
 
 ### Protocol-level failure: the Kitty keyboard protocol (`lode-av50`)
 
@@ -368,24 +370,49 @@ iTerm2 3.5+ on macOS supports that protocol. Once negotiated, the terminal
 stops emitting the legacy `0x1f` byte for `Ctrl+Underscore` and instead
 reports the base key plus a modifier bitmask as a CSI-u escape sequence.
 
-**Confirmed empirically** (`lode-av50`, feeding the raw sequence straight
-through `textual._xterm_parser.XTermParser` — installed textual 8.2.8): a
-terminal that does **not** report associated text for this combo sends
-`CSI 45;6u` (codepoint 45 = `-`, modifier byte 6 = ctrl+shift), which
-Textual's Kitty-sequence parser resolves to the key name
-**`ctrl+shift+minus`**, not `ctrl+underscore` — confirmed this is iTerm2's
-behavior for this combo. A terminal that *does* report associated text
-(e.g. `CSI 45;6;95u`, 95 = `_`) resolves back to `ctrl+underscore`, same as
-the legacy path — so the failure is specific to terminals/combos where no
-associated text is reported, not universal to the Kitty protocol.
+**Diagnosed via Textual's own parser — not proof of iTerm2's wire
+behavior on its own.** Feeding the raw sequence straight through
+`textual._xterm_parser.XTermParser` (installed textual 8.2.8): a terminal
+that does **not** report associated text for this combo sends `CSI 45;6u`
+(codepoint 45 = `-`, modifier byte 6 = ctrl+shift), which Textual's
+Kitty-sequence parser resolves to the key name **`ctrl+shift+minus`**, not
+`ctrl+underscore`. A terminal that *does* report associated text (e.g.
+`CSI 45;6;95u`, 95 = `_`) resolves back to `ctrl+underscore`, same as the
+legacy path — so the failure is specific to terminals/combos where no
+associated text is reported, not universal to the Kitty protocol. **This
+experiment proves what Textual does with a given byte sequence — it does
+not prove what iTerm2 actually puts on the wire.** That distinction was
+flagged explicitly by the ticket itself (the CSI-u shape "is my inference,
+not an observation") and, independently, by `/land`'s semantic review,
+which escalated the branch specifically because criterion 1 — the overlay
+actually opening in iTerm2 — was unverified by this experiment alone.
+
+**Confirmed on a live terminal (maintainer, 2026-08-10).** `textual keys`
+(from the `textual-dev` package), run in iTerm2 3.5+ on macOS, US keyboard
+layout, with the Kitty keyboard protocol negotiated
+(`TEXTUAL_DISABLE_KITTY_KEY` unset), reports:
+
+| Press | Textual `.name` (the `key_*` handler spelling) | `Binding` string |
+|---|---|---|
+| `Ctrl+-` | `ctrl_minus` | `ctrl+minus` |
+| `Ctrl+Shift+-` | `ctrl_shift_minus` | `ctrl+shift+minus` |
+
+**The `.name` column is not a `Binding` string — do not bind it verbatim.**
+That underscored spelling is what Textual prints and what a `key_*` handler
+method would be named after; the corresponding `Binding` string uses `+` as
+its separator, never `_`. Conflating the two is the one trap in this
+evidence. Written as binding strings, the live observation confirms
+`ctrl+minus` and `ctrl+shift+minus` are exactly the names Textual reports
+for these two presses — matching what the CSI-u inference above predicted,
+and exactly what `LodeApp.BINDINGS` already binds (table below).
 
 **The modifier byte is the whole axis, and it has two values.** The legacy
 `0x1f` byte is documented in `textual/_ansi_sequences.py` as "Also for
 Ctrl-hyphen", so `Ctrl+-` *without* shift has always opened this overlay
 too. Under the Kitty protocol the same base codepoint 45 therefore arrives
-under two different names depending on shift, and each had to be bound
-(both confirmed empirically against the installed textual 8.2.8 by the
-method above):
+under two different names depending on shift, and each had to be bound —
+both confirmed against the installed textual 8.2.8's parser, and now both
+confirmed against a live terminal above:
 
 | Press | Kitty sequence | Modifier byte | Textual key name |
 |---|---|---|---|
@@ -424,11 +451,19 @@ sends that key name; (2) a parametrized unit test against
 `textual._xterm_parser.XTermParser`, feeding each raw byte sequence in the
 table above and asserting the key name it decodes to — this pins the
 empirical finding, but it exercises Textual's parser, not a live terminal's
-wire behavior. **No test in this repo, and none that
-could be added without a live terminal, verifies what iTerm2 (or any other
+wire behavior. **No automated test in this repo, and none that could be
+added without a live terminal, verifies what iTerm2 (or any other
 terminal) actually puts on the wire** — that gap is inherent to a
 sandboxed CI/build environment and is stated here explicitly rather than
-papered over with a synthetic assertion.
+papered over with a synthetic assertion. The maintainer's live-terminal
+observation above closes that gap for acceptance purposes (a one-time,
+manually-recorded measurement, not a repeatable automated check), and is
+the only thing that could: a key-arrival claim cannot be verified at the
+ANSI-sequence-table level, or by feeding bytes through Textual's own
+parser — both describe what Textual does with a sequence, never what a
+real terminal emits. The negotiated keyboard protocol sits above the
+byte-level table and can invalidate it; only a live terminal settles what
+actually arrives.
 
 Neither a ctrl-*letter* (so it doesn't draw on the exhausted letter-space
 this doc's own ledger tracks) nor a function key (so `lode-juz8.1`'s ban
