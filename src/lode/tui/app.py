@@ -188,6 +188,20 @@ class LodeApp(App[str | None]):
         # verification, and the footer-width measurement:
         # docs/keybindings.md.
         Binding("ctrl+underscore", "show_help", "Help"),
+        # lode-av50: the two Kitty-keyboard-protocol names for the same
+        # physical press. Textual negotiates that protocol by default (gated
+        # only on TEXTUAL_DISABLE_KITTY_KEY, never set by lode itself), and
+        # under it a terminal that reports no associated text sends the base
+        # codepoint plus a modifier bitmask instead of the legacy 0x1f byte
+        # the binding above depends on: CSI 45;6u -> "ctrl+shift+minus"
+        # (Ctrl+_) and CSI 45;5u -> "ctrl+minus" (Ctrl+-, which the legacy
+        # byte also covered). Both bound to the SAME action, alongside --
+        # never replacing -- ctrl+underscore, which terminals off the
+        # protocol, or reporting associated text, still rely on. Hidden --
+        # one footer slot ("Help", above) already covers this action.
+        # Full mechanism and empirical derivation: docs/keybindings.md.
+        Binding("ctrl+shift+minus", "show_help", "Help", show=False),
+        Binding("ctrl+minus", "show_help", "Help", show=False),
         # '?' is a convenience alias for the same action, reachable wherever
         # no TextArea/Input holds focus (freed by lode-2bt3.1). Hidden --
         # "Help" is already shown via the Ctrl+_ entry above; a duplicate

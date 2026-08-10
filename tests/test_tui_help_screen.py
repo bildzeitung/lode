@@ -355,3 +355,82 @@ def test_help_screen_registered_in_screens_for_discoverability(
 ) -> None:
     app = LodeApp(db_path=tmp_path / "lode.db")
     assert app.SCREENS["help"] is HelpScreen
+
+
+def test_ctrl_shift_minus_opens_the_overlay(tmp_path: Path) -> None:
+    """lode-av50: under the Kitty keyboard protocol, a terminal that does
+    not report associated text for Ctrl+Underscore (confirmed on iTerm2
+    3.5+/macOS) never sends the legacy 0x1f byte -- it sends a CSI-u
+    sequence Textual decodes to the key name ``ctrl+shift+minus`` instead
+    (see the parser-level test below, and docs/keybindings.md's
+    "Protocol-level failure" section for the full derivation). This proves
+    the binding itself is wired to the same action -- it does NOT prove a
+    real terminal sends this key name; that's inherently untestable without
+    a live terminal, which the parser-level test below is honest about."""
+    app = LodeApp(db_path=tmp_path / "lode.db")
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            assert isinstance(app.screen, CaptureScreen)
+            await pilot.press("ctrl+shift+minus")
+            await pilot.pause()
+            assert isinstance(app.screen, HelpScreen)
+
+    asyncio.run(_drive())
+
+
+def test_ctrl_minus_opens_the_overlay(tmp_path: Path) -> None:
+    """lode-av50: the shift-less half of the same gap. The legacy 0x1f byte
+    is documented in textual/_ansi_sequences.py as "Also for Ctrl-hyphen",
+    so Ctrl+- has always opened this overlay on the legacy path; under the
+    Kitty protocol it arrives as ``ctrl+minus`` instead (see the
+    parser-level test below). Bound for parity so the shift-less press does
+    not silently regress."""
+    app = LodeApp(db_path=tmp_path / "lode.db")
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            assert isinstance(app.screen, CaptureScreen)
+            await pilot.press("ctrl+minus")
+            await pilot.pause()
+            assert isinstance(app.screen, HelpScreen)
+
+    asyncio.run(_drive())
+
+
+@pytest.mark.parametrize(
+    ("sequence", "expected_key"),
+    [
+        ("\x1b[45;6u", "ctrl+shift+minus"),
+        ("\x1b[45;5u", "ctrl+minus"),
+    ],
+    ids=["ctrl+shift", "ctrl_only"],
+)
+def test_kitty_protocol_csi_u_sequence_decodes_to_the_bound_key_name(
+    sequence: str, expected_key: str
+) -> None:
+    """lode-av50's actual empirical finding, pinned at the source: feed the
+    raw Kitty-protocol CSI-u byte sequences straight through Textual's own
+    parser and assert each decodes to the key name this ticket binds, not to
+    'ctrl+underscore'. The modifier byte is the whole axis -- same base
+    codepoint 45 ('-'), byte 6 (ctrl+shift, i.e. Ctrl+_) and byte 5 (ctrl
+    only, i.e. Ctrl+-) decode to two DIFFERENT names, which is why both had
+    to be bound.
+
+    HONEST LIMIT: this exercises textual._xterm_parser.XTermParser in
+    isolation -- it proves what Textual's installed 8.2.8 does with those
+    exact byte sequences, which is the mechanism this ticket diagnosed and
+    fixed. It does NOT prove iTerm2 (or any other terminal) actually puts
+    them on the wire for these key combos -- no interactive terminal is
+    available in this build/CI environment, so that leg of verification
+    cannot be automated here. See docs/keybindings.md's "Protocol-level
+    failure: the Kitty keyboard protocol" section for the full account,
+    including why the table-level check that covered the legacy byte could
+    never have caught this."""
+    from textual._xterm_parser import XTermParser
+
+    parser = XTermParser(debug=False)
+    events = list(parser.feed(sequence))
+
+    assert len(events) == 1
+    assert events[0].key == expected_key
