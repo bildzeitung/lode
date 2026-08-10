@@ -88,14 +88,28 @@ _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
 # (which doesn't exist -- it's a bullet inside a numbered step, not a
 # heading). These ids are literal, never slugified.
 _HTML_ANCHOR_RE = re.compile(r'<a\s+(?:id|name)=["\']([^"\']+)["\']', re.IGNORECASE)
-# A bare (no markdown brackets) `docs/<path>.md#<anchor>` text reference --
-# what a `.github/workflows/*.yml` or `scripts/*.sh` comment actually writes.
+# A bare (no markdown brackets) `docs/<path>.md` or `docs/<path>.md#<anchor>`
+# text reference -- what a `.github/workflows/*.yml` or `scripts/*.sh` comment
+# actually writes, AND what a `help=` docs/ footnote in `src/lode/cli/` writes
+# when it points at a whole page rather than a specific heading (e.g. "See
+# docs/how-to/maintenance-commands.md.", lode-6lvu). The `#<anchor>` suffix is
+# optional -- `(?:#[\w-]+)?` -- so both shapes are recognized by one regex; a
+# reference lacking it still gets its FILE existence verified by
+# `_resolve_error` (anchor checking simply doesn't apply when there is no
+# anchor to check, same as an anchor-less markdown link).
 # The `(?<![\w./-])` lookbehind makes "root-relative" mechanical: it refuses
 # any `docs/` preceded by a path character, so a URL into ANOTHER repo's docs
 # (`https://github.com/org/repo/blob/main/docs/release.md#anchor`) is never
 # resolved against this tree. Without it, one upstream URL in a README turns
 # this blocking gate red on a target that was never ours (verified: it did).
-_DOC_ANCHOR_REF_RE = re.compile(r"(?<![\w./-])docs/[\w./-]+\.md#[\w-]+")
+# The trailing `(?![\w-])` stops the match from swallowing a following word
+# character or hyphen that would make the matched text not actually a plain
+# `<page>.md` reference -- e.g. a hypothetical `<page>.mdx` or `<page>.md`
+# immediately followed by a hyphenated suffix. (Written here without a
+# contiguous literal `docs/*.md` example on purpose: this file is itself
+# scanned by this same regex, as a tracked file outside SCAN_DIRS -- see
+# tests/test_check_links.py's `_DOCS` split for the identical concern.)
+_DOC_ANCHOR_REF_RE = re.compile(r"(?<![\w./-])docs/[\w./-]+\.md(?:#[\w-]+)?(?![\w-])")
 # Extensions skipped when walking tracked files OUTSIDE SCAN_DIRS for a bare
 # docs/ anchor reference: machine-generated data/lock formats, whose contents
 # nobody edits by hand. `.jsonl` is the load-bearing entry, NOT dead weight --

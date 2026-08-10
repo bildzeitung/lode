@@ -26,6 +26,16 @@ check_links = load_module_from_path(
 check = check_links.check
 github_slug = check_links.github_slug
 
+#: Split so this module's own source never spells out a bare, matchable
+#: `docs/<path>.md` (anchored or not, lode-6lvu) reference -- the real-repo
+#: self-test below (``test_real_repo_passes_the_gate``) walks tests/ as a
+#: tracked file outside SCAN_DIRS, so a contiguous literal here would make
+#: this file cite itself, and its fabricated fixture paths would fail the
+#: gate. Used throughout this module's `docs/`-shaped fixture paths, not just
+#: the ones with an explicit anchor -- since lode-6lvu, an anchor-LESS bare
+#: reference is gated too, so every such fixture needs the same treatment.
+_DOCS = "doc" + "s"
+
 
 def _git_init(root: Path) -> None:
     """A real git repo is required -- the gate scopes to ``git ls-files``, not
@@ -75,14 +85,14 @@ class TestGithubSlug:
 
 class TestCheck:
     def test_clean_tree_has_no_errors(self, tmp_path):
-        _write(tmp_path, "docs/a.md", "# A\n\nSee [B](b.md#section-one).\n")
-        _write(tmp_path, "docs/b.md", "# B\n\n## Section One\n")
+        _write(tmp_path, f"{_DOCS}/a.md", "# A\n\nSee [B](b.md#section-one).\n")
+        _write(tmp_path, f"{_DOCS}/b.md", "# B\n\n## Section One\n")
         _git_init(tmp_path)
 
         assert check(tmp_path) == []
 
     def test_broken_file_target_is_reported(self, tmp_path):
-        _write(tmp_path, "docs/a.md", "See [missing](nope.md).\n")
+        _write(tmp_path, f"{_DOCS}/a.md", "See [missing](nope.md).\n")
         _git_init(tmp_path)
 
         errors = check(tmp_path)
@@ -92,8 +102,8 @@ class TestCheck:
         assert "does not exist" in errors[0].reason
 
     def test_broken_anchor_is_reported(self, tmp_path):
-        _write(tmp_path, "docs/a.md", "See [B](b.md#no-such-heading).\n")
-        _write(tmp_path, "docs/b.md", "# B\n\n## Real Heading\n")
+        _write(tmp_path, f"{_DOCS}/a.md", "See [B](b.md#no-such-heading).\n")
+        _write(tmp_path, f"{_DOCS}/b.md", "# B\n\n## Real Heading\n")
         _git_init(tmp_path)
 
         errors = check(tmp_path)
@@ -104,7 +114,9 @@ class TestCheck:
 
     def test_same_file_anchor_checked_against_own_headings(self, tmp_path):
         _write(
-            tmp_path, "docs/a.md", "# A\n\n## Real\n\n[back](#real)\n\n[bad](#fake)\n"
+            tmp_path,
+            f"{_DOCS}/a.md",
+            "# A\n\n## Real\n\n[back](#real)\n\n[bad](#fake)\n",
         )
         _git_init(tmp_path)
 
@@ -119,7 +131,7 @@ class TestCheck:
         step, not a heading -- GFM honors these independently of headings."""
         _write(
             tmp_path,
-            "docs/a.md",
+            f"{_DOCS}/a.md",
             '# A\n\n<a id="reclaim"></a>\n**Step.** Do the thing.\n\n[see](#reclaim)\n',
         )
         _git_init(tmp_path)
@@ -129,7 +141,7 @@ class TestCheck:
     def test_duplicate_headings_get_dash_n_suffix(self, tmp_path):
         _write(
             tmp_path,
-            "docs/a.md",
+            f"{_DOCS}/a.md",
             "# A\n\n## Note\n\n## Note\n\n[first](#note) [second](#note-1)\n",
         )
         _git_init(tmp_path)
@@ -139,7 +151,7 @@ class TestCheck:
     def test_external_links_are_skipped(self, tmp_path):
         _write(
             tmp_path,
-            "docs/a.md",
+            f"{_DOCS}/a.md",
             "[web](https://example.com/nope#frag) [mail](mailto:a@b.com)\n",
         )
         _git_init(tmp_path)
@@ -149,7 +161,7 @@ class TestCheck:
     def test_link_inside_inline_code_span_is_not_a_real_link(self, tmp_path):
         """docs/editing.md has real prose like `` `[text](url)` `` showing
         markdown syntax -- that must never be scanned as an actual link."""
-        _write(tmp_path, "docs/a.md", "Example: `[text](nope.md)` shows a link.\n")
+        _write(tmp_path, f"{_DOCS}/a.md", "Example: `[text](nope.md)` shows a link.\n")
         _git_init(tmp_path)
 
         assert check(tmp_path) == []
@@ -159,7 +171,7 @@ class TestCheck:
         must never be read as an ATX heading target for an anchor check."""
         _write(
             tmp_path,
-            "docs/a.md",
+            f"{_DOCS}/a.md",
             "# A\n\n```bash\n# not a heading\n```\n\n[link](#not-a-heading)\n",
         )
         _git_init(tmp_path)
@@ -170,7 +182,7 @@ class TestCheck:
         assert errors[0].target == "#not-a-heading"
 
     def test_anchor_into_non_markdown_target_only_checks_file_existence(self, tmp_path):
-        _write(tmp_path, "docs/a.md", "[script](../scripts/foo.sh#anything)\n")
+        _write(tmp_path, f"{_DOCS}/a.md", "[script](../scripts/foo.sh#anything)\n")
         _write(tmp_path, "scripts/foo.sh", "#!/bin/bash\n")
         _git_init(tmp_path)
 
@@ -181,7 +193,7 @@ class TestCheck:
         (see TestBareDocAnchorRefs below for what they DO get: a bare
         docs/-anchor citation check) -- but they remain valid *targets* for
         a link written inside a SCAN_DIRS document."""
-        _write(tmp_path, "docs/a.md", "[readme](../README.md)\n")
+        _write(tmp_path, f"{_DOCS}/a.md", "[readme](../README.md)\n")
         _write(tmp_path, "README.md", "# Readme\n")
         _git_init(tmp_path)
 
@@ -196,13 +208,6 @@ def test_gate_scans_both_docs_and_dot_claude(tmp_path, scan_dir):
     errors = check(tmp_path)
 
     assert len(errors) == 1
-
-
-#: Split so this module's own source never spells out a bare
-#: docs-dir-slash-anchor string -- the real-repo self-test below walks tests/
-#: as a tracked file outside SCAN_DIRS, so a contiguous literal here would
-#: make this file cite itself, and its fabricated anchors would fail the gate.
-_DOCS = "doc" + "s"
 
 
 class TestBareDocAnchorRefs:
@@ -262,6 +267,80 @@ class TestBareDocAnchorRefs:
         (which would look for scripts/docs/x.md and never find it)."""
         _write(tmp_path, f"{_DOCS}/x.md", "# X\n\n## Anchor\n")
         _write(tmp_path, "scripts/foo.sh", f"# {_DOCS}/x.md#anchor\n")
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+    def test_anchor_less_bare_reference_to_existing_file_passes(self, tmp_path):
+        """lode-6lvu: a bare `docs/<page>.md` reference with NO `#anchor` --
+        the exact shape a `help=` footnote in `src/lode/cli/` writes ("See
+        docs/how-to/maintenance-commands.md.") -- must resolve when the file
+        exists, with nothing to check beyond file existence (there is no
+        anchor to validate)."""
+        _write(tmp_path, f"{_DOCS}/how-to/x.md", "# X\n")
+        _write(
+            tmp_path,
+            "src/lode/cli/reembed.py",
+            f'"""See {_DOCS}/how-to/x.md."""\n',
+        )
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+    def test_anchor_less_bare_reference_to_missing_file_is_reported(self, tmp_path):
+        """lode-6lvu's core acceptance case: an anchor-less citation to a
+        `docs/<page>.md` that does NOT exist must be flagged -- this is the
+        exact hole that let a page rename/move silently break these
+        footnotes with nothing failing."""
+        _write(
+            tmp_path,
+            "src/lode/cli/reenrich.py",
+            f'"""See {_DOCS}/how-to/does-not-exist.md."""\n',
+        )
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert len(errors) == 1
+        assert errors[0].target == f"{_DOCS}/how-to/does-not-exist.md"
+        assert "does not exist" in errors[0].reason
+
+    def test_anchor_less_and_anchored_bare_references_both_reported_once_each(
+        self, tmp_path
+    ):
+        """An anchored reference to a broken anchor, and an anchor-less
+        reference on another line, are independent -- fixing one must not
+        hide or duplicate the other."""
+        _write(tmp_path, f"{_DOCS}/a.md", "# A\n\n## Real\n")
+        _write(
+            tmp_path,
+            "scripts/foo.sh",
+            f"# See {_DOCS}/a.md#no-such-anchor\n# See {_DOCS}/does-not-exist.md\n",
+        )
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert len(errors) == 2
+        targets = {e.target for e in errors}
+        assert targets == {
+            f"{_DOCS}/a.md#no-such-anchor",
+            f"{_DOCS}/does-not-exist.md",
+        }
+
+    def test_anchor_less_reference_does_not_swallow_trailing_word_char(self, tmp_path):
+        """A `<page>.mdx`-shaped token must not be matched as if it were the
+        plain `<page>.md` reference with a stray trailing 'x' -- the trailing
+        `(?![\\w-])` guard is what prevents that. Nothing in this fixture is a
+        citation, so the gate must report NOTHING: without the guard the regex
+        matches a truncated `<page>.md`, which does not exist and so surfaces
+        as an error here. (Written without a contiguous literal `docs/*.md`
+        example -- see the `_DOCS` split's comment above.)"""
+        _write(
+            tmp_path,
+            "scripts/foo.sh",
+            f"# not a citation: {_DOCS}/foo.mdx\n",
+        )
         _git_init(tmp_path)
 
         assert check(tmp_path) == []
@@ -354,7 +433,7 @@ def test_real_repo_passes_the_gate():
 
 
 def test_cli_exits_nonzero_and_names_source_line_and_target_on_breakage(tmp_path):
-    _write(tmp_path, "docs/a.md", "line one\nSee [missing](nope.md) here.\n")
+    _write(tmp_path, f"{_DOCS}/a.md", "line one\nSee [missing](nope.md) here.\n")
     _git_init(tmp_path)
 
     result = subprocess.run(
@@ -376,7 +455,7 @@ def test_cli_exits_nonzero_and_names_source_line_and_target_on_breakage(tmp_path
 
 
 def test_cli_exits_zero_on_clean_tree(tmp_path):
-    _write(tmp_path, "docs/a.md", "# A\n\nNo links here.\n")
+    _write(tmp_path, f"{_DOCS}/a.md", "# A\n\nNo links here.\n")
     _git_init(tmp_path)
 
     result = subprocess.run(
