@@ -216,6 +216,17 @@ Because filing writes Dolt, a missing or failing `bd` (or the `bd dolt push` aft
 it never changes the script's exit status or the lock promotion, preserving the script's existing
 contract that it never mutates anything outside `./venv` and `requirements.lock`.
 
+The diff parsing, the rendering, and the stub's skip policy live in the sourceable
+`scripts/dep-churn-lib.sh`, not inline in `update-deps.sh` — so they get `nox -s shellcheck` and
+`tests/test_dep_churn_lib.py`, the same shape `scripts/venv-install.sh` and `scripts/gate-lib.sh`
+already use. **A sourceable shell library in this repo returns its data on stdout and holds no
+cross-call state** — the standing rule the split exists to enforce, not a stylistic preference: a
+caller consumes such a helper through command substitution, which runs in a *subshell*, so a
+function that "returns" a value by setting a global has that value silently discarded. lode-i642's
+first implementation did exactly that and shipped a feature that could never fire on any input, with
+both quality gates green because nothing tested it (`tests/test_dep_churn_lib.py`'s docstring keeps
+the incident).
+
 ### Ruff's lint rule set (settled `lode-cs5u`)
 
 **The model: ruff's full default set, minus a shrinking `[tool.ruff.lint] ignore` list.**

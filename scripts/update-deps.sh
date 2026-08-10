@@ -55,7 +55,10 @@
 #      have been auto-filed). Noise gate: filing is skipped entirely when
 #      every moved package changed only its patch component (mechanically
 #      decidable from the diff already computed) -- a ticket per run that is
-#      usually noise gets ignored. `--no-file` suppresses filing outright;
+#      usually noise gets ignored -- that gate, the diff parsing and the
+#      rendering all live in the sourceable scripts/dep-churn-lib.sh so they
+#      are unit-tested rather than trapped in this script's uninvokable
+#      middle. `--no-file` suppresses filing outright;
 #      `--dry-run` never reaches this step at all. Filing writes Dolt, so a
 #      missing/failing `bd` (or the `bd dolt push` after it) only WARNS --
 #      it never changes this script's exit status or the lock promotion
@@ -150,82 +153,31 @@ fi
 # /tmp path into requirements.lock's history.
 sed -i "s|$CANDIDATE|$LOCK|" "$CANDIDATE"
 
-# Readable name==version diff -- deliberately ignores the --hash lines;
-# those are the whole reason this isn't `git diff`. Also stashes the raw,
-# unformatted "$name\t$old\t$new" change lines (moved packages only, i.e.
-# $old != $new) in the global CHANGES_RAW for the noise-gate check in
-# all_patch_level_only() below -- computed once here so the filing step
-# never has to re-derive the diff.
-CHANGES_RAW=""
-print_version_diff() {
-  local old="$1" new="$2"
-  local old_kv new_kv changes
-  old_kv="$(mktemp)"
-  new_kv="$(mktemp)"
-  grep -oE '^[A-Za-z0-9_.+-]+==[A-Za-z0-9_.!+-]+' "$old" \
-    | sed -E 's/==/\t/' | sort -t $'\t' -k1,1 -u > "$old_kv"
-  grep -oE '^[A-Za-z0-9_.+-]+==[A-Za-z0-9_.!+-]+' "$new" \
-    | sed -E 's/==/\t/' | sort -t $'\t' -k1,1 -u > "$new_kv"
+# Readable name==version diff. The parsing, the rendering and the stub's skip
+# policy all live in the sourceable scripts/dep-churn-lib.sh so they are
+# unit-tested (tests/test_dep_churn_lib.py) rather than trapped in this
+# script's uninvokable middle. Both values below are assigned HERE, at top
+# level -- see that library's CONTRACT note for why nothing there may return a
+# value by setting a global.
+# shellcheck source=dep-churn-lib.sh
+. "$REPO/scripts/dep-churn-lib.sh"
 
-  CHANGES_RAW="$(join -a1 -a2 -e '(none)' -o 0,1.2,2.2 -t $'\t' "$old_kv" "$new_kv" \
-    | awk -F'\t' '$2 != $3')"
-
-  changes="$(printf '%s\n' "$CHANGES_RAW" | awk -F'\t' '
-        NF < 3 { next }
-        $2 == "(none)" { printf "  + %-30s %s\n", $1, $3; next }
-        $3 == "(none)" { printf "  - %-30s %s (removed)\n", $1, $2; next }
-        { printf "    %-30s %s -> %s\n", $1, $2, $3 }
-      ')"
-  rm -f "$old_kv" "$new_kv"
-
-  if [ -z "$changes" ]; then
-    echo "VERSION DIFF: no change -- candidate lock is identical to $old"
-  else
-    printf 'VERSION DIFF (%s -> candidate):\n%s\n' "$old" "$changes"
-  fi
-}
-
-DIFF_TEXT="$(print_version_diff "$LOCK" "$CANDIDATE")"
+CHANGES_RAW="$(dep_changes_raw "$LOCK" "$CANDIDATE")"
+DIFF_TEXT="$(dep_version_diff_text "$LOCK" "$CHANGES_RAW")"
 echo "$DIFF_TEXT"
 
 if [ "$DRY_RUN" -eq 1 ]; then
   exit 0
 fi
 
-# Noise gate for the churn-evaluation stub (lode-i642): true iff every moved
-# package in CHANGES_RAW changed ONLY its patch component (major.minor
-# unchanged). An addition/removal ("(none)" on either side) or a version
-# string that doesn't parse as major.minor.patch is conservatively treated
-# as NOT patch-only, so it still triggers filing.
-all_patch_level_only() {
-  [ -n "$CHANGES_RAW" ] || return 1   # no changes at all -- nothing to gate
-  local name old new old_mm new_mm
-  while IFS=$'\t' read -r name old new; do
-    [ -n "$name" ] || continue
-    [ "$old" = "(none)" ] && return 1
-    [ "$new" = "(none)" ] && return 1
-    old_mm="$(echo "$old" | grep -oE '^[0-9]+\.[0-9]+')" || return 1
-    new_mm="$(echo "$new" | grep -oE '^[0-9]+\.[0-9]+')" || return 1
-    [ -n "$old_mm" ] && [ "$old_mm" = "$new_mm" ] || return 1
-  done <<<"$CHANGES_RAW"
-  return 0
-}
-
 # File ONE bd stub ticket carrying the VERSION DIFF as a durable work order
 # (lode-i642) -- only called from the GREEN promote path (step 5). Every
 # failure mode here WARNS and returns 0: filing must never change this
 # script's exit status or the lock promotion outcome.
 file_churn_stub() {
-  if [ "$NO_FILE" -eq 1 ]; then
-    echo "update-deps.sh: --no-file set -- skipping churn-evaluation stub ticket."
-    return 0
-  fi
-  if [ -z "$CHANGES_RAW" ]; then
-    echo "update-deps.sh: no version changes -- skipping churn-evaluation stub ticket."
-    return 0
-  fi
-  if all_patch_level_only; then
-    echo "update-deps.sh: every moved package is patch-level only -- skipping churn-evaluation stub ticket (noise gate)."
+  local skip
+  if skip="$(dep_stub_skip_reason "$NO_FILE" "$CHANGES_RAW")"; then
+    echo "update-deps.sh: $skip"
     return 0
   fi
   if ! command -v bd >/dev/null 2>&1; then
