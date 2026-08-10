@@ -355,3 +355,51 @@ def test_help_screen_registered_in_screens_for_discoverability(
 ) -> None:
     app = LodeApp(db_path=tmp_path / "lode.db")
     assert app.SCREENS["help"] is HelpScreen
+
+
+def test_ctrl_shift_minus_opens_the_overlay(tmp_path: Path) -> None:
+    """lode-av50: under the Kitty keyboard protocol, a terminal that does
+    not report associated text for Ctrl+Underscore (confirmed on iTerm2
+    3.5+/macOS) never sends the legacy 0x1f byte -- it sends a CSI-u
+    sequence Textual decodes to the key name ``ctrl+shift+minus`` instead
+    (see the parser-level test below, and docs/keybindings.md's
+    "Protocol-level failure" section for the full derivation). This proves
+    the binding itself is wired to the same action -- it does NOT prove a
+    real terminal sends this key name; that's inherently untestable without
+    a live terminal, which the parser-level test below is honest about."""
+    app = LodeApp(db_path=tmp_path / "lode.db")
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            assert isinstance(app.screen, CaptureScreen)
+            await pilot.press("ctrl+shift+minus")
+            await pilot.pause()
+            assert isinstance(app.screen, HelpScreen)
+
+    asyncio.run(_drive())
+
+
+def test_kitty_protocol_csi_u_sequence_decodes_to_ctrl_shift_minus() -> None:
+    """lode-av50's actual empirical finding, pinned at the source: feed the
+    raw Kitty-protocol CSI-u byte sequence iTerm2 sends for Ctrl+Shift+-
+    (codepoint 45 = '-', modifier byte 6 = ctrl+shift, no associated-text
+    component) straight through Textual's own parser and assert it decodes
+    to the key name this ticket binds, not to 'ctrl+underscore'.
+
+    HONEST LIMIT: this exercises textual._xterm_parser.XTermParser in
+    isolation -- it proves what Textual's installed 8.2.8 does with that
+    exact byte sequence, which is the mechanism this ticket diagnosed and
+    fixed. It does NOT prove iTerm2 (or any other terminal) actually puts
+    that sequence on the wire for this key combo -- no interactive terminal
+    is available in this build/CI environment, so that leg of verification
+    cannot be automated here. See docs/keybindings.md's "Protocol-level
+    failure: the Kitty keyboard protocol" section for the full account,
+    including why the table-level check that covered the legacy byte could
+    never have caught this."""
+    from textual._xterm_parser import XTermParser
+
+    parser = XTermParser(debug=False)
+    events = list(parser.feed("\x1b[45;6u"))
+
+    assert len(events) == 1
+    assert events[0].key == "ctrl+shift+minus"

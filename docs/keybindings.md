@@ -163,6 +163,7 @@ tree by `lode-pijc`.
 | `ctrl+t` | Show Tags | "Tags" — rekeyed off the function key `f5` by `lode-juz8.1` (itself a land-time rekey off `f4` — see the history below) |
 | `ctrl+l` | Show Ask | Claimed by `lode-11io` — the mnemonic `ctrl+a` is NOT available (a `TextArea`/`Input` builtin, cursor-to-line-start); confirmed against all three traps below and against every screen's own `BINDINGS` |
 | `ctrl+underscore` | Show keybinding help overlay | Claimed by `lode-2bt3.2` — see "The keybinding help overlay" section below |
+| `ctrl+shift+minus` (hidden, `show=False`) | Show keybinding help overlay | Same action as `ctrl+underscore`; added by `lode-av50` for terminals that negotiate the Kitty keyboard protocol without reporting associated text for this combo (confirmed on iTerm2 3.5+/macOS) — see "Protocol-level failure: the Kitty keyboard protocol" below |
 | `?` (hidden, `show=False`) | Show keybinding help overlay | Same action as `ctrl+underscore`; convenience-only, reachable wherever no `TextArea`/`Input` holds focus (freed by `lode-2bt3.1`) |
 
 No App-level function keys remain — see the "No function keys" policy above. `ctrl+l` is now
@@ -348,9 +349,69 @@ interactive terminal is available in this build environment) —
 `(Keys.ControlUnderscore,)`, which is the standard, universal `xterm`/`vt100`
 encoding for `Ctrl+/` (also documented as "Also for Ctrl-hyphen" in that same
 table) — not something Textual invented or that varies meaningfully by
-terminal emulator. If a specific terminal is later found not to deliver this
-byte, escalate rather than silently falling back to a letter (none are left
-— see the "No function keys" section's letter-space accounting above).
+terminal emulator. **This table-level check is correct as far as it goes,
+but is now KNOWN-INSUFFICIENT, not merely unverified** — it only covers the
+byte a terminal sends when no keyboard protocol renegotiates the wire
+underneath it; see `lode-av50` below for the protocol-level gap it cannot
+see and does not need correcting for (the byte-level mapping was never
+wrong).
+
+### Protocol-level failure: the Kitty keyboard protocol (`lode-av50`)
+
+**The table-level verification above cannot catch a failure that happens
+above the table.** Textual's Linux driver enables the Kitty keyboard
+protocol on startup by default (`textual/drivers/linux_driver.py`), gated
+only on the `TEXTUAL_DISABLE_KITTY_KEY` env var, which lode does not set
+anywhere in its own startup path (by design — see the scope fence below).
+iTerm2 3.5+ on macOS supports that protocol. Once negotiated, the terminal
+stops emitting the legacy `0x1f` byte for `Ctrl+Underscore` and instead
+reports the base key plus a modifier bitmask as a CSI-u escape sequence.
+
+**Confirmed empirically** (`lode-av50`, feeding the raw sequence straight
+through `textual._xterm_parser.XTermParser` — installed textual 8.2.8): a
+terminal that does **not** report associated text for this combo sends
+`CSI 45;6u` (codepoint 45 = `-`, modifier byte 6 = ctrl+shift), which
+Textual's Kitty-sequence parser resolves to the key name
+**`ctrl+shift+minus`**, not `ctrl+underscore` — confirmed this is iTerm2's
+behavior for this combo. A terminal that *does* report associated text
+(e.g. `CSI 45;6;95u`, 95 = `_`) resolves back to `ctrl+underscore`, same as
+the legacy path — so the failure is specific to terminals/combos where no
+associated text is reported, not universal to the Kitty protocol.
+
+**The fix:** `LodeApp.BINDINGS` binds `ctrl+shift+minus` to the same
+`action_show_help`, alongside — never replacing — `ctrl+underscore`
+(`src/lode/tui/app.py`). Both routes reach the same action; neither
+terminal family regresses.
+
+**Scope fence — do not disable the Kitty protocol.** Setting
+`TEXTUAL_DISABLE_KITTY_KEY` in lode's own startup would suppress the
+protocol for the whole app to fix one binding — a broad, invisible
+behaviour change traded for a narrow bug. Not done here; if that trade is
+ever judged worthwhile, it is a decision for a human, not something folded
+into this ticket.
+
+**Neighbouring-bindings spot check.** Every other App-level binding is a
+`ctrl+`*letter* combo (`ctrl+q`, `ctrl+o`, `ctrl+b`, `ctrl+t`, `ctrl+l`).
+Fed through the same Kitty parser (`CSI <codepoint>;5u`, ctrl only, no
+shift), each resolves to its own unchanged `ctrl+<letter>` name regardless
+of whether the terminal reports associated text — letters don't carry the
+shift-dependent base-vs-associated-text ambiguity that `-`/`_` does.
+`ctrl+underscore` is the only binding in the codebase affected by this
+failure mode.
+
+**Regression coverage.** `tests/test_tui_help_screen.py` covers two
+layers: (1) `pilot.press("ctrl+shift+minus")` opens the overlay, proving
+the binding itself is wired to `action_show_help` — the same coverage
+style every other binding in this suite already gets, and it says nothing
+about whether a real terminal ever sends that key name; (2) a direct unit
+test against `textual._xterm_parser.XTermParser`, feeding the raw
+`CSI 45;6u` byte sequence and asserting it decodes to `ctrl+shift+minus` —
+this pins the empirical finding above, but it exercises Textual's parser,
+not a live terminal's wire behavior. **No test in this repo, and none that
+could be added without a live terminal, verifies what iTerm2 (or any other
+terminal) actually puts on the wire** — that gap is inherent to a
+sandboxed CI/build environment and is stated here explicitly rather than
+papered over with a synthetic assertion.
 
 Neither a ctrl-*letter* (so it doesn't draw on the exhausted letter-space
 this doc's own ledger tracks) nor a function key (so `lode-juz8.1`'s ban
