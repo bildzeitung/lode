@@ -76,12 +76,19 @@ fi
 # --- Fleet pipeline counts (A) ----------------------------------------------
 # `bd list` costs ~0.85s; the statusline re-renders far too often to pay that
 # synchronously, so read from a short-lived cache refreshed in the background.
-# We cache ALL open issues (one call) and count by stage. `build:` means
-# "claimed (in_progress), not yet handed off to any pipeline stage": it excludes
-# the full /sweep SKILL.md §2b roster (sweep-digest, permanently in_progress by
-# design, plus ready-for-code-review/ready-for-land/needs-rebase, which are also
-# in_progress but already own their own segment below), so a ticket counts in
-# exactly one of build/review/land/rebase. Zero-count stages are omitted.
+# We cache ALL open issues (one call) and count by stage. The invariant is
+# MUTUAL EXCLUSION: no ticket is ever counted in two segments. `build:` means
+# "claimed (in_progress) and matched by no other segment", so its exclusion is
+# DERIVED from the sibling segments' own predicates (is_review/is_land/
+# is_rebase/is_human below, plus the never-rendered is_digest bookkeeping
+# predicate -- the /sweep digest is permanently in_progress by design). It is
+# NOT a label list copied from /sweep SKILL.md §2b: there is no second roster
+# here to drift against that one. The siblings are exclusive of each other by
+# the write side's discipline, not by anything here -- /land swaps pipeline
+# labels atomically (--remove-label X --add-label Y) and escalation opens a
+# SEPARATE `human` decision ticket rather than adding `human` to the escalated
+# one -- so this renderer does not re-assert that upstream guarantee.
+# Zero-count stages are omitted.
 #
 # `--limit 0` is load-bearing, not noise (lode-9bbq). The canonical reason, the
 # bd 1.1.0 measurements, and why this is HARDENING rather than a live fix all
@@ -112,13 +119,18 @@ if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
     if [ -s "$cache" ]; then
         counts=$(jq -r '
             def hasl($l): ((.labels // []) | index($l)) != null;
-            def in_pipeline: hasl("sweep-digest") or hasl("ready-for-code-review")
-                or hasl("ready-for-land") or hasl("needs-rebase");
-            [ ([.[] | select(.status=="in_progress" and (in_pipeline | not))]  | length),
-              ([.[] | select(hasl("ready-for-code-review"))]                | length),
-              ([.[] | select(hasl("ready-for-land"))]                       | length),
-              ([.[] | select(hasl("needs-rebase"))]                         | length),
-              ([.[] | select(hasl("human") or hasl("land-escalated"))]      | length)
+            def is_review: hasl("ready-for-code-review");
+            def is_land:   hasl("ready-for-land");
+            def is_rebase: hasl("needs-rebase");
+            def is_human:  hasl("human") or hasl("land-escalated");
+            def is_digest: hasl("sweep-digest");
+            def is_build:  .status=="in_progress"
+                and ((is_review or is_land or is_rebase or is_human or is_digest) | not);
+            [ ([.[] | select(is_build)]  | length),
+              ([.[] | select(is_review)] | length),
+              ([.[] | select(is_land)]   | length),
+              ([.[] | select(is_rebase)] | length),
+              ([.[] | select(is_human)]  | length)
             ] | join(" ")
         ' "$cache" 2>/dev/null)
         if [ -n "$counts" ]; then
