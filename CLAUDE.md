@@ -30,6 +30,19 @@ The source of truth is the design under [`docs/`](docs/). Read [`docs/design.md`
 - [`docs/configuration.md`](docs/configuration.md) — every tunable knob and build constant
 - [`docs/decisions.md`](docs/decisions.md) — open decisions, deferred but not forgotten
 
+**Answering "what did we decide about X" starts with the docs-index tool, not with reading a doc.**
+`docs/decisions.md` alone is 400K+ and cannot be pulled into context, and the same lookup cost applies
+across every file above. Run the on-demand FTS5 lookup CLI first — it rebuilds a never-tracked index
+over all of `docs/*.md` on every invocation and prints ranked `path:line_lo-line_hi` pointers with a
+snippet, never a full doc or a synthesized answer:
+
+```bash
+./venv/bin/python scripts/docs_index_query.py "<search terms — a bd id, a phrase, anything>"
+```
+
+Read the cited range yourself once you have the pointer. Reach for a doc directly only when the index
+turns up nothing relevant.
+
 **Build sequencing lives in `docs/design.md` §7** — core-first (notes + version chains + cited Q&A + a minimal eval harness), then connectors one at a time. Do not fan out before the core loop works.
 
 ## Diagrams
