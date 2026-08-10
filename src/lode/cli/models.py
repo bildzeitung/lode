@@ -102,7 +102,18 @@ def _warm(warm: Callable[[], None], model_id: str) -> None:
         raise typer.Exit(code=1) from None
 
 
-@models_app.command("pull")
+@models_app.command(
+    "pull",
+    help=(
+        "Warm the local model cache: download the resolved weights once, deliberately.\n\n"
+        "Run it once on a fresh install, or after changing a model in config.toml, "
+        "before 'lode work' or 'lode ask' -- otherwise the first embed call "
+        "downloads several hundred MB mid-capture as a surprise phone-home. "
+        "Warms the embedder, reranker, and entailment models from your "
+        "resolved settings. On failure (no network, or a HuggingFace error) "
+        "this exits non-zero with an actionable message, not a traceback."
+    ),
+)
 def models_pull() -> None:
     """Warm the local model cache: download the resolved weights once, deliberately.
 
