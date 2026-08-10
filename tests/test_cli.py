@@ -828,6 +828,31 @@ def _insert_dead_job(db_path: Path, job_type: str, target_version: str) -> None:
         conn.close()
 
 
+def _capture_dead_line(monkeypatch: pytest.MonkeyPatch) -> Callable[[], str]:
+    """Rebind ``lode status``'s console to an ANSI-capturing one; return a
+    reader for the rendered dead-letters line.
+
+    Asserting on a style means asserting on escape codes, which needs a
+    ``force_terminal=True`` Console writing to a buffer -- rich emits nothing
+    otherwise and every colour assertion goes vacuous. The rebind targets
+    ``lode.cli.status``'s own ``console`` name, not the package's (lode-nftw):
+    status.py imports it plainly, so that namespace is the only binding a
+    substitute Console can reach. Shared by all three dead-line style tests.
+    """
+    from lode.cli import CLI_THEME
+    from lode.cli import status as cli_status
+
+    buf = io.StringIO()
+    monkeypatch.setattr(
+        cli_status,
+        "console",
+        Console(theme=CLI_THEME, force_terminal=True, width=100, file=buf),
+    )
+    return lambda: next(
+        ln for ln in buf.getvalue().splitlines() if "dead-letters" in ln
+    )
+
+
 def test_status_no_pending_hint_when_only_dead_letters_present(
     tmp_path: Path, warm_model_cache: None
 ) -> None:
@@ -857,7 +882,19 @@ def test_status_hints_self_healing_dead_letters(
     assert "'lode work'" in result.stdout
     assert "'lode reembed'" in result.stdout
     assert "'lode reenrich'" in result.stdout
-    assert "tombstoned" not in result.stdout
+    # lode-tix0: the self-healing hint now names the excluded-from-reconcile
+    # cases (which mention "tombstoned" as one of several excluded states)
+    # as a caveat -- it must NOT be confused with the refresh-specific
+    # "permanent failure record" hint below, which is what actually matters.
+    assert "permanent failure record" not in result.stdout
+    # lode-tix0: the caveat must also name the *most common* non-re-enqueue
+    # case -- a dead row that already healed. Nothing reaps a dead row, so
+    # after a successful sweep the original stays listed forever while both
+    # gap steps correctly see no gap; without this clause the hint promises a
+    # re-enqueue that is never coming for the steady state users see most.
+    # Whitespace-normalized: rich hard-wraps the hint, so a multi-word phrase
+    # is split across source lines at this console width.
+    assert "already succeeded under a later job" in " ".join(result.stdout.split())
     assert "No action needed." not in result.stdout
 
 
@@ -889,6 +926,62 @@ def test_status_hints_both_self_healing_and_tombstoned_dead_letters(
     assert result.exit_code == 0
     assert "self-healing" in result.stdout
     assert "tombstoned" in result.stdout
+
+
+# jobs.type carries a schema-level CHECK (type IN ('embed', 'enrich',
+# 'refresh')) -- an unrecognized type can never actually reach the DB today,
+# by design. The whole point of lode-tix0's fallback arm is to be correct
+# on the day someone widens that CHECK to add a new type WITHOUT also
+# remembering to touch this file's hint logic -- so these two tests
+# monkeypatch `dead_letter_jobs` itself to simulate that future state,
+# rather than trying to smuggle an unknown type past a constraint that
+# exists specifically to prevent it.
+def _patch_dead_letters(monkeypatch: pytest.MonkeyPatch, job_type: str) -> None:
+    from lode.cli import status as cli_status
+
+    monkeypatch.setattr(
+        cli_status,
+        "dead_letter_jobs",
+        # `id` is an int in the real `dead_letter_jobs` signature -- keep the
+        # double faithful to it so this can never mask an id-formatting bug.
+        lambda conn: [(1, job_type, "ver-eeeeeeeeeeeeeeee", "boom")],
+    )
+
+
+def test_status_hints_unknown_dead_letter_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
+) -> None:
+    # A dead-lettered job of a type this file doesn't recognize (neither
+    # embed/enrich nor refresh) must get its own generic, non-misleading
+    # hint -- not silence, and not the refresh-specific "re-add the URL"
+    # text, which would be wrong advice for a type that isn't a URL fetch at
+    # all (lode-tix0).
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    _patch_dead_letters(monkeypatch, "some_future_job_type")
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert "doesn't recognize" in result.stdout
+    assert "re-add the URL" not in result.stdout
+    assert "self-healing" not in result.stdout
+    assert "No action needed." not in result.stdout
+
+
+def test_status_dead_line_is_danger_for_unknown_dead_letter_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
+) -> None:
+    # An unknown dead-letter type must not get a free pass to `warn` just
+    # because it also isn't `refresh` -- it's treated as conservatively as
+    # a known tombstone (lode-tix0).
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    _patch_dead_letters(monkeypatch, "some_future_job_type")
+
+    dead_line = _capture_dead_line(monkeypatch)
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+
+    assert "\x1b[1;31m" in dead_line()
 
 
 def test_status_hints_cold_model_cache(tmp_path: Path) -> None:
@@ -2057,33 +2150,16 @@ def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
     ``test_status_hints_self_healing_dead_letters`` and its sibling below,
     not here. This test's job is only the highlight=False regression.
     """
-    import io
-
-    from rich.console import Console
-
-    from lode.cli import CLI_THEME
-
-    # The rebind below targets THIS module's `console` name, not the package's
-    # (lode-nftw) -- status.py imports `console` plainly, so its own namespace
-    # is the only binding a substitute Console can reach.
-    from lode.cli import status as cli_status
-
     db_path = tmp_path / "lode.db"
     _insert_dead_job(db_path, "refresh", "ver-cccccccccccccccc")
 
-    buf = io.StringIO()
-    monkeypatch.setattr(
-        cli_status,
-        "console",
-        Console(theme=CLI_THEME, force_terminal=True, width=100, file=buf),
-    )
+    dead_line = _capture_dead_line(monkeypatch)
     result = runner.invoke(app, ["status", "--db", str(db_path)])
     assert result.exit_code == 0
 
-    dead_line = next(ln for ln in buf.getvalue().splitlines() if "dead-letters" in ln)
     # bold red (danger) present, bold cyan (repr.number) absent.
-    assert "\x1b[1;31m" in dead_line
-    assert "\x1b[1;36m" not in dead_line
+    assert "\x1b[1;31m" in dead_line()
+    assert "\x1b[1;36m" not in dead_line()
 
 
 def test_status_dead_line_softens_to_warn_when_only_self_healing(
@@ -2096,29 +2172,16 @@ def test_status_dead_line_softens_to_warn_when_only_self_healing(
     ``test_status_dead_line_is_uniformly_danger_not_repr_highlighted`` used
     to pin, per that ticket's own acceptance criterion.
     """
-    import io
-
-    from rich.console import Console
-
-    from lode.cli import CLI_THEME
-    from lode.cli import status as cli_status
-
     db_path = tmp_path / "lode.db"
     _insert_dead_job(db_path, "enrich", "ver-cccccccccccccccc")
 
-    buf = io.StringIO()
-    monkeypatch.setattr(
-        cli_status,
-        "console",
-        Console(theme=CLI_THEME, force_terminal=True, width=100, file=buf),
-    )
+    dead_line = _capture_dead_line(monkeypatch)
     result = runner.invoke(app, ["status", "--db", str(db_path)])
     assert result.exit_code == 0
 
-    dead_line = next(ln for ln in buf.getvalue().splitlines() if "dead-letters" in ln)
     # plain yellow (warn), not bold red (danger).
-    assert "\x1b[33m" in dead_line
-    assert "\x1b[1;31m" not in dead_line
+    assert "\x1b[33m" in dead_line()
+    assert "\x1b[1;31m" not in dead_line()
 
 
 def _write_fake_cache_hit(home: Path, hf_source: str, model_file: str) -> None:

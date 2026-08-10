@@ -24,17 +24,46 @@ from lode.reconcile import lexical_gap_count
 
 log = logging.getLogger(__name__)
 
-#: Dead-lettered ``embed``/``enrich`` jobs are NOT terminal in practice --
+#: Dead-lettered ``embed``/``enrich`` jobs are NOT terminal in most cases --
 #: reconcile.py's gap sweep re-enqueues them on its next scan regardless of
 #: prior dead-letters (the ``idx_jobs_live`` unique index is scoped to
 #: pending/running precisely so that's legal, docs/storage.md:552) -- so a
-#: dead-letter of one of these types self-heals without user action, and
-#: ``lode work``/``lode reembed``/``lode reenrich`` force it now (lode-8vcq).
+#: dead-letter of one of these types usually self-heals without user action,
+#: and ``lode work``/``lode reembed``/``lode reenrich`` force it now
+#: (lode-8vcq). That is NOT universal, though (lode-tix0): the gap sweep
+#: itself skips a target version that is tombstoned, purged, or no longer a
+#: live head (reconcile.py's ``_embed_gap_step``/``_enrich_gap_step``, both
+#: filtered to live heads only), and ``_enrich_gap_step`` additionally skips
+#: any ``no_egress`` note. A dead-lettered embed/enrich job whose target
+#: fell into one of those states is moot (nothing to re-enqueue for), but it
+#: will NOT be swept back in by name -- the hint below is worded as "should"
+#: rather than a flat guarantee for exactly this reason.
+#:
+#: The same caveat also covers the *most common* steady state, which is easy
+#: to miss: nothing reaps a ``dead`` row (dead_letter_jobs is a bare
+#: ``status = 'dead'`` scan), so once a target HAS self-healed, the
+#: succeeding job lands as a second ``done`` row while the original dead row
+#: stays listed forever -- and both gap steps then correctly see no gap.
+#:
 #: Everything else (currently just ``refresh``) is deliberately terminal: the
 #: worker's terminal-transition hook (lode-at8) tombstones the head and
 #: reconcile excludes tombstoned heads from re-enqueue on purpose
 #: (reconcile.py:429) -- recovery there means the user re-pasting the URL.
+#: That terminal set is a POSITIVE allowlist of *known* job types, not the
+#: complement of this one -- see ``_KNOWN_TOMBSTONED_DEAD_LETTER_TYPES``
+#: below for why that distinction matters for a job type this file does not
+#: know about yet.
 _SELF_HEALING_DEAD_LETTER_TYPES = frozenset({"embed", "enrich"})
+
+#: The refresh-specific "tombstoned, re-add the URL" hint text is only true
+#: for a ``refresh`` dead-letter -- it is NOT the safe default for anything
+#: that merely isn't embed/enrich. So this is a POSITIVE allowlist, not the
+#: complement of the set above: a future job type would otherwise silently
+#: inherit refresh's remediation text (re-add a URL that may not even apply
+#: to it). Anything outside BOTH sets gets its own generic fallback hint
+#: below, so every dead-letter type still gets a non-misleading hint rather
+#: than silence (lode-tix0).
+_KNOWN_TOMBSTONED_DEAD_LETTER_TYPES = frozenset({"refresh"})
 
 
 class JobStatus(str, Enum):
@@ -387,11 +416,16 @@ def status(db: _DbOption = None) -> None:
     -- the same signal the ``lexical_gap`` reconcile step self-heals on its
     own schedule, surfaced here as a count so a user isn't waiting on that
     schedule blind (lode-cyly), flag dead-lettered embed/enrich jobs as
-    self-healing (they clear on the next reconciliation scan; 'lode work'
-    drains them, 'lode reembed'/'lode reenrich' force it now) and a
-    dead-lettered refresh job as a permanent failure record (re-add the URL
-    to retry) -- or an explicit "No action needed." if none of those apply
-    (lode-8vcq).
+    usually self-healing (they should clear on the next reconciliation scan
+    unless the job is already moot -- its target has since gone
+    tombstoned/purged/superseded, or -- enrich only -- no_egress, or the work
+    already succeeded under a later job, since a dead row is a permanent
+    record that is not cleared once it heals;
+    'lode work' drains them, 'lode reembed'/'lode reenrich' force it now),
+    flag a dead-lettered refresh job as a permanent failure record (re-add
+    the URL to retry), and flag a dead-lettered job of any other, unrecognized
+    type as needing manual triage -- or an explicit "No action needed." if
+    none of those apply (lode-8vcq, lode-tix0).
     """
     db_path = db or default_db_path()
     conn = _open_db(db)
@@ -415,15 +449,29 @@ def status(db: _DbOption = None) -> None:
     # than `danger` -- the uniform danger red is what made these "look
     # ominous" (the reported complaint) despite needing no action. A single
     # dead-lettered refresh job (a permanent tombstone, no self-heal) is
-    # enough to keep the whole line/table cell at `danger`.
-    # Both halves of the partition are computed once, here, and reused by the
-    # action-hint footer far below, so the style and the hints cannot disagree
-    # about which arm a dead set falls in (no new query -- the already-fetched
-    # rows carry job_type, per lode-8vcq's design note).
+    # enough to keep the whole line/table cell at `danger` -- and so is any
+    # dead-letter type this file doesn't recognize at all (lode-tix0): an
+    # unknown type gets the conservative severity, not a free pass just
+    # because it also isn't refresh.
+    # All three arms of the partition are computed once, here, and reused by
+    # the action-hint footer far below, so the style and the hints cannot
+    # disagree about which arm a dead set falls in (no new query -- the
+    # already-fetched rows carry job_type, per lode-8vcq's design note).
     dead_types = {job_type for _, job_type, _, _ in dead_letters}
     dead_self_healing = bool(dead_types & _SELF_HEALING_DEAD_LETTER_TYPES)
-    dead_tombstoned = bool(dead_types - _SELF_HEALING_DEAD_LETTER_TYPES)
-    dead_style = "danger" if dead_tombstoned else "warn" if dead_self_healing else None
+    dead_tombstoned = bool(dead_types & _KNOWN_TOMBSTONED_DEAD_LETTER_TYPES)
+    dead_unknown_type = bool(
+        dead_types
+        - _SELF_HEALING_DEAD_LETTER_TYPES
+        - _KNOWN_TOMBSTONED_DEAD_LETTER_TYPES
+    )
+    dead_style = (
+        "danger"
+        if dead_tombstoned or dead_unknown_type
+        else "warn"
+        if dead_self_healing
+        else None
+    )
 
     # No header_style= here: rich's Table already defaults it to "table.header",
     # the name CLI_STYLES declares (see the palette comment above), so passing it
@@ -601,8 +649,12 @@ def status(db: _DbOption = None) -> None:
     if dead_self_healing:
         console.print(
             "[warn]Action needed:[/warn] some dead-lettered jobs (embed/enrich) "
-            "are self-healing -- the next reconciliation scan will re-enqueue "
-            "them on its own; run 'lode work' to drain them now, or "
+            "are usually self-healing -- the next reconciliation scan should "
+            "re-enqueue them on its own, unless the job is already moot: its "
+            "target note has since been tombstoned, purged, superseded, or "
+            "(enrich only) marked no_egress, or the work already succeeded "
+            "under a later job (a dead row is a permanent record and is not "
+            "cleared once it heals). Run 'lode work' to drain them now, or "
             "'lode reembed'/'lode reenrich' to force it.",
             highlight=False,
         )
@@ -613,6 +665,14 @@ def status(db: _DbOption = None) -> None:
             "automatically; re-add the URL to force a fresh draw-down.",
             highlight=False,
         )
+    if dead_unknown_type:
+        console.print(
+            "[warn]Action needed:[/warn] a dead-lettered job has a type this "
+            "command doesn't recognize -- it may or may not self-heal; check "
+            "the per-job error text above and treat it as needing manual "
+            "follow-up until confirmed otherwise.",
+            highlight=False,
+        )
     if (
         pending_or_failed == 0
         and not cache_cold
@@ -620,8 +680,9 @@ def status(db: _DbOption = None) -> None:
         and not revision_drift
         and not enrichment_stale
         and not lexical_gaps
-        # Every dead-letter now trips one of the two hints above, so a
-        # non-empty dead set is exactly `dead_self_healing or dead_tombstoned`.
+        # Every dead-letter now trips one of the three hints above, so a
+        # non-empty dead set is exactly
+        # `dead_self_healing or dead_tombstoned or dead_unknown_type`.
         and not dead_letters
     ):
         console.print("[ok]No action needed.[/ok]", highlight=False)
