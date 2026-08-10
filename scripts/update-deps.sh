@@ -9,6 +9,7 @@
 #   scripts/update-deps.sh --dry-run          # print the version diff only, touch nothing
 #   scripts/update-deps.sh --package NAME     # bump just NAME (+ whatever it drags with it)
 #   scripts/update-deps.sh --package NAME --dry-run
+#   scripts/update-deps.sh --no-file          # promote as usual but never file the churn stub
 #
 # What it does:
 #   1. Recompile the lock from pyproject.toml into a temp file, via
@@ -40,6 +41,26 @@
 #      lock is always left untouched either way, and if the rollback
 #      rebuild itself also fails, a loud warning after the report says so
 #      and points at scripts/python-init.sh as the manual recovery.
+#   6. On promote (step 5's GREEN path only -- never on --dry-run, never on
+#      a failed/rolled-back run), file ONE bd stub ticket carrying the
+#      VERSION DIFF as a durable work order for a human/producer to read
+#      upstream changelogs and judge required-work vs. judgment-call in the
+#      context of lode's actual call sites (lode-i642). This is a WORK
+#      ORDER, not a finding: the script cannot itself judge required-vs-
+#      decision, so the stub's own acceptance criteria delegate that
+#      judgment (required-only: file follow-ups only for churn that
+#      demonstrably breaks/degrades a lode call site; surface new
+#      capabilities and judgment calls in the executor's hand-off instead --
+#      lode-cai6 is the worked example of a judgment call that should NOT
+#      have been auto-filed). Noise gate: filing is skipped entirely when
+#      every moved package changed only its patch component (mechanically
+#      decidable from the diff already computed) -- a ticket per run that is
+#      usually noise gets ignored. `--no-file` suppresses filing outright;
+#      `--dry-run` never reaches this step at all. Filing writes Dolt, so a
+#      missing/failing `bd` (or the `bd dolt push` after it) only WARNS --
+#      it never changes this script's exit status or the lock promotion
+#      (this script still never commits anything outside ./venv and
+#      requirements.lock).
 #
 # NO -x / TRASH-NOT-REPAIR -- deviates from the scripts/*.sh house style of
 # `#!/bin/bash -ex`, per this ticket's own note that -ex may fight the
@@ -74,6 +95,7 @@ LOCK="requirements.lock"
 
 DRY_RUN=0
 PACKAGE=""
+NO_FILE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run)
@@ -84,13 +106,17 @@ while [ "$#" -gt 0 ]; do
       PACKAGE="${2:?--package requires a package name}"
       shift 2
       ;;
+    --no-file)
+      NO_FILE=1
+      shift
+      ;;
     -h|--help)
-      echo "usage: $0 [--dry-run] [--package NAME]" >&2
+      echo "usage: $0 [--dry-run] [--package NAME] [--no-file]" >&2
       exit 0
       ;;
     *)
       echo "update-deps.sh: unknown argument '$1'" >&2
-      echo "usage: $0 [--dry-run] [--package NAME]" >&2
+      echo "usage: $0 [--dry-run] [--package NAME] [--no-file]" >&2
       exit 1
       ;;
   esac
@@ -125,7 +151,12 @@ fi
 sed -i "s|$CANDIDATE|$LOCK|" "$CANDIDATE"
 
 # Readable name==version diff -- deliberately ignores the --hash lines;
-# those are the whole reason this isn't `git diff`.
+# those are the whole reason this isn't `git diff`. Also stashes the raw,
+# unformatted "$name\t$old\t$new" change lines (moved packages only, i.e.
+# $old != $new) in the global CHANGES_RAW for the noise-gate check in
+# all_patch_level_only() below -- computed once here so the filing step
+# never has to re-derive the diff.
+CHANGES_RAW=""
 print_version_diff() {
   local old="$1" new="$2"
   local old_kv new_kv changes
@@ -136,9 +167,11 @@ print_version_diff() {
   grep -oE '^[A-Za-z0-9_.+-]+==[A-Za-z0-9_.!+-]+' "$new" \
     | sed -E 's/==/\t/' | sort -t $'\t' -k1,1 -u > "$new_kv"
 
-  changes="$(join -a1 -a2 -e '(none)' -o 0,1.2,2.2 -t $'\t' "$old_kv" "$new_kv" \
-    | awk -F'\t' '
-        $2 == $3 { next }
+  CHANGES_RAW="$(join -a1 -a2 -e '(none)' -o 0,1.2,2.2 -t $'\t' "$old_kv" "$new_kv" \
+    | awk -F'\t' '$2 != $3')"
+
+  changes="$(printf '%s\n' "$CHANGES_RAW" | awk -F'\t' '
+        NF < 3 { next }
         $2 == "(none)" { printf "  + %-30s %s\n", $1, $3; next }
         $3 == "(none)" { printf "  - %-30s %s (removed)\n", $1, $2; next }
         { printf "    %-30s %s -> %s\n", $1, $2, $3 }
@@ -158,6 +191,71 @@ echo "$DIFF_TEXT"
 if [ "$DRY_RUN" -eq 1 ]; then
   exit 0
 fi
+
+# Noise gate for the churn-evaluation stub (lode-i642): true iff every moved
+# package in CHANGES_RAW changed ONLY its patch component (major.minor
+# unchanged). An addition/removal ("(none)" on either side) or a version
+# string that doesn't parse as major.minor.patch is conservatively treated
+# as NOT patch-only, so it still triggers filing.
+all_patch_level_only() {
+  [ -n "$CHANGES_RAW" ] || return 1   # no changes at all -- nothing to gate
+  local name old new old_mm new_mm
+  while IFS=$'\t' read -r name old new; do
+    [ -n "$name" ] || continue
+    [ "$old" = "(none)" ] && return 1
+    [ "$new" = "(none)" ] && return 1
+    old_mm="$(echo "$old" | grep -oE '^[0-9]+\.[0-9]+')" || return 1
+    new_mm="$(echo "$new" | grep -oE '^[0-9]+\.[0-9]+')" || return 1
+    [ -n "$old_mm" ] && [ "$old_mm" = "$new_mm" ] || return 1
+  done <<<"$CHANGES_RAW"
+  return 0
+}
+
+# File ONE bd stub ticket carrying the VERSION DIFF as a durable work order
+# (lode-i642) -- only called from the GREEN promote path (step 5). Every
+# failure mode here WARNS and returns 0: filing must never change this
+# script's exit status or the lock promotion outcome.
+file_churn_stub() {
+  if [ "$NO_FILE" -eq 1 ]; then
+    echo "update-deps.sh: --no-file set -- skipping churn-evaluation stub ticket."
+    return 0
+  fi
+  if [ -z "$CHANGES_RAW" ]; then
+    echo "update-deps.sh: no version changes -- skipping churn-evaluation stub ticket."
+    return 0
+  fi
+  if all_patch_level_only; then
+    echo "update-deps.sh: every moved package is patch-level only -- skipping churn-evaluation stub ticket (noise gate)."
+    return 0
+  fi
+  if ! command -v bd >/dev/null 2>&1; then
+    echo "update-deps.sh: WARNING -- bd not found; skipping churn-evaluation stub ticket." >&2
+    return 0
+  fi
+
+  local title body acceptance new_id
+  title="Evaluate dependency churn from update-deps.sh ($(date +%Y-%m-%d))"
+  body="$(cat <<BODY_EOF
+Dependency lock update landed via scripts/update-deps.sh. Evaluate the churn
+below in the context of lode's actual call sites.
+
+$DIFF_TEXT
+BODY_EOF
+)"
+  acceptance="Required-only filing policy for THIS ticket's executor: read the upstream changelog for each moved package's crossed versions, then open a follow-up ticket ONLY for churn that demonstrably breaks or degrades an existing lode call site. Do NOT file tickets for new capabilities or other judgment calls -- surface those in your hand-off for a human instead."
+
+  if ! new_id="$(bd create --title="$title" --description="$body" \
+      --acceptance="$acceptance" --type=task --silent 2>&1)"; then
+    echo "update-deps.sh: WARNING -- bd create failed; skipping churn-evaluation stub ticket. ($new_id)" >&2
+    return 0
+  fi
+  echo "update-deps.sh: filed churn-evaluation stub ticket $new_id"
+
+  if ! "$REPO/scripts/bd-dolt-push.sh" >/dev/null 2>&1; then
+    echo "update-deps.sh: WARNING -- bd dolt push failed after filing $new_id; sync manually." >&2
+  fi
+  return 0
+}
 
 # shellcheck source=venv-install.sh
 . "$REPO/scripts/venv-install.sh"
@@ -209,6 +307,7 @@ if [ -z "$FAILED_AT" ]; then
   cp "$CANDIDATE" "$LOCK"
   echo "update-deps.sh: gates green -- promoted candidate to $LOCK."
   echo "update-deps.sh: review and commit it yourself: git diff -- $LOCK"
+  file_churn_stub
   exit 0
 fi
 

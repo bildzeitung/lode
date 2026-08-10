@@ -200,6 +200,22 @@ only catches a lock that has fallen *behind* a `pyproject.toml` constraint chang
 fallen behind PyPI — uv's preference seeding, described in that same section. Moving the runtime set
 forward is always a deliberate `scripts/update-deps.sh` run, never something CI notices on its own.
 
+**A green promote files a churn-evaluation bd stub, not a finding (`lode-i642`).** Reading upstream
+changelogs for the packages that moved, and judging required-work-vs-judgment-call in the context of
+lode's actual call sites, worked by hand once (it produced `lode-cai6`) but depends on remembering.
+`scripts/update-deps.sh` now files exactly one bd ticket on its GREEN promote path (step 6 in the
+script's own header), carrying the VERSION DIFF it already computed as a durable work order — the
+script never does the evaluation itself. Filing policy for that ticket's own executor is
+**required-only**: open follow-up tickets only for churn that demonstrably breaks or degrades a lode
+call site; new capabilities and judgment calls belong in the executor's hand-off for a human, not as
+auto-filed tickets — `lode-cai6` is the worked example of a judgment call that should *not* have been
+auto-filed. A **noise gate** skips filing entirely when every moved package changed only its patch
+component (mechanically decidable from the diff already on hand) — a ticket per run that is usually
+noise gets ignored. `--no-file` suppresses filing outright; `--dry-run` never reaches this step.
+Because filing writes Dolt, a missing or failing `bd` (or the `bd dolt push` after it) only warns —
+it never changes the script's exit status or the lock promotion, preserving the script's existing
+contract that it never mutates anything outside `./venv` and `requirements.lock`.
+
 ### Ruff's lint rule set (settled `lode-cs5u`)
 
 **The model: ruff's full default set, minus a shrinking `[tool.ruff.lint] ignore` list.**
