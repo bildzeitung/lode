@@ -891,6 +891,53 @@ def test_status_hints_both_self_healing_and_tombstoned_dead_letters(
     assert "tombstoned" in result.stdout
 
 
+def test_status_hints_unknown_dead_letter_type(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # A dead-lettered job of a type this file doesn't recognize (neither
+    # embed/enrich nor refresh) must get its own generic, non-misleading
+    # hint -- not silence, and not the refresh-specific "re-add the URL"
+    # text, which would be wrong advice for a type that isn't a URL fetch at
+    # all (lode-tix0).
+    db_path = tmp_path / "lode.db"
+    _insert_dead_job(db_path, "some_future_job_type", "ver-eeeeeeeeeeeeeeee")
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert "doesn't recognize" in result.stdout
+    assert "re-add the URL" not in result.stdout
+    assert "self-healing" not in result.stdout
+    assert "No action needed." not in result.stdout
+
+
+def test_status_dead_line_is_danger_for_unknown_dead_letter_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
+) -> None:
+    # An unknown dead-letter type must not get a free pass to `warn` just
+    # because it also isn't `refresh` -- it's treated as conservatively as
+    # a known tombstone (lode-tix0).
+    import io
+
+    from rich.console import Console
+
+    from lode.cli import CLI_THEME
+    from lode.cli import status as cli_status
+
+    db_path = tmp_path / "lode.db"
+    _insert_dead_job(db_path, "some_future_job_type", "ver-eeeeeeeeeeeeeeee")
+
+    buf = io.StringIO()
+    monkeypatch.setattr(
+        cli_status,
+        "console",
+        Console(theme=CLI_THEME, force_terminal=True, width=100, file=buf),
+    )
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+
+    dead_line = next(ln for ln in buf.getvalue().splitlines() if "dead-letters" in ln)
+    assert "\x1b[1;31m" in dead_line
+
+
 def test_status_hints_cold_model_cache(tmp_path: Path) -> None:
     # A fresh $LODE_HOME with no models/ dir at all -- every resolved model
     # is missing its cache subdir, so the probe must call this cold and hint
