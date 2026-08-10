@@ -164,6 +164,7 @@ tree by `lode-pijc`.
 | `ctrl+l` | Show Ask | Claimed by `lode-11io` — the mnemonic `ctrl+a` is NOT available (a `TextArea`/`Input` builtin, cursor-to-line-start); confirmed against all three traps below and against every screen's own `BINDINGS` |
 | `ctrl+underscore` | Show keybinding help overlay | Claimed by `lode-2bt3.2` — see "The keybinding help overlay" section below |
 | `ctrl+shift+minus` (hidden, `show=False`) | Show keybinding help overlay | Same action as `ctrl+underscore`; added by `lode-av50` for terminals that negotiate the Kitty keyboard protocol without reporting associated text for this combo (confirmed on iTerm2 3.5+/macOS) — see "Protocol-level failure: the Kitty keyboard protocol" below |
+| `ctrl+minus` (hidden, `show=False`) | Show keybinding help overlay | Same action as `ctrl+underscore`; added by `lode-av50` for the shift-less half of the same gap — the legacy `0x1f` byte covers `Ctrl+hyphen` too, which under the Kitty protocol arrives as `ctrl+minus` instead |
 | `?` (hidden, `show=False`) | Show keybinding help overlay | Same action as `ctrl+underscore`; convenience-only, reachable wherever no `TextArea`/`Input` holds focus (freed by `lode-2bt3.1`) |
 
 No App-level function keys remain — see the "No function keys" policy above. `ctrl+l` is now
@@ -378,10 +379,25 @@ behavior for this combo. A terminal that *does* report associated text
 the legacy path — so the failure is specific to terminals/combos where no
 associated text is reported, not universal to the Kitty protocol.
 
-**The fix:** `LodeApp.BINDINGS` binds `ctrl+shift+minus` to the same
+**The modifier byte is the whole axis, and it has two values.** The legacy
+`0x1f` byte is documented in `textual/_ansi_sequences.py` as "Also for
+Ctrl-hyphen", so `Ctrl+-` *without* shift has always opened this overlay
+too. Under the Kitty protocol the same base codepoint 45 therefore arrives
+under two different names depending on shift, and each had to be bound
+(both confirmed empirically against the installed textual 8.2.8 by the
+method above):
+
+| Press | Kitty sequence | Modifier byte | Textual key name |
+|---|---|---|---|
+| `Ctrl+_` | `CSI 45;6u` | 6 = ctrl+shift | `ctrl+shift+minus` |
+| `Ctrl+-` | `CSI 45;5u` | 5 = ctrl only | `ctrl+minus` |
+
+**The fix:** `LodeApp.BINDINGS` binds *both* names to the same
 `action_show_help`, alongside — never replacing — `ctrl+underscore`
-(`src/lode/tui/app.py`). Both routes reach the same action; neither
-terminal family regresses.
+(`src/lode/tui/app.py`), each hidden (`show=False`) since one footer slot
+already covers the action. All three routes reach the same action; neither
+terminal family regresses, and neither the shifted nor the shift-less
+press does.
 
 **Scope fence — do not disable the Kitty protocol.** Setting
 `TEXTUAL_DISABLE_KITTY_KEY` in lode's own startup would suppress the
@@ -400,14 +416,15 @@ shift-dependent base-vs-associated-text ambiguity that `-`/`_` does.
 failure mode.
 
 **Regression coverage.** `tests/test_tui_help_screen.py` covers two
-layers: (1) `pilot.press("ctrl+shift+minus")` opens the overlay, proving
-the binding itself is wired to `action_show_help` — the same coverage
-style every other binding in this suite already gets, and it says nothing
-about whether a real terminal ever sends that key name; (2) a direct unit
-test against `textual._xterm_parser.XTermParser`, feeding the raw
-`CSI 45;6u` byte sequence and asserting it decodes to `ctrl+shift+minus` —
-this pins the empirical finding above, but it exercises Textual's parser,
-not a live terminal's wire behavior. **No test in this repo, and none that
+layers, each over both modifier bytes: (1) one `pilot.press(...)` test per
+key name, asserting the overlay opens — this proves the binding is wired to
+`action_show_help`, the same coverage style every other binding in this
+suite already gets, and it says nothing about whether a real terminal ever
+sends that key name; (2) a parametrized unit test against
+`textual._xterm_parser.XTermParser`, feeding each raw byte sequence in the
+table above and asserting the key name it decodes to — this pins the
+empirical finding, but it exercises Textual's parser, not a live terminal's
+wire behavior. **No test in this repo, and none that
 could be added without a live terminal, verifies what iTerm2 (or any other
 terminal) actually puts on the wire** — that gap is inherent to a
 sandboxed CI/build environment and is stated here explicitly rather than
