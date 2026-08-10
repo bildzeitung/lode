@@ -66,7 +66,14 @@ def _top_level_commands_panel() -> str:
     Cached, as the corpus gate caches its own render helper: the output is a
     pure function of the registered command tree, and both tests below want it.
     """
-    result = runner.invoke(app, ["--help"], env={"COLUMNS": "80"})
+    # NO_COLOR/TERM=dumb: without these, rich colorizes even this non-tty
+    # CliRunner capture under GITHUB_ACTIONS=true (rich treats that env var
+    # as terminal-capable), and the raw ANSI SGR escapes break the ``╭``
+    # panel-border scan below. See tests/test_cli_help_corpus_gate.py's
+    # _ANSI_ESCAPE_RE comment for the measured rationale and escape counts.
+    result = runner.invoke(
+        app, ["--help"], env={"COLUMNS": "80", "NO_COLOR": "1", "TERM": "dumb"}
+    )
     assert result.exit_code == 0, f"lode --help exited {result.exit_code}"
 
     lines = result.output.splitlines()
