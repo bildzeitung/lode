@@ -39,27 +39,30 @@ log = logging.getLogger(__name__)
 #: will NOT be swept back in by name -- the hint below is worded as "should"
 #: rather than a flat guarantee for exactly this reason.
 #:
+#: The same caveat also covers the *most common* steady state, which is easy
+#: to miss: nothing reaps a ``dead`` row (dead_letter_jobs is a bare
+#: ``status = 'dead'`` scan), so once a target HAS self-healed, the
+#: succeeding job lands as a second ``done`` row while the original dead row
+#: stays listed forever -- and both gap steps then correctly see no gap.
+#:
 #: Everything else (currently just ``refresh``) is deliberately terminal: the
 #: worker's terminal-transition hook (lode-at8) tombstones the head and
 #: reconcile excludes tombstoned heads from re-enqueue on purpose
 #: (reconcile.py:429) -- recovery there means the user re-pasting the URL.
-#: This set is a POSITIVE allowlist of *known* job types, not the self-heal
-#: complement -- see ``_KNOWN_TOMBSTONED_DEAD_LETTER_TYPES`` below for why
-#: that distinction matters for a job type this file doesn't know about yet.
+#: That terminal set is a POSITIVE allowlist of *known* job types, not the
+#: complement of this one -- see ``_KNOWN_TOMBSTONED_DEAD_LETTER_TYPES``
+#: below for why that distinction matters for a job type this file does not
+#: know about yet.
 _SELF_HEALING_DEAD_LETTER_TYPES = frozenset({"embed", "enrich"})
 
 #: The refresh-specific "tombstoned, re-add the URL" hint text is only true
 #: for a ``refresh`` dead-letter -- it is NOT the safe default for anything
-#: that merely isn't embed/enrich. Before lode-tix0, ``dead_tombstoned`` was
-#: computed as the negation ``dead_types - _SELF_HEALING_DEAD_LETTER_TYPES``,
-#: which today coincides with "is refresh" only because refresh is the sole
-#: non-self-healing type that exists -- a future job type would silently
-#: inherit refresh's specific remediation text (re-add a URL that may not
-#: even apply to it) while being painted with the same danger severity.
-#: Naming the known-terminal type explicitly, and giving anything outside
-#: BOTH sets its own generic fallback hint (below), keeps the refresh advice
-#: refresh-only and still guarantees every dead-letter type gets some
-#: non-misleading hint rather than silence.
+#: that merely isn't embed/enrich. So this is a POSITIVE allowlist, not the
+#: complement of the set above: a future job type would otherwise silently
+#: inherit refresh's remediation text (re-add a URL that may not even apply
+#: to it). Anything outside BOTH sets gets its own generic fallback hint
+#: below, so every dead-letter type still gets a non-misleading hint rather
+#: than silence (lode-tix0).
 _KNOWN_TOMBSTONED_DEAD_LETTER_TYPES = frozenset({"refresh"})
 
 
@@ -414,8 +417,10 @@ def status(db: _DbOption = None) -> None:
     own schedule, surfaced here as a count so a user isn't waiting on that
     schedule blind (lode-cyly), flag dead-lettered embed/enrich jobs as
     usually self-healing (they should clear on the next reconciliation scan
-    unless their target has since gone tombstoned/purged/superseded, or --
-    enrich only -- no_egress, in which case the job is already moot;
+    unless the job is already moot -- its target has since gone
+    tombstoned/purged/superseded, or -- enrich only -- no_egress, or the work
+    already succeeded under a later job, since a dead row is a permanent
+    record that is not cleared once it heals;
     'lode work' drains them, 'lode reembed'/'lode reenrich' force it now),
     flag a dead-lettered refresh job as a permanent failure record (re-add
     the URL to retry), and flag a dead-lettered job of any other, unrecognized
@@ -645,11 +650,12 @@ def status(db: _DbOption = None) -> None:
         console.print(
             "[warn]Action needed:[/warn] some dead-lettered jobs (embed/enrich) "
             "are usually self-healing -- the next reconciliation scan should "
-            "re-enqueue them on its own, unless their target note has since "
-            "been tombstoned, purged, superseded, or (enrich only) marked "
-            "no_egress, in which case the job is already moot; run 'lode "
-            "work' to drain them now, or 'lode reembed'/'lode reenrich' to "
-            "force it.",
+            "re-enqueue them on its own, unless the job is already moot: its "
+            "target note has since been tombstoned, purged, superseded, or "
+            "(enrich only) marked no_egress, or the work already succeeded "
+            "under a later job (a dead row is a permanent record and is not "
+            "cleared once it heals). Run 'lode work' to drain them now, or "
+            "'lode reembed'/'lode reenrich' to force it.",
             highlight=False,
         )
     if dead_tombstoned:
