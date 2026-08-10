@@ -209,8 +209,7 @@ action on one of these screens still faces the exhausted pool above; this one di
 | | | `v` | View retrieved content | |
 | | | `d` | Delete | |
 | | | `x` | Expand/collapse summary (hidden from the footer, `show=False`, `lode-2bt3.3`) | |
-| | | `slash` | Search (restarts from the top each keystroke, `lode-2bt3.1`) | search direction retired (`lode-2bt3.1`) — `?` was unbound on every screen until `lode-2bt3.2` claimed it App-level for the help overlay |
-| | | `s` | Quick search (BM25, narrows the list, `lode-35nu.6`) | distinct from `slash`'s scan-and-highlight |
+| | | `slash` | Search (BM25 quick search, narrows the list, `lode-35nu.6`, rebound here from `s` — `lode-wdm0`) | `s` is unbound; the progressive summary-scan search formerly on `slash` (`lode-olmi.4`) is retired |
 | `ExternalPickerScreen` | `screens/external_picker.py` | `escape` | Back | — (DataTable) |
 | `TagsScreen` | `screens/tags.py` | `escape` | Back | — (DataTable grid, `lode-l38d.9`) |
 | | | `space` | Toggle tag (`show=False`) | hand-rolled multi-select; `enter` (DataTable's own native binding) does the same. Hidden to match the `SelectionList` it replaced, whose own `space` binding was `show=False` too |
@@ -555,6 +554,10 @@ App-level footer slot (`Help`) and paid for it by hiding `Quit`.
   `"Find"` for `/`'s scan, and a second `"Search"` label would read as a duplicate) and `"View"` →
   `"View content"`. MEASURED: 97/100, `hscroll=False` (the App-level `Help` label's ~7 columns included). Un-hiding
   `Expand` at full length reopens the overflow: 106/100 with `hscroll=True` (confirmed, not assumed).
+  (SUPERSEDED by `lode-wdm0`: the `/`-bound "Find" scan search was later retired outright and its
+  key given to the surviving BM25 search, whose label is now plain `"Search"` — see the Current
+  keymap table above. The measurement and reasoning above are left as the historical record of
+  `lode-2bt3.3`'s own footer-width call, not current fact.)
 - **`EditScreen`** — `"View content"` (`ctrl+r`, view externally-retrieved content) and `"Link"`
   (`ctrl+n`, open URL under cursor) are now hidden: both apply only to a subset of notes (an
   externally-retrieved note; a note whose cursor sits on a URL) rather than every note this screen

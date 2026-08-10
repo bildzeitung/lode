@@ -29,7 +29,6 @@ from lode.tui.app import LodeApp
 from lode.tui.dates import format_adaptive_date
 from lode.tui.screens.browse import (
     QUICK_SEARCH_INPUT_ID,
-    SEARCH_INPUT_ID,
     TABLE_ID,
     BrowseScreen,
 )
@@ -1429,7 +1428,7 @@ def test_quick_search_matching_nothing_shows_a_distinct_empty_message(
     async def _drive() -> tuple[int, str | None]:
         async with app.run_test() as pilot:
             await pilot.press("ctrl+b")
-            await pilot.press("s")
+            await pilot.press("slash")
             await _press_and_settle(pilot, *"zzzznomatch")
             table = app.screen.query_one(f"#{TABLE_ID}", LodeDataTable)
             return table.row_count, table.empty_message
@@ -1902,11 +1901,10 @@ def test_delete_head_conflict_notifies_and_reloads_instead_of_crashing(
 
 
 # ---------------------------------------------------------------------------
-# Progressive incremental search (lode-olmi.4) -- '/' opens a hidden one-line
-# Input at the bottom of the screen; each keystroke re-scans the table from
-# the cursor's current row for the next Summary containing the query
-# (case-insensitive substring), wrapping if needed. '?' does the same upward.
-# Escape/Enter both close the box, keeping wherever the search landed.
+# BM25 quick search (lode-35nu.6, bound to '/' -- lode-wdm0) -- '/' opens a
+# hidden one-line Input at the bottom of the screen; each keystroke re-runs
+# search_notes and narrows the table to the ranked matches. Escape/Enter both
+# close the box, keeping whatever it narrowed to.
 #
 # Four notes are saved in this order: alpha, beta, gamma, delta -- newest
 # first, the table therefore reads (top to bottom) delta(0), gamma(1),
@@ -1914,21 +1912,10 @@ def test_delete_head_conflict_notifies_and_reloads_instead_of_crashing(
 # ---------------------------------------------------------------------------
 
 
-def _seed_four_notes(db_path: Path) -> None:
-    conn = init_db(db_path)
-    try:
-        save(conn, "note-alpha", "alpha widget")
-        save(conn, "note-beta", "beta widget")
-        save(conn, "note-gamma", "gamma widget")
-        save(conn, "note-delta", "delta report")
-    finally:
-        conn.close()
-
-
 def _seed_four_notes_indexed(db_path: Path) -> None:
-    """Same four notes as :func:`_seed_four_notes`, but also FTS5-indexed
-    (lode-35nu.6's quick search needs ``passages_fts`` populated -- plain
-    :func:`~lode.versions.save` alone, unlike ``Repository``, never drives
+    """Seed the same four notes, FTS5-indexed (lode-35nu.6's quick search
+    needs ``passages_fts`` populated -- plain :func:`~lode.versions.save`
+    alone, unlike ``Repository``, never drives
     :class:`~lode.lexical.LexicalCacheBackend`)."""
     conn = init_db(db_path)
     try:
@@ -1947,182 +1934,13 @@ def _seed_four_notes_indexed(db_path: Path) -> None:
 
 # _press_and_settle moved to tests/conftest.py (lode-lcju) -- see docs/tui.md's
 # "Settling TUI tests under load" section for the ruling + mechanism, and
-# tests/conftest.py's own docstring for the helper itself. In brief: this
-# file's search is a STATEFUL cascade (``BrowseScreen._seek_match`` reads
-# ``table.cursor_row`` as its scan start), so a key dispatched before the
-# previous one's cascade lands corrupts the next scan -- pressing one key per
-# call, each with its own real drain, fixes it. NARROW BY DESIGN: a plain
-# multi-key ``pilot.press("down", "down", "down")`` elsewhere in this file is
-# fine and deliberately left alone -- cursor moves are order-preserving with
-# no read-back dependency between keys.
+# tests/conftest.py's own docstring for the helper itself.
 
 
-def test_slash_opens_a_hidden_search_box_and_focuses_it(tmp_path: Path) -> None:
-    db_path = tmp_path / "lode.db"
-    _seed_four_notes(db_path)
-    app = LodeApp(db_path=db_path)
-
-    async def _drive() -> tuple[bool, bool, bool]:
-        async with app.run_test() as pilot:
-            await pilot.press("ctrl+b")
-            search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
-            closed_before = not search_input.display
-            await pilot.press("slash")
-            await pilot.pause()
-            open_after = search_input.display
-            focused_after = app.focused is search_input
-            return closed_before, open_after, focused_after
-
-    closed_before, open_after, focused_after = asyncio.run(_drive())
-
-    assert closed_before
-    assert open_after
-    assert focused_after
+# --- '/': BM25 quick search narrows the list (lode-35nu.6, bound to '/' lode-wdm0) -
 
 
-def test_incremental_search_jumps_to_the_first_matching_summary(
-    tmp_path: Path,
-) -> None:
-    """'/' then typing scans from the top for the first matching row."""
-    db_path = tmp_path / "lode.db"
-    _seed_four_notes(db_path)
-    app = LodeApp(db_path=db_path)
-
-    async def _drive() -> int:
-        async with app.run_test() as pilot:
-            await pilot.press("ctrl+b")
-            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
-            assert table.cursor_row == 0  # starts on delta
-            await pilot.press("slash")
-            await _press_and_settle(pilot, *"beta")
-            return table.cursor_row
-
-    cursor_row = asyncio.run(_drive())
-
-    assert cursor_row == 2  # beta widget -- gamma (row 1) doesn't match "beta"
-
-
-def test_incremental_search_restarts_from_the_top_every_keystroke(
-    tmp_path: Path,
-) -> None:
-    """'/' always scans from row 0, even when the cursor already sits on a
-    matching row -- search direction is retired, "continue from the cursor"
-    no longer exists (lode-2bt3.1)."""
-    db_path = tmp_path / "lode.db"
-    _seed_four_notes(db_path)
-    app = LodeApp(db_path=db_path)
-
-    async def _drive() -> int:
-        async with app.run_test() as pilot:
-            await pilot.press("ctrl+b")
-            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
-            await pilot.press("down", "down")
-            assert table.cursor_row == 2  # beta widget -- itself a match for "widget"
-            await pilot.press("slash")
-            await _press_and_settle(pilot, *"widget")
-            return table.cursor_row
-
-    cursor_row = asyncio.run(_drive())
-
-    assert (
-        cursor_row == 1
-    )  # gamma widget -- the topmost match, not the cursor's own row
-
-
-def test_incremental_search_matches_case_insensitively(tmp_path: Path) -> None:
-    db_path = tmp_path / "lode.db"
-    _seed_four_notes(db_path)
-    app = LodeApp(db_path=db_path)
-
-    async def _drive() -> int:
-        async with app.run_test() as pilot:
-            await pilot.press("ctrl+b")
-            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
-            await pilot.press("slash")
-            await _press_and_settle(pilot, *"GAMMA")
-            return table.cursor_row
-
-    cursor_row = asyncio.run(_drive())
-
-    assert cursor_row == 1  # gamma widget, matched despite the differing case
-
-
-def test_empty_query_is_a_no_op(tmp_path: Path) -> None:
-    """Backspacing the query back to empty leaves the cursor wherever it last
-    landed, rather than searching for (and "matching") the empty string."""
-    db_path = tmp_path / "lode.db"
-    _seed_four_notes(db_path)
-    app = LodeApp(db_path=db_path)
-
-    async def _drive() -> int:
-        async with app.run_test() as pilot:
-            await pilot.press("ctrl+b")
-            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
-            await pilot.press("slash")
-            await _press_and_settle(pilot, *"beta")
-            assert table.cursor_row == 2
-            await _press_and_settle(
-                pilot, "backspace", "backspace", "backspace", "backspace"
-            )
-            return table.cursor_row
-
-    cursor_row = asyncio.run(_drive())
-
-    assert cursor_row == 2  # unchanged -- the empty query moved nothing
-
-
-def test_escape_closes_the_search_box_and_keeps_the_current_selection(
-    tmp_path: Path,
-) -> None:
-    db_path = tmp_path / "lode.db"
-    _seed_four_notes(db_path)
-    app = LodeApp(db_path=db_path)
-
-    async def _drive() -> tuple[bool, bool, int]:
-        async with app.run_test() as pilot:
-            await pilot.press("ctrl+b")
-            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
-            await pilot.press("slash")
-            await _press_and_settle(pilot, *"beta")
-            await pilot.press("escape")
-            await pilot.pause()
-            search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
-            still_browsing = isinstance(app.screen, BrowseScreen)
-            return still_browsing, search_input.display, table.cursor_row
-
-    still_browsing, box_visible, cursor_row = asyncio.run(_drive())
-
-    assert still_browsing  # Escape closed the box, not the whole screen
-    assert not box_visible
-    assert cursor_row == 2  # selection kept where the search left it
-
-
-def test_enter_confirms_and_closes_the_search_box(tmp_path: Path) -> None:
-    db_path = tmp_path / "lode.db"
-    _seed_four_notes(db_path)
-    app = LodeApp(db_path=db_path)
-
-    async def _drive() -> tuple[bool, int]:
-        async with app.run_test() as pilot:
-            await pilot.press("ctrl+b")
-            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
-            await pilot.press("slash")
-            await _press_and_settle(pilot, *"gamma")
-            await pilot.press("enter")
-            await pilot.pause()
-            search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
-            return search_input.display, table.cursor_row
-
-    box_visible, cursor_row = asyncio.run(_drive())
-
-    assert not box_visible
-    assert cursor_row == 1  # gamma widget, kept after Enter confirms
-
-
-# --- 's': BM25 quick search narrows the list (lode-35nu.6) --------------------
-
-
-def test_s_opens_a_hidden_quick_search_box_and_focuses_it(tmp_path: Path) -> None:
+def test_slash_opens_a_hidden_quick_search_box_and_focuses_it(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     _seed_four_notes_indexed(db_path)
     app = LodeApp(db_path=db_path)
@@ -2132,7 +1950,7 @@ def test_s_opens_a_hidden_quick_search_box_and_focuses_it(tmp_path: Path) -> Non
             await pilot.press("ctrl+b")
             quick_input = app.screen.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
             closed_before = not quick_input.display
-            await pilot.press("s")
+            await pilot.press("slash")
             await pilot.pause()
             open_after = quick_input.display
             focused_after = app.focused is quick_input
@@ -2155,7 +1973,7 @@ def test_typing_in_quick_search_narrows_the_table_to_bm25_matches(
     async def _drive() -> list[str]:
         async with app.run_test() as pilot:
             await pilot.press("ctrl+b")
-            await pilot.press("s")
+            await pilot.press("slash")
             await _press_and_settle(pilot, *"report")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             return [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
@@ -2175,7 +1993,7 @@ def test_clearing_the_quick_search_box_restores_the_full_list(
     async def _drive() -> tuple[int, int]:
         async with app.run_test() as pilot:
             await pilot.press("ctrl+b")
-            await pilot.press("s")
+            await pilot.press("slash")
             await _press_and_settle(pilot, *"report")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             narrowed_count = table.row_count
@@ -2193,9 +2011,9 @@ def test_clearing_the_quick_search_box_restores_the_full_list(
 def test_escape_closes_the_quick_search_box_but_keeps_the_narrowed_list(
     tmp_path: Path,
 ) -> None:
-    """Mirrors '/'s own contract (lode-olmi.4): closing the box is not a
-    revert-on-cancel -- only clearing the text (not closing the box) restores
-    the full list, per :func:`test_clearing_the_quick_search_box_restores_the_full_list`."""
+    """Closing the box is not a revert-on-cancel -- only clearing the text
+    (not closing the box) restores the full list, per
+    :func:`test_clearing_the_quick_search_box_restores_the_full_list`."""
     db_path = tmp_path / "lode.db"
     _seed_four_notes_indexed(db_path)
     app = LodeApp(db_path=db_path)
@@ -2203,7 +2021,7 @@ def test_escape_closes_the_quick_search_box_but_keeps_the_narrowed_list(
     async def _drive() -> tuple[bool, bool, int]:
         async with app.run_test() as pilot:
             await pilot.press("ctrl+b")
-            await pilot.press("s")
+            await pilot.press("slash")
             await _press_and_settle(pilot, *"report")
             await pilot.press("escape")
             await pilot.pause()
@@ -2219,60 +2037,136 @@ def test_escape_closes_the_quick_search_box_but_keeps_the_narrowed_list(
     assert row_count == 1  # the narrowed result is kept
 
 
-def test_opening_one_search_box_closes_the_other(tmp_path: Path) -> None:
-    """At most one of the two boxes is ever open (lode-35nu.6, review).
+def test_enter_confirms_and_closes_the_quick_search_box(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes_indexed(db_path)
+    app = LodeApp(db_path=db_path)
 
-    '/' leaves its box open when focus moves off it, so '/' then Tab then 's'
-    used to display BOTH boxes at once -- and then Escape's branch order, not
-    anything the user did, decided which one it closed. Verified in both
-    directions.
+    async def _drive() -> tuple[bool, int]:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("slash")
+            await _press_and_settle(pilot, *"report")
+            await pilot.press("enter")
+            await pilot.pause()
+            quick_input = app.screen.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            return quick_input.display, table.row_count
+
+    box_visible, row_count = asyncio.run(_drive())
+
+    assert not box_visible
+    assert row_count == 1  # the narrowed result is kept, same as Escape
+
+
+def test_selection_stays_put_across_open_filter_and_close(
+    tmp_path: Path,
+) -> None:
+    """Selection-stability contract (lode-wdm0): the highlighted note does
+    not hop around across opening the box, filtering (in both the filtered
+    and the unfiltered list), and closing it -- and closing keeps the
+    current selection rather than reverting it. Reopening starts blank."""
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes_indexed(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[str | None, ...]:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            await pilot.press("down")  # highlight row 1 (gamma) before opening
+            before_open = _highlighted_note_id(table)
+            await pilot.press("slash")
+            await pilot.pause()
+            after_open = _highlighted_note_id(table)  # opening alone must not move it
+            await _press_and_settle(pilot, *"report")  # narrows to note-delta only
+            after_filter = _highlighted_note_id(table)  # only match, now highlighted
+            quick_input = app.screen.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
+            quick_input.value = ""  # back to the unfiltered list
+            await pilot.pause()
+            after_clear = _highlighted_note_id(table)
+            await pilot.press("escape")
+            await pilot.pause()
+            after_close = _highlighted_note_id(table)  # closing keeps it, no revert
+            return before_open, after_open, after_filter, after_clear, after_close
+
+    before_open, after_open, after_filter, after_clear, after_close = asyncio.run(
+        _drive()
+    )
+
+    assert before_open == after_open  # opening the box alone does not move it
+    assert after_filter == "note-delta"  # narrowed to the sole match
+    # Clearing back to the unfiltered list keeps the cursor on whatever was
+    # highlighted at that moment (the sole filtered match) rather than
+    # reverting to where it sat before the box was opened -- _reload_rows'
+    # cursor-preservation contract (lode-olmi.1) preserves the *current*
+    # selection across a rebuild, not some earlier one.
+    assert after_clear == after_filter
+    assert after_close == after_clear  # closing the box keeps the selection
+
+
+def test_selection_survives_a_filter_that_keeps_the_highlighted_note(
+    tmp_path: Path,
+) -> None:
+    """The load-bearing half of the selection-stability contract (lode-wdm0).
+
+    :func:`test_selection_stays_put_across_open_filter_and_close` filters to a
+    query the highlighted note does *not* match, so the cursor has nowhere to
+    stay and the assertion there is really "it lands on the sole match" -- a
+    weaker proxy. This is the case the contract is actually about: the
+    highlighted note is still in the narrowed result, so it must remain
+    highlighted rather than snapping to the BM25 top hit.
     """
     db_path = tmp_path / "lode.db"
     _seed_four_notes_indexed(db_path)
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> tuple[bool, bool, bool, bool]:
+    async def _drive() -> tuple[str | None, str | None, int, str | None]:
         async with app.run_test() as pilot:
             await pilot.press("ctrl+b")
-            scan = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
-            quick = app.screen.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
-            # '/' -> Tab (focus back to the table) -> 's'
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            await pilot.press("down")  # row 1 -- gamma, which matches "widget"
+            before = _highlighted_note_id(table)
             await pilot.press("slash")
-            await pilot.press("tab")
-            await pilot.press("s")
+            await _press_and_settle(pilot, *"widget")
+            after_filter = _highlighted_note_id(table)
+            narrowed_count = table.row_count
+            quick_input = app.screen.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
+            quick_input.value = ""  # back to the unfiltered list
             await pilot.pause()
-            scan_after_s, quick_after_s = scan.display, quick.display
-            # ...and the mirror: 's' is open now, Tab off it, then '/'
-            await pilot.press("tab")
-            await pilot.press("slash")
-            await pilot.pause()
-            return scan_after_s, quick_after_s, scan.display, quick.display
+            after_clear = _highlighted_note_id(table)
+            return before, after_filter, narrowed_count, after_clear
 
-    scan_after_s, quick_after_s, scan_after_slash, quick_after_slash = asyncio.run(
-        _drive()
-    )
+    before, after_filter, narrowed_count, after_clear = asyncio.run(_drive())
 
-    assert not scan_after_s and quick_after_s  # 's' closed the '/' box
-    assert scan_after_slash and not quick_after_slash  # '/' closed the 's' box
+    assert before == "note-gamma"
+    assert narrowed_count == 3  # alpha/beta/gamma -- delta ("report") drops out
+    assert after_filter == "note-gamma"  # kept, wherever BM25 ranked it
+    assert after_clear == "note-gamma"  # and kept again in the unfiltered list
 
 
-def test_quick_search_never_touches_the_scan_search_box(tmp_path: Path) -> None:
-    """The two boxes are independent -- opening one leaves the other closed."""
+def test_reopening_the_quick_search_box_starts_blank(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     _seed_four_notes_indexed(db_path)
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> bool:
+    async def _drive() -> tuple[str, int]:
         async with app.run_test() as pilot:
             await pilot.press("ctrl+b")
-            await pilot.press("s")
+            await pilot.press("slash")
+            await _press_and_settle(pilot, *"report")
+            await pilot.press("escape")
             await pilot.pause()
-            search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
-            return search_input.display
+            await pilot.press("slash")
+            await pilot.pause()
+            quick_input = app.screen.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            return quick_input.value, table.row_count
 
-    scan_box_visible = asyncio.run(_drive())
+    value, row_count = asyncio.run(_drive())
 
-    assert not scan_box_visible
+    assert value == ""
+    assert row_count == 4  # reopening blank restores the full list
 
 
 def test_search_box_stays_on_screen_when_the_notes_list_overflows_the_viewport(
@@ -2307,8 +2201,8 @@ def test_search_box_stays_on_screen_when_the_notes_list_overflows_the_viewport(
             await pilot.pause()
             await pilot.press("slash")
             await pilot.pause()
-            search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
-            region = search_input.region
+            quick_input = app.screen.query_one(f"#{QUICK_SEARCH_INPUT_ID}", Input)
+            region = quick_input.region
             return region.y, region.bottom, region.right, region.x
 
     top, bottom, right, left = asyncio.run(_drive())
@@ -3131,23 +3025,22 @@ def test_browse_footer_shows_every_shown_binding_visible(
 
     descriptions = asyncio.run(_drive())
 
-    # 6 of the 7 screen-level bindings stay shown, plus 5 shown App-level
-    # ones. "Up" (question_mark/search_backward) is gone -- search direction
-    # is retired (lode-2bt3.1). "Quit" is hidden (show=False, lode-2bt3.2,
-    # re-verified by lode-2bt3.3 -- see docs/keybindings.md); "Help" (Ctrl+_,
-    # lode-2bt3.2's keybinding overlay) takes its slot instead. lode-2bt3.3:
-    # "Expand" (toggle_summary) is now hidden too -- see BrowseScreen's own
-    # BINDINGS comment for why it is the least-needed reminder of the
-    # seven -- which pays for "View" -> "View content" and "S" -> "Quick"
-    # being un-abbreviated. MEASURED at 97/100.
+    # 5 of the 6 screen-level bindings stay shown, plus 5 shown App-level
+    # ones. The progressive summary-scan search is retired (lode-wdm0), so
+    # '/' now opens the BM25 quick search directly and the surviving binding
+    # reads "Search" (no longer needing to distinguish itself from a second
+    # box). "Quit" is hidden (show=False, lode-2bt3.2, re-verified by
+    # lode-2bt3.3 -- see docs/keybindings.md); "Help" (Ctrl+_, lode-2bt3.2's
+    # keybinding overlay) takes its slot instead. lode-2bt3.3: "Expand"
+    # (toggle_summary) is now hidden too -- see BrowseScreen's own BINDINGS
+    # comment for why it is the least-needed reminder of the six -- which
+    # pays for "View" -> "View content" being un-abbreviated.
     assert descriptions == [
         "Back",
         "Inspect",
         "View content",
         "Delete",
-        "Find",
-        "Quick",  # BM25 quick search (lode-35nu.6) -- see BrowseScreen.BINDINGS'
-        # own comment for why this label and not "Search"
+        "Search",  # BM25 quick search (lode-35nu.6, bound to '/' -- lode-wdm0)
         "Cfg",
         "Browse",
         "Tags",

@@ -148,7 +148,8 @@ footer-wide cost was shortening one of its own labels — `"View content"` → `
 strictly a stopgap: each round left the labels a little less legible and the next ticket a little
 less room, with no floor except "however short a word can get and still be a word." `lode-2bt3.3`
 spends the recovered budget paying those abbreviations *back* (`"Rel"` → `"Related"`, `"Hist"` →
-`"History"`, `"S"` → `"Quick"`, `"View"` → `"View content"` on `BrowseScreen`/`EditScreen`) rather
+`"History"`, `"S"` → `"Quick"` (relabelled again to `"Search"` once `lode-wdm0` left one search on
+the screen), `"View"` → `"View content"` on `BrowseScreen`/`EditScreen`) rather
 than shortening further, and the mechanism that pays for new bindings going forward is per-screen
 priority, not the next abbreviation: **a screen that needs to make room for a new binding hides its
 least-needed existing entry (`Binding(show=False)`) rather than truncating a label.** Do not
@@ -157,8 +158,11 @@ entry was hidden and why (least-needed, not merely smallest) at the `BINDINGS` d
 
 **Choosing what to hide is a judgment call per screen, not a formula.** `lode-2bt3.3`'s two worked
 examples: `BrowseScreen` hides `"Expand"` (`toggle_summary`) — a reversible, non-destructive display
-toggle, learned once and rarely revisited, unlike Inspect/Delete/Find/Quick which sit on the primary
-read/search/delete path every session. `EditScreen` hides `"View content"` (view externally-retrieved
+toggle, learned once and rarely revisited, unlike Inspect/Delete/Find/Quick — as those labels read at
+the time; `lode-wdm0` has since retired the `"Find"` scan search on `slash` outright and relabelled
+the surviving BM25 search `"Search"`, so the live set is Inspect/Delete/Search — which sit on the
+primary read/search/delete path every session.
+`EditScreen` hides `"View content"` (view externally-retrieved
 content) and `"Link"` (open URL under cursor) — both apply only to a subset of notes (an
 externally-sourced note; a note whose cursor sits on a URL), not to every note this screen edits, unlike
 Save/Back/Related/History/Inspect/Ask. Full reasoning and the measured column counts:
@@ -213,8 +217,10 @@ Rejected alternatives, so the question isn't reopened:
 
 **The bracketed-key style (`[d]elete`, `[i]nspect`, `E[x]pand`) is ruled out, permanently.** It
 needs the binding's key letter to literally appear inside its own description, which only
-single-letter bindings have — counted across the app's real binding set: `BrowseScreen` has 5 of 7
-(`i`/`v`/`d`/`x`/`s`; not `escape`/`slash` — `question_mark`/search-backward retired, `lode-2bt3.1`),
+single-letter bindings have — counted across the app's real binding set: `BrowseScreen` has 4 of 6
+(`i`/`v`/`d`/`x`; not `escape`/`slash` — the progressive summary-scan search formerly on `slash`
+(`lode-olmi.4`) is retired (`lode-wdm0`), and `question_mark`/search-backward retired earlier
+(`lode-2bt3.1`)),
 `ReconcileScreen` has 2 of 2 (`r`/`d`), and every other screen (`CaptureScreen`, `EditScreen`, `ConfigScreen`, `AskScreen`, `TagsScreen`,
 `VersionHistoryScreen`, `VersionViewScreen`, `ExternalPickerScreen`) has **zero** — all `ctrl+`
 combos or `escape`, per the no-function-key / no-bare-printable-key-on-an-editable-widget policy
@@ -286,8 +292,9 @@ element anywhere in the pilot press/pause path:
    the test needs before it can act or assert**, never for the value the assertion itself checks.
 
 2. **A stateful, read-back keystroke cascade** (a later keystroke's behavior depends on state an
-   earlier keystroke's cascade produced — e.g. incremental search, where `_seek_match` reads
-   `table.cursor_row` as its next scan's start) → `_press_and_settle(pilot, *keys)`
+   earlier keystroke's cascade produced — e.g. the BM25 quick search, where each keystroke's
+   `_reload_rows` reads the table's current cursor row before rebuilding it against the newly
+   narrowed rows) → `_press_and_settle(pilot, *keys)`
    (`tests/conftest.py`): presses one key at a time via `pilot.press(key)` (whose own trailing
    `_wait_for_screen()` is a real drain, not the CPU heuristic), so every keystroke is fully settled
    before the next is dispatched. This is the case `_wait_until` cannot cover: the correct wait
