@@ -3305,3 +3305,53 @@ def test_edit_screen_sub_title_has_no_marker_for_a_plain_note(tmp_path: Path) ->
 
     assert sub_title == "note-edit-plain"
     assert NO_EGRESS_MARKER not in (sub_title or "")
+
+
+def test_edit_screen_on_mount_opens_one_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """on_mount reads the marker and the head over ONE ``init_db`` (lode-nnqp).
+
+    ``init_db`` applies the full schema DDL plus the migration pass, so a
+    second call per note open is a real fixed cost, and nothing but this test
+    stops a future edit from reintroducing a ``db_path``-taking call alongside
+    the connection ``on_mount`` already holds. Every module that could open
+    that second connection is counted -- the screen's own binding *and* both
+    service modules' -- because a reintroduced ``load_head(db_path, ...)`` /
+    ``note_no_egress(db_path, ...)`` would call ``init_db`` through the
+    service's binding, not the screen's, and a screen-only counter would miss
+    exactly the regression this test exists to catch.
+    """
+    import lode.tui.screens.edit as edit_screen_mod
+    import lode.tui.services.edit as edit_service_mod
+    import lode.tui.services.no_egress as no_egress_service_mod
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-edit-one-conn", "a note body")
+    finally:
+        conn.close()
+
+    calls = 0
+    real_init_db = edit_screen_mod.init_db
+
+    def _counting_init_db(path: Path) -> sqlite3.Connection:
+        nonlocal calls
+        calls += 1
+        return real_init_db(path)
+
+    for module in (edit_screen_mod, edit_service_mod, no_egress_service_mod):
+        monkeypatch.setattr(module, "init_db", _counting_init_db)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, EditScreen)
+
+    asyncio.run(_drive())
+
+    assert calls == 1
