@@ -126,6 +126,7 @@ from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
 from lode.notes_read import NO_EGRESS_MARKER
+from lode.storage import init_db
 from lode.tui.screens._content_view import _view_note_external_content
 from lode.tui.screens._link_open import open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
@@ -134,8 +135,13 @@ from lode.tui.screens.discard_confirm import DiscardConfirmScreen
 from lode.tui.screens.enrichment_modal import EnrichmentModalScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 from lode.tui.screens.version_history import VersionHistoryScreen
-from lode.tui.services.edit import EditConflict, EmptyEditError, load_head, save_edit
-from lode.tui.services.no_egress import note_no_egress
+from lode.tui.services.edit import (
+    EditConflict,
+    EmptyEditError,
+    load_head_conn,
+    save_edit,
+)
+from lode.tui.services.no_egress import note_no_egress_conn
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.versions import SaveResult
@@ -235,13 +241,24 @@ class EditScreen(Screen[None]):
         # a width budget to protect. A no_egress note (lode-82wt) appends the
         # same plain-text marker Browse's marker column shows, so the flag is
         # visible at a glance on the note itself too, not only in the list.
-        marker = (
-            f" [{NO_EGRESS_MARKER}]"
-            if note_no_egress(self.app.db_path, self.note_id)
-            else ""
-        )
-        self.sub_title = f"{self.note_id}{marker}"
-        head = load_head(self.app.db_path, self.note_id)
+        #
+        # Both reads share a single init_db connection (lode-nnqp) -- init_db
+        # applies the full schema DDL plus the migration pass, not a bare
+        # sqlite3.connect, so opening one per read paid that fixed cost
+        # twice on every note open. load_head/note_no_egress (the db_path-
+        # taking public functions) are unchanged for their other callers;
+        # this screen alone reaches for the _conn variants.
+        conn = init_db(self.app.db_path)
+        try:
+            marker = (
+                f" [{NO_EGRESS_MARKER}]"
+                if note_no_egress_conn(conn, self.note_id)
+                else ""
+            )
+            self.sub_title = f"{self.note_id}{marker}"
+            head = load_head_conn(conn, self.note_id)
+        finally:
+            conn.close()
         if head is None:
             raise LookupError(f"no live note {self.note_id!r} to edit")
         self._loaded_head, self._loaded_body = head
