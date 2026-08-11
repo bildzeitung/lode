@@ -16,10 +16,12 @@ shape (a small binary confirm) rather than
 choice -- there is no third option here. Built on the shared
 :class:`~lode.tui.screens.yes_no_confirm.YesNoConfirmScreen` skeleton
 (lode-1ip2), extended with a scrollable preview pane via
-:meth:`~lode.tui.screens.yes_no_confirm.YesNoConfirmScreen._dialog_children`.
+:meth:`~lode.tui.screens.yes_no_confirm.YesNoConfirmScreen._extra_children`.
 """
 
 from __future__ import annotations
+
+from collections.abc import Iterable
 
 from textual.containers import VerticalScroll
 from textual.widget import Widget
@@ -41,17 +43,16 @@ class SaveAsNoteConfirmScreen(YesNoConfirmScreen):
     edge, no version anywhere (the ticket's own acceptance wording).
     """
 
+    MESSAGE = "Save this answer as a new note, linked to the source note? (Y)es / (N)o"
+    DIALOG_ID = "save-as-note-confirm-dialog"
+    MESSAGE_ID = SAVE_AS_NOTE_PROMPT_ID
+
     def __init__(self, preview_text: str) -> None:
-        super().__init__(
-            "Save this answer as a new note, linked to the source note? (Y)es / (N)o",
-            dialog_id="save-as-note-confirm-dialog",
-            message_id=SAVE_AS_NOTE_PROMPT_ID,
-        )
+        super().__init__()
         self._preview_text = preview_text
 
-    def _dialog_children(self) -> list[Widget]:
-        return [
-            *super()._dialog_children(),
+    def _extra_children(self) -> Iterable[Widget]:
+        return (
             VerticalScroll(
                 # markup=False -- the preview is the answer's own rendered
                 # text, which uses literal bracket citation markers (see
@@ -59,4 +60,4 @@ class SaveAsNoteConfirmScreen(YesNoConfirmScreen):
                 LodeStatic(self._preview_text, id=SAVE_AS_NOTE_PREVIEW_ID),
                 id="save-as-note-preview-pane",
             ),
-        ]
+        )

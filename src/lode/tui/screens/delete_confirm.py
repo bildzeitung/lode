@@ -25,9 +25,6 @@ class DeleteConfirmScreen(YesNoConfirmScreen):
     skeleton (lode-1ip2).
     """
 
-    def __init__(self) -> None:
-        super().__init__(
-            "Delete this note? (Y)es / (N)o",
-            dialog_id="delete-confirm-dialog",
-            message_id=DELETE_CONFIRM_MESSAGE_ID,
-        )
+    MESSAGE = "Delete this note? (Y)es / (N)o"
+    DIALOG_ID = "delete-confirm-dialog"
+    MESSAGE_ID = DELETE_CONFIRM_MESSAGE_ID

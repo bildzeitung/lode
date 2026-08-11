@@ -28,10 +28,9 @@ class NoEgressClearConfirmScreen(YesNoConfirmScreen):
     (lode-1ip2).
     """
 
-    def __init__(self) -> None:
-        super().__init__(
-            "Clear no-egress on this note? It will become cloud-eligible"
-            " again. (Y)es / (N)o",
-            dialog_id="no-egress-clear-confirm-dialog",
-            message_id=NO_EGRESS_CLEAR_CONFIRM_MESSAGE_ID,
-        )
+    MESSAGE = (
+        "Clear no-egress on this note? It will become cloud-eligible"
+        " again. (Y)es / (N)o"
+    )
+    DIALOG_ID = "no-egress-clear-confirm-dialog"
+    MESSAGE_ID = NO_EGRESS_CLEAR_CONFIRM_MESSAGE_ID
