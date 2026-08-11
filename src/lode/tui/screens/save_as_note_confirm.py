@@ -13,18 +13,18 @@ just shows the exact text that would become that note's body and asks
 Yes/No, mirroring :class:`~lode.tui.screens.delete_confirm.DeleteConfirmScreen`'s
 shape (a small binary confirm) rather than
 :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`'s three-way
-choice -- there is no third option here.
+choice -- there is no third option here. Built on the shared
+:class:`~lode.tui.screens.yes_no_confirm.YesNoConfirmScreen` skeleton
+(lode-1ip2), extended with a scrollable preview pane via
+:meth:`~lode.tui.screens.yes_no_confirm.YesNoConfirmScreen._dialog_children`.
 """
 
 from __future__ import annotations
 
-from typing import ClassVar
+from textual.containers import VerticalScroll
+from textual.widget import Widget
 
-from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
-from textual.screen import ModalScreen
-
+from lode.tui.screens.yes_no_confirm import YesNoConfirmScreen
 from lode.tui.widgets.lode_static import LodeStatic
 
 #: The preview pane's widget id -- read back in tests.
@@ -33,7 +33,7 @@ SAVE_AS_NOTE_PREVIEW_ID = "save-as-note-preview"
 SAVE_AS_NOTE_PROMPT_ID = "save-as-note-prompt"
 
 
-class SaveAsNoteConfirmScreen(ModalScreen[bool]):
+class SaveAsNoteConfirmScreen(YesNoConfirmScreen):
     """A Yes/No confirm previewing the note an accepted ask answer would create.
 
     Dismisses with a ``bool``: ``True`` on confirm (save), ``False`` on
@@ -41,23 +41,17 @@ class SaveAsNoteConfirmScreen(ModalScreen[bool]):
     edge, no version anywhere (the ticket's own acceptance wording).
     """
 
-    BINDINGS: ClassVar = [
-        Binding("y", "choose(True)", "Yes, save"),
-        Binding("n", "choose(False)", "No, cancel"),
-        Binding("escape", "choose(False)", "Cancel", show=False),
-    ]
-
     def __init__(self, preview_text: str) -> None:
-        super().__init__()
+        super().__init__(
+            "Save this answer as a new note, linked to the source note? (Y)es / (N)o",
+            dialog_id="save-as-note-confirm-dialog",
+            message_id=SAVE_AS_NOTE_PROMPT_ID,
+        )
         self._preview_text = preview_text
 
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            LodeStatic(
-                "Save this answer as a new note, linked to the source note? "
-                "(Y)es / (N)o",
-                id=SAVE_AS_NOTE_PROMPT_ID,
-            ),
+    def _dialog_children(self) -> list[Widget]:
+        return [
+            *super()._dialog_children(),
             VerticalScroll(
                 # markup=False -- the preview is the answer's own rendered
                 # text, which uses literal bracket citation markers (see
@@ -65,8 +59,4 @@ class SaveAsNoteConfirmScreen(ModalScreen[bool]):
                 LodeStatic(self._preview_text, id=SAVE_AS_NOTE_PREVIEW_ID),
                 id="save-as-note-preview-pane",
             ),
-            id="save-as-note-confirm-dialog",
-        )
-
-    def action_choose(self, confirmed: bool) -> None:
-        self.dismiss(confirmed)
+        ]

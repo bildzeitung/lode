@@ -13,42 +13,25 @@ already gives a soft-delete.
 
 from __future__ import annotations
 
-from typing import ClassVar
-
-from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Vertical
-from textual.screen import ModalScreen
-
-from lode.tui.widgets.lode_static import LodeStatic
+from lode.tui.screens.yes_no_confirm import YesNoConfirmScreen
 
 #: The no-egress-clear-confirm dialog's message widget id -- read back in tests.
 NO_EGRESS_CLEAR_CONFIRM_MESSAGE_ID = "no-egress-clear-confirm-message"
 
 
-class NoEgressClearConfirmScreen(ModalScreen[bool]):
+class NoEgressClearConfirmScreen(YesNoConfirmScreen):
     """A small Yes/No confirm before clearing a note's no_egress flag (lode-a50f).
 
     Mirrors :class:`~lode.tui.screens.delete_confirm.DeleteConfirmScreen`'s
-    popup styling and Yes/No shape. Dismisses with a ``bool``: ``True`` on
-    confirm, ``False`` on decline or Escape.
+    popup styling and Yes/No shape -- both now built on the shared
+    :class:`~lode.tui.screens.yes_no_confirm.YesNoConfirmScreen` skeleton
+    (lode-1ip2).
     """
 
-    BINDINGS: ClassVar = [
-        Binding("y", "choose(True)", "Yes, clear"),
-        Binding("n", "choose(False)", "No, cancel"),
-        Binding("escape", "choose(False)", "Cancel", show=False),
-    ]
-
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            LodeStatic(
-                "Clear no-egress on this note? It will become cloud-eligible"
-                " again. (Y)es / (N)o",
-                id=NO_EGRESS_CLEAR_CONFIRM_MESSAGE_ID,
-            ),
-            id="no-egress-clear-confirm-dialog",
+    def __init__(self) -> None:
+        super().__init__(
+            "Clear no-egress on this note? It will become cloud-eligible"
+            " again. (Y)es / (N)o",
+            dialog_id="no-egress-clear-confirm-dialog",
+            message_id=NO_EGRESS_CLEAR_CONFIRM_MESSAGE_ID,
         )
-
-    def action_choose(self, confirmed: bool) -> None:
-        self.dismiss(confirmed)

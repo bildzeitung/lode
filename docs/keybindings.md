@@ -201,11 +201,8 @@ action on one of these screens still faces the exhausted pool above; this one di
 | | | `ctrl+n` | Open link under cursor | |
 | | | `ctrl+l` | Ask about this note (`lode-35nu.11.3`, shadows the App-level `ctrl+l`) | |
 | `EnrichmentModalScreen` | `screens/enrichment_modal.py` | `escape` | Back | — |
-| `DeleteConfirmScreen` | `screens/delete_confirm.py` | `y` | Yes, delete | — |
-| | | `n` | No, cancel | |
-| | | `escape` | Cancel (`show=False`) | |
-| `NoEgressClearConfirmScreen` | `screens/no_egress_confirm.py` | `y` | Yes, clear | — |
-| | | `n` | No, cancel | |
+| `YesNoConfirmScreen` | `screens/yes_no_confirm.py` | `y` | Yes -- shared base for `DeleteConfirmScreen` (`screens/delete_confirm.py`), `NoEgressClearConfirmScreen` (`screens/no_egress_confirm.py`) and `SaveAsNoteConfirmScreen` (`screens/save_as_note_confirm.py`, `lode-1ip2`) | — |
+| | | `n` | No | |
 | | | `escape` | Cancel (`show=False`) | |
 | `BrowseScreen` | `screens/browse.py` | `escape` | Back | — (DataTable) |
 | | | `i` | Inspect | |
@@ -241,9 +238,6 @@ action on one of these screens still faces the exhausted pool above; this one di
 | | | `down` | Move the focused-citation cursor to the next citation (`show=False`, same reasoning) | |
 | | | `ctrl+j` | Open the focused citation's cited version/snapshot (`lode-35nu.4`) | |
 | | | `ctrl+s` | Save the current answer as a new note (`lode-35nu.11.4`, per-note ask only) | |
-| `SaveAsNoteConfirmScreen` | `screens/save_as_note_confirm.py` | `y` | Yes, save | — |
-| | | `n` | No, cancel | |
-| | | `escape` | Cancel (`show=False`) | |
 | `ConfigScreen` | `screens/config.py` | `escape` | Back | — |
 | `ReconcileScreen` | `screens/reconcile.py` | `r` | Re-apply | read-only diff |
 | | | `d` | Discard | |
