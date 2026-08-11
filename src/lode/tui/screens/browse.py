@@ -630,16 +630,29 @@ class BrowseScreen(Screen[None]):
                 lambda confirmed: self._on_no_egress_clear_confirm(confirmed, note_id),
             )
             return
-        toggle_note_no_egress(self.app.db_path, note_id)
-        self.notify("Marked no-egress: this note is now withheld from cloud egress.")
-        self._reload_rows()
+        self._apply_no_egress_toggle(note_id)
 
     def _on_no_egress_clear_confirm(self, confirmed: bool | None, note_id: str) -> None:
         """Act on the clear-confirm dialog's answer: clear-then-reload, or leave untouched."""
         if not confirmed:
             return
-        toggle_note_no_egress(self.app.db_path, note_id)
-        self.notify("Cleared no-egress: this note is cloud-eligible again.")
+        self._apply_no_egress_toggle(note_id)
+
+    def _apply_no_egress_toggle(self, note_id: str) -> None:
+        """Flip the flag, report the RESULTING state, and re-render.
+
+        Both arms of ``n`` land here. The notify text comes from
+        :func:`~lode.tui.services.no_egress.toggle_note_no_egress`'s return
+        value -- the state actually written -- rather than from the direction
+        the caller expected, so a note flipped elsewhere between the confirm
+        popping up and this running is still described accurately.
+        """
+        if toggle_note_no_egress(self.app.db_path, note_id):
+            self.notify(
+                "Marked no-egress: this note is now withheld from cloud egress."
+            )
+        else:
+            self.notify("Cleared no-egress: this note is cloud-eligible again.")
         self._reload_rows()
 
     def action_delete_selected(self) -> None:
