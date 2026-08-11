@@ -31,11 +31,19 @@ from lode.backfill import (
     run_backfill,
 )
 from lode.config import Settings
+from lode.externals import set_no_egress
 from lode.storage import init_db
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+def _no_egress(conn: sqlite3.Connection, external_id: str) -> int:
+    (no_egress,) = conn.execute(
+        "SELECT no_egress FROM externals WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    return no_egress
 
 
 @pytest.fixture()
@@ -270,10 +278,7 @@ class TestMintExternal:
     def test_defaults_no_egress_false(self, conn: sqlite3.Connection):
         """The ordinary (default) case: a freshly minted external is cloud-eligible."""
         mint_external(conn, "ABC-1", "jira")
-        (no_egress,) = conn.execute(
-            "SELECT no_egress FROM externals WHERE external_id = 'ABC-1'"
-        ).fetchone()
-        assert no_egress == 0
+        assert _no_egress(conn, "ABC-1") == 0
 
     def test_honors_settings_no_egress_default(self, conn: sqlite3.Connection):
         """Settings.no_egress_default=True must apply at the row's true first
@@ -282,10 +287,7 @@ class TestMintExternal:
         cloud-eligible.
         """
         mint_external(conn, "ABC-1", "jira", settings=Settings(no_egress_default=True))
-        (no_egress,) = conn.execute(
-            "SELECT no_egress FROM externals WHERE external_id = 'ABC-1'"
-        ).fetchone()
-        assert no_egress == 1
+        assert _no_egress(conn, "ABC-1") == 1
 
     def test_default_does_not_stomp_an_explicit_clear_on_a_noop_remint(
         self, conn: sqlite3.Connection
@@ -296,15 +298,14 @@ class TestMintExternal:
         """
         settings = Settings(no_egress_default=True)
         mint_external(conn, "ABC-1", "jira", settings=settings)
-        conn.execute("UPDATE externals SET no_egress = 0 WHERE external_id = 'ABC-1'")
+        # The real clear path, not a hand-rolled UPDATE: this is what
+        # 'lode no-egress --clear' actually executes.
+        set_no_egress(conn, "ABC-1", no_egress=False)
 
         created_again = mint_external(conn, "ABC-1", "jira", settings=settings)
 
         assert created_again is False
-        (no_egress,) = conn.execute(
-            "SELECT no_egress FROM externals WHERE external_id = 'ABC-1'"
-        ).fetchone()
-        assert no_egress == 0
+        assert _no_egress(conn, "ABC-1") == 0
 
 
 # ---------------------------------------------------------------------------

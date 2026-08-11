@@ -230,10 +230,9 @@ def mint_external(
         return row is None
     settings = settings or Settings()
     with conn:
-        cur = _insert_external(
+        return _insert_external(
             conn, external_id, source_type, settings, api_base=api_base
         )
-        return cur.rowcount > 0
 
 
 def repoint_edges(

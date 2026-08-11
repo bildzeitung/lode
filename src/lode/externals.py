@@ -180,7 +180,7 @@ def _insert_external(
     settings: Settings,
     *,
     api_base: str | None = None,
-) -> sqlite3.Cursor:
+) -> bool:
     """First-write-wins ``INSERT INTO externals``, seeding ``no_egress`` (lode-ge8w).
 
     The one shared write path for every ``externals`` insert site (here, plus
@@ -196,15 +196,16 @@ def _insert_external(
     default over a user's explicit ``lode no-egress --clear``
     (``docs/externals.md`` "No-egress tier").
 
-    Returns the raw :class:`sqlite3.Cursor` so a caller that needs to tell a
-    real insert from a ``DO NOTHING`` no-op (:func:`lode.backfill.mint_external`)
-    can read ``cursor.rowcount`` itself.
+    Returns ``True`` iff a row was newly inserted — ``False`` means the
+    ``DO NOTHING`` path fired on an already-existing ``external_id``, which
+    :func:`lode.backfill.mint_external` reports to its own caller.
     """
-    return conn.execute(
+    cur = conn.execute(
         "INSERT INTO externals (external_id, source_type, api_base, no_egress) "
         "VALUES (?, ?, ?, ?) ON CONFLICT (external_id) DO NOTHING",
         (external_id, source_type, api_base, int(settings.no_egress_default)),
     )
+    return cur.rowcount > 0
 
 
 def _external_head(

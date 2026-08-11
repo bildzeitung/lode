@@ -484,12 +484,10 @@ def detect_and_enqueue_drawdown(
             # Owner decision A: persist source_type + api_base on the
             # externals row NOW, synchronously — the async refresh handler
             # can no longer derive them from external_id alone once
-            # external_id is a semantic key rather than a URL.
-            # _insert_external mirrors lode.externals.ingest_snapshot's own
-            # externals upsert: first-write-wins (ON CONFLICT DO NOTHING),
-            # idempotent for a second note linking the same already-known
-            # external, and seeds no_egress from Settings.no_egress_default
-            # (lode-ge8w).
+            # external_id is a semantic key rather than a URL. The shared
+            # first-write-wins insert (idempotent for a second note linking
+            # the same already-known external, and the one place no_egress is
+            # seeded) lives in lode.externals._insert_external — see there.
             _insert_external(
                 conn, external_id, source_type, settings, api_base=api_base
             )
