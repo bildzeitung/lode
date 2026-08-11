@@ -241,9 +241,12 @@ def _save_core(
         version_id = content_version_id(note_id, NO_PARENT, body, settings)
         # Note row first: its head points at the not-yet-written version (the
         # deferred FK permits this), satisfying the version's note_id FK.
+        # ``no_egress`` honors Settings.no_egress_default (lode-a43n) -- the
+        # schema DEFAULT 0 alone never consulted it, silently leaving every
+        # new note cloud-eligible even with the knob set.
         conn.execute(
-            "INSERT INTO notes (note_id, head_version_id) VALUES (?, ?)",
-            (note_id, version_id),
+            "INSERT INTO notes (note_id, head_version_id, no_egress) VALUES (?, ?, ?)",
+            (note_id, version_id, int(settings.no_egress_default)),
         )
         _write_version(conn, version_id, note_id, NO_PARENT, body, "create")
         return SaveResult(note_id, version_id, "create")

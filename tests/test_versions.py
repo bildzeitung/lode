@@ -64,6 +64,30 @@ def test_recreating_an_existing_note_conflicts(conn):
         save(conn, "note-1", "again")
 
 
+def test_create_defaults_no_egress_false(conn):
+    """The ordinary (default) case: a new note is cloud-eligible."""
+    save(conn, "note-1", "hello")
+    (no_egress,) = conn.execute(
+        "SELECT no_egress FROM notes WHERE note_id = ?", ("note-1",)
+    ).fetchone()
+    assert no_egress == 0
+
+
+def test_create_honors_settings_no_egress_default(conn):
+    """Settings.no_egress_default=True must apply at note-row creation
+    time (lode-a43n) -- previously only the schema DEFAULT 0 was consulted,
+    silently leaving every new note cloud-eligible even with the knob set.
+    """
+    from lode.config import Settings
+
+    settings = Settings(no_egress_default=True)
+    save(conn, "note-1", "hello", settings=settings)
+    (no_egress,) = conn.execute(
+        "SELECT no_egress FROM notes WHERE note_id = ?", ("note-1",)
+    ).fetchone()
+    assert no_egress == 1
+
+
 # --- update + CAS -----------------------------------------------------------
 
 
