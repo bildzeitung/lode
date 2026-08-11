@@ -103,6 +103,14 @@ def short_note_id(note_id: str) -> str:
     return note_id[:SHORT_NOTE_ID_LENGTH]
 
 
+#: The TUI's plain-text marker for a ``no_egress`` note (lode-82wt) -- ASCII,
+#: no emoji/box-drawing glyph, so it survives a plain terminal.
+#: :class:`~lode.tui.screens.browse.BrowseScreen`'s marker column and
+#: :class:`~lode.tui.screens.edit.EditScreen`'s ``sub_title`` both render this
+#: same text, so a withheld note reads identically wherever it's shown.
+NO_EGRESS_MARKER = "no-egress"
+
+
 @dataclass(frozen=True, slots=True)
 class NoteRow:
     """One note as a note list shows it.
@@ -116,6 +124,11 @@ class NoteRow:
     created: str
     version: int
     summary: str
+    #: Whether this note is currently marked ``no_egress`` (lode-82wt) --
+    #: withheld from cloud egress (enrichment send + Q&A context). Defaults
+    #: to ``False`` so :func:`_list_deleted_notes`, which has no reason to
+    #: surface the flag on a tombstoned note, need not be touched.
+    no_egress: bool = False
 
 
 def list_notes(db_path: Path) -> list[NoteRow]:
@@ -185,7 +198,8 @@ def _list_notes(
     """
     rows = conn.execute(
         "SELECT n.note_id, n.created, n.head_version_id, v.body, "
-        "(SELECT COUNT(*) FROM versions vc WHERE vc.note_id = n.note_id) "
+        "(SELECT COUNT(*) FROM versions vc WHERE vc.note_id = n.note_id), "
+        "n.no_egress "
         "FROM notes n "
         "JOIN versions v ON v.version_id = n.head_version_id "
         "WHERE v.op != 'delete' " + extra_where + "ORDER BY n.rowid DESC",
@@ -197,8 +211,9 @@ def _list_notes(
             created=created,
             version=chain_length,
             summary=_head_summary(conn, note_id, head_version_id, body),
+            no_egress=bool(no_egress),
         )
-        for note_id, created, head_version_id, body, chain_length in rows
+        for note_id, created, head_version_id, body, chain_length, no_egress in rows
     ]
 
 

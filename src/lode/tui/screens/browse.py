@@ -252,7 +252,13 @@ from textual.screen import Screen
 from textual.widgets import Header, Input
 from textual.widgets.data_table import RowDoesNotExist
 
-from lode.notes_read import NoteRow, list_notes, search_notes, short_note_id
+from lode.notes_read import (
+    NO_EGRESS_MARKER,
+    NoteRow,
+    list_notes,
+    search_notes,
+    short_note_id,
+)
 from lode.tui.dates import format_adaptive_date
 from lode.tui.screens._browse_render import (
     _SUMMARY_ROW_HEIGHT,
@@ -264,6 +270,7 @@ from lode.tui.screens.delete_confirm import DeleteConfirmScreen
 from lode.tui.screens.edit import EditScreen
 from lode.tui.screens.enrichment_modal import EnrichmentModalScreen
 from lode.tui.services.edit import delete_note, load_head
+from lode.tui.services.no_egress import toggle_note_no_egress
 from lode.tui.widgets.lode_data_table import LodeDataTable
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.versions import HeadConflictError
@@ -320,12 +327,17 @@ class BrowseScreen(Screen[None]):
     # the historical record of lode-2bt3.3's own call, not current fact. The
     # live gate is tests/test_tui_footer_width_corpus.py (consumed <= 100,
     # hscroll False), not this number.
+    # "No-egress" (lode-82wt) is hidden for the same reason "Expand" is: a
+    # pure, reversible flag toggle, used far less often than
+    # Inspect/View content/Delete/Search once learned once -- an overlay-only
+    # lookup rather than a permanent footer line item.
     BINDINGS: ClassVar = [
         Binding("escape", "dismiss_screen", "Back"),
         Binding("i", "inspect_selected", "Inspect"),
         Binding("v", "view_content", "View content"),
         Binding("d", "delete_selected", "Delete"),
         Binding("x", "toggle_summary", "Expand", show=False),
+        Binding("n", "toggle_no_egress", "No-egress", show=False),
         Binding("slash", "quick_search", "Search"),
     ]
 
@@ -486,7 +498,17 @@ class BrowseScreen(Screen[None]):
         # Id is the shared 8-char note-id abbreviation (lode-1gr.2), not the
         # full id -- EditScreen shows that instead, where there's no width
         # budget to protect.
-        id_cells = [short_note_id(row.note_id) for row in rows]
+        # No-egress marker (lode-82wt): a withheld note's Id cell is prefixed
+        # with NO_EGRESS_MARKER in brackets so it reads at a glance, without
+        # adding a whole new column (which would shift every other column's
+        # index for every existing caller/test). A plain note's Id cell is
+        # unchanged.
+        id_cells = [
+            f"[{NO_EGRESS_MARKER}] {short_note_id(row.note_id)}"
+            if row.no_egress
+            else short_note_id(row.note_id)
+            for row in rows
+        ]
         id_width = max([len("Id"), *(len(cell) for cell in id_cells)])
         date_cells = [format_adaptive_date(row.created) for row in rows]
         date_width = max([len("Date"), *(len(cell) for cell in date_cells)])
@@ -577,6 +599,25 @@ class BrowseScreen(Screen[None]):
             self._expanded_note_id = None
         else:
             self._expanded_note_id = note_id
+        self._reload_rows()
+
+    def action_toggle_no_egress(self) -> None:
+        """``n``: flip the highlighted row's no_egress flag (lode-82wt).
+
+        Withholds (or reinstates) this note from cloud egress -- the note-side
+        mirror of ``lode no-egress --note``. Goes through
+        :func:`~lode.tui.services.no_egress.toggle_note_no_egress`, the single
+        write path onto ``notes.no_egress`` this screen uses; no second code
+        path reaches the column. Reloads afterward so the marker column and
+        the toggle both reflect the new state immediately.
+        """
+        table = self.query_one(f"#{TABLE_ID}", LodeDataTable)
+        if table.row_count == 0:
+            return
+        note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        if note_id is None:
+            return
+        toggle_note_no_egress(self.app.db_path, note_id)
         self._reload_rows()
 
     def action_delete_selected(self) -> None:

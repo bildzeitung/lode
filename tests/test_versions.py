@@ -368,3 +368,37 @@ def test_purge_is_idempotent(conn):
 def test_purge_unknown_note_raises(conn):
     with pytest.raises(KeyError):
         purge(conn, "ghost")
+
+
+# --- set_no_egress (the note-side no_egress setter, lode-82wt) -------------
+
+
+def test_set_no_egress_marks_an_existing_note(conn):
+    from lode.versions import set_no_egress
+
+    save(conn, "note-1", "a note")
+
+    assert set_no_egress(conn, "note-1", no_egress=True) is True
+    row = conn.execute(
+        "SELECT no_egress FROM notes WHERE note_id = ?", ("note-1",)
+    ).fetchone()
+    assert row == (1,)
+
+
+def test_set_no_egress_clear_flips_it_back(conn):
+    from lode.versions import set_no_egress
+
+    save(conn, "note-1", "a note")
+    set_no_egress(conn, "note-1", no_egress=True)
+
+    assert set_no_egress(conn, "note-1", no_egress=False) is True
+    row = conn.execute(
+        "SELECT no_egress FROM notes WHERE note_id = ?", ("note-1",)
+    ).fetchone()
+    assert row == (0,)
+
+
+def test_set_no_egress_unknown_note_returns_false(conn):
+    from lode.versions import set_no_egress
+
+    assert set_no_egress(conn, "ghost", no_egress=True) is False

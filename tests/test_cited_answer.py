@@ -401,6 +401,44 @@ def test_no_egress_note_kept_off_cloud_and_surfaced_as_withheld(conn) -> None:
     assert answer.withheld_citations[0].note == WITHHELD_CITATION
 
 
+def test_note_flipped_no_egress_via_set_no_egress_is_withheld_from_qa_send(
+    conn,
+) -> None:
+    """The new note-side write path (lode-82wt) reaches the same gate.
+
+    Unlike :func:`test_no_egress_note_kept_off_cloud_and_surfaced_as_withheld`
+    above -- which seeds the flag directly via ``_insert_note``'s INSERT --
+    this note is saved plain and then flipped through
+    :func:`lode.versions.set_no_egress`, the exact setter the CLI's ``lode
+    no-egress --note`` and the TUI browse toggle both call. This asserts the
+    new write path actually reaches the already-tested gate, not just that
+    the gate itself works when the column happens to be set.
+    """
+    from lode.versions import set_no_egress
+
+    _insert_note(conn, note_id="n-open", version_id="v-open", body="shareable body")
+    _insert_note(conn, note_id="n-secret", version_id="v-secret", body="secret body")
+    assert set_no_egress(conn, "n-secret", no_egress=True) is True
+    client = _FakeClient([])
+
+    answer = ask(
+        conn,
+        "q",
+        [
+            _note_context("v-open", "shareable body"),
+            _note_context("v-secret", "secret body"),
+        ],
+        provider=AnthropicProvider(client),
+    )
+
+    prompt = _user_prompt(client)
+    assert "secret body" not in prompt  # the just-flipped body never left the box
+    assert "v-secret" not in prompt
+    assert "shareable body" in prompt
+    assert [c.target_id for c in answer.withheld_citations] == ["v-secret"]
+    assert answer.withheld_citations[0].note == WITHHELD_CITATION
+
+
 def test_claim_citing_a_no_egress_target_fails_closed(conn) -> None:
     # A claim whose span is verbatim in a withheld body is still dropped: the gate
     # verifies only against egress-cleared bodies, so content the model never saw

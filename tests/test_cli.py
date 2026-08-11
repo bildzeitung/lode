@@ -2677,6 +2677,81 @@ def test_no_egress_unknown_external_reports_and_exits_nonzero(
     assert "no such external source" in result.stderr
 
 
+# --- lode no-egress --note (per-note surfacing, lode-82wt) ------------------
+
+
+def test_no_egress_note_marks_an_existing_note(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-ne-1", "a note worth withholding")
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app, ["no-egress", "--note", "note-ne-1", "--db", str(db_path)]
+    )
+    assert result.exit_code == 0
+    assert "marked no_egress" in result.stdout
+    assert _rows(
+        db_path, "SELECT no_egress FROM notes WHERE note_id = ?", ("note-ne-1",)
+    ) == [(1,)]
+
+
+def test_no_egress_note_clear_flips_it_back(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-ne-2", "a note worth withholding")
+    finally:
+        conn.close()
+    runner.invoke(app, ["no-egress", "--note", "note-ne-2", "--db", str(db_path)])
+
+    result = runner.invoke(
+        app,
+        ["no-egress", "--note", "note-ne-2", "--clear", "--db", str(db_path)],
+    )
+    assert result.exit_code == 0
+    assert "cleared no_egress" in result.stdout
+    assert _rows(
+        db_path, "SELECT no_egress FROM notes WHERE note_id = ?", ("note-ne-2",)
+    ) == [(0,)]
+
+
+def test_no_egress_note_unknown_id_reports_and_exits_nonzero(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(
+        app, ["no-egress", "--note", "no-such-note", "--db", str(db_path)]
+    )
+    assert result.exit_code == 1
+    assert "no such note" in result.stderr
+
+
+def test_no_egress_requires_exactly_one_of_external_id_or_note(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    neither = runner.invoke(app, ["no-egress", "--db", str(db_path)])
+    assert neither.exit_code == 1
+    assert "exactly one" in neither.stderr
+
+    both = runner.invoke(
+        app,
+        [
+            "no-egress",
+            "https://example.com/a",
+            "--note",
+            "note-ne-3",
+            "--db",
+            str(db_path),
+        ],
+    )
+    assert both.exit_code == 1
+    assert "exactly one" in both.stderr
+
+
 # --- lode purge (E8 hard delete via Repository.purge, lode-7cx) -------------
 
 

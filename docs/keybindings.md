@@ -209,6 +209,7 @@ action on one of these screens still faces the exhausted pool above; this one di
 | | | `v` | View retrieved content | |
 | | | `d` | Delete | |
 | | | `x` | Expand/collapse summary (hidden from the footer, `show=False`, `lode-2bt3.3`) | |
+| | | `n` | Toggle no_egress on the highlighted note (hidden from the footer, `show=False`, `lode-82wt`) | |
 | | | `slash` | Search (BM25 quick search, narrows the list, `lode-35nu.6`, rebound here from `s` — `lode-wdm0`) | `s` is unbound; the progressive summary-scan search formerly on `slash` (`lode-olmi.4`) is retired |
 | `ExternalPickerScreen` | `screens/external_picker.py` | `escape` | Back | — (DataTable) |
 | `TagsScreen` | `screens/tags.py` | `escape` | Back | — (DataTable grid, `lode-l38d.9`) |
