@@ -19,6 +19,8 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from rich.style import Style
+from rich.text import Text
 from textual.screen import Screen
 from textual.widgets import TextArea
 from textual.widgets.text_area import LanguageDoesNotExist
@@ -81,20 +83,30 @@ def test_tree_sitter_markdown_grammar_is_importable() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _break_grammar(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
+    """Make ``TextArea(..., language=...)`` raise ``exc``, leaving plain construction alone.
+
+    Both broken-environment arms differ only in which exception comes out of
+    ``TextArea.__init__``, so the simulation lives here once rather than being
+    re-typed per case.
+    """
+    real_init = TextArea.__init__
+
+    def _fail_if_language_requested(
+        self: TextArea, *args: object, **kwargs: object
+    ) -> None:
+        if kwargs.get("language") is not None:
+            raise exc
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(TextArea, "__init__", _fail_if_language_requested)
+
+
 def test_markdown_text_area_falls_back_to_plain_text_when_grammar_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Simulates the grammar being absent: no raise, plain uncoloured TextArea."""
-    real_init = TextArea.__init__
-
-    def _raise_missing_language(
-        self: TextArea, *args: object, **kwargs: object
-    ) -> None:
-        if kwargs.get("language") is not None:
-            raise LanguageDoesNotExist("simulated missing markdown grammar")
-        real_init(self, *args, **kwargs)
-
-    monkeypatch.setattr(TextArea, "__init__", _raise_missing_language)
+    _break_grammar(monkeypatch, LanguageDoesNotExist("simulated missing grammar"))
 
     widget = _markdown_text_area("some body", id="body", read_only=True)
 
@@ -119,14 +131,7 @@ def test_markdown_text_area_falls_back_when_grammar_abi_is_incompatible(
     the two failures, so the helper must degrade here too rather than kill the
     screen.
     """
-    real_init = TextArea.__init__
-
-    def _raise_abi_mismatch(self: TextArea, *args: object, **kwargs: object) -> None:
-        if kwargs.get("language") is not None:
-            raise ValueError("invalid language ID")
-        real_init(self, *args, **kwargs)
-
-    monkeypatch.setattr(TextArea, "__init__", _raise_abi_mismatch)
+    _break_grammar(monkeypatch, ValueError("invalid language ID"))
 
     widget = _markdown_text_area("some body", id="body", read_only=True)
 
@@ -156,28 +161,21 @@ def test_markdown_text_area_uses_markdown_language_when_grammar_present() -> Non
 
 
 # ---------------------------------------------------------------------------
-# Fenced-code-block colour (lode-lab1): OUR palette, asserted against the
-# module-level object, not the library default -- same convention as
-# ``CLI_STYLES``/``CLI_THEME`` in ``lode.cli``. MAINTAINER DECISION (lode-lab1
-# notes): magenta, colour only.
+# Fenced-code-block colour (lode-lab1). MAINTAINER DECISION (lode-lab1 notes):
+# magenta, colour only.
 # ---------------------------------------------------------------------------
 
 
-def test_note_body_syntax_styles_maps_text_literal_to_magenta_only() -> None:
-    """The declared palette: ``text.literal`` -> magenta, colour only, nothing else."""
-    style = NOTE_BODY_SYNTAX_STYLES["text.literal"]
+def test_note_body_syntax_styles_is_exactly_text_literal_magenta() -> None:
+    """The whole declared palette, asserted as one equality.
 
-    assert style.color is not None
-    assert style.color.name == "magenta"
-    assert not style.bold
-    assert style.bgcolor is None
-
-
-def test_note_body_syntax_styles_leaves_none_capture_unmapped() -> None:
-    """Mapping ``"none"`` would emit a later, winning span that overrides
-    ``text.literal`` (lode-76go's spike) -- it must stay absent from the theme.
+    ``Style`` equality covers every attribute at once, so this pins "magenta,
+    colour only" (no bold, no background tint) *and* pins that ``"none"`` stays
+    unmapped -- lode-76go found that capture is emitted later in each line's
+    highlight iteration order, so mapping it would win the colour attribute at
+    render time and silently undo ``text.literal``.
     """
-    assert "none" not in NOTE_BODY_SYNTAX_STYLES
+    assert NOTE_BODY_SYNTAX_STYLES == {"text.literal": Style(color="magenta")}
 
 
 def test_markdown_text_area_applies_the_shared_note_body_theme() -> None:
@@ -185,27 +183,48 @@ def test_markdown_text_area_applies_the_shared_note_body_theme() -> None:
     widget = _markdown_text_area("some body", id="body")
 
     assert widget.theme == NOTE_BODY_THEME.name
-    assert widget._themes[NOTE_BODY_THEME.name] is NOTE_BODY_THEME
+    assert NOTE_BODY_THEME.name in widget.available_themes
+
+
+def test_fenced_code_block_lines_render_magenta_end_to_end() -> None:
+    """The point of the whole ticket: fenced-block lines colour, prose does not.
+
+    Asserting the palette and the wiring separately would both stay green if a
+    Textual upgrade renamed the capture out from under us, so this drives the
+    real highlighter over a real buffer and resolves the spans exactly the way
+    ``TextArea._render_line`` does (look up each capture in the active theme's
+    ``syntax_styles``; skip it entirely when unmapped).
+    """
+    body = "intro\n```python\ndef foo():\n    return 1\n```\ntail\n"
+    widget = _markdown_text_area(body, id="body")
+    styles = widget._theme.syntax_styles
+
+    def _spans(line_index: int) -> list[Style]:
+        text = Text(widget.document.get_line(line_index), end="", no_wrap=True)
+        for start, end, capture in widget._highlights[line_index]:
+            style = styles.get(capture)
+            if style is not None:
+                text.stylize(style, start, end)
+        return [span.style for span in text.spans]
+
+    magenta = Style(color="magenta")
+    # The opening delimiter, both body lines, and the closing delimiter.
+    for line_index in (1, 2, 3, 4):
+        assert _spans(line_index) == [magenta], f"line {line_index} not coloured"
+    # Surrounding prose is left alone.
+    assert _spans(0) == []
+    assert _spans(5) == []
 
 
 def test_markdown_text_area_fallback_does_not_touch_theme(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The no-grammar fallback stays a plain TextArea -- no third failure mode."""
-    real_init = TextArea.__init__
-
-    def _raise_missing_language(
-        self: TextArea, *args: object, **kwargs: object
-    ) -> None:
-        if kwargs.get("language") is not None:
-            raise LanguageDoesNotExist("simulated missing markdown grammar")
-        real_init(self, *args, **kwargs)
-
-    monkeypatch.setattr(TextArea, "__init__", _raise_missing_language)
+    _break_grammar(monkeypatch, LanguageDoesNotExist("simulated missing grammar"))
 
     widget = _markdown_text_area("some body", id="body")
 
-    assert NOTE_BODY_THEME.name not in widget._themes
+    assert NOTE_BODY_THEME.name not in widget.available_themes
 
 
 # ---------------------------------------------------------------------------

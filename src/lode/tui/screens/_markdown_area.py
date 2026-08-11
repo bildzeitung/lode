@@ -60,13 +60,10 @@ from textual.widgets.text_area import LanguageDoesNotExist, TextAreaTheme
 #: Semantic declaration of the note-body fenced-code-block colour (lode-lab1),
 #: kept as a plain module-level dict -- same convention as ``CLI_STYLES`` in
 #: ``lode.cli`` -- so a test can assert OUR palette rather than the library
-#: default. ``TextAreaTheme`` is a ``@dataclass`` whose ``syntax_styles``
-#: field is just a normal ``dict[str, Style]`` attribute (unlike rich's
-#: ``Theme``, nothing about ``TextAreaTheme.__init__``/``__post_init__``
-#: destroys or copies-by-reference in a way that would make inlining unsafe),
-#: but the dict is still pulled out here rather than inlined into the
-#: constructor call below, purely so this object -- not the theme's internals
-#: -- is the one thing a test needs to import and assert against.
+#: default. (``TextAreaTheme`` is a ``@dataclass`` that keeps ``syntax_styles``
+#: as a plain attribute, so unlike rich's ``Theme`` it would not destroy an
+#: inlined declaration -- the dict is hoisted for the test seam, not to dodge a
+#: constructor.)
 #:
 #: Maps the tree-sitter capture ``text.literal``, which lode-76go's spike
 #: confirmed carries a whole-line span on every line of a fenced code block
@@ -118,11 +115,17 @@ def _markdown_text_area(
             id=id,
             placeholder=placeholder,
         )
-        text_area.register_theme(NOTE_BODY_THEME)
-        text_area.theme = NOTE_BODY_THEME.name
-        return text_area
     except LanguageDoesNotExist, ValueError:
         # Both arms mean "no usable markdown grammar in this environment" --
         # see this module's docstring for why ValueError is required here and
         # why it is narrow enough not to mask a real bug.
         return TextArea(text, read_only=read_only, id=id, placeholder=placeholder)
+
+    # Deliberately OUTSIDE the try: the ``except`` above is scoped to
+    # ``TextArea.__init__``'s two documented grammar failures and nothing else.
+    # Covering these two lines with it would let an unrelated ``ValueError``
+    # from theme application silently degrade to the uncoloured fallback --
+    # exactly the third failure mode the ticket forbids.
+    text_area.register_theme(NOTE_BODY_THEME)
+    text_area.theme = NOTE_BODY_THEME.name
+    return text_area
