@@ -368,3 +368,73 @@ def test_purge_is_idempotent(conn):
 def test_purge_unknown_note_raises(conn):
     with pytest.raises(KeyError):
         purge(conn, "ghost")
+
+
+# --- set_no_egress (the note-side no_egress setter, lode-82wt) -------------
+
+
+def test_set_no_egress_marks_an_existing_note(conn):
+    from lode.versions import set_no_egress
+
+    save(conn, "note-1", "a note")
+
+    assert set_no_egress(conn, "note-1", no_egress=True) is True
+    row = conn.execute(
+        "SELECT no_egress FROM notes WHERE note_id = ?", ("note-1",)
+    ).fetchone()
+    assert row == (1,)
+
+
+def test_set_no_egress_clear_flips_it_back(conn):
+    from lode.versions import set_no_egress
+
+    save(conn, "note-1", "a note")
+    set_no_egress(conn, "note-1", no_egress=True)
+
+    assert set_no_egress(conn, "note-1", no_egress=False) is True
+    row = conn.execute(
+        "SELECT no_egress FROM notes WHERE note_id = ?", ("note-1",)
+    ).fetchone()
+    assert row == (0,)
+
+
+def test_set_no_egress_unknown_note_returns_false(conn):
+    from lode.versions import set_no_egress
+
+    assert set_no_egress(conn, "ghost", no_egress=True) is False
+
+
+def test_no_egress_survives_new_versions_and_delete_recover(conn):
+    """A withheld note stays withheld across its whole version chain (lode-82wt).
+
+    ``no_egress`` is a NOTE-scoped column, not a per-version one, so every
+    later chain operation must leave it alone: :func:`save` advances
+    ``notes.head_version_id`` in place (it does not re-INSERT the ``notes``
+    row), and :func:`delete`/:func:`recover` only repoint that same head. This
+    pins that, because the failure is silent and privacy-affecting in the
+    *unsafe* direction -- a refactor that re-INSERTs the note row (or an
+    ``INSERT OR REPLACE``) would reset the column to its ``DEFAULT 0`` and
+    quietly make an explicitly withheld note cloud-eligible again on its next
+    edit, with nothing in the UI or the CLI to say so.
+    """
+    from lode.versions import set_no_egress
+
+    v1 = save(conn, "note-1", "v1 body").version_id
+    set_no_egress(conn, "note-1", no_egress=True)
+
+    v2 = save(conn, "note-1", "v2 body", parent=v1).version_id
+    v3 = save(conn, "note-1", "v3 body", parent=v2).version_id
+    assert _count_versions(conn, "note-1") == 3
+    assert _no_egress(conn, "note-1") == 1
+
+    delete(conn, "note-1", parent=v3)
+    assert _no_egress(conn, "note-1") == 1
+    recover(conn, "note-1", target_version=v3)
+    assert _no_egress(conn, "note-1") == 1
+
+
+def _no_egress(conn, note_id: str) -> int:
+    (flag,) = conn.execute(
+        "SELECT no_egress FROM notes WHERE note_id = ?", (note_id,)
+    ).fetchone()
+    return flag

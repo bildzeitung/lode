@@ -188,7 +188,7 @@ Presence is computed from the env var / the resolver's inputs, not read back off
 
 | Knob | Kind | Default | Notes |
 |---|---|---|---|
-| `no_egress` (per note / source) | runtime | off | Indexed locally, never sent to the configured cloud LLM (no enrichment, excluded from cloud Q&A; cited as "withheld"). ([externals.md](externals.md#privacy-consequence-of-aggregation)) |
+| `no_egress` (per note / source) | runtime | off | Indexed locally, never sent to the configured cloud LLM (no enrichment, excluded from cloud Q&A; cited as "withheld"). Set/cleared per note via `lode no-egress --note <note_id>` (`--clear` to unset) or the TUI browse screen's `n` toggle, and per external source via `lode no-egress <external_id>` (lode-82wt) — both write through the same `no_egress` column, just via a note-side vs. externals-side setter. ([externals.md](externals.md#privacy-consequence-of-aggregation)) |
 | `no_egress_scopes` | runtime | `[]` | Declarative no_egress SCOPE rules (lode-35nu.11.8) — see below. |
 | Redact-before-egress pattern set | runtime | high-precision seed | Secret patterns stripped before content is sent to the configured cloud LLM; iterate from real misses. ([decisions.md](decisions.md)) |
 | Redact-before-index pattern set | runtime | high-precision seed | Secret patterns kept out of the local vector/FTS index. |

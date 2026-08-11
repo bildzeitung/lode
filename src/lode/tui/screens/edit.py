@@ -125,6 +125,7 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
+from lode.notes_read import NO_EGRESS_MARKER
 from lode.tui.screens._content_view import _view_note_external_content
 from lode.tui.screens._link_open import open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
@@ -134,6 +135,7 @@ from lode.tui.screens.enrichment_modal import EnrichmentModalScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 from lode.tui.screens.version_history import VersionHistoryScreen
 from lode.tui.services.edit import EditConflict, EmptyEditError, load_head, save_edit
+from lode.tui.services.no_egress import note_no_egress
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.versions import SaveResult
@@ -230,8 +232,15 @@ class EditScreen(Screen[None]):
     def on_mount(self) -> None:
         # Full 36-char id (lode-1gr.2/lode-olmi.2) -- selectable/copyable in
         # the header, unlike Browse's 8-char abbreviated Id column, which has
-        # a width budget to protect.
-        self.sub_title = self.note_id
+        # a width budget to protect. A no_egress note (lode-82wt) appends the
+        # same plain-text marker Browse's marker column shows, so the flag is
+        # visible at a glance on the note itself too, not only in the list.
+        marker = (
+            f" [{NO_EGRESS_MARKER}]"
+            if note_no_egress(self.app.db_path, self.note_id)
+            else ""
+        )
+        self.sub_title = f"{self.note_id}{marker}"
         head = load_head(self.app.db_path, self.note_id)
         if head is None:
             raise LookupError(f"no live note {self.note_id!r} to edit")

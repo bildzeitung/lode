@@ -437,3 +437,34 @@ def purge(conn: sqlite3.Connection, note_id: str) -> PurgeResult:
             (note_id,),
         )
         return PurgeResult(note_id, head_version_id, head_op, marker, version_ids)
+
+
+def set_no_egress(
+    conn: sqlite3.Connection, note_id: str, no_egress: bool = True
+) -> bool:
+    """Set (or clear) ``notes.no_egress`` for ``note_id`` (lode-82wt).
+
+    The note-side mirror of :func:`lode.externals.set_no_egress` — a pure flag
+    flip, never touching indexing or retrieval (``docs/externals.md``
+    "No-egress tier": "no_egress gates egress only"). A just-marked note stays
+    keyword/vector-retrievable immediately; only the next enrich/Q&A egress
+    send excludes it, via :func:`lode.egress.partition_egress` and the
+    ``notes.no_egress`` join already read by
+    :func:`lode.cited_answer._resolve_targets` and
+    :func:`lode.enrich._resolve_enrich_target` — flipping the column is the
+    only step needed here, same as the external case.
+
+    Returns ``True`` if ``note_id`` had a row to flip, ``False`` if no such
+    note exists (the caller — :mod:`lode.cli.egress` — turns that into a
+    clean "no such note" error rather than silently no-opping). This is the
+    single write path onto ``notes.no_egress``: both the CLI (``lode
+    no-egress --note``) and the TUI browse-screen toggle
+    (:func:`lode.tui.services.no_egress.toggle_note_no_egress`) call through
+    here rather than each issuing their own ``UPDATE``.
+    """
+    with conn:
+        cur = conn.execute(
+            "UPDATE notes SET no_egress = ? WHERE note_id = ?",
+            (int(no_egress), note_id),
+        )
+    return cur.rowcount > 0

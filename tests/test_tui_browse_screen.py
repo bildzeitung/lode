@@ -3123,3 +3123,185 @@ def test_edit_footer_shows_every_shown_binding_visible(
         "Tags",
         "Help",
     ]
+
+
+# --- no_egress toggle + marker (lode-82wt) ----------------------------------
+
+
+def _visible_screen_text(app: LodeApp) -> str:
+    """Everything actually painted on the terminal, as plain text.
+
+    The marker assertions below need the COMPOSITED screen, not the cell value
+    handed to ``add_row``: ``[no-egress]`` is Rich-markup-shaped, and a bare
+    ``str`` cell reaching ``Text.from_markup`` would silently swallow it whole
+    (``Text.from_markup("[no-egress] ab")`` renders as ``" ab"`` -- no error,
+    no marker). :class:`~lode.tui.widgets.lode_data_table.LodeDataTable` closes
+    exactly that bug class at the seam (lode-3dz2) and ``Header``'s
+    ``sub_title`` is not markup-parsed either, so the marker does render today
+    -- but a stored-value assertion would pass either way, which is precisely
+    the false green lode-3dz2 exists to prevent. Same ``Screen._compositor``
+    reach-through, and the same rationale, as
+    ``tests/test_tui_related_notes_panel_cursor.py``'s helper of this name.
+    """
+    return "\n".join(
+        "".join(segment.text for segment in strip)
+        for strip in app.screen._compositor.render_strips()
+    )
+
+
+def test_no_egress_marker_is_painted_on_screen_for_a_flagged_note(
+    tmp_path: Path,
+) -> None:
+    """The marker survives to the composited terminal, in both places it shows."""
+    from lode.notes_read import NO_EGRESS_MARKER
+    from lode.versions import set_no_egress
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-withheld", "a withheld note")
+        set_no_egress(conn, "note-withheld", no_egress=True)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[str, str]:
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.pause()
+            browse_text = _visible_screen_text(app)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, EditScreen)
+            return browse_text, _visible_screen_text(app)
+
+    browse_text, edit_text = asyncio.run(_drive())
+
+    assert NO_EGRESS_MARKER in browse_text
+    assert NO_EGRESS_MARKER in edit_text
+
+
+def test_no_egress_marker_appears_only_for_a_flagged_note(tmp_path: Path) -> None:
+    """The Id cell shows the no-egress marker for a withheld note, not a plain one."""
+    from lode.notes_read import NO_EGRESS_MARKER
+    from lode.versions import set_no_egress
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-plain", "a plain note")
+        save(conn, "note-withheld", "a withheld note")
+        set_no_egress(conn, "note-withheld", no_egress=True)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[str, str]:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            cells = {
+                str(table.get_row_at(i)[3]): str(table.get_row_at(i)[0])
+                for i in range(table.row_count)
+            }
+            return cells["a withheld note"], cells["a plain note"]
+
+    withheld_id_cell, plain_id_cell = asyncio.run(_drive())
+
+    assert NO_EGRESS_MARKER in withheld_id_cell
+    assert NO_EGRESS_MARKER not in plain_id_cell
+
+
+def test_n_toggles_no_egress_on_the_highlighted_row(tmp_path: Path) -> None:
+    """``n`` flips notes.no_egress through the single write path and re-renders."""
+    from lode.notes_read import NO_EGRESS_MARKER
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-toggle", "toggle me")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[str, str, str, int]:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            before = str(table.get_row_at(0)[0])
+            await pilot.press("n")
+            await pilot.pause()
+            after_set = str(table.get_row_at(0)[0])
+            await pilot.press("n")
+            await pilot.pause()
+            after_clear = str(table.get_row_at(0)[0])
+            db_conn = sqlite3.connect(db_path)
+            try:
+                row = db_conn.execute(
+                    "SELECT no_egress FROM notes WHERE note_id = ?",
+                    ("note-toggle",),
+                ).fetchone()
+            finally:
+                db_conn.close()
+            return before, after_set, after_clear, row[0]
+
+    before, after_set, after_clear, final_flag = asyncio.run(_drive())
+
+    assert NO_EGRESS_MARKER not in before
+    assert NO_EGRESS_MARKER in after_set
+    assert NO_EGRESS_MARKER not in after_clear
+    assert final_flag == 0
+
+
+def test_edit_screen_sub_title_shows_no_egress_marker(tmp_path: Path) -> None:
+    """EditScreen's header marks a withheld note the same way Browse does."""
+    from lode.notes_read import NO_EGRESS_MARKER
+    from lode.versions import set_no_egress
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-edit-withheld", "a withheld note body")
+        set_no_egress(conn, "note-edit-withheld", no_egress=True)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str | None:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, EditScreen)
+            return app.screen.sub_title
+
+    sub_title = asyncio.run(_drive())
+
+    assert sub_title is not None
+    assert NO_EGRESS_MARKER in sub_title
+    assert "note-edit-withheld" in sub_title
+
+
+def test_edit_screen_sub_title_has_no_marker_for_a_plain_note(tmp_path: Path) -> None:
+    from lode.notes_read import NO_EGRESS_MARKER
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-edit-plain", "a plain note body")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str | None:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, EditScreen)
+            return app.screen.sub_title
+
+    sub_title = asyncio.run(_drive())
+
+    assert sub_title == "note-edit-plain"
+    assert NO_EGRESS_MARKER not in (sub_title or "")

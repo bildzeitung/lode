@@ -57,43 +57,72 @@ def egress(
         typer.echo(line)
 
 
-@app.command(name="no-egress")
+@app.command(
+    name="no-egress",
+    help=(
+        "Mark (or --clear) an external source, or --note NOTE_ID, no_egress.\n\n"
+        "Withholds that one source/note from cloud egress -- the enrichment "
+        "send and the Q&A context -- without touching a global default. "
+        "Specify exactly one of EXTERNAL_ID or --note."
+    ),
+)
 def no_egress_(
     external_id: Annotated[
-        str,
+        str | None,
         typer.Argument(
             help="The external source's id (its canonical URL) to mark/clear."
         ),
-    ],
+    ] = None,
+    note: Annotated[
+        str | None,
+        typer.Option(
+            "--note",
+            help="A note id to mark/clear no_egress on, instead of an external source.",
+        ),
+    ] = None,
     clear: Annotated[
         bool,
         typer.Option(
             "--clear",
-            help="Clear no_egress instead of setting it (source becomes cloud-eligible again).",
+            help="Clear no_egress instead of setting it (becomes cloud-eligible again).",
         ),
     ] = False,
     db: _DbOption = None,
 ) -> None:
-    """Mark (or --clear) an external source no_egress (see docs/externals.md).
+    """Mark (or --clear) an external source, or --note NOTE_ID, no_egress (see docs/externals.md).
 
-    A no_egress external stays captured, chunked, embedded, and locally
+    A no_egress source/note stays captured, chunked, embedded, and locally
     retrievable (keyword + vector) -- only cloud egress changes. It is
     excluded from both the enrichment send and the Q&A context, and any
     answer that would have cited it surfaces it instead as "present,
     withheld from cloud synthesis".
 
     EXTERNAL_ID must already exist (e.g. drawn down via a note's pasted
-    URL) -- this command does not create sources.
+    URL) -- this command does not create sources. --note takes a live
+    note's id instead, writing through lode.versions.set_no_egress rather
+    than lode.externals.set_no_egress -- the note-side mirror of this same
+    command (lode-82wt). Specify exactly one of EXTERNAL_ID or --note.
     """
+    if (external_id is None) == (note is None):
+        typer.echo("specify exactly one of EXTERNAL_ID or --note", err=True)
+        raise typer.Exit(code=1)
     conn = _open_db(db)
     try:
-        from lode.externals import set_no_egress
+        if note is not None:
+            from lode.versions import set_no_egress as set_note_no_egress
 
-        existed = set_no_egress(conn, external_id, no_egress=not clear)
+            existed = set_note_no_egress(conn, note, no_egress=not clear)
+            target, kind = note, "note"
+        else:
+            from lode.externals import set_no_egress
+
+            assert external_id is not None  # narrowed by the xor check above
+            existed = set_no_egress(conn, external_id, no_egress=not clear)
+            target, kind = external_id, "external source"
     finally:
         conn.close()
     if not existed:
-        typer.echo(f"no such external source: {external_id}", err=True)
+        typer.echo(f"no such {kind}: {target}", err=True)
         raise typer.Exit(code=1)
     state = "cleared" if clear else "marked"
-    typer.echo(f"{state} no_egress: {external_id}")
+    typer.echo(f"{state} no_egress: {target}")
