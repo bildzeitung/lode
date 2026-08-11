@@ -50,20 +50,29 @@ EnrichmentModalScreen {
     padding: 1 2;
 }
 
-/* Browse's two small Yes/No confirms -- the delete confirm (lode-d32.1) and
- * the no-egress CLEAR confirm (lode-a50f) -- share capture's
- * DiscardConfirmScreen popup treatment above, and are grouped here so the
- * treatment has one definition rather than one per dialog. They keep their own
- * screen/id pairs because their prompts and choices differ. Omitting a dialog
- * from these selectors is not cosmetic: it renders as a bare unframed line at
- * the top-left over the browse table. */
-DeleteConfirmScreen,
-NoEgressClearConfirmScreen {
+/* All three Yes/No confirms (lode-1ip2) -- DeleteConfirmScreen,
+ * NoEgressClearConfirmScreen and SaveAsNoteConfirmScreen -- subclass the
+ * shared YesNoConfirmScreen, so this one type selector covers all of them
+ * (Textual matches a type selector against the whole class MRO). The border/
+ * background/padding treatment likewise has ONE definition, via the
+ * .confirm-dialog class every dialog's outer Vertical carries -- and that
+ * class carries the SIZE too, not just the frame.
+ *
+ * Together those two rules are what close lode-a50f's defect properly: a new
+ * confirm subclass is centered, framed AND sized with no tcss of its own, so
+ * it cannot ship as the bare unframed line at the top-left that
+ * NoEgressClearConfirmScreen did, and cannot ship as a full-screen box
+ * either (Textual's Vertical default is width: 1fr; height: 1fr, which is
+ * what a size-less dialog would otherwise inherit). Adding an id rule below
+ * is now an OPT-IN for a dialog that genuinely deviates from the small
+ * single-line default -- not an obligation a new dialog can forget. */
+YesNoConfirmScreen {
     align: center middle;
 }
 
-#delete-confirm-dialog,
-#no-egress-clear-confirm-dialog {
+/* The default: a small, fixed-size popup whose prompt is a single line --
+ * delete (lode-d32.1) and no-egress CLEAR (lode-a50f) both take it as-is. */
+.confirm-dialog {
     width: 50;
     height: auto;
     border: thick $primary;
@@ -71,20 +80,15 @@ NoEgressClearConfirmScreen {
     padding: 1 2;
 }
 
-/* Save-ask-answer-as-note confirm (lode-35nu.11.4) -- same larger, scrollable
- * popup treatment as #enrichment-inspector-dialog above, since the preview is
- * an answer's full rendered text and can run longer than the terminal
- * height. */
-SaveAsNoteConfirmScreen {
-    align: center middle;
-}
-
+/* Save-ask-answer-as-note confirm (lode-35nu.11.4): the one deviation --
+ * the same larger, scrollable popup size as #enrichment-inspector-dialog
+ * above, since the preview is an answer's full rendered text and can run
+ * longer than the terminal height. An id selector outranks the
+ * .confirm-dialog class, so this overrides the default size above while
+ * still inheriting its frame. */
 #save-as-note-confirm-dialog {
     width: 80%;
     height: 80%;
-    border: thick $primary;
-    background: $panel;
-    padding: 1 2;
 }
 
 /* Related-notes panel (lode-35nu.10) -- INVARIANT: exactly one row per note,
