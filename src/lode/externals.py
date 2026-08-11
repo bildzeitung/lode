@@ -173,6 +173,41 @@ def tombstone_body(reason: str) -> str:
     return f"[tombstone: {reason}]"
 
 
+def _insert_external(
+    conn: sqlite3.Connection,
+    external_id: str,
+    source_type: str,
+    settings: Settings,
+    *,
+    api_base: str | None = None,
+) -> bool:
+    """First-write-wins ``INSERT INTO externals``, seeding ``no_egress`` (lode-ge8w).
+
+    The one shared write path for every ``externals`` insert site (here, plus
+    :func:`lode.drawdown.detect_and_enqueue_drawdown` and
+    :func:`lode.backfill.mint_external`) — all three used ``ON CONFLICT
+    (external_id) DO NOTHING`` but only relied on the schema's ``DEFAULT 0``
+    for ``no_egress``, never consulting ``Settings.no_egress_default``
+    (mirroring the same gap :func:`lode.versions._save_core` had for notes,
+    lode-a43n). ``ON CONFLICT DO NOTHING`` makes this safe to call
+    unconditionally on every ingest/link/backfill: the default is applied
+    only on the row's true first write, and a later call for an
+    already-existing ``external_id`` is a no-op that never re-applies the
+    default over a user's explicit ``lode no-egress --clear``
+    (``docs/externals.md`` "No-egress tier").
+
+    Returns ``True`` iff a row was newly inserted — ``False`` means the
+    ``DO NOTHING`` path fired on an already-existing ``external_id``, which
+    :func:`lode.backfill.mint_external` reports to its own caller.
+    """
+    cur = conn.execute(
+        "INSERT INTO externals (external_id, source_type, api_base, no_egress) "
+        "VALUES (?, ?, ?, ?) ON CONFLICT (external_id) DO NOTHING",
+        (external_id, source_type, api_base, int(settings.no_egress_default)),
+    )
+    return cur.rowcount > 0
+
+
 def _external_head(
     conn: sqlite3.Connection, external_id: str
 ) -> tuple[bool, str | None]:
@@ -377,11 +412,7 @@ def ingest_snapshot(
         # dead_letter_hook_deduped_success_is_atomic_under_genuine_concurrency
         # both fail with head == 'tombstone' over a successful fetch if this is
         # broken.
-        conn.execute(
-            "INSERT INTO externals (external_id, source_type) VALUES (?, ?) "
-            "ON CONFLICT (external_id) DO NOTHING",
-            (external_id, source_type),
-        )
+        _insert_external(conn, external_id, source_type, settings)
         # One JOIN for all three values: head_snapshot_id (for the dedup check
         # below) plus the guard's status/fetched_at. No row means no head to
         # compare against (never-ingested external, or head_snapshot_id still

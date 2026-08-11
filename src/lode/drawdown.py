@@ -153,7 +153,7 @@ from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 from lode import jobs
 from lode.config import Settings, confluence_active, jira_active
 from lode.confluence import fetch_confluence_page
-from lode.externals import ingest_fetch_result
+from lode.externals import _insert_external, ingest_fetch_result
 from lode.jira_fetch import fetch_jira_issue
 from lode.webfetch import Fetcher, FetchResult, fetch_and_extract
 
@@ -484,14 +484,12 @@ def detect_and_enqueue_drawdown(
             # Owner decision A: persist source_type + api_base on the
             # externals row NOW, synchronously — the async refresh handler
             # can no longer derive them from external_id alone once
-            # external_id is a semantic key rather than a URL. ON CONFLICT
-            # DO NOTHING mirrors lode.externals.ingest_snapshot's own
-            # externals upsert: first-write-wins, idempotent for a second
-            # note linking the same already-known external.
-            conn.execute(
-                "INSERT INTO externals (external_id, source_type, api_base) "
-                "VALUES (?, ?, ?) ON CONFLICT (external_id) DO NOTHING",
-                (external_id, source_type, api_base),
+            # external_id is a semantic key rather than a URL. The shared
+            # first-write-wins insert (idempotent for a second note linking
+            # the same already-known external, and the one place no_egress is
+            # seeded) lives in lode.externals._insert_external — see there.
+            _insert_external(
+                conn, external_id, source_type, settings, api_base=api_base
             )
 
         conn.execute(

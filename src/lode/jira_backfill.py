@@ -102,7 +102,14 @@ def _jira_backfill(
         if link.external_id != key:
             # First migration for this edge: mint the fresh semantic
             # identity and re-point the edge onto it.
-            if mint_external(conn, key, SOURCE_TYPE_JIRA, api_base, dry_run=dry_run):
+            if mint_external(
+                conn,
+                key,
+                SOURCE_TYPE_JIRA,
+                api_base,
+                settings=settings,
+                dry_run=dry_run,
+            ):
                 migrated += 1
             repoint_edges(conn, link.external_id, key, dry_run=dry_run)
 

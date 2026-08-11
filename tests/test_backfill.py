@@ -31,11 +31,19 @@ from lode.backfill import (
     run_backfill,
 )
 from lode.config import Settings
+from lode.externals import set_no_egress
 from lode.storage import init_db
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+def _no_egress(conn: sqlite3.Connection, external_id: str) -> int:
+    (no_egress,) = conn.execute(
+        "SELECT no_egress FROM externals WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    return no_egress
 
 
 @pytest.fixture()
@@ -266,6 +274,38 @@ class TestMintExternal:
     def test_dry_run_reports_false_when_already_exists(self, conn: sqlite3.Connection):
         mint_external(conn, "ABC-1", "jira")
         assert mint_external(conn, "ABC-1", "jira", dry_run=True) is False
+
+    def test_defaults_no_egress_false(self, conn: sqlite3.Connection):
+        """The ordinary (default) case: a freshly minted external is cloud-eligible."""
+        mint_external(conn, "ABC-1", "jira")
+        assert _no_egress(conn, "ABC-1") == 0
+
+    def test_honors_settings_no_egress_default(self, conn: sqlite3.Connection):
+        """Settings.no_egress_default=True must apply at the row's true first
+        insert (lode-ge8w) -- previously only the schema DEFAULT 0 was
+        consulted, silently leaving every backfill-minted external
+        cloud-eligible.
+        """
+        mint_external(conn, "ABC-1", "jira", settings=Settings(no_egress_default=True))
+        assert _no_egress(conn, "ABC-1") == 1
+
+    def test_default_does_not_stomp_an_explicit_clear_on_a_noop_remint(
+        self, conn: sqlite3.Connection
+    ):
+        """ON CONFLICT (external_id) DO NOTHING must never re-apply the
+        default over a user's explicit 'lode no-egress --clear' on a later
+        no-op re-mint of the SAME external_id.
+        """
+        settings = Settings(no_egress_default=True)
+        mint_external(conn, "ABC-1", "jira", settings=settings)
+        # The real clear path, not a hand-rolled UPDATE: this is what
+        # 'lode no-egress --clear' actually executes.
+        set_no_egress(conn, "ABC-1", no_egress=False)
+
+        created_again = mint_external(conn, "ABC-1", "jira", settings=settings)
+
+        assert created_again is False
+        assert _no_egress(conn, "ABC-1") == 0
 
 
 # ---------------------------------------------------------------------------
