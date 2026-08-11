@@ -50,14 +50,20 @@ EnrichmentModalScreen {
     padding: 1 2;
 }
 
-/* Browse's delete confirm (lode-d32.1) -- same popup treatment as capture's
- * DiscardConfirmScreen above, just its own screen/id pair since the two
- * dialogs' prompts and choices differ. */
-DeleteConfirmScreen {
+/* Browse's two small Yes/No confirms -- the delete confirm (lode-d32.1) and
+ * the no-egress CLEAR confirm (lode-a50f) -- share capture's
+ * DiscardConfirmScreen popup treatment above, and are grouped here so the
+ * treatment has one definition rather than one per dialog. They keep their own
+ * screen/id pairs because their prompts and choices differ. Omitting a dialog
+ * from these selectors is not cosmetic: it renders as a bare unframed line at
+ * the top-left over the browse table. */
+DeleteConfirmScreen,
+NoEgressClearConfirmScreen {
     align: center middle;
 }
 
-#delete-confirm-dialog {
+#delete-confirm-dialog,
+#no-egress-clear-confirm-dialog {
     width: 50;
     height: auto;
     border: thick $primary;

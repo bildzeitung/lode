@@ -269,8 +269,9 @@ from lode.tui.screens._content_view import _view_note_external_content
 from lode.tui.screens.delete_confirm import DeleteConfirmScreen
 from lode.tui.screens.edit import EditScreen
 from lode.tui.screens.enrichment_modal import EnrichmentModalScreen
+from lode.tui.screens.no_egress_confirm import NoEgressClearConfirmScreen
 from lode.tui.services.edit import delete_note, load_head
-from lode.tui.services.no_egress import toggle_note_no_egress
+from lode.tui.services.no_egress import note_no_egress, toggle_note_no_egress
 from lode.tui.widgets.lode_data_table import LodeDataTable
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.versions import HeadConflictError
@@ -601,14 +602,21 @@ class BrowseScreen(Screen[None]):
         self._reload_rows()
 
     def action_toggle_no_egress(self) -> None:
-        """``n``: flip the highlighted row's no_egress flag (lode-82wt).
+        """``n``: flip the highlighted row's no_egress flag (lode-82wt, lode-a50f).
 
         Withholds (or reinstates) this note from cloud egress -- the note-side
         mirror of ``lode no-egress --note``. Goes through
         :func:`~lode.tui.services.no_egress.toggle_note_no_egress`, the single
         write path onto ``notes.no_egress`` this screen uses; no second code
-        path reaches the column. Reloads afterward so the marker column and
-        the toggle both reflect the new state immediately.
+        path reaches the column.
+
+        SETTING it (the note is currently NOT withheld) is the safe
+        direction and applies immediately, same as before lode-a50f.
+        CLEARING it is the dangerous direction -- it makes an explicitly
+        withheld note cloud-eligible again -- so it first confirms via
+        :class:`~lode.tui.screens.no_egress_confirm.NoEgressClearConfirmScreen`,
+        mirroring ``d``'s :class:`~lode.tui.screens.delete_confirm.DeleteConfirmScreen`.
+        Either way, a :meth:`notify` gives feedback beyond the marker itself.
         """
         table = self.query_one(f"#{TABLE_ID}", LodeDataTable)
         if table.row_count == 0:
@@ -616,7 +624,35 @@ class BrowseScreen(Screen[None]):
         note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
         if note_id is None:
             return
-        toggle_note_no_egress(self.app.db_path, note_id)
+        if note_no_egress(self.app.db_path, note_id):
+            self.app.push_screen(
+                NoEgressClearConfirmScreen(),
+                lambda confirmed: self._on_no_egress_clear_confirm(confirmed, note_id),
+            )
+            return
+        self._apply_no_egress_toggle(note_id)
+
+    def _on_no_egress_clear_confirm(self, confirmed: bool | None, note_id: str) -> None:
+        """Act on the clear-confirm dialog's answer: clear-then-reload, or leave untouched."""
+        if not confirmed:
+            return
+        self._apply_no_egress_toggle(note_id)
+
+    def _apply_no_egress_toggle(self, note_id: str) -> None:
+        """Flip the flag, report the RESULTING state, and re-render.
+
+        Both arms of ``n`` land here. The notify text comes from
+        :func:`~lode.tui.services.no_egress.toggle_note_no_egress`'s return
+        value -- the state actually written -- rather than from the direction
+        the caller expected, so a note flipped elsewhere between the confirm
+        popping up and this running is still described accurately.
+        """
+        if toggle_note_no_egress(self.app.db_path, note_id):
+            self.notify(
+                "Marked no-egress: this note is now withheld from cloud egress."
+            )
+        else:
+            self.notify("Cleared no-egress: this note is cloud-eligible again.")
         self._reload_rows()
 
     def action_delete_selected(self) -> None:
