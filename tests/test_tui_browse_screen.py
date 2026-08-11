@@ -51,6 +51,10 @@ from lode.tui.screens.external_picker import (
     EXTERNAL_PICKER_TABLE_ID,
     ExternalPickerScreen,
 )
+from lode.tui.screens.no_egress_confirm import (
+    NO_EGRESS_CLEAR_CONFIRM_MESSAGE_ID,
+    NoEgressClearConfirmScreen,
+)
 from lode.tui.screens.snapshot_viewer import (
     SNAPSHOT_VIEWER_BODY_ID,
     SnapshotViewerScreen,
@@ -3213,7 +3217,11 @@ def test_no_egress_marker_appears_only_for_a_flagged_note(tmp_path: Path) -> Non
 
 
 def test_n_toggles_no_egress_on_the_highlighted_row(tmp_path: Path) -> None:
-    """``n`` flips notes.no_egress through the single write path and re-renders."""
+    """``n`` flips notes.no_egress through the single write path and re-renders.
+
+    SETTING applies immediately; CLEARING pops a confirm first (lode-a50f), so
+    the second ``n`` press must be followed by ``y`` to actually clear.
+    """
     from lode.notes_read import NO_EGRESS_MARKER
 
     db_path = tmp_path / "lode.db"
@@ -3234,6 +3242,9 @@ def test_n_toggles_no_egress_on_the_highlighted_row(tmp_path: Path) -> None:
             after_set = str(table.get_row_at(0)[0])
             await pilot.press("n")
             await pilot.pause()
+            assert isinstance(app.screen, NoEgressClearConfirmScreen)
+            await pilot.press("y")
+            await pilot.pause()
             after_clear = str(table.get_row_at(0)[0])
             db_conn = sqlite3.connect(db_path)
             try:
@@ -3251,6 +3262,71 @@ def test_n_toggles_no_egress_on_the_highlighted_row(tmp_path: Path) -> None:
     assert NO_EGRESS_MARKER in after_set
     assert NO_EGRESS_MARKER not in after_clear
     assert final_flag == 0
+
+
+def test_clearing_no_egress_pops_a_confirm_dialog(tmp_path: Path) -> None:
+    """``n`` on an already-withheld note pops the clear-confirm, not a bare toggle."""
+    from lode.versions import set_no_egress
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-withheld", "withheld already")
+        set_no_egress(conn, "note-withheld", no_egress=True)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> bool:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("n")
+            await pilot.pause()
+            is_confirm = isinstance(app.screen, NoEgressClearConfirmScreen)
+            if is_confirm:
+                message = app.screen.query_one(
+                    f"#{NO_EGRESS_CLEAR_CONFIRM_MESSAGE_ID}", Static
+                )
+                assert "Clear no-egress" in str(message.render())
+            return is_confirm
+
+    assert asyncio.run(_drive())
+
+
+def test_declining_the_no_egress_clear_confirm_leaves_the_note_withheld(
+    tmp_path: Path,
+) -> None:
+    """Escape/No on the clear-confirm must not touch notes.no_egress."""
+    from lode.versions import set_no_egress
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-withheld", "withheld already")
+        set_no_egress(conn, "note-withheld", no_egress=True)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> int:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("n")
+            await pilot.pause()
+            assert isinstance(app.screen, NoEgressClearConfirmScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            db_conn = sqlite3.connect(db_path)
+            try:
+                row = db_conn.execute(
+                    "SELECT no_egress FROM notes WHERE note_id = ?",
+                    ("note-withheld",),
+                ).fetchone()
+            finally:
+                db_conn.close()
+            return row[0]
+
+    assert asyncio.run(_drive()) == 1
 
 
 def test_edit_screen_sub_title_shows_no_egress_marker(tmp_path: Path) -> None:
