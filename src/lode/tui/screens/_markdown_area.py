@@ -53,8 +53,41 @@ working.
 
 from __future__ import annotations
 
+from rich.style import Style
 from textual.widgets import TextArea
-from textual.widgets.text_area import LanguageDoesNotExist
+from textual.widgets.text_area import LanguageDoesNotExist, TextAreaTheme
+
+#: Semantic declaration of the note-body fenced-code-block colour (lode-lab1),
+#: kept as a plain module-level dict -- same convention as ``CLI_STYLES`` in
+#: ``lode.cli`` -- so a test can assert OUR palette rather than the library
+#: default. (``TextAreaTheme`` is a ``@dataclass`` that keeps ``syntax_styles``
+#: as a plain attribute, so unlike rich's ``Theme`` it would not destroy an
+#: inlined declaration -- the dict is hoisted for the test seam, not to dodge a
+#: constructor.)
+#:
+#: Maps the tree-sitter capture ``text.literal``, which lode-76go's spike
+#: confirmed carries a whole-line span on every line of a fenced code block
+#: (delimiters, info string, and body alike) for ``language="markdown"``.
+#: MAINTAINER DECISION (lode-lab1 notes): magenta, colour only -- no bold, no
+#: background tint. Deliberately does **not** map ``"none"``: lode-76go found
+#: that capture appears later in each line's highlight iteration order, so
+#: mapping it would emit a second, LATER Rich span that wins the colour
+#: attribute at render time and silently overrides ``text.literal`` again.
+NOTE_BODY_SYNTAX_STYLES: dict[str, Style] = {
+    "text.literal": Style(color="magenta"),
+}
+
+#: The one shared ``TextAreaTheme`` for the TUI's note-body screens (lode-lab1)
+#: -- a PARALLEL mechanism to ``CLI_STYLES``/``CLI_THEME`` in ``lode.cli``, not
+#: an extension of it: that one is a rich ``Theme`` for CLI output, this one is
+#: a ``textual`` ``TextAreaTheme`` keyed by tree-sitter capture names, and the
+#: two share no code path. Registered on, and applied to, every ``TextArea``
+#: this module builds with a working markdown grammar (see
+#: ``_markdown_text_area`` below); left off the graceful-degradation fallback,
+#: which has no grammar to colour in the first place.
+NOTE_BODY_THEME = TextAreaTheme(
+    name="lode-note-body", syntax_styles=NOTE_BODY_SYNTAX_STYLES
+)
 
 
 def _markdown_text_area(
@@ -75,7 +108,7 @@ def _markdown_text_area(
             other placeholder in this TUI is.
     """
     try:
-        return TextArea(
+        text_area = TextArea(
             text,
             language="markdown",
             read_only=read_only,
@@ -87,3 +120,12 @@ def _markdown_text_area(
         # see this module's docstring for why ValueError is required here and
         # why it is narrow enough not to mask a real bug.
         return TextArea(text, read_only=read_only, id=id, placeholder=placeholder)
+
+    # Deliberately OUTSIDE the try: the ``except`` above is scoped to
+    # ``TextArea.__init__``'s two documented grammar failures and nothing else.
+    # Covering these two lines with it would let an unrelated ``ValueError``
+    # from theme application silently degrade to the uncoloured fallback --
+    # exactly the third failure mode the ticket forbids.
+    text_area.register_theme(NOTE_BODY_THEME)
+    text_area.theme = NOTE_BODY_THEME.name
+    return text_area
