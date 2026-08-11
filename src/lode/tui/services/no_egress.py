@@ -39,11 +39,24 @@ def _read_no_egress(conn: sqlite3.Connection, note_id: str) -> bool:
     return bool(row[0]) if row is not None else False
 
 
+def note_no_egress_conn(conn: sqlite3.Connection, note_id: str) -> bool:
+    """Connection-taking core of :func:`note_no_egress` (lode-nnqp).
+
+    Split out so a caller that already holds an open connection -- e.g.
+    :meth:`~lode.tui.screens.edit.EditScreen.on_mount`, which also needs
+    :func:`~lode.tui.services.edit.load_head_conn` -- can read the flag
+    without paying :func:`lode.storage.init_db`'s schema-DDL-plus-migration
+    cost a second time. Same public/private split as :func:`_read_no_egress`
+    itself, just exported one layer up for reuse across modules.
+    """
+    return _read_no_egress(conn, note_id)
+
+
 def note_no_egress(db_path: Path, note_id: str) -> bool:
     """Whether ``note_id`` is currently marked no_egress."""
     conn = init_db(db_path)
     try:
-        return _read_no_egress(conn, note_id)
+        return note_no_egress_conn(conn, note_id)
     finally:
         conn.close()
 

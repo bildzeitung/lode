@@ -42,6 +42,7 @@ list (which already reflects the current state either way).
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from lode.config import Settings
@@ -64,6 +65,25 @@ class EmptyEditError(Exception):
     """
 
 
+def load_head_conn(conn: sqlite3.Connection, note_id: str) -> tuple[str, str] | None:
+    """Connection-taking core of :func:`load_head` (lode-nnqp).
+
+    Split out so a caller that already holds an open connection -- e.g.
+    :meth:`~lode.tui.screens.edit.EditScreen.on_mount`, which also needs
+    :func:`~lode.tui.services.no_egress.note_no_egress_conn` -- can read the
+    head without paying :func:`lode.storage.init_db`'s schema-DDL-plus-
+    migration cost a second time. :func:`load_head` itself is unchanged and
+    still the entry point for every other call site.
+    """
+    row = conn.execute(
+        "SELECT n.head_version_id, v.body FROM notes n "
+        "JOIN versions v ON v.version_id = n.head_version_id "
+        "WHERE n.note_id = ? AND v.op != 'delete'",
+        (note_id,),
+    ).fetchone()
+    return (row[0], row[1]) if row is not None else None
+
+
 def load_head(db_path: Path, note_id: str) -> tuple[str, str] | None:
     """Return ``(head_version_id, head_body)`` for ``note_id``'s live head.
 
@@ -75,13 +95,7 @@ def load_head(db_path: Path, note_id: str) -> tuple[str, str] | None:
     """
     conn = init_db(db_path)
     try:
-        row = conn.execute(
-            "SELECT n.head_version_id, v.body FROM notes n "
-            "JOIN versions v ON v.version_id = n.head_version_id "
-            "WHERE n.note_id = ? AND v.op != 'delete'",
-            (note_id,),
-        ).fetchone()
-        return (row[0], row[1]) if row is not None else None
+        return load_head_conn(conn, note_id)
     finally:
         conn.close()
 
