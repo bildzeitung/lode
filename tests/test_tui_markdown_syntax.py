@@ -25,7 +25,11 @@ from textual.widgets.text_area import LanguageDoesNotExist
 
 from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.screens._markdown_area import _markdown_text_area
+from lode.tui.screens._markdown_area import (
+    NOTE_BODY_SYNTAX_STYLES,
+    NOTE_BODY_THEME,
+    _markdown_text_area,
+)
 from lode.tui.screens.capture import BODY_ID, CaptureScreen
 from lode.tui.screens.edit import EDIT_BODY_ID, EditScreen
 from lode.tui.screens.reconcile import DIFF_ID, ReconcileScreen
@@ -149,6 +153,59 @@ def test_markdown_text_area_uses_markdown_language_when_grammar_present() -> Non
 
     assert widget.language == "markdown"
     assert widget.text == "some body"
+
+
+# ---------------------------------------------------------------------------
+# Fenced-code-block colour (lode-lab1): OUR palette, asserted against the
+# module-level object, not the library default -- same convention as
+# ``CLI_STYLES``/``CLI_THEME`` in ``lode.cli``. MAINTAINER DECISION (lode-lab1
+# notes): magenta, colour only.
+# ---------------------------------------------------------------------------
+
+
+def test_note_body_syntax_styles_maps_text_literal_to_magenta_only() -> None:
+    """The declared palette: ``text.literal`` -> magenta, colour only, nothing else."""
+    style = NOTE_BODY_SYNTAX_STYLES["text.literal"]
+
+    assert style.color is not None
+    assert style.color.name == "magenta"
+    assert not style.bold
+    assert style.bgcolor is None
+
+
+def test_note_body_syntax_styles_leaves_none_capture_unmapped() -> None:
+    """Mapping ``"none"`` would emit a later, winning span that overrides
+    ``text.literal`` (lode-76go's spike) -- it must stay absent from the theme.
+    """
+    assert "none" not in NOTE_BODY_SYNTAX_STYLES
+
+
+def test_markdown_text_area_applies_the_shared_note_body_theme() -> None:
+    """A successfully-graded ``TextArea`` is registered with, and set to, our theme."""
+    widget = _markdown_text_area("some body", id="body")
+
+    assert widget.theme == NOTE_BODY_THEME.name
+    assert widget._themes[NOTE_BODY_THEME.name] is NOTE_BODY_THEME
+
+
+def test_markdown_text_area_fallback_does_not_touch_theme(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The no-grammar fallback stays a plain TextArea -- no third failure mode."""
+    real_init = TextArea.__init__
+
+    def _raise_missing_language(
+        self: TextArea, *args: object, **kwargs: object
+    ) -> None:
+        if kwargs.get("language") is not None:
+            raise LanguageDoesNotExist("simulated missing markdown grammar")
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(TextArea, "__init__", _raise_missing_language)
+
+    widget = _markdown_text_area("some body", id="body")
+
+    assert NOTE_BODY_THEME.name not in widget._themes
 
 
 # ---------------------------------------------------------------------------

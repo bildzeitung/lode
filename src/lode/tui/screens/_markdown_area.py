@@ -53,8 +53,44 @@ working.
 
 from __future__ import annotations
 
+from rich.style import Style
 from textual.widgets import TextArea
-from textual.widgets.text_area import LanguageDoesNotExist
+from textual.widgets.text_area import LanguageDoesNotExist, TextAreaTheme
+
+#: Semantic declaration of the note-body fenced-code-block colour (lode-lab1),
+#: kept as a plain module-level dict -- same convention as ``CLI_STYLES`` in
+#: ``lode.cli`` -- so a test can assert OUR palette rather than the library
+#: default. ``TextAreaTheme`` is a ``@dataclass`` whose ``syntax_styles``
+#: field is just a normal ``dict[str, Style]`` attribute (unlike rich's
+#: ``Theme``, nothing about ``TextAreaTheme.__init__``/``__post_init__``
+#: destroys or copies-by-reference in a way that would make inlining unsafe),
+#: but the dict is still pulled out here rather than inlined into the
+#: constructor call below, purely so this object -- not the theme's internals
+#: -- is the one thing a test needs to import and assert against.
+#:
+#: Maps the tree-sitter capture ``text.literal``, which lode-76go's spike
+#: confirmed carries a whole-line span on every line of a fenced code block
+#: (delimiters, info string, and body alike) for ``language="markdown"``.
+#: MAINTAINER DECISION (lode-lab1 notes): magenta, colour only -- no bold, no
+#: background tint. Deliberately does **not** map ``"none"``: lode-76go found
+#: that capture appears later in each line's highlight iteration order, so
+#: mapping it would emit a second, LATER Rich span that wins the colour
+#: attribute at render time and silently overrides ``text.literal`` again.
+NOTE_BODY_SYNTAX_STYLES: dict[str, Style] = {
+    "text.literal": Style(color="magenta"),
+}
+
+#: The one shared ``TextAreaTheme`` for the TUI's note-body screens (lode-lab1)
+#: -- a PARALLEL mechanism to ``CLI_STYLES``/``CLI_THEME`` in ``lode.cli``, not
+#: an extension of it: that one is a rich ``Theme`` for CLI output, this one is
+#: a ``textual`` ``TextAreaTheme`` keyed by tree-sitter capture names, and the
+#: two share no code path. Registered on, and applied to, every ``TextArea``
+#: this module builds with a working markdown grammar (see
+#: ``_markdown_text_area`` below); left off the graceful-degradation fallback,
+#: which has no grammar to colour in the first place.
+NOTE_BODY_THEME = TextAreaTheme(
+    name="lode-note-body", syntax_styles=NOTE_BODY_SYNTAX_STYLES
+)
 
 
 def _markdown_text_area(
@@ -75,13 +111,16 @@ def _markdown_text_area(
             other placeholder in this TUI is.
     """
     try:
-        return TextArea(
+        text_area = TextArea(
             text,
             language="markdown",
             read_only=read_only,
             id=id,
             placeholder=placeholder,
         )
+        text_area.register_theme(NOTE_BODY_THEME)
+        text_area.theme = NOTE_BODY_THEME.name
+        return text_area
     except LanguageDoesNotExist, ValueError:
         # Both arms mean "no usable markdown grammar in this environment" --
         # see this module's docstring for why ValueError is required here and
