@@ -504,9 +504,8 @@ class BrowseScreen(Screen[None]):
         # index for every existing caller/test). A plain note's Id cell is
         # unchanged.
         id_cells = [
-            f"[{NO_EGRESS_MARKER}] {short_note_id(row.note_id)}"
-            if row.no_egress
-            else short_note_id(row.note_id)
+            f"{f'[{NO_EGRESS_MARKER}] ' if row.no_egress else ''}"
+            f"{short_note_id(row.note_id)}"
             for row in rows
         ]
         id_width = max([len("Id"), *(len(cell) for cell in id_cells)])

@@ -235,9 +235,12 @@ class EditScreen(Screen[None]):
         # a width budget to protect. A no_egress note (lode-82wt) appends the
         # same plain-text marker Browse's marker column shows, so the flag is
         # visible at a glance on the note itself too, not only in the list.
-        self.sub_title = self.note_id
-        if note_no_egress(self.app.db_path, self.note_id):
-            self.sub_title = f"{self.note_id} [{NO_EGRESS_MARKER}]"
+        marker = (
+            f" [{NO_EGRESS_MARKER}]"
+            if note_no_egress(self.app.db_path, self.note_id)
+            else ""
+        )
+        self.sub_title = f"{self.note_id}{marker}"
         head = load_head(self.app.db_path, self.note_id)
         if head is None:
             raise LookupError(f"no live note {self.note_id!r} to edit")
