@@ -11,9 +11,17 @@ from pathlib import Path
 
 import pytest
 
+from lode.config import Settings
 from lode.hashing import NO_PARENT, content_version_id
 from lode.storage import init_db
-from lode.versions import HeadConflictError, delete, purge, recover, save
+from lode.versions import (
+    HeadConflictError,
+    delete,
+    purge,
+    recover,
+    save,
+    set_no_egress,
+)
 
 
 @pytest.fixture
@@ -67,10 +75,7 @@ def test_recreating_an_existing_note_conflicts(conn):
 def test_create_defaults_no_egress_false(conn):
     """The ordinary (default) case: a new note is cloud-eligible."""
     save(conn, "note-1", "hello")
-    (no_egress,) = conn.execute(
-        "SELECT no_egress FROM notes WHERE note_id = ?", ("note-1",)
-    ).fetchone()
-    assert no_egress == 0
+    assert _no_egress(conn, "note-1") == 0
 
 
 def test_create_honors_settings_no_egress_default(conn):
@@ -78,14 +83,23 @@ def test_create_honors_settings_no_egress_default(conn):
     time (lode-a43n) -- previously only the schema DEFAULT 0 was consulted,
     silently leaving every new note cloud-eligible even with the knob set.
     """
-    from lode.config import Settings
+    save(conn, "note-1", "hello", settings=Settings(no_egress_default=True))
+    assert _no_egress(conn, "note-1") == 1
 
+
+def test_settings_no_egress_default_does_not_touch_later_versions(conn):
+    """The knob applies at ROOT CREATION only (lode-a43n).
+
+    An update appends a version and repoints the head; it must never re-apply
+    (or re-INSERT) the note row, so a note explicitly cleared after creation
+    stays cleared even while the corpus-wide default is still True.
+    """
     settings = Settings(no_egress_default=True)
-    save(conn, "note-1", "hello", settings=settings)
-    (no_egress,) = conn.execute(
-        "SELECT no_egress FROM notes WHERE note_id = ?", ("note-1",)
-    ).fetchone()
-    assert no_egress == 1
+    v1 = save(conn, "note-1", "v1 body", settings=settings).version_id
+    set_no_egress(conn, "note-1", no_egress=False)
+
+    save(conn, "note-1", "v2 body", parent=v1, settings=settings)
+    assert _no_egress(conn, "note-1") == 0
 
 
 # --- update + CAS -----------------------------------------------------------
@@ -398,8 +412,6 @@ def test_purge_unknown_note_raises(conn):
 
 
 def test_set_no_egress_marks_an_existing_note(conn):
-    from lode.versions import set_no_egress
-
     save(conn, "note-1", "a note")
 
     assert set_no_egress(conn, "note-1", no_egress=True) is True
@@ -410,8 +422,6 @@ def test_set_no_egress_marks_an_existing_note(conn):
 
 
 def test_set_no_egress_clear_flips_it_back(conn):
-    from lode.versions import set_no_egress
-
     save(conn, "note-1", "a note")
     set_no_egress(conn, "note-1", no_egress=True)
 
@@ -423,8 +433,6 @@ def test_set_no_egress_clear_flips_it_back(conn):
 
 
 def test_set_no_egress_unknown_note_returns_false(conn):
-    from lode.versions import set_no_egress
-
     assert set_no_egress(conn, "ghost", no_egress=True) is False
 
 
@@ -441,8 +449,6 @@ def test_no_egress_survives_new_versions_and_delete_recover(conn):
     quietly make an explicitly withheld note cloud-eligible again on its next
     edit, with nothing in the UI or the CLI to say so.
     """
-    from lode.versions import set_no_egress
-
     v1 = save(conn, "note-1", "v1 body").version_id
     set_no_egress(conn, "note-1", no_egress=True)
 
