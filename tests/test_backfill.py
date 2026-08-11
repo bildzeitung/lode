@@ -267,6 +267,45 @@ class TestMintExternal:
         mint_external(conn, "ABC-1", "jira")
         assert mint_external(conn, "ABC-1", "jira", dry_run=True) is False
 
+    def test_defaults_no_egress_false(self, conn: sqlite3.Connection):
+        """The ordinary (default) case: a freshly minted external is cloud-eligible."""
+        mint_external(conn, "ABC-1", "jira")
+        (no_egress,) = conn.execute(
+            "SELECT no_egress FROM externals WHERE external_id = 'ABC-1'"
+        ).fetchone()
+        assert no_egress == 0
+
+    def test_honors_settings_no_egress_default(self, conn: sqlite3.Connection):
+        """Settings.no_egress_default=True must apply at the row's true first
+        insert (lode-ge8w) -- previously only the schema DEFAULT 0 was
+        consulted, silently leaving every backfill-minted external
+        cloud-eligible.
+        """
+        mint_external(conn, "ABC-1", "jira", settings=Settings(no_egress_default=True))
+        (no_egress,) = conn.execute(
+            "SELECT no_egress FROM externals WHERE external_id = 'ABC-1'"
+        ).fetchone()
+        assert no_egress == 1
+
+    def test_default_does_not_stomp_an_explicit_clear_on_a_noop_remint(
+        self, conn: sqlite3.Connection
+    ):
+        """ON CONFLICT (external_id) DO NOTHING must never re-apply the
+        default over a user's explicit 'lode no-egress --clear' on a later
+        no-op re-mint of the SAME external_id.
+        """
+        settings = Settings(no_egress_default=True)
+        mint_external(conn, "ABC-1", "jira", settings=settings)
+        conn.execute("UPDATE externals SET no_egress = 0 WHERE external_id = 'ABC-1'")
+
+        created_again = mint_external(conn, "ABC-1", "jira", settings=settings)
+
+        assert created_again is False
+        (no_egress,) = conn.execute(
+            "SELECT no_egress FROM externals WHERE external_id = 'ABC-1'"
+        ).fetchone()
+        assert no_egress == 0
+
 
 # ---------------------------------------------------------------------------
 # repoint_edges

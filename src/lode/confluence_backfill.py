@@ -97,7 +97,12 @@ def backfill_confluence(
         _, external_id, api_base = classified
 
         mint_external(
-            conn, external_id, SOURCE_TYPE_CONFLUENCE, api_base, dry_run=dry_run
+            conn,
+            external_id,
+            SOURCE_TYPE_CONFLUENCE,
+            api_base,
+            settings=settings,
+            dry_run=dry_run,
         )
         repoint_edges(conn, link.external_id, external_id, dry_run=dry_run)
         if needs_refresh(conn, external_id, retry_tombstoned=retry_tombstoned):

@@ -388,6 +388,21 @@ class TestAtlassianDetection:
             "https://acme.atlassian.net",
         )
 
+    def test_jira_externals_row_honors_settings_no_egress_default(self, conn) -> None:
+        """The atlassian-routed externals insert must seed no_egress from
+        Settings.no_egress_default at true first-write (lode-ge8w) -- the
+        same gap lode-a43n closed for notes, still open here.
+        """
+        url = "https://acme.atlassian.net/browse/ABC-123"
+        settings = _jira_settings(no_egress_default=True)
+        with conn:
+            detect_and_enqueue_drawdown(conn, "note-1", "ver-1", url, settings=settings)
+
+        (no_egress,) = conn.execute(
+            "SELECT no_egress FROM externals WHERE external_id = ?", ("ABC-123",)
+        ).fetchone()
+        assert no_egress == 1
+
     def test_jira_flag_off_falls_through_to_web(self, conn) -> None:
         url = "https://acme.atlassian.net/browse/ABC-123"
         with conn:

@@ -87,6 +87,7 @@ from dataclasses import dataclass
 from lode import jobs
 from lode.config import Settings
 from lode.drawdown import _repoint_edges
+from lode.externals import _insert_external
 
 #: A connector's registered backfill handler:
 #: ``(conn, settings, dry_run, retry_tombstoned) -> summary``.
@@ -205,16 +206,19 @@ def mint_external(
     source_type: str,
     api_base: str | None = None,
     *,
+    settings: Settings | None = None,
     dry_run: bool = False,
 ) -> bool:
     """INSERT a fresh ``externals`` row for ``external_id`` if none exists yet.
 
-    First-write-wins (``ON CONFLICT DO NOTHING``), mirroring
+    First-write-wins (``ON CONFLICT DO NOTHING``) via
+    :func:`lode.externals._insert_external`, mirroring
     :func:`lode.drawdown.detect_and_enqueue_drawdown`'s own externals upsert
     — idempotent for a second backfill pass over a link that already
-    migrated. Returns ``True`` iff a row was (or, under ``dry_run``, *would
-    be*) newly inserted; ``False`` means the identity already exists (a
-    prior pass already minted it).
+    migrated, and seeding ``no_egress`` from ``Settings.no_egress_default``
+    on true first-write only (lode-ge8w). Returns ``True`` iff a row was (or,
+    under ``dry_run``, *would be*) newly inserted; ``False`` means the
+    identity already exists (a prior pass already minted it).
 
     ``dry_run=True`` performs no write — it only reports whether a row would
     be inserted, per the module docstring's dry-run contract.
@@ -224,11 +228,10 @@ def mint_external(
             "SELECT 1 FROM externals WHERE external_id = ?", (external_id,)
         ).fetchone()
         return row is None
+    settings = settings or Settings()
     with conn:
-        cur = conn.execute(
-            "INSERT INTO externals (external_id, source_type, api_base) "
-            "VALUES (?, ?, ?) ON CONFLICT (external_id) DO NOTHING",
-            (external_id, source_type, api_base),
+        cur = _insert_external(
+            conn, external_id, source_type, settings, api_base=api_base
         )
         return cur.rowcount > 0
 

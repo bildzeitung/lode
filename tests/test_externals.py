@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from lode.config import load_settings
+from lode.config import Settings, load_settings
 from lode.embedding import embed
 from lode.externals import (
     IngestResult,
@@ -669,6 +669,52 @@ def test_ingest_result_is_frozen_dataclass_shape() -> None:
     assert result.snapshot_id == "snap-1"
     assert result.status == "ok"
     assert result.deduped is True
+
+
+# --- no_egress default seeded from Settings.no_egress_default (lode-ge8w) -----
+
+
+def _no_egress(conn, external_id: str) -> int:
+    (no_egress,) = conn.execute(
+        "SELECT no_egress FROM externals WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    return no_egress
+
+
+def test_ingest_snapshot_defaults_no_egress_false(conn) -> None:
+    """The ordinary (default) case: a freshly ingested external is cloud-eligible."""
+    ingest_snapshot(conn, _EXTERNAL_ID, "web", "hello world")
+    assert _no_egress(conn, _EXTERNAL_ID) == 0
+
+
+def test_ingest_snapshot_honors_settings_no_egress_default(conn) -> None:
+    """Settings.no_egress_default=True must apply at the externals row's
+    true first insert (lode-ge8w) -- previously only the schema DEFAULT 0
+    was consulted (the same gap lode-a43n closed for notes), silently
+    leaving every newly captured external source cloud-eligible.
+    """
+    ingest_snapshot(
+        conn,
+        _EXTERNAL_ID,
+        "web",
+        "hello world",
+        settings=Settings(no_egress_default=True),
+    )
+    assert _no_egress(conn, _EXTERNAL_ID) == 1
+
+
+def test_ingest_snapshot_default_does_not_stomp_an_explicit_clear(conn) -> None:
+    """ON CONFLICT (external_id) DO NOTHING must never re-apply the default
+    over a user's explicit 'lode no-egress --clear' on a later re-ingest of
+    the SAME external_id (a changed-body write, not a dedup).
+    """
+    settings = Settings(no_egress_default=True)
+    ingest_snapshot(conn, _EXTERNAL_ID, "web", "hello world", settings=settings)
+    set_no_egress(conn, _EXTERNAL_ID, no_egress=False)
+
+    ingest_snapshot(conn, _EXTERNAL_ID, "web", "a changed body", settings=settings)
+
+    assert _no_egress(conn, _EXTERNAL_ID) == 0
 
 
 # --- set_no_egress: the no-egress control surface (lode-w0h.7) ----------------
