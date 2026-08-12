@@ -84,4 +84,5 @@ class HelpScreen(ModalScreen[None]):
         yield VerticalScroll(
             BindingsTable(shrink=True, expand=False),
             id=HELP_DIALOG_ID,
+            classes="confirm-dialog",
         )

@@ -56,6 +56,7 @@ class DiscardConfirmScreen(ModalScreen[str]):
                 id=CONFIRM_MESSAGE_ID,
             ),
             id="capture-confirm-dialog",
+            classes="confirm-dialog",
         )
 
     def action_choose(self, choice: str) -> None:

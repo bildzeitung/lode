@@ -84,6 +84,7 @@ class EnrichmentModalScreen(ModalScreen[None]):
             LodeStatic("", id=INSPECTOR_EDGES_ID),
             LodeStatic("", id=INSPECTOR_EMBED_ID),
             id=INSPECTOR_DIALOG_ID,
+            classes="confirm-dialog",
         )
 
     def on_mount(self) -> None:
