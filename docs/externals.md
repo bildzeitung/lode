@@ -808,15 +808,33 @@ The fix: those five sites (`lode.versions.save`, `lode.externals.ingest_snapshot
 `lode.repository.Repository.save`) fall back via
 `lode.config.default_settings_for_missing_arg(caller)` instead of a bare
 `Settings()` — same defaults-only `Settings()` underneath, but it logs at
-WARNING first, so an omitted `settings=` at one of these five call sites is
+WARNING first, so an omitted `settings=` at one of them is
 loud (a log line an operator or CI can notice) rather than a silent privacy
 regression with no test failure and no error. `settings: Settings | None =
-None` was kept (not made required) at all five, since making it required
+None` was kept (not made required) at all of them, since making it required
 would only shift the failure from "loud log line" to "TypeError," at the cost
 of forcing every test caller of these widely-used functions to start passing
 `settings=` explicitly for no additional safety — the loud fallback already
 makes an omission visible. Every other `settings or Settings()` site is
 unaffected and stays the plain house pattern documented on `load_settings`.
+
+**Masking wrappers count as privacy-bearing too.** A caller one frame above a
+hardened site that keeps the plain `settings or Settings()` fallback resolves
+the omission itself and hands the write site a non-`None`, defaults-only
+`Settings` — so the WARNING can never fire for that path and the omission is
+silent again, just one frame higher. Two such entry points therefore use the
+loud fallback as well: `lode.tui.services.capture.save_capture` (mints a fresh
+note, so it seeds `notes.no_egress`) and `lode.tools.fetch_for_ask` (mints a
+fresh external via `ingest_snapshot`, and separately consults `settings` for
+the `no_egress_denied` egress gate). The line is drawn at wrappers whose own
+job is to mint the row; the other `Repository.save` wrappers
+(`tui.services.edit.save_edit`/`delete_note`, `tui.services.reconcile.reapply`)
+only ever *update* an existing note, and root-create is the only path that
+seeds `no_egress` (`lode.versions._save_core`), so they stay on the house
+pattern. `lode.worker.drain` also stays on it deliberately: it is a general
+executor whose handlers may write rows, not a mint site, and hardening it
+would fire the privacy warning on essentially every worker invocation,
+devaluing the signal.
 
 ### No-egress scope rules (decided, `lode-35nu.11.8`)
 

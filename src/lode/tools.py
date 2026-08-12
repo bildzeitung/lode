@@ -129,7 +129,7 @@ from collections.abc import Iterable
 from ipaddress import ip_address, ip_network
 from urllib.parse import urlsplit
 
-from lode.config import Settings
+from lode.config import Settings, default_settings_for_missing_arg
 from lode.confluence import fetch_confluence_page
 from lode.drawdown import (
     SOURCE_TYPE_CONFLUENCE,
@@ -383,7 +383,7 @@ def fetch_for_ask(
     """
     if source_type not in _FETCHABLE_SOURCE_TYPES:
         raise ValueError(f"fetch_for_ask: unsupported source_type={source_type!r}")
-    settings = settings or Settings()
+    settings = settings or default_settings_for_missing_arg("tools.fetch_for_ask")
 
     if no_egress_denied(conn, external_id, source_type, settings):
         raise ToolFetchError(

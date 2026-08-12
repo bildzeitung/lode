@@ -789,13 +789,9 @@ def default_settings_for_missing_arg(caller: str) -> Settings:
     """Library-default ``Settings()`` for a privacy-bearing call whose
     caller omitted ``settings=`` (lode-xa5d).
 
-    A handful of entry points can write a fresh ``notes``/``externals`` row
-    (:func:`lode.versions.save`, :func:`lode.externals.ingest_snapshot`,
-    :func:`lode.backfill.mint_external`,
-    :func:`lode.drawdown.detect_and_enqueue_drawdown`,
-    :meth:`lode.repository.Repository.save`) and therefore decide that row's
-    ``no_egress`` seed from ``Settings.no_egress_default`` — a PRIVACY
-    control. Falling back to a bare ``Settings()`` there silently ignores
+    A handful of entry points mint a fresh ``notes``/``externals`` row and
+    therefore decide that row's ``no_egress`` seed from
+    ``Settings.no_egress_default`` — a PRIVACY control. Falling back to a bare ``Settings()`` there silently ignores
     the user's ``config.toml`` (the file :func:`load_settings` reads) in
     favor of hardcoded library defaults, which is exactly the class of bug
     lode-a43n and lode-ge8w were filed to fix at the write sites; this
@@ -805,6 +801,20 @@ def default_settings_for_missing_arg(caller: str) -> Settings:
     caller of the functions above threads a real, resolved ``Settings``
     instance (verified at lode-xa5d) — so this firing at all means either a
     test/script omission or a new call site that forgot the argument.
+
+    A thin public wrapper sitting directly *above* a mint site uses this
+    helper too, not just the mint site itself: a wrapper that resolves
+    ``settings or Settings()`` on its own hands the site below a non-``None``
+    defaults-only ``Settings``, which would silence the warning entirely —
+    the omission stays silent, just one frame higher. The line is drawn at
+    entry points whose own job is to mint the row; a general executor that
+    merely runs handlers which may write rows (:func:`lode.worker.drain`)
+    keeps the plain house pattern, so the warning stays a privacy signal
+    instead of firing on every worker call.
+
+    ``grep`` for this function's name is the authoritative call-site list;
+    the survey, the exemptions and the rationale are recorded in
+    ``docs/externals.md`` ("``settings or Settings()`` fallback survey").
 
     Every other ``settings: Settings | None = None`` site in this codebase
     is NOT privacy-bearing and keeps the plain ``settings or Settings()``
