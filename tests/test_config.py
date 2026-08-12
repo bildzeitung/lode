@@ -28,6 +28,7 @@ from lode.config import (
     config_rows,
     confluence_active,
     default_db_path,
+    default_settings_for_missing_arg,
     hf_hub_offline,
     jira_active,
     knob_kinds,
@@ -999,3 +1000,24 @@ def test_settings_repr_and_str_never_echo_secret_tokens() -> None:
     assert s.jira_email == "jira-secret@acme.com"
     assert s.model_dump()["confluence_token"] == "conf-super-secret"
     assert s.model_dump()["confluence_email"] == "conf-secret@acme.com"
+
+
+class TestDefaultSettingsForMissingArg:
+    """lode-xa5d: the loud fallback for privacy-bearing ``settings or Settings()``
+    call sites (versions.save, externals.ingest_snapshot, backfill.mint_external,
+    drawdown.detect_and_enqueue_drawdown, Repository.save)."""
+
+    def test_returns_library_default_settings(self) -> None:
+        result = default_settings_for_missing_arg("some.caller")
+        assert result == Settings()
+
+    def test_logs_a_warning_naming_the_caller(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("WARNING", logger="lode.config"):
+            default_settings_for_missing_arg("backfill.mint_external")
+        assert len(caplog.records) == 1
+        assert caplog.records[0].levelname == "WARNING"
+        message = caplog.records[0].getMessage()
+        assert "backfill.mint_external" in message
+        assert "no_egress_default" in message

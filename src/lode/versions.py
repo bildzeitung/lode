@@ -53,7 +53,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from lode.config import Settings
+from lode.config import Settings, default_settings_for_missing_arg
 from lode.hashing import NO_PARENT, content_version_id
 
 
@@ -297,7 +297,7 @@ def save(
     — specifically :class:`lode.repository.Repository`, which wraps the write and
     the derive-job enqueue atomically — use :func:`_save_core` directly.
     """
-    settings = settings or Settings()
+    settings = settings or default_settings_for_missing_arg("versions.save")
     with conn:
         return _save_core(conn, note_id, body, parent=parent, settings=settings)
 

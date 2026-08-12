@@ -151,7 +151,12 @@ from collections.abc import Callable, Iterator
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from lode import jobs
-from lode.config import Settings, confluence_active, jira_active
+from lode.config import (
+    Settings,
+    confluence_active,
+    default_settings_for_missing_arg,
+    jira_active,
+)
 from lode.confluence import fetch_confluence_page
 from lode.externals import _insert_external, ingest_fetch_result
 from lode.jira_fetch import fetch_jira_issue
@@ -452,7 +457,9 @@ def detect_and_enqueue_drawdown(
     within this call), whether or not it was newly linked — mostly useful
     for tests/logging, not required by any caller today.
     """
-    settings = settings or Settings()
+    settings = settings or default_settings_for_missing_arg(
+        "drawdown.detect_and_enqueue_drawdown"
+    )
     external_ids: list[str] = []
     for url in extract_urls(body):
         atlassian = _classify_atlassian(url, settings)

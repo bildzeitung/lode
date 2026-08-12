@@ -130,7 +130,7 @@ from pathlib import Path
 from typing import Literal
 
 from lode import jobs, staleness
-from lode.config import Settings
+from lode.config import Settings, default_settings_for_missing_arg
 from lode.hashing import content_snapshot_id
 from lode.ids import short_version_id
 from lode.lexical import LexicalCacheBackend
@@ -380,7 +380,7 @@ def ingest_snapshot(
     anyway. The one genuinely new lock acquisition is a repeated identical
     ``"tombstone"`` dedup — a rare path, and still a no-op on the row itself.
     """
-    settings = settings or Settings()
+    settings = settings or default_settings_for_missing_arg("externals.ingest_snapshot")
     with conn:
         # THIS STATEMENT MUST STAY FIRST IN THE TRANSACTION, and must stay a
         # DML, for EVERY caller -- guarded or not. It is what forces this

@@ -774,6 +774,50 @@ row, so setting it is the only step needed **for a row that already exists** (lo
 project, a host — broader than any single resource is a separate mechanism, [scope
 rules](#no-egress-scope-rules-decided-lode-35nu118), below.
 
+### `settings or Settings()` fallback survey (decided, `lode-xa5d`)
+
+`Settings.no_egress_default` is the seed for `no_egress` on every newly-inserted
+notes/externals row (root note create, `externals.ingest_snapshot`,
+`backfill.mint_external`, `drawdown.detect_and_enqueue_drawdown` — lode-a43n,
+lode-ge8w). Every one of those functions, like ~30 other functions across the
+codebase, declares `settings: Settings | None = None` and falls back with the
+house pattern `settings = settings or Settings()` when the caller omits it —
+but a bare `Settings()` construction is plain-defaults, not the user's
+`config.toml` (that file is read only by `load_settings()`, called once per
+CLI/TUI entry point and threaded down — `lode.config.load_settings`'s own
+docstring). Falling back silently on one of the functions above would
+re-introduce, for a future forgetful caller, exactly the bug lode-a43n and
+lode-ge8w were filed to fix: a new row seeded `no_egress=0` regardless of what
+the user configured.
+
+Surveyed conclusion: every *live* production caller of the five functions
+above already threads a real, resolved `Settings` instance (confirmed by
+walking the call graph — `lode.cli`'s entry points, `lode.repository.Repository`,
+`lode.tui.services.*`); the only omissions found were in tests. Because ~30
+other `settings or Settings()` sites are **not** privacy-bearing (they don't
+decide a `no_egress` seed — e.g. `drawdown.canonicalize_url`, `redact.py`,
+retrieval/embedding tuning knobs) and a bare `Settings()` there really is
+"library default is fine, this is a convenience for a standalone caller,"
+tightening only the five privacy-bearing sites — rather than making
+`settings` required everywhere — was the chosen fix, to avoid churning ~20
+unrelated call sites (many exercised across a dozen test files) for no safety
+gain.
+
+The fix: those five sites (`lode.versions.save`, `lode.externals.ingest_snapshot`,
+`lode.backfill.mint_external`, `lode.drawdown.detect_and_enqueue_drawdown`,
+`lode.repository.Repository.save`) fall back via
+`lode.config.default_settings_for_missing_arg(caller)` instead of a bare
+`Settings()` — same defaults-only `Settings()` underneath, but it logs at
+WARNING first, so an omitted `settings=` at one of these five call sites is
+loud (a log line an operator or CI can notice) rather than a silent privacy
+regression with no test failure and no error. `settings: Settings | None =
+None` was kept (not made required) at all five, since making it required
+would only shift the failure from "loud log line" to "TypeError," at the cost
+of forcing every test caller of these widely-used functions to start passing
+`settings=` explicitly for no additional safety — the loud fallback already
+makes an omission visible. Every other `settings or Settings()` site is
+unaffected and stays the plain house pattern documented on `load_settings`.
+
 ### No-egress scope rules (decided, `lode-35nu.11.8`)
 
 The per-row flag above cannot cover an external that has **no row yet** — exactly the resources a
