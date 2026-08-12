@@ -40,6 +40,33 @@ coloured: headings and heading markers, fenced/indented code and fence
 delimiters, list markers, block-quote markers, thematic breaks, backslash escapes, and
 *reference-style* link definitions (`[label]: url` — not inline `[text](url)`).
 
+**The palette** (`NOTE_BODY_SYNTAX_STYLES` in `_markdown_area.py`, `lode-lab1`, retuned by
+`lode-dmbc`). The bundled grammar's captures are the complete menu of what *can* be coloured; lode
+maps four of them:
+
+| Capture | Covers | Style |
+|---|---|---|
+| `text.literal` | every line of a fenced block (delimiters, info string, body), indented code blocks, reference-link titles | `plum3` |
+| `punctuation.delimiter` | the ` ``` ` fence characters | `grey42` |
+| `heading.marker` | `#`…`######` and setext underlines | `steel_blue3` |
+| `list.marker` | bullet/ordered markers — **and thematic breaks**, which share the capture | `dark_sea_green4` |
+
+Unmapped, and left that way on purpose: `heading` (the heading text), `link.uri`, `link.label`,
+`punctuation.special` (block-quote markers, which the grammar emits as zero-width spans here),
+`string.escape`, and `none`. `none` is the load-bearing one — `lode-76go` found it is emitted
+*after* `text.literal` in each line's highlight iteration order, so mapping it would win the colour
+attribute at render time and silently undo the code-block colour. The same ordering is used
+deliberately in the other direction for `punctuation.delimiter`, which lands after `text.literal`
+and so dims the fence characters on top of the whole-line code span.
+
+**Colour only — no bold, no background tint** (maintainer decision), and **every value sits in the
+256-colour range, never the standard 16.** Indices 0–15 are remapped by the user's terminal theme:
+the original `text.literal` colour was `magenta` (index 5), which is why it rendered harsh and why
+there was no way to soften it in place. The 256-colour names render consistently without requiring
+truecolor, so hex — which would have hardcoded a dark-background assumption — was not needed.
+Whether any of this should become user-configurable is open; see
+[decisions.md](decisions.md).
+
 **Why block-only.** `lode-ev5j.1`'s spike (verified against textual 8.2.8 + tree-sitter-markdown
 0.5.1) found that `TextArea(language="markdown")` loads only Textual's bundled **block** grammar.
 An inline construct like `[my link](https://example.com/path)` collapses to one opaque `inline`
