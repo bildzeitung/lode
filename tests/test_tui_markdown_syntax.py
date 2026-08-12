@@ -19,6 +19,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from rich.color import ColorType
 from rich.style import Style
 from rich.text import Text
 from textual.screen import Screen
@@ -161,21 +162,40 @@ def test_markdown_text_area_uses_markdown_language_when_grammar_present() -> Non
 
 
 # ---------------------------------------------------------------------------
-# Fenced-code-block colour (lode-lab1). MAINTAINER DECISION (lode-lab1 notes):
-# magenta, colour only.
+# Note-body markdown palette (lode-lab1, retuned lode-dmbc). MAINTAINER
+# DECISION: colour only, and every value in the 256-colour range rather than
+# the terminal-themed standard 16.
 # ---------------------------------------------------------------------------
 
 
-def test_note_body_syntax_styles_is_exactly_text_literal_magenta() -> None:
+def test_note_body_syntax_styles_is_exactly_the_declared_palette() -> None:
     """The whole declared palette, asserted as one equality.
 
-    ``Style`` equality covers every attribute at once, so this pins "magenta,
-    colour only" (no bold, no background tint) *and* pins that ``"none"`` stays
+    ``Style`` equality covers every attribute at once, so this pins "colour
+    only" (no bold, no background tint) *and* pins that ``"none"`` stays
     unmapped -- lode-76go found that capture is emitted later in each line's
     highlight iteration order, so mapping it would win the colour attribute at
     render time and silently undo ``text.literal``.
     """
-    assert NOTE_BODY_SYNTAX_STYLES == {"text.literal": Style(color="magenta")}
+    assert NOTE_BODY_SYNTAX_STYLES == {
+        "text.literal": Style(color="plum3"),
+        "punctuation.delimiter": Style(color="grey42"),
+        "heading.marker": Style(color="steel_blue3"),
+        "list.marker": Style(color="dark_sea_green4"),
+    }
+
+
+def test_note_body_palette_avoids_the_terminal_themed_standard_16() -> None:
+    """Every colour resolves outside indices 0-15 (lode-dmbc).
+
+    The original ``"magenta"`` was index 5, inside the range a terminal remaps
+    to its own theme -- which is both why it rendered harsh and why there was
+    no way to soften it in place. Asserting the resolved colour type (rather
+    than the names) keeps this honest if a name is swapped later.
+    """
+    for capture, style in NOTE_BODY_SYNTAX_STYLES.items():
+        assert style.color is not None, capture
+        assert style.color.type is not ColorType.STANDARD, capture
 
 
 def test_markdown_text_area_applies_the_shared_note_body_theme() -> None:
@@ -186,16 +206,19 @@ def test_markdown_text_area_applies_the_shared_note_body_theme() -> None:
     assert NOTE_BODY_THEME.name in widget.available_themes
 
 
-def test_fenced_code_block_lines_render_magenta_end_to_end() -> None:
-    """The point of the whole ticket: fenced-block lines colour, prose does not.
+def test_markdown_constructs_render_the_palette_end_to_end() -> None:
+    """The point of the whole ticket: the mapped constructs colour, prose does not.
 
     Asserting the palette and the wiring separately would both stay green if a
-    Textual upgrade renamed the capture out from under us, so this drives the
+    Textual upgrade renamed a capture out from under us, so this drives the
     real highlighter over a real buffer and resolves the spans exactly the way
     ``TextArea._render_line`` does (look up each capture in the active theme's
     ``syntax_styles``; skip it entirely when unmapped).
     """
-    body = "intro\n```python\ndef foo():\n    return 1\n```\ntail\n"
+    body = (
+        "# Title\nintro\n\n- one\n- two\n\n---\n\n"
+        "```python\ndef foo():\n    return 1\n```\ntail\n"
+    )
     widget = _markdown_text_area(body, id="body")
     styles = widget._theme.syntax_styles
 
@@ -207,13 +230,27 @@ def test_fenced_code_block_lines_render_magenta_end_to_end() -> None:
                 text.stylize(style, start, end)
         return [span.style for span in text.spans]
 
-    magenta = Style(color="magenta")
-    # The opening delimiter, both body lines, and the closing delimiter.
-    for line_index in (1, 2, 3, 4):
-        assert _spans(line_index) == [magenta], f"line {line_index} not coloured"
+    code = Style(color="plum3")
+    fence = Style(color="grey42")
+
+    # Heading marker colours; the heading TEXT capture is deliberately unmapped.
+    assert _spans(0) == [Style(color="steel_blue3")]
+    # Bullets, and the thematic break that shares their capture (see the
+    # palette comment -- the grammar gives no way to separate the two).
+    bullet = Style(color="dark_sea_green4")
+    assert _spans(3) == [bullet]
+    assert _spans(4) == [bullet]
+    assert _spans(6) == [bullet]
+    # Fenced block: ``text.literal`` spans the whole of all four lines, and the
+    # two delimiter lines carry the dimmed fence style ON TOP (it is emitted
+    # later, so it wins on those three characters).
+    assert _spans(8) == [code, fence]
+    assert _spans(9) == [code]
+    assert _spans(10) == [code]
+    assert _spans(11) == [code, fence]
     # Surrounding prose is left alone.
-    assert _spans(0) == []
-    assert _spans(5) == []
+    assert _spans(1) == []
+    assert _spans(12) == []
 
 
 def test_markdown_text_area_fallback_does_not_touch_theme(

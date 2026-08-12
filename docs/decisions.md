@@ -5031,3 +5031,30 @@ entries below from being rewritten to chase the current tree.)
   the count is recorded so the next reader does not re-derive it. The chosen generator and its
   rationale land in [stack.md](stack.md) when `lode-fhql.8` is built; this entry records the
   constraints that choice must satisfy.
+- **User-configurable colour: open, and deliberately not a `Settings` knob (`lode-dmbc`,
+  2026-08-12).** Raised while retuning the note-body markdown palette (four hardcoded `Style`s in
+  `_markdown_area.py`; see [editing.md](editing.md#live-syntax-colouring--block-level-only-on-four-screens)):
+  if the maintainer is hand-picking colours, should the user be able to? Left **open**, with the
+  leaning **not yet**, for three reasons recorded here so the next person does not re-derive them:
+  1. **There is no single styling surface to expose.** lode has *three*, and they share no code
+     path: `CLI_STYLES`/`CLI_THEME` (a rich `Theme` of semantic names — `note_id`, `date`, `warn` —
+     for CLI output, `lode-l38d.11`); `NOTE_BODY_SYNTAX_STYLES`/`NOTE_BODY_THEME` (a Textual
+     `TextAreaTheme` keyed by *tree-sitter capture names*, `lode-lab1`); and `lode.tcss` (Textual
+     CSS for widget chrome). A colour config that covered only one of them would be a lie by
+     omission, and unifying all three is an epic, not a knob.
+  2. **`config.Settings` is the wrong model for it.** It is `extra="forbid"` with typed,
+     individually-documented behaviour knobs, threaded through the privacy/egress paths. Colour
+     values validate only as "some string" — a typo would surface as a rich/Textual render-time
+     failure far from the config load, and the capture-name keys are a *library-internal* grammar
+     vocabulary that would become public config surface lode does not control.
+  3. **The pressure that prompted it was already relieved.** The complaint was that `magenta` read
+     harsh; the cause was that it sat at index 5, inside the range terminals remap to their own
+     theme. Moving the palette into the 256-colour range fixed the intensity without any new
+     mechanism. A user knob would have been a large answer to a problem a one-line value change
+     closed.
+  Tracked as **`lode-5zxt`** (status `deferred`), which carries this reasoning so the question is
+  not re-opened from scratch. **Revisit when** a second, independent request arrives that a value
+  change cannot satisfy — most
+  likely light-background legibility (the current values are chosen for a dark terminal) or an
+  accessibility need. At that point the honest first question is whether the answer is a lode
+  config at all, or adopting Textual's own theme system across all three surfaces.

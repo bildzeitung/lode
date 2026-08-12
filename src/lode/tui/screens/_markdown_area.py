@@ -57,24 +57,50 @@ from rich.style import Style
 from textual.widgets import TextArea
 from textual.widgets.text_area import LanguageDoesNotExist, TextAreaTheme
 
-#: Semantic declaration of the note-body fenced-code-block colour (lode-lab1),
-#: kept as a plain module-level dict -- same convention as ``CLI_STYLES`` in
-#: ``lode.cli`` -- so a test can assert OUR palette rather than the library
-#: default. (``TextAreaTheme`` is a ``@dataclass`` that keeps ``syntax_styles``
-#: as a plain attribute, so unlike rich's ``Theme`` it would not destroy an
-#: inlined declaration -- the dict is hoisted for the test seam, not to dodge a
-#: constructor.)
+#: Semantic declaration of the note-body markdown palette (lode-lab1,
+#: retuned lode-dmbc), kept as a plain module-level dict -- same convention as
+#: ``CLI_STYLES`` in ``lode.cli`` -- so a test can assert OUR palette rather
+#: than the library default. (``TextAreaTheme`` is a ``@dataclass`` that keeps
+#: ``syntax_styles`` as a plain attribute, so unlike rich's ``Theme`` it would
+#: not destroy an inlined declaration -- the dict is hoisted for the test seam,
+#: not to dodge a constructor.)
 #:
-#: Maps the tree-sitter capture ``text.literal``, which lode-76go's spike
-#: confirmed carries a whole-line span on every line of a fenced code block
-#: (delimiters, info string, and body alike) for ``language="markdown"``.
-#: MAINTAINER DECISION (lode-lab1 notes): magenta, colour only -- no bold, no
-#: background tint. Deliberately does **not** map ``"none"``: lode-76go found
-#: that capture appears later in each line's highlight iteration order, so
-#: mapping it would emit a second, LATER Rich span that wins the colour
-#: attribute at render time and silently overrides ``text.literal`` again.
+#: Keys are tree-sitter capture names emitted by Textual's *bundled* markdown
+#: grammar (``textual/tree-sitter/highlights/markdown.scm``); that file is the
+#: complete menu, and it is block-only -- there is no inline capture to map, so
+#: bold/italic/inline-code/inline-link colouring is unreachable here (see this
+#: module's docstring and lode-ev5j.1).
+#:
+#: MAINTAINER DECISION (lode-lab1 notes, revised lode-dmbc): colour only -- no
+#: bold, no background tint. Every value sits in the 256-colour range rather
+#: than the standard 16: indices 0-15 are remapped by the user's terminal
+#: theme, which is what made the original ``"magenta"`` (index 5) read as harsh
+#: and gave no way to soften it. The 256-colour names render consistently
+#: without requiring truecolor, so hex was not needed.
+#:
+#: * ``text.literal`` -- lode-76go's spike confirmed this carries a whole-line
+#:   span on every line of a fenced code block (delimiters, info string, and
+#:   body alike), and it also covers indented code blocks and reference-link
+#:   titles. ``plum3`` (176) is the muted mauve that replaced ``magenta``.
+#: * ``punctuation.delimiter`` -- the ``` fence lines themselves. Dimmed so the
+#:   fence recedes behind the code it wraps. Rendered *over* the ``text.literal``
+#:   whole-line span on those two lines, which is exactly the intent.
+#: * ``heading.marker`` -- the ``#``..``######`` markers and the setext
+#:   underlines. Present without competing with the heading text.
+#: * ``list.marker`` -- bullet and ordered markers. NOTE: the grammar puts
+#:   ``thematic_break`` (``---``) in this same capture, so horizontal rules take
+#:   the bullet colour; there is no way to separate them without a custom
+#:   highlight query.
+#:
+#: Deliberately does **not** map ``"none"``: lode-76go found that capture
+#: appears later in each line's highlight iteration order, so mapping it would
+#: emit a second, LATER Rich span that wins the colour attribute at render time
+#: and silently overrides ``text.literal`` again.
 NOTE_BODY_SYNTAX_STYLES: dict[str, Style] = {
-    "text.literal": Style(color="magenta"),
+    "text.literal": Style(color="plum3"),
+    "punctuation.delimiter": Style(color="grey42"),
+    "heading.marker": Style(color="steel_blue3"),
+    "list.marker": Style(color="dark_sea_green4"),
 }
 
 #: The one shared ``TextAreaTheme`` for the TUI's note-body screens (lode-lab1)
