@@ -774,6 +774,68 @@ row, so setting it is the only step needed **for a row that already exists** (lo
 project, a host — broader than any single resource is a separate mechanism, [scope
 rules](#no-egress-scope-rules-decided-lode-35nu118), below.
 
+### `settings or Settings()` fallback survey (decided, `lode-xa5d`)
+
+`Settings.no_egress_default` is the seed for `no_egress` on every newly-inserted
+notes/externals row (root note create, `externals.ingest_snapshot`,
+`backfill.mint_external`, `drawdown.detect_and_enqueue_drawdown` — lode-a43n,
+lode-ge8w). Every one of those functions, like ~30 other functions across the
+codebase, declares `settings: Settings | None = None` and falls back with the
+house pattern `settings = settings or Settings()` when the caller omits it —
+but a bare `Settings()` construction is plain-defaults, not the user's
+`config.toml` (that file is read only by `load_settings()`, called once per
+CLI/TUI entry point and threaded down — `lode.config.load_settings`'s own
+docstring). Falling back silently on one of the functions above would
+re-introduce, for a future forgetful caller, exactly the bug lode-a43n and
+lode-ge8w were filed to fix: a new row seeded `no_egress=0` regardless of what
+the user configured.
+
+Surveyed conclusion: every *live* production caller of the five functions
+above already threads a real, resolved `Settings` instance (confirmed by
+walking the call graph — `lode.cli`'s entry points, `lode.repository.Repository`,
+`lode.tui.services.*`); the only omissions found were in tests. Because ~30
+other `settings or Settings()` sites are **not** privacy-bearing (they don't
+decide a `no_egress` seed — e.g. `drawdown.canonicalize_url`, `redact.py`,
+retrieval/embedding tuning knobs) and a bare `Settings()` there really is
+"library default is fine, this is a convenience for a standalone caller,"
+tightening only the five privacy-bearing sites — rather than making
+`settings` required everywhere — was the chosen fix, to avoid churning ~20
+unrelated call sites (many exercised across a dozen test files) for no safety
+gain.
+
+The fix: those five sites (`lode.versions.save`, `lode.externals.ingest_snapshot`,
+`lode.backfill.mint_external`, `lode.drawdown.detect_and_enqueue_drawdown`,
+`lode.repository.Repository.save`) fall back via
+`lode.config.default_settings_for_missing_arg(caller)` instead of a bare
+`Settings()` — same defaults-only `Settings()` underneath, but it logs at
+WARNING first, so an omitted `settings=` at one of them is
+loud (a log line an operator or CI can notice) rather than a silent privacy
+regression with no test failure and no error. `settings: Settings | None =
+None` was kept (not made required) at all of them, since making it required
+would only shift the failure from "loud log line" to "TypeError," at the cost
+of forcing every test caller of these widely-used functions to start passing
+`settings=` explicitly for no additional safety — the loud fallback already
+makes an omission visible. Every other `settings or Settings()` site is
+unaffected and stays the plain house pattern documented on `load_settings`.
+
+**Masking wrappers count as privacy-bearing too.** A caller one frame above a
+hardened site that keeps the plain `settings or Settings()` fallback resolves
+the omission itself and hands the write site a non-`None`, defaults-only
+`Settings` — so the WARNING can never fire for that path and the omission is
+silent again, just one frame higher. Two such entry points therefore use the
+loud fallback as well: `lode.tui.services.capture.save_capture` (mints a fresh
+note, so it seeds `notes.no_egress`) and `lode.tools.fetch_for_ask` (mints a
+fresh external via `ingest_snapshot`, and separately consults `settings` for
+the `no_egress_denied` egress gate). The line is drawn at wrappers whose own
+job is to mint the row; the other `Repository.save` wrappers
+(`tui.services.edit.save_edit`/`delete_note`, `tui.services.reconcile.reapply`)
+only ever *update* an existing note, and root-create is the only path that
+seeds `no_egress` (`lode.versions._save_core`), so they stay on the house
+pattern. `lode.worker.drain` also stays on it deliberately: it is a general
+executor whose handlers may write rows, not a mint site, and hardening it
+would fire the privacy warning on essentially every worker invocation,
+devaluing the signal.
+
 ### No-egress scope rules (decided, `lode-35nu.11.8`)
 
 The per-row flag above cannot cover an external that has **no row yet** — exactly the resources a

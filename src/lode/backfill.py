@@ -85,7 +85,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 from lode import jobs
-from lode.config import Settings
+from lode.config import Settings, default_settings_for_missing_arg
 from lode.drawdown import _repoint_edges
 from lode.externals import _insert_external
 
@@ -228,7 +228,7 @@ def mint_external(
             "SELECT 1 FROM externals WHERE external_id = ?", (external_id,)
         ).fetchone()
         return row is None
-    settings = settings or Settings()
+    settings = settings or default_settings_for_missing_arg("backfill.mint_external")
     with conn:
         return _insert_external(
             conn, external_id, source_type, settings, api_base=api_base

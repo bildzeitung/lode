@@ -22,6 +22,7 @@ drives :mod:`lode.redact`'s redact-before-index / redact-before-egress controls;
 each pattern is validated to compile at load.
 """
 
+import logging
 import os
 import re
 import tomllib
@@ -36,6 +37,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from lode.llm_provider import EFFORT_LEVELS_BY_PROVIDER, ModelTier
 from lode.lock import lock_path
 from lode.no_egress_scope import SCOPED_SOURCE_TYPES, NoEgressScopeRule
+
+log = logging.getLogger(__name__)
 
 # --- Atlassian connector credential env vars (lode-gpzn.1) --------------------
 # Documented, env-var-PRIMARY resolution for the JIRA/Confluence Cloud Basic-auth
@@ -782,6 +785,51 @@ def knob_kinds() -> dict[str, str]:
     }
 
 
+def default_settings_for_missing_arg(caller: str) -> Settings:
+    """Library-default ``Settings()`` for a privacy-bearing call whose
+    caller omitted ``settings=`` (lode-xa5d).
+
+    A handful of entry points mint a fresh ``notes``/``externals`` row and
+    therefore decide that row's ``no_egress`` seed from
+    ``Settings.no_egress_default`` — a PRIVACY control. Falling back to a bare ``Settings()`` there silently ignores
+    the user's ``config.toml`` (the file :func:`load_settings` reads) in
+    favor of hardcoded library defaults, which is exactly the class of bug
+    lode-a43n and lode-ge8w were filed to fix at the write sites; this
+    fallback exists only so those functions still work standalone (tests,
+    scripts) without forcing every caller to pass ``settings=``. It logs at
+    WARNING rather than silently proceeding, because every *production*
+    caller of the functions above threads a real, resolved ``Settings``
+    instance (verified at lode-xa5d) — so this firing at all means either a
+    test/script omission or a new call site that forgot the argument.
+
+    A thin public wrapper sitting directly *above* a mint site uses this
+    helper too, not just the mint site itself: a wrapper that resolves
+    ``settings or Settings()`` on its own hands the site below a non-``None``
+    defaults-only ``Settings``, which would silence the warning entirely —
+    the omission stays silent, just one frame higher. The line is drawn at
+    entry points whose own job is to mint the row; a general executor that
+    merely runs handlers which may write rows (:func:`lode.worker.drain`)
+    keeps the plain house pattern, so the warning stays a privacy signal
+    instead of firing on every worker call.
+
+    ``grep`` for this function's name is the authoritative call-site list;
+    the survey, the exemptions and the rationale are recorded in
+    ``docs/externals.md`` ("``settings or Settings()`` fallback survey").
+
+    Every other ``settings: Settings | None = None`` site in this codebase
+    is NOT privacy-bearing and keeps the plain ``settings or Settings()``
+    house pattern documented on :func:`load_settings` below — this helper is
+    deliberately narrow, not a blanket replacement for that pattern.
+    """
+    log.warning(
+        "%s: no `settings` supplied for a privacy-bearing call -- falling "
+        "back to library defaults, which silently ignores the user's "
+        "config.toml (e.g. no_egress_default). Pass settings= explicitly.",
+        caller,
+    )
+    return Settings()
+
+
 def load_settings(**overrides: object) -> Settings:
     """Construct and validate settings from every configured source.
 
@@ -813,7 +861,11 @@ def load_settings(**overrides: object) -> Settings:
     ``ask``/``work``/``add``/``tui`` entry points (lode-40g); everywhere else a
     bare ``Settings()`` fallback (``settings = settings or Settings()``) is the
     correct default for a function accepting an *optional* caller-supplied
-    override, not a second place to resolve the file/overrides layering.
+    override, not a second place to resolve the file/overrides layering --
+    except the small set of privacy-bearing write paths that use
+    :func:`default_settings_for_missing_arg` instead so an omitted
+    ``settings=`` is loud, not silent (lode-xa5d; see that function's
+    docstring for the full site list and rationale).
     """
     path = config_path()
     file_values: dict[str, object] = {}

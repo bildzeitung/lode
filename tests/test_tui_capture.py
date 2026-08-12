@@ -42,6 +42,23 @@ def test_save_capture_persists_note_via_repository_save(tmp_path: Path) -> None:
     ) == [(result.note_id, "hello world", "create")]
 
 
+def test_save_capture_omitted_settings_logs_a_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """lode-xa5d: ``save_capture`` mints a fresh note row, so it seeds
+    ``notes.no_egress`` from ``Settings.no_egress_default`` — an omitted
+    ``settings=`` here must be loud, not a silent library-defaults fallback.
+    Without this the loud fallback inside ``Repository.save`` can never fire
+    for this path: ``save_capture`` would hand it a non-``None`` defaults-only
+    ``Settings``, masking the omission.
+    """
+    with caplog.at_level("WARNING", logger="lode.config"):
+        save_capture(tmp_path / "lode.db", "hello world")
+    assert any(
+        "tui.services.capture.save_capture" in r.getMessage() for r in caplog.records
+    )
+
+
 def test_save_capture_makes_note_keyword_findable_instantly(tmp_path: Path) -> None:
     """The synchronous FTS5 leg runs inline, same as ``lode add`` (lode-xyb)."""
     db_path = tmp_path / "lode.db"

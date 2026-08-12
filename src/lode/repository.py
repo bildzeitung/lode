@@ -27,7 +27,7 @@ from collections.abc import Iterable
 from typing import Protocol, runtime_checkable
 
 from lode import drawdown, jobs, staleness, versions
-from lode.config import Settings
+from lode.config import Settings, default_settings_for_missing_arg
 from lode.hashing import NO_PARENT
 from lode.redact import redact_before_index
 from lode.versions import SaveResult
@@ -227,7 +227,7 @@ class Repository:
         here at all — it independently redacts what it reads (see its
         docstring) since it runs off the enqueued ``target_version`` alone.
         """
-        settings = settings or Settings()
+        settings = settings or default_settings_for_missing_arg("Repository.save")
         with self.conn:
             result = versions._save_core(
                 self.conn, note_id, body, parent=parent, settings=settings

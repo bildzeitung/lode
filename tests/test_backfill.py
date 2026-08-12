@@ -280,6 +280,16 @@ class TestMintExternal:
         mint_external(conn, "ABC-1", "jira")
         assert _no_egress(conn, "ABC-1") == 0
 
+    def test_omitted_settings_logs_a_warning(
+        self, conn: sqlite3.Connection, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """lode-xa5d: mint_external is privacy-bearing (seeds no_egress), so an
+        omitted ``settings=`` must be loud, not a silent library-defaults fallback.
+        """
+        with caplog.at_level("WARNING", logger="lode.config"):
+            mint_external(conn, "ABC-1", "jira")
+        assert any("backfill.mint_external" in r.getMessage() for r in caplog.records)
+
     def test_honors_settings_no_egress_default(self, conn: sqlite3.Connection):
         """Settings.no_egress_default=True must apply at the row's true first
         insert (lode-ge8w) -- previously only the schema DEFAULT 0 was

@@ -35,7 +35,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from lode.config import Settings
+from lode.config import Settings, default_settings_for_missing_arg
 from lode.lexical import LexicalCacheBackend
 from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
@@ -74,7 +74,9 @@ def save_capture(
     if not body.strip():
         raise EmptyCaptureError("refusing to save an empty note")
 
-    settings = settings or Settings()
+    settings = settings or default_settings_for_missing_arg(
+        "tui.services.capture.save_capture"
+    )
     note_id = str(uuid.uuid4())
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = init_db(db_path)
