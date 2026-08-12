@@ -13,8 +13,9 @@ triple verbatim: :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`
 ``YesNoConfirmScreen`` -- this is a pure styling dedup, not a base-class
 change -- so this file exercises them directly through a real ``LodeApp``
 pilot rather than reusing ``tests/test_tui_yes_no_confirm.py``'s bare-``App``
-harness (each of these five needs real seeded data for ``on_mount`` to
-succeed).
+harness: three of the five (enrichment, related-note, snapshot) need real
+seeded data for ``on_mount`` to succeed, and one ``LodeApp`` harness for all
+five is simpler than splitting them across two.
 """
 
 from __future__ import annotations
@@ -178,11 +179,14 @@ def test_snapshot_viewer_is_framed_centered_and_large(tmp_path: Path) -> None:
     def check(screen, dialog) -> None:
         _check_framed_and_centered(screen, dialog)
         assert dialog.region.width == int(SCREEN_WIDTH * 0.8)
-        # One row short of the other 80%-height dialogs: unlike them, this
-        # screen also composes a docked LodeFooter sibling (lode-ev5j.3),
-        # which claims one row of the screen height before the percentage
-        # resolves against what's left.
-        assert dialog.region.height == int(SCREEN_HEIGHT * 0.8) - 1
+        # Unlike the other 80%-height dialogs, this screen also composes a
+        # docked LodeFooter sibling (lode-ev5j.3, dock: bottom; height: 1),
+        # which claims one row BEFORE the percentage resolves -- so 80% is
+        # taken of what's left, not of the full screen. Written as that
+        # mechanism rather than as the other dialogs' expectation minus a bare
+        # `- 1`: the two happen to coincide at SCREEN_HEIGHT = 40, but only
+        # this form stays correct if that constant changes.
+        assert dialog.region.height == int((SCREEN_HEIGHT - 1) * 0.8)
 
     _push_and_check(
         db_path,
@@ -206,14 +210,26 @@ def test_help_screen_is_framed_centered_and_large(tmp_path: Path) -> None:
     )
 
 
-def test_the_shared_declaration_triple_appears_exactly_once() -> None:
-    """Acceptance criterion 1, asserted mechanically -- not eyeballed."""
+def test_each_frame_declaration_appears_exactly_once() -> None:
+    """Acceptance criterion 1, asserted mechanically -- not eyeballed.
+
+    Deliberately counts the three declarations SEPARATELY rather than matching
+    them as one contiguous block: a single-substring match would pin the
+    stylesheet's exact declaration order and indentation (so an innocent
+    reformat fails, reporting "duplication" that did not happen) while still
+    letting a genuine re-duplication written in a different order slip
+    through. Counting each declaration on its own is insensitive to ordering
+    and whitespace inside the rule, and catches a partial copy too.
+    """
     import lode.tui
 
-    tcss_path = Path(lode.tui.__file__).parent / "lode.tcss"
-    text = tcss_path.read_text()
-    triple = "border: thick $primary;\n    background: $panel;\n    padding: 1 2;"
-    assert text.count(triple) == 1, (
-        "the border/background/padding triple must appear exactly once, in "
-        ".confirm-dialog -- every other dialog must inherit it via the class"
-    )
+    text = (Path(lode.tui.__file__).parent / "lode.tcss").read_text()
+    for declaration in (
+        "border: thick $primary;",
+        "background: $panel;",
+        "padding: 1 2;",
+    ):
+        assert text.count(declaration) == 1, (
+            f"{declaration!r} must appear exactly once, in .confirm-dialog -- "
+            "every other dialog must inherit the frame via that class"
+        )
