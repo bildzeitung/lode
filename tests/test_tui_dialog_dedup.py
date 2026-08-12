@@ -164,7 +164,10 @@ def test_related_note_modal_is_framed_centered_and_large(tmp_path: Path) -> None
         assert dialog.region.height == int(SCREEN_HEIGHT * 0.8)
 
     _push_and_check(
-        db_path, RELATED_MODAL_DIALOG_ID, lambda _app: RelatedNoteModalScreen(note), check
+        db_path,
+        RELATED_MODAL_DIALOG_ID,
+        lambda _app: RelatedNoteModalScreen(note),
+        check,
     )
 
 
@@ -175,7 +178,11 @@ def test_snapshot_viewer_is_framed_centered_and_large(tmp_path: Path) -> None:
     def check(screen, dialog) -> None:
         _check_framed_and_centered(screen, dialog)
         assert dialog.region.width == int(SCREEN_WIDTH * 0.8)
-        assert dialog.region.height == int(SCREEN_HEIGHT * 0.8)
+        # One row short of the other 80%-height dialogs: unlike them, this
+        # screen also composes a docked LodeFooter sibling (lode-ev5j.3),
+        # which claims one row of the screen height before the percentage
+        # resolves against what's left.
+        assert dialog.region.height == int(SCREEN_HEIGHT * 0.8) - 1
 
     _push_and_check(
         db_path,
