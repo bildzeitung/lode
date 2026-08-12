@@ -832,9 +832,11 @@ job is to mint the row; the other `Repository.save` wrappers
 only ever *update* an existing note, and root-create is the only path that
 seeds `no_egress` (`lode.versions._save_core`), so they stay on the house
 pattern. `lode.worker.drain` also stays on it deliberately: it is a general
-executor whose handlers may write rows, not a mint site, and hardening it
-would fire the privacy warning on essentially every worker invocation,
-devaluing the signal.
+executor whose handlers may write rows, not a mint site. Note the carve-out
+rests on that alone, not on warning volume: `lode.cli.work` -- `drain`'s only
+production caller -- threads a real `_resolve_settings()` result, so a
+hardened `drain` would in practice fire the privacy warning on no invocation
+at all. 
 
 ### No-egress scope rules (decided, `lode-35nu.11.8`)
 
