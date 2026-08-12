@@ -45,8 +45,10 @@ from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets._key_panel import BindingsTable
 
-#: The overlay's scrollable dialog container id -- sized/centered in
-#: ``lode.tcss`` like every other popup (``lode-1i8.4``'s pattern).
+#: The overlay's scrollable dialog container id. Centering and the frame come
+#: from ``lode.tcss``'s shared screen-type selector and ``.confirm-dialog``
+#: class; this id's own rule carries only the larger 80%/80% size deviation
+#: it shares with the other big popups (lode-f0qf).
 HELP_DIALOG_ID = "help-dialog"
 
 
@@ -84,4 +86,5 @@ class HelpScreen(ModalScreen[None]):
         yield VerticalScroll(
             BindingsTable(shrink=True, expand=False),
             id=HELP_DIALOG_ID,
+            classes="confirm-dialog",
         )

@@ -20,58 +20,36 @@
  * ``[tool.setuptools.package-data]`` in ``pyproject.toml``.
  */
 
-DiscardConfirmScreen {
+/* All the modal dialogs sharing the .confirm-dialog frame below (lode-1ip2,
+ * lode-f0qf) -- DiscardConfirmScreen, EnrichmentModalScreen, the three
+ * YesNoConfirmScreen subclasses (DeleteConfirmScreen,
+ * NoEgressClearConfirmScreen, SaveAsNoteConfirmScreen),
+ * RelatedNoteModalScreen, SnapshotViewerScreen and HelpScreen -- are
+ * collapsed onto one comma-separated selector so centering has ONE
+ * definition too, not eight near-identical type-selector copies. */
+DiscardConfirmScreen,
+EnrichmentModalScreen,
+YesNoConfirmScreen,
+RelatedNoteModalScreen,
+SnapshotViewerScreen,
+HelpScreen {
     align: center middle;
 }
 
-#capture-confirm-dialog {
-    width: 50;
-    height: auto;
-    border: thick $primary;
-    background: $panel;
-    padding: 1 2;
-}
-
-/* Enrichment inspector modal (lode-ay5.2) -- a larger, scrollable popup
- * (unlike #capture-confirm-dialog's small fixed box) since a note's summary/
- * tags/entities/edges can run longer than the terminal height. Height is
- * bounded (not auto) so the container itself -- not the dialog growing past
- * the screen -- is what scrolls.
- */
-EnrichmentModalScreen {
-    align: center middle;
-}
-
-#enrichment-inspector-dialog {
-    width: 80%;
-    height: 80%;
-    border: thick $primary;
-    background: $panel;
-    padding: 1 2;
-}
-
-/* All three Yes/No confirms (lode-1ip2) -- DeleteConfirmScreen,
- * NoEgressClearConfirmScreen and SaveAsNoteConfirmScreen -- subclass the
- * shared YesNoConfirmScreen, so this one type selector covers all of them
- * (Textual matches a type selector against the whole class MRO). The border/
- * background/padding treatment likewise has ONE definition, via the
- * .confirm-dialog class every dialog's outer Vertical carries -- and that
- * class carries the SIZE too, not just the frame.
- *
- * Together those two rules are what close lode-a50f's defect properly: a new
- * confirm subclass is centered, framed AND sized with no tcss of its own, so
- * it cannot ship as the bare unframed line at the top-left that
+/* Together with .confirm-dialog below, this is what closes lode-a50f's
+ * defect properly: a new dialog's outer container is centered (via the type
+ * selector above), framed AND sized (via the class below) with no tcss of
+ * its own, so it cannot ship as the bare unframed line at the top-left that
  * NoEgressClearConfirmScreen did, and cannot ship as a full-screen box
  * either (Textual's Vertical default is width: 1fr; height: 1fr, which is
- * what a size-less dialog would otherwise inherit). Adding an id rule below
- * is now an OPT-IN for a dialog that genuinely deviates from the small
- * single-line default -- not an obligation a new dialog can forget. */
-YesNoConfirmScreen {
-    align: center middle;
-}
+ * what a size-less dialog would otherwise inherit). An id rule below is now
+ * an OPT-IN for a dialog that genuinely deviates from the small single-line
+ * default -- not an obligation a new dialog can forget. */
 
 /* The default: a small, fixed-size popup whose prompt is a single line --
- * delete (lode-d32.1) and no-egress CLEAR (lode-a50f) both take it as-is. */
+ * delete (lode-d32.1), no-egress CLEAR (lode-a50f) and the capture
+ * Save/Discard/Cancel confirm (lode-0wj.1, #capture-confirm-dialog) all take
+ * it as-is. */
 .confirm-dialog {
     width: 50;
     height: auto;
@@ -80,13 +58,19 @@ YesNoConfirmScreen {
     padding: 1 2;
 }
 
-/* Save-ask-answer-as-note confirm (lode-35nu.11.4): the one deviation --
- * the same larger, scrollable popup size as #enrichment-inspector-dialog
- * above, since the preview is an answer's full rendered text and can run
- * longer than the terminal height. An id selector outranks the
- * .confirm-dialog class, so this overrides the default size above while
- * still inheriting its frame. */
-#save-as-note-confirm-dialog {
+/* The larger, scrollable popup size shared by the enrichment inspector
+ * (lode-ay5.2), save-as-note confirm (lode-35nu.11.4), the related-note
+ * modal (lode-olmi.9), the content-viewer modal (lode-0sjj) and the
+ * keybinding help overlay (lode-2bt3.2) -- each note/answer/binding list can
+ * run longer than the terminal height. Height is bounded (not auto) so the
+ * container itself -- not the dialog growing past the screen -- is what
+ * scrolls. An id selector outranks the .confirm-dialog class, so this
+ * overrides the default size above while still inheriting its frame. */
+#enrichment-inspector-dialog,
+#save-as-note-confirm-dialog,
+#related-note-modal-dialog,
+#snapshot-viewer-dialog,
+#help-dialog {
     width: 80%;
     height: 80%;
 }
@@ -109,38 +93,6 @@ RelatedNotesPanel:focus {
     border: round $accent;
 }
 
-/* Related-note highlighted-context modal (lode-olmi.9) -- same larger,
- * scrollable popup treatment as #enrichment-inspector-dialog above, since a
- * note's full body can run longer than the terminal height. */
-RelatedNoteModalScreen {
-    align: center middle;
-}
-
-#related-note-modal-dialog {
-    width: 80%;
-    height: 80%;
-    border: thick $primary;
-    background: $panel;
-    padding: 1 2;
-}
-
-/* Content-viewer modal (lode-0sjj) -- same larger, scrollable popup
- * treatment as #enrichment-inspector-dialog / #related-note-modal-dialog
- * above, since a retrieved page's extracted body (or raw HTML) can run much
- * longer than the terminal height; the TextArea inside scrolls its own
- * content within this bounded box. */
-SnapshotViewerScreen {
-    align: center middle;
-}
-
-#snapshot-viewer-dialog {
-    width: 80%;
-    height: 80%;
-    border: thick $primary;
-    background: $panel;
-    padding: 1 2;
-}
-
 /* Tags screen (lode-olmi.6) -- top panel (tag multi-select) is capped to 30%
  * of the available height so the bottom panel (the filtered notes list)
  * keeps most of the vertical space; each panel scrolls its own overflow
@@ -153,25 +105,12 @@ SnapshotViewerScreen {
     border: solid $primary;
 }
 
-/* Keybinding help overlay (lode-2bt3.2) -- same larger, scrollable popup
- * treatment as #enrichment-inspector-dialog above (the binding list can run
- * longer than the terminal height). BindingsTable's own component-class
+/* Keybinding help overlay (lode-2bt3.2). BindingsTable's own component-class
  * styling (key/description/divider/header) is normally supplied by
  * Textual's KeyPanel wrapper (textual/widgets/_key_panel.py); reproduced
  * here directly since HelpScreen composes BindingsTable on its own, not via
- * KeyPanel -- same declarations KeyPanel's own DEFAULT_CSS uses. */
-HelpScreen {
-    align: center middle;
-}
-
-#help-dialog {
-    width: 80%;
-    height: 80%;
-    border: thick $primary;
-    background: $panel;
-    padding: 1 2;
-}
-
+ * KeyPanel -- same declarations KeyPanel's own DEFAULT_CSS uses. Centering
+ * and #help-dialog's frame/size are covered by the shared rules above. */
 HelpScreen BindingsTable > .bindings-table--key {
     color: $text-accent;
     text-style: bold;
@@ -218,7 +157,7 @@ HelpScreen BindingsTable > .bindings-table--header {
  * restructure, not to fix a live bug.
  *
  * Re-verified safe as of lode-efn2: all six DataTables in this app live in a
- * plain, non-modal Screen's layout -- none of the five ModalScreen dialogs
+ * plain, non-modal Screen's layout -- none of the eight ModalScreen dialogs
  * above contains one, so this rule never reaches into an auto/fixed-size
  * dialog box. Re-check that if a DataTable is ever added inside one. Screens
  * that genuinely differ (like #tags-tag-list above) keep an explicit per-id

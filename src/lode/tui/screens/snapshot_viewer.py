@@ -79,6 +79,7 @@ class SnapshotViewerScreen(ModalScreen[None]):
         yield Vertical(
             _markdown_text_area(read_only=True, id=SNAPSHOT_VIEWER_BODY_ID),
             id=SNAPSHOT_VIEWER_DIALOG_ID,
+            classes="confirm-dialog",
         )
         yield LodeFooter()
 

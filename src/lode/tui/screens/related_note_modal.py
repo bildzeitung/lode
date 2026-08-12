@@ -78,6 +78,7 @@ class RelatedNoteModalScreen(ModalScreen[None]):
         yield VerticalScroll(
             LodeStatic("", id=RELATED_MODAL_BODY_ID),
             id=RELATED_MODAL_DIALOG_ID,
+            classes="confirm-dialog",
         )
 
     def on_mount(self) -> None:

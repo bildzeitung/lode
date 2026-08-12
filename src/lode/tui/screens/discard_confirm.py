@@ -37,9 +37,12 @@ class DiscardConfirmScreen(ModalScreen[str]):
     :class:`~textual.screen.ModalScreen`'s own ``DEFAULT_CSS`` already dims
     that screen underneath (``background: $background 60%``); ``lode.tcss``
     (:mod:`lode.tui`, loaded via ``LodeApp.CSS_PATH``) adds only what was
-    missing — centering and sizing the ``#capture-confirm-dialog`` box itself
-    — so the prompt reads as a bounded, bordered popup over the still-visible
-    editor instead of a blank full screen.
+    missing — centering, via the shared screen-type selector, plus the frame
+    and size, via the shared ``.confirm-dialog`` class this dialog's outer
+    ``Vertical`` carries (lode-f0qf; it takes that class's small fixed default
+    as-is, so it needs no id rule of its own) — so the prompt reads as a
+    bounded, bordered popup over the still-visible editor instead of a blank
+    full screen.
     """
 
     BINDINGS: ClassVar = [
@@ -56,6 +59,7 @@ class DiscardConfirmScreen(ModalScreen[str]):
                 id=CONFIRM_MESSAGE_ID,
             ),
             id="capture-confirm-dialog",
+            classes="confirm-dialog",
         )
 
     def action_choose(self, choice: str) -> None:

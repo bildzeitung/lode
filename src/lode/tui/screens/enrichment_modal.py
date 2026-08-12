@@ -61,8 +61,10 @@ class EnrichmentModalScreen(ModalScreen[None]):
     same one-level-at-a-time contract every other screen in this cluster already uses.
     Like ``DiscardConfirmScreen``, this is a bare ``ModalScreen`` pushed directly (not a
     :data:`~lode.tui.app.LodeApp.SCREENS` entry): it dims the screen underneath for free
-    via ``ModalScreen``'s own ``DEFAULT_CSS``, and ``lode.tcss`` adds only sizing and
-    centering for :data:`INSPECTOR_DIALOG_ID`.
+    via ``ModalScreen``'s own ``DEFAULT_CSS``; ``lode.tcss`` centers it via the shared
+    screen-type selector and frames it via the shared ``.confirm-dialog`` class, leaving
+    :data:`INSPECTOR_DIALOG_ID`'s own rule to carry nothing but the larger 80%/80% size
+    deviation (lode-f0qf).
     """
 
     # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
@@ -84,6 +86,7 @@ class EnrichmentModalScreen(ModalScreen[None]):
             LodeStatic("", id=INSPECTOR_EDGES_ID),
             LodeStatic("", id=INSPECTOR_EMBED_ID),
             id=INSPECTOR_DIALOG_ID,
+            classes="confirm-dialog",
         )
 
     def on_mount(self) -> None:
