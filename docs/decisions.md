@@ -4969,3 +4969,65 @@ entries below from being rewritten to chase the current tree.)
   against, and measuring them would need exactly the per-call aggregator this ticket rules out.
   Full implementation: `src/lode/llm_provider.py` (`run_tool_turns`, plus `_forced_schema_turn`
   now returning `(parsed, output_tokens)` so the final turn's spend folds in without a callback).
+
+- **2026-08-12 — RECONFIRMED (`lode-fhql.1`, maintainer decision): the PyPI `lode` name collision is
+  INERT, because lode does not publish to PyPI.** Filed because the `lode-fhql` brand epic was
+  scoped on the opposite premise and had built its whole critical path on it. `pyproject.toml`'s
+  `[project] name = "lode"` collides with an unrelated project already holding that name on PyPI, so
+  `pip install lode` installs something else. The epic recorded that as a *blocking constraint* —
+  "lode therefore cannot publish under that name" — and made a P0 human keep-or-rename decision the
+  root blocker of all eleven of its children. That premise was already refuted by
+  [release.md](release.md)'s **Non-goals** section, owner-confirmed 2026-07-07: *"No PyPI releases.
+  lode publishes a GitHub release with the wheel and sdist attached as downloadable artifacts —
+  nothing is pushed to PyPI. Don't assume `pip install lode` works."* Verified independently while
+  challenging the epic: there is no `twine`, no `pypa/gh-action-pypi-publish`, and no PyPI reference
+  anywhere in `.github/`, `noxfile.py`, or `scripts/`. **What the name actually is today:** the
+  wheel-filename identifier for an artifact attached to a GitHub release — a local label, not a
+  claim on a namespace. Nothing is blocked by another project owning that namespace on a registry
+  lode never pushes to. **Consequence:** no rename, `pyproject.toml` is left alone, `lode-fhql.1`
+  demoted from a P0 root blocker to P3 informational (its trademark and search-collision findings
+  still feed the brand brief; its packaging verdict is moot), and the brand epic lost the human gate
+  at its root entirely. **What remains real** is documentation, not packaging: `README.md` and
+  [onboarding.md](onboarding.md) must show an install path a new user can actually run and must not
+  imply `pip install lode` works, since that command installs a different project
+  (`lode-fhql.2`). **Recorded here rather than left in bd** because the epic's original framing was
+  persuasive enough to survive a filing pass unchallenged, and the next reader who notices the
+  collision will reach for the same wrong conclusion without this. Reopen only if a decision puts
+  PyPI back in scope — which would also mean amending [release.md](release.md)'s Non-goals, not
+  quietly contradicting it.
+
+- **2026-08-12 — DECIDED (`lode-fhql.8`, maintainer decision): the docs site publishes a curated
+  subset, and renders Mermaid at BUILD TIME.** Two constraints settled before the generator was
+  chosen, because each disqualifies otherwise-reasonable generators.
+  1. **Build-time pre-render, not client-side.** `docs/` Mermaid is validated by
+     `scripts/validate-mermaid.sh` against `minlag/mermaid-cli` in Docker — deliberately the parser
+     GitHub renders with ([CLAUDE.md](../CLAUDE.md)). A generator that renders Mermaid *client-side
+     in the visitor's browser* (the default for MkDocs-Material with `pymdownx.superfences`) has no
+     build step that can fail, so a broken diagram ships as a silently-empty box and no CI gate can
+     catch it. Pre-rendering to SVG through the same pinned image instead gives GitHub/site parity
+     by construction and gives the publish workflow something that can go red. Note
+     `validate-mermaid.sh` **validates only** — it parses each block and reports pass/fail, it emits
+     no SVG — so the pre-render step is new work, not a reuse of that script.
+  2. **Scope: the site is about lode, not about how lode is made.** Published — `design.md`,
+     `retrieval.md`, `storage.md`, `externals.md`, `brand.md`, and `docs/how-to/`. Excluded —
+     `decisions.md`, `agents-workflow.md`, `stack.md`, `conventions.md`, `release.md`,
+     `test-suite-audit.md`, `onboarding.md`, `keybindings.md`, `tui.md`, `editing.md`,
+     `configuration.md`. The last four are the non-obvious ones: they are *about* lode by title but
+     *addressed to whoever builds it next* ("Consult this doc before adding or rebinding a key";
+     layout rules for the next screen; build-time knobs). Their genuinely user-facing content —
+     the keymap, the runtime settings — is delivered as **derived** pages written for a reader
+     using lode (`lode-fhql.15`), never by publishing the maintainer originals. Excluding
+     `decisions.md` also disposes of a problem this file creates for itself: its append-only
+     correction rule (see the preamble) means a rendered site would show superseded and current
+     entries as visually equal peers, with no reader affordance for which won.
+  **Link consequence, measured rather than assumed (2026-08-12):** 64 outbound relative links from
+  the published set point at excluded pages, against 38 that stay internal. They are not one kind —
+  ~23 target `decisions.md` and ~17 target `stack.md`, and those read as maintainer citations
+  ("Per-connector judgment; see `decisions.md`") that a site reader loses nothing by not resolving;
+  18 target `configuration.md` and *are* substantive, and are absorbed by the derived settings page;
+  the remaining 6 are one apiece. So the fix is **one rewrite rule** — links to unpublished pages
+  resolve to their GitHub URLs — **not a link-rewriting architecture.** The initial estimate here
+  was that this would be a serious structural problem; measuring it is what showed it was not, and
+  the count is recorded so the next reader does not re-derive it. The chosen generator and its
+  rationale land in [stack.md](stack.md) when `lode-fhql.8` is built; this entry records the
+  constraints that choice must satisfy.
