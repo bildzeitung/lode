@@ -27,18 +27,23 @@ non-interactive behavior:
 - `apt-get`: `-y`
 - `brew`: `HOMEBREW_NO_AUTO_UPDATE=1`
 
+[`AGENTS.md`](AGENTS.md#non-interactive-shell-commands) states the same rule at more length, for
+tooling that loads that file instead of this one. Keep the two in step — if you change one, change
+the other.
+
 ## Terms used throughout
 
 A short glossary of synonyms this file, the skill files under `.claude/skills/`, and the docs under
 `docs/` use interchangeably:
 
 - **"the default branch"** = `trunk` — this repo's default branch (see the STOP section above).
-  Never conflate with "the primary checkout" below; scripts that read one and write the other are
+  Never conflate with "the main checkout" below; scripts that read one and write the other are
   the most destructive ones in the repo.
 - **"the tracker"** = `bd` (beads), backed by Dolt — see [Beads Issue Tracker](#beads-issue-tracker)
   below.
-- **"the primary checkout"** = the repo root working tree, as opposed to a worktree under
-  `.claude/worktrees/`.
+- **"the main checkout"** = the repo root working tree, as opposed to a worktree under
+  `.claude/worktrees/`. This is lode's own term — "the primary checkout" means the same thing and
+  appears in imported/upstream material, but new prose says "the main checkout".
 
 ## What this is
 
