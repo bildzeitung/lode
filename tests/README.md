@@ -37,6 +37,8 @@ assert properties about the *shell semantics* of that embedded bash, not about p
   `fence_scan` helper both build on, so "what counts as a fenced code block" is answered once, not
   reimplemented per gate. `tests/test_no_private_fence_state_machine.py` is the companion AST gate:
   no module may hand-roll a second, private fence-toggle state machine instead of importing this one.
+  Several of the Markdown scanners below still carry private copies of similar parsing logic rather
+  than importing it; extracting a shared test-side helper is tracked as `lode-s9xe.15`, not here.
 - **`tests/test_no_hand_derived_skill_md_path.py`** — a mechanical gate that no test/script hand-types
   a `.claude/skills/*/SKILL.md` path instead of deriving it, so a renamed or moved skill can't silently
   desync from what's actually being scanned.
@@ -46,13 +48,15 @@ assert properties about the *shell semantics* of that embedded bash, not about p
   **`test_land_conflicts_state.py`**, **`test_land_lock.py`**, **`test_land_merge_one.py`**,
   **`test_land_state_load.py`**, **`test_merge_precheck.py`**, **`test_release_bump.py`**,
   **`test_release_latest_tag.py`**, **`test_validate_sha40_call_sites.py`**,
-  **`test_worktree_gc_classify.py`** — each pins a specific correctness property of the bash embedded
-  in a SKILL.md against drift: that a script it invokes is actually called with the right arguments,
-  that guard coverage stays complete as new call sites are added, that a state variable set in one
-  section is still read correctly downstream, etc. Several of these also exercise the extracted
-  `scripts/*.sh` libraries a SKILL.md delegates to (see below) — the split exists so the *reusable*
-  logic can be shellcheck'd and unit-tested as an ordinary script, leaving only the orchestration glue
-  inline in the Markdown for these scanners to cover.
+  **`test_worktree_gc_classify.py`** — each pins a specific correctness property of a `/code`,
+  `/land`, `/sweep`, `/epic-audit` or `/release` SKILL.md against drift: that a script it invokes is
+  actually called with the right arguments, that guard coverage stays complete as new call sites are
+  added, that a state variable set in one section is still read correctly downstream, etc. The group
+  is a **mix**: some (`test_bd_list_limit_gate.py`, `test_land_lock.py`,
+  `test_land_skill_guard_coverage.py`) parse the Markdown and assert on the bash inside it; others
+  (`test_isolation_guard.py`, `test_merge_precheck.py`, `test_release_bump.py`) drive the extracted
+  `scripts/*.sh` library a SKILL.md delegates to, naming the SKILL.md only as the caller they protect
+  — and are listed again under **git/worktree/land-loop infrastructure** below, from that angle.
 - **`tests/_hookharness.py`** — the shared harness for the second Markdown-adjacent surface: the
   committed `PreToolUse(Bash)` hooks in `.claude/settings.json` (JSON, not Markdown, but the same
   "not reachable by a normal linter" problem — a hook is a shell one-liner embedded as a JSON string
@@ -86,7 +90,8 @@ The remaining ~130 files are ordinary tests, organized by what they cover:
 
 - **Core save/retrieve pipeline** — `test_storage.py`, `test_versions.py`, `test_hashing.py`,
   `test_repository.py`, `test_chunking.py`, `test_embedding.py`, `test_lexical.py`,
-  `test_retrieval.py`, `test_vectorstore.py`, `test_sql_ids.py`, `test_ids.py` — the
+  `test_retrieval.py`, `test_vectorstore.py`, `test_sql_ids.py`, `test_ids.py`,
+  `test_notes_read.py` — the
   content-addressed, event-sourced note/version storage layer and the two-leg (lexical + vector)
   retrieval read side.
 - **Cited Q&A** — `test_qa.py`, `test_cited_answer.py`, `test_answer.py`, `test_faithfulness.py`,
@@ -113,7 +118,8 @@ The remaining ~130 files are ordinary tests, organized by what they cover:
   Typer CLI surface, its shared console/theme, and the settings module; `test_cli_help_corpus_gate.py`
   is a corpus gate enforcing `docs/conventions.md`'s `help=` length/format rules across every
   registered command.
-- **TUI** — every `test_tui_*.py` file — one test module per Textual screen or seam widget
+- **TUI** — every `test_tui_*.py` file, plus `test_link_open.py` (pure-function tests for the
+  open-link-under-cursor helper behind the TUI screens) — one test module per Textual screen or seam widget
   (capture, edit, browse, ask, tags, reconcile, config, help, quit-confirm, related-notes panel, the
   shared `LodeDataTable`/`LodeStatic` widgets, markdown syntax colouring, footer-width and dialog
   styling corpus gates), following `docs/conventions.md`'s one-screen/one-widget-per-module rule.
@@ -124,7 +130,8 @@ The remaining ~130 files are ordinary tests, organized by what they cover:
   `test_trunk_write_guard.py`, `test_gh_write_guard.py`, `test_sha_fabrication_guard.py`,
   `test_bd_deps_guard.py`, `test_bd_dolt_push_guard.py`, `test_validate_sha40.py`,
   `test_validate_sha40_call_sites.py`, `test_precondition_guards.py`, `test_gate_lib.py`,
-  `test_shell_quote_split_lib.py`, `test_dep_churn_lib.py`, `test_workflow_concurrency.py` — tests for
+  `test_shell_quote_split_lib.py`, `test_dep_churn_lib.py`, `test_workflow_concurrency.py`,
+  `test_beads_passive_exports.py` — tests for
   the `scripts/*.sh` libraries the `/code`/`/land`/`/sweep` skills delegate reusable logic to (see
   above), plus the committed `PreToolUse` hook guards.
 - **`/sweep`, `/code`, `/epic-audit` skill plumbing** — `test_sweep_digest_id.py`,
@@ -157,11 +164,3 @@ The remaining ~130 files are ordinary tests, organized by what they cover:
 If a file isn't obviously covered by one of the groups above, its own module docstring is the
 authoritative one-line description — every test module in this directory carries one; that's the
 fastest way to confirm current coverage without re-deriving it from this file, which will drift.
-
-## Consolidation note
-
-Today, `src/lode/fence_parsing.py` is a shared helper already used by `scripts/docs_index_chunker.py`
-and `tests/conftest.py`'s `fence_scan`, but several of the Markdown/fence scanners listed above still
-carry their own private copies of similar parsing logic rather than importing it. Extracting a
-`tests/_fence_parsing.py`-style shared helper so those scanners import one implementation instead of
-duplicating it is tracked separately as `lode-s9xe.15` — out of scope for this file.
