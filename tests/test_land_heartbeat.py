@@ -21,6 +21,7 @@ mid-pass. That file, not an env var, is this script's only real input beyond
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -32,11 +33,21 @@ LAND_LOCK = REPO_ROOT / "scripts" / "land-lock.sh"
 
 
 def _init_repo(tmp_path: Path) -> Path:
+    """A throwaway git repo, seeded with a real copy of scripts/land-lock.sh
+    under its OWN scripts/ dir -- land-heartbeat.sh resolves it via
+    `$(git rev-parse --show-toplevel)/scripts/land-lock.sh`, i.e. relative to
+    whichever repo it's actually run from, exactly like every real SKILL.md
+    call site. Without this, `_run()` below would exercise land-heartbeat.sh
+    reaching for THIS repo's land-lock.sh from inside a throwaway repo that
+    doesn't have one at that path."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "trunk")
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "test")
+    (repo / "scripts").mkdir()
+    shutil.copy(LAND_LOCK, repo / "scripts" / "land-lock.sh")
+    (repo / "scripts" / "land-lock.sh").chmod(0o755)
     return repo
 
 
@@ -172,19 +183,24 @@ def test_release_propagates_land_locks_exit_status(tmp_path: Path) -> None:
     """Unlike the heartbeat path, --release propagates land-lock.sh's own
     status so a caller CAN notice a failed release, even though nothing is
     required to act on it (the script's own header is explicit about the
-    asymmetry)."""
+    asymmetry). land-lock.sh's `release <own-token>` exits 0 for ANY
+    syntactically valid (non-empty) token, even a mismatched one -- it only
+    refuses to touch someone else's record, silently, still exiting 0 (its
+    own header: "release always exits 0 when the argument was valid"). The
+    one real non-zero release outcome is a MACHINE FAULT -- an unwritable
+    git dir -- so that's what this exercises, the same technique
+    test_land_lock.py's own write-failure test uses."""
     repo = _init_repo(tmp_path)
     _acquire_and_write_token(repo)
-    # Corrupt the token on disk so land-lock.sh's ownership check refuses
-    # the release outright (a real, verifiable non-zero exit to propagate).
-    _token_path(repo).write_text("not-the-real-owner-token")
-
-    result = _run("--release", repo=repo)
+    git_dir = repo / ".git"
+    original_mode = git_dir.stat().st_mode
+    git_dir.chmod(0o500)  # readable + traversable, not writable
+    try:
+        result = _run("--release", repo=repo)
+    finally:
+        git_dir.chmod(original_mode)  # or tmp_path teardown fails
 
     assert result.returncode != 0, result.stdout + result.stderr
-    # The lock is untouched -- land-lock.sh refused rather than releasing
-    # someone else's record.
-    assert _lock_path(repo).exists()
 
 
 def test_release_with_no_token_file_warns_and_exits_0_leaving_the_lock_held(
