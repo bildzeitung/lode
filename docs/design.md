@@ -22,6 +22,7 @@ mechanics live in focused companion docs:
 | [externals.md](externals.md) | External sources, snapshots, the knowledge graph, edges, link-rot immunity, privacy, hard delete |
 | [stack.md](stack.md) | The decided stack and the split-store rationale |
 | [configuration.md](configuration.md) | Every tunable knob and build constant, in one table |
+| [brand.md](brand.md) | The brand brief -- positioning, the name story, palette (with a terminal-safe subset), typography, voice, usage rules |
 | [decisions.md](decisions.md) | Open decisions, deferred but not forgotten |
 | [keybindings.md](keybindings.md) | The TUI's central keymap: which keys are taken, App- vs Screen-level altitude, the editable-TextArea non-printable-key rule |
 | [tui.md](tui.md) | TUI layout conventions -- what every screen's middle panel needs so it never renders past the docked Footer |
