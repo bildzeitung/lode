@@ -5077,11 +5077,15 @@ entries below from being rewritten to chase the current tree.)
      `AGENTS.md` as "generic beads-generated quick-reference prose, not an automated call site" —
      a judgment that presupposes the file still exists. Dropping it would require rewriting three
      other docs' cross-references, not just this one.
-  3. **`scripts/check_links.py` already treats it as a first-class markdown source**
-     (`skip_fences` is enabled for it alongside `README.md`), so the harness-export precedent's own
-     coupling — its `8b444b9` commit had to touch `check_links.py` (`README.md`, `install.sh`
-     besides) — does not apply here as "add a reference," only as "the file already has one and
-     must keep having one."
+  3. **The link gate the ticket warned about turns out not to be coupled at all.** The ticket's
+     acceptance criteria singled out `scripts/check_links.py`, because harness-export's `8b444b9`
+     had to touch it (alongside `README.md` and `install.sh`). Verified against this tree: lode's
+     `check_links.py` names no file — it scans whatever `git ls-files` returns, and turns
+     `skip_fences` on by suffix (`source.suffix == ".md"`), so `AGENTS.md` is covered generically,
+     by being a tracked `.md`, not by an enumeration. A delete would therefore have needed **zero**
+     scanner edit here; the precedent's coupling does not transfer. Recorded because the ticket
+     asserted otherwise, and a future fold-and-delete should not go hunting for a call site that
+     does not exist.
   4. **The one section of `AGENTS.md` genuinely absent from `CLAUDE.md`** — "Non-Interactive Shell
      Commands" (avoiding `cp`/`mv`/`rm`/`scp`/`ssh`/`apt-get`/`brew` hangs on aliased `-i` flags) —
      is generically useful and not in scope for this decision to duplicate; it stays where it is.
