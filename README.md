@@ -19,6 +19,29 @@ $ lode add
 $ lode ask "what did we decide about auth?"
 ```
 
+## Install
+
+lode does not publish to PyPI, so **`pip install lode` installs a different, unrelated project** —
+see [`docs/release.md`](docs/release.md#non-goals). Two install paths actually work:
+
+**From a release (no clone needed).** Download the wheel from the
+[GitHub releases page](https://github.com/bildzeitung/lode/releases/latest) and install it directly:
+
+```bash
+pip install lode-*.whl   # the wheel attached to the release you downloaded
+```
+
+**From source (for contributing or tracking `trunk`).** See
+[`docs/onboarding.md`](docs/onboarding.md) for the full walkthrough (venv, beads issue database,
+quality gates); the short version:
+
+```bash
+git clone https://github.com/bildzeitung/lode.git
+cd lode
+./scripts/python-init.sh
+. ./venv/bin/activate
+```
+
 ## The idea in one breath
 
 Capture is cheap and frequent; retrieval is rare and valuable. The whole point of the AI is to
