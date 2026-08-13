@@ -21,14 +21,37 @@
 # Exit codes: always 0 on the heartbeat path -- lock bookkeeping must never stop
 # a pass that is otherwise fine. --release propagates land-lock.sh's own status
 # so a caller can report a failed release, but no caller is required to act.
+# The ONE exception is exit 2, a usage error: same reservation land-lock.sh
+# makes, for the same reason. A mistyped flag (`--relase`) must not quietly
+# degrade a release into a heartbeat -- that leaves the lock held for the whole
+# staleness window while the caller's exit status says everything went fine.
 set -u
 
-MODE="heartbeat"
-[ "${1:-}" = "--release" ] && MODE="release"
+case "$#:${1:-}" in
+  0:) MODE="heartbeat" ;;
+  1:--release) MODE="release" ;;
+  *)
+    echo "usage: $0 [--release]" >&2
+    exit 2
+    ;;
+esac
 
-TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || TOP=""
+# Sibling resolution is `$(dirname "$0")`, the same idiom scripts/land-merge-one.sh
+# uses for every script it shells out to -- NOT a repo-graph lookup. The upstream
+# template reached for `git rev-parse --show-toplevel` here; going through the repo
+# graph to find a file that is literally next to this one buys nothing, and it
+# forced every test to plant a copy of land-lock.sh inside its throwaway repo.
+LAND_LOCK="$(dirname "$0")/land-lock.sh"
+
+# `--git-dir`, NOT land-lock.sh's `--path-format=absolute --git-common-dir`. That
+# divergence is DELIBERATE and must stay paired: SKILL.md WRITES the token file at
+# the `--git-dir` path, so the reader has to look where the writer put it. The two
+# resolve identically in the main checkout, which is the only place /land runs
+# (scripts/assert-main-checkout.sh). Harmonizing the pair onto --git-common-dir is
+# follow-up work and must move the writer and this reader together -- changing one
+# alone silently orphans the token.
 GITDIR="$(git rev-parse --git-dir 2>/dev/null)" || GITDIR=""
-if [ -z "$TOP" ] || [ -z "$GITDIR" ]; then
+if [ -z "$GITDIR" ]; then
   echo "land-heartbeat: WARNING -- not inside a git repository; no $MODE performed" >&2
   exit 0
 fi
@@ -50,8 +73,8 @@ if [ -z "$TOKEN" ]; then
 fi
 
 if [ "$MODE" = "release" ]; then
-  exec "$TOP/scripts/land-lock.sh" release "$TOKEN"
+  exec "$LAND_LOCK" release "$TOKEN"
 fi
 
-"$TOP/scripts/land-lock.sh" heartbeat "$TOKEN" || true
+"$LAND_LOCK" heartbeat "$TOKEN" || true
 exit 0

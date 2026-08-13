@@ -21,7 +21,6 @@ mid-pass. That file, not an env var, is this script's only real input beyond
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -33,21 +32,16 @@ LAND_LOCK = REPO_ROOT / "scripts" / "land-lock.sh"
 
 
 def _init_repo(tmp_path: Path) -> Path:
-    """A throwaway git repo, seeded with a real copy of scripts/land-lock.sh
-    under its OWN scripts/ dir -- land-heartbeat.sh resolves it via
-    `$(git rev-parse --show-toplevel)/scripts/land-lock.sh`, i.e. relative to
-    whichever repo it's actually run from, exactly like every real SKILL.md
-    call site. Without this, `_run()` below would exercise land-heartbeat.sh
-    reaching for THIS repo's land-lock.sh from inside a throwaway repo that
-    doesn't have one at that path."""
+    """A throwaway git repo for the lock to live in.
+
+    No copy of `land-lock.sh` is planted here: `land-heartbeat.sh` resolves its
+    sibling as `$(dirname "$0")/land-lock.sh`, so it always runs THIS repo's
+    real script -- while `land-lock.sh` itself resolves the lock from the
+    CWD's git dir, which is this throwaway repo. Script under test: real.
+    Lock and token state: disposable."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "trunk")
-    _git(repo, "config", "user.email", "test@example.com")
-    _git(repo, "config", "user.name", "test")
-    (repo / "scripts").mkdir()
-    shutil.copy(LAND_LOCK, repo / "scripts" / "land-lock.sh")
-    (repo / "scripts" / "land-lock.sh").chmod(0o755)
     return repo
 
 
@@ -218,6 +212,23 @@ def test_release_with_no_token_file_warns_and_exits_0_leaving_the_lock_held(
     assert result.returncode == 0, result.stdout + result.stderr
     assert "land-lock ownership check is DISABLED" in result.stderr
     assert "stays held until it ages out" in result.stderr
+    assert _lock_path(repo).exists()
+
+
+def test_a_mistyped_flag_is_a_usage_error_not_a_silent_heartbeat(
+    tmp_path: Path,
+) -> None:
+    """A near-miss of `--release` must NOT degrade into a heartbeat: that
+    would leave the lock held for the whole staleness window while handing
+    the caller a 0 exit saying the release succeeded. Exit 2 is the same
+    caller-bug reservation land-lock.sh makes for its own argv shapes."""
+    repo = _init_repo(tmp_path)
+    _acquire_and_write_token(repo)
+
+    result = _run("--relase", repo=repo)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "usage:" in result.stderr
     assert _lock_path(repo).exists()
 
 
