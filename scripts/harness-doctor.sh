@@ -12,6 +12,12 @@
 #
 # Exit codes: 0 = everything required is present; 1 = at least one REQUIRED check
 # failed; 2 = could not run (not in a git repo). Warnings never change the exit code.
+#
+# Deliberately does NOT source scripts/gate-lib.sh (lode-pcee expects the reason
+# stated): this is a human-facing preflight, not a pipeline gate. Nothing consumes
+# its exit code, so the `GATE COULD NOT RUN:` banner and the --no-advisory sentinel
+# would be addressed to a caller that does not exist. The 0/1/2 numbering matches
+# the gate contract on purpose, so the two never mean opposite things.
 set -u
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
@@ -38,18 +44,26 @@ for tool in git jq bd python3; do
   fi
 done
 # Docker gates only the diagram validator, so its absence is a warning, not a failure:
-# a project with no diagrams never invokes it.
-if command -v docker >/dev/null 2>&1; then
-  ok "docker on PATH (diagram validation available)"
+# a project with no diagrams never invokes it. Probe with `docker info`, not
+# `command -v docker` -- scripts/validate-mermaid.sh already measured that a Docker
+# Desktop / WSL shim satisfies the PATH check while every container run fails, which
+# on this repo's own environment would print "available" for the one docker failure
+# mode we have actually hit.
+if docker info >/dev/null 2>&1; then
+  ok "docker responds (diagram validation available)"
 else
-  warn "docker not on PATH -- scripts/validate-mermaid.sh will exit 2 (gate could not run)"
+  warn "docker not usable -- scripts/validate-mermaid.sh will exit 2 (gate could not run)"
 fi
 
 echo
 echo "guard scripts"
-# Every script an agent or skill invokes by path. A missing one is a BOOTSTRAP GAP:
-# the agents are written to stop rather than proceed unguarded, so the pipeline
-# halts loudly -- but it halts, which is worth catching here instead of mid-pass.
+# Every script an agent or skill invokes by path, plus every script the
+# .claude/settings.json hooks shell out to. Two different failure shapes, and the
+# second is why this list is not just the agent-facing ones: a missing agent-facing
+# guard is a BOOTSTRAP GAP that halts the pipeline loudly, but the PreToolUse hook
+# wrappers are written as `[ -x "$SCRIPT" ] && bash "$SCRIPT"`, so a missing hook
+# script FAILS OPEN -- the guard silently stops guarding and nothing anywhere says
+# so. That one is invisible without a check like this.
 required_scripts="
 scripts/isolation-guard.sh
 scripts/recycled-worktree-guard.sh
@@ -69,6 +83,16 @@ scripts/sweep-digest-id.sh
 scripts/code-concurrency-cap.sh
 scripts/bd-dolt-push.sh
 scripts/python-init.sh
+scripts/validate-mermaid.sh
+scripts/check-decisions-no-silent-rewrite.sh
+scripts/gh-write-guard.sh
+scripts/sha-fabrication-guard.sh
+scripts/trunk-write-guard.sh
+scripts/bd-deps-blocks-guard.sh
+scripts/discard-beads-passive-export-churn.sh
+scripts/release.sh
+scripts/release-latest-tag.sh
+scripts/release-bump.sh
 "
 for s in $required_scripts; do
   if [ ! -f "$s" ]; then
@@ -120,10 +144,20 @@ if [ -d .beads ]; then
     # THE invariant. With auto-import on, a pull or merge replays a stale committed
     # export back into Dolt and silently reverts recent closes. beads accepts either
     # a dotted single-line key ("import.auto: false") or a nested block ("import:"
-    # then an indented "auto: false") -- check both forms.
-    if grep -qE '^[[:space:]]*import\.auto:[[:space:]]*false' .beads/config.yaml \
-       || { grep -qE '^[[:space:]]*import:' .beads/config.yaml \
-            && grep -qE '^[[:space:]]*auto:[[:space:]]*false' .beads/config.yaml; }; then
+    # then an indented "auto: false"), so both forms must be read -- but the nested
+    # one has to be BLOCK-SCOPED. Two independent greps ("is there an import: block"
+    # AND "is there an auto: false anywhere") report ok on a config that sets
+    # import.auto TRUE and some other block's auto to false, which is a silent false
+    # ALL-CLEAR on the one invariant this check exists to protect. So parse the
+    # effective value instead of pattern-matching for reassurance.
+    auto="$(awk '
+      /^[ \t]*#/ { next }
+      /^import\.auto:/ { print $2; exit }
+      /^import:[ \t]*$/ { inblk = 1; next }
+      inblk && /^[ \t]+auto:/ { print $2; exit }
+      inblk && /^[^ \t]/ { inblk = 0 }
+    ' .beads/config.yaml)"
+    if [ "$auto" = "false" ]; then
       ok "import.auto is false (Dolt stays authoritative)"
     else
       bad ".beads/config.yaml does not set import.auto: false -- a pull can silently revert closes"
@@ -151,9 +185,9 @@ fi
 
 echo
 echo "gate tests"
-if [ -d tests ] && ls tests/test_*.py >/dev/null 2>&1; then
-  n="$(ls tests/test_*.py | wc -l | tr -d ' ')"
-  ok "tests/ present ($n gate test modules) -- run: ./venv/bin/pytest tests -q"
+set -- tests/test_*.py
+if [ -e "$1" ]; then
+  ok "tests/ present ($# gate test modules) -- run: ./venv/bin/pytest tests -q"
 else
   # Not a hard failure: a project may deliberately drop them. But say so loudly,
   # because without them every mechanism below is prose-enforced only.

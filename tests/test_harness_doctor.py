@@ -19,34 +19,32 @@ one check in the script would turn the corresponding test here red.
 
 from __future__ import annotations
 
+import re
+import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 from _gitrepo import _git
+from _hookharness import SETTINGS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "harness-doctor.sh"
 
-REQUIRED_SCRIPTS = [
-    "scripts/isolation-guard.sh",
-    "scripts/recycled-worktree-guard.sh",
-    "scripts/assert-main-checkout.sh",
-    "scripts/land-lock.sh",
-    "scripts/land-merge-one.sh",
-    "scripts/land-state-load.sh",
-    "scripts/merge-precheck.sh",
-    "scripts/validate-sha40.sh",
-    "scripts/worktree-gc-classify.sh",
-    "scripts/worktree-lock-stale.sh",
-    "scripts/blocks-dependents.sh",
-    "scripts/epic-children-closed.sh",
-    "scripts/epic-completion-check.sh",
-    "scripts/epic-debate-gate.sh",
-    "scripts/sweep-digest-id.sh",
-    "scripts/code-concurrency-cap.sh",
-    "scripts/bd-dolt-push.sh",
-    "scripts/python-init.sh",
-]
+
+def _required_scripts() -> list[str]:
+    """The required-script list as the script itself declares it.
+
+    Derived, not mirrored: a hand-copied list here would need its own
+    anti-drift test, and the only drift it could uniquely catch is the
+    harmless direction (an extra entry, which is inert in the fake repo).
+    """
+    parts = SCRIPT.read_text().split('required_scripts="', 1)
+    assert len(parts) == 2, 'harness-doctor.sh no longer declares required_scripts="'
+    return parts[1].split('"', 1)[0].split()
+
+
+REQUIRED_SCRIPTS = _required_scripts()
 REQUIRED_AGENTS = ["coding", "code-reviewer", "land-review"]
 REQUIRED_SKILLS = ["code", "land", "challenge", "epic-audit", "sweep", "release"]
 
@@ -66,9 +64,10 @@ def _build_healthy_repo(tmp_path: Path) -> Path:
     """A minimal repo that passes every REQUIRED check (warnings are fine)."""
     repo = tmp_path / "repo"
     repo.mkdir()
+    # `git init` only -- no commit. The doctor reads no history, index, or tree
+    # (just `git rev-parse --show-toplevel` and `git worktree list`), so building
+    # one would be ~30% of this module's runtime for zero coverage.
     _git(repo, "init", "-q", "-b", "trunk")
-    _git(repo, "config", "user.email", "test@example.com")
-    _git(repo, "config", "user.name", "test")
 
     for rel in REQUIRED_SCRIPTS:
         p = repo / rel
@@ -98,12 +97,7 @@ def _build_healthy_repo(tmp_path: Path) -> Path:
     tests_dir.mkdir(parents=True, exist_ok=True)
     (tests_dir / "test_stub.py").write_text("def test_x():\n    assert True\n")
 
-    gitignore = repo / ".gitignore"
-    gitignore.write_text("venv/\n.nox/\n")
-
-    (repo / "f.txt").write_text("base\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "base")
+    (repo / ".gitignore").write_text("venv/\n.nox/\n")
     return repo
 
 
@@ -193,33 +187,71 @@ def test_no_hooks_fails(tmp_path: Path) -> None:
 
 def test_missing_beads_dir_fails(tmp_path: Path) -> None:
     repo = _build_healthy_repo(tmp_path)
-    import shutil
-
     shutil.rmtree(repo / ".beads")
     result = _run(repo)
     assert result.returncode == 1, result.stdout + result.stderr
     assert ".beads/ missing" in result.stdout
 
 
-def test_import_auto_true_fails(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("case", "config", "auto_is_false"),
+    [
+        # beads accepts a dotted single-line key and a nested block; both count.
+        ("dotted false", "import.auto: false\n", True),
+        ("nested false", "import:\n  auto: false\n", True),
+        ("dotted true", "import.auto: true\n", False),
+        # A false ALL-CLEAR on THE invariant is worse than no check at all. The
+        # nested form must be read BLOCK-SCOPED: asking "is there an `import:`
+        # block" and "is there an `auto: false` anywhere" as two independent
+        # questions reports ok on this config, whose import.auto is TRUE.
+        (
+            "nested true, masked by export",
+            "import:\n  auto: true\nexport:\n  auto: false\n",
+            False,
+        ),
+        ("commented out", "# import.auto: false\n", False),
+    ],
+)
+def test_import_auto_invariant(
+    tmp_path: Path, case: str, config: str, auto_is_false: bool
+) -> None:
     repo = _build_healthy_repo(tmp_path)
-    (repo / ".beads" / "config.yaml").write_text(
-        'issue-prefix: "lode"\nimport.auto: true\n'
-    )
+    (repo / ".beads" / "config.yaml").write_text(f'issue-prefix: "lode"\n{config}')
     result = _run(repo)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "does not set import.auto: false" in result.stdout
+    detail = f"{case}: " + result.stdout + result.stderr
+    if auto_is_false:
+        assert result.returncode == 0, detail
+        assert "import.auto is false" in result.stdout, detail
+    else:
+        assert result.returncode == 1, detail
+        assert "does not set import.auto: false" in result.stdout, detail
 
 
-def test_import_auto_false_nested_form_passes(tmp_path: Path) -> None:
-    """beads also accepts a nested block form -- both must be recognized."""
-    repo = _build_healthy_repo(tmp_path)
-    (repo / ".beads" / "config.yaml").write_text(
-        'issue-prefix: "lode"\nimport:\n  auto: false\n'
+def test_every_script_the_harness_invokes_by_path_is_checked() -> None:
+    """The doctor's list must keep matching its own stated criterion.
+
+    Both declaration sources are derived, never mirrored -- and both are
+    declarations of INTENT, not the filesystem, so this stays a real check
+    rather than the tautology that globbing `scripts/` would be.
+
+    The hook half is the sharper one: the PreToolUse wrappers are written
+    `[ -x "$SCRIPT" ] && bash "$SCRIPT"`, so a deleted guard FAILS OPEN --
+    it silently stops guarding and nothing else in the harness notices. The
+    agent/skill half is what caught `scripts/release.sh` and its two
+    siblings missing from the first draft of the list.
+    """
+    sources = [SETTINGS, *sorted(REPO_ROOT.glob(".claude/skills/*/SKILL.md"))]
+    sources += sorted(REPO_ROOT.glob(".claude/agents/*.md"))
+    referenced: set[str] = set()
+    for path in sources:
+        referenced |= set(re.findall(r"scripts/[A-Za-z0-9._-]+\.sh", path.read_text()))
+    missing = sorted(referenced - set(REQUIRED_SCRIPTS))
+    assert not missing, (
+        f"scripts referenced by the harness but not checked by harness-doctor: "
+        f"{missing}. Add them to required_scripts in {SCRIPT.name}, or -- if a "
+        f"reference is a mention rather than an invocation -- exempt it here with "
+        f"a stated reason."
     )
-    result = _run(repo)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "import.auto is false" in result.stdout
 
 
 def test_issue_prefix_with_double_hyphen_fails(tmp_path: Path) -> None:
