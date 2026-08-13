@@ -53,8 +53,13 @@ Two constraints, in tension, both real:
 2. The docs site, README badges, and any SVG mark render on the web, where hex is the only honest
    unit.
 
-So the palette below is stated **both ways** for every colour: a hex anchor for the web, and its
-nearest terminal-safe equivalent for the TUI. "Terminal-safe" here means the **256-colour xterm
+So the palette below is stated **both ways** for every colour: a hex anchor for the web, and a
+designated terminal-safe counterpart for the TUI. The counterpart is a judgment call, not a
+mechanical nearest-neighbour computation — `slate_blue3` happens to be the closest 256-colour entry
+to `#5A4FCF`, but `dark_goldenrod` is deliberately *not* the closest to `#C08A3E` (that would be
+`light_salmon3`, which reads pink rather than metallic). Where the two disagree, the named
+256-colour value is what a terminal surface uses; do not "correct" it toward the hex.
+"Terminal-safe" here means the **256-colour xterm
 palette** (`\e[38;5;Nm`), not the 16-colour ANSI set — the lesson already learned and recorded in
 `src/lode/tui/screens/_markdown_area.py` (`lode-lab1`, retuned `lode-dmbc`): ANSI indices 0–15 are
 *remapped by the user's own terminal theme*, so a colour picked there can land anywhere (the
@@ -87,9 +92,15 @@ consistently across terminals without requiring truecolor.
 Only **primary** and **accent** are brand colours the TUI palette may use, and only as 256-colour
 names, never hex, never ANSI 0–15. **Ink and paper are web-only** — the TUI never sets an explicit
 foreground/background colour derived from this palette at all; it inherits the user's terminal
-theme, exactly as `lode.cli.CLI_STYLES` and `NOTE_BODY_THEME` already do (both are semantic style
-names — `note_id`, `warn`, `text.literal` — resolved to 256-colour values, never a literal hex or
-an assumption about what's "dark" or "light"). This brief does not introduce a third palette
+theme. The rule above binds new brand-coloured surfaces only — neither existing styling surface is
+a precedent for it, and this brief does not retroactively bind them. `lode.cli.CLI_STYLES` maps its
+semantic names (`note_id`, `warn`, `danger`) onto *ANSI* colours — `cyan`, `yellow`, `bold red` —
+deliberately, because CLI status colour *should* follow whatever the user's terminal theme makes of
+those names; only `NOTE_BODY_THEME` moved into the 256-colour range (the lesson above), a syntax
+palette needing a predictable intensity. And `docs/decisions.md` records the current note-body
+values as chosen for a **dark** terminal, so lode is not today free of every light/dark assumption
+— that gap is `lode-5zxt`, not something this brief closes.
+This brief does not introduce a third palette
 mechanism; a future TUI surface that wants the brand's primary or accent reaches for
 `slate_blue3` / `dark_goldenrod` by name, through whichever of the two existing mechanisms
 (`CLI_STYLES` for CLI/rich, a `TextAreaTheme`-style dict for Textual widgets) fits the surface —
