@@ -5101,3 +5101,63 @@ entries below from being rewritten to chase the current tree.)
   `AGENTS.md`'s section is a one-line pointer at it. Reasons 1-3 and the **Decision** (keep
   `AGENTS.md`) are unaffected; only "the shell-command hygiene" item in the *Revisit if* clause no
   longer names content unique to `AGENTS.md`.
+
+- **2026-08-13 (lode-csxh) — DECISION: `/sweep` §1 excludes a dependency-blocked `human`-labeled
+  ticket from `$CURRENT`/the digest/the `PushNotification`; it is surfaced report-only instead
+  (§2c), and re-enters `$CURRENT` — notifying as NEW — the moment its blocking dependency
+  closes.** A `human`-labeled ticket is a sign-off placeholder for an artifact a build produces
+  (e.g. `lode-fhql.12`/`.13`/`.14`, each blocked on its own builder ticket). `bd human list`
+  ignores dependencies entirely, so before this decision such a placeholder sat in the digest for
+  the epic's whole lifetime and notified at *creation* time — well before the artifact it asks a
+  human to judge actually existed. Verified 2026-08-13: dependency links are real bd `blocks`
+  edges, and `bd blocked --json` returns exactly the blocked set (`lode-fhql.11`-`.14` all
+  appeared; `lode-fhql.1`, which has no open deps, correctly did not).
+  - **Mechanism:** `.claude/skills/sweep/SKILL.md` §1 captures `bd blocked --json`'s id set and
+    subtracts it from the `$HUMAN` rows before they are persisted to `$SWEEP_TMP/human` — `bd
+    human list --json` rows carry no dependency fields, so this has to be a second query and a
+    join, not a single-pass filter.
+  - **Constraint 1 — filter ONLY the `$HUMAN` source.** `$ESCALATED` (`land-escalated`) is never
+    filtered this way — escalations are not dependency-gated, and a `land-escalated` branch is
+    already actionable regardless of what else is open. `$CLOSABLE` (epics ready to close) is
+    unaffected for the same reason: an epic's closability is a `parent-child` child-completion
+    check, not a `blocks` dependency. Only `$HUMAN` sign-off placeholders are gated on an artifact
+    that doesn't exist yet.
+  - **Constraint 2 — no new silence.** The tickets `bd blocked` subtracts out of `$HUMAN` are
+    listed unconditionally, every pass, in a new report-only section — `.claude/skills/sweep/SKILL.md`
+    §2c, "Blocked human tickets" — on the exact same contract §2a (`deferred`) and §2b (stranded
+    `in_progress`) already establish for *rendering* — with two deliberate exceptions on the
+    *collection* half, both recorded at `.claude/skills/sweep/SKILL.md`'s shared-contract section:
+    §2c issues no query of its own (§1's single `bd blocked` call is its data, so the two halves
+    of the partition cannot disagree), and its failure is therefore not isolated to the section
+    (see Constraint 3). The rendering half it shares exactly: its own `$SWEEP_TMP` scratch file (`blocked_human`), the
+    `SWEEP-QUERY-ERROR` sentinel on a failed query, three-state (`missing`/`error`/`ok`) rendering
+    in §8, never dedup'd, never written into the digest, never part of the push. Rationale: a
+    human ticket blocked on a *deferred* dependency (parked indefinitely) would otherwise vanish
+    from every surface in the system for as long as the dependency stays parked — precisely the
+    silence `/sweep` exists to close, reintroduced one layer down by the fix meant to close it.
+  - **Constraint 3 — failure semantics.** A failed `bd blocked` query in §1 writes
+    `$SWEEP_TMP/source_query_failed` exactly like a failed `$ESCALATED`/`$HUMAN` query — it must
+    NOT be read as "nothing is blocked," which would let the whole blocked set flood `$CURRENT`
+    and false-notify every one of them as new the moment the query starts working again. This is
+    the same "a failed query is not an empty result" principle §5's hard precondition already
+    states for `$ESCALATED`/`$HUMAN`, extended to the new source. §2c's own report-only copy still
+    gets its own `SWEEP-QUERY-ERROR` sentinel per the §2a/§2b contract — the two failure signals
+    (suppress the rewrite; render the report row as errored) are deliberately separate mechanisms
+    answering different questions, not redundant.
+  - **Consequence, deliberate — notify-on-unblock:** when a blocking dependency closes, the
+    now-decidable ticket is no longer in `bd blocked`'s output, so it is no longer subtracted out
+    of `$HUMAN` — it enters `$CURRENT` for the *first* time (from `/sweep`'s perspective) on that
+    pass, `$NEW_IDS` picks it up, and it notifies as NEW. The sign-off push therefore arrives
+    exactly when the artifact it asks a human to judge exists, instead of at ticket-creation time
+    when there is nothing yet to look at. This is the whole point of the change, not an
+    accidental side effect of the subtraction.
+  - **Checked and found not applicable:** `bd blocked --json` (`bd blocked --help`) exposes no
+    `--limit` flag at all — there is nothing to pin `--limit 0` on, unlike every `bd list` call
+    this skill makes. `tests/test_bd_list_limit_gate.py`'s scan surface matches only a literal
+    `list` subcommand, so `bd blocked` sits outside it by construction, not by omission.
+  - **Implementation:** `.claude/skills/sweep/SKILL.md` §1 (the `bd blocked` query + the
+    `$HUMAN`/blocked-human partition), a new §2c (report-only, sharing the §2a/§2b contract —
+    that contract's heading and prose widened to cover three sections instead of two), the
+    Non-goals bullet list (a new bullet recording the exclude-but-never-hide behavior), and §8
+    (a `<blocked_human>` state var, a `## Blocked human tickets` report section, and a `blocked`
+    field on the one-line summary).

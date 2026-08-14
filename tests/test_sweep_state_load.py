@@ -139,7 +139,15 @@ def test_section_7_new_ids_existence_check_is_left_alone() -> None:
 
 
 @pytest.mark.parametrize(
-    ("var", "name"), [("DEFERRED", "deferred"), ("STRANDED", "stranded")]
+    ("var", "name"),
+    [
+        ("DEFERRED", "deferred"),
+        ("STRANDED", "stranded"),
+        # lode-csxh added a THIRD site on this exact shape. Its file is written by §1, not by a
+        # §2c block of its own, but the reason it must stay un-retrofitted is identical: a
+        # missing file has to remain a non-fatal `missing`, not abort §8's publish step.
+        ("BLOCKED_HUMAN", "blocked_human"),
+    ],
 )
 def test_section_8_load_is_deliberately_not_retrofitted(var: str, name: str) -> None:
     site = _section_8_block()
@@ -156,7 +164,7 @@ def test_section_8_load_is_deliberately_not_retrofitted(var: str, name: str) -> 
     )
 
 
-@pytest.mark.parametrize("name", ["deferred", "stranded"])
+@pytest.mark.parametrize("name", ["deferred", "stranded", "blocked_human"])
 def test_section_8_load_carries_its_own_note(name: str) -> None:
     """Acceptance criterion (lode-3oik) is per-SITE: each un-retrofitted read
     carries its own note, not one shared note covering both. Pinned as an exact

@@ -1,6 +1,6 @@
 ---
 name: sweep
-description: The third `/loop` leg — a SURFACE-ONLY human-decision surfacer. Scans bd for work that has stopped waiting on a human and nothing else consumes (`land-escalated` branches, `human`-labeled decision tickets, epics ready for a human close-decision), dedups against a durable cross-machine digest issue, and surfaces new items; also lists every `deferred`-status ticket (§2a) and every `in_progress` ticket claimed more than 24h ago that carries no pipeline label (§2b) in its report each pass (read-only, no dedup, never in the digest) so parked and stranded work stays visible. Writes no `trunk`, makes no decisions, dispatches no builders/landers/auditors. Run self-paced as `/loop 30m /sweep`. Examples — "/sweep", "/loop 30m /sweep", "what needs a human decision right now?", "sweep the human-decision queue".
+description: The third `/loop` leg — a SURFACE-ONLY human-decision surfacer. Scans bd for work that has stopped waiting on a human and nothing else consumes (`land-escalated` branches, `human`-labeled decision tickets that are not dependency-blocked, epics ready for a human close-decision), dedups against a durable cross-machine digest issue, and surfaces new items; also lists every `deferred`-status ticket (§2a), every `in_progress` ticket claimed more than 24h ago that carries no pipeline label (§2b), and every dependency-blocked `human`-labeled ticket (§2c) in its report each pass (read-only, no dedup, never in the digest) so parked, stranded, and not-yet-decidable work stays visible. Writes no `trunk`, makes no decisions, dispatches no builders/landers/auditors. Run self-paced as `/loop 30m /sweep`. Examples — "/sweep", "/loop 30m /sweep", "what needs a human decision right now?", "sweep the human-decision queue".
 ---
 
 # sweep
@@ -14,11 +14,14 @@ human when work parks on one of these — you only find it by manually running `
 silence into an active surface.
 
 I also list every `deferred`-status ticket in my report each pass (§2a) — parked work that
-`bd ready` hides by design and no other loop leg surfaces — and every `in_progress` ticket claimed
+`bd ready` hides by design and no other loop leg surfaces — every `in_progress` ticket claimed
 more than 24h ago (§2b's age discriminator, below) that carries none of the pipeline labels — claimed
 work that fell out of every consumer's sight (`bd ready` excludes it because it's `in_progress`;
-every pipeline leg keys on a label it doesn't have). Both are
-report-only: no dedup state, no digest rewrite, no notification.
+every pipeline leg keys on a label it doesn't have) — and every open `human`-labeled ticket that is
+currently dependency-blocked (§2c) — a sign-off placeholder whose artifact does not exist yet, so it
+is not decidable and is subtracted from §1's `$HUMAN` source before it can reach `$CURRENT`/the
+digest/the push (lode-csxh). All three are report-only: no dedup state, no digest rewrite, no
+notification.
 
 I am the **lowest-privilege** loop leg, deliberately: I write **one** self-owned bookkeeping issue
 (a running digest) and nothing else. The full design record — why this exists, what was challenged,
@@ -62,6 +65,13 @@ complete rarely, so a slow tick is fine), or invoked ad hoc as bare `/sweep`.
   is recorded alongside lode-o7ai in [docs/decisions.md](../../../docs/decisions.md) (lode-ppki).
 - **Never auto-remediates a stranded ticket.** §2b does not unclaim, reassign, or reopen anything —
   surface only. A human decides whether a stranded ticket is abandoned or deliberately held.
+- **Never lets a dependency-blocked `human` ticket sit in `$CURRENT`/the digest/the push, and never
+  drops it from view either.** §1 subtracts `bd blocked`'s id set from `$HUMAN` — a sign-off
+  placeholder for an artifact that doesn't exist yet is not decidable — but the subtracted rows are
+  still listed, unconditionally, every pass, in §2c's report-only "Blocked human tickets" section.
+  When the blocking dependency closes, the ticket enters `$CURRENT` for the first time and notifies
+  as NEW — deliberate, not a side effect. Full rationale: lode-csxh in
+  [docs/decisions.md](../../../docs/decisions.md).
 
 ## 0. Setup — Dolt-authoritative, fresh scratch state
 
@@ -82,7 +92,8 @@ rm -rf "$SWEEP_TMP" && mkdir -p "$SWEEP_TMP"
 
 ## 1. Collect the human-decision queue
 
-Two sources, per the epic's decided scope. I defensively exclude my own digest issue from the
+Two sources, per the epic's decided scope, plus a `bd blocked` subtraction on the `human` source
+(lode-csxh) — see the note below the block. I defensively exclude my own digest issue from the
 `land-escalated` query (it should never carry that label, but cheap insurance costs nothing):
 
 ```bash
@@ -103,12 +114,52 @@ if ! ESCALATED=$(bd list --label land-escalated --exclude-label sweep-digest --l
 fi
 printf '%s' "$ESCALATED" > "$SWEEP_TMP/escalated"
 
-if ! HUMAN=$(bd human list --status open --json \
+if ! HUMAN_RAW=$(bd human list --status open --json \
   | jq -r '(. // []) | .[] | "\(.id)\thuman\t\(.title)"'); then
   touch "$SWEEP_TMP/source_query_failed"
-  HUMAN=""
+  HUMAN_RAW=""
 fi
-printf '%s' "$HUMAN" > "$SWEEP_TMP/human"
+
+# lode-csxh: a human-labeled ticket that is dependency-blocked is not decidable -- the
+# artifact it signs off on does not exist yet -- so subtract `bd blocked`'s id set from
+# $HUMAN before it can reach $CURRENT/the digest/PushNotification. $ESCALATED/$CLOSABLE are
+# never filtered this way -- this is a $HUMAN-only subtraction. `bd blocked` has no --limit
+# flag to pin (checked -- it is a distinct subcommand from `bd list`, outside
+# tests/test_bd_list_limit_gate.py's `bd list`-only scan surface).
+# Pre-truncate BOTH outputs, unconditionally: awk never opens an output file it writes zero
+# rows to, so without these an empty list would leave NO file and §8 would read `missing`
+# ("§1 never ran") instead of `ok`/`(none)` ("§1 ran, nothing to report"). These lines are
+# load-bearing for that three-state distinction -- do not drop them in favour of awk's own
+# redirection.
+: > "$SWEEP_TMP/human"
+: > "$SWEEP_TMP/blocked_human"
+
+# The query and the partition it feeds are ONE branch deliberately: the failure path has to
+# write both files itself, so splitting them would mean re-testing a flag 20 lines below the
+# branch that set it.
+#
+# Partition $HUMAN_RAW on membership in $BLOCKED_IDS: the non-blocked rows become the real
+# $HUMAN source (unchanged shape, `<id>\thuman\t<title>`); the blocked-out rows are persisted
+# separately for §2c's report-only "Blocked human tickets" section, which shares the §2a/§2b
+# contract (own scratch file, own sentinel -- see that section below).
+if ! BLOCKED_IDS=$(bd blocked --json | jq -r '(. // []) | .[] | .id'); then
+  # Same marker as the two queries above: a failed `bd blocked` must NOT be read as "nothing
+  # is blocked" -- that would let the whole blocked set flood $CURRENT and false-notify it as
+  # new. It suppresses the §6 rewrite exactly like an $ESCALATED/$HUMAN failure.
+  touch "$SWEEP_TMP/source_query_failed"
+  # The partition itself is meaningless now (we don't know the true blocked set), so $HUMAN is
+  # left unfiltered -- harmless, since the marker above already suppresses §6/§7 for this whole
+  # pass -- and §2c's own copy gets the SWEEP-QUERY-ERROR sentinel per its contract.
+  printf '%s' "SWEEP-QUERY-ERROR" > "$SWEEP_TMP/blocked_human"
+  printf '%s' "$HUMAN_RAW" > "$SWEEP_TMP/human"
+else
+  awk -F'\t' -v human_out="$SWEEP_TMP/human" -v blocked_out="$SWEEP_TMP/blocked_human" '
+    NR == FNR { if ($1 != "") blocked[$1] = 1; next }
+    $1 == "" { next }
+    ($1 in blocked) { print $1 "\t" $3 >> blocked_out; next }
+    { print $1 "\t" $2 "\t" $3 >> human_out }
+  ' <(printf '%s\n' "$BLOCKED_IDS") <(printf '%s\n' "$HUMAN_RAW")
+fi
 ```
 
 **`set -o pipefail` is what makes those `if !` guards mean anything** — without it a failing `bd`
@@ -156,6 +207,19 @@ extra `bd` call (the same derivable-state principle §2's `title` comment below 
 never needs it — that query already filters to `--status open`, so a `human`-labeled row can never
 be `deferred` in the first place. Rationale: lode-o7ai in
 [docs/decisions.md](../../../docs/decisions.md).
+
+**Why `$HUMAN` is subtracted against `bd blocked` before it becomes the real `$HUMAN` source
+(lode-csxh):** a `human`-labeled ticket that is dependency-blocked is a sign-off placeholder for an
+artifact that does not exist yet — it is not decidable, so it must not sit in `$CURRENT`, the
+digest, or the push. `bd human list --json` carries no dependency fields, so the filter is a
+subtraction against `bd blocked --json`'s id set, done once here, never touching `$ESCALATED` or
+`$CLOSABLE`. The subtracted-out rows are never dropped from view — they are persisted to their own
+report-only §2c section below, so a human ticket blocked on a deferred dependency does not vanish
+from every surface indefinitely. A failed `bd blocked` query is treated exactly like a failed
+`$ESCALATED`/`$HUMAN` query — it writes `source_query_failed` and suppresses §6/§7 for this pass,
+never "nothing is blocked" (which would flood `$CURRENT` with the whole blocked set and false-notify
+it as new). Full rationale, the three load-bearing constraints, and the deliberate
+notify-on-unblock consequence: lode-csxh in [docs/decisions.md](../../../docs/decisions.md).
 
 ## 2. Collect epics ready for a human close-decision
 
@@ -210,14 +274,21 @@ status, before the loop ever starts, is what actually surfaces the failure.
 
 `--limit 0` for the same reason as §1 — same `$CURRENT`, same wholesale §6 rewrite.
 
-## Report-only sections (§2a, §2b) — shared contract
+## Report-only sections (§2a, §2b, §2c) — shared contract
 
-§2a (`deferred` tickets) and §2b (stranded `in_progress` tickets) are two independent reads, each on
-its own track, that share one contract — stated once here rather than twice below. Each section
-keeps only its own query, its own persistence target, and its own section-specific reasoning.
+§2a (`deferred` tickets), §2b (stranded `in_progress` tickets), and §2c (dependency-blocked `human`
+tickets) are three independent reads that share one contract — stated once here rather than three
+times below. Each section keeps only its own persistence target and its own section-specific
+reasoning. §2c is the one exception to "independent **read**": its query is `bd blocked --json`,
+already run once in §1 (to compute the `$HUMAN` subtraction, lode-csxh) — §2c does not re-issue it,
+it only persists the blocked-out rows §1 already partitioned out. Everything else below — the
+sentinel and the three-state file contract, and the digest/notify exclusion — applies to §2c
+identically. `--limit 0` does not apply to §2c's own query: `bd blocked` exposes no `--limit` flag
+at all (checked directly against `bd blocked --help`), so there is nothing to pin — see §1's note.
 
 **The sentinel, and why it can't collide with a real row.** Each section persists its result to its
-own `$SWEEP_TMP` file (`$SWEEP_TMP/deferred` for §2a, `$SWEEP_TMP/stranded` for §2b) the same way §1
+own `$SWEEP_TMP` file (`$SWEEP_TMP/deferred` for §2a, `$SWEEP_TMP/stranded` for §2b,
+`$SWEEP_TMP/blocked_human` for §2c — written by §1, per that section's note) the same way §1
 persists `$ESCALATED`/`$HUMAN` — §8 (a later, separate Bash invocation) reads it back from disk
 rather than relying on the model's in-context memory of the block's output, which is not the
 mechanism §0 says this file uses. On a query error (`bd` or `jq`), the block overwrites the
@@ -257,16 +328,22 @@ literal `bd list` search. **But the roster is no longer what enforces this** —
 this list to stay current by itself. That test owns the scan surface and the exclusions; this
 paragraph is documentation for a human reader, and deliberately does not restate them.)
 
-**Deliberately excluded from everything else in this skill.** Neither `$DEFERRED` (§2a) nor
-`$STRANDED` (§2b) ever feeds `$CURRENT` (§3) — neither may enter `$CURRENT_IDS`/`$NEW_IDS` (§5),
-drive the digest rewrite/no-op decision, or trigger the §7 `PushNotification`. Neither is ever
-written into the digest body (§6), and neither carries **dedup state** of its own — each is
-recomputed fresh, in full, every pass, straight into the §8 report. (What a ticket entering or
-leaving each list *means* differs by section — see each section's own note below.)
+**Deliberately excluded from everything else in this skill.** None of `$DEFERRED` (§2a),
+`$STRANDED` (§2b), or the blocked-human rows (§2c) ever feed `$CURRENT` (§3) — none may enter
+`$CURRENT_IDS`/`$NEW_IDS` (§5), drive the digest rewrite/no-op decision, or trigger the §7
+`PushNotification`. None is ever written into the digest body (§6), and none carries **dedup
+state** of its own — each is recomputed fresh, in full, every pass, straight into the §8 report.
+(What a ticket entering or leaving each list *means* differs by section — see each section's own
+note below.) §2c is already excluded a layer earlier too: its rows are subtracted out of `$HUMAN`
+itself in §1, before `$HUMAN` ever reaches §3 — so unlike §2a/§2b, whose lists are independent of
+what does reach `$CURRENT`, §2c's list is the complement of what §1 lets through.
 
-If either section's query errors, the failure is isolated to that step alone: the block writes the
-sentinel instead of aborting, and the pass continues. §8 owns what that renders as — see its
-three-state rule, and [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
+If §2a's or §2b's query errors, the failure is isolated to that step alone: the block writes the
+sentinel instead of aborting, and the pass continues. §2c's failure mode is different — its query
+is §1's `bd blocked` call, so a failure there writes `source_query_failed` (§1) *and* the
+`SWEEP-QUERY-ERROR` sentinel into `$SWEEP_TMP/blocked_human`, both at once. §8 owns what each
+state renders as — see its three-state rule, and
+[Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
 
 ## 2a. Collect deferred tickets (report-only — never touches the digest or notify path)
 
@@ -291,7 +368,7 @@ printf '%s' "$DEFERRED" > "$SWEEP_TMP/deferred"
 
 The persistence/sentinel convention, the `(. // [])`/`@tsv` guards, the `--limit 0` stake, and what
 this section is deliberately excluded from are all stated once, for both this section and §2b, in
-[Report-only sections (§2a, §2b) — shared contract](#report-only-sections-2a-2b--shared-contract)
+[Report-only sections (§2a, §2b, §2c) — shared contract](#report-only-sections-2a-2b-2c--shared-contract)
 just above. A ticket moving into (or out of) `deferred` is not a new human-decision item.
 
 **The one deliberate overlap:** a ticket that is simultaneously `land-escalated` (§1) and `deferred`
@@ -344,7 +421,7 @@ printf '%s' "$STRANDED" > "$SWEEP_TMP/stranded"
 
 The persistence/sentinel convention, the `(. // [])`/`@tsv` guards, the `--limit 0` stake, and what
 this section is deliberately excluded from are all stated once, for both this section and §2a, in
-[Report-only sections (§2a, §2b) — shared contract](#report-only-sections-2a-2b--shared-contract)
+[Report-only sections (§2a, §2b, §2c) — shared contract](#report-only-sections-2a-2b-2c--shared-contract)
 above. A ticket becoming (or ceasing to be) stranded is not a new human-decision item — it is
 surfaced so a human notices it, not resolved by this skill.
 
@@ -375,6 +452,28 @@ scans every `--add-label`/`bd label add` site across `.claude/skills/*/SKILL.md`
 list doesn't cover — the same shape as `tests/test_bd_list_limit_gate.py` above. The test owns the
 scan surface and its exclusions; like the `--limit 0` paragraph above, this prose deliberately does
 not restate them.
+
+## 2c. Blocked human tickets (report-only — never touches the digest or notify path; DECIDED lode-csxh)
+
+A fifth, independent list, but not an independent **read**: its data is the `bd blocked --json` call
+§1 already made to subtract dependency-blocked ids out of `$HUMAN` (see §1's note above). §2c is
+just this pass's persistence of the rows §1 partitioned out — every open `human`-labeled ticket that
+is currently blocked on an unclosed `blocks` dependency, listed for visibility only, so it does not
+vanish from every workflow surface for the epic's whole lifetime the way it did before this ticket
+(e.g. `lode-fhql.12`/`.13`/`.14`, blocked on their builder tickets).
+
+§1 already wrote this section's file (`$SWEEP_TMP/blocked_human`, `<id>\t<title>` rows, or the
+`SWEEP-QUERY-ERROR` sentinel on a failed `bd blocked`) as part of partitioning `$HUMAN` — there is no
+separate fenced block here to run. The persistence/sentinel convention, the three-state file
+contract, and what this section is deliberately excluded from are all stated once, for this section
+and §2a/§2b both, in [Report-only sections (§2a, §2b, §2c) — shared
+contract](#report-only-sections-2a-2b-2c--shared-contract) above.
+
+A ticket entering or leaving this list is not itself a new human-decision item — but leaving it (its
+blocking dependency closes) is exactly what makes the ticket enter `$CURRENT` for the *first* time in
+§1/§3, which *does* trigger a fresh `PushNotification` on that later pass (§5/§7) — the sign-off push
+arrives exactly when the artifact it signs off on exists. That is the decided, deliberate point of
+this section, not a side effect: lode-csxh in [docs/decisions.md](../../../docs/decisions.md).
 
 ## 3. Build the current queue (dedup on stable IDs)
 
@@ -634,9 +733,9 @@ report — never fail a pass over the notify channel.
 
 ## 8. Publish and report
 
-This is its own, separate Bash tool invocation — nothing from §2a/§2b survives into it (§0's
-governing rule) — so `$DEFERRED` and `$STRANDED` are re-derived from the scratch files §2a/§2b
-already wrote, not from in-context memory of those blocks' output:
+This is its own, separate Bash tool invocation — nothing from §1/§2a/§2b survives into it (§0's
+governing rule) — so `$DEFERRED`, `$STRANDED`, and `$BLOCKED_HUMAN` are re-derived from the scratch
+files §1/§2a/§2b already wrote, not from in-context memory of those blocks' output:
 
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
@@ -667,6 +766,17 @@ else
   STRANDED_STATE=missing
 fi
 
+# lode-3oik: NOT retrofitted onto scripts/land-state-load.sh -- a missing $SWEEP_TMP/blocked_human is a
+# non-fatal third state, same reason as the two reads above.
+# lode-csxh: §1 wrote this file (as part of partitioning $HUMAN), not a §2c block of its own --
+# see §2c's own note. That changes only WHICH block a `missing` state indicts, not the policy.
+if BLOCKED_HUMAN="$(cat "$SWEEP_TMP/blocked_human" 2>/dev/null)"; then
+  BLOCKED_HUMAN_STATE=ok
+  [ "$BLOCKED_HUMAN" = "SWEEP-QUERY-ERROR" ] && BLOCKED_HUMAN_STATE=error
+else
+  BLOCKED_HUMAN_STATE=missing
+fi
+
 # §1/§2's shared marker (written there, enforced in §5). Read from DISK, like everything else in
 # this block: §5's stderr message is in-context state, which §0 says this file never relies on.
 if [ -f "$SWEEP_TMP/source_query_failed" ]; then SOURCE_STATE=error; else SOURCE_STATE=ok; fi
@@ -674,13 +784,15 @@ if [ -f "$SWEEP_TMP/source_query_failed" ]; then SOURCE_STATE=error; else SOURCE
 scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
 ```
 
-The rule is one rule, over both report-only lists — for each `<list>` in {`deferred`, `stranded`}
-there are three mutually exclusive states, and §8 must not confuse them:
+The rule is one rule, over all three report-only lists — for each `<list>` in {`deferred`,
+`stranded`, `blocked_human`} there are three mutually exclusive states, and §8 must not confuse
+them:
 
-- **`missing`** — that section's §2a/§2b block never ran this pass at all (e.g. it crashed before
-  reaching its `printf`). Section body: "`<list>` list unavailable this pass"; summary field:
-  `unavailable`, never `0`.
-- **`error`** — that section's block *did* run, but its `bd`/`jq` query failed and wrote the
+- **`missing`** — the block that writes that section's file never ran this pass at all (e.g. it
+  crashed before reaching its `printf`) — §2a's or §2b's own block, or, for `blocked_human`, **§1**
+  (which writes that file as part of partitioning `$HUMAN`; §2c has no block of its own). Section
+  body: "`<list>` list unavailable this pass"; summary field: `unavailable`, never `0`.
+- **`error`** — that writing block *did* run, but its `bd`/`jq` query failed and wrote the
   sentinel. Section body: "`<list>` query failed this pass"; summary field: `error` — never `0`,
   and never `unavailable`, which is a different failure with a different remedy.
 - **`ok`** — the query succeeded; report it normally, including the legitimately-empty case
@@ -688,14 +800,15 @@ there are three mutually exclusive states, and §8 must not confuse them:
 
 None of the three states aborts this block (the digest push above still has to run), and none
 suppresses or is suppressed by the §1/§2 escalation/human/epic reporting or by the other
-report-only section — every one of these reads its own, separately-persisted scratch file, and
-each of the two lists is judged solely on its own file's content.
+report-only sections — every one of these reads its own, separately-persisted scratch file, and
+each of the three lists is judged solely on its own file's content.
 
-Report exactly one line, then the deferred section (§2a, always present) and the stranded section
-(§2b, always present), plus, when non-empty, the loud new-items block:
+Report exactly one line, then the deferred section (§2a, always present), the stranded section
+(§2b, always present), and the blocked-human section (§2c, always present), plus, when non-empty,
+the loud new-items block:
 
 ```
-sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-to-close rows> closable, <deferred field> deferred, <stranded field> stranded
+sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-to-close rows> closable, <deferred field> deferred, <stranded field> stranded, <blocked_human field> blocked
 
 ## Deferred (surfaced, not reviewed) (<deferred field>)
 <id> <title>
@@ -706,11 +819,16 @@ sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-
 <id> <title>
 ...
 (none) | unavailable this pass | query failed this pass
+
+## Blocked human tickets (dependency-blocked, not yet decidable) (<blocked_human field>)
+<id> <title>
+...
+(none) | unavailable this pass | query failed this pass
 ```
 
-`<deferred field>`/`<stranded field>` and the alternatives on the last line of each section are the
-three states above, per that list's `$<LIST>_STATE`. On `ok`, each section lists every current row
-(id + title) each pass, in full, with no dedup.
+`<deferred field>`/`<stranded field>`/`<blocked_human field>` and the alternatives on the last line
+of each section are the three states above, per that list's `$<LIST>_STATE`. On `ok`, each section
+lists every current row (id + title) each pass, in full, with no dedup.
 
 When `$SWEEP_TMP/new_annotated` (§7) is non-empty, follow the two sections above with:
 
@@ -731,8 +849,10 @@ row can honestly be both), not a bug for a later edit to "fix" by suppressing ei
 
 If §4 found `N > 1` duplicate digests, any sub-step in §1/§2 failed (`$SOURCE_STATE` = `error`, in
 which case also say that §6 and §7 were skipped and the prior digest is stale but intact), or the
-§2a deferred or §2b stranded query failed, say so plainly in the same report — the pass still ends
-cleanly either way.
+§2a deferred, §2b stranded, or §2c blocked-human query failed, say so plainly in the same report —
+the pass still ends cleanly either way. A failed `bd blocked` query is both at once: it sets
+`$SOURCE_STATE = error` (via §1's shared marker) *and* `$BLOCKED_HUMAN_STATE = error` (via its own
+sentinel) — report both, not just one.
 
 ## Failure handling — a sub-step fails, the loop survives
 
@@ -752,13 +872,19 @@ real items from the durable record a human relies on.
   `--body-file` write).
 - If §4 finds `N > 1` digests, the write path stops for the pass (that anomaly is reported, never
   guessed at).
-- **A report-only section's failure is isolated to that section alone** — this covers both §2a
-  (deferred) and §2b (stranded), identically: if either query errors, its block writes the
+- **A report-only section's failure is isolated to that section alone** — this covers §2a
+  (deferred) and §2b (stranded) identically: if either query errors, its block writes the
   `SWEEP-QUERY-ERROR` sentinel instead of the (possibly-partial) query output, and §8's three-state
   rule — the canonical statement of what each state renders as — reports it. Neither a failed query
   nor a missing scratch file may suppress the §6 rewrite or §7 notification for the (unrelated)
-  escalation/human/epic queue; the reverse holds too (a §1/§2 failure never suppresses §2a or §2b, neither of which has a
-  rewrite to protect), and so does the §2a-vs-§2b case — each is its own isolated read.
+  escalation/human/epic queue; the reverse holds too (a §1/§2 failure never suppresses §2a or §2b,
+  neither of which has a rewrite to protect), and so does the §2a-vs-§2b case — each is its own
+  isolated read. **§2c is the one exception, deliberately:** its query is §1's own `bd blocked`
+  call, so a failure there is *not* isolated the way §2a/§2b's are — it writes both
+  `$SWEEP_TMP/blocked_human`'s `SWEEP-QUERY-ERROR` sentinel (for §8's report) *and*
+  `$SWEEP_TMP/source_query_failed` (§1's shared marker, since a failed `bd blocked` must not be
+  read as "nothing is blocked" — see §1's note). The rewrite-suppression half is real, not
+  redundant caution.
 - A failed pass still ends with a report and exit 0, so the next `/loop` tick gets a clean shot.
 
 ## What I never do
@@ -776,7 +902,7 @@ real items from the durable record a human relies on.
 ## Stop and report
 
 When the pass ends I report: the one-line summary (§8), the deferred section (§2a, always present),
-the stranded section (§2b, always present), the full **NEW HUMAN-DECISION ITEMS** block when
-`$NEW_IDS` is non-empty (annotated `(deferred)` per-row where applicable, per §7 — lode-o7ai), any
-duplicate-digest anomaly, and any sub-step that failed. A clean, unchanged queue is a valid, common
-outcome — I say so plainly and stop.
+the stranded section (§2b, always present), the blocked-human section (§2c, always present), the
+full **NEW HUMAN-DECISION ITEMS** block when `$NEW_IDS` is non-empty (annotated `(deferred)`
+per-row where applicable, per §7 — lode-o7ai), any duplicate-digest anomaly, and any sub-step that
+failed. A clean, unchanged queue is a valid, common outcome — I say so plainly and stop.
