@@ -14,14 +14,17 @@
   is here).
 
   HOW TO OVERRIDE IT: a consumer inlining this SVG must set `color` on the
-  `<svg>` element itself, via a CSS rule that matches it — set it to the
-  paper custom property (its name is two hyphens followed by "paper") with
-  CSS `var()`. Any author rule beats a
-  presentation attribute, so that works. Merely setting `color` on an
-  ANCESTOR does NOT: `color` on the root is a specified value, and a
-  specified value defeats inheritance. Removing the attribute would make
-  inheritance work but leaves the standalone/raster case colourless, so the
-  attribute stays and this is the documented contract.
+  `<svg>` element itself, via a CSS rule that matches it — a `.brand-mark`
+  rule, say, setting `color` to CSS `var()` of the paper custom property.
+  That property's name is spelled out rather than shown literally because it
+  opens with two hyphens, which XML forbids inside a comment; do not "fix"
+  it back to a literal snippet (tests/test_brand_assets.py gates this, and
+  its docstring has the why). Any author rule beats a presentation
+  attribute, so that works. Merely setting `color` on an ANCESTOR does NOT:
+  `color` on the root is a specified value, and a specified value defeats
+  inheritance. Removing the attribute would make inheritance work but leaves
+  the standalone/raster case colourless, so the attribute stays and this is
+  the documented contract.
 
   Geometric shapes only, no strokes thin enough to vanish at a 16x16
   favicon render (docs/brand.md section 6's minimum-size rule); the strata
