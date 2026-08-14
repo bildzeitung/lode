@@ -552,6 +552,10 @@ So I go back to **step 6** (commit, re-gate, re-push) rather than push them stra
 
 ```bash
 HEAD_SHA=$(git rev-parse HEAD)
+# Never write a malformed SHA to bd metadata (lode-0a4n). The validator prints its own
+# diagnostic; `|| exit $?` preserves its 1-vs-2 split (1 = the VALUE is bad, re-derive and
+# retry; 2 = this CALL is broken, fix the invocation and report nothing about the field).
+scripts/validate-sha40.sh review_head "$HEAD_SHA" || exit $?
 bd update <id> --add-label ready-for-code-review \
   --set-metadata review_head="$HEAD_SHA"
 scripts/bd-dolt-push.sh   # publish claim + ready-for-code-review over refs/dolt/data — durable, cross-machine
@@ -588,7 +592,10 @@ settle), I:
   as the green hand-off, captured now while the reverted-to-green tree and its push are still current:
 
   ```bash
-  bd update <id> --set-metadata review_head="$(git rev-parse HEAD)"
+  HEAD_SHA=$(git rev-parse HEAD)
+  # Same guard as the green hand-off (lode-0a4n); `|| exit $?` keeps the 1-vs-2 split.
+  scripts/validate-sha40.sh review_head "$HEAD_SHA" || exit $?
+  bd update <id> --set-metadata review_head="$HEAD_SHA"
   ```
 - **do not** set `ready-for-code-review`; instead `bd update <id> --add-label land-escalated
   --append-notes "ESCALATION: <the decision needed>"`, then `scripts/bd-dolt-push.sh`, and
@@ -785,6 +792,8 @@ Then refresh the hand-off metadata and swap the label myself:
 
 ```bash
 HEAD_SHA=$(git rev-parse HEAD)
+# Same guard as the green hand-off (lode-0a4n); `|| exit $?` keeps the 1-vs-2 split.
+scripts/validate-sha40.sh land_head "$HEAD_SHA" || exit $?
 bd update <id> --remove-label needs-rebase --add-label ready-for-land \
   --set-metadata land_head="$HEAD_SHA" \
   --set-metadata land_summary="Merged trunk @ $(git rev-parse --short origin/trunk) into the branch"
@@ -956,6 +965,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
 | Review context | head SHA (`review_head`) is the only metadata field the hand-off writes — `review_worktree`/`review_branch` are retired (lode-2m89: nobody read them) (bd metadata, read via `bd show --json`) |
+| SHA metadata writes | every `review_head`/`land_head` write derives the value (`$(git rev-parse HEAD)`) and passes it through `scripts/validate-sha40.sh <field> "$HEAD_SHA" \|\| exit $?` in the **same** fenced block before the `bd update` (lode-0a4n) — never write a SHA I retyped, and never collapse the validator's exit 2 (broken call) into exit 1 (malformed value) |
 | I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
 | External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal (lode-o29m) |
 | Technical review | **not mine** — the separate `code-reviewer` agent (Opus) fetches `land/<id>` into its own worktree and runs its own correctness reasoning (`/code-review` is unreachable from any model context, lode-axyq) + `/simplify` there |
