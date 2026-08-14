@@ -5094,3 +5094,10 @@ entries below from being rewritten to chase the current tree.)
   OpenAI tooling under `.agents/` is ever removed from the repo, at which point the Codex-pointer
   rationale (reason 1) no longer holds and the remaining content (the Dolt architecture blurb, the
   bd quick reference, the shell-command hygiene) could reasonably fold into `CLAUDE.md`.
+  **Update (lode-ohya, 2026-08-14):** reason 4 above is superseded. `lode-s9xe.8` added a
+  "Non-interactive shell commands" section to `CLAUDE.md`, leaving two normative copies, and
+  `lode-ohya` settled the duplication the other way from what reason 4 assumed: `CLAUDE.md`'s copy
+  is now the single normative statement (enriched with `AGENTS.md`'s NOT-form examples), and
+  `AGENTS.md`'s section is a one-line pointer at it. Reasons 1-3 and the **Decision** (keep
+  `AGENTS.md`) are unaffected; only "the shell-command hygiene" item in the *Revisit if* clause no
+  longer names content unique to `AGENTS.md`.
