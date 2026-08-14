@@ -47,6 +47,7 @@ case "$1$2" in
     else
       [ -f REFORMAT_ME ] && echo "reformatted" > reformat_target.txt
       [ -f REFORMAT_BEADS_CONFIG ] && echo "reformatted" > .beads/config.yaml
+      [ -f REFORMAT_BEADS_ISSUES_JSONL ] && echo "reformatted" > .beads/issues.jsonl
       exit 0
     fi
     ;;
