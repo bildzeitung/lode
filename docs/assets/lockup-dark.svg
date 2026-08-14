@@ -21,11 +21,11 @@
 
   Byte-for-byte identical to lockup.svg except: `color="#F7F4EE"` (paper,
   docs/brand.md section 3) on the root instead of ink, and this header.
-  tests/test_brand_assets.py's strict-XML gate covers this file via its
-  `docs/assets/*.svg` glob; it is not wired into the lockup.svg /
-  mark.svg geometry-drift gate (that gate is keyed to the two specific
-  filenames), so keep this file's geometry in sync with lockup.svg/mark.svg
-  by hand if either changes.
+  tests/test_brand_assets.py gates both halves of that claim:
+  test_dark_lockup_is_the_lockup_recoloured_and_nothing_else asserts this file
+  is lockup.svg with the root colour swapped for paper, so an edit to
+  lockup.svg cannot silently leave this variant behind; the strict-XML gate
+  covers it via the `docs/assets/*.svg` glob.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 104 32" color="#F7F4EE">
   <!-- mark, unchanged from mark.svg -->
