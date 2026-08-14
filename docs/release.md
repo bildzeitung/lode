@@ -12,7 +12,9 @@ GitHub release. This is the design record for epic `lode-0ru`.
   `dynamic = ["version"]` instead of a literal `version = "…"`; `[tool.setuptools_scm]` sets
   `version_file = "src/lode/_version.py"` (the build-generated file setuptools-scm writes the
   resolved version into — gitignored, never committed).
-- `src/lode/__init__.py` resolves `__version__` via `importlib.metadata.version("lode")`, falling
+- `src/lode/__init__.py` resolves `__version__` via `importlib.metadata.version("lode-kb")` (the
+  distribution name, per `docs/decisions.md`'s `lode-fhql.1` collision entry — the import package,
+  CLI command, and brand all stay `lode`), falling
   back to `"0.0.0+unknown"` (wrapped in `try/except PackageNotFoundError`) for a raw source tree
   that was never installed — not even editable.
 - Because `scripts/python-init.sh` always installs the local package editable (`-e .`, whether via

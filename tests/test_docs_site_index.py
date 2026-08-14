@@ -61,7 +61,7 @@ def test_index_carries_the_required_content() -> None:
     # The lockup (lode-fhql.4).
     assert "assets/lockup.svg" in text
     # The install command that actually works (lode-fhql.2 / README parity).
-    assert "pip install lode-*.whl" in text
+    assert "pip install lode_kb-*.whl" in text
     assert "./scripts/python-init.sh" in text
     # The two-line demo.
     assert "$ lode add" in text

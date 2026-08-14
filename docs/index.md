@@ -46,7 +46,7 @@ see [release.md's Non-goals](release.md#non-goals).
 directly:
 
 ```bash
-pip install lode-*.whl   # the wheel attached to the release you downloaded
+pip install lode_kb-*.whl   # the wheel attached to the release you downloaded
 ```
 
 **From source (for contributing or tracking `trunk`).**

@@ -3,7 +3,7 @@ requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lode"
+name = "lode-kb"
 dynamic = ["version"]
 description = "AI-first, TUI-first personal knowledge base for things you learn at work."
 readme = "README.md"
