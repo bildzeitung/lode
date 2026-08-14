@@ -48,7 +48,13 @@ MERMAID_IMAGE = "minlag/mermaid-cli:10.9.1"
 # docs/stack.md "Published / excluded page sets" (lode-fhql.8, current as of
 # 2026-08-13). PUBLISHED is authoritative; docs/how-to/ is published as a
 # DIRECTORY (every file in it, not a frozen list) -- see that section.
-PUBLISHED_TOP_LEVEL = ["design.md", "retrieval.md", "storage.md", "externals.md", "brand.md"]
+PUBLISHED_TOP_LEVEL = [
+    "design.md",
+    "retrieval.md",
+    "storage.md",
+    "externals.md",
+    "brand.md",
+]
 PUBLISHED_DIRS = ["how-to"]
 
 GITHUB_BASE = "https://github.com/bildzeitung/lode/blob/trunk"
@@ -115,6 +121,7 @@ def _render_mermaid_svg(code: str, out_svg: Path) -> None:
             ],
             capture_output=True,
             text=True,
+            check=False,  # we inspect returncode ourselves below
         )
         if result.returncode != 0:
             raise SystemExit(
@@ -139,7 +146,9 @@ def _process_mermaid(text: str, rel_path: str, assets_dir: Path, out_dir: Path) 
         code = match.group(1)
         svg_name = f"{page_slug}-{counter}.svg"
         svg_path = assets_dir / svg_name
-        print(f"  rendering mermaid diagram {counter} of {rel_path} -> assets/mermaid/{svg_name}")
+        print(
+            f"  rendering mermaid diagram {counter} of {rel_path} -> assets/mermaid/{svg_name}"
+        )
         _render_mermaid_svg(code, svg_path)
         # Path relative to the page's own directory once staged.
         page_dir = (out_dir / rel_path).parent
@@ -149,7 +158,9 @@ def _process_mermaid(text: str, rel_path: str, assets_dir: Path, out_dir: Path) 
     return _MERMAID_FENCE_RE.sub(_sub, text)
 
 
-def _rewrite_target(current_rel: str, link_target: str, published: set[str]) -> str | None:
+def _rewrite_target(
+    current_rel: str, link_target: str, published: set[str]
+) -> str | None:
     """Return a rewritten link target, or None if the link is left alone."""
     if link_target.startswith(("http://", "https://", "mailto:", "#")):
         return None
@@ -203,7 +214,9 @@ def build(repo_root: Path, out_dir: Path) -> None:
     for rel in sorted(published):
         src = docs_dir / rel
         if not src.is_file():
-            raise SystemExit(f"published doc {rel!r} listed in build_docs_site.py but missing on disk: {src}")
+            raise SystemExit(
+                f"published doc {rel!r} listed in build_docs_site.py but missing on disk: {src}"
+            )
         text = src.read_text(encoding="utf-8")
         text = _process_mermaid(text, rel, assets_dir, out_dir)
         text = _process_links(text, rel, published)
@@ -216,8 +229,8 @@ def build(repo_root: Path, out_dir: Path) -> None:
     # lands, MkDocs has no index.md/README.md in the published set and would
     # otherwise ship a homepage-less site. Synthesize a minimal placeholder
     # ONLY if the published set doesn't already provide one -- once .10 adds
-    # its own docs/index.md (or README.md) to the published set, this branch
-    # stops firing and the real page wins.
+    # its own index.md (or README.md) under docs/ to the published set, this
+    # branch stops firing and the real page wins.
     if "index.md" not in published and "README.md" not in published:
         (out_dir / "index.md").write_text(
             "# lode\n\n"

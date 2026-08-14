@@ -24,7 +24,13 @@ on:
 
 # Cancels a superseded run on the same ref. Convention + rationale:
 # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
-# Byte-identical to build.yml/tests.yml/coverage.yml's expression -- keep it so.
+#
+# The group collapses a branch's push run and its pull_request run so one
+# cancels the other. Fallback is github.ref_name, NOT github.ref -- and NOT
+# `head_ref || ref`, the form most likely to be copied in, which still leaves
+# the push run in its own group and cancels nothing. Derivation + the accepted
+# fork-branch-name trade-off: the release.md anchor above (lode-7hbu).
+# This expression is byte-identical in build/tests/coverage/docs.yml -- keep it so.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true

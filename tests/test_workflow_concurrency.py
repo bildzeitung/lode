@@ -15,11 +15,12 @@ workflow's top-level `on:`/`concurrency:` keys, so three copies is the only
 shape the platform allows. Pinning the duplication is the fallback, not a
 departure from the house style.
 
-Scope is deliberately the three named files, not a glob over the workflows
-directory -- release.yml is tag-triggered and correctly carries no concurrency
-block at all (cancelling a one-shot tag build would be wrong, not missing).
-The hard-coded list is not a blind spot, though: a fourth branch-push or
-pull_request-triggered workflow added later trips
+Scope is deliberately the named files in EXPECTED_WORKFLOWS, not a glob over
+the workflows directory -- release.yml is tag-triggered and correctly carries
+no concurrency block at all (cancelling a one-shot tag build would be wrong,
+not missing). The hard-coded list is not a blind spot, though: a new
+branch-push or pull_request-triggered workflow added later (docs.yml,
+lode-fhql.9, was the first) trips
 `test_no_unlisted_workflow_is_branch_push_or_pr_triggered`, which points the
 author at EXPECTED_WORKFLOWS.
 
@@ -39,10 +40,10 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 
-# The three branch-push/pull_request-triggered CI workflows that must share
-# this concurrency block (lode-7hbu). release.yml is tag-triggered and
-# intentionally excluded.
-EXPECTED_WORKFLOWS = ["build.yml", "tests.yml", "coverage.yml"]
+# The branch-push/pull_request-triggered CI workflows that must share this
+# concurrency block (lode-7hbu; docs.yml added lode-fhql.9). release.yml is
+# tag-triggered and intentionally excluded.
+EXPECTED_WORKFLOWS = ["build.yml", "tests.yml", "coverage.yml", "docs.yml"]
 
 EXPECTED_GROUP = "${{ github.workflow }}-${{ github.head_ref || github.ref_name }}"
 
