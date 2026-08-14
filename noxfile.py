@@ -338,42 +338,27 @@ def docs(session: nox.Session) -> None:
     anchors, filed as ``lode-fhql.21``) with nothing in the existing gate set able to catch
     it -- this session is that missing validator.
 
-    Deliberately runs ``mkdocs build`` WITHOUT ``--strict``: as of `lode-fhql.10`'s
-    scaffold, ``--strict`` also aborts on four pre-existing warnings about links that leave
-    ``docs/`` entirely (``brand.md`` -> ``../README.md``, two ``how-to/*.md`` -> ``../../src/lode/*.py``)
-    -- expected until `lode-fhql.9` lands the doc-site link-rewrite rule (docs/stack.md), and
-    out of THIS session's scope to fix. Instead this session inspects mkdocs' own log output
-    directly and fails only on a line naming a broken anchor -- mkdocs logs those at INFO
-    (not WARNING) in 1.6.1, so ``--strict`` would not even catch them; grepping the log is
-    the only way to make this gate red for real anchor breakage. A non-anchor build failure
-    (bad `mkdocs.yml`, a missing plugin, ...) still fails the session via a nonzero mkdocs
-    exit code.
+    All of the gate's own logic lives in ``mkdocs.yml``'s ``validation:`` block, NOT here:
+    it sets ``links.anchors: warn`` (mkdocs 1.6 logs anchor breakage at INFO by default, so
+    ``--strict`` alone would not catch it) and every other link/nav check to ``ignore``, so
+    ``--strict`` reddens on a broken anchor and on nothing else. See that block for why each
+    ``ignore`` is deliberate. Keeping the predicate in mkdocs' own config rather than
+    grepping its log matters both ways round: a renamed validation key is itself a
+    ``--strict`` config error (loud), whereas a grep goes silently green the day mkdocs
+    rewords a message.
+
+    **Coverage boundary:** ``mkdocs.yml``'s ``exclude_docs`` allowlist is what gets built, so
+    this session only ever sees the PUBLISHED set (``index``/``design``/``storage``/
+    ``retrieval``/``externals``/``brand`` + ``how-to/``). Anchors in and into unpublished
+    pages -- ``decisions.md``, ``stack.md``, ``configuration.md``, ... -- are ``linkcheck``'s
+    job alone. These two gates are complements, not duplicates.
 
     Resolves ``mkdocs`` through ``_venv_tool`` (lode-0yfn) -- an ambient interpreter would
     not have ``mkdocs-material`` (or ``lode``'s other deps) installed.
     """
     mkdocs = _venv_tool(session, "mkdocs")
     with tempfile.TemporaryDirectory() as site_dir:
-        result = subprocess.run(
-            [mkdocs, "build", "-f", "mkdocs.yml", "-d", site_dir],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    output = result.stdout + result.stderr
-    session.log(output)
-    anchor_lines = [line for line in output.splitlines() if "anchor" in line.lower()]
-    if anchor_lines:
-        session.error(
-            "mkdocs build found a broken intra-doc anchor (a #fragment mkdocs's own "
-            "renderer cannot resolve, even though scripts/check_links.py's GitHub-slug "
-            "algorithm resolves it -- mkdocs slugs punctuation differently):\n"
-            + "\n".join(anchor_lines)
-        )
-    if result.returncode != 0:
-        session.error(
-            f"mkdocs build failed (exit {result.returncode}) -- see log above"
-        )
+        session.run(mkdocs, "build", "--strict", "-d", site_dir)
 
 
 @nox.session
