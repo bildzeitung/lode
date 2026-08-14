@@ -26,9 +26,9 @@ lode-uvjr, `.claude/agents/coding.md`'s three `--set-metadata
 review_head=`/`--set-metadata land_head=` writes could each drop their
 `scripts/validate-sha40.sh` guard with the whole suite green, and worse, a
 reader of this file's docstring would reasonably conclude the corpus was fully
-covered. :func:`_write_sites`/:data:`WRITE_TESTS` below mirror the read-site
-shape (non-vacuity, same-block gate, right-variable check) but keyed on
-`--set-metadata <field>=` instead of a read-and-compare.
+covered. :func:`_write_sites` and the three ``..._write...`` tests below mirror
+the read-site shape (non-vacuity, same-block gate, right-variable check) but
+keyed on `--set-metadata <field>=` instead of a read-and-compare.
 
 Within each rostered file the gate is shaped around the *hazard*, not around
 the current text: it finds any fenced bash block that reads one of these
@@ -110,13 +110,31 @@ def _read_sites(blocks: list[str], field: str) -> list[str]:
     ]
 
 
+#: Per-field `--set-metadata <field>=` matcher, compiled once at import rather
+#: than per :func:`_write_sites` call (three tests x every corpus file x every
+#: field, for two distinct patterns).
+WRITE_PATTERNS = {
+    field: re.compile(rf"--set-metadata\s+{re.escape(field)}=")
+    for field in DRIFT_FIELDS
+}
+
+#: The same write, narrowed to the `"$VAR"` form, capturing the variable name
+#: so :func:`test_validator_is_called_on_the_value_that_was_written` can check
+#: the validator was called on that same variable.
+WRITE_VAR_PATTERNS = {
+    field: re.compile(
+        rf'--set-metadata\s+{re.escape(field)}="\$([A-Za-z_][A-Za-z0-9_]*)"'
+    )
+    for field in DRIFT_FIELDS
+}
+
+
 def _write_sites(blocks: list[str], field: str) -> list[str]:
     """Blocks in ``blocks`` that write ``metadata.<field>`` via
     `bd update ... --set-metadata <field>=` -- the write-side hazard
     (lode-uvjr), distinct from :func:`_read_sites` above: a write block never
     reads `metadata.<field>` at all, it sets it."""
-    pattern = re.compile(rf"--set-metadata\s+{re.escape(field)}=")
-    return [b for b in blocks if pattern.search(b)]
+    return [b for b in blocks if WRITE_PATTERNS[field].search(b)]
 
 
 #: (relative path, fenced-bash-blocks) for every file in the corpus -- the
@@ -241,25 +259,34 @@ def test_validator_is_called_on_the_value_that_was_written() -> None:
     :func:`test_validator_is_called_on_the_value_that_was_read`. Pins that
     the variable named in `--set-metadata <field>="$VAR"` -- whatever that
     call site happens to name it (`$HEAD_SHA`, `$SHA`, `$LAND_HEAD`, ...) --
-    is the same variable the validator is called on, in the same block."""
+    is the same variable the validator is called on, in the same block.
+
+    Checks EVERY write in the block, not just the first: a block writing the
+    same field twice from two different variables would otherwise pass on the
+    strength of the first one's guard while the second went unvalidated. No
+    such block exists today; the loop costs nothing and closes the hole
+    structurally instead of relying on that staying true.
+
+    Deliberately narrow: the write must be a plain `"$VAR"` substitution, not
+    an inline `"$(git rev-parse ...)"`. That is the whole point -- a value
+    that is never bound to a variable cannot be validated before it is
+    written, so the assertion below rejects it rather than accommodating it.
+    """
     for path, blocks in CALL_SITES:
         for field in DRIFT_FIELDS:
             for block in _write_sites(blocks, field):
-                write_match = re.search(
-                    rf'--set-metadata\s+{re.escape(field)}="\$([A-Za-z_][A-Za-z0-9_]*)"',
-                    block,
-                )
-                assert write_match, (
+                written = [
+                    m.group(1) for m in WRITE_VAR_PATTERNS[field].finditer(block)
+                ]
+                assert written, (
                     f"{path}: --set-metadata {field}=... does not assign from a "
                     'plain "$VAR" -- write the SHA into a variable first so it can '
                     "be validated before the write"
                 )
-                var = write_match.group(1)
                 lines = [ln for ln in block.splitlines() if VALIDATOR in ln]
-                assert len(lines) == 1, f"{path}: expected one {VALIDATOR} call"
-                assert field in lines[0], f"{path}: {VALIDATOR} call omits {field}"
-                assert f'"${var}"' in lines[0], (
-                    f"{path}: {VALIDATOR} is called on something other than "
-                    f'"${var}", the variable the same block writes via '
-                    f"--set-metadata {field}="
-                )
+                for var in written:
+                    assert any(field in ln and f'"${var}"' in ln for ln in lines), (
+                        f"{path}: no {VALIDATOR} call on {field} and "
+                        f'"${var}" -- the variable this same block writes via '
+                        f"--set-metadata {field}="
+                    )

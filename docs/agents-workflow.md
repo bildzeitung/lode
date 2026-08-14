@@ -2025,10 +2025,10 @@ site contains, so widening it naively missed every `--set-metadata (review|land)
 follow-up (`lode-uvjr`) added a second, parallel predicate to the same test file — any fenced block
 containing `--set-metadata <field>=` must call the validator on the same variable in the same block
 — mirroring the read-side gate's shape (non-vacuity, same-block check, right-variable check) rather
-than hardcoding a single variable name: different write sites name the derived SHA differently
-(`$HEAD_SHA` in `coding.md`/`code-reviewer.md`, `$SHA` in `land/SKILL.md`/`code/SKILL.md`,
-`$LAND_HEAD` at one `land/SKILL.md` site), so the gate extracts whatever variable a block's own
-`--set-metadata` write names and requires the validator call to reuse that same variable. Turning the
+than hardcoding a single variable name: write sites name the derived SHA differently from one
+another, so the gate extracts whatever variable a block's own `--set-metadata` write names and
+requires the validator call to reuse that same variable (the live roster is whatever the gate finds
+— deliberately not restated here, where it would drift). Turning the
 gate on surfaced two write sites that predated it and had no guard at all — `code-reviewer.md`'s
 `ready-for-land` swap (step 8) and `land/SKILL.md`'s exit-(a) resolution path — both fixed by adding
 the same derive-then-validate-then-write shape the others already used.
