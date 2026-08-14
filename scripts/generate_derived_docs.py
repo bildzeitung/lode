@@ -123,7 +123,7 @@ def _github_slug(heading_text: str) -> str:
     `import check_links` would resolve in some of them and not others;
     `tests/test_generate_derived_docs.py` asserts the copy still agrees with the authority.
     """
-    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", heading_text).lower()
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", heading_text).lower()
     text = re.sub(r"[^\w\- ]", "", text)
     return text.replace(" ", "-")
 
