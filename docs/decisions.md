@@ -5215,3 +5215,31 @@ entries below from being rewritten to chase the current tree.)
   guarded against silent drift even unextracted. Revisit if a fourth call site appears — that
   would be the point three genuinely stops being "fine, and guarded" and starts paying for its
   own script.
+
+- **`worktree-gc-sweep.sh` backstop 3's narrower capture predicate is correct-by-design, not a bug
+  (`lode-2132`, 2026-08-14).** `lode-0867` unified backstop 3's BASE REF at a `trunk` literal but
+  deliberately left its capture PREDICATE narrower than `scripts/worktree-gc-classify.sh`'s:
+  the classifier captures a branch as reclaimed if it is an ancestor of `trunk` **OR** of the
+  branch's own `origin/<branch>` (the widened `lode-amif` test), while backstop 3 uses only
+  `git branch --merged trunk` — no `origin/` arm. Left open at the time: does that gap leak a
+  `worktree-agent-*` ref that the main worktree sweep reclaims as a worktree but backstop 3 keeps
+  as a ref forever?
+
+  **Decided: (b) — the narrower predicate is correct-by-design for bare `worktree-agent-*` refs;
+  no code change.** Verified against the code and origin: backstop 3 scans only
+  `refs/heads/worktree-agent-*` (`worktree-gc-sweep.sh`); the classifier's widened arm tests
+  `origin/${br%%--*}`, i.e. `origin/worktree-agent-*` for this namespace; and builder branches
+  are never pushed under that name (`lode-yrtu`; `git ls-remote origin
+  'refs/heads/worktree-agent-*'` returns zero refs — builder content reaches origin as `land/*`,
+  a different name neither predicate examines). So the leak this ticket worried about — a bare
+  `worktree-agent-*` ref captured only on `origin/` — requires a remote ref the pipeline never
+  creates. The classifier's `origin/` arm exists for `land/`-branched reviewer/rebase-pickup
+  worktrees, a namespace backstop 3 deliberately does not touch. Widening a `branch -D` to close
+  an unreachable leak would only add destructive surface for no benefit.
+
+  Residual, accepted: a hand-pushed `worktree-agent-*` branch would leave its bare ref kept
+  forever after the worktree is reclaimed — a *kept* ref, recoverable, failing safe in the
+  direction a delete arm should. `scripts/worktree-gc-sweep.sh` already states this divergence
+  plainly: the header (near the BASE REF paragraph) names it and cites `lode-2132`, and the inline
+  backstop-3 comment flags the narrower predicate as deliberate and points back at the header. No
+  comment or code change was needed.
