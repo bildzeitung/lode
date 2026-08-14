@@ -2005,6 +2005,24 @@ catches the same corruption **and** any other route a malformed value could reac
 value actually gets *acted on*, rather than N checks at every place it could be written. This is the
 "cheapest thing that actually fires" the ticket's acceptance criteria asks for.
 
+**NARROWED by lode-0a4n (2026-08-14) — write-time validation was added to `coding.md` after all, and
+the paragraph above is why it is an ADDITION rather than a replacement.** The rejection reasoned that
+a write site "already derives the value mechanically", so re-checking its own local variable adds
+nothing. A live occurrence disproved the premise, not the reasoning: on `lode-fhql.10` the `coding`
+producer recorded `review_head=861e86234150432280523f861d96efcad80df94` — 39 hex characters, one
+short of the real tip — which `git rev-parse` cannot emit. The value reached `bd update` **without**
+being derived, i.e. the "Derive identifiers, never retype them" fiat was violated at the write site,
+and the write-side guard fires precisely on that class because an agent substituting a literal into
+the fenced block substitutes it into the validator line too. So: the read-side checks stay exactly as
+described above (they remain the backstop that catches a hand edit or an unguarded future write
+site), and `coding.md`'s three write sites now *also* validate — three checks, not N, at the one
+producer that was observed getting it wrong. Both use `|| exit $?`, never `exit 1`, so the 0/1/2
+contract below is preserved end to end. What is still NOT done, deliberately: no write-site test
+gate (option (c) covers read sites only, keyed on `metadata.<field>` + `jq` + a tip comparison, none
+of which a write site contains), so these three guards can be deleted with the suite green — filed
+as its own ticket rather than widened here, since the matcher's variable-name contract
+(`"$REVIEW_HEAD"`/`"$LAND_HEAD"`) does not fit a write site's `"$HEAD_SHA"`.
+
 **The ticket's option (c) — a test gate over the markdown roster — was taken too, and it is what
 makes this a mechanism rather than an instruction** (added in technical review, which found it
 missing and unargued). Both read sites are fenced bash inside markdown agent instructions, and no
