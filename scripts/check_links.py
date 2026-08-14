@@ -226,7 +226,9 @@ def _tracked_paths(root: Path) -> list[Path]:
     return [Path(p) for p in out.split()]
 
 
-def _tracked_markdown_files(root: Path, tracked: list[Path] | None = None) -> list[Path]:
+def _tracked_markdown_files(
+    root: Path, tracked: list[Path] | None = None
+) -> list[Path]:
     """Every ``*.md`` file git tracks, repo-wide (lode-act5) -- not limited to
     ``docs/`` and ``.claude/``. Widened from the original two-directory scan
     so a bracketed relative link written in ANY tracked markdown file (a
