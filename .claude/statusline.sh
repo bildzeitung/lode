@@ -99,30 +99,71 @@ fi
 # alternative, rejected because the trigger is already met -- the query below is
 # unfiltered by status, so it already returns well past bd's documented default
 # (63 rows when measured: 39 open + 18 in_progress + 6 deferred).
+#
+# lode-7guf (companion to /sweep's lode-csxh, same maintainer decision): a
+# `human`-labeled ticket that is dependency-blocked is not decidable yet -- its
+# sign-off artifact doesn't exist -- so it must not inflate `!human`. We cache
+# `bd blocked --json`'s id set in a SECOND file, refreshed in the SAME detached
+# background job as the `bd list` call above (one trigger, one TTL, no new
+# synchronous call on the render path), and subtract it from the `human` arm
+# only -- `land-escalated` always counts (escalations are never dependency-gated).
+# `bd blocked` has no `--limit` flag to pin (checked against `bd blocked --help`,
+# same finding lode-csxh made); it also cannot match
+# tests/test_bd_list_limit_gate.py's `BD_LIST_RE`, which requires a literal
+# `list` token -- `blocked` doesn't contain one, so this call site sits outside
+# that gate's scan surface by construction, not by omission.
+#
+# Failure semantics DELIBERATELY differ from lode-csxh's digest: this is a
+# passive display, not a notification pipeline, so a missing/unreadable/invalid
+# blocked cache fails OPEN -- count every `human` ticket, today's behavior.
+# Overcounting here is harmless (a stale-looking segment); silently hiding
+# decidable work is not. No sentinel machinery needed -- an empty/absent
+# `$blocked_cache` naturally yields an empty `$blocked_json` ("[]"), under which
+# `isblocked` is false for every id, so the human arm counts everything.
 pipeline_part=""
 if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
     cache="${TMPDIR:-/tmp}/lode-statusline-bd.cache"
+    blocked_cache="${TMPDIR:-/tmp}/lode-statusline-blocked.cache"
     ttl=5
     now=$(date +%s)
     mtime=0
     [ -f "$cache" ] && mtime=$(stat -c %Y "$cache" 2>/dev/null || echo 0)
     if [ $((now - mtime)) -ge "$ttl" ]; then
         # Reset mtime first so the next few renders (within the ~0.85s bd takes)
-        # don't each spawn their own refresh; then refresh detached.
+        # don't each spawn their own refresh; then refresh detached. Both bd
+        # calls run in this ONE background job, independently -- a failure in
+        # either never blocks the other's cache from refreshing.
         touch "$cache"
-        ( if bd -C "$cwd" list --limit 0 --json 2>/dev/null > "$cache.new" \
-              && mv -f "$cache.new" "$cache"; then :; else rm -f "$cache.new"; fi ) >/dev/null 2>&1 &
+        (
+            if bd -C "$cwd" list --limit 0 --json 2>/dev/null > "$cache.new" \
+                  && mv -f "$cache.new" "$cache"; then :; else rm -f "$cache.new"; fi
+            if bd -C "$cwd" blocked --json 2>/dev/null > "$blocked_cache.new" \
+                  && mv -f "$blocked_cache.new" "$blocked_cache"; then :; else rm -f "$blocked_cache.new"; fi
+        ) >/dev/null 2>&1 &
     fi
     if [ -s "$cache" ]; then
-        counts=$(jq -r '
+        # Fail open: an absent/empty/invalid blocked cache collapses to "[]", so
+        # `isblocked` below is false for every id and every human ticket counts,
+        # matching pre-lode-7guf behavior exactly.
+        blocked_json=$(jq -c '[(. // [])[] | .id]' "$blocked_cache" 2>/dev/null)
+        case "$blocked_json" in
+            \[*\]) ;;
+            *) blocked_json="[]" ;;
+        esac
+        counts=$(jq -r --argjson blocked "$blocked_json" '
             def hasl($l): ((.labels // []) | index($l)) != null;
+            def isblocked: . as $t | ($blocked | index($t.id)) != null;
             # First matching arm wins; order IS the precedence rule. A ticket
             # waiting on a human outranks any pipeline label it still carries,
             # and the /sweep digest (permanently in_progress by design) maps to
             # no segment at all. Emitting nothing means "counted nowhere".
+            # lode-7guf: land-escalated always counts (never dependency-gated);
+            # a dependency-blocked human ticket is excluded from `human` only.
             def stage:
                 if   hasl("sweep-digest")                    then empty
-                elif hasl("human") or hasl("land-escalated") then "human"
+                elif hasl("land-escalated")                  then "human"
+                elif hasl("human") and (isblocked | not)     then "human"
+                elif hasl("human")                            then empty
                 elif hasl("needs-rebase")                    then "rebase"
                 elif hasl("ready-for-land")                  then "land"
                 elif hasl("ready-for-code-review")           then "review"
