@@ -27,6 +27,7 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
 from _gitrepo import _git
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -34,8 +35,20 @@ SCRIPT = REPO_ROOT / "scripts" / "land-replay.sh"
 
 _FAKE_NOX = """#!/usr/bin/env bash
 case "$1$2" in
-  "-stests") [ -f TESTS_FAIL ] && exit 1 || exit 0 ;;
-  "-tfix") [ -f FIX_FAIL ] && exit 1 || exit 0 ;;
+  "-stests")
+    if [ -f TESTS_FAULT_127 ]; then exit 127
+    elif [ -f TESTS_FAIL ]; then exit 1
+    else exit 0
+    fi
+    ;;
+  "-tfix")
+    if [ -f FIX_FAULT_127 ]; then exit 127
+    elif [ -f FIX_FAIL ]; then exit 1
+    else
+      [ -f REFORMAT_ME ] && echo "reformatted" > reformat_target.txt
+      exit 0
+    fi
+    ;;
   "-slock_currency")
     if [ -f LOCK_FAIL_2 ]; then exit 2
     elif [ -f LOCK_FAIL_1 ]; then exit 1
@@ -196,15 +209,20 @@ def test_landed_file_is_truncated_even_if_it_had_prior_content(
     assert landed.read_text() == "lode-a\n"
 
 
-def test_a_branch_that_fails_nox_tests_is_bounced_and_backed_out(
-    tmp_path: Path,
+@pytest.mark.parametrize("sentinel", ["TESTS_FAIL", "FIX_FAIL"])
+def test_a_branch_that_fails_a_nox_gate_is_bounced_and_backed_out(
+    tmp_path: Path, sentinel: str
 ) -> None:
+    """Exit 1 -- the one CONTENT verdict either per-branch nox gate has --
+    still bounces. Parametrized over both gates since lode-lmu9 split `nox -t
+    fix` and `nox -s tests` into separate arms: each arm now owns its own
+    bounce path, so neither is covered by the other."""
     repo = _init_repo(tmp_path)
     fake_nox = _fake_nox_bin(tmp_path)
     _branch_from(repo, "trunk", "origin/land/lode-good")
     _commit_file(repo, "good.txt", "fine\n", "good adds good.txt")
     _branch_from(repo, "trunk", "origin/land/lode-bad")
-    _commit_file(repo, "TESTS_FAIL", "", "bad breaks the tests")
+    _commit_file(repo, sentinel, "", "bad breaks a nox gate")
     _branch_from(repo, "trunk", "origin/land/lode-after")
     _commit_file(repo, "after.txt", "fine too\n", "after adds after.txt")
 
@@ -228,7 +246,7 @@ def test_a_branch_that_fails_nox_tests_is_bounced_and_backed_out(
     assert accepted.read_text() == "lode-good\nlode-after\n", (
         "the bounced id must be rewritten out of --accepted"
     )
-    assert not (repo / "TESTS_FAIL").exists(), (
+    assert not (repo / sentinel).exists(), (
         "the bounce must back the bad merge out of the working tree"
     )
     assert (repo / "good.txt").exists()
@@ -412,6 +430,96 @@ def test_mid_loop_lock_currency_machine_fault_stops_the_pass(tmp_path: Path) -> 
     assert landed.read_text() == "lode-a\n"
     assert "BOUNCED" not in result.stdout
     assert not (repo / "c.txt").exists(), "an id after the fault must never be merged"
+
+
+@pytest.mark.parametrize(
+    ("sentinel", "gate"),
+    [("FIX_FAULT_127", "nox -t fix"), ("TESTS_FAULT_127", "nox -s tests")],
+)
+def test_mid_loop_nonverdict_nox_exit_stops_the_pass_without_bouncing(
+    tmp_path: Path, sentinel: str, gate: str
+) -> None:
+    """A 127 (nox not on PATH mid-run) from EITHER per-branch nox gate after a
+    clean merge is a machine fault, not that id's verdict -- it must stop the
+    replay, never bounce the branch that happened to be merged when it hit
+    (lode-lmu9). Both gates are parametrized here rather than written twice:
+    they are two arms of one contract, and a change to one that is not
+    mirrored in the other is exactly what this pins."""
+    repo = _init_repo(tmp_path)
+    fake_nox = _fake_nox_bin(tmp_path)
+    _branch_from(repo, "trunk", "origin/land/lode-a")
+    _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
+    _branch_from(repo, "trunk", "origin/land/lode-b")
+    _commit_file(repo, sentinel, "", f"b's merge makes {gate} fault")
+    _branch_from(repo, "trunk", "origin/land/lode-c")
+    _commit_file(repo, "c.txt", "from C\n", "C adds c.txt")
+
+    msg_dir = tmp_path / "msgs"
+    for id_, label in (("lode-a", "A"), ("lode-b", "B"), ("lode-c", "C")):
+        _write_msg(msg_dir, id_, f"Merge land/{id_}: {label} ({id_})")
+    conflicts_dir = tmp_path / "conflicts"
+    conflicts_dir.mkdir()
+    accepted = _accepted(tmp_path, "lode-a", "lode-b", "lode-c")
+    landed = tmp_path / "landed"
+
+    result = _run(repo, accepted, msg_dir, conflicts_dir, landed, fake_nox=fake_nox)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == "LANDED\tlode-a\n"
+    assert landed.read_text() == "lode-a\n"
+    assert "BOUNCED" not in result.stdout
+    assert "machine fault" in result.stderr
+    assert not (repo / "c.txt").exists(), "an id after the fault must never be merged"
+
+
+def test_landed_reformat_is_committed_as_part_of_the_merge(tmp_path: Path) -> None:
+    """`nox -t fix` reformatting the just-merged content must be folded into
+    the merge commit (not left dirty) so the NEXT iteration's merge meets a
+    clean tree, and a later bounce's single `git reset --hard HEAD~1` would
+    discard both together (lode-lmu9)."""
+    repo = _init_repo(tmp_path)
+    fake_nox = _fake_nox_bin(tmp_path)
+    _branch_from(repo, "trunk", "origin/land/lode-a")
+    _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
+    _commit_file(
+        repo, "reformat_target.txt", "unformatted\n", "A adds an unformatted file"
+    )
+    _commit_file(repo, "REFORMAT_ME", "", "trigger the fake reformat")
+    _branch_from(repo, "trunk", "origin/land/lode-b")
+    _commit_file(repo, "b.txt", "from B\n", "B adds b.txt")
+
+    msg_dir = tmp_path / "msgs"
+    for id_, label in (("lode-a", "A"), ("lode-b", "B")):
+        _write_msg(msg_dir, id_, f"Merge land/{id_}: {label} ({id_})")
+    conflicts_dir = tmp_path / "conflicts"
+    conflicts_dir.mkdir()
+    accepted = _accepted(tmp_path, "lode-a", "lode-b")
+    landed = tmp_path / "landed"
+
+    result = _run(repo, accepted, msg_dir, conflicts_dir, landed, fake_nox=fake_nox)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "LANDED\tlode-a\nLANDED\tlode-b\n"
+    assert landed.read_text() == "lode-a\nlode-b\n"
+    # The reformat landed, and the tree is clean -- no separate uncommitted
+    # reformat left behind for the next merge (lode-b's) to trip over.
+    assert (repo / "reformat_target.txt").read_text() == "reformatted\n"
+    status = _git(repo, "status", "--porcelain")
+    assert status.stdout == ""
+    # b.txt must still exist -- proof the second merge succeeded against a
+    # clean tree rather than machine-faulting on a's leftover dirt.
+    assert (repo / "b.txt").exists()
+    # The reformat is IN lode-a's own merge commit (--amend), not a
+    # trailing, separately-authored commit on top of it.
+    merge_sha = _git(
+        repo, "log", "--format=%H", "--grep=Merge land/lode-a", "origin/trunk..HEAD"
+    ).stdout.strip()
+    assert merge_sha, "expected to find lode-a's merge commit"
+    content_at_merge = _git(repo, "show", f"{merge_sha}:reformat_target.txt").stdout
+    assert content_at_merge == "reformatted\n"
+    # And no separately-authored "style:"/reformat commit exists on top.
+    log = _git(repo, "log", "--oneline", "origin/trunk..HEAD")
+    assert "style" not in log.stdout.lower()
 
 
 def test_an_unrunnable_land_merge_one_is_a_fault_not_a_conflict(

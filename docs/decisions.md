@@ -5304,3 +5304,48 @@ entries below from being rewritten to chase the current tree.)
   mechanical fix (required kwarg, no default) is "fine, and guarded" for now; a third would be the
   point a shared lint rule (e.g. a `flake8`/`ruff` custom check, or a narrower corpus scan scoped
   to exactly `cwd: Path | None = None` parameters in `tests/*.py`) starts paying for itself.
+- **`scripts/land-replay.sh`'s per-branch gate: mid-loop non-verdict `nox` exits, and the
+  reformat-commit gap (`lode-lmu9`, 2026-08-14).** Discovered technically reviewing `lode-s9xe.13`
+  (the isolation-replay extraction), two hazards inherited faithfully from
+  `.claude/skills/land/SKILL.md` Section 3's fenced isolation-replay loop this script ports — a
+  pre-existing `/land` defect the extraction made legible, not a regression the port introduced.
+  Both decided the same direction as `nox -s lock_currency`'s existing 0/1/2 triage
+  (`lode-jhry`) — no new contract, just applying the one the file already lives under everywhere
+  else in the same loop:
+  1. **A mid-loop non-verdict `nox -t fix` / `nox -s tests` exit (127/126/128+n) is a machine
+     fault, not that branch's verdict.** The per-branch gate previously read
+     `if ! nox -t fix || ! nox -s tests; then bounce "$id"; fi` — collapsing both commands' exit
+     codes into one boolean, so *any* nonzero (nox falling off PATH mid-run, a signal) bounced
+     whichever branch happened to be merged at the time, deleting a reviewed branch and
+     superseding its ticket for something that was never its fault. Fixed by checking each
+     command separately via `gate-lib.sh`'s existing `escalate_unless_content` (the same
+     partition `nox -s lock_currency`'s baseline and mid-loop arms already use): exit 1 is the
+     only content verdict either command has; anything else stops the whole replay
+     (`gate_could_not_run`, exit 2), never bounces.
+  2. **A `nox -t fix` reformat on the LANDED path is folded into the merge commit via
+     `git commit --amend --no-edit`, not left uncommitted.** SKILL.md's own combined re-gate
+     (Section 3, pre-isolation) and Section 4 both commit a reformat explicitly; this loop's
+     per-branch gate did not, so a reformat left the working tree dirty for the *next*
+     iteration's `git merge` (inside `land-merge-one.sh`), which most likely machine-faults
+     against a dirty tree — silently stopping the whole replay. The BOUNCED path never surfaced
+     this because `git reset --hard HEAD~1` cleans it along with everything else. Amending (not a
+     separate commit) keeps the property a later bounce's single `git reset --hard HEAD~1` relies
+     on: one commit per landed id, so backing it out discards the reformat with it. Staging
+     mirrors SKILL.md Section 4's own rule — only the explicit paths `git diff` names, excluding
+     `.beads/*`, never `-A` (CLAUDE.md's workflow gotchas).
+
+  No SKILL.md prose changed — its fenced isolation-replay loop already reads as pseudocode this
+  script implements, and neither hazard was spelled out in that prose to begin with (the fenced
+  block's `nox -t fix && nox -s tests && nox -s lock_currency` combined re-gate, a different code
+  path from this per-branch loop, already has its own SKILL.md commit-the-reformat handling in
+  Section 4). Tests: `tests/test_land_replay.py`'s
+  `test_mid_loop_nonverdict_nox_exit_stops_the_pass_without_bouncing` (parametrized over both
+  gates), `test_a_branch_that_fails_a_nox_gate_is_bounced_and_backed_out` (likewise — the exit-1
+  content verdict each arm still owns), and `test_landed_reformat_is_committed_as_part_of_the_merge`.
+
+  **Not fixed here, filed as its own ticket:** `nox -t fix` is now an attributing per-branch gate
+  but is still absent from the up-front baseline block (which runs `nox -s tests` and
+  `nox -s lock_currency` on bare `--base-ref`), so a `fix` red on trunk itself would bounce
+  whichever branch merged first. Pre-existing — the old collapsed boolean had the same hole — and
+  baselining it is not a one-liner, because a baseline `nox -t fix` that reformats the base tree
+  reintroduces hazard 2 above before any merge. See `lode-mps0`.
