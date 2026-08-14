@@ -2,16 +2,21 @@
 
 {# OG/social-card metadata (lode-fhql.10).
 
-   The image path below is the convention lode-fhql.6 (favicon + OG card)
-   commits its 1200x630 asset to -- docs/assets/og-card.png, alongside the
-   rest of docs/assets/ (mark.svg, mark-16.png, lockup.svg). lode-fhql.10
-   no longer depends on lode-fhql.6 (dropped 2026-08-12, see lode-fhql.10's
-   notes): this tag points at that path now so the metadata is present and
-   wired, and starts resolving the moment lode-fhql.6 commits the file --
-   nothing here needs to change when it lands. #}
+   The image path below points at docs/assets/og-card.png, the 1200x630
+   asset lode-fhql.6 (favicon + OG card) commits alongside the rest of
+   docs/assets/ (mark.svg, mark-16.png, favicon.ico, lockup.svg) --
+   regenerated from docs/assets/og-card.svg via
+   scripts/rasterize-og-card.sh, per that file's own header. #}
 
 {% block extrahead %}
   {{ super() }}
+  {# theme.favicon (mkdocs.yml) already wires assets/mark-16.png as the
+     modern PNG favicon. This adds the multi-resolution assets/favicon.ico
+     (lode-fhql.6) alongside it, for a client that ignores a PNG icon link
+     or wants the 32/48px entries the single 16px PNG cannot offer. Note
+     this does NOT serve a bare /favicon.ico at the site root -- the asset
+     is published under assets/, and only this link points at it. #}
+  <link rel="shortcut icon" href="{{ 'assets/favicon.ico' | url }}">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="lode">
   <meta property="og:title" content="{{ page.title | default('lode') }}">
