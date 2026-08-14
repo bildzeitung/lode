@@ -50,6 +50,14 @@
 # rather than threaded through to the classifier (option (a) of lode-0867's
 # decision). `trunk` is now a literal at the one site that ever consumed it.
 #
+# That unifies the BASE REF, not the whole predicate: the classifier's capture
+# test is the widened lode-amif one (ancestor of `trunk` OR of the branch's own
+# `origin/<branch>`), while backstop 3 below is still the narrower `git branch
+# --merged trunk` alone. A bare builder ref captured only on `origin/<branch>`
+# is therefore reclaimed as a worktree but kept as a ref. That divergence
+# predates this change and is deliberately left alone here -- widening a
+# `branch -D` is its own decision, tracked as lode-2132.
+#
 # Not sourced from scripts/gate-lib.sh, though the "GATE COULD NOT RUN" banner
 # below is that library's: same abstention as scripts/assert-main-checkout.sh
 # makes, for the same reason -- gate-lib.sh's exit 2 means "could not judge the
@@ -195,9 +203,11 @@ fi
 # as backstop 2 but the OTHER namespace, invisible to both nets above, accumulating without
 # bound (17 confirmed orphans on one machine). This namespace needs a DIFFERENT guard: a
 # builder branch is never pushed to origin (lode-yrtu), so "remote gone" is meaningless here and
-# would delete a LIVE, still-building branch. The correct guard is the same PREDICATE the
-# worktree sweep applies — captured elsewhere — reached by a branch-NAME lookup, because a bare
-# ref has no worktree and therefore no HEAD line to test; plus not currently checked out anywhere.
+# would delete a LIVE, still-building branch. The correct guard is the same NOTION the worktree
+# sweep applies — captured elsewhere — reached by a branch-NAME lookup, because a bare ref has no
+# worktree and therefore no HEAD line to test; plus not currently checked out anywhere. Same base
+# ref (`trunk`), but a NARROWER predicate than the classifier's: no `origin/<branch>` arm here —
+# see the header. Deliberate; this arm ends in `branch -D`.
 MERGED=$(git branch --merged trunk --format='%(refname:short)')
 CHECKED_OUT=$(git worktree list --porcelain | awk '/^branch refs\/heads\//{print substr($0,19)}')
 B3_DELETED=0; B3_FAILED=0

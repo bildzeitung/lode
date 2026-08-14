@@ -58,12 +58,17 @@ def _add_wt(repo: Path, name: str, branch: str, start: str = "trunk") -> Path:
 
 
 def _sweep(
-    repo: Path, cwd: Path | None = None, env: dict[str, str] | None = None
+    repo: Path,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    args: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     # `env` OVERLAYS the real environment rather than replacing it -- the sweep
     # shells out to git, which needs HOME/PATH to behave at all.
+    # `args` exists ONLY so the rejection test below can launch the sweep the
+    # same way every other test does; the script itself takes none (lode-0867).
     return subprocess.run(
-        ["bash", str(repo / "scripts" / "worktree-gc-sweep.sh")],
+        ["bash", str(repo / "scripts" / "worktree-gc-sweep.sh"), *(args or [])],
         cwd=cwd or repo,
         capture_output=True,
         text=True,
@@ -248,14 +253,15 @@ def test_backstop3_deletes_a_merged_unattached_builder_ref(tmp_path: Path) -> No
 
 
 def test_default_base_ref_is_trunk_with_no_flag_passed(tmp_path: Path) -> None:
-    """Pins the script's IMPLICIT default base ref as `trunk` now that --base-ref
-    has been removed entirely (lode-0867). Every other test in this file already
-    calls the sweep with no flag at all, but this one exists specifically to make
-    that regression visible: if the default ever silently reverted to something
-    else (e.g. the upstream export's `main`), a `worktree-agent-*` ref merged into
-    `trunk` -- but not into that other ref -- would stop being reclaimed by
-    backstop 3, and nothing else in this file would catch it."""
+    """Pins the script's IMPLICIT base ref as `trunk` now that --base-ref has been
+    removed entirely (lode-0867). The fixture is what makes this test able to fail
+    on its own rather than only in lockstep with the backstop-3 test above: it
+    plants a SECOND branch, `main` -- the upstream export's base ref, the exact
+    value a careless re-port would reintroduce -- at an EARLIER commit, so the
+    candidate ref is merged into `trunk` but NOT into `main`. Judge against
+    `trunk` and it is reclaimed; judge against `main` and it survives."""
     repo = _repo(tmp_path)
+    _git(repo, "branch", "main", "trunk~1")  # does NOT contain trunk's tip
     _git(repo, "branch", "worktree-agent-default-check", "trunk")  # merged into trunk
     r = _sweep(repo)
     assert r.returncode == 0, r.stderr
@@ -266,13 +272,7 @@ def test_a_base_ref_argument_is_rejected(tmp_path: Path) -> None:
     """The flag was removed outright (lode-0867), not merely defaulted -- passing
     one must fail loudly rather than being silently ignored."""
     repo = _repo(tmp_path)
-    r = subprocess.run(
-        ["bash", str(repo / "scripts" / "worktree-gc-sweep.sh"), "--base-ref", "trunk"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    r = _sweep(repo, args=["--base-ref", "trunk"])
     assert r.returncode == 2
     assert "GATE COULD NOT RUN" in r.stderr
 
