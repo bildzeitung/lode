@@ -92,10 +92,15 @@ bare-citation pass, the opposite of what "scan dirs" suggests. Renamed to
 ``BARE_CITATION_EXCLUDE_DIRS`` to say what it actually does; nothing about
 its VALUE or behavior changed, only the name. This also collapsed
 ``check()`` to a single ``git ls-files`` fork per call (both file sets are
-now derived in memory from one fetch) and to reading each tracked markdown
-file from disk at most once per call (the two passes share a text cache, so
-a markdown file that both passes visit -- one outside
-``BARE_CITATION_EXCLUDE_DIRS`` -- is read once, not twice).
+now derived in memory from one fetch) and to reading each markdown file from
+disk at most once per call, via the ``_cached_text`` cache all three markdown
+reads now go through: the bracketed walk's source read, the bare pass's
+source read for a ``*.md`` file outside ``BARE_CITATION_EXCLUDE_DIRS``, and
+``_slugs_for_file``'s read of a link TARGET -- the last being the one that
+actually dominated, since nearly every anchor target is a ``docs/`` page the
+walk had already read. Non-markdown files in the bare pass are deliberately
+NOT cached: they are read exactly once, so retaining them would cost
+megabytes of resident text for no saved read.
 """
 
 from __future__ import annotations
@@ -210,13 +215,11 @@ def _is_external(target: str) -> bool:
 
 
 def _tracked_paths(root: Path) -> list[Path]:
-    """Every repo-relative path git tracks -- the single ``git ls-files`` fork
-    per ``check()`` call (lode-6e9c). Both file sets below are now derived
-    from this one fetch, held in memory, rather than each forking git a
-    second time -- before lode-6e9c the two callers below issued genuinely
-    different ``git ls-files`` queries (different pathspecs); since lode-act5
-    widened the markdown walk repo-wide, both queries became the identical
-    unscoped ``git ls-files``, so forking it twice bought nothing."""
+    """Every repo-relative path git tracks. ``check()`` calls this exactly
+    once and passes the result to both filters below (lode-6e9c) -- before
+    lode-act5 widened the markdown walk repo-wide the two filters issued
+    genuinely different pathspec-scoped queries; once both became the
+    identical unscoped one, forking git twice bought nothing."""
     out = subprocess.run(
         ["git", "-C", str(root), "ls-files"],
         capture_output=True,
@@ -226,9 +229,7 @@ def _tracked_paths(root: Path) -> list[Path]:
     return [Path(p) for p in out.split()]
 
 
-def _tracked_markdown_files(
-    root: Path, tracked: list[Path] | None = None
-) -> list[Path]:
+def _tracked_markdown_files(root: Path, tracked: list[Path]) -> list[Path]:
     """Every ``*.md`` file git tracks, repo-wide (lode-act5) -- not limited to
     ``docs/`` and ``.claude/``. Widened from the original two-directory scan
     so a bracketed relative link written in ANY tracked markdown file (a
@@ -237,15 +238,13 @@ def _tracked_markdown_files(
     module docstring's SCOPE DECISION (lode-act5) for why the general form
     was chosen over a named allowlist of top-level READMEs.
 
-    ``tracked`` lets a caller that already has the full ``git ls-files``
-    output (``check()`` below) pass it in instead of triggering a second
-    fork; omitted, this fetches it itself (used directly by tests)."""
-    if tracked is None:
-        tracked = _tracked_paths(root)
+    A pure filter over ``tracked`` (``_tracked_paths``' output): required, not
+    optional, so ``check()`` stays the single owner of the ``git ls-files``
+    fork and no caller can silently reintroduce a second one."""
     return sorted(root / rel for rel in tracked if rel.suffix == ".md")
 
 
-def _tracked_other_files(root: Path, tracked: list[Path] | None = None) -> list[Path]:
+def _tracked_other_files(root: Path, tracked: list[Path]) -> list[Path]:
     """Every tracked file OUTSIDE ``BARE_CITATION_EXCLUDE_DIRS`` -- the
     general form the scope decision in the module docstring calls for. Any
     of these can cite a ``docs/`` anchor in a bare-text comment (CI workflow
@@ -265,9 +264,7 @@ def _tracked_other_files(root: Path, tracked: list[Path] | None = None) -> list[
     walks' input sets) is handled by ``check``'s de-duplication, not by
     narrowing this set.
 
-    ``tracked``: see ``_tracked_markdown_files`` above -- identical purpose."""
-    if tracked is None:
-        tracked = _tracked_paths(root)
+    ``tracked``: see ``_tracked_markdown_files`` above -- identical role."""
     return sorted(
         root / rel
         for rel in tracked
@@ -364,12 +361,35 @@ def _headings(text: str) -> list[str]:
     return headings
 
 
-def _slugs_for_file(path: Path) -> set[str]:
+def _cached_text(path: Path, cache: dict[Path, str]) -> str:
+    """Read ``path`` once per ``check()`` call and remember it -- the single
+    home of every markdown read in this gate (lode-6e9c). Keyed by the
+    RESOLVED path, because the same file reaches this function under two
+    spellings: a walk source is ``root / <tracked rel>`` while a link target
+    has already been ``.resolve()``d, and any symlink above the repo root
+    would otherwise make those two keys miss each other and read twice.
+
+    Raises ``OSError`` exactly as a plain ``.read_text()`` would on the first
+    read of an unreadable path; a cached hit can never raise, since an entry
+    only exists once a read has already succeeded."""
+    key = path.resolve()
+    if key not in cache:
+        cache[key] = path.read_text(encoding="utf-8", errors="replace")
+    return cache[key]
+
+
+def _slugs_for_file(path: Path, text_cache: dict[Path, str]) -> set[str]:
     """All valid anchor slugs for a markdown file: every heading's slug
     (including GitHub's disambiguating ``-1``, ``-2``, ... suffixes for
     repeated headings) plus every literal id from an explicit
-    ``<a id="...">``/``<a name="...">`` anchor tag."""
-    text = path.read_text(encoding="utf-8", errors="replace")
+    ``<a id="...">``/``<a name="...">`` anchor tag.
+
+    Reads through ``text_cache`` (lode-6e9c): a link *target* is almost
+    always some ``docs/*.md`` page the bracketed walk already read as a
+    *source*, so without the shared cache this re-read the bulk of the
+    repo's markdown a second time -- by far the larger of the two duplicate
+    reads that ticket set out to remove."""
+    text = _cached_text(path, text_cache)
     slugs: set[str] = set()
     seen_counts: dict[str, int] = {}
     for heading in _headings(text):
@@ -405,6 +425,7 @@ def _resolve_error(
     target_path: Path,
     anchor: str,
     slug_cache: dict[Path, set[str]],
+    text_cache: dict[Path, str],
 ) -> LinkError | None:
     """The verdict on one already-resolved target: missing file, missing
     anchor, or fine. Shared by both walks in ``check`` so a broken link and a
@@ -415,7 +436,7 @@ def _resolve_error(
     if not anchor or target_path.suffix != ".md":
         return None
     if target_path not in slug_cache:
-        slug_cache[target_path] = _slugs_for_file(target_path)
+        slug_cache[target_path] = _slugs_for_file(target_path, text_cache)
     if anchor in slug_cache[target_path]:
         return None
     try:
@@ -425,18 +446,6 @@ def _resolve_error(
     return LinkError(
         source, line_no, target, f"no heading slug '#{anchor}' in {display}"
     )
-
-
-def _cached_text(path: Path, cache: dict[Path, str]) -> str:
-    """Read ``path`` once and remember it -- the shared home of both walks'
-    file reads below (lode-6e9c), so a markdown file outside
-    ``BARE_CITATION_EXCLUDE_DIRS`` (visited by both passes) is read from disk
-    once per ``check()`` call, not twice. Raises ``OSError`` same as a plain
-    ``.read_text()`` on the first read of an unreadable path; a cached hit
-    can never raise, since it only exists once a read has already succeeded."""
-    if path not in cache:
-        cache[path] = path.read_text(encoding="utf-8", errors="replace")
-    return cache[path]
 
 
 def check(root: Path) -> list[LinkError]:
@@ -456,14 +465,31 @@ def check(root: Path) -> list[LinkError]:
                 (source.parent / file_part).resolve() if file_part else source.resolve()
             )
             error = _resolve_error(
-                root, source, line_no, target, target_path, anchor, slug_cache
+                root,
+                source,
+                line_no,
+                target,
+                target_path,
+                anchor,
+                slug_cache,
+                text_cache,
             )
             if error:
                 errors.append(error)
 
     for source in _tracked_other_files(root, tracked):
         try:
-            source_text = _cached_text(source, text_cache)
+            # Only markdown is worth caching here: a `.md` source outside
+            # BARE_CITATION_EXCLUDE_DIRS was already read by the walk above
+            # (and may yet be read again as a link target), while the rest of
+            # this set -- src/, tests/, workflow YAML, shell scripts -- is
+            # read exactly once, so caching it would retain megabytes of text
+            # for the whole call in exchange for nothing.
+            source_text = (
+                _cached_text(source, text_cache)
+                if source.suffix == ".md"
+                else source.read_text(encoding="utf-8", errors="replace")
+            )
         except OSError:
             continue
         for line_no, target in _bare_doc_anchor_refs(
@@ -479,6 +505,7 @@ def check(root: Path) -> list[LinkError]:
                 (root / file_part).resolve(),
                 anchor,
                 slug_cache,
+                text_cache,
             )
             if error:
                 errors.append(error)

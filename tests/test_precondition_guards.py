@@ -7,9 +7,11 @@ than re-derived in all three (which is the drift lode-t6ni was filed to close).
 
 WHY THIS MODULE EXISTS -- nothing else gates those pointers. ``nox -s
 linkcheck`` (``scripts/check_links.py``) is the repo's anchor-rot gate, but it
-scans only git-tracked ``*.md`` under ``docs/`` and ``.claude/``
-(``SCAN_DIRS``), so a markdown link living in a ``*.sh`` comment is invisible
-to it. The target heading is stamped with a ticket id -- "Precondition guards
+walks bracketed markdown links only in git-tracked ``*.md`` files (repo-wide
+since lode-act5), so a markdown link living in a ``*.sh`` comment is invisible
+to it -- its second, bare-citation pass over non-markdown files recognizes only
+a literal ``docs/<page>.md#<anchor>`` text reference, never a bracketed link to
+anything else. The target heading is stamped with a ticket id -- "Precondition guards
 (the 0/1/2 family) (lode-t6ni)" -- and dropping a ticket id from a heading that
 describes a general contract is exactly the kind of tidy-up a later reader
 reasonably makes. Today that would silently break all three headers' only route
@@ -93,7 +95,9 @@ def test_the_contract_anchor_resolves_in_the_target_doc() -> None:
     a heading rename fails here for the same reason and by the same algorithm
     it would fail there.
     """
-    slugs = _check_links._slugs_for_file(CONTRACT_DOC)
+    # `{}` is a throwaway per-call text cache -- see `_cached_text`; this
+    # test reads one file once, so it has nothing to share.
+    slugs = _check_links._slugs_for_file(CONTRACT_DOC, {})
     assert ANCHOR in slugs, (
         f"'{CONTRACT_HEADING}' no longer resolves to #{ANCHOR} in "
         f"{CONTRACT_DOC.name} -- the heading was renamed or removed, and the "
