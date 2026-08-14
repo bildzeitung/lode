@@ -72,7 +72,7 @@ alternatives, live in
 
 A pytest corpus scan (`tests/test_except_parens_gate.py`) gates this fiat mechanically — it fails on
 any tracked-source bare or unmarked multi-exception `except`, so a dropped `# fmt: skip` marker turns
-red on the next `nox -t fix` instead of degrading silently.
+`nox -s tests` red instead of degrading silently.
 
 ## Derive identifiers, never retype them
 
