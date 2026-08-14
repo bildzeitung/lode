@@ -1341,11 +1341,10 @@ git status --short
 
 **MISTAKES.md — narrow, explicit exception to "report the patch, not the gap."** Before the trunk
 push below, check whether this pass surfaced a qualifying mistake — either one I noticed myself this
-pass, or a `MISTAKES.md CANDIDATE` block a `land-review` dispatch returned this pass (its own file,
-step "MISTAKES.md — I report, I never write it myself" — it cannot commit from its disposable
-worktree, so filing is mine). "Qualifying" is CLAUDE.md directive 9's bar (destroyed/risked real work,
-or shipped a wrong artifact, with a derivable prevention rule) — not every bounce or drift. If nothing
-qualifies this pass, skip this block entirely. If something does:
+pass, or a `MISTAKES.md CANDIDATE` block a `land-review` dispatch returned this pass — it cannot
+commit from its disposable worktree, so filing is mine. "Qualifying" is CLAUDE.md directive 9's bar —
+not every bounce or drift. If nothing qualifies this pass, skip this block entirely. If something
+does:
 
 ```bash
 scripts/assert-main-checkout.sh || exit 1     # same reason as the reformat commit above (lode-pxyt)
@@ -1354,15 +1353,14 @@ grep -n "<distinctive phrase from the incident>" MISTAKES.md    # dedup: same ro
 
 - **Already present** (a prior stage — a producer in its worktree, the code-reviewer, an earlier
   `/land` pass — already filed the same incident) → skip. Entries are append-only; do not double-file.
-- **Not present** → append a new entry at the **top** of the log (newest first), in the fixed shape —
-  what happened / root cause / consequence / the rule that prevents a repeat — then commit it
-  **directly on `trunk`**, the same narrow exception CLAUDE.md's own workflow gotchas already carry
-  for a human's direct doc-only trunk commit: MISTAKES.md is a pure audit-trail file, append-only, no
-  gate risk (no code, no tests, nothing `nox` or a technical review would catch), so unlike an
-  ordinary "gap" this file's own remedy is always self-contained prose I can state and commit myself,
-  never a decision that needs review:
+- **Not present** → append a new entry at the **top** of the log (newest first), in directive 9's
+  entry shape, then commit it **directly on `trunk`** — the same narrow exception CLAUDE.md's
+  workflow gotchas already carry for a direct doc-only trunk commit. This file is append-only prose
+  with no gate risk (no code, no tests, nothing `nox` or a technical review would catch), so unlike
+  an ordinary "gap" its remedy is never a decision that needs review:
 
   ```bash
+  scripts/assert-main-checkout.sh || exit 1                          # fresh Bash invocation; this commit names no ref or path either (lode-pxyt)
   git add MISTAKES.md
   git commit --no-verify -q -m "docs: record <short incident name> in MISTAKES.md"   # --no-verify: same beads pre-commit hook reason as above
   git show --stat HEAD   # confirm only MISTAKES.md rode along
@@ -2498,11 +2496,9 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   ([1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)).
 - **File a bd ticket for an incidental discovery** — something I notice about /land's own mechanics
   mid-pass, not a per-branch verdict. I **report** it in [Stop and report](#stop-and-report) instead,
-  and the **human reading that report** decides whether it becomes a ticket. **This does not touch
-  MISTAKES.md filing** — a MISTAKES.md append is a doc write recording a past incident, not a bd
-  ticket filing, so it does not conflict with this rule; see [Section
-  4](#4-land-the-survivors)'s "MISTAKES.md — narrow, explicit exception to 'report the patch, not the
-  gap'" for the write path (lode-v1rk). Not `/sweep` — it only
+  and the **human reading that report** decides whether it becomes a ticket. (This rule is about **bd
+  tickets**; a MISTAKES.md append is a doc write, and its sanctioned path is in [Section
+  4](#4-land-the-survivors) — lode-v1rk.) Not `/sweep` — it only
   surfaces what is already *in bd*, so it cannot see a discovery I never filed. That is the point, not
   a gap to close by filing one so `/sweep` can find it: filing *is* the dupe generator this rule
   removes. The rule is scoped narrowly and does **not** touch the two sanctioned `bd create` paths,

@@ -954,8 +954,9 @@ real items from the durable record a human relies on.
 - **File to MISTAKES.md.** I touch no `git` and write no repo files at all (see [Non-goals](#non-goals--hold-the-line)),
   so an autonomous append is structurally out of reach here even for a qualifying finding — and this
   stage surfaces work *other* stages already stopped waiting on a human for, not something I discover
-  firsthand. If a surfaced item itself looks MISTAKES.md-worthy, I note it in my report; filing it is
-  for a human or a stage that can write repo files (lode-v1rk).
+  firsthand. If a surfaced item itself meets CLAUDE.md directive 9's bar, I note it in my report as a
+  `MISTAKES.md CANDIDATE` block (the same block name `land-review` and `/epic-audit` use); filing it
+  is for a human or a stage that can write repo files (lode-v1rk).
 
 ## Stop and report
 

@@ -142,6 +142,6 @@ explicit step you ask for.
 **MISTAKES.md: nothing for me to add.** I stress-test a plan *before* it's built — there is no
 executed work yet for anything to have gone wrong in, and I edit no repo files (`docs/`, tickets)
 as a side effect of running. If I'm handed a plan that turns out to already describe a past
-incident matching CLAUDE.md directive 9's bar, that's a finding for my §3 readout like any other
-criticism, not something I file myself — filing happens in the stage that actually builds or lands
-the work (lode-v1rk).
+incident matching CLAUDE.md directive 9's bar, that's a `MISTAKES.md CANDIDATE` block in my §3
+readout (the same block name the other report-only stages use), not something I file myself — filing
+happens in the stage that actually builds or lands the work (lode-v1rk).

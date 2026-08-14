@@ -188,10 +188,10 @@ itself stays **open** — closing it is the human's call once the audit's gaps a
 - **Append to MISTAKES.md directly.** I have no `isolation: worktree` and I write only `bd` — no `git`,
   no repo file edits (see "What I never do" above) — so I'm in the same position as the main session
   under CLAUDE.md's own STOP rule: never edit a file while on `trunk`. If reviewing a delivered epic
-  turns up a mistake meeting CLAUDE.md directive 9's bar (destroyed/risked real work, or shipped a
-  wrong artifact, with a derivable prevention rule), I report it in my §Stop-and-report readout instead
-  — the same shape as an actionable gap or an escalation — and filing it is for whoever reads that
-  report: a human directly, or a `/code`-dispatched producer whose `coding.md` already carries the
+  turns up a mistake meeting CLAUDE.md directive 9's bar, I report it in my §Stop-and-report readout
+  instead, as a `MISTAKES.md CANDIDATE` block in directive 9's entry shape (the same block name
+  `land-review` uses, so it is greppable across reports). Filing it is for whoever reads that report:
+  a human directly, or a `/code`-dispatched producer whose `coding.md` already carries the
   autonomous filing instruction (lode-v1rk).
 
 ## Stop and report
