@@ -1042,3 +1042,41 @@ Material's Markdown dialect (`pymdownx` extensions: admonitions, tabs, etc.) is 
 in `mkdocs.yml`; none of the currently-published pages use GitHub-flavored-Markdown-incompatible
 syntax today, and none should be added as part of adopting the site without checking it renders
 sanely in GitHub's plain markdown view first.
+
+### Derived reference pages (decided, lode-fhql.15)
+
+`docs/keybindings.md` and `docs/configuration.md` are EXCLUDED above because they're addressed to
+whoever *builds* lode next, not whoever *uses* it — but each holds genuinely user-facing content
+trapped inside that maintainer prose: `keybindings.md`'s "Current keymap" tables (which keys the TUI
+responds to, full stop), and `configuration.md`'s `runtime`-kind rows (a setting the user/operator
+can change while running, as opposed to a `tune`/`build` knob nobody outside the codebase acts on).
+`docs/tui.md` was assessed against the same question and found to hold **none** — it is TCSS layout
+rules, footer-width measurement mechanics, and TUI test-settling internals, addressed entirely to
+whoever writes the next screen; no derived page is generated from it.
+
+**Generated, not hand-copied, so the two copies cannot silently diverge.**
+`scripts/generate_derived_docs.py` parses the source doc's own markdown tables (the "Current keymap"
+tables in `keybindings.md`; every `| Knob | Kind | Default | Notes |` table in `configuration.md`,
+filtered to `Kind == runtime`) and writes `docs/keymap.md` / `docs/settings.md` from them — no field
+is retyped by hand. `scripts/generate_derived_docs.py --check` regenerates to memory and diffs
+against the committed files, exiting 1 (naming the stale file) on any drift;
+`tests/test_generate_derived_docs.py` runs that check as part of `nox -s tests`, so a source table
+that changes without regenerating the derived page fails the gate rather than shipping a page that
+silently disagrees with its own source. The generator also strips maintainer-only asides (a
+parenthetical citing a bd ticket id, or `show=False` footer-visibility trivia) — the two pages read
+as documentation for someone using lode, not a verbatim dump of `keybindings.md`'s development
+history or `configuration.md`'s implementation notes.
+
+`docs/keymap.md` links back to `keybindings.md`'s GitHub URL for whoever actually needs to add or
+rebind a key, and both derived pages point out that the in-app `Ctrl+_`/`?` help overlay (not this
+page) is the definitive *live* keymap — the derived page is a browsing convenience, not a promise
+that it can never lag a mid-session TUI change the way the always-current overlay cannot.
+
+**Publish-scope wiring is a follow-up, not this ticket's job.** `lode-fhql.9` (built concurrently, in
+its own worktree) owns `scripts/build_docs_site.py`'s `PUBLISHED_TOP_LEVEL` list — this ticket has no
+access to that file to add `keymap.md`/`settings.md` to it, and doing so before both branches land
+would edit a sibling's in-flight file. The "`lode-fhql.15`'s derived pages take precedence once they
+exist" link-rewrite rule above already anticipates this: once both land, `keymap.md`/`settings.md`
+need adding to `PUBLISHED_TOP_LEVEL` (and the link-rewrite rule then resolves `keybindings.md`/
+`configuration.md` citations elsewhere in the published set to these two pages instead of falling
+through to GitHub) — tracked as a follow-up ticket, blocked on both `lode-fhql.9` and `lode-fhql.15`.
