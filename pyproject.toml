@@ -86,12 +86,14 @@ dev = [
                             # textual[syntax] (lode-sjbo). Hyphenated: a
                             # requirement names the distribution, not the
                             # import.
-]
-docs = [
     "mkdocs-material>=9.5,<10", # docs-site generator (lode-fhql.8; rationale
-                                # in docs/stack.md). Its own extra rather than
-                                # `dev` because it is CI-only -- lode-fhql.9's
-                                # Pages workflow, not a local `dev` install.
+                                # in docs/stack.md). Moved here from its own
+                                # CI-only `docs` extra (lode-fhql.20) -- mkdocs
+                                # is also a VALIDATOR (`nox -s docs`, below):
+                                # a local `mkdocs build` surfaced broken
+                                # intra-doc anchors nobody had seen, so it
+                                # belongs on every dev's PATH like any other
+                                # gate tool.
 ]
 
 [project.scripts]

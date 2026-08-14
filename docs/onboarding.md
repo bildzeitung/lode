@@ -159,9 +159,9 @@ cache"](storage.md#rebuild-the-vector-cache-after-a-schema-mismatch-crash-lode-2
 [`noxfile.py`](../noxfile.py) runs **inside the already-built `./venv`**, not an isolated
 env, so activate first. `nox -t fix` and `nox -s tests` are the two entry points REQUIRED
 before any merge (CLAUDE.md) — a narrower claim than "runs by default": a bare `nox`
-invocation also runs `nox -s shellcheck`, `nox -s linkcheck`, and `nox -s docstringcheck`
-(five sessions total; see [`noxfile.py`](../noxfile.py)'s module docstring for what those
-three check):
+invocation also runs `nox -s shellcheck`, `nox -s linkcheck`, `nox -s docstringcheck`, and
+`nox -s docs` (six sessions total; see [`noxfile.py`](../noxfile.py)'s module docstring for
+what those four check):
 
 ```bash
 nox -t fix         # ruff format + ruff check --fix
