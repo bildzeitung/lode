@@ -524,6 +524,7 @@ def test_quote_aware_real_invocation_wrapped_in_quotes_stays_the_same_accepted_r
 # which no functional assertion notices. The test below pins the performance property directly.
 
 
+@pytest.mark.serial
 def test_fast_path_rejects_gh_inside_an_ordinary_word_without_scanning() -> None:
     """The pre-filter must reject a "gh"-inside-an-ordinary-word command BEFORE the O(n^2)
     _split_unquoted split/scan ever runs, not merely allow it (correctly) after paying that cost.
@@ -531,16 +532,19 @@ def test_fast_path_rejects_gh_inside_an_ordinary_word_without_scanning() -> None
     Measured on this ticket's own machine (bash 5.x, LANG=C.UTF-8): the OLD `*gh*` substring
     pre-filter let an 8 KB such command through to the split, taking ~469ms; a 24.6 KB one ~3.5s.
     The tightened command-position pre-filter exits before the split ever runs, so this completes
-    in a small, size-independent budget. The ceiling below (1.0s, lode-887o -- widened from an
-    original 0.25s that measured 0.320s flaky under `pytest -n 8` on a loaded machine, lode-887o)
-    stays comfortably under the OLD guard's own smallest measured regression (469ms @ 8 KB is
-    already close; the 3.5s @ 24.6 KB path this fixture actually exercises is 3.5x the new
-    ceiling) while riding out ordinary scheduler noise, so a REVERT of the pre-filter (back to
-    `*gh*`, or dropped outright) still fails this test long before anyone notices a slow session.
-    This test is also run OUTSIDE the parallel ``-n 8`` worker pool (``noxfile.py``'s
-    ``_SERIAL_TIMING_TESTS``, lode-887o): its wall-clock measurement would otherwise share the
-    machine with 7 sibling xdist workers and be subject to their scheduling load, which is what
-    produced the original flake.
+    in a small, size-independent budget. The ceiling below is 1.0s (lode-887o -- widened from an
+    original 0.25s that measured 0.320s flaky under `pytest -n 8` on a loaded machine). What it is
+    measured against is the regression path THIS fixture exercises: ~3.5s at 24.6 KB, i.e. 3.5x the
+    ceiling, so a REVERT of the pre-filter (back to `*gh*`, or dropped outright) still fails this
+    test loudly. It is deliberately NOT tight enough to catch the OLD guard's smaller 8 KB case
+    (469ms, under the ceiling) -- that size is not what this test feeds it, and buying that margin
+    back is what made the assertion flaky in the first place.
+
+    Carries `@pytest.mark.serial` (lode-887o, registered in `pyproject.toml`): `nox -s tests` -- the
+    landing gate -- runs marked tests in a separate `-n 0` pytest invocation, so this wall-clock
+    measurement never shares the machine with sibling xdist workers, which is what produced the
+    original flake. `nox -s unit` / `nox -s coverage` do not split that way, so the 1.0s ceiling
+    still has to survive parallel load on its own there.
     """
     # ~25 KB of prose containing "through" repeatedly, no real `gh` invocation anywhere.
     command = "git commit -m '" + ("walking through the design once more. " * 650) + "'"
