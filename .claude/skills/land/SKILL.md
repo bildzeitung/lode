@@ -111,7 +111,7 @@ one of those exit sites (lode-0jan).** [Section 3](#3-batch-merge-the-accepted-s
 empty-`accepted` guard used to abort identically whether `$STATE_DIR/accepted` was **missing** (3a's
 precompute never ran — a real silent-failure shape, still aborted loudly, unchanged) or merely
 **empty** (every branch already left the set for a legitimate reason). The empty case is not a
-failure: the loop that reads `$ACCEPTED` correctly iterates zero times, the re-gate that follows is
+failure: `scripts/land-merge-batch.sh` correctly processes zero ids, the re-gate that follows is
 *skipped* (`trunk` is unchanged, so there is nothing this pass introduced to gate — see that
 section's own note; it is skipped rather than merely harmless, since running it would cost a full
 suite for no new content), and the pass flows straight through to [Section
@@ -434,7 +434,12 @@ which dependents a conflicting or bounced base takes with it:
 ```bash
 STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation (lode-sfnb)
 mkdir -p "$STATE_DIR"
-scripts/stacked-graph.sh --base-ref origin/trunk --report-unordered | tee "$STATE_DIR/graph"
+# REDIRECT, never `| tee` (lode-b8sr): a pipeline reports the LAST command's status, so `| tee` would
+# hand back tee's always-0 exit and swallow the script's exit 2 -- leaving a truncated or empty
+# $STATE_DIR/graph that the merge scripts below read as a valid "no stacks" graph. That is exactly how
+# a dependent gets merged before its base, which is what the exit-2 rule below exists to prevent.
+scripts/stacked-graph.sh --base-ref origin/trunk --report-unordered > "$STATE_DIR/graph" || exit 1
+cat "$STATE_DIR/graph"   # the visibility `tee` used to give, now that the status is the script's own
 ```
 
 `$STATE_DIR` is wiped at the top of every pass (Section 1, lode-wjw4), so `$STATE_DIR/graph` can never
@@ -899,15 +904,18 @@ argument rather than by hand-rolling a fifth `cat` spelling. The `cat "$STATE_DI
 block **above** is deliberately left alone and is not a counter-example — it re-reads the file that
 same block wrote two lines up, so there is no cross-block hand-off to assert and nothing a load
 failure there could mean other than "the write immediately above failed," which its own `printf`
-already reports. `for id in $ACCEPTED` over an empty value iterates
+already reports. An empty accepted set iterates
 **zero** times and exits 0: it merges nothing, closes nothing, and is indistinguishable *by its
 behaviour* from a clean pass with an empty queue. What the assertion separates is not that shape from
 a real merge, but its two **causes**: a file that was never written (3a never ran — the silent
 failure, aborted loudly) from a file that was written empty (every branch legitimately left the set —
 allowed through, lode-0jan). Since lode-0jan the guards test only the former; do **not** re-add an
-`[ -n "$ACCEPTED" ]`/`[ -z "$ACCEPTED" ]` emptiness test to the first-pass merge loop on the strength
+emptiness test on top of that load — in `scripts/land-merge-batch.sh` (which owns the first-pass loop
+now) or anywhere else — on the strength
 of this paragraph — that conflates the two causes again, which is the whole defect lode-0jan fixed
-(pinned by `tests/test_land_conflicts_state.py::test_empty_accepted_falls_through_missing_accepted_still_aborts`).
+(pinned, since the loop became `scripts/land-merge-batch.sh`, by that script's own behavioural tests:
+`tests/test_land_merge_batch.py::test_missing_accepted_file_is_a_machine_fault` and
+`::test_empty_accepted_file_iterates_zero_times`).
 
 Before merging anything, unstage the passive jsonl export — unconditionally, without needing to know
 what staged it (see the reconciliation above: it is *not* the reads above, and the `bd dolt pull`
@@ -1010,7 +1018,7 @@ Re-gate the combined result (this is a Python-gated repo where code changed; a *
 set has no Python gate — skip nox, run `scripts/validate-mermaid.sh` only if a merged diff touched a
 `docs/` diagram).
 
-**If the loop above merged NOTHING — `$STATE_DIR/landed` is empty, the all-bounced /
+**If the batch above merged NOTHING — `$STATE_DIR/landed` is empty, the all-bounced /
 all-`needs-rebase` pass lode-0jan lets through — skip this re-gate entirely and go straight to
 [Section 4](#4-land-the-survivors).** Local `trunk` is byte-identical to the `origin/trunk` Section 1
 fetched, whose content is by construction already gated (that is the premise every fresh agent
@@ -1030,8 +1038,8 @@ nox -t fix && nox -s tests && nox -s lock_currency     # if nox -t fix reformats
 public CI badge does.** A branch that bumped a `pyproject.toml` dependency without regenerating the
 lock (or whose merge with another accepted branch this pass changed the resolved graph) fails this
 with **exit 1**, the same way a red `nox -s tests` would; treat *that* identically — **Red** below
-covers it, and the isolation-replay loop re-runs it per branch (see its own `nox -s lock_currency`
-call) to find the culprit.
+covers it, and the isolation replay re-runs it per branch (inside
+[`scripts/land-replay.sh`](../../../scripts/land-replay.sh), not in a fence here) to find the culprit.
 
 **`nox -s lock_currency` and `validate-mermaid.sh` exit 2 are NOT red gates — they are machine
 faults, and isolating on either bounces an innocent branch.** Full contract (what 0/1/2 mean, and
@@ -1156,8 +1164,9 @@ git status --short
 
   **This commit names no ref or path at all — the one `git` write in this section that doesn't.**
   Every other one below is ref- or path-addressed and therefore cwd-independent (`git push origin
-  trunk`, `git push origin --delete land/<id>`, `git worktree unlock/remove --force/prune`, `git
-  branch -D` — each names its own target; the `bd` calls are cwd-independent too, but for an
+  trunk`, `git push origin --delete land/<id>` — each names its own target; the worktree/branch
+  deletes are no longer fenced here at all, they are `scripts/worktree-gc-sweep.sh`'s, which asserts
+  its own checkout; the `bd` calls are cwd-independent too, but for an
   unrelated reason: `bd` resolves the repo's canonical `.beads` rather than cwd's). This one commits
   directly to whatever branch cwd's `HEAD` happens to be on, and run from the wrong directory that is
   not a loud failure: it silently commits the reformat to that directory's branch, and the
@@ -1987,7 +1996,7 @@ git push origin trunk
 git status                 # MUST show trunk up to date with origin
 ```
 
-When the pass ends I release the lock (`scripts/land-lock.sh release`, [Section
+When the pass ends I release the lock (`scripts/land-heartbeat.sh --release`, [Section
 4](#4-land-the-survivors) — or, on any exit that never reaches it, the staleness window does,
 [Section 0](#0-single-lander-lock--acquire-first-every-tick)) and report: how many branches I
 reviewed; which

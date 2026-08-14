@@ -491,12 +491,9 @@ def test_default_expansion_is_a_use_not_an_assignment() -> None:
     """`${VAR:-default}` READS var (with a fallback); it must never be mistaken for
     an assignment of VAR. A name in _KNOWN_ENV_VARS would be filtered out before
     this check could see it, so use a plain unknown name (TIMEOUT) here instead --
-    test_known_env_var_is_never_flagged below covers the filtered case."""
+    test_tmpdir_default_expansion_is_never_flagged below covers the filtered
+    case."""
     assert _violations_in_block('echo "${TIMEOUT:-30}"\n') == {"TIMEOUT"}
-
-
-def test_known_env_var_is_never_flagged() -> None:
-    assert _violations_in_block('echo "${TMPDIR:-/tmp}"\n') == set()
 
 
 def test_tmpdir_default_expansion_is_never_flagged() -> None:

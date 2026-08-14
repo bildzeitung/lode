@@ -98,6 +98,7 @@ import threading
 import time
 from pathlib import Path
 
+import conftest
 import pytest
 from _gitrepo import _git
 from conftest import (
@@ -1532,7 +1533,10 @@ def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
     """
     text = LAND_SKILL_TEXT
 
-    assert "scripts/land-heartbeat.sh" in text, (
+    # NOT a bare `"scripts/land-heartbeat.sh" in text`: that also matches the
+    # two `--release` lines, so the pin would stay green with every real
+    # heartbeat call site deleted. Match the script NOT followed by --release.
+    assert re.search(r"scripts/land-heartbeat\.sh(?!\s*--release)", text), (
         "land/SKILL.md never heartbeats the single-lander lock -- the TTL is "
         "back to measuring acquisition age, not idle time (lode-m87j)"
     )
@@ -1567,7 +1571,15 @@ def test_land_skill_heartbeats_at_both_new_boundary_call_sites_lode_v4sv() -> No
 
     positions = [
         m.start()
-        for m in re.finditer(r"^scripts/land-heartbeat\.sh$", text, re.MULTILINE)
+        # Line-anchored so a backticked prose mention cannot pad the count, but
+        # NOT anchored at the line END: `|| true` is exactly the best-effort
+        # spelling the surrounding prose describes, and an indented call site
+        # (inside the Red branch's nested fence) is equally legitimate. The
+        # `--release` lookahead keeps the two release sites out of a HEARTBEAT
+        # count.
+        for m in re.finditer(
+            r"^[ \t]*scripts/land-heartbeat\.sh(?!\s*--release)", text, re.MULTILINE
+        )
     ]
     assert len(positions) == 3, (
         "expected exactly 3 in-skill 'scripts/land-heartbeat.sh' call sites "
@@ -1687,16 +1699,7 @@ def test_land_skill_threads_its_own_token_into_land_merge_one() -> None:
     forwarding it verbatim to `land-merge-one.sh` as its own [own-token]
     argument (see each script's own header); a call site that drops the flag
     makes every merge under it heartbeat blind (lode-q9pm)."""
-    calls = [
-        b
-        for b in LAND_SKILL_BLOCKS
-        if "land-merge-batch.sh" in b or "land-replay.sh" in b
-    ]
-    assert len(calls) == 2, (
-        f"expected both merge-script call sites (first pass land-merge-batch.sh "
-        f"+ isolation replay land-replay.sh), found {len(calls)} -- has the "
-        "skill's layout drifted?"
-    )
+    calls = conftest.land_merge_script_blocks()
     offenders = [c for c in calls if "--token" not in c]
     assert not offenders, (
         "a merge-script call site omits --token, so land-merge-one.sh "
@@ -1798,7 +1801,8 @@ def test_land_skill_never_reintroduces_an_inline_lock() -> None:
         "the acquire call is not inside an executable ```bash fence -- "
         "_fenced_bash() or the skill's layout has drifted"
     )
-    assert "land-heartbeat.sh" in executed, (
+    # Same `--release` exclusion as the pin above, for the same reason.
+    assert re.search(r"land-heartbeat\.sh(?!\s*--release)", executed), (
         "the heartbeat call (Section 2a) is not inside an executable ```bash "
         "fence -- test_land_skill_heartbeats_the_lock_once_per_ticket_in_"
         "section_2a found it in the file's prose but not where it is actually "

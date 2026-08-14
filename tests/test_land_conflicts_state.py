@@ -38,6 +38,7 @@ scaffolding and the cross-block-ordering precedent already are.
 
 from __future__ import annotations
 
+import conftest
 from conftest import LAND_SKILL_BLOCKS, only_block_with
 
 
@@ -164,47 +165,74 @@ def test_2b_precheck_persists_conflicts_to_the_state_dir() -> None:
     )
 
 
-def _merge_script_calls() -> list[str]:
-    """The two fenced call sites that hand /land's merge work to a script.
-
-    Neither merge loop is fenced any more (lode-s9xe.6): the first pass calls
-    scripts/land-merge-batch.sh and the isolation replay calls
+def test_both_merge_script_calls_are_given_the_state_paths_they_need() -> None:
+    """Neither merge loop is fenced any more (lode-s9xe.6): the first pass
+    calls scripts/land-merge-batch.sh and the isolation replay calls
     scripts/land-replay.sh, each covered directly by its own test module
     (tests/test_land_merge_batch.py, tests/test_land_replay.py) -- the
     per-conflict persist-to-disk behaviour these two used to pin inline now
     lives, and is tested, inside those scripts. What the skill still owns --
-    and what can still drift silently -- is the WIRING: the state paths it
-    hands them.
-    """
-    blocks = [
-        b
-        for b in _skill_blocks()
-        if "land-merge-batch.sh" in b or "land-replay.sh" in b
-    ]
-    assert len(blocks) == 2, (
-        f"expected exactly 2 fenced blocks calling the merge scripts (first pass "
-        f"land-merge-batch.sh + isolation-replay land-replay.sh), found "
-        f"{len(blocks)} -- this test's assumption about SKILL.md's structure has "
-        "drifted; re-check by hand before adjusting the count"
-    )
-    return blocks
+    and what can still drift silently -- is the WIRING.
 
+    A dropped flag is silent in the direction that matters: a missing REQUIRED
+    path makes the script fault loudly, but `--graph` is optional from the
+    script's own point of view, and losing it silently stops a conflicting base
+    from taking its dependents with it -- Section 3a's invariant, gone without a
+    word (lode-s9xe.4).
 
-def test_both_merge_script_calls_are_given_the_state_paths_they_need() -> None:
-    """A dropped flag is silent in the direction that matters: a missing
-    REQUIRED path makes the script fault loudly, but `--graph` is optional
-    from the script's own point of view, and losing it silently stops a
-    conflicting base from taking its dependents with it -- Section 3a's
-    invariant, gone without a word (lode-s9xe.4)."""
-    for call in _merge_script_calls():
-        for flag in (
-            "--accepted",
-            "--landed",
-            "--msg-dir",
-            "--conflicts-dir",
-            "--graph",
+    Pinned as flag-and-VALUE pairs, not bare flag names: `--graph
+    "$STATE_DIR/accepted"` would satisfy a presence-only check while feeding
+    the dependent-drop the wrong file entirely, and this is the only skill-side
+    wiring pin either merge path now has."""
+    for call in conftest.land_merge_script_blocks():
+        for flag, value in (
+            ("--accepted", '"$STATE_DIR/accepted"'),
+            ("--landed", '"$STATE_DIR/landed"'),
+            ("--msg-dir", '"$MSG_DIR"'),
+            ("--conflicts-dir", '"$CONFLICTS_DIR"'),
+            ("--graph", '"$STATE_DIR/graph"'),
         ):
-            assert flag in call, f"a merge script call no longer passes {flag}"
+            assert f"{flag} {value}" in call, (
+                f"a merge script call no longer passes `{flag} {value}` -- it is "
+                "either missing or pointed at a different path"
+            )
+
+
+def test_section_1a_derives_the_graph_without_swallowing_a_machine_fault() -> None:
+    """1a's `scripts/stacked-graph.sh` call is the only producer of
+    `$STATE_DIR/graph`, which both merge scripts read to decide which
+    dependents a conflicting or bounced base takes with it -- and its exit 2 is
+    a machine fault that must stop the pass, never be read as "no stacks".
+
+    Two ways that goes silently wrong, both pinned here because nothing else
+    pins this call site at all: piping into `tee` (the pipeline reports tee's
+    always-0 status, so a faulted run leaves a truncated file that reads as a
+    valid empty graph -- lode-b8sr), and dropping `--report-unordered` (every
+    UNORDERED pair vanishes, and a branch whose relation has no derivable
+    direction is deleted without the descendant question being asked)."""
+    block = only_block_with(
+        _skill_blocks(),
+        "scripts/stacked-graph.sh",
+        what="1a's stacked-graph derivation",
+    )
+
+    assert (
+        "scripts/stacked-graph.sh --base-ref origin/trunk --report-unordered > "
+        '"$STATE_DIR/graph" || exit 1'
+    ) in block, (
+        "1a no longer derives $STATE_DIR/graph by redirect with `|| exit 1`, or "
+        "dropped --base-ref/--report-unordered -- see this test's docstring for "
+        "what each half of that line is holding up"
+    )
+    # Over the block's COMMANDS only: the fence's own comment explains why the
+    # `| tee` spelling is wrong, and a needle over the raw text would match that
+    # explanation and fail on the very shape it is asking for.
+    assert "| tee" not in "\n".join(_commands(block)), (
+        "1a pipes stacked-graph.sh into tee -- the pipeline's status is tee's "
+        "(always 0), so the script's machine-fault exit 2 is swallowed and the "
+        "truncated $STATE_DIR/graph reads downstream as a valid empty graph "
+        "(lode-b8sr)"
+    )
 
 
 def test_kick_back_block_reads_conflicts_from_disk_not_a_bare_variable() -> None:
@@ -288,9 +316,13 @@ sat above Section 4 -- the same first-of-several-near-identical-blocks hazard
 """
 
 
-def _regate_and_push_indices(blocks: list[str]) -> tuple[list[int], int]:
-    """Document-order positions of the re-gate blocks and Section 4's push
+def _regate_and_push_indices(blocks: list[str]) -> tuple[int, int]:
+    """Document-order positions of the re-gate block and Section 4's push
     block -- the latter identified by CONTENT (`_SECTION_4_PUSH_MARK`).
+
+    Both scalars since lode-s9xe.6: the Red isolation-replay path's own re-gate
+    moved inside `scripts/land-replay.sh`, so exactly one re-gate fence is left
+    here and there is no longer a set of them to take a `max()` over.
 
     lode-om7o added a SECOND `git push origin trunk` fence, in "Stop and
     report"'s own MISTAKES.md entry point -- it fires only on a pass that
@@ -328,11 +360,11 @@ def _regate_and_push_indices(blocks: list[str]) -> tuple[list[int], int]:
         f"found {len(section_4)} -- this test's assumption about SKILL.md's "
         "structure has drifted; re-check by hand before adjusting the needle"
     )
-    return regate_indices, section_4[0]
+    return regate_indices[0], section_4[0]
 
 
 def _regate_precedes_push(blocks: list[str]) -> bool:
-    """Whether EVERY re-gate block precedes Section 4's push block.
+    """Whether the re-gate block precedes Section 4's push block.
 
     Shared by the pin below and its sabotage twin ON PURPOSE: a twin that
     re-derives the comparison instead of calling it proves only that the
@@ -340,8 +372,8 @@ def _regate_precedes_push(blocks: list[str]) -> bool:
     assertion actually shipped. Routing both through this one function is what
     makes the sabotage bind -- weaken the comparison here and the twin goes red.
     """
-    regate_indices, push_index = _regate_and_push_indices(blocks)
-    return max(regate_indices) < push_index
+    regate_index, push_index = _regate_and_push_indices(blocks)
+    return regate_index < push_index
 
 
 def test_section_3_regate_precedes_section_4_push_origin_trunk() -> None:
@@ -366,10 +398,10 @@ def test_section_3_regate_precedes_section_4_push_origin_trunk() -> None:
     path.
     """
     blocks = _skill_blocks()
-    regate_indices, push_index = _regate_and_push_indices(blocks)
+    regate_index, push_index = _regate_and_push_indices(blocks)
     assert _regate_precedes_push(blocks), (
         f"Section 3's re-gate (`{_REGATE}`) no longer precedes Section 4's "
-        f"`{_PUSH}` in document order -- re-gate blocks at {regate_indices}, "
+        f"`{_PUSH}` in document order -- re-gate block at {regate_index}, "
         f"push block at {push_index}. A reorder here would let un-gated "
         "content reach `origin/trunk`, and every fresh agent worktree branches "
         "from it (lode-youi, lode-rlz8)"
@@ -382,22 +414,21 @@ def test_section_3_regate_precedes_push_is_sabotage_proven() -> None:
     of the real parsed block list.
 
     The sabotage is the exact edit the pin exists to catch: swap the push block
-    with the LAST re-gate block, i.e. hoist the push above Section 3's re-gate.
-    Deliberately not "move the push to index 0" -- that makes the comparison
-    `max(regate) < 0`, false for ANY input, so such a twin passes even against a
-    document that is already broken, and proves nothing.
+    with the re-gate block, i.e. hoist the push above Section 3's re-gate.
+    Deliberately a SWAP rather than "move the push to index 0" -- the latter
+    makes the comparison false for ANY input, so such a twin passes even
+    against a document that is already broken, and proves nothing.
     """
     blocks = _skill_blocks()
-    regate_indices, push_index = _regate_and_push_indices(blocks)
+    regate_index, push_index = _regate_and_push_indices(blocks)
 
     # The copy is MANDATORY, not defensive housekeeping (lode-pxwn):
     # `_skill_blocks()` now returns the session-shared `conftest.LAND_SKILL_BLOCKS`
     # itself, so reordering in place would corrupt it for every test that runs
     # after this one -- an order-dependent failure elsewhere in the suite.
     sabotaged = list(blocks)
-    last_regate = max(regate_indices)
-    sabotaged[push_index], sabotaged[last_regate] = (
-        sabotaged[last_regate],
+    sabotaged[push_index], sabotaged[regate_index] = (
+        sabotaged[regate_index],
         sabotaged[push_index],
     )
     assert not _regate_precedes_push(sabotaged), (
