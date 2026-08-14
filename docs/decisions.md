@@ -5267,3 +5267,40 @@ entries below from being rewritten to chase the current tree.)
   `.claude/skills/sweep/SKILL.md` §8 (`$ACTIONABLE_NOW`, computed from `$SWEEP_TMP/current` with a
   `$4 == "deferred"` awk exclusion), the report-format block (section moved to last position), the
   "Stop and report" section, and the skill's frontmatter `description`.
+
+- **`scripts/land-merge-batch.sh` and `scripts/land-replay.sh` stay two scripts, not unified into
+  one shared loop (`lode-fdod`, 2026-08-14).** Discovered while technically reviewing
+  `lode-s9xe.13`: the extraction that moved `/land`'s two merge loops from markdown fences into
+  scripts kept ~80 lines byte-identical across the two files — arg parsing, the `grep -qxF`
+  stale-membership re-check with its 0/1/else partition, the `if CMD; then rc=0; else rc=$?; fi`
+  merge-dispatch idiom, and the CONFLICT/machine-fault arms. **Decided: no, deliberately leave the
+  duplication.** Two reasons, both practical rather than architectural:
+
+  1. **The loops' verdict sets genuinely differ and are not interchangeable.**
+     `land-merge-batch.sh` classifies LANDED/CONFLICT/HELD and runs no gates at all (the caller
+     re-gates the combined result once); `land-replay.sh` classifies
+     LANDED/CONFLICT/BOUNCED/HELD, runs baseline gates before touching anything, and gates *after
+     every single merge* — the entire reason it exists (a combined re-gate can be green with two
+     branches each clean in isolation; only per-branch gating on an otherwise-untouched checkout
+     finds the culprit). A shared loop body would need its own branchy "does this caller gate
+     per-iteration" parameter threaded through the CONFLICT/dispatch arms — the sketch in this
+     ticket's description (an optional per-branch gate hook plus reset-on-red in the batch script)
+     is plausible, but it turns two straightforward, independently-readable loops over
+     `/land`'s most destructive code path (`git reset --hard`, real merges onto the checkout that
+     ships) into one script with a conditional gating mode, at exactly the place where a
+     misread of "which mode am I in" is hardest to catch and most expensive to get wrong.
+  2. **The actually-shared, reused-by-both logic is already extracted.** `land-merge-one.sh`,
+     `drop-from-accepted.sh`, `land-state-load.sh`, and `gate-lib.sh` are the parts both loops
+     call rather than duplicate — SKILL.md's own prose already pointed at these as the shared
+     surface. What remains duplicated is loop *scaffolding* around genuinely different behavior,
+     not shared logic that was merely copy-pasted.
+
+  What the ticket actually asked for closing the gap on — "nothing tests that the two loops stay
+  the same shape, and the replay copy is the one whose drift nobody notices because it only runs
+  on the red path" — is real and worth fixing without the restructuring risk above:
+  `tests/test_land_loops_shared_idioms.py` now pins the shared idioms (the grep re-check block and
+  the `if CMD; then rc=0; else rc=$?; fi` dispatch guard) byte-for-byte equal between the two
+  scripts, so an edit to one that silently drifts from the other now fails `nox -s tests` instead
+  of only being caught by someone reading both files side by side. If a third such loop ever
+  appears, or the two loops' verdict sets converge, that would be the point to revisit unification
+  — the same "three genuinely stops being fine and unextracted" trigger this file uses elsewhere.
