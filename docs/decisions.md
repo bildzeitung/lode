@@ -5058,3 +5058,39 @@ entries below from being rewritten to chase the current tree.)
   likely light-background legibility (the current values are chosen for a dark terminal) or an
   accessibility need. At that point the honest first question is whether the answer is a lode
   config at all, or adopting Textual's own theme system across all three surfaces.
+- **lode keeps `AGENTS.md` — does NOT drop it the way harness-export did (`lode-s9xe.9`,
+  2026-08-13).** harness-export's commit `8b444b9` deleted its `template/AGENTS.md` (54 lines) and
+  folded the content into `CLAUDE.md`, on the grounds that `CLAUDE.md` is imported into every
+  subagent anyway. lode's `AGENTS.md` is 128 lines — 2.4x the export's — and diffing it against
+  lode's `CLAUDE.md` shows it is not a Claude-only duplicate:
+  1. **Real non-Claude tooling depends on it.** The file's `<!-- BEGIN BEADS CODEX SETUP -->` block
+     points Codex/OpenAI-compatible agents at `.agents/skills/beads/SKILL.md` — a tracked,
+     non-boilerplate file (`.agents/skills/beads/SKILL.md`,
+     `.agents/skills/beads/agents/openai.yaml`) that exists in this repo for exactly that purpose.
+     `CLAUDE.md` has no equivalent pointer. Deleting `AGENTS.md` orphans that setup with nothing
+     telling a Codex-driven session where to look.
+  2. **It is already load-bearing prose elsewhere in the docs, not a dead file.**
+     [`agents-workflow.md`](agents-workflow.md) names `CLAUDE.md` and `AGENTS.md` together as
+     "the hard project invariants," with an explicit precedence rule for when they disagree;
+     [`onboarding.md`](onboarding.md) warns that `bd init` rewrites both files and must be reset;
+     this file's own `bd-dolt-push` wrapper audit (above, `lode-bpl`) explicitly exempts
+     `AGENTS.md` as "generic beads-generated quick-reference prose, not an automated call site" —
+     a judgment that presupposes the file still exists. Dropping it would require rewriting three
+     other docs' cross-references, not just this one.
+  3. **The link gate the ticket warned about turns out not to be coupled at all.** The ticket's
+     acceptance criteria singled out `scripts/check_links.py`, because harness-export's `8b444b9`
+     had to touch it (alongside `README.md` and `install.sh`). Verified against this tree: lode's
+     `check_links.py` names no file — it scans whatever `git ls-files` returns, and turns
+     `skip_fences` on by suffix (`source.suffix == ".md"`), so `AGENTS.md` is covered generically,
+     by being a tracked `.md`, not by an enumeration. A delete would therefore have needed **zero**
+     scanner edit here; the precedent's coupling does not transfer. Recorded because the ticket
+     asserted otherwise, and a future fold-and-delete should not go hunting for a call site that
+     does not exist.
+  4. **The one section of `AGENTS.md` genuinely absent from `CLAUDE.md`** — "Non-Interactive Shell
+     Commands" (avoiding `cp`/`mv`/`rm`/`scp`/`ssh`/`apt-get`/`brew` hangs on aliased `-i` flags) —
+     is generically useful and not in scope for this decision to duplicate; it stays where it is.
+  **Decision:** keep `AGENTS.md`. No fold, no delete, no reference updates needed — the acceptance
+  criteria's "record in `docs/decisions.md` why lode keeps it" branch. **Revisit if** the Codex/
+  OpenAI tooling under `.agents/` is ever removed from the repo, at which point the Codex-pointer
+  rationale (reason 1) no longer holds and the remaining content (the Dolt architecture blurb, the
+  bd quick reference, the shell-command hygiene) could reasonably fold into `CLAUDE.md`.
