@@ -22,8 +22,12 @@
 
   Layout: paper background; the lockup (mark + "lode" wordmark) centred
   near the top at 5x the lockup's native scale; the positioning line from
-  docs/brand.md section 1 (verbatim, wrapped by hand across two lines since
-  SVG <text> does not auto-wrap) centred below it, set in the Inter body
+  docs/brand.md section 1 centred below it, wrapped by hand across two
+  lines since SVG <text> does not auto-wrap. The sentence drops only its
+  subject ("lode is"), which the wordmark directly above already supplies,
+  leaving it byte-identical to mkdocs.yml's own `site_description` -- so
+  the card and the og:description meta tag say the same thing. It is set
+  in the Inter body
   stack from docs/brand.md section 4, falling back to the system sans-serif
   stack for a rasterizer without the Inter webfont installed (the same
   fallback-stack convention the wordmark already uses for its monospace
@@ -34,7 +38,7 @@
   <rect x="0" y="0" width="1200" height="630" fill="#F7F4EE"/>
 
   <!-- lockup: mark.svg's strata + vein, plus the "lode" wordmark, copied from lockup.svg at 5x scale, centred -->
-  <g transform="translate(340,140) scale(5)">
+  <g id="mark" transform="translate(340,140) scale(5)">
     <rect x="0" y="4"  width="32" height="4" fill="#1E1B2E" opacity="0.35"/>
     <rect x="0" y="16" width="32" height="4" fill="#1E1B2E" opacity="0.35"/>
     <rect x="0" y="24" width="32" height="4" fill="#1E1B2E" opacity="0.35"/>

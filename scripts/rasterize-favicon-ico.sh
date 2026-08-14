@@ -70,15 +70,16 @@ pngs = [
 # ICONDIR header: reserved(2)=0, type(2)=1 (icon), count(2)
 header = struct.pack('<HHH', 0, 1, len(sizes))
 
-# ICONDIRENTRY per image: width, height (0 means 256), colour count/reserved
-# byte pairs, planes, bpp, data size, data offset. 32-bit-depth PNG data
-# embedded verbatim is a documented, universally-supported ICO variant.
+# ICONDIRENTRY per image: width, height, colour count/reserved byte pairs,
+# planes, bpp, data size, data offset. Each dimension is a single byte, so
+# 256 would have to be encoded as 0 -- every size above is well under that,
+# so no such encoding is needed here. 32-bit-depth PNG data embedded
+# verbatim is a documented, universally-supported ICO variant.
 offset = len(header) + len(sizes) * 16
 entries = b''
 for size, png in zip(sizes, pngs):
-    dim = size if size < 256 else 0
     entries += struct.pack(
-        '<BBBBHHII', dim, dim, 0, 0, 1, 32, len(png), offset
+        '<BBBBHHII', size, size, 0, 0, 1, 32, len(png), offset
     )
     offset += len(png)
 
