@@ -944,12 +944,17 @@ deciding factors were:
   Node/Chromium toolchain, per [`CLAUDE.md`](../CLAUDE.md)) and Hugo/Zola (not Python, and a second
   static-site toolchain the venv/lock already cover for nothing).
 
-**Dependency**: `mkdocs-material>=9.5,<10` as its own `docs` extra in `pyproject.toml`, not folded
-into `dev` — it is CI-only (`lode-fhql.9`'s Pages workflow builds the site; no local `dev` install
-needs it). Per the [pyproject-intent / requirements.lock split](#dependency-locking-lode-g2741),
-optional extras stay unlocked (the `dev` extra's existing policy, extended unchanged to `docs`), and
-`scripts/compile-lock.sh` compiles the lock from `pyproject.toml` with no `--extra` flags — so this
-needs no `requirements.lock` regeneration, only the `pyproject.toml` declaration.
+**Dependency**: `mkdocs-material>=9.5,<10` in the `dev` extra in `pyproject.toml` (`lode-fhql.20`,
+2026-08-14 — **reverses** the original decision below to put it in its own CI-only `docs` extra).
+The original premise was that the docs build had no local value (`lode-fhql.9`'s Pages workflow
+builds the site; no local `dev` install needs it) — that premise broke the same day a local `mkdocs
+serve` (run ad hoc for `lode-fhql.13`'s favicon sign-off) immediately surfaced two broken intra-doc
+anchors nobody had seen (`lode-fhql.21`). mkdocs is a validator, not just a site generator, so it
+belongs in `dev` and behind its own gate — see `nox -s docs` in `noxfile.py` (`lode-fhql.20`). Per
+the [pyproject-intent / requirements.lock split](#dependency-locking-lode-g2741), optional extras
+stay unlocked (the `dev` extra's existing policy), and `scripts/compile-lock.sh` compiles the lock
+from `pyproject.toml` with no `--extra` flags — so this needed no `requirements.lock` regeneration,
+only the `pyproject.toml` declaration.
 
 ### Mermaid: build-time pre-render, not the validator (mandated, user call 2026-08-12)
 

@@ -1,22 +1,23 @@
 """Nox sessions for lode's dev loop.
 
 Two entry points are REQUIRED before any merge (CLAUDE.md) -- a narrower claim
-than "runs by default": a bare ``nox`` invocation actually runs all FIVE
+than "runs by default": a bare ``nox`` invocation actually runs all SIX
 sessions in ``nox.options.sessions`` below (``fix``, ``tests``, ``shellcheck``,
-``linkcheck``, ``docstringcheck``), but CLAUDE.md's merge gate only names these two:
+``linkcheck``, ``docstringcheck``, ``docs``), but CLAUDE.md's merge gate only names these two:
 
     nox -t fix      ruff format + ruff check --fix   (the pre-merge fixer)
     nox -s tests    pytest                           (the test gate — the FULL suite,
                                                         every test, no marker filter;
                                                         this is what /land re-gates with)
 
-The other three sessions in the default set, not required-before-merge by name
+The other four sessions in the default set, not required-before-merge by name
 but still part of a bare ``nox`` run:
 
     nox -s shellcheck      lint every tracked shell script (--severity=warning)
     nox -s linkcheck       verify every relative markdown link in docs/ and .claude/ resolves (lode-dkdg)
     nox -s docstringcheck  verify every symbol-naming Sphinx role naming a lode.* symbol
                              in src/ and tests/ resolves to a real symbol (lode-8oeu)
+    nox -s docs            build the mkdocs site and fail on a broken intra-doc anchor (lode-fhql.20)
 
 Plus FIVE opt-in sessions that are **not** in the default set:
 
@@ -146,7 +147,7 @@ GATE_MACHINE_FAULT = 2
 
 # A bare ``nox`` runs only the offline, keyless gates; ``eval`` (network + an API
 # key) and ``build`` (packaging, not a code gate) stay explicit, never a default.
-nox.options.sessions = ["fix", "tests", "shellcheck", "linkcheck", "docstringcheck"]
+nox.options.sessions = ["fix", "tests", "shellcheck", "linkcheck", "docstringcheck", "docs"]
 
 # The project's own venv, always at this fixed location relative to this file
 # (CLAUDE.md: "The venv lives at ./venv (repo root)").
@@ -317,6 +318,53 @@ def docstringcheck(session: nox.Session) -> None:
     interpreter would not have ``lode`` (or ``typer``) installed.
     """
     session.run(_venv_tool(session, "python"), "scripts/check_docstring_refs.py")
+
+
+@nox.session
+def docs(session: nox.Session) -> None:
+    """Build the mkdocs site and fail on a broken intra-doc anchor (lode-fhql.20).
+
+    ``scripts/check_links.py``/``linkcheck`` resolves ``#anchor`` fragments with the same
+    slug algorithm GitHub uses -- but mkdocs-material's own renderer slugs heading text
+    differently (punctuation in particular), so a link that resolves cleanly on GitHub can
+    still 404 on the built site. A local ``mkdocs serve`` surfaced exactly this (two
+    anchors, filed as ``lode-fhql.21``) with nothing in the existing gate set able to catch
+    it -- this session is that missing validator.
+
+    Deliberately runs ``mkdocs build`` WITHOUT ``--strict``: as of `lode-fhql.10`'s
+    scaffold, ``--strict`` also aborts on four pre-existing warnings about links that leave
+    ``docs/`` entirely (``brand.md`` -> ``../README.md``, two ``how-to/*.md`` -> ``../../src/lode/*.py``)
+    -- expected until `lode-fhql.9` lands the doc-site link-rewrite rule (docs/stack.md), and
+    out of THIS session's scope to fix. Instead this session inspects mkdocs' own log output
+    directly and fails only on a line naming a broken anchor -- mkdocs logs those at INFO
+    (not WARNING) in 1.6.1, so ``--strict`` would not even catch them; grepping the log is
+    the only way to make this gate red for real anchor breakage. A non-anchor build failure
+    (bad `mkdocs.yml`, a missing plugin, ...) still fails the session via a nonzero mkdocs
+    exit code.
+
+    Resolves ``mkdocs`` through ``_venv_tool`` (lode-0yfn) -- an ambient interpreter would
+    not have ``mkdocs-material`` (or ``lode``'s other deps) installed.
+    """
+    mkdocs = _venv_tool(session, "mkdocs")
+    with tempfile.TemporaryDirectory() as site_dir:
+        result = subprocess.run(
+            [mkdocs, "build", "-f", "mkdocs.yml", "-d", site_dir],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    output = result.stdout + result.stderr
+    session.log(output)
+    anchor_lines = [line for line in output.splitlines() if "anchor" in line.lower()]
+    if anchor_lines:
+        session.error(
+            "mkdocs build found a broken intra-doc anchor (a #fragment mkdocs's own "
+            "renderer cannot resolve, even though scripts/check_links.py's GitHub-slug "
+            "algorithm resolves it -- mkdocs slugs punctuation differently):\n"
+            + "\n".join(anchor_lines)
+        )
+    if result.returncode != 0:
+        session.error(f"mkdocs build failed (exit {result.returncode}) -- see log above")
 
 
 @nox.session

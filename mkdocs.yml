@@ -4,8 +4,10 @@
 # render as the site's index with correct nav and OG/social metadata. Wiring
 # this into GitHub Actions/Pages -- including the Mermaid build-time
 # pre-render step mandated in docs/stack.md -- is lode-fhql.9's scope, not
-# this file's. `mkdocs-material` is declared in pyproject.toml's `docs` extra
-# (CI-only, per docs/stack.md); there is no local `dev` install requirement.
+# this file's. `mkdocs-material` is declared in pyproject.toml's `dev` extra
+# (lode-fhql.20 -- reversed from an earlier CI-only `docs` extra, per
+# docs/stack.md): mkdocs is also a validator (`nox -s docs`), so it's on
+# every dev's PATH via ./scripts/python-init.sh.
 #
 # Two SEPARATE mechanisms keep the site to the PUBLISHED set -- `exclude_docs`
 # decides what is BUILT, `nav` decides what is LISTED. An explicit `nav` alone
