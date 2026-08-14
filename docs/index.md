@@ -22,13 +22,14 @@ description: An AI-first, TUI-first personal knowledge base for the things you l
 </p>
 
 <p align="center">
-An AI-first, TUI-first personal knowledge base for <strong>things you learn during your day at
-work</strong> -- meeting notes, technical instructions, decisions. Fast to capture, intelligent to
-retrieve.
+<strong>lode</strong> is an AI-first, TUI-first personal knowledge base for the things you learn
+during your day at work. Fast to capture, intelligent to retrieve.
 </p>
 
 > The mother lode: a rich vein you accumulate and mine. An append-only log of notes + a derived
 > knowledge graph -- the ore and the assay.
+
+Meeting notes, technical instructions, decisions -- captured fast, retrieved with citations.
 
 ```
 $ lode add
