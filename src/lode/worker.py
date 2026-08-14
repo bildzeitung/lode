@@ -852,7 +852,7 @@ def _batch_collect_enrich(
             ):
                 ended += 1
             _reset_batch_collect_failures(conn, batch_id)
-        except AuthError, LLMAuthError:
+        except (AuthError, LLMAuthError):  # fmt: skip
             # Not handle-specific -- every remaining handle shares the same
             # credentials and would fail identically. Propagate immediately;
             # drain()'s own stash-and-continue contract takes it from here.

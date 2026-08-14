@@ -56,6 +56,19 @@ The `help=` text:
 - Contains **no Sphinx roles, RST backticks, bd issue ids, or test names**. It may cite a `docs/`
   page as a footnote, never as something load-bearing for the decision to run the command.
 
+## Multi-exception `except`: parenthesized only
+
+Always write a multi-exception handler as `except (A, B):` — never the unparenthesized `except A,
+B:` form PEP 758 re-legalized in Python 3.14. The bare form was a `SyntaxError` in 3.0–3.13 and in
+Python 2 meant `except A as B` (bind, shadowing `B`), so it reads as a bug to reviewers, and it
+silently creates a 3.14-only syntax floor that breaks with an unhelpful bare `SyntaxError` under
+older grammars/tooling.
+
+Under this repo's `requires-python = ">=3.14"`, `ruff format` treats the parentheses as redundant
+and strips them back to the bare PEP 758 form on every `nox -t fix` run — undoing the fiat.
+Every parenthesized multi-exception `except` line therefore carries a trailing `# fmt: skip` to
+hold the parentheses through formatting; `ruff check` raises no complaint about the comment.
+
 ## Derive identifiers, never retype them
 
 A long opaque identifier — a full git SHA, a bd issue id, a `.claude/worktrees/` hash — is never
