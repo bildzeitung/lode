@@ -1,6 +1,6 @@
 ---
 name: sweep
-description: The third `/loop` leg — a SURFACE-ONLY human-decision surfacer. Scans bd for work that has stopped waiting on a human and nothing else consumes (`land-escalated` branches, `human`-labeled decision tickets that are not dependency-blocked, epics ready for a human close-decision), dedups against a durable cross-machine digest issue, and surfaces new items; also lists every `deferred`-status ticket (§2a), every `in_progress` ticket claimed more than 24h ago that carries no pipeline label (§2b), and every dependency-blocked `human`-labeled ticket (§2c) in its report each pass (read-only, no dedup, never in the digest) so parked, stranded, and not-yet-decidable work stays visible. Writes no `trunk`, makes no decisions, dispatches no builders/landers/auditors. Run self-paced as `/loop 30m /sweep`. Examples — "/sweep", "/loop 30m /sweep", "what needs a human decision right now?", "sweep the human-decision queue".
+description: The third `/loop` leg — a SURFACE-ONLY human-decision surfacer. Scans bd for work that has stopped waiting on a human and nothing else consumes (`land-escalated` branches, `human`-labeled decision tickets that are not dependency-blocked, epics ready for a human close-decision), dedups against a durable cross-machine digest issue, and surfaces new items; every pass's report ends with the full "Actionable now" list of what's decidable right now (every current, non-deferred row, in full — not just the delta), and also lists every `deferred`-status ticket (§2a), every `in_progress` ticket claimed more than 24h ago that carries no pipeline label (§2b), and every dependency-blocked `human`-labeled ticket (§2c) in its report each pass (read-only, no dedup, never in the digest) so parked, stranded, and not-yet-decidable work stays visible. Writes no `trunk`, makes no decisions, dispatches no builders/landers/auditors. Run self-paced as `/loop 30m /sweep`. Examples — "/sweep", "/loop 30m /sweep", "what needs a human decision right now?", "sweep the human-decision queue".
 ---
 
 # sweep
@@ -786,6 +786,29 @@ fi
 if [ -f "$SWEEP_TMP/source_query_failed" ]; then SOURCE_STATE=error; else SOURCE_STATE=ok; fi
 
 scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
+
+# lode-8xl2: the always-present "Actionable now" section, rendered LAST in the report — after the
+# report-only sections and after the NEW HUMAN-DECISION ITEMS block (when present), not here.
+# Source is every row of $SWEEP_TMP/current (§3), fields 1-3, EXCLUDING any row whose optional 4th
+# field (the $ESCALATED-sourced .status, §1) is `deferred` — a deferred row is never listed here;
+# it already appears in §2a's unchanged "Deferred (surfaced, not reviewed)" section, so no
+# `(deferred)` annotation is needed. Report-only, feeds nothing (no digest change, §6 unchanged; no
+# dedup state; no PushNotification change, §7 unchanged). Missing is fatal here the same way it is
+# for §5/§7's own re-derivation of $CURRENT: §3 must have run for this section to have anything to
+# show — a hard exit here is deliberate and does NOT contradict this block's opening note, which
+# scopes "§8 must finish either way" to the three report-only lists (a missing $SWEEP_TMP/deferred
+# is an ordinary third state; a missing $SWEEP_TMP/current means the pass itself never happened).
+# It runs AFTER the digest push above and never before it precisely so that exit can never suppress
+# the publish.
+# An item appearing in both this section and the NEW HUMAN-DECISION ITEMS block above it is
+# deliberate — "what's new" vs. "what's decidable now" answer different questions.
+CURRENT="$(scripts/land-state-load.sh "$SWEEP_TMP/current" -- \
+  "§3 did not run this pass")" || exit 1
+ACTIONABLE_NOW=$(printf '%s\n' "$CURRENT" | awk -F'\t' '
+  NF == 0 { next }
+  $4 == "deferred" { next }
+  { print $1 " " $2 " " $3 }
+')
 ```
 
 The rule is one rule, over all three report-only lists — for each `<list>` in {`deferred`,
@@ -809,7 +832,7 @@ each of the three lists is judged solely on its own file's content.
 
 Report exactly one line, then the deferred section (§2a, always present), the stranded section
 (§2b, always present), and the blocked-human section (§2c, always present), plus, when non-empty,
-the loud new-items block:
+the loud new-items block, and finally the always-present **Actionable now** section (last):
 
 ```
 sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-to-close rows> closable, <deferred field> deferred, <stranded field> stranded, <blocked_human field> blocked
@@ -834,7 +857,7 @@ sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-
 of each section are the three states above, per that list's `$<LIST>_STATE`. On `ok`, each section
 lists every current row (id + title) each pass, in full, with no dedup.
 
-When `$SWEEP_TMP/new_annotated` (§7) is non-empty, follow the two sections above with:
+When `$SWEEP_TMP/new_annotated` (§7) is non-empty, follow the three sections above with:
 
 ```
 ## NEW HUMAN-DECISION ITEMS (<count of rows in new_annotated>)
@@ -850,6 +873,32 @@ new to `$CURRENT_IDS` this pass but its status is `deferred`: per the decided be
 appear in the `## Deferred (surfaced, not reviewed)` section above. That double appearance is
 deliberate (the two sections answer different questions — "what's new" vs. "what's parked" — and a
 row can honestly be both), not a bug for a later edit to "fix" by suppressing either listing.
+
+**Finally, always append the `## Actionable now` section — DECIDED (maintainer, 2026-08-14, amended
+same day, lode-8xl2): every pass's report ends with the full list of human decisions that are
+actionable RIGHT NOW, not just the delta.** Its rows are `$ACTIONABLE_NOW` (computed in §8's script
+above): every row of `$SWEEP_TMP/current` (§3), fields 1-3, in full, EXCLUDING any row whose 4th
+field is `deferred` (that row already appears in §2a's "Deferred (surfaced, not reviewed)" section,
+unchanged — no `(deferred)` annotation is needed here since deferred rows are excluded outright):
+
+```
+## Actionable now (<count of rows in $ACTIONABLE_NOW>)
+<id> <kind> <title>
+...
+(none)
+```
+
+This is distinct from the three report-only lists above (§2a/§2b/§2c list *parked/stranded/
+not-yet-decidable* work `bd ready` already hides) and from the `NEW HUMAN-DECISION ITEMS` block
+above it (that block is delta-only — new since the last digest, deferred rows included and
+annotated). This section is the standing, decidable-now queue — `land-escalated`, open `human`, and
+`epic-ready-to-close` rows minus anything deferred — every pass, so a human reading the transcript
+never has to run `bd show` to see what is still waiting on them and can act on it without first
+filtering out parked items themselves. It feeds nothing downstream: no digest change (§6 is
+unchanged), no dedup state of its own, no `PushNotification` change (§7 is unchanged — the push
+still covers only `$SWEEP_TMP/push_ids`, the NEW non-deferred ids). A row appearing here **and** in
+the `NEW HUMAN-DECISION ITEMS` block on the same pass is deliberate, not redundant — "what's new"
+vs. "what's decidable now" answer different questions.
 
 If §4 found `N > 1` duplicate digests, any sub-step in §1/§2 failed (`$SOURCE_STATE` = `error`, in
 which case also say that §6 and §7 were skipped and the prior digest is stale but intact), or the
@@ -908,5 +957,7 @@ real items from the durable record a human relies on.
 When the pass ends I report: the one-line summary (§8), the deferred section (§2a, always present),
 the stranded section (§2b, always present), the blocked-human section (§2c, always present), the
 full **NEW HUMAN-DECISION ITEMS** block when `$NEW_IDS` is non-empty (annotated `(deferred)`
-per-row where applicable, per §7 — lode-o7ai), any duplicate-digest anomaly, and any sub-step that
-failed. A clean, unchanged queue is a valid, common outcome — I say so plainly and stop.
+per-row where applicable, per §7 — lode-o7ai), and finally — always, last — the **Actionable now**
+section (every non-`deferred` row of `$CURRENT`, in full, every pass — DECIDED lode-8xl2), plus any
+duplicate-digest anomaly and any sub-step that failed. A clean, unchanged queue is a valid, common
+outcome — I say so plainly and stop.

@@ -5247,3 +5247,23 @@ entries below from being rewritten to chase the current tree.)
 - Update (lode-887o, 2026-08-14): nox -s tests now applies two marker filters (-m 'not serial' 
   -n 8, then -m serial -n 0) — an exhaustive partition, so lode-pql's intent (nothing is excluded
   before trunk) is preserved; every test still runs exactly once.
+
+- **`/sweep` §8's report ends with the full "actionable now" list every pass, not just the delta
+  (`lode-8xl2`, 2026-08-14, amended same day).** The original ask was a `## Human-decision queue`
+  section right after the one-line summary, listing every `$CURRENT` row (including `deferred`
+  ones, annotated `(deferred)`). The maintainer amended it mid-build to `## Actionable now`,
+  moved to the **end** of the report (after §2a/§2b/§2c and after the `NEW HUMAN-DECISION ITEMS`
+  block), and narrowed its source to **exclude** any row whose status is `deferred` outright — no
+  `(deferred)` annotation, since a deferred row already has a home in §2a's unchanged "Deferred
+  (surfaced, not reviewed)" section. The maintainer accepted the repetition-under-`/loop` trade-off
+  knowingly, twice: once for the section existing at all (the report at the transcript is what a
+  human actually reads, and the decidable queue must be visible there without a `bd show`), and
+  again for the deliberate double-listing with `NEW HUMAN-DECISION ITEMS` (a row can be both new
+  this pass and still decidable now — "what's new" and "what's decidable now" answer different
+  questions, the same shape as the already-decided §2a/new-items overlap, `lode-o7ai`).
+  Report-only throughout both versions of the spec: no digest-body change (§6), no `$NEW_IDS`
+  computation change (§5), no push-eligibility change (§7 — the push still covers only
+  `$SWEEP_TMP/push_ids`), no dedup state of its own. Implementation:
+  `.claude/skills/sweep/SKILL.md` §8 (`$ACTIONABLE_NOW`, computed from `$SWEEP_TMP/current` with a
+  `$4 == "deferred"` awk exclusion), the report-format block (section moved to last position), the
+  "Stop and report" section, and the skill's frontmatter `description`.
