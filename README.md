@@ -1,4 +1,8 @@
-# lode
+<img src="docs/assets/lockup.svg" alt="lode" width="208" height="64">
+
+**lode** is an AI-first, TUI-first personal knowledge base for the things you learn during your
+day at work. Fast to capture, intelligent to retrieve. See [`docs/brand.md`](docs/brand.md) for
+the full brand brief (positioning, name story, palette, type, voice, usage rules).
 
 [![Build](https://img.shields.io/github/actions/workflow/status/bildzeitung/lode/build.yml?branch=trunk)](https://github.com/bildzeitung/lode/actions/workflows/build.yml)
 [![Tests](https://img.shields.io/github/actions/workflow/status/bildzeitung/lode/tests.yml?branch=trunk&label=test)](https://github.com/bildzeitung/lode/actions/workflows/tests.yml)
@@ -8,11 +12,10 @@
 [![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Built with Textual](https://img.shields.io/badge/TUI-Textual-5A4FCF.svg)](https://textual.textualize.io/)
 
-An AI-first, TUI-first personal knowledge base for **things you learn during your day at work** —
-meeting notes, technical instructions, decisions. Fast to capture, intelligent to retrieve.
-
 > The mother lode: a rich vein you accumulate and mine. An append-only log of notes + a derived
 > knowledge graph — the ore and the assay.
+
+Meeting notes, technical instructions, decisions — captured fast, retrieved with citations.
 
 ```
 $ lode add
