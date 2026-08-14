@@ -2584,6 +2584,11 @@ git show --stat HEAD   # confirm only MISTAKES.md rode along
 
 ```bash
 scripts/assert-main-checkout.sh || exit 1
+# This push must carry the MISTAKES.md doc commit and NOTHING ELSE. Section 4's re-gate is the
+# only thing that certifies merge output, and it did not run this pass -- so if anything other
+# than the single commit just made is unpushed, this path is not the right one to push it.
+# STOP and report instead; never advance origin/trunk past un-re-gated content.
+test "$(git rev-list --count origin/trunk..trunk)" = 1 || exit 1
 git push origin trunk
 git status                 # MUST show trunk up to date with origin
 ```
