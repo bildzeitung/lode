@@ -83,7 +83,9 @@ KNOWN_SITES = {
 # rest of the line (for a trailing `# fmt: skip` comment check). Deliberately
 # does not attempt to parse across a `:` inside a string literal within the
 # clause body -- no real site does that.
-_EXCEPT_LINE_RE = re.compile(r"^(?P<indent>\s*)except\s+(?P<body>[^\n:]+):(?P<rest>.*)$")
+_EXCEPT_LINE_RE = re.compile(
+    r"^(?P<indent>\s*)except\s+(?P<body>[^\n:]+):(?P<rest>.*)$"
+)
 
 
 def _top_level_comma_count(text: str) -> int:
@@ -274,11 +276,20 @@ def test_ruff_format_really_does_strip_an_unmarked_site(tmp_path: Path) -> None:
     assert any("fmt: skip" in v.reason for v in pre_violations)
 
     venv_ruff = REPO_ROOT / "venv" / "bin" / "ruff"
-    ruff_cmd = [str(venv_ruff)] if venv_ruff.exists() else [sys.executable, "-m", "ruff"]
+    ruff_cmd = (
+        [str(venv_ruff)] if venv_ruff.exists() else [sys.executable, "-m", "ruff"]
+    )
     result = subprocess.run(
-        [*ruff_cmd, "format", "--config", str(REPO_ROOT / "pyproject.toml"), str(scratch)],
+        [
+            *ruff_cmd,
+            "format",
+            "--config",
+            str(REPO_ROOT / "pyproject.toml"),
+            str(scratch),
+        ],
         capture_output=True,
         text=True,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
 
