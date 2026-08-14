@@ -1051,19 +1051,41 @@ them, and the landing page's own acceptance criteria ("the site's index renders.
 satisfied without a minimal, working scaffold to render it against — so `lode-fhql.10` created
 both, kept deliberately small:
 
-- `mkdocs.yml`'s `nav` is hand-restricted to the PUBLISHED set above — without an explicit `nav`,
-  MkDocs auto-discovers every markdown file under `docs_dir`, which would silently pull in the
-  EXCLUDED maintainer docs this section just carved out.
+- Keeping the site to the PUBLISHED set above takes **two separate settings**, and an explicit
+  `nav` alone is **not** one of them. MkDocs renders every markdown file under `docs_dir` whether
+  or not `nav` lists it, so `nav` controls only the *menu*: with `nav` alone, `decisions.md` and
+  `agents-workflow.md` still build and are publicly reachable by URL, merely unlisted (verified by
+  running `mkdocs build` against mkdocs 1.6.1 / mkdocs-material 9.7.7 — it reports them as "pages
+  [that] exist in the docs directory, but are not included in the nav configuration", i.e. built).
+  What actually decides publication is **`exclude_docs`**, written as an **allowlist** (exclude
+  `*`, re-include the published pages) so it matches this section's authoritative direction:
+  PUBLISHED is the closed enumeration, everything else is unpublished by default, and a maintainer
+  doc added later stays off the site with nobody remembering to exclude it. `how-to/` is
+  re-included as `how-to/*.md` — a directory, not a frozen file list, per the PUBLISHED entry
+  above. `nav` is then hand-restricted to that same set, for order and labels.
 - `docs/overrides/main.html` (a `theme.custom_dir` override) adds the OG/social `<meta>` tags,
   pointing `og:image`/`twitter:image` at `assets/og-card.png` — the path `lode-fhql.6` (favicon +
   OG card, open at the time `.10` built) will commit its 1200x630 asset to, matching the existing
   `docs/assets/` naming convention (`mark.svg`, `mark-16.png`, `lockup.svg`). The tag needs no
   change once `.6` lands the file.
 - Wiring this scaffold into GitHub Actions/Pages — including the Mermaid build-time pre-render step
-  mandated above — is still entirely `lode-fhql.9`'s scope; this file has never been built or
-  validated by an actual `mkdocs build` (`mkdocs-material` is a CI-only `docs` extra, not a local
-  `dev` dependency, per the dependency note above), only reviewed by eye against MkDocs-Material's
-  documented config shape.
+  and the link-rewrite rule mandated above — is still entirely `lode-fhql.9`'s scope.
+
+**Measured against a real `mkdocs build` (2026-08-13, `lode-fhql.10`'s technical review).** The
+scaffold was validated by actually running mkdocs 1.6.1 / mkdocs-material 9.7.7 against it — not
+just reviewed by eye — which is what turned up the `nav`-does-not-exclude behaviour above. Two
+results `lode-fhql.9` should plan around:
+
+- **`mkdocs build --strict` does not pass yet, and that is expected.** Four warnings remain, all of
+  the same kind: a published page links to a file **outside `docs/`** (`brand.md` → `../README.md`;
+  `how-to/config-change.md` and `how-to/jira-setup.md` → `../../src/lode/*.py`). These are precisely
+  what the one rewrite rule above exists to fix, so `--strict` becomes viable once `lode-fhql.9`
+  implements it — the rule must therefore cover links leaving `docs/` entirely, not only links to
+  unpublished pages *inside* `docs/`. Until then a Pages workflow must either omit `--strict` or
+  land the rewrite rule in the same change.
+- **`exclude_docs` gives the rewrite rule a free enumeration.** With the allowlist in place, MkDocs
+  logs every `link to 'X' which is excluded from the built site`, which is exactly the set of links
+  the rule has to rewrite to GitHub URLs.
 
 **Landing page / README sync (lode-fhql.10).** `README.md` is the **canonical** pitch — every
 GitHub visitor sees it first, with or without a deployed docs site. `docs/index.md` is a **derived

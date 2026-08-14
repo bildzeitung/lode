@@ -3,9 +3,13 @@
 Checks the things that would otherwise drift silently: that the landing page
 carries the required content (per its acceptance criteria), that it is
 reused verbatim from README.md rather than forked into separate marketing
-copy, and that mkdocs.yml's hand-restricted ``nav`` only lists pages from
-the PUBLISHED set decided in lode-fhql.8 (docs/stack.md) -- never one of the
-EXCLUDED maintainer docs.
+copy, and that mkdocs.yml publishes exactly the PUBLISHED set decided in
+lode-fhql.8 -- both what is BUILT (``exclude_docs``) and what is LISTED
+(``nav``), which are separate mechanisms in MkDocs.
+
+Why an allowlist rather than a denylist, and why ``nav`` alone does not
+exclude anything, is stated once in docs/stack.md ("Published / excluded page
+sets", and the lode-fhql.10 subsection below it) -- not restated here.
 """
 
 import re
@@ -13,31 +17,37 @@ from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parent.parent
-INDEX = ROOT / "docs" / "index.md"
-README = ROOT / "README.md"
-MKDOCS_YML = ROOT / "mkdocs.yml"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+INDEX = REPO_ROOT / "docs" / "index.md"
+README = REPO_ROOT / "README.md"
+STACK = REPO_ROOT / "docs" / "stack.md"
+MKDOCS_YML = REPO_ROOT / "mkdocs.yml"
 
-# The PUBLISHED set from docs/stack.md (lode-fhql.8) -- kept as a literal
-# list here rather than parsed out of the doc, since this is a small,
-# deliberately-enumerated set that changes rarely and by explicit decision.
-EXCLUDED_STEMS = {
-    "decisions",
-    "agents-workflow",
-    "stack",
-    "conventions",
-    "release",
-    "test-suite-audit",
-    "onboarding",
-    "keybindings",
-    "tui",
-    "editing",
-    "configuration",
+# The PUBLISHED set from docs/stack.md (lode-fhql.8), as an ALLOWLIST.
+#
+# Held as a literal rather than derived from mkdocs.yml on purpose: deriving
+# it would make the two mkdocs.yml checks below tautological. It is instead
+# tied back to stack.md -- the authoritative statement -- by
+# ``test_published_set_matches_stack_md``.
+PUBLISHED_TOP_LEVEL = {
+    "index",  # the landing page itself (lode-fhql.10; postdates the 2026-08-12 call)
+    "design",
+    "storage",
+    "retrieval",
+    "externals",
+    "brand",
 }
+# docs/how-to/ is published as a DIRECTORY, not a frozen file list -- a guide
+# added there later is published by default (docs/stack.md).
+PUBLISHED_DIRS = {"how-to"}
 
 
 def _index_text() -> str:
     return INDEX.read_text()
+
+
+def _mkdocs_config() -> dict:
+    return yaml.safe_load(MKDOCS_YML.read_text())
 
 
 def test_index_exists_and_has_front_matter_title() -> None:
@@ -83,15 +93,10 @@ def test_index_documents_its_relationship_to_readme() -> None:
     assert "canonical" in text.lower()
 
 
-def test_mkdocs_yml_exists_with_og_meta_override() -> None:
-    assert MKDOCS_YML.exists()
-    config = yaml.safe_load(MKDOCS_YML.read_text())
-    assert config["docs_dir"] == "docs"
-    assert config["theme"]["custom_dir"] == "docs/overrides"
-
-    overrides = ROOT / "docs" / "overrides" / "main.html"
-    assert overrides.exists()
-    html = overrides.read_text()
+def test_og_meta_override_is_wired_and_populated() -> None:
+    """The OG tags only reach the site if ``custom_dir`` points at them."""
+    custom_dir = REPO_ROOT / _mkdocs_config()["theme"]["custom_dir"]
+    html = (custom_dir / "main.html").read_text()
     assert 'property="og:image"' in html
     assert "assets/og-card.png" in html
 
@@ -110,16 +115,98 @@ def _nav_leaf_values(node) -> list[str]:
     return values
 
 
+def _is_published(page: str) -> bool:
+    path = Path(page)
+    if len(path.parts) == 1:
+        return path.stem in PUBLISHED_TOP_LEVEL
+    return path.parts[0] in PUBLISHED_DIRS
+
+
 def test_nav_only_lists_published_pages() -> None:
-    config = yaml.safe_load(MKDOCS_YML.read_text())
+    config = _mkdocs_config()
     pages = _nav_leaf_values(config["nav"])
     assert pages, "mkdocs.yml's nav is empty"
     for page in pages:
-        stem = Path(page).stem
-        # how-to/* pages aren't in EXCLUDED_STEMS at all -- they're PUBLISHED
-        # as a directory. Only guard against an EXCLUDED maintainer doc
-        # slipping into nav.
-        assert stem not in EXCLUDED_STEMS, (
-            f"mkdocs.yml nav references {page!r}, which is on the EXCLUDED list "
-            "in docs/stack.md (lode-fhql.8) -- it must not be published."
+        assert _is_published(page), (
+            f"mkdocs.yml nav references {page!r}, which is not in the PUBLISHED set "
+            "decided in docs/stack.md (lode-fhql.8) -- everything not on that closed "
+            "list is unpublished."
+        )
+
+
+def test_every_nav_target_exists() -> None:
+    """A nav entry pointing at a missing file fails ``mkdocs build --strict``."""
+    config = _mkdocs_config()
+    docs_dir = REPO_ROOT / config["docs_dir"]
+    for page in _nav_leaf_values(config["nav"]):
+        assert (docs_dir / page).is_file(), (
+            f"mkdocs.yml nav references {page!r}, which does not exist under "
+            f"{config['docs_dir']}/ -- this breaks the docs build."
+        )
+
+
+def test_every_how_to_guide_is_in_nav() -> None:
+    """how-to/ is published as a directory, so a new guide must reach the nav."""
+    config = _mkdocs_config()
+    pages = set(_nav_leaf_values(config["nav"]))
+    for guide in sorted((REPO_ROOT / "docs" / "how-to").glob("*.md")):
+        rel = f"how-to/{guide.name}"
+        assert rel in pages, (
+            f"docs/{rel} exists but is not listed in mkdocs.yml's nav. docs/stack.md "
+            "publishes docs/how-to/ as a directory, not a frozen file list -- add it."
+        )
+
+
+def test_published_set_matches_stack_md() -> None:
+    """docs/stack.md is the authoritative statement -- anchor the literal to it.
+
+    mkdocs.yml's two mechanisms and this module's literal already cross-check
+    each other, but all three could drift away from the prose decision
+    together without this.
+    """
+    m = re.search(
+        r"- \*\*PUBLISHED\*\*: (.+?)- \*\*EXCLUDED\*\*",
+        STACK.read_text(),
+        re.DOTALL,
+    )
+    assert m, "docs/stack.md's '**PUBLISHED**:' bullet moved or was renamed"
+    bullet = m.group(1)
+    for stem in PUBLISHED_TOP_LEVEL - {"index"}:  # index.md postdates the bullet
+        assert f"`{stem}.md`" in bullet, (
+            f"docs/{stem}.md is in this module's PUBLISHED literal but docs/stack.md's "
+            "PUBLISHED bullet no longer names it -- reconcile the two."
+        )
+    for directory in PUBLISHED_DIRS:
+        assert f"`docs/{directory}/`" in bullet, (
+            f"docs/{directory}/ is in this module's PUBLISHED literal but docs/stack.md's "
+            "PUBLISHED bullet no longer names it -- reconcile the two."
+        )
+
+
+def test_exclude_docs_is_an_allowlist_covering_the_published_set() -> None:
+    """``nav`` alone does not stop MkDocs building an unpublished page.
+
+    MkDocs renders every markdown file under ``docs_dir`` regardless of
+    ``nav``; only ``exclude_docs`` decides what is published. It must be
+    written as an allowlist so a maintainer doc added later is off the site
+    by default (docs/stack.md, lode-fhql.8).
+    """
+    config = _mkdocs_config()
+    patterns = [
+        line.strip() for line in config["exclude_docs"].splitlines() if line.strip()
+    ]
+    assert patterns[0] == "*", (
+        "exclude_docs must start by excluding everything ('*') so the published set "
+        "is an allowlist, not a denylist."
+    )
+    reincluded = {p.lstrip("!") for p in patterns[1:] if p.startswith("!")}
+    for stem in PUBLISHED_TOP_LEVEL:
+        assert f"{stem}.md" in reincluded, (
+            f"docs/{stem}.md is in the PUBLISHED set but exclude_docs does not "
+            "re-include it -- it would not be built."
+        )
+    for directory in PUBLISHED_DIRS:
+        assert f"{directory}/*.md" in reincluded, (
+            f"docs/{directory}/ is published as a directory but exclude_docs does not "
+            f"re-include '{directory}/*.md'."
         )

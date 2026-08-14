@@ -7,10 +7,10 @@
 # this file's. `mkdocs-material` is declared in pyproject.toml's `docs` extra
 # (CI-only, per docs/stack.md); there is no local `dev` install requirement.
 #
-# nav is restricted to the PUBLISHED set from docs/stack.md -- without an
-# explicit nav, MkDocs auto-discovers every markdown file under docs_dir,
-# which would pull in the EXCLUDED maintainer docs (decisions.md,
-# agents-workflow.md, ...) that lode-fhql.8 deliberately keeps off the site.
+# Two SEPARATE mechanisms keep the site to the PUBLISHED set -- `exclude_docs`
+# decides what is BUILT, `nav` decides what is LISTED. An explicit `nav` alone
+# is NOT enough. Why, and why exclude_docs is written as an allowlist, is
+# stated once in docs/stack.md ("mkdocs.yml scaffold and the landing page").
 
 site_name: lode
 site_description: >-
@@ -22,6 +22,19 @@ repo_name: bildzeitung/lode
 edit_uri: edit/trunk/docs/
 
 docs_dir: docs
+
+# `how-to/` is re-included as a DIRECTORY, not a frozen file list: a guide
+# added there later is published by default.
+exclude_docs: |
+  *
+  !index.md
+  !design.md
+  !storage.md
+  !retrieval.md
+  !externals.md
+  !brand.md
+  !how-to/*.md
+  !assets/*
 
 theme:
   name: material
