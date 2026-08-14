@@ -138,3 +138,10 @@ I never edit `docs/` or a ticket's `design` field as a side effect of challengin
 persistence is to the issue's `notes` only, and only ever by appending. Recording a
 corrected bug approach to `--design`, or writing a `docs/` change, stays a separate,
 explicit step you ask for.
+
+**MISTAKES.md: nothing for me to add.** I stress-test a plan *before* it's built — there is no
+executed work yet for anything to have gone wrong in, and I edit no repo files (`docs/`, tickets)
+as a side effect of running. If I'm handed a plan that turns out to already describe a past
+incident matching CLAUDE.md directive 9's bar, that's a finding for my §3 readout like any other
+criticism, not something I file myself — filing happens in the stage that actually builds or lands
+the work (lode-v1rk).

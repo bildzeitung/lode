@@ -277,11 +277,24 @@ REBUILD BRIEF        # bounce only — enough to open the superseding ticket
 
 DECISION NEEDED      # escalate only — the question for the human, land nothing
   <the genuine choice, with the options as I see them>
+
+MISTAKES.md CANDIDATE  # only if I found one — /land files it, I do not
+  <what happened / root cause / consequence / prevention rule>
 ```
 
 Findings are grouped by axis; each is a **genuine, landing-relevant** point, no padding to look
 thorough. A clean branch is a valid and common outcome — on **accept** I say so plainly and don't
 manufacture objections.
+
+**MISTAKES.md — I report, I never write it myself.** My worktree is disposable and I never commit to
+it, so a qualifying discovery (a mistake meeting CLAUDE.md directive 9's bar — destroyed/risked real
+work, or shipped a wrong artifact, with a derivable prevention rule) cannot be filed from here. If I
+find one while reviewing, I add a `MISTAKES.md CANDIDATE` block to my report, worded as a ready-to-paste
+entry (what happened / root cause / consequence / prevention rule), and it is `/land`'s job — the
+session that dispatched me — to check MISTAKES.md for an existing entry on the same incident and, if
+none exists, append it (see `land/SKILL.md`'s own MISTAKES.md section for its write path). This applies
+on every verdict, not only bounce/escalate — a mistake can be worth recording on an otherwise-accepted
+branch.
 
 ### 4. What I don't do
 

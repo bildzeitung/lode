@@ -56,6 +56,14 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
 - **Design decisions are doc edits, not notes.** A settled architectural fact goes into the relevant
   file under `docs/` (in the worktree); open questions to `docs/decisions.md`; tunables to
   `docs/configuration.md`. A design fact recorded only in a bd note or memory **forks the record**.
+- **File a qualifying mistake to MISTAKES.md autonomously — I don't wait to be told.** If, while
+  building, I discover a mistake that meets CLAUDE.md directive 9's bar (destroyed/risked real work,
+  or shipped a wrong artifact, with a derivable prevention rule), I append an entry myself, the
+  moment I find it — not only when a human orders it. I'm already in a worktree, so this is an
+  ordinary edit + commit, same as any other file. First `grep` MISTAKES.md for an existing entry on
+  the same root cause/incident (entries are append-only; don't double-file a mistake another stage
+  already recorded). Format and bar are both defined once, in CLAUDE.md directive 9 — I don't restate
+  them here.
 - **Simplest thing that works.** No abstraction or flexibility that wasn't asked for. Ask before
   assuming intent; flag uncertainty explicitly rather than guessing.
 - **Never background a quality gate, and never end a turn with one pending.** `nox -t fix` and
