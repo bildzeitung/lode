@@ -14,8 +14,11 @@ accepted file or a missing graph must be machine faults, never a silent
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "drop-from-accepted.sh"
@@ -124,6 +127,24 @@ def test_missing_graph_file_is_a_machine_fault_not_a_skipped_drop(
     assert r.returncode == 2
     assert r.stdout == ""
     assert acc.read_text() == "a\nb\n", "no partial reduction may be applied on a fault"
+
+
+def test_an_unreadable_accepted_file_does_not_empty_the_merge_set(
+    tmp_path: Path,
+) -> None:
+    """grep exit 1 is CONTENT (it filtered out the last line); anything above 1 is
+    a machine fault. A blanket `|| true` would move the empty temp file over the
+    accepted set -- silently emptying the merge set on an I/O error."""
+    acc = _accepted(tmp_path, "a", "b")
+    acc.chmod(0o000)
+    if os.access(acc, os.R_OK):  # running as root: the fault cannot be provoked
+        acc.chmod(0o644)
+        pytest.skip("cannot make a file unreadable as this user")
+    r = _run("a", "--accepted", str(acc))
+    acc.chmod(0o644)
+    assert r.returncode == 2, r.stderr
+    assert r.stdout == ""
+    assert acc.read_text() == "a\nb\n"
 
 
 def test_bad_invocation_is_a_machine_fault(tmp_path: Path) -> None:
