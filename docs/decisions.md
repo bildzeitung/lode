@@ -5301,6 +5301,14 @@ entries below from being rewritten to chase the current tree.)
   `tests/test_land_loops_shared_idioms.py` now pins the shared idioms (the grep re-check block and
   the `if CMD; then rc=0; else rc=$?; fi` dispatch guard) byte-for-byte equal between the two
   scripts, so an edit to one that silently drifts from the other now fails `nox -s tests` instead
-  of only being caught by someone reading both files side by side. If a third such loop ever
+  of only being caught by someone reading both files side by side. A test pin rather than the
+  repo's usual move of extracting the shared bytes into a `gate-lib.sh`-style sourced function,
+  because the stale-membership idiom's whole payload is a `continue` against the *caller's* loop —
+  a construct that cannot move into a shell function without depending on bash's
+  continue-through-a-function-frame behavior, inside `/land`'s most destructive path. The
+  merge-dispatch idiom could be extracted alone, but on its own that leaves the more dangerous of
+  the two idioms un-enforced and adds a second sharing mechanism to reason about. The pin's known
+  cost: it matches leading whitespace, so a reindent of either loop body fails the test with no
+  logic change — loud and mechanical to fix, never a silent miss. If a third such loop ever
   appears, or the two loops' verdict sets converge, that would be the point to revisit unification
   — the same "three genuinely stops being fine and unextracted" trigger this file uses elsewhere.
