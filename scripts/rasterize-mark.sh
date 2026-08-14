@@ -14,18 +14,29 @@
 # reason stated): this is a human-run, one-off asset generator, not a pipeline
 # gate -- nothing classifies its exit code into the 0/1/2 gate contract.
 #
-# Usage: scripts/rasterize-mark.sh [SIZE]
+# Usage: scripts/rasterize-mark.sh [SIZE] [SOURCE_STEM] [OUT_STEM]
 #
 # SIZE defaults to 16 (the committed docs/assets/mark-16.png). Any other size
 # writes docs/assets/mark-<SIZE>.png instead and is not committed -- that path
 # exists so the 80x80 render docs/assets/mark-blocks.txt cites as the source of
 # its 8x8 grid (10px per cell) is reproducible with this same script.
+#
+# SOURCE_STEM/OUT_STEM name docs/assets/<SOURCE_STEM>.svg and
+# docs/assets/<OUT_STEM>-<SIZE>.png, both defaulting to "mark". They exist so a
+# second square-SVG-to-PNG asset does not need a clone of this file: the
+# rasterizing step is identical no matter which mark variant is being rendered
+# (scripts/rasterize-favicon-mark.sh, lode-fhql.22, is a thin wrapper that only
+# supplies these two stems). Unlike scripts/rasterize-og-card.sh (fixed
+# 1200x630) and scripts/rasterize-favicon-ico.sh (multi-resolution ICO
+# packing), which do more than this and keep their own files.
 
 SIZE="${1:-16}"
+SOURCE_STEM="${2:-mark}"
+OUT_STEM="${3:-mark}"
 
 REPO=$(git rev-parse --show-toplevel)
-SVG="$REPO/docs/assets/mark.svg"
-OUT="$REPO/docs/assets/mark-$SIZE.png"
+SVG="$REPO/docs/assets/$SOURCE_STEM.svg"
+OUT="$REPO/docs/assets/$OUT_STEM-$SIZE.png"
 
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT

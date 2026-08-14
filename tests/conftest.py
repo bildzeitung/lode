@@ -188,6 +188,7 @@ from typing import TYPE_CHECKING
 from unittest import mock
 
 import pytest
+import yaml
 from textual.pilot import Pilot
 
 import lode
@@ -1142,6 +1143,42 @@ def _cache_cross_encoder_model_load():
 # sys.modules BEFORE exec_module and the third did not, while only the third
 # narrowed the Optional spec. This helper is the union, so a fourth call site
 # gets both without whoever writes it having to know about either.
+
+
+class _MkdocsLoader(yaml.SafeLoader):
+    """SafeLoader that resolves ONE extra tag: the ``!!python/name:`` reference
+    mkdocs.yml uses for ``markdown_extensions.toc.slugify`` (lode-fhql.21).
+
+    ``yaml.unsafe_load`` would also parse it, but by importing whatever the tag
+    names and permitting every other unsafe tag in the file -- more authority
+    than any reader here needs, and a loose precedent for the next reader to
+    copy. Resolving the tag to its dotted name as a plain STRING is enough, and
+    lets ``test_toc_slugify_is_the_github_compatible_one`` assert the wiring by
+    value. MkDocs' own loader is Safe-derived with a ``python/name``
+    constructor for the same reason.
+    """
+
+
+_MkdocsLoader.add_multi_constructor(
+    "tag:yaml.org,2002:python/name:",
+    lambda loader, suffix, node: suffix,
+)
+
+
+def mkdocs_config() -> dict:
+    """``mkdocs.yml`` parsed with :class:`_MkdocsLoader`.
+
+    Lives here rather than in one test module because two gates now read the
+    same config for different reasons -- the published-set checks
+    (tests/test_docs_site_index.py) and the duplicate-heading-slug gate
+    (tests/test_docs_no_duplicate_heading_slugs.py, lode-rmsf) -- and a second
+    hand-rolled parse of the same file is exactly how the two would drift on
+    what "published" means.
+    """
+    return yaml.load(
+        (_CHECKOUT_ROOT / "mkdocs.yml").read_text(encoding="utf-8"),
+        Loader=_MkdocsLoader,
+    )
 
 
 def load_module_from_path(name: str, path: Path) -> ModuleType:

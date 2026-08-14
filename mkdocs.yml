@@ -13,6 +13,11 @@
 # `nav` (decided 2026-08-14, resolving the lode-fhql.9/.10 mkdocs.yml
 # conflict; see lode-fhql.9's notes).
 #
+# `mkdocs-material` is declared in pyproject.toml's `dev` extra (lode-fhql.20
+# -- reversed from an earlier CI-only `docs` extra, per docs/stack.md):
+# mkdocs is also a validator (`nox -s docs`), so it's on every dev's PATH via
+# ./scripts/python-init.sh.
+#
 # `nav` below still curates order and labels for the same PUBLISHED set
 # build_docs_site.py stages -- see docs/stack.md ("Published / excluded page
 # sets") for the authoritative enumeration.
@@ -32,7 +37,11 @@ theme:
   name: material
   custom_dir: docs/overrides
   logo: assets/mark.svg
-  favicon: assets/mark-16.png
+  # assets/favicon-16.png (lode-fhql.22), not mark-16.png: the tab icon is a
+  # theme-neutral, fixed-tile favicon variant -- see docs/assets/favicon-mark.svg's
+  # header for why the two diverge (a raster favicon has no theme-conditional
+  # mechanism the way the header logo above, an inline currentColor SVG, does).
+  favicon: assets/favicon-16.png
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -83,3 +92,27 @@ markdown_extensions:
       # shared import; that module's docstring owns the why, and
       # tests/test_check_links.py keeps the two copies from drifting.
       slugify: !!python/name:lode.docs_slug.github_slugify
+
+# What `nox -s docs` gates on (lode-fhql.20). mkdocs' own link validator is the
+# only thing that knows how mkdocs-material slugs a heading -- scripts/check_links.py
+# (`nox -s linkcheck`) resolves the same `#fragment` with GitHub's algorithm, so a
+# link can pass there and 404 on the built site. `anchors: warn` promotes that
+# check from its INFO default to a warning, which `mkdocs build --strict` then
+# turns into a nonzero exit.
+#
+# Everything else is `ignore` ON PURPOSE, so --strict fails on anchors and nothing
+# else: the published set links out of `docs/` in four places (brand.md ->
+# ../README.md, how-to/*.md -> ../../src/lode/*.py) that only lode-fhql.9's
+# link-rewrite rule can fix, and `exclude_docs` above deliberately drops ~46
+# maintainer citations into unpublished pages (docs/stack.md). Flipping any of
+# these back to `warn` once lode-fhql.9 lands is a one-word edit here.
+validation:
+  links:
+    anchors: warn
+    not_found: ignore
+    unrecognized_links: ignore
+    absolute_links: ignore
+  nav:
+    omitted_files: ignore
+    not_found: ignore
+    absolute_links: ignore

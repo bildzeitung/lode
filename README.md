@@ -116,10 +116,13 @@ scripts/validate-mermaid.sh   # parse every ```mermaid block in docs/, fail on s
 
 The hand-authored mark, wordmark, and lockup live under [`docs/assets/`](docs/assets/); the brief
 they conform to is [`docs/brand.md`](docs/brand.md). The docs site's favicon
-(`assets/mark-16.png`, `assets/favicon.ico`) and its social/OG preview card
-(`assets/og-card.png`, 1200x630) are derived mechanically from the same mark — never redrawn — via
-`scripts/rasterize-mark.sh`, `scripts/rasterize-favicon-ico.sh`, and `scripts/rasterize-og-card.sh`,
-each documented in its own header.
+(`assets/favicon-16.png`, `assets/favicon.ico`) is derived from a theme-neutral, fixed-tile variant
+of the mark (`assets/favicon-mark.svg`, lode-fhql.22 — a raster favicon can't track the browser
+chrome's own theme the way the header logo's `currentColor` SVG can, so it carries its own paper
+background tile instead), and its social/OG preview card (`assets/og-card.png`, 1200x630) is derived
+mechanically from the same mark — never redrawn — via `scripts/rasterize-mark.sh`,
+`scripts/rasterize-favicon-mark.sh`, `scripts/rasterize-favicon-ico.sh`, and
+`scripts/rasterize-og-card.sh`, each documented in its own header.
 
 ## License
 
