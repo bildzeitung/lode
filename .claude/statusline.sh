@@ -120,6 +120,10 @@ fi
 # decidable work is not. No sentinel machinery needed -- an empty/absent
 # `$blocked_cache` naturally yields an empty `$blocked_json` ("[]"), under which
 # `isblocked` is false for every id, so the human arm counts everything.
+# A STALE cache is the case the read side CANNOT catch (it is neither absent nor
+# invalid), so the refresh job below deletes the cache whenever `bd blocked`
+# fails -- without that, a persistently broken `bd blocked` would quietly hide
+# decidable work indefinitely, the one failure this feature must never produce.
 pipeline_part=""
 if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
     cache="${TMPDIR:-/tmp}/lode-statusline-bd.cache"
@@ -137,14 +141,23 @@ if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
         (
             if bd -C "$cwd" list --limit 0 --json 2>/dev/null > "$cache.new" \
                   && mv -f "$cache.new" "$cache"; then :; else rm -f "$cache.new"; fi
+            # On failure drop the STALE cache too, not just the temp file --
+            # otherwise a persistently broken `bd blocked` keeps subtracting a
+            # frozen id set forever. This is the write-side half of the fail-open
+            # contract in the design note above; deleting it fails open on the
+            # very next render.
             if bd -C "$cwd" blocked --json 2>/dev/null > "$blocked_cache.new" \
-                  && mv -f "$blocked_cache.new" "$blocked_cache"; then :; else rm -f "$blocked_cache.new"; fi
+                  && mv -f "$blocked_cache.new" "$blocked_cache"; then :; else
+                rm -f "$blocked_cache.new" "$blocked_cache"; fi
         ) >/dev/null 2>&1 &
     fi
     if [ -s "$cache" ]; then
-        # Fail open: an absent/empty/invalid blocked cache collapses to "[]", so
-        # `isblocked` below is false for every id and every human ticket counts,
-        # matching pre-lode-7guf behavior exactly.
+        # Fail open: absent/empty/invalid all collapse to "[]" (design note above).
+        # The `case` is NOT redundant with a plain `|| blocked_json="[]"`, so
+        # don't "simplify" it to one: on an EMPTY cache file jq exits 0 and
+        # prints nothing, so the `||` never fires and the empty string reaches
+        # `--argjson`, which rejects it and fails the WHOLE counts query -- every
+        # segment disappears, not just `!human`. Guard the shape, not the exit.
         blocked_json=$(jq -c '[(. // [])[] | .id]' "$blocked_cache" 2>/dev/null)
         case "$blocked_json" in
             \[*\]) ;;
@@ -163,7 +176,7 @@ if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
                 if   hasl("sweep-digest")                    then empty
                 elif hasl("land-escalated")                  then "human"
                 elif hasl("human") and (isblocked | not)     then "human"
-                elif hasl("human")                            then empty
+                elif hasl("human")                           then empty
                 elif hasl("needs-rebase")                    then "rebase"
                 elif hasl("ready-for-land")                  then "land"
                 elif hasl("ready-for-code-review")           then "review"
