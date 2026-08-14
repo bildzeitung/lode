@@ -7,35 +7,35 @@ cases below assert the *refusals* as hard as the reclaims:
 
   * a DIRTY worktree is kept, whatever its ancestry
   * a NOT-MERGED worktree is kept
+  * a LOCKED worktree is kept -- the "rip a worktree out from under a running
+    agent" harm the whole locked branch of the loop exists to prevent
+  * the `dir-only` arm removes the DIRECTORY but deliberately KEEPS the ref
+  * backstop 3 keeps a `worktree-agent-*` ref that is still checked out or not
+    yet merged -- that namespace is never pushed (lode-yrtu), so a wrong
+    deletion there has no origin copy to recover from
   * running from a worktree instead of the main checkout refuses outright
   * the summary distinguishes "0 of 0" (idle) from "0 of N" (everything skipped)
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
 
+from _gitrepo import _git
 from conftest import _CHECKOUT_ROOT as REPO_ROOT
 
 SCRIPT = REPO_ROOT / "scripts" / "worktree-gc-sweep.sh"
-
-
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
 
 
 def _repo(tmp_path: Path) -> Path:
     repo = tmp_path / "r"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "trunk", ".")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
     _git(repo, "commit", "-q", "--allow-empty", "-m", "init")
     # The sweep only considers paths under .claude/worktrees/, and reads a tree as
     # clean only because build junk is ignored -- both are load-bearing here.
@@ -57,14 +57,27 @@ def _add_wt(repo: Path, name: str, branch: str, start: str = "trunk") -> Path:
     return repo / ".claude" / "worktrees" / name
 
 
-def _sweep(repo: Path, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def _sweep(
+    repo: Path, cwd: Path | None = None, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    # `env` OVERLAYS the real environment rather than replacing it -- the sweep
+    # shells out to git, which needs HOME/PATH to behave at all.
     return subprocess.run(
         ["bash", str(repo / "scripts" / "worktree-gc-sweep.sh"), "--base-ref", "trunk"],
         cwd=cwd or repo,
         capture_output=True,
         text=True,
         check=False,
+        env={**os.environ, **(env or {})},
     )
+
+
+def _worktrees(repo: Path) -> str:
+    return _git(repo, "worktree", "list").stdout.strip()
+
+
+def _branches(repo: Path) -> str:
+    return _git(repo, "branch", "--list").stdout.strip()
 
 
 def test_idle_sweep_reports_zero_of_zero(tmp_path: Path) -> None:
@@ -79,8 +92,8 @@ def test_clean_merged_worktree_is_fully_reclaimed(tmp_path: Path) -> None:
     r = _sweep(repo)
     assert r.returncode == 0, r.stderr
     assert "full=1" in r.stdout
-    assert "agent-a" not in _git(repo, "worktree", "list")
-    assert "worktree-agent-a" not in _git(repo, "branch", "--list")
+    assert "agent-a" not in _worktrees(repo)
+    assert "worktree-agent-a" not in _branches(repo)
 
 
 def test_dirty_worktree_is_kept_even_though_it_is_merged(tmp_path: Path) -> None:
@@ -92,7 +105,7 @@ def test_dirty_worktree_is_kept_even_though_it_is_merged(tmp_path: Path) -> None
     r = _sweep(repo)
     assert r.returncode == 0, r.stderr
     assert "dirty=1" in r.stdout and "full=0" in r.stdout
-    assert "agent-b" in _git(repo, "worktree", "list")
+    assert "agent-b" in _worktrees(repo)
     assert (wt / "uncommitted.txt").exists()
 
 
@@ -105,7 +118,53 @@ def test_not_merged_worktree_is_kept(tmp_path: Path) -> None:
     r = _sweep(repo)
     assert r.returncode == 0, r.stderr
     assert "not-merged=1" in r.stdout
-    assert "agent-c" in _git(repo, "worktree", "list")
+    assert "agent-c" in _worktrees(repo)
+
+
+def test_a_live_lock_keeps_the_worktree(tmp_path: Path) -> None:
+    """A lock the sweep cannot positively prove dead must fail CLOSED. This is the
+    only path that turns a LOCKED worktree into a destroyable one, and getting the
+    signal wrong rips a directory out from under a running agent -- the harm the
+    locked branch of the loop exists to prevent."""
+    repo = _repo(tmp_path)
+    _add_wt(repo, "agent-f", "worktree-agent-f")
+    # A reason string worktree-lock-stale.sh cannot parse as a proven-dead session.
+    _git(
+        repo,
+        "worktree",
+        "lock",
+        "--reason",
+        "held by a live session",
+        ".claude/worktrees/agent-f",
+    )
+    r = _sweep(repo)
+    assert r.returncode == 0, r.stderr
+    assert "locked=1" in r.stdout and "full=0" in r.stdout
+    assert "agent-f" in _worktrees(repo)
+    assert "worktree-agent-f" in _branches(repo)
+
+
+def test_dir_only_reclaim_removes_the_directory_but_keeps_the_ref(
+    tmp_path: Path,
+) -> None:
+    """The `dir-only` arm's DEFINING property: a builder branch is never pushed
+    (lode-yrtu), so its commits stay reachable only through the local ref. A
+    copy-paste of `git branch -D` from the full-reclaim arm below it would destroy
+    exactly what this arm exists to preserve."""
+    repo = _repo(tmp_path)
+    wt = _add_wt(repo, "agent-g", "worktree-agent-g")
+    (wt / "f.txt").write_text("x")
+    _git(wt, "add", "f.txt")
+    _git(wt, "commit", "-q", "-m", "unpushed builder work")
+    # Age floor to 0 so the just-made commit clears it; without this the candidate
+    # is (correctly) kept as not-merged.
+    r = _sweep(repo, env={"LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS": "0"})
+    assert r.returncode == 0, r.stderr
+    assert "dir-only=1" in r.stdout
+    assert "agent-g" not in _worktrees(repo)
+    assert "worktree-agent-g" in _branches(repo), (
+        "the un-pushed builder ref was deleted -- its commits are unrecoverable"
+    )
 
 
 def test_everything_skipped_is_distinguishable_from_idle(tmp_path: Path) -> None:
@@ -124,7 +183,7 @@ def test_a_worktree_outside_the_claude_dir_is_never_a_candidate(tmp_path: Path) 
     _git(repo, "worktree", "add", "-q", "-b", "elsewhere", "../side", "trunk")
     r = _sweep(repo)
     assert "reclaimed 0 of 0" in r.stdout
-    assert "side" in _git(repo, "worktree", "list")
+    assert "side" in _worktrees(repo)
 
 
 def test_running_from_a_worktree_refuses_with_exit_2(tmp_path: Path) -> None:
@@ -133,7 +192,7 @@ def test_running_from_a_worktree_refuses_with_exit_2(tmp_path: Path) -> None:
     wt = _add_wt(repo, "agent-e", "worktree-agent-e")
     r = _sweep(repo, cwd=wt)
     assert r.returncode == 2, r.stdout
-    assert "agent-e" in _git(repo, "worktree", "list")
+    assert "agent-e" in _worktrees(repo)
 
 
 def test_bare_ref_backstop_keeps_a_land_ref_whose_remote_still_exists(
@@ -155,8 +214,7 @@ def test_bare_ref_backstop_keeps_a_land_ref_whose_remote_still_exists(
 
     r = _sweep(repo)
     assert r.returncode == 0, r.stderr
-    branches = _git(repo, "branch", "--list")
-    assert "land/t1--agent-xyz" in branches, (
+    assert "land/t1--agent-xyz" in _branches(repo), (
         "suffixed ref deleted despite its remote existing"
     )
 
@@ -175,4 +233,33 @@ def test_bare_ref_backstop_deletes_a_land_ref_whose_remote_is_gone(
 
     r = _sweep(repo)
     assert r.returncode == 0, r.stderr
-    assert "land/gone" not in _git(repo, "branch", "--list")
+    assert "land/gone" not in _branches(repo)
+
+
+def test_backstop3_deletes_a_merged_unattached_builder_ref(tmp_path: Path) -> None:
+    """The `worktree-agent-*` namespace accumulates orphan refs invisible to both
+    nets above (17 confirmed on one machine)."""
+    repo = _repo(tmp_path)
+    _git(repo, "branch", "worktree-agent-orphan", "trunk")  # merged, no worktree
+    r = _sweep(repo)
+    assert r.returncode == 0, r.stderr
+    assert "backstop3" in r.stdout
+    assert "worktree-agent-orphan" not in _branches(repo)
+
+
+def test_backstop3_keeps_an_unmerged_builder_ref(tmp_path: Path) -> None:
+    """The guard that matters: this namespace is NEVER pushed to origin (lode-yrtu),
+    so unlike backstop 2 there is no remote copy to recover from. A ref whose
+    commits are not yet in trunk must survive even with no worktree attached --
+    that is exactly the state the `dir-only` arm above deliberately leaves behind."""
+    repo = _repo(tmp_path)
+    wt = _add_wt(repo, "agent-h", "worktree-agent-h")
+    (wt / "f.txt").write_text("x")
+    _git(wt, "add", "f.txt")
+    _git(wt, "commit", "-q", "-m", "unpushed builder work")
+    _git(repo, "worktree", "remove", "--force", ".claude/worktrees/agent-h")
+    r = _sweep(repo)
+    assert r.returncode == 0, r.stderr
+    assert "worktree-agent-h" in _branches(repo), (
+        "an un-merged, never-pushed builder ref was force-deleted"
+    )

@@ -1,11 +1,17 @@
 """Tests for scripts/worktree-gc-classify.sh (lode-9owc).
 
-`/land`'s Section 4 worktree-GC backstop sweep (`.claude/skills/land/SKILL.md`)
-decides what to do with each candidate under `.claude/worktrees/` via a
-per-candidate predicate that -- before this ticket -- lived only as inline
-bash in a markdown fence, reachable by no gate at all. The script's own header
-carries WHY it was extracted and what each bucket means; that is deliberately
-not retold here.
+`/land`'s Section 4 worktree-GC backstop sweep decides what to do with each
+candidate under `.claude/worktrees/` via a per-candidate predicate that --
+before this ticket -- lived only as inline bash in a markdown fence, reachable
+by no gate at all. The script's own header carries WHY it was extracted and
+what each bucket means; that is deliberately not retold here.
+
+The SWEEP around it has since been extracted the same way, into
+`scripts/worktree-gc-sweep.sh` (lode-s9xe.5, tested in
+`tests/test_worktree_gc_sweep.py`) -- that script, not the surviving
+`.claude/skills/land/SKILL.md` fence, is what the bucket-vocabulary test at
+the bottom of this module now reads. The fence is deleted by the call-site
+ticket that wires the sweep in.
 
 What matters to the tests: the script only ever PRINTS a bucket name -- it
 never removes a worktree or deletes a branch -- so every fixture below only

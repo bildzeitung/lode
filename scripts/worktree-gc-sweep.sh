@@ -34,6 +34,24 @@
 #
 # Usage: scripts/worktree-gc-sweep.sh [--base-ref <ref>]
 # Exit codes: 0 = swept (summary on stdout), 2 = machine fault / wrong checkout.
+#
+# --base-ref GOVERNS BACKSTOP 3 ONLY -- the `git branch --merged` at the bottom
+# of this file. It does NOT reach the worktree sweep: that decision belongs to
+# scripts/worktree-gc-classify.sh, which takes no base ref and hardcodes `trunk`
+# (deliberately -- it is a character-for-character port of the condition this
+# loop used when it lived in a markdown fence). Passing anything but `trunk`
+# therefore judges bare builder refs against one branch while every `worktree
+# remove --force` still judges against `trunk`. lode has exactly one default
+# branch, so the only correct value is the default; the flag survives the port
+# from harness-export (whose call site passes `--base-ref main`) rather than
+# because lode has a second base to sweep against. Whether to drop it or push it
+# through to the classifier is lode-s9xe.5's open question for the call-site
+# ticket -- see that follow-up before wiring an argument here.
+#
+# Not sourced from scripts/gate-lib.sh, though the "GATE COULD NOT RUN" banner
+# below is that library's: same abstention as scripts/assert-main-checkout.sh
+# makes, for the same reason -- gate-lib.sh's exit 2 means "could not judge the
+# CONTENT", and this is a sweep with a precondition guard, not a content gate.
 set -u
 
 TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || TOP=""
@@ -108,6 +126,11 @@ while IFS=$'\t' read -r WT SHA LOCKED BR; do
       fi
       ;;
     full-reclaim)
+      # ASYMMETRY, DELIBERATE: the DIRECTORY removal is checked, the ref delete is
+      # not -- `full=N` means "directory gone", not "directory and ref gone". A
+      # refused `branch -D` leaks a ref, which is the safe direction and which
+      # backstops 2 and 3 below exist to collect on a later pass; a refused
+      # `worktree remove` would leave the directory live, which is not.
       if git worktree remove --force "$WT"; then
         [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true
         RECLAIMED=$((RECLAIMED + 1))
