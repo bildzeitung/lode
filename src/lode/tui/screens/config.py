@@ -9,6 +9,7 @@ row-builder :func:`lode.config.config_lines` for the resolved on-disk paths
 every runtime/tune Settings knob and its current value (lode-juz8.6) — where
 the rows, and why they are shared rather than mirrored by hand, are
 documented.
+
 """
 
 from __future__ import annotations

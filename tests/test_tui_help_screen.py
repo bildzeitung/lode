@@ -21,15 +21,35 @@ from pathlib import Path
 
 import pytest
 from textual.binding import BindingsMap
+from textual.widgets import Static
 
+from lode.branding import TAGLINE
 from lode.storage import init_db
 from lode.tui.app import LodeApp
 from lode.tui.screens.ask import AskScreen
 from lode.tui.screens.browse import BrowseScreen
 from lode.tui.screens.capture import BODY_ID, CaptureScreen
 from lode.tui.screens.edit import EditScreen
-from lode.tui.screens.help import HelpScreen
+from lode.tui.screens.help import WORDMARK_ID, HelpScreen
 from lode.versions import save
+
+
+def test_ctrl_underscore_overlay_shows_the_wordmark(tmp_path: Path) -> None:
+    # lode-fhql.5: the wordmark lives on this opt-in "about" overlay, not as
+    # a CaptureScreen startup splash -- see the module docstring's
+    # "Wordmark placement" note. Reachable the same way the overlay itself
+    # is: Ctrl+_ (or "?").
+    app = LodeApp(db_path=tmp_path / "lode.db")
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+underscore")
+            await pilot.pause()
+            assert isinstance(app.screen, HelpScreen)
+            return str(app.screen.query_one(f"#{WORDMARK_ID}", Static).content)
+
+    text = asyncio.run(_drive())
+    assert TAGLINE in text
 
 
 def test_ctrl_underscore_opens_the_overlay_from_the_default_capture_screen(
