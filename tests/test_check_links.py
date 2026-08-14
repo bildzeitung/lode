@@ -189,10 +189,11 @@ class TestCheck:
         assert check(tmp_path) == []
 
     def test_files_outside_scan_dirs_are_valid_link_targets(self, tmp_path):
-        """Files outside SCAN_DIRS don't get the full markdown-link walk
-        (see TestBareDocAnchorRefs below for what they DO get: a bare
-        docs/-anchor citation check) -- but they remain valid *targets* for
-        a link written inside a SCAN_DIRS document."""
+        """A markdown file outside SCAN_DIRS is itself a valid link *target*
+        for a link written inside a SCAN_DIRS document (it also gets the
+        full markdown-link walk in its own right since lode-act5 -- see
+        TestBareDocAnchorRefs below for the bare docs/-anchor citation check
+        it gets on top of that)."""
         _write(tmp_path, f"{_DOCS}/a.md", "[readme](../README.md)\n")
         _write(tmp_path, "README.md", "# Readme\n")
         _git_init(tmp_path)
@@ -208,6 +209,68 @@ def test_gate_scans_both_docs_and_dot_claude(tmp_path, scan_dir):
     errors = check(tmp_path)
 
     assert len(errors) == 1
+
+
+class TestScanScopeWidenedRepoWide:
+    """lode-act5: the full bracketed-link walk is no longer bounded to
+    SCAN_DIRS -- it now covers every tracked ``*.md`` file, closing the gap
+    where a bracketed relative link written in a top-level ``README.md`` (or
+    any other markdown file outside ``docs/``/``.claude/``) was never
+    resolved at all: not by the full walk (file outside SCAN_DIRS) and not
+    by the bare-citation pass (a real ``[text](target)`` link isn't a bare
+    root-relative doc-page text reference unless its target happens to start
+    with ``docs/``)."""
+
+    def test_broken_bracketed_link_in_top_level_readme_is_reported(self, tmp_path):
+        _write(tmp_path, "README.md", "[missing](nope.md)\n")
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert len(errors) == 1
+        assert errors[0].target == "nope.md"
+
+    def test_broken_bracketed_link_in_nested_readme_is_reported(self, tmp_path):
+        """The concrete case found reviewing lode-s9xe.7: a bracketed link
+        in tests/README.md, verified by hand because nothing gated it."""
+        _write(tmp_path, "tests/README.md", "[claude](../CLAUDE.md)\n")
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert len(errors) == 1
+        assert errors[0].target == "../CLAUDE.md"
+
+    def test_working_bracketed_link_in_top_level_readme_passes(self, tmp_path):
+        _write(tmp_path, "README.md", "[claude](CLAUDE.md)\n")
+        _write(tmp_path, "CLAUDE.md", "# Claude\n")
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+    def test_broken_anchor_in_top_level_readme_link_is_reported(self, tmp_path):
+        _write(tmp_path, "README.md", "[claude](CLAUDE.md#no-such-anchor)\n")
+        _write(tmp_path, "CLAUDE.md", "# Claude\n\n## Real Heading\n")
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert len(errors) == 1
+        assert "no heading slug" in errors[0].reason
+
+    def test_link_caught_by_both_passes_is_reported_once(self, tmp_path):
+        """A bracketed link into a `docs/` target, written in a markdown file
+        outside SCAN_DIRS, matches BOTH the widened bracket walk and the
+        bare-citation regex. `check` de-duplicates so one real break is
+        reported once, not twice (which would also double the summary
+        count)."""
+        _write(tmp_path, "README.md", f"[foo]({_DOCS}/foo.md#no-such-anchor)\n")
+        _write(tmp_path, f"{_DOCS}/foo.md", "# Real Heading\n")
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert len(errors) == 1
 
 
 class TestBareDocAnchorRefs:
@@ -346,8 +409,10 @@ class TestBareDocAnchorRefs:
         assert check(tmp_path) == []
 
     def test_scan_dirs_files_are_excluded_from_the_bare_pass(self, tmp_path):
-        """The two passes must not both claim the same file. Asserted on the
-        pass boundary itself rather than on `check() == []`, which would hold
+        """A SCAN_DIRS file is never claimed by the bare pass (a markdown file
+        OUTSIDE SCAN_DIRS is claimed by both since lode-act5 -- see
+        TestScanScopeWidenedRepoWide). Asserted on the pass boundary itself
+        rather than on `check() == []`, which would hold
         under any implementation (a plain-prose mention matches no `_LINK_RE`
         either) and so could not detect double-scanning."""
         _write(tmp_path, f"{_DOCS}/a.md", f"# A\n\nSee {_DOCS}/a.md#no-such-anchor.\n")
@@ -424,9 +489,10 @@ class TestBareDocAnchorRefs:
 
 def test_real_repo_passes_the_gate():
     """The acceptance criterion, for both passes at once: every relative
-    markdown link in docs/ and .claude/ resolves, AND every bare docs/ anchor
-    citation from anywhere else in the tree (.github/workflows/, scripts/,
-    src/, noxfile.py, README.md, ...) resolves."""
+    markdown link in every tracked *.md file (lode-act5: repo-wide, not just
+    docs/ and .claude/) resolves, AND every bare docs/ anchor citation from
+    anywhere else in the tree (.github/workflows/, scripts/, src/,
+    noxfile.py, README.md, ...) resolves."""
     errors = check(REPO_ROOT)
 
     assert errors == [], "broken link(s):\n" + "\n".join(str(e) for e in errors)
