@@ -531,10 +531,16 @@ def test_fast_path_rejects_gh_inside_an_ordinary_word_without_scanning() -> None
     Measured on this ticket's own machine (bash 5.x, LANG=C.UTF-8): the OLD `*gh*` substring
     pre-filter let an 8 KB such command through to the split, taking ~469ms; a 24.6 KB one ~3.5s.
     The tightened command-position pre-filter exits before the split ever runs, so this completes
-    in a small, size-independent budget. The ceiling below is generous -- well under the OLD
-    guard's own smallest measured regression (469ms @ 8 KB) but comfortably above ordinary
-    process-spawn + bash-parse overhead -- so a REVERT of the pre-filter (back to `*gh*`, or
-    dropped outright) fails this test long before anyone notices a slow session.
+    in a small, size-independent budget. The ceiling below (1.0s, lode-887o -- widened from an
+    original 0.25s that measured 0.320s flaky under `pytest -n 8` on a loaded machine, lode-887o)
+    stays comfortably under the OLD guard's own smallest measured regression (469ms @ 8 KB is
+    already close; the 3.5s @ 24.6 KB path this fixture actually exercises is 3.5x the new
+    ceiling) while riding out ordinary scheduler noise, so a REVERT of the pre-filter (back to
+    `*gh*`, or dropped outright) still fails this test long before anyone notices a slow session.
+    This test is also run OUTSIDE the parallel ``-n 8`` worker pool (``noxfile.py``'s
+    ``_SERIAL_TIMING_TESTS``, lode-887o): its wall-clock measurement would otherwise share the
+    machine with 7 sibling xdist workers and be subject to their scheduling load, which is what
+    produced the original flake.
     """
     # ~25 KB of prose containing "through" repeatedly, no real `gh` invocation anywhere.
     command = "git commit -m '" + ("walking through the design once more. " * 650) + "'"
@@ -547,7 +553,7 @@ def test_fast_path_rejects_gh_inside_an_ordinary_word_without_scanning() -> None
     assert decision is None, (
         f"guard wrongly denied a gh-free command: {command[:80]}..."
     )
-    assert elapsed < 0.25, (
+    assert elapsed < 1.0, (
         f"guard took {elapsed:.3f}s on a gh-free ~25 KB command -- the O(n^2) split/scan ran; "
         "the command-position pre-filter regressed (lode-vrhu)"
     )

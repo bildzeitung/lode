@@ -228,6 +228,16 @@ def fix(session: nox.Session) -> None:
     session.run(ruff, "check", "--fix", ".")
 
 
+#: A wall-clock timing assertion cannot share a machine with 7 sibling xdist
+#: workers and stay reliable (lode-887o: measured 0.320s against a 0.25s
+#: budget under -n 8 on a loaded machine, green on the very next unloaded
+#: run). Deselected from the main -n 8 run below and run serially afterwards
+#: so its timing measurement is never subject to concurrent worker load.
+_SERIAL_TIMING_TESTS = [
+    "tests/test_gh_write_guard.py::test_fast_path_rejects_gh_inside_an_ordinary_word_without_scanning",
+]
+
+
 @nox.session
 def tests(session: nox.Session) -> None:
     """Run the FULL test suite (pytest, no marker filter) — the merge/landing gate.
@@ -240,9 +250,18 @@ def tests(session: nox.Session) -> None:
     ``8``, lode-bv6y — see the module docstring) — no marker filter changes,
     no test skipped, just distributed across workers.
 
+    ``_SERIAL_TIMING_TESTS`` (lode-887o) is deselected from that parallel run
+    and executed as a second, ``-n0`` (no xdist workers at all) invocation
+    right after — each such test asserts a wall-clock budget that 7 sibling
+    workers' scheduler noise would make flaky. Still exactly one run of the
+    test per suite invocation, just not sharing a worker pool with the rest.
+
     Resolves ``pytest`` through ``_venv_tool`` (lode-0yfn) — see its docstring.
     """
-    session.run(_venv_tool(session, "pytest"), "-n", _xdist_workers())
+    pytest = _venv_tool(session, "pytest")
+    deselect = [arg for t in _SERIAL_TIMING_TESTS for arg in ("--deselect", t)]
+    session.run(pytest, "-n", _xdist_workers(), *deselect)
+    session.run(pytest, "-n", "0", *_SERIAL_TIMING_TESTS)
 
 
 @nox.session
