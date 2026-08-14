@@ -1,0 +1,324 @@
+#!/usr/bin/env bash
+#
+# The isolation-replay path: after a combined re-gate of /land's first-pass
+# batch merge turns red, reset back to a known-green base and replay the
+# accepted set one branch at a time -- gating after EACH merge -- so the
+# culprit is found and bounced without taking every innocent branch down
+# with it. (lode-s9xe.13)
+#
+# WHY THIS IS A SCRIPT, NOT A SECOND COPY OF land-merge-batch.sh's LOOP.
+# /land's Section 3 has two loops with the identical merge-and-classify
+# shape -- the first-pass batch merge (scripts/land-merge-batch.sh,
+# lode-s9xe.4) and this isolation-replay copy -- fenced separately in
+# .claude/skills/land/SKILL.md with a comment asking a human to "keep the two
+# loops the same shape". That is an unenforced sync invariant over
+# destructive code. This script drives its own copy of that shape (via the
+# same scripts/land-merge-one.sh and scripts/drop-from-accepted.sh both
+# loops already share), plus the per-branch gate and reset-on-red this loop
+# alone performs -- so the two loops sharing their inner merge/classify
+# helpers is what stays enforced, not the fenced markdown around them.
+#
+# Same two traps as land-merge-batch.sh, both learned the hard way in
+# /land's own history -- see that script's header for the full account:
+#
+#   * `if CMD; then rc=0; else rc=$?; fi`, NOT `if ! CMD; then rc=$?; fi` --
+#     the negated form's `$?` is the NEGATION's status, always 0, and would
+#     read a machine-fault 2 as a clean merge.
+#   * a branch that leaves the accepted set (real conflict, or bounced by a
+#     failed gate) is written back to the FILE, not just this shell's view
+#     of it, and takes every branch stacked on it with it
+#     (drop-from-accepted.sh already owns that reduction).
+#
+# THIS SCRIPT DOES RUN GATES (nox -t fix / nox -s tests / nox -s
+# lock_currency) -- unlike land-merge-batch.sh, which runs none. That is the
+# entire reason the isolation-replay loop exists: a combined merge can be
+# green with two branches each clean in isolation, so the only way to find
+# the culprit is to gate after every single merge, on a checkout no other
+# branch has touched. It also performs the two destructive resets this
+# whole path is named for: `git reset --hard <base-ref>` once, up front, and
+# `git reset --hard HEAD~1` per bounced branch.
+#
+# Usage:
+#   scripts/land-replay.sh --accepted <file> --msg-dir <dir> \
+#       --conflicts-dir <dir> --landed <file> [--graph <file>] \
+#       [--token <token>] [--base-ref <ref>]
+#
+#   --accepted       the ordered accepted-set file (base before dependent --
+#                     /land's Section 3a). Loaded with --require-nonempty:
+#                     unlike the first-pass loop, an empty accepted set here
+#                     is unreachable by construction (a nothing-merged pass
+#                     skips the combined re-gate, and therefore this script,
+#                     entirely -- see SKILL.md's Section 3 note) and is
+#                     therefore always a fault, never a legitimate outcome
+#                     (lode-0jan's asymmetry, preserved from the isolation
+#                     loop's own SKILL.md prose).
+#   --msg-dir        directory of precomputed merge messages, one file per id
+#                     at <msg-dir>/<id> -- forwarded verbatim to
+#                     land-merge-one.sh. Same directory the first-pass loop
+#                     used; this script never writes to it.
+#   --conflicts-dir  directory to write <conflicts-dir>/<id> into on a real
+#                     conflict -- the conflicting paths land-merge-one.sh
+#                     printed, persisted for a later, separate invocation
+#                     (the needs-rebase kick-back note) to read back
+#                     (lode-rfon's reasoning).
+#   --landed         REQUIRED (unlike land-merge-batch.sh's optional flag of
+#                     the same name): this loop's whole point is producing
+#                     the durable record /land's Section 4 reads back from a
+#                     later, separate invocation to decide what to close.
+#                     Truncated by THIS script before the replay loop starts
+#                     (the reset below discards whatever the first-pass loop
+#                     already recorded there) -- see below.
+#   --graph          scripts/stacked-graph.sh output, forwarded to
+#                     drop-from-accepted.sh so a bounced or conflicting
+#                     base's dependents are held too. Omit only when this
+#                     pass has no stacked branches at all.
+#   --token          this pass's land-lock token (lode-q9pm), forwarded
+#                     verbatim to land-merge-one.sh. Omit to fall through to
+#                     that script's blind heartbeat.
+#   --base-ref       the ref to reset onto before replaying, and the ref the
+#                     baseline gates below run against. Defaults to
+#                     `origin/trunk` -- re-specialized from a generalized
+#                     upstream default the same way scripts/stacked-graph.sh
+#                     (lode-s9xe.2) re-specializes its own --base-ref, since
+#                     lode's tracked default branch is `trunk`.
+#
+# BASELINE GATES, before attributing anything (lode-sys4, extended to `nox -s
+# tests` by lode-kq4v). No gate this script attributes is a pure function of
+# the tree -- an ambient FORCE_COLOR in the calling shell, a stale lock
+# against today's PyPI, can turn a gate red with no branch involved at all.
+# So every gate run below is baselined on bare --base-ref BEFORE the replay
+# loop merges anything: if the baseline itself is red, nothing in
+# --accepted caused it, and this script stops rather than blaming (and
+# deleting) whichever branch happened to merge first.
+#
+# Output (stdout), one line per id processed, in accepted-set order:
+#   LANDED\t<id>      merged AND gated clean; stays merged on the current
+#                     checkout.
+#   CONFLICT\t<id>    a real textual conflict against a branch already
+#                     merged this replay. Left the accepted set.
+#   BOUNCED\t<id>     merged cleanly but turned a gate red; backed out via
+#                     `git reset --hard HEAD~1` and left the accepted set.
+#                     Not a textual conflict -- the caller still owes this id
+#                     a bounce (new rebuild ticket, drop the branch), same as
+#                     any other gate failure.
+#   HELD\t<id>        NOT processed -- removed from the accepted set as a
+#                     dependent of a branch this call classified CONFLICT or
+#                     BOUNCED (or an earlier HELD's own dependent, via
+#                     drop-from-accepted.sh's transitive closure).
+#
+# Exit codes: 0 = the loop ran to completion (LANDED/CONFLICT/BOUNCED/HELD
+# are all non-fault outcomes). 2 = machine fault: bad usage, a required file
+# missing, the baseline gate itself red or faulting, or a called script
+# failing in any way that is not its own documented content verdict. Per
+# lode-9i2p's rule this is never read as a branch verdict, and processing
+# stops immediately. There is no exit 1: like land-merge-batch.sh, a batch of
+# multiple ids has no single verdict to report through the exit code -- read
+# stdout.
+set -uo pipefail   # deliberately NOT -e -- every branch below inspects an
+                   # exit code by hand, same as land-merge-batch.sh.
+
+# shellcheck source=gate-lib.sh
+if ! . "$(dirname "$0")/gate-lib.sh" --no-advisory; then
+  echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
+  echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
+  exit 2
+fi
+
+SCRIPT_DIR="$(dirname "$0")"
+
+# Main-checkout identity (lode-1nty's pattern, same as land-merge-one.sh):
+# every destructive git call below (`git reset --hard`) is cwd-resolved, with
+# no `-C`/`--git-dir` of its own pinning it to a specific checkout. This
+# script asserts its own main-checkout identity as its first real action so
+# no caller needs to fence it separately -- a caller with cwd-resolved
+# mutations of its OWN still needs its own guard, but this script's resets
+# are covered here.
+if [ ! -x "$SCRIPT_DIR/assert-main-checkout.sh" ]; then
+  gate_could_not_run \
+    "scripts/assert-main-checkout.sh is missing or not executable next to $0." \
+    "This is a bootstrap/checkout fault -- the guard could not run at all, which" \
+    "is NOT a verdict that cwd is the wrong checkout, and never a branch conflict."
+fi
+if ! "$SCRIPT_DIR/assert-main-checkout.sh"; then
+  gate_could_not_run \
+    "not running in lode's main checkout (see the diagnostic above)." \
+    "scripts/assert-main-checkout.sh refused -- every git call in this" \
+    "script is cwd-resolved with no -C of its own, so this is a" \
+    "machine/dispatch fault, never a branch conflict."
+fi
+
+ACCEPTED=""
+MSG_DIR=""
+CONFLICTS_DIR=""
+LANDED_FILE=""
+GRAPH=""
+TOKEN=""
+BASE_REF="origin/trunk"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --accepted)       shift; [ "$#" -gt 0 ] || gate_could_not_run "--accepted needs a value"; ACCEPTED="$1" ;;
+    --msg-dir)        shift; [ "$#" -gt 0 ] || gate_could_not_run "--msg-dir needs a value"; MSG_DIR="$1" ;;
+    --conflicts-dir)  shift; [ "$#" -gt 0 ] || gate_could_not_run "--conflicts-dir needs a value"; CONFLICTS_DIR="$1" ;;
+    --landed)         shift; [ "$#" -gt 0 ] || gate_could_not_run "--landed needs a value"; LANDED_FILE="$1" ;;
+    --graph)          shift; [ "$#" -gt 0 ] || gate_could_not_run "--graph needs a value"; GRAPH="$1" ;;
+    --token)          shift; [ "$#" -gt 0 ] || gate_could_not_run "--token needs a value"; TOKEN="$1" ;;
+    --base-ref)       shift; [ "$#" -gt 0 ] || gate_could_not_run "--base-ref needs a value"; BASE_REF="$1" ;;
+    *)                gate_could_not_run "unknown argument '$1'" \
+                        "usage: land-replay.sh --accepted <file> --msg-dir <dir> --conflicts-dir <dir>" \
+                        "  --landed <file> [--graph <file>] [--token <token>] [--base-ref <ref>]" ;;
+  esac
+  shift
+done
+
+[ -n "$ACCEPTED" ]      || gate_could_not_run "--accepted is required"
+[ -n "$MSG_DIR" ]       || gate_could_not_run "--msg-dir is required"
+[ -n "$CONFLICTS_DIR" ] || gate_could_not_run "--conflicts-dir is required"
+[ -n "$LANDED_FILE" ]   || gate_could_not_run "--landed is required"
+[ -d "$MSG_DIR" ]       || gate_could_not_run "--msg-dir '$MSG_DIR' does not exist"
+[ -d "$CONFLICTS_DIR" ] || gate_could_not_run "--conflicts-dir '$CONFLICTS_DIR' does not exist"
+if [ -n "$GRAPH" ] && [ ! -f "$GRAPH" ]; then
+  gate_could_not_run "graph file '$GRAPH' does not exist" \
+    "Pass the file scripts/stacked-graph.sh wrote, or omit --graph only if this pass has no stacks."
+fi
+
+# Missing -> fatal (Section 3a's precompute never ran). Empty -> ALSO fatal
+# here, unlike land-merge-batch.sh's own load of the same file: this script
+# only runs after a combined re-gate turned red, and a nothing-merged pass
+# skips that re-gate (and therefore this script) entirely, so an empty
+# accepted set at this point is unreachable by construction and always a
+# fault (lode-0jan's asymmetry).
+ACCEPTED_IDS=$("$SCRIPT_DIR/land-state-load.sh" "$ACCEPTED" --require-nonempty -- \
+  "land-replay.sh: isolation-replay path -- nothing to attribute a red combined re-gate to.") \
+  || gate_could_not_run "could not read --accepted '$ACCEPTED' (see land-state-load.sh's own diagnostic above)"
+
+# -q: this script's stdout is the caller's LANDED/CONFLICT/BOUNCED/HELD
+# channel (same contract as land-merge-one.sh's $CONFLICTS) and must stay
+# clean of git's own "HEAD is now at ..." chatter.
+git reset --hard -q "$BASE_REF"
+
+# Baseline every gate this loop attributes, on the reset tree, BEFORE
+# touching anything (see the file header). A baseline failure is never a
+# branch's fault: stop here, land nothing from this replay.
+if ! nox -s tests; then
+  gate_could_not_run "'nox -s tests' is red on bare '$BASE_REF', before any branch merged." \
+    "Not attributable to anything in --accepted. Check the calling shell's own" \
+    "environment (FORCE_COLOR / NO_COLOR / TTY_COMPATIBLE / TTY_INTERACTIVE, lode-kq4v)" \
+    "before assuming this is a genuine regression on '$BASE_REF' itself."
+fi
+lc_rc=0
+nox -s lock_currency || lc_rc=$?
+case "$lc_rc" in
+  0) : ;;
+  2) gate_could_not_run "'nox -s lock_currency' machine-faulted (exit 2) on bare '$BASE_REF'." \
+       "This is a machine fault (lode-jhry's 0/1/2 contract), never a branch verdict --" \
+       "surface it as-is, never as a bounce." ;;
+  *) gate_could_not_run "'nox -s lock_currency' is red (exit $lc_rc) on bare '$BASE_REF', before any branch merged." \
+       "Not attributable to anything in --accepted -- trunk's own lock is stale." ;;
+esac
+
+# The reset above discarded whatever the first-pass loop already recorded in
+# --landed; start THIS replay's record from empty so the caller closes only
+# what this loop actually keeps merged.
+: > "$LANDED_FILE"
+
+for id in $ACCEPTED_IDS; do
+  # A branch already HELD/CONFLICT/BOUNCED-dropped by an earlier iteration
+  # this same call may still appear in $ACCEPTED_IDS (captured before the
+  # loop started) -- re-check membership against the file, same idiom as
+  # land-merge-batch.sh's own loop, for the same reason.
+  grep -qxF "$id" "$ACCEPTED"
+  grc=$?
+  case "$grc" in
+    0) ;;
+    1) continue ;;
+    *) gate_could_not_run "grep failed (exit $grc) re-checking '$id' in '$ACCEPTED'" \
+         "Reading this as 'already dropped' would silently skip the rest of the replay." ;;
+  esac
+
+  # Same idiom as land-merge-batch.sh's loop, for the same reason: `if !
+  # CMD; then rc=$?` would capture the negation's status (always 0 in that
+  # arm), silently reading a machine-fault 2 as a clean merge.
+  if CONFLICTS=$("$SCRIPT_DIR/land-merge-one.sh" "$id" "$MSG_DIR" "$TOKEN"); then
+    rc=0
+  else
+    rc=$?
+  fi
+
+  case "$rc" in
+    0) : ;;   # merged -- gate it below before deciding LANDED vs. BOUNCED
+    1)
+      # A real textual conflict against a branch already merged this
+      # replay. Persist the conflicting paths now, while this loop actually
+      # holds them (lode-rfon), then drop it and its dependents.
+      printf '%s\n' "$CONFLICTS" > "$CONFLICTS_DIR/$id"
+      printf 'CONFLICT\t%s\n' "$id"
+      DROP_OUT=$("$SCRIPT_DIR/drop-from-accepted.sh" "$id" --accepted "$ACCEPTED" \
+        ${GRAPH:+--graph "$GRAPH"}) \
+        || gate_could_not_run "drop-from-accepted.sh faulted dropping '$id' (see its own diagnostic above)"
+      while IFS=$'\t' read -r verb held_id; do
+        [ "$verb" = "HELD" ] || continue
+        printf 'HELD\t%s\n' "$held_id"
+      done <<< "$DROP_OUT"
+      continue
+      ;;
+    *)
+      # MACHINE FAULT -- land-merge-one.sh's own exit 2, or any other
+      # nonzero (127/126 missing/non-executable next to this script, 128+n
+      # on a signal). CONFLICT (1) is the ONE code that is a branch verdict;
+      # everything else is the machine (lode-9i2p). Stop rather than guess
+      # at the fate of ids not yet reached.
+      gate_could_not_run "land-merge-one.sh failed (exit $rc) on '$id'" \
+        "Exit 1 is the only conflict verdict; $rc is a machine/bootstrap fault" \
+        "(see land-merge-one.sh's own diagnostic above, if it ran at all)." \
+        "Do NOT bounce '$id' on the strength of this."
+      ;;
+  esac
+
+  # Merged cleanly -- gate it, on THIS checkout alone, before deciding its
+  # fate. `nox -t fix` first (may reformat what was just merged), then `nox
+  # -s tests`; either red backs the merge out via `git reset --hard HEAD~1`
+  # and bounces this id (not a conflict -- its content merged fine, a gate
+  # just judged it bad).
+  if ! nox -t fix || ! nox -s tests; then
+    git reset --hard -q HEAD~1
+    printf 'BOUNCED\t%s\n' "$id"
+    DROP_OUT=$("$SCRIPT_DIR/drop-from-accepted.sh" "$id" --accepted "$ACCEPTED" \
+      ${GRAPH:+--graph "$GRAPH"}) \
+      || gate_could_not_run "drop-from-accepted.sh faulted dropping '$id' (see its own diagnostic above)"
+    while IFS=$'\t' read -r verb held_id; do
+      [ "$verb" = "HELD" ] || continue
+      printf 'HELD\t%s\n' "$held_id"
+    done <<< "$DROP_OUT"
+    continue
+  fi
+
+  bounce_rc=0
+  nox -s lock_currency || bounce_rc=$?
+  case "$bounce_rc" in
+    0)
+      printf 'LANDED\t%s\n' "$id"
+      printf '%s\n' "$id" >> "$LANDED_FILE" \
+        || gate_could_not_run "could not append '$id' to --landed '$LANDED_FILE'" \
+             "This id IS merged onto the current checkout; the record of it is not."
+      ;;
+    2)
+      # Machine fault MID-LOOP, not this branch's fault (lode-jhry): stop
+      # the whole replay here rather than bounce an innocent id.
+      gate_could_not_run "'nox -s lock_currency' machine-faulted (exit 2) after merging '$id'." \
+        "This is a machine fault, never a branch verdict -- do not bounce '$id' on it."
+      ;;
+    *)
+      git reset --hard -q HEAD~1
+      printf 'BOUNCED\t%s\n' "$id"
+      DROP_OUT=$("$SCRIPT_DIR/drop-from-accepted.sh" "$id" --accepted "$ACCEPTED" \
+        ${GRAPH:+--graph "$GRAPH"}) \
+        || gate_could_not_run "drop-from-accepted.sh faulted dropping '$id' (see its own diagnostic above)"
+      while IFS=$'\t' read -r verb held_id; do
+        [ "$verb" = "HELD" ] || continue
+        printf 'HELD\t%s\n' "$held_id"
+      done <<< "$DROP_OUT"
+      ;;
+  esac
+done
+
+exit 0
