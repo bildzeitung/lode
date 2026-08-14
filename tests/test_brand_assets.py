@@ -14,6 +14,10 @@ enforced by nothing (lode-fhql.4, added in technical review):
    wordmark (lode-fhql.5) consumes. The second is a pure glyph substitution of
    the first, so an edit to one must be an edit to both.
 
+Since lode-fhql.17 this module also gates that every ``docs/assets/*.svg``
+parses under a strict XML parser -- a separate concern from the two
+consistency claims above, but the same two files and the same owner.
+
 Deliberately NOT gated: re-deriving the grid from ``mark.svg``'s own geometry.
 That needs either ``cairosvg`` (which ``scripts/rasterize-mark.sh`` keeps out of
 ``pyproject.toml``/``requirements.lock`` on purpose) or a hand-transcribed
@@ -22,7 +26,10 @@ reimplementation of stroke-coverage maths — itself unverified — to gate a
 """
 
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
+
+import pytest
 
 ASSETS = Path(__file__).resolve().parent.parent / "docs" / "assets"
 
@@ -36,6 +43,32 @@ def _shape_lines(svg: str) -> list[str]:
     body = svg[svg.index("<svg") :]
     shapes = re.findall(r"<(?:rect|path)\b.*?/>", body, re.DOTALL)
     return [" ".join(s.split()) for s in shapes]
+
+
+SVGS = sorted(ASSETS.glob("*.svg"))
+
+
+def test_the_svg_corpus_is_not_empty() -> None:
+    """Guard the parametrised gate below against silently collecting nothing.
+
+    An empty parameter set makes pytest SKIP the test rather than fail it, so a
+    move or rename of docs/assets/ would retire the strict-XML gate without a
+    red run. This assertion is the only thing that makes that loud.
+    """
+    assert SVGS, f"no *.svg found under {ASSETS} -- the strict-XML gate is inert"
+
+
+@pytest.mark.parametrize("svg_path", SVGS, ids=lambda p: p.name)
+def test_svg_is_strict_xml(svg_path: Path) -> None:
+    """Every docs/assets/*.svg must parse under a strict XML parser.
+
+    A standalone-opened SVG (MS Edge, etc.) and scripts/rasterize-mark.sh's
+    cairosvg/defusedxml both parse strictly -- unlike an SVG embedded via HTML,
+    which browsers parse laxly. A literal ``--`` inside an XML comment (XML 1.0
+    section 2.5) is the failure mode this gate exists to catch (lode-fhql.17);
+    it slipped through review because the lax embedded-HTML path never noticed.
+    """
+    ET.parse(svg_path)
 
 
 def test_lockup_carries_the_marks_geometry_verbatim() -> None:
