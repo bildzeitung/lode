@@ -1,0 +1,64 @@
+<!--
+  lode favicon mark, theme-neutral variant (lode-fhql.22, rebuild of
+  lode-fhql.6's favicon).
+
+  Human sign-off lode-fhql.13 found the plain mark.svg-derived favicon
+  (docs/assets/mark-16.png / favicon.ico, ink-on-transparent) illegible
+  against a dark browser tab — it disappears the same way lockup.svg did
+  against GitHub's dark theme (lode-fhql.19), but the fix used there
+  (a `<picture>` element with a `prefers-color-scheme: dark` `<source>`,
+  swapping to a paper-coloured lockup) is NOT available here: browser tab
+  chrome has no theme-conditional favicon mechanism (no `<picture>`
+  equivalent for `<link rel=icon>`), and these consumers are RASTER
+  (PNG/ICO) — a currentColor/media-query trick inside the file cannot
+  reach a browser tab background either way.
+
+  So this file takes route (a) from lode-fhql.22's mechanism list: make the
+  mark itself theme-NEUTRAL by giving it a fixed, self-contained background
+  tile, rather than trying to track the tab's theme at all. Same palette as
+  lode-fhql.19 (ink #1E1B2E / paper #F7F4EE, docs/brand.md section 3): a
+  paper background square behind the ink mark, so the mark always sits on
+  its own light tile and reads against BOTH a light and a dark browser tab,
+  the same way a badge or app icon would. This is the recorded divergence
+  from .19's mechanism — a fixed tile instead of a colour flip — forced by
+  the raster/16px constraint the ticket calls out, not a second, unrelated
+  design decision.
+
+  Unlike mark.svg/lockup.svg, this file does NOT use `currentColor`: like
+  og-card.svg (lode-fhql.6), a favicon is always rendered the same way
+  regardless of embedding context (there is no page CSS to inherit from
+  inside a browser's tab-icon slot), so the ink/paper hex values from
+  docs/brand.md section 3 are hard-coded directly. The mark geometry inside
+  `<g id="mark">` is copied verbatim from mark.svg, the same duplication
+  convention lockup.svg and og-card.svg already use (cross-file `<use
+  href>` does not work for standalone SVG assets); tests/test_brand_assets.py
+  gates that the copy agrees.
+
+  scripts/rasterize-favicon-mark.sh renders this to docs/assets/favicon-16.png
+  (wired as mkdocs.yml's `theme.favicon`), and
+  scripts/rasterize-favicon-ico.sh now sources this file (not mark.svg) for
+  docs/assets/favicon.ico's multi-resolution PNGs. docs/assets/mark-16.png
+  and mark.svg itself are UNCHANGED and still used where the embedding
+  context supplies its own themed background (the docs site header logo,
+  `theme.logo`) — this ticket's scope is only the two raster favicon
+  consumption points lode-fhql.13 tested against.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- theme-neutral tile: paper background, always present regardless of the embedding chrome's theme -->
+  <rect x="0" y="0" width="32" height="32" fill="#F7F4EE"/>
+
+  <!-- mark, unchanged geometry from mark.svg, fixed ink fill/stroke instead of currentColor -->
+  <g id="mark">
+    <rect x="0" y="4"  width="32" height="4" fill="#1E1B2E" opacity="0.35"/>
+    <rect x="0" y="16" width="32" height="4" fill="#1E1B2E" opacity="0.35"/>
+    <rect x="0" y="24" width="32" height="4" fill="#1E1B2E" opacity="0.35"/>
+    <path
+      d="M 4 28 L 12 28 L 12 16 L 24 16 L 24 4 L 28 4"
+      fill="none"
+      stroke="#1E1B2E"
+      stroke-width="4"
+      stroke-linecap="square"
+      stroke-linejoin="miter"
+    />
+  </g>
+</svg>

@@ -162,25 +162,84 @@ def _geometry(svg: str) -> list[dict[str, str]]:
     return out
 
 
+def _id_mark_geometry(svg_text: str, source_name: str) -> list[dict[str, str]]:
+    """Geometry of the ``<g id="mark">`` group's own rect/path children.
+
+    Shared by every derived asset (og-card.svg, favicon-mark.svg, ...) that
+    wraps a verbatim copy of mark.svg's geometry in its own transformed/
+    recoloured group alongside other elements mark.svg doesn't have (a
+    background rect, wordmark text, ...) -- scope the comparison to just
+    that group, in the same untransformed 0-32 coordinate space mark.svg
+    uses. Selected by `id="mark"`, not by being the first `<g>` in the file:
+    adding a second group later must not silently re-point a gate at the
+    wrong geometry.
+
+    Searches the document with its leading maintainer comment stripped
+    (``_document``), not the raw file text: a comment that itself mentions
+    the literal string ``<g id="mark">`` in prose (as favicon-mark.svg's
+    does) would otherwise let this regex latch onto that prose and swallow
+    everything up to the real element's closing ``</g>``.
+    """
+    document = _document(svg_text)
+    group = re.search(r'<g\b[^>]*id="mark"[^>]*>(.*?)</g>', document, re.DOTALL)
+    assert group, (
+        f'{source_name} has no <g id="mark"> wrapping the copied mark geometry'
+    )
+    return _geometry(f"<svg>{group.group(1)}</svg>")
+
+
 def test_og_card_carries_the_marks_geometry() -> None:
     mark = _geometry((ASSETS / "mark.svg").read_text())
-
-    # og-card.svg wraps its copy of the mark in a <g transform="..."> group
-    # (scaled/positioned for the 1200x630 card) alongside a background <rect>
-    # and the wordmark <text> that mark.svg doesn't have -- scope the
-    # comparison to just that group's own rect/path children, in the same
-    # untransformed 0-32 coordinate space mark.svg uses.
-    # The group is selected by its `id="mark"`, not by being the first <g> in
-    # the file: adding a second group later must not silently re-point this
-    # gate at the wrong geometry.
-    og_card_svg = (ASSETS / "og-card.svg").read_text()
-    group = re.search(r'<g\b[^>]*id="mark"[^>]*>(.*?)</g>', og_card_svg, re.DOTALL)
-    assert group, 'og-card.svg has no <g id="mark"> wrapping the copied mark geometry'
-    og_card = _geometry(f"<svg>{group.group(1)}</svg>")
+    og_card = _id_mark_geometry((ASSETS / "og-card.svg").read_text(), "og-card.svg")
 
     assert mark, "mark.svg has no <rect>/<path> elements -- parser or asset broke"
     assert og_card == mark, (
         "og-card.svg's mark geometry has drifted from mark.svg. The two are "
         "copy-pasted on purpose (colour differs deliberately); edit both, or "
         "update this gate deliberately."
+    )
+
+
+def test_favicon_mark_carries_the_marks_geometry() -> None:
+    """favicon-mark.svg (lode-fhql.22) wraps a verbatim copy of mark.svg's
+    geometry in its own `<g id="mark">`, alongside the paper background tile
+    mark.svg doesn't have -- same drift risk and same gate shape as
+    test_og_card_carries_the_marks_geometry.
+    """
+    mark = _geometry((ASSETS / "mark.svg").read_text())
+    favicon_mark = _id_mark_geometry(
+        (ASSETS / "favicon-mark.svg").read_text(), "favicon-mark.svg"
+    )
+
+    assert mark, "mark.svg has no <rect>/<path> elements -- parser or asset broke"
+    assert favicon_mark == mark, (
+        "favicon-mark.svg's mark geometry has drifted from mark.svg. The two "
+        "are copy-pasted on purpose (colour and background tile differ "
+        "deliberately); edit both, or update this gate deliberately."
+    )
+
+
+def test_favicon_mark_has_a_theme_neutral_background_tile() -> None:
+    """favicon-mark.svg's whole point (lode-fhql.22) is a fixed paper tile
+    behind the mark, so the favicon is legible regardless of the browser
+    tab's own theme. Assert the tile is present, paper-coloured, and covers
+    the full 32x32 viewBox -- not just present-but-wrong-size/colour.
+    """
+    svg = (ASSETS / "favicon-mark.svg").read_text()
+    document = _document(svg)
+    tile = re.search(r"<rect\b[^>]*/>", document)
+    assert tile, 'favicon-mark.svg has no background <rect> before <g id="mark">'
+    assert document.index(tile.group(0)) < document.index('id="mark"'), (
+        "favicon-mark.svg's background tile must be drawn before (under) the mark"
+    )
+    attrs = dict(re.findall(r'(\w[\w-]*)="([^"]*)"', tile.group(0)))
+    assert attrs.get("fill") == "#F7F4EE", (
+        "favicon-mark.svg's background tile is not paper (#F7F4EE, "
+        "docs/brand.md section 3)"
+    )
+    assert (attrs.get("x"), attrs.get("y")) == ("0", "0"), (
+        "favicon-mark.svg's background tile does not start at the viewBox origin"
+    )
+    assert (attrs.get("width"), attrs.get("height")) == ("32", "32"), (
+        "favicon-mark.svg's background tile does not cover the full 32x32 viewBox"
     )

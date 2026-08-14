@@ -2,11 +2,13 @@
 #
 # Build docs/assets/favicon.ico -- the classic ICO fallback for browsers
 # that still request /favicon.ico directly rather than honoring an SVG or
-# PNG <link rel="icon">. docs/assets/mark.svg is the favicon SVG source
-# (already referenced as `theme.logo` in mkdocs.yml, and reused verbatim,
-# not redrawn, per lode-fhql.6); docs/assets/mark-16.png (lode-fhql.4) is
-# the PNG fallback, already wired as `theme.favicon` in mkdocs.yml. This
-# script produces the third, ICO, fallback.
+# PNG <link rel="icon">. docs/assets/favicon-mark.svg is the favicon SVG
+# source (lode-fhql.22 -- a theme-neutral, fixed-tile variant of mark.svg,
+# NOT mark.svg itself, which mkdocs.yml's `theme.logo` still uses unchanged
+# for the site header; see favicon-mark.svg's own header for why the two
+# diverge); docs/assets/favicon-16.png (lode-fhql.22) is the PNG fallback,
+# wired as `theme.favicon` in mkdocs.yml. This script produces the third,
+# ICO, fallback.
 #
 # Uses only cairosvg (via a throwaway venv, never the project's own
 # ./venv) plus the Python standard library -- the same rasterizer as
@@ -31,7 +33,7 @@
 # Usage: scripts/rasterize-favicon-ico.sh
 
 REPO=$(git rev-parse --show-toplevel)
-SVG="$REPO/docs/assets/mark.svg"
+SVG="$REPO/docs/assets/favicon-mark.svg"
 OUT="$REPO/docs/assets/favicon.ico"
 
 WORKDIR=$(mktemp -d)
@@ -43,12 +45,13 @@ python3 -m venv "$WORKDIR/venv"
 # Paths go in as argv, not interpolated into the Python source: a repo path
 # containing a quote would otherwise break the string literal. The SVG is
 # handed to cairosvg by `url=`, exactly as scripts/rasterize-mark.sh and
-# scripts/rasterize-og-card.sh do -- which requires mark.svg to parse under
-# a strict XML parser (cairosvg goes through defusedxml's expat-based
-# ElementTree). That is not an assumption: lode-fhql.17 fixed the literal
-# '--' that used to sit in mark.svg's header comment and added a gate over
-# every docs/assets/*.svg (tests/test_brand_assets.py::test_svg_is_strict_xml)
-# so it cannot come back unnoticed.
+# scripts/rasterize-og-card.sh do -- which requires favicon-mark.svg to
+# parse under a strict XML parser (cairosvg goes through defusedxml's
+# expat-based ElementTree). That is not an assumption: lode-fhql.17 fixed
+# the literal '--' that used to sit in mark.svg's header comment and added a
+# gate over every docs/assets/*.svg
+# (tests/test_brand_assets.py::test_svg_is_strict_xml) so it cannot come
+# back unnoticed, in any file under that glob including this one.
 "$WORKDIR/venv/bin/python3" -c "
 import struct
 import sys
