@@ -42,26 +42,27 @@ that are neither under ``docs/`` nor ``.claude/`` -- a bare-text pointer like
 ``# comment`` in ``.github/workflows/*.yml`` or ``scripts/*.sh``, with no
 markdown ``[text](...)`` brackets at all. The general form was chosen over
 special-casing ``.github/workflows/``: EVERY tracked file outside
-``SCAN_DIRS`` is scanned for a bare ``docs/<path>.md#<anchor>`` text
-reference (``_bare_doc_anchor_refs`` / ``_tracked_other_files`` below), not
-just workflow YAML -- ``scripts/``, ``noxfile.py`` and ``src/`` all cite
+``BARE_CITATION_EXCLUDE_DIRS`` is scanned for a bare ``docs/<path>.md#<anchor>``
+text reference (``_bare_doc_anchor_refs`` / ``_tracked_other_files`` below),
+not just workflow YAML -- ``scripts/``, ``noxfile.py`` and ``src/`` all cite
 docs/ anchors the identical way, so special-casing one directory would have
 left the others silently ungated again.
 
-This second pass is deliberately narrower than the SCAN_DIRS walk: it
-recognizes only a literal, root-relative ``docs/<path>.md#<anchor>``
+This second pass is deliberately narrower than the full bracketed-link walk:
+it recognizes only a literal, root-relative ``docs/<path>.md#<anchor>``
 substring -- the shape every real instance in this repo is written in,
 regardless of the citing file's own directory depth.
 
-SCOPE DECISION (lode-act5): ``SCAN_DIRS`` originally bounded BOTH what got
-the full bracketed-link walk (``docs/`` + ``.claude/`` only) AND, inversely,
-what got the bare-citation pass above (everything else). That meant a
-bracketed relative link -- ``[text](../CLAUDE.md)``, say -- written in a
-tracked markdown file OUTSIDE ``SCAN_DIRS`` (a top-level ``README.md``,
-``tests/README.md``, ``AGENTS.md``, ...) was never resolved at all: it isn't
-a bare ``docs/...`` citation (so the second pass's regex doesn't match it),
-and the file wasn't in ``SCAN_DIRS`` (so the first pass never walked it).
-Found concretely reviewing lode-s9xe.7: ``tests/README.md``'s
+SCOPE DECISION (lode-act5): what is now ``BARE_CITATION_EXCLUDE_DIRS``
+originally bounded BOTH what got the full bracketed-link walk (``docs/`` +
+``.claude/`` only) AND, inversely, what got the bare-citation pass above
+(everything else). That meant a bracketed relative link --
+``[text](../CLAUDE.md)``, say -- written in a tracked markdown file outside
+that pair of directories (a top-level ``README.md``, ``tests/README.md``,
+``AGENTS.md``, ...) was never resolved at all: it isn't a bare ``docs/...``
+citation (so the second pass's regex doesn't match it), and the file wasn't
+under ``docs/``/``.claude/`` (so the first pass never walked it). Found
+concretely reviewing lode-s9xe.7: ``tests/README.md``'s
 ``[`CLAUDE.md`](../CLAUDE.md)`` link was verified by hand, not by this gate.
 
 Two ways to close it were on the table: widen the full walk to every tracked
@@ -75,13 +76,31 @@ where the general form costs nothing extra to maintain and catches the next
 one automatically. ``_tracked_markdown_files`` below now returns every
 tracked ``*.md`` file, repo-wide, for the full walk; ``_tracked_other_files``
 (the bare-citation pass) is UNCHANGED -- still every tracked file outside
-``SCAN_DIRS`` -- so a markdown file outside ``SCAN_DIRS`` now gets BOTH
-passes. That is deliberate, not an oversight: the bare pass alone still
-catches a citation with no markdown brackets at all (backtick-quoted prose,
-e.g. tests/README.md's `` `docs/conventions.md` `` mentions), a shape the
-bracket walk cannot see. Where the two passes do overlap -- a bracketed
-link into a ``docs/`` target, matched by both -- ``check`` de-duplicates its
-result list, so one real break is still reported exactly once.
+``BARE_CITATION_EXCLUDE_DIRS`` -- so a markdown file outside those two
+directories now gets BOTH passes. That is deliberate, not an oversight: the
+bare pass alone still catches a citation with no markdown brackets at all
+(backtick-quoted prose, e.g. tests/README.md's `` `docs/conventions.md` ``
+mentions), a shape the bracket walk cannot see. Where the two passes do
+overlap -- a bracketed link into a ``docs/`` target, matched by both --
+``check`` de-duplicates its result list, so one real break is still reported
+exactly once.
+
+RETIRED (lode-6e9c): once the full bracketed-link walk widened repo-wide
+(lode-act5, above), the old ``SCAN_DIRS`` name stopped bounding any scan at
+all -- its only surviving job was excluding ``docs/``/``.claude/`` from the
+bare-citation pass, the opposite of what "scan dirs" suggests. Renamed to
+``BARE_CITATION_EXCLUDE_DIRS`` to say what it actually does; nothing about
+its VALUE or behavior changed, only the name. This also collapsed
+``check()`` to a single ``git ls-files`` fork per call (both file sets are
+now derived in memory from one fetch) and to reading each markdown file from
+disk at most once per call, via the ``_cached_text`` cache all three markdown
+reads now go through: the bracketed walk's source read, the bare pass's
+source read for a ``*.md`` file outside ``BARE_CITATION_EXCLUDE_DIRS``, and
+``_slugs_for_file``'s read of a link TARGET -- the last being the one that
+actually dominated, since nearly every anchor target is a ``docs/`` page the
+walk had already read. Non-markdown files in the bare pass are deliberately
+NOT cached: they are read exactly once, so retaining them would cost
+megabytes of resident text for no saved read.
 """
 
 from __future__ import annotations
@@ -100,7 +119,18 @@ app = typer.Typer(add_completion=False)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-SCAN_DIRS = ("docs", ".claude")
+#: Directories excluded from the bare-citation pass (``_bare_doc_anchor_refs``
+#: / ``_tracked_other_files`` below) -- NOT a scan boundary any more
+#: (lode-6e9c). Before lode-act5 this also bounded the full bracketed-link
+#: walk; that job is gone now (the walk is repo-wide), leaving this constant
+#: with exactly one surviving job: keeping ``docs/`` and ``.claude/`` (both
+#: already fully covered by the bracketed-link walk) out of the bare-citation
+#: pass, so a bare same-directory self-reference written IN docs/ prose
+#: isn't double-checked by both passes. (No contiguous literal ``docs/*.md``
+#: example here on purpose -- this file is itself scanned by
+#: ``_DOC_ANCHOR_REF_RE`` as a tracked file outside this exclusion list; see
+#: the identical concern noted near that regex's definition below.)
+BARE_CITATION_EXCLUDE_DIRS = ("docs", ".claude")
 
 # A markdown inline link: `[text](target)`, never an image (`![...]`).
 _LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
@@ -139,11 +169,13 @@ _HTML_ANCHOR_RE = re.compile(r'<a\s+(?:id|name)=["\']([^"\']+)["\']', re.IGNOREC
 # `<page>.md` reference -- e.g. a hypothetical `<page>.mdx` or `<page>.md`
 # immediately followed by a hyphenated suffix. (Written here without a
 # contiguous literal `docs/*.md` example on purpose: this file is itself
-# scanned by this same regex, as a tracked file outside SCAN_DIRS -- see
-# tests/test_check_links.py's `_DOCS` split for the identical concern.)
+# scanned by this same regex, as a tracked file outside
+# BARE_CITATION_EXCLUDE_DIRS -- see tests/test_check_links.py's `_DOCS` split
+# for the identical concern.)
 _DOC_ANCHOR_REF_RE = re.compile(r"(?<![\w./-])docs/[\w./-]+\.md(?:#[\w-]+)?(?![\w-])")
-# Extensions skipped when walking tracked files OUTSIDE SCAN_DIRS for a bare
-# docs/ anchor reference: machine-generated data/lock formats, whose contents
+# Extensions skipped when walking tracked files OUTSIDE
+# BARE_CITATION_EXCLUDE_DIRS for a bare docs/ anchor reference:
+# machine-generated data/lock formats, whose contents
 # nobody edits by hand. `.jsonl` is the load-bearing entry, NOT dead weight --
 # `.beads/issues.jsonl` is bd's passive, regenerated export of issue HISTORY,
 # and closed tickets' free-text descriptions really do cite docs/ anchors
@@ -182,13 +214,14 @@ def _is_external(target: str) -> bool:
     return target.startswith("//") or bool(_SCHEME_RE.match(target))
 
 
-def _tracked_paths(root: Path, *pathspecs: str) -> list[Path]:
-    """Repo-relative paths git tracks, optionally narrowed by pathspec -- the
-    single home of this gate's ``git ls-files`` scoping (mirroring the
-    ``shellcheck`` nox session's) so scratch or gitignored files never enter
-    it, and so both walks below parse that output exactly one way."""
+def _tracked_paths(root: Path) -> list[Path]:
+    """Every repo-relative path git tracks. ``check()`` calls this exactly
+    once and passes the result to both filters below (lode-6e9c) -- before
+    lode-act5 widened the markdown walk repo-wide the two filters issued
+    genuinely different pathspec-scoped queries; once both became the
+    identical unscoped one, forking git twice bought nothing."""
     out = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "--", *pathspecs],
+        ["git", "-C", str(root), "ls-files"],
         capture_output=True,
         text=True,
         check=True,
@@ -196,39 +229,46 @@ def _tracked_paths(root: Path, *pathspecs: str) -> list[Path]:
     return [Path(p) for p in out.split()]
 
 
-def _tracked_markdown_files(root: Path) -> list[Path]:
+def _tracked_markdown_files(root: Path, tracked: list[Path]) -> list[Path]:
     """Every ``*.md`` file git tracks, repo-wide (lode-act5) -- not limited to
     ``docs/`` and ``.claude/``. Widened from the original two-directory scan
     so a bracketed relative link written in ANY tracked markdown file (a
     top-level ``README.md``, ``tests/README.md``, ...) gets the full
     link+anchor walk, not just the narrower bare-citation check. See the
     module docstring's SCOPE DECISION (lode-act5) for why the general form
-    was chosen over a named allowlist of top-level READMEs."""
-    return sorted(root / rel for rel in _tracked_paths(root) if rel.suffix == ".md")
+    was chosen over a named allowlist of top-level READMEs.
+
+    A pure filter over ``tracked`` (``_tracked_paths``' output): required, not
+    optional, so ``check()`` stays the single owner of the ``git ls-files``
+    fork and no caller can silently reintroduce a second one."""
+    return sorted(root / rel for rel in tracked if rel.suffix == ".md")
 
 
-def _tracked_other_files(root: Path) -> list[Path]:
-    """Every tracked file OUTSIDE ``SCAN_DIRS`` -- the general form the scope
-    decision in the module docstring calls for. Any of these can cite a
-    ``docs/`` anchor in a bare-text comment (CI workflow YAML, a shell
-    script, a ``README.md`` prose sentence with no markdown brackets, ...);
-    ``_OTHER_SKIP_EXTENSIONS`` is subtracted.
+def _tracked_other_files(root: Path, tracked: list[Path]) -> list[Path]:
+    """Every tracked file OUTSIDE ``BARE_CITATION_EXCLUDE_DIRS`` -- the
+    general form the scope decision in the module docstring calls for. Any
+    of these can cite a ``docs/`` anchor in a bare-text comment (CI workflow
+    YAML, a shell script, a ``README.md`` prose sentence with no markdown
+    brackets, ...); ``_OTHER_SKIP_EXTENSIONS`` is subtracted.
 
     Deliberately NOT narrowed to non-markdown files even though
     ``_tracked_markdown_files`` above now ALSO walks every tracked ``*.md``
     file for the full bracketed-link check (lode-act5): a markdown file
-    outside ``SCAN_DIRS`` can carry a *bare* citation with no brackets at all
-    (e.g. tests/README.md's `` `docs/conventions.md` `` inline-code
-    mentions), and that shape is only ever caught by this bare-citation pass,
-    never by the bracket walk. A markdown file INSIDE ``SCAN_DIRS`` still
-    never gets this pass -- unchanged from before this ticket, and out of
-    its scope. The resulting two-pass overlap (impossible before lode-act5,
-    since no file was ever in both walks' input sets) is handled by
-    ``check``'s de-duplication, not by narrowing this set."""
+    outside ``BARE_CITATION_EXCLUDE_DIRS`` can carry a *bare* citation with
+    no brackets at all (e.g. tests/README.md's `` `docs/conventions.md` ``
+    inline-code mentions), and that shape is only ever caught by this
+    bare-citation pass, never by the bracket walk. A markdown file INSIDE
+    ``BARE_CITATION_EXCLUDE_DIRS`` still never gets this pass -- unchanged
+    from before this ticket, and out of its scope. The resulting two-pass
+    overlap (impossible before lode-act5, since no file was ever in both
+    walks' input sets) is handled by ``check``'s de-duplication, not by
+    narrowing this set.
+
+    ``tracked``: see ``_tracked_markdown_files`` above -- identical role."""
     return sorted(
         root / rel
-        for rel in _tracked_paths(root)
-        if not (rel.parts and rel.parts[0] in SCAN_DIRS)
+        for rel in tracked
+        if not (rel.parts and rel.parts[0] in BARE_CITATION_EXCLUDE_DIRS)
         and rel.suffix not in _OTHER_SKIP_EXTENSIONS
     )
 
@@ -321,12 +361,35 @@ def _headings(text: str) -> list[str]:
     return headings
 
 
-def _slugs_for_file(path: Path) -> set[str]:
+def _cached_text(path: Path, cache: dict[Path, str]) -> str:
+    """Read ``path`` once per ``check()`` call and remember it -- the single
+    home of every markdown read in this gate (lode-6e9c). Keyed by the
+    RESOLVED path, because the same file reaches this function under two
+    spellings: a walk source is ``root / <tracked rel>`` while a link target
+    has already been ``.resolve()``d, and any symlink above the repo root
+    would otherwise make those two keys miss each other and read twice.
+
+    Raises ``OSError`` exactly as a plain ``.read_text()`` would on the first
+    read of an unreadable path; a cached hit can never raise, since an entry
+    only exists once a read has already succeeded."""
+    key = path.resolve()
+    if key not in cache:
+        cache[key] = path.read_text(encoding="utf-8", errors="replace")
+    return cache[key]
+
+
+def _slugs_for_file(path: Path, text_cache: dict[Path, str]) -> set[str]:
     """All valid anchor slugs for a markdown file: every heading's slug
     (including GitHub's disambiguating ``-1``, ``-2``, ... suffixes for
     repeated headings) plus every literal id from an explicit
-    ``<a id="...">``/``<a name="...">`` anchor tag."""
-    text = path.read_text(encoding="utf-8", errors="replace")
+    ``<a id="...">``/``<a name="...">`` anchor tag.
+
+    Reads through ``text_cache`` (lode-6e9c): a link *target* is almost
+    always some ``docs/*.md`` page the bracketed walk already read as a
+    *source*, so without the shared cache this re-read the bulk of the
+    repo's markdown a second time -- by far the larger of the two duplicate
+    reads that ticket set out to remove."""
+    text = _cached_text(path, text_cache)
     slugs: set[str] = set()
     seen_counts: dict[str, int] = {}
     for heading in _headings(text):
@@ -362,6 +425,7 @@ def _resolve_error(
     target_path: Path,
     anchor: str,
     slug_cache: dict[Path, set[str]],
+    text_cache: dict[Path, str],
 ) -> LinkError | None:
     """The verdict on one already-resolved target: missing file, missing
     anchor, or fine. Shared by both walks in ``check`` so a broken link and a
@@ -372,7 +436,7 @@ def _resolve_error(
     if not anchor or target_path.suffix != ".md":
         return None
     if target_path not in slug_cache:
-        slug_cache[target_path] = _slugs_for_file(target_path)
+        slug_cache[target_path] = _slugs_for_file(target_path, text_cache)
     if anchor in slug_cache[target_path]:
         return None
     try:
@@ -387,8 +451,11 @@ def _resolve_error(
 def check(root: Path) -> list[LinkError]:
     errors: list[LinkError] = []
     slug_cache: dict[Path, set[str]] = {}
-    for source in _tracked_markdown_files(root):
-        source_text = source.read_text(encoding="utf-8", errors="replace")
+    text_cache: dict[Path, str] = {}
+    tracked = _tracked_paths(root)  # single 'git ls-files' fork for this call
+
+    for source in _tracked_markdown_files(root, tracked):
+        source_text = _cached_text(source, text_cache)
         for line_no, target in _links_in_file(source_text):
             if not target or _is_external(target):
                 continue
@@ -398,14 +465,31 @@ def check(root: Path) -> list[LinkError]:
                 (source.parent / file_part).resolve() if file_part else source.resolve()
             )
             error = _resolve_error(
-                root, source, line_no, target, target_path, anchor, slug_cache
+                root,
+                source,
+                line_no,
+                target,
+                target_path,
+                anchor,
+                slug_cache,
+                text_cache,
             )
             if error:
                 errors.append(error)
 
-    for source in _tracked_other_files(root):
+    for source in _tracked_other_files(root, tracked):
         try:
-            source_text = source.read_text(encoding="utf-8", errors="replace")
+            # Only markdown is worth caching here: a `.md` source outside
+            # BARE_CITATION_EXCLUDE_DIRS was already read by the walk above
+            # (and may yet be read again as a link target), while the rest of
+            # this set -- src/, tests/, workflow YAML, shell scripts -- is
+            # read exactly once, so caching it would retain megabytes of text
+            # for the whole call in exchange for nothing.
+            source_text = (
+                _cached_text(source, text_cache)
+                if source.suffix == ".md"
+                else source.read_text(encoding="utf-8", errors="replace")
+            )
         except OSError:
             continue
         for line_no, target in _bare_doc_anchor_refs(
@@ -421,14 +505,15 @@ def check(root: Path) -> list[LinkError]:
                 (root / file_part).resolve(),
                 anchor,
                 slug_cache,
+                text_cache,
             )
             if error:
                 errors.append(error)
-    # Since lode-act5 a markdown file outside SCAN_DIRS goes through BOTH
-    # walks, so one bracketed link into a `docs/` target can produce the
-    # identical LinkError twice. De-duplicate (order-preserving; LinkError is
-    # a frozen dataclass, so hashable) -- reporting one break twice would
-    # also double-count it in the summary line.
+    # Since lode-act5 a markdown file outside BARE_CITATION_EXCLUDE_DIRS goes
+    # through BOTH walks, so one bracketed link into a `docs/` target can
+    # produce the identical LinkError twice. De-duplicate (order-preserving;
+    # LinkError is a frozen dataclass, so hashable) -- reporting one break
+    # twice would also double-count it in the summary line.
     return list(dict.fromkeys(errors))
 
 
