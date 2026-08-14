@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Verify every relative markdown link in docs/ and .claude/ resolves (lode-dkdg).
+"""Verify every relative markdown link in every tracked *.md file resolves
+(lode-dkdg, widened repo-wide by lode-act5).
 
 docs/ leans heavily on deep cross-document anchors (decisions.md alone points
 into stack.md, externals.md, editing.md, agents-workflow.md), but GitHub's
 anchor slugs are derived from heading TEXT -- so rewording a heading silently
 breaks every inbound link, with nothing failing to report it. This gate walks
-every tracked ``*.md`` file under ``docs/`` and ``.claude/``, resolves each
-relative markdown link's target file, and -- for a ``#anchor`` link -- checks
-the anchor against the target file's headings, slugged the same way GitHub
-slugs them.
+every tracked ``*.md`` file in the repo (originally just ``docs/`` and
+``.claude/``; widened repo-wide by lode-act5 -- see SCOPE DECISION
+(lode-act5) below), resolves each relative markdown link's target file, and
+-- for a ``#anchor`` link -- checks the anchor against the target file's
+headings, slugged the same way GitHub slugs them.
 
 CONCRETE EVIDENCE this already happens in trunk (found by an ad-hoc slug
 check before this gate existed): ``docs/decisions.md`` carried a dead anchor
@@ -19,7 +21,7 @@ regression lock on the slug algorithm itself.
 
 Usage::
 
-    python scripts/check_links.py            # scan this repo's docs/ + .claude/ + every other tracked file
+    python scripts/check_links.py            # scan every tracked *.md file + every other tracked file
     python scripts/check_links.py --root DIR # scan a different tree (tests)
 
 Exits 1 and prints one ``file:line: reason -> target`` line per broken link
@@ -50,6 +52,36 @@ This second pass is deliberately narrower than the SCAN_DIRS walk: it
 recognizes only a literal, root-relative ``docs/<path>.md#<anchor>``
 substring -- the shape every real instance in this repo is written in,
 regardless of the citing file's own directory depth.
+
+SCOPE DECISION (lode-act5): ``SCAN_DIRS`` originally bounded BOTH what got
+the full bracketed-link walk (``docs/`` + ``.claude/`` only) AND, inversely,
+what got the bare-citation pass above (everything else). That meant a
+bracketed relative link -- ``[text](../CLAUDE.md)``, say -- written in a
+tracked markdown file OUTSIDE ``SCAN_DIRS`` (a top-level ``README.md``,
+``tests/README.md``, ``AGENTS.md``, ...) was never resolved at all: it isn't
+a bare ``docs/...`` citation (so the second pass's regex doesn't match it),
+and the file wasn't in ``SCAN_DIRS`` (so the first pass never walked it).
+Found concretely reviewing lode-s9xe.7: ``tests/README.md``'s
+``[`CLAUDE.md`](../CLAUDE.md)`` link was verified by hand, not by this gate.
+
+Two ways to close it were on the table: widen the full walk to every tracked
+``*.md`` file, or hand-maintain a named allowlist of top-level READMEs. The
+general form won, consistent with the lode-v10i precedent above -- an
+allowlist needs a human to remember to add every new top-level README (and
+this repo already has several: the root, ``tests/``, ``.beads/``, plus
+``specs/*.md`` and ``src/lode/eval/corpus/*.md``, all of which carry real
+relative links today and are exactly the shape this gate exists to check),
+where the general form costs nothing extra to maintain and catches the next
+one automatically. ``_tracked_markdown_files`` below now returns every
+tracked ``*.md`` file, repo-wide, for the full walk; ``_tracked_other_files``
+(the bare-citation pass) is UNCHANGED -- still every tracked file outside
+``SCAN_DIRS`` -- so a markdown file outside ``SCAN_DIRS`` now gets BOTH
+passes. That is deliberate, not an oversight: the bare pass alone still
+catches a citation with no markdown brackets at all (backtick-quoted prose,
+e.g. tests/README.md's `` `docs/conventions.md` `` mentions), a shape the
+bracket walk cannot see. Where the two passes do overlap -- a bracketed
+link into a ``docs/`` target, matched by both -- ``check`` de-duplicates its
+result list, so one real break is still reported exactly once.
 """
 
 from __future__ import annotations
@@ -165,22 +197,34 @@ def _tracked_paths(root: Path, *pathspecs: str) -> list[Path]:
 
 
 def _tracked_markdown_files(root: Path) -> list[Path]:
-    """Every ``*.md`` file git tracks under ``docs/`` and ``.claude/``."""
-    existing_dirs = [d for d in SCAN_DIRS if (root / d).is_dir()]
-    if not existing_dirs:
-        return []
-    return sorted(
-        root / rel
-        for rel in _tracked_paths(root, *existing_dirs)
-        if rel.suffix == ".md"
-    )
+    """Every ``*.md`` file git tracks, repo-wide (lode-act5) -- not limited to
+    ``docs/`` and ``.claude/``. Widened from the original two-directory scan
+    so a bracketed relative link written in ANY tracked markdown file (a
+    top-level ``README.md``, ``tests/README.md``, ...) gets the full
+    link+anchor walk, not just the narrower bare-citation check. See the
+    module docstring's SCOPE DECISION (lode-act5) for why the general form
+    was chosen over a named allowlist of top-level READMEs."""
+    return sorted(root / rel for rel in _tracked_paths(root) if rel.suffix == ".md")
 
 
 def _tracked_other_files(root: Path) -> list[Path]:
     """Every tracked file OUTSIDE ``SCAN_DIRS`` -- the general form the scope
     decision in the module docstring calls for. Any of these can cite a
     ``docs/`` anchor in a bare-text comment (CI workflow YAML, a shell
-    script, ...); ``_OTHER_SKIP_EXTENSIONS`` is subtracted."""
+    script, a ``README.md`` prose sentence with no markdown brackets, ...);
+    ``_OTHER_SKIP_EXTENSIONS`` is subtracted.
+
+    Deliberately NOT narrowed to non-markdown files even though
+    ``_tracked_markdown_files`` above now ALSO walks every tracked ``*.md``
+    file for the full bracketed-link check (lode-act5): a markdown file
+    outside ``SCAN_DIRS`` can carry a *bare* citation with no brackets at all
+    (e.g. tests/README.md's `` `docs/conventions.md` `` inline-code
+    mentions), and that shape is only ever caught by this bare-citation pass,
+    never by the bracket walk. A markdown file INSIDE ``SCAN_DIRS`` still
+    never gets this pass -- unchanged from before this ticket, and out of
+    its scope. The resulting two-pass overlap (impossible before lode-act5,
+    since no file was ever in both walks' input sets) is handled by
+    ``check``'s de-duplication, not by narrowing this set."""
     return sorted(
         root / rel
         for rel in _tracked_paths(root)
@@ -191,8 +235,7 @@ def _tracked_other_files(root: Path) -> list[Path]:
 
 def _bare_doc_anchor_refs(text: str, *, skip_fences: bool) -> list[tuple[int, str]]:
     """``(line_number, target)`` for every bare ``docs/<path>.md#<anchor>``
-    text reference in a file outside ``SCAN_DIRS`` -- no markdown link
-    brackets required.
+    text reference in a tracked file -- no markdown link brackets required.
 
     ``skip_fences`` is on for a markdown source (``README.md``, ``AGENTS.md``,
     ...), reusing ``_content_lines``: an anchor inside a ```` ``` ```` block
@@ -381,7 +424,12 @@ def check(root: Path) -> list[LinkError]:
             )
             if error:
                 errors.append(error)
-    return errors
+    # Since lode-act5 a markdown file outside SCAN_DIRS goes through BOTH
+    # walks, so one bracketed link into a `docs/` target can produce the
+    # identical LinkError twice. De-duplicate (order-preserving; LinkError is
+    # a frozen dataclass, so hashable) -- reporting one break twice would
+    # also double-count it in the summary line.
+    return list(dict.fromkeys(errors))
 
 
 @app.command()
@@ -393,8 +441,8 @@ def main(
         ),
     ] = None,
 ) -> None:
-    """Fail if any relative markdown link in docs/ (and .claude/) is broken, or
-    any docs/ anchor cited elsewhere in the tree (e.g. .github/workflows/,
+    """Fail if any relative markdown link in any tracked *.md file is broken,
+    or any docs/ anchor cited elsewhere in the tree (e.g. .github/workflows/,
     scripts/) does not resolve."""
     target_root = (root or REPO_ROOT).resolve()
     errors = check(target_root)
@@ -404,8 +452,8 @@ def main(
         print(f"\n{len(errors)} broken markdown link(s) found", file=sys.stderr)
         raise typer.Exit(1)
     print(
-        "OK: every relative markdown link in docs/ and .claude/ resolves, and every "
-        "docs/ anchor citation elsewhere in the tree resolves"
+        "OK: every relative markdown link in every tracked *.md file resolves, and "
+        "every docs/ anchor citation elsewhere in the tree resolves"
     )
 
 
