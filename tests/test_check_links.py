@@ -258,6 +258,20 @@ class TestScanScopeWidenedRepoWide:
         assert len(errors) == 1
         assert "no heading slug" in errors[0].reason
 
+    def test_link_caught_by_both_passes_is_reported_once(self, tmp_path):
+        """A bracketed link into a `docs/` target, written in a markdown file
+        outside SCAN_DIRS, matches BOTH the widened bracket walk and the
+        bare-citation regex. `check` de-duplicates so one real break is
+        reported once, not twice (which would also double the summary
+        count)."""
+        _write(tmp_path, "README.md", f"[foo]({_DOCS}/foo.md#no-such-anchor)\n")
+        _write(tmp_path, f"{_DOCS}/foo.md", "# Real Heading\n")
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert len(errors) == 1
+
 
 class TestBareDocAnchorRefs:
     """lode-v10i: a bare-text `docs/<path>.md#<anchor>` reference -- no
@@ -395,8 +409,10 @@ class TestBareDocAnchorRefs:
         assert check(tmp_path) == []
 
     def test_scan_dirs_files_are_excluded_from_the_bare_pass(self, tmp_path):
-        """The two passes must not both claim the same file. Asserted on the
-        pass boundary itself rather than on `check() == []`, which would hold
+        """A SCAN_DIRS file is never claimed by the bare pass (a markdown file
+        OUTSIDE SCAN_DIRS is claimed by both since lode-act5 -- see
+        TestScanScopeWidenedRepoWide). Asserted on the pass boundary itself
+        rather than on `check() == []`, which would hold
         under any implementation (a plain-prose mention matches no `_LINK_RE`
         either) and so could not detect double-scanning."""
         _write(tmp_path, f"{_DOCS}/a.md", f"# A\n\nSee {_DOCS}/a.md#no-such-anchor.\n")

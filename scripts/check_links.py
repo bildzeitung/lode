@@ -79,8 +79,9 @@ tracked ``*.md`` file, repo-wide, for the full walk; ``_tracked_other_files``
 passes. That is deliberate, not an oversight: the bare pass alone still
 catches a citation with no markdown brackets at all (backtick-quoted prose,
 e.g. tests/README.md's `` `docs/conventions.md` `` mentions), a shape the
-bracket walk cannot see. See ``_tracked_other_files``'s own docstring for
-why the resulting overlap is redundant, never incorrect.
+bracket walk cannot see. Where the two passes do overlap -- a bracketed
+link into a ``docs/`` target, matched by both -- ``check`` de-duplicates its
+result list, so one real break is still reported exactly once.
 """
 
 from __future__ import annotations
@@ -221,13 +222,9 @@ def _tracked_other_files(root: Path) -> list[Path]:
     mentions), and that shape is only ever caught by this bare-citation pass,
     never by the bracket walk. A markdown file INSIDE ``SCAN_DIRS`` still
     never gets this pass -- unchanged from before this ticket, and out of
-    its scope. The two passes can therefore both fire on one bracketed link
-    into a ``docs/`` target written in a non-SCAN_DIRS markdown file (the
-    bracket walk AND the bare-text regex both match the same substring); on
-    a real break that reports the same broken link twice, which is
-    redundant, never incorrect -- and identical to how this file already
-    behaved pre-lode-act5 whenever a link's own visible text also happened
-    to spell out a root-relative doc-page reference."""
+    its scope. The resulting two-pass overlap (impossible before lode-act5,
+    since no file was ever in both walks' input sets) is handled by
+    ``check``'s de-duplication, not by narrowing this set."""
     return sorted(
         root / rel
         for rel in _tracked_paths(root)
@@ -427,7 +424,12 @@ def check(root: Path) -> list[LinkError]:
             )
             if error:
                 errors.append(error)
-    return errors
+    # Since lode-act5 a markdown file outside SCAN_DIRS goes through BOTH
+    # walks, so one bracketed link into a `docs/` target can produce the
+    # identical LinkError twice. De-duplicate (order-preserving; LinkError is
+    # a frozen dataclass, so hashable) -- reporting one break twice would
+    # also double-count it in the summary line.
+    return list(dict.fromkeys(errors))
 
 
 @app.command()
