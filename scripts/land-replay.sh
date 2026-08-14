@@ -338,31 +338,33 @@ for id in $ACCEPTED_IDS; do
   # `nox -s lock_currency` two paragraphs below: exit 1 is the only content
   # verdict either of these two commands has; anything else is a machine
   # fault and stops the whole replay (lode-9i2p), exactly like the baseline
-  # gates above and `nox -s lock_currency`'s own mid-loop exit-2 arm.
+  # gates above and `nox -s lock_currency`'s own mid-loop exit-2 arm. The
+  # success arm is a bare `:` and the bounce lives INSIDE the else arm, on
+  # the far side of `escalate_unless_content` -- which only ever returns on
+  # the content verdict (exit 1), so a second `if [ "$rc" -ne 0 ]` after the
+  # `fi` could never read anything but "bounce" (dead state). `rc=$?` must
+  # still be the FIRST command in the else arm, and the condition must stay
+  # un-negated: `if ! CMD; then rc=$?` captures the NEGATION's status.
   if nox -t fix; then
-    fix_rc=0
+    :
   else
     fix_rc=$?
     escalate_unless_content "$fix_rc" \
       "'nox -t fix' failed with exit $fix_rc after merging '$id'." \
       "Exit 1 is the only content verdict (lode-9i2p); a 127/126/signal here is a" \
       "machine fault, not '$id''s verdict -- do NOT bounce it on the strength of this."
-  fi
-  if [ "$fix_rc" -ne 0 ]; then
     bounce "$id"
     continue
   fi
 
   if nox -s tests; then
-    tests_rc=0
+    :
   else
     tests_rc=$?
     escalate_unless_content "$tests_rc" \
       "'nox -s tests' failed with exit $tests_rc after merging '$id'." \
       "Exit 1 is the only content verdict (lode-9i2p); a 127/126/signal here is a" \
       "machine fault, not '$id''s verdict -- do NOT bounce it on the strength of this."
-  fi
-  if [ "$tests_rc" -ne 0 ]; then
     bounce "$id"
     continue
   fi

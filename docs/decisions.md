@@ -5303,6 +5303,13 @@ entries below from being rewritten to chase the current tree.)
   block's `nox -t fix && nox -s tests && nox -s lock_currency` combined re-gate, a different code
   path from this per-branch loop, already has its own SKILL.md commit-the-reformat handling in
   Section 4). Tests: `tests/test_land_replay.py`'s
-  `test_mid_loop_fix_nonverdict_exit_stops_the_pass_without_bouncing`,
-  `test_mid_loop_tests_nonverdict_exit_stops_the_pass_without_bouncing`, and
-  `test_landed_reformat_is_committed_as_part_of_the_merge`.
+  `test_mid_loop_nonverdict_nox_exit_stops_the_pass_without_bouncing` (parametrized over both
+  gates), `test_a_branch_that_fails_a_nox_gate_is_bounced_and_backed_out` (likewise — the exit-1
+  content verdict each arm still owns), and `test_landed_reformat_is_committed_as_part_of_the_merge`.
+
+  **Not fixed here, filed as its own ticket:** `nox -t fix` is now an attributing per-branch gate
+  but is still absent from the up-front baseline block (which runs `nox -s tests` and
+  `nox -s lock_currency` on bare `--base-ref`), so a `fix` red on trunk itself would bounce
+  whichever branch merged first. Pre-existing — the old collapsed boolean had the same hole — and
+  baselining it is not a one-liner, because a baseline `nox -t fix` that reformats the base tree
+  reintroduces hazard 2 above before any merge. See `lode-mps0`.
