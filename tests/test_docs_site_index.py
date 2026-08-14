@@ -47,7 +47,13 @@ def _index_text() -> str:
 
 
 def _mkdocs_config() -> dict:
-    return yaml.safe_load(MKDOCS_YML.read_text())
+    # Not yaml.safe_load: markdown_extensions.toc.slugify is a
+    # `!!python/name:lode.docs_slug.github_slugify` reference (lode-fhql.21,
+    # matching GitHub's own heading-anchor algorithm rather than the `toc`
+    # extension's default), which only a loader that actually imports Python
+    # names can resolve. mkdocs.yml is a tracked, repo-owned config file, so
+    # the same trust level `mkdocs build` itself already extends applies here.
+    return yaml.unsafe_load(MKDOCS_YML.read_text())
 
 
 def test_index_exists_and_has_front_matter_title() -> None:
