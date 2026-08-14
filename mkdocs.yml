@@ -40,7 +40,11 @@ theme:
   name: material
   custom_dir: docs/overrides
   logo: assets/mark.svg
-  favicon: assets/mark-16.png
+  # assets/favicon-16.png (lode-fhql.22), not mark-16.png: the tab icon is a
+  # theme-neutral, fixed-tile favicon variant -- see docs/assets/favicon-mark.svg's
+  # header for why the two diverge (a raster favicon has no theme-conditional
+  # mechanism the way the header logo above, an inline currentColor SVG, does).
+  favicon: assets/favicon-16.png
   palette:
     scheme: default
   features:
