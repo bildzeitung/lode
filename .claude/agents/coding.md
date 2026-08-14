@@ -552,6 +552,12 @@ So I go back to **step 6** (commit, re-gate, re-push) rather than push them stra
 
 ```bash
 HEAD_SHA=$(git rev-parse HEAD)
+scripts/validate-sha40.sh review_head "$HEAD_SHA" || {
+  echo "STOP: derived review_head '$HEAD_SHA' failed validate-sha40.sh (lode-0a4n) -- do NOT" \
+    "write this value to bd metadata. Re-derive with git rev-parse HEAD and retry; a repeat" \
+    "failure is a real problem to report, not to paper over."
+  exit 1
+}
 bd update <id> --add-label ready-for-code-review \
   --set-metadata review_head="$HEAD_SHA"
 scripts/bd-dolt-push.sh   # publish claim + ready-for-code-review over refs/dolt/data — durable, cross-machine
@@ -588,7 +594,13 @@ settle), I:
   as the green hand-off, captured now while the reverted-to-green tree and its push are still current:
 
   ```bash
-  bd update <id> --set-metadata review_head="$(git rev-parse HEAD)"
+  HEAD_SHA=$(git rev-parse HEAD)
+  scripts/validate-sha40.sh review_head "$HEAD_SHA" || {
+    echo "STOP: derived review_head '$HEAD_SHA' failed validate-sha40.sh (lode-0a4n) -- do NOT" \
+      "write this value to bd metadata. Re-derive with git rev-parse HEAD and retry."
+    exit 1
+  }
+  bd update <id> --set-metadata review_head="$HEAD_SHA"
   ```
 - **do not** set `ready-for-code-review`; instead `bd update <id> --add-label land-escalated
   --append-notes "ESCALATION: <the decision needed>"`, then `scripts/bd-dolt-push.sh`, and
@@ -785,6 +797,12 @@ Then refresh the hand-off metadata and swap the label myself:
 
 ```bash
 HEAD_SHA=$(git rev-parse HEAD)
+scripts/validate-sha40.sh land_head "$HEAD_SHA" || {
+  echo "STOP: derived land_head '$HEAD_SHA' failed validate-sha40.sh (lode-0a4n) -- do NOT write" \
+    "this value to bd metadata. Re-derive with git rev-parse HEAD and retry; a repeat failure is" \
+    "a real problem to report, not to paper over."
+  exit 1
+}
 bd update <id> --remove-label needs-rebase --add-label ready-for-land \
   --set-metadata land_head="$HEAD_SHA" \
   --set-metadata land_summary="Merged trunk @ $(git rev-parse --short origin/trunk) into the branch"
