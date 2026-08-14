@@ -93,6 +93,12 @@ scripts/discard-beads-passive-export-churn.sh
 scripts/release.sh
 scripts/release-latest-tag.sh
 scripts/release-bump.sh
+scripts/drop-from-accepted.sh
+scripts/land-heartbeat.sh
+scripts/land-merge-batch.sh
+scripts/land-replay.sh
+scripts/stacked-graph.sh
+scripts/worktree-gc-sweep.sh
 "
 for s in $required_scripts; do
   if [ ! -f "$s" ]; then
