@@ -944,12 +944,17 @@ deciding factors were:
   Node/Chromium toolchain, per [`CLAUDE.md`](../CLAUDE.md)) and Hugo/Zola (not Python, and a second
   static-site toolchain the venv/lock already cover for nothing).
 
-**Dependency**: `mkdocs-material>=9.5,<10` as its own `docs` extra in `pyproject.toml`, not folded
-into `dev` — it is CI-only (`lode-fhql.9`'s Pages workflow builds the site; no local `dev` install
-needs it). Per the [pyproject-intent / requirements.lock split](#dependency-locking-lode-g2741),
-optional extras stay unlocked (the `dev` extra's existing policy, extended unchanged to `docs`), and
-`scripts/compile-lock.sh` compiles the lock from `pyproject.toml` with no `--extra` flags — so this
-needs no `requirements.lock` regeneration, only the `pyproject.toml` declaration.
+**Dependency**: `mkdocs-material>=9.5,<10` in the `dev` extra in `pyproject.toml` (`lode-fhql.20`,
+2026-08-14 — **reverses** the original decision below to put it in its own CI-only `docs` extra).
+The original premise was that the docs build had no local value (`lode-fhql.9`'s Pages workflow
+builds the site; no local `dev` install needs it) — that premise broke the same day a local `mkdocs
+serve` (run ad hoc for `lode-fhql.13`'s favicon sign-off) immediately surfaced two broken intra-doc
+anchors nobody had seen (`lode-fhql.21`). mkdocs is a validator, not just a site generator, so it
+belongs in `dev` and behind its own gate — see `nox -s docs` in `noxfile.py` (`lode-fhql.20`). Per
+the [pyproject-intent / requirements.lock split](#dependency-locking-lode-g2741), optional extras
+stay unlocked (the `dev` extra's existing policy), and `scripts/compile-lock.sh` compiles the lock
+from `pyproject.toml` with no `--extra` flags — so this needed no `requirements.lock` regeneration,
+only the `pyproject.toml` declaration.
 
 ### Mermaid: build-time pre-render, not the validator (mandated, user call 2026-08-12)
 
@@ -1137,6 +1142,42 @@ results `lode-fhql.9` should plan around:
 - **`exclude_docs` gives the rewrite rule a free enumeration.** With the allowlist in place, MkDocs
   logs every `link to 'X' which is excluded from the built site`, which is exactly the set of links
   the rule has to rewrite to GitHub URLs.
+
+### Heading-anchor slugs: matching GitHub, and the dedup-suffix gap (lode-fhql.21, lode-rmsf)
+
+Every published doc is read both on GitHub directly and through the built site, and every intra-doc
+`#anchor` link in `docs/` is written against **GitHub's** heading-to-anchor algorithm — so the site's
+renderer must slug headings the same way GitHub does, not diverge. `mkdocs.yml`'s `markdown_extensions
+→ toc.slugify` installs `src/lode/docs_slug.py`'s `github_slugify` (a deliberate copy of
+`scripts/check_links.py`'s `github_slug` — see that module's docstring for why it's a copy, not a
+shared import) so a single heading's anchor `id` matches on both surfaces (`lode-fhql.21`).
+
+**That fixes only the slug half of GitHub's algorithm — not the dedup-suffix half (`lode-rmsf`).**
+GitHub dedups a *repeated* heading's slug with a `-1`, `-2`, ... suffix; `check_links.py`'s own
+`_slugs_for_file` reproduces that. Python-Markdown's `toc` extension dedups with its own `unique()`
+helper instead, which appends `_1`, `_2`, ... — and critically, `toc` calls `slugify` **before**
+dedup, so no custom `slugify` (installed or otherwise) can influence the suffix `toc` picks. A
+published doc that ever grows two headings with the same slug would render `#foo_1` on the built
+site while GitHub, and this repo's own link gate, both resolve `#foo-1` — a second, independent
+broken-anchor bug that `lode-fhql.21`'s fix cannot reach.
+
+**Decided: gate it, don't patch `toc`'s internals.** The docs set has zero duplicate heading slugs
+today (verified during `lode-fhql.21`'s review), so this is latent, not live. Patching or
+monkeypatching python-markdown's `toc.unique()` to match GitHub's `-1` suffix was considered and
+rejected as disproportionate to a case that has never actually occurred — instead,
+`tests/test_docs_no_duplicate_heading_slugs.py` fails `nox -s tests` loudly the moment any
+**published** doc (the `exclude_docs` allowlist above, read directly from `mkdocs.yml` via the
+shared `conftest.mkdocs_config` so the test can't drift from what the site actually publishes) gains
+a repeated heading slug, forcing the heading to be renamed before the mismatch can ever ship. It
+reuses `check_links.py`'s `_headings`/`github_slug` rather than adding a third copy of the slug
+algorithm, and touches zero lines of that script.
+
+**Why a pytest gate and not `scripts/check_links.py`, the repo's existing docs-anchor gate.** Scope:
+this invariant holds over the **published** set only — `toc` never runs over an excluded doc, so a
+duplicate heading in e.g. `decisions.md` is harmless — while `check_links.py` deliberately validates
+*citations* across all of `docs/`, under GitHub semantics everywhere. Folding this in would make a
+standalone markdown script (runnable under any interpreter, by design) read `mkdocs.yml` to learn
+the site's published set: a new coupling that buys nothing the pytest gate doesn't already give.
 
 **Landing page / README sync (lode-fhql.10).** `README.md` is the **canonical** pitch — every
 GitHub visitor sees it first, with or without a deployed docs site. `docs/index.md` is a **derived

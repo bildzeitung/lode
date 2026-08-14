@@ -5267,3 +5267,162 @@ entries below from being rewritten to chase the current tree.)
   `.claude/skills/sweep/SKILL.md` §8 (`$ACTIONABLE_NOW`, computed from `$SWEEP_TMP/current` with a
   `$4 == "deferred"` awk exclusion), the report-format block (section moved to last position), the
   "Stop and report" section, and the skill's frontmatter `description`.
+
+- **No mechanical corpus scan for "every script-running subprocess in tests/ must pass an
+  explicit `cwd`" (`lode-6hl9`, 2026-08-14).** `lode-6hl9`'s own text raised the question, citing
+  `tests/test_gate_lib.py`'s discovery-based sweeps (`lode-090f`/`lode-bss5`) as the shape such a
+  scan could take: walk `tests/*.py` for `subprocess.run`/`subprocess.Popen` call sites that
+  invoke a tracked `scripts/*.sh`, and fail any that omit `cwd=` or default it to something other
+  than a throwaway fixture path.
+
+  **Decided: don't build it now.** The two concrete instances this ticket found
+  (`tests/conftest.py`'s `run_block()` and `tests/test_worktree_gc_sweep.py`'s `_sweep()`
+  helper) are fixed directly instead — both now take a **required, keyword-only `cwd` with no
+  default**, so a caller that used to inherit an implicit live-checkout cwd is now a
+  `TypeError` at collection time until it makes its own explicit choice. That closes the actual
+  defect class (an implicit default silently resolving to `_CHECKOUT_ROOT`/the real repo) without
+  new scanning machinery: a required parameter with no fallback is enforced by Python's own call
+  syntax, not by a corpus sweep that has to keep pace with every new test helper shape.
+
+  A `test_gate_lib.py`-shaped scan is heavier than this ticket's yield justifies: `gate-lib.sh`'s
+  sweeps exist because that library has many independent consumers under `scripts/*.sh`, sourced
+  in a mechanically recognizable way (`. "$(dirname "$0")/gate-lib.sh"`), so *discovering* the
+  consumer set at runtime is the whole point (a hard-coded list rots the moment a consumer is
+  added and nobody remembers the sixth test). A "does this subprocess call pass cwd" scan has no
+  comparably crisp anchor: `subprocess.run`/`subprocess.Popen` call shapes vary per test file (see
+  `tests/test_land_lock.py`'s own separate `_run_block`, deliberately written to a throwaway repo
+  rather than sharing `conftest.py`'s helper), so telling "runs a tracked script against a
+  meaningful cwd" apart from "runs an arbitrary subprocess for an unrelated reason" would need
+  per-call-site judgment a mechanical AST/regex sweep can't reliably make — a scan built to that
+  spec would either miss real cases (too narrow a pattern) or flag unrelated subprocess calls
+  (too broad), neither of which beats the required-keyword-argument fix already in place for the
+  two instances found.
+
+  **Revisit if a third instance of this exact shape turns up** — an optional-`cwd`-defaulting-to-
+  the-live-checkout parameter on some other test helper — the same "three strikes" bar
+  `worktree-gc-sweep.sh`'s doc-duplication decision above uses. Two fixed instances plus a clear,
+  mechanical fix (required kwarg, no default) is "fine, and guarded" for now; a third would be the
+  point a shared lint rule (e.g. a `flake8`/`ruff` custom check, or a narrower corpus scan scoped
+  to exactly `cwd: Path | None = None` parameters in `tests/*.py`) starts paying for itself.
+- **`scripts/land-replay.sh`'s per-branch gate: mid-loop non-verdict `nox` exits, and the
+  reformat-commit gap (`lode-lmu9`, 2026-08-14).** Discovered technically reviewing `lode-s9xe.13`
+  (the isolation-replay extraction), two hazards inherited faithfully from
+  `.claude/skills/land/SKILL.md` Section 3's fenced isolation-replay loop this script ports — a
+  pre-existing `/land` defect the extraction made legible, not a regression the port introduced.
+  Both decided the same direction as `nox -s lock_currency`'s existing 0/1/2 triage
+  (`lode-jhry`) — no new contract, just applying the one the file already lives under everywhere
+  else in the same loop:
+  1. **A mid-loop non-verdict `nox -t fix` / `nox -s tests` exit (127/126/128+n) is a machine
+     fault, not that branch's verdict.** The per-branch gate previously read
+     `if ! nox -t fix || ! nox -s tests; then bounce "$id"; fi` — collapsing both commands' exit
+     codes into one boolean, so *any* nonzero (nox falling off PATH mid-run, a signal) bounced
+     whichever branch happened to be merged at the time, deleting a reviewed branch and
+     superseding its ticket for something that was never its fault. Fixed by checking each
+     command separately via `gate-lib.sh`'s existing `escalate_unless_content` (the same
+     partition `nox -s lock_currency`'s baseline and mid-loop arms already use): exit 1 is the
+     only content verdict either command has; anything else stops the whole replay
+     (`gate_could_not_run`, exit 2), never bounces.
+  2. **A `nox -t fix` reformat on the LANDED path is folded into the merge commit via
+     `git commit --amend --no-edit`, not left uncommitted.** SKILL.md's own combined re-gate
+     (Section 3, pre-isolation) and Section 4 both commit a reformat explicitly; this loop's
+     per-branch gate did not, so a reformat left the working tree dirty for the *next*
+     iteration's `git merge` (inside `land-merge-one.sh`), which most likely machine-faults
+     against a dirty tree — silently stopping the whole replay. The BOUNCED path never surfaced
+     this because `git reset --hard HEAD~1` cleans it along with everything else. Amending (not a
+     separate commit) keeps the property a later bounce's single `git reset --hard HEAD~1` relies
+     on: one commit per landed id, so backing it out discards the reformat with it. Staging
+     mirrors SKILL.md Section 4's own rule — only the explicit paths `git diff` names, excluding
+     `.beads/*`, never `-A` (CLAUDE.md's workflow gotchas).
+
+  No SKILL.md prose changed — its fenced isolation-replay loop already reads as pseudocode this
+  script implements, and neither hazard was spelled out in that prose to begin with (the fenced
+  block's `nox -t fix && nox -s tests && nox -s lock_currency` combined re-gate, a different code
+  path from this per-branch loop, already has its own SKILL.md commit-the-reformat handling in
+  Section 4). Tests: `tests/test_land_replay.py`'s
+  `test_mid_loop_nonverdict_nox_exit_stops_the_pass_without_bouncing` (parametrized over both
+  gates), `test_a_branch_that_fails_a_nox_gate_is_bounced_and_backed_out` (likewise — the exit-1
+  content verdict each arm still owns), and `test_landed_reformat_is_committed_as_part_of_the_merge`.
+
+  **Not fixed here, filed as its own ticket:** `nox -t fix` is now an attributing per-branch gate
+  but is still absent from the up-front baseline block (which runs `nox -s tests` and
+  `nox -s lock_currency` on bare `--base-ref`), so a `fix` red on trunk itself would bounce
+  whichever branch merged first. Pre-existing — the old collapsed boolean had the same hole — and
+  baselining it is not a one-liner, because a baseline `nox -t fix` that reformats the base tree
+  reintroduces hazard 2 above before any merge. See `lode-mps0`.
+- **`scripts/land-replay.sh`'s baseline `nox -t fix` gate: a dirty-tree reformat on bare
+  `--base-ref` is `gate_could_not_run`, never committed invisibly or discarded (`lode-mps0`,
+  2026-08-14).** Closes the gap the `lode-lmu9` entry above deliberately left open. Three options
+  were on the table for what a baseline `nox -t fix` does when it reformats the bare base tree
+  (`noxfile.py`'s `fix` session runs `ruff format .` unconditionally before `ruff check --fix .`,
+  so it can leave the tree dirty even on exit 0, independent of whether `--fix` itself found any
+  unfixable violations):
+
+  1. **Commit the reformat to the local base ref** and let the replay path land it under no
+     branch's name. Rejected: this loop's whole contract is that every `LANDED` line names the id
+     whose branch produced it — a commit with no accepted-set id behind it breaks that contract
+     silently, and buries a real trunk-formatting fact inside a replay run instead of surfacing it
+     as what it is: a fact about `trunk` itself, unrelated to any branch in this pass.
+  2. **`git reset --hard` it away.** Rejected: if the reformat is a genuine fix trunk needs (ruff's
+     pinned version changed, a rule tightened, whatever), silently discarding it hides that fact
+     with nothing left even *hinting* at it — worse than committing it invisibly, because there
+     isn't even a commit a human could later notice and puzzle over.
+  3. **`gate_could_not_run` on a dirty (or red) baseline tree, chosen.** Matches the baseline
+     block's existing invariant for `nox -s tests` and `nox -s lock_currency` immediately
+     alongside it: a baseline failure is never a branch's fault, so the pass stops rather than
+     landing or discarding anything, and a human deals with `trunk`'s own formatting directly (a
+     plain, direct `nox -t fix` + commit to `trunk`, outside this loop entirely). The tree check
+     (`git diff --name-only -- . ':!.beads'` — the same idiom the per-branch reformat-commit step
+     two paragraphs below already uses) is necessary *in addition to* the exit-code check: a green
+     `nox -t fix` (exit 0) can still leave the tree dirty, and the exit code alone would miss
+     exactly the reformat-only case this decision is about. Costs nothing but a delayed pass — the
+     one thing every baseline gate-could-not-run already costs.
+
+  Implemented as two baseline checks, `nox -t fix`'s own exit code and then `git diff --name-only`
+  against the reset tree, both `gate_could_not_run` on failure, run first in the baseline block
+  (ahead of `nox -s tests`, mirroring the per-branch gate's own `fix`-then-`tests` order).
+  Tests: `tests/test_land_replay.py::test_baseline_failure_stops_before_merging_anything`, cases
+  `fix-red` and `fix-reformat` (parametrized alongside the pre-existing `tests-red` case).
+- **`scripts/land-merge-batch.sh` and `scripts/land-replay.sh` stay two scripts, not unified into
+  one shared loop (`lode-fdod`, 2026-08-14).** Discovered while technically reviewing
+  `lode-s9xe.13`: the extraction that moved `/land`'s two merge loops from markdown fences into
+  scripts kept ~80 lines byte-identical across the two files — arg parsing, the `grep -qxF`
+  stale-membership re-check with its 0/1/else partition, the `if CMD; then rc=0; else rc=$?; fi`
+  merge-dispatch idiom, and the CONFLICT/machine-fault arms. **Decided: no, deliberately leave the
+  duplication.** Two reasons, both practical rather than architectural:
+
+  1. **The loops' verdict sets genuinely differ and are not interchangeable.**
+     `land-merge-batch.sh` classifies LANDED/CONFLICT/HELD and runs no gates at all (the caller
+     re-gates the combined result once); `land-replay.sh` classifies
+     LANDED/CONFLICT/BOUNCED/HELD, runs baseline gates before touching anything, and gates *after
+     every single merge* — the entire reason it exists (a combined re-gate can be green with two
+     branches each clean in isolation; only per-branch gating on an otherwise-untouched checkout
+     finds the culprit). A shared loop body would need its own branchy "does this caller gate
+     per-iteration" parameter threaded through the CONFLICT/dispatch arms — the sketch in this
+     ticket's description (an optional per-branch gate hook plus reset-on-red in the batch script)
+     is plausible, but it turns two straightforward, independently-readable loops over
+     `/land`'s most destructive code path (`git reset --hard`, real merges onto the checkout that
+     ships) into one script with a conditional gating mode, at exactly the place where a
+     misread of "which mode am I in" is hardest to catch and most expensive to get wrong.
+  2. **The actually-shared, reused-by-both logic is already extracted.** `land-merge-one.sh`,
+     `drop-from-accepted.sh`, `land-state-load.sh`, and `gate-lib.sh` are the parts both loops
+     call rather than duplicate — SKILL.md's own prose already pointed at these as the shared
+     surface. What remains duplicated is loop *scaffolding* around genuinely different behavior,
+     not shared logic that was merely copy-pasted.
+
+  What the ticket actually asked for closing the gap on — "nothing tests that the two loops stay
+  the same shape, and the replay copy is the one whose drift nobody notices because it only runs
+  on the red path" — is real and worth fixing without the restructuring risk above:
+  `tests/test_land_loops_shared_idioms.py` now pins the shared idioms (the grep re-check block and
+  the `if CMD; then rc=0; else rc=$?; fi` dispatch guard) byte-for-byte equal between the two
+  scripts, so an edit to one that silently drifts from the other now fails `nox -s tests` instead
+  of only being caught by someone reading both files side by side. A test pin rather than the
+  repo's usual move of extracting the shared bytes into a `gate-lib.sh`-style sourced function,
+  because the stale-membership idiom's whole payload is a `continue` against the *caller's* loop —
+  a construct that cannot move into a shell function without depending on bash's
+  continue-through-a-function-frame behavior, inside `/land`'s most destructive path. The
+  merge-dispatch idiom could be extracted alone, but on its own that leaves the more dangerous of
+  the two idioms un-enforced and adds a second sharing mechanism to reason about. The pin's known
+  cost: it matches leading whitespace, so a reindent of either loop body fails the test with no
+  logic change — loud and mechanical to fix, never a silent miss. If a third such loop ever
+  appears, or the two loops' verdict sets converge, that would be the point to revisit unification
+  — the same "three genuinely stops being fine and unextracted" trigger this file uses elsewhere.

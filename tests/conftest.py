@@ -188,6 +188,7 @@ from typing import TYPE_CHECKING
 from unittest import mock
 
 import pytest
+import yaml
 from textual.pilot import Pilot
 
 import lode
@@ -1144,6 +1145,42 @@ def _cache_cross_encoder_model_load():
 # gets both without whoever writes it having to know about either.
 
 
+class _MkdocsLoader(yaml.SafeLoader):
+    """SafeLoader that resolves ONE extra tag: the ``!!python/name:`` reference
+    mkdocs.yml uses for ``markdown_extensions.toc.slugify`` (lode-fhql.21).
+
+    ``yaml.unsafe_load`` would also parse it, but by importing whatever the tag
+    names and permitting every other unsafe tag in the file -- more authority
+    than any reader here needs, and a loose precedent for the next reader to
+    copy. Resolving the tag to its dotted name as a plain STRING is enough, and
+    lets ``test_toc_slugify_is_the_github_compatible_one`` assert the wiring by
+    value. MkDocs' own loader is Safe-derived with a ``python/name``
+    constructor for the same reason.
+    """
+
+
+_MkdocsLoader.add_multi_constructor(
+    "tag:yaml.org,2002:python/name:",
+    lambda loader, suffix, node: suffix,
+)
+
+
+def mkdocs_config() -> dict:
+    """``mkdocs.yml`` parsed with :class:`_MkdocsLoader`.
+
+    Lives here rather than in one test module because two gates now read the
+    same config for different reasons -- the published-set checks
+    (tests/test_docs_site_index.py) and the duplicate-heading-slug gate
+    (tests/test_docs_no_duplicate_heading_slugs.py, lode-rmsf) -- and a second
+    hand-rolled parse of the same file is exactly how the two would drift on
+    what "published" means.
+    """
+    return yaml.load(
+        (_CHECKOUT_ROOT / "mkdocs.yml").read_text(encoding="utf-8"),
+        Loader=_MkdocsLoader,
+    )
+
+
 def load_module_from_path(name: str, path: Path) -> ModuleType:
     """Load the script/module at ``path`` under module name ``name``.
 
@@ -1722,7 +1759,7 @@ def fake_bin_env(bin_dir: Path) -> dict[str, str]:
 
 
 def run_block(
-    block: str, sweep_tmp: Path, bin_dir: Path
+    block: str, sweep_tmp: Path, bin_dir: Path, *, cwd: Path
 ) -> subprocess.CompletedProcess[str]:
     """Run one fenced ```bash block as its own, fresh subprocess (lode-n6q0).
 
@@ -1738,8 +1775,16 @@ def run_block(
     derivation lands exactly on the ``sweep_tmp`` fixture's directory -- that
     derivation is ``/sweep``'s §0 convention SPECIFICALLY, so a caller testing
     a different skill's blocks inherits a redirection it did not ask for.
-    ``cwd`` is the checkout root (:data:`_CHECKOUT_ROOT`, worktree-aware)
-    rather than a hand-rolled ``Path(__file__).parent.parent`` in each caller.
+
+    ``cwd`` is REQUIRED, keyword-only, and has no default (lode-6hl9) -- it
+    used to default silently to :data:`_CHECKOUT_ROOT`, the live checkout.
+    Every existing caller only ever hands this function /sweep's read-only
+    fences, so passing ``cwd=_CHECKOUT_ROOT`` there is fine and stays
+    explicit at the call site; the point of removing the default is that a
+    future caller handing this a destructive fence (a /land or /code
+    section) is now forced to make its own cwd choice instead of silently
+    inheriting the live checkout, the exact defect class the lode-s9xe.13
+    incident (commit efbfa79) proved is not theoretical.
     """
     env = dict(fake_bin_env(bin_dir), TMPDIR=str(sweep_tmp.parent))
     return subprocess.run(
@@ -1747,7 +1792,7 @@ def run_block(
         capture_output=True,
         text=True,
         env=env,
-        cwd=_CHECKOUT_ROOT,
+        cwd=cwd,
         check=False,
     )
 

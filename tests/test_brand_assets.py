@@ -91,6 +91,40 @@ def test_lockup_carries_the_marks_geometry_verbatim() -> None:
     )
 
 
+def _document(svg: str) -> str:
+    """The SVG document itself, with the leading maintainer comment stripped.
+
+    Anchored on ``<svg xmlns``, not on ``<svg``: lockup.svg's header comment
+    contains a literal ``<svg>`` and would otherwise be treated as the start
+    of the document.
+    """
+    return svg[svg.index("<svg xmlns") :]
+
+
+def test_dark_lockup_is_the_lockup_recoloured_and_nothing_else() -> None:
+    """lockup-dark.svg differs from lockup.svg only in the root ``color``.
+
+    The dark variant exists solely to give <picture>'s
+    ``prefers-color-scheme: dark`` source a paper-coloured lockup
+    (lode-fhql.19); its geometry is a verbatim copy. Without this gate an edit
+    to lockup.svg silently leaves the dark variant behind, and the drift is
+    invisible to anyone on the other theme -- exactly the failure mode that
+    produced this ticket.
+    """
+    light = _document((ASSETS / "lockup.svg").read_text())
+    dark = _document((ASSETS / "lockup-dark.svg").read_text())
+
+    assert 'color="#F7F4EE"' in dark, (
+        "lockup-dark.svg's root color is no longer paper (#F7F4EE, "
+        "docs/brand.md section 3) -- it will not be legible on a dark theme."
+    )
+    assert dark == light.replace('color="#1E1B2E"', 'color="#F7F4EE"'), (
+        "lockup-dark.svg is no longer lockup.svg recoloured. The two are "
+        "copy-pasted on purpose (only the root colour differs); edit both, or "
+        "update this gate deliberately."
+    )
+
+
 def _grids(text: str) -> tuple[list[str], list[str]]:
     ascii_rows = re.findall(r"^[vs.]{8}$", text, re.MULTILINE)
     block_rows = re.findall(r"^[█░·]{8}$", text, re.MULTILINE)
@@ -119,34 +153,90 @@ def test_block_redraw_matches_the_ascii_proof_grid() -> None:
 _GEOMETRY_ATTRS = ("d", "x", "y", "width", "height")
 
 
+def _attrs(shape: str) -> dict[str, str]:
+    """One drawable element's attributes, as a dict."""
+    return dict(re.findall(r'(\w[\w-]*)="([^"]*)"', shape))
+
+
 def _geometry(svg: str) -> list[dict[str, str]]:
     """Each drawable element's geometry-only attributes, in source order."""
-    out = []
-    for shape in _shapes(svg):
-        attrs = dict(re.findall(r'(\w[\w-]*)="([^"]*)"', shape))
-        out.append({k: v for k, v in attrs.items() if k in _GEOMETRY_ATTRS})
-    return out
+    return [
+        {k: v for k, v in _attrs(shape).items() if k in _GEOMETRY_ATTRS}
+        for shape in _shapes(svg)
+    ]
 
 
-def test_og_card_carries_the_marks_geometry() -> None:
+def _id_mark_geometry(svg_text: str, source_name: str) -> list[dict[str, str]]:
+    """Geometry of the ``<g id="mark">`` group's own rect/path children.
+
+    Shared by every derived asset (og-card.svg, favicon-mark.svg, ...) that
+    wraps a verbatim copy of mark.svg's geometry in its own transformed/
+    recoloured group alongside other elements mark.svg doesn't have (a
+    background rect, wordmark text, ...) -- scope the comparison to just
+    that group, in the same untransformed 0-32 coordinate space mark.svg
+    uses. Selected by `id="mark"`, not by being the first `<g>` in the file:
+    adding a second group later must not silently re-point a gate at the
+    wrong geometry.
+
+    Searches the document with its leading maintainer comment stripped
+    (``_document``), not the raw file text: a comment that itself mentions
+    the literal string ``<g id="mark">`` in prose (as favicon-mark.svg's
+    does) would otherwise let this regex latch onto that prose and swallow
+    everything up to the real element's closing ``</g>``.
+    """
+    document = _document(svg_text)
+    group = re.search(r'<g\b[^>]*id="mark"[^>]*>(.*?)</g>', document, re.DOTALL)
+    assert group, (
+        f'{source_name} has no <g id="mark"> wrapping the copied mark geometry'
+    )
+    return _geometry(f"<svg>{group.group(1)}</svg>")
+
+
+@pytest.mark.parametrize("derived", ["og-card.svg", "favicon-mark.svg"])
+def test_derived_asset_carries_the_marks_geometry(derived: str) -> None:
+    """Every asset that wraps a copy of mark.svg's geometry in its own
+    `<g id="mark">` must still agree with mark.svg -- og-card.svg
+    (lode-fhql.6) and favicon-mark.svg (lode-fhql.22) alike. Parametrised so
+    a third derived asset is one more id, not a third copy of this gate.
+    """
     mark = _geometry((ASSETS / "mark.svg").read_text())
-
-    # og-card.svg wraps its copy of the mark in a <g transform="..."> group
-    # (scaled/positioned for the 1200x630 card) alongside a background <rect>
-    # and the wordmark <text> that mark.svg doesn't have -- scope the
-    # comparison to just that group's own rect/path children, in the same
-    # untransformed 0-32 coordinate space mark.svg uses.
-    # The group is selected by its `id="mark"`, not by being the first <g> in
-    # the file: adding a second group later must not silently re-point this
-    # gate at the wrong geometry.
-    og_card_svg = (ASSETS / "og-card.svg").read_text()
-    group = re.search(r'<g\b[^>]*id="mark"[^>]*>(.*?)</g>', og_card_svg, re.DOTALL)
-    assert group, 'og-card.svg has no <g id="mark"> wrapping the copied mark geometry'
-    og_card = _geometry(f"<svg>{group.group(1)}</svg>")
+    copied = _id_mark_geometry((ASSETS / derived).read_text(), derived)
 
     assert mark, "mark.svg has no <rect>/<path> elements -- parser or asset broke"
-    assert og_card == mark, (
-        "og-card.svg's mark geometry has drifted from mark.svg. The two are "
-        "copy-pasted on purpose (colour differs deliberately); edit both, or "
-        "update this gate deliberately."
+    assert copied == mark, (
+        f"{derived}'s mark geometry has drifted from mark.svg. The two are "
+        "copy-pasted on purpose (colour, and any background the derived asset "
+        "adds, differ deliberately); edit both, or update this gate "
+        "deliberately."
+    )
+
+
+def test_favicon_mark_has_a_theme_neutral_background_tile() -> None:
+    """favicon-mark.svg's whole point (lode-fhql.22) is a fixed paper tile
+    behind the mark, so the favicon is legible regardless of the browser
+    tab's own theme. Assert the tile is present, paper-coloured, and covers
+    the full 32x32 viewBox -- not just present-but-wrong-size/colour.
+    """
+    document = _document((ASSETS / "favicon-mark.svg").read_text())
+    # Selected by `id="tile"`, not by being the first <rect> in the file, for
+    # the same reason _id_mark_geometry selects on `id="mark"`: a later edit
+    # that reorders the elements must not silently re-point this gate at one
+    # of the mark's own rects. Extracted via _shapes(), the module's single
+    # drawable-element extractor, so a future element type stays a one-place
+    # change.
+    tile = next((s for s in _shapes(document) if 'id="tile"' in s), None)
+    assert tile, 'favicon-mark.svg has no background <rect id="tile">'
+    assert document.index(tile) < document.index('id="mark"'), (
+        "favicon-mark.svg's background tile must be drawn before (under) the mark"
+    )
+    attrs = _attrs(tile)
+    assert attrs.get("fill") == "#F7F4EE", (
+        "favicon-mark.svg's background tile is not paper (#F7F4EE, "
+        "docs/brand.md section 3)"
+    )
+    assert (attrs.get("x"), attrs.get("y")) == ("0", "0"), (
+        "favicon-mark.svg's background tile does not start at the viewBox origin"
+    )
+    assert (attrs.get("width"), attrs.get("height")) == ("32", "32"), (
+        "favicon-mark.svg's background tile does not cover the full 32x32 viewBox"
     )

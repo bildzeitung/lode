@@ -1,22 +1,23 @@
 """Nox sessions for lode's dev loop.
 
 Two entry points are REQUIRED before any merge (CLAUDE.md) -- a narrower claim
-than "runs by default": a bare ``nox`` invocation actually runs all FIVE
+than "runs by default": a bare ``nox`` invocation actually runs all SIX
 sessions in ``nox.options.sessions`` below (``fix``, ``tests``, ``shellcheck``,
-``linkcheck``, ``docstringcheck``), but CLAUDE.md's merge gate only names these two:
+``linkcheck``, ``docstringcheck``, ``docs``), but CLAUDE.md's merge gate only names these two:
 
     nox -t fix      ruff format + ruff check --fix   (the pre-merge fixer)
     nox -s tests    pytest                           (the test gate — the FULL suite,
                                                         every test, no marker filter;
                                                         this is what /land re-gates with)
 
-The other three sessions in the default set, not required-before-merge by name
+The other four sessions in the default set, not required-before-merge by name
 but still part of a bare ``nox`` run:
 
     nox -s shellcheck      lint every tracked shell script (--severity=warning)
     nox -s linkcheck       verify every relative markdown link in docs/ and .claude/ resolves (lode-dkdg)
     nox -s docstringcheck  verify every symbol-naming Sphinx role naming a lode.* symbol
                              in src/ and tests/ resolves to a real symbol (lode-8oeu)
+    nox -s docs            build the mkdocs site and fail on a broken intra-doc anchor (lode-fhql.20)
 
 Plus FIVE opt-in sessions that are **not** in the default set:
 
@@ -146,7 +147,14 @@ GATE_MACHINE_FAULT = 2
 
 # A bare ``nox`` runs only the offline, keyless gates; ``eval`` (network + an API
 # key) and ``build`` (packaging, not a code gate) stay explicit, never a default.
-nox.options.sessions = ["fix", "tests", "shellcheck", "linkcheck", "docstringcheck"]
+nox.options.sessions = [
+    "fix",
+    "tests",
+    "shellcheck",
+    "linkcheck",
+    "docstringcheck",
+    "docs",
+]
 
 # The project's own venv, always at this fixed location relative to this file
 # (CLAUDE.md: "The venv lives at ./venv (repo root)").
@@ -317,6 +325,40 @@ def docstringcheck(session: nox.Session) -> None:
     interpreter would not have ``lode`` (or ``typer``) installed.
     """
     session.run(_venv_tool(session, "python"), "scripts/check_docstring_refs.py")
+
+
+@nox.session
+def docs(session: nox.Session) -> None:
+    """Build the mkdocs site and fail on a broken intra-doc anchor (lode-fhql.20).
+
+    ``scripts/check_links.py``/``linkcheck`` resolves ``#anchor`` fragments with the same
+    slug algorithm GitHub uses -- but mkdocs-material's own renderer slugs heading text
+    differently (punctuation in particular), so a link that resolves cleanly on GitHub can
+    still 404 on the built site. A local ``mkdocs serve`` surfaced exactly this (two
+    anchors, filed as ``lode-fhql.21``) with nothing in the existing gate set able to catch
+    it -- this session is that missing validator.
+
+    All of the gate's own logic lives in ``mkdocs.yml``'s ``validation:`` block, NOT here:
+    it sets ``links.anchors: warn`` (mkdocs 1.6 logs anchor breakage at INFO by default, so
+    ``--strict`` alone would not catch it) and every other link/nav check to ``ignore``, so
+    ``--strict`` reddens on a broken anchor and on nothing else. See that block for why each
+    ``ignore`` is deliberate. Keeping the predicate in mkdocs' own config rather than
+    grepping its log matters both ways round: a renamed validation key is itself a
+    ``--strict`` config error (loud), whereas a grep goes silently green the day mkdocs
+    rewords a message.
+
+    **Coverage boundary:** ``mkdocs.yml``'s ``exclude_docs`` allowlist is what gets built, so
+    this session only ever sees the PUBLISHED set (``index``/``design``/``storage``/
+    ``retrieval``/``externals``/``brand`` + ``how-to/``). Anchors in and into unpublished
+    pages -- ``decisions.md``, ``stack.md``, ``configuration.md``, ... -- are ``linkcheck``'s
+    job alone. These two gates are complements, not duplicates.
+
+    Resolves ``mkdocs`` through ``_venv_tool`` (lode-0yfn) -- an ambient interpreter would
+    not have ``mkdocs-material`` (or ``lode``'s other deps) installed.
+    """
+    mkdocs = _venv_tool(session, "mkdocs")
+    with tempfile.TemporaryDirectory() as site_dir:
+        session.run(mkdocs, "build", "--strict", "-d", site_dir)
 
 
 @nox.session

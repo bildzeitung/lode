@@ -38,6 +38,22 @@
 # whole path is named for: `git reset --hard <base-ref>` once, up front, and
 # `git reset --hard HEAD~1` per bounced branch.
 #
+# TWO MORE HAZARDS, both mid-loop and both found technically reviewing
+# lode-s9xe.13, fixed under lode-lmu9:
+#
+#   * `nox -t fix` / `nox -s tests` are gated the SAME way `nox -s
+#     lock_currency` already was: exit 1 is the only content verdict either
+#     command has, via gate-lib.sh's `escalate_unless_content` -- a 127 (nox
+#     not on PATH mid-run), 126, or 128+n (signal) is a machine fault and
+#     stops the whole replay, never a bounce of the branch that happened to
+#     be merged when it hit.
+#   * a `nox -t fix` reformat on the LANDED path is folded into the merge
+#     commit via `git commit --amend` before the loop continues, mirroring
+#     SKILL.md Section 4's own reformat-commit step -- otherwise it leaves
+#     the tree dirty for the NEXT iteration's `git merge`, which most likely
+#     machine-faults against it (the BOUNCED path never surfaces this: `git
+#     reset --hard HEAD~1` cleans it along with everything else).
+#
 # Usage:
 #   scripts/land-replay.sh --accepted <file> --msg-dir <dir> \
 #       --conflicts-dir <dir> --landed <file> [--graph <file>] \
@@ -85,13 +101,18 @@
 #                     lode's tracked default branch is `trunk`.
 #
 # BASELINE GATES, before attributing anything (lode-sys4, extended to `nox -s
-# tests` by lode-kq4v). No gate this script attributes is a pure function of
-# the tree -- an ambient FORCE_COLOR in the calling shell, a stale lock
-# against today's PyPI, can turn a gate red with no branch involved at all.
-# So every gate run below is baselined on bare --base-ref BEFORE the replay
-# loop merges anything: if the baseline itself is red, nothing in
-# --accepted caused it, and this script stops rather than blaming (and
-# deleting) whichever branch happened to merge first.
+# tests` by lode-kq4v, and to `nox -t fix` by lode-mps0). No gate this
+# script attributes is a pure function of the tree -- an ambient FORCE_COLOR
+# in the calling shell, a stale lock against today's PyPI, can turn a gate
+# red with no branch involved at all. So every gate run below is baselined
+# on bare --base-ref BEFORE the replay loop merges anything: if the baseline
+# itself is red, nothing in --accepted caused it, and this script stops
+# rather than blaming (and deleting) whichever branch happened to merge
+# first. `nox -t fix` baselines on BOTH its exit code (red) and its effect
+# on the tree (a reformat, possible even on exit 0) -- see the baseline
+# block below and docs/decisions.md (search "lode-mps0") for why a dirty
+# baseline reformat is gate-could-not-run, never committed invisibly or
+# discarded.
 #
 # Output (stdout), one line per id processed, in accepted-set order:
 #   LANDED\t<id>      merged AND gated clean; stays merged on the current
@@ -183,6 +204,25 @@ if [ -n "$GRAPH" ] && [ ! -f "$GRAPH" ]; then
     "Pass the file scripts/stacked-graph.sh wrote, or omit --graph only if this pass has no stacks."
 fi
 
+# Beads-exclusion pathspecs for both dirty-tree checks below (baseline
+# reformat-detect, per-branch reformat-detect), read from the canonical list
+# rather than the hardcoded ':!.beads' this replaced (lode-3cda). Same idiom
+# as scripts/worktree-gc-classify.sh's own _BEADS_EXCLUDE_PATHSPECS: built
+# ONCE here, fail-loud if unreadable or empty. Unlike the old ':!.beads',
+# this excludes only the two listed jsonl relpaths -- a real non-passive
+# .beads/ change (e.g. config.yaml) now counts as dirty, matching every other
+# consumer of scripts/beads-passive-exports.txt.
+_BEADS_EXPORTS_LIST="$SCRIPT_DIR/beads-passive-exports.txt"
+if [ ! -r "$_BEADS_EXPORTS_LIST" ]; then
+  gate_could_not_run "cannot read $_BEADS_EXPORTS_LIST" \
+    "Both dirty-tree checks below cannot know which beads paths to exclude without it."
+fi
+mapfile -t _BEADS_EXPORTS < "$_BEADS_EXPORTS_LIST"
+if [ "${#_BEADS_EXPORTS[@]}" -eq 0 ] || printf '%s\n' "${_BEADS_EXPORTS[@]}" | grep -qx ''; then
+  gate_could_not_run "$_BEADS_EXPORTS_LIST is empty or contains a blank line"
+fi
+_BEADS_EXCLUDE_PATHSPECS=("${_BEADS_EXPORTS[@]/#/:(exclude)}")
+
 # Missing -> fatal (Section 3a's precompute never ran). Empty -> ALSO fatal
 # here, unlike land-merge-batch.sh's own load of the same file: this script
 # only runs after a combined re-gate turned red, and a nothing-merged pass
@@ -218,6 +258,39 @@ git reset --hard -q "$BASE_REF" \
 # Baseline every gate this loop attributes, on the reset tree, BEFORE
 # touching anything (see the file header). A baseline failure is never a
 # branch's fault: stop here, land nothing from this replay.
+#
+# `nox -t fix` first (mirrors the per-branch gate's own ordering below), then
+# `nox -s tests` (lode-mps0, extending lode-sys4/lode-kq4v's baseline
+# coverage to the one attributing gate that had never been baselined).
+# `nox -t fix` needs TWO checks, not one: noxfile.py's `fix` session runs
+# `ruff format .` UNCONDITIONALLY before `ruff check --fix .`, so it can
+# leave the bare base tree dirty (a reformat) even when it exits 0 -- the
+# exit code alone would miss exactly the reformat-only case. Both arms
+# `gate_could_not_run`: this loop neither commits a base-ref reformat
+# invisibly under no branch's name nor discards one via `git reset --hard`,
+# and the reformat is left IN the working tree for the human to commit to
+# '$BASE_REF' directly. Rejected alternatives: docs/decisions.md (search
+# "lode-mps0"). No `escalate_unless_content` partition here -- like the
+# `nox -s tests` baseline arm below, every nonzero stops the pass, so there
+# is no mid-loop rc to split into content-vs-machine.
+if ! nox -t fix; then
+  gate_could_not_run "'nox -t fix' is red on bare '$BASE_REF', before any branch merged." \
+    "Not attributable to anything in --accepted. '$BASE_REF' itself needs a human's fix" \
+    "(see lode-mps0's decision in docs/decisions.md)."
+fi
+# A plain string, not the NUL-read array the per-branch reformat step below
+# builds: nothing is staged here, so the paths are only ever a diagnostic.
+# The pathspec itself stays byte-identical to that site's.
+fix_reformat_paths=$(git diff --name-only -- . "${_BEADS_EXCLUDE_PATHSPECS[@]}")
+if [ -n "$fix_reformat_paths" ]; then
+  gate_could_not_run "'nox -t fix' reformatted the bare base tree at '$BASE_REF' (exit 0, but" \
+    "the tree is now dirty: $(printf '%s' "$fix_reformat_paths" | tr '\n' ' '))." \
+    "Not attributable to anything in --accepted -- '$BASE_REF' genuinely needs this reformat," \
+    "but this loop must not land it invisibly under no branch's name, nor discard it via" \
+    "'git reset --hard'. The reformat is left in the working tree -- a human should commit it" \
+    "directly to '$BASE_REF' (see lode-mps0's decision in docs/decisions.md)."
+fi
+
 if ! nox -s tests; then
   gate_could_not_run "'nox -s tests' is red on bare '$BASE_REF', before any branch merged." \
     "Not attributable to anything in --accepted. Check the calling shell's own" \
@@ -313,12 +386,67 @@ for id in $ACCEPTED_IDS; do
 
   # Merged cleanly -- gate it, on THIS checkout alone, before deciding its
   # fate. `nox -t fix` first (may reformat what was just merged), then `nox
-  # -s tests`; either red backs the merge out via `git reset --hard HEAD~1`
-  # and bounces this id (not a conflict -- its content merged fine, a gate
-  # just judged it bad).
-  if ! nox -t fix || ! nox -s tests; then
+  # -s tests`. Each is checked separately, never via `if ! CMD_A || ! CMD_B`
+  # (that idiom collapses BOTH commands' exit codes into one boolean and
+  # cannot tell a genuine content failure (exit 1) from a non-verdict
+  # mid-loop fault -- 127 (not on PATH), 126, or 128+n (signal) -- which
+  # would otherwise BOUNCE an innocent branch (lode-lmu9). Same
+  # `escalate_unless_content` partition gate-lib.sh already gives
+  # `nox -s lock_currency` two paragraphs below: exit 1 is the only content
+  # verdict either of these two commands has; anything else is a machine
+  # fault and stops the whole replay (lode-9i2p), exactly like the baseline
+  # gates above and `nox -s lock_currency`'s own mid-loop exit-2 arm. The
+  # success arm is a bare `:` and the bounce lives INSIDE the else arm, on
+  # the far side of `escalate_unless_content` -- which only ever returns on
+  # the content verdict (exit 1), so a second `if [ "$rc" -ne 0 ]` after the
+  # `fi` could never read anything but "bounce" (dead state). `rc=$?` must
+  # still be the FIRST command in the else arm, and the condition must stay
+  # un-negated: `if ! CMD; then rc=$?` captures the NEGATION's status.
+  if nox -t fix; then
+    :
+  else
+    fix_rc=$?
+    escalate_unless_content "$fix_rc" \
+      "'nox -t fix' failed with exit $fix_rc after merging '$id'." \
+      "Exit 1 is the only content verdict (lode-9i2p); a 127/126/signal here is a" \
+      "machine fault, not '$id''s verdict -- do NOT bounce it on the strength of this."
     bounce "$id"
     continue
+  fi
+
+  if nox -s tests; then
+    :
+  else
+    tests_rc=$?
+    escalate_unless_content "$tests_rc" \
+      "'nox -s tests' failed with exit $tests_rc after merging '$id'." \
+      "Exit 1 is the only content verdict (lode-9i2p); a 127/126/signal here is a" \
+      "machine fault, not '$id''s verdict -- do NOT bounce it on the strength of this."
+    bounce "$id"
+    continue
+  fi
+
+  # `nox -t fix` may have reformatted the just-merged content, leaving the
+  # working tree dirty. Fold that reformat INTO the merge commit (`--amend`,
+  # not a separate commit) so a later bounce's single `git reset --hard
+  # HEAD~1` discards both together, and so the tree handed to the NEXT
+  # iteration's `git merge` (inside land-merge-one.sh) is clean -- a dirty
+  # tree there most likely machine-faults that merge (lode-lmu9). Mirrors
+  # SKILL.md Section 4's own reformat-commit step: stage only the explicit
+  # paths `git diff` names, never `-A` (CLAUDE.md's workflow gotchas), and
+  # skip the commit entirely when nothing changed.
+  reformat_paths=()
+  while IFS= read -r -d '' path; do
+    reformat_paths+=("$path")
+  done < <(git diff -z --name-only -- . "${_BEADS_EXCLUDE_PATHSPECS[@]}")
+  if [ "${#reformat_paths[@]}" -gt 0 ]; then
+    git add -- "${reformat_paths[@]}" \
+      || gate_could_not_run "could not stage nox -t fix's reformat of '$id' (${reformat_paths[*]})" \
+           "The merge itself succeeded; only staging the reformat failed."
+    git commit --no-verify -q --amend --no-edit \
+      || gate_could_not_run "could not amend '$id''s merge commit with nox -t fix's reformat" \
+           "The tree now carries an uncommitted reformat on top of '$id''s merge -- the next" \
+           "iteration's merge would most likely fault against it."
   fi
 
   lc_rc=0

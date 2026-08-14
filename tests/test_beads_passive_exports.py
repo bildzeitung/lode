@@ -4,9 +4,10 @@
 must treat as "by invariant never real work" (`import.auto: false`, lode-6ra). Its consumers
 read it rather than re-inlining the paths: `scripts/worktree-gc-classify.sh`'s dirty-tree guard,
 the `Stop` hook in `.claude/settings.json` (via
-`scripts/discard-beads-passive-export-churn.sh`), and `scripts/land-merge-one.sh`'s merge-retry
-restore (lode-2nw5). Register a new consumer in the loops below rather than starting a
-parallel module for it.
+`scripts/discard-beads-passive-export-churn.sh`), `scripts/land-merge-one.sh`'s merge-retry
+restore (lode-2nw5), and `scripts/land-replay.sh`'s two dirty-tree reformat-detect checks
+(lode-3cda). Register a new bash consumer in the `BASH_CONSUMERS` tuple below -- every
+per-consumer test derives from it -- rather than starting a parallel module for it.
 
 (A fourth consumer, `tests/test_land_lock.py`'s `_STALL_HOOK_SCAN_EXCLUDED_RELPATHS`, is gone
 as of lode-y3dw: `flock(1)` replaced the mkdir reclaim gate, retiring the
@@ -36,6 +37,12 @@ CANONICAL_LIST = REPO_ROOT / "scripts" / "beads-passive-exports.txt"
 HOOK_SCRIPT = REPO_ROOT / "scripts" / "discard-beads-passive-export-churn.sh"
 GC_CLASSIFY = REPO_ROOT / "scripts" / "worktree-gc-classify.sh"
 MERGE_ONE = REPO_ROOT / "scripts" / "land-merge-one.sh"
+LAND_REPLAY = REPO_ROOT / "scripts" / "land-replay.sh"
+
+# The one registry every per-consumer test below derives from -- registering a new bash
+# consumer is a single edit here, not one per loop (lode-3cda's review: the module had
+# grown three hand-maintained copies of this set).
+BASH_CONSUMERS = (HOOK_SCRIPT, GC_CLASSIFY, MERGE_ONE, LAND_REPLAY)
 
 
 def _entries() -> list[str]:
@@ -43,11 +50,11 @@ def _entries() -> list[str]:
 
 
 def test_the_canonical_list_is_present_and_every_line_is_a_usable_relpath() -> None:
-    """Non-vacuity for all three consumers at once.
+    """Non-vacuity for every consumer at once.
 
     Each consumer degrades differently on a bad list -- the gc classifier now exits 2, the
     Stop hook no-ops, the stall-hook scan silently widens -- so the list itself is the one
-    place worth asserting the precondition all three share.
+    place worth asserting the precondition they all share.
     """
     assert CANONICAL_LIST.is_file()
     entries = _entries()
@@ -85,11 +92,8 @@ def test_no_consumer_keeps_a_literal_copy_of_the_relpaths() -> None:
     stop_commands = " ".join(
         h["command"] for entry in settings["hooks"]["Stop"] for h in entry["hooks"]
     )
-    consumers = {
-        ".claude/settings.json (Stop hooks)": stop_commands,
-        str(HOOK_SCRIPT): HOOK_SCRIPT.read_text(encoding="utf-8"),
-        str(GC_CLASSIFY): GC_CLASSIFY.read_text(encoding="utf-8"),
-        str(MERGE_ONE): MERGE_ONE.read_text(encoding="utf-8"),
+    consumers = {".claude/settings.json (Stop hooks)": stop_commands} | {
+        str(script): script.read_text(encoding="utf-8") for script in BASH_CONSUMERS
     }
     for rel in _entries():
         for name, text in consumers.items():
@@ -99,7 +103,26 @@ def test_no_consumer_keeps_a_literal_copy_of_the_relpaths() -> None:
 def test_every_bash_consumer_names_the_canonical_list() -> None:
     """Cheap proof the scripts read the file this module is asserting about, so a rename
     of the list cannot leave these tests green while the guards read nothing."""
-    for script in (HOOK_SCRIPT, GC_CLASSIFY, MERGE_ONE):
+    for script in BASH_CONSUMERS:
         assert CANONICAL_LIST.name in script.read_text(encoding="utf-8"), (
             f"{script} no longer reads {CANONICAL_LIST.name}"
+        )
+
+
+def test_no_consumer_hardcodes_the_broad_beads_pathspec() -> None:
+    """lode-3cda: land-replay.sh used to hardcode a literal ':!.beads' git pathspec
+    argument, which is BROADER than the canonical list -- it excluded the whole
+    .beads/ directory, so a real non-passive .beads/ change (e.g. config.yaml) was
+    invisible to both of its dirty-tree checks. The invariant is general, so it is
+    asserted over every bash consumer rather than the one script that regressed.
+    Checks actual code lines only, not a comment describing the fix."""
+    for script in BASH_CONSUMERS:
+        code_lines = [
+            line
+            for line in script.read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith("#")
+        ]
+        assert not any(":!.beads" in line for line in code_lines), (
+            f"{script} hardcodes the broad ':!.beads' pathspec in code instead of "
+            f"reading {CANONICAL_LIST.name}"
         )

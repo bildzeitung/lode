@@ -10,12 +10,13 @@
 
 {% block extrahead %}
   {{ super() }}
-  {# theme.favicon (mkdocs.yml) already wires assets/mark-16.png as the
-     modern PNG favicon. This adds the multi-resolution assets/favicon.ico
-     (lode-fhql.6) alongside it, for a client that ignores a PNG icon link
-     or wants the 32/48px entries the single 16px PNG cannot offer. Note
-     this does NOT serve a bare /favicon.ico at the site root -- the asset
-     is published under assets/, and only this link points at it. #}
+  {# theme.favicon (mkdocs.yml) already wires assets/favicon-16.png (lode-fhql.22)
+     as the modern PNG favicon. This adds the multi-resolution assets/favicon.ico
+     (lode-fhql.6, regenerated from favicon-mark.svg since lode-fhql.22) alongside
+     it, for a client that ignores a PNG icon link or wants the 32/48px entries
+     the single 16px PNG cannot offer. Note this does NOT serve a bare
+     /favicon.ico at the site root -- the asset is published under assets/,
+     and only this link points at it. #}
   <link rel="shortcut icon" href="{{ 'assets/favicon.ico' | url }}">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="lode">

@@ -160,6 +160,10 @@ def test_emitted_anchor_ids_match_the_link_gates_github_slug() -> None:
         "TUI — passive connection surfacing (E11)",
         "Retrieval and ranking",
         "Privacy & egress",
+        # Empty link text (`[]( url )`) -- the authority strips the whole construct via `[^\]]*`
+        # (zero-or-more); a `[^\]]+` (one-or-more) copy fails to match on empty text and leaves
+        # the url's own text sitting in the slug instead (lode-d3k0).
+        "See [](/x.md) here",
     ):
         assert generate_derived_docs._github_slug(heading) == check_links.github_slug(
             heading
