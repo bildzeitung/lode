@@ -5,12 +5,22 @@
   story): three faint horizontal bands are the rock layers ("strata"); one
   bold zigzag seam crosses them corner to corner ("the vein you accumulate
   and mine"). Both are drawn with the SAME `currentColor` so this single
-  file works on light and dark backgrounds; the embedding context sets
-  `color` (ink in light contexts, paper in dark, per docs/brand.md section
-  6's monochrome usage rule); the `color="#1E1B2E"` (ink) on the root is
-  only a fallback for a context that never sets one (e.g. this file opened
-  directly, or the 16px raster in mark-16.png, produced reproducibly by
-  scripts/rasterize-mark.sh).
+  file works on light and dark backgrounds: the embedding context picks the
+  colour (ink in light contexts, paper in dark, per docs/brand.md section
+  6's monochrome usage rule). The `color="#1E1B2E"` (ink) on the root is the
+  standalone default, for a context that supplies no colour at all — this
+  file opened directly, or the 16px raster in mark-16.png (produced
+  reproducibly by scripts/rasterize-mark.sh, which renders it exactly as it
+  is here).
+
+  HOW TO OVERRIDE IT: a consumer inlining this SVG must set `color` on the
+  `<svg>` element itself, via a CSS rule that matches it —
+  `.brand-mark { color: var(--paper); }`. Any author rule beats a
+  presentation attribute, so that works. Merely setting `color` on an
+  ANCESTOR does NOT: `color` on the root is a specified value, and a
+  specified value defeats inheritance. Removing the attribute would make
+  inheritance work but leaves the standalone/raster case colourless, so the
+  attribute stays and this is the documented contract.
 
   Geometric shapes only, no strokes thin enough to vanish at a 16x16
   favicon render (docs/brand.md section 6's minimum-size rule); the strata

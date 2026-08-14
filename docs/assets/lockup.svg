@@ -1,19 +1,30 @@
 <!--
   lode lockup: mark.svg plus the wordmark, horizontal (lode-fhql.4)
 
-  Reuses mark.svg's exact geometry at the same 32-unit scale so the two
-  files never drift; this is not a from-scratch redraw of the mark. The
+  Carries mark.svg's exact geometry at the same 32-unit scale, copied
+  verbatim -- not a from-scratch redraw. Cross-file `<use href>` does not
+  work for standalone SVG assets, so the duplication is deliberate; edit
+  both files together. tests/test_brand_assets.py gates that they agree. The
   wordmark sits to the mark's right, set in the monospace stack from
   docs/brand.md section 4 ("Code / inline snippets / the wordmark, where
   one is rendered on the web": JetBrains Mono, falling back to the system
   monospace stack), deliberately monospace even on the web, since the
   wordmark is the one place the brief asks for that font on purpose.
 
-  Single `currentColor` file, same fallback convention as mark.svg: the
-  root's `color="#1E1B2E"` (ink) only applies where the embedding context
-  sets none.
+  Single `currentColor` file, same convention as mark.svg: the root's
+  `color="#1E1B2E"` (ink) is the standalone default, and a consumer
+  overrides it with a CSS rule matching the `<svg>` element itself, never by
+  setting `color` on an ancestor — see mark.svg's header for why.
+
+  viewBox width 104: the wordmark starts at x=44 and "lode" is 4 glyphs at
+  font-size 20, so it ends at 44 + 4*advance. Every monospace in the fallback
+  stack sits at 0.55-0.60em, so 104 holds the text even at 0.75em -- wider
+  than anything renders -- while keeping the box tight, since dead space on
+  the right pushes the lockup off-centre wherever it is embedded. The mark is
+  flush at x=0 by design: padding is the consumer's to apply (docs/brand.md
+  section 6's clear-space rule).
 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 148 32" color="#1E1B2E">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 104 32" color="#1E1B2E">
   <!-- mark, unchanged from mark.svg -->
   <rect x="0" y="4"  width="32" height="4" fill="currentColor" opacity="0.35"/>
   <rect x="0" y="16" width="32" height="4" fill="currentColor" opacity="0.35"/>
