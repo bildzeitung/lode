@@ -432,6 +432,8 @@ state survives between this skill's separate Bash invocations, and Section 3's m
 which dependents a conflicting or bounced base takes with it:
 
 ```bash
+STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation (lode-sfnb)
+mkdir -p "$STATE_DIR"
 scripts/stacked-graph.sh --base-ref origin/trunk --report-unordered | tee "$STATE_DIR/graph"
 ```
 
