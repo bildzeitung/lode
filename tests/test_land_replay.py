@@ -382,7 +382,9 @@ def test_baseline_red_fix_stops_before_merging_anything(tmp_path: Path) -> None:
     assert landed.read_text() == ""
 
 
-def test_baseline_dirty_fix_reformat_stops_before_merging_anything(tmp_path: Path) -> None:
+def test_baseline_dirty_fix_reformat_stops_before_merging_anything(
+    tmp_path: Path,
+) -> None:
     """`origin/trunk` itself is clean per `nox -t fix`'s own exit code (0),
     but the fake `nox -t fix` reformats the tree anyway (the real `fix`
     session's `ruff format .` can do this even when nothing was unfixable).
@@ -390,9 +392,14 @@ def test_baseline_dirty_fix_reformat_stops_before_merging_anything(tmp_path: Pat
     discarded via reset (lode-mps0)."""
     repo = _init_repo(tmp_path)
     fake_nox = _fake_nox_bin(tmp_path)
-    (repo / "REFORMAT_ME").write_text("")
-    _git(repo, "add", "REFORMAT_ME")
-    _git(repo, "commit", "-q", "-m", "trunk's nox -t fix will reformat this tree")
+    # reformat_target.txt must already be TRACKED with different content --
+    # `git diff --name-only` (what the baseline dirty-tree check greps) only
+    # sees modified tracked files, not new untracked ones, same as the
+    # mid-loop reformat test below.
+    _commit_file(
+        repo, "reformat_target.txt", "unformatted\n", "trunk has an unformatted file"
+    )
+    _commit_file(repo, "REFORMAT_ME", "", "trigger the fake reformat on bare trunk")
     _git(repo, "branch", "-f", "origin/trunk", "trunk")
 
     _branch_from(repo, "trunk", "origin/land/lode-a")
