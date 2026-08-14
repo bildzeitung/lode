@@ -1043,6 +1043,57 @@ in `mkdocs.yml`; none of the currently-published pages use GitHub-flavored-Markd
 syntax today, and none should be added as part of adopting the site without checking it renders
 sanely in GitHub's plain markdown view first.
 
+### Derived reference pages (decided, lode-fhql.15)
+
+`docs/keybindings.md` and `docs/configuration.md` are EXCLUDED above because they're addressed to
+whoever *builds* lode next, not whoever *uses* it — but each holds genuinely user-facing content
+trapped inside that maintainer prose: `keybindings.md`'s "Current keymap" tables (which keys the TUI
+responds to, full stop), and `configuration.md`'s `runtime`-kind rows (a setting the user/operator
+can change while running, as opposed to a `tune`/`build` knob nobody outside the codebase acts on).
+`docs/tui.md` was assessed against the same question and found to hold **none** — it is TCSS layout
+rules, footer-width measurement mechanics, and TUI test-settling internals, addressed entirely to
+whoever writes the next screen; no derived page is generated from it.
+
+**Generated, not hand-copied, so the two copies cannot silently diverge.**
+`scripts/generate_derived_docs.py` parses the source doc's own markdown tables (the "Current keymap"
+tables in `keybindings.md`; every `| Knob | Kind | Default | Notes |` table in `configuration.md`,
+filtered to `Kind == runtime`) and writes `docs/keymap.md` / `docs/settings.md` from them — no field
+is retyped by hand. `scripts/generate_derived_docs.py --check` regenerates to memory and diffs
+against the committed files, exiting 1 (naming the stale file) on any drift;
+`tests/test_generate_derived_docs.py` runs that check as part of `nox -s tests`, so a source table
+that changes without regenerating the derived page fails the gate rather than shipping a page that
+silently disagrees with its own source. A source doc reshaped past what the generator can read (a
+renamed `## Current keymap`, a renamed/reordered table column, a `Kind` column that no longer says
+`runtime`) **raises** rather than emitting a thinner page: `--check` would otherwise report only "stale, regenerate", and the
+truncated page would get committed. The generator also strips maintainer-only asides — a
+parenthetical citing a bd ticket id, `show=False` footer-visibility trivia, or a source-file path
+(`screens/browse.py`) — from cells *and* headings alike, so the two pages read as documentation for
+someone using lode, not a verbatim dump of `keybindings.md`'s development history or
+`configuration.md`'s implementation notes.
+
+`docs/keymap.md` links back to `keybindings.md`'s GitHub URL for whoever actually needs to add or
+rebind a key, and points out that the in-app `Ctrl+_`/`?` help overlay (not the page) is the
+definitive *live* keymap — the derived page is a browsing convenience, not a promise that it can
+never lag a mid-session TUI change the way the always-current overlay cannot. Its per-screen section
+titles come from a `SCREEN_LABELS` map in the generator (reader-facing names, not `Screen` class
+names) — **adding a screen to `keybindings.md`'s Screen-level table means adding its label there
+too**, or the page falls back to a de-camel-cased class name rather than failing. `docs/settings.md`
+emits an explicit `<a id="...">` above each section heading, slugged exactly the way GitHub slugs
+that heading (`scripts/check_links.py::github_slug`, the algorithm the repo's link gate already
+enforces), so one `#anchor` link resolves both on GitHub — via its own auto-generated heading
+anchor — and on the site, whose renderer slugs punctuation differently.
+
+**Publish-scope wiring is a follow-up, not this ticket's job — it is `lode-gecm`,** blocked on both
+`lode-fhql.9` and `lode-fhql.15`. So `keymap.md` and `settings.md` land in `docs/` **unpublished**:
+the live publish gate today is `mkdocs.yml`'s `exclude_docs` allowlist plus its `nav` (`lode-fhql.10`,
+next section), and neither lists them. `lode-fhql.9` is being built concurrently in its own worktree
+and may reshape that gate, so wiring the two pages in from here would edit a sibling's in-flight file
+on a mechanism that may not survive; `lode-gecm` does it once, against whatever gate `trunk` actually
+carries at that point. The "`lode-fhql.15`'s derived pages take precedence once they exist"
+link-rewrite rule above already anticipates the same moment: once the pages are published, that rule
+resolves `keybindings.md`/`configuration.md` citations elsewhere in the published set to these two
+pages instead of falling through to GitHub.
+
 ### mkdocs.yml scaffold and the landing page (lode-fhql.10)
 
 `mkdocs.yml` (repo root) and `docs/index.md` (the site's landing page) exist as of `lode-fhql.10`.
