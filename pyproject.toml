@@ -87,6 +87,16 @@ dev = [
                             # requirement names the distribution, not the
                             # import.
 ]
+docs = [
+    "mkdocs-material>=9.5,<10", # docs-site generator (lode-fhql.8, see
+                                # docs/stack.md) -- pulls in mkdocs itself as
+                                # a transitive dependency. Python-native,
+                                # matches the existing venv/lock; separate
+                                # extra (not `dev`) because it is CI-only
+                                # (lode-fhql.9's Pages workflow), not
+                                # something every contributor's local `dev`
+                                # install needs.
+]
 
 [project.scripts]
 lode = "lode.cli:app"
