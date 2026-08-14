@@ -63,10 +63,13 @@
 #                     argument. Omit to fall through to that script's blind
 #                     heartbeat.
 #   --landed         optional: append each LANDED id to this file, one per
-#                     line, as it merges -- the same file /land's Section 4
-#                     reads back. Omit to skip this bookkeeping (a caller that
-#                     wants it can instead grep this script's own LANDED
-#                     lines from stdout).
+#                     line, as it merges. Not sugar for the stdout lines --
+#                     it is the SAME durable file /land's Section 4 reads back
+#                     from a LATER, SEPARATE Bash invocation, which cannot see
+#                     this call's stdout at all (the same reason
+#                     --conflicts-dir exists). Omit only for a caller that
+#                     consumes this script's stdout in the invocation that
+#                     produced it.
 #
 # Output (stdout), one line per id processed, in accepted-set order:
 #   LANDED\t<id>      merged cleanly onto the current checkout.
@@ -83,8 +86,12 @@
 #
 # Exit codes: 0 = the loop ran to completion (LANDED/CONFLICT/HELD are all
 # non-fault outcomes -- a batch that conflicts or holds every id still exits
-# 0). 2 = machine fault: bad usage, a required file missing, or any called
-# script (land-merge-one.sh, drop-from-accepted.sh) itself exited 2. Per
+# 0). 2 = machine fault: bad usage, a required file missing, or a called
+# script (land-merge-one.sh, drop-from-accepted.sh) failing in any way that
+# is not its own content verdict -- for land-merge-one.sh that means every
+# nonzero code EXCEPT 1, so its documented 2 and equally its undocumented
+# 126/127 (missing or non-executable next to this script) and 128+n (killed
+# by a signal) all land here rather than being read as a conflict. Per
 # lode-9i2p's rule, this is never read as a branch verdict, and processing
 # stops immediately -- an id whose fate is unknown must not be silently
 # carried forward or silently dropped. There is no exit 1: a batch of
@@ -145,9 +152,18 @@ for id in $ACCEPTED_IDS; do
   # call may still appear in $ACCEPTED_IDS (that variable was captured
   # before the loop started) -- drop-from-accepted.sh already removed it
   # from the FILE, so re-check membership rather than trust the stale list.
-  if ! grep -qxF "$id" "$ACCEPTED"; then
-    continue
-  fi
+  # grep's own 1-vs-else partition: 1 = "not in the set" (skip it), anything
+  # ABOVE 1 (the file vanished, an I/O error) is a machine fault. Reading a
+  # grep-2 as "not in the set" would silently skip every REMAINING id while
+  # leaving them in the accepted file -- neither merged nor reported.
+  grep -qxF "$id" "$ACCEPTED"
+  grc=$?
+  case "$grc" in
+    0) ;;
+    1) continue ;;
+    *) gate_could_not_run "grep failed (exit $grc) re-checking '$id' in '$ACCEPTED'" \
+         "Reading this as 'already dropped' would silently skip the rest of the batch." ;;
+  esac
 
   # Same idiom as land-merge-one.sh's own callers, for the same reason: `if !
   # CMD; then rc=$?` would capture the negation's status (always 0 in that
@@ -161,16 +177,15 @@ for id in $ACCEPTED_IDS; do
   case "$rc" in
     0)
       printf 'LANDED\t%s\n' "$id"
-      [ -z "$LANDED_FILE" ] || printf '%s\n' "$id" >> "$LANDED_FILE"
+      # A failed append is a fault, not a shrug: /land's Section 4 reads this
+      # file back to decide which tickets to close, so a silently dropped
+      # line leaves a merged branch's ticket open with nothing to say so.
+      [ -z "$LANDED_FILE" ] || printf '%s\n' "$id" >> "$LANDED_FILE" \
+        || gate_could_not_run "could not append '$id' to --landed '$LANDED_FILE'" \
+             "This id IS merged onto the current checkout; the record of it is not."
       ;;
-    2)
-      # MACHINE FAULT -- land-merge-one.sh already printed its own diagnostic
-      # to this call's stderr. Never a branch verdict (lode-9i2p): stop
-      # processing rather than guess at the fate of the ids not yet reached.
-      gate_could_not_run "land-merge-one.sh faulted on '$id' (see its own diagnostic above)"
-      ;;
-    *)
-      # rc=1: a real textual conflict against a branch already merged this
+    1)
+      # A real textual conflict against a branch already merged this
       # pass. Persist the conflicting paths now, while this loop actually
       # holds them -- a later, separate Bash invocation writing the
       # needs-rebase kick-back note cannot see this loop's $CONFLICTS once
@@ -187,10 +202,27 @@ for id in $ACCEPTED_IDS; do
       DROP_OUT=$("$SCRIPT_DIR/drop-from-accepted.sh" "$id" --accepted "$ACCEPTED" \
         ${GRAPH:+--graph "$GRAPH"}) \
         || gate_could_not_run "drop-from-accepted.sh faulted dropping '$id' (see its own diagnostic above)"
-      printf '%s\n' "$DROP_OUT" | while IFS=$'\t' read -r verb held_id; do
+      # A here-string, not `printf ... | while`: a pipeline would run the loop
+      # in a subshell for no gain (one more process, and nothing the loop
+      # learns could escape it).
+      while IFS=$'\t' read -r verb held_id; do
         [ "$verb" = "HELD" ] || continue
         printf 'HELD\t%s\n' "$held_id"
-      done
+      done <<< "$DROP_OUT"
+      ;;
+    *)
+      # MACHINE FAULT -- rc 2 (land-merge-one.sh's own contract; it already
+      # printed its diagnostic to this call's stderr), or any OTHER nonzero:
+      # 127/126 when land-merge-one.sh is missing or not executable next to
+      # this script, 128+n when it dies on a signal. CONFLICT is the ONE code
+      # (1) that is a branch verdict; everything else is the machine, and
+      # reading it as a conflict would kick a perfectly good branch back
+      # needs-rebase on a bootstrap gap (lode-9i2p). Stop processing rather
+      # than guess at the fate of the ids not yet reached.
+      gate_could_not_run "land-merge-one.sh failed (exit $rc) on '$id'" \
+        "Exit 1 is the only conflict verdict; $rc is a machine/bootstrap fault" \
+        "(see land-merge-one.sh's own diagnostic above, if it ran at all)." \
+        "Do NOT kick '$id' back needs-rebase on the strength of this."
       ;;
   esac
 done

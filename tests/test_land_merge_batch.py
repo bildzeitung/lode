@@ -16,6 +16,7 @@ tests/test_land_merge_one.py and tests/test_drop_from_accepted.py use.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -82,11 +83,12 @@ def _run(
     graph: Path | None = None,
     landed: Path | None = None,
     on_branch: str = "trunk",
+    script: Path = SCRIPT,
 ) -> subprocess.CompletedProcess:
     _git(repo, "checkout", "-q", on_branch)
     args = [
         "bash",
-        str(SCRIPT),
+        str(script),
         "--accepted",
         str(accepted),
         "--msg-dir",
@@ -249,6 +251,49 @@ def test_a_machine_fault_stops_processing_the_rest_of_the_batch(
     assert landed.read_text() == "lode-p\n"
     assert not (repo / "r.txt").exists(), "an id after the fault must never be merged"
     assert "no precomputed merge message" in result.stderr
+
+
+def test_an_unrunnable_land_merge_one_is_a_fault_not_a_conflict(
+    tmp_path: Path,
+) -> None:
+    """A bootstrap gap must never read as a branch verdict.
+
+    land-merge-one.sh documents 0/1/2, but bash produces 126/127 when it is
+    not executable or not there at all. Classifying "anything that is not 0
+    or 2" as CONFLICT would kick a perfectly mergeable branch back
+    needs-rebase because a file lost its +x bit -- exactly the lode-9i2p
+    inversion. Real sabotage: a real copy of scripts/, chmod'd unreadable.
+    """
+    repo = _init_repo(tmp_path)
+    _branch_from(repo, "trunk", "origin/land/lode-a")
+    _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
+
+    scripts = tmp_path / "scripts"
+    shutil.copytree(REPO_ROOT / "scripts", scripts)
+    # 0o644, not 0o000: still un-runnable (bash exits 126), but readable, so
+    # pytest's own cleanup of old tmp dirs cannot trip over the leftover.
+    (scripts / "land-merge-one.sh").chmod(0o644)
+
+    msg_dir = tmp_path / "msgs"
+    _write_msg(msg_dir, "lode-a", "Merge land/lode-a: A (lode-a)")
+    conflicts_dir = tmp_path / "conflicts"
+    conflicts_dir.mkdir()
+    accepted = _accepted(tmp_path, "lode-a")
+
+    result = _run(
+        repo,
+        accepted,
+        msg_dir,
+        conflicts_dir,
+        script=scripts / "land-merge-batch.sh",
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "CONFLICT" not in result.stdout
+    assert not (conflicts_dir / "lode-a").exists()
+    assert accepted.read_text() == "lode-a\n", (
+        "a machine fault must not drop the id from the accepted set"
+    )
 
 
 def test_missing_accepted_file_is_a_machine_fault(tmp_path: Path) -> None:
