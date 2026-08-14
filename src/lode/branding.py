@@ -1,24 +1,26 @@
 """lode's terminal wordmark (lode-fhql.5) -- the mark that renders where lode
-actually lives: the TUI's config/diagnostics screen and the CLI's ``lode
-version`` output.
+actually lives: the TUI's help overlay
+(:class:`~lode.tui.screens.help.HelpScreen`, which carries the placement
+rationale) and the CLI's ``lode version`` output.
 
-Two fixed strings, not a font-rendering routine -- there are exactly two
-callers and the source of truth for the *glyphs* is this module, read
-verbatim. :data:`WORDMARK_UNICODE` draws "LODE" with Unicode full/half block
-characters (U+2588/U+2591 family); :data:`WORDMARK_ASCII` draws the same
-letterforms with plain ``*`` so it degrades on a terminal/encoding that
-cannot render the block glyphs. Both are exactly 22 columns wide, five rows
-tall -- comfortably inside the 80-column hard limit this ticket calls out
-(``CaptureScreen`` overflowed it once, lode-3rvw; this module is checked by
-``tests/test_branding.py`` so it can't repeat that silently).
+One hand-drawn string, not a font-rendering routine -- there are exactly two
+callers and the source of truth for the *glyphs* is
+:data:`WORDMARK_UNICODE`, read verbatim: "LODE" in the Unicode full block
+character (U+2588). :data:`WORDMARK_ASCII` is **derived** from it by a
+single glyph substitution rather than hand-copied, so the two forms cannot
+drift apart into different letterforms or different widths. Both are
+therefore exactly 22 columns wide and five rows tall -- comfortably inside
+the 80-column hard limit this ticket calls out (``CaptureScreen`` overflowed
+it once, lode-3rvw; ``tests/test_branding.py`` pins the footprint so it
+can't repeat that silently).
 
 **Selection is explicit, never hopeful** (the ticket's own wording):
-:func:`supports_unicode` decides from the target stream's *encoding* before
+:func:`supports_unicode` decides from :data:`sys.stdout`'s *encoding* before
 anything is printed, rather than emitting the Unicode form and discovering a
-``UnicodeEncodeError`` after some of it already reached the terminal.
-:func:`wordmark` is the one call site both callers use; passing
-``unicode=True/False`` bypasses detection entirely for a caller (e.g. a
-test) that wants a specific form regardless of environment.
+``UnicodeEncodeError`` after some of it already reached the terminal. That
+detection is for the **CLI** path; a caller that already knows its render
+target's capability (the TUI does -- Textual owns the terminal and paints
+non-ASCII chrome unconditionally) passes ``unicode=`` and bypasses it.
 
 **No colour, ever, in this module.** The glyphs are plain characters with no
 ANSI escape codes attached -- NO_COLOR and a non-TTY stdout need no special
@@ -34,7 +36,7 @@ from __future__ import annotations
 import sys
 from typing import TextIO
 
-#: "LODE" drawn in Unicode full-block glyphs, 5 letter-cells wide (L O D E)
+#: "LODE" drawn in Unicode full-block glyphs -- four letter-cells (L O D E)
 #: with a 2-column gap between letters, 22 columns x 5 rows total.
 WORDMARK_UNICODE = (
     "█      ██   ███   ████\n"
@@ -44,22 +46,20 @@ WORDMARK_UNICODE = (
     "████   ██   ███   ████"
 )
 
-#: The same letterforms in plain ASCII (``*`` for the Unicode form's ``█``)
-#: -- the explicit fallback for a terminal/encoding that can't render the
-#: block glyphs above. Same 22x5 footprint, so callers never need to
-#: special-case layout based on which form was picked.
-WORDMARK_ASCII = (
-    "*      **   ***   ****\n"
-    "*     *  *  *  *  *   \n"
-    "*     *  *  *  *  *** \n"
-    "*     *  *  *  *  *   \n"
-    "****   **   ***   ****"
-)
+#: The same letterforms in plain ASCII -- the explicit fallback for a
+#: terminal/encoding that can't render the block glyphs above. DERIVED from
+#: :data:`WORDMARK_UNICODE` by one glyph substitution rather than copied by
+#: hand, so the 22x5 footprint is identical by construction and callers
+#: never need to special-case layout based on which form was picked.
+WORDMARK_ASCII = WORDMARK_UNICODE.replace("█", "*")
 
-#: lode's one-line tagline, shown under the wordmark. Plain ASCII already --
-#: an em dash is the only non-ASCII byte a truly minimal terminal might
-#: balk at, so it's spelled out as a hyphen instead rather than adding a
-#: second unicode/ascii pair for one punctuation mark.
+#: lode's one-line tagline, shown under the wordmark. Deliberately its own
+#: string, NOT the package description (``pyproject.toml``) or the CLI root
+#: ``help=`` -- this is the mark's tagline and is free to be shorter than
+#: either. Deliberately plain ASCII too -- no em dash, no typographic quotes
+#: -- so it needs no unicode/ascii pair of its own and prints identically
+#: under both forms of the wordmark above (``tests/test_branding.py`` pins
+#: that).
 TAGLINE = "capture fast, retrieve cited"
 
 
@@ -79,16 +79,17 @@ def supports_unicode(stream: TextIO | None = None) -> bool:
     return "utf" in encoding.lower()
 
 
-def wordmark(*, unicode: bool | None = None, stream: TextIO | None = None) -> str:
+def wordmark(*, unicode: bool | None = None) -> str:
     """Return lode's wordmark plus :data:`TAGLINE`, ready to print as-is --
     no colour/markup embedded, so both CLI and TUI callers are free to wrap
     it in their own styling (or none).
 
-    ``unicode`` overrides detection outright when passed explicitly (e.g. a
-    test pinning one form regardless of environment); left as the default
+    ``unicode`` overrides detection outright when passed explicitly -- for a
+    caller that already knows its render target's capability (the TUI) or a
+    test pinning one form regardless of environment. Left as the default
     ``None``, the form is picked by :func:`supports_unicode` against
-    ``stream`` (default :data:`sys.stdout`).
+    :data:`sys.stdout`, which is the right target for the CLI path.
     """
-    use_unicode = supports_unicode(stream) if unicode is None else unicode
+    use_unicode = supports_unicode() if unicode is None else unicode
     glyphs = WORDMARK_UNICODE if use_unicode else WORDMARK_ASCII
     return f"{glyphs}\n{TAGLINE}"

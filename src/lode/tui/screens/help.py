@@ -46,6 +46,17 @@ space-consuming sibling there reliably pushes it past the docked Footer),
 this screen's ``VerticalScroll`` already absorbs overflow by scrolling
 rather than assuming everything fits, so one more line of content is never
 a layout risk.
+
+The call passes ``unicode=True`` explicitly rather than letting
+:func:`~lode.branding.wordmark` sniff the encoding: that sniff reads
+``sys.stdout``, which is NOT this screen's render target -- Textual owns the
+terminal through its own driver, and a redirected process stdout would drop
+the overlay to the ``*`` fallback on a perfectly capable terminal. The TUI
+already paints non-ASCII chrome unconditionally anyway (the braille spinner
+in :mod:`lode.tui.screens.ask`, ``lode.tcss``'s ``border: round``), so a
+degraded wordmark here would protect one widget on a screen whose frame had
+already broken. The encoding sniff stays for the CLI's ``lode version``,
+where ``sys.stdout`` genuinely is the target.
 """
 
 from __future__ import annotations
@@ -103,7 +114,7 @@ class HelpScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(
-            LodeStatic(wordmark(), id=WORDMARK_ID),
+            LodeStatic(wordmark(unicode=True), id=WORDMARK_ID),
             BindingsTable(shrink=True, expand=False),
             id=HELP_DIALOG_ID,
             classes="confirm-dialog",
