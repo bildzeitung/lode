@@ -46,6 +46,8 @@ case "$1$2" in
     elif [ -f FIX_FAIL ]; then exit 1
     else
       [ -f REFORMAT_ME ] && echo "reformatted" > reformat_target.txt
+      [ -f REFORMAT_BEADS_CONFIG ] && echo "reformatted" > .beads/config.yaml
+      [ -f REFORMAT_BEADS_ISSUES_JSONL ] && echo "reformatted" > .beads/issues.jsonl
       exit 0
     fi
     ;;
@@ -368,6 +370,76 @@ def test_baseline_failure_stops_before_merging_anything(
     # had merged -- so the durable record must not survive it still naming
     # merges that are no longer on the tree.
     assert landed.read_text() == ""
+
+
+def test_a_non_passive_beads_reformat_counts_as_dirty(tmp_path: Path) -> None:
+    """lode-3cda: a real, non-passive `.beads/` change (e.g. config.yaml) must still be
+    caught by the baseline reformat-detect -- the old hardcoded ':!.beads' pathspec
+    excluded the WHOLE `.beads/` directory, which would have made this invisible."""
+    repo = _init_repo(tmp_path)
+    fake_nox = _fake_nox_bin(tmp_path)
+    _commit_file(
+        repo, ".beads/config.yaml", "old: true\n", "trunk carries a beads config"
+    )
+    _commit_file(
+        repo,
+        "REFORMAT_BEADS_CONFIG",
+        "",
+        "trigger the fake .beads/config.yaml reformat",
+    )
+    _git(repo, "branch", "-f", "origin/trunk", "trunk")
+
+    _branch_from(repo, "trunk", "origin/land/lode-a")
+    _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
+
+    msg_dir = tmp_path / "msgs"
+    _write_msg(msg_dir, "lode-a", "Merge land/lode-a: A (lode-a)")
+    conflicts_dir = tmp_path / "conflicts"
+    conflicts_dir.mkdir()
+    accepted = _accepted(tmp_path, "lode-a")
+    landed = tmp_path / "landed"
+
+    result = _run(repo, accepted, msg_dir, conflicts_dir, landed, fake_nox=fake_nox)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "reformatted the bare base tree" in result.stderr
+    assert ".beads/config.yaml" in result.stderr
+    assert not (repo / "a.txt").exists()
+
+
+def test_a_passive_beads_export_reformat_is_excluded(tmp_path: Path) -> None:
+    """The canonical passive-export list (scripts/beads-passive-exports.txt) still
+    excludes `.beads/issues.jsonl` itself -- only a genuinely non-passive `.beads/`
+    change should now count as dirty, not the passive export churn lode-bns3 exists
+    to ignore."""
+    repo = _init_repo(tmp_path)
+    fake_nox = _fake_nox_bin(tmp_path)
+    _commit_file(
+        repo, ".beads/issues.jsonl", "old\n", "trunk carries the passive export"
+    )
+    _commit_file(
+        repo,
+        "REFORMAT_BEADS_ISSUES_JSONL",
+        "",
+        "trigger the fake .beads/issues.jsonl reformat",
+    )
+    _git(repo, "branch", "-f", "origin/trunk", "trunk")
+
+    _branch_from(repo, "trunk", "origin/land/lode-a")
+    _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
+
+    msg_dir = tmp_path / "msgs"
+    _write_msg(msg_dir, "lode-a", "Merge land/lode-a: A (lode-a)")
+    conflicts_dir = tmp_path / "conflicts"
+    conflicts_dir.mkdir()
+    accepted = _accepted(tmp_path, "lode-a")
+    landed = tmp_path / "landed"
+
+    result = _run(repo, accepted, msg_dir, conflicts_dir, landed, fake_nox=fake_nox)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "LANDED\tlode-a\n"
+    assert landed.read_text() == "lode-a\n"
 
 
 def test_an_unresolvable_base_ref_is_a_machine_fault(tmp_path: Path) -> None:
