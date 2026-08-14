@@ -14,8 +14,9 @@
   is here).
 
   HOW TO OVERRIDE IT: a consumer inlining this SVG must set `color` on the
-  `<svg>` element itself, via a CSS rule that matches it —
-  `.brand-mark { color: var(--paper); }`. Any author rule beats a
+  `<svg>` element itself, via a CSS rule that matches it — set it to the
+  paper custom property (its name is two hyphens followed by "paper") with
+  CSS `var()`. Any author rule beats a
   presentation attribute, so that works. Merely setting `color` on an
   ANCESTOR does NOT: `color` on the root is a specified value, and a
   specified value defeats inheritance. Removing the attribute would make

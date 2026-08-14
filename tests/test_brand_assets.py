@@ -22,7 +22,10 @@ reimplementation of stroke-coverage maths — itself unverified — to gate a
 """
 
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
+
+import pytest
 
 ASSETS = Path(__file__).resolve().parent.parent / "docs" / "assets"
 
@@ -36,6 +39,19 @@ def _shape_lines(svg: str) -> list[str]:
     body = svg[svg.index("<svg") :]
     shapes = re.findall(r"<(?:rect|path)\b.*?/>", body, re.DOTALL)
     return [" ".join(s.split()) for s in shapes]
+
+
+@pytest.mark.parametrize("svg_path", sorted(ASSETS.glob("*.svg")), ids=lambda p: p.name)
+def test_svg_is_strict_xml(svg_path: Path) -> None:
+    """Every docs/assets/*.svg must parse under a strict XML parser.
+
+    A standalone-opened SVG (MS Edge, etc.) and scripts/rasterize-mark.sh's
+    cairosvg/defusedxml both parse strictly -- unlike an SVG embedded via HTML,
+    which browsers parse laxly. A literal ``--`` inside an XML comment (XML 1.0
+    section 2.5) is the failure mode this gate exists to catch (lode-fhql.17);
+    it slipped through review because the lax embedded-HTML path never noticed.
+    """
+    ET.parse(svg_path)
 
 
 def test_lockup_carries_the_marks_geometry_verbatim() -> None:
