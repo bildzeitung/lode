@@ -147,7 +147,14 @@ GATE_MACHINE_FAULT = 2
 
 # A bare ``nox`` runs only the offline, keyless gates; ``eval`` (network + an API
 # key) and ``build`` (packaging, not a code gate) stay explicit, never a default.
-nox.options.sessions = ["fix", "tests", "shellcheck", "linkcheck", "docstringcheck", "docs"]
+nox.options.sessions = [
+    "fix",
+    "tests",
+    "shellcheck",
+    "linkcheck",
+    "docstringcheck",
+    "docs",
+]
 
 # The project's own venv, always at this fixed location relative to this file
 # (CLAUDE.md: "The venv lives at ./venv (repo root)").
@@ -364,7 +371,9 @@ def docs(session: nox.Session) -> None:
             + "\n".join(anchor_lines)
         )
     if result.returncode != 0:
-        session.error(f"mkdocs build failed (exit {result.returncode}) -- see log above")
+        session.error(
+            f"mkdocs build failed (exit {result.returncode}) -- see log above"
+        )
 
 
 @nox.session
