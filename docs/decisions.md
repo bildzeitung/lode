@@ -4994,7 +4994,43 @@ entries below from being rewritten to chase the current tree.)
   persuasive enough to survive a filing pass unchallenged, and the next reader who notices the
   collision will reach for the same wrong conclusion without this. Reopen only if a decision puts
   PyPI back in scope — which would also mean amending [release.md](release.md)'s Non-goals, not
-  quietly contradicting it.
+  quietly contradicting it. **Update (`lode-fhql.16`/`lode-w3wt`, 2026-08-14): superseded on the
+  packaging axis only** — see the entry immediately below. The no-PyPI-now position, the brand
+  staying `lode`, and the collision being inert *for publishing* all still hold exactly as stated
+  above; what changed is a decision to hedge the distribution name anyway, in case that no-PyPI
+  position is ever revisited.
+
+- **2026-08-14 — DECIDED (`lode-fhql.1`/`lode-fhql.16`/`lode-w3wt`, maintainer decision): hedge the
+  PyPI collision by renaming the distribution name to `lode-kb`, brand and CLI unchanged.**
+  Revisits the 2026-08-12 entry immediately above, which left `pyproject.toml` alone on the
+  reasoning that the collision is inert while lode never publishes to PyPI. **Evidence
+  (2026-08-13):** PyPI's `lode` is `kragniz/lode` v0.3.0 — `pip install lode` installs that
+  unrelated project, not this one; confirmed no `twine`/`pypa/gh-action-pypi-publish` anywhere in
+  `.github/`, `noxfile.py`, or `scripts/`, so the no-PyPI-now position from
+  [release.md](release.md)'s **Non-goals** (owner-confirmed 2026-07-07) is reaffirmed, not
+  reversed. **Decision:** keep the `lode` brand, repo name, CLI command, and import package exactly
+  as they are; change only `pyproject.toml`'s `[project].name` to `lode-kb` (the distribution /
+  packaging-metadata name — what `pip install`, PyPI, and `importlib.metadata.version()` key off).
+  **Alternates checked, all unregistered on PyPI as of 2026-08-13:** `lode-kb`, `lodekb`,
+  `lode-notes`, `lode-cli`, `getlode`; `lode-kb` was picked as the clearest, most literal hedge
+  ("lode knowledge base"). **Caveat:** renaming `pyproject.toml` reserves nothing on PyPI —
+  namespaces are only claimed by actually publishing, and placeholder-squatting a name nobody
+  intends to fill violates PyPI policy, so this is *purely* a local label change that keeps a
+  future real publish from being blocked by the collision, not a registration act. **Deliberately
+  skipped:** the full PEP 541 (PyPI name-dispute policy)/USPTO trademark/domain-availability audit
+  that `lode-fhql.1` was originally scoped to run — moot while lode is inert on every registry that
+  audit would matter for; `lode-fhql.1` stays demoted to P3 informational, its trademark/search-
+  collision findings feeding the brand brief only. **What changed in the tree:**
+  `pyproject.toml`'s `name`, `src/lode/__init__.py`'s `importlib.metadata.version()` lookup key,
+  `requirements.lock`'s self-reference annotations (regenerated via
+  `scripts/compile-lock.sh`, not hand-edited — `docs/stack.md#dependency-locking-lode-g2741`), and
+  the `pip install lode-*.whl` wheel-glob examples in `README.md`/`docs/index.md`/their gate test
+  (setuptools normalizes `-` to `_` in wheel filenames, so the glob becomes `lode_kb-*.whl`).
+  **Rebuild note:** first attempted as `lode-fhql.16`, bounced by `/land` because that branch
+  renamed the distribution without regenerating `requirements.lock`, leaving `nox -s lock_currency`
+  red on the merged tree; rebuilt as `lode-w3wt` with the lock regenerated as part of the same
+  change. No external write performed (no PyPI, registrar, or USPTO action) — reserving the name
+  happens only if and when a real publish decision is made.
 
 - **2026-08-12 — DECIDED (`lode-fhql.8`, maintainer decision): the docs site publishes a curated
   subset, and renders Mermaid at BUILD TIME.** Two constraints settled before the generator was

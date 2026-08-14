@@ -31,7 +31,7 @@ see [`docs/release.md`](docs/release.md#non-goals). Two install paths actually w
 [GitHub releases page](https://github.com/bildzeitung/lode/releases/latest) and install it directly:
 
 ```bash
-pip install lode-*.whl   # the wheel attached to the release you downloaded
+pip install lode_kb-*.whl   # the wheel attached to the release you downloaded
 ```
 
 **From source (for contributing or tracking `trunk`).** See
