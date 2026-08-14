@@ -68,3 +68,17 @@ plugins:
 markdown_extensions:
   - toc:
       permalink: true
+      # Match GitHub's own heading-anchor algorithm (lode-fhql.21) -- the
+      # `toc` extension's built-in slugify collapses an em-dash-between-spaces
+      # run to a SINGLE hyphen, but GitHub's produces a DOUBLE hyphen (the
+      # dash itself is stripped as invalid, leaving two adjacent spaces that
+      # each become their own hyphen). Every intra-doc anchor in docs/ is
+      # written against GitHub's algorithm (docs render there, not just
+      # through this site), and scripts/check_links.py's `github_slug` gate
+      # (tests/test_check_links.py) already enforces it repo-wide -- so
+      # mkdocs' own build must slug headings the same way, not diverge from
+      # the anchors the docs use. src/lode/docs_slug.py holds this side's
+      # implementation -- a deliberate copy of the gate's algorithm, not a
+      # shared import; that module's docstring owns the why, and
+      # tests/test_check_links.py keeps the two copies from drifting.
+      slugify: !!python/name:lode.docs_slug.github_slugify

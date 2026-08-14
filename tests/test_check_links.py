@@ -15,6 +15,8 @@ import pytest
 from _gitrepo import _git
 from conftest import load_module_from_path
 
+from lode import docs_slug
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # scripts/ isn't an installed package, so load by file path via the shared
@@ -82,6 +84,35 @@ class TestGithubSlug:
 
     def test_link_text_extracted_from_heading(self):
         assert github_slug("See [the doc](other.md) for more") == "see-the-doc-for-more"
+
+
+class TestDocsSlugCopyAgrees:
+    """``src/lode/docs_slug.py`` is a deliberate copy of ``github_slug`` above,
+    installed as ``mkdocs.yml``'s ``toc.slugify`` so the built site's heading
+    ``id``\\ s are the anchors this gate resolves against (lode-fhql.21; that
+    module's docstring owns the why-a-copy). A divergence would republish the
+    site with anchors the gate believes are fine -- the exact silent breakage
+    lode-fhql.21 was filed for -- so it is asserted here, in the module that
+    already owns the authority implementation."""
+
+    def test_agrees_on_every_heading_in_docs(self):
+        headings = [
+            heading
+            for path in sorted((REPO_ROOT / "docs").rglob("*.md"))
+            for heading in check_links._headings(path.read_text(encoding="utf-8"))
+        ]
+        assert headings, (
+            "no headings found under docs/ -- the corpus scan is not running"
+        )
+        for heading in headings:
+            assert docs_slug.github_slug(heading) == github_slug(heading)
+
+    def test_agrees_on_an_empty_link_text(self):
+        """The one shape the docs/ corpus above cannot cover: no heading in
+        docs/ has an empty link text, so only the `[^\\]]*`-vs-`[^\\]]+`
+        spelling of the two copies' link-text regex decides it."""
+        heading = "See [](other.md) for more"
+        assert docs_slug.github_slug(heading) == github_slug(heading)
 
 
 class TestCheck:
