@@ -52,6 +52,7 @@ from typer.testing import CliRunner
 from lode import __version__, cli, config, retrieval
 from lode.answer import Claim, Support
 from lode.auth import AuthError
+from lode.branding import TAGLINE
 from lode.cited_answer import CitedAnswer
 from lode.cli import app
 from lode.config import Settings, load_settings
@@ -96,6 +97,18 @@ def test_version_command_prints_version() -> None:
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
     assert __version__ in result.stdout
+
+
+def test_version_command_prints_the_wordmark(monkeypatch: pytest.MonkeyPatch) -> None:
+    # lode-fhql.5: `lode version` shows the wordmark + tagline above the bare
+    # version string. Typer's CliRunner captures stdout through an in-memory
+    # stream whose encoding attribute reflects the ASCII fallback path here
+    # (see lode.branding.supports_unicode's "unknown encoding -> ASCII"
+    # default) -- assert on TAGLINE, which is identical in both forms,
+    # rather than pinning one glyph set to this runner's capture internals.
+    result = runner.invoke(app, ["version"])
+    assert result.exit_code == 0
+    assert TAGLINE in result.stdout
 
 
 def test_help_lists_usage() -> None:
