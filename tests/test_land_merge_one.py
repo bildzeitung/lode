@@ -36,7 +36,7 @@ import time
 from pathlib import Path
 
 import pytest
-from _gitrepo import _git
+from _gitrepo import _branch_from, _commit_file, _git
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-merge-one.sh"
@@ -85,19 +85,6 @@ def _add_worktree(repo: Path, rel_path: str, branch: str) -> Path:
     wt.parent.mkdir(parents=True, exist_ok=True)
     _git(repo, "worktree", "add", "-q", str(wt), "-b", branch, "trunk")
     return wt
-
-
-def _branch_from(repo: Path, base: str, name: str) -> None:
-    _git(repo, "checkout", "-q", base)
-    _git(repo, "checkout", "-q", "-b", name)
-
-
-def _commit_file(repo: Path, path: str, content: str, message: str) -> None:
-    full = repo / path
-    full.parent.mkdir(parents=True, exist_ok=True)
-    full.write_text(content)
-    _git(repo, "add", path)
-    _git(repo, "commit", "-q", "-m", message)
 
 
 def _write_msg(msg_dir: Path, id_: str, message: str) -> None:

@@ -66,7 +66,11 @@ MERMAID_IMAGE = "minlag/mermaid-cli:10.9.1"
 # docs/stack.md "Published / excluded page sets" (lode-fhql.8, current as of
 # 2026-08-13). PUBLISHED is authoritative; docs/how-to/ is published as a
 # DIRECTORY (every file in it, not a frozen list) -- see that section.
+# "index.md" is the landing page (lode-fhql.10, postdates the 2026-08-12
+# PUBLISHED call recorded in stack.md) -- staging it here is what lets the
+# real landing page ship instead of build()'s placeholder fallback below.
 PUBLISHED_TOP_LEVEL = [
+    "index.md",
     "design.md",
     "retrieval.md",
     "storage.md",
@@ -74,6 +78,13 @@ PUBLISHED_TOP_LEVEL = [
     "brand.md",
 ]
 PUBLISHED_DIRS = ["how-to"]
+
+# Static assets the theme (mkdocs.yml: theme.logo/favicon, docs/overrides/
+# main.html's OG tags) references by a docs_dir-relative path -- these are
+# not markdown and carry no mermaid/link processing, just a verbatim copy
+# into the staged tree so mkdocs can find them (lode-fhql.9/.10 mkdocs.yml
+# merge, 2026-08-14).
+ASSETS_DIR = "assets"
 
 GITHUB_BASE = "https://github.com/bildzeitung/lode/blob/trunk"
 
@@ -270,6 +281,14 @@ def build(repo_root: Path, out_dir: Path) -> None:
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
     assets_dir = out_dir / "assets" / "mermaid"
+
+    # Static assets (theme.logo/favicon, the OG-card image) -- a verbatim
+    # copy, no mermaid/link processing. Copied before any mermaid render so
+    # assets_dir.mkdir(parents=True) below never races a directory this
+    # copytree already created.
+    src_assets_dir = docs_dir / ASSETS_DIR
+    if src_assets_dir.is_dir():
+        shutil.copytree(src_assets_dir, out_dir / ASSETS_DIR, dirs_exist_ok=True)
 
     for rel in sorted(published):
         src = docs_dir / rel

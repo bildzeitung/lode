@@ -32,21 +32,31 @@
 # and reads clean ONLY because those are ignored. Un-ignore one and every
 # worktree reads dirty and this sweep silently reclaims NOTHING.
 #
-# Usage: scripts/worktree-gc-sweep.sh [--base-ref <ref>]
+# Usage: scripts/worktree-gc-sweep.sh
 # Exit codes: 0 = swept (summary on stdout), 2 = machine fault / wrong checkout.
 #
-# --base-ref GOVERNS BACKSTOP 3 ONLY -- the `git branch --merged` at the bottom
-# of this file. It does NOT reach the worktree sweep: that decision belongs to
-# scripts/worktree-gc-classify.sh, which takes no base ref and hardcodes `trunk`
-# (deliberately -- it is a character-for-character port of the condition this
-# loop used when it lived in a markdown fence). Passing anything but `trunk`
-# therefore judges bare builder refs against one branch while every `worktree
-# remove --force` still judges against `trunk`. lode has exactly one default
-# branch, so the only correct value is the default; the flag survives the port
-# from harness-export (whose call site passes `--base-ref main`) rather than
-# because lode has a second base to sweep against. Whether to drop it or push it
-# through to the classifier is lode-s9xe.5's open question for the call-site
-# ticket -- see that follow-up before wiring an argument here.
+# NO --base-ref FLAG (lode-0867). An earlier revision accepted one, but it
+# governed backstop 3's `git branch --merged` ONLY -- it never reached the
+# worktree sweep (that decision belongs to scripts/worktree-gc-classify.sh,
+# which takes no base ref and hardcodes `trunk`, a character-for-character port
+# of the condition this loop used when it lived in a markdown fence) or
+# backstop 2 (which keys off remote existence, no base ref at all). Passing
+# anything but `trunk` would therefore have judged bare builder refs against
+# one branch while every `worktree remove --force` still judged against
+# `trunk` -- two different notions of "captured" inside one destructive pass.
+# lode has exactly one default branch, no non-test caller ever passed a
+# non-default value, and the flag was never anything but a carry-over from
+# harness-export (whose call site passes `--base-ref main`); it was dropped
+# rather than threaded through to the classifier (option (a) of lode-0867's
+# decision). `trunk` is now a literal at the one site that ever consumed it.
+#
+# That unifies the BASE REF, not the whole predicate: the classifier's capture
+# test is the widened lode-amif one (ancestor of `trunk` OR of the branch's own
+# `origin/<branch>`), while backstop 3 below is still the narrower `git branch
+# --merged trunk` alone. A bare builder ref captured only on `origin/<branch>`
+# is therefore reclaimed as a worktree but kept as a ref. That divergence
+# predates this change and is deliberately left alone here -- widening a
+# `branch -D` is its own decision, tracked as lode-2132.
 #
 # Not sourced from scripts/gate-lib.sh, though the "GATE COULD NOT RUN" banner
 # below is that library's: same abstention as scripts/assert-main-checkout.sh
@@ -57,15 +67,7 @@ set -u
 TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || TOP=""
 [ -n "$TOP" ] || { echo "GATE COULD NOT RUN: not inside a git repository" >&2; exit 2; }
 
-BASE_REF_NAME="trunk"
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --base-ref) shift; [ "$#" -gt 0 ] || { echo "GATE COULD NOT RUN: --base-ref needs a value" >&2; exit 2; }
-                BASE_REF_NAME="$1" ;;
-    *) echo "GATE COULD NOT RUN: unknown argument '$1'" >&2; exit 2 ;;
-  esac
-  shift
-done
+[ "$#" -eq 0 ] || { echo "GATE COULD NOT RUN: unknown argument '$1' (this script takes none)" >&2; exit 2; }
 
 # Every destructive call below is ref- or path-addressed, but the sweep as a
 # whole only makes sense from the main checkout -- and running it from a
@@ -201,10 +203,12 @@ fi
 # as backstop 2 but the OTHER namespace, invisible to both nets above, accumulating without
 # bound (17 confirmed orphans on one machine). This namespace needs a DIFFERENT guard: a
 # builder branch is never pushed to origin (lode-yrtu), so "remote gone" is meaningless here and
-# would delete a LIVE, still-building branch. The correct guard is the same PREDICATE the
-# worktree sweep applies — captured elsewhere — reached by a branch-NAME lookup, because a bare
-# ref has no worktree and therefore no HEAD line to test; plus not currently checked out anywhere.
-MERGED=$(git branch --merged "$BASE_REF_NAME" --format='%(refname:short)')
+# would delete a LIVE, still-building branch. The correct guard is the same NOTION the worktree
+# sweep applies — captured elsewhere — reached by a branch-NAME lookup, because a bare ref has no
+# worktree and therefore no HEAD line to test; plus not currently checked out anywhere. Same base
+# ref (`trunk`), but a NARROWER predicate than the classifier's: no `origin/<branch>` arm here —
+# see the header. Deliberate; this arm ends in `branch -D`.
+MERGED=$(git branch --merged trunk --format='%(refname:short)')
 CHECKED_OUT=$(git worktree list --porcelain | awk '/^branch refs\/heads\//{print substr($0,19)}')
 B3_DELETED=0; B3_FAILED=0
 while read -r BR; do

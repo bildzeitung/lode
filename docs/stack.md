@@ -1042,3 +1042,123 @@ Material's Markdown dialect (`pymdownx` extensions: admonitions, tabs, etc.) is 
 in `mkdocs.yml`; none of the currently-published pages use GitHub-flavored-Markdown-incompatible
 syntax today, and none should be added as part of adopting the site without checking it renders
 sanely in GitHub's plain markdown view first.
+
+### Derived reference pages (decided, lode-fhql.15)
+
+`docs/keybindings.md` and `docs/configuration.md` are EXCLUDED above because they're addressed to
+whoever *builds* lode next, not whoever *uses* it — but each holds genuinely user-facing content
+trapped inside that maintainer prose: `keybindings.md`'s "Current keymap" tables (which keys the TUI
+responds to, full stop), and `configuration.md`'s `runtime`-kind rows (a setting the user/operator
+can change while running, as opposed to a `tune`/`build` knob nobody outside the codebase acts on).
+`docs/tui.md` was assessed against the same question and found to hold **none** — it is TCSS layout
+rules, footer-width measurement mechanics, and TUI test-settling internals, addressed entirely to
+whoever writes the next screen; no derived page is generated from it.
+
+**Generated, not hand-copied, so the two copies cannot silently diverge.**
+`scripts/generate_derived_docs.py` parses the source doc's own markdown tables (the "Current keymap"
+tables in `keybindings.md`; every `| Knob | Kind | Default | Notes |` table in `configuration.md`,
+filtered to `Kind == runtime`) and writes `docs/keymap.md` / `docs/settings.md` from them — no field
+is retyped by hand. `scripts/generate_derived_docs.py --check` regenerates to memory and diffs
+against the committed files, exiting 1 (naming the stale file) on any drift;
+`tests/test_generate_derived_docs.py` runs that check as part of `nox -s tests`, so a source table
+that changes without regenerating the derived page fails the gate rather than shipping a page that
+silently disagrees with its own source. A source doc reshaped past what the generator can read (a
+renamed `## Current keymap`, a renamed/reordered table column, a `Kind` column that no longer says
+`runtime`) **raises** rather than emitting a thinner page: `--check` would otherwise report only "stale, regenerate", and the
+truncated page would get committed. The generator also strips maintainer-only asides — a
+parenthetical citing a bd ticket id, `show=False` footer-visibility trivia, or a source-file path
+(`screens/browse.py`) — from cells *and* headings alike, so the two pages read as documentation for
+someone using lode, not a verbatim dump of `keybindings.md`'s development history or
+`configuration.md`'s implementation notes.
+
+`docs/keymap.md` links back to `keybindings.md`'s GitHub URL for whoever actually needs to add or
+rebind a key, and points out that the in-app `Ctrl+_`/`?` help overlay (not the page) is the
+definitive *live* keymap — the derived page is a browsing convenience, not a promise that it can
+never lag a mid-session TUI change the way the always-current overlay cannot. Its per-screen section
+titles come from a `SCREEN_LABELS` map in the generator (reader-facing names, not `Screen` class
+names) — **adding a screen to `keybindings.md`'s Screen-level table means adding its label there
+too**, or the page falls back to a de-camel-cased class name rather than failing. `docs/settings.md`
+emits an explicit `<a id="...">` above each section heading, slugged exactly the way GitHub slugs
+that heading (`scripts/check_links.py::github_slug`, the algorithm the repo's link gate already
+enforces), so one `#anchor` link resolves both on GitHub — via its own auto-generated heading
+anchor — and on the site, whose renderer slugs punctuation differently.
+
+**Publish-scope wiring is a follow-up, not this ticket's job — it is `lode-gecm`,** blocked on both
+`lode-fhql.9` and `lode-fhql.15`. So `keymap.md` and `settings.md` land in `docs/` **unpublished**:
+the live publish gate today is `scripts/build_docs_site.py`'s `PUBLISHED_TOP_LEVEL`/`PUBLISHED_DIRS`
+staging list plus `mkdocs.yml`'s `nav` (`lode-fhql.9`/`.10`, next section), and neither lists them.
+`lode-fhql.9` is being built concurrently in its own worktree and may reshape that gate, so wiring the
+two pages in from here would edit a sibling's in-flight file on a mechanism that may not survive;
+`lode-gecm` does it once, against whatever gate `trunk` actually carries at that point. The
+"`lode-fhql.15`'s derived pages take precedence once they exist"
+link-rewrite rule above already anticipates the same moment: once the pages are published, that rule
+resolves `keybindings.md`/`configuration.md` citations elsewhere in the published set to these two
+pages instead of falling through to GitHub.
+
+### mkdocs.yml scaffold and the landing page (lode-fhql.10)
+
+`mkdocs.yml` (repo root) and `docs/index.md` (the site's landing page) exist as of `lode-fhql.10`.
+Neither ticket that named the generator or the CI workflow (`lode-fhql.8`/`.9`) owned creating
+them, and the landing page's own acceptance criteria ("the site's index renders...") could not be
+satisfied without a minimal, working scaffold to render it against — so `lode-fhql.10` created
+both, kept deliberately small:
+
+- Keeping the site to the PUBLISHED set above takes **two separate settings**, and an explicit
+  `nav` alone is **not** one of them. MkDocs renders every markdown file under `docs_dir` whether
+  or not `nav` lists it, so `nav` controls only the *menu*: with `nav` alone, `decisions.md` and
+  `agents-workflow.md` still build and are publicly reachable by URL, merely unlisted (verified by
+  running `mkdocs build` against mkdocs 1.6.1 / mkdocs-material 9.7.7 — it reports them as "pages
+  [that] exist in the docs directory, but are not included in the nav configuration", i.e. built).
+  What actually decides publication is **`exclude_docs`**, written as an **allowlist** (exclude
+  `*`, re-include the published pages) so it matches this section's authoritative direction:
+  PUBLISHED is the closed enumeration, everything else is unpublished by default, and a maintainer
+  doc added later stays off the site with nobody remembering to exclude it. `how-to/` is
+  re-included as `how-to/*.md` — a directory, not a frozen file list, per the PUBLISHED entry
+  above. `nav` is then hand-restricted to that same set, for order and labels.
+- `docs/overrides/main.html` (a `theme.custom_dir` override) adds the OG/social `<meta>` tags,
+  pointing `og:image`/`twitter:image` at `assets/og-card.png` — the path `lode-fhql.6` (favicon +
+  OG card, open at the time `.10` built) will commit its 1200x630 asset to, matching the existing
+  `docs/assets/` naming convention (`mark.svg`, `mark-16.png`, `lockup.svg`). The tag needs no
+  change once `.6` lands the file.
+- Wiring this scaffold into GitHub Actions/Pages — including the Mermaid build-time pre-render step
+  and the link-rewrite rule mandated above — is still entirely `lode-fhql.9`'s scope.
+
+**SUPERSEDED (2026-08-14, maintainer decision resolving the `lode-fhql.9`/`.10` `mkdocs.yml`
+merge conflict).** The two-separate-settings `exclude_docs` mechanism described in the bullet above
+is **gone from `mkdocs.yml`**. `lode-fhql.9`'s staged-build architecture — `docs_dir` pointed at
+`scripts/build_docs_site.py`'s staged output (`.docs-site-src`), never at `docs/` directly — makes
+publication total by construction: nothing unpublished can ship regardless of `nav`, so a second,
+separately-maintained `exclude_docs` allowlist is redundant and was dropped. `.10`'s other additions
+(`nav`, `theme.custom_dir`/`logo`/`favicon`/`features`, `edit_uri`, `site_description`,
+`markdown_extensions`) all still apply, layered on top of the staged `docs_dir`.
+`scripts/build_docs_site.py`'s `PUBLISHED_TOP_LEVEL`/`PUBLISHED_DIRS` is now the sole publish-scope
+enumeration; it also stages `docs/assets/` verbatim (theme logo/favicon/OG-card) and `index.md` (the
+landing page), which `.10`'s original scaffold did not need to stage since it built straight from
+`docs/`. The paragraph below (measured against a real `mkdocs build`) still describes the `.10`
+scaffold as it stood before this merge; read it with that in mind.
+
+**Measured against a real `mkdocs build` (2026-08-13, `lode-fhql.10`'s technical review).** The
+scaffold was validated by actually running mkdocs 1.6.1 / mkdocs-material 9.7.7 against it — not
+just reviewed by eye — which is what turned up the `nav`-does-not-exclude behaviour above. Two
+results `lode-fhql.9` should plan around:
+
+- **`mkdocs build --strict` does not pass yet, and that is expected.** Four warnings remain, all of
+  the same kind: a published page links to a file **outside `docs/`** (`brand.md` → `../README.md`;
+  `how-to/config-change.md` and `how-to/jira-setup.md` → `../../src/lode/*.py`). These are precisely
+  what the one rewrite rule above exists to fix, so `--strict` becomes viable once `lode-fhql.9`
+  implements it — the rule must therefore cover links leaving `docs/` entirely, not only links to
+  unpublished pages *inside* `docs/`. Until then a Pages workflow must either omit `--strict` or
+  land the rewrite rule in the same change.
+- **`exclude_docs` gives the rewrite rule a free enumeration.** With the allowlist in place, MkDocs
+  logs every `link to 'X' which is excluded from the built site`, which is exactly the set of links
+  the rule has to rewrite to GitHub URLs.
+
+**Landing page / README sync (lode-fhql.10).** `README.md` is the **canonical** pitch — every
+GitHub visitor sees it first, with or without a deployed docs site. `docs/index.md` is a **derived
+restatement**, not a second, independently-maintained pitch: its positioning line, name-story
+quote, two-line demo, and "The idea in one breath" section are reused **verbatim** from
+`README.md`, never rewritten into separate marketing copy (an instruction already given in
+`lode-fhql.10`'s own ticket text, and repeated here so it survives past the ticket). Whoever edits
+any of those sections in `README.md` updates `docs/index.md`'s copy in the same commit, and vice
+versa — there is no automated sync; this paragraph, plus the HTML-comment note at the top of
+`docs/index.md` pointing back here, is the only thing keeping the two from silently diverging.

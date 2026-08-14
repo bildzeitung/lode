@@ -230,19 +230,26 @@ def fix(session: nox.Session) -> None:
 
 @nox.session
 def tests(session: nox.Session) -> None:
-    """Run the FULL test suite (pytest, no marker filter) — the merge/landing gate.
+    """Run the FULL test suite (pytest) — the merge/landing gate.
 
     Every test runs here, including ones tagged ``@pytest.mark.slow`` — this is
     the suite ``/land`` re-gates with, so nothing slow is ever skipped before
     trunk (lode-pql). For a fast code-time inner loop, see ``nox -s unit``.
 
     Runs under ``pytest-xdist`` (``-n`` from ``LODE_TEST_WORKERS``, default
-    ``8``, lode-bv6y — see the module docstring) — no marker filter changes,
-    no test skipped, just distributed across workers.
+    ``8``, lode-bv6y — see the module docstring), split into two invocations
+    that exhaustively partition the suite on ``@pytest.mark.serial`` (lode-887o,
+    registered in ``pyproject.toml``): everything else in the parallel pool,
+    then the serial tests with no xdist workers at all. A ``serial`` test
+    asserts a wall-clock budget that sibling workers' scheduler noise would
+    make flaky. No test is skipped and none runs twice — the partition is the
+    only thing the marker changes.
 
     Resolves ``pytest`` through ``_venv_tool`` (lode-0yfn) — see its docstring.
     """
-    session.run(_venv_tool(session, "pytest"), "-n", _xdist_workers())
+    pytest = _venv_tool(session, "pytest")
+    session.run(pytest, "-m", "not serial", "-n", _xdist_workers())
+    session.run(pytest, "-m", "serial", "-n", "0")
 
 
 @nox.session

@@ -177,13 +177,32 @@ CONSUMERS = _consumers()
 NO_ADVISORY_CONSUMERS = [p for p in CONSUMERS if "--no-advisory" in p.read_text()]
 
 
-def _run_script(path: Path, *args: str) -> subprocess.CompletedProcess:
+def _run_script(path: Path, cwd: Path, *args: str) -> subprocess.CompletedProcess:
     """Execute directly (not `bash <path>`) so each script's own shebang flags
     are honoured -- validate-mermaid.sh's `#!/bin/bash -e` is dropped entirely
     under `bash <path>`, which would make this test run a shell that is not
-    the one the script actually ships with."""
+    the one the script actually ships with.
+
+    `cwd` is REQUIRED, and every caller passes `tmp_path` -- a directory that
+    is not inside any git repository. It used to be omitted, which inherited
+    pytest's cwd: the live checkout. That is only safe while no consumer
+    reaches a cwd-resolved mutating command with gate-lib.sh missing, and
+    these tests exist precisely to run consumers in that state -- with the
+    fail-closed guard deliberately sabotaged, `gate_could_not_run` is
+    undefined, every `... || gate_could_not_run ...` merely yields 127, and
+    (there is no `set -e`) execution continues to whatever comes next.
+    scripts/land-replay.sh was the first consumer whose "next" is an
+    unconditional `git reset --hard origin/trunk`, and it duly reset the
+    developer's own worktree -- branch ref included -- on every `nox -s
+    tests` run. OBSERVED three times, 2026-08-14. Running in a
+    non-repository makes any such command fail harmlessly instead."""
     return subprocess.run(
-        [str(path), *args], capture_output=True, text=True, timeout=30, check=False
+        [str(path), *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
 
 
@@ -607,7 +626,7 @@ def test_every_consumer_exits_2_when_gate_lib_is_missing(script: Path, tmp_path:
     copied = tmp_path / script.name
     shutil.copy2(script, copied)
 
-    result = _run_script(copied)
+    result = _run_script(copied, tmp_path)
 
     assert result.returncode == 2, result.stdout + result.stderr
     assert result.stdout == ""
@@ -635,7 +654,7 @@ def test_missing_gate_lib_sweep_is_not_vacuous(script: Path, tmp_path: Path):
     copied.write_text(sabotaged)
     copied.chmod(0o755)
 
-    result = _run_script(copied)
+    result = _run_script(copied, tmp_path)
 
     assert result.returncode != 2, (
         f"{script.name} still exits 2 with the guard removed, so the sweep "
@@ -689,7 +708,7 @@ def test_stripping_the_no_advisory_sentinel_leaks_the_consumers_own_argv(
     shutil.copy2(GATE_LIB, tmp_path / "gate-lib.sh")
 
     marker = "leak-marker-xyz-123"
-    result = _run_script(copied, marker)
+    result = _run_script(copied, tmp_path, marker)
 
     assert result.returncode == 2, result.stdout + result.stderr
     assert marker in result.stderr, (

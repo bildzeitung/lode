@@ -29,7 +29,8 @@ github_slug = check_links.github_slug
 #: Split so this module's own source never spells out a bare, matchable
 #: `docs/<path>.md` (anchored or not, lode-6lvu) reference -- the real-repo
 #: self-test below (``test_real_repo_passes_the_gate``) walks tests/ as a
-#: tracked file outside SCAN_DIRS, so a contiguous literal here would make
+#: tracked file outside ``BARE_CITATION_EXCLUDE_DIRS``, so a contiguous
+#: literal here would make
 #: this file cite itself, and its fabricated fixture paths would fail the
 #: gate. Used throughout this module's `docs/`-shaped fixture paths, not just
 #: the ones with an explicit anchor -- since lode-6lvu, an anchor-LESS bare
@@ -188,12 +189,12 @@ class TestCheck:
 
         assert check(tmp_path) == []
 
-    def test_files_outside_scan_dirs_are_valid_link_targets(self, tmp_path):
-        """A markdown file outside SCAN_DIRS is itself a valid link *target*
-        for a link written inside a SCAN_DIRS document (it also gets the
-        full markdown-link walk in its own right since lode-act5 -- see
-        TestBareDocAnchorRefs below for the bare docs/-anchor citation check
-        it gets on top of that)."""
+    def test_files_outside_docs_and_dot_claude_are_valid_link_targets(self, tmp_path):
+        """A markdown file outside ``docs/``/``.claude/`` is itself a valid
+        link *target* for a link written inside a ``docs/`` document (it also
+        gets the full markdown-link walk in its own right since lode-act5 --
+        see TestBareDocAnchorRefs below for the bare docs/-anchor citation
+        check it gets on top of that)."""
         _write(tmp_path, f"{_DOCS}/a.md", "[readme](../README.md)\n")
         _write(tmp_path, "README.md", "# Readme\n")
         _git_init(tmp_path)
@@ -213,10 +214,10 @@ def test_gate_scans_both_docs_and_dot_claude(tmp_path, scan_dir):
 
 class TestScanScopeWidenedRepoWide:
     """lode-act5: the full bracketed-link walk is no longer bounded to
-    SCAN_DIRS -- it now covers every tracked ``*.md`` file, closing the gap
-    where a bracketed relative link written in a top-level ``README.md`` (or
-    any other markdown file outside ``docs/``/``.claude/``) was never
-    resolved at all: not by the full walk (file outside SCAN_DIRS) and not
+    ``docs/``/``.claude/`` -- it now covers every tracked ``*.md`` file,
+    closing the gap where a bracketed relative link written in a top-level
+    ``README.md`` (or any other markdown file outside those two directories)
+    was never resolved at all: not by the full walk (file out of scope) and not
     by the bare-citation pass (a real ``[text](target)`` link isn't a bare
     root-relative doc-page text reference unless its target happens to start
     with ``docs/``)."""
@@ -260,7 +261,8 @@ class TestScanScopeWidenedRepoWide:
 
     def test_link_caught_by_both_passes_is_reported_once(self, tmp_path):
         """A bracketed link into a `docs/` target, written in a markdown file
-        outside SCAN_DIRS, matches BOTH the widened bracket walk and the
+        outside ``BARE_CITATION_EXCLUDE_DIRS``, matches BOTH the widened
+        bracket walk and the
         bare-citation regex. `check` de-duplicates so one real break is
         reported once, not twice (which would also double the summary
         count)."""
@@ -275,7 +277,8 @@ class TestScanScopeWidenedRepoWide:
 
 class TestBareDocAnchorRefs:
     """lode-v10i: a bare-text `docs/<path>.md#<anchor>` reference -- no
-    markdown brackets -- cited from any tracked file OUTSIDE SCAN_DIRS (a
+    markdown brackets -- cited from any tracked file OUTSIDE
+    ``BARE_CITATION_EXCLUDE_DIRS`` (a
     .github/workflows/*.yml comment, a scripts/*.sh comment, ...) must also
     be gated. This is the exact shape that was silently ungated before this
     ticket: the anchor is referenced exclusively from files check_links.py
@@ -408,18 +411,20 @@ class TestBareDocAnchorRefs:
 
         assert check(tmp_path) == []
 
-    def test_scan_dirs_files_are_excluded_from_the_bare_pass(self, tmp_path):
-        """A SCAN_DIRS file is never claimed by the bare pass (a markdown file
-        OUTSIDE SCAN_DIRS is claimed by both since lode-act5 -- see
-        TestScanScopeWidenedRepoWide). Asserted on the pass boundary itself
-        rather than on `check() == []`, which would hold
+    def test_excluded_dir_files_are_excluded_from_the_bare_pass(self, tmp_path):
+        """A file under ``BARE_CITATION_EXCLUDE_DIRS`` is never claimed by the
+        bare pass (a markdown file OUTSIDE it is claimed by both since
+        lode-act5 -- see TestScanScopeWidenedRepoWide). Asserted on the pass
+        boundary itself rather than on `check() == []`, which would hold
         under any implementation (a plain-prose mention matches no `_LINK_RE`
         either) and so could not detect double-scanning."""
         _write(tmp_path, f"{_DOCS}/a.md", f"# A\n\nSee {_DOCS}/a.md#no-such-anchor.\n")
         _write(tmp_path, "README.md", "# R\n")
         _git_init(tmp_path)
 
-        walked = check_links._tracked_other_files(tmp_path)
+        walked = check_links._tracked_other_files(
+            tmp_path, check_links._tracked_paths(tmp_path)
+        )
 
         assert tmp_path / f"{_DOCS}/a.md" not in walked
         assert tmp_path / "README.md" in walked
@@ -440,10 +445,11 @@ class TestBareDocAnchorRefs:
 
         assert check(tmp_path) == []
 
-    def test_anchor_inside_a_fenced_block_in_a_non_scan_dir_markdown_is_example(
+    def test_anchor_inside_a_fenced_block_in_a_non_excluded_markdown_is_example(
         self, tmp_path
     ):
-        """README.md lives outside SCAN_DIRS, so the bare pass walks it -- but
+        """README.md lives outside ``BARE_CITATION_EXCLUDE_DIRS``, so the bare
+        pass walks it -- but
         an anchor inside a ``` fence there is an example, not a citation. The
         identical text OUTSIDE the fence still fails, which is what keeps this
         test from passing vacuously."""

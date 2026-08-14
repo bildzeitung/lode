@@ -4994,7 +4994,43 @@ entries below from being rewritten to chase the current tree.)
   persuasive enough to survive a filing pass unchallenged, and the next reader who notices the
   collision will reach for the same wrong conclusion without this. Reopen only if a decision puts
   PyPI back in scope — which would also mean amending [release.md](release.md)'s Non-goals, not
-  quietly contradicting it.
+  quietly contradicting it. **Update (`lode-fhql.16`/`lode-w3wt`, 2026-08-14): superseded on the
+  packaging axis only** — see the entry immediately below. The no-PyPI-now position, the brand
+  staying `lode`, and the collision being inert *for publishing* all still hold exactly as stated
+  above; what changed is a decision to hedge the distribution name anyway, in case that no-PyPI
+  position is ever revisited.
+
+- **2026-08-14 — DECIDED (`lode-fhql.1`/`lode-fhql.16`/`lode-w3wt`, maintainer decision): hedge the
+  PyPI collision by renaming the distribution name to `lode-kb`, brand and CLI unchanged.**
+  Revisits the 2026-08-12 entry immediately above, which left `pyproject.toml` alone on the
+  reasoning that the collision is inert while lode never publishes to PyPI. **Evidence
+  (2026-08-13):** PyPI's `lode` is `kragniz/lode` v0.3.0 — `pip install lode` installs that
+  unrelated project, not this one; confirmed no `twine`/`pypa/gh-action-pypi-publish` anywhere in
+  `.github/`, `noxfile.py`, or `scripts/`, so the no-PyPI-now position from
+  [release.md](release.md)'s **Non-goals** (owner-confirmed 2026-07-07) is reaffirmed, not
+  reversed. **Decision:** keep the `lode` brand, repo name, CLI command, and import package exactly
+  as they are; change only `pyproject.toml`'s `[project].name` to `lode-kb` (the distribution /
+  packaging-metadata name — what `pip install`, PyPI, and `importlib.metadata.version()` key off).
+  **Alternates checked, all unregistered on PyPI as of 2026-08-13:** `lode-kb`, `lodekb`,
+  `lode-notes`, `lode-cli`, `getlode`; `lode-kb` was picked as the clearest, most literal hedge
+  ("lode knowledge base"). **Caveat:** renaming `pyproject.toml` reserves nothing on PyPI —
+  namespaces are only claimed by actually publishing, and placeholder-squatting a name nobody
+  intends to fill violates PyPI policy, so this is *purely* a local label change that keeps a
+  future real publish from being blocked by the collision, not a registration act. **Deliberately
+  skipped:** the full PEP 541 (PyPI name-dispute policy)/USPTO trademark/domain-availability audit
+  that `lode-fhql.1` was originally scoped to run — moot while lode is inert on every registry that
+  audit would matter for; `lode-fhql.1` stays demoted to P3 informational, its trademark/search-
+  collision findings feeding the brand brief only. **What changed in the tree:**
+  `pyproject.toml`'s `name`, `src/lode/__init__.py`'s `importlib.metadata.version()` lookup key,
+  `requirements.lock`'s self-reference annotations (regenerated via
+  `scripts/compile-lock.sh`, not hand-edited — `docs/stack.md#dependency-locking-lode-g2741`), and
+  the `pip install lode-*.whl` wheel-glob examples in `README.md`/`docs/index.md`/their gate test
+  (setuptools normalizes `-` to `_` in wheel filenames, so the glob becomes `lode_kb-*.whl`).
+  **Rebuild note:** first attempted as `lode-fhql.16`, bounced by `/land` because that branch
+  renamed the distribution without regenerating `requirements.lock`, leaving `nox -s lock_currency`
+  red on the merged tree; rebuilt as `lode-w3wt` with the lock regenerated as part of the same
+  change. No external write performed (no PyPI, registrar, or USPTO action) — reserving the name
+  happens only if and when a real publish decision is made.
 
 - **2026-08-12 — DECIDED (`lode-fhql.8`, maintainer decision): the docs site publishes a curated
   subset, and renders Mermaid at BUILD TIME.** Two constraints settled before the generator was
@@ -5161,3 +5197,73 @@ entries below from being rewritten to chase the current tree.)
     Non-goals bullet list (a new bullet recording the exclude-but-never-hide behavior), and §8
     (a `<blocked_human>` state var, a `## Blocked human tickets` report section, and a `blocked`
     field on the one-line summary).
+
+- **`/sweep` §8's three-state (`missing`/`error`/`ok`) read of a `$SWEEP_TMP` scratch file, not
+  extracted to a script despite a third verbatim copy (`lode-48gj`, 2026-08-13).** `lode-csxh`
+  added a third call site (§2c's `$SWEEP_TMP/blocked_human` read) to the pattern §2a/§2b already
+  used, crossing the two-copies-are-fine line `scripts/sweep-digest-id.sh`'s own header draws
+  ("logic shared by two call sites belongs in `scripts/`, never duplicated in markdown"). Judged
+  in the same review that filed this ticket: `scripts/land-state-load.sh` is not a drop-in
+  replacement — both of its policies `exit 1` on a missing file, which is exactly the non-fatal
+  third state `lode-3oik` documents this contract needs (a missing file degrades only that
+  section's §8 report line, never the pass). Using it here would mean adding a third policy
+  (something like `--tri-state`/`--sentinel`) to that shared script, or standing up a new
+  `scripts/sweep-report-state.sh` just for this — either a real change to a script other call
+  sites depend on, or a new script for three ~6-line, already-identical blocks. **Decision:
+  leave the three copies as documented duplication for now.** `tests/test_sweep_state_load.py`
+  was extended (in the `lode-csxh` review) to pin all three sites equally, so the copies stay
+  guarded against silent drift even unextracted. Revisit if a fourth call site appears — that
+  would be the point three genuinely stops being "fine, and guarded" and starts paying for its
+  own script.
+
+- **`worktree-gc-sweep.sh` backstop 3's narrower capture predicate is correct-by-design, not a bug
+  (`lode-2132`, 2026-08-14).** `lode-0867` unified backstop 3's BASE REF at a `trunk` literal but
+  deliberately left its capture PREDICATE narrower than `scripts/worktree-gc-classify.sh`'s:
+  the classifier captures a branch as reclaimed if it is an ancestor of `trunk` **OR** of the
+  branch's own `origin/<branch>` (the widened `lode-amif` test), while backstop 3 uses only
+  `git branch --merged trunk` — no `origin/` arm. Left open at the time: does that gap leak a
+  `worktree-agent-*` ref that the main worktree sweep reclaims as a worktree but backstop 3 keeps
+  as a ref forever?
+
+  **Decided: (b) — the narrower predicate is correct-by-design for bare `worktree-agent-*` refs;
+  no code change.** Verified against the code and origin: backstop 3 scans only
+  `refs/heads/worktree-agent-*` (`worktree-gc-sweep.sh`); the classifier's widened arm tests
+  `origin/${br%%--*}`, i.e. `origin/worktree-agent-*` for this namespace; and builder branches
+  are never pushed under that name (`lode-yrtu`; `git ls-remote origin
+  'refs/heads/worktree-agent-*'` returns zero refs — builder content reaches origin as `land/*`,
+  a different name neither predicate examines). So the leak this ticket worried about — a bare
+  `worktree-agent-*` ref captured only on `origin/` — requires a remote ref the pipeline never
+  creates. The classifier's `origin/` arm exists for `land/`-branched reviewer/rebase-pickup
+  worktrees, a namespace backstop 3 deliberately does not touch. Widening a `branch -D` to close
+  an unreachable leak would only add destructive surface for no benefit.
+
+  Residual, accepted: a hand-pushed `worktree-agent-*` branch would leave its bare ref kept
+  forever after the worktree is reclaimed — a *kept* ref, recoverable, failing safe in the
+  direction a delete arm should. `scripts/worktree-gc-sweep.sh` already states this divergence
+  plainly: the header (near the BASE REF paragraph) names it and cites `lode-2132`, and the inline
+  backstop-3 comment flags the narrower predicate as deliberate and points back at the header. No
+  comment or code change was needed.
+
+- Update (lode-887o, 2026-08-14): nox -s tests now applies two marker filters (-m 'not serial' 
+  -n 8, then -m serial -n 0) — an exhaustive partition, so lode-pql's intent (nothing is excluded
+  before trunk) is preserved; every test still runs exactly once.
+
+- **`/sweep` §8's report ends with the full "actionable now" list every pass, not just the delta
+  (`lode-8xl2`, 2026-08-14, amended same day).** The original ask was a `## Human-decision queue`
+  section right after the one-line summary, listing every `$CURRENT` row (including `deferred`
+  ones, annotated `(deferred)`). The maintainer amended it mid-build to `## Actionable now`,
+  moved to the **end** of the report (after §2a/§2b/§2c and after the `NEW HUMAN-DECISION ITEMS`
+  block), and narrowed its source to **exclude** any row whose status is `deferred` outright — no
+  `(deferred)` annotation, since a deferred row already has a home in §2a's unchanged "Deferred
+  (surfaced, not reviewed)" section. The maintainer accepted the repetition-under-`/loop` trade-off
+  knowingly, twice: once for the section existing at all (the report at the transcript is what a
+  human actually reads, and the decidable queue must be visible there without a `bd show`), and
+  again for the deliberate double-listing with `NEW HUMAN-DECISION ITEMS` (a row can be both new
+  this pass and still decidable now — "what's new" and "what's decidable now" answer different
+  questions, the same shape as the already-decided §2a/new-items overlap, `lode-o7ai`).
+  Report-only throughout both versions of the spec: no digest-body change (§6), no `$NEW_IDS`
+  computation change (§5), no push-eligibility change (§7 — the push still covers only
+  `$SWEEP_TMP/push_ids`), no dedup state of its own. Implementation:
+  `.claude/skills/sweep/SKILL.md` §8 (`$ACTIONABLE_NOW`, computed from `$SWEEP_TMP/current` with a
+  `$4 == "deferred"` awk exclusion), the report-format block (section moved to last position), the
+  "Stop and report" section, and the skill's frontmatter `description`.

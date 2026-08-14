@@ -33,6 +33,30 @@ below simply overrides ``Screen``'s own property to return it, so the stock,
 untouched ``BindingsTable`` widget reads it back via the completely normal
 ``self.screen.active_bindings`` path -- no widget-level hand-rolling or
 monkeypatching needed, only the one property this screen already owns.
+
+**Wordmark placement (lode-fhql.5).** :func:`lode.branding.wordmark` is
+shown here, above the ``BindingsTable``, rather than as a startup splash on
+``CaptureScreen``: capture is the app's default/landing screen and must stay
+instant (docs/design.md's core principle), so nothing may sit in front of it
+at launch. This overlay is already the TUI's opt-in "about" surface,
+reachable from anywhere via ``Ctrl+_``/``?`` -- and unlike
+:class:`~lode.tui.screens.config.ConfigScreen` (whose ``DataTable`` has a
+documented ``height: 1fr`` sizing contract, lode-l38d.2 -- a second
+space-consuming sibling there reliably pushes it past the docked Footer),
+this screen's ``VerticalScroll`` already absorbs overflow by scrolling
+rather than assuming everything fits, so one more line of content is never
+a layout risk.
+
+The call passes ``unicode=True`` explicitly rather than letting
+:func:`~lode.branding.wordmark` sniff the encoding: that sniff reads
+``sys.stdout``, which is NOT this screen's render target -- Textual owns the
+terminal through its own driver, and a redirected process stdout would drop
+the overlay to the ``*`` fallback on a perfectly capable terminal. The TUI
+already paints non-ASCII chrome unconditionally anyway (the braille spinner
+in :mod:`lode.tui.screens.ask`, ``lode.tcss``'s ``border: round``), so a
+degraded wordmark here would protect one widget on a screen whose frame had
+already broken. The encoding sniff stays for the CLI's ``lode version``,
+where ``sys.stdout`` genuinely is the target.
 """
 
 from __future__ import annotations
@@ -45,11 +69,17 @@ from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets._key_panel import BindingsTable
 
+from lode.branding import wordmark
+from lode.tui.widgets.lode_static import LodeStatic
+
 #: The overlay's scrollable dialog container id. Centering and the frame come
 #: from ``lode.tcss``'s shared screen-type selector and ``.confirm-dialog``
 #: class; this id's own rule carries only the larger 80%/80% size deviation
 #: it shares with the other big popups (lode-f0qf).
 HELP_DIALOG_ID = "help-dialog"
+
+#: The wordmark widget id — read back in tests.
+WORDMARK_ID = "help-wordmark"
 
 
 class HelpScreen(ModalScreen[None]):
@@ -84,6 +114,7 @@ class HelpScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(
+            LodeStatic(wordmark(unicode=True), id=WORDMARK_ID),
             BindingsTable(shrink=True, expand=False),
             id=HELP_DIALOG_ID,
             classes="confirm-dialog",

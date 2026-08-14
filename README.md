@@ -1,18 +1,21 @@
-# lode
+<img src="docs/assets/lockup.svg" alt="lode" width="208" height="64">
 
+**lode** is an AI-first, TUI-first personal knowledge base for the things you learn during your
+day at work. Fast to capture, intelligent to retrieve. See [`docs/brand.md`](docs/brand.md) for
+the full brand brief (positioning, name story, palette, type, voice, usage rules).
+
+[![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
+[![Built with Textual](https://img.shields.io/badge/TUI-Textual-5A4FCF.svg)](https://textual.textualize.io/)
+[![License: Apache 2.0](https://img.shields.io/github/license/bildzeitung/lode)](LICENSE)
 [![Build](https://img.shields.io/github/actions/workflow/status/bildzeitung/lode/build.yml?branch=trunk)](https://github.com/bildzeitung/lode/actions/workflows/build.yml)
 [![Tests](https://img.shields.io/github/actions/workflow/status/bildzeitung/lode/tests.yml?branch=trunk&label=test)](https://github.com/bildzeitung/lode/actions/workflows/tests.yml)
 [![Coverage](https://img.shields.io/codecov/c/github/bildzeitung/lode/trunk)](https://codecov.io/gh/bildzeitung/lode)
-[![License: Apache 2.0](https://img.shields.io/github/license/bildzeitung/lode)](LICENSE)
-[![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![Built with Textual](https://img.shields.io/badge/TUI-Textual-5A4FCF.svg)](https://textual.textualize.io/)
-
-An AI-first, TUI-first personal knowledge base for **things you learn during your day at work** —
-meeting notes, technical instructions, decisions. Fast to capture, intelligent to retrieve.
 
 > The mother lode: a rich vein you accumulate and mine. An append-only log of notes + a derived
 > knowledge graph — the ore and the assay.
+
+Meeting notes, technical instructions, decisions — captured fast, retrieved with citations.
 
 ```
 $ lode add
@@ -28,7 +31,7 @@ see [`docs/release.md`](docs/release.md#non-goals). Two install paths actually w
 [GitHub releases page](https://github.com/bildzeitung/lode/releases/latest) and install it directly:
 
 ```bash
-pip install lode-*.whl   # the wheel attached to the release you downloaded
+pip install lode_kb-*.whl   # the wheel attached to the release you downloaded
 ```
 
 **From source (for contributing or tracking `trunk`).** See
@@ -105,6 +108,15 @@ scripts/validate-mermaid.sh   # parse every ```mermaid block in docs/, fail on s
 ```
 
 `docker` is the only host requirement.
+
+## Brand assets
+
+The hand-authored mark, wordmark, and lockup live under [`docs/assets/`](docs/assets/); the brief
+they conform to is [`docs/brand.md`](docs/brand.md). The docs site's favicon
+(`assets/mark-16.png`, `assets/favicon.ico`) and its social/OG preview card
+(`assets/og-card.png`, 1200x630) are derived mechanically from the same mark — never redrawn — via
+`scripts/rasterize-mark.sh`, `scripts/rasterize-favicon-ico.sh`, and `scripts/rasterize-og-card.sh`,
+each documented in its own header.
 
 ## License
 

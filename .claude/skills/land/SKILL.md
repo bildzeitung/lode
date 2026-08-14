@@ -2196,7 +2196,11 @@ bd update <id> --acceptance="<revised, unambiguous acceptance criteria>"   # lan
 # and (d) route through a code-reviewer, which refreshes land_head itself.
 # --set-metadata (upsert), NOT --metadata (which takes a whole JSON blob and would drop
 # land_summary/review_head — verified 2026-08-05).
-bd update <id> --set-metadata land_head="$(git rev-parse origin/land/<id>)"   # omit if nothing was committed
+# Omit this whole block if nothing was committed. Derived into a variable and shape-checked
+# before the write (lode-uvjr) — a malformed value here reads as drift on a later pass.
+LAND_HEAD="$(git rev-parse origin/land/<id>)"
+scripts/validate-sha40.sh land_head "$LAND_HEAD" || exit $?
+bd update <id> --set-metadata land_head="$LAND_HEAD"
 bd update <id> --remove-label land-escalated --add-label ready-for-land
 scripts/bd-dolt-push.sh
 # /land's NEXT pass re-runs land-review against the now-unambiguous ticket — same gate, no bypass.

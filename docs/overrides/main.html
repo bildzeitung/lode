@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{# OG/social-card metadata (lode-fhql.10).
+
+   The image path below points at docs/assets/og-card.png, the 1200x630
+   asset lode-fhql.6 (favicon + OG card) commits alongside the rest of
+   docs/assets/ (mark.svg, mark-16.png, favicon.ico, lockup.svg) --
+   regenerated from docs/assets/og-card.svg via
+   scripts/rasterize-og-card.sh, per that file's own header. #}
+
+{% block extrahead %}
+  {{ super() }}
+  {# theme.favicon (mkdocs.yml) already wires assets/mark-16.png as the
+     modern PNG favicon. This adds the multi-resolution assets/favicon.ico
+     (lode-fhql.6) alongside it, for a client that ignores a PNG icon link
+     or wants the 32/48px entries the single 16px PNG cannot offer. Note
+     this does NOT serve a bare /favicon.ico at the site root -- the asset
+     is published under assets/, and only this link points at it. #}
+  <link rel="shortcut icon" href="{{ 'assets/favicon.ico' | url }}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="lode">
+  <meta property="og:title" content="{{ page.title | default('lode') }}">
+  <meta property="og:description" content="{{ config.site_description }}">
+  {# page.canonical_url is ALREADY absolute (it embeds site_url) -- prefixing
+     site_url again yields a doubled URL. Use it bare. #}
+  <meta property="og:url" content="{{ page.canonical_url }}">
+  <meta property="og:image" content="{{ config.site_url }}assets/og-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ page.title | default('lode') }}">
+  <meta name="twitter:description" content="{{ config.site_description }}">
+  <meta name="twitter:image" content="{{ config.site_url }}assets/og-card.png">
+{% endblock %}

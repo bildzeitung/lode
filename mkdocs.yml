@@ -1,25 +1,38 @@
-# MkDocs-Material config for the lode docs site (lode-fhql.8/.9).
+# MkDocs-Material config for the lode docs site (lode-fhql.8/.9/.10).
 #
 # docs_dir points at the STAGED output of scripts/build_docs_site.py, not at
 # docs/ directly -- docs/ contains maintainer-only pages (decisions.md,
 # agents-workflow.md, ...) that must never ship on the public site
 # (docs/stack.md's "Published / excluded page sets"). Building from a curated
 # staging copy makes that total by construction: nothing under docs_dir here
-# exists unless build_docs_site.py put it there.
+# exists unless build_docs_site.py put it there. This SUPERSEDES the
+# `exclude_docs`-allowlist mechanism `lode-fhql.10` originally scaffolded
+# (docs_dir: docs + exclude_docs) -- staging is a single, structural
+# guarantee rather than two separately-maintained mechanisms; a maintainer
+# doc that build_docs_site.py never stages simply cannot ship, `nav` or no
+# `nav` (decided 2026-08-14, resolving the lode-fhql.9/.10 mkdocs.yml
+# conflict; see lode-fhql.9's notes).
 #
-# `nav:` is deliberately OMITTED -- MkDocs auto-generates one from the staged
-# directory structure. lode-fhql.10 (concurrent sibling, landing page) and
-# lode-fhql.15 (derived reference pages) may want to curate this explicitly;
-# left to those tickets rather than guessed at here.
+# `nav` below still curates order and labels for the same PUBLISHED set
+# build_docs_site.py stages -- see docs/stack.md ("Published / excluded page
+# sets") for the authoritative enumeration.
 site_name: lode
+site_description: >-
+  An AI-first, TUI-first personal knowledge base for the things you learn
+  during your day at work.
 site_url: https://bildzeitung.github.io/lode/
 repo_url: https://github.com/bildzeitung/lode
 repo_name: bildzeitung/lode
+edit_uri: edit/trunk/docs/
+
 docs_dir: .docs-site-src
 site_dir: site
 
 theme:
   name: material
+  custom_dir: docs/overrides
+  logo: assets/mark.svg
+  favicon: assets/mark-16.png
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -31,6 +44,28 @@ theme:
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.top
+    - search.suggest
+    - content.action.edit
+
+nav:
+  - Home: index.md
+  - Design: design.md
+  - Storage: storage.md
+  - Retrieval: retrieval.md
+  - Externals: externals.md
+  - Brand: brand.md
+  - How-to:
+      - Overview: how-to/README.md
+      - Change a config setting: how-to/config-change.md
+      - JIRA setup: how-to/jira-setup.md
+      - Maintenance commands: how-to/maintenance-commands.md
 
 plugins:
   - search
+
+markdown_extensions:
+  - toc:
+      permalink: true

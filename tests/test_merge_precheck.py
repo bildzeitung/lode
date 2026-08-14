@@ -38,7 +38,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from _gitrepo import _git
+from _gitrepo import _branch_from, _commit_file, _git
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "merge-precheck.sh"
@@ -56,17 +56,6 @@ def _init_repo(tmp_path: Path) -> Path:
     _git(repo, "add", "f.txt", "g.txt")
     _git(repo, "commit", "-q", "-m", "base")
     return repo
-
-
-def _branch_from(repo: Path, base: str, name: str) -> None:
-    _git(repo, "checkout", "-q", base)
-    _git(repo, "checkout", "-q", "-b", name)
-
-
-def _commit_file(repo: Path, path: str, content: str, message: str) -> None:
-    (repo / path).write_text(content)
-    _git(repo, "add", path)
-    _git(repo, "commit", "-q", "-m", message)
 
 
 def _run(base: str, branch: str, repo: Path) -> subprocess.CompletedProcess:

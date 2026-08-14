@@ -530,6 +530,9 @@ can detect a later push; a one-line summary):
 
 ```bash
 HEAD_SHA=$(git rev-parse HEAD)
+# Shape-checked before the write (lode-uvjr) — a malformed value here reads as drift on a
+# later /land pass. Same guard the producer's own hand-off uses (lode-0a4n).
+scripts/validate-sha40.sh land_head "$HEAD_SHA" || exit $?
 bd update <id> --remove-label ready-for-code-review --add-label ready-for-land \
   --set-metadata land_head="$HEAD_SHA" \
   --set-metadata land_summary="<one-line summary of what landed>"
