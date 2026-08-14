@@ -1,0 +1,47 @@
+<!--
+  lode mark (lode-fhql.4)
+
+  The vein cutting through strata (docs/brand.md, section 2, the name
+  story): three faint horizontal bands are the rock layers ("strata"); one
+  bold zigzag seam crosses them corner to corner ("the vein you accumulate
+  and mine"). Both are drawn with the SAME `currentColor` so this single
+  file works on light and dark backgrounds: the embedding context picks the
+  colour (ink in light contexts, paper in dark, per docs/brand.md section
+  6's monochrome usage rule). The `color="#1E1B2E"` (ink) on the root is the
+  standalone default, for a context that supplies no colour at all — this
+  file opened directly, or the 16px raster in mark-16.png (produced
+  reproducibly by scripts/rasterize-mark.sh, which renders it exactly as it
+  is here).
+
+  HOW TO OVERRIDE IT: a consumer inlining this SVG must set `color` on the
+  `<svg>` element itself, via a CSS rule that matches it —
+  `.brand-mark { color: var(--paper); }`. Any author rule beats a
+  presentation attribute, so that works. Merely setting `color` on an
+  ANCESTOR does NOT: `color` on the root is a specified value, and a
+  specified value defeats inheritance. Removing the attribute would make
+  inheritance work but leaves the standalone/raster case colourless, so the
+  attribute stays and this is the documented contract.
+
+  Geometric shapes only, no strokes thin enough to vanish at a 16x16
+  favicon render (docs/brand.md section 6's minimum-size rule); the strata
+  are 4-unit-tall bars and the vein is a 4-unit-wide stroke, in a 32x32
+  grid. The whole mark is also hand-reducible to Unicode block characters
+  (see mark-blocks.txt, lode-fhql.5) because every coordinate below is a
+  multiple of 4: an 8-column by 8-row grid of 4-unit cells.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" color="#1E1B2E">
+  <!-- strata: three horizontal bands (grid rows 1, 4, 6), receded (lower opacity) so the vein reads first -->
+  <rect x="0" y="4"  width="32" height="4" fill="currentColor" opacity="0.35"/>
+  <rect x="0" y="16" width="32" height="4" fill="currentColor" opacity="0.35"/>
+  <rect x="0" y="24" width="32" height="4" fill="currentColor" opacity="0.35"/>
+
+  <!-- vein: a bold zigzag seam, bottom-left to top-right, cutting through all three bands -->
+  <path
+    d="M 4 28 L 12 28 L 12 16 L 24 16 L 24 4 L 28 4"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="4"
+    stroke-linecap="square"
+    stroke-linejoin="miter"
+  />
+</svg>
