@@ -72,7 +72,10 @@ def _publish(repo: Path, *branches: str) -> None:
 def _run(repo: Path, *extra: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(SCRIPT), "--base-ref", "origin/trunk", *extra],
-        cwd=repo, capture_output=True, text=True,
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
 
@@ -128,14 +131,16 @@ def test_stack_survives_the_base_tip_moving_afterwards(tmp_path: Path) -> None:
     _commit(repo, "dep_work")
     _git(repo, "merge", "-q", "--no-ff", "-m", "merge base", "land/base")
     _branch(repo, "land/base", "land/base")
-    _commit(repo, "base_review_fix")          # the base tip moves
+    _commit(repo, "base_review_fix")  # the base tip moves
     _publish(repo, "land/base", "land/dep")
 
     # Precondition: the naive tip test really does fail here, so this fixture
     # is exercising what it claims to.
     naive = subprocess.run(
         ["git", "merge-base", "--is-ancestor", "origin/land/base", "origin/land/dep"],
-        cwd=repo, capture_output=True,
+        cwd=repo,
+        capture_output=True,
+        check=False,
     )
     assert naive.returncode != 0, "fixture no longer reproduces the moved-tip case"
 
@@ -166,8 +171,9 @@ def test_second_on_branch_merge_base_does_not_hide_the_stack(tmp_path: Path) -> 
     _publish(repo, "land/base", "land/dep")
 
     n = len(
-        _git(repo, "merge-base", "--all", "origin/land/base", "origin/land/dep")
-        .stdout.split()
+        _git(
+            repo, "merge-base", "--all", "origin/land/base", "origin/land/dep"
+        ).stdout.split()
     )
     assert n >= 2, f"fixture no longer produces multiple merge-bases (got {n})"
 
@@ -208,7 +214,9 @@ def test_transitive_stack_marks_only_the_nearest_base_direct(tmp_path: Path) -> 
     edges = _edges(_run(repo))
     assert ("b", "a", "direct") in edges
     assert ("c", "b", "direct") in edges
-    assert ("c", "a", "transitive") in edges, "full relation must still contain the transitive edge"
+    assert ("c", "a", "transitive") in edges, (
+        "full relation must still contain the transitive edge"
+    )
     assert ("c", "a", "direct") not in edges
 
 
@@ -219,7 +227,7 @@ def test_branched_from_base_is_reported_unordered_not_guessed(tmp_path: Path) ->
     repo = _repo(tmp_path)
     _branch(repo, "land/base", "origin/trunk")
     _commit(repo, "base_work")
-    _branch(repo, "land/dep", "land/base")     # branched off, not merged in
+    _branch(repo, "land/dep", "land/base")  # branched off, not merged in
     _commit(repo, "dep_work")
     _publish(repo, "land/base", "land/dep")
 
@@ -243,7 +251,7 @@ def test_default_base_ref_is_origin_trunk(tmp_path: Path) -> None:
     _publish(repo, "land/base", "land/dep")
 
     r = subprocess.run(
-        ["bash", str(SCRIPT)], cwd=repo, capture_output=True, text=True
+        ["bash", str(SCRIPT)], cwd=repo, capture_output=True, text=True, check=False
     )
     assert r.returncode == 0, r.stderr
     assert _edges(r) == {("dep", "base", "direct")}
@@ -258,7 +266,11 @@ def test_machine_faults_exit_2_and_never_read_as_no_stacks(tmp_path: Path) -> No
         (["--bogus-flag"], "unknown argument"),
     ):
         r = subprocess.run(
-            ["bash", str(SCRIPT), *args], cwd=repo, capture_output=True, text=True
+            ["bash", str(SCRIPT), *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         assert r.returncode == 2, r.stdout
         assert needle in r.stderr
