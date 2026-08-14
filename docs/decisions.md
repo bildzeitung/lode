@@ -5203,6 +5203,7 @@ entries below from being rewritten to chase the current tree.)
 
   Residual, accepted: a hand-pushed `worktree-agent-*` branch would leave its bare ref kept
   forever after the worktree is reclaimed — a *kept* ref, recoverable, failing safe in the
-  direction a delete arm should. `scripts/worktree-gc-sweep.sh`'s header (near the BASE REF
-  paragraph) and inline backstop-3 comment already state this divergence plainly and cite
-  `lode-2132`; no comment or code change was needed.
+  direction a delete arm should. `scripts/worktree-gc-sweep.sh` already states this divergence
+  plainly: the header (near the BASE REF paragraph) names it and cites `lode-2132`, and the inline
+  backstop-3 comment flags the narrower predicate as deliberate and points back at the header. No
+  comment or code change was needed.
