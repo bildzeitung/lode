@@ -903,3 +903,142 @@ it was asked to offer the model. Rationale:
 Revisit this decision once `lode-35nu.11.2` lands real tools and an OpenAI/Azure user actually needs
 this path — implementing `OpenAIProvider`'s real loop then is scoped as its own follow-up, not
 bundled into this ticket.
+
+---
+
+## Docs site generator (decided, lode-fhql.8)
+
+`lode-fhql` (brand + docs site epic) needs a rendered site over a curated subset of `docs/`. This
+section is the generator decision; `lode-fhql.9` wires it into a GitHub Pages CI workflow,
+`lode-fhql.10` builds the landing page, and `lode-fhql.15` writes derived reference pages for
+content the publish scope below excludes. The constraints this section decides against — the Mermaid
+pre-render mandate, the publish scope, the link policy — were set as user calls on 2026-08-12 and are
+recorded in [`decisions.md`](decisions.md) (`lode-fhql.8`); this section is where the settled outcome
+lands, so where the two differ, **this is current**.
+
+### Chosen: MkDocs-Material
+
+**MkDocs-Material** (`mkdocs-material`, which pulls in `mkdocs` itself as a transitive dependency),
+evaluated against **Sphinx + MyST-Parser** — the other realistic Python-native candidate. Mermaid
+does not separate the two (both render client-side by default; see the next subsection), so the
+deciding factors were:
+
+- **Source markdown, not reStructuredText.** MkDocs authors pages in plain Markdown out of the box.
+  Sphinx's native format is reStructuredText; MyST-Parser adds Markdown support on top, but that's an
+  extra layer doing work MkDocs needs none of, for docs that are already committed as `.md` and
+  already read on GitHub today (a hard requirement here — see below).
+- **Narrative fit.** lode's docs are prose design documents and how-tos, not an API reference.
+  Sphinx's core strength — `autodoc`, cross-referencing a Python object graph — is exactly the
+  workload lode's docs don't have. MkDocs-Material's nav-and-search shape matches a curated set of
+  narrative pages directly, with far less configuration to reach a working site.
+- **Built-in search.** MkDocs-Material ships a strong client-side search (a prebuilt Lucene-derived
+  index, offline, no external service) with no plugin wiring beyond enabling it. Sphinx's built-in
+  search is functional but plainer, and the docs corpus here is large and heavily cross-referenced —
+  search is a stated requirement, not a nice-to-have.
+- **Precedent already in the dependency tree.** Typer — already a hard lode dependency (the stack
+  table at the top of this file) — is itself documented with MkDocs-Material, so the theme and its
+  conventions are a known quantity, not a fresh unknown.
+- **Ruled out without deep evaluation** (neither candidate above loses on this axis — both are
+  Python-native and add zero Node toolchain on the host): Docusaurus (Node-based — the exact cost
+  this repo already avoids by running Mermaid validation through Docker rather than a host
+  Node/Chromium toolchain, per [`CLAUDE.md`](../CLAUDE.md)) and Hugo/Zola (not Python, and a second
+  static-site toolchain the venv/lock already cover for nothing).
+
+**Dependency**: `mkdocs-material>=9.5,<10` as its own `docs` extra in `pyproject.toml`, not folded
+into `dev` — it is CI-only (`lode-fhql.9`'s Pages workflow builds the site; no local `dev` install
+needs it). Per the [pyproject-intent / requirements.lock split](#dependency-locking-lode-g2741),
+optional extras stay unlocked (the `dev` extra's existing policy, extended unchanged to `docs`), and
+`scripts/compile-lock.sh` compiles the lock from `pyproject.toml` with no `--extra` flags — so this
+needs no `requirements.lock` regeneration, only the `pyproject.toml` declaration.
+
+### Mermaid: build-time pre-render, not the validator (mandated, user call 2026-08-12)
+
+`docs/` diagrams are validated today by `scripts/validate-mermaid.sh` against `minlag/mermaid-cli` in
+Docker — the same parser GitHub renders with (`CLAUDE.md`). That script **validates only**: it parses
+each fenced block and reports pass/fail, emitting no SVG. Neither MkDocs-Material's nor Sphinx's
+default Mermaid integration (`pymdownx.superfences` custom-fence / `sphinxcontrib-mermaid`) renders
+at build time either — both hand a `<div class="mermaid">…</div>` (or equivalent) to `mermaid.js` in
+the visitor's browser. That means a broken diagram under either generator's default renders as a
+silently-empty box, with nothing for `lode-fhql.9`'s "a Mermaid render failure fails the build"
+requirement to hook into.
+
+The fix, mandated rather than optional: the site build **pre-renders** every Mermaid block to SVG
+through the **same pinned `mermaid-cli` Docker image** `scripts/validate-mermaid.sh` already uses (not
+a second, independently-versioned copy), and the site embeds the resulting SVGs — never a live
+`mermaid.js` require in the shipped page. This is **new work**, not a reuse of the existing script: a
+renderer that walks the published pages' fenced blocks, shells out to the pinned image per block, and
+substitutes the SVG output (or fails the build on any block the image can't render). Building that
+renderer and wiring its failure into the CI workflow's exit status is `lode-fhql.9`'s scope; what
+this section fixes is the *contract* `.9` builds against — pre-render through the pinned image, embed
+the result, never ship a live client-side Mermaid require.
+
+### Published / excluded page sets (user call, 2026-08-12)
+
+The site is about lode, not about how lode is made — it publishes a curated subset of `docs/`, not
+all of it:
+
+- **PUBLISHED**: `design.md`, `retrieval.md`, `storage.md`, `externals.md`, `brand.md`, and **all of
+  `docs/how-to/`** — genuinely end-user content, already linked from `design.md`. The how-to
+  directory is published **as a directory, not as a frozen file list**: it holds `README.md`,
+  `config-change.md`, `jira-setup.md`, and `maintenance-commands.md` today, and a guide added there
+  later is published by default (the 2026-08-12 call named only the first three, which predated
+  `maintenance-commands.md`; `how-to/README.md`'s index table links it, so a frozen list would have
+  shipped a dangling link).
+- **EXCLUDED**: `decisions.md`, `agents-workflow.md`, `stack.md` (this file), `conventions.md`,
+  `release.md`, `test-suite-audit.md`, `onboarding.md`, `keybindings.md`, `tui.md`, `editing.md`,
+  `configuration.md`. The last four are the interesting exclusions — they're about lode by title but
+  addressed to whoever *builds* it next, not whoever *uses* it (`keybindings.md`: "Consult this doc
+  before adding or rebinding a key"; `tui.md`: layout rules for the next screen; `configuration.md`:
+  build-time knobs alongside runtime ones; `editing.md`: TextArea internals). Their genuinely
+  user-facing content is picked up as **derived pages** by `lode-fhql.15`, not by publishing the
+  maintainer originals verbatim.
+
+**PUBLISHED is the authoritative list; EXCLUDED is commentary.** The published set is a closed
+enumeration and everything else under `docs/` is unpublished — including material the excluded list
+does not name individually (`docs/research/`, `test-suite-audit-data.csv`, and anything added later).
+Stated this way round a new maintainer doc is unpublished by default, rather than published because
+nobody remembered to exclude it.
+
+### Link policy: one rewrite rule, not a link-rewriting architecture
+
+Measured 2026-08-13 (the user call of 2026-08-12 measured 64/38, before `brand.md` joined the
+published set; the shape is unchanged): **75** outbound relative links from the published set leave
+it, against **48** that stay internal. They are not one kind — `decisions.md` 25 and `stack.md` 17
+read as maintainer citations ("Per-connector judgment; see decisions.md") that a site reader loses
+nothing by not resolving; `configuration.md` 24 are substantive (a specific knob a reader following
+the prose actually wants) and are the links `lode-fhql.15`'s derived settings page absorbs; the rest
+are ones and twos. The counts are a snapshot, not an invariant — `lode-fhql.9` must not gate on a
+literal number; the **shape** is what the rewrite rule is sized against.
+
+The fix is **one rewrite rule**: at build time, any relative link inside a published page that
+targets a file **not in the published set** resolves instead to that file's **GitHub URL**
+(`https://github.com/bildzeitung/lode/blob/trunk/docs/<path>` — the canonical repo, `trunk` being
+this repo's default branch), rather than a 404 or a broken relative path on the rendered site. Three
+details `lode-fhql.9` should not have to guess at:
+
+- **Keyed on "not published", never on the EXCLUDED list.** The rule is then total over every link
+  target — the unenumerated material noted above, and repo-root files like `README.md`
+  (`blob/trunk/<path>`, one level up from `docs/`) — instead of silently passing through anything
+  nobody remembered to exclude.
+- **Fragments carry through verbatim.** `configuration.md#some-knob` becomes
+  `…/blob/trunk/docs/configuration.md#some-knob`; GitHub's heading anchors are the same slugs the
+  markdown source already targets, so the deep link keeps working. This matters most for exactly the
+  24 `configuration.md` links measured above, which are overwhelmingly anchored.
+- **`lode-fhql.15`'s derived pages take precedence once they exist.** A link whose target is
+  absorbed by a derived page resolves to that on-site page, not to GitHub — the GitHub rewrite is
+  the fallback for everything not yet derived.
+
+Links among **published** pages stay plain relative markdown links — those work unmodified both on
+GitHub's markdown view and once rendered by MkDocs-Material, so no rewriting is applied to that set.
+This is deliberately the smallest fix that closes the measured gap, not a general link-rewriting
+architecture: the outbound links are overwhelmingly one repeated pattern (a citation to an
+unpublished maintainer doc), not a diversity of cases that would justify one.
+
+### Constraint carried over unchanged: docs still read on GitHub
+
+Every published page is (and remains) read directly on GitHub today, unmodified by this decision —
+this was a hard requirement going in, not something the generator choice gets to relax. MkDocs-
+Material's Markdown dialect (`pymdownx` extensions: admonitions, tabs, etc.) is opt-in per-extension
+in `mkdocs.yml`; none of the currently-published pages use GitHub-flavored-Markdown-incompatible
+syntax today, and none should be added as part of adopting the site without checking it renders
+sanely in GitHub's plain markdown view first.

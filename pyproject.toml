@@ -87,6 +87,12 @@ dev = [
                             # requirement names the distribution, not the
                             # import.
 ]
+docs = [
+    "mkdocs-material>=9.5,<10", # docs-site generator (lode-fhql.8; rationale
+                                # in docs/stack.md). Its own extra rather than
+                                # `dev` because it is CI-only -- lode-fhql.9's
+                                # Pages workflow, not a local `dev` install.
+]
 
 [project.scripts]
 lode = "lode.cli:app"
