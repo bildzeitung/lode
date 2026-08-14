@@ -1,4 +1,4 @@
-"""Shared `_git` test helper for driving real throwaway git repos (lode-863q).
+"""Shared test helpers for driving real throwaway git repos (lode-863q).
 
 `_git(repo, *args)` was originally defined byte-identically (modulo the
 parameter name `repo` vs `cwd`) in six shell-script test modules, and
@@ -58,3 +58,21 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     )
     assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr}"
     return result
+
+
+def _branch_from(repo: Path, base: str, name: str) -> None:
+    _git(repo, "checkout", "-q", base)
+    _git(repo, "checkout", "-q", "-b", name)
+
+
+def _commit_file(repo: Path, path: str, content: str, message: str) -> None:
+    """Write `path` (creating parent dirs) and commit it (lode-9egu).
+
+    The parent `mkdir` is the superset of the three pre-hoist copies: it is a
+    no-op for a repo-root path, and required for a nested one.
+    """
+    full = repo / path
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(content)
+    _git(repo, "add", path)
+    _git(repo, "commit", "-q", "-m", message)
