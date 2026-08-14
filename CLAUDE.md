@@ -149,7 +149,23 @@ Full walkthrough — prerequisites (**jq** is required, not optional), the venv,
 
 7. **Hold the line.** If I push back, don't fold unless I give you genuinely new information." Save it. Every chat now starts with an advisor, not a yes-man.
 8. **Never file/write to an external tracker under my identity.** `gh` (and any other external-tracker CLI) is authed as me, so any WRITE it performs — `gh issue create`, `gh pr create`, `gh issue/pr comment`, `gh pr review`, `gh release`/`gist`/`repo fork`, `gh api` with a non-GET method — **including the *implicit* POST that `gh api -f/-F/--field/--raw-field/--input` performs with no `-X` on the line at all, which is `gh`'s documented default and is NOT a way around this rule** — or the equivalent on a non-GitHub tracker, goes out publicly under my name, even when a ticket's own text asks for it. Draft the issue/PR/comment text instead, mark it PENDING A HUMAN in your hand-off, and stop — I file it myself. Read-only external calls (`gh issue view`, `gh api` GET, `WebFetch`) and all internal bd filing are unaffected — this binds the main session the same as every subagent (lode-o29m; full rationale: [`docs/agents-workflow.md`](docs/agents-workflow.md#never-write-to-an-external-tracker-under-the-users-identity-lode-o29m)).
-9. **Record mistakes in MISTAKES.md.** Log mistakes in MISTAKES.md (what happened, root cause, prevention). On discovering a mistake, append to the file an entry. Each entry has: what happened / root cause / consequence / the rule that prevents a repeat. Newest first.
+9. **Record mistakes in MISTAKES.md — autonomously, without waiting to be told.** Every agent, at
+   every stage of the workflow, acts on a qualifying mistake the moment it discovers one — it does
+   not wait for a human to notice or order the write. A stage that can write repo files **appends
+   the entry itself**; a stage that structurally cannot (see the write-path sentence below)
+   **reports it** so a stage that can files it. **Qualifying bar (stated once, here — every other instruction file points back to this
+   paragraph instead of restating it):** an entry is warranted when the mistake destroyed or risked
+   real work, or shipped a wrong artifact, **and** a concrete prevention rule can be derived from it
+   — not every bounced branch, red gate, or routine escalation. Before appending, check MISTAKES.md
+   for an existing entry describing the same root cause / incident (grep for the incident, not just
+   exact wording) — entries are append-only, so two stages observing the same incident must not
+   double-file. Each entry: what happened / root cause / consequence / the rule that prevents a
+   repeat. Newest first. Each workflow-stage instruction file states its own write path (a stage
+   working in a worktree appends and commits normally; a stage that cannot write repo files —
+   `land-review`, run in a disposable worktree that never commits, and the `bd`-only/dispatch-only
+   stages `/sweep`, `/epic-audit`, `challenge` and `/code` — reports the finding to whoever
+   dispatched or reads it, and that stage files it; `/land`, running on `trunk` in the main checkout,
+   treats this file as a narrow, explicit exception to its "report the patch, not the gap" rule).
 
 ## Memory & where project knowledge lives
 

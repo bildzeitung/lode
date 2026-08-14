@@ -32,7 +32,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import SWEEP_SKILL_BLOCKS, only_block_with, run_block
+from conftest import _CHECKOUT_ROOT, SWEEP_SKILL_BLOCKS, only_block_with, run_block
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the skill's fenced blocks shell out to jq"
@@ -123,7 +123,7 @@ def _rows() -> list[dict]:
 def test_boundary_and_null_absent_rows(sweep_tmp: Path, tmp_path: Path) -> None:
     bin_dir = tmp_path / "fakebin"
     _fake_bd(bin_dir, _rows())
-    proc = run_block(_section_2b_block(), sweep_tmp, bin_dir)
+    proc = run_block(_section_2b_block(), sweep_tmp, bin_dir, cwd=_CHECKOUT_ROOT)
 
     assert proc.returncode == 0, (
         f"a healthy §2b query exited non-zero (rc={proc.returncode}, "

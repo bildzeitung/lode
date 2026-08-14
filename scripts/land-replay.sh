@@ -38,6 +38,22 @@
 # whole path is named for: `git reset --hard <base-ref>` once, up front, and
 # `git reset --hard HEAD~1` per bounced branch.
 #
+# TWO MORE HAZARDS, both mid-loop and both found technically reviewing
+# lode-s9xe.13, fixed under lode-lmu9:
+#
+#   * `nox -t fix` / `nox -s tests` are gated the SAME way `nox -s
+#     lock_currency` already was: exit 1 is the only content verdict either
+#     command has, via gate-lib.sh's `escalate_unless_content` -- a 127 (nox
+#     not on PATH mid-run), 126, or 128+n (signal) is a machine fault and
+#     stops the whole replay, never a bounce of the branch that happened to
+#     be merged when it hit.
+#   * a `nox -t fix` reformat on the LANDED path is folded into the merge
+#     commit via `git commit --amend` before the loop continues, mirroring
+#     SKILL.md Section 4's own reformat-commit step -- otherwise it leaves
+#     the tree dirty for the NEXT iteration's `git merge`, which most likely
+#     machine-faults against it (the BOUNCED path never surfaces this: `git
+#     reset --hard HEAD~1` cleans it along with everything else).
+#
 # Usage:
 #   scripts/land-replay.sh --accepted <file> --msg-dir <dir> \
 #       --conflicts-dir <dir> --landed <file> [--graph <file>] \
@@ -313,12 +329,67 @@ for id in $ACCEPTED_IDS; do
 
   # Merged cleanly -- gate it, on THIS checkout alone, before deciding its
   # fate. `nox -t fix` first (may reformat what was just merged), then `nox
-  # -s tests`; either red backs the merge out via `git reset --hard HEAD~1`
-  # and bounces this id (not a conflict -- its content merged fine, a gate
-  # just judged it bad).
-  if ! nox -t fix || ! nox -s tests; then
+  # -s tests`. Each is checked separately, never via `if ! CMD_A || ! CMD_B`
+  # (that idiom collapses BOTH commands' exit codes into one boolean and
+  # cannot tell a genuine content failure (exit 1) from a non-verdict
+  # mid-loop fault -- 127 (not on PATH), 126, or 128+n (signal) -- which
+  # would otherwise BOUNCE an innocent branch (lode-lmu9). Same
+  # `escalate_unless_content` partition gate-lib.sh already gives
+  # `nox -s lock_currency` two paragraphs below: exit 1 is the only content
+  # verdict either of these two commands has; anything else is a machine
+  # fault and stops the whole replay (lode-9i2p), exactly like the baseline
+  # gates above and `nox -s lock_currency`'s own mid-loop exit-2 arm. The
+  # success arm is a bare `:` and the bounce lives INSIDE the else arm, on
+  # the far side of `escalate_unless_content` -- which only ever returns on
+  # the content verdict (exit 1), so a second `if [ "$rc" -ne 0 ]` after the
+  # `fi` could never read anything but "bounce" (dead state). `rc=$?` must
+  # still be the FIRST command in the else arm, and the condition must stay
+  # un-negated: `if ! CMD; then rc=$?` captures the NEGATION's status.
+  if nox -t fix; then
+    :
+  else
+    fix_rc=$?
+    escalate_unless_content "$fix_rc" \
+      "'nox -t fix' failed with exit $fix_rc after merging '$id'." \
+      "Exit 1 is the only content verdict (lode-9i2p); a 127/126/signal here is a" \
+      "machine fault, not '$id''s verdict -- do NOT bounce it on the strength of this."
     bounce "$id"
     continue
+  fi
+
+  if nox -s tests; then
+    :
+  else
+    tests_rc=$?
+    escalate_unless_content "$tests_rc" \
+      "'nox -s tests' failed with exit $tests_rc after merging '$id'." \
+      "Exit 1 is the only content verdict (lode-9i2p); a 127/126/signal here is a" \
+      "machine fault, not '$id''s verdict -- do NOT bounce it on the strength of this."
+    bounce "$id"
+    continue
+  fi
+
+  # `nox -t fix` may have reformatted the just-merged content, leaving the
+  # working tree dirty. Fold that reformat INTO the merge commit (`--amend`,
+  # not a separate commit) so a later bounce's single `git reset --hard
+  # HEAD~1` discards both together, and so the tree handed to the NEXT
+  # iteration's `git merge` (inside land-merge-one.sh) is clean -- a dirty
+  # tree there most likely machine-faults that merge (lode-lmu9). Mirrors
+  # SKILL.md Section 4's own reformat-commit step: stage only the explicit
+  # paths `git diff` names, never `-A` (CLAUDE.md's workflow gotchas), and
+  # skip the commit entirely when nothing changed.
+  reformat_paths=()
+  while IFS= read -r -d '' path; do
+    reformat_paths+=("$path")
+  done < <(git diff -z --name-only -- . ':!.beads')
+  if [ "${#reformat_paths[@]}" -gt 0 ]; then
+    git add -- "${reformat_paths[@]}" \
+      || gate_could_not_run "could not stage nox -t fix's reformat of '$id' (${reformat_paths[*]})" \
+           "The merge itself succeeded; only staging the reformat failed."
+    git commit --no-verify -q --amend --no-edit \
+      || gate_could_not_run "could not amend '$id''s merge commit with nox -t fix's reformat" \
+           "The tree now carries an uncommitted reformat on top of '$id''s merge -- the next" \
+           "iteration's merge would most likely fault against it."
   fi
 
   lc_rc=0

@@ -88,6 +88,12 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
 - **bd is the only task tracker.** No TodoWrite, no markdown checklists, no `MEMORY.md`.
 - **Design decisions are doc edits, not notes** — settled facts to `docs/`, open questions to
   `docs/decisions.md`, tunables to `docs/configuration.md`.
+- **File a qualifying mistake to MISTAKES.md autonomously — I don't wait to be told.** If the
+  technical review turns up a mistake meeting CLAUDE.md directive 9's bar, I append an entry myself,
+  in my own worktree — an ordinary edit + commit alongside my review fixes (step 6), no different
+  from any other file I touch this cycle. `grep` MISTAKES.md first for an existing entry on the same
+  root cause/incident — the builder or a prior pass may already have filed it. Bar, dedup rule and
+  entry format are all stated once, in CLAUDE.md directive 9.
 - **Simplest thing that works.** The review *removes* over-design; it never adds flexibility nobody
   asked for. Flag uncertainty explicitly rather than guessing.
 - **I never WRITE to an external tracker under the user's identity — GitHub, an upstream repo, any
