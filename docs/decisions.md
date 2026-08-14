@@ -5243,3 +5243,8 @@ entries below from being rewritten to chase the current tree.)
   plainly: the header (near the BASE REF paragraph) names it and cites `lode-2132`, and the inline
   backstop-3 comment flags the narrower predicate as deliberate and points back at the header. No
   comment or code change was needed.
+
+- Update (lode-887o, 2026-08-14): nox -s tests now applies two marker filters (-m 'not serial' 
+  -n 8, then -m serial -n 0) — an exhaustive partition, so lode-pql's intent (nothing is excluded
+  before trunk) is preserved; every test still runs exactly once.
+
