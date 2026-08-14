@@ -785,6 +785,8 @@ fi
 # this block: §5's stderr message is in-context state, which §0 says this file never relies on.
 if [ -f "$SWEEP_TMP/source_query_failed" ]; then SOURCE_STATE=error; else SOURCE_STATE=ok; fi
 
+scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
+
 # lode-8xl2: the always-present "Actionable now" section, rendered LAST in the report — after the
 # report-only sections and after the NEW HUMAN-DECISION ITEMS block (when present), not here.
 # Source is every row of $SWEEP_TMP/current (§3), fields 1-3, EXCLUDING any row whose optional 4th
@@ -793,7 +795,12 @@ if [ -f "$SWEEP_TMP/source_query_failed" ]; then SOURCE_STATE=error; else SOURCE
 # `(deferred)` annotation is needed. Report-only, feeds nothing (no digest change, §6 unchanged; no
 # dedup state; no PushNotification change, §7 unchanged). Missing is fatal here the same way it is
 # for §5/§7's own re-derivation of $CURRENT: §3 must have run for this section to have anything to
-# show. An item appearing in both this section and the NEW HUMAN-DECISION ITEMS block above it is
+# show — a hard exit here is deliberate and does NOT contradict this block's opening note, which
+# scopes "§8 must finish either way" to the three report-only lists (a missing $SWEEP_TMP/deferred
+# is an ordinary third state; a missing $SWEEP_TMP/current means the pass itself never happened).
+# It runs AFTER the digest push above and never before it precisely so that exit can never suppress
+# the publish.
+# An item appearing in both this section and the NEW HUMAN-DECISION ITEMS block above it is
 # deliberate — "what's new" vs. "what's decidable now" answer different questions.
 CURRENT="$(scripts/land-state-load.sh "$SWEEP_TMP/current" -- \
   "§3 did not run this pass")" || exit 1
@@ -802,8 +809,6 @@ ACTIONABLE_NOW=$(printf '%s\n' "$CURRENT" | awk -F'\t' '
   $4 == "deferred" { next }
   { print $1 " " $2 " " $3 }
 ')
-
-scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
 ```
 
 The rule is one rule, over all three report-only lists — for each `<list>` in {`deferred`,
