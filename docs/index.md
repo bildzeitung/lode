@@ -61,7 +61,7 @@ cd lode
 
 Capture is cheap and frequent; retrieval is rare and valuable. The whole point of the AI is to
 make capture worth it *because* you trust you can always **ask later** and get a cited answer
-grounded in your own notes. The TUI keeps capture instant; intelligence runs async or on demand --
+grounded in your own notes. The TUI keeps capture instant; intelligence runs async or on demand —
 **never in the capture path.**
 
 ## Read more
