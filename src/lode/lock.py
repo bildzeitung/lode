@@ -122,5 +122,5 @@ class WorkerLock:
         """Read PID from lockfile; return None on unreadable / non-integer content."""
         try:
             return int(self._lock.read_text().strip())
-        except ValueError, OSError:
+        except (ValueError, OSError):  # fmt: skip
             return None

@@ -209,7 +209,7 @@ def fetch_confluence_page(
         html = payload["body"]["view"]["value"]
         if not isinstance(html, str):
             raise TypeError("body.view.value is not a string")
-    except json.JSONDecodeError, KeyError, TypeError:
+    except (json.JSONDecodeError, KeyError, TypeError):  # fmt: skip
         return _tombstone(
             final_url=response.final_url,
             reason="malformed_response",
