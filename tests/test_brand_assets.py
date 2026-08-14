@@ -66,3 +66,44 @@ def test_block_redraw_matches_the_ascii_proof_grid() -> None:
         "mark-blocks.txt's Unicode redraw no longer matches its own ASCII proof "
         "grid cell for cell -- one of the two was edited alone."
     )
+
+
+# Attributes that carry the actual shape (position/size/path), as opposed to
+# presentation (fill/stroke/opacity). og-card.svg (lode-fhql.6) deliberately
+# hard-codes ink hex fills instead of mark.svg/lockup.svg's currentColor (an
+# OG card is a fixed, non-themable raster -- see og-card.svg's own header),
+# so a byte-for-byte comparison like test_lockup_carries_the_marks_geometry_verbatim
+# would false-positive on that intentional difference. Compare geometry only.
+_GEOMETRY_ATTRS = ("d", "x", "y", "width", "height")
+
+
+def _geometry(svg: str) -> list[dict[str, str]]:
+    """Each drawable element's geometry-only attributes, in source order."""
+    body = svg[svg.index("<svg") :]
+    shapes = re.findall(r"<(?:rect|path)\b.*?/>", body, re.DOTALL)
+    out = []
+    for shape in shapes:
+        attrs = dict(re.findall(r'(\w[\w-]*)="([^"]*)"', shape))
+        out.append({k: v for k, v in attrs.items() if k in _GEOMETRY_ATTRS})
+    return out
+
+
+def test_og_card_carries_the_marks_geometry() -> None:
+    mark = _geometry((ASSETS / "mark.svg").read_text())
+
+    # og-card.svg wraps its copy of the mark in a <g transform="..."> group
+    # (scaled/positioned for the 1200x630 card) alongside a background <rect>
+    # and the wordmark <text> that mark.svg doesn't have -- scope the
+    # comparison to just that group's own rect/path children, in the same
+    # untransformed 0-32 coordinate space mark.svg uses.
+    og_card_svg = (ASSETS / "og-card.svg").read_text()
+    group = re.search(r"<g\b[^>]*>(.*?)</g>", og_card_svg, re.DOTALL)
+    assert group, "og-card.svg has no <g> group wrapping the copied mark geometry"
+    og_card = _geometry(f"<svg>{group.group(1)}</svg>")
+
+    assert mark, "mark.svg has no <rect>/<path> elements -- parser or asset broke"
+    assert og_card == mark, (
+        "og-card.svg's mark geometry has drifted from mark.svg. The two are "
+        "copy-pasted on purpose (colour differs deliberately); edit both, or "
+        "update this gate deliberately."
+    )

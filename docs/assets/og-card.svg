@@ -1,0 +1,76 @@
+<!--
+  lode Open Graph / social card (lode-fhql.6)
+
+  Derived assets, mechanically from lode-fhql.4's mark and lockup, not
+  redrawn. The mark and wordmark geometry below is copied verbatim from
+  lockup.svg at a larger scale, the same way lockup.svg itself copies
+  mark.svg's geometry verbatim (cross-file `<use href>` does not work for
+  standalone SVG assets, so duplication is the established convention here;
+  see lockup.svg's own header). tests/test_brand_assets.py gates that the
+  copies agree.
+
+  Unlike mark.svg/lockup.svg, this file does NOT use `currentColor`: an OG
+  card is always rendered the same way regardless of embedding context (a
+  fixed image a scraper fetches once, per docs/brand.md section 3's
+  ink/paper being "web-only" colours), so the ink/paper hex values from
+  docs/brand.md section 3 are hard-coded directly.
+
+  1200x630 is the canonical Open Graph image size (Slack, Twitter/X,
+  Facebook, LinkedIn all crop/scale around it); docs/overrides/main.html's
+  `og:image` meta tag points at the rasterized PNG this file produces via
+  scripts/rasterize-og-card.sh.
+
+  Layout: paper background; the lockup (mark + "lode" wordmark) centred
+  near the top at 5x the lockup's native scale; the positioning line from
+  docs/brand.md section 1 (verbatim, wrapped by hand across two lines since
+  SVG <text> does not auto-wrap) centred below it, set in the Inter body
+  stack from docs/brand.md section 4, falling back to the system sans-serif
+  stack for a rasterizer without the Inter webfont installed (the same
+  fallback-stack convention the wordmark already uses for its monospace
+  stack, per lockup.svg).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <!-- paper background -->
+  <rect x="0" y="0" width="1200" height="630" fill="#F7F4EE"/>
+
+  <!-- lockup: mark.svg's strata + vein, plus the "lode" wordmark, copied from lockup.svg at 5x scale, centred -->
+  <g transform="translate(340,140) scale(5)">
+    <rect x="0" y="4"  width="32" height="4" fill="#1E1B2E" opacity="0.35"/>
+    <rect x="0" y="16" width="32" height="4" fill="#1E1B2E" opacity="0.35"/>
+    <rect x="0" y="24" width="32" height="4" fill="#1E1B2E" opacity="0.35"/>
+    <path
+      d="M 4 28 L 12 28 L 12 16 L 24 16 L 24 4 L 28 4"
+      fill="none"
+      stroke="#1E1B2E"
+      stroke-width="4"
+      stroke-linecap="square"
+      stroke-linejoin="miter"
+    />
+    <text
+      x="44"
+      y="23"
+      fill="#1E1B2E"
+      font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+      font-size="20"
+      font-weight="600"
+    >lode</text>
+  </g>
+
+  <!-- positioning line, docs/brand.md section 1, verbatim, wrapped across two lines by hand -->
+  <text
+    x="600"
+    y="386"
+    fill="#1E1B2E"
+    font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+    font-size="34"
+    text-anchor="middle"
+  >An AI-first, TUI-first personal knowledge base</text>
+  <text
+    x="600"
+    y="434"
+    fill="#1E1B2E"
+    font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+    font-size="34"
+    text-anchor="middle"
+  >for the things you learn during your day at work.</text>
+</svg>
