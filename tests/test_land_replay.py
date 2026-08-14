@@ -315,91 +315,37 @@ def test_a_real_conflict_drops_the_id_and_continues(tmp_path: Path) -> None:
     assert unmerged.stdout == ""
 
 
-def test_baseline_red_stops_before_merging_anything(tmp_path: Path) -> None:
-    """`origin/trunk` itself carries the failing marker -- unattributable to
-    any branch in --accepted. Nothing may be merged or bounced."""
-    repo = _init_repo(tmp_path)
-    fake_nox = _fake_nox_bin(tmp_path)
-    (repo / "TESTS_FAIL").write_text("")
-    _git(repo, "add", "TESTS_FAIL")
-    _git(repo, "commit", "-q", "-m", "trunk itself is already red")
-    _git(repo, "branch", "-f", "origin/trunk", "trunk")
-
-    _branch_from(repo, "trunk", "origin/land/lode-a")
-    _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
-
-    msg_dir = tmp_path / "msgs"
-    _write_msg(msg_dir, "lode-a", "Merge land/lode-a: A (lode-a)")
-    conflicts_dir = tmp_path / "conflicts"
-    conflicts_dir.mkdir()
-    accepted = _accepted(tmp_path, "lode-a")
-    landed = tmp_path / "landed"
-
-    result = _run(repo, accepted, msg_dir, conflicts_dir, landed, fake_nox=fake_nox)
-
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert result.stdout == ""
-    assert "before any branch merged" in result.stderr
-    assert not (repo / "a.txt").exists()
-    # The reset ran BEFORE this stop, discarding whatever the first-pass loop
-    # had merged -- so the durable record must not survive it still naming
-    # merges that are no longer on the tree.
-    assert landed.read_text() == ""
-
-
-def test_baseline_red_fix_stops_before_merging_anything(tmp_path: Path) -> None:
-    """`origin/trunk` itself has a `nox -t fix` violation `--fix` cannot
-    resolve (lode-mps0) -- unattributable to any branch in --accepted.
-    Nothing may be merged or bounced, same as a baseline `nox -s tests`
-    failure."""
-    repo = _init_repo(tmp_path)
-    fake_nox = _fake_nox_bin(tmp_path)
-    (repo / "FIX_FAIL").write_text("")
-    _git(repo, "add", "FIX_FAIL")
-    _git(repo, "commit", "-q", "-m", "trunk itself already fails nox -t fix")
-    _git(repo, "branch", "-f", "origin/trunk", "trunk")
-
-    _branch_from(repo, "trunk", "origin/land/lode-a")
-    _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
-
-    msg_dir = tmp_path / "msgs"
-    _write_msg(msg_dir, "lode-a", "Merge land/lode-a: A (lode-a)")
-    conflicts_dir = tmp_path / "conflicts"
-    conflicts_dir.mkdir()
-    accepted = _accepted(tmp_path, "lode-a")
-    landed = tmp_path / "landed"
-
-    result = _run(repo, accepted, msg_dir, conflicts_dir, landed, fake_nox=fake_nox)
-
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert result.stdout == ""
-    assert "'nox -t fix' is red" in result.stderr
-    assert "before any branch merged" in result.stderr
-    assert not (repo / "a.txt").exists()
-    # The reset ran BEFORE this stop, discarding whatever the first-pass loop
-    # had merged -- so the durable record must not survive it still naming
-    # merges that are no longer on the tree.
-    assert landed.read_text() == ""
-
-
-def test_baseline_dirty_fix_reformat_stops_before_merging_anything(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("trunk_files", "fragment"),
+    [
+        # A gate already red on bare origin/trunk (lode-sys4/lode-kq4v), and
+        # -- since lode-mps0 -- `nox -t fix` too, the one attributing gate
+        # that had never been baselined.
+        ((("TESTS_FAIL", ""),), "'nox -s tests' is red"),
+        ((("FIX_FAIL", ""),), "'nox -t fix' is red"),
+        # `nox -t fix` exits 0 here but REFORMATS the tree anyway (the real
+        # `fix` session's `ruff format .` can, even when nothing was
+        # unfixable) -- must stop the same way a red gate does, never
+        # committed invisibly, never discarded via reset (lode-mps0).
+        # reformat_target.txt must already be TRACKED with different
+        # content: `git diff --name-only`, what the dirty check reads, sees
+        # modified tracked files only, not new untracked ones.
+        (
+            (("reformat_target.txt", "unformatted\n"), ("REFORMAT_ME", "")),
+            "reformatted the bare base tree",
+        ),
+    ],
+    ids=["tests-red", "fix-red", "fix-reformat"],
+)
+def test_baseline_failure_stops_before_merging_anything(
+    tmp_path: Path, trunk_files: tuple[tuple[str, str], ...], fragment: str
 ) -> None:
-    """`origin/trunk` itself is clean per `nox -t fix`'s own exit code (0),
-    but the fake `nox -t fix` reformats the tree anyway (the real `fix`
-    session's `ruff format .` can do this even when nothing was unfixable).
-    Must stop the same way a red fix does -- never committed invisibly, never
-    discarded via reset (lode-mps0)."""
+    """`origin/trunk` itself fails a baseline gate -- unattributable to any
+    branch in --accepted. Nothing may be merged or bounced."""
     repo = _init_repo(tmp_path)
     fake_nox = _fake_nox_bin(tmp_path)
-    # reformat_target.txt must already be TRACKED with different content --
-    # `git diff --name-only` (what the baseline dirty-tree check greps) only
-    # sees modified tracked files, not new untracked ones, same as the
-    # mid-loop reformat test below.
-    _commit_file(
-        repo, "reformat_target.txt", "unformatted\n", "trunk has an unformatted file"
-    )
-    _commit_file(repo, "REFORMAT_ME", "", "trigger the fake reformat on bare trunk")
+    for name, content in trunk_files:
+        _commit_file(repo, name, content, f"trunk itself carries {name}")
     _git(repo, "branch", "-f", "origin/trunk", "trunk")
 
     _branch_from(repo, "trunk", "origin/land/lode-a")
@@ -416,8 +362,11 @@ def test_baseline_dirty_fix_reformat_stops_before_merging_anything(
 
     assert result.returncode == 2, result.stdout + result.stderr
     assert result.stdout == ""
-    assert "reformatted the bare base tree" in result.stderr
+    assert fragment in result.stderr
     assert not (repo / "a.txt").exists()
+    # The reset ran BEFORE this stop, discarding whatever the first-pass loop
+    # had merged -- so the durable record must not survive it still naming
+    # merges that are no longer on the tree.
     assert landed.read_text() == ""
 
 

@@ -242,39 +242,34 @@ git reset --hard -q "$BASE_REF" \
 #
 # `nox -t fix` first (mirrors the per-branch gate's own ordering below), then
 # `nox -s tests` (lode-mps0, extending lode-sys4/lode-kq4v's baseline
-# coverage to the one attributing gate that had never been baselined -- the
-# old collapsed `if ! nox -t fix || ! nox -s tests` had the same hole, and
-# lode-lmu9 only made it legible by giving `nox -t fix` its own arm). Unlike
-# `nox -s tests`, `nox -t fix` is not a pure pass/fail check: noxfile.py's
-# `fix` session runs `ruff format .` UNCONDITIONALLY before `ruff check
-# --fix .`, so it can leave the bare base tree dirty (a reformat) even when
-# it exits 0. DECIDED (docs/decisions.md, next to lode-lmu9's entry): a
-# baseline `nox -t fix` that is EITHER red (exit 1: violations `--fix`
-# cannot resolve) OR merely reformats the tree (exit 0, tree left dirty)
-# both `gate_could_not_run` here -- this loop must not commit a base-ref
-# reformat invisibly under no branch's name, and must not silently discard
-# one via `git reset --hard`. A human fixes '$BASE_REF' directly. Exit-1 is
-# still the only CONTENT verdict `nox -t fix` has (`escalate_unless_content`
-# would apply if this arm needed to distinguish 127/126/signal from exit 1 --
-# it does not: every non-zero exit is treated as gate-could-not-run
-# baseline, same as `nox -s tests` immediately below, so no separate
-# machine-fault partition is needed here).
+# coverage to the one attributing gate that had never been baselined).
+# `nox -t fix` needs TWO checks, not one: noxfile.py's `fix` session runs
+# `ruff format .` UNCONDITIONALLY before `ruff check --fix .`, so it can
+# leave the bare base tree dirty (a reformat) even when it exits 0 -- the
+# exit code alone would miss exactly the reformat-only case. Both arms
+# `gate_could_not_run`: this loop neither commits a base-ref reformat
+# invisibly under no branch's name nor discards one via `git reset --hard`,
+# and the reformat is left IN the working tree for the human to commit to
+# '$BASE_REF' directly. Rejected alternatives: docs/decisions.md (search
+# "lode-mps0"). No `escalate_unless_content` partition here -- like the
+# `nox -s tests` baseline arm below, every nonzero stops the pass, so there
+# is no mid-loop rc to split into content-vs-machine.
 if ! nox -t fix; then
   gate_could_not_run "'nox -t fix' is red on bare '$BASE_REF', before any branch merged." \
     "Not attributable to anything in --accepted. '$BASE_REF' itself needs a human's fix" \
     "(see lode-mps0's decision in docs/decisions.md)."
 fi
-fix_reformat_paths=()
-while IFS= read -r -d '' path; do
-  fix_reformat_paths+=("$path")
-done < <(git diff -z --name-only -- . ':!.beads')
-if [ "${#fix_reformat_paths[@]}" -gt 0 ]; then
+# A plain string, not the NUL-read array the per-branch reformat step below
+# builds: nothing is staged here, so the paths are only ever a diagnostic.
+# The pathspec itself stays byte-identical to that site's.
+fix_reformat_paths=$(git diff --name-only -- . ':!.beads')
+if [ -n "$fix_reformat_paths" ]; then
   gate_could_not_run "'nox -t fix' reformatted the bare base tree at '$BASE_REF' (exit 0, but" \
-    "the tree is now dirty: ${fix_reformat_paths[*]})." \
+    "the tree is now dirty: $(printf '%s' "$fix_reformat_paths" | tr '\n' ' '))." \
     "Not attributable to anything in --accepted -- '$BASE_REF' genuinely needs this reformat," \
     "but this loop must not land it invisibly under no branch's name, nor discard it via" \
-    "'git reset --hard'. A human should commit it directly to '$BASE_REF'" \
-    "(see lode-mps0's decision in docs/decisions.md)."
+    "'git reset --hard'. The reformat is left in the working tree -- a human should commit it" \
+    "directly to '$BASE_REF' (see lode-mps0's decision in docs/decisions.md)."
 fi
 
 if ! nox -s tests; then

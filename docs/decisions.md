@@ -5380,7 +5380,8 @@ entries below from being rewritten to chase the current tree.)
   Implemented as two baseline checks, `nox -t fix`'s own exit code and then `git diff --name-only`
   against the reset tree, both `gate_could_not_run` on failure, run first in the baseline block
   (ahead of `nox -s tests`, mirroring the per-branch gate's own `fix`-then-`tests` order).
-  Test: `tests/test_land_replay.py::test_baseline_red_fix_stops_before_merging_anything`.
+  Tests: `tests/test_land_replay.py::test_baseline_failure_stops_before_merging_anything`, cases
+  `fix-red` and `fix-reformat` (parametrized alongside the pre-existing `tests-red` case).
 - **`scripts/land-merge-batch.sh` and `scripts/land-replay.sh` stay two scripts, not unified into
   one shared loop (`lode-fdod`, 2026-08-14).** Discovered while technically reviewing
   `lode-s9xe.13`: the extraction that moved `/land`'s two merge loops from markdown fences into
