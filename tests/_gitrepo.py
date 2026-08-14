@@ -58,3 +58,16 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     )
     assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr}"
     return result
+
+
+def _branch_from(repo: Path, base: str, name: str) -> None:
+    _git(repo, "checkout", "-q", base)
+    _git(repo, "checkout", "-q", "-b", name)
+
+
+def _commit_file(repo: Path, path: str, content: str, message: str) -> None:
+    full = repo / path
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(content)
+    _git(repo, "add", path)
+    _git(repo, "commit", "-q", "-m", message)
