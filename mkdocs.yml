@@ -1,0 +1,36 @@
+# MkDocs-Material config for the lode docs site (lode-fhql.8/.9).
+#
+# docs_dir points at the STAGED output of scripts/build_docs_site.py, not at
+# docs/ directly -- docs/ contains maintainer-only pages (decisions.md,
+# agents-workflow.md, ...) that must never ship on the public site
+# (docs/stack.md's "Published / excluded page sets"). Building from a curated
+# staging copy makes that total by construction: nothing under docs_dir here
+# exists unless build_docs_site.py put it there.
+#
+# `nav:` is deliberately OMITTED -- MkDocs auto-generates one from the staged
+# directory structure. lode-fhql.10 (concurrent sibling, landing page) and
+# lode-fhql.15 (derived reference pages) may want to curate this explicitly;
+# left to those tickets rather than guessed at here.
+site_name: lode
+site_url: https://bildzeitung.github.io/lode/
+repo_url: https://github.com/bildzeitung/lode
+repo_name: bildzeitung/lode
+docs_dir: .docs-site-src
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search

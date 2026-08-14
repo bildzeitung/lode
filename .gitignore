@@ -8,6 +8,11 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Docs-site build outputs (lode-fhql.9) -- staged/rendered on demand by
+# scripts/build_docs_site.py + `mkdocs build`, never committed.
+/.docs-site-src/
+/site/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
