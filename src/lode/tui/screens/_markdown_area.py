@@ -141,7 +141,7 @@ def _markdown_text_area(
             id=id,
             placeholder=placeholder,
         )
-    except LanguageDoesNotExist, ValueError:
+    except (LanguageDoesNotExist, ValueError):  # fmt: skip
         # Both arms mean "no usable markdown grammar in this environment" --
         # see this module's docstring for why ValueError is required here and
         # why it is narrow enough not to mask a real bug.

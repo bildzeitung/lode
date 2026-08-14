@@ -680,8 +680,26 @@ reintroducing an explicit `disabled`.
 | `ASSERTIVE_KINDS` (`lode.display`) | build | `{"action_item"}` | Annotation kinds the [stale-display policy](storage.md#stale-display-policy-decided-implemented-lode-npx4) hides (rather than shows-flagged) once not fresh. No extractor emits one yet — a forward-compatible hook for action-item extraction. |
 | `_MODEL_CACHE_IDENTITY` (`lode.config`) | build | the `(sources.hf, model_file)` pair for each pinned model id above | On-disk cache identity for the pinned models — **duplicated from `fastembed`'s own `list_supported_models()`** so `lode status`'s cold-cache hint can answer "are the weights on disk?" via `huggingface_hub.try_to_load_from_cache` alone and **never `import fastembed`** (~830 modules via onnxruntime/numpy, ~740ms warm — it made a pure-DB-read command ~1.4x slower just to print "No action needed."; `lode-l38d.6`). Needed because the HF repo id can differ from the friendly model id (`BAAI/bge-small-en-v1.5` caches under `qdrant/bge-small-en-v1.5-onnx-q`). Deliberately duplicated data, so it can drift on a `fastembed` upgrade: `tests/test_model_cache_identity.py` is the drift guard, asserting the pin still matches the installed registry (**that** test may import `fastembed`; production must not). A model id outside this set — a `config.toml` override — falls back to importing the registry, which is fine: it is already off the fast path. |
 
-## Python style: PEP 758 unparenthesized `except`
+## Python style: multi-exception `except` must be parenthesized (lode-buay)
 
-**Decided (lode-mkm):** with `requires-python = ">=3.14"` (lode-93o), lode adopts [PEP 758](https://peps.python.org/pep-0758/)'s unparenthesized multi-exception `except` clauses **tree-wide, deliberately** — `except ValueError, OSError:` rather than `except (ValueError, OSError):`. This is a 3.14-only style choice, not a workaround: no `# fmt: skip` pragma and no pinned older `[tool.ruff] target-version` — ruff infers `target-version` from `requires-python` and its formatter performs the flip automatically on every `ruff format .` / `nox -t fix`. Once flipped, the tree is stable (no further reformats on repeat runs).
+**Decided (lode-buay, 2026-08-13) — SUPERSEDES lode-mkm below.** lode writes every multi-exception
+handler as `except (A, B):`, and reverses the tree-wide adoption of PEP 758's bare form recorded in
+the superseded entry. Reasons the maintainer reversed it: the bare form was a `SyntaxError` in
+3.0–3.13 and in Python 2 meant `except A as B` (bind, shadowing `B`), so it reads as a bug — an
+Opus reviewer on lode-fhql.3 flagged one as a syntax error before checking — and it silently
+creates a 3.14-only syntax floor that fails under older grammars and tooling with a bare,
+unhelpful `SyntaxError`.
+
+**Mechanism: a per-line `# fmt: skip`.** ruff infers `target-version` from `requires-python =
+">=3.14"`, and its formatter has no per-rule toggle, so the only ways to hold the parentheses are a
+pragma or a pinned older target. The pin was rejected on measurement: `ruff check --target-version
+py313` over this tree reports 9 errors (6 `TC004`, 3 `F821`) that exist only because PEP 649's lazy
+annotations make `if TYPE_CHECKING:` imports legal under 3.14 — pinning would force six
+`TYPE_CHECKING` blocks restructured and three suppressions added, permanently, and would misstate
+the target, to save four one-line comments. The pragma's known weakness is that it degrades
+*silently*: drop a marker and `nox -t fix` quietly restores the forbidden form with nothing turning
+red. The `as`-bound caveat below still holds unchanged and needs no marker.
+
+**Superseded — Decided (lode-mkm):** with `requires-python = ">=3.14"` (lode-93o), lode adopts [PEP 758](https://peps.python.org/pep-0758/)'s unparenthesized multi-exception `except` clauses **tree-wide, deliberately** — `except ValueError, OSError:` rather than `except (ValueError, OSError):`. This is a 3.14-only style choice, not a workaround: no `# fmt: skip` pragma and no pinned older `[tool.ruff] target-version` — ruff infers `target-version` from `requires-python` and its formatter performs the flip automatically on every `ruff format .` / `nox -t fix`. Once flipped, the tree is stable (no further reformats on repeat runs).
 
 **Caveat — `as`-bound clauses keep their parens.** PEP 758 only relaxes parentheses when the clause has no `as` binding. `except A, B as err:` is a `SyntaxError` under 3.14 ("multiple exception types must be parenthesized when using 'as'") — parens remain mandatory whenever a name is bound. So clauses like `src/lode/auth.py`'s `except (ValueError, KeyError, TypeError) as err:` are correctly left parenthesized by ruff; that is expected behavior, not a ruff gap or an inconsistency to fix.
