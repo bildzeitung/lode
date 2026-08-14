@@ -1,0 +1,39 @@
+<!--
+  lode lockup: mark.svg plus the wordmark, horizontal (lode-fhql.4)
+
+  Reuses mark.svg's exact geometry at the same 32-unit scale so the two
+  files never drift; this is not a from-scratch redraw of the mark. The
+  wordmark sits to the mark's right, set in the monospace stack from
+  docs/brand.md section 4 ("Code / inline snippets / the wordmark, where
+  one is rendered on the web": JetBrains Mono, falling back to the system
+  monospace stack), deliberately monospace even on the web, since the
+  wordmark is the one place the brief asks for that font on purpose.
+
+  Single `currentColor` file, same fallback convention as mark.svg: the
+  root's `color="#1E1B2E"` (ink) only applies where the embedding context
+  sets none.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 148 32" color="#1E1B2E">
+  <!-- mark, unchanged from mark.svg -->
+  <rect x="0" y="4"  width="32" height="4" fill="currentColor" opacity="0.35"/>
+  <rect x="0" y="16" width="32" height="4" fill="currentColor" opacity="0.35"/>
+  <rect x="0" y="24" width="32" height="4" fill="currentColor" opacity="0.35"/>
+  <path
+    d="M 4 28 L 12 28 L 12 16 L 24 16 L 24 4 L 28 4"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="4"
+    stroke-linecap="square"
+    stroke-linejoin="miter"
+  />
+
+  <!-- wordmark: "lode", set in the monospace stack, vertically centred on the mark -->
+  <text
+    x="44"
+    y="23"
+    fill="currentColor"
+    font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+    font-size="20"
+    font-weight="600"
+  >lode</text>
+</svg>

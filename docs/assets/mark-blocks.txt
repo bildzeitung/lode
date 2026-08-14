@@ -1,0 +1,44 @@
+lode mark -- Unicode block-character redraw (lode-fhql.4, feeds lode-fhql.5)
+
+Derived directly from docs/assets/mark.svg's own 8x8 grid: every coordinate
+in that SVG (viewBox 0 0 32 32, 4-unit cells) is a multiple of 4, so the
+SVG's own path IS this grid -- this file rasterizes it cell for cell, by
+eye, rather than reinterpreting the mark. Reproduced with the same
+toolchain as mark-16.png (scripts/rasterize-mark.sh, cairosvg): rendered
+mark.svg at 80x80px (10px per cell) and sampled the centre pixel of each
+of the 64 cells.
+
+Legend, 8 columns by 8 rows, row 0 at top (matching the SVG's own y axis):
+
+    v = vein   (the bold zigzag stroke)
+    s = strata (one of the three receded horizontal bands)
+    . = empty
+
+ASCII proof grid (one character per cell, no separators, 8 chars/row):
+
+.....vv.
+sssssvss
+.....v..
+..vvvv..
+ssvsssss
+..v.....
+vvvsssss
+........
+
+Unicode block redraw -- the same 64 cells, one glyph per cell, monospace
+only, copy/paste safe. Empty cells use a middle dot rather than a plain
+space so every row stays exactly 8 columns wide even if trailing
+whitespace gets stripped by an editor or a git diff:
+
+    v -> █ FULL BLOCK   (foreground: the vein)
+    s -> ░ LIGHT SHADE  (background: strata)
+    . -> · MIDDLE DOT   (empty)
+
+·····██·
+░░░░░█░░
+·····█··
+··████··
+░░█░░░░░
+··█·····
+███░░░░░
+········
