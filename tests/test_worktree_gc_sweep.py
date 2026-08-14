@@ -63,7 +63,7 @@ def _sweep(
     # `env` OVERLAYS the real environment rather than replacing it -- the sweep
     # shells out to git, which needs HOME/PATH to behave at all.
     return subprocess.run(
-        ["bash", str(repo / "scripts" / "worktree-gc-sweep.sh"), "--base-ref", "trunk"],
+        ["bash", str(repo / "scripts" / "worktree-gc-sweep.sh")],
         cwd=cwd or repo,
         capture_output=True,
         text=True,
@@ -245,6 +245,36 @@ def test_backstop3_deletes_a_merged_unattached_builder_ref(tmp_path: Path) -> No
     assert r.returncode == 0, r.stderr
     assert "backstop3" in r.stdout
     assert "worktree-agent-orphan" not in _branches(repo)
+
+
+def test_default_base_ref_is_trunk_with_no_flag_passed(tmp_path: Path) -> None:
+    """Pins the script's IMPLICIT default base ref as `trunk` now that --base-ref
+    has been removed entirely (lode-0867). Every other test in this file already
+    calls the sweep with no flag at all, but this one exists specifically to make
+    that regression visible: if the default ever silently reverted to something
+    else (e.g. the upstream export's `main`), a `worktree-agent-*` ref merged into
+    `trunk` -- but not into that other ref -- would stop being reclaimed by
+    backstop 3, and nothing else in this file would catch it."""
+    repo = _repo(tmp_path)
+    _git(repo, "branch", "worktree-agent-default-check", "trunk")  # merged into trunk
+    r = _sweep(repo)
+    assert r.returncode == 0, r.stderr
+    assert "worktree-agent-default-check" not in _branches(repo)
+
+
+def test_a_base_ref_argument_is_rejected(tmp_path: Path) -> None:
+    """The flag was removed outright (lode-0867), not merely defaulted -- passing
+    one must fail loudly rather than being silently ignored."""
+    repo = _repo(tmp_path)
+    r = subprocess.run(
+        ["bash", str(repo / "scripts" / "worktree-gc-sweep.sh"), "--base-ref", "trunk"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 2
+    assert "GATE COULD NOT RUN" in r.stderr
 
 
 def test_backstop3_keeps_an_unmerged_builder_ref(tmp_path: Path) -> None:
