@@ -19,6 +19,7 @@ one check in the script would turn the corresponding test here red.
 
 from __future__ import annotations
 
+import atexit
 import os
 import re
 import shutil
@@ -29,6 +30,7 @@ from pathlib import Path
 import pytest
 from _gitrepo import _git
 from _hookharness import SETTINGS
+from conftest import fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "harness-doctor.sh"
@@ -50,23 +52,19 @@ REQUIRED_SCRIPTS = _required_scripts()
 REQUIRED_AGENTS = ["coding", "code-reviewer", "land-review"]
 REQUIRED_SKILLS = ["code", "land", "challenge", "epic-audit", "sweep", "release"]
 
-# The doctor's only REQUIRED prerequisite that a CI runner may lack is `bd`
-# (beads) -- git/jq/python3 are always present on GitHub Actions runners, and
-# `docker` is a warn, not a fail (see harness-doctor.sh). Rather than install
-# beads in CI (explicitly rejected -- lode-fqob), stub a `bd` onto PATH for
-# every subprocess this module launches, so these tests exercise the repo
-# checks the doctor performs, not whether the runner's own toolchain has
-# beads installed. Built once at import time (module-scoped tmp dir, not
-# tmp_path) since the stub is identical and read-only across every test.
+# Beads is deliberately NOT installed in CI (lode-fqob), so a `bd` stub goes
+# in front of the real one for every subprocess this module launches -- these
+# tests are about the repo checks the doctor performs, not about the runner's
+# own toolchain. `test_missing_prerequisite_fails` keeps the check the stub
+# hides genuinely falsifiable. The stub is only ever resolved by `command -v`,
+# never executed, so an empty executable file is the whole contract.
 _STUB_BIN = Path(tempfile.mkdtemp(prefix="lode-harness-doctor-stub-bin-"))
-_stub_bd = _STUB_BIN / "bd"
-_stub_bd.write_text("#!/usr/bin/env bash\ntrue\n")
-_stub_bd.chmod(0o755)
-_STUBBED_PATH = f"{_STUB_BIN}{os.pathsep}{os.environ.get('PATH', '')}"
+atexit.register(shutil.rmtree, _STUB_BIN, ignore_errors=True)
+(_STUB_BIN / "bd").touch(mode=0o755)
+_STUBBED_ENV = fake_bin_env(_STUB_BIN)
 
 
-def _run(cwd: Path) -> subprocess.CompletedProcess:
-    env = dict(os.environ, PATH=_STUBBED_PATH)
+def _run(cwd: Path, env: dict[str, str] = _STUBBED_ENV) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["bash", str(SCRIPT)],
         cwd=cwd,
@@ -132,6 +130,26 @@ def test_healthy_repo_exits_0(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "FAIL" not in result.stdout
     assert "harness-doctor: all required checks passed" in result.stdout
+
+
+def test_missing_prerequisite_fails(tmp_path: Path) -> None:
+    """The stub must not make the prerequisite check unfalsifiable (lode-fqob).
+
+    Every other test here hides the runner's toolchain behind the `bd` stub,
+    which would leave the doctor's prerequisite loop asserted by nothing.
+    Subtracting every PATH entry that holds a `bd` -- rather than emptying
+    PATH -- keeps `git`/`jq`/`python3` resolvable, so the FAIL pinned here is
+    the intended one.
+    """
+    repo = _build_healthy_repo(tmp_path)
+    without_bd = os.pathsep.join(
+        p
+        for p in os.environ.get("PATH", "").split(os.pathsep)
+        if p and not (Path(p) / "bd").exists()
+    )
+    result = _run(repo, env=dict(os.environ, PATH=without_bd))
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "bd NOT on PATH (required)" in result.stdout
 
 
 def test_missing_guard_script_fails(tmp_path: Path) -> None:
