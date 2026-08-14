@@ -22,7 +22,9 @@ SCRIPT = REPO_ROOT / "scripts" / "drop-from-accepted.sh"
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["bash", str(SCRIPT), *args], capture_output=True, text=True)
+    return subprocess.run(
+        ["bash", str(SCRIPT), *args], capture_output=True, text=True, check=False
+    )
 
 
 def _accepted(tmp_path: Path, *ids: str) -> Path:
@@ -42,7 +44,9 @@ def test_drops_the_named_id_and_rewrites_the_file(tmp_path: Path) -> None:
     r = _run("b", "--accepted", str(acc))
     assert r.returncode == 0, r.stderr
     assert r.stdout == "DROPPED\tb\n"
-    assert acc.read_text() == "a\nc\n", "the reduction must reach the FILE, not just stdout"
+    assert acc.read_text() == "a\nc\n", (
+        "the reduction must reach the FILE, not just stdout"
+    )
 
 
 def test_drops_direct_dependents_with_the_base(tmp_path: Path) -> None:
@@ -59,7 +63,9 @@ def test_drops_transitive_dependents_too(tmp_path: Path) -> None:
     much as b does. stacked-graph.sh emits the closure, so the transitive edge
     is present and no closure walk is hand-rolled here."""
     acc = _accepted(tmp_path, "a", "b", "c", "unrelated")
-    g = _graph(tmp_path, ("b", "a", "direct"), ("c", "b", "direct"), ("c", "a", "transitive"))
+    g = _graph(
+        tmp_path, ("b", "a", "direct"), ("c", "b", "direct"), ("c", "a", "transitive")
+    )
     r = _run("a", "--accepted", str(acc), "--graph", str(g))
     assert r.returncode == 0, r.stderr
     assert acc.read_text() == "unrelated\n"
@@ -74,7 +80,9 @@ def test_a_dependent_of_something_else_is_not_dropped(tmp_path: Path) -> None:
     assert acc.read_text() == "y\nydep\n"
 
 
-def test_dropping_the_last_entry_leaves_an_empty_file_not_an_error(tmp_path: Path) -> None:
+def test_dropping_the_last_entry_leaves_an_empty_file_not_an_error(
+    tmp_path: Path,
+) -> None:
     """An all-kicked-back pass is legitimate. grep exits 1 when it filters out the
     last line, and aborting there would break the reduction exactly when it matters."""
     acc = _accepted(tmp_path, "only")
@@ -106,7 +114,9 @@ def test_missing_accepted_file_is_a_machine_fault(tmp_path: Path) -> None:
     assert r.stdout == ""
 
 
-def test_missing_graph_file_is_a_machine_fault_not_a_skipped_drop(tmp_path: Path) -> None:
+def test_missing_graph_file_is_a_machine_fault_not_a_skipped_drop(
+    tmp_path: Path,
+) -> None:
     """Reading a missing graph as 'no dependents' is precisely the silent skip
     this script exists to remove."""
     acc = _accepted(tmp_path, "a", "b")
