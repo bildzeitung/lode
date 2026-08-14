@@ -101,13 +101,18 @@
 #                     lode's tracked default branch is `trunk`.
 #
 # BASELINE GATES, before attributing anything (lode-sys4, extended to `nox -s
-# tests` by lode-kq4v). No gate this script attributes is a pure function of
-# the tree -- an ambient FORCE_COLOR in the calling shell, a stale lock
-# against today's PyPI, can turn a gate red with no branch involved at all.
-# So every gate run below is baselined on bare --base-ref BEFORE the replay
-# loop merges anything: if the baseline itself is red, nothing in
-# --accepted caused it, and this script stops rather than blaming (and
-# deleting) whichever branch happened to merge first.
+# tests` by lode-kq4v, and to `nox -t fix` by lode-mps0). No gate this
+# script attributes is a pure function of the tree -- an ambient FORCE_COLOR
+# in the calling shell, a stale lock against today's PyPI, can turn a gate
+# red with no branch involved at all. So every gate run below is baselined
+# on bare --base-ref BEFORE the replay loop merges anything: if the baseline
+# itself is red, nothing in --accepted caused it, and this script stops
+# rather than blaming (and deleting) whichever branch happened to merge
+# first. `nox -t fix` baselines on BOTH its exit code (red) and its effect
+# on the tree (a reformat, possible even on exit 0) -- see the baseline
+# block below and docs/decisions.md (search "lode-mps0") for why a dirty
+# baseline reformat is gate-could-not-run, never committed invisibly or
+# discarded.
 #
 # Output (stdout), one line per id processed, in accepted-set order:
 #   LANDED\t<id>      merged AND gated clean; stays merged on the current
@@ -234,6 +239,44 @@ git reset --hard -q "$BASE_REF" \
 # Baseline every gate this loop attributes, on the reset tree, BEFORE
 # touching anything (see the file header). A baseline failure is never a
 # branch's fault: stop here, land nothing from this replay.
+#
+# `nox -t fix` first (mirrors the per-branch gate's own ordering below), then
+# `nox -s tests` (lode-mps0, extending lode-sys4/lode-kq4v's baseline
+# coverage to the one attributing gate that had never been baselined -- the
+# old collapsed `if ! nox -t fix || ! nox -s tests` had the same hole, and
+# lode-lmu9 only made it legible by giving `nox -t fix` its own arm). Unlike
+# `nox -s tests`, `nox -t fix` is not a pure pass/fail check: noxfile.py's
+# `fix` session runs `ruff format .` UNCONDITIONALLY before `ruff check
+# --fix .`, so it can leave the bare base tree dirty (a reformat) even when
+# it exits 0. DECIDED (docs/decisions.md, next to lode-lmu9's entry): a
+# baseline `nox -t fix` that is EITHER red (exit 1: violations `--fix`
+# cannot resolve) OR merely reformats the tree (exit 0, tree left dirty)
+# both `gate_could_not_run` here -- this loop must not commit a base-ref
+# reformat invisibly under no branch's name, and must not silently discard
+# one via `git reset --hard`. A human fixes '$BASE_REF' directly. Exit-1 is
+# still the only CONTENT verdict `nox -t fix` has (`escalate_unless_content`
+# would apply if this arm needed to distinguish 127/126/signal from exit 1 --
+# it does not: every non-zero exit is treated as gate-could-not-run
+# baseline, same as `nox -s tests` immediately below, so no separate
+# machine-fault partition is needed here).
+if ! nox -t fix; then
+  gate_could_not_run "'nox -t fix' is red on bare '$BASE_REF', before any branch merged." \
+    "Not attributable to anything in --accepted. '$BASE_REF' itself needs a human's fix" \
+    "(see lode-mps0's decision in docs/decisions.md)."
+fi
+fix_reformat_paths=()
+while IFS= read -r -d '' path; do
+  fix_reformat_paths+=("$path")
+done < <(git diff -z --name-only -- . ':!.beads')
+if [ "${#fix_reformat_paths[@]}" -gt 0 ]; then
+  gate_could_not_run "'nox -t fix' reformatted the bare base tree at '$BASE_REF' (exit 0, but" \
+    "the tree is now dirty: ${fix_reformat_paths[*]})." \
+    "Not attributable to anything in --accepted -- '$BASE_REF' genuinely needs this reformat," \
+    "but this loop must not land it invisibly under no branch's name, nor discard it via" \
+    "'git reset --hard'. A human should commit it directly to '$BASE_REF'" \
+    "(see lode-mps0's decision in docs/decisions.md)."
+fi
+
 if ! nox -s tests; then
   gate_could_not_run "'nox -s tests' is red on bare '$BASE_REF', before any branch merged." \
     "Not attributable to anything in --accepted. Check the calling shell's own" \

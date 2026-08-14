@@ -347,6 +347,73 @@ def test_baseline_red_stops_before_merging_anything(tmp_path: Path) -> None:
     assert landed.read_text() == ""
 
 
+def test_baseline_red_fix_stops_before_merging_anything(tmp_path: Path) -> None:
+    """`origin/trunk` itself has a `nox -t fix` violation `--fix` cannot
+    resolve (lode-mps0) -- unattributable to any branch in --accepted.
+    Nothing may be merged or bounced, same as a baseline `nox -s tests`
+    failure."""
+    repo = _init_repo(tmp_path)
+    fake_nox = _fake_nox_bin(tmp_path)
+    (repo / "FIX_FAIL").write_text("")
+    _git(repo, "add", "FIX_FAIL")
+    _git(repo, "commit", "-q", "-m", "trunk itself already fails nox -t fix")
+    _git(repo, "branch", "-f", "origin/trunk", "trunk")
+
+    _branch_from(repo, "trunk", "origin/land/lode-a")
+    _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
+
+    msg_dir = tmp_path / "msgs"
+    _write_msg(msg_dir, "lode-a", "Merge land/lode-a: A (lode-a)")
+    conflicts_dir = tmp_path / "conflicts"
+    conflicts_dir.mkdir()
+    accepted = _accepted(tmp_path, "lode-a")
+    landed = tmp_path / "landed"
+
+    result = _run(repo, accepted, msg_dir, conflicts_dir, landed, fake_nox=fake_nox)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert "'nox -t fix' is red" in result.stderr
+    assert "before any branch merged" in result.stderr
+    assert not (repo / "a.txt").exists()
+    # The reset ran BEFORE this stop, discarding whatever the first-pass loop
+    # had merged -- so the durable record must not survive it still naming
+    # merges that are no longer on the tree.
+    assert landed.read_text() == ""
+
+
+def test_baseline_dirty_fix_reformat_stops_before_merging_anything(tmp_path: Path) -> None:
+    """`origin/trunk` itself is clean per `nox -t fix`'s own exit code (0),
+    but the fake `nox -t fix` reformats the tree anyway (the real `fix`
+    session's `ruff format .` can do this even when nothing was unfixable).
+    Must stop the same way a red fix does -- never committed invisibly, never
+    discarded via reset (lode-mps0)."""
+    repo = _init_repo(tmp_path)
+    fake_nox = _fake_nox_bin(tmp_path)
+    (repo / "REFORMAT_ME").write_text("")
+    _git(repo, "add", "REFORMAT_ME")
+    _git(repo, "commit", "-q", "-m", "trunk's nox -t fix will reformat this tree")
+    _git(repo, "branch", "-f", "origin/trunk", "trunk")
+
+    _branch_from(repo, "trunk", "origin/land/lode-a")
+    _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
+
+    msg_dir = tmp_path / "msgs"
+    _write_msg(msg_dir, "lode-a", "Merge land/lode-a: A (lode-a)")
+    conflicts_dir = tmp_path / "conflicts"
+    conflicts_dir.mkdir()
+    accepted = _accepted(tmp_path, "lode-a")
+    landed = tmp_path / "landed"
+
+    result = _run(repo, accepted, msg_dir, conflicts_dir, landed, fake_nox=fake_nox)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert "reformatted the bare base tree" in result.stderr
+    assert not (repo / "a.txt").exists()
+    assert landed.read_text() == ""
+
+
 def test_an_unresolvable_base_ref_is_a_machine_fault(tmp_path: Path) -> None:
     """A failed `git reset --hard <base-ref>` must stop the pass, not fall
     through and attribute gates against whatever the first-pass loop left

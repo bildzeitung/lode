@@ -5349,6 +5349,38 @@ entries below from being rewritten to chase the current tree.)
   whichever branch merged first. Pre-existing — the old collapsed boolean had the same hole — and
   baselining it is not a one-liner, because a baseline `nox -t fix` that reformats the base tree
   reintroduces hazard 2 above before any merge. See `lode-mps0`.
+- **`scripts/land-replay.sh`'s baseline `nox -t fix` gate: a dirty-tree reformat on bare
+  `--base-ref` is `gate_could_not_run`, never committed invisibly or discarded (`lode-mps0`,
+  2026-08-14).** Closes the gap the `lode-lmu9` entry above deliberately left open. Three options
+  were on the table for what a baseline `nox -t fix` does when it reformats the bare base tree
+  (`noxfile.py`'s `fix` session runs `ruff format .` unconditionally before `ruff check --fix .`,
+  so it can leave the tree dirty even on exit 0, independent of whether `--fix` itself found any
+  unfixable violations):
+
+  1. **Commit the reformat to the local base ref** and let the replay path land it under no
+     branch's name. Rejected: this loop's whole contract is that every `LANDED` line names the id
+     whose branch produced it — a commit with no accepted-set id behind it breaks that contract
+     silently, and buries a real trunk-formatting fact inside a replay run instead of surfacing it
+     as what it is: a fact about `trunk` itself, unrelated to any branch in this pass.
+  2. **`git reset --hard` it away.** Rejected: if the reformat is a genuine fix trunk needs (ruff's
+     pinned version changed, a rule tightened, whatever), silently discarding it hides that fact
+     with nothing left even *hinting* at it — worse than committing it invisibly, because there
+     isn't even a commit a human could later notice and puzzle over.
+  3. **`gate_could_not_run` on a dirty (or red) baseline tree, chosen.** Matches the baseline
+     block's existing invariant for `nox -s tests` and `nox -s lock_currency` immediately
+     alongside it: a baseline failure is never a branch's fault, so the pass stops rather than
+     landing or discarding anything, and a human deals with `trunk`'s own formatting directly (a
+     plain, direct `nox -t fix` + commit to `trunk`, outside this loop entirely). The tree check
+     (`git diff --name-only -- . ':!.beads'` — the same idiom the per-branch reformat-commit step
+     two paragraphs below already uses) is necessary *in addition to* the exit-code check: a green
+     `nox -t fix` (exit 0) can still leave the tree dirty, and the exit code alone would miss
+     exactly the reformat-only case this decision is about. Costs nothing but a delayed pass — the
+     one thing every baseline gate-could-not-run already costs.
+
+  Implemented as two baseline checks, `nox -t fix`'s own exit code and then `git diff --name-only`
+  against the reset tree, both `gate_could_not_run` on failure, run first in the baseline block
+  (ahead of `nox -s tests`, mirroring the per-branch gate's own `fix`-then-`tests` order).
+  Test: `tests/test_land_replay.py::test_baseline_red_fix_stops_before_merging_anything`.
 - **`scripts/land-merge-batch.sh` and `scripts/land-replay.sh` stay two scripts, not unified into
   one shared loop (`lode-fdod`, 2026-08-14).** Discovered while technically reviewing
   `lode-s9xe.13`: the extraction that moved `/land`'s two merge loops from markdown fences into
