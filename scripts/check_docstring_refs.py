@@ -128,8 +128,10 @@ class RefFinding:
 
 def _tracked_python_files(root: Path) -> list[Path]:
     """Every ``*.py`` file git tracks under ``src/`` and ``tests/`` --
-    mirrors ``check_links.py``'s ``git ls-files`` scoping so scratch or
-    gitignored files never enter this gate."""
+    sourced from ``git ls-files``, like ``check_links.py``'s own walk, so
+    scratch or gitignored files never enter this gate. (The pathspec scoping
+    is this gate's own: ``check_links.py`` dropped its pathspecs in lode-6e9c
+    once its walk went repo-wide.)"""
     existing_dirs = [d for d in SCAN_DIRS if (root / d).is_dir()]
     if not existing_dirs:
         return []
