@@ -18,11 +18,9 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 
 ## Non-interactive shell commands
 
-**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
-
 Some shells alias destructive commands to their interactive form (`cp`/`mv`/`rm` → `-i`), which
-hangs an agent indefinitely on a `y/n` prompt nobody can answer. Always pass the flag that forces
-non-interactive behavior:
+hangs an agent indefinitely on a `y/n` prompt nobody can answer. **ALWAYS pass the flag that forces
+non-interactive behavior:**
 
 ```bash
 # Force overwrite without prompting

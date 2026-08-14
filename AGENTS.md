@@ -26,8 +26,9 @@ bd dolt push          # Push beads data to remote
 ## Non-Interactive Shell Commands
 
 See [`CLAUDE.md`](CLAUDE.md#non-interactive-shell-commands) — the single normative statement of
-this rule (always pass the non-interactive flag: `cp -f`/`rm -f`/`rm -rf`, `scp`/`ssh -o
-BatchMode=yes`, `apt-get -y`, `brew` with `HOMEBREW_NO_AUTO_UPDATE=1`). Don't restate it here.
+this rule (always pass the non-interactive flag: `cp -f`/`cp -rf`/`mv -f`/`rm -f`/`rm -rf`,
+`scp`/`ssh -o BatchMode=yes`, `apt-get -y`, `brew` with `HOMEBREW_NO_AUTO_UPDATE=1`). Don't restate
+it here.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:970c3bf2 -->
 ## Beads Issue Tracker
