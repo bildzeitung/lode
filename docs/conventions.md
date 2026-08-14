@@ -59,15 +59,16 @@ The `help=` text:
 ## Multi-exception `except`: parenthesized only
 
 Always write a multi-exception handler as `except (A, B):` — never the unparenthesized `except A,
-B:` form PEP 758 re-legalized in Python 3.14. The bare form was a `SyntaxError` in 3.0–3.13 and in
-Python 2 meant `except A as B` (bind, shadowing `B`), so it reads as a bug to reviewers, and it
-silently creates a 3.14-only syntax floor that breaks with an unhelpful bare `SyntaxError` under
-older grammars/tooling.
+B:` form PEP 758 re-legalized in Python 3.14.
 
-Under this repo's `requires-python = ">=3.14"`, `ruff format` treats the parentheses as redundant
-and strips them back to the bare PEP 758 form on every `nox -t fix` run — undoing the fiat.
-Every parenthesized multi-exception `except` line therefore carries a trailing `# fmt: skip` to
-hold the parentheses through formatting; `ruff check` raises no complaint about the comment.
+A multi-exception `except` **without** an `as` binding carries a trailing `# fmt: skip`, because
+`ruff format` would otherwise strip the parentheses back to the bare form on every `nox -t fix`.
+The `as` form (`except (A, B) as exc:`) needs no marker — PEP 758 keeps the parentheses mandatory
+there, so the formatter leaves it alone.
+
+This **reverses** the earlier tree-wide adoption of the bare form; the why, and the rejected
+alternatives, live in
+[`configuration.md`](configuration.md#python-style-multi-exception-except-must-be-parenthesized-lode-buay).
 
 ## Derive identifiers, never retype them
 
