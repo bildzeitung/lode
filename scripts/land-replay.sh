@@ -65,9 +65,11 @@
 #                     the same name): this loop's whole point is producing
 #                     the durable record /land's Section 4 reads back from a
 #                     later, separate invocation to decide what to close.
-#                     Truncated by THIS script before the replay loop starts
-#                     (the reset below discards whatever the first-pass loop
-#                     already recorded there) -- see below.
+#                     Truncated by THIS script immediately after the reset
+#                     below (which discards whatever the first-pass loop
+#                     already recorded there) and BEFORE the baseline gates,
+#                     so a baseline stop leaves behind no record claiming
+#                     merges the reset just threw away.
 #   --graph          scripts/stacked-graph.sh output, forwarded to
 #                     drop-from-accepted.sh so a bounced or conflicting
 #                     base's dependents are held too. Omit only when this
@@ -194,7 +196,24 @@ ACCEPTED_IDS=$("$SCRIPT_DIR/land-state-load.sh" "$ACCEPTED" --require-nonempty -
 # -q: this script's stdout is the caller's LANDED/CONFLICT/BOUNCED/HELD
 # channel (same contract as land-merge-one.sh's $CONFLICTS) and must stay
 # clean of git's own "HEAD is now at ..." chatter.
-git reset --hard -q "$BASE_REF"
+# Fail CLOSED: --base-ref is caller-supplied, and with no `set -e` a failed
+# reset would fall straight through into the baseline gates and the replay
+# loop -- gating, attributing and bouncing branches against whatever the
+# first-pass loop happened to leave merged, which is the one tree this whole
+# path exists to discard.
+git reset --hard -q "$BASE_REF" \
+  || gate_could_not_run "'git reset --hard $BASE_REF' failed (see git's own error above)." \
+       "Everything below assumes the tree IS '$BASE_REF' -- most likely --base-ref names a ref" \
+       "this checkout cannot resolve. Nothing merged, nothing attributed."
+
+# The reset above discarded whatever the first-pass loop already recorded in
+# --landed; start THIS replay's record from empty so the caller closes only
+# what this loop actually keeps merged. Done HERE -- immediately after the
+# reset, BEFORE the baseline gates -- so that a baseline stop cannot leave a
+# durable record naming merges the reset has just thrown away.
+: > "$LANDED_FILE" \
+  || gate_could_not_run "could not truncate --landed '$LANDED_FILE'" \
+       "Leaving it would claim first-pass merges the reset above has discarded."
 
 # Baseline every gate this loop attributes, on the reset tree, BEFORE
 # touching anything (see the file header). A baseline failure is never a
@@ -216,10 +235,34 @@ case "$lc_rc" in
        "Not attributable to anything in --accepted -- trunk's own lock is stale." ;;
 esac
 
-# The reset above discarded whatever the first-pass loop already recorded in
-# --landed; start THIS replay's record from empty so the caller closes only
-# what this loop actually keeps merged.
-: > "$LANDED_FILE"
+# One copy of the drop-and-report-HELD step, called from all three arms that
+# take a branch out of the accepted set (CONFLICT, and both BOUNCED arms).
+# land-merge-batch.sh inlines the equivalent block once; this loop needs it
+# three times, and three in-file copies of a step that rewrites the accepted
+# set is the same unenforced-sync hazard this script's header objects to.
+drop_and_hold() {   # $1 = id already reported CONFLICT/BOUNCED on stdout
+  local drop_out verb held_id
+  drop_out=$("$SCRIPT_DIR/drop-from-accepted.sh" "$1" --accepted "$ACCEPTED" \
+    ${GRAPH:+--graph "$GRAPH"}) \
+    || gate_could_not_run "drop-from-accepted.sh faulted dropping '$1' (see its own diagnostic above)"
+  # A here-string, not `printf ... | while`: a pipeline would run the loop in a
+  # subshell for no gain.
+  while IFS=$'\t' read -r verb held_id; do
+    [ "$verb" = "HELD" ] || continue
+    printf 'HELD\t%s\n' "$held_id"
+  done <<< "$drop_out"
+}
+
+# Back the just-merged culprit out and report it. NOT a textual conflict --
+# its content merged fine; a gate judged it bad.
+bounce() {   # $1 = id, merged at HEAD, whose gate turned red
+  git reset --hard -q HEAD~1 \
+    || gate_could_not_run "'git reset --hard HEAD~1' failed backing '$1' out." \
+         "The tree still carries this branch's merge; continuing would attribute the next" \
+         "branch's gates to a tree that includes content this loop has already rejected."
+  printf 'BOUNCED\t%s\n' "$1"
+  drop_and_hold "$1"
+}
 
 for id in $ACCEPTED_IDS; do
   # A branch already HELD/CONFLICT/BOUNCED-dropped by an earlier iteration
@@ -252,13 +295,7 @@ for id in $ACCEPTED_IDS; do
       # holds them (lode-rfon), then drop it and its dependents.
       printf '%s\n' "$CONFLICTS" > "$CONFLICTS_DIR/$id"
       printf 'CONFLICT\t%s\n' "$id"
-      DROP_OUT=$("$SCRIPT_DIR/drop-from-accepted.sh" "$id" --accepted "$ACCEPTED" \
-        ${GRAPH:+--graph "$GRAPH"}) \
-        || gate_could_not_run "drop-from-accepted.sh faulted dropping '$id' (see its own diagnostic above)"
-      while IFS=$'\t' read -r verb held_id; do
-        [ "$verb" = "HELD" ] || continue
-        printf 'HELD\t%s\n' "$held_id"
-      done <<< "$DROP_OUT"
+      drop_and_hold "$id"
       continue
       ;;
     *)
@@ -280,21 +317,13 @@ for id in $ACCEPTED_IDS; do
   # and bounces this id (not a conflict -- its content merged fine, a gate
   # just judged it bad).
   if ! nox -t fix || ! nox -s tests; then
-    git reset --hard -q HEAD~1
-    printf 'BOUNCED\t%s\n' "$id"
-    DROP_OUT=$("$SCRIPT_DIR/drop-from-accepted.sh" "$id" --accepted "$ACCEPTED" \
-      ${GRAPH:+--graph "$GRAPH"}) \
-      || gate_could_not_run "drop-from-accepted.sh faulted dropping '$id' (see its own diagnostic above)"
-    while IFS=$'\t' read -r verb held_id; do
-      [ "$verb" = "HELD" ] || continue
-      printf 'HELD\t%s\n' "$held_id"
-    done <<< "$DROP_OUT"
+    bounce "$id"
     continue
   fi
 
-  bounce_rc=0
-  nox -s lock_currency || bounce_rc=$?
-  case "$bounce_rc" in
+  lc_rc=0
+  nox -s lock_currency || lc_rc=$?
+  case "$lc_rc" in
     0)
       printf 'LANDED\t%s\n' "$id"
       printf '%s\n' "$id" >> "$LANDED_FILE" \
@@ -308,15 +337,7 @@ for id in $ACCEPTED_IDS; do
         "This is a machine fault, never a branch verdict -- do not bounce '$id' on it."
       ;;
     *)
-      git reset --hard -q HEAD~1
-      printf 'BOUNCED\t%s\n' "$id"
-      DROP_OUT=$("$SCRIPT_DIR/drop-from-accepted.sh" "$id" --accepted "$ACCEPTED" \
-        ${GRAPH:+--graph "$GRAPH"}) \
-        || gate_could_not_run "drop-from-accepted.sh faulted dropping '$id' (see its own diagnostic above)"
-      while IFS=$'\t' read -r verb held_id; do
-        [ "$verb" = "HELD" ] || continue
-        printf 'HELD\t%s\n' "$held_id"
-      done <<< "$DROP_OUT"
+      bounce "$id"
       ;;
   esac
 done

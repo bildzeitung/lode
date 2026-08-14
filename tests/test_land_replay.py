@@ -323,6 +323,42 @@ def test_baseline_red_stops_before_merging_anything(tmp_path: Path) -> None:
     assert result.stdout == ""
     assert "before any branch merged" in result.stderr
     assert not (repo / "a.txt").exists()
+    # The reset ran BEFORE this stop, discarding whatever the first-pass loop
+    # had merged -- so the durable record must not survive it still naming
+    # merges that are no longer on the tree.
+    assert landed.read_text() == ""
+
+
+def test_an_unresolvable_base_ref_is_a_machine_fault(tmp_path: Path) -> None:
+    """A failed `git reset --hard <base-ref>` must stop the pass, not fall
+    through and attribute gates against whatever the first-pass loop left
+    merged."""
+    repo = _init_repo(tmp_path)
+    fake_nox = _fake_nox_bin(tmp_path)
+    _branch_from(repo, "trunk", "origin/land/lode-a")
+    _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
+
+    msg_dir = tmp_path / "msgs"
+    _write_msg(msg_dir, "lode-a", "Merge land/lode-a: A (lode-a)")
+    conflicts_dir = tmp_path / "conflicts"
+    conflicts_dir.mkdir()
+    accepted = _accepted(tmp_path, "lode-a")
+    landed = tmp_path / "landed"
+
+    result = _run(
+        repo,
+        accepted,
+        msg_dir,
+        conflicts_dir,
+        landed,
+        base_ref="no-such-ref-anywhere",
+        fake_nox=fake_nox,
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert "git reset --hard no-such-ref-anywhere" in result.stderr
+    assert not (repo / "a.txt").exists(), "nothing may merge after a failed reset"
 
 
 def test_baseline_lock_currency_machine_fault_stops_the_pass(tmp_path: Path) -> None:
