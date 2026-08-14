@@ -18,18 +18,31 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 
 ## Non-interactive shell commands
 
+**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
+
 Some shells alias destructive commands to their interactive form (`cp`/`mv`/`rm` → `-i`), which
 hangs an agent indefinitely on a `y/n` prompt nobody can answer. Always pass the flag that forces
 non-interactive behavior:
 
-- `cp -f`, `cp -rf`, `mv -f`, `rm -f`, `rm -rf`
-- `scp`/`ssh`: `-o BatchMode=yes`
-- `apt-get`: `-y`
-- `brew`: `HOMEBREW_NO_AUTO_UPDATE=1`
+```bash
+# Force overwrite without prompting
+cp -f source dest           # NOT: cp source dest
+mv -f source dest           # NOT: mv source dest
+rm -f file                  # NOT: rm file
 
-[`AGENTS.md`](AGENTS.md#non-interactive-shell-commands) states the same rule at more length, for
-tooling that loads that file instead of this one. Keep the two in step — if you change one, change
-the other.
+# For recursive operations
+rm -rf directory            # NOT: rm -r directory
+cp -rf source dest          # NOT: cp -r source dest
+```
+
+**Other commands that may prompt:**
+- `scp` — use `-o BatchMode=yes` for non-interactive
+- `ssh` — use `-o BatchMode=yes` to fail instead of prompting
+- `apt-get` — use `-y` flag
+- `brew` — use `HOMEBREW_NO_AUTO_UPDATE=1` env var
+
+This is the single normative statement of this rule; [`AGENTS.md`](AGENTS.md#non-interactive-shell-commands)
+carries only a pointer here. If the rule changes, edit this section — don't restate it there.
 
 ## Terms used throughout
 
