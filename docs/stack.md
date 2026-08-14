@@ -911,16 +911,17 @@ bundled into this ticket.
 `lode-fhql` (brand + docs site epic) needs a rendered site over a curated subset of `docs/`. This
 section is the generator decision; `lode-fhql.9` wires it into a GitHub Pages CI workflow,
 `lode-fhql.10` builds the landing page, and `lode-fhql.15` writes derived reference pages for
-content the publish scope below excludes.
+content the publish scope below excludes. The constraints this section decides against — the Mermaid
+pre-render mandate, the publish scope, the link policy — were set as user calls on 2026-08-12 and are
+recorded in [`decisions.md`](decisions.md) (`lode-fhql.8`); this section is where the settled outcome
+lands, so where the two differ, **this is current**.
 
 ### Chosen: MkDocs-Material
 
 **MkDocs-Material** (`mkdocs-material`, which pulls in `mkdocs` itself as a transitive dependency),
-evaluated honestly against **Sphinx + MyST-Parser** — the other realistic Python-native candidate.
-Both are ruled out as the *default* answer only if a good reason turns up; neither is ruled out by
-the Mermaid requirement below, since **both render Mermaid client-side by default** and neither
-ships a build-time pre-render path out of the box — that gap is orthogonal to the generator choice
-and is closed the same way regardless of which one is picked (see below). The deciding factors were:
+evaluated against **Sphinx + MyST-Parser** — the other realistic Python-native candidate. Mermaid
+does not separate the two (both render client-side by default; see the next subsection), so the
+deciding factors were:
 
 - **Source markdown, not reStructuredText.** MkDocs authors pages in plain Markdown out of the box.
   Sphinx's native format is reStructuredText; MyST-Parser adds Markdown support on top, but that's an
@@ -937,18 +938,18 @@ and is closed the same way regardless of which one is picked (see below). The de
 - **Precedent already in the dependency tree.** Typer — already a hard lode dependency (the stack
   table at the top of this file) — is itself documented with MkDocs-Material, so the theme and its
   conventions are a known quantity, not a fresh unknown.
-- **Both are equally Python-native and equally add zero Node toolchain on the host** — neither wins
-  on that axis, which rules out Docusaurus (Node-based — the exact cost this repo already avoids by
-  running Mermaid validation through Docker instead of a host Node/Chromium toolchain, per
-  `CLAUDE.md`) and Hugo/Zola (not Python, and a second static-site toolchain the venv/lock already
-  cover for nothing) without needing to evaluate them in as much depth.
+- **Ruled out without deep evaluation** (neither candidate above loses on this axis — both are
+  Python-native and add zero Node toolchain on the host): Docusaurus (Node-based — the exact cost
+  this repo already avoids by running Mermaid validation through Docker rather than a host
+  Node/Chromium toolchain, per [`CLAUDE.md`](../CLAUDE.md)) and Hugo/Zola (not Python, and a second
+  static-site toolchain the venv/lock already cover for nothing).
 
-**Dependency**: added as its own `docs` extra in `pyproject.toml` (`mkdocs-material>=9.5,<10`, not
-folded into `dev`) — it's CI-only (`lode-fhql.9`'s Pages workflow builds the site; no local `dev`
-install needs it) — per the [pyproject-intent / requirements.lock split](#dependency-locking-lode-g2741):
-**optional extras stay unlocked** (the `dev` extra's existing policy — see that section — extends
-unchanged to `docs`), so this needs no `requirements.lock` regeneration, only the `pyproject.toml`
-declaration.
+**Dependency**: `mkdocs-material>=9.5,<10` as its own `docs` extra in `pyproject.toml`, not folded
+into `dev` — it is CI-only (`lode-fhql.9`'s Pages workflow builds the site; no local `dev` install
+needs it). Per the [pyproject-intent / requirements.lock split](#dependency-locking-lode-g2741),
+optional extras stay unlocked (the `dev` extra's existing policy, extended unchanged to `docs`), and
+`scripts/compile-lock.sh` compiles the lock from `pyproject.toml` with no `--extra` flags — so this
+needs no `requirements.lock` regeneration, only the `pyproject.toml` declaration.
 
 ### Mermaid: build-time pre-render, not the validator (mandated, user call 2026-08-12)
 
@@ -967,19 +968,22 @@ a second, independently-versioned copy), and the site embeds the resulting SVGs 
 `mermaid.js` require in the shipped page. This is **new work**, not a reuse of the existing script: a
 renderer that walks the published pages' fenced blocks, shells out to the pinned image per block, and
 substitutes the SVG output (or fails the build on any block the image can't render). Building that
-renderer and wiring its failure into the CI workflow's exit status is `lode-fhql.9`'s scope, not this
-ticket's — this section fixes the *mechanism* (pre-render through the pinned image, embed the result,
-never ship a live client-side Mermaid require) so `.9` has a decided contract to build against, the
-same way the LLM provider seam above was pinned design-first for `lode-568v.2`/`.3`.
+renderer and wiring its failure into the CI workflow's exit status is `lode-fhql.9`'s scope; what
+this section fixes is the *contract* `.9` builds against — pre-render through the pinned image, embed
+the result, never ship a live client-side Mermaid require.
 
 ### Published / excluded page sets (user call, 2026-08-12)
 
 The site is about lode, not about how lode is made — it publishes a curated subset of `docs/`, not
 all of it:
 
-- **PUBLISHED**: `design.md`, `retrieval.md`, `storage.md`, `externals.md`, `brand.md`, and
-  `docs/how-to/` (`README.md`, `config-change.md`, `jira-setup.md`) — genuinely end-user content,
-  already linked from `design.md`.
+- **PUBLISHED**: `design.md`, `retrieval.md`, `storage.md`, `externals.md`, `brand.md`, and **all of
+  `docs/how-to/`** — genuinely end-user content, already linked from `design.md`. The how-to
+  directory is published **as a directory, not as a frozen file list**: it holds `README.md`,
+  `config-change.md`, `jira-setup.md`, and `maintenance-commands.md` today, and a guide added there
+  later is published by default (the 2026-08-12 call named only the first three, which predated
+  `maintenance-commands.md`; `how-to/README.md`'s index table links it, so a frozen list would have
+  shipped a dangling link).
 - **EXCLUDED**: `decisions.md`, `agents-workflow.md`, `stack.md` (this file), `conventions.md`,
   `release.md`, `test-suite-audit.md`, `onboarding.md`, `keybindings.md`, `tui.md`, `editing.md`,
   `configuration.md`. The last four are the interesting exclusions — they're about lode by title but
@@ -989,25 +993,46 @@ all of it:
   user-facing content is picked up as **derived pages** by `lode-fhql.15`, not by publishing the
   maintainer originals verbatim.
 
+**PUBLISHED is the authoritative list; EXCLUDED is commentary.** The published set is a closed
+enumeration and everything else under `docs/` is unpublished — including material the excluded list
+does not name individually (`docs/research/`, `test-suite-audit-data.csv`, and anything added later).
+Stated this way round a new maintainer doc is unpublished by default, rather than published because
+nobody remembered to exclude it.
+
 ### Link policy: one rewrite rule, not a link-rewriting architecture
 
-Measured 2026-08-12: 64 outbound relative links from the published set point at excluded pages
-(against 38 that stay internal to the published set). They are not one kind — roughly 23 go to
-`decisions.md` and 17 to `stack.md`, reading as maintainer citations ("Per-connector judgment; see
-decisions.md", "Both are tracked in decisions.md") that a site reader loses nothing by not resolving;
-18 go to `configuration.md` and are substantive (a specific knob a reader following the prose
-actually wants) — those are the links `lode-fhql.15`'s derived settings page absorbs; the remaining 6
-are one apiece.
+Measured 2026-08-13 (the user call of 2026-08-12 measured 64/38, before `brand.md` joined the
+published set; the shape is unchanged): **75** outbound relative links from the published set leave
+it, against **48** that stay internal. They are not one kind — `decisions.md` 25 and `stack.md` 17
+read as maintainer citations ("Per-connector judgment; see decisions.md") that a site reader loses
+nothing by not resolving; `configuration.md` 24 are substantive (a specific knob a reader following
+the prose actually wants) and are the links `lode-fhql.15`'s derived settings page absorbs; the rest
+are ones and twos. The counts are a snapshot, not an invariant — `lode-fhql.9` must not gate on a
+literal number; the **shape** is what the rewrite rule is sized against.
 
 The fix is **one rewrite rule**: at build time, any relative link inside a published page that
-targets an excluded page resolves instead to that page's **GitHub URL** (`blob/trunk/docs/<path>` on
-the canonical repo), rather than a 404 or a broken relative path on the rendered site. Links among
-**published** pages stay plain relative markdown links — those already work unmodified both on
-GitHub's own markdown view (the existing, load-bearing requirement — see below) and once rendered by
-MkDocs-Material, so no rewriting is needed or applied to that set. This is deliberately the smallest
-fix that closes the measured gap — not a general link-rewriting architecture, since the 64 broken
-links are overwhelmingly one repeated pattern (a citation to an excluded maintainer doc), not a
-diversity of cases that would justify one.
+targets a file **not in the published set** resolves instead to that file's **GitHub URL**
+(`https://github.com/bildzeitung/lode/blob/trunk/docs/<path>` — the canonical repo, `trunk` being
+this repo's default branch), rather than a 404 or a broken relative path on the rendered site. Three
+details `lode-fhql.9` should not have to guess at:
+
+- **Keyed on "not published", never on the EXCLUDED list.** The rule is then total over every link
+  target — the unenumerated material noted above, and repo-root files like `README.md`
+  (`blob/trunk/<path>`, one level up from `docs/`) — instead of silently passing through anything
+  nobody remembered to exclude.
+- **Fragments carry through verbatim.** `configuration.md#some-knob` becomes
+  `…/blob/trunk/docs/configuration.md#some-knob`; GitHub's heading anchors are the same slugs the
+  markdown source already targets, so the deep link keeps working. This matters most for exactly the
+  24 `configuration.md` links measured above, which are overwhelmingly anchored.
+- **`lode-fhql.15`'s derived pages take precedence once they exist.** A link whose target is
+  absorbed by a derived page resolves to that on-site page, not to GitHub — the GitHub rewrite is
+  the fallback for everything not yet derived.
+
+Links among **published** pages stay plain relative markdown links — those work unmodified both on
+GitHub's markdown view and once rendered by MkDocs-Material, so no rewriting is applied to that set.
+This is deliberately the smallest fix that closes the measured gap, not a general link-rewriting
+architecture: the outbound links are overwhelmingly one repeated pattern (a citation to an
+unpublished maintainer doc), not a diversity of cases that would justify one.
 
 ### Constraint carried over unchanged: docs still read on GitHub
 

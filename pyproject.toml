@@ -88,14 +88,10 @@ dev = [
                             # import.
 ]
 docs = [
-    "mkdocs-material>=9.5,<10", # docs-site generator (lode-fhql.8, see
-                                # docs/stack.md) -- pulls in mkdocs itself as
-                                # a transitive dependency. Python-native,
-                                # matches the existing venv/lock; separate
-                                # extra (not `dev`) because it is CI-only
-                                # (lode-fhql.9's Pages workflow), not
-                                # something every contributor's local `dev`
-                                # install needs.
+    "mkdocs-material>=9.5,<10", # docs-site generator (lode-fhql.8; rationale
+                                # in docs/stack.md). Its own extra rather than
+                                # `dev` because it is CI-only -- lode-fhql.9's
+                                # Pages workflow, not a local `dev` install.
 ]
 
 [project.scripts]
