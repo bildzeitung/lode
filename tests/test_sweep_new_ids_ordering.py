@@ -43,7 +43,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import SWEEP_SKILL_BLOCKS, only_block_with, run_block
+from conftest import _CHECKOUT_ROOT, SWEEP_SKILL_BLOCKS, only_block_with, run_block
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the skill's fenced blocks shell out to jq"
@@ -221,7 +221,7 @@ def test_full_pass_new_item_reaches_push_ids_after_the_digest_rewrite(
     (sweep_tmp / "current").write_text(current_rows)
 
     # --- Section 5, its own subprocess ---
-    r5 = run_block(_section_5_block(), sweep_tmp, bin_dir)
+    r5 = run_block(_section_5_block(), sweep_tmp, bin_dir, cwd=_CHECKOUT_ROOT)
     assert r5.returncode == 0, f"Section 5 failed: {r5.stderr}"
 
     new_ids_after_5 = (sweep_tmp / "new_ids").read_text()
@@ -245,7 +245,7 @@ def test_full_pass_new_item_reaches_push_ids_after_the_digest_rewrite(
     # --- Section 7, its OWN, separate subprocess -- nothing from Section 5's
     # shell survives (lode-sfnb); only $SWEEP_TMP/new_ids and
     # $SWEEP_TMP/current on disk do. ---
-    r7 = run_block(_section_7_block(), sweep_tmp, bin_dir)
+    r7 = run_block(_section_7_block(), sweep_tmp, bin_dir, cwd=_CHECKOUT_ROOT)
     assert r7.returncode == 0, f"Section 7 failed: {r7.stderr}"
 
     push_ids = (sweep_tmp / "push_ids").read_text().strip()
@@ -281,11 +281,11 @@ def test_no_change_pass_is_a_true_no_op(sweep_tmp: Path, tmp_path: Path) -> None
         "lode-yuwt\tland-escalated\tSome prior item\topen"
     )
 
-    r5 = run_block(_section_5_block(), sweep_tmp, bin_dir)
+    r5 = run_block(_section_5_block(), sweep_tmp, bin_dir, cwd=_CHECKOUT_ROOT)
     assert r5.returncode == 0, f"Section 5 failed: {r5.stderr}"
     assert (sweep_tmp / "new_ids").read_text().strip() == ""
 
-    r7 = run_block(_section_7_block(), sweep_tmp, bin_dir)
+    r7 = run_block(_section_7_block(), sweep_tmp, bin_dir, cwd=_CHECKOUT_ROOT)
     assert r7.returncode == 0, f"Section 7 failed: {r7.stderr}"
     assert (sweep_tmp / "push_ids").read_text().strip() == ""
     assert (sweep_tmp / "new_annotated").read_text().strip() == ""
@@ -306,7 +306,7 @@ def test_section_7_missing_new_ids_file_is_a_loud_gate_failure(
     )
     # Deliberately do NOT write $SWEEP_TMP/new_ids.
 
-    r7 = run_block(_section_7_block(), sweep_tmp, bin_dir)
+    r7 = run_block(_section_7_block(), sweep_tmp, bin_dir, cwd=_CHECKOUT_ROOT)
     assert r7.returncode == 1
     assert "GATE COULD NOT RUN" in r7.stderr
     assert "new_ids" in r7.stderr
@@ -331,7 +331,7 @@ def test_section_7_present_but_empty_new_ids_is_not_conflated_with_missing(
     )
     (sweep_tmp / "new_ids").write_text("")
 
-    r7 = run_block(_section_7_block(), sweep_tmp, bin_dir)
+    r7 = run_block(_section_7_block(), sweep_tmp, bin_dir, cwd=_CHECKOUT_ROOT)
     assert r7.returncode == 0, (
         f"Section 7 must not fail on a legitimately-empty new_ids: {r7.stderr}"
     )
@@ -385,7 +385,7 @@ awk -F'\t' -v ann="$SWEEP_TMP/new_annotated" -v push="$SWEEP_TMP/push_ids" '
     )
     (sweep_tmp / "current").write_text(current_rows)
 
-    r5 = run_block(_section_5_block(), sweep_tmp, bin_dir)
+    r5 = run_block(_section_5_block(), sweep_tmp, bin_dir, cwd=_CHECKOUT_ROOT)
     assert r5.returncode == 0, f"Section 5 failed: {r5.stderr}"
     assert (sweep_tmp / "new_ids").read_text().strip() == "lode-l7mj"
 
@@ -397,7 +397,7 @@ awk -F'\t' -v ann="$SWEEP_TMP/new_annotated" -v push="$SWEEP_TMP/push_ids" '
     )
     body_file.write_text(new_body)
 
-    r7 = run_block(old_broken_section_7, sweep_tmp, bin_dir)
+    r7 = run_block(old_broken_section_7, sweep_tmp, bin_dir, cwd=_CHECKOUT_ROOT)
     assert r7.returncode == 0, f"reimplemented old Section 7 errored: {r7.stderr}"
 
     # THIS is the regression this whole file exists to catch: the OLD shape
