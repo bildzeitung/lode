@@ -5247,4 +5247,3 @@ entries below from being rewritten to chase the current tree.)
 - Update (lode-887o, 2026-08-14): nox -s tests now applies two marker filters (-m 'not serial' 
   -n 8, then -m serial -n 0) — an exhaustive partition, so lode-pql's intent (nothing is excluded
   before trunk) is preserved; every test still runs exactly once.
-
