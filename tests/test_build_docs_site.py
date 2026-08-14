@@ -51,6 +51,12 @@ EXCLUDED = {
     "tui.md",
     "editing.md",
     "configuration.md",
+    # lode-fhql.15's derived reference pages -- exist in docs/ but are not
+    # yet wired into the PUBLISHED set. docs/stack.md ("Publish-scope wiring
+    # is a follow-up") explicitly defers that to lode-gecm, blocked on both
+    # this ticket and .15; unpublished-for-now, not an oversight.
+    "keymap.md",
+    "settings.md",
 }
 
 
