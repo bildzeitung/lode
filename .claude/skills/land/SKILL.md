@@ -1339,16 +1339,30 @@ git status --short
   git show --stat HEAD                                               # confirm only the intended paths rode along — no jsonl, nothing else
   ```
 
-**MISTAKES.md — narrow, explicit exception to "report the patch, not the gap."** Before the trunk
-push below, check whether this pass surfaced a qualifying mistake — either one I noticed myself this
-pass, or a `MISTAKES.md CANDIDATE` block a `land-review` dispatch returned this pass — it cannot
-commit from its disposable worktree, so filing is mine. "Qualifying" is CLAUDE.md directive 9's bar —
-not every bounce or drift. If nothing qualifies this pass, skip this block entirely. If something
-does:
+**MISTAKES.md — narrow, explicit exception to "report the patch, not the gap."** This check is owed
+**every `/land` pass that reaches a verdict on at least one branch — not conditional on this pass
+having an accepted set to merge.** It lives here, in Section 4, because that is where the trunk push
+already sits and the common case (some branches landed) reaches it naturally here. But `land-review`
+returns a `MISTAKES.md CANDIDATE` "on every verdict, not only bounce/escalate" (`land-review.md`), so
+a pass where every branch bounces, kicks back `needs-rebase`, or escalates — leaving no accepted set,
+and on some paths never reaching this section at all — still owes this check. If this section runs
+this pass, it runs here, as below. If it does **not** — no branch was merged and nothing below this
+point executes — the identical block runs instead from [Stop and report](#stop-and-report)'s own
+entry point for that case, which also pushes the entry itself (`git push origin trunk`), since no
+merge push follows it there. Before the trunk push below, check whether this pass surfaced a
+qualifying mistake — either one I noticed myself this pass, or a `MISTAKES.md CANDIDATE` block a
+`land-review` dispatch returned this pass — it cannot commit from its disposable worktree, so filing
+is mine. "Qualifying" is CLAUDE.md directive 9's bar — not every bounce or drift. If nothing qualifies
+this pass, skip this block entirely. If something does:
 
 ```bash
 scripts/assert-main-checkout.sh || exit 1     # same reason as the reformat commit above (lode-pxyt)
-grep -n "<distinctive phrase from the incident>" MISTAKES.md    # dedup: same root cause already filed?
+# Dedup by INCIDENT, not exact wording (CLAUDE.md directive 9: "grep for the incident, not just
+# exact wording") -- one exact phrase would miss the same root cause re-described in different
+# words. -i: case-insensitive; -E: alternate a few candidates -- the ticket id if one exists, the
+# file/script/mechanism at fault, and a couple of paraphrases of the failure -- rather than one
+# fixed sentence.
+grep -niE "<ticket id>|<mechanism or file at fault>|<a paraphrase of the failure>" MISTAKES.md
 ```
 
 - **Already present** (a prior stage — a producer in its worktree, the code-reviewer, an earlier
@@ -2535,6 +2549,49 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   considered and rejected (lode-9t7u).
 
 ## Stop and report
+
+### MISTAKES.md filing on a pass that never reaches Section 4
+
+If this pass reached [Section 4](#4-land-the-survivors) and ran its own MISTAKES.md block, that
+already covers this pass — nothing further to do here. But whenever this pass ends with **no accepted
+set to merge** on a path that skips Section 3 and Section 4 entirely (every branch bounced, kicked
+back `needs-rebase`, or escalated; or the pass stopped early on a machine fault), the check is still
+owed — `land-review` can return a `MISTAKES.md CANDIDATE` on any verdict, not only when a branch also
+happens to land. Before releasing the lock, check whether this pass surfaced a qualifying mistake —
+one I noticed myself, or a `MISTAKES.md CANDIDATE` a `land-review` dispatch returned this pass — using
+the same bar and the same block [Section 4](#4-land-the-survivors) uses (CLAUDE.md directive 9's bar;
+dedup by incident via `grep -niE`, never one exact phrase). If nothing qualifies, skip this entirely.
+If something does, run it here, verbatim:
+
+```bash
+scripts/assert-main-checkout.sh || exit 1     # same reason as Section 4's copy (lode-pxyt)
+grep -niE "<ticket id>|<mechanism or file at fault>|<a paraphrase of the failure>" MISTAKES.md
+```
+
+- **Already present** → skip. Entries are append-only; do not double-file.
+- **Not present** → append a new entry at the **top** of the log (newest first), in directive 9's
+  entry shape, then commit it directly on `trunk`, same as Section 4's copy:
+
+```bash
+scripts/assert-main-checkout.sh || exit 1
+git add MISTAKES.md
+git commit --no-verify -q -m "docs: record <short incident name> in MISTAKES.md"
+git show --stat HEAD   # confirm only MISTAKES.md rode along
+```
+
+**This path has no merge push to ride in on — push it myself, right here**, since Section 4's own
+`git push origin trunk` never runs on this path:
+
+```bash
+scripts/assert-main-checkout.sh || exit 1
+# This push must carry the MISTAKES.md doc commit and NOTHING ELSE. Section 4's re-gate is the
+# only thing that certifies merge output, and it did not run this pass -- so if anything other
+# than the single commit just made is unpushed, this path is not the right one to push it.
+# STOP and report instead; never advance origin/trunk past un-re-gated content.
+test "$(git rev-list --count origin/trunk..trunk)" = 1 || exit 1
+git push origin trunk
+git status                 # MUST show trunk up to date with origin
+```
 
 When the pass ends I release the lock (`scripts/land-lock.sh release`, [Section
 4](#4-land-the-survivors) — or, on any exit that never reaches it, the staleness window does,
