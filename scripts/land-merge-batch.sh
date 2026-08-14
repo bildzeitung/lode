@@ -137,7 +137,8 @@ fi
 # present-but-empty -> OK, iterates zero times (lode-0jan's rule: an
 # all-bounced/all-kicked-back pass is a legitimate outcome, not a fault).
 ACCEPTED_IDS=$("$SCRIPT_DIR/land-state-load.sh" "$ACCEPTED" -- \
-  "land-merge-batch.sh: the accepted-set precompute did not run.") || exit 2
+  "land-merge-batch.sh: the accepted-set precompute did not run.") \
+  || gate_could_not_run "could not read --accepted '$ACCEPTED' (see land-state-load.sh's own diagnostic above)"
 
 for id in $ACCEPTED_IDS; do
   # A branch already HELD/CONFLICT-dropped by an earlier iteration this same
@@ -166,7 +167,7 @@ for id in $ACCEPTED_IDS; do
       # MACHINE FAULT -- land-merge-one.sh already printed its own diagnostic
       # to this call's stderr. Never a branch verdict (lode-9i2p): stop
       # processing rather than guess at the fate of the ids not yet reached.
-      exit 2
+      gate_could_not_run "land-merge-one.sh faulted on '$id' (see its own diagnostic above)"
       ;;
     *)
       # rc=1: a real textual conflict against a branch already merged this
@@ -184,7 +185,8 @@ for id in $ACCEPTED_IDS; do
       # script's own fault too: propagate it as exit 2 rather than silently
       # leaving a conflicted branch in the accepted set.
       DROP_OUT=$("$SCRIPT_DIR/drop-from-accepted.sh" "$id" --accepted "$ACCEPTED" \
-        ${GRAPH:+--graph "$GRAPH"}) || exit 2
+        ${GRAPH:+--graph "$GRAPH"}) \
+        || gate_could_not_run "drop-from-accepted.sh faulted dropping '$id' (see its own diagnostic above)"
       printf '%s\n' "$DROP_OUT" | while IFS=$'\t' read -r verb held_id; do
         [ "$verb" = "HELD" ] || continue
         printf 'HELD\t%s\n' "$held_id"
