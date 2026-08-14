@@ -5161,3 +5161,21 @@ entries below from being rewritten to chase the current tree.)
     Non-goals bullet list (a new bullet recording the exclude-but-never-hide behavior), and §8
     (a `<blocked_human>` state var, a `## Blocked human tickets` report section, and a `blocked`
     field on the one-line summary).
+
+- **`/sweep` §8's three-state (`missing`/`error`/`ok`) read of a `$SWEEP_TMP` scratch file, not
+  extracted to a script despite a third verbatim copy (`lode-48gj`, 2026-08-13).** `lode-csxh`
+  added a third call site (§2c's `$SWEEP_TMP/blocked_human` read) to the pattern §2a/§2b already
+  used, crossing the two-copies-are-fine line `scripts/sweep-digest-id.sh`'s own header draws
+  ("logic shared by two call sites belongs in `scripts/`, never duplicated in markdown"). Judged
+  in the same review that filed this ticket: `scripts/land-state-load.sh` is not a drop-in
+  replacement — both of its policies `exit 1` on a missing file, which is exactly the non-fatal
+  third state `lode-3oik` documents this contract needs (a missing file degrades only that
+  section's §8 report line, never the pass). Using it here would mean adding a third policy
+  (something like `--tri-state`/`--sentinel`) to that shared script, or standing up a new
+  `scripts/sweep-report-state.sh` just for this — either a real change to a script other call
+  sites depend on, or a new script for three ~6-line, already-identical blocks. **Decision:
+  leave the three copies as documented duplication for now.** `tests/test_sweep_state_load.py`
+  was extended (in the `lode-csxh` review) to pin all three sites equally, so the copies stay
+  guarded against silent drift even unextracted. Revisit if a fourth call site appears — that
+  would be the point three genuinely stops being "fine, and guarded" and starts paying for its
+  own script.

@@ -277,30 +277,44 @@ status, before the loop ever starts, is what actually surfaces the failure.
 ## Report-only sections (§2a, §2b, §2c) — shared contract
 
 §2a (`deferred` tickets), §2b (stranded `in_progress` tickets), and §2c (dependency-blocked `human`
-tickets) are three independent reads that share one contract — stated once here rather than three
-times below. Each section keeps only its own persistence target and its own section-specific
-reasoning. §2c is the one exception to "independent **read**": its query is `bd blocked --json`,
-already run once in §1 (to compute the `$HUMAN` subtraction, lode-csxh) — §2c does not re-issue it,
-it only persists the blocked-out rows §1 already partitioned out. Everything else below — the
-sentinel and the three-state file contract, and the digest/notify exclusion — applies to §2c
-identically. `--limit 0` does not apply to §2c's own query: `bd blocked` exposes no `--limit` flag
-at all (checked directly against `bd blocked --help`), so there is nothing to pin — see §1's note.
+tickets) are three report-only lists that share a **rendering contract** — how each list's result is
+persisted and what it's excluded from — stated once here rather than three times below. §2a and §2b
+additionally share a **collection contract** — how each list's own `bd` query is run. §2c has no
+collection contract of its own: its data is the `bd blocked --json` call §1 already makes (to
+compute the `$HUMAN` subtraction, lode-csxh), not an independent read — see §2c's own section below
+for what stands in its place.
+
+### Rendering contract (§2a, §2b, §2c — no exceptions)
 
 **The sentinel, and why it can't collide with a real row.** Each section persists its result to its
 own `$SWEEP_TMP` file (`$SWEEP_TMP/deferred` for §2a, `$SWEEP_TMP/stranded` for §2b,
-`$SWEEP_TMP/blocked_human` for §2c — written by §1, per that section's note) the same way §1
-persists `$ESCALATED`/`$HUMAN` — §8 (a later, separate Bash invocation) reads it back from disk
-rather than relying on the model's in-context memory of the block's output, which is not the
-mechanism §0 says this file uses. On a query error (`bd` or `jq`), the block overwrites the
-capture — which may be partial or garbled — with the literal string `SWEEP-QUERY-ERROR` instead of
-letting the pass abort. That gives each file three readable states: *missing* (the block never ran
-this pass — e.g. it crashed before reaching the `printf`), *the sentinel* (the query itself errored,
-detected on the assignment itself, so the failure replaces the capture before it can be written out
-as data), and *anything else* (the query succeeded — zero or more real `@tsv` rows, each of which
-always contains a tab). The sentinel is a single line with **no tab**, which is structurally
-impossible for a real row to produce (every row is `<id>\t<title>` via `@tsv`) — so this isn't a
-string-luck collision avoidance, it's a format invariant. §8 checks for the sentinel by exact match
-before treating a file's content as data.
+`$SWEEP_TMP/blocked_human` for §2c) the same way §1 persists `$ESCALATED`/`$HUMAN` — §8 (a later,
+separate Bash invocation) reads it back from disk rather than relying on the model's in-context
+memory of the block's output, which is not the mechanism §0 says this file uses. On a query error
+(`bd` or `jq`), the writer overwrites the capture — which may be partial or garbled — with the
+literal string `SWEEP-QUERY-ERROR` instead of letting the pass abort. That gives each file three
+readable states: *missing* (the writer never ran this pass — e.g. it crashed before reaching the
+`printf`), *the sentinel* (the query itself errored, detected on the assignment itself, so the
+failure replaces the capture before it can be written out as data), and *anything else* (the query
+succeeded — zero or more real `@tsv` rows, each of which always contains a tab). The sentinel is a
+single line with **no tab**, which is structurally impossible for a real row to produce (every row is
+`<id>\t<title>` via `@tsv`) — so this isn't a string-luck collision avoidance, it's a format
+invariant. §8 checks for the sentinel by exact match before treating a file's content as data.
+
+**Deliberately excluded from everything else in this skill.** None of `$DEFERRED` (§2a),
+`$STRANDED` (§2b), or the blocked-human rows (§2c) ever feed `$CURRENT` (§3) — none may enter
+`$CURRENT_IDS`/`$NEW_IDS` (§5), drive the digest rewrite/no-op decision, or trigger the §7
+`PushNotification`. None is ever written into the digest body (§6), and none carries **dedup
+state** of its own — each is recomputed fresh, in full, every pass, straight into the §8 report.
+(What a ticket entering or leaving each list *means* differs by section — see each section's own
+note below.)
+
+§8 owns what each state renders as — see its three-state rule, and
+[Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
+
+### Collection contract (§2a, §2b only)
+
+§2a and §2b are two independent reads, on their own track, each with its own `bd list` query.
 
 **`set -o pipefail` is what makes the failure detectable at all** — it is the load-bearing line in
 each section's block, not hygiene. Without it, `VAR=$(bd … | jq …)` carries the exit status of the
@@ -328,22 +342,8 @@ literal `bd list` search. **But the roster is no longer what enforces this** —
 this list to stay current by itself. That test owns the scan surface and the exclusions; this
 paragraph is documentation for a human reader, and deliberately does not restate them.)
 
-**Deliberately excluded from everything else in this skill.** None of `$DEFERRED` (§2a),
-`$STRANDED` (§2b), or the blocked-human rows (§2c) ever feed `$CURRENT` (§3) — none may enter
-`$CURRENT_IDS`/`$NEW_IDS` (§5), drive the digest rewrite/no-op decision, or trigger the §7
-`PushNotification`. None is ever written into the digest body (§6), and none carries **dedup
-state** of its own — each is recomputed fresh, in full, every pass, straight into the §8 report.
-(What a ticket entering or leaving each list *means* differs by section — see each section's own
-note below.) §2c is already excluded a layer earlier too: its rows are subtracted out of `$HUMAN`
-itself in §1, before `$HUMAN` ever reaches §3 — so unlike §2a/§2b, whose lists are independent of
-what does reach `$CURRENT`, §2c's list is the complement of what §1 lets through.
-
-If §2a's or §2b's query errors, the failure is isolated to that step alone: the block writes the
-sentinel instead of aborting, and the pass continues. §2c's failure mode is different — its query
-is §1's `bd blocked` call, so a failure there writes `source_query_failed` (§1) *and* the
-`SWEEP-QUERY-ERROR` sentinel into `$SWEEP_TMP/blocked_human`, both at once. §8 owns what each
-state renders as — see its three-state rule, and
-[Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
+Failure here is isolated to that step alone: the block writes the sentinel instead of aborting, and
+the pass continues.
 
 ## 2a. Collect deferred tickets (report-only — never touches the digest or notify path)
 
@@ -464,10 +464,16 @@ vanish from every workflow surface for the epic's whole lifetime the way it did 
 
 §1 already wrote this section's file (`$SWEEP_TMP/blocked_human`, `<id>\t<title>` rows, or the
 `SWEEP-QUERY-ERROR` sentinel on a failed `bd blocked`) as part of partitioning `$HUMAN` — there is no
-separate fenced block here to run. The persistence/sentinel convention, the three-state file
-contract, and what this section is deliberately excluded from are all stated once, for this section
-and §2a/§2b both, in [Report-only sections (§2a, §2b, §2c) — shared
-contract](#report-only-sections-2a-2b-2c--shared-contract) above.
+separate fenced block here to run, and so no `--limit 0`/`set -o pipefail` collection contract of its
+own: `bd blocked` exposes no `--limit` flag at all (checked directly against `bd blocked --help`), so
+there is nothing to pin. The rendering contract — the persistence/sentinel convention, the
+three-state file contract, and what this section is deliberately excluded from — is stated once, for
+this section and §2a/§2b both, in [Report-only sections (§2a, §2b, §2c) — shared
+contract](#report-only-sections-2a-2b-2c--shared-contract) above, and applies to §2c identically,
+with one difference in how its failure surfaces: since §2c's data is §1's `bd blocked` call rather
+than a query of its own, a failure there writes `source_query_failed` (§1) *and* the
+`SWEEP-QUERY-ERROR` sentinel into `$SWEEP_TMP/blocked_human`, both at once — rather than the sentinel
+alone, as §2a/§2b's own failed queries write.
 
 A ticket entering or leaving this list is not itself a new human-decision item — but leaving it (its
 blocking dependency closes) is exactly what makes the ticket enter `$CURRENT` for the *first* time in
