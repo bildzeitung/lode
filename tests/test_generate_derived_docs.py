@@ -14,6 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from conftest import load_module_from_path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -117,9 +118,24 @@ def test_a_renamed_source_heading_fails_loud(tmp_path: Path) -> None:
     assert "SourceDocChanged" in result.stderr
 
 
-def test_a_renamed_source_column_fails_loud(tmp_path: Path) -> None:
-    """Columns are read by NAME, so a renamed or reordered column raises too -- the failure a
-    positional read would survive silently, emitting one column's content under another's header."""
+@pytest.mark.parametrize(
+    "renamed_header",
+    [
+        # Renaming a column the generator only READS: a positional read would survive this
+        # silently, emitting one column's content under another's header.
+        "| Knob | Kind | Value | Notes |",
+        # Renaming a column the generator also RECOGNIZES knob tables BY. This is the rename that
+        # could skip a whole table rather than misread it -- emitting a page quietly missing a
+        # section -- so it must raise like every other reshape, not fall through as "not a table".
+        "| Setting | Kind | Default | Notes |",
+        "| Knob | Category | Default | Notes |",
+    ],
+)
+def test_a_renamed_source_column_fails_loud(
+    tmp_path: Path, renamed_header: str
+) -> None:
+    """Columns are read by NAME, and a knob table is recognized by those same names, so any rename
+    of one raises rather than degrading the page."""
     configuration = (REPO_ROOT / "docs" / "configuration.md").read_text(
         encoding="utf-8"
     )
@@ -127,7 +143,7 @@ def test_a_renamed_source_column_fails_loud(tmp_path: Path) -> None:
         tmp_path,
         sources={
             "configuration.md": configuration.replace(
-                "| Knob | Kind | Default | Notes |", "| Knob | Kind | Value | Notes |"
+                "| Knob | Kind | Default | Notes |", renamed_header
             )
         },
         derived={},

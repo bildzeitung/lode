@@ -1083,14 +1083,16 @@ that heading (`scripts/check_links.py::github_slug`, the algorithm the repo's li
 enforces), so one `#anchor` link resolves both on GitHub — via its own auto-generated heading
 anchor — and on the site, whose renderer slugs punctuation differently.
 
-**Publish-scope wiring is a follow-up, not this ticket's job.** `lode-fhql.9` (built concurrently, in
-its own worktree) owns `scripts/build_docs_site.py`'s `PUBLISHED_TOP_LEVEL` list — this ticket has no
-access to that file to add `keymap.md`/`settings.md` to it, and doing so before both branches land
-would edit a sibling's in-flight file. The "`lode-fhql.15`'s derived pages take precedence once they
-exist" link-rewrite rule above already anticipates this: once both land, `keymap.md`/`settings.md`
-need adding to `PUBLISHED_TOP_LEVEL` (and the link-rewrite rule then resolves `keybindings.md`/
-`configuration.md` citations elsewhere in the published set to these two pages instead of falling
-through to GitHub) — tracked as a follow-up ticket, blocked on both `lode-fhql.9` and `lode-fhql.15`.
+**Publish-scope wiring is a follow-up, not this ticket's job — it is `lode-gecm`,** blocked on both
+`lode-fhql.9` and `lode-fhql.15`. So `keymap.md` and `settings.md` land in `docs/` **unpublished**:
+the live publish gate today is `mkdocs.yml`'s `exclude_docs` allowlist plus its `nav` (`lode-fhql.10`,
+next section), and neither lists them. `lode-fhql.9` is being built concurrently in its own worktree
+and may reshape that gate, so wiring the two pages in from here would edit a sibling's in-flight file
+on a mechanism that may not survive; `lode-gecm` does it once, against whatever gate `trunk` actually
+carries at that point. The "`lode-fhql.15`'s derived pages take precedence once they exist"
+link-rewrite rule above already anticipates the same moment: once the pages are published, that rule
+resolves `keybindings.md`/`configuration.md` citations elsewhere in the published set to these two
+pages instead of falling through to GitHub.
 
 ### mkdocs.yml scaffold and the landing page (lode-fhql.10)
 

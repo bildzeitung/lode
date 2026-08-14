@@ -46,8 +46,10 @@ class SourceDocChanged(Exception):
 
 
 # Friendlier, reader-facing names for the TUI's Screen classes -- someone using lode doesn't think
-# in terms of Python class names. Keys are matched against the source table's Screen cell with its
-# backticks removed (`_screen_key`), so they read as plain class names here. Any screen name found
+# in terms of Python class names. Keys are matched against the source table's Screen cell normalized
+# by `_screen_key` -- backticks dropped and any trailing parenthetical aside ("(default screen)",
+# "(focusable widget, not a Screen)") cut -- so they are bare class names here, and rewording one of
+# those asides in the source doc cannot silently stop a label from matching. Any screen name found
 # in the source table but missing here falls back to a de-camel-cased version of the class name
 # (see `_fallback_label`), so a new screen never goes unlisted -- it just gets a slightly less
 # polished label until this map is extended.
@@ -62,11 +64,11 @@ SCREEN_LABELS = {
     "SnapshotViewerScreen": "Viewing a saved web snapshot",
     "EditScreen": "Editing a note",
     "DiscardConfirmScreen": "Discard-and-quit confirmation",
-    "CaptureScreen (default screen)": "Capture (the screen you land on)",
+    "CaptureScreen": "Capture (the screen you land on)",
     "AskScreen": "Ask",
     "ConfigScreen": "Config",
     "ReconcileScreen": "Reconcile",
-    "RelatedNotesPanel (focusable widget, not a Screen)": "The related-notes panel",
+    "RelatedNotesPanel": "The related-notes panel",
     "RelatedNoteModalScreen": "Viewing a related note",
     "HelpScreen": "The keybinding help overlay",
 }
@@ -74,9 +76,10 @@ SCREEN_LABELS = {
 
 def _screen_key(screen: str) -> str:
     """The source table's Screen cell, normalized for `SCREEN_LABELS` lookup: the cell wraps the
-    class name in backticks (and sometimes a parenthetical containing more of them), which the map's
-    plain-prose keys don't carry."""
-    return screen.replace("`", "").strip()
+    class name in backticks and sometimes trails a parenthetical aside, neither of which the map's
+    bare-class-name keys carry. `_fallback_label` normalizes the same way, so an unmapped screen and
+    a mapped one are keyed off identical text."""
+    return screen.replace("`", "").split(" (")[0].strip()
 
 
 def _fallback_label(screen: str) -> str:
@@ -337,6 +340,12 @@ def generate_keymap() -> str:
 # Settings (docs/configuration.md -> docs/settings.md, runtime rows only)
 # ---------------------------------------------------------------------------
 
+# The columns every `| Knob | Kind | Default | Notes |` table in docs/configuration.md declares.
+# Doubles as the table SNIFFER (any one of them present marks a header row) and as the list read
+# by name below -- one concept, so a renamed column can never make a table go unrecognized instead
+# of raising.
+_KNOB_TABLE_COLUMN_NAMES = ("Knob", "Kind", "Default", "Notes")
+
 
 def generate_settings() -> str:
     src = (DOCS_DIR / "configuration.md").read_text(encoding="utf-8")
@@ -401,12 +410,17 @@ def generate_settings() -> str:
         if cells is None:
             in_table = False
             continue
-        if cells[:1] == ["Knob"]:
+        if set(_KNOB_TABLE_COLUMN_NAMES) & set(cells):
+            # A knob table is anything declaring ANY of the four column names -- not `Knob` alone.
+            # Recognizing it by one column would make renaming THAT column skip the whole table
+            # silently, emitting a page quietly missing a section: exactly the thinner-page failure
+            # `_column` exists to raise on. Declaring some of them means a reshaped knob table, and
+            # falls through to `_column` below, which raises.
             # Read by name from here on, so an inserted or reordered column raises rather than
             # silently shifting (e.g. emitting the Kind column as the Default).
             header_cols = {
                 n: _column(cells, n, "docs/configuration.md")
-                for n in ("Knob", "Kind", "Default", "Notes")
+                for n in _KNOB_TABLE_COLUMN_NAMES
             }
             if cols is not None and header_cols != cols:
                 raise SourceDocChanged(
