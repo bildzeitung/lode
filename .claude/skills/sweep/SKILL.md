@@ -314,8 +314,6 @@ note below.)
 
 ### Collection contract (§2a, §2b only)
 
-§2a and §2b are two independent reads, on their own track, each with its own `bd list` query.
-
 **`set -o pipefail` is what makes the failure detectable at all** — it is the load-bearing line in
 each section's block, not hygiene. Without it, `VAR=$(bd … | jq …)` carries the exit status of the
 *last* command in the pipeline, `jq` alone, and a failing `bd` never reaches it: measured on bd
