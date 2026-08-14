@@ -1,0 +1,53 @@
+<!--
+  lode lockup, dark-theme variant (lode-fhql.19).
+
+  lockup.svg's `<img>`/`<picture>`-embedded consumers (README.md, docs/index.md)
+  cannot rely on `currentColor` at all: an `<img>`-embedded SVG is an
+  independent document page CSS cannot reach, and GitHub sanitizes README
+  HTML on top of that, so `currentColor` always resolves to lockup.svg's own
+  ink default regardless of the surrounding page's theme (lode-fhql.19,
+  finding from lode-fhql.7's technical review). The fix is GitHub's own
+  documented idiom: a `<picture>` element whose
+  `media="(prefers-color-scheme: dark)"` `<source>` points here, with
+  lockup.svg as the light/fallback `<img>`. That means a second asset
+  variant instead of one currentColor file, a deliberate trade against
+  lockup.svg's single-file preference, taken because the alternative (an
+  inline `<style>` block inside lockup.svg) rests on an unverified
+  assumption, whether GitHub's SVG sanitizer preserves an inline `<style>`
+  element at all, and, even if it did, only tracks the visitor's OS
+  preference, not GitHub's own light/dark toggle (GitHub-dark-on-OS-light
+  would still fail). `<picture>`'s media query is evaluated by the
+  embedding page, not the SVG document, so it works correctly under both.
+
+  Byte-for-byte identical to lockup.svg except: `color="#F7F4EE"` (paper,
+  docs/brand.md section 3) on the root instead of ink, and this header.
+  tests/test_brand_assets.py's strict-XML gate covers this file via its
+  `docs/assets/*.svg` glob; it is not wired into the lockup.svg /
+  mark.svg geometry-drift gate (that gate is keyed to the two specific
+  filenames), so keep this file's geometry in sync with lockup.svg/mark.svg
+  by hand if either changes.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 104 32" color="#F7F4EE">
+  <!-- mark, unchanged from mark.svg -->
+  <rect x="0" y="4"  width="32" height="4" fill="currentColor" opacity="0.35"/>
+  <rect x="0" y="16" width="32" height="4" fill="currentColor" opacity="0.35"/>
+  <rect x="0" y="24" width="32" height="4" fill="currentColor" opacity="0.35"/>
+  <path
+    d="M 4 28 L 12 28 L 12 16 L 24 16 L 24 4 L 28 4"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="4"
+    stroke-linecap="square"
+    stroke-linejoin="miter"
+  />
+
+  <!-- wordmark: "lode", set in the monospace stack, vertically centred on the mark -->
+  <text
+    x="44"
+    y="23"
+    fill="currentColor"
+    font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+    font-size="20"
+    font-weight="600"
+  >lode</text>
+</svg>
