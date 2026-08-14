@@ -19,9 +19,11 @@ one check in the script would turn the corresponding test here red.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -48,8 +50,23 @@ REQUIRED_SCRIPTS = _required_scripts()
 REQUIRED_AGENTS = ["coding", "code-reviewer", "land-review"]
 REQUIRED_SKILLS = ["code", "land", "challenge", "epic-audit", "sweep", "release"]
 
+# The doctor's only REQUIRED prerequisite that a CI runner may lack is `bd`
+# (beads) -- git/jq/python3 are always present on GitHub Actions runners, and
+# `docker` is a warn, not a fail (see harness-doctor.sh). Rather than install
+# beads in CI (explicitly rejected -- lode-fqob), stub a `bd` onto PATH for
+# every subprocess this module launches, so these tests exercise the repo
+# checks the doctor performs, not whether the runner's own toolchain has
+# beads installed. Built once at import time (module-scoped tmp dir, not
+# tmp_path) since the stub is identical and read-only across every test.
+_STUB_BIN = Path(tempfile.mkdtemp(prefix="lode-harness-doctor-stub-bin-"))
+_stub_bd = _STUB_BIN / "bd"
+_stub_bd.write_text("#!/usr/bin/env bash\ntrue\n")
+_stub_bd.chmod(0o755)
+_STUBBED_PATH = f"{_STUB_BIN}{os.pathsep}{os.environ.get('PATH', '')}"
+
 
 def _run(cwd: Path) -> subprocess.CompletedProcess:
+    env = dict(os.environ, PATH=_STUBBED_PATH)
     return subprocess.run(
         ["bash", str(SCRIPT)],
         cwd=cwd,
@@ -57,6 +74,7 @@ def _run(cwd: Path) -> subprocess.CompletedProcess:
         text=True,
         timeout=30,
         check=False,
+        env=env,
     )
 
 
