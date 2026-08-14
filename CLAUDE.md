@@ -16,6 +16,35 @@ If you find yourself about to run `Edit`, `Write`, or any mutating command while
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ```
 
+## Non-interactive shell commands
+
+Some shells alias destructive commands to their interactive form (`cp`/`mv`/`rm` → `-i`), which
+hangs an agent indefinitely on a `y/n` prompt nobody can answer. Always pass the flag that forces
+non-interactive behavior:
+
+- `cp -f`, `cp -rf`, `mv -f`, `rm -f`, `rm -rf`
+- `scp`/`ssh`: `-o BatchMode=yes`
+- `apt-get`: `-y`
+- `brew`: `HOMEBREW_NO_AUTO_UPDATE=1`
+
+[`AGENTS.md`](AGENTS.md#non-interactive-shell-commands) states the same rule at more length, for
+tooling that loads that file instead of this one. Keep the two in step — if you change one, change
+the other.
+
+## Terms used throughout
+
+A short glossary of synonyms this file, the skill files under `.claude/skills/`, and the docs under
+`docs/` use interchangeably:
+
+- **"the default branch"** = `trunk` — this repo's default branch (see the STOP section above).
+  Never conflate with "the main checkout" below; scripts that read one and write the other are
+  the most destructive ones in the repo.
+- **"the tracker"** = `bd` (beads), backed by Dolt — see [Beads Issue Tracker](#beads-issue-tracker)
+  below.
+- **"the main checkout"** = the repo root working tree, as opposed to a worktree under
+  `.claude/worktrees/`. This is lode's own term — "the primary checkout" means the same thing and
+  appears in imported/upstream material, but new prose says "the main checkout".
+
 ## What this is
 
 **lode** — an AI-first, TUI-first personal knowledge base for "things you learn during your day at work." Fast to capture, intelligent to retrieve: the bet is grounded, *cited* Q&A over your own notes. Status: **built end-to-end.** The core loop ships — notes, version chains, cited Q&A, a minimal eval harness, and a web connector — behind a Textual TUI, plus a full CLI. Additional connectors (e.g. Atlassian) are in progress; see [`docs/decisions.md`](docs/decisions.md) for what's still open.
