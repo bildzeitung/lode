@@ -91,6 +91,40 @@ def test_lockup_carries_the_marks_geometry_verbatim() -> None:
     )
 
 
+def _document(svg: str) -> str:
+    """The SVG document itself, with the leading maintainer comment stripped.
+
+    Anchored on ``<svg xmlns``, not on ``<svg``: lockup.svg's header comment
+    contains a literal ``<svg>`` and would otherwise be treated as the start
+    of the document.
+    """
+    return svg[svg.index("<svg xmlns") :]
+
+
+def test_dark_lockup_is_the_lockup_recoloured_and_nothing_else() -> None:
+    """lockup-dark.svg differs from lockup.svg only in the root ``color``.
+
+    The dark variant exists solely to give <picture>'s
+    ``prefers-color-scheme: dark`` source a paper-coloured lockup
+    (lode-fhql.19); its geometry is a verbatim copy. Without this gate an edit
+    to lockup.svg silently leaves the dark variant behind, and the drift is
+    invisible to anyone on the other theme -- exactly the failure mode that
+    produced this ticket.
+    """
+    light = _document((ASSETS / "lockup.svg").read_text())
+    dark = _document((ASSETS / "lockup-dark.svg").read_text())
+
+    assert 'color="#F7F4EE"' in dark, (
+        "lockup-dark.svg's root color is no longer paper (#F7F4EE, "
+        "docs/brand.md section 3) -- it will not be legible on a dark theme."
+    )
+    assert dark == light.replace('color="#1E1B2E"', 'color="#F7F4EE"'), (
+        "lockup-dark.svg is no longer lockup.svg recoloured. The two are "
+        "copy-pasted on purpose (only the root colour differs); edit both, or "
+        "update this gate deliberately."
+    )
+
+
 def _grids(text: str) -> tuple[list[str], list[str]]:
     ascii_rows = re.findall(r"^[vs.]{8}$", text, re.MULTILINE)
     block_rows = re.findall(r"^[█░·]{8}$", text, re.MULTILINE)

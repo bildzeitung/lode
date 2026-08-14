@@ -46,8 +46,29 @@ def _index_text() -> str:
     return INDEX.read_text()
 
 
+class _MkdocsLoader(yaml.SafeLoader):
+    """SafeLoader that resolves ONE extra tag: the ``!!python/name:`` reference
+    mkdocs.yml uses for ``markdown_extensions.toc.slugify`` (lode-fhql.21).
+
+    ``yaml.unsafe_load`` would also parse it, but by importing whatever the tag
+    names and permitting every other unsafe tag in the file -- more authority
+    than this module needs (it reads ``nav``/``theme``/``docs_dir``/
+    ``exclude_docs``) and a loose precedent for the next reader to copy.
+    Resolving the tag to its dotted name as a plain STRING is enough, and lets
+    ``test_toc_slugify_is_the_github_compatible_one`` assert the wiring by
+    value. MkDocs' own loader is Safe-derived with a ``python/name``
+    constructor for the same reason.
+    """
+
+
+_MkdocsLoader.add_multi_constructor(
+    "tag:yaml.org,2002:python/name:",
+    lambda loader, suffix, node: suffix,
+)
+
+
 def _mkdocs_config() -> dict:
-    return yaml.safe_load(MKDOCS_YML.read_text())
+    return yaml.load(MKDOCS_YML.read_text(), Loader=_MkdocsLoader)
 
 
 def test_index_exists_and_has_front_matter_title() -> None:
@@ -210,3 +231,17 @@ def test_exclude_docs_is_an_allowlist_covering_the_published_set() -> None:
             f"docs/{directory}/ is published as a directory but exclude_docs does not "
             f"re-include '{directory}/*.md'."
         )
+
+
+def test_toc_slugify_is_the_github_compatible_one() -> None:
+    """The `toc` extension's DEFAULT slugify collapses an em-dash-between-spaces
+    run to a single hyphen where GitHub emits two, so the built site's heading
+    ids stop matching the anchors docs/ links against (lode-fhql.21). The
+    override is a one-line config key that nothing else would notice going
+    missing -- so assert it by value."""
+    toc = next(
+        ext["toc"]
+        for ext in _mkdocs_config()["markdown_extensions"]
+        if isinstance(ext, dict) and "toc" in ext
+    )
+    assert toc["slugify"] == "lode.docs_slug.github_slugify"

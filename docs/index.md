@@ -18,7 +18,10 @@ description: An AI-first, TUI-first personal knowledge base for the things you l
 -->
 
 <p align="center">
-  <img src="assets/lockup.svg" alt="lode" width="220">
+  <picture>
+    <source srcset="assets/lockup-dark.svg" media="(prefers-color-scheme: dark)">
+    <img src="assets/lockup.svg" alt="lode" width="220">
+  </picture>
 </p>
 
 <p align="center">

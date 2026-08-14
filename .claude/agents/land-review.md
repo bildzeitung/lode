@@ -223,7 +223,10 @@ These mirror `challenge`'s axes, turned from *plan* onto *result*:
 - Does the branch do **exactly** the ticket, no more? **Silent scope creep** — an unrelated refactor,
   a drive-by feature, a config change nobody asked for — is a finding even when it's "nice", because
   it lands unreviewed work under this ticket's name. Discovered work belongs in its own
-  `discovered-from` issue, not smuggled in here.
+  `discovered-from` issue, not smuggled in here. **One exception: a MISTAKES.md append is never
+  scope creep** — CLAUDE.md directive 9 requires the producer or the code-reviewer to file a
+  qualifying mistake autonomously, from whatever branch they were on, so an entry riding a branch
+  that is otherwise unrelated to it is the sanctioned write path, not smuggled work.
 - Does it do **less** than the ticket and hide it? Under-scope is as much a finding as over-scope.
 
 **Design & invariants — does it honor the record?** (challenge's *assumptions*, after the fact)
@@ -277,11 +280,20 @@ REBUILD BRIEF        # bounce only — enough to open the superseding ticket
 
 DECISION NEEDED      # escalate only — the question for the human, land nothing
   <the genuine choice, with the options as I see them>
+
+MISTAKES.md CANDIDATE  # only if I found one — /land files it, I do not
+  <what happened / root cause / consequence / prevention rule>
 ```
 
 Findings are grouped by axis; each is a **genuine, landing-relevant** point, no padding to look
 thorough. A clean branch is a valid and common outcome — on **accept** I say so plainly and don't
 manufacture objections.
+
+**MISTAKES.md — I report, I never write it myself.** My worktree is disposable and I never commit to
+it, so a discovery meeting CLAUDE.md directive 9's bar cannot be filed from here. I put it in a
+`MISTAKES.md CANDIDATE` block in my report, worded ready-to-paste in directive 9's entry shape, and
+`/land` — the session that dispatched me — dedups and files it. This applies on every verdict, not
+only bounce/escalate: a mistake can be worth recording on an otherwise-accepted branch.
 
 ### 4. What I don't do
 
