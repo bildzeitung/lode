@@ -25,9 +25,9 @@
   docs/brand.md section 1 centred below it, wrapped by hand across two
   lines since SVG <text> does not auto-wrap. The sentence drops only its
   subject ("lode is"), which the wordmark directly above already supplies,
-  leaving it byte-identical to mkdocs.yml's own `site_description` -- so
-  the card and the og:description meta tag say the same thing. It is set
-  in the Inter body
+  leaving it byte-identical to mkdocs.yml's own `site_description`, so the
+  card and the og:description meta tag say the same thing. It is set in
+  the Inter body
   stack from docs/brand.md section 4, falling back to the system sans-serif
   stack for a rasterizer without the Inter webfont installed (the same
   fallback-stack convention the wordmark already uses for its monospace

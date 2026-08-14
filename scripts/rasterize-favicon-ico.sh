@@ -41,29 +41,25 @@ python3 -m venv "$WORKDIR/venv"
 "$WORKDIR/venv/bin/pip" install --quiet cairosvg==2.9.0
 
 # Paths go in as argv, not interpolated into the Python source: a repo path
-# containing a quote would otherwise break the string literal. Strip XML
-# comments before handing the source to cairosvg's strict parser: mark.svg's
-# header comment currently contains a literal '--' (CSS var(--paper),
-# lode-fhql.17's fix for the same class of bug is unlanded as of this
-# writing) which trips defusedxml's expat-based ElementTree parser, even
-# though the comment carries no rendering meaning at all. Comments are
-# irrelevant to the rasterized pixels either way, so stripping them here
-# does not touch the committed file and makes this script robust to the
-# tracked source having (or not having) a stray '--' in a comment.
+# containing a quote would otherwise break the string literal. The SVG is
+# handed to cairosvg by `url=`, exactly as scripts/rasterize-mark.sh and
+# scripts/rasterize-og-card.sh do -- which requires mark.svg to parse under
+# a strict XML parser (cairosvg goes through defusedxml's expat-based
+# ElementTree). That is not an assumption: lode-fhql.17 fixed the literal
+# '--' that used to sit in mark.svg's header comment and added a gate over
+# every docs/assets/*.svg (tests/test_brand_assets.py::test_svg_is_strict_xml)
+# so it cannot come back unnoticed.
 "$WORKDIR/venv/bin/python3" -c "
-import re
 import struct
 import sys
 
 import cairosvg
 
 svg_path, out_path = sys.argv[1], sys.argv[2]
-with open(svg_path, 'rb') as f:
-    svg_bytes = re.sub(rb'<!--.*?-->', b'', f.read(), flags=re.DOTALL)
 
 sizes = (16, 32, 48)
 pngs = [
-    cairosvg.svg2png(bytestring=svg_bytes, output_width=s, output_height=s)
+    cairosvg.svg2png(url=svg_path, output_width=s, output_height=s)
     for s in sizes
 ]
 
