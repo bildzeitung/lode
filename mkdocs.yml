@@ -77,7 +77,8 @@ markdown_extensions:
       # through this site), and scripts/check_links.py's `github_slug` gate
       # (tests/test_check_links.py) already enforces it repo-wide -- so
       # mkdocs' own build must slug headings the same way, not diverge from
-      # the anchors the docs use. src/lode/docs_slug.py holds the one shared
-      # implementation, reused here and by scripts/check_links.py's
-      # github_slug gate.
+      # the anchors the docs use. src/lode/docs_slug.py holds this side's
+      # implementation -- a deliberate copy of the gate's algorithm, not a
+      # shared import; that module's docstring owns the why, and
+      # tests/test_check_links.py keeps the two copies from drifting.
       slugify: !!python/name:lode.docs_slug.github_slugify
