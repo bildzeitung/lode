@@ -501,7 +501,9 @@ def test_landed_reformat_is_committed_as_part_of_the_merge(tmp_path: Path) -> No
     fake_nox = _fake_nox_bin(tmp_path)
     _branch_from(repo, "trunk", "origin/land/lode-a")
     _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
-    _commit_file(repo, "reformat_target.txt", "unformatted\n", "A adds an unformatted file")
+    _commit_file(
+        repo, "reformat_target.txt", "unformatted\n", "A adds an unformatted file"
+    )
     _commit_file(repo, "REFORMAT_ME", "", "trigger the fake reformat")
     _branch_from(repo, "trunk", "origin/land/lode-b")
     _commit_file(repo, "b.txt", "from B\n", "B adds b.txt")
