@@ -4,16 +4,16 @@ Every knob lode reads that you can change **while running it** -- an environment
 
 See [Paths & locations](#paths--locations) below for where `config.toml` lives and its format; a knob not listed there defaults, and there is no requirement to have a `config.toml` at all.
 
-<a id="paths-locations"></a>
+<a id="paths--locations"></a>
 ## Paths & locations
 
 | Setting | Default | Notes |
 |---|---|---|
 | `LODE_HOME` | `~/.lode` | Root for all on-disk state. Env-var override; one directory holds the DB, vector store, logs, lock, and config. |
 | Log directory | `$LODE_HOME/logs/` | Application logs. |
-| `LODE_LOG_LEVEL` | `INFO` | lode's own root-logger level. Accepts a case-insensitive level name (`debug`, `info`, `warning`, ...); an unrecognized value raises rather than silently defaulting. Read when no level is passed explicitly (`src/lode/logconfig.py::resolve_level`). |
-| `ANTHROPIC_LOG` | unset | Not a lode-specific knob — the Anthropic SDK's own wire-level debug switch. Set to `debug` or `info` and the SDK logs on the `anthropic` logger, which propagates to the root logger and is formatted/routed alongside lode's own logs (`src/lode/logconfig.py`). |
-| `lode --debug` | off | Top-level CLI flag (`lode --debug <subcommand>`, e.g. `lode --debug tui`): forces the root-logger level to `DEBUG` for that invocation, which also flips on every DEBUG-gated diagnostic (e.g. the TUI's event-loop-lag `latency_probe`). Takes precedence over `LODE_LOG_LEVEL` when passed; omit it and `LODE_LOG_LEVEL` (default `INFO`) still applies unchanged. In the TUI this only raises verbosity in the log file — the console stays suppressed either way; for plain CLI commands it raises both stderr and file verbosity (`src/lode/cli/__init__.py::main`). |
+| `LODE_LOG_LEVEL` | `INFO` | lode's own root-logger level. Accepts a case-insensitive level name (`debug`, `info`, `warning`, ...); an unrecognized value raises rather than silently defaulting. Read when no level is passed explicitly. |
+| `ANTHROPIC_LOG` | unset | Not a lode-specific knob — the Anthropic SDK's own wire-level debug switch. Set to `debug` or `info` and the SDK logs on the `anthropic` logger, which propagates to the root logger and is formatted/routed alongside lode's own logs. |
+| `lode --debug` | off | Top-level CLI flag (`lode --debug <subcommand>`, e.g. `lode --debug tui`): forces the root-logger level to `DEBUG` for that invocation, which also flips on every DEBUG-gated diagnostic (e.g. the TUI's event-loop-lag `latency_probe`). Takes precedence over `LODE_LOG_LEVEL` when passed; omit it and `LODE_LOG_LEVEL` (default `INFO`) still applies unchanged. In the TUI this only raises verbosity in the log file — the console stays suppressed either way; for plain CLI commands it raises both stderr and file verbosity. |
 | Config file path | `$LODE_HOME/config.toml` | User-editable runtime knobs. **Optional** — if absent, every knob uses its default below; no config file is a valid, fully-working state. |
 
 <a id="retrieval-and-ranking"></a>
@@ -30,7 +30,7 @@ See [Paths & locations](#paths--locations) below for where `config.toml` lives a
 |---|---|---|
 | LLM-judge second pass | off | Optional "high-assurance" verification; costs a round-trip + $ + off-box egress. |
 
-<a id="tui-passive-connection-surfacing-e11"></a>
+<a id="tui--passive-connection-surfacing-e11"></a>
 ## TUI — passive connection surfacing (E11)
 
 | Setting | Default | Notes |
@@ -40,8 +40,8 @@ See [Paths & locations](#paths--locations) below for where `config.toml` lives a
 | Related-notes result count | `5` | Max related past notes shown per pass. |
 | Related-notes minimum draft length | `20` chars | Below this (stripped) length, no pass runs at all — no DB connection opened. |
 
-<a id="tui-ask-screen-citation-rendering-lode-35nu-3"></a>
-## TUI — ask screen citation rendering (lode-35nu.3)
+<a id="tui--ask-screen-citation-rendering"></a>
+## TUI — ask screen citation rendering
 
 | Setting | Default | Notes |
 |---|---|---|
@@ -59,7 +59,7 @@ See [Paths & locations](#paths--locations) below for where `config.toml` lives a
 | Batch collect failure budget (`batch_collect_failure_budget`) | `5` | Consecutive `collect_enrich_batch()` failures (the poll call itself raising, not an individual result's errored/expired/canceled outcome) at which one `batch_handle`'s still-`running` jobs are dead-lettered — so N-1 are tolerated and the Nth is fatal. Resets to 0 on any poll that doesn't raise, so it counts *consecutive* failures, not a lifetime total. Closes the last of the three poison-pill axes `_batch_collect_enrich`'s per-handle isolation left open. |
 | `work --wait` timeout | `1800s` (30 min) | Max time `lode work --wait` blocks polling for the queue to fully drain (incl. collected Batches API enrich results) before exiting non-zero and naming the still-pending/running jobs. The Batches API SLA is up to 24h, so `--wait` can legitimately time out on a large enrich load -- that's expected, not a bug; it suits embed-heavy or small-batch cases, and a big async enrich backlog may need a plain re-run of `lode work` instead. |
 | Progress heartbeat interval (`progress_heartbeat_interval_s`) | `15s` | How often `lode work` logs a "still running" heartbeat line (`lode.progress.op_progress`) for a named long-running op -- a `reconcile()` step, a `drain()` batch pre-step, or the main claim/run loop -- that hasn't finished yet. Makes a stuck op visible instead of silent, even where it can't be safely aborted outright (e.g. a local ONNX model load or a SQL scan). |
-| Enrich call timeout (`enrich_call_timeout_s`) | `120s` | Per-call client-side timeout passed to every **enrichment** cloud-LLM call through the `LLMProvider` seam, immediate and batch alike, under whichever provider is active: the calls reachable from `lode work` (`enrich.py` -- the batch-path pre-steps and the immediate structured-output call a residual enrich job can take in `drain()`'s main loop) -- bounds a hung network call rather than letting it block forever. Renamed vendor-neutral from `anthropic_call_timeout_s`, then renamed again from `llm_call_timeout_s` to `enrich_call_timeout_s` once the `qa_call_timeout_s` split left the general name covering only this enrichment subset; a `config.toml` still carrying either old key is remapped by `load_settings()`. Distinct from Fetch timeout below, which governs web draw-down HTTP fetches, not LLM provider calls. Does not reach the Q&A synthesis call (`qa.py`) -- see [`qa_call_timeout_s`](#models). |
+| Enrich call timeout (`enrich_call_timeout_s`) | `120s` | Per-call client-side timeout passed to every **enrichment** cloud-LLM call through the `LLMProvider` seam, immediate and batch alike, under whichever provider is active: the calls reachable from `lode work` -- bounds a hung network call rather than letting it block forever. Renamed vendor-neutral from `anthropic_call_timeout_s`, then renamed again from `llm_call_timeout_s` to `enrich_call_timeout_s` once the `qa_call_timeout_s` split left the general name covering only this enrichment subset; a `config.toml` still carrying either old key is remapped by `load_settings()`. Distinct from Fetch timeout below, which governs web draw-down HTTP fetches, not LLM provider calls. Does not reach the Q&A synthesis call -- see [`qa_call_timeout_s`](#models). |
 | VectorStore optimize interval (`vectorstore_optimize_interval`) | `200` | How often a `VectorStore` holding its opened LanceDB Table across many `replace_vectors()` calls runs `table.optimize()` to prune old versions. Bounds the held Table's version-history-linked memory growth, which was measured to be linear and effectively unbounded over a long `lode work --loop` process otherwise -- see [`docs/decisions.md`](decisions.md). |
 
 <a id="externals-with-connectors"></a>
@@ -75,12 +75,12 @@ See [Paths & locations](#paths--locations) below for where `config.toml` lives a
 | `confluence_enabled` | `false` | Feature flag for the Confluence Cloud API connector. |
 | `jira_base_url` | `""` (empty) | API base override, e.g. `https://acme.atlassian.net`. Empty means infer from the pasted link at detection time. A non-empty value must be a well-formed `http(s)` URL — a malformed one fails validation at `Settings()` construction. |
 | `confluence_base_url` | `""` (empty) | Same shape as `jira_base_url`, for Confluence. |
-| `LODE_JIRA_TOKEN` env var / `jira_token` (config.toml fallback) | unset / `""` | JIRA Cloud API token. Resolved **env-var PRIMARY**: `LODE_JIRA_TOKEN` is checked first, then the `jira_token` key in `config.toml` as fallback. No secret is required to live in `config.toml`. **The raw value is never logged, echoed, or shown by `lode config`** — `secret=True` (`src/lode/config.py::_knob`) shows only a presence indicator in the knob table, never the value (see below). |
+| `LODE_JIRA_TOKEN` env var / `jira_token` (config.toml fallback) | unset / `""` | JIRA Cloud API token. Resolved **env-var PRIMARY**: `LODE_JIRA_TOKEN` is checked first, then the `jira_token` key in `config.toml` as fallback. No secret is required to live in `config.toml`. **The raw value is never logged, echoed, or shown by `lode config`** — `secret=True` shows only a presence indicator in the knob table, never the value (see below). |
 | `LODE_JIRA_EMAIL` env var / `jira_email` (config.toml fallback) | unset / `""` | JIRA Cloud Basic-auth account email — same env-first, config.toml-fallback resolution as the token, and the same `secret=True` presence-only treatment. |
 | `LODE_CONFLUENCE_TOKEN` env var / `confluence_token` (config.toml fallback) | unset / `""` | Confluence Cloud API token — same resolution and secrecy guarantee as `jira_token`. |
 | `LODE_CONFLUENCE_EMAIL` env var / `confluence_email` (config.toml fallback) | unset / `""` | Confluence Cloud Basic-auth account email — same resolution and secrecy guarantee as `jira_email`. |
 
-<a id="privacy-egress"></a>
+<a id="privacy--egress"></a>
 ## Privacy & egress
 
 | Setting | Default | Notes |
@@ -90,8 +90,8 @@ See [Paths & locations](#paths--locations) below for where `config.toml` lives a
 | Redact-before-egress pattern set | high-precision seed | Secret patterns stripped before content is sent to the configured cloud LLM; iterate from real misses. ([decisions.md](decisions.md)) |
 | Redact-before-index pattern set | high-precision seed | Secret patterns kept out of the local vector/FTS index. |
 
-<a id="tool-augmented-ask-lode-8hsk-lode-35nu-11-2-lode-8vvp"></a>
-## Tool-augmented Ask (lode-8hsk / lode-35nu.11.2 / lode-8vvp)
+<a id="tool-augmented-ask"></a>
+## Tool-augmented Ask
 
 | Setting | Default | Notes |
 |---|---|---|

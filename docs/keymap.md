@@ -14,21 +14,21 @@ A reference for every key lode's TUI responds to, for someone **using** lode day
 | `ctrl+t` | Show Tags |
 | `ctrl+l` | Show Ask |
 | `ctrl+underscore` | Show keybinding help overlay |
-| `ctrl+shift+minus` (hidden, `show=False`) | Show keybinding help overlay |
-| `ctrl+minus` (hidden, `show=False`) | Show keybinding help overlay |
-| `?` (hidden, `show=False`) | Show keybinding help overlay |
+| `ctrl+shift+minus` | Show keybinding help overlay |
+| `ctrl+minus` | Show keybinding help overlay |
+| `?` | Show keybinding help overlay |
 
 ## Keys by screen
 
 Each screen also has its own keys, active only while that screen is showing. A key listed here can differ from what the same key does elsewhere in the app -- lode resolves whichever binding belongs to the screen you're currently on first.
 
-### Version History Screen
+### Version history
 
 | Key | Action |
 |---|---|
 | `escape` | Back |
 
-### Version View Screen
+### Viewing an old version
 
 | Key | Action |
 |---|---|
@@ -36,21 +36,21 @@ Each screen also has its own keys, active only while that screen is showing. A k
 | `ctrl+n` | Open link under cursor |
 | `ctrl+l` | Ask about this note |
 
-### Enrichment Modal Screen
+### Enrichment inspector
 
 | Key | Action |
 |---|---|
 | `escape` | Back |
 
-### Yes No Confirm Screen
+### Yes/No confirmation dialogs
 
 | Key | Action |
 |---|---|
-| `y` | Yes -- shared base for `DeleteConfirmScreen` (`screens/delete_confirm.py`), `NoEgressClearConfirmScreen` (`screens/no_egress_confirm.py`) and `SaveAsNoteConfirmScreen` |
+| `y` | Yes -- shared base for `DeleteConfirmScreen`, `NoEgressClearConfirmScreen` and `SaveAsNoteConfirmScreen` |
 | `n` | No |
 | `escape` | Cancel |
 
-### Browse Screen
+### Browse
 
 | Key | Action |
 |---|---|
@@ -62,20 +62,20 @@ Each screen also has its own keys, active only while that screen is showing. A k
 | `n` | Toggle no_egress on the highlighted note; clearing it confirms first |
 | `slash` | Search |
 
-### External Picker Screen
+### External-source picker
 
 | Key | Action |
 |---|---|
 | `escape` | Back |
 
-### Tags Screen
+### Tags
 
 | Key | Action |
 |---|---|
 | `escape` | Back |
 | `space` | Toggle tag |
 
-### Snapshot Viewer Screen
+### Viewing a saved web snapshot
 
 | Key | Action |
 |---|---|
@@ -83,7 +83,7 @@ Each screen also has its own keys, active only while that screen is showing. A k
 | `t` | Toggle raw HTML |
 | `ctrl+n` | Open link under cursor |
 
-### Edit Screen
+### Editing a note
 
 | Key | Action |
 |---|---|
@@ -96,7 +96,7 @@ Each screen also has its own keys, active only while that screen is showing. A k
 | `ctrl+n` | Open link under cursor |
 | `ctrl+l` | Ask about this note |
 
-### Discard Confirm Screen
+### Discard-and-quit confirmation
 
 | Key | Action |
 |---|---|
@@ -105,7 +105,7 @@ Each screen also has its own keys, active only while that screen is showing. A k
 | `c` | Cancel |
 | `escape` | Cancel |
 
-### Capture Screen
+### Capture (the screen you land on)
 
 | Key | Action |
 |---|---|
@@ -114,7 +114,7 @@ Each screen also has its own keys, active only while that screen is showing. A k
 | `ctrl+f` | Focus related-notes panel |
 | `ctrl+n` | Open link under cursor |
 
-### Ask Screen
+### Ask
 
 | Key | Action |
 |---|---|
@@ -124,20 +124,20 @@ Each screen also has its own keys, active only while that screen is showing. A k
 | `ctrl+j` | Open the focused citation's cited version/snapshot |
 | `ctrl+s` | Save the current answer as a new note |
 
-### Config Screen
+### Config
 
 | Key | Action |
 |---|---|
 | `escape` | Back |
 
-### Reconcile Screen
+### Reconcile
 
 | Key | Action |
 |---|---|
 | `r` | Re-apply |
 | `d` | Discard |
 
-### Related Notes Panel
+### The related-notes panel
 
 | Key | Action |
 |---|---|
@@ -145,13 +145,13 @@ Each screen also has its own keys, active only while that screen is showing. A k
 | `down` | Select next related |
 | `enter` | Open selected (modal) |
 
-### Related Note Modal Screen
+### Viewing a related note
 
 | Key | Action |
 |---|---|
 | `escape` | Back |
 
-### Help Screen
+### The keybinding help overlay
 
 | Key | Action |
 |---|---|
