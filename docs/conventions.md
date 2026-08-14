@@ -70,6 +70,10 @@ This **reverses** the earlier tree-wide adoption of the bare form; the why, and 
 alternatives, live in
 [`configuration.md`](configuration.md#python-style-multi-exception-except-must-be-parenthesized-lode-buay).
 
+A pytest corpus scan (`tests/test_except_parens_gate.py`) gates this fiat mechanically — it fails on
+any tracked-source bare or unmarked multi-exception `except`, so a dropped `# fmt: skip` marker turns
+red on the next `nox -t fix` instead of degrading silently.
+
 ## Derive identifiers, never retype them
 
 A long opaque identifier — a full git SHA, a bd issue id, a `.claude/worktrees/` hash — is never
