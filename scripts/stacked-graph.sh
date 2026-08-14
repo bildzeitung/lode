@@ -64,6 +64,9 @@
 #   EDGE       <dependent>  <base>     transitive
 #   UNORDERED  <a>          <b>                   (only with --report-unordered)
 #
+#   UNORDERED means "related, and NO direction exists in either ordering" -- a
+#   pair that also carries an EDGE is never reported unordered.
+#
 #   "direct" = <base> is <dependent>'s NEAREST base: no other base of
 #   <dependent> itself has <base> as one of ITS bases. /land needs this to pick
 #   the single base land-review diffs against -- handing it a transitive base
@@ -75,16 +78,43 @@
 # exit 1: this is a query, not a verdict, so "no stacks" is a successful run.
 set -u
 
-TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || TOP=""
-if [ -n "$TOP" ] && [ -r "$TOP/scripts/gate-lib.sh" ]; then
-  # shellcheck source=/dev/null
-  . "$TOP/scripts/gate-lib.sh" --no-advisory
-else
-  gate_could_not_run() { echo "GATE COULD NOT RUN: $1" >&2; shift; for l in "$@"; do echo "$l" >&2; done; exit 2; }
+# The source itself must fail CLOSED (lode-bss5) -- see gate-lib.sh's Usage
+# section for the measurement and why the guard can't use the library it loads.
+# The export this script was ported from carried a permissive variant (source
+# if readable, else define a local gate_could_not_run), which both defeats that
+# rule and is invisible to tests/test_gate_lib.py's consumer sweep, since that
+# sweep anchors on this exact source line. lode's form is the pinned one.
+# shellcheck source=gate-lib.sh
+if ! . "$(dirname "$0")/gate-lib.sh" --no-advisory; then
+  echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
+  echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
+  exit 2
 fi
 
 BASE_REF="origin/trunk"
 REPORT_UNORDERED=0
+
+# Printed by BOTH exit paths (empty edge set, and the normal one), so the
+# directed-pair filter below cannot be applied on one path and forgotten on the
+# other.
+emit_unordered() {
+  [ "$REPORT_UNORDERED" = "1" ] || return 0
+  [ -n "$UNORD" ] || return 0
+  printf '%s' "$UNORD" | while IFS="$(printf '\t')" read -r a b; do
+    [ -n "$a" ] || continue
+    # A pair is collected into UNORD by whichever ordering has x < y, but
+    # direction is only ever found in ONE of the two orderings -- the one with
+    # the BASE first. When the base's id sorts AFTER the dependent's, the
+    # x < y ordering is the undirected one, so a genuinely stacked pair lands
+    # in UNORD as well as in EDGES. Suppress those: UNORDERED means "related
+    # and NO direction exists", not "no direction in this ordering".
+    if printf '%s' "$EDGES" | grep -qxF "$a	$b" \
+      || printf '%s' "$EDGES" | grep -qxF "$b	$a"; then
+      continue
+    fi
+    printf 'UNORDERED\t%s\t%s\n' "$a" "$b"
+  done
+}
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --base-ref) shift; [ "$#" -gt 0 ] || gate_could_not_run "--base-ref needs a value"; BASE_REF="$1" ;;
@@ -144,8 +174,7 @@ for x in $IDS; do
   done
 done
 
-[ -n "$EDGES" ] || { [ -n "$UNORD" ] && printf '%s' "$UNORD" | while IFS="$(printf '\t')" read -r a b; do
-    [ -n "$a" ] && printf 'UNORDERED\t%s\t%s\n' "$a" "$b"; done; exit 0; }
+[ -n "$EDGES" ] || { emit_unordered; exit 0; }
 
 # --- pass 2: transitive closure + nearest-base classification --------------
 # Done in awk rather than bash: a fixpoint over an edge set is where hand-rolled
@@ -177,9 +206,5 @@ printf '%s' "$EDGES" | awk -F'\t' '
   }
 ' | sort
 
-if [ "$REPORT_UNORDERED" = "1" ] && [ -n "$UNORD" ]; then
-  printf '%s' "$UNORD" | while IFS="$(printf '\t')" read -r a b; do
-    [ -n "$a" ] && printf 'UNORDERED\t%s\t%s\n' "$a" "$b"
-  done
-fi
+emit_unordered
 exit 0

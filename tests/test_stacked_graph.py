@@ -23,6 +23,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
 from _gitrepo import _git
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -237,6 +238,30 @@ def test_branched_from_base_is_reported_unordered_not_guessed(tmp_path: Path) ->
     assert "UNORDERED\tbase\tdep" in r.stdout
 
 
+def test_directed_stack_is_never_also_reported_unordered(tmp_path: Path) -> None:
+    """Direction is only found in the ordering that puts the BASE first, but
+    UNORDERED pairs are collected in the x < y ordering. When the base's id
+    sorts AFTER the dependent's, those two orderings differ, and a genuinely
+    stacked pair used to be emitted as an EDGE *and* as UNORDERED -- a false
+    ambiguity on roughly half of all real stacks, since ids sort arbitrarily.
+
+    Every other case in this file happens to name its base so it sorts first,
+    which is exactly why this went unnoticed; here the base is `land/zzz`.
+    """
+    repo = _repo(tmp_path)
+    _branch(repo, "land/zzz", "origin/trunk")
+    _commit(repo, "zzz_work")
+    _branch(repo, "land/aaa", "origin/trunk")
+    _commit(repo, "aaa_work")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "merge zzz", "land/zzz")
+    _publish(repo, "land/zzz", "land/aaa")
+
+    r = _run(repo, "--report-unordered")
+    assert r.returncode == 0, r.stderr
+    assert _edges(r) == {("aaa", "zzz", "direct")}
+    assert "UNORDERED" not in r.stdout, r.stdout
+
+
 def test_default_base_ref_is_origin_trunk(tmp_path: Path) -> None:
     """Acceptance criterion for lode-s9xe.2: the ported script's default must be
     re-specialized to origin/trunk, not left at the export's origin/main --
@@ -257,21 +282,26 @@ def test_default_base_ref_is_origin_trunk(tmp_path: Path) -> None:
     assert _edges(r) == {("dep", "base", "direct")}
 
 
-def test_machine_faults_exit_2_and_never_read_as_no_stacks(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("args", "needle"),
+    [
+        (["--base-ref", "origin/does-not-exist"], "does not resolve"),
+        (["--bogus-flag"], "unknown argument"),
+    ],
+)
+def test_machine_faults_exit_2_and_never_read_as_no_stacks(
+    tmp_path: Path, args: list[str], needle: str
+) -> None:
     """A query that could not run must not be indistinguishable from 'no stacks'
     -- that conflation is what would let /land merge a dependent before its base."""
     repo = _repo(tmp_path)
-    for args, needle in (
-        (["--base-ref", "origin/does-not-exist"], "does not resolve"),
-        (["--bogus-flag"], "unknown argument"),
-    ):
-        r = subprocess.run(
-            ["bash", str(SCRIPT), *args],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert r.returncode == 2, r.stdout
-        assert needle in r.stderr
-        assert r.stdout == ""
+    r = subprocess.run(
+        ["bash", str(SCRIPT), *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 2, r.stdout
+    assert needle in r.stderr
+    assert r.stdout == ""
