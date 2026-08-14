@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{# OG/social-card metadata (lode-fhql.10).
+
+   The image path below is the convention lode-fhql.6 (favicon + OG card)
+   commits its 1200x630 asset to -- docs/assets/og-card.png, alongside the
+   rest of docs/assets/ (mark.svg, mark-16.png, lockup.svg). lode-fhql.10
+   no longer depends on lode-fhql.6 (dropped 2026-08-12, see lode-fhql.10's
+   notes): this tag points at that path now so the metadata is present and
+   wired, and starts resolving the moment lode-fhql.6 commits the file --
+   nothing here needs to change when it lands. #}
+
+{% block extrahead %}
+  {{ super() }}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="lode">
+  <meta property="og:title" content="{{ page.title | default('lode') }}">
+  <meta property="og:description" content="{{ config.site_description }}">
+  {# page.canonical_url is ALREADY absolute (it embeds site_url) -- prefixing
+     site_url again yields a doubled URL. Use it bare. #}
+  <meta property="og:url" content="{{ page.canonical_url }}">
+  <meta property="og:image" content="{{ config.site_url }}assets/og-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ page.title | default('lode') }}">
+  <meta name="twitter:description" content="{{ config.site_description }}">
+  <meta name="twitter:image" content="{{ config.site_url }}assets/og-card.png">
+{% endblock %}
