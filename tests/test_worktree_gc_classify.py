@@ -1,11 +1,17 @@
 """Tests for scripts/worktree-gc-classify.sh (lode-9owc).
 
-`/land`'s Section 4 worktree-GC backstop sweep (`.claude/skills/land/SKILL.md`)
-decides what to do with each candidate under `.claude/worktrees/` via a
-per-candidate predicate that -- before this ticket -- lived only as inline
-bash in a markdown fence, reachable by no gate at all. The script's own header
-carries WHY it was extracted and what each bucket means; that is deliberately
-not retold here.
+`/land`'s Section 4 worktree-GC backstop sweep decides what to do with each
+candidate under `.claude/worktrees/` via a per-candidate predicate that --
+before this ticket -- lived only as inline bash in a markdown fence, reachable
+by no gate at all. The script's own header carries WHY it was extracted and
+what each bucket means; that is deliberately not retold here.
+
+The SWEEP around it has since been extracted the same way, into
+`scripts/worktree-gc-sweep.sh` (lode-s9xe.5, tested in
+`tests/test_worktree_gc_sweep.py`) -- that script, not the surviving
+`.claude/skills/land/SKILL.md` fence, is what the bucket-vocabulary test at
+the bottom of this module now reads. The fence is deleted by the call-site
+ticket that wires the sweep in.
 
 What matters to the tests: the script only ever PRINTS a bucket name -- it
 never removes a worktree or deletes a branch -- so every fixture below only
@@ -56,10 +62,13 @@ import subprocess
 from pathlib import Path
 
 from _gitrepo import _git
-from conftest import LAND_SKILL_TEXT
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "worktree-gc-classify.sh"
+
+#: The GC loop moved out of land/SKILL.md into this script (lode-s9xe.5); the
+#: bucket contract it must handle is the classifier's, wherever the loop lives.
+SWEEP_TEXT = (REPO_ROOT / "scripts" / "worktree-gc-sweep.sh").read_text()
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -161,18 +170,18 @@ def _buckets_the_script_can_print() -> set[str]:
 
 
 def _buckets_the_land_loop_handles() -> set[str]:
-    """Every non-default arm label of `SKILL.md`'s `case "$BUCKET"` dispatch."""
-    text = LAND_SKILL_TEXT
+    """Every non-default arm label of the sweep script's `case "$BUCKET"` dispatch."""
+    text = SWEEP_TEXT
     start = text.index('case "$BUCKET" in')
     end = text.index("\n  esac", start)
     return set(re.findall(r"^\s*([a-z][a-z-]*)\)", text[start:end], re.MULTILINE))
 
 
 def test_land_loop_handles_exactly_the_buckets_the_script_prints() -> None:
-    """`/land`'s loop maps each bucket to a counter and a (possibly
-    DESTRUCTIVE) action by matching the script's output as a literal string,
-    in a markdown fence that no other gate reads. Nothing else links the two
-    vocabularies, so a rename or typo on either side is caught by nothing:
+    """`scripts/worktree-gc-sweep.sh`'s loop maps each bucket to a counter and
+    a (possibly DESTRUCTIVE) action by matching the classify script's output
+    as a literal string. Nothing else links the two vocabularies, so a rename
+    or typo on either side is caught by nothing:
     the loop would fall to its `*)` arm for every candidate and count the
     whole sweep as `failed`, silently zeroing out worktree GC. That fails
     SAFE (no worktree is touched), which is exactly why it could run
