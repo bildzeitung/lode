@@ -153,13 +153,17 @@ def test_block_redraw_matches_the_ascii_proof_grid() -> None:
 _GEOMETRY_ATTRS = ("d", "x", "y", "width", "height")
 
 
+def _attrs(shape: str) -> dict[str, str]:
+    """One drawable element's attributes, as a dict."""
+    return dict(re.findall(r'(\w[\w-]*)="([^"]*)"', shape))
+
+
 def _geometry(svg: str) -> list[dict[str, str]]:
     """Each drawable element's geometry-only attributes, in source order."""
-    out = []
-    for shape in _shapes(svg):
-        attrs = dict(re.findall(r'(\w[\w-]*)="([^"]*)"', shape))
-        out.append({k: v for k, v in attrs.items() if k in _GEOMETRY_ATTRS})
-    return out
+    return [
+        {k: v for k, v in _attrs(shape).items() if k in _GEOMETRY_ATTRS}
+        for shape in _shapes(svg)
+    ]
 
 
 def _id_mark_geometry(svg_text: str, source_name: str) -> list[dict[str, str]]:
@@ -188,34 +192,22 @@ def _id_mark_geometry(svg_text: str, source_name: str) -> list[dict[str, str]]:
     return _geometry(f"<svg>{group.group(1)}</svg>")
 
 
-def test_og_card_carries_the_marks_geometry() -> None:
-    mark = _geometry((ASSETS / "mark.svg").read_text())
-    og_card = _id_mark_geometry((ASSETS / "og-card.svg").read_text(), "og-card.svg")
-
-    assert mark, "mark.svg has no <rect>/<path> elements -- parser or asset broke"
-    assert og_card == mark, (
-        "og-card.svg's mark geometry has drifted from mark.svg. The two are "
-        "copy-pasted on purpose (colour differs deliberately); edit both, or "
-        "update this gate deliberately."
-    )
-
-
-def test_favicon_mark_carries_the_marks_geometry() -> None:
-    """favicon-mark.svg (lode-fhql.22) wraps a verbatim copy of mark.svg's
-    geometry in its own `<g id="mark">`, alongside the paper background tile
-    mark.svg doesn't have -- same drift risk and same gate shape as
-    test_og_card_carries_the_marks_geometry.
+@pytest.mark.parametrize("derived", ["og-card.svg", "favicon-mark.svg"])
+def test_derived_asset_carries_the_marks_geometry(derived: str) -> None:
+    """Every asset that wraps a copy of mark.svg's geometry in its own
+    `<g id="mark">` must still agree with mark.svg -- og-card.svg
+    (lode-fhql.6) and favicon-mark.svg (lode-fhql.22) alike. Parametrised so
+    a third derived asset is one more id, not a third copy of this gate.
     """
     mark = _geometry((ASSETS / "mark.svg").read_text())
-    favicon_mark = _id_mark_geometry(
-        (ASSETS / "favicon-mark.svg").read_text(), "favicon-mark.svg"
-    )
+    copied = _id_mark_geometry((ASSETS / derived).read_text(), derived)
 
     assert mark, "mark.svg has no <rect>/<path> elements -- parser or asset broke"
-    assert favicon_mark == mark, (
-        "favicon-mark.svg's mark geometry has drifted from mark.svg. The two "
-        "are copy-pasted on purpose (colour and background tile differ "
-        "deliberately); edit both, or update this gate deliberately."
+    assert copied == mark, (
+        f"{derived}'s mark geometry has drifted from mark.svg. The two are "
+        "copy-pasted on purpose (colour, and any background the derived asset "
+        "adds, differ deliberately); edit both, or update this gate "
+        "deliberately."
     )
 
 
@@ -225,14 +217,19 @@ def test_favicon_mark_has_a_theme_neutral_background_tile() -> None:
     tab's own theme. Assert the tile is present, paper-coloured, and covers
     the full 32x32 viewBox -- not just present-but-wrong-size/colour.
     """
-    svg = (ASSETS / "favicon-mark.svg").read_text()
-    document = _document(svg)
-    tile = re.search(r"<rect\b[^>]*/>", document)
-    assert tile, 'favicon-mark.svg has no background <rect> before <g id="mark">'
-    assert document.index(tile.group(0)) < document.index('id="mark"'), (
+    document = _document((ASSETS / "favicon-mark.svg").read_text())
+    # Selected by `id="tile"`, not by being the first <rect> in the file, for
+    # the same reason _id_mark_geometry selects on `id="mark"`: a later edit
+    # that reorders the elements must not silently re-point this gate at one
+    # of the mark's own rects. Extracted via _shapes(), the module's single
+    # drawable-element extractor, so a future element type stays a one-place
+    # change.
+    tile = next((s for s in _shapes(document) if 'id="tile"' in s), None)
+    assert tile, 'favicon-mark.svg has no background <rect id="tile">'
+    assert document.index(tile) < document.index('id="mark"'), (
         "favicon-mark.svg's background tile must be drawn before (under) the mark"
     )
-    attrs = dict(re.findall(r'(\w[\w-]*)="([^"]*)"', tile.group(0)))
+    attrs = _attrs(tile)
     assert attrs.get("fill") == "#F7F4EE", (
         "favicon-mark.svg's background tile is not paper (#F7F4EE, "
         "docs/brand.md section 3)"
