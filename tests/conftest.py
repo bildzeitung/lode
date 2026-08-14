@@ -1722,7 +1722,7 @@ def fake_bin_env(bin_dir: Path) -> dict[str, str]:
 
 
 def run_block(
-    block: str, sweep_tmp: Path, bin_dir: Path
+    block: str, sweep_tmp: Path, bin_dir: Path, *, cwd: Path
 ) -> subprocess.CompletedProcess[str]:
     """Run one fenced ```bash block as its own, fresh subprocess (lode-n6q0).
 
@@ -1738,8 +1738,16 @@ def run_block(
     derivation lands exactly on the ``sweep_tmp`` fixture's directory -- that
     derivation is ``/sweep``'s §0 convention SPECIFICALLY, so a caller testing
     a different skill's blocks inherits a redirection it did not ask for.
-    ``cwd`` is the checkout root (:data:`_CHECKOUT_ROOT`, worktree-aware)
-    rather than a hand-rolled ``Path(__file__).parent.parent`` in each caller.
+
+    ``cwd`` is REQUIRED, keyword-only, and has no default (lode-6hl9) -- it
+    used to default silently to :data:`_CHECKOUT_ROOT`, the live checkout.
+    Every existing caller only ever hands this function /sweep's read-only
+    fences, so passing ``cwd=_CHECKOUT_ROOT`` there is fine and stays
+    explicit at the call site; the point of removing the default is that a
+    future caller handing this a destructive fence (a /land or /code
+    section) is now forced to make its own cwd choice instead of silently
+    inheriting the live checkout, the exact defect class the lode-s9xe.13
+    incident (commit efbfa79) proved is not theoretical.
     """
     env = dict(fake_bin_env(bin_dir), TMPDIR=str(sweep_tmp.parent))
     return subprocess.run(
@@ -1747,7 +1755,7 @@ def run_block(
         capture_output=True,
         text=True,
         env=env,
-        cwd=_CHECKOUT_ROOT,
+        cwd=cwd,
         check=False,
     )
 

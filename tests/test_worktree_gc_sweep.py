@@ -59,7 +59,8 @@ def _add_wt(repo: Path, name: str, branch: str, start: str = "trunk") -> Path:
 
 def _sweep(
     repo: Path,
-    cwd: Path | None = None,
+    *,
+    cwd: Path,
     env: dict[str, str] | None = None,
     args: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -67,9 +68,17 @@ def _sweep(
     # shells out to git, which needs HOME/PATH to behave at all.
     # `args` exists ONLY so the rejection test below can launch the sweep the
     # same way every other test does; the script itself takes none (lode-0867).
+    #
+    # `cwd` is REQUIRED and has no `cwd or repo` fallback (lode-6hl9): every
+    # caller below that means "run from the repo itself" now says so
+    # explicitly (`cwd=repo`), so a future caller that means to target a
+    # worktree instead can never silently land on the real repo by passing
+    # `cwd=None`. The sweep is destructive (`git worktree remove --force`,
+    # `git branch -D`) -- the same defect class the lode-s9xe.13 incident
+    # (commit efbfa79) proved is not theoretical.
     return subprocess.run(
         ["bash", str(repo / "scripts" / "worktree-gc-sweep.sh"), *(args or [])],
-        cwd=cwd or repo,
+        cwd=cwd,
         capture_output=True,
         text=True,
         check=False,
@@ -86,7 +95,8 @@ def _branches(repo: Path) -> str:
 
 
 def test_idle_sweep_reports_zero_of_zero(tmp_path: Path) -> None:
-    r = _sweep(_repo(tmp_path))
+    repo = _repo(tmp_path)
+    r = _sweep(repo, cwd=repo)
     assert r.returncode == 0, r.stderr
     assert "reclaimed 0 of 0" in r.stdout
 
@@ -94,7 +104,7 @@ def test_idle_sweep_reports_zero_of_zero(tmp_path: Path) -> None:
 def test_clean_merged_worktree_is_fully_reclaimed(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _add_wt(repo, "agent-a", "worktree-agent-a")
-    r = _sweep(repo)
+    r = _sweep(repo, cwd=repo)
     assert r.returncode == 0, r.stderr
     assert "full=1" in r.stdout
     assert "agent-a" not in _worktrees(repo)
@@ -107,7 +117,7 @@ def test_dirty_worktree_is_kept_even_though_it_is_merged(tmp_path: Path) -> None
     repo = _repo(tmp_path)
     wt = _add_wt(repo, "agent-b", "worktree-agent-b")
     (wt / "uncommitted.txt").write_text("work in progress")
-    r = _sweep(repo)
+    r = _sweep(repo, cwd=repo)
     assert r.returncode == 0, r.stderr
     assert "dirty=1" in r.stdout and "full=0" in r.stdout
     assert "agent-b" in _worktrees(repo)
@@ -120,7 +130,7 @@ def test_not_merged_worktree_is_kept(tmp_path: Path) -> None:
     (wt / "f.txt").write_text("x")
     _git(wt, "add", "f.txt")
     _git(wt, "commit", "-q", "-m", "diverged")
-    r = _sweep(repo)
+    r = _sweep(repo, cwd=repo)
     assert r.returncode == 0, r.stderr
     assert "not-merged=1" in r.stdout
     assert "agent-c" in _worktrees(repo)
@@ -142,7 +152,7 @@ def test_a_live_lock_keeps_the_worktree(tmp_path: Path) -> None:
         "held by a live session",
         ".claude/worktrees/agent-f",
     )
-    r = _sweep(repo)
+    r = _sweep(repo, cwd=repo)
     assert r.returncode == 0, r.stderr
     assert "locked=1" in r.stdout and "full=0" in r.stdout
     assert "agent-f" in _worktrees(repo)
@@ -163,7 +173,7 @@ def test_dir_only_reclaim_removes_the_directory_but_keeps_the_ref(
     _git(wt, "commit", "-q", "-m", "unpushed builder work")
     # Age floor to 0 so the just-made commit clears it; without this the candidate
     # is (correctly) kept as not-merged.
-    r = _sweep(repo, env={"LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS": "0"})
+    r = _sweep(repo, cwd=repo, env={"LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS": "0"})
     assert r.returncode == 0, r.stderr
     assert "dir-only=1" in r.stdout
     assert "agent-g" not in _worktrees(repo)
@@ -176,7 +186,7 @@ def test_everything_skipped_is_distinguishable_from_idle(tmp_path: Path) -> None
     repo = _repo(tmp_path)
     wt = _add_wt(repo, "agent-d", "worktree-agent-d")
     (wt / "dirty.txt").write_text("x")
-    out = _sweep(repo).stdout
+    out = _sweep(repo, cwd=repo).stdout
     assert "reclaimed 0 of 1" in out, (
         "a sweep that reclaimed nothing must not read as idle"
     )
@@ -186,7 +196,7 @@ def test_everything_skipped_is_distinguishable_from_idle(tmp_path: Path) -> None
 def test_a_worktree_outside_the_claude_dir_is_never_a_candidate(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _git(repo, "worktree", "add", "-q", "-b", "elsewhere", "../side", "trunk")
-    r = _sweep(repo)
+    r = _sweep(repo, cwd=repo)
     assert "reclaimed 0 of 0" in r.stdout
     assert "side" in _worktrees(repo)
 
@@ -217,7 +227,7 @@ def test_bare_ref_backstop_keeps_a_land_ref_whose_remote_still_exists(
     _git(repo, "branch", "land/t1--agent-xyz", "trunk")  # a reviewer's local name
     _git(repo, "fetch", "-q", "origin")
 
-    r = _sweep(repo)
+    r = _sweep(repo, cwd=repo)
     assert r.returncode == 0, r.stderr
     assert "land/t1--agent-xyz" in _branches(repo), (
         "suffixed ref deleted despite its remote existing"
@@ -236,7 +246,7 @@ def test_bare_ref_backstop_deletes_a_land_ref_whose_remote_is_gone(
     _git(repo, "branch", "land/gone", "trunk")
     _git(repo, "fetch", "-q", "origin")
 
-    r = _sweep(repo)
+    r = _sweep(repo, cwd=repo)
     assert r.returncode == 0, r.stderr
     assert "land/gone" not in _branches(repo)
 
@@ -246,7 +256,7 @@ def test_backstop3_deletes_a_merged_unattached_builder_ref(tmp_path: Path) -> No
     nets above (17 confirmed on one machine)."""
     repo = _repo(tmp_path)
     _git(repo, "branch", "worktree-agent-orphan", "trunk")  # merged, no worktree
-    r = _sweep(repo)
+    r = _sweep(repo, cwd=repo)
     assert r.returncode == 0, r.stderr
     assert "backstop3" in r.stdout
     assert "worktree-agent-orphan" not in _branches(repo)
@@ -263,7 +273,7 @@ def test_default_base_ref_is_trunk_with_no_flag_passed(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _git(repo, "branch", "main", "trunk~1")  # does NOT contain trunk's tip
     _git(repo, "branch", "worktree-agent-default-check", "trunk")  # merged into trunk
-    r = _sweep(repo)
+    r = _sweep(repo, cwd=repo)
     assert r.returncode == 0, r.stderr
     assert "worktree-agent-default-check" not in _branches(repo)
 
@@ -272,7 +282,7 @@ def test_a_base_ref_argument_is_rejected(tmp_path: Path) -> None:
     """The flag was removed outright (lode-0867), not merely defaulted -- passing
     one must fail loudly rather than being silently ignored."""
     repo = _repo(tmp_path)
-    r = _sweep(repo, args=["--base-ref", "trunk"])
+    r = _sweep(repo, cwd=repo, args=["--base-ref", "trunk"])
     assert r.returncode == 2
     assert "GATE COULD NOT RUN" in r.stderr
 
@@ -288,7 +298,7 @@ def test_backstop3_keeps_an_unmerged_builder_ref(tmp_path: Path) -> None:
     _git(wt, "add", "f.txt")
     _git(wt, "commit", "-q", "-m", "unpushed builder work")
     _git(repo, "worktree", "remove", "--force", ".claude/worktrees/agent-h")
-    r = _sweep(repo)
+    r = _sweep(repo, cwd=repo)
     assert r.returncode == 0, r.stderr
     assert "worktree-agent-h" in _branches(repo), (
         "an un-merged, never-pushed builder ref was force-deleted"

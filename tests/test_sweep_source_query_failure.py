@@ -27,7 +27,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import SWEEP_SKILL_BLOCKS, only_block_with, run_block
+from conftest import _CHECKOUT_ROOT, SWEEP_SKILL_BLOCKS, only_block_with, run_block
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the skill's fenced blocks shell out to jq"
@@ -142,7 +142,7 @@ def test_failed_source_query_writes_the_marker(
     marker Section 5 reads to suppress Section 6's wholesale digest rewrite."""
     bin_dir = tmp_path / "fakebin"
     _fake_bd(bin_dir, failing=failing)
-    run_block(block_fn(), sweep_tmp, bin_dir)
+    run_block(block_fn(), sweep_tmp, bin_dir, cwd=_CHECKOUT_ROOT)
     assert (sweep_tmp / MARKER).exists(), (
         "a failed bd source query did not write $SWEEP_TMP/source_query_failed -- "
         "Section 5 will fall through and Section 6 will rewrite the digest "
@@ -161,7 +161,7 @@ def test_successful_pass_writes_no_marker_and_exits_zero(
     healthy pass the block must NOT write the marker, and must exit 0."""
     bin_dir = tmp_path / "fakebin"
     _fake_bd(bin_dir, failing=None)
-    proc = run_block(block_fn(), sweep_tmp, bin_dir)
+    proc = run_block(block_fn(), sweep_tmp, bin_dir, cwd=_CHECKOUT_ROOT)
     assert not (sweep_tmp / MARKER).exists(), (
         "a SUCCESSFUL pass wrote $SWEEP_TMP/source_query_failed -- Section 5 "
         "would then skip the digest rewrite on every pass, silently freezing "

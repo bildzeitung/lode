@@ -5267,3 +5267,40 @@ entries below from being rewritten to chase the current tree.)
   `.claude/skills/sweep/SKILL.md` §8 (`$ACTIONABLE_NOW`, computed from `$SWEEP_TMP/current` with a
   `$4 == "deferred"` awk exclusion), the report-format block (section moved to last position), the
   "Stop and report" section, and the skill's frontmatter `description`.
+
+- **No mechanical corpus scan for "every script-running subprocess in tests/ must pass an
+  explicit `cwd`" (`lode-6hl9`, 2026-08-14).** `lode-6hl9`'s own text raised the question, citing
+  `tests/test_gate_lib.py`'s discovery-based sweeps (`lode-090f`/`lode-bss5`) as the shape such a
+  scan could take: walk `tests/*.py` for `subprocess.run`/`subprocess.Popen` call sites that
+  invoke a tracked `scripts/*.sh`, and fail any that omit `cwd=` or default it to something other
+  than a throwaway fixture path.
+
+  **Decided: don't build it now.** The two concrete instances this ticket found
+  (`tests/conftest.py`'s `run_block()` and `tests/test_worktree_gc_sweep.py`'s `_sweep()`
+  helper) are fixed directly instead — both now take a **required, keyword-only `cwd` with no
+  default**, so a caller that used to inherit an implicit live-checkout cwd is now a
+  `TypeError` at collection time until it makes its own explicit choice. That closes the actual
+  defect class (an implicit default silently resolving to `_CHECKOUT_ROOT`/the real repo) without
+  new scanning machinery: a required parameter with no fallback is enforced by Python's own call
+  syntax, not by a corpus sweep that has to keep pace with every new test helper shape.
+
+  A `test_gate_lib.py`-shaped scan is heavier than this ticket's yield justifies: `gate-lib.sh`'s
+  sweeps exist because that library has many independent consumers under `scripts/*.sh`, sourced
+  in a mechanically recognizable way (`. "$(dirname "$0")/gate-lib.sh"`), so *discovering* the
+  consumer set at runtime is the whole point (a hard-coded list rots the moment a consumer is
+  added and nobody remembers the sixth test). A "does this subprocess call pass cwd" scan has no
+  comparably crisp anchor: `subprocess.run`/`subprocess.Popen` call shapes vary per test file (see
+  `tests/test_land_lock.py`'s own separate `_run_block`, deliberately written to a throwaway repo
+  rather than sharing `conftest.py`'s helper), so telling "runs a tracked script against a
+  meaningful cwd" apart from "runs an arbitrary subprocess for an unrelated reason" would need
+  per-call-site judgment a mechanical AST/regex sweep can't reliably make — a scan built to that
+  spec would either miss real cases (too narrow a pattern) or flag unrelated subprocess calls
+  (too broad), neither of which beats the required-keyword-argument fix already in place for the
+  two instances found.
+
+  **Revisit if a third instance of this exact shape turns up** — an optional-`cwd`-defaulting-to-
+  the-live-checkout parameter on some other test helper — the same "three strikes" bar
+  `worktree-gc-sweep.sh`'s doc-duplication decision above uses. Two fixed instances plus a clear,
+  mechanical fix (required kwarg, no default) is "fine, and guarded" for now; a third would be the
+  point a shared lint rule (e.g. a `flake8`/`ruff` custom check, or a narrower corpus scan scoped
+  to exactly `cwd: Path | None = None` parameters in `tests/*.py`) starts paying for itself.
