@@ -4,9 +4,10 @@
 must treat as "by invariant never real work" (`import.auto: false`, lode-6ra). Its consumers
 read it rather than re-inlining the paths: `scripts/worktree-gc-classify.sh`'s dirty-tree guard,
 the `Stop` hook in `.claude/settings.json` (via
-`scripts/discard-beads-passive-export-churn.sh`), and `scripts/land-merge-one.sh`'s merge-retry
-restore (lode-2nw5). Register a new consumer in the loops below rather than starting a
-parallel module for it.
+`scripts/discard-beads-passive-export-churn.sh`), `scripts/land-merge-one.sh`'s merge-retry
+restore (lode-2nw5), and `scripts/land-replay.sh`'s two dirty-tree reformat-detect checks
+(lode-3cda). Register a new consumer in the loops below rather than starting a parallel module
+for it.
 
 (A fourth consumer, `tests/test_land_lock.py`'s `_STALL_HOOK_SCAN_EXCLUDED_RELPATHS`, is gone
 as of lode-y3dw: `flock(1)` replaced the mkdir reclaim gate, retiring the
@@ -36,6 +37,7 @@ CANONICAL_LIST = REPO_ROOT / "scripts" / "beads-passive-exports.txt"
 HOOK_SCRIPT = REPO_ROOT / "scripts" / "discard-beads-passive-export-churn.sh"
 GC_CLASSIFY = REPO_ROOT / "scripts" / "worktree-gc-classify.sh"
 MERGE_ONE = REPO_ROOT / "scripts" / "land-merge-one.sh"
+LAND_REPLAY = REPO_ROOT / "scripts" / "land-replay.sh"
 
 
 def _entries() -> list[str]:
@@ -90,6 +92,7 @@ def test_no_consumer_keeps_a_literal_copy_of_the_relpaths() -> None:
         str(HOOK_SCRIPT): HOOK_SCRIPT.read_text(encoding="utf-8"),
         str(GC_CLASSIFY): GC_CLASSIFY.read_text(encoding="utf-8"),
         str(MERGE_ONE): MERGE_ONE.read_text(encoding="utf-8"),
+        str(LAND_REPLAY): LAND_REPLAY.read_text(encoding="utf-8"),
     }
     for rel in _entries():
         for name, text in consumers.items():
@@ -99,7 +102,24 @@ def test_no_consumer_keeps_a_literal_copy_of_the_relpaths() -> None:
 def test_every_bash_consumer_names_the_canonical_list() -> None:
     """Cheap proof the scripts read the file this module is asserting about, so a rename
     of the list cannot leave these tests green while the guards read nothing."""
-    for script in (HOOK_SCRIPT, GC_CLASSIFY, MERGE_ONE):
+    for script in (HOOK_SCRIPT, GC_CLASSIFY, MERGE_ONE, LAND_REPLAY):
         assert CANONICAL_LIST.name in script.read_text(encoding="utf-8"), (
             f"{script} no longer reads {CANONICAL_LIST.name}"
         )
+
+
+def test_land_replay_no_longer_hardcodes_the_beads_pathspec() -> None:
+    """lode-3cda: land-replay.sh used to hardcode a literal ':!.beads' git pathspec
+    argument, which is BROADER than the canonical list -- it excluded the whole
+    .beads/ directory, so a real non-passive .beads/ change (e.g. config.yaml) was
+    invisible to both dirty-tree checks. Checks actual code lines only (a `git diff`
+    call ending in the literal pathspec), not this file's own prose describing the fix."""
+    code_lines = [
+        line
+        for line in LAND_REPLAY.read_text(encoding="utf-8").splitlines()
+        if not line.strip().startswith("#")
+    ]
+    assert not any(":!.beads" in line for line in code_lines), (
+        "land-replay.sh still hardcodes the broad ':!.beads' pathspec in code instead of "
+        f"reading {CANONICAL_LIST.name}"
+    )
