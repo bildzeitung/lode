@@ -1,4 +1,7 @@
-<img src="docs/assets/lockup.svg" alt="lode" width="208" height="64">
+<picture>
+  <source srcset="docs/assets/lockup-dark.svg" media="(prefers-color-scheme: dark)">
+  <img src="docs/assets/lockup.svg" alt="lode" width="208" height="64">
+</picture>
 
 **lode** is an AI-first, TUI-first personal knowledge base for the things you learn during your
 day at work. Fast to capture, intelligent to retrieve. See [`docs/brand.md`](docs/brand.md) for
