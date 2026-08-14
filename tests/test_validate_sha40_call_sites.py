@@ -17,6 +17,19 @@ uses -- script-behaviour tests plus a markdown coverage gate
 this ticket added. It is also the ticket's own option (c), which the design
 note argued neither for nor against.
 
+**WRITE sites are a distinct hazard from READ sites, and are gated separately
+(lode-uvjr).** The read-site gate above matches only a block that pulls
+`metadata.<field>` out of `bd show --json` AND compares it to a branch tip
+(:data:`TIP_COMPARISON_MARKERS`) -- a write block does neither: it never reads
+`metadata.<field>` at all, it *sets* it via `--set-metadata <field>=`. Before
+lode-uvjr, `.claude/agents/coding.md`'s three `--set-metadata
+review_head=`/`--set-metadata land_head=` writes could each drop their
+`scripts/validate-sha40.sh` guard with the whole suite green, and worse, a
+reader of this file's docstring would reasonably conclude the corpus was fully
+covered. :func:`_write_sites`/:data:`WRITE_TESTS` below mirror the read-site
+shape (non-vacuity, same-block gate, right-variable check) but keyed on
+`--set-metadata <field>=` instead of a read-and-compare.
+
 Within each rostered file the gate is shaped around the *hazard*, not around
 the current text: it finds any fenced bash block that reads one of these
 metadata fields AND compares that value against a real branch tip, and
@@ -46,6 +59,7 @@ a *new* file is caught without editing this test.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -94,6 +108,15 @@ def _read_sites(blocks: list[str], field: str) -> list[str]:
         and "jq" in b
         and any(marker in b for marker in TIP_COMPARISON_MARKERS)
     ]
+
+
+def _write_sites(blocks: list[str], field: str) -> list[str]:
+    """Blocks in ``blocks`` that write ``metadata.<field>`` via
+    `bd update ... --set-metadata <field>=` -- the write-side hazard
+    (lode-uvjr), distinct from :func:`_read_sites` above: a write block never
+    reads `metadata.<field>` at all, it sets it."""
+    pattern = re.compile(rf"--set-metadata\s+{re.escape(field)}=")
+    return [b for b in blocks if pattern.search(b)]
 
 
 #: (relative path, fenced-bash-blocks) for every file in the corpus -- the
@@ -175,3 +198,68 @@ def test_validator_script_is_executable() -> None:
     script = REPO_ROOT / VALIDATOR
     assert script.exists(), f"{VALIDATOR} is missing"
     assert os.access(script, os.X_OK), f"{VALIDATOR} is not executable"
+
+
+@pytest.mark.parametrize("field", DRIFT_FIELDS)
+def test_the_expected_write_site_still_exists(field: str) -> None:
+    """Non-vacuity for the write-side gate (lode-uvjr): pins that each field
+    is still written via `--set-metadata <field>=` at least once somewhere in
+    the corpus, so this gate can't pass merely by finding nothing to check."""
+    found = [path for path, blocks in CALL_SITES if _write_sites(blocks, field)]
+    assert found, (
+        f"expected at least one fenced bash block writing metadata.{field} "
+        "via --set-metadata, found none -- if the write site was renamed, "
+        "moved, or removed, extend or update this gate rather than deleting "
+        "it"
+    )
+
+
+def test_every_drift_field_write_is_shape_checked_in_the_same_block() -> None:
+    """The write-side gate proper (lode-uvjr). A block that writes
+    `land_head`/`review_head` via `--set-metadata` must call the validator on
+    the same variable in the same block, mirroring
+    :func:`test_every_drift_field_read_is_shape_checked_in_the_same_block`."""
+    unguarded: list[str] = []
+    for path, blocks in CALL_SITES:
+        for field in DRIFT_FIELDS:
+            for block in _write_sites(blocks, field):
+                if VALIDATOR not in block:
+                    unguarded.append(f"{path}: block writing metadata.{field}")
+    assert not unguarded, (
+        "these fenced bash blocks write a drift-detection SHA to bd metadata "
+        f"via --set-metadata without calling {VALIDATOR} on it in the same "
+        f"block (lode-uvjr): {unguarded}. An unvalidated write can persist a "
+        "malformed SHA that later reads as drift and bounces a correct "
+        "branch. Shell state does not survive between blocks (lode-sfnb), so "
+        "the check must be in the SAME block as the write."
+    )
+
+
+def test_validator_is_called_on_the_value_that_was_written() -> None:
+    """A call passing the wrong variable would satisfy the gate above while
+    validating nothing -- the write-side twin of
+    :func:`test_validator_is_called_on_the_value_that_was_read`. Pins that
+    the variable named in `--set-metadata <field>="$VAR"` -- whatever that
+    call site happens to name it (`$HEAD_SHA`, `$SHA`, `$LAND_HEAD`, ...) --
+    is the same variable the validator is called on, in the same block."""
+    for path, blocks in CALL_SITES:
+        for field in DRIFT_FIELDS:
+            for block in _write_sites(blocks, field):
+                write_match = re.search(
+                    rf'--set-metadata\s+{re.escape(field)}="\$([A-Za-z_][A-Za-z0-9_]*)"',
+                    block,
+                )
+                assert write_match, (
+                    f"{path}: --set-metadata {field}=... does not assign from a "
+                    'plain "$VAR" -- write the SHA into a variable first so it can '
+                    "be validated before the write"
+                )
+                var = write_match.group(1)
+                lines = [ln for ln in block.splitlines() if VALIDATOR in ln]
+                assert len(lines) == 1, f"{path}: expected one {VALIDATOR} call"
+                assert field in lines[0], f"{path}: {VALIDATOR} call omits {field}"
+                assert f'"${var}"' in lines[0], (
+                    f"{path}: {VALIDATOR} is called on something other than "
+                    f'"${var}", the variable the same block writes via '
+                    f"--set-metadata {field}="
+                )

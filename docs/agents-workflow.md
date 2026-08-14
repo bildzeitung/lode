@@ -2015,13 +2015,23 @@ being derived, i.e. the "Derive identifiers, never retype them" fiat was violate
 and the write-side guard fires precisely on that class because an agent substituting a literal into
 the fenced block substitutes it into the validator line too. So: the read-side checks stay exactly as
 described above (they remain the backstop that catches a hand edit or an unguarded future write
-site), and `coding.md`'s three write sites now *also* validate — three checks, not N, at the one
-producer that was observed getting it wrong. Both use `|| exit $?`, never `exit 1`, so the 0/1/2
-contract below is preserved end to end. What is still NOT done, deliberately: no write-site test
-gate (option (c) covers read sites only, keyed on `metadata.<field>` + `jq` + a tip comparison, none
-of which a write site contains), so these three guards can be deleted with the suite green — filed
-as its own ticket rather than widened here, since the matcher's variable-name contract
-(`"$REVIEW_HEAD"`/`"$LAND_HEAD"`) does not fit a write site's `"$HEAD_SHA"`.
+site), and every write site now *also* validates. Both use `|| exit $?`, never `exit 1`, so the 0/1/2
+contract below is preserved end to end.
+
+**Write sites are now gated too (`lode-uvjr`).** The original landing of this section left write
+sites unpinned deliberately, filed as its own follow-up: `tests/test_validate_sha40_call_sites.py`'s
+read-side matcher is keyed on `metadata.<field>` + `jq` + a tip comparison, none of which a write
+site contains, so widening it naively missed every `--set-metadata (review|land)_head=` write. That
+follow-up (`lode-uvjr`) added a second, parallel predicate to the same test file — any fenced block
+containing `--set-metadata <field>=` must call the validator on the same variable in the same block
+— mirroring the read-side gate's shape (non-vacuity, same-block check, right-variable check) rather
+than hardcoding a single variable name: different write sites name the derived SHA differently
+(`$HEAD_SHA` in `coding.md`/`code-reviewer.md`, `$SHA` in `land/SKILL.md`/`code/SKILL.md`,
+`$LAND_HEAD` at one `land/SKILL.md` site), so the gate extracts whatever variable a block's own
+`--set-metadata` write names and requires the validator call to reuse that same variable. Turning the
+gate on surfaced two write sites that predated it and had no guard at all — `code-reviewer.md`'s
+`ready-for-land` swap (step 8) and `land/SKILL.md`'s exit-(a) resolution path — both fixed by adding
+the same derive-then-validate-then-write shape the others already used.
 
 **The ticket's option (c) — a test gate over the markdown roster — was taken too, and it is what
 makes this a mechanism rather than an instruction** (added in technical review, which found it
