@@ -1161,10 +1161,18 @@ today (verified during `lode-fhql.21`'s review), so this is latent, not live. Pa
 monkeypatching python-markdown's `toc.unique()` to match GitHub's `-1` suffix was considered and
 rejected as disproportionate to a case that has never actually occurred — instead,
 `tests/test_docs_no_duplicate_heading_slugs.py` fails `nox -s tests` loudly the moment any
-**published** doc (the `exclude_docs` allowlist above, read directly from `mkdocs.yml` so the test
-can't drift from what the site actually publishes) gains a repeated heading slug, forcing the
-heading to be renamed before the mismatch can ever ship. The test reuses `check_links.py`'s own
-`_headings`/`github_slug` unmodified rather than adding a third copy of the algorithm.
+**published** doc (the `exclude_docs` allowlist above, read directly from `mkdocs.yml` via the
+shared `conftest.mkdocs_config` so the test can't drift from what the site actually publishes) gains
+a repeated heading slug, forcing the heading to be renamed before the mismatch can ever ship. It
+reuses `check_links.py`'s `_headings`/`github_slug` rather than adding a third copy of the slug
+algorithm, and touches zero lines of that script.
+
+**Why a pytest gate and not `scripts/check_links.py`, the repo's existing docs-anchor gate.** Scope:
+this invariant holds over the **published** set only — `toc` never runs over an excluded doc, so a
+duplicate heading in e.g. `decisions.md` is harmless — while `check_links.py` deliberately validates
+*citations* across all of `docs/`, under GitHub semantics everywhere. Folding this in would make a
+standalone markdown script (runnable under any interpreter, by design) read `mkdocs.yml` to learn
+the site's published set: a new coupling that buys nothing the pytest gate doesn't already give.
 
 **Landing page / README sync (lode-fhql.10).** `README.md` is the **canonical** pitch — every
 GitHub visitor sees it first, with or without a deployed docs site. `docs/index.md` is a **derived
