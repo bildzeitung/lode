@@ -7,10 +7,11 @@ docs/stack.md: MkDocs-Material never renders Mermaid at build time on its own
 visitor's browser, so a broken diagram would ship as a silently-empty box.
 This script is the *new* renderer docs/stack.md calls for: it walks every
 ```mermaid fenced block in the PUBLISHED subset of docs/, renders each to SVG
-through the SAME pinned mermaid-cli Docker image scripts/validate-mermaid.sh
-already uses, and embeds the SVG in place of the fence -- the built site never
-ships a live client-side Mermaid require. Any render failure aborts the whole
-build (a machine/content distinction, unlike validate-mermaid.sh's gate
+through the same mermaid-cli Docker image scripts/validate-mermaid.sh gates
+with -- at a PINNED tag rather than that script's floating ``:latest``, see
+MERMAID_IMAGE below -- and embeds the SVG in place of the fence; the built
+site never ships a live client-side Mermaid require. Any render failure aborts
+the whole build (a machine/content distinction, unlike validate-mermaid.sh's gate
 contract, is not needed here -- this is a build step, not a merge gate; any
 nonzero from `docker run` fails the build loudly, full stop).
 
@@ -30,19 +31,36 @@ never a silent partial build.
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Annotated
+
+import typer
+
+# src/ on the path so the fence rule below comes from lode.fence_parsing --
+# the ONE importable home of it (lode-ee7b) -- without this CI job having to
+# `pip install` the package. Same approach as scripts/check_docstring_refs.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from lode.fence_parsing import fence_flags
 
 # The pinned mermaid-cli image. Deliberately NOT `:latest` (scripts/validate-
 # mermaid.sh's tag) -- lode-fhql.9's own acceptance requires the toolchain
 # pinned, not floating; this is a build-output artifact (embedded in every
 # page the site ships) where an unannounced upstream change is a worse
-# surprise than in a pass/fail validation gate. Bump deliberately, matching
-# validate-mermaid.sh's IMAGE if the two are ever reconciled.
+# surprise than in a pass/fail validation gate.
+#
+# docs/stack.md mandates ONE image shared with validate-mermaid.sh, "not a
+# second, independently-versioned copy" -- which the tag split above is, until
+# validate-mermaid.sh + update-images.sh move onto this same pin. Converging
+# them touches a repo-wide merge gate and is deliberately NOT folded into this
+# ticket; it is filed as lode-3ld8. Bump the two together once that lands.
+# tests/test_build_docs_site.py pins .github/workflows/docs.yml to this value.
 MERMAID_IMAGE = "minlag/mermaid-cli:10.9.1"
 
 # docs/stack.md "Published / excluded page sets" (lode-fhql.8, current as of
@@ -61,14 +79,22 @@ GITHUB_BASE = "https://github.com/bildzeitung/lode/blob/trunk"
 
 _MERMAID_FENCE_RE = re.compile(r"```mermaid\n(.*?)\n```", re.DOTALL)
 _LINK_RE = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)\s]+)\)")
+# An inline code span. Same one-line rule as scripts/check_links.py's
+# _INLINE_CODE_RE, and for the same reason: a literal `[text](foo.md)` written
+# as an EXAMPLE inside backticks (or inside a fenced block) is documentation,
+# not a link, and rewriting it would corrupt the published page.
+_INLINE_CODE_RE = re.compile(r"`[^`]*`")
 
 
 def _published_set(docs_dir: Path) -> set[str]:
     """Relative (POSIX, to docs/) paths of every published file."""
     published = set(PUBLISHED_TOP_LEVEL)
     for d in PUBLISHED_DIRS:
-        for f in sorted((docs_dir / d).glob("*.md")):
-            published.add(f"{d}/{f.name}")
+        # rglob, not glob: docs/stack.md publishes how-to as a DIRECTORY, so a
+        # guide filed under a subdirectory later is published by default too.
+        published |= {
+            p.relative_to(docs_dir).as_posix() for p in (docs_dir / d).rglob("*.md")
+        }
     return published
 
 
@@ -165,34 +191,34 @@ def _rewrite_target(
     if link_target.startswith(("http://", "https://", "mailto:", "#")):
         return None
     path_part, _, fragment = link_target.partition("#")
-    if not path_part:
-        return None  # pure same-page fragment, already excluded above
-    current_dir = str(Path(current_rel).parent)
-    combined = Path(("" if current_dir == "." else current_dir + "/") + path_part)
-    # Resolve relative to docs/, allowing `..` to escape it.
-    root_rel = Path("docs") / combined
-    parts: list[str] = []
-    for part in root_rel.parts:
-        if part == "..":
-            if parts:
-                parts.pop()
-        elif part != ".":
-            parts.append(part)
-    root_rel_str = "/".join(parts)
+    # Resolve relative to docs/, allowing `..` to escape it (a published page
+    # linking ../README.md or ../src/lode/config.py resolves repo-root-relative).
+    root_rel_str = posixpath.normpath(
+        posixpath.join("docs", posixpath.dirname(current_rel), path_part)
+    )
+    if root_rel_str.startswith(".."):
+        # Escapes the repo entirely -- no GitHub blob URL can express it, so
+        # leave it verbatim rather than emit a confidently-wrong link.
+        return None
 
-    if root_rel_str.startswith("docs/"):
-        docs_rel = root_rel_str[len("docs/") :]
-        if docs_rel in published:
-            return None  # stays a plain relative link between published pages
-        url = f"{GITHUB_BASE}/{root_rel_str}"
-    else:
-        url = f"{GITHUB_BASE}/{root_rel_str}"
+    if root_rel_str.startswith("docs/") and root_rel_str[len("docs/") :] in published:
+        return None  # stays a plain relative link between published pages
+    # Everything else -- an unpublished docs/ page, a repo-root file, a source
+    # file -- gets the one rewrite rule: its GitHub blob URL, fragment verbatim.
+    url = f"{GITHUB_BASE}/{root_rel_str}"
     if fragment:
         url = f"{url}#{fragment}"
     return url
 
 
 def _process_links(text: str, rel_path: str, published: set[str]) -> str:
+    """Apply the rewrite rule to every real link, skipping code.
+
+    Fenced blocks and inline code spans are left untouched -- a published page
+    that documents markdown syntax must ship that example verbatim, not a
+    rewritten GitHub URL.
+    """
+
     def _sub(match: re.Match[str]) -> str:
         label, target = match.group(1), match.group(2)
         rewritten = _rewrite_target(rel_path, target, published)
@@ -200,12 +226,46 @@ def _process_links(text: str, rel_path: str, published: set[str]) -> str:
             return match.group(0)
         return f"[{label}]({rewritten})"
 
-    return _LINK_RE.sub(_sub, text)
+    def _sub_unless_protected(match: re.Match[str]) -> str:
+        # Keyed on where the link STARTS, so a link whose label is itself
+        # backticked -- [`configuration.md`](configuration.md), the dominant
+        # form in these docs -- is still rewritten; only a link that starts
+        # inside code is left alone.
+        if any(lo <= match.start() < hi for lo, hi in protected):
+            return match.group(0)
+        return _sub(match)
+
+    protected: list[tuple[int, int]] = []
+    offset = 0
+    lines = text.split("\n")
+    for line, fenced in zip(lines, fence_flags(lines), strict=True):
+        if fenced:
+            protected.append((offset, offset + len(line)))
+        else:
+            protected += [
+                (offset + m.start(), offset + m.end())
+                for m in _INLINE_CODE_RE.finditer(line)
+            ]
+        offset += len(line) + 1  # +1 for the "\n" that split() removed
+
+    # Substituted over the WHOLE text, never line by line: a link's label
+    # routinely wraps across lines in these docs, and _LINK_RE has to see it
+    # whole or it silently stops matching.
+    return _LINK_RE.sub(_sub_unless_protected, text)
 
 
 def build(repo_root: Path, out_dir: Path) -> None:
     docs_dir = repo_root / "docs"
     published = _published_set(docs_dir)
+    # `out_dir` is wiped below, so refuse anything that isn't a disposable
+    # staging directory INSIDE the repo. A mistyped argument otherwise turns
+    # this into `rm -rf` on whatever it names (the CI invocation passes a
+    # relative path, so a stray leading `/` is one keystroke away).
+    if repo_root not in out_dir.parents or out_dir.is_relative_to(docs_dir):
+        raise SystemExit(
+            f"refusing to wipe {out_dir}: the staging dir must be inside "
+            f"{repo_root} and outside {docs_dir}"
+        )
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
@@ -242,16 +302,31 @@ def build(repo_root: Path, out_dir: Path) -> None:
         print("staged placeholder index.md (lode-fhql.10 not yet landed)")
 
 
-def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print(f"usage: {argv[0]} <output-dir>", file=sys.stderr)
-        return 2
+app = typer.Typer(add_completion=False)
+
+
+@app.command(
+    help=(
+        "Stage the published docs subset into OUTPUT_DIR for `mkdocs build`, "
+        "pre-rendering every Mermaid diagram to SVG.\n\n"
+        "Run this before `mkdocs build` -- mkdocs.yml's docs_dir points at the "
+        "staged output, never at docs/ directly, so the site can only ever ship "
+        "the published set. OUTPUT_DIR is wiped and recreated on every run, and "
+        "must live inside the repository."
+    )
+)
+def main(
+    output_dir: Annotated[
+        Path,
+        typer.Argument(help="Staging directory to (re)create. Wiped on every run."),
+    ],
+) -> None:
+    """Entry point. See the module docstring for the architecture this implements."""
     repo_root = Path(__file__).resolve().parent.parent
-    out_dir = Path(argv[1]).resolve()
+    out_dir = output_dir.resolve()
     build(repo_root, out_dir)
     print(f"docs site staged at {out_dir}")
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+    app()

@@ -50,14 +50,15 @@ jobs:
         with:
           python-version-file: .python-version
 
-      - name: Install mkdocs-material
-        # Pinned exact version, not the pyproject.toml range (>=9.5,<10) --
-        # lode-fhql.9's acceptance requires the toolchain pinned, not
-        # floating. NOTE: this version was NOT verified against a live PyPI
-        # query (no network access in the environment that authored this
-        # workflow) -- confirm it resolves before relying on this job, and
+      - name: Install site-build toolchain
+        # Pinned exact versions, not the pyproject.toml range (>=9.5,<10) --
+        # lode-fhql.9's acceptance requires the toolchain pinned, not floating;
         # bump deliberately alongside pyproject.toml's `docs` extra range.
-        run: pip install "mkdocs-material==9.5.44"
+        # (mkdocs-material 9.5.44 confirmed to exist on PyPI, 2026-08-13.)
+        # typer is here because scripts/build_docs_site.py is a Typer CLI like
+        # every other Python CLI in the repo (docs/conventions.md); the pin
+        # matches requirements.lock so the two can't drift silently.
+        run: pip install "mkdocs-material==9.5.44" "typer==0.27.1"
 
       # mermaid-cli's image is pulled once here rather than left to the
       # first `docker run` inside build_docs_site.py, so a pull failure
@@ -66,7 +67,7 @@ jobs:
       - name: Pull pinned mermaid-cli image
         # Keep in sync with MERMAID_IMAGE in scripts/build_docs_site.py --
         # deliberately a DIFFERENT pin than scripts/validate-mermaid.sh's
-        # floating `:latest` (docs/build.yml's own acceptance requires this
+        # floating `:latest` (lode-fhql.9's own acceptance requires this
         # toolchain pinned; the separate validate-mermaid.sh gate is
         # untouched by this ticket).
         run: docker pull minlag/mermaid-cli:10.9.1
@@ -78,8 +79,13 @@ jobs:
         run: python3 scripts/build_docs_site.py .docs-site-src
 
       - name: Build site (strict -- fail on broken links/nav, not just exceptions)
-        run: mkdocs build --strict --site-dir site
+        # Output dir comes from mkdocs.yml's `site_dir`, not a flag -- one
+        # place to change, and the upload step's `path:` below tracks it.
+        run: mkdocs build --strict
 
+      # Condition is byte-identical to the `deploy` job's `if:` and must stay
+      # so (tests/test_build_docs_site.py pins that). Without it, every PR
+      # would upload a Pages artifact for a job that can never run.
       - name: Upload Pages artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/trunk'
         uses: actions/upload-pages-artifact@v3
