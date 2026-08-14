@@ -343,7 +343,17 @@ _PUSH = "git push origin trunk"
 
 
 def _regate_and_push_indices(blocks: list[str]) -> tuple[list[int], int]:
-    """Document-order positions of the re-gate blocks and the push block.
+    """Document-order positions of the re-gate blocks and Section 4's push
+    block -- specifically the FIRST `_PUSH`-matching block in document order.
+
+    lode-om7o added a SECOND `git push origin trunk` fence, in "Stop and
+    report"'s own MISTAKES.md entry point -- it fires only on a pass that
+    never reaches Section 3/4 at all (nothing merged, so nothing to gate), and
+    pushes only a MISTAKES.md doc commit, never Section 3's merge output. It
+    is deliberately excluded from THIS pin: taking the first (lowest-index)
+    match keeps this test pinned to Section 4's merge-output push specifically,
+    which is the one this test's whole premise (`origin/trunk` only advances
+    to already-gated content) is about.
 
     Also polices the structural assumption itself, so a SKILL.md reshape that
     adds or drops one of these blocks fails loudly here rather than silently
@@ -357,16 +367,18 @@ def _regate_and_push_indices(blocks: list[str]) -> tuple[list[int], int]:
         f"{len(regate_indices)} -- this test's assumption about SKILL.md's "
         "structure has drifted; re-check by hand before adjusting the count"
     )
-    assert len(push_indices) == 1, (
-        f"expected exactly 1 fenced block running `{_PUSH}`, found "
-        f"{len(push_indices)} -- this test's assumption about SKILL.md's "
-        "structure has drifted; re-check by hand before adjusting the count"
+    assert len(push_indices) == 2, (
+        f"expected exactly 2 fenced blocks running `{_PUSH}` (Section 4's "
+        f"merge-output push + Stop and report's no-accepted-set MISTAKES.md "
+        f"push, lode-om7o), found {len(push_indices)} -- this test's "
+        "assumption about SKILL.md's structure has drifted; re-check by hand "
+        "before adjusting the count"
     )
-    return regate_indices, push_indices[0]
+    return regate_indices, min(push_indices)
 
 
 def _regate_precedes_push(blocks: list[str]) -> bool:
-    """Whether EVERY re-gate block precedes the push block.
+    """Whether EVERY re-gate block precedes Section 4's push block.
 
     Shared by the pin below and its sabotage twin ON PURPOSE: a twin that
     re-derives the comparison instead of calling it proves only that the
