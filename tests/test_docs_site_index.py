@@ -15,13 +15,12 @@ sets", and the lode-fhql.10 subsection below it) -- not restated here.
 import re
 from pathlib import Path
 
-import yaml
+from conftest import mkdocs_config
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INDEX = REPO_ROOT / "docs" / "index.md"
 README = REPO_ROOT / "README.md"
 STACK = REPO_ROOT / "docs" / "stack.md"
-MKDOCS_YML = REPO_ROOT / "mkdocs.yml"
 
 # The PUBLISHED set from docs/stack.md (lode-fhql.8), as an ALLOWLIST.
 #
@@ -44,31 +43,6 @@ PUBLISHED_DIRS = {"how-to"}
 
 def _index_text() -> str:
     return INDEX.read_text()
-
-
-class _MkdocsLoader(yaml.SafeLoader):
-    """SafeLoader that resolves ONE extra tag: the ``!!python/name:`` reference
-    mkdocs.yml uses for ``markdown_extensions.toc.slugify`` (lode-fhql.21).
-
-    ``yaml.unsafe_load`` would also parse it, but by importing whatever the tag
-    names and permitting every other unsafe tag in the file -- more authority
-    than this module needs (it reads ``nav``/``theme``/``docs_dir``/
-    ``exclude_docs``) and a loose precedent for the next reader to copy.
-    Resolving the tag to its dotted name as a plain STRING is enough, and lets
-    ``test_toc_slugify_is_the_github_compatible_one`` assert the wiring by
-    value. MkDocs' own loader is Safe-derived with a ``python/name``
-    constructor for the same reason.
-    """
-
-
-_MkdocsLoader.add_multi_constructor(
-    "tag:yaml.org,2002:python/name:",
-    lambda loader, suffix, node: suffix,
-)
-
-
-def _mkdocs_config() -> dict:
-    return yaml.load(MKDOCS_YML.read_text(), Loader=_MkdocsLoader)
 
 
 def test_index_exists_and_has_front_matter_title() -> None:
@@ -116,7 +90,7 @@ def test_index_documents_its_relationship_to_readme() -> None:
 
 def test_og_meta_override_is_wired_and_populated() -> None:
     """The OG tags only reach the site if ``custom_dir`` points at them."""
-    custom_dir = REPO_ROOT / _mkdocs_config()["theme"]["custom_dir"]
+    custom_dir = REPO_ROOT / mkdocs_config()["theme"]["custom_dir"]
     html = (custom_dir / "main.html").read_text()
     assert 'property="og:image"' in html
     assert "assets/og-card.png" in html
@@ -144,7 +118,7 @@ def _is_published(page: str) -> bool:
 
 
 def test_nav_only_lists_published_pages() -> None:
-    config = _mkdocs_config()
+    config = mkdocs_config()
     pages = _nav_leaf_values(config["nav"])
     assert pages, "mkdocs.yml's nav is empty"
     for page in pages:
@@ -157,7 +131,7 @@ def test_nav_only_lists_published_pages() -> None:
 
 def test_every_nav_target_exists() -> None:
     """A nav entry pointing at a missing file fails ``mkdocs build --strict``."""
-    config = _mkdocs_config()
+    config = mkdocs_config()
     docs_dir = REPO_ROOT / config["docs_dir"]
     for page in _nav_leaf_values(config["nav"]):
         assert (docs_dir / page).is_file(), (
@@ -168,7 +142,7 @@ def test_every_nav_target_exists() -> None:
 
 def test_every_how_to_guide_is_in_nav() -> None:
     """how-to/ is published as a directory, so a new guide must reach the nav."""
-    config = _mkdocs_config()
+    config = mkdocs_config()
     pages = set(_nav_leaf_values(config["nav"]))
     for guide in sorted((REPO_ROOT / "docs" / "how-to").glob("*.md")):
         rel = f"how-to/{guide.name}"
@@ -212,7 +186,7 @@ def test_exclude_docs_is_an_allowlist_covering_the_published_set() -> None:
     written as an allowlist so a maintainer doc added later is off the site
     by default (docs/stack.md, lode-fhql.8).
     """
-    config = _mkdocs_config()
+    config = mkdocs_config()
     patterns = [
         line.strip() for line in config["exclude_docs"].splitlines() if line.strip()
     ]
@@ -241,7 +215,7 @@ def test_toc_slugify_is_the_github_compatible_one() -> None:
     missing -- so assert it by value."""
     toc = next(
         ext["toc"]
-        for ext in _mkdocs_config()["markdown_extensions"]
+        for ext in mkdocs_config()["markdown_extensions"]
         if isinstance(ext, dict) and "toc" in ext
     )
     assert toc["slugify"] == "lode.docs_slug.github_slugify"
