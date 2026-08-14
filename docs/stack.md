@@ -1138,6 +1138,34 @@ results `lode-fhql.9` should plan around:
   logs every `link to 'X' which is excluded from the built site`, which is exactly the set of links
   the rule has to rewrite to GitHub URLs.
 
+### Heading-anchor slugs: matching GitHub, and the dedup-suffix gap (lode-fhql.21, lode-rmsf)
+
+Every published doc is read both on GitHub directly and through the built site, and every intra-doc
+`#anchor` link in `docs/` is written against **GitHub's** heading-to-anchor algorithm — so the site's
+renderer must slug headings the same way GitHub does, not diverge. `mkdocs.yml`'s `markdown_extensions
+→ toc.slugify` installs `src/lode/docs_slug.py`'s `github_slugify` (a deliberate copy of
+`scripts/check_links.py`'s `github_slug` — see that module's docstring for why it's a copy, not a
+shared import) so a single heading's anchor `id` matches on both surfaces (`lode-fhql.21`).
+
+**That fixes only the slug half of GitHub's algorithm — not the dedup-suffix half (`lode-rmsf`).**
+GitHub dedups a *repeated* heading's slug with a `-1`, `-2`, ... suffix; `check_links.py`'s own
+`_slugs_for_file` reproduces that. Python-Markdown's `toc` extension dedups with its own `unique()`
+helper instead, which appends `_1`, `_2`, ... — and critically, `toc` calls `slugify` **before**
+dedup, so no custom `slugify` (installed or otherwise) can influence the suffix `toc` picks. A
+published doc that ever grows two headings with the same slug would render `#foo_1` on the built
+site while GitHub, and this repo's own link gate, both resolve `#foo-1` — a second, independent
+broken-anchor bug that `lode-fhql.21`'s fix cannot reach.
+
+**Decided: gate it, don't patch `toc`'s internals.** The docs set has zero duplicate heading slugs
+today (verified during `lode-fhql.21`'s review), so this is latent, not live. Patching or
+monkeypatching python-markdown's `toc.unique()` to match GitHub's `-1` suffix was considered and
+rejected as disproportionate to a case that has never actually occurred — instead,
+`tests/test_docs_no_duplicate_heading_slugs.py` fails `nox -s tests` loudly the moment any
+**published** doc (the `exclude_docs` allowlist above, read directly from `mkdocs.yml` so the test
+can't drift from what the site actually publishes) gains a repeated heading slug, forcing the
+heading to be renamed before the mismatch can ever ship. The test reuses `check_links.py`'s own
+`_headings`/`github_slug` unmodified rather than adding a third copy of the algorithm.
+
 **Landing page / README sync (lode-fhql.10).** `README.md` is the **canonical** pitch — every
 GitHub visitor sees it first, with or without a deployed docs site. `docs/index.md` is a **derived
 restatement**, not a second, independently-maintained pitch: its positioning line, name-story
