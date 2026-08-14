@@ -56,10 +56,13 @@ import subprocess
 from pathlib import Path
 
 from _gitrepo import _git
-from conftest import LAND_SKILL_TEXT
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "worktree-gc-classify.sh"
+
+#: The GC loop moved out of land/SKILL.md into this script (lode-s9xe.5); the
+#: bucket contract it must handle is the classifier's, wherever the loop lives.
+SWEEP_TEXT = (REPO_ROOT / "scripts" / "worktree-gc-sweep.sh").read_text()
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -161,18 +164,18 @@ def _buckets_the_script_can_print() -> set[str]:
 
 
 def _buckets_the_land_loop_handles() -> set[str]:
-    """Every non-default arm label of `SKILL.md`'s `case "$BUCKET"` dispatch."""
-    text = LAND_SKILL_TEXT
+    """Every non-default arm label of the sweep script's `case "$BUCKET"` dispatch."""
+    text = SWEEP_TEXT
     start = text.index('case "$BUCKET" in')
     end = text.index("\n  esac", start)
     return set(re.findall(r"^\s*([a-z][a-z-]*)\)", text[start:end], re.MULTILINE))
 
 
 def test_land_loop_handles_exactly_the_buckets_the_script_prints() -> None:
-    """`/land`'s loop maps each bucket to a counter and a (possibly
-    DESTRUCTIVE) action by matching the script's output as a literal string,
-    in a markdown fence that no other gate reads. Nothing else links the two
-    vocabularies, so a rename or typo on either side is caught by nothing:
+    """`scripts/worktree-gc-sweep.sh`'s loop maps each bucket to a counter and
+    a (possibly DESTRUCTIVE) action by matching the classify script's output
+    as a literal string. Nothing else links the two vocabularies, so a rename
+    or typo on either side is caught by nothing:
     the loop would fall to its `*)` arm for every candidate and count the
     whole sweep as `failed`, silently zeroing out worktree GC. That fails
     SAFE (no worktree is touched), which is exactly why it could run
