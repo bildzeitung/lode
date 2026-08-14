@@ -1042,3 +1042,35 @@ Material's Markdown dialect (`pymdownx` extensions: admonitions, tabs, etc.) is 
 in `mkdocs.yml`; none of the currently-published pages use GitHub-flavored-Markdown-incompatible
 syntax today, and none should be added as part of adopting the site without checking it renders
 sanely in GitHub's plain markdown view first.
+
+### mkdocs.yml scaffold and the landing page (lode-fhql.10)
+
+`mkdocs.yml` (repo root) and `docs/index.md` (the site's landing page) exist as of `lode-fhql.10`.
+Neither ticket that named the generator or the CI workflow (`lode-fhql.8`/`.9`) owned creating
+them, and the landing page's own acceptance criteria ("the site's index renders...") could not be
+satisfied without a minimal, working scaffold to render it against — so `lode-fhql.10` created
+both, kept deliberately small:
+
+- `mkdocs.yml`'s `nav` is hand-restricted to the PUBLISHED set above — without an explicit `nav`,
+  MkDocs auto-discovers every markdown file under `docs_dir`, which would silently pull in the
+  EXCLUDED maintainer docs this section just carved out.
+- `docs/overrides/main.html` (a `theme.custom_dir` override) adds the OG/social `<meta>` tags,
+  pointing `og:image`/`twitter:image` at `assets/og-card.png` — the path `lode-fhql.6` (favicon +
+  OG card, open at the time `.10` built) will commit its 1200x630 asset to, matching the existing
+  `docs/assets/` naming convention (`mark.svg`, `mark-16.png`, `lockup.svg`). The tag needs no
+  change once `.6` lands the file.
+- Wiring this scaffold into GitHub Actions/Pages — including the Mermaid build-time pre-render step
+  mandated above — is still entirely `lode-fhql.9`'s scope; this file has never been built or
+  validated by an actual `mkdocs build` (`mkdocs-material` is a CI-only `docs` extra, not a local
+  `dev` dependency, per the dependency note above), only reviewed by eye against MkDocs-Material's
+  documented config shape.
+
+**Landing page / README sync (lode-fhql.10).** `README.md` is the **canonical** pitch — every
+GitHub visitor sees it first, with or without a deployed docs site. `docs/index.md` is a **derived
+restatement**, not a second, independently-maintained pitch: its positioning line, name-story
+quote, two-line demo, and "The idea in one breath" section are reused **verbatim** from
+`README.md`, never rewritten into separate marketing copy (an instruction already given in
+`lode-fhql.10`'s own ticket text, and repeated here so it survives past the ticket). Whoever edits
+any of those sections in `README.md` updates `docs/index.md`'s copy in the same commit, and vice
+versa — there is no automated sync; this paragraph, plus the HTML-comment note at the top of
+`docs/index.md` pointing back here, is the only thing keeping the two from silently diverging.

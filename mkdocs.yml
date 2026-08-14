@@ -1,0 +1,57 @@
+# lode docs site -- generator chosen and decided in docs/stack.md (lode-fhql.8).
+#
+# This file is the minimal scaffold the landing page (lode-fhql.10) needs to
+# render as the site's index with correct nav and OG/social metadata. Wiring
+# this into GitHub Actions/Pages -- including the Mermaid build-time
+# pre-render step mandated in docs/stack.md -- is lode-fhql.9's scope, not
+# this file's. `mkdocs-material` is declared in pyproject.toml's `docs` extra
+# (CI-only, per docs/stack.md); there is no local `dev` install requirement.
+#
+# nav is restricted to the PUBLISHED set from docs/stack.md -- without an
+# explicit nav, MkDocs auto-discovers every markdown file under docs_dir,
+# which would pull in the EXCLUDED maintainer docs (decisions.md,
+# agents-workflow.md, ...) that lode-fhql.8 deliberately keeps off the site.
+
+site_name: lode
+site_description: >-
+  An AI-first, TUI-first personal knowledge base for the things you learn
+  during your day at work.
+site_url: https://bildzeitung.github.io/lode/
+repo_url: https://github.com/bildzeitung/lode
+repo_name: bildzeitung/lode
+edit_uri: edit/trunk/docs/
+
+docs_dir: docs
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  logo: assets/mark.svg
+  favicon: assets/mark-16.png
+  palette:
+    scheme: default
+  features:
+    - navigation.instant
+    - navigation.top
+    - search.suggest
+    - content.action.edit
+
+nav:
+  - Home: index.md
+  - Design: design.md
+  - Storage: storage.md
+  - Retrieval: retrieval.md
+  - Externals: externals.md
+  - Brand: brand.md
+  - How-to:
+      - Overview: how-to/README.md
+      - Change a config setting: how-to/config-change.md
+      - JIRA setup: how-to/jira-setup.md
+      - Maintenance commands: how-to/maintenance-commands.md
+
+plugins:
+  - search
+
+markdown_extensions:
+  - toc:
+      permalink: true
