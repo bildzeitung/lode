@@ -172,27 +172,6 @@ _MUTATING_CMD_RE = re.compile(
 # an exemption reviewable data rather than prose; KNOWN LIMITATION 3 above
 # records what that keying does and does not catch.
 _KNOWN_LAND_SKILL_MUTATIONS: dict[str, str] = {
-    # --- read-only false positives of the broad verb regex (limitation 2) ---
-    'for mb in $(git merge-base --all "origin/land/<X>" "origin/land/<Y>"); do': (
-        "read-only: enumerates merge-bases, mutates nothing (1a stacked-branch "
-        "detection)"
-    ),
-    'git merge-base --is-ancestor "$mb" origin/trunk || OFF_TRUNK="$OFF_TRUNK $mb"': (
-        "read-only: --is-ancestor is a pure query, mutates nothing"
-    ),
-    'LOCK_REASON=$(git worktree list --porcelain | awk -v want="$WT" \'': (
-        "read-only listing (Section 4 worktree-GC loop's stale-lock reason lookup)"
-    ),
-    "done < <(git worktree list --porcelain | awk '": (
-        "read-only listing (Section 4 worktree-GC loop's candidate enumeration)"
-    ),
-    "MERGED=$(git branch --merged trunk --format='%(refname:short)')": (
-        "read-only listing (Section 4's third backstop, computing the merged set)"
-    ),
-    "CHECKED_OUT=$(git worktree list --porcelain | awk "
-    "'/^branch refs\\/heads\\//{print substr($0,19)}')": (
-        "read-only listing (Section 4's third backstop, computing checked-out branches)"
-    ),
     # --- explicit ref/path-addressed writes: cwd-independent by construction,
     #     the same reasoning Section 4's own prose gives for these commands
     #     ("each names its own target") ---
@@ -206,25 +185,6 @@ _KNOWN_LAND_SKILL_MUTATIONS: dict[str, str] = {
     'git push origin --delete "land/<id>"': (
         "ref-addressed delete (explicit remote+branch); cwd-independent "
         "(Bounce / Escalate-exit-(b) / Escalate-exit-(c))"
-    ),
-    'git worktree unlock "$WT" 2>/dev/null || true': (
-        "path-addressed to $WT (the exact worktree path just read from "
-        "`git worktree list --porcelain`), not cwd-resolved"
-    ),
-    'if git worktree remove --force "$WT"; then': (
-        "path-addressed to $WT, not cwd-resolved (same reasoning as worktree "
-        "unlock above)"
-    ),
-    '[ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true': (
-        "ref-addressed to $BR, an explicit branch name read from the same "
-        "porcelain listing, not cwd-resolved"
-    ),
-    'if git branch -D "$BR" 2>/dev/null; then': (
-        "ref-addressed to $BR, an explicit branch name, not cwd-resolved"
-    ),
-    "git worktree prune": (
-        "housekeeping only: drops stale worktree admin entries already gone "
-        "from disk; never removes real content or a live worktree"
     ),
     # --- path-addressed to the passive bd export, never real work ---
     "git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true": (

@@ -164,41 +164,47 @@ def test_2b_precheck_persists_conflicts_to_the_state_dir() -> None:
     )
 
 
-def _merge_loop_blocks() -> list[str]:
-    """Section 3's two `land-merge-one.sh` fences, in document order: index 0 is
-    3a's first-pass merge loop, index 1 the isolation-replay copy entered only on
-    a red combined re-gate.
+def _merge_script_calls() -> list[str]:
+    """The two fenced call sites that hand /land's merge work to a script.
 
-    Document order is the only signal separating them (both call the same script
-    the same way), so this also polices the "exactly two" precondition itself --
-    a SKILL.md reshape that adds or drops a merge loop fails loudly here rather
-    than silently changing what its callers' pins mean. ONE locator, shared: a
-    second byte-identical copy would carry any locator bug into both, so it could
-    not act as the independent check such a copy is usually justified by.
+    Neither merge loop is fenced any more (lode-s9xe.6): the first pass calls
+    scripts/land-merge-batch.sh and the isolation replay calls
+    scripts/land-replay.sh, each covered directly by its own test module
+    (tests/test_land_merge_batch.py, tests/test_land_replay.py) -- the
+    per-conflict persist-to-disk behaviour these two used to pin inline now
+    lives, and is tested, inside those scripts. What the skill still owns --
+    and what can still drift silently -- is the WIRING: the state paths it
+    hands them.
     """
-    sites = [b for b in _skill_blocks() if "scripts/land-merge-one.sh" in b]
-    assert len(sites) == 2, (
-        f"expected exactly 2 fenced blocks calling land-merge-one.sh (Section 3's "
-        f"two merge loops), found {len(sites)} -- this test's assumption about "
-        "SKILL.md's structure has drifted; re-check by hand before adjusting the count"
+    blocks = [
+        b
+        for b in _skill_blocks()
+        if "land-merge-batch.sh" in b or "land-replay.sh" in b
+    ]
+    assert len(blocks) == 2, (
+        f"expected exactly 2 fenced blocks calling the merge scripts (first pass "
+        f"land-merge-batch.sh + isolation-replay land-replay.sh), found "
+        f"{len(blocks)} -- this test's assumption about SKILL.md's structure has "
+        "drifted; re-check by hand before adjusting the count"
     )
-    return sites
+    return blocks
 
 
-def test_section_3_merge_loops_both_persist_conflicts_to_the_state_dir() -> None:
-    """Section 3 has TWO merge loops -- the first pass, and the
-    isolation-replay loop entered on a red combined re-gate. Both call
-    scripts/land-merge-one.sh and both must persist a real conflict's paths
-    the same way, or the isolation-replay path silently regresses even when
-    the first-pass loop is fixed."""
-    for i, site in enumerate(_merge_loop_blocks(), start=1):
-        assert 'CONFLICTS_DIR="$STATE_DIR/conflicts"' in site, (
-            f"merge loop #{i} no longer (re-)derives CONFLICTS_DIR"
-        )
-        assert 'printf \'%s\\n\' "$CONFLICTS" > "$CONFLICTS_DIR/$id"' in site, (
-            f"merge loop #{i}'s rc=1 arm no longer persists $CONFLICTS to disk "
-            "(lode-rfon)"
-        )
+def test_both_merge_script_calls_are_given_the_state_paths_they_need() -> None:
+    """A dropped flag is silent in the direction that matters: a missing
+    REQUIRED path makes the script fault loudly, but `--graph` is optional
+    from the script's own point of view, and losing it silently stops a
+    conflicting base from taking its dependents with it -- Section 3a's
+    invariant, gone without a word (lode-s9xe.4)."""
+    for call in _merge_script_calls():
+        for flag in (
+            "--accepted",
+            "--landed",
+            "--msg-dir",
+            "--conflicts-dir",
+            "--graph",
+        ):
+            assert flag in call, f"a merge script call no longer passes {flag}"
 
 
 def test_kick_back_block_reads_conflicts_from_disk_not_a_bare_variable() -> None:
@@ -258,77 +264,6 @@ def test_kick_back_block_refuses_loudly_on_missing_or_empty_conflicts() -> None:
     )
 
 
-def test_empty_accepted_falls_through_missing_accepted_still_aborts() -> None:
-    """lode-0jan: Section 3's first-pass merge loop must distinguish a MISSING
-    `$STATE_DIR/accepted` (3a's precompute never ran -- lode-sfnb's silent-
-    failure shape, still aborts loudly) from an EMPTY one (every branch already
-    bounced, escalated, held, or kicked back needs-rebase before this loop
-    started -- a legitimate outcome that must NOT abort, so the pass falls
-    through to Section 4's end-of-pass work instead of leaving the lock to age
-    out for no reason).
-
-    Before this fix, both cases hit the same `[ -n "$ACCEPTED" ] || exit 1`
-    guard and aborted identically -- this pins that the empty case no longer
-    does, while the missing case (a failed load) still does.
-
-    lode-dc4n retargeted the load itself onto scripts/land-state-load.sh
-    (default policy: missing fatal, empty OK) -- the missing-vs-empty
-    distinction this test pins now lives in that shared script rather than
-    inline `cat`/`[ -n ... ]` shell, but the invariant is unchanged: this
-    call site must not pass --require-nonempty (that's the OTHER policy,
-    used by the isolation-replay call site and the kick-back one)."""
-    site = _merge_loop_blocks()[0]
-
-    # The missing case: the abort must hang off the LOAD's own exit status,
-    # via scripts/land-state-load.sh -- not off a separate emptiness test that
-    # a legitimately empty-but-present file would also trip. Pinned as the
-    # exact call + `|| exit 1` rather than "an `exit 1` somewhere near the
-    # load": the same fence carries other `exit 1`s (the rc=2 machine-fault
-    # arm), so a proximity check could stay green with this handler deleted.
-    assert 'ACCEPTED=$(scripts/land-state-load.sh "$STATE_DIR/accepted"' in site, (
-        "the first-pass merge loop no longer loads $STATE_DIR/accepted via "
-        "scripts/land-state-load.sh (lode-dc4n) -- lode-sfnb's silent-failure "
-        "guard has regressed"
-    )
-    # EXACT, not a character-proximity check. lode-0jan's own technical review
-    # replaced a `< 200` proximity pin here with an exact one for precisely the
-    # reason it still holds: the same fence carries other `exit 1`s (the rc=2
-    # machine-fault arm), so a distance check stays green with the real handler
-    # deleted and an unrelated one nearby. Pin the whole call, continuation and
-    # handler included.
-    assert (
-        'ACCEPTED=$(scripts/land-state-load.sh "$STATE_DIR/accepted" -- \\\n'
-        '  "3a\'s precompute did not run. Landing nothing.") || exit 1'
-    ) in site, (
-        "the first-pass merge loop's land-state-load.sh call is no longer wired "
-        "to `|| exit 1` (or its context argument changed) -- a failed (missing) "
-        "load must abort the pass"
-    )
-
-    # This call site must use the DEFAULT policy (empty OK) -- never
-    # --require-nonempty, which is the isolation-replay/kick-back policy.
-    assert "--require-nonempty" not in site, (
-        "the first-pass merge loop's land-state-load.sh call passes "
-        "--require-nonempty -- an empty-but-present $STATE_DIR/accepted (every "
-        "branch bounced/escalated/held/needs-rebased) must fall through to "
-        "Section 4, not abort (lode-0jan)"
-    )
-
-    # The empty case must NOT independently abort: no `[ -n "$ACCEPTED" ] ||
-    # exit` (or equivalent) guard anywhere in this block. An empty-but-present
-    # accepted set is legitimate and must fall through to the for loop below
-    # (which correctly iterates zero times) rather than aborting the pass.
-    # Both spellings, so the guard cannot come back merely rephrased: the `-n
-    # ... || exit` form this fix removed, and its `-z ... && exit` inverse.
-    for emptiness_test in ('[ -n "$ACCEPTED" ]', '[ -z "$ACCEPTED" ]'):
-        assert emptiness_test not in site, (
-            f"the first-pass merge loop guards on `{emptiness_test}` -- an "
-            "empty-but-present $STATE_DIR/accepted (every branch bounced/"
-            "escalated/held/needs-rebased) must fall through to Section 4, "
-            "not abort (lode-0jan)"
-        )
-
-
 _REGATE = "nox -s tests"
 """The re-gate needle: the session that actually gates CONTENT.
 
@@ -371,11 +306,13 @@ def _regate_and_push_indices(blocks: list[str]) -> tuple[list[int], int]:
     """
     regate_indices = [i for i, b in enumerate(blocks) if _REGATE in b]
     push_indices = [i for i, b in enumerate(blocks) if _PUSH in b]
-    assert len(regate_indices) == 2, (
-        f"expected exactly 2 fenced blocks running `{_REGATE}` (Section 3's "
-        f"Green re-gate + the Red isolation-replay re-gate), found "
-        f"{len(regate_indices)} -- this test's assumption about SKILL.md's "
-        "structure has drifted; re-check by hand before adjusting the count"
+    assert len(regate_indices) == 1, (
+        f"expected exactly 1 fenced block running `{_REGATE}` (Section 3's "
+        f"combined Green re-gate -- the Red isolation-replay path's own re-gate "
+        f"now runs INSIDE scripts/land-replay.sh, lode-s9xe.6, so it is no "
+        f"longer a separate fenced block here), found {len(regate_indices)} -- "
+        "this test's assumption about SKILL.md's structure has drifted; "
+        "re-check by hand before adjusting the count"
     )
     assert len(push_indices) == 2, (
         f"expected exactly 2 fenced blocks running `{_PUSH}` (Section 4's "

@@ -1399,9 +1399,10 @@ def test_land_skill_acquires_and_releases_through_this_script() -> None:
     # Both explicit release sites: Section 1's empty-queue exit and the end of
     # Section 4. Losing one is not a correctness bug (the TTL still reclaims)
     # but it silently costs up to LAND_LOCK_STALE_SECONDS of blocked landing.
-    assert text.count("scripts/land-lock.sh release") >= 2, (
-        "land/SKILL.md lost one of its two explicit `release` call sites -- "
-        "that pass now waits out the whole staleness window instead"
+    assert text.count("scripts/land-heartbeat.sh --release") >= 2, (
+        "land/SKILL.md lost one of its two explicit `--release` call sites "
+        "(scripts/land-heartbeat.sh --release, lode-s9xe.1) -- that pass now "
+        "waits out the whole staleness window instead"
     )
 
 
@@ -1531,7 +1532,7 @@ def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
     """
     text = LAND_SKILL_TEXT
 
-    assert "scripts/land-lock.sh heartbeat" in text, (
+    assert "scripts/land-heartbeat.sh" in text, (
         "land/SKILL.md never heartbeats the single-lander lock -- the TTL is "
         "back to measuring acquisition age, not idle time (lode-m87j)"
     )
@@ -1566,16 +1567,14 @@ def test_land_skill_heartbeats_at_both_new_boundary_call_sites_lode_v4sv() -> No
 
     positions = [
         m.start()
-        for m in re.finditer(
-            r'scripts/land-lock\.sh heartbeat "\$MY_TOKEN" \|\| true', text
-        )
+        for m in re.finditer(r"^scripts/land-heartbeat\.sh$", text, re.MULTILINE)
     ]
     assert len(positions) == 3, (
-        f'expected exactly 3 in-skill \'scripts/land-lock.sh heartbeat "$MY_TOKEN" || '
-        f"true' call sites (Section 1 -> 1a boundary [lode-v4sv], Section 2a's "
-        f"per-ticket vet loop, Section 4's push-trunk -> release boundary "
-        f"[lode-v4sv]), found {len(positions)}. A dropped site silently re-widens "
-        "one of the two queue-size-growing gaps lode-v4sv closed."
+        "expected exactly 3 in-skill 'scripts/land-heartbeat.sh' call sites "
+        f"(Section 1 -> 1a boundary [lode-v4sv], Section 2a's per-ticket vet "
+        f"loop, Section 4's push-trunk -> release boundary [lode-v4sv]), found "
+        f"{len(positions)}. A dropped site silently re-widens one of the two "
+        "queue-size-growing gaps lode-v4sv closed."
     )
 
     heading_1a = text.index("## 1a. Compute the stacked-branch graph")
@@ -1681,22 +1680,27 @@ def test_every_land_lock_heartbeat_and_release_call_site_supplies_its_own_token(
 
 
 def test_land_skill_threads_its_own_token_into_land_merge_one() -> None:
-    """`scripts/land-merge-one.sh` heartbeats on every invocation, and it is
-    itself a script called from a fence rather than a block that could read
-    $STATE_DIR on its own -- so BOTH of Section 3's merge loops (the first pass
-    and the isolation replay) must hand it the token as its third argument, or
-    that heartbeat goes blind for every merged branch."""
-    executed = LAND_SKILL_BASH
-
-    calls = re.findall(r"land-merge-one\.sh [^\n]*", executed)
-    assert len(calls) >= 2, (
-        f"expected both of Section 3's land-merge-one.sh call sites, found "
-        f"{calls} -- has the skill's layout drifted?"
+    """`scripts/land-merge-one.sh` heartbeats on every invocation and cannot
+    read $STATE_DIR on its own, so the token has to be threaded to it. Both of
+    Section 3's merge paths are scripts now (`scripts/land-merge-batch.sh`,
+    `scripts/land-replay.sh`, lode-s9xe.6) and both take it via `--token`,
+    forwarding it verbatim to `land-merge-one.sh` as its own [own-token]
+    argument (see each script's own header); a call site that drops the flag
+    makes every merge under it heartbeat blind (lode-q9pm)."""
+    calls = [
+        b
+        for b in LAND_SKILL_BLOCKS
+        if "land-merge-batch.sh" in b or "land-replay.sh" in b
+    ]
+    assert len(calls) == 2, (
+        f"expected both merge-script call sites (first pass land-merge-batch.sh "
+        f"+ isolation replay land-replay.sh), found {len(calls)} -- has the "
+        "skill's layout drifted?"
     )
-    offenders = [c for c in calls if '"$MY_TOKEN"' not in c]
+    offenders = [c for c in calls if "--token" not in c]
     assert not offenders, (
-        f"land-merge-one.sh call site(s) omit the own-token third argument: "
-        f"{offenders}. It then heartbeats blind (lode-q9pm)."
+        "a merge-script call site omits --token, so land-merge-one.sh "
+        "heartbeats blind for every branch it merges (lode-q9pm)"
     )
 
 
@@ -1794,7 +1798,7 @@ def test_land_skill_never_reintroduces_an_inline_lock() -> None:
         "the acquire call is not inside an executable ```bash fence -- "
         "_fenced_bash() or the skill's layout has drifted"
     )
-    assert "land-lock.sh heartbeat" in executed, (
+    assert "land-heartbeat.sh" in executed, (
         "the heartbeat call (Section 2a) is not inside an executable ```bash "
         "fence -- test_land_skill_heartbeats_the_lock_once_per_ticket_in_"
         "section_2a found it in the file's prose but not where it is actually "
@@ -1841,15 +1845,18 @@ def test_every_own_token_readback_site_warns_when_empty() -> None:
     executed = LAND_SKILL_BASH
 
     token_reads = executed.count('cat "$(git rev-parse --git-dir)/land-lock-token"')
-    assert token_reads == 7, (
-        f"expected exactly 7 reads of $(git rev-parse --git-dir)/land-lock-token"
-        f" in land/SKILL.md (Section 1's release, the gap (a) boundary heartbeat "
-        f"before Section 1a [lode-v4sv], Section 2a's per-ticket heartbeat, "
-        f"Section 3's two merge loops, the gap (c) boundary heartbeat at the top "
-        f"of Section 4 [lode-v4sv], Section 4's final release), found "
-        f"{token_reads} -- if a call site was genuinely added or removed, "
-        "update this pin's count deliberately and check the new/removed site "
-        "got (or lost) its own lode-67nk diagnostic too"
+    assert token_reads == 2, (
+        f"expected exactly 2 reads of $(git rev-parse --git-dir)/land-lock-token"
+        f" in land/SKILL.md -- Section 3's two merge script call sites, the only "
+        f"remaining places that need $MY_TOKEN read back from disk to forward it "
+        f"via --token to land-merge-batch.sh/land-replay.sh (lode-s9xe.6 moved "
+        f"every OTHER former read-back site -- Section 1's release, the gap (a)/"
+        f"(c) boundary heartbeats, Section 2a's per-ticket heartbeat, Section 4's "
+        f"final release -- onto scripts/land-heartbeat.sh, which re-derives the "
+        f"token itself and no longer needs it threaded in), found {token_reads} -- "
+        "if a call site was genuinely added or removed, update this pin's count "
+        "deliberately and check the new/removed site got (or lost) its own "
+        "lode-67nk diagnostic too"
     )
 
     warning_sites = executed.count("DISABLED for this call (lode-67nk)")
