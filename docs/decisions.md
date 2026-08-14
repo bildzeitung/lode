@@ -5118,7 +5118,11 @@ entries below from being rewritten to chase the current tree.)
   - **Constraint 2 — no new silence.** The tickets `bd blocked` subtracts out of `$HUMAN` are
     listed unconditionally, every pass, in a new report-only section — `.claude/skills/sweep/SKILL.md`
     §2c, "Blocked human tickets" — on the exact same contract §2a (`deferred`) and §2b (stranded
-    `in_progress`) already establish: its own `$SWEEP_TMP` scratch file (`blocked_human`), the
+    `in_progress`) already establish for *rendering* — with two deliberate exceptions on the
+    *collection* half, both recorded at `.claude/skills/sweep/SKILL.md`'s shared-contract section:
+    §2c issues no query of its own (§1's single `bd blocked` call is its data, so the two halves
+    of the partition cannot disagree), and its failure is therefore not isolated to the section
+    (see Constraint 3). The rendering half it shares exactly: its own `$SWEEP_TMP` scratch file (`blocked_human`), the
     `SWEEP-QUERY-ERROR` sentinel on a failed query, three-state (`missing`/`error`/`ok`) rendering
     in §8, never dedup'd, never written into the digest, never part of the push. Rationale: a
     human ticket blocked on a *deferred* dependency (parked indefinitely) would otherwise vanish

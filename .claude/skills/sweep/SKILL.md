@@ -126,25 +126,30 @@ fi
 # never filtered this way -- this is a $HUMAN-only subtraction. `bd blocked` has no --limit
 # flag to pin (checked -- it is a distinct subcommand from `bd list`, outside
 # tests/test_bd_list_limit_gate.py's `bd list`-only scan surface).
+# Pre-truncate BOTH outputs, unconditionally: awk never opens an output file it writes zero
+# rows to, so without these an empty list would leave NO file and §8 would read `missing`
+# ("§1 never ran") instead of `ok`/`(none)` ("§1 ran, nothing to report"). These lines are
+# load-bearing for that three-state distinction -- do not drop them in favour of awk's own
+# redirection.
+: > "$SWEEP_TMP/human"
+: > "$SWEEP_TMP/blocked_human"
+
+# The query and the partition it feeds are ONE branch deliberately: the failure path has to
+# write both files itself, so splitting them would mean re-testing a flag 20 lines below the
+# branch that set it.
+#
+# Partition $HUMAN_RAW on membership in $BLOCKED_IDS: the non-blocked rows become the real
+# $HUMAN source (unchanged shape, `<id>\thuman\t<title>`); the blocked-out rows are persisted
+# separately for §2c's report-only "Blocked human tickets" section, which shares the §2a/§2b
+# contract (own scratch file, own sentinel -- see that section below).
 if ! BLOCKED_IDS=$(bd blocked --json | jq -r '(. // []) | .[] | .id'); then
   # Same marker as the two queries above: a failed `bd blocked` must NOT be read as "nothing
   # is blocked" -- that would let the whole blocked set flood $CURRENT and false-notify it as
   # new. It suppresses the §6 rewrite exactly like an $ESCALATED/$HUMAN failure.
   touch "$SWEEP_TMP/source_query_failed"
-  BLOCKED_IDS=""
-  BLOCKED_QUERY_FAILED=1
-fi
-
-# Partition $HUMAN_RAW on membership in $BLOCKED_IDS: the non-blocked rows become the real
-# $HUMAN source (unchanged shape, `<id>\thuman\t<title>`); the blocked-out rows are persisted
-# separately for §2c's report-only "Blocked human tickets" section, which shares the §2a/§2b
-# contract (own scratch file, own sentinel -- see that section below). On a `bd blocked`
-# failure the partition itself is meaningless (we don't know the true blocked set), so $HUMAN
-# is left unfiltered -- harmless, since source_query_failed above already suppresses §6/§7 for
-# this whole pass -- and §2c's own copy gets the SWEEP-QUERY-ERROR sentinel per its contract.
-: > "$SWEEP_TMP/human"
-: > "$SWEEP_TMP/blocked_human"
-if [ -n "${BLOCKED_QUERY_FAILED:-}" ]; then
+  # The partition itself is meaningless now (we don't know the true blocked set), so $HUMAN is
+  # left unfiltered -- harmless, since the marker above already suppresses §6/§7 for this whole
+  # pass -- and §2c's own copy gets the SWEEP-QUERY-ERROR sentinel per its contract.
   printf '%s' "SWEEP-QUERY-ERROR" > "$SWEEP_TMP/blocked_human"
   printf '%s' "$HUMAN_RAW" > "$SWEEP_TMP/human"
 else
@@ -282,7 +287,8 @@ identically. `--limit 0` does not apply to §2c's own query: `bd blocked` expose
 at all (checked directly against `bd blocked --help`), so there is nothing to pin — see §1's note.
 
 **The sentinel, and why it can't collide with a real row.** Each section persists its result to its
-own `$SWEEP_TMP` file (`$SWEEP_TMP/deferred` for §2a, `$SWEEP_TMP/stranded` for §2b) the same way §1
+own `$SWEEP_TMP` file (`$SWEEP_TMP/deferred` for §2a, `$SWEEP_TMP/stranded` for §2b,
+`$SWEEP_TMP/blocked_human` for §2c — written by §1, per that section's note) the same way §1
 persists `$ESCALATED`/`$HUMAN` — §8 (a later, separate Bash invocation) reads it back from disk
 rather than relying on the model's in-context memory of the block's output, which is not the
 mechanism §0 says this file uses. On a query error (`bd` or `jq`), the block overwrites the
@@ -760,8 +766,10 @@ else
   STRANDED_STATE=missing
 fi
 
-# lode-csxh: same non-fatal third state, for §2c's blocked-human list. §1 wrote this file (as
-# part of partitioning $HUMAN), not a §2c block of its own -- see §2c's own note.
+# lode-3oik: NOT retrofitted onto scripts/land-state-load.sh -- a missing $SWEEP_TMP/blocked_human is a
+# non-fatal third state, same reason as the two reads above.
+# lode-csxh: §1 wrote this file (as part of partitioning $HUMAN), not a §2c block of its own --
+# see §2c's own note. That changes only WHICH block a `missing` state indicts, not the policy.
 if BLOCKED_HUMAN="$(cat "$SWEEP_TMP/blocked_human" 2>/dev/null)"; then
   BLOCKED_HUMAN_STATE=ok
   [ "$BLOCKED_HUMAN" = "SWEEP-QUERY-ERROR" ] && BLOCKED_HUMAN_STATE=error
@@ -780,10 +788,11 @@ The rule is one rule, over all three report-only lists — for each `<list>` in 
 `stranded`, `blocked_human`} there are three mutually exclusive states, and §8 must not confuse
 them:
 
-- **`missing`** — that section's §2a/§2b block never ran this pass at all (e.g. it crashed before
-  reaching its `printf`). Section body: "`<list>` list unavailable this pass"; summary field:
-  `unavailable`, never `0`.
-- **`error`** — that section's block *did* run, but its `bd`/`jq` query failed and wrote the
+- **`missing`** — the block that writes that section's file never ran this pass at all (e.g. it
+  crashed before reaching its `printf`) — §2a's or §2b's own block, or, for `blocked_human`, **§1**
+  (which writes that file as part of partitioning `$HUMAN`; §2c has no block of its own). Section
+  body: "`<list>` list unavailable this pass"; summary field: `unavailable`, never `0`.
+- **`error`** — that writing block *did* run, but its `bd`/`jq` query failed and wrote the
   sentinel. Section body: "`<list>` query failed this pass"; summary field: `error` — never `0`,
   and never `unavailable`, which is a different failure with a different remedy.
 - **`ok`** — the query succeeded; report it normally, including the legitimately-empty case
