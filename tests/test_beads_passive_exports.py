@@ -29,7 +29,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
+from pathlib import Path
 
+import pytest
 from _hookharness import SETTINGS
 
 REPO_ROOT = SETTINGS.parent.parent
@@ -43,6 +47,17 @@ LAND_REPLAY = REPO_ROOT / "scripts" / "land-replay.sh"
 # consumer is a single edit here, not one per loop (lode-3cda's review: the module had
 # grown three hand-maintained copies of this set).
 BASH_CONSUMERS = (HOOK_SCRIPT, GC_CLASSIFY, MERGE_ONE, LAND_REPLAY)
+
+# The sourced library that now OWNS the load+validate+":(exclude)" transform for two of
+# those consumers (lode-xlcm). It is not a member of BASH_CONSUMERS -- it never names the
+# canonical list in code (its callers pass the path in), so
+# test_every_bash_consumer_names_the_canonical_list does not apply to it. The two CONTENT
+# invariants below do: they are what stops a relpath or the broad ':!.beads' pathspec from
+# being re-inlined, and after the extraction the place that would land is this file, one
+# level below every consumer. Registering it here rather than in BASH_CONSUMERS keeps each
+# invariant asserted over exactly the files it is true of.
+PASSIVE_EXPORTS_LIB = REPO_ROOT / "scripts" / "beads-passive-exports.sh"
+PATHSPEC_OWNERS = BASH_CONSUMERS + (PASSIVE_EXPORTS_LIB,)
 
 
 def _entries() -> list[str]:
@@ -93,7 +108,7 @@ def test_no_consumer_keeps_a_literal_copy_of_the_relpaths() -> None:
         h["command"] for entry in settings["hooks"]["Stop"] for h in entry["hooks"]
     )
     consumers = {".claude/settings.json (Stop hooks)": stop_commands} | {
-        str(script): script.read_text(encoding="utf-8") for script in BASH_CONSUMERS
+        str(script): script.read_text(encoding="utf-8") for script in PATHSPEC_OWNERS
     }
     for rel in _entries():
         for name, text in consumers.items():
@@ -116,7 +131,7 @@ def test_no_consumer_hardcodes_the_broad_beads_pathspec() -> None:
     invisible to both of its dirty-tree checks. The invariant is general, so it is
     asserted over every bash consumer rather than the one script that regressed.
     Checks actual code lines only, not a comment describing the fix."""
-    for script in BASH_CONSUMERS:
+    for script in PATHSPEC_OWNERS:
         code_lines = [
             line
             for line in script.read_text(encoding="utf-8").splitlines()
@@ -126,3 +141,112 @@ def test_no_consumer_hardcodes_the_broad_beads_pathspec() -> None:
             f"{script} hardcodes the broad ':!.beads' pathspec in code instead of "
             f"reading {CANONICAL_LIST.name}"
         )
+
+
+def _lib_sourcers() -> list[Path]:
+    """Every scripts/*.sh that sources the library, DISCOVERED rather than listed.
+
+    Same reasoning as `tests/test_gate_lib.py`'s `_sources_gate_lib` (lode-pcee): a
+    hardcoded roster cannot fail on the newcomer these sweeps exist to catch. Discovery is
+    on the library's filename in a non-comment line, deliberately NOT on the guard text --
+    tightening it onto the guard would vacate the guard sweep below, which is the whole
+    point of the discovery.
+    """
+    found = []
+    for script in sorted((REPO_ROOT / "scripts").glob("*.sh")):
+        if script == PASSIVE_EXPORTS_LIB:
+            continue
+        code = [
+            line
+            for line in script.read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith("#")
+        ]
+        if any(PASSIVE_EXPORTS_LIB.name in line for line in code):
+            found.append(script)
+    return found
+
+
+def test_the_library_has_at_least_the_two_sourcers_it_was_extracted_for() -> None:
+    """Non-vacuity for the guard sweep below: if discovery ever returns nothing, that sweep
+    passes trivially while enforcing nothing."""
+    assert set(_lib_sourcers()) >= {GC_CLASSIFY, LAND_REPLAY}
+
+
+@pytest.mark.parametrize("script", _lib_sourcers(), ids=lambda p: p.name)
+def test_every_sourcer_guards_the_source_line(script: Path) -> None:
+    """lode-bss5's fail-closed convention, applied to this library (lode-xlcm).
+
+    A bare `. "$SCRIPT_DIR/beads-passive-exports.sh"` under `set -uo pipefail` does NOT stop
+    the script when the source fails -- it leaves `load_beads_passive_exports` undefined and
+    the first call site resolves to a bash "command not found" whose exit code is whatever
+    the surrounding logic happens to produce, never the 2 the caller meant. A third consumer
+    that sources bare fails here the day it lands rather than on a live gate.
+    """
+    for line in script.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or PASSIVE_EXPORTS_LIB.name not in stripped:
+            continue
+        if re.search(r"^\.\s|(^|\s)\.\s+\"", stripped):
+            assert stripped.startswith("if ! . "), (
+                f"{script.name} sources {PASSIVE_EXPORTS_LIB.name} without a fail-closed "
+                f"guard: {stripped!r}"
+            )
+
+
+def _load(tmp_path: Path, list_body: str | None) -> subprocess.CompletedProcess[str]:
+    """Source the library in a fresh bash and call `load_beads_passive_exports`.
+
+    Prints the return code, then the two globals -- so an assertion can distinguish "set"
+    from "left over from a failed load", which the header now documents as undefined.
+    """
+    list_path = tmp_path / "list.txt"
+    if list_body is not None:
+        list_path.write_text(list_body, encoding="utf-8")
+    script = f"""
+      set -uo pipefail
+      . "{PASSIVE_EXPORTS_LIB}"
+      load_beads_passive_exports "{list_path}"
+      echo "rc=$?"
+      echo "pathspecs=${{BEADS_PASSIVE_EXPORTS_EXCLUDE_PATHSPECS[*]-<unset>}}"
+    """
+    return subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, check=False
+    )
+
+
+def test_a_good_list_loads_and_becomes_exclude_pathspecs(tmp_path: Path) -> None:
+    """The transform the extraction moved out of two scripts, asserted once, here."""
+    result = _load(tmp_path, ".beads/issues.jsonl\n.beads/interactions.jsonl\n")
+    assert "rc=0" in result.stdout, result.stdout + result.stderr
+    assert (
+        "pathspecs=:(exclude).beads/issues.jsonl :(exclude).beads/interactions.jsonl"
+        in result.stdout
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "cause"),
+    [
+        (None, "cannot read"),
+        ("", "empty or contains a blank line"),
+        (
+            ".beads/issues.jsonl\n\n.beads/interactions.jsonl\n",
+            "empty or contains a blank line",
+        ),
+    ],
+    ids=["unreadable", "empty", "blank-line"],
+)
+def test_a_bad_list_returns_1_with_one_diagnostic_and_never_exits(
+    tmp_path: Path, body: str | None, cause: str
+) -> None:
+    """The contract every caller's own failure handling is layered on: a plain non-zero
+    RETURN (so the caller chooses gate_could_not_run vs echo+exit 2 vs the Stop hook's
+    deliberate exit 0), never an `exit` taken on the caller's behalf. The trailing `echo`s
+    in `_load` are what prove the calling shell survived the failure.
+    """
+    result = _load(tmp_path, body)
+    assert "rc=1" in result.stdout, result.stdout + result.stderr
+    diagnostics = [ln for ln in result.stderr.splitlines() if ln.strip()]
+    assert len(diagnostics) == 1, result.stderr
+    assert cause in diagnostics[0]
+    assert str(tmp_path / "list.txt") in diagnostics[0]

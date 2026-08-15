@@ -156,11 +156,10 @@ fi
 if ! load_beads_passive_exports "$SCRIPT_DIR/beads-passive-exports.txt"; then
   exit 2
 fi
-_BEADS_EXCLUDE_PATHSPECS=("${BEADS_PASSIVE_EXPORTS_EXCLUDE_PATHSPECS[@]}")
 
 wt_provably_clean() {
   local st
-  st=$(git -C "$1" status --porcelain -- . "${_BEADS_EXCLUDE_PATHSPECS[@]}" 2>&1) && [ -z "$st" ]
+  st=$(git -C "$1" status --porcelain -- . "${BEADS_PASSIVE_EXPORTS_EXCLUDE_PATHSPECS[@]}" 2>&1) && [ -z "$st" ]
 }
 
 # WIDENED PREDICATE (lode-amif): "merged into trunk" is a PROXY for "this

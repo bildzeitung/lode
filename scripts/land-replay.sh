@@ -207,7 +207,7 @@ fi
 # Beads-exclusion pathspecs for both dirty-tree checks below (baseline
 # reformat-detect, per-branch reformat-detect), read from the canonical list
 # rather than the hardcoded ':!.beads' this replaced (lode-3cda). Same idiom
-# as scripts/worktree-gc-classify.sh's own _BEADS_EXCLUDE_PATHSPECS: built
+# as scripts/worktree-gc-classify.sh's own load of the same list: built
 # ONCE here, fail-loud if unreadable or empty. Unlike the old ':!.beads',
 # this excludes only the two listed jsonl relpaths -- a real non-passive
 # .beads/ change (e.g. config.yaml) now counts as dirty, matching every other
@@ -225,7 +225,6 @@ if ! load_beads_passive_exports "$SCRIPT_DIR/beads-passive-exports.txt"; then
   gate_could_not_run "could not load $SCRIPT_DIR/beads-passive-exports.txt" \
     "Both dirty-tree checks below cannot know which beads paths to exclude without it."
 fi
-_BEADS_EXCLUDE_PATHSPECS=("${BEADS_PASSIVE_EXPORTS_EXCLUDE_PATHSPECS[@]}")
 
 # Missing -> fatal (Section 3a's precompute never ran). Empty -> ALSO fatal
 # here, unlike land-merge-batch.sh's own load of the same file: this script
@@ -285,7 +284,7 @@ fi
 # A plain string, not the NUL-read array the per-branch reformat step below
 # builds: nothing is staged here, so the paths are only ever a diagnostic.
 # The pathspec itself stays byte-identical to that site's.
-fix_reformat_paths=$(git diff --name-only -- . "${_BEADS_EXCLUDE_PATHSPECS[@]}")
+fix_reformat_paths=$(git diff --name-only -- . "${BEADS_PASSIVE_EXPORTS_EXCLUDE_PATHSPECS[@]}")
 if [ -n "$fix_reformat_paths" ]; then
   gate_could_not_run "'nox -t fix' reformatted the bare base tree at '$BASE_REF' (exit 0, but" \
     "the tree is now dirty: $(printf '%s' "$fix_reformat_paths" | tr '\n' ' '))." \
@@ -442,7 +441,7 @@ for id in $ACCEPTED_IDS; do
   reformat_paths=()
   while IFS= read -r -d '' path; do
     reformat_paths+=("$path")
-  done < <(git diff -z --name-only -- . "${_BEADS_EXCLUDE_PATHSPECS[@]}")
+  done < <(git diff -z --name-only -- . "${BEADS_PASSIVE_EXPORTS_EXCLUDE_PATHSPECS[@]}")
   if [ "${#reformat_paths[@]}" -gt 0 ]; then
     git add -- "${reformat_paths[@]}" \
       || gate_could_not_run "could not stage nox -t fix's reformat of '$id' (${reformat_paths[*]})" \

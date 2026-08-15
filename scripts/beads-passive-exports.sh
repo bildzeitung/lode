@@ -10,6 +10,16 @@
 # lode-090f; also scripts/epic-children-closed.sh,
 # scripts/recycled-worktree-guard.sh) is "reaches three copies, extract."
 #
+# TWO OF THOSE FOUR ARE DELIBERATELY NOT CONVERTED, and this is not unfinished
+# work -- neither can adopt this function without a behaviour change:
+#   - scripts/land-merge-one.sh tolerates a blank line by design (it `continue`s
+#     past one); this function rejects one as a hard failure, which would turn a
+#     currently-survivable list into an exit-2 in the merge-retry path.
+#   - scripts/discard-beads-passive-export-churn.sh is silent by contract (a
+#     Stop hook that always exits 0 and swallows every failure); this function
+#     writes an unconditional diagnostic to stderr.
+# Convert either one only by first giving it the behaviour this function has.
+#
 # This file is a LIBRARY -- source it, never execute it directly. It performs
 # no validation and sets no globals at source time; call
 # load_beads_passive_exports() explicitly once sourced.
@@ -28,13 +38,11 @@
 #   # $BEADS_PASSIVE_EXPORTS and $BEADS_PASSIVE_EXPORTS_EXCLUDE_PATHSPECS are
 #   # now set for the rest of the caller's script.
 #
-# THE SOURCE LINE ITSELF MUST BE GUARDED, same convention as gate-lib.sh
-# (lode-bss5's measurement applies here too: a bare, unguarded source under
-# `set -uo pipefail` does not stop the script when the source fails -- it
-# just leaves load_beads_passive_exports undefined, and the first call site
-# then resolves to a bash "command not found" whose exit code is whatever the
-# surrounding logic happens to produce next, never a code the caller chose on
-# purpose). A missing/unreadable copy of this file must fail CLOSED.
+# THE SOURCE LINE ITSELF MUST BE GUARDED so a missing/unreadable copy of this
+# file fails CLOSED. Why an unguarded source does NOT stop the sourcing script
+# -- lode-bss5's measurement -- is stated ONCE, in scripts/gate-lib.sh's Usage
+# block, and deliberately NOT restated here; it applies verbatim to this
+# library, with load_beads_passive_exports in place of gate_could_not_run.
 #
 # load_beads_passive_exports <list-path>
 #   Reads <list-path>, validates it (must be readable, non-empty, and contain
@@ -53,12 +61,20 @@
 #
 #   Returns 0 on success. Returns 1 and prints exactly one diagnostic line to
 #   stderr (naming <list-path> and the cause) on failure -- this function
-#   NEVER exits the calling script. Each caller keeps its own failure
-#   semantics on top of that return code: scripts/worktree-gc-classify.sh and
-#   scripts/land-replay.sh both fail loud (gate_could_not_run / echo+exit 2)
-#   because an empty exclude list would silently invert lode-bns3 for a gate;
-#   scripts/discard-beads-passive-export-churn.sh is deliberately best-effort
-#   and must keep exiting 0 regardless.
+#   NEVER exits the calling script, so each caller keeps whatever failure
+#   semantics its own domain calls for on top of that return code. On the
+#   failure return the two globals are UNDEFINED, not merely unset: the
+#   blank-line path leaves BEADS_PASSIVE_EXPORTS already populated with the bad
+#   list and BEADS_PASSIVE_EXPORTS_EXCLUDE_PATHSPECS stale or unset. A caller
+#   that does not abort on a non-zero return must not read either one.
+#
+#   <list-path> is a REQUIRED argument rather than a default alongside this
+#   file, even though every call site passes the same
+#   "$SCRIPT_DIR/beads-passive-exports.txt": defaulting it would hollow out
+#   tests/test_beads_passive_exports.py's
+#   test_every_bash_consumer_names_the_canonical_list, which proves each
+#   consumer still reads the canonical list by finding its filename in the
+#   consumer's own source.
 load_beads_passive_exports() {
   local list_path="$1"
   if [ ! -r "$list_path" ]; then
@@ -71,6 +87,7 @@ load_beads_passive_exports() {
     echo "load_beads_passive_exports: $list_path is empty or contains a blank line" >&2
     return 1
   fi
+  # shellcheck disable=SC2034  # consumed by the sourcing script, invisible here
   BEADS_PASSIVE_EXPORTS_EXCLUDE_PATHSPECS=("${BEADS_PASSIVE_EXPORTS[@]/#/:(exclude)}")
   return 0
 }
