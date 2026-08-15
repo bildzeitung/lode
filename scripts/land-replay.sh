@@ -212,16 +212,20 @@ fi
 # this excludes only the two listed jsonl relpaths -- a real non-passive
 # .beads/ change (e.g. config.yaml) now counts as dirty, matching every other
 # consumer of scripts/beads-passive-exports.txt.
-_BEADS_EXPORTS_LIST="$SCRIPT_DIR/beads-passive-exports.txt"
-if [ ! -r "$_BEADS_EXPORTS_LIST" ]; then
-  gate_could_not_run "cannot read $_BEADS_EXPORTS_LIST" \
+#
+# lode-xlcm: the load+validate+":(exclude)" transform itself is owned by the
+# sourced helper scripts/beads-passive-exports.sh (this script keeps its own
+# gate_could_not_run failure semantics on top of the helper's plain return code).
+# shellcheck source=beads-passive-exports.sh
+if ! . "$SCRIPT_DIR/beads-passive-exports.sh"; then
+  gate_could_not_run "cannot source $SCRIPT_DIR/beads-passive-exports.sh" \
     "Both dirty-tree checks below cannot know which beads paths to exclude without it."
 fi
-mapfile -t _BEADS_EXPORTS < "$_BEADS_EXPORTS_LIST"
-if [ "${#_BEADS_EXPORTS[@]}" -eq 0 ] || printf '%s\n' "${_BEADS_EXPORTS[@]}" | grep -qx ''; then
-  gate_could_not_run "$_BEADS_EXPORTS_LIST is empty or contains a blank line"
+if ! load_beads_passive_exports "$SCRIPT_DIR/beads-passive-exports.txt"; then
+  gate_could_not_run "could not load $SCRIPT_DIR/beads-passive-exports.txt" \
+    "Both dirty-tree checks below cannot know which beads paths to exclude without it."
 fi
-_BEADS_EXCLUDE_PATHSPECS=("${_BEADS_EXPORTS[@]/#/:(exclude)}")
+_BEADS_EXCLUDE_PATHSPECS=("${BEADS_PASSIVE_EXPORTS_EXCLUDE_PATHSPECS[@]}")
 
 # Missing -> fatal (Section 3a's precompute never ran). Empty -> ALSO fatal
 # here, unlike land-merge-batch.sh's own load of the same file: this script
