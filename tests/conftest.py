@@ -1999,6 +1999,39 @@ LAND_SKILL_BLOCKS = bash_fence_blocks(LAND_SKILL_TEXT)
 #: above for why this is cached at all.
 LAND_SKILL_BASH = "\n".join(LAND_SKILL_BLOCKS)
 
+
+def land_merge_script_blocks() -> list[str]:
+    """The two fenced blocks that hand /land's Section 3 merge work to a script
+    -- the first-pass ``scripts/land-merge-batch.sh`` and the isolation-replay
+    ``scripts/land-replay.sh`` (lode-s9xe.6).
+
+    ONE locator, shared by every module that pins those two call sites
+    (``tests/test_land_conflicts_state.py`` pins the state paths they are
+    given, ``tests/test_land_lock.py`` pins that both are handed the pass's own
+    lock token). Two hand-rolled copies of this predicate would have to stay in
+    sync by hand the next time the wiring changes -- the same duplication
+    :data:`SWEEP_SKILL` was consolidated here to end.
+
+    Asserts exactly two rather than returning whatever it finds: a SKILL.md
+    reshape that adds or drops a merge call site must fail loudly here rather
+    than silently changing what every caller's pin means. Not
+    :func:`only_block_with`, which asserts exactly ONE block carrying ALL
+    needles; this is the disjunctive, exactly-two case.
+    """
+    hits = [
+        b
+        for b in LAND_SKILL_BLOCKS
+        if "land-merge-batch.sh" in b or "land-replay.sh" in b
+    ]
+    assert len(hits) == 2, (
+        f"expected exactly 2 fenced blocks calling the merge scripts (first pass "
+        f"land-merge-batch.sh + isolation-replay land-replay.sh), found "
+        f"{len(hits)} -- this locator's assumption about SKILL.md's structure has "
+        "drifted; re-check by hand before adjusting the count"
+    )
+    return hits
+
+
 #: The sweep skill doc, derived the same way as LAND_SKILL above. Was
 #: hand-derived independently in every tests/ module that pins a sweep block
 #: (five of them by then) until lode-b8jc consolidated it here. Import this

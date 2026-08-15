@@ -111,7 +111,7 @@ one of those exit sites (lode-0jan).** [Section 3](#3-batch-merge-the-accepted-s
 empty-`accepted` guard used to abort identically whether `$STATE_DIR/accepted` was **missing** (3a's
 precompute never ran — a real silent-failure shape, still aborted loudly, unchanged) or merely
 **empty** (every branch already left the set for a legitimate reason). The empty case is not a
-failure: the loop that reads `$ACCEPTED` correctly iterates zero times, the re-gate that follows is
+failure: `scripts/land-merge-batch.sh` correctly processes zero ids, the re-gate that follows is
 *skipped* (`trunk` is unchanged, so there is nothing this pass introduced to gate — see that
 section's own note; it is skipped rather than merely harmless, since running it would cost a full
 suite for no new content), and the pass flows straight through to [Section
@@ -380,11 +380,7 @@ If the queue is empty, there is nothing to land: release the lock and stop —
 
 ```bash
 # Normal completion -- release now rather than waiting out the staleness window for no reason.
-MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"
-[ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
-  "DISABLED for this call (lode-67nk) -- land-lock.sh REFUSES it outright (exit 2, lode-yuwt)" \
-  "rather than releasing blind, so the lock stays held until the staleness window reclaims it" >&2
-scripts/land-lock.sh release "$MY_TOKEN"
+scripts/land-heartbeat.sh --release
 exit 0
 ```
 
@@ -402,11 +398,7 @@ best-effort contract as every other heartbeat call site: failure here is logged 
 pass.
 
 ```bash
-MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"
-[ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
-  "DISABLED for this call (lode-67nk) -- land-lock.sh REFUSES it outright (exit 2, lode-yuwt)" \
-  "rather than re-stamping blind, so this heartbeat simply does not fire (|| true below)" >&2
-scripts/land-lock.sh heartbeat "$MY_TOKEN" || true
+scripts/land-heartbeat.sh
 ```
 
 ---
@@ -424,113 +416,56 @@ branch's *content* announces this — I detect it purely from **git history**. `
 only — I never trust it as the mechanism; a producer that forgets to write it, or writes it wrong,
 must not silently break this section.
 
-**Detection — shared history off `trunk`, NOT tip-ancestry.** Two land branches cut independently from
-`trunk` have nothing but `trunk` in common. So the relation to test is: **does any of their merge-bases
-lie off `trunk`?** If one does, the pair **shares non-trunk history** — and that shared commit is a
-base's tip *at the moment a dependent merged it*.
+**This is [`scripts/stacked-graph.sh`](../../../scripts/stacked-graph.sh) (lode-s9xe.2), not something I
+derive by hand.** It used to be a fenced snippet here whose outer "for every ordered pair" loop existed
+only as a comment — a bare `continue` sat outside any loop, so it did not parse, and the O(n²) driver
+plus the direction test got re-improvised, untested, on every pass for an algorithm whose failure is
+silent. The detection rule (shared history off `trunk`, not tip-ancestry), the direction test, and the
+two known gaps (force-push; branched-from-base rather than merged-base — OBSERVED 2026-08-07 on
+`land/lode-35nu.9`/`land/lode-kuc7`) live in the script's own header and are pinned by
+`tests/test_stacked_graph.py`, which builds real repos for each case, including the moved-base-tip and
+two-merge-base shapes a plausible reimplementation gets wrong. **Do not re-derive this logic here.**
 
-**Shared history is necessary, not sufficient — the direction test is what decides.** An off-trunk
-merge-base means one of *two* things, and only the first is a stack:
-
-- **A stack** — one of the pair merged the other. The direction test below finds the shared commit on
-  the base's first-parent spine but not the dependent's, and emits the edge.
-- **Siblings** — *two dependents that each merged the same third base* also share that base's commits,
-  so they too have an off-trunk merge-base with **each other**, while neither is stacked on the other.
-  Here the shared commit is off *both* spines (each reached it through a merge), the direction test
-  matches neither ordering, and **no edge is emitted — which is the correct answer.** Each sibling is
-  still correctly detected as stacked on the *base* by its own pair. This is a normal, supported shape
-  (two producers may stack on one base); a related pair with no direction between them is not, by
-  itself, a symptom of anything wrong.
+Run it **once** per pass, into `$STATE_DIR/graph` — a file, not a shell variable, because no shell
+state survives between this skill's separate Bash invocations, and Section 3's merge loop
+(`land-merge-batch.sh`) and the isolation-replay loop (`land-replay.sh`) both read it back to decide
+which dependents a conflicting or bounced base takes with it:
 
 ```bash
-git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/land/*'
-# for every ORDERED pair (X, Y) among the listed refs:
-# ENUMERATE ALL merge-bases — a pair can have more than one (see below) — and keep only the
-# off-trunk ones. A base branch that later takes a needs-rebase trunk-merge pickup (lode-cln)
-# AFTER a dependent has already merged it acquires a SECOND merge-base: the dependent's own
-# trunk cut point, which IS an ancestor of trunk. The single-result `git merge-base` picks one
-# of the two ARBITRARILY, and when it happens to return the on-trunk one, the pair reads as
-# unrelated and the stack goes undetected. `--all` sees every candidate; discarding the
-# on-trunk ones and keeping any survivor is what makes this immune to that flow.
-OFF_TRUNK=""
-for mb in $(git merge-base --all "origin/land/<X>" "origin/land/<Y>"); do
-  git merge-base --is-ancestor "$mb" origin/trunk || OFF_TRUNK="$OFF_TRUNK $mb"
-done
-[ -z "$OFF_TRUNK" ] && continue   # every merge-base is on trunk → unrelated
-# At least one off-trunk merge-base → X and Y share non-trunk history. That is EITHER a stack OR two
-# siblings on a common base; the direction test below is what tells them apart. Emitting no edge here
-# is a normal outcome (siblings), not a failure.
-# DIRECTION: the BASE is the one whose own first-parent spine contains an off-trunk MB — the
-# dependent reached that commit through a merge (second parent), so it is not on its spine.
-for mb in $OFF_TRUNK; do
-  git rev-list --first-parent origin/trunk..origin/land/<X> | grep -qx "$mb" \
-    && ! git rev-list --first-parent origin/trunk..origin/land/<Y> | grep -qx "$mb" \
-    && echo "<Y> is stacked on <X>" && break
-done
+STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation (lode-sfnb)
+mkdir -p "$STATE_DIR"
+# REDIRECT, never `| tee` (lode-b8sr): a pipeline reports the LAST command's status, so `| tee` would
+# hand back tee's always-0 exit and swallow the script's exit 2 -- leaving a truncated or empty
+# $STATE_DIR/graph that the merge scripts below read as a valid "no stacks" graph. That is exactly how
+# a dependent gets merged before its base, which is what the exit-2 rule below exists to prevent.
+scripts/stacked-graph.sh --base-ref origin/trunk --report-unordered > "$STATE_DIR/graph" || exit 1
+cat "$STATE_DIR/graph"   # the visibility `tee` used to give, now that the status is the script's own
 ```
 
-**Do NOT reduce this to `git merge-base --is-ancestor origin/land/<X> origin/land/<Y>`** (i.e. "is X's
-current tip contained in Y"). That tests the base's **tip**, and a base's tip *moves after a dependent
-merges it* — by an ordinary, entirely legitimate fast-forward: the code-reviewer pushes review fixes
-onto `land/<base>` ([`code-reviewer.md`](../../agents/code-reviewer.md)), and a `needs-rebase` pickup
-merges `trunk` into it (lode-cln). Both leave the dependent holding the base's *older* commits, so the
-base's current tip is no longer an ancestor of the dependent and **the whole stack goes invisible** —
-silently, with no error. That is not a corner case; it is the *normal* flow, because a producer stacks
-on a base precisely while that base is still unlanded and therefore still moving. A detector that
-misses the stack is worse than no detector, because the rest of this section trusts it and goes right
-back to stranding dependents. But note the merge-base test above is immune to a fast-forward on either
-side **only when every merge-base is considered, not one** — a single-result `git merge-base` walks
-straight back into this same silent miss by a different route, for the reason spelled out in the
-`--all` comment in the snippet above. Immunity comes from `--all` + the off-trunk filter, not from
-using a merge-base per se.
+`$STATE_DIR` is wiped at the top of every pass (Section 1, lode-wjw4), so `$STATE_DIR/graph` can never
+be carried over from a prior one — a branch can be bounced, dropped, or landed in between.
 
-Build this **once**, right here, as an in-memory map for the rest of the pass — never persisted, never
-trusted from a prior pass (a branch can be bounced, dropped, or landed between passes, changing what's
-live). Two shapes of the same relation get used below:
+Output is one tab-separated record per line:
 
-- **Full relation** (every base of Y, direct *or* transitive) — used by [Bounce](#bounce--clear-failure)
-  and the [exit-(b)/(c) resolution paths](#resolving-a-land-escalated-branch) to ask "does deleting X
-  strand a live descendant?" A transitively-stacked branch inherits X's content just as much as a
-  directly-stacked one, so the strand check must not reduce to direct edges only.
-- **Direct edges only** (X is Y's *nearest* base: no other base `B'` of Y has X as one of *its* bases —
-  computed from the relation itself, never from tips, which move) — needed by
-  [2c](#2c-run-the-semantic-gate) to pick the one base `land-review` diffs a stacked branch against:
-  handing it a *transitive* base would reintroduce hole 2, because the diff would then carry the
-  intermediate branch's work as if it were this branch's. [Section
-  3a](#3a-order-the-accepted-set--base-before-dependent-hold-an-orphaned-dependent) uses the same view
-  to order the merge set, though the topological sort would in fact run correctly off the full relation
-  too (its extra transitive edges are already-implied constraints, not new ones) — the nearest-base
-  pick is the reason this view has to exist.
+- `EDGE  <dependent>  <base>  direct` — `<base>` is `<dependent>`'s **nearest** base. This is the one
+  [2c](#2c-run-the-semantic-gate) hands `land-review` to diff against; a *transitive* base would make
+  the diff carry the intermediate branch's work as if it were this branch's. [Section
+  3a](#3a-order-the-accepted-set--base-before-dependent-hold-an-orphaned-dependent) orders the merge set
+  off these.
+- `EDGE  <dependent>  <base>  transitive` — still a real dependency. `direct` + `transitive` together
+  are the **full relation**, which is what [Bounce](#bounce--clear-failure) and the
+  [exit-(b)/(c) resolution paths](#resolving-a-land-escalated-branch) need to ask "does deleting this
+  branch strand a live descendant?"
+- `UNORDERED <a> <b>` — related but with no derivable direction (siblings that share a base, or a
+  producer that branched directly off `land/<base>` instead of merging it in). Treat as **related**: do
+  not delete either branch without the descendant question being answered by a human.
 
-**Known gap — documented, not claimed airtight.** The merge-base test survives any *append* to either
-branch, but not a **rewrite**: if a base's history were force-pushed after a dependent merged it, the
-shared commit is gone from the base's history entirely, the merge-base falls back to `trunk`, and the
-pair reads as unrelated — the dependent still carries the base's old, now-orphaned commits. Nothing in
-the current architecture force-pushes a `land/<id>` branch (every push on these branches is an ordinary
-fast-forward), so this is a defense against a *future* change or a manual force-push, not a
-live trigger today. There is no fully general fix short of every dependent re-checking after every base
-push, which this ticket deliberately does not build (documented-YAGNI: this has happened once). **If a
-`land/<id>` branch is ever force-pushed, the stacked-branch graph for that pass is not trustworthy** —
-that is the honest limit of this mechanism, and it is stated here rather than papered over.
+**Exit 2 is a machine fault, never "no stacks."** Stop the pass and surface it: a query that could not
+run must not be read as an empty graph, because that is precisely how a dependent gets merged before
+its base.
 
-**A second known gap, same honest register: branched-from-base, not merged-base.** The direction test
-assumes the dependent *merged* the base, so the shared commit sits on the base's first-parent spine
-but not the dependent's. A producer that instead **branches directly off `land/<base>`** (rather than
-branching from `trunk` and merging the base in, as `coding.md` instructs) puts that shared commit on
-*both* branches' first-parent spines — the direction test finds it on both sides, matches neither
-half of the `&&` condition, and emits no edge at all. Detection (the off-trunk-merge-base test) still
-correctly flags the pair as related; only the *direction* is silently lost. `coding.md`'s sanctioned
-build flow (branch from `trunk`, merge the base in) never produces this shape, but a producer HAS 
-deviated from it — OBSERVED 2026-08-07, `land/lode-35nu.9` branched directly off `land/lode-kuc7`,
-detected as related and silently given no direction — so unlike the force-push gap above this is a
-LIVE trigger, not merely a defense against a future or off-process deviation, not something this
-ticket builds a general fix for.
-
-**And note it is not distinguishable from a sibling pair by signature alone**: both show up as "related
-(off-trunk merge-base) but no edge." That is exactly why this stays a *documented gap* rather than
-something to detect and warn on — a warning keyed on that signature would fire on every perfectly
-normal sibling pair. If a stack is ever suspected but no edge appears, the thing to check by hand is
-whether the dependent's first-parent spine reaches `trunk` at all, or dead-ends in the base.
+A producer records a `builds_on` bd field as a breadcrumb, but that is intent only — the graph always
+comes from git, never from bd.
 
 ---
 
@@ -558,11 +493,7 @@ across the whole queue. `scripts/land-lock.sh`'s own header has the full reasoni
 logged but never stops the pass (this is lock bookkeeping, not the vet itself):
 
 ```bash
-MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"
-[ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
-  "DISABLED for this call (lode-67nk) -- land-lock.sh REFUSES it outright (exit 2, lode-yuwt)" \
-  "rather than re-stamping blind, so this iteration simply does not heartbeat (|| true below)" >&2
-scripts/land-lock.sh heartbeat "$MY_TOKEN" || true
+scripts/land-heartbeat.sh
 BD_JSON="$(bd show <id> --json)"     # read metadata.land_head and metadata.land_summary
 LAND_HEAD="$(jq -r '.[0].metadata.land_head // empty' <<<"$BD_JSON")"
 # Shape-check land_head BEFORE comparing it to anything (lode-xdg3, prose below).
@@ -973,15 +904,18 @@ argument rather than by hand-rolling a fifth `cat` spelling. The `cat "$STATE_DI
 block **above** is deliberately left alone and is not a counter-example — it re-reads the file that
 same block wrote two lines up, so there is no cross-block hand-off to assert and nothing a load
 failure there could mean other than "the write immediately above failed," which its own `printf`
-already reports. `for id in $ACCEPTED` over an empty value iterates
+already reports. An empty accepted set iterates
 **zero** times and exits 0: it merges nothing, closes nothing, and is indistinguishable *by its
 behaviour* from a clean pass with an empty queue. What the assertion separates is not that shape from
 a real merge, but its two **causes**: a file that was never written (3a never ran — the silent
 failure, aborted loudly) from a file that was written empty (every branch legitimately left the set —
 allowed through, lode-0jan). Since lode-0jan the guards test only the former; do **not** re-add an
-`[ -n "$ACCEPTED" ]`/`[ -z "$ACCEPTED" ]` emptiness test to the first-pass merge loop on the strength
+emptiness test on top of that load — in `scripts/land-merge-batch.sh` (which owns the first-pass loop
+now) or anywhere else — on the strength
 of this paragraph — that conflates the two causes again, which is the whole defect lode-0jan fixed
-(pinned by `tests/test_land_conflicts_state.py::test_empty_accepted_falls_through_missing_accepted_still_aborts`).
+(pinned, since the loop became `scripts/land-merge-batch.sh`, by that script's own behavioural tests:
+`tests/test_land_merge_batch.py::test_missing_accepted_file_is_a_machine_fault` and
+`::test_empty_accepted_file_iterates_zero_times`).
 
 Before merging anything, unstage the passive jsonl export — unconditionally, without needing to know
 what staged it (see the reconciliation above: it is *not* the reads above, and the `bd dolt pull`
@@ -1028,6 +962,17 @@ it. This reverses lode-pxyt's original choice to guard this fence directly — s
 [docs/agents-workflow.md's main-checkout section](../../../docs/agents-workflow.md#mechanics-decided)
 for the decision and its reasoning.
 
+**This loop is [`scripts/land-merge-batch.sh`](../../../scripts/land-merge-batch.sh) (lode-s9xe.4), not
+an inline `for`.** It drives `land-merge-one.sh` per id exactly as the loop above did (same `if CMD;
+then rc=0; else rc=$?; fi` idiom, for the same reason: the negated form's `$?` is always 0 and would
+read a machine-fault 2 as a clean merge), and on a real conflict it calls
+[`scripts/drop-from-accepted.sh`](../../../scripts/drop-from-accepted.sh) (lode-s9xe.3) to enforce 3a's
+invariant — the conflicting branch AND its dependents (1a's full relation, transitively) leave
+`$STATE_DIR/accepted` **in the file**, not just in this shell's view of it, before the isolation-replay
+loop below can re-read a stale copy and re-merge one of them. This used to be a `grep -vxF`/`mv` recipe
+left as a comment for the agent to implement inline, at the exact moment a conflict had just fired;
+`drop-from-accepted.sh` is the executable version, with its own tests.
+
 ```bash
 STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive here -- this is a fresh Bash
 MSG_DIR="$STATE_DIR/msg"                                # invocation; nothing from 3a's block persists
@@ -1036,77 +981,44 @@ MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true
 [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
   "DISABLED for this call (lode-67nk)" >&2
 
-# Load 3a's accepted set from disk, and REFUSE to continue if the FILE never got written: that is
-# 3a's precompute not having run at all, the silent-failure shape lode-sfnb's governing rule (top)
-# exists to catch. An EMPTY file is a different, legitimate outcome (lode-0jan) -- every branch was
-# already bounced, escalated, held, or kicked back needs-rebase before this loop started -- and is
-# NOT refused: $ACCEPTED being empty makes the loop below iterate zero times, the re-gate after it
-# SKIPPED (nothing merged, so there is nothing new to gate -- see that section's own note), and the
-# pass falls through to Section 4 exactly as a real merge would.
-#
-# scripts/land-state-load.sh (lode-dc4n) makes this the "missing fatal, empty OK" policy explicit
-# -- one of the two policies every $STATE_DIR load in this skill now shares, instead of a fourth
-# hand-rolled spelling. Its own exit status IS the missing-vs-empty discriminator: a missing file, an
-# unreadable one, and a directory in its place all fail the read and print a diagnostic to this
-# call's stderr, while a present-but-empty OR whitespace-only file reads clean and prints nothing --
-# unquoted word-splitting in the `for` below then iterates zero times over either.
-ACCEPTED=$(scripts/land-state-load.sh "$STATE_DIR/accepted" -- \
-  "3a's precompute did not run. Landing nothing.") || exit 1
-
-for id in $ACCEPTED; do
-  # Same idiom as Section 2b's merge-precheck.sh call, for the same reason: a command substitution
-  # inside an `if` condition is exempt from `set -e` (unlike a bare `VAR=$(cmd)` assignment, which
-  # would abort the shell on a non-zero exit before `rc=$?` is ever reached), and `$?` in the `else`
-  # arm is the SCRIPT's real exit status. Do NOT rewrite this as `if ! CMD; then rc=$?`: there `$?`
-  # is the *negation's* status, which inside that arm is always 0 -- so a machine-fault 2 would read
-  # as a clean merge and the pass would carry on as though the branch had landed.
-  if CONFLICTS=$(scripts/land-merge-one.sh "$id" "$MSG_DIR" "$MY_TOKEN"); then
-    rc=0
-  else
-    rc=$?
-  fi
-  case "$rc" in
-    0) echo "$id" >> "$STATE_DIR/landed" ;;   # merged cleanly -- record it and keep going
-    2)
-      # MACHINE FAULT (missing/empty message file, or an unexpected git failure) -- per lode-9i2p's
-      # rule, never read this as a conflict or a bounce. Stop the pass and surface the script's own
-      # stderr (already printed to this call's stderr) as a human decision.
-      exit 1
-      ;;
-    *)
-      # rc=1: real textual conflict with a branch already merged this pass -- both passed the 2b
-      # precheck against origin/trunk but conflict with *each other*. Needs-rebase kick-back (see
-      # below, with $CONFLICTS), NOT a land. It never reaches the `0)` arm, so it is never appended
-      # to $STATE_DIR/landed and Section 4 cannot close or GC it -- what used to rely on the agent
-      # remembering to exclude it from a hand-restated $LANDED is now structural.
-      #
-      # Persist the conflicting paths now, while this loop actually holds them: the kick-back block
-      # that writes the bd note is a SEPARATE Bash invocation and cannot see this loop's $CONFLICTS
-      # once it exits (lode-rfon).
-      printf '%s\n' "$CONFLICTS" > "$CONFLICTS_DIR/$id"
-      #
-      # 3a INVARIANT: this branch just LEFT the merge set -- so drop it AND its dependents (1a's full
-      # relation, transitively; scripts/blocks-dependents.sh derives the `blocks` edges) and leave
-      # each dependent the HELD note. WRITE THAT REDUCTION TO $STATE_DIR/accepted, not just to this
-      # shell's $ACCEPTED: the isolation-replay loop below re-reads the FILE, and would otherwise
-      # re-merge a branch this pass already kicked back, or merge a dependent whose base is no longer
-      # landing -- putting this branch's un-landed content on trunk under the dependent's name.
-      # For each dropped id:
-      #   grep -vxF "$dropped" "$STATE_DIR/accepted" > "$STATE_DIR/accepted.tmp" || true
-      #   mv "$STATE_DIR/accepted.tmp" "$STATE_DIR/accepted"
-      # (`|| true` because grep exits 1 when it filters out the last remaining line, and an empty
-      # accepted set is a legitimate outcome here -- not a reason to leave the file unchanged.)
-      continue
-      ;;
-  esac
-done
+scripts/land-merge-batch.sh \
+  --accepted "$STATE_DIR/accepted" --landed "$STATE_DIR/landed" \
+  --msg-dir "$MSG_DIR" --conflicts-dir "$CONFLICTS_DIR" \
+  --graph "$STATE_DIR/graph" --token "$MY_TOKEN"
 ```
+
+`--accepted` is 3a's precompute, loaded (via `scripts/land-state-load.sh`, lode-dc4n) with the same
+"missing fatal, empty OK" policy as ever: a **missing** file means 3a never ran at all — the
+silent-failure shape lode-sfnb's governing rule exists to catch, and the script exits 2 for it. An
+**empty** file is a legitimate outcome (lode-0jan) — every branch was already bounced, escalated,
+held, or kicked back `needs-rebase` before this call started — and processes zero ids, so the re-gate
+below is skipped and the pass falls through to Section 4 exactly as a real merge would. `--graph` is
+[1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)'s
+`$STATE_DIR/graph`; omitting it silently skips the dependent drop on a conflict, so pass it always.
+
+It prints one line per id, in accepted-set order:
+
+| Record | Means | What I owe it |
+|---|---|---|
+| `LANDED <id>` | merged cleanly, appended to `$STATE_DIR/landed` | nothing |
+| `CONFLICT <id>` | real textual conflict against a branch already merged this pass; left the accepted set | a [needs-rebase kick-back](#needs-rebase--kick-back) |
+| `HELD <id>` | removed from the accepted set as a dependent of a branch this call classified `CONFLICT` (or an earlier `HELD`'s own dependent) | a HELD note — not conflicted, not rejected, it simply has no foundation left this pass |
+
+**Exit 0** = the batch ran to completion (`LANDED`/`CONFLICT`/`HELD` are all non-fault outcomes — a
+batch that conflicts or holds every id still exits 0). **Exit 2** = machine fault (per lode-9i2p's
+rule this is never a branch verdict — including every `land-merge-one.sh` exit other than its
+documented 0/1/2, and any `drop-from-accepted.sh` fault): stop the pass and surface the script's own
+stderr as a human decision. There is no exit 1 — a batch of multiple ids has no single verdict to
+report through the exit code.
+
+It runs **no gates** and makes **no tracker writes** — every `nox` call and every `bd` write stays
+mine, below.
 
 Re-gate the combined result (this is a Python-gated repo where code changed; a **docs-only** merge
 set has no Python gate — skip nox, run `scripts/validate-mermaid.sh` only if a merged diff touched a
 `docs/` diagram).
 
-**If the loop above merged NOTHING — `$STATE_DIR/landed` is empty, the all-bounced /
+**If the batch above merged NOTHING — `$STATE_DIR/landed` is empty, the all-bounced /
 all-`needs-rebase` pass lode-0jan lets through — skip this re-gate entirely and go straight to
 [Section 4](#4-land-the-survivors).** Local `trunk` is byte-identical to the `origin/trunk` Section 1
 fetched, whose content is by construction already gated (that is the premise every fresh agent
@@ -1126,8 +1038,8 @@ nox -t fix && nox -s tests && nox -s lock_currency     # if nox -t fix reformats
 public CI badge does.** A branch that bumped a `pyproject.toml` dependency without regenerating the
 lock (or whose merge with another accepted branch this pass changed the resolved graph) fails this
 with **exit 1**, the same way a red `nox -s tests` would; treat *that* identically — **Red** below
-covers it, and the isolation-replay loop re-runs it per branch (see its own `nox -s lock_currency`
-call) to find the culprit.
+covers it, and the isolation replay re-runs it per branch (inside
+[`scripts/land-replay.sh`](../../../scripts/land-replay.sh), not in a fence here) to find the culprit.
 
 **`nox -s lock_currency` and `validate-mermaid.sh` exit 2 are NOT red gates — they are machine
 faults, and isolating on either bounces an innocent branch.** Full contract (what 0/1/2 mean, and
@@ -1154,140 +1066,70 @@ it would mask the 2. Keep it there.
   check](#bounce--clear-failure) fires here too — a live dependent means this bounce **escalates**
   rather than deleting the branch.)
 
-  This is a fresh Bash invocation — `STATE_DIR`/`MSG_DIR` are re-derived and `$ACCEPTED` re-read from
-  disk exactly as the first-pass merge loop above does (lode-sfnb): re-deriving the path is cheap, and
-  the **files** under `$STATE_DIR` (not the shell variables naming them) are what actually survived
-  `git reset --hard` below, since that only resets the index and working tree, never anything under
-  `.git/`.
-
-  Being a fresh invocation is also why this block needs its **own**
-  [`assert-main-checkout.sh`](../../../scripts/assert-main-checkout.sh) call as its first line
-  (lode-gczf) — Section 1's cannot reach it. The
-  [rule and its reasoning live in Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin) and
-  apply here unchanged: keep the guard first, and keep this block's own destructive commands below it
-  **in this same fence** — the replay loop's two `git reset --hard HEAD~1` calls are protected only by
-  sharing it, since neither is ref/path-addressed. (The `git merge` inside `land-merge-one.sh` is, as
-  of **lode-1nty**, ALSO self-guarded internally — see Section 3's first-pass loop above — so this
-  fence's guard is now redundant defense-in-depth for that one call, not its sole protection; it stays
-  first here regardless, since it is still the sole protection for the two resets.) Splitting this
-  block is what would silently un-guard the resets.
+  **This is [`scripts/land-replay.sh`](../../../scripts/land-replay.sh) (lode-s9xe.13), not a second
+  copy of Section 3's merge loop.** It drives the same `land-merge-one.sh` / `drop-from-accepted.sh`
+  pair the first-pass batch uses, plus what only the isolation path needs: its own
+  `assert-main-checkout.sh` guard (a fresh Bash invocation needs its own — Section 1's cannot reach it),
+  the `git reset --hard <base-ref>` that discards the first-pass merge, the baseline gate run, and the
+  per-branch `git reset --hard HEAD~1` that bounces a culprit. One script, not a fenced block with a
+  comment asking a human to "keep the two loops the same shape" — that was an unenforced sync invariant
+  over the most destructive code in this file.
 
   ```bash
-  scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed
-  git reset --hard origin/trunk
-  STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- see above; 3a's files under
-  MSG_DIR="$STATE_DIR/msg"                                 # $STATE_DIR are untouched by the reset
+  STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation
+  MSG_DIR="$STATE_DIR/msg"
   CONFLICTS_DIR="$STATE_DIR/conflicts"
   MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
   [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check" \
     "is DISABLED for this call (lode-67nk)" >&2
-  # DELIBERATELY ASYMMETRIC with the first-pass loop above, which lode-0jan taught to let an EMPTY
-  # accepted set through: here an empty one is still refused (--require-nonempty). This block only
-  # runs on a RED combined re-gate, and a nothing-merged pass now skips that re-gate entirely (see its
-  # note above), so an empty set should be unreachable here -- which is exactly why it stays fatal
-  # rather than being relaxed for symmetry. If it ever does arrive, `trunk` is byte-identical to
-  # `origin/trunk`, so the red is attributable to no branch in this pass: nothing to isolate, nothing
-  # to bounce, and a loud stop is the only honest outcome. Do not "finish the job" by deleting this
-  # guard -- the two blocks are answering different questions; scripts/land-state-load.sh (lode-dc4n)
-  # is what makes that difference a single visible flag instead of two divergent hand-rolled loads.
-  ACCEPTED=$(scripts/land-state-load.sh "$STATE_DIR/accepted" --require-nonempty -- \
-    "isolation-replay path -- nothing to attribute this red to. Landing nothing.") || exit 1
-  : > "$STATE_DIR/landed"    # the reset above discarded every merge the first-pass loop recorded --
-                              # start the replay's record from empty so Section 4 closes only what
-                              # THIS loop actually keeps merged
 
-  # BASELINE before attributing anything (lode-sys4, extended to cover `nox -s tests` by
-  # lode-kq4v). THE RULE, stated generally so a gate added here later inherits it instead of
-  # earning its own paragraph: NO gate this loop attributes is a pure function of the tree, so
-  # baseline EVERY one of them on bare `origin/trunk` before entering the attribution loop.
-  # Otherwise the loop blames — and deletes — whichever innocent branch happened to be merged
-  # first. This whole block is on the red/isolate path only, so a green pass never pays for it.
-  #
-  # `nox -s tests` used to be exempt, on the premise that it "asks a question about the tree
-  # alone". That premise licensed a real incident (lode-kq4v, OBSERVED landing a real pass): an
-  # ambient `FORCE_COLOR=3` in the LANDING SESSION's own shell — not set anywhere in this repo —
-  # fixed rich's colour decision at IMPORT (lode-xgaa's mechanism) and reddened 6
-  # `tests/test_cli.py` tests on a bare, unmodified `origin/trunk` with NOTHING merged. Trusting
-  # it would have bounced the first branch in `$ACCEPTED`: `bd supersede` closes its ticket, a
-  # rebuild ticket carries a FABRICATED "turned the gate red" finding, and `git push origin
-  # --delete land/<id>` destroys the reviewed branch — for a variable this repo does not set.
-  # `nox -s lock_currency` fails the same test for its own reason: it asks whether the committed
-  # lock is a fixed point of the tree PLUS this machine's ambient uv PLUS today's PyPI, so it too
-  # can be red with no branch involved at all (a uv release that changes the emitted format, an
-  # upstream yank, a lock that went stale on trunk itself).
-  nox -s tests
-  #   exit 0 → attributable from here on for THIS gate: any later `nox -s tests` red IS caused by
-  #            a merged branch. Continue.
-  #   nonzero → the suite is red before any branch merged — not attributable to anything in
-  #            $ACCEPTED. Stop the pass, land nothing, surface as a human decision — and check the
-  #            landing shell's own environment for an ambient `FORCE_COLOR` / `NO_COLOR` /
-  #            `TTY_COMPATIBLE` / `TTY_INTERACTIVE` first (lode-kq4v; `tests/conftest.py` now
-  #            scrubs these for every pytest invocation it collects for, so a baseline red here
-  #            more likely means a genuine regression on `trunk` itself — still not attributable
-  #            to any branch in this pass, but worth a closer look before assuming "just env").
-  nox -s lock_currency
-  #   exit 0 → attributable from here on: any later red IS caused by a merged branch. Continue.
-  #   exit 1 → trunk's own lock is stale, before any branch merged. Not attributable to anything in
-  #            $ACCEPTED: stop the pass, land nothing, surface as a human decision.
-  #   exit 2 → machine fault (see above): stop the pass, land nothing, surface it verbatim.
-
-  # $ACCEPTED was loaded from $STATE_DIR/accepted above -- already reduced by any needs-rebase
-  # kick-back the first-pass loop wrote back to that file, so the replay never re-merges one.
-  for id in $ACCEPTED; do
-    # Identical idiom and identical shape to the first-pass loop above -- see its comment for why
-    # `if ! CMD; then rc=$?` is wrong here (that `$?` is the negation's, always 0 in that arm, so a
-    # machine-fault 2 would read as a clean merge). Keep the two loops the same shape.
-    if CONFLICTS=$(scripts/land-merge-one.sh "$id" "$MSG_DIR" "$MY_TOKEN"); then
-      rc=0
-    else
-      rc=$?
-    fi
-    case "$rc" in
-      0) : ;;   # merged -- now gate it below before recording it as a survivor
-      2)
-        # MACHINE FAULT — never a branch verdict (lode-9i2p). Stop the pass here; do not bounce, do
-        # not isolate further, do not land anything from this pass.
-        exit 1
-        ;;
-      *)
-        # rc=1: real textual conflict against an earlier survivor merged this pass: needs-rebase
-        # kick-back (see below, with $CONFLICTS), not a bounce — its content wasn't judged bad, it
-        # just needs to replay onto the new trunk. Continue with the rest.
-        #
-        # Persist the conflicting paths, identically to the first-pass loop above and for the same
-        # reason -- see its comment (lode-rfon).
-        printf '%s\n' "$CONFLICTS" > "$CONFLICTS_DIR/$id"
-        continue
-        ;;
-    esac
-    if ! nox -t fix || ! nox -s tests; then
-      git reset --hard HEAD~1   # back the culprit out
-      # → bounce <id> (Section "Bounce"); it does NOT land this pass
-      continue
-    fi
-    nox -s lock_currency
-    case $? in
-      0) echo "$id" >> "$STATE_DIR/landed" ;;   # survivor — keep it merged and record it
-      2) break ;;                          # machine fault mid-loop, NOT this branch: stop the pass,
-                                           # land nothing (skip section 4). Never bounce on a 2.
-      *) git reset --hard HEAD~1 ;;    # back the culprit out → bounce <id> (Section "Bounce")
-    esac
-  done
+  scripts/land-replay.sh \
+    --accepted "$STATE_DIR/accepted" --msg-dir "$MSG_DIR" \
+    --conflicts-dir "$CONFLICTS_DIR" --landed "$STATE_DIR/landed" \
+    --graph "$STATE_DIR/graph" --token "$MY_TOKEN" --base-ref origin/trunk
   ```
 
-  **Every "stop the pass" exit above (the baseline's exit 1/2, and the loop's own break on 2) leaves
-  local `trunk` exactly as it sits** — at bare `origin/trunk` for the baseline exits, or carrying
-  whichever prefix of `$ACCEPTED` had merged when the loop broke. I restore none of them; that is
-  [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)'s job (lode-k9ef).
+  **`--accepted` is loaded `--require-nonempty` — DELIBERATELY ASYMMETRIC with the first-pass batch**,
+  which lets an empty accepted set through (lode-0jan). This script only runs after a combined re-gate
+  turns red, and a nothing-merged pass skips that re-gate (and therefore this script) entirely, so an
+  empty set here should be unreachable — which is exactly why it stays fatal rather than relaxed for
+  symmetry: if it ever does arrive, `trunk` is byte-identical to `origin/trunk`, so the red is
+  attributable to no branch in this pass, and a loud stop is the only honest outcome. `--landed` is
+  truncated internally, immediately after the reset and before the baseline gates, so a baseline stop
+  never leaves a durable record naming merges the reset just discarded.
 
-  Read `$?` from the gate itself — `nox -s lock_currency` yields nox's own 0/1/2. The same lode-b8sr rule as ever applies with
-  extra force here: never pipe this gate into `tail`/`grep` and read the *pipeline's* status, which
-  would silently flatten a 2 into whatever ran last.
+  **The baseline gates run inside the script, once, before it attributes anything to a branch** —
+  `nox -s tests` then `nox -s lock_currency`, both against the bare `--base-ref`. This is not optional:
+  no gate here is a pure function of the tree, and this replay *deletes* what it blames. An ambient
+  `FORCE_COLOR=3` in the landing session's own shell — not set anywhere in this repo — once reddened
+  `nox -s tests` on a bare `origin/trunk` with nothing merged (lode-kq4v; `tests/conftest.py` now scrubs
+  it, along with `NO_COLOR`/`TTY_COMPATIBLE`/`TTY_INTERACTIVE`, from every pytest invocation it collects
+  for). Trusting an unbaselined red would have bounced the first branch in `--accepted`: `bd supersede`
+  closes its ticket, a rebuild ticket carries a fabricated "turned the gate red" finding, and `git push
+  origin --delete land/<id>` destroys the reviewed branch — for a variable this repo does not set.
+  `nox -s lock_currency` fails the same test for its own reason: it asks whether the lock is a fixed
+  point of the tree *plus* ambient tooling *plus* today's PyPI.
 
-  The survivors stay merged on local `trunk`; the culprit is bounced like any other failure. A branch
-  `scripts/land-merge-one.sh` reports as a real conflict (exit 1) here — one that passed the 2b
-  precheck against `origin/trunk` but can't cleanly combine with an *earlier survivor* merged this
-  pass — is handled as a [needs-rebase kick-back](#needs-rebase--kick-back), not a bounce.
+  It prints one line per id it actually reaches, in accepted-set order:
+
+  | Record | Means | What I owe it |
+  |---|---|---|
+  | `LANDED <id>` | merged AND gated clean; stays merged on local `trunk` | nothing |
+  | `CONFLICT <id>` | real textual conflict against an earlier survivor merged this replay; left the accepted set | a [needs-rebase kick-back](#needs-rebase--kick-back), not a bounce — its content wasn't judged bad, it just needs to replay onto the new `trunk` |
+  | `BOUNCED <id>` | merged cleanly but turned a gate red; backed out via `git reset --hard HEAD~1`, left the accepted set | a **bounce** (new rebuild ticket, drop the branch) — not a textual conflict |
+  | `HELD <id>` | removed from the accepted set as a dependent of a branch this call classified `CONFLICT` or `BOUNCED` | a HELD note, same as the first-pass batch |
+
+  **Exit 0** = the replay ran to completion. **Exit 2** = machine fault — bad usage, a required file
+  missing, the baseline gate itself red or faulting, or a called script faulting outside its own
+  documented content verdict (lode-9i2p): stop the pass, land nothing further, surface the script's own
+  stderr. There is no exit 1, same reasoning as `land-merge-batch.sh`: a batch of ids has no single
+  verdict for the exit code to carry.
+
+  **Every exit — a stop, or a normal finish holding whatever prefix it kept merged — leaves local
+  `trunk` exactly as the script's own resets left it.** I restore none of it further; that is
+  [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)'s job (lode-k9ef). The survivors it
+  reports `LANDED` stay merged on local `trunk`; each `BOUNCED` id is handled like any other bounce, and
+  each `CONFLICT` id like any other needs-rebase kick-back.
 
 ---
 
@@ -1322,8 +1164,9 @@ git status --short
 
   **This commit names no ref or path at all — the one `git` write in this section that doesn't.**
   Every other one below is ref- or path-addressed and therefore cwd-independent (`git push origin
-  trunk`, `git push origin --delete land/<id>`, `git worktree unlock/remove --force/prune`, `git
-  branch -D` — each names its own target; the `bd` calls are cwd-independent too, but for an
+  trunk`, `git push origin --delete land/<id>` — each names its own target; the worktree/branch
+  deletes are no longer fenced here at all, they are `scripts/worktree-gc-sweep.sh`'s, which asserts
+  its own checkout; the `bd` calls are cwd-independent too, but for an
   unrelated reason: `bd` resolves the repo's canonical `.beads` rather than cwd's). This one commits
   directly to whatever branch cwd's `HEAD` happens to be on, and run from the wrong directory that is
   not a loud failure: it silently commits the reformat to that directory's branch, and the
@@ -1397,11 +1240,7 @@ git status                 # MUST show trunk up to date with origin
 # does not itself bound the per-ticket loops' own growth -- it just isolates this stretch as the one
 # remaining unheartbeated span, cleanly separated from Section 3's own re-gate + merge loops (already
 # heartbeated via that same helper). Same best-effort contract as every other call site here.
-MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
-[ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
-  "DISABLED for this call (lode-67nk) -- land-lock.sh REFUSES it outright (exit 2, lode-yuwt)" \
-  "rather than re-stamping blind, so this heartbeat simply does not fire (|| true below)" >&2
-scripts/land-lock.sh heartbeat "$MY_TOKEN" || true
+scripts/land-heartbeat.sh
 
 # $LANDED: the ids that actually stayed merged through Section 3 -- read back from the file Section 3's
 # merge loops appended to as each branch merged (lode-sfnb), never restated by hand. On the Green path
@@ -1452,512 +1291,76 @@ for id in $LANDED; do
                                              # regardless of the local worktree-GC decision below.
 done
 
-# Local worktree + branch GC is NOT done per-ticket (lode-h1vn). There used to be a loop here that read
-# metadata.review_worktree/review_branch off each just-landed ticket and ran `git worktree remove
-# --force` unconditionally — no `locked` check, no dirty-tree check. It is DELETED; the backstop sweep
-# below is now the only local worktree/branch reclaim, and it catches every just-landed builder worktree
-# on the same pass (this pass's `--no-ff` merge is what makes each one's HEAD an ancestor of trunk, a
-# few lines above). Discovering worktrees live from `git worktree list --porcelain` also beats trusting
-# per-ticket metadata that can drift.
+# Local worktree + branch GC is NOT done per-ticket (lode-h1vn) -- it is entirely
+# scripts/worktree-gc-sweep.sh's job, run once here at the end of every pass. It catches every
+# just-landed builder worktree on the same pass (this pass's `--no-ff` merge is what makes each one's
+# HEAD an ancestor of trunk, a few lines above), discovering worktrees live off `git worktree list
+# --porcelain` rather than trusting per-ticket metadata that can drift.
 #
-# WHAT THIS COSTS, because "the backstop subsumes it" is true of the CANDIDATE set but NOT the RECLAIMED
-# set: the backstop gates on `locked` + clean-tree + HEAD-ancestry, none of which the old loop had, so it
-# reclaims strictly LESS. A landed builder worktree that is DIRTY, LOCKED, or carries commits that never
-# reached origin is now KEPT where the old loop force-removed it — the dirty case being a PERMANENT leak
-# (it stays dirty, so every later pass skips it too; a human must clear it). That is deliberate and is
-# the trade lode-9hgu already made: leak a directory rather than destroy uncommitted work. Measured to be
-# rare — real post-build/post-review worktrees read clean.
+# WHY A SCRIPT. This was ~80 lines of destructive shell (worktree remove --force, branch -D) fenced
+# here, where nothing lint-checked it and only a markdown scanner could assert anything about it. It
+# performs the most dangerous operations in the harness, so it belongs where it can be shellcheck'd and
+# unit-tested (tests/test_worktree_gc_sweep.py and friends). The per-candidate DECISION lives in
+# scripts/worktree-gc-classify.sh (lode-9owc); this sweep is what a side-effect-free classifier cannot
+# own -- reading the porcelain, resolving a stale lock, and the two destructive calls the classifier
+# only ever recommends. Its own header carries the full contract: the unlocked+clean+ancestry predicate
+# (widened by lode-amif to cover a captured-on-origin escalated-ticket worktree, not just one merged
+# into trunk), the lode-9hgu dirty-tree guard that protects an exited agent's uncommitted scratch, the
+# lode-yrtu dir-only age floor for a not-yet-merged builder worktree, and both bare-ref backstops
+# (`land/*` orphaned by remote deletion, `worktree-agent-*` orphaned with no remote at all) that catch
+# what the worktree sweep itself structurally cannot see. Takes **no `--base-ref`** (lode-0867): the
+# classifier hardcodes `trunk`, and lode has exactly one default branch.
 #
-# ONE UNENFORCED COUPLING keeps this loop reclaiming anything at all; if it breaks it silently
-# reclaims NOTHING, and since the per-ticket loop is gone there is no second net and no alarm:
-#   1. `.gitignore` (lode-9hgu) — a finished worktree is full of untracked build junk (`venv/`, `.nox/`,
-#      `__pycache__/`); it reads clean ONLY because those are ignored. Un-ignore one and every worktree
-#      reads dirty.
-# (CLOSED, lode-bns3) bd export churn used to be a SECOND unenforced coupling — this comment used to
-#   say the gate ASSUMES a `bd` write never dirties the tree, contradicted by Section 3 (~line 354,
-#   now reconciled) asserting the opposite for its own merge path. Measured three times (lode-h1vn's
-#   review, lode-bns3's build, lode-bns3's review): neither a bare `bd` read nor a `bd` write dirties a
-#   worktree by itself. The positive cause of the staged export is NOT established — `bd dolt pull` is
-#   the suspected trigger, but bd-sync discipline below states that as a defensive assumption, not a
-#   measurement, and it did not reproduce when tried (see Section 3's reconciled note; do not restate
-#   the suspicion as fact). None of that matters to this loop, which no longer needs the premise
-#   settled in EITHER direction — the whole point is that the gate is correct whatever the trigger
-#   turns out to be, since the export is by invariant never work. It now EXCLUDES
-#   `.beads/issues.jsonl` / `.beads/interactions.jsonl` from the cleanliness judgment outright, via
-#   `:(exclude)` pathspecs on the dirty-tree guard (in `scripts/worktree-gc-classify.sh` since
-#   lode-9owc — see the WHERE THE PREDICATES LIVE note below) — so a staged or modified export, from
-#   whatever cause, present or future, can never zero out this sweep on its own.
-# If you touch `.gitignore`, re-check that this loop still reclaims.
-#
-# Full record — the three options, the measurement, why deletion beat guarding: docs/decisions.md,
-# lode-h1vn entry.
+# ONE UNENFORCED COUPLING keeps this sweep reclaiming anything at all: `.gitignore`. A finished
+# worktree is full of untracked build junk (`venv/`, `.nox/`, `__pycache__/`) and reads clean ONLY
+# because those are ignored. Un-ignore one and every worktree reads dirty and the sweep silently
+# reclaims NOTHING. Re-check this whenever `.gitignore` changes.
+scripts/worktree-gc-sweep.sh
+```
 
-# WHERE THE PREDICATES LIVE, READ THIS FIRST (lode-9owc): every predicate the comments from here to
-# the loop describe — both ancestry arms, the lode-9hgu dirty-tree guard and its `:(exclude)` list,
-# and the lode-yrtu dir-only age floor — now lives in `scripts/worktree-gc-classify.sh`, NOT in the
-# fence below. So "the dirty-tree guard below", "the loop below also tests", "either predicate" and
-# friends in this block mean "in the classifier the loop below calls." Only the CODE moved, and it
-# moved so it could be shellcheck'd and unit-tested (tests/test_worktree_gc_classify.py) instead of
-# living unreachable by any gate in a markdown fence. The prose split that leaves: this block holds
-# the SWEEP-level contract (which worktrees are candidates at all, and what this sweep promises
-# about them); the script's header holds the per-arm detail. Change a predicate there and this block
-# is what tells you whether you were allowed to.
-#
-# Backstop: now the ONLY local worktree/branch reclaim in this pass — catches every just-landed
-# builder worktree (per the reasoning above) plus whatever it always caught: a stale/missing
-# review_worktree pointer, a build that never got GC'd on its own machine, a reviewer/rebase-pickup
-# worktree from a multi-cycle review that no ticket's single review_worktree field can point at
-# (lode-r78 — the reviewer and a rebase pickup each check `land/<id>` out into their OWN fresh
-# worktree per lode-k5e/lode-8k3, so a ticket reviewed more than once leaves extra land/<id>-branched
-# worktrees a per-ticket net could never see anyway). Walks the raw porcelain blocks directly, so a worktree with no matching
-# ticket, or a ticket with stale/wrong metadata, still gets reclaimed.
-#
-# NOTE (lode-vs7g): `/code`'s own orchestrating session now reclaims a reviewer's or rebase-pickup's
-# launch worktree proactively, right after that subagent returns (either outcome — ready-for-land or
-# land-escalated), deriving it from the ticket id via the `land/<id>--<worktree-dir>` branch name — see
-# `.claude/skills/code/SKILL.md` and docs/decisions.md's lode-vs7g entry. This backstop is UNCHANGED
-# and stays exactly as it was, but it is a PARTIAL net, not a total one: it only ever reclaims a
-# worktree whose branch is already merged into trunk, so it cannot cover an escalated ticket (whose
-# branch never merges) — that case is closed by /code's reclaim, not here. Expect this to fire far less
-# often now: mostly for a /code session that died mid-fan-out, before it could reclaim.
-#
-# ONE loop covers BOTH branch-attached and DETACHED worktrees (lode-jiyk unifies what were formerly
-# two separate WORKTREE sweeps here: a branch-NAME-keyed one, lode-r78, and a later HEAD-sha-keyed
-# one, lode-mxeu, added because the name-keyed one structurally cannot see a detached worktree).
-# Both tested the literally identical predicate — "this worktree's tip is already merged
-# into trunk" — by two different routes: a branch-name lookup against a `git branch --merged trunk`
-# list (branch NAMES, so it can only ever match a worktree that HAS a branch), or a direct
-# `git merge-base --is-ancestor <HEAD-sha> trunk` (needs no branch name at all). The SHA form is
-# strictly more general — it subsumes the branch-attached case too — so ONE loop, keyed on HEAD-sha
-# ancestry rather than a branch-name pattern, replaces both nets: this sweep no longer cares whether
-# a candidate worktree's branch (if any) is named `worktree-agent-*`, `land/*`, or something else
-# entirely — every worktree under `.claude/worktrees/` is a candidate, so a new worktree-BRANCH-naming
-# convention cannot leak past THIS loop.
-#
-# That name-independence is scoped to worktrees and does NOT extend to the bare-ref backstops below:
-# the second and third still enumerate `refs/heads/land/*` and `refs/heads/worktree-agent-*` by name,
-# because `refs/heads/*` is shared with human branches and a name-blind "delete any merged local ref"
-# would eat them. A new BARE-REF namespace can therefore still leak exactly as lode-j5i0's did — so
-# if you add one, audit those two, not this one. (lode-j5i0's sweep is the THIRD backstop below; it is
-# alive and untouched — it was never one of the two unified here.)
-#
-# CONTRACT (lode-9hgu closed the zero-divergence residual this paragraph used to describe; lode-amif
-# widened the ancestry predicate itself, and the dirty-tree guard below gates BOTH arms): ANY
-# worktree under `.claude/worktrees/` that is unlocked, AND EITHER has not diverged from `trunk` OR —
-# for a branch-attached worktree — has not diverged from its own branch's origin counterpart, AND is
-# clean is reclaimable by this loop, whoever made it (lode-amif: the ancestry predicate widened from
-# "merged into trunk" alone to "captured on origin," so an escalated ticket's reviewer/rebase-pickup
-# worktree, whose branch never merges into trunk by definition, is reclaimable too, once its content
-# is safely on `origin/land/<id>`). A worktree freshly branched off `trunk` HEAD (or freshly checked
-# out at its origin branch's current tip) is trivially "merged"/"captured" by zero divergence — that
-# proxy alone would read TRUE for a live, uncommitted build/review the instant its worktree is created
-# — so the loop below also tests the ACTUAL invariant directly ("is this work captured anywhere
-# else"): `git -C "$WT" status --porcelain`. A dirty tree is never reclaimed, regardless of lock
-# state, ancestry, or who made the worktree — this is what actually protects the worktree classes that
-# hold NO lock by the time this sweep sees them: an interactive `EnterWorktree` session, a human's
-# hand-made worktree (CLAUDE.md mandates one for all work), and an exited agent's leftover scratch.
-# There are exactly TWO lock sources in this system, and neither covers those three:
-#   1. The Claude Code HARNESS locks every `isolation: worktree` launch worktree for the LIFETIME of
-#      the agent standing in it (reason: `claude agent <name> (pid <n> start <n>)`), released when
-#      the agent exits. Neither `.claude/agents/code-reviewer.md` nor `coding`'s rebase pickup calls
-#      `git worktree lock` itself, but both run in such a worktree — so a LIVE reviewer/pickup
-#      worktree is `locked` and this loop skips it outright, never reaching the predicate. Verified
-#      against a running reviewer (lode-amif's own).
-#   2. `.claude/agents/coding.md` ALSO locks its producer build worktree explicitly (lode-oqr),
-#      because it unlocks again at its first commit — earlier than the harness would.
-# So the zero-divergence residual bites only an EXITED agent's worktree, and only its UNCOMMITTED
-# scratch — and even there, the dirty-tree guard below is the real backstop, not `locked`: `git -C
-# "$WT" status --porcelain` prints nothing both when the tree is CLEAN and when the command itself
-# errors (missing dir, corrupt worktree admin, …), so the guard distinguishes "clean" (proceed) from
-# "could not tell" (skip) rather than treating empty output as always meaning clean. On the trunk arm
-# an unguarded zero-divergence read was once a real hazard — it destroyed two builds' uncommitted work
-# outright before the dirty guard existed (lode-oqr's explicit lock closed the narrower pre-first-
-# commit window; lode-9hgu's dirty guard closed the rest). On the origin arm the same guard is what
-# keeps a captured-but-dirty reviewer/rebase-pickup worktree from being reclaimed too: content merely
-# pushed to `origin/land/<id>` is captured, but a worktree with additional uncommitted changes on top
-# of that push is not, and must still be KEPT — otherwise this widened arm reopens exactly the hole
-# lode-9hgu just closed. Accepted residual: a CLEAN worktree at zero divergence (trunk arm) or clean at
-# its origin counterpart's tip (origin arm) that raises no lock — a human's hand-made worktree they
-# happen to be sitting in, or an exited agent's clean leftovers — is still reclaimable; nothing is
-# destroyed (the tree is clean), the directory just vanishes out from under whoever is standing in it.
-# A LIVE harness agent's worktree is NOT in that set — its harness lock (above) drops it in the
-# `locked` check below, before either predicate is ever evaluated. The trade is intentional: the
-# failure direction is now "remove an empty checkout," never "destroy uncommitted work," on either arm.
-#
-# Skip anything `locked` — that's the git-native in-use signal, and it's load-bearing here: a
-# currently-running sibling worktree whose branch hasn't diverged from trunk yet is trivially
-# "merged" into trunk by content identity, so `locked` must gate this even though `merged` alone
-# looks sufficient. `merged` is the same safety invariant that justified the old per-ticket loop's own
-# unconditional `--force` ("the build artifact is on trunk now — force is safe") before that loop was
-# deleted in favor of this backstop owning all local worktree/branch reclaim (lode-h1vn) — for a
-# **builder's own** `worktree-agent-*` worktree specifically, `merged` is what proves the ticket already
-# landed: its branch is never pushed anywhere, so the origin arm added by lode-amif is always false for
-# it. WHAT `merged` NO LONGER IMPLIES (lode-yrtu): an in-flight
-# `ready-for-code-review`/`ready-for-land`/`land-escalated` ticket's builder worktree used to be
-# excluded outright, both ancestry arms being false for it. It is now reachable by the DIR-ONLY arm
-# below once its last commit is older than $MIN_AGE_SECONDS and its tree is clean — its DIRECTORY is
-# reclaimed while its branch REF is deliberately KEPT, so no commit is ever lost, but do not read
-# `merged` as a promise that a builder worktree's directory survives. A `land/<id>`-branched
-# **reviewer/rebase-pickup** worktree is different since lode-amif: once its branch is pushed to
-# `origin/land/<id>`, the origin arm can make it reclaimable even though its branch has not (and, if
-# escalated, never will) merge into trunk — that is the gap lode-amif exists to close. This `locked`
-# check used to be a no-op in practice:
-# nothing on the producer side ever raised it, so every producer build was "merged" (trivially, by
-# zero divergence) and reclaimable from the moment its worktree was created until its first commit --
-# this destroyed two builds' uncommitted work outright (branch and all, not just the checkout) before
-# the gap was understood (lode-oqr). `.claude/agents/coding.md` now locks the worktree as the
-# producer's first action and unlocks it right after its first commit, closing that window; this
-# loop's `locked` filter needed no change. `locked` is still checked first (cheapest, and the
-# git-native in-use signal), but as of lode-9hgu it is no longer the ONLY thing standing between a
-# live, uncommitted tree and `--force` removal — the dirty-tree guard below is the backstop for every
-# worktree class that never raises `locked` at all (see the CONTRACT paragraph above). The one
-# accepted trade-off specific to `locked`: a crash strictly between lock and first commit leaves a
-# locked worktree this sweep won't auto-reclaim -- rare (a normal build commits within minutes) and
-# resolved by a manual `git worktree unlock` (or a future cleanup ticket), not by this loop, since
-# correctness (never destroy a live build) matters more here than eagerness.
-#
-# Scoped to paths under .claude/worktrees/ so this can never touch the main checkout (its tip is
-# always merged into itself, so the predicate alone wouldn't exclude it — the path guard is what
-# does, and it costs nothing). If the worktree has a branch, delete it too (`git branch -D`); a
-# detached worktree has none, so worktree removal alone is the entire reclaim.
-# lode-bns3 (observability): count each candidate into exactly one bucket — reclaimed, or skipped for
-# locked / not-merged / dirty — so the summary line after the loop can tell "reclaimed 0 of 0, nothing
-# to do" apart from "reclaimed 0 of N, everything was skipped" (a regression that zeroes out GC must be
-# visible here, not silent). `locked` is counted in the loop body now rather than filtered inside awk,
-# so every candidate under .claude/worktrees/ reaches the summary, whichever bucket it lands in.
-#
-# FIELD ORDER IS LOAD-BEARING — DO NOT REORDER (`$BR` must stay LAST). Tab is IFS *whitespace*, so
-# `read` collapses adjacent tabs into a single delimiter and does NOT preserve an empty MIDDLE field.
-# `branch` is the one field that can be empty (a DETACHED worktree — a case this loop explicitly
-# supports, see the `git branch -D` note above). With `branch` in the middle, a detached worktree's
-# line (`path\thead\t\tlocked`) shifts every later field left: `$BR` swallows the locked flag and
-# `$LOCKED` reads EMPTY, so `[ "$LOCKED" = "1" ]` is FALSE and a LOCKED, LIVE agent's worktree sails
-# past the locked gate into the `--force` below — precisely the "rip a worktree out from under a
-# running agent" harm the gate exists to prevent (the pre-lode-oqr disaster). Keeping `branch` last
-# makes its empty case a TRAILING delimiter, which `read` discards harmlessly ($BR="").
-RECLAIMED=0; RECLAIMED_DIR_ONLY=0; SKIP_LOCKED=0; SKIP_NOTMERGED=0; SKIP_DIRTY=0; FAILED=0
-STALE_LOCKS_FOUND=0
-# lode-yrtu: minimum age (seconds) of a NOT-MERGED worktree-agent-*'s last commit before its
-# DIRECTORY (never its branch ref) becomes eligible for the dir-only reclaim below -- see
-# docs/agents-workflow.md's "Worktree-GC widened" section for the tunable + default (documented
-# there, not configuration.md, per that page's own scope note: dev-tooling for the landing loop,
-# not an application knob).
-MIN_AGE_SECONDS="${LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS:-21600}"
-# lode-9owc: the per-candidate DECISION is scripts/worktree-gc-classify.sh (see WHERE THE PREDICATES
-# LIVE above), extracted the same way lode-ivth extracted scripts/recycled-worktree-guard.sh and
-# lode-yrtu extracted scripts/worktree-lock-stale.sh out of this same loop. What stays HERE is
-# exactly what a side-effect-free script cannot own: reading the porcelain candidates, resolving a
-# STALE lock (a real mutation), and the two DESTRUCTIVE calls the script only ever recommends.
-while IFS=$'\t' read -r WT SHA LOCKED BR; do
-  if [ "$LOCKED" = "1" ]; then
-    # lode-yrtu: the lock recorded here is PER-SESSION, not per-agent -- measured: several worktrees
-    # can share ONE lock-owner pid (the parent session process), so a DEAD session leaves every
-    # worktree it ever locked stuck at this check forever, since `locked` is tested before any other
-    # predicate. scripts/worktree-lock-stale.sh proves the recorded pid is either not running at all,
-    # or has been REUSED by an unrelated later process (via /proc/<pid>/stat's own starttime, matched
-    # against the token the harness recorded at lock time) -- see the script's header for the full
-    # mechanism and why a plain PID-liveness probe (signal 0) alone cannot safely make this call. A
-    # lock the script cannot positively prove dead is left alone (fail closed): $LOCKED stays "1" and
-    # classify below reports keep-locked, same as before.
-    LOCK_REASON=$(git worktree list --porcelain | awk -v want="$WT" '
-      /^worktree / { path=$2; reason="" }
-      /^locked/    { reason=substr($0,8) }
-      /^$/         { if (path==want) { print reason; exit }; path="" }
-    ')
-    if scripts/worktree-lock-stale.sh "$LOCK_REASON"; then
-      STALE_LOCKS_FOUND=$((STALE_LOCKS_FOUND + 1))
-      # `git worktree remove` refuses a still-locked worktree even with `--force` -- that flag
-      # overrides "has modifications," never "is locked" (verified: dry-run against a fabricated
-      # repo, lode-yrtu). Proving the SESSION is dead is not the same as clearing git's own on-disk
-      # lock, so unlock it now, unconditionally, then reflect the resolution in $LOCKED so classify
-      # below judges this candidate as unlocked rather than short-circuiting to keep-locked.
-      git worktree unlock "$WT" 2>/dev/null || true
-      LOCKED=0
-    fi
-  fi
-  # scripts/worktree-gc-classify.sh is the single source of truth for the bucket -- see its own
-  # header for what each name means and why. It takes no action; the case below performs the two
-  # destructive calls the script only ever recommends, and counts each candidate into exactly one
-  # bucket (lode-bns3: reading `git worktree remove`'s own exit status, not merely the fact that we
-  # attempted it, so the summary line can never report "reclaimed N" when every remove FAILED).
-  BUCKET=$(scripts/worktree-gc-classify.sh "$WT" "$SHA" "$LOCKED" "$BR" "$MIN_AGE_SECONDS")
-  case "$BUCKET" in
-    keep-locked)    SKIP_LOCKED=$((SKIP_LOCKED + 1)) ;;
-    keep-notmerged) SKIP_NOTMERGED=$((SKIP_NOTMERGED + 1)) ;;
-    keep-dirty)     SKIP_DIRTY=$((SKIP_DIRTY + 1)) ;;
-    dir-only)
-      if git worktree remove --force "$WT"; then
-        RECLAIMED_DIR_ONLY=$((RECLAIMED_DIR_ONLY + 1))   # ref intentionally KEPT -- no `git branch -D`
-      else
-        FAILED=$((FAILED + 1))
-      fi
-      ;;
-    full-reclaim)
-      if git worktree remove --force "$WT"; then
-        [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true
-        RECLAIMED=$((RECLAIMED + 1))
-      else
-        FAILED=$((FAILED + 1))    # git printed its own error; surface it in the summary too
-      fi
-      ;;
-    *)
-      # Never observed -- a defensive net against a future classify bug printing something outside
-      # its own documented bucket set. Fails CLOSED (counted as failed, worktree left untouched)
-      # rather than silently falling through either reclaim arm.
-      echo "worktree GC: unexpected classify output '$BUCKET' for $WT -- treating as failed" >&2
-      FAILED=$((FAILED + 1))
-      ;;
-  esac
-done < <(git worktree list --porcelain | awk '
-  /^worktree / { path=$2; head=""; branch=""; locked=0 }
-  /^HEAD / { head=$2 }
-  /^branch refs\/heads\// { branch=substr($0,19) }
-  /^locked/ { locked=1 }
-  /^$/ { if (path!="" && path ~ /\/\.claude\/worktrees\//) print path"\t"head"\t"locked"\t"branch; path="" }
-')
-git worktree prune          # drop any now-stale worktree admin entries
-# lode-bns3 (observability): always emit one line. "reclaimed 0 of 0" (nothing to do) reads differently
-# from "reclaimed 0 of N" (everything was skipped — worth investigating), and the reason breakdown
-# makes a regression that silently zeroes out GC visible here instead of indistinguishable from idle.
-TOTAL=$((RECLAIMED + RECLAIMED_DIR_ONLY + SKIP_LOCKED + SKIP_NOTMERGED + SKIP_DIRTY + FAILED))
-echo "worktree GC: reclaimed $((RECLAIMED + RECLAIMED_DIR_ONLY)) of $TOTAL candidate(s) under .claude/worktrees/ (full=$RECLAIMED, dir-only=$RECLAIMED_DIR_ONLY, stale-locks-treated-as-unlocked=$STALE_LOCKS_FOUND; skipped: locked=$SKIP_LOCKED, not-merged=$SKIP_NOTMERGED, dirty=$SKIP_DIRTY; failed=$FAILED)"
+It prints one summary line per sweep plus one per bare-ref backstop. **"reclaimed 0 of 0" (nothing to
+do) reads differently from "reclaimed 0 of N" (everything was skipped)** — a regression that zeroes
+out GC must be visible here, not indistinguishable from idle. Exit 2 is a machine fault or a wrong
+checkout; it never means "nothing to reclaim" — surface it as a human decision same as any other
+machine-fault exit in this section.
 
-# Second backstop: dangling local land/<id> refs with no worktree attached at all (so the
-# worktree-GC loop above never even considered them) and no remote counterpart left (lode-r78). That
-# loop only runs `git branch -D` when it also found a matching
-# worktree; a local land/<id> branch that already lost its worktree by some other path (or
-# never had one materialize beyond the fetch+checkout in coding.md's rebase pickup /
-# code-reviewer.md) is invisible to it. "Remote gone" is sufficient signal on its own: an
-# in-flight ticket's origin/land/<id> always exists (the producer pushed it in build step 8
-# and nothing deletes it until /land lands, bounces, or drops the ticket), so a missing
-# remote means this local ref is already stale. No extra locked/merged check is needed here
-# — `git branch -D` itself refuses harmlessly if the branch is still checked out in some
-# worktree, which is exactly the case the loop above would have just finished reclaiming.
-# List origin's land refs ONCE (a single round-trip, not one `ls-remote` per local ref — a
-# machine can accumulate dozens of stale land refs) and only sweep if that listing SUCCEEDED:
-# an unreachable origin makes `ls-remote` exit non-zero, and reading that as "every remote
-# land branch is gone" would force-delete every local land ref on a transient network blip.
-# A failed listing therefore skips the sweep; an empty-but-successful one correctly means
-# every local land ref is stale (grep against the empty set matches nothing → all deleted).
-# STRIP THE WORKTREE SUFFIX BEFORE COMPARING (lode-em6v): since lode-em6v the reviewer and
-# the rebase pickup check the branch out under `land/<id>--<their-own-worktree-dir>`, never
-# the bare `land/<id>`, and that suffixed name can NEVER byte-match origin's `land/<id>`.
-# Comparing it raw would make the "remote still exists — keep" arm dead code for every ref
-# this sweep now sees, silently demoting the backstop to "delete every land/* ref not
-# currently checked out" and force-deleting an in-flight ticket's ref (its unpushed commits
-# with it) the moment its worktree goes away by any route. `${BR%%--*}` maps the local name
-# back to the remote one it corresponds to (`land/x--agent-ab12` → `land/x`) and leaves a
-# bare `land/x` untouched, so the ORIGINAL "remote gone ⇒ stale" semantics hold for both
-# shapes. Safe because a bd id never contains `--` (ids are `lode-<slug>`, single hyphens),
-# so the first `--` is always the worktree-suffix delimiter.
-if REMOTE_LAND=$(git ls-remote --heads origin 'land/*' 2>/dev/null); then
-  REMOTE_LAND=$(printf '%s\n' "$REMOTE_LAND" | sed 's#^.*refs/heads/##')
-  # lode-yrtu (lode-bns3 treatment): report only deletions that ACTUALLY happened, reading `git
-  # branch -D`'s own exit status rather than announcing one "before the fact" behind `|| true`.
-  # OBSERVED live (bd show lode-yrtu): this backstop once printed "deleting stale local ref
-  # land/lode-rlyx--agent-aad6b30a923856fb7" while the ref still existed afterward -- `git branch -D`
-  # had refused it (still checked out in a locked worktree) and the trailing `|| true` swallowed that
-  # failure silently. Same class of bug lode-bns3 already fixed for the WORKTREE loop above (counting
-  # an attempt rather than the remove's real exit status). Process substitution (`< <(...)`), not a
-  # pipe, so these counters survive past the loop instead of dying in a subshell.
-  B2_DELETED=0; B2_FAILED=0
-  while read -r BR; do
-    printf '%s\n' "$REMOTE_LAND" | grep -qxF "${BR%%--*}" && continue   # remote still exists — keep
-    if git branch -D "$BR" 2>/dev/null; then
-      B2_DELETED=$((B2_DELETED + 1))
-    else
-      B2_FAILED=$((B2_FAILED + 1))    # refused (e.g. still checked out somewhere) -- report it, don't claim success
-    fi
-  done < <(git for-each-ref --format='%(refname:short)' 'refs/heads/land/*')
-  echo "bare-ref backstop2 (land/*): deleted $B2_DELETED stale local ref(s) (failed=$B2_FAILED)"
-fi
+Then release the lock — the pass is fully done, and releasing now beats waiting out the staleness
+window for no reason (lode-aps3; see Section 0):
 
-# Third backstop: dangling local worktree-agent-* refs with no worktree attached at all
-# (lode-j5i0 — the same bug as lode-r78, but the OTHER ref namespace: the second backstop
-# above only ever swept refs/heads/land/*, so a worktree-agent-* ref orphaned by any route other
-# than the worktree sweep above — which can only ever reclaim a ref that still HAS a worktree to
-# remove — was swept by nothing and accumulated without bound — 17 confirmed on the landing
-# machine). This namespace needs a
-# DIFFERENT guard than land/*: a worktree-agent-* branch is never pushed to origin, so it
-# has no remote counterpart, ever — "remote gone" is meaningless here and would delete a
-# LIVE, still-building branch (every producer branch would read as "remote gone" the
-# instant it's created). The correct guard is the same PREDICATE the worktree sweep above
-# applies — merged into `trunk` (the work is safely captured elsewhere) — but reached by a
-# branch-NAME lookup rather than that loop's HEAD-sha ancestry test, because a bare ref has no
-# worktree and therefore no porcelain `HEAD ` line to test; plus not currently checked out in
-# any worktree. $MERGED is computed right HERE, immediately above its ONLY consumer (the worktree
-# sweep keys on HEAD-sha ancestry and needs no branch name, so nothing else reads it). Computing it
-# after the sweeps above is safe: `trunk` has not moved, and every ref they deleted is gone from
-# `for-each-ref` too, so the set is identical for every ref still listed. `git branch -D` itself also
-# refuses harmlessly if the branch is still checked out somewhere, but that alone is not the guard
-# being relied on — the explicit merged check is what keeps an in-flight, not-yet-merged build ref
-# from ever being a candidate in the first place.
-MERGED=$(git branch --merged trunk --format='%(refname:short)')
-CHECKED_OUT=$(git worktree list --porcelain | awk '/^branch refs\/heads\//{print substr($0,19)}')
-# lode-yrtu (lode-bns3 treatment): same fix as backstop 2 just above -- report only what `git branch
-# -D` actually did, and use process substitution rather than a pipe so these counters survive.
-B3_DELETED=0; B3_FAILED=0
-while read -r BR; do
-  printf '%s\n' "$CHECKED_OUT" | grep -qxF "$BR" && continue   # still checked out somewhere — keep
-  printf '%s\n' "$MERGED" | grep -qxF "$BR" || continue        # not merged into trunk — keep (in-flight)
-  if git branch -D "$BR" 2>/dev/null; then
-    B3_DELETED=$((B3_DELETED + 1))
-  else
-    B3_FAILED=$((B3_FAILED + 1))
-  fi
-done < <(git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*')
-echo "bare-ref backstop3 (worktree-agent-*): deleted $B3_DELETED stale local ref(s) (failed=$B3_FAILED)"
-
-MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
-[ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
-  "DISABLED for this call (lode-67nk) -- land-lock.sh REFUSES it outright (exit 2, lode-yuwt)" \
-  "rather than releasing blind, so the lock stays held until the staleness window reclaims it" >&2
-scripts/land-lock.sh release "$MY_TOKEN"   # the pass is fully done -- release now rather than
-                                     # waiting out the staleness window (lode-aps3; see Section 0)
+```bash
+scripts/land-heartbeat.sh --release
 ```
 
 `bd close` unblocks dependents — that is *why* the lander closes (the producer never does): a closed
 ticket frees the next layer of `bd ready`. Closing is mine because the merge decision is mine.
 
-The worktree GC is **best-effort and machine-local**, and (since **lode-h1vn**) entirely the
-end-of-pass backstop sweep's job — there is no separate per-ticket removal step any more. **Nothing in
-`/land` reads `review_worktree`/`review_branch`**, and as of **lode-2m89** nothing writes them either:
-the deleted loop was their only GC consumer, the backstop discovers worktrees directly off
-`git worktree list --porcelain`, and `/code`'s own reclaim *derives* its target from the ticket id
-rather than trusting a recorded path (lode-vs7g) — so the fields were pure dead weight and `coding.md`
-stopped recording them (see lode-2m89's `docs/decisions.md` entry). Discovering worktrees live instead
-of trusting recorded paths is strictly better anyway: there is no bookkeeping to drift. Builds can
-happen on several machines, and a worktree on another machine simply isn't in this machine's
-`git worktree list`, so it's invisible to this sweep and that other machine's
-own `/land` (or a later sweep there) reclaims it. A worktree that is `merged`+`unlocked`+clean is
-reclaimed **fully** (directory *and* branch ref), which for a just-landed ticket's builder worktree is
-true precisely *because* this pass just `--no-ff` merged it into trunk a few lines above. **Since
-lode-yrtu, failing the ancestry gate no longer means the tree is kept.** On a **bounce** the branch is
-dropped but the rebuild ticket may still want the tree, and on an **escalate** the work is held for a
-human — in both cases the *builder's* worktree HEAD never merges into `trunk`, and its
-`worktree-agent-*` branch is never pushed, so neither ancestry arm ever becomes true. Its **branch
-ref** is what survives those outcomes now, not its directory: once its last commit ages past
-`LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS` (default 6h) and its tree is clean, the dir-only arm reclaims
-the directory and keeps the ref, so every commit stays reachable but the checkout itself does not
-persist indefinitely. A **dirty** builder worktree is still never touched, in any bucket (lode-9hgu).
-(Scope all of that to the **builder's** worktree deliberately: a reviewer's or rebase-pickup's *own*
-launch worktree is a different thing — `/code` reclaims that one proactively on an escalation,
-lode-vs7g, and **lode-amif** widens this loop's predicate to reclaim it via *origin*-ancestry precisely
-*because* an escalated branch never merges.) This backstop sweep
-is now the **only** net over the same machine's worktrees: it doesn't consult any ticket's metadata, so
-it reclaims **any** worktree under `.claude/worktrees/` — branch-attached (`worktree-agent-*`,
-`land/<id>--<worktree-dir>`, or any other name) or **detached** alike — regardless of whether any
-ticket ever pointed at it (no ticket does, since lode-2m89). lode-jiyk unified what were originally
-two separate **worktree** sweeps here: an early one keyed on branch **name** (`lode-r78`), and a
-later one keyed directly on
-**HEAD-sha ancestry** (`lode-mxeu`) added because a detached worktree has no branch name for the first
-sweep to match. Both tested the identical predicate — "this worktree's tip is already merged into
-trunk" — so now there is one loop: it requires the worktree to be **unlocked** (no in-flight agent owns
-it — or, since lode-yrtu, holding a lock whose recorded owner process is *provably* dead, which
-`scripts/worktree-lock-stale.sh` must positively prove before the lock is cleared) and its **HEAD
-commit** an ancestor of `trunk` (`git merge-base --is-ancestor <HEAD-sha> trunk` — the work is safely
-captured elsewhere). The **FULL** reclaim (directory *and* branch ref) therefore still needs no
-branch-name pattern to keep in sync as new worktree-branch-naming conventions are added. lode-yrtu
-adds the loop's one deliberate exception to that: the **dir-only** arm does key on a branch NAME
-(`worktree-agent-*`), because what it is really testing — "no agent will ever want this exact
-checkout again, and its ref will survive to hold the commits" — has no ticket-metadata-free signal
-other than the branch shape, this sweep consulting no ticket metadata by design. So a NEW
-worktree-branch-naming convention leaks past the dir-only arm (it simply won't be reclaimed) but
-never past the full one. That name-independence is otherwise **scoped to this loop**: the
-bare-ref backstops below still enumerate `land/*` and `worktree-agent-*` by name (they must —
-`refs/heads/*` is shared with human branches), so a new *bare-ref* namespace can still leak exactly as
-`lode-j5i0`'s did. (`lode-j5i0`'s own sweep is the **third** backstop below — alive and untouched; it
-was never one of the two unified here.) "Unlocked" is a real signal now, not a formality: a producer
-(`.claude/agents/coding.md`) locks its worktree the instant it starts building and unlocks it right
-after its first commit, so this sweep only ever finds a worktree unlocked once its build has either not
-started or already diverged from `trunk` — never mid-build with uncommitted, unreclaimed-elsewhere work
-sitting in it (lode-oqr). Dropping the branch-name filter makes the sweep's **contract** explicit where
-it used to be incidental: *any* worktree under `.claude/worktrees/` that is unlocked and has not
-diverged from `trunk` is reclaimable, whoever created it — and a tree freshly branched off `trunk` HEAD
-is trivially "merged" by zero divergence, so uncommitted work in one is **not** protected by the merged
-check. At the time this loop was written, `locked` was the only thing holding it off — and a hand-made
-worktree raises no lock (both lock sources are agent-side: see the CONTRACT paragraph above), so one
-under `.claude/worktrees/` had to be committed or locked by hand to survive. This residual is
-**pre-existing, not new** (both unified sweeps already had it: the old name-keyed one matched
-`worktree-agent-*`, which is exactly what an interactive session gets, and the old detached one was
-already name-blind); dropping the name filter just makes it impossible to overlook. **lode-9hgu** has
-since closed the *destructive* half of this (see below): it **added** a real guard on the actual
-invariant (is the tree dirty?) *alongside* the ancestry checks — which still run and still decide
-candidacy — rather than relying solely on the zero-divergence-vulnerable "merged" proxy. So today a
-**dirty** hand-made worktree survives even unlocked and merged-by-zero-divergence; a **clean** one at
-zero divergence is still reclaimable, which is the accepted residual the CONTRACT paragraph above
-records. A branch-attached candidate here is typically the reviewer's or a rebase
-pickup's *own* launch worktree, per the lode-k5e/lode-8k3 architecture (they `git fetch origin
-land/<id>` and check it out into a locally **uniquely-named** branch — `land/<id>--<their-own-worktree-dir>`
-since **lode-em6v**, plain `land/<id>` before it. Before lode-em6v this reused the bare `land/<id>` name,
-which git permits in only one worktree at a time, so whenever `land/<id>` was already checked out
-elsewhere (a leaked worktree from an earlier cycle, since neither agent ever removed its own launch
-worktree) the agent fell back to `git checkout --detach FETCH_HEAD`, leaving a **detached**, branchless
-worktree — and the leak was **self-compounding**: a stale worktree from one cycle was precisely what
-forced the next cycle onto the detaching path. **lode-em6v closed this at the source** by making the
-local name unique by construction, so the collision — and the detach fallback it forced — can no longer
-arise in **normal operation**; this backstop keeps catching a detached worktree regardless, as a
-crash-safety net for a killed process, not because the steady-state leak it was originally built to
-catch still occurs) — a ticket reviewed across more than one cycle leaves *extra* such worktrees
-(branch-attached or detached) that no single `review_worktree` field can name, so this backstop is the
-only net that ever reclaims them (lode-r78, lode-mxeu); `merged`+`unlocked` excludes an in-flight one
-regardless of whether it has a branch. If the worktree has a branch, this backstop deletes it too
-(`git branch -D`); a detached worktree has none, so worktree removal alone is the entire reclaim. A
-**separate** pass right after the worktree sweep (see the script above) deletes any local `land/<id>`
-**branch ref** whose `origin/land/<id>` counterpart no longer exists — the worktree sweep above only
-deletes a local branch when it also found an attached worktree, so a bare ref with no worktree (e.g.
-`git worktree remove`d by some other path) would otherwise linger forever once its remote is gone. That
-pass is the one place the **lode-em6v** renaming *does* reach: it keys on an **exact** name match
-against origin's listing, which a suffixed `land/<id>--<worktree-dir>` can never satisfy, so it strips
-the suffix (`${BR%%--*}`) before comparing — the comment above the sweep has the full reasoning and why
-skipping the strip would silently turn this backstop into a ref shredder, force-deleting an in-flight
-ticket's ref (and its unpushed commits) the moment its worktree goes away by any route. A **third** pass
-sweeps the mirror-image gap in the *other* namespace (lode-j5i0): a bare `worktree-agent-*` ref with no
-worktree attached at all is invisible to both nets above (the first only matches refs that still have a
-worktree; the second only matches `land/*`), so it was swept by nothing and accumulated without bound —
-17 confirmed orphans on the landing machine, all already merged. Unlike `land/<id>`, a `worktree-agent-*`
-branch is never pushed to origin, so "remote gone" can't be the guard here (it would fire on every
-branch, live or not); the guard is `merged`-into-`trunk` plus not currently checked out anywhere — the
-same safety *predicate* the worktree sweep applies, reached by a branch-**name** lookup (`git branch
---merged trunk`) rather than that sweep's HEAD-sha ancestry test, since a bare ref has no worktree and
-so no HEAD sha to test.
+The worktree GC is **best-effort and machine-local**, and (since **lode-h1vn**) entirely
+`scripts/worktree-gc-sweep.sh`'s job — there is no separate per-ticket removal step any more, and
+**nothing in `/land` reads or writes `review_worktree`/`review_branch`** (lode-2m89: the deleted
+per-ticket loop was their only consumer; the sweep discovers worktrees live off `git worktree list
+--porcelain` instead, and `/code`'s own proactive reclaim of a reviewer's or rebase-pickup's launch
+worktree, lode-vs7g, derives its target from the ticket id rather than a recorded path). Builds can
+happen on several machines: a worktree on another machine is invisible to this sweep and reclaimed by
+that machine's own `/land` instead.
 
-**Update (lode-amif): the worktree sweep's predicate widened from "merged into trunk" alone to
-"merged into trunk OR captured on origin."** Everything above describes the sweep as it stood after
-lode-jiyk: `unlocked` + `HEAD-sha is-ancestor-of trunk`. That predicate structurally cannot reclaim an
-**escalated** ticket's reviewer/rebase-pickup worktree — an escalated branch is, by definition, held
-for a human decision and never merges into `trunk`, so if the `/code` session that would otherwise
-eagerly reclaim it (lode-vs7g) itself dies mid-fan-out before running that reclaim, the worktree leaks
-**indefinitely**: the trunk-ancestry test is never satisfied, so backstop 1 never even considers it a
-candidate. The gap is one level up from what lode-vs7g closed (lode-vs7g handles the normal-exit case,
-including a clean escalation return; this is the crash-before-that-point case).
+The sweep reclaims any worktree under `.claude/worktrees/` — branch-attached or detached, whoever
+created it — that is **unlocked**, **clean**, and captured elsewhere: an ancestor of `trunk`, or (since
+**lode-amif**, for a reviewer/rebase-pickup worktree whose branch never merges by definition, i.e. an
+escalated ticket) an ancestor of its own `origin/<branch>`. A just-landed builder worktree qualifies the
+moment this pass's `--no-ff` merge lands, above. A **bounced** or **escalated** builder worktree
+qualifies for neither ancestry arm (its content never reaches `trunk` or `origin`), so it is kept —
+except its *directory* alone, once its last commit ages past `LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS`
+(default 6h): the dir-only arm reclaims the checkout but deliberately keeps the branch ref, so no commit
+is ever lost. A **dirty** worktree is never touched, in any bucket. Full contract, every predicate, and
+the design history behind each one (lode-jiyk, lode-r78, lode-mxeu, lode-yrtu, lode-em6v, lode-9hgu,
+lode-amif, lode-j5i0) live in `scripts/worktree-gc-sweep.sh`'s and `scripts/worktree-gc-classify.sh`'s
+own headers — read there, not here, for the reasoning behind a specific bucket.
 
-The fix widens the loop's predicate with a second arm: `git merge-base --is-ancestor "$SHA" trunk ||
-{ [ -n "$BR" ] && git merge-base --is-ancestor "$SHA" "origin/${BR%%--*}"; } || continue` (see the
-script above and its inline comment). The real safety invariant was never "merged into trunk" — that
-was always a stand-in for "this worktree's content already exists safely elsewhere." A
-reviewer/rebase-pickup worktree satisfies that invariant by construction the moment it has pushed to
-`origin/land/<id>` (lode-k5e/lode-8k3), on **either** outcome, `ready-for-land` or `land-escalated` — so
-testing ancestry against that origin ref directly reaches exactly the cases the trunk-only test missed.
-`${BR%%--*}` strips the lode-em6v worktree-uniqueness suffix the same way backstop 2 already does, so
-the new arm resolves to `origin/land/<id>` regardless of which locally-suffixed name the branch was
-checked out under. A detached worktree (no `$BR`) and a builder's own `worktree-agent-*` worktree (never
-pushed to origin, so its origin counterpart doesn't exist and the ancestor test simply fails) are
-unaffected — the new arm is false for both, so they fall through to the unchanged `trunk`-only
-behavior. The new arm carries the *same* zero-divergence residual the trunk arm already has (see the
-CONTRACT paragraph above and lode-9hgu) rather than introducing a new one — and on this arm it is
-**benign**. A freshly-checked-out reviewer/pickup worktree is trivially "captured on origin"
-(identical to origin's current tip) until its first local commit, but for that entire window it is
-`locked`: the harness locks every `isolation: worktree` launch worktree for the lifetime of the agent
-standing in it, so the sweep's existing `locked` filter drops a **live** reviewer/pickup worktree
-before the predicate is ever evaluated. What the arm can reach is an **exited** agent's worktree,
-which at zero divergence holds only uncommitted, ungated scratch from a run that never finished —
-authoritative content is on `origin/land/<id>` and the ticket is re-reviewed from there. That is
-precisely the worktree this widening exists to reclaim. lode-9hgu has since landed (6591ba9). It did
-not *remove* the ancestry proxies — both arms still run, and still decide candidacy — it added a real
-dirty-tree guard (`git -C "$WT" status --porcelain`) immediately below them, gating **both**: a worktree
-captured on `trunk` or on `origin` but left dirty is now KEPT, not reclaimed. See the CONTRACT paragraph
-above and the guard itself in the loop.
+The two bare-ref backstops the script also runs catch what the worktree sweep structurally cannot: a
+local `land/<id>` ref with no worktree attached and no `origin/land/<id>` counterpart left, and a local
+`worktree-agent-*` ref with no worktree attached at all (never pushed to origin, so it needs the
+`merged`-into-`trunk` guard instead of a remote-existence check). Both are name-keyed, unlike the
+worktree sweep itself, because `refs/heads/*` is shared with human branches.
 
 ---
 
@@ -2593,7 +1996,7 @@ git push origin trunk
 git status                 # MUST show trunk up to date with origin
 ```
 
-When the pass ends I release the lock (`scripts/land-lock.sh release`, [Section
+When the pass ends I release the lock (`scripts/land-heartbeat.sh --release`, [Section
 4](#4-land-the-survivors) — or, on any exit that never reaches it, the staleness window does,
 [Section 0](#0-single-lander-lock--acquire-first-every-tick)) and report: how many branches I
 reviewed; which

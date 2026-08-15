@@ -218,12 +218,6 @@ _KNOWN_ENV_VARS: dict[str, str] = {
         "standard POSIX env var; sweep/SKILL.md reads it only via `${TMPDIR:-/tmp}` to "
         "place its own cross-block scratch state, and never assigns it."
     ),
-    "LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS": (
-        "(lode-yrtu) operator-settable age floor for Section 4's clean-not-merged "
-        "worktree-agent-* dir-only reclaim; read only via "
-        "`${LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS:-21600}`, documented in "
-        "docs/agents-workflow.md, never assigned by any skill's own bash."
-    ),
 }
 
 # (path relative to CLAUDE_DIR, variable name) -> reason a human can audit. Relative
@@ -497,15 +491,9 @@ def test_default_expansion_is_a_use_not_an_assignment() -> None:
     """`${VAR:-default}` READS var (with a fallback); it must never be mistaken for
     an assignment of VAR. A name in _KNOWN_ENV_VARS would be filtered out before
     this check could see it, so use a plain unknown name (TIMEOUT) here instead --
-    test_known_env_var_is_never_flagged below covers the filtered case."""
+    test_tmpdir_default_expansion_is_never_flagged below covers the filtered
+    case."""
     assert _violations_in_block('echo "${TIMEOUT:-30}"\n') == {"TIMEOUT"}
-
-
-def test_known_env_var_is_never_flagged() -> None:
-    assert (
-        _violations_in_block('echo "${LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS:-21600}"\n')
-        == set()
-    )
 
 
 def test_tmpdir_default_expansion_is_never_flagged() -> None:

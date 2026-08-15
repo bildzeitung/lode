@@ -4,6 +4,32 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-08-14 — An extraction replaced a fenced computation with `script | tee`, swallowing its machine-fault exit
+
+- **What happened:** `land/lode-s9xe.6` moved `/land`'s stacked-branch graph derivation out of a
+  fenced bash block and into `scripts/stacked-graph.sh`, wiring it as
+  `scripts/stacked-graph.sh --base-ref origin/trunk --report-unordered | tee "$STATE_DIR/graph"`.
+  A pipeline reports its LAST command's status, so the block's exit status was `tee`'s — always 0 —
+  and the script's documented exit 2 (machine fault) was discarded. The prose four lines above the
+  fence says exit 2 "is a machine fault, never 'no stacks'" and names the consequence exactly.
+  Caught in technical review; nothing landed.
+- **Root cause:** The extraction's whole point was to give the computation a real exit-code
+  contract (0/1/2, lode-9i2p), and the call site that consumed it then threw that contract away
+  for the convenience of seeing the output. lode-b8sr had already recorded this exact hazard for
+  gates piped into `tail`/`grep`, but nothing pinned this call site — no test referenced
+  `stacked-graph.sh` outside the script's own module — so neither the gates nor a scanner could
+  have caught it.
+- **Consequence:** Had it landed, a faulted graph run would have left a truncated or empty
+  `$STATE_DIR/graph` that `land-merge-batch.sh`/`land-replay.sh` read as a valid "no stacks"
+  graph — a dependent branch merged before its base, and a conflicting base failing to take its
+  dependents with it, silently, in the file that owns every write to `trunk`.
+- **Rule that prevents a repeat:** When an extraction replaces inline logic with a script call,
+  the call site must PRESERVE the script's exit status: redirect (`> file || exit 1`) rather than
+  pipe, and if the output must also be visible, `cat` it afterwards. Never `| tee`, `| tail`,
+  `| grep` a command whose exit code carries a verdict. And every newly-wired call site gets at
+  least one pin of its own — an extraction that leaves its consumer untested moves the code
+  somewhere lintable while leaving the wiring exactly as unchecked as the markdown was.
+
 ## 2026-08-14 — A `docs_dir` config change left a default `nox` session red, with all named gates green
 
 - **What happened:** `land/lode-fhql.9` repointed `mkdocs.yml`'s `docs_dir` from `docs` to
