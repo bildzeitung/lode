@@ -1,0 +1,121 @@
+name: docs
+
+# Builds the MkDocs-Material docs site (lode-fhql.8/.9) on every push and PR;
+# deploys to GitHub Pages only on a push to trunk. A PR build never deploys --
+# a docs change that breaks the build (including a Mermaid render failure,
+# see below) is caught before it can land, not after.
+#
+# PENDING A HUMAN (CLAUDE.md rule 8 -- an agent must not perform a repo-
+# settings change): enable GitHub Pages on bildzeitung/lode --
+#   Settings -> Pages -> Build and deployment -> Source: "GitHub Actions"
+# Not currently enabled (checked 2026-08-12, API returned 404); the repo is
+# public, so no paid plan is required. Until this is done, the `deploy` job
+# below will fail on its first push to trunk with a Pages-not-enabled error
+# -- the `build` job (staging, Mermaid render, `mkdocs build --strict`) is
+# fully verifiable without it and is exercised on every push/PR regardless.
+#
+# push trigger convention (lode-bmvy, mirrored from build.yml/tests.yml) --
+# narrowed to trunk + land/** so this doesn't also fire on a v* tag push. See
+# docs/release.md#ci-workflow-trigger-scope-push-and-pull_request.
+on:
+  push:
+    branches: [trunk, "land/**"]
+  pull_request:
+
+# Cancels a superseded run on the same ref. Convention + rationale:
+# docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
+#
+# The group collapses a branch's push run and its pull_request run so one
+# cancels the other. Fallback is github.ref_name, NOT github.ref -- and NOT
+# `head_ref || ref`, the form most likely to be copied in, which still leaves
+# the push run in its own group and cancels nothing. Derivation + the accepted
+# fork-branch-name trade-off: the release.md anchor above (lode-7hbu).
+# This expression is byte-identical in build/tests/coverage/docs.yml -- keep it so.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Caps a hung docker pull / mermaid render. Ladder + rationale:
+    # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install site-build toolchain
+        # Pinned exact versions -- lode-fhql.9's acceptance requires the toolchain
+        # pinned, not floating. mkdocs-material's pin here MUST match pyproject.toml's
+        # `dev` extra pin (a single-tool carve-out from the otherwise-unlocked `dev`
+        # extra, same pattern as ruff there, HUMAN DECISION 2026-08-14) -- one source
+        # of truth for the renderer CI and a local `nox -s docs`/`mkdocs build` build
+        # with, kept in sync by tests/test_build_docs_site.py; bump both together.
+        # typer is here because scripts/build_docs_site.py is a Typer CLI like
+        # every other Python CLI in the repo (docs/conventions.md); the pin
+        # matches requirements.lock so the two can't drift silently.
+        run: pip install "mkdocs-material==9.5.44" "typer==0.27.1"
+
+      # mermaid-cli's image is pulled once here rather than left to the
+      # first `docker run` inside build_docs_site.py, so a pull failure
+      # surfaces as its own clearly-named step instead of buried inside the
+      # first diagram's render error.
+      - name: Pull pinned mermaid-cli image
+        # Keep in sync with MERMAID_IMAGE in scripts/build_docs_site.py --
+        # deliberately a DIFFERENT pin than scripts/validate-mermaid.sh's
+        # floating `:latest` (lode-fhql.9's own acceptance requires this
+        # toolchain pinned; the separate validate-mermaid.sh gate is
+        # untouched by this ticket).
+        run: docker pull minlag/mermaid-cli:10.9.1
+
+      - name: Stage published docs + pre-render Mermaid to SVG
+        # Fails the whole job loudly on any render error (see
+        # scripts/build_docs_site.py's own docstring) -- never a silently-
+        # empty diagram on the published site.
+        run: python3 scripts/build_docs_site.py .docs-site-src
+
+      - name: Build site (strict -- fail on broken links/nav, not just exceptions)
+        # Output dir comes from mkdocs.yml's `site_dir`, not a flag -- one
+        # place to change, and the upload step's `path:` below tracks it.
+        run: mkdocs build --strict
+
+      # Condition is byte-identical to the `deploy` job's `if:` and must stay
+      # so (tests/test_build_docs_site.py pins that). Without it, every PR
+      # would upload a Pages artifact for a job that can never run.
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/trunk'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    # Only a push to trunk deploys -- a PR build (above) never does, and
+    # neither does a push to a land/** branch (still pre-review/pre-land).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/trunk'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Reads (and, only if the repo owner has already switched the Pages
+      # source to "GitHub Actions" in repo Settings, confirms) the Pages
+      # config for deploy-pages below. It does NOT flip that repo-settings
+      # switch itself -- see the PENDING A HUMAN step in this workflow's own
+      # header comment / this ticket's hand-off.
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

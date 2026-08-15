@@ -16,7 +16,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import load_module_from_path, mkdocs_config
+from conftest import load_module_from_path
+from test_docs_site_index import PUBLISHED_DIRS, PUBLISHED_TOP_LEVEL
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -30,29 +31,29 @@ check_links = load_module_from_path(
 
 
 def _published_doc_paths() -> list[Path]:
-    """Every published markdown file, derived from ``mkdocs.yml``'s
-    ``exclude_docs`` allowlist (its ``!pattern`` re-includes) rather than
+    """Every published markdown file, derived from
+    ``test_docs_site_index.py``'s ``PUBLISHED_TOP_LEVEL``/``PUBLISHED_DIRS``
+    (the authoritative PUBLISHED set, docs/stack.md, lode-fhql.8) rather than
     hand-listed here, so this gate cannot drift from what the site actually
-    publishes as the allowlist grows.
+    publishes as that set grows.
 
-    A re-include that resolves to a directory (``!guides/``) contributes its
-    markdown recursively, and one that resolves to non-markdown (``!assets/*``)
-    contributes nothing -- so a future allowlist entry cannot silently drop
-    pages out of this gate's scope.
+    Checked against docs/ (the SOURCE tree), not the staged
+    ``scripts/build_docs_site.py`` output: the staged tree is git-ignored and
+    only exists after a build runs, not a fixture this test can assume. Every
+    PUBLISHED page stages under the identical relative path it has in docs/,
+    so checking the source is equivalent (same rationale as
+    ``test_docs_site_index.test_every_nav_target_exists``, lode-fhql.9/.10
+    mkdocs.yml merge, 2026-08-14).
     """
-    config = mkdocs_config()
-    docs_dir = REPO_ROOT / config["docs_dir"]
-    patterns = [
-        line.strip() for line in config["exclude_docs"].splitlines() if line.strip()
-    ]
+    docs_dir = REPO_ROOT / "docs"
     paths: list[Path] = []
-    for glob in (p.lstrip("!") for p in patterns if p.startswith("!")):
-        for hit in sorted(docs_dir.glob(glob)):
-            if hit.is_dir():
-                paths.extend(sorted(hit.rglob("*.md")))
-            elif hit.suffix == ".md":
-                paths.append(hit)
-    assert paths, "no published .md files resolved -- exclude_docs parsing broke"
+    for stem in sorted(PUBLISHED_TOP_LEVEL):
+        hit = docs_dir / f"{stem}.md"
+        if hit.is_file():
+            paths.append(hit)
+    for directory in sorted(PUBLISHED_DIRS):
+        paths.extend(sorted((docs_dir / directory).rglob("*.md")))
+    assert paths, "no published .md files resolved -- PUBLISHED set parsing broke"
     return paths
 
 

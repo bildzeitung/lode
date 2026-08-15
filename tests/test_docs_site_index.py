@@ -3,13 +3,16 @@
 Checks the things that would otherwise drift silently: that the landing page
 carries the required content (per its acceptance criteria), that it is
 reused verbatim from README.md rather than forked into separate marketing
-copy, and that mkdocs.yml publishes exactly the PUBLISHED set decided in
-lode-fhql.8 -- both what is BUILT (``exclude_docs``) and what is LISTED
-(``nav``), which are separate mechanisms in MkDocs.
+copy, and that mkdocs.yml's ``nav`` only lists pages from the PUBLISHED set
+decided in lode-fhql.8.
 
-Why an allowlist rather than a denylist, and why ``nav`` alone does not
-exclude anything, is stated once in docs/stack.md ("Published / excluded page
-sets", and the lode-fhql.10 subsection below it) -- not restated here.
+What is actually BUILT is decided by scripts/build_docs_site.py's staging
+step (lode-fhql.9) -- mkdocs.yml's ``docs_dir`` points at that staged output,
+never at docs/ directly, so nothing build_docs_site.py doesn't stage can ship,
+``nav`` or no ``nav``. This supersedes the ``exclude_docs``-allowlist
+mechanism lode-fhql.10 originally scaffolded (2026-08-14 mkdocs.yml merge
+decision, see lode-fhql.9's notes) -- ``exclude_docs`` no longer appears in
+mkdocs.yml, so there is no second mechanism to gate here.
 """
 
 import re
@@ -130,13 +133,21 @@ def test_nav_only_lists_published_pages() -> None:
 
 
 def test_every_nav_target_exists() -> None:
-    """A nav entry pointing at a missing file fails ``mkdocs build --strict``."""
+    """A nav entry pointing at a missing file fails ``mkdocs build --strict``.
+
+    Checked against docs/ (the SOURCE tree), not ``config["docs_dir"]``: that
+    now points at scripts/build_docs_site.py's staged output
+    (``.docs-site-src``), which is git-ignored and only exists after a build
+    runs -- not a fixture this test can assume. Every PUBLISHED page stages
+    under the identical relative path it has in docs/, so checking the
+    source is equivalent (lode-fhql.9/.10 mkdocs.yml merge, 2026-08-14).
+    """
     config = mkdocs_config()
-    docs_dir = REPO_ROOT / config["docs_dir"]
+    docs_dir = REPO_ROOT / "docs"
     for page in _nav_leaf_values(config["nav"]):
         assert (docs_dir / page).is_file(), (
             f"mkdocs.yml nav references {page!r}, which does not exist under "
-            f"{config['docs_dir']}/ -- this breaks the docs build."
+            f"docs/ -- this breaks the docs build."
         )
 
 
@@ -178,33 +189,21 @@ def test_published_set_matches_stack_md() -> None:
         )
 
 
-def test_exclude_docs_is_an_allowlist_covering_the_published_set() -> None:
-    """``nav`` alone does not stop MkDocs building an unpublished page.
+def test_mkdocs_yml_has_no_exclude_docs() -> None:
+    """The staged-build docs_dir supersedes the exclude_docs mechanism.
 
-    MkDocs renders every markdown file under ``docs_dir`` regardless of
-    ``nav``; only ``exclude_docs`` decides what is published. It must be
-    written as an allowlist so a maintainer doc added later is off the site
-    by default (docs/stack.md, lode-fhql.8).
+    mkdocs.yml's docs_dir points at scripts/build_docs_site.py's staged
+    output (lode-fhql.9), which contains only the PUBLISHED set by
+    construction -- there is nothing left for exclude_docs to filter, and a
+    reintroduced copy would silently reference docs_dir=docs semantics that
+    no longer apply (2026-08-14 mkdocs.yml merge decision).
     """
     config = mkdocs_config()
-    patterns = [
-        line.strip() for line in config["exclude_docs"].splitlines() if line.strip()
-    ]
-    assert patterns[0] == "*", (
-        "exclude_docs must start by excluding everything ('*') so the published set "
-        "is an allowlist, not a denylist."
+    assert "exclude_docs" not in config, (
+        "mkdocs.yml carries exclude_docs again -- the staged docs_dir "
+        "(scripts/build_docs_site.py) is the sole publish mechanism now; "
+        "see lode-fhql.9's notes for why the two were merged this way."
     )
-    reincluded = {p.lstrip("!") for p in patterns[1:] if p.startswith("!")}
-    for stem in PUBLISHED_TOP_LEVEL:
-        assert f"{stem}.md" in reincluded, (
-            f"docs/{stem}.md is in the PUBLISHED set but exclude_docs does not "
-            "re-include it -- it would not be built."
-        )
-    for directory in PUBLISHED_DIRS:
-        assert f"{directory}/*.md" in reincluded, (
-            f"docs/{directory}/ is published as a directory but exclude_docs does not "
-            f"re-include '{directory}/*.md'."
-        )
 
 
 def test_toc_slugify_is_the_github_compatible_one() -> None:

@@ -347,17 +347,28 @@ def docs(session: nox.Session) -> None:
     ``--strict`` config error (loud), whereas a grep goes silently green the day mkdocs
     rewords a message.
 
-    **Coverage boundary:** ``mkdocs.yml``'s ``exclude_docs`` allowlist is what gets built, so
-    this session only ever sees the PUBLISHED set (``index``/``design``/``storage``/
-    ``retrieval``/``externals``/``brand`` + ``how-to/``). Anchors in and into unpublished
-    pages -- ``decisions.md``, ``stack.md``, ``configuration.md``, ... -- are ``linkcheck``'s
-    job alone. These two gates are complements, not duplicates.
+    **Coverage boundary:** ``mkdocs.yml``'s ``docs_dir`` points at the STAGED output of
+    ``scripts/build_docs_site.py`` (lode-fhql.9's HUMAN DECISION 2026-08-14 superseded the
+    ``exclude_docs`` allowlist this docstring used to describe), so this session only ever
+    sees the PUBLISHED set (``index``/``design``/``storage``/``retrieval``/``externals``/
+    ``brand`` + ``how-to/``) -- nothing else can ship on ``docs_dir`` by construction. Anchors
+    in and into unpublished pages -- ``decisions.md``, ``stack.md``, ``configuration.md``, ...
+    -- are ``linkcheck``'s job alone. These two gates are complements, not duplicates.
 
-    Resolves ``mkdocs`` through ``_venv_tool`` (lode-0yfn) -- an ambient interpreter would
-    not have ``mkdocs-material`` (or ``lode``'s other deps) installed.
+    Stages with ``--no-mermaid`` first (copy-only, no Docker) so this session -- in the
+    default ``nox`` set -- stays offline; the real, Docker-backed Mermaid pre-render is
+    exclusive to ``.github/workflows/docs.yml``. A raw mermaid code fence that ships
+    unrendered here is fine: this session gates anchors/links, not diagram rendering.
+
+    Resolves ``mkdocs``/``python`` through ``_venv_tool`` (lode-0yfn) -- an ambient
+    interpreter would not have ``mkdocs-material`` (or ``lode``'s other deps) installed.
     """
+    python = _venv_tool(session, "python")
     mkdocs = _venv_tool(session, "mkdocs")
     with tempfile.TemporaryDirectory() as site_dir:
+        session.run(
+            python, "scripts/build_docs_site.py", "--no-mermaid", ".docs-site-src"
+        )
         session.run(mkdocs, "build", "--strict", "-d", site_dir)
 
 
