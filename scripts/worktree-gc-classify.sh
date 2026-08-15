@@ -144,21 +144,22 @@ fi
 # (scripts/discard-beads-passive-export-churn.sh), this is a gate, and an empty
 # exclude list would silently INVERT lode-bns3 -- passive-export churn would read
 # as "dirty" and zero out the sweep with nothing red.
-_BEADS_EXPORTS_LIST="$SCRIPT_DIR/beads-passive-exports.txt"
-if [ ! -r "$_BEADS_EXPORTS_LIST" ]; then
-  echo "$0: cannot read $_BEADS_EXPORTS_LIST" >&2
+#
+# lode-xlcm: the load+validate+":(exclude)" transform itself is owned by the
+# sourced helper scripts/beads-passive-exports.sh (this script keeps its own
+# fail-loud exit-2 semantics on top of the helper's plain return code).
+# shellcheck source=beads-passive-exports.sh
+if ! . "$SCRIPT_DIR/beads-passive-exports.sh"; then
+  echo "$0: cannot source $SCRIPT_DIR/beads-passive-exports.sh" >&2
   exit 2
 fi
-mapfile -t _BEADS_EXPORTS < "$_BEADS_EXPORTS_LIST"
-if [ "${#_BEADS_EXPORTS[@]}" -eq 0 ] || printf '%s\n' "${_BEADS_EXPORTS[@]}" | grep -qx ''; then
-  echo "$0: $_BEADS_EXPORTS_LIST is empty or contains a blank line" >&2
+if ! load_beads_passive_exports "$SCRIPT_DIR/beads-passive-exports.txt"; then
   exit 2
 fi
-_BEADS_EXCLUDE_PATHSPECS=("${_BEADS_EXPORTS[@]/#/:(exclude)}")
 
 wt_provably_clean() {
   local st
-  st=$(git -C "$1" status --porcelain -- . "${_BEADS_EXCLUDE_PATHSPECS[@]}" 2>&1) && [ -z "$st" ]
+  st=$(git -C "$1" status --porcelain -- . "${BEADS_PASSIVE_EXPORTS_EXCLUDE_PATHSPECS[@]}" 2>&1) && [ -z "$st" ]
 }
 
 # WIDENED PREDICATE (lode-amif): "merged into trunk" is a PROXY for "this
