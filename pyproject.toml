@@ -86,14 +86,21 @@ dev = [
                             # textual[syntax] (lode-sjbo). Hyphenated: a
                             # requirement names the distribution, not the
                             # import.
-    "mkdocs-material>=9.5,<10", # docs-site generator (lode-fhql.8; rationale
+    "mkdocs-material==9.5.44", # docs-site generator (lode-fhql.8; rationale
                                 # in docs/stack.md). Moved here from its own
                                 # CI-only `docs` extra (lode-fhql.20) -- mkdocs
                                 # is also a VALIDATOR (`nox -s docs`, below):
                                 # a local `mkdocs build` surfaced broken
                                 # intra-doc anchors nobody had seen, so it
                                 # belongs on every dev's PATH like any other
-                                # gate tool.
+                                # gate tool. Pinned exact (single-tool carve-out
+                                # from the otherwise-unlocked `dev` extra, same
+                                # pattern as ruff above, lode-fhql.9 HUMAN
+                                # DECISION 2026-08-14): CI's docs.yml installs
+                                # this exact pin too (kept in sync by
+                                # tests/test_build_docs_site.py) so the renderer
+                                # that builds the published site is the same one
+                                # every developer gates against locally.
 ]
 
 [project.scripts]

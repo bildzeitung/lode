@@ -100,16 +100,20 @@ markdown_extensions:
 # check from its INFO default to a warning, which `mkdocs build --strict` then
 # turns into a nonzero exit.
 #
-# Everything else is `ignore` ON PURPOSE, so --strict fails on anchors and nothing
-# else: the published set links out of `docs/` in four places (brand.md ->
-# ../README.md, how-to/*.md -> ../../src/lode/*.py) that only lode-fhql.9's
-# link-rewrite rule can fix, and `exclude_docs` above deliberately drops ~46
-# maintainer citations into unpublished pages (docs/stack.md). Flipping any of
-# these back to `warn` once lode-fhql.9 lands is a one-word edit here.
+# `not_found: warn` (promoted from `ignore`, HUMAN DECISION 2026-08-14, lode-fhql.9):
+# scripts/build_docs_site.py's staging-time link-rewrite rule already rewrites every
+# link that targets a file OUTSIDE the published set to that file's GitHub blob URL
+# (fragment preserved) before mkdocs ever sees it, so a genuinely broken relative
+# link between two PUBLISHED pages is now a real bug this gate should catch, not an
+# expected-and-ignored citation into an unpublished maintainer doc.
+#
+# `unrecognized_links`/`absolute_links` stay `ignore` ON PURPOSE: an absolute
+# https://... link (there are many, to external sites) is not something mkdocs can
+# resolve at build time either way.
 validation:
   links:
     anchors: warn
-    not_found: ignore
+    not_found: warn
     unrecognized_links: ignore
     absolute_links: ignore
   nav:

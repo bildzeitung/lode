@@ -10,6 +10,7 @@ which nothing else reports.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -216,6 +217,25 @@ def test_workflow_pins_match_their_sources() -> None:
     assert typer_pin in workflow, (
         f"docs.yml installs typer for scripts/build_docs_site.py; pin it at "
         f"{typer_pin} to match requirements.lock."
+    )
+
+
+def test_mkdocs_material_pin_matches_pyproject() -> None:
+    """CI and a local `nox -s docs`/`mkdocs build` must render with the SAME
+    mkdocs-material (lode-fhql.9 HUMAN DECISION 2026-08-14) -- pyproject.toml's
+    `dev` extra is the one source of truth; docs.yml duplicates the exact pin
+    only because it installs without building the project's own venv.
+    """
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'"mkdocs-material==([^"]+)"', pyproject)
+    assert match, "pyproject.toml's dev extra must pin mkdocs-material exactly (==)."
+    pin = match.group(1)
+    workflow = (REPO_ROOT / ".github" / "workflows" / "docs.yml").read_text(
+        encoding="utf-8"
+    )
+    assert f"mkdocs-material=={pin}" in workflow, (
+        f"docs.yml must install mkdocs-material=={pin} to match pyproject.toml's "
+        "dev extra pin -- CI and a local build must render with the same version."
     )
 
 

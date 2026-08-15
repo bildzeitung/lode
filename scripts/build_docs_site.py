@@ -172,8 +172,25 @@ def _render_mermaid_svg(code: str, out_svg: Path) -> None:
         shutil.copyfile(tmp / "out.svg", out_svg)
 
 
-def _process_mermaid(text: str, rel_path: str, assets_dir: Path, out_dir: Path) -> str:
-    """Replace every ```mermaid fence in `text` with an embedded SVG image."""
+def _process_mermaid(
+    text: str,
+    rel_path: str,
+    assets_dir: Path,
+    out_dir: Path,
+    render_mermaid: bool = True,
+) -> str:
+    """Replace every ```mermaid fence in `text` with an embedded SVG image.
+
+    ``render_mermaid=False`` (the ``--no-mermaid`` / copy-only mode, lode-
+    fhql.9's HUMAN DECISION 2026-08-14) skips the Docker render entirely and
+    leaves every fence byte-for-byte as-is -- no substitution at all. That
+    mode exists so `nox -s docs` can stage + `mkdocs build --strict` without
+    Docker, keeping the default `nox` set offline; the real, Docker-backed
+    pre-render stays exclusive to `.github/workflows/docs.yml`, which never
+    passes this flag.
+    """
+    if not render_mermaid:
+        return text
     page_slug = rel_path.replace("/", "-").removesuffix(".md")
     counter = 0
 
@@ -265,7 +282,7 @@ def _process_links(text: str, rel_path: str, published: set[str]) -> str:
     return _LINK_RE.sub(_sub_unless_protected, text)
 
 
-def build(repo_root: Path, out_dir: Path) -> None:
+def build(repo_root: Path, out_dir: Path, render_mermaid: bool = True) -> None:
     docs_dir = repo_root / "docs"
     published = _published_set(docs_dir)
     # `out_dir` is wiped below, so refuse anything that isn't a disposable
@@ -297,7 +314,9 @@ def build(repo_root: Path, out_dir: Path) -> None:
                 f"published doc {rel!r} listed in build_docs_site.py but missing on disk: {src}"
             )
         text = src.read_text(encoding="utf-8")
-        text = _process_mermaid(text, rel, assets_dir, out_dir)
+        text = _process_mermaid(
+            text, rel, assets_dir, out_dir, render_mermaid=render_mermaid
+        )
         text = _process_links(text, rel, published)
         dest = out_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -339,11 +358,21 @@ def main(
         Path,
         typer.Argument(help="Staging directory to (re)create. Wiped on every run."),
     ],
+    no_mermaid: Annotated[
+        bool,
+        typer.Option(
+            "--no-mermaid",
+            help=(
+                "Skip the Docker Mermaid render; copy fences through as-is. "
+                "Used by `nox -s docs` so the default gate stays offline."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Entry point. See the module docstring for the architecture this implements."""
     repo_root = Path(__file__).resolve().parent.parent
     out_dir = output_dir.resolve()
-    build(repo_root, out_dir)
+    build(repo_root, out_dir, render_mermaid=not no_mermaid)
     print(f"docs site staged at {out_dir}")
 
 
