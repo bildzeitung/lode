@@ -146,6 +146,32 @@ on:
   Either way, a `land/<id>` build cannot affect the README, so keeping `land/**` in the trigger is
   safe to leave in place; there is no badge-hygiene reason to drop it.
 
+## docs workflow paths filter (lode-ui7m)
+
+`.github/workflows/docs.yml` is the **one** CI leg in this repo with a `paths:` filter on its
+push/pull_request triggers — `build.yml`, `tests.yml`, and `coverage.yml` deliberately carry none.
+This is a scoped exception, not a change of house style:
+
+- **Why docs.yml and nothing else.** Every `docs.yml` run installs `mkdocs-material`'s dependency
+  tree and pulls the 1.6GB `minlag/mermaid-cli` Docker image to pre-render diagrams — by a wide
+  margin the heaviest recurring cost any workflow in this repo adds, on a repo where `/code` and
+  `/land` push constantly. `build.yml`/`tests.yml`/`coverage.yml` are comparatively cheap (or, per
+  the trigger-scope section above, already narrowed to `trunk`/`land/**` — the remaining cost there
+  is "runs on every push", not "runs needlessly on changes it can't possibly care about").
+- **The filter:** `docs/**`, `mkdocs.yml`, `scripts/build_docs_site.py`,
+  `.github/workflows/docs.yml` itself, `pyproject.toml` (the pinned `mkdocs-material`/`typer` dev
+  extras the workflow's toolchain install step reads), and `.python-version` (the
+  `actions/setup-python` version file). `push.paths` and `pull_request.paths` are kept identical via
+  a YAML anchor (`&docs-paths` / `*docs-paths`) so they can't silently diverge.
+- **This does not weaken `tests/test_workflow_concurrency.py`'s trigger-shape gate.** That test only
+  asserts a workflow carries a `push`/`pull_request` trigger at all (branch-scoped, not tag-only); it
+  does not assert the absence of a `paths:` filter, so adding one here changes nothing it pins.
+- **Not (yet) a required status check.** If `docs.yml` is ever made a required check on a branch
+  protection rule, a `paths:`-filtered workflow silently never reports on an unrelated PR/push, which
+  needs the usual `paths-ignore` + always-pass companion job pattern to avoid blocking merges
+  indefinitely. Revisit this filter if/when that happens; it does not apply today since nothing in
+  this repo's landing loop (`/land`) reads GitHub Actions check results at all (see above).
+
 ## CI workflow concurrency and job timeouts (lode-2ouz, lode-w35h)
 
 `concurrency: cancel-in-progress` and `timeout-minutes` are the same kind of convention as the

@@ -17,10 +17,26 @@ name: docs
 # push trigger convention (lode-bmvy, mirrored from build.yml/tests.yml) --
 # narrowed to trunk + land/** so this doesn't also fire on a v* tag push. See
 # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request.
+#
+# paths filter (lode-ui7m) -- this is the one CI leg with a paths filter at
+# all (build.yml/tests.yml/coverage.yml deliberately have none; see
+# docs/release.md#docs-workflow-paths-filter-lode-ui7m for why this workflow
+# is the exception). Every run installs mkdocs-material's dependency tree and
+# pulls the 1.6GB minlag/mermaid-cli image -- the heaviest recurring CI cost
+# this repo has -- so it's scoped to what scripts/build_docs_site.py / mkdocs
+# actually reads. Keep push.paths and pull_request.paths identical.
 on:
   push:
     branches: [trunk, "land/**"]
+    paths: &docs-paths
+      - "docs/**"
+      - "mkdocs.yml"
+      - "scripts/build_docs_site.py"
+      - ".github/workflows/docs.yml"
+      - "pyproject.toml"
+      - ".python-version"
   pull_request:
+    paths: *docs-paths
 
 # Cancels a superseded run on the same ref. Convention + rationale:
 # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
