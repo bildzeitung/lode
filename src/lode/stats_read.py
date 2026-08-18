@@ -15,34 +15,10 @@ current corpus state, and is excluded here the same way it is everywhere
 else.
 """
 
-import re
 import sqlite3
 from typing import NamedTuple
 
-from lode.externals import tombstone_body
-
-#: Matches the stable machine-readable body :func:`lode.externals.tombstone_body`
-#: writes for every tombstone snapshot -- ``"[tombstone: <reason>]"``.
-_TOMBSTONE_BODY_RE = re.compile(r"^\[tombstone: (.+)\]$")
-
-#: Sanity-checked against the real writer at import time -- if
-#: :func:`~lode.externals.tombstone_body`'s format ever changes, this regex
-#: (and the parser below) must change with it rather than silently bucketing
-#: every real tombstone as ``"other"``.
-assert _TOMBSTONE_BODY_RE.match(tombstone_body("empty_extract")) is not None
-
-
-def parse_tombstone_reason(body: str) -> str:
-    """Extract the machine tag from a tombstone snapshot's ``body``.
-
-    Tolerant by design (acceptance criteria): a body that does not match the
-    ``"[tombstone: <reason>]"`` shape :func:`~lode.externals.tombstone_body`
-    writes -- a hand-written tombstone, a future format, any corruption --
-    buckets as ``"other"`` rather than raising. Never called against an
-    ``"ok"``-status snapshot's body.
-    """
-    match = _TOMBSTONE_BODY_RE.match(body)
-    return match.group(1) if match else "other"
+from lode.externals import parse_tombstone_reason, tombstone_body
 
 
 def snapshot_status_counts(conn: sqlite3.Connection) -> list[tuple[str, int]]:
@@ -56,15 +32,15 @@ def snapshot_status_counts(conn: sqlite3.Connection) -> list[tuple[str, int]]:
 
 def tombstone_reason_counts(conn: sqlite3.Connection) -> list[tuple[str, int]]:
     """Head tombstone snapshots bucketed by their parsed reason, most common first."""
-    bodies = conn.execute(
-        "SELECT s.body FROM externals e "
+    by_body = conn.execute(
+        "SELECT s.body, COUNT(*) FROM externals e "
         "JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id "
-        "WHERE s.status = 'tombstone'"
+        "WHERE s.status = 'tombstone' GROUP BY s.body"
     ).fetchall()
     counts: dict[str, int] = {}
-    for (body,) in bodies:
+    for body, count in by_body:
         reason = parse_tombstone_reason(body)
-        counts[reason] = counts.get(reason, 0) + 1
+        counts[reason] = counts.get(reason, 0) + count
     return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
@@ -122,17 +98,15 @@ def version_chain_stats(conn: sqlite3.Connection) -> VersionChainStats:
     (``notes.head_version_id`` is populated atomically with the root
     version), so every note counted here has depth >= 1.
     """
-    depths = [
-        n
-        for (n,) in conn.execute(
-            "SELECT COUNT(*) FROM versions GROUP BY note_id"
-        ).fetchall()
-    ]
-    (total_versions,) = conn.execute("SELECT COUNT(*) FROM versions").fetchone()
-    max_depth = max(depths) if depths else 0
-    avg_depth = (sum(depths) / len(depths)) if depths else 0.0
+    total_versions, max_depth, avg_depth = conn.execute(
+        "SELECT SUM(depth), MAX(depth), AVG(depth) FROM "
+        "(SELECT COUNT(*) AS depth FROM versions GROUP BY note_id)"
+    ).fetchone()
+    # All three are NULL on an empty ``versions`` table (no groups to aggregate).
     return VersionChainStats(
-        total_versions=total_versions, max_depth=max_depth, avg_depth=avg_depth
+        total_versions=total_versions or 0,
+        max_depth=max_depth or 0,
+        avg_depth=avg_depth or 0.0,
     )
 
 
@@ -196,9 +170,3 @@ def edges_by_source(conn: sqlite3.Connection) -> list[tuple[str, int]]:
     return conn.execute(
         "SELECT source, COUNT(*) FROM edges GROUP BY source ORDER BY source"
     ).fetchall()
-
-
-def egress_log_total(conn: sqlite3.Connection) -> int:
-    """Total row count in ``egress_log`` -- ``lode egress`` owns the detail view."""
-    (count,) = conn.execute("SELECT COUNT(*) FROM egress_log").fetchone()
-    return count

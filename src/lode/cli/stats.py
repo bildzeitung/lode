@@ -15,10 +15,10 @@ already follow.
 """
 
 from lode.cli import _DbOption, _open_db, _tabular_table, app, console
+from lode.jobs_read import egress_purpose_counts
 from lode.stats_read import (
     edges_by_source,
     edges_by_status,
-    egress_log_total,
     empty_extract_raw_payload_retained_count,
     externals_by_source_type,
     externals_no_egress_count,
@@ -36,13 +36,17 @@ _ONI_CANDIDATE_REASON = "empty_extract"
 
 
 def _counts_table(
-    title: str, column: str, rows: list[tuple[str, int]], annotate: dict[str, str]
+    title: str,
+    column: str,
+    rows: list[tuple[str, int]],
+    *,
+    flag_label: str | None = None,
+    flag_suffix: str = "",
 ) -> None:
     """Render a ``(label, count)`` list as a titled two-column table.
 
-    ``annotate`` maps a row's label to an extra suffix appended to that row's
-    label cell (e.g. flagging the lode-oni candidate bucket) -- empty for
-    every label not present.
+    ``flag_label``/``flag_suffix`` append a note to that one row's label cell
+    (only the lode-oni candidate bucket uses it); every other row renders bare.
     """
     console.print(title, style="table.header")
     table = _tabular_table()
@@ -51,7 +55,7 @@ def _counts_table(
     if not rows:
         table.add_row("(none)", "0")
     for label, count in rows:
-        suffix = annotate.get(label, "")
+        suffix = flag_suffix if label == flag_label else ""
         table.add_row(f"{label}{suffix}", str(count))
     console.print(table)
 
@@ -95,16 +99,19 @@ def stats(db: _DbOption = None) -> None:
         passages = passage_index_stats(conn)
         edge_status = edges_by_status(conn)
         edge_source = edges_by_source(conn)
-        egress_total = egress_log_total(conn)
+        # Same seam `lode status` totals egress through, so the two commands
+        # can never report different totals for the same DB.
+        egress_total = sum(n for _, n in egress_purpose_counts(conn))
     finally:
         conn.close()
 
-    _counts_table("Snapshots by status", "Status", snap_counts, {})
+    _counts_table("Snapshots by status", "Status", snap_counts)
     _counts_table(
         "Tombstones by reason",
         "Reason",
         reason_counts,
-        {_ONI_CANDIDATE_REASON: " (lode-oni candidate)"},
+        flag_label=_ONI_CANDIDATE_REASON,
+        flag_suffix=" (lode-oni candidate)",
     )
     console.print(
         f"empty_extract tombstones with raw_payload retained: {retained}",
@@ -136,6 +143,6 @@ def stats(db: _DbOption = None) -> None:
     overview.add_row("Egress log (total entries)", str(egress_total))
     console.print(overview)
 
-    _counts_table("Externals by source_type", "Source type", by_source_type, {})
-    _counts_table("Edges by status", "Status", edge_status, {})
-    _counts_table("Edges by source", "Source", edge_source, {})
+    _counts_table("Externals by source_type", "Source type", by_source_type)
+    _counts_table("Edges by status", "Status", edge_status)
+    _counts_table("Edges by source", "Source", edge_source)

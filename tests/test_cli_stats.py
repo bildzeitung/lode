@@ -13,10 +13,9 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from lode.cli import app
-from lode.externals import ingest_snapshot
+from lode.externals import ingest_snapshot, parse_tombstone_reason, tombstone_body
 from lode.stats_read import (
     empty_extract_raw_payload_retained_count,
-    parse_tombstone_reason,
     snapshot_status_counts,
     tombstone_reason_counts,
 )
@@ -58,6 +57,16 @@ def test_parse_tombstone_reason_recognized() -> None:
     assert parse_tombstone_reason("[tombstone: too_many_redirects]") == (
         "too_many_redirects"
     )
+
+
+def test_parse_tombstone_reason_matches_the_real_writer() -> None:
+    """Pins the parser to `lode.externals.tombstone_body`'s actual format.
+
+    Without this, a format change there would silently bucket every real
+    tombstone as "other" instead of failing anything.
+    """
+    for reason in ("empty_extract", "http_403", "dead"):
+        assert parse_tombstone_reason(tombstone_body(reason)) == reason
 
 
 def test_parse_tombstone_reason_unrecognized_bucket_is_other() -> None:
