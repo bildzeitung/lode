@@ -100,9 +100,9 @@ The remaining ~130 files are ordinary tests, organized by what they cover:
   and the eval harness that scores it (`test_eval_live.py` is a live-credentials integration test,
   self-skipping when `ANTHROPIC_API_KEY` is unset).
 - **Enrichment / curation / staleness** — `test_enrich.py`, `test_enrichment_view.py`,
-  `test_curation.py`, `test_display.py`, `test_staleness.py`, `test_redact.py`, `test_drawdown.py`,
-  `test_capture_lag_diagnosis.py` — the Haiku-driven enrichment pass and the annotation/edge
-  suppression, staleness, and redaction rules layered on top of it.
+  `test_curation.py`, `test_display.py`, `test_staleness.py`, `test_redact.py`, `test_drawdown.py`
+  — the Haiku-driven enrichment pass and the annotation/edge suppression, staleness, and redaction
+  rules layered on top of it.
 - **Async work queue** — `test_worker.py`, `test_jobs.py`, `test_reconcile.py`, `test_lock.py`,
   `test_backfill.py`, `test_progress.py`, `test_latency_probe.py` — the durable job queue, its worker
   loop, single-instance locking, and per-connector backfill.
