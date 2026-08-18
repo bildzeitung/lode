@@ -220,6 +220,33 @@ def test_workflow_pins_match_their_sources() -> None:
     )
 
 
+def test_validate_mermaid_and_update_images_pin_match_build_docs_site() -> None:
+    """docs/stack.md mandates ONE mermaid-cli image shared by every consumer
+    -- not a second, independently-versioned copy (lode-3ld8). Nothing but
+    this test keeps scripts/validate-mermaid.sh's merge-gate pin and
+    scripts/update-images.sh's pull in sync with the docs-site render pin.
+
+    A drift here means the merge gate validates diagrams against one parser
+    version while the docs site renders them with another -- a diagram could
+    pass CI and still fail (or silently differ) when the site builds it.
+    """
+    validate_mermaid = (REPO_ROOT / "scripts" / "validate-mermaid.sh").read_text(
+        encoding="utf-8"
+    )
+    assert f'IMAGE="{build_docs_site.MERMAID_IMAGE}"' in validate_mermaid, (
+        f"scripts/validate-mermaid.sh must pin IMAGE to "
+        f"{build_docs_site.MERMAID_IMAGE} -- the same tag "
+        "scripts/build_docs_site.py renders the docs site with."
+    )
+    update_images = (REPO_ROOT / "scripts" / "update-images.sh").read_text(
+        encoding="utf-8"
+    )
+    assert f"docker pull {build_docs_site.MERMAID_IMAGE}" in update_images, (
+        f"scripts/update-images.sh must pull {build_docs_site.MERMAID_IMAGE} -- "
+        "the same tag scripts/build_docs_site.py renders the docs site with."
+    )
+
+
 def test_mkdocs_material_pin_matches_pyproject() -> None:
     """CI and a local `nox -s docs`/`mkdocs build` must render with the SAME
     mkdocs-material (lode-fhql.9 HUMAN DECISION 2026-08-14) -- pyproject.toml's

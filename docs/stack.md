@@ -977,6 +977,14 @@ renderer and wiring its failure into the CI workflow's exit status is `lode-fhql
 this section fixes is the *contract* `.9` builds against — pre-render through the pinned image, embed
 the result, never ship a live client-side Mermaid require.
 
+`lode-fhql.9` as landed temporarily shipped a second, independently-versioned pin (a defensible split
+at the time: `.9`'s own acceptance required a pinned toolchain, while `validate-mermaid.sh` still
+floated `:latest`). `lode-3ld8` closed that split: `scripts/validate-mermaid.sh` and
+`scripts/update-images.sh` now pin the same `minlag/mermaid-cli` tag as
+`scripts/build_docs_site.py`'s `MERMAID_IMAGE`, kept in sync by
+`tests/test_build_docs_site.py::test_validate_mermaid_and_update_images_pin_match_build_docs_site` —
+this mandate is satisfied, not amended.
+
 ### Published / excluded page sets (user call, 2026-08-12)
 
 The site is about lode, not about how lode is made — it publishes a curated subset of `docs/`, not

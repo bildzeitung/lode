@@ -56,11 +56,12 @@ from lode.fence_parsing import fence_flags
 # surprise than in a pass/fail validation gate.
 #
 # docs/stack.md mandates ONE image shared with validate-mermaid.sh, "not a
-# second, independently-versioned copy" -- which the tag split above is, until
-# validate-mermaid.sh + update-images.sh move onto this same pin. Converging
-# them touches a repo-wide merge gate and is deliberately NOT folded into this
-# ticket; it is filed as lode-3ld8. Bump the two together once that lands.
-# tests/test_build_docs_site.py pins .github/workflows/docs.yml to this value.
+# second, independently-versioned copy" -- converged by lode-3ld8:
+# scripts/validate-mermaid.sh and scripts/update-images.sh now pin the same
+# tag as this constant. tests/test_build_docs_site.py's
+# test_workflow_pins_match_their_sources pins .github/workflows/docs.yml to
+# this value, and test_validate_mermaid_and_update_images_pin_match_build_docs_site
+# pins those two scripts to it too -- bump all three alongside this constant.
 MERMAID_IMAGE = "minlag/mermaid-cli:10.9.1"
 
 # docs/stack.md "Published / excluded page sets" (lode-fhql.8, current as of
