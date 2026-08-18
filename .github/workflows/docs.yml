@@ -104,13 +104,11 @@ jobs:
         #
         # THE TWO-COMMAND SPLIT BELOW IS LOAD-BEARING (lode-xx46) -- do not
         # collapse it back into one `pip install` line. `--no-deps` applies to
-        # EVERY requirement on a single pip install line, not just `-e .`; a
-        # collapsed line starves mkdocs-material and typer of their own
-        # dependency trees (typer 0.27.1 imports `annotated_doc` at module load
-        # and dies with ModuleNotFoundError when that tree is skipped). Keeping
-        # `-e .` on its own `--no-deps` line preserves the intent above while
-        # letting the pinned toolchain packages resolve their dependencies
-        # normally on the second, un-flagged line.
+        # EVERY requirement on the line, not just `-e .`, so a collapsed line
+        # also starves the pinned toolchain of ITS dependencies (typer 0.27.1
+        # imports `annotated_doc` at module load and dies with
+        # ModuleNotFoundError). Two lines keep lode dep-free while letting
+        # mkdocs-material and typer resolve normally.
         run: |
           pip install --no-deps -e .
           pip install "mkdocs-material==9.5.44" "typer==0.27.1"
