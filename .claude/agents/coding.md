@@ -473,18 +473,29 @@ above; `nox -s tests` fits well under `Bash`'s 600000ms timeout cap.
 
 ```bash
 ./scripts/python-init.sh              # first time / if no venv (builds ./venv itself)
-./venv/bin/nox -t fix             # ruff format + lint (fixes in place)
-./venv/bin/nox -s tests           # pytest
+./venv/bin/nox -t fix              # ruff format + lint (fixes in place) -- run first so its
+                                        # rewrites are already on disk for the full pass below
+./venv/bin/nox                     # the FULL default session set -- fix, tests, shellcheck,
+                                        # linkcheck, docstringcheck, docs (nox.options.sessions in
+                                        # noxfile.py). A bare invocation, not an enumerated list: it
+                                        # cannot silently lag noxfile.py's own default set the way
+                                        # naming `-t fix`/`-s tests` alone did (lode-vvt1 -- a
+                                        # shell-only branch went to review with `shellcheck` red
+                                        # because the gate list here never ran it).
 ```
 
-**Call the venv's `nox` by explicit path — never `. ./venv/bin/activate`, and never a bare `nox`**
-(lode-6874). The isolation guard refuses any sourced command (and any hand-rolled
+**Call the venv's `nox` by explicit path — never `. ./venv/bin/activate`, and never a bare `nox`
+command on `$PATH`** (lode-6874) — that's a distinct "bare" from the bare *session list* above: this
+rule is about how the binary is resolved (`./venv/bin/nox`, always), not about which sessions run
+once it is. The isolation guard refuses any sourced command (and any hand-rolled
 `VIRTUAL_ENV=...`/`PATH=...` too); `nox` isn't on `PATH` unactivated; and `noxfile.py`'s
 `_venv_tool()` (lode-0yfn) already resolves the tools under `./venv/bin` regardless of activation, so
 lode-jh80 is satisfied without it. A missing venv fails loudly on its own — `./venv/bin/nox` exits 127
 naming the path; re-run `./scripts/python-init.sh` and re-gate. On a branch whose base predates
-lode-0yfn, `-s tests` instead dies with `Program pytest not found` (no `_venv_tool()` yet) — run
-`./venv/bin/pytest` directly, which is equally guard-friendly. **This overrides CLAUDE.md's
+lode-0yfn, the `tests` session instead dies with `Program pytest not found` (no `_venv_tool()` yet) —
+run `./venv/bin/pytest` directly for that one, which is equally guard-friendly, then still run the
+other default sessions individually (`-s shellcheck`, `-s linkcheck`, `-s docstringcheck`, `-s docs`)
+since the bare invocation is unavailable on that base. **This overrides CLAUDE.md's
 Python-environment section**, which shows the activation form for a human at a terminal — correct
 there, refused here. Full mechanism:
 [docs/agents-workflow.md](../../docs/agents-workflow.md#gating-from-an-isolated-worktree-lode-6874).
@@ -495,15 +506,18 @@ Once the gates are green, stage and commit **everything the gate loop produced**
 made to fix a red gate and any files `nox -t fix` reformatted — either amending step 6's commit
 (`git commit --amend`) or adding a follow-up commit, then re-check `git status --short` is
 empty again before step 8. Until that commit lands, the tree the gates just certified is not the tree
-`land/<id>` would receive. For any change touching `docs/` diagrams:
+`land/<id>` would receive. For any change touching `docs/` diagrams — the `docs` default session
+builds the mkdocs site but does not itself validate mermaid syntax against GitHub's renderer, so this
+stays a separate, additional call:
 
 ```bash
 scripts/validate-mermaid.sh                          # parse every ```mermaid block
 ```
 
-A docs-only change has no Python gate — skip nox, but still validate mermaid if a diagram changed.
-**Gates must be green before I hand off.** Fix and re-run. (The reviewer re-gates after its fixes, but
-I hand off only a green branch.)
+**Gates must be green before I hand off** — the full bare `./venv/bin/nox` run above, regardless of
+whether the diff touches Python, shell, or docs: which sessions matter for a given diff is exactly
+the judgment call the bare invocation exists to remove (lode-vvt1). Fix and re-run. (The reviewer
+re-gates after its fixes, but I hand off only a green branch.)
 
 **Exit 2 from `validate-mermaid.sh` means the gate itself could not run — never that the mermaid is
 invalid** (distinct from exit 1, a real syntax failure) — see the [gate exit-code
@@ -756,8 +770,12 @@ target tree — and the same FOREGROUND-only rule from the non-negotiables appli
 
 ```bash
 ./scripts/python-init.sh              # a fresh worktree — always needs its own venv
-./venv/bin/nox -t fix             # ruff format + lint (fixes in place)
-./venv/bin/nox -s tests           # pytest
+./venv/bin/nox -t fix              # ruff format + lint (fixes in place)
+./venv/bin/nox                     # the FULL default session set -- fix, tests, shellcheck,
+                                        # linkcheck, docstringcheck, docs -- same bare invocation
+                                        # as the fresh-build cycle's step 7, for the same reason
+                                        # (lode-vvt1): it cannot silently lag noxfile.py's own
+                                        # default set the way naming individual sessions did.
 scripts/validate-mermaid.sh           # only if a docs/ diagram is in the branch
 ```
 
@@ -978,7 +996,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Rebase pickup | `needs-rebase` ticket → fetch + check out `land/<id>` into my own launch worktree, `git merge origin/trunk` (resolve a *mechanical* conflict directly with `Edit`; escalate a *genuine* one), re-gate, commit, **push it myself** (ordinary, non-force — a merge never rewrites origin), swap to `ready-for-land` myself (no review) (lode-cln) |
 | Rebase pickup's own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
 | Venv | `./venv` via `./scripts/python-init.sh` |
-| Gates | `./venv/bin/nox -t fix`, `./venv/bin/nox -s tests` — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn); `scripts/validate-mermaid.sh` for diagrams |
+| Gates | `./venv/bin/nox -t fix` then bare `./venv/bin/nox` — the FULL default session set (fix, tests, shellcheck, linkcheck, docstringcheck, docs), so the gate list can't silently lag `nox.options.sessions` (lode-vvt1) — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` command on `$PATH` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn); `scripts/validate-mermaid.sh` for diagrams |
 | Clean-tree assertion | `git status --short` empty before gating, before hand-off, and before a rebase-pickup push — `nox` gates the working tree, not `HEAD`, so **the tree that gated green must be the tree committed and pushed** (lode-tpt) |
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; follow them |
 | Design source of truth | `docs/` (settled), `docs/decisions.md` (open), `docs/configuration.md` (tunables) |
