@@ -475,12 +475,8 @@ above; the full default set (`tests` dominates it) fits well under `Bash`'s 6000
 ```bash
 ./scripts/python-init.sh              # first time / if no venv (builds ./venv itself)
 ./venv/bin/nox                        # the FULL default session set (nox.options.sessions in
-                                      # noxfile.py) -- `fix` runs first and rewrites in place, then
-                                      # every other default gate. A bare invocation, never an
-                                      # enumerated list: it cannot silently lag noxfile.py's own
-                                      # default set the way naming `-t fix`/`-s tests` alone did
-                                      # (lode-vvt1 -- a shell-only branch went to review with
-                                      # `shellcheck` red because the gate list here never ran it).
+                                      # noxfile.py); `fix` is its first session and rewrites in
+                                      # place. Bare, never an enumerated list -- see below.
 ```
 
 **Call the venv's `nox` by explicit path — never `. ./venv/bin/activate`, and never a bare `nox`
@@ -492,9 +488,9 @@ once it is. The isolation guard refuses any sourced command (and any hand-rolled
 lode-jh80 is satisfied without it. A missing venv fails loudly on its own — `./venv/bin/nox` exits 127
 naming the path; re-run `./scripts/python-init.sh` and re-gate. On a branch whose base predates
 lode-0yfn, the `tests` session instead dies with `Program pytest not found` (no `_venv_tool()` yet) —
-run `./venv/bin/pytest` directly for that one, which is equally guard-friendly, then still run the
-other default sessions individually (`-s shellcheck`, `-s linkcheck`, `-s docstringcheck`, `-s docs`)
-since the bare invocation is unavailable on that base. **This overrides CLAUDE.md's
+run `./venv/bin/pytest` directly for that one, then still run each of the other default sessions
+by name — read the current list out of `noxfile.py`'s `nox.options.sessions` rather than trusting one
+written down here. **This overrides CLAUDE.md's
 Python-environment section**, which shows the activation form for a human at a terminal — correct
 there, refused here. Full mechanism:
 [docs/agents-workflow.md](../../docs/agents-workflow.md#gating-from-an-isolated-worktree-lode-6874).
@@ -514,8 +510,10 @@ scripts/validate-mermaid.sh                          # parse every ```mermaid bl
 ```
 
 **Gates must be green before I hand off** — the full bare `./venv/bin/nox` run above, regardless of
-whether the diff touches Python, shell, or docs: which sessions matter for a given diff is exactly
-the judgment call the bare invocation exists to remove (lode-vvt1). Fix and re-run. (The reviewer
+whether the diff touches Python, shell, or docs. The invocation is bare on purpose: an enumerated
+list silently lags `noxfile.py`'s own default set, and deciding which sessions "matter" for a given
+diff is the judgment call this removes (lode-vvt1 — a shell-only branch reached review with
+`shellcheck` red because the gate list here never ran it). Fix and re-run. (The reviewer
 re-gates after its fixes, but I hand off only a green branch.)
 
 **Exit 2 from `validate-mermaid.sh` means the gate itself could not run — never that the mermaid is

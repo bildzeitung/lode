@@ -472,11 +472,10 @@ insurance against the worktree vanishing in the interval since:
 
 ```bash
 ./venv/bin/nox                        # the FULL default session set (nox.options.sessions in
-                                      # noxfile.py) -- `fix` runs first and rewrites in place, then
-                                      # every other default gate. A bare invocation, never an
-                                      # enumerated list: it cannot silently lag noxfile.py's own
-                                      # default set (lode-vvt1), which is the identical rule the
-                                      # builder now follows in .claude/agents/coding.md step 7.
+                                      # noxfile.py); `fix` is its first session and rewrites in
+                                      # place. Bare, never an enumerated list -- it cannot then lag
+                                      # noxfile.py's own default set (lode-vvt1); identical rule to
+                                      # the builder's step 7 in .claude/agents/coding.md.
 ./scripts/validate-mermaid.sh         # only if a docs/ diagram changed
 ```
 
@@ -488,9 +487,9 @@ command; `nox` isn't on `PATH` unactivated; and
 activation, so lode-jh80 is satisfied without it. A missing venv fails loudly on its own —
 `./venv/bin/nox` exits 127 naming the path; re-run `./scripts/python-init.sh` (step 3) and re-gate.
 On a branch whose base predates lode-0yfn, the `tests` session instead dies with `Program pytest not
-found` (no `_venv_tool()` yet) — run `./venv/bin/pytest` directly for that one, which is equally
-guard-friendly, then still run the other default sessions individually (`-s shellcheck`,
-`-s linkcheck`, `-s docstringcheck`, `-s docs`).
+found` (no `_venv_tool()` yet) — run `./venv/bin/pytest` directly for that one, then still run each
+of the other default sessions by name — read the current list out of `noxfile.py`'s
+`nox.options.sessions` rather than trusting one written down here.
 **This overrides CLAUDE.md's Python-environment section**, which shows the activation form for a
 human at a terminal — correct there, refused here. Full mechanism:
 [docs/agents-workflow.md](../../docs/agents-workflow.md#gating-from-an-isolated-worktree-lode-6874).
