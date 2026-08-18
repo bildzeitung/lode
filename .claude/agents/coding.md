@@ -64,9 +64,10 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   format are all stated once, in CLAUDE.md directive 9; I don't restate them here.
 - **Simplest thing that works.** No abstraction or flexibility that wasn't asked for. Ask before
   assuming intent; flag uncertainty explicitly rather than guessing.
-- **Never background a quality gate, and never end a turn with one pending.** `nox -t fix` and
-  `nox -s tests` run in the **FOREGROUND** via `Bash` (its timeout goes up to 600000ms, which
-  comfortably covers them) and I read their output **within the same turn** I launched them. The rule
+- **Never background a quality gate, and never end a turn with one pending.** The bare `nox`
+  gate run (the full default session set) runs in the **FOREGROUND** via `Bash` (its timeout goes up
+  to 600000ms, which comfortably covers it) and I read its output **within the same turn** I launched
+  it. The rule
   is about the *state I leave the turn in*, not about one tool: **if a gate is still running when I
   would otherwise yield, I have already broken it.** So — no `run_in_background: true` on a gate, no
   `Monitor` armed on one, no backgrounding it by any other means (`&`, `nohup`, a detached script),
@@ -469,19 +470,17 @@ git worktree unlock "$(git rev-parse --show-toplevel)"
 
 **Run these in the FOREGROUND, in the same turn, and read the output before doing anything else.**
 No `run_in_background`, no `Monitor`, no ending the turn on a pending gate — see the non-negotiable
-above; `nox -s tests` fits well under `Bash`'s 600000ms timeout cap.
+above; the full default set (`tests` dominates it) fits well under `Bash`'s 600000ms timeout cap.
 
 ```bash
 ./scripts/python-init.sh              # first time / if no venv (builds ./venv itself)
-./venv/bin/nox -t fix              # ruff format + lint (fixes in place) -- run first so its
-                                        # rewrites are already on disk for the full pass below
-./venv/bin/nox                     # the FULL default session set -- fix, tests, shellcheck,
-                                        # linkcheck, docstringcheck, docs (nox.options.sessions in
-                                        # noxfile.py). A bare invocation, not an enumerated list: it
-                                        # cannot silently lag noxfile.py's own default set the way
-                                        # naming `-t fix`/`-s tests` alone did (lode-vvt1 -- a
-                                        # shell-only branch went to review with `shellcheck` red
-                                        # because the gate list here never ran it).
+./venv/bin/nox                        # the FULL default session set (nox.options.sessions in
+                                      # noxfile.py) -- `fix` runs first and rewrites in place, then
+                                      # every other default gate. A bare invocation, never an
+                                      # enumerated list: it cannot silently lag noxfile.py's own
+                                      # default set the way naming `-t fix`/`-s tests` alone did
+                                      # (lode-vvt1 -- a shell-only branch went to review with
+                                      # `shellcheck` red because the gate list here never ran it).
 ```
 
 **Call the venv's `nox` by explicit path — never `. ./venv/bin/activate`, and never a bare `nox`
@@ -503,7 +502,7 @@ there, refused here. Full mechanism:
 A gate that fails after step 6's commit leaves my fix uncommitted — that's expected, not a problem, so
 long as I close the loop: **gate → (red? fix, re-gate) → green → commit whatever changed → clean.**
 Once the gates are green, stage and commit **everything the gate loop produced** — both the edits I
-made to fix a red gate and any files `nox -t fix` reformatted — either amending step 6's commit
+made to fix a red gate and any files the `fix` session reformatted — either amending step 6's commit
 (`git commit --amend`) or adding a follow-up commit, then re-check `git status --short` is
 empty again before step 8. Until that commit lands, the tree the gates just certified is not the tree
 `land/<id>` would receive. For any change touching `docs/` diagrams — the `docs` default session
@@ -770,19 +769,15 @@ target tree — and the same FOREGROUND-only rule from the non-negotiables appli
 
 ```bash
 ./scripts/python-init.sh              # a fresh worktree — always needs its own venv
-./venv/bin/nox -t fix              # ruff format + lint (fixes in place)
-./venv/bin/nox                     # the FULL default session set -- fix, tests, shellcheck,
-                                        # linkcheck, docstringcheck, docs -- same bare invocation
-                                        # as the fresh-build cycle's step 7, for the same reason
-                                        # (lode-vvt1): it cannot silently lag noxfile.py's own
-                                        # default set the way naming individual sessions did.
+./venv/bin/nox                        # the FULL default session set -- same bare invocation as the
+                                      # fresh-build cycle's step 7, for the same reason (lode-vvt1)
 scripts/validate-mermaid.sh           # only if a docs/ diagram is in the branch
 ```
 
 Same explicit-path form as the fresh-build cycle above — guard-friendly, and no activation needed
 (lode-6874); never hand-roll the activation.
 
-If `nox -t fix` reformats anything, commit it — step 3 already completed the merge commit, so this is
+If the `fix` session reformats anything, commit it — step 3 already completed the merge commit, so this is
 an ordinary commit on top of it, not something folded into the merge. **Gates must be green before I
 re-mark the ticket** — same bar as a fresh build.
 
@@ -996,7 +991,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Rebase pickup | `needs-rebase` ticket → fetch + check out `land/<id>` into my own launch worktree, `git merge origin/trunk` (resolve a *mechanical* conflict directly with `Edit`; escalate a *genuine* one), re-gate, commit, **push it myself** (ordinary, non-force — a merge never rewrites origin), swap to `ready-for-land` myself (no review) (lode-cln) |
 | Rebase pickup's own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
 | Venv | `./venv` via `./scripts/python-init.sh` |
-| Gates | `./venv/bin/nox -t fix` then bare `./venv/bin/nox` — the FULL default session set (fix, tests, shellcheck, linkcheck, docstringcheck, docs), so the gate list can't silently lag `nox.options.sessions` (lode-vvt1) — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` command on `$PATH` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn); `scripts/validate-mermaid.sh` for diagrams |
+| Gates | bare `./venv/bin/nox` — the FULL default session set (`nox.options.sessions`; `fix` is its first session), never an enumerated one, so the gate list can't silently lag `noxfile.py` (lode-vvt1) — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` command on `$PATH` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn); `scripts/validate-mermaid.sh` for diagrams |
 | Clean-tree assertion | `git status --short` empty before gating, before hand-off, and before a rebase-pickup push — `nox` gates the working tree, not `HEAD`, so **the tree that gated green must be the tree committed and pushed** (lode-tpt) |
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; follow them |
 | Design source of truth | `docs/` (settled), `docs/decisions.md` (open), `docs/configuration.md` (tunables) |

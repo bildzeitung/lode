@@ -139,7 +139,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > FETCH_HEAD` (a local name suffixed with your own launch worktree's directory — unique by
    > construction, so it never collides with a leftover checkout and the old `--detach` fallback is
    > never needed), `git merge
-   > origin/trunk`, re-gate (`nox -t fix` then the bare full default session set, `nox`), commit anything the gate loop produced,
+   > origin/trunk`, re-gate (a bare `./venv/bin/nox` — the full default session set, never an
+   > enumerated one), commit anything the gate loop produced,
    > then `git push origin HEAD:land/lode-ai1` (an ordinary push by explicit refspec — the merge only
    > appends, it never rewrites what's already on `land/lode-ai1`), refresh `land_head`/`land_summary`,
    > and swap `needs-rebase` straight to `ready-for-land` yourself. Do not merge, close, or push trunk.
