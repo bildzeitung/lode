@@ -124,7 +124,7 @@
 #
 #   SHOWN SAFE TO CONTINUE PAST -- deliberately unguarded:
 #     - `set -uo pipefail` itself, and the literal/parameter-expansion
-#       assignments `IMAGE="minlag/mermaid-cli:latest"` / `fail=0` /
+#       assignments `IMAGE="minlag/mermaid-cli:10.9.1"` / `fail=0` /
 #       `found=0` / `rel="docs/${f##*/}"` / `found=1` / `fail=1` / `rc=$?` --
 #       none of these can fail: a literal assignment to a plain variable
 #       can't, and parameter expansion (`${f##*/}`) can't either.
@@ -186,7 +186,16 @@
 # open -- worth remembering if a new variable reference is added here.
 set -uo pipefail
 
-IMAGE="minlag/mermaid-cli:latest"
+# Pinned to the SAME tag scripts/build_docs_site.py's MERMAID_IMAGE renders
+# the docs site with (lode-3ld8; converges the split lode-fhql.9 left behind
+# under a deliberate, documented deferral -- see MERMAID_IMAGE's own comment
+# there). Previously a floating `:latest`, which meant this merge gate and the
+# docs-site build could validate/render against two different mermaid.js
+# parser versions -- a diagram could pass this gate and still fail the site
+# build, or vice versa. tests/test_build_docs_site.py's
+# test_validate_mermaid_and_update_images_pin_match_build_docs_site keeps this
+# in sync with MERMAID_IMAGE; bump both together.
+IMAGE="minlag/mermaid-cli:10.9.1"
 
 # The ONE owner of the gate-could-not-run contract: the banner callers key on,
 # the caller's cause lines, the standing instruction to a reader, and exit 2.
