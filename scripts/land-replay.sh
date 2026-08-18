@@ -29,12 +29,13 @@
 #     of it, and takes every branch stacked on it with it
 #     (drop-from-accepted.sh already owns that reduction).
 #
-# THIS SCRIPT DOES RUN GATES (nox -t fix / nox -s tests / nox -s
-# lock_currency) -- unlike land-merge-batch.sh, which runs none. That is the
-# entire reason the isolation-replay loop exists: a combined merge can be
-# green with two branches each clean in isolation, so the only way to find
-# the culprit is to gate after every single merge, on a checkout no other
-# branch has touched. It also performs the two destructive resets this
+# THIS SCRIPT DOES RUN GATES (nox -t fix / nox -s tests / nox -t
+# everything-else / nox -s lock_currency) -- unlike land-merge-batch.sh,
+# which runs none. That is the entire reason the isolation-replay loop
+# exists: a combined merge can be green with two branches each clean in
+# isolation, so the only way to find the culprit is to gate after every
+# single merge, on a checkout no other branch has touched. It also
+# performs the two destructive resets this
 # whole path is named for: `git reset --hard <base-ref>` once, up front, and
 # `git reset --hard HEAD~1` per bounced branch.
 #
@@ -101,18 +102,24 @@
 #                     lode's tracked default branch is `trunk`.
 #
 # BASELINE GATES, before attributing anything (lode-sys4, extended to `nox -s
-# tests` by lode-kq4v, and to `nox -t fix` by lode-mps0). No gate this
-# script attributes is a pure function of the tree -- an ambient FORCE_COLOR
-# in the calling shell, a stale lock against today's PyPI, can turn a gate
-# red with no branch involved at all. So every gate run below is baselined
-# on bare --base-ref BEFORE the replay loop merges anything: if the baseline
-# itself is red, nothing in --accepted caused it, and this script stops
-# rather than blaming (and deleting) whichever branch happened to merge
-# first. `nox -t fix` baselines on BOTH its exit code (red) and its effect
-# on the tree (a reformat, possible even on exit 0) -- see the baseline
-# block below and docs/decisions.md (search "lode-mps0") for why a dirty
-# baseline reformat is gate-could-not-run, never committed invisibly or
-# discarded.
+# tests` by lode-kq4v, to `nox -t fix` by lode-mps0, and to `nox -t
+# everything-else` by lode-b9qy -- matching lode-6ldh's staged reviewer/land
+# gate policy, so a shellcheck/linkcheck/docstringcheck/docs regression a
+# merged branch introduces is reproduced here instead of silently missed).
+# No gate this script attributes is a pure function of the tree -- an
+# ambient FORCE_COLOR in the calling shell, a stale lock against today's
+# PyPI, can turn a gate red with no branch involved at all. So every gate
+# run below is baselined on bare --base-ref BEFORE the replay loop merges
+# anything: if the baseline itself is red, nothing in --accepted caused it,
+# and this script stops rather than blaming (and deleting) whichever branch
+# happened to merge first. `nox -t fix` baselines on BOTH its exit code
+# (red) and its effect on the tree (a reformat, possible even on exit 0) --
+# see the baseline block below and docs/decisions.md (search "lode-mps0")
+# for why a dirty baseline reformat is gate-could-not-run, never committed
+# invisibly or discarded. `nox -t everything-else` needs neither check --
+# every session in that bucket (shellcheck/linkcheck/docstringcheck/docs) is
+# a read-only check with no tracked-tree side effect, same as `nox -s
+# tests`, so it baselines on its exit code alone.
 #
 # Output (stdout), one line per id processed, in accepted-set order:
 #   LANDED\t<id>      merged AND gated clean; stays merged on the current
@@ -300,6 +307,11 @@ if ! nox -s tests; then
     "environment (FORCE_COLOR / NO_COLOR / TTY_COMPATIBLE / TTY_INTERACTIVE, lode-kq4v)" \
     "before assuming this is a genuine regression on '$BASE_REF' itself."
 fi
+if ! nox -t everything-else; then
+  gate_could_not_run "'nox -t everything-else' is red on bare '$BASE_REF', before any branch merged." \
+    "Not attributable to anything in --accepted -- '$BASE_REF' itself needs a human's fix" \
+    "(shellcheck/linkcheck/docstringcheck/docs bucket, lode-6ldh)."
+fi
 lc_rc=0
 nox -s lock_currency || lc_rc=$?
 case "$lc_rc" in
@@ -423,6 +435,24 @@ for id in $ACCEPTED_IDS; do
     tests_rc=$?
     escalate_unless_content "$tests_rc" \
       "'nox -s tests' failed with exit $tests_rc after merging '$id'." \
+      "Exit 1 is the only content verdict (lode-9i2p); a 127/126/signal here is a" \
+      "machine fault, not '$id''s verdict -- do NOT bounce it on the strength of this."
+    bounce "$id"
+    continue
+  fi
+
+  # lode-b9qy: the everything-else bucket
+  # (shellcheck/linkcheck/docstringcheck/docs), matching lode-6ldh's staged
+  # reviewer/land gate policy -- so a red finding in any of those a merged
+  # branch introduces is attributed to it here, not silently missed. Same
+  # `escalate_unless_content` partition, and the same arm shape, as the two
+  # gates above -- see their comment for why both are written this way.
+  if nox -t everything-else; then
+    :
+  else
+    everything_else_rc=$?
+    escalate_unless_content "$everything_else_rc" \
+      "'nox -t everything-else' failed with exit $everything_else_rc after merging '$id'." \
       "Exit 1 is the only content verdict (lode-9i2p); a 127/126/signal here is a" \
       "machine fault, not '$id''s verdict -- do NOT bounce it on the strength of this."
     bounce "$id"
