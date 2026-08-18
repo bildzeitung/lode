@@ -33,6 +33,7 @@ on:
       - "mkdocs.yml"
       - "scripts/build_docs_site.py"
       - "src/lode/docs_slug.py"
+      - "src/lode/fence_parsing.py"
       - ".github/workflows/docs.yml"
       - "pyproject.toml"
       - ".python-version"
@@ -61,6 +62,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        # Deliberately NO `fetch-depth: 0`, even though the install step below
+        # runs `pip install -e .` and build.yml/tests.yml/coverage.yml/release.yml
+        # all pair that with full history for setuptools-scm (lode-fhql.23).
+        # Those legs SHIP the version (a wheel/sdist filename, a release tag);
+        # this one only needs `import lode.docs_slug` to work. On a shallow,
+        # tagless checkout setuptools-scm does not fail -- it falls back to
+        # `0.1.devN+g<sha>` (reproduced against a `--depth 1 --no-tags` clone) --
+        # and nothing in the built site reads `lode.__version__`. Full history on
+        # the repo's heaviest CI leg would be paid for a version nobody reads.
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -77,7 +87,21 @@ jobs:
         # typer is here because scripts/build_docs_site.py is a Typer CLI like
         # every other Python CLI in the repo (docs/conventions.md); the pin
         # matches requirements.lock so the two can't drift silently.
-        run: pip install "mkdocs-material==9.5.44" "typer==0.27.1"
+        # `--no-deps -e .` (lode-fhql.23) installs the lode package itself --
+        # mkdocs.yml's `!!python/name:lode.docs_slug.github_slugify` slugify hook
+        # (lode-fhql.21) needs `lode.docs_slug` importable, which this step never
+        # provided before; locally the build passed only because ./venv already
+        # has lode installed via the normal dev setup.
+        # `--no-deps` is load-bearing, not an optimisation -- do not drop it. The
+        # only lode modules this job imports are `lode.docs_slug` and the
+        # `lode.fence_parsing` it pulls in, both pure-stdlib; without the flag pip
+        # would drag lode's ENTIRE unpinned runtime tree (textual, anthropic,
+        # openai, fastembed/onnxruntime, lancedb, pyarrow, ...) into the repo's
+        # heaviest CI leg, floating, in a step whose whole point is a pinned
+        # toolchain (lode-fhql.9's acceptance). A future docs build needing a
+        # dependency-carrying lode module fails loudly here with
+        # ModuleNotFoundError -- add that dependency explicitly and pinned.
+        run: pip install --no-deps -e . "mkdocs-material==9.5.44" "typer==0.27.1"
 
       # mermaid-cli's image is pulled once here rather than left to the
       # first `docker run` inside build_docs_site.py, so a pull failure
