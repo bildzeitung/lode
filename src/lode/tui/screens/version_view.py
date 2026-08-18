@@ -54,7 +54,9 @@ class VersionViewScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield _markdown_text_area(read_only=True, id=VERSION_BODY_ID)
+        yield _markdown_text_area(
+            read_only=True, id=VERSION_BODY_ID, theme=self.app.note_body_theme
+        )
         yield LodeFooter()
 
     def on_mount(self) -> None:
