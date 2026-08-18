@@ -259,7 +259,9 @@ def _rewrite_target(
         # relative link from the current page's directory, since the alias
         # target's filename differs from what the source markdown wrote.
         current_dir = posixpath.dirname(current_rel)
-        rel_to_alias = posixpath.relpath(alias[len("docs/") :], start=current_dir or ".")
+        rel_to_alias = posixpath.relpath(
+            alias[len("docs/") :], start=current_dir or "."
+        )
         return f"{rel_to_alias}#{fragment}" if fragment else rel_to_alias
 
     # Everything else -- an unpublished docs/ page, a repo-root file, a source

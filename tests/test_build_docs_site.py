@@ -71,11 +71,6 @@ EXCLUDED = {
         ("design.md", "#a-same-page-anchor", None),
         # Published -> unpublished: the one rewrite rule.
         ("design.md", "decisions.md", f"{BASE}/docs/decisions.md"),
-        (
-            "design.md",
-            "configuration.md#models",
-            f"{BASE}/docs/configuration.md#models",
-        ),
         ("how-to/README.md", "../stack.md", f"{BASE}/docs/stack.md"),
         # Repo-root and source files -- one level up out of docs/.
         ("design.md", "../README.md", f"{BASE}/README.md"),
