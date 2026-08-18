@@ -470,33 +470,37 @@ insurance against the worktree vanishing in the interval since:
 }
 ```
 
+**Blessed gate-invocation buckets (lode-6ldh, superseding lode-vvt1's bare-`nox`-everywhere
+policy — full fiat: [docs/conventions.md](../../docs/conventions.md)).** As the last gate before
+`trunk`, I run **all three buckets** — `fix`, the full `tests` session (not the builder's fast
+`unit` view), and every `everything-else` session — identical to `/land`'s post-merge re-gate and
+to this file's own rebase-pickup counterpart in `.claude/agents/coding.md`:
+
 ```bash
-./venv/bin/nox                        # the FULL default session set (nox.options.sessions in
-                                      # noxfile.py); `fix` is its first session and rewrites in
-                                      # place. Bare, never an enumerated list -- it cannot then lag
-                                      # noxfile.py's own default set (lode-vvt1); identical rule to
-                                      # the builder's step 7 in .claude/agents/coding.md.
+./venv/bin/nox -t fix                 # ruff format + lint (fixes in place)
+./venv/bin/nox -s tests               # the tests bucket's FULL view -- not `unit`, the builder's
+                                       # fast subset; this is the last gate before trunk
+./venv/bin/nox -t everything-else     # shellcheck + linkcheck + docstringcheck + docs
 ./scripts/validate-mermaid.sh         # only if a docs/ diagram changed
 ```
 
 **Call the venv's `nox` by explicit path — never `. ./venv/bin/activate`, and never a bare `nox`
-command on `$PATH`** (lode-6874) — a distinct "bare" from the bare *session list* above: this rule is
-about how the binary is resolved, not which sessions run. The isolation guard refuses any sourced
+command on `$PATH`** (lode-6874). The isolation guard refuses any sourced
 command; `nox` isn't on `PATH` unactivated; and
 `noxfile.py`'s `_venv_tool()` (lode-0yfn) already resolves the tools under `./venv/bin` regardless of
 activation, so lode-jh80 is satisfied without it. A missing venv fails loudly on its own —
 `./venv/bin/nox` exits 127 naming the path; re-run `./scripts/python-init.sh` (step 3) and re-gate.
-On a branch whose base predates lode-0yfn, the `tests` session instead dies with `Program pytest not
+On a branch whose base predates lode-0yfn, `-s tests` instead dies with `Program pytest not
 found` (no `_venv_tool()` yet) — run `./venv/bin/pytest` directly for that one, then still run each
-of the other default sessions by name — read the current list out of `noxfile.py`'s
+of the other buckets by their own session names — read the current list out of `noxfile.py`'s
 `nox.options.sessions` rather than trusting one written down here.
 **This overrides CLAUDE.md's Python-environment section**, which shows the activation form for a
 human at a terminal — correct there, refused here. Full mechanism:
 [docs/agents-workflow.md](../../docs/agents-workflow.md#gating-from-an-isolated-worktree-lode-6874).
 
-**Run the `nox` gate in the FOREGROUND, in the same turn, and read its output before doing
+**Run every gate in the FOREGROUND, in the same turn, and read its output before doing
 anything else.** No `run_in_background`, no `Monitor`, no ending the turn on a pending gate — see the
-non-negotiable above; the full default set (`tests` dominates it) fits well under `Bash`'s 600000ms
+non-negotiable above; the full `tests` session (the dominant cost) fits well under `Bash`'s 600000ms
 timeout cap. **Gates must be
 green before I mark `ready-for-land`.** Fix and re-run.
 
@@ -666,7 +670,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Technical review | correctness = **my own reasoning** against the diff, and nothing behind it — no `correctness-review` Workflow runs for me or before me (lode-rlyx removed it from the `/code` path; `/code-review` is separately user-gated and unreachable from any model context, lode-axyq); cleanup = **`/simplify`** (genuinely tool-backed); re-gate, keep last green; escalate only on a clarifying decision or "making it worse" |
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; flag violations |
 | Applying fixes | via **`Edit`/`Write`**, directly — my own worktree, no guard to work around |
-| Gates | bare `./venv/bin/nox` — the FULL default session set (`nox.options.sessions`; `fix` is its first session), never an enumerated one, so the gate list can't silently lag `noxfile.py` (lode-vvt1) — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn) — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree needs its own venv every time |
+| Gates | blessed bucket tags, ALL THREE (lode-6ldh): `nox -t fix`, `nox -s tests` (full, not the builder's `unit` view), `nox -t everything-else` — never an enumerated `everything-else` session by name, so the gate list can't silently lag `noxfile.py` (lode-vvt1) — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn) — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree needs its own venv every time |
 | Clean-tree assertions | `git status --short` empty before re-gating (step 5) and at exit (step 8) (lode-tpt) |
 | My own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
 | Commit trailer | `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>` |

@@ -1031,8 +1031,15 @@ check, which a skipped `nox -t fix` leaves clean.
 
 ```bash
 . ./venv/bin/activate
-nox -t fix && nox -s tests && nox -s lock_currency     # if nox -t fix reformats merged code, commit that as part of the merge result
+nox -t fix && nox -s tests && nox -t everything-else && nox -s lock_currency     # if nox -t fix reformats merged code, commit that as part of the merge result
 ```
+
+**`nox -t everything-else` (lode-6ldh, resolving lode-87v7) runs the everything-else bucket
+(`shellcheck`/`linkcheck`/`docstringcheck`/`docs`) against the MERGED batch, not just against each
+branch individually before the merge** — two independently-green branches that together break a
+doc anchor, a cross-file markdown link, or a shell lint would otherwise land red. `lock_currency`
+stays a separate, explicit call: it needs network and is not part of the blessed-tag bucket scheme
+(full fiat: `docs/conventions.md`).
 
 **`nox -s lock_currency` (lode-sys4) catches a stale `requirements.lock` here — locally, before the
 public CI badge does.** A branch that bumped a `pyproject.toml` dependency without regenerating the

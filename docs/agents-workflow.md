@@ -316,7 +316,7 @@ flowchart TD
     COMMIT --> CLEAN1{"git status --short<br>empty?"}
     CLEAN1 -->|"no"| COMMIT
     CLEAN1 -->|"yes"| GATES{"Quality gates"}
-    GATES -->|"bare nox (full default set) ·<br>validate-mermaid (if diagram)"| GFAIL{"Pass?"}
+    GATES -->|"nox -t fix · nox -s unit<br>(builder-side bucket subset) ·<br>validate-mermaid (if diagram)"| GFAIL{"Pass?"}
     GFAIL -->|"no"| FIX["Fix & re-run —<br>never hand off on a failing gate"]
     FIX --> GATES
     GFAIL -->|"yes"| FIXCOMMIT["Commit gate output<br>(fixes + fix-session reformatting)"]
@@ -343,9 +343,15 @@ flowchart TD
 
 ### Gating from an isolated worktree (lode-6874)
 
-**Agents gate with a bare `./venv/bin/nox` — the FULL default session set (`nox.options.sessions`
-in `noxfile.py`), never an enumerated one, so the gate list cannot silently lag `noxfile.py`
-(lode-vvt1) — and never activate the venv at all.**
+**Agents gate by blessed nox bucket tag — `fix`, `tests`, `everything-else` (lode-6ldh,
+superseding lode-vvt1's earlier bare-`nox`-everywhere rule; full fiat: `docs/conventions.md`) —
+never by enumerating an `everything-else` session individually, and never by activating the venv
+at all.** Coding builders run `fix` + the `tests` bucket's fast `unit` view; `code-reviewer` and
+`/land`'s post-merge re-gate run all three buckets (full `tests`, not `unit`, plus every
+`everything-else` session), since those are the last gates before `trunk`. A corpus-scan pytest
+gate (`tests/test_nox_bucket_gate.py`) fails the suite if a covered session carries zero or 2+
+of the three blessed tags, so the gate list cannot silently lag `noxfile.py` the way it did before
+lode-vvt1 (a `shellcheck` session missing from a hand-typed prose list).
 The isolation guard refuses any command that sources a file (`. ./venv/bin/activate` — "runs a
 string through `.`, which can't be verified to stay inside the worktree"), so the once-documented
 `./scripts/python-init.sh && . ./venv/bin/activate` was unrunnable by the very agents the docs
@@ -2250,7 +2256,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |
 | Design decisions | doc edits under `docs/`, never a bd note or memory (that forks the record) |
-| Gates | bare `./venv/bin/nox` — the FULL default session set, never an enumerated one (lode-vvt1); `scripts/validate-mermaid.sh` for diagram changes — never hand off / mark ready on a failing gate |
+| Gates | blessed nox bucket tags, staged by role (lode-6ldh): builders `nox -t fix` + `nox -s unit`; reviewer/`/land` `nox -t fix` + `nox -s tests` (full) + `nox -t everything-else` — never an enumerated `everything-else` session by name (lode-vvt1); `scripts/validate-mermaid.sh` for diagram changes — never hand off / mark ready on a failing gate |
 | Clean tree | `git status --short` empty before gating and before hand-off — `nox` gates the working tree, not `HEAD`, so the tree that gated green must be the tree committed and pushed; a dirty tree at either point silently drops uncommitted work (lode-tpt) |
 | CLI framework | **Typer** (never argparse); venv at `./venv` |
 | External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record it PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal ([full rationale above](#never-write-to-an-external-tracker-under-the-users-identity-lode-o29m); lode-o29m) |
@@ -2458,7 +2464,8 @@ building five are the same act, just a different count:
 
 Each builder (the `coding` agent, on **Sonnet**), in its worktree:
 
-1. **Claims and builds** the simplest thing that works; a bare `nox` (full default session set) green.
+1. **Claims and builds** the simplest thing that works; `nox -t fix` + `nox -s unit` (the builder-
+   side blessed-bucket subset, lode-6ldh) green.
 2. **Pushes the branch to origin** (`git push -u origin HEAD:land/<id>`) — the durable, cross-machine
    artifact (a *new* branch ref doesn't race `trunk`, so parallel producers stay safe).
 3. **Marks the ticket `ready-for-code-review`** with the review context (worktree path, branch, head
@@ -2574,7 +2581,7 @@ flowchart TD
     INV["bare /code · /code --single · /code &lt;id&gt; … · /code --all-ready"] --> N{"one or many?"}
     N -->|"one"| ONE["1 builder"]
     N -->|"many"| FAN["N builders<br>(parallel · isolated worktrees)"]
-    ONE --> BUILD["coding builder (Sonnet):<br>claim · build (simplest thing) ·<br>bare nox (full default set) green"]
+    ONE --> BUILD["coding builder (Sonnet):<br>claim · build (simplest thing) ·<br>nox -t fix · nox -s unit green"]
     FAN --> BUILD
     BUILD --> BESC{"build-time<br>clarifying decision?"}
     BESC -->|"yes"| BHOLD["Revert to green · push ·<br>record review_head ·<br>land-escalated · surface async"]
@@ -2964,7 +2971,9 @@ Concretely, the whole cycle stays inside the one dispatched `coding` producer, s
 - `git merge origin/trunk` (not `git rebase`) — a **mechanical** conflict (independent,
   non-overlapping additions) is resolved directly with `Edit`, `git add`, `git commit`; a **genuine
   disagreement** between the two sides still escalates to a human, unchanged from before,
-- re-gate (a bare `nox` — the full default session set), commit anything the gate loop produced,
+- re-gate at the reviewer/`/land` level — ALL three blessed nox bucket tags (`nox -t fix`,
+  `nox -s tests` full, `nox -t everything-else`, lode-6ldh), since this cycle swaps straight to
+  `ready-for-land` with no further review — commit anything the gate loop produced,
 - `git push origin HEAD:land/<id>` — an ordinary, non-force push by explicit refspec (regardless of
   what the local branch is named) to a ref that already exists on origin, because the merge commit
   descends from what's already there,
