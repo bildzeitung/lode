@@ -223,8 +223,8 @@ echo "$ACQUIRE_OUT"
 # empty token -- see scripts/land-lock.sh's own "acquired (token ...)"/
 # "acquired via reclaim (token ...)" stdout contract.
 printf '%s\n' "$ACQUIRE_OUT" \
-  | grep -oE 'token [0-9a-f]+' | cut -d' ' -f2 > "$(git rev-parse --git-dir)/land-lock-token"
-[ -s "$(git rev-parse --git-dir)/land-lock-token" ] || {
+  | grep -oE 'token [0-9a-f]+' | cut -d' ' -f2 > "$(git rev-parse --path-format=absolute --git-common-dir)/land-lock-token"
+[ -s "$(git rev-parse --path-format=absolute --git-common-dir)/land-lock-token" ] || {
   echo "land: could not parse this pass's own token out of: $ACQUIRE_OUT" >&2
   # RELEASE BEFORE BAILING. We hold the lock as of two lines ago, and this is the
   # only exit path in the whole skill that aborts while holding it -- without this,

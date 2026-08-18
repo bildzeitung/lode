@@ -1626,14 +1626,18 @@ _BLIND_OK = "land-lock-blind-ok"
 
 def test_land_skill_persists_its_own_acquire_token_for_later_blocks() -> None:
     """Section 0 must capture `acquire`'s printed token and write it to
-    `$(git rev-parse --git-dir)/land-lock-token` -- deliberately OUTSIDE
-    `$STATE_DIR` (lode-l7mj): Section 1's `rm -rf "$STATE_DIR"` would otherwise
-    destroy it before any consumer reads it (it did, in production, on every
-    pass -- see the mechanical execution test below). Nothing else can carry
-    the token forward: no shell state survives to the later, separate Bash
-    invocations that heartbeat and release (lode-sfnb), so if this write is
-    lost every later call site reads an empty token and silently degrades to
-    the blind, pre-lode-q9pm behaviour."""
+    `$(git rev-parse --path-format=absolute --git-common-dir)/land-lock-token`
+    -- deliberately OUTSIDE `$STATE_DIR` (lode-l7mj): Section 1's
+    `rm -rf "$STATE_DIR"` would otherwise destroy it before any consumer
+    reads it (it did, in production, on every pass -- see the mechanical
+    execution test below). Nothing else can carry the token forward: no
+    shell state survives to the later, separate Bash invocations that
+    heartbeat and release (lode-sfnb), so if this write is lost every later
+    call site reads an empty token and silently degrades to the blind,
+    pre-lode-q9pm behaviour. `--path-format=absolute --git-common-dir`, not
+    bare `--git-dir`, is required as of lode-k6h0: bare `--git-dir` is
+    worktree-PRIVATE, so a linked worktree's write would orphan the token
+    the shared reader (scripts/land-heartbeat.sh) looks for."""
     executed = LAND_SKILL_BASH
 
     # Match the WRITE specifically, not a bare mention of the filename: the
@@ -1641,11 +1645,15 @@ def test_land_skill_persists_its_own_acquire_token_for_later_blocks() -> None:
     # check stays green with the write itself deleted (measured by sabotage --
     # it did).
     assert re.search(
-        r'>\s*"\$\(git rev-parse --git-dir\)/land-lock-token"', executed
+        r">\s*\"\$\(git rev-parse --path-format=absolute --git-common-dir\)"
+        r'/land-lock-token"',
+        executed,
     ), (
-        "land/SKILL.md never WRITES $(git rev-parse --git-dir)/land-lock-token"
-        " -- every later heartbeat/release then reads an empty token and the "
-        "lode-q9pm ownership check is silently disabled for the whole pass"
+        "land/SKILL.md never WRITES $(git rev-parse --path-format=absolute "
+        "--git-common-dir)/land-lock-token -- every later heartbeat/release "
+        "then reads an empty token and the lode-q9pm ownership check is "
+        "silently disabled for the whole pass (or, from a linked worktree, "
+        "orphaned entirely -- lode-k6h0)"
     )
     assert '"$STATE_DIR/land-lock-token"' not in executed, (
         "land/SKILL.md still writes or reads the token under $STATE_DIR -- "

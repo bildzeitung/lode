@@ -242,3 +242,42 @@ def test_release_outside_any_git_repository_warns_and_exits_0(
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "not inside a git repository" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Repo-global token path (lode-k6h0) -- `--git-dir` is worktree-PRIVATE
+# ---------------------------------------------------------------------------
+
+
+def test_heartbeat_finds_the_token_when_run_from_a_linked_worktree(
+    tmp_path: Path,
+) -> None:
+    """The token is written at the shared `--git-common-dir` path (SKILL.md's
+    write site), so a reader that resolved a worktree-PRIVATE `--git-dir`
+    instead would look in the wrong place and find nothing -- the same
+    divergence `tests/test_land_lock.py`'s
+    `test_lock_path_is_identical_from_a_linked_worktree` exercises for the
+    lock file itself. This test is red against a bare `--git-dir` read (the
+    linked worktree's own private gitdir has no token file, so the script
+    would warn "no own-token available" and skip the heartbeat) and green
+    against `--path-format=absolute --git-common-dir`."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "test")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+    worktree = tmp_path / "wt"
+    _git(repo, "worktree", "add", "-q", str(worktree), "-b", "feat", "trunk")
+
+    # Acquire from the main checkout and stash the token at the shared,
+    # --git-common-dir path -- exactly what SKILL.md's write site does.
+    token = _acquire_and_write_token(repo)
+    before_epoch = int(_lock_path(repo).read_text().split()[2])
+
+    # Run the heartbeat from the LINKED WORKTREE, not the main checkout.
+    result = _run(repo=worktree)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "no own-token available" not in result.stderr
+    fields = _lock_path(repo).read_text().split()
+    assert int(fields[2]) >= before_epoch
+    assert fields[4] == token
