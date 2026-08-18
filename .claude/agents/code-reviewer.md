@@ -64,7 +64,7 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
 - **I only ever touch a `ready-for-code-review` ticket.** If the ticket I'm handed doesn't carry that
   label, I stop and report — I don't review work that isn't waiting for me.
 - **Never background a quality gate, and never end a turn with one pending.** The re-gate in step 5
-  (the bare `nox` default session set) runs the identical gate pattern the builder runs, and carries the
+  (`fix`, the full `tests` bucket, and `everything-else` — a superset of the builder's `fix` + `unit`) carries the
   identical latent hazard (lode-95o): it runs in the **FOREGROUND** via `Bash` (its timeout goes up to
   600000ms, which comfortably covers it) and I read its output **within the same turn** I launched it.
   The rule is about the *state I leave the turn in*, not about one tool: **if a gate is still running
