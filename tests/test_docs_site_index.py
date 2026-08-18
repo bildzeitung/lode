@@ -221,6 +221,24 @@ def test_published_top_level_matches_build_docs_site() -> None:
     )
 
 
+def test_published_dirs_matches_build_docs_site() -> None:
+    """The PUBLISHED_DIRS half of the same pair must agree too (lode-zznx).
+
+    Both modules carry a directory list beside the top-level one, and
+    test_published_set_matches_stack_md anchors BOTH of this module's literals
+    to docs/stack.md -- so leaving the directory pair uncrosschecked would
+    reopen exactly the gap the test above closes, one published directory at a
+    time.
+    """
+    script_dirs = set(build_docs_site.PUBLISHED_DIRS)
+    assert script_dirs == PUBLISHED_DIRS, (
+        "scripts/build_docs_site.py's PUBLISHED_DIRS and this module's "
+        "PUBLISHED_DIRS have drifted apart: "
+        f"only in build_docs_site.py: {sorted(script_dirs - PUBLISHED_DIRS)}; "
+        f"only in this test module: {sorted(PUBLISHED_DIRS - script_dirs)}."
+    )
+
+
 def test_mkdocs_yml_has_no_exclude_docs() -> None:
     """The staged-build docs_dir supersedes the exclude_docs mechanism.
 
