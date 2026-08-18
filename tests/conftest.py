@@ -695,10 +695,9 @@ def _reset_jobs_clock_anchor() -> None:
       patchable clock would need its own reset here.
     - This fixture is function-scoped, so it cannot protect *module*- or
       *session*-scoped fixture setup, which pytest runs before it. A
-      higher-scoped fixture that reaches ``jobs.now()`` therefore still sees
-      whatever the previous test left behind -- reachable today only via
-      ``tests/test_capture_lag_diagnosis.py``'s ``seeded_db``, which is
-      ``skipif``-gated and asserts nothing about job timestamps.
+      higher-scoped fixture that reaches ``jobs.now()`` would therefore still
+      see whatever the previous test left behind -- no such fixture exists
+      today, so this is a structural gap, not a live one.
     - It bounds a poison's lifetime; it does not prevent the leak. lode-e8lo
       fixed the leak at its source for the two ``test_cli.py`` tests, so no
       test currently runs under a process-global fake clock -- but a future
@@ -896,12 +895,6 @@ class _OfflineQueryEmbedder:
 #:   is a live production path one test away from leaking exactly as the panel
 #:   did. Patching one binding and not the other is the half-fix that gets
 #:   rediscovered.
-#:
-#: A module that binds the name at *import* time and is imported before the
-#: fixture runs — tests/test_capture_lag_diagnosis.py, the lag spike that wants
-#: the real ONNX model — keeps its own reference and is untouched. That is the
-#: correct outcome, and it is why that file needs no opt-out marker (it is also
-#: skipped unless ``LODE_DIAGNOSE_LAG=1``).
 _FASTEMBED_BINDINGS = ("lode.embedding", "lode.tui.services.related")
 
 
