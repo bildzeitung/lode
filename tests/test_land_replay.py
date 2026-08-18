@@ -57,6 +57,12 @@ case "$1$2" in
     else exit 0
     fi
     ;;
+  "-teverything-else")
+    if [ -f EVERYTHING_ELSE_FAULT_127 ]; then exit 127
+    elif [ -f EVERYTHING_ELSE_FAIL ]; then exit 1
+    else exit 0
+    fi
+    ;;
   *) echo "fake nox: unhandled args: $*" >&2; exit 3 ;;
 esac
 """
@@ -211,14 +217,18 @@ def test_landed_file_is_truncated_even_if_it_had_prior_content(
     assert landed.read_text() == "lode-a\n"
 
 
-@pytest.mark.parametrize("sentinel", ["TESTS_FAIL", "FIX_FAIL"])
+@pytest.mark.parametrize("sentinel", ["TESTS_FAIL", "FIX_FAIL", "EVERYTHING_ELSE_FAIL"])
 def test_a_branch_that_fails_a_nox_gate_is_bounced_and_backed_out(
     tmp_path: Path, sentinel: str
 ) -> None:
     """Exit 1 -- the one CONTENT verdict either per-branch nox gate has --
-    still bounces. Parametrized over both gates since lode-lmu9 split `nox -t
-    fix` and `nox -s tests` into separate arms: each arm now owns its own
-    bounce path, so neither is covered by the other."""
+    still bounces. Parametrized over all three gates since lode-lmu9 split
+    `nox -t fix` and `nox -s tests` into separate arms (each arm owns its own
+    bounce path, so neither is covered by the other), and lode-b9qy added
+    `nox -t everything-else` (shellcheck/linkcheck/docstringcheck/docs) as a
+    fourth per-branch gate, matching lode-6ldh's staged reviewer/land gate
+    policy -- a red finding there must be attributed to the branch that
+    introduced it, not silently missed."""
     repo = _init_repo(tmp_path)
     fake_nox = _fake_nox_bin(tmp_path)
     _branch_from(repo, "trunk", "origin/land/lode-good")
@@ -325,6 +335,10 @@ def test_a_real_conflict_drops_the_id_and_continues(tmp_path: Path) -> None:
         # that had never been baselined.
         ((("TESTS_FAIL", ""),), "'nox -s tests' is red"),
         ((("FIX_FAIL", ""),), "'nox -t fix' is red"),
+        # lode-b9qy: the everything-else bucket must be baselined too, same as
+        # tests/fix -- a red shellcheck/linkcheck/docstringcheck/docs on bare
+        # origin/trunk is unattributable to any branch in --accepted.
+        ((("EVERYTHING_ELSE_FAIL", ""),), "'nox -t everything-else' is red"),
         # `nox -t fix` exits 0 here but REFORMATS the tree anyway (the real
         # `fix` session's `ruff format .` can, even when nothing was
         # unfixable) -- must stop the same way a red gate does, never
@@ -337,7 +351,7 @@ def test_a_real_conflict_drops_the_id_and_continues(tmp_path: Path) -> None:
             "reformatted the bare base tree",
         ),
     ],
-    ids=["tests-red", "fix-red", "fix-reformat"],
+    ids=["tests-red", "fix-red", "fix-reformat", "everything-else-red"],
 )
 def test_baseline_failure_stops_before_merging_anything(
     tmp_path: Path, trunk_files: tuple[tuple[str, str], ...], fragment: str
@@ -529,17 +543,22 @@ def test_mid_loop_lock_currency_machine_fault_stops_the_pass(tmp_path: Path) -> 
 
 @pytest.mark.parametrize(
     ("sentinel", "gate"),
-    [("FIX_FAULT_127", "nox -t fix"), ("TESTS_FAULT_127", "nox -s tests")],
+    [
+        ("FIX_FAULT_127", "nox -t fix"),
+        ("TESTS_FAULT_127", "nox -s tests"),
+        ("EVERYTHING_ELSE_FAULT_127", "nox -t everything-else"),
+    ],
 )
 def test_mid_loop_nonverdict_nox_exit_stops_the_pass_without_bouncing(
     tmp_path: Path, sentinel: str, gate: str
 ) -> None:
-    """A 127 (nox not on PATH mid-run) from EITHER per-branch nox gate after a
+    """A 127 (nox not on PATH mid-run) from ANY per-branch nox gate after a
     clean merge is a machine fault, not that id's verdict -- it must stop the
     replay, never bounce the branch that happened to be merged when it hit
-    (lode-lmu9). Both gates are parametrized here rather than written twice:
-    they are two arms of one contract, and a change to one that is not
-    mirrored in the other is exactly what this pins."""
+    (lode-lmu9, extended to `nox -t everything-else` by lode-b9qy). All three
+    gates are parametrized here rather than written thrice: they are three
+    arms of one contract, and a change to one that is not mirrored in the
+    others is exactly what this pins."""
     repo = _init_repo(tmp_path)
     fake_nox = _fake_nox_bin(tmp_path)
     _branch_from(repo, "trunk", "origin/land/lode-a")
