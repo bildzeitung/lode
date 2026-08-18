@@ -1096,17 +1096,28 @@ that heading (`scripts/check_links.py::github_slug`, the algorithm the repo's li
 enforces), so one `#anchor` link resolves both on GitHub — via its own auto-generated heading
 anchor — and on the site, whose renderer slugs punctuation differently.
 
-**Publish-scope wiring is a follow-up, not this ticket's job — it is `lode-gecm`,** blocked on both
-`lode-fhql.9` and `lode-fhql.15`. So `keymap.md` and `settings.md` land in `docs/` **unpublished**:
-the live publish gate today is `scripts/build_docs_site.py`'s `PUBLISHED_TOP_LEVEL`/`PUBLISHED_DIRS`
-staging list plus `mkdocs.yml`'s `nav` (`lode-fhql.9`/`.10`, next section), and neither lists them.
-`lode-fhql.9` is being built concurrently in its own worktree and may reshape that gate, so wiring the
-two pages in from here would edit a sibling's in-flight file on a mechanism that may not survive;
-`lode-gecm` does it once, against whatever gate `trunk` actually carries at that point. The
-"`lode-fhql.15`'s derived pages take precedence once they exist"
-link-rewrite rule above already anticipates the same moment: once the pages are published, that rule
-resolves `keybindings.md`/`configuration.md` citations elsewhere in the published set to these two
-pages instead of falling through to GitHub.
+**Publish-scope wiring landed as `lode-7uze`**, once both `lode-fhql.9` (the staging gate itself) and
+`lode-fhql.15` (the derived pages) were on `trunk` — deferred at the time this section was first
+written because `lode-fhql.9` was still being built concurrently in its own worktree and could
+reshape the gate; wiring the two pages in from mid-flight would have edited a sibling's in-flight
+file on a mechanism that might not survive. `keymap.md` and `settings.md` are now listed in
+`scripts/build_docs_site.py`'s `PUBLISHED_TOP_LEVEL`, and the "`lode-fhql.15`'s derived pages take
+precedence once they exist" link-rewrite rule above is implemented: `DERIVED_PAGE_ALIASES` in that
+same script resolves a `keybindings.md`/`configuration.md` citation elsewhere in the published set to
+these two pages instead of falling through to GitHub — but **only when the derived page actually
+carries the cited anchor**. The derived pages are curated subsets of their maintainer sources, so a
+citation of a section they don't carry (e.g.
+`configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745`) keeps the GitHub blob
+URL: aliasing it would both lose the cited content and fail `mkdocs build --strict`, whose
+`validation.links.anchors: warn` treats a link to a nonexistent anchor as an error. (`lode-gecm`, the
+near-duplicate umbrella ticket that originally owned this follow-up, still stands open in the
+tracker; `lode-7uze` delivered its staging half, and the remainder is the nav wiring below —
+whether `lode-gecm` is closed as superseded is a human call, not one this branch makes.)
+
+Neither page is added to `mkdocs.yml`'s `nav` — reachable by direct URL once published, but not in
+the site menu. That is outside `lode-7uze`'s acceptance criteria and tracked as **`lode-kqeb`**. It
+is safe to ship in the meantime: `mkdocs.yml` sets `validation.nav.omitted_files: ignore`, so a
+staged page absent from `nav` does not fail `mkdocs build --strict`.
 
 ### mkdocs.yml scaffold and the landing page (lode-fhql.10)
 

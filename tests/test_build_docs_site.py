@@ -50,6 +50,8 @@ PUBLISHED = {
     "brand.md",
     "how-to/README.md",
     "how-to/config-change.md",
+    "keymap.md",
+    "settings.md",
 }
 BASE = build_docs_site.GITHUB_BASE
 
@@ -68,12 +70,6 @@ EXCLUDED = {
     "tui.md",
     "editing.md",
     "configuration.md",
-    # lode-fhql.15's derived reference pages -- exist in docs/ but are not
-    # yet wired into the PUBLISHED set. docs/stack.md ("Publish-scope wiring
-    # is a follow-up") explicitly defers that to lode-gecm, blocked on both
-    # this ticket and .15; unpublished-for-now, not an oversight.
-    "keymap.md",
-    "settings.md",
 }
 
 
@@ -91,11 +87,6 @@ EXCLUDED = {
         ("design.md", "#a-same-page-anchor", None),
         # Published -> unpublished: the one rewrite rule.
         ("design.md", "decisions.md", f"{BASE}/docs/decisions.md"),
-        (
-            "design.md",
-            "configuration.md#models",
-            f"{BASE}/docs/configuration.md#models",
-        ),
         ("how-to/README.md", "../stack.md", f"{BASE}/docs/stack.md"),
         # Repo-root and source files -- one level up out of docs/.
         ("design.md", "../README.md", f"{BASE}/README.md"),
@@ -107,6 +98,26 @@ EXCLUDED = {
         # Escapes the repo: no blob URL can express it, so leave it verbatim
         # rather than emit a confidently-wrong link.
         ("design.md", "../../elsewhere/x.md", None),
+        # lode-fhql.15's derived pages take precedence over the GitHub
+        # fallback (docs/stack.md): a citation of the maintainer doc resolves
+        # to its published, derived counterpart instead.
+        ("design.md", "keybindings.md", "keymap.md"),
+        ("design.md", "configuration.md", "settings.md"),
+        ("design.md", "configuration.md#models", "settings.md#models"),
+        # ...but only when the derived page HAS that anchor (see
+        # build_docs_site._alias_anchors); otherwise the GitHub blob URL wins.
+        (
+            "design.md",
+            "configuration.md#not-a-section-settings-md-carries",
+            f"{BASE}/docs/configuration.md#not-a-section-settings-md-carries",
+        ),
+        (
+            "how-to/README.md",
+            "../configuration.md#no-such-section",
+            f"{BASE}/docs/configuration.md#no-such-section",
+        ),
+        ("how-to/README.md", "../keybindings.md", "../keymap.md"),
+        ("how-to/README.md", "../configuration.md", "../settings.md"),
     ],
 )
 def test_rewrite_target(current: str, target: str, expected: str | None) -> None:
