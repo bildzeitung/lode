@@ -3348,7 +3348,8 @@ assumption would not have closed it.
   `--land-lock-blind` in place of a real token, reserved for exactly two call sites (below). What actually
   makes every real call site pass its own token, now backstopped by that script-level enforcement, is
   `.claude/skills/land/SKILL.md` plus three sabotage-verified pins in `tests/test_land_lock.py` — one that
-  Section 0 WRITES `$(git rev-parse --git-dir)/land-lock-token` at all, one over every executed
+  Section 0 WRITES `$(git rev-parse --path-format=absolute --git-common-dir)/land-lock-token` at all
+  (bare `--git-dir` until lode-k6h0 — see the path note below), one over every executed
   `heartbeat`/`release` call site in that skill, and one over `land-merge-one.sh`'s own two call sites.
   lode-yuwt's own scope note keeps all three (and lode-67nk's caller-side empty-token diagnostics, below)
   rather than deleting them: with the check now enforced at the script layer too, they are a redundant but
@@ -3389,7 +3390,8 @@ assumption would not have closed it.
   **What was true before lode-yuwt landed, kept here for anyone reading history or a pre-lode-yuwt
   diagnostic.** The pins above were always *textual* — they prove every call site spells `"$MY_TOKEN"` in
   the skill's source, not that the variable is non-empty at run time. Every read-back site reads
-  `$(git rev-parse --git-dir)/land-lock-token` with `2>/dev/null || true`, so if that file is missing or
+  `$(git rev-parse --git-dir)/land-lock-token` (the spelling of the day — lode-k6h0 later moved every
+  site onto `--path-format=absolute --git-common-dir`) with `2>/dev/null || true`, so if that file is missing or
   empty (a pass resumed mid-flight before Section 0 ever ran, an operator running a later section by hand
   with no prior `acquire` in this working tree) `$MY_TOKEN` comes back empty — before lode-yuwt this made
   the call proceed blind with no run-time enforcement; **after** lode-yuwt, `land-lock.sh` itself now
@@ -3412,8 +3414,20 @@ assumption would not have closed it.
   Because `.claude/skills/land/SKILL.md` runs every fenced `bash` block as its own, separate Bash tool
   invocation with no shell state surviving between them (lode-sfnb, same constraint as the single-lander
   lock design itself, above), Section 0's `acquire` block captures the printed token and writes it to
-  `$(git rev-parse --git-dir)/land-lock-token` — every later `heartbeat`/`release` call site re-reads
-  that file into `$MY_TOKEN` before calling `land-lock.sh`. `scripts/land-merge-one.sh` (invoked from
+  `$(git rev-parse --path-format=absolute --git-common-dir)/land-lock-token` — every later
+  `heartbeat`/`release` call site re-reads that file into `$MY_TOKEN` before calling `land-lock.sh`.
+
+  **For the TOKEN FILE the path idiom is `--path-format=absolute --git-common-dir`, never bare
+  `--git-dir` (lode-k6h0).** Scoped to the token deliberately: `$STATE_DIR` in the same fences stays
+  on bare `--git-dir` — it is per-pass scratch, not lock state, and nothing outside the pass reads it.
+  Both idioms resolve identically in the main checkout — the only place `/land` runs
+  (`scripts/assert-main-checkout.sh`) — but bare `--git-dir` is worktree-PRIVATE: from a linked
+  worktree it names that worktree's own gitdir, so a writer and a reader that disagree on the idiom
+  would put the token somewhere the other never looks and the ownership check would silently degrade
+  (or the lock would be held until it ages out). The write site in `.claude/skills/land/SKILL.md`, its
+  two Section 3 read-back sites, and `scripts/land-heartbeat.sh`'s read all use the one idiom, and
+  `tests/test_land_lock.py`'s pins spell it exactly — they must move together or not at all. This is
+  the same idiom `scripts/land-lock.sh` already uses for the lock file itself (lode-xkpd). `scripts/land-merge-one.sh` (invoked from
   Section 3's two merge loops) takes the same token as an optional third positional argument *at its own
   argument level* (kept optional there so a direct invocation without a token still runs, unblocked), for
   the identical reason: it is a script called *from* a fenced block, not a block that could read the file
@@ -3431,7 +3445,7 @@ assumption would not have closed it.
   directory as per-pass scratch hygiene (lode-wjw4), which ran *after* Section 0 wrote the token and
   before any consumer read it, silently disabling the ownership check on every single pass (not a
   corner case reachable only via a wiped or resumed state dir — the default, every time). The token is
-  lock state, not per-pass scratch, so it now sits in `$(git rev-parse --git-dir)` itself — beside
+  lock state, not per-pass scratch, so it now sits in the repo-global git dir itself — beside
   `.git/land.lock` whenever `/land` runs where it is supposed to, in the main checkout — a location
   Section 1's wipe was never scoped to touch and does not need to be taught about. This was
   chosen over the two alternatives that *do* touch `$STATE_DIR`'s wipe: writing the token after
