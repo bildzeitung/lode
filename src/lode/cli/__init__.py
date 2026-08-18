@@ -500,6 +500,7 @@ _COMMAND_MODULES = (
     "notes",
     "show",
     "status",
+    "stats",
     "reembed",
     "reindex_lexical",
     "reenrich",

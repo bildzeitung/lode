@@ -124,6 +124,7 @@ annotations/edges against ``external_id``.
 from __future__ import annotations
 
 import math
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -171,6 +172,23 @@ def tombstone_body(reason: str) -> str:
     the same convention rather than inventing their own body text.
     """
     return f"[tombstone: {reason}]"
+
+
+#: Inverse of :func:`tombstone_body` -- kept beside the writer so the two
+#: cannot drift across a module boundary (lode-tyhy).
+_TOMBSTONE_BODY_RE = re.compile(r"^\[tombstone: (.+)\]$")
+
+
+def parse_tombstone_reason(body: str) -> str:
+    """Extract the machine tag from a tombstone snapshot's ``body``.
+
+    Tolerant by design: a body that does not match the shape
+    :func:`tombstone_body` writes -- a hand-written tombstone, a future
+    format, any corruption -- buckets as ``"other"`` rather than raising.
+    Never meaningful against an ``"ok"``-status snapshot's body.
+    """
+    match = _TOMBSTONE_BODY_RE.match(body)
+    return match.group(1) if match else "other"
 
 
 def _insert_external(
