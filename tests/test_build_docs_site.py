@@ -16,8 +16,24 @@ from pathlib import Path
 import pytest
 import yaml
 from conftest import load_module_from_path
+from test_skill_bash_state import _strip_comment
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _uncommented_lines(text: str) -> list[str]:
+    """Shell lines that actually execute -- comments and blanks dropped.
+
+    Comment stripping is delegated to ``test_skill_bash_state._strip_comment``
+    (the suite's existing quote-aware stripper, already shared by two other
+    gates) rather than re-rolled here.
+    """
+    return [
+        stripped
+        for line in text.splitlines()
+        if (stripped := _strip_comment(line).strip())
+    ]
+
 
 build_docs_site = load_module_from_path(
     "build_docs_site", REPO_ROOT / "scripts" / "build_docs_site.py"
@@ -229,22 +245,38 @@ def test_validate_mermaid_and_update_images_pin_match_build_docs_site() -> None:
     A drift here means the merge gate validates diagrams against one parser
     version while the docs site renders them with another -- a diagram could
     pass CI and still fail (or silently differ) when the site builds it.
+
+    Both checks read the scripts' *executable* lines only: validate-mermaid.sh
+    quotes its own ``IMAGE=`` assignment inside a long explanatory comment, so
+    a whole-file substring match would stay green even if the live assignment
+    were reverted to a floating tag.
     """
-    validate_mermaid = (REPO_ROOT / "scripts" / "validate-mermaid.sh").read_text(
-        encoding="utf-8"
-    )
-    assert f'IMAGE="{build_docs_site.MERMAID_IMAGE}"' in validate_mermaid, (
-        f"scripts/validate-mermaid.sh must pin IMAGE to "
-        f"{build_docs_site.MERMAID_IMAGE} -- the same tag "
-        "scripts/build_docs_site.py renders the docs site with."
-    )
-    update_images = (REPO_ROOT / "scripts" / "update-images.sh").read_text(
-        encoding="utf-8"
-    )
-    assert f"docker pull {build_docs_site.MERMAID_IMAGE}" in update_images, (
-        f"scripts/update-images.sh must pull {build_docs_site.MERMAID_IMAGE} -- "
-        "the same tag scripts/build_docs_site.py renders the docs site with."
-    )
+    for script, pattern in (
+        (
+            "validate-mermaid.sh",
+            rf'^IMAGE="{re.escape(build_docs_site.MERMAID_IMAGE)}"$',
+        ),
+        (
+            "update-images.sh",
+            rf"^docker pull {re.escape(build_docs_site.MERMAID_IMAGE)}$",
+        ),
+    ):
+        code = _uncommented_lines((REPO_ROOT / "scripts" / script).read_text("utf-8"))
+        assert any(re.match(pattern, line) for line in code), (
+            f"scripts/{script} must use {build_docs_site.MERMAID_IMAGE} on an "
+            "executable line -- the same tag scripts/build_docs_site.py renders "
+            f"the docs site with. Found: {[m for m in code if 'mermaid-cli' in m]}"
+        )
+        others = [
+            line
+            for line in code
+            if "minlag/mermaid-cli" in line
+            and build_docs_site.MERMAID_IMAGE not in line
+        ]
+        assert not others, (
+            f"scripts/{script} references a second mermaid-cli tag: {others}. "
+            "docs/stack.md mandates ONE shared pin."
+        )
 
 
 def test_mkdocs_material_pin_matches_pyproject() -> None:
