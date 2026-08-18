@@ -30,6 +30,7 @@ never a silent partial build.
 
 from __future__ import annotations
 
+import functools
 import os
 import posixpath
 import re
@@ -45,8 +46,10 @@ import typer
 # src/ on the path so the fence rule below comes from lode.fence_parsing --
 # the ONE importable home of it (lode-ee7b) -- without this CI job having to
 # `pip install` the package. Same approach as scripts/check_docstring_refs.py.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO_ROOT / "src"))
 
+from lode.docs_slug import anchor_slugs
 from lode.fence_parsing import fence_flags
 
 # The pinned mermaid-cli image. Deliberately NOT `:latest` (scripts/validate-
@@ -76,13 +79,8 @@ PUBLISHED_TOP_LEVEL = [
     "storage.md",
     "externals.md",
     "brand.md",
-    # lode-fhql.15's derived reference pages, wired in by lode-7uze. Each
-    # links back to its maintainer source (keybindings.md / configuration.md)
-    # by GitHub URL for whoever needs the full doc -- see DERIVED_PAGE_ALIASES
-    # below for the reverse: citations of the maintainer doc elsewhere in the
-    # published set resolve to these derived pages instead of falling through
-    # to a GitHub blob URL (docs/stack.md, lode-fhql.8/.9 "derived pages take
-    # precedence once they exist").
+    # lode-fhql.15's derived reference pages, wired in by lode-7uze.
+    # See DERIVED_PAGE_ALIASES below for the link precedence they get.
     "keymap.md",
     "settings.md",
 ]
@@ -91,12 +89,12 @@ PUBLISHED_DIRS = ["how-to"]
 # docs/stack.md ("`lode-fhql.15`'s derived pages take precedence once they
 # exist"): a link elsewhere in the published set that cites one of these
 # maintainer docs resolves to its derived, published counterpart instead of
-# falling through to the one GITHUB_BASE rewrite rule. Keyed and valued by
-# root-relative (repo-root, POSIX) path, matching _rewrite_target's
-# root_rel_str.
+# falling through to the one GITHUB_BASE rewrite rule. Keyed by repo-root-
+# relative POSIX path (matching _rewrite_target's root_rel_str), valued
+# docs-relative (matching the published set).
 DERIVED_PAGE_ALIASES = {
-    "docs/keybindings.md": "docs/keymap.md",
-    "docs/configuration.md": "docs/settings.md",
+    "docs/keybindings.md": "keymap.md",
+    "docs/configuration.md": "settings.md",
 }
 
 # Static assets the theme (mkdocs.yml: theme.logo/favicon, docs/overrides/
@@ -115,6 +113,25 @@ _LINK_RE = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)\s]+)\)")
 # as an EXAMPLE inside backticks (or inside a fenced block) is documentation,
 # not a link, and rewriting it would corrupt the published page.
 _INLINE_CODE_RE = re.compile(r"`[^`]*`")
+
+
+@functools.cache
+def _alias_anchors(rel: str) -> frozenset[str]:
+    """Anchors the derived page `rel` (docs-relative) actually offers.
+
+    Read from `docs/` -- the tree `build()` stages FROM, so the staged copy
+    carries the same anchors. Cached: `DERIVED_PAGE_ALIASES` has two values,
+    so this reads at most two files per run.
+
+    Used to decide whether an aliased link's fragment survives the rewrite:
+    mkdocs.yml sets `validation.links.anchors: warn`, which `mkdocs build
+    --strict` turns into a build failure, so pointing a link at an anchor the
+    derived page does not have is worse than leaving it on GitHub.
+    """
+    path = _REPO_ROOT / "docs" / rel
+    if not path.is_file():
+        return frozenset()
+    return frozenset(anchor_slugs(path.read_text(encoding="utf-8")))
 
 
 def _published_set(docs_dir: Path) -> set[str]:
@@ -252,16 +269,17 @@ def _rewrite_target(
     if root_rel_str.startswith("docs/") and root_rel_str[len("docs/") :] in published:
         return None  # stays a plain relative link between published pages
 
+    # A citation of a maintainer doc resolves to its derived, published
+    # counterpart -- but a fragment only survives if that page HAS the anchor
+    # (the derived pages are curated subsets; see _alias_anchors). Anything
+    # else falls through to the GitHub blob URL below, which still resolves to
+    # exactly what was cited.
     alias = DERIVED_PAGE_ALIASES.get(root_rel_str)
-    if alias is not None and alias[len("docs/") :] in published:
-        # A citation of the maintainer doc resolves to its derived, published
-        # counterpart instead of falling through to GitHub -- compute a fresh
-        # relative link from the current page's directory, since the alias
+    if alias in published and (not fragment or fragment in _alias_anchors(alias)):
+        # A fresh relative link from the current page's directory: the alias
         # target's filename differs from what the source markdown wrote.
         current_dir = posixpath.dirname(current_rel)
-        rel_to_alias = posixpath.relpath(
-            alias[len("docs/") :], start=current_dir or "."
-        )
+        rel_to_alias = posixpath.relpath(alias, start=current_dir or ".")
         return f"{rel_to_alias}#{fragment}" if fragment else rel_to_alias
 
     # Everything else -- an unpublished docs/ page, a repo-root file, a source

@@ -88,6 +88,18 @@ EXCLUDED = {
         ("design.md", "keybindings.md", "keymap.md"),
         ("design.md", "configuration.md", "settings.md"),
         ("design.md", "configuration.md#models", "settings.md#models"),
+        # ...but only when the derived page HAS that anchor (see
+        # build_docs_site._alias_anchors); otherwise the GitHub blob URL wins.
+        (
+            "design.md",
+            "configuration.md#not-a-section-settings-md-carries",
+            f"{BASE}/docs/configuration.md#not-a-section-settings-md-carries",
+        ),
+        (
+            "how-to/README.md",
+            "../configuration.md#no-such-section",
+            f"{BASE}/docs/configuration.md#no-such-section",
+        ),
         ("how-to/README.md", "../keybindings.md", "../keymap.md"),
         ("how-to/README.md", "../configuration.md", "../settings.md"),
     ],
