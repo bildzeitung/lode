@@ -1506,6 +1506,33 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
     }
 
 
+def nox_session_tags(node: ast.FunctionDef) -> list[str]:
+    """The strings in this session's ``@nox.session(tags=[...])``, if any.
+
+    Shared rather than copied because two gate tests read the same decorator
+    for different questions -- ``test_nox_session_inventory.py`` derives a
+    session's canonical CLI invocation from its tag, and
+    ``test_nox_bucket_gate.py`` (lode-6ldh) checks bucket registration. Two
+    copies would mean a change to the decorator form (a tuple instead of a
+    list, a tag passed via a variable) fixes one caller and leaves the other
+    silently reading every session as untagged -- which in the bucket gate
+    reads as a finding, not as a broken parse.
+    """
+    for dec in node.decorator_list:
+        if not (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)):
+            continue
+        if dec.func.attr != "session":
+            continue
+        for kw in dec.keywords:
+            if kw.arg == "tags" and isinstance(kw.value, ast.List):
+                return [
+                    elt.value
+                    for elt in kw.value.elts
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                ]
+    return []
+
+
 # --- Fenced ```bash/```sh block parsing (lode-ovgs, lode-p4qb) --------------
 #
 # THE ONE parser for "which bash does an agent actually execute", for the gates

@@ -1,25 +1,46 @@
 """Nox sessions for lode's dev loop.
 
-Two entry points are REQUIRED before any merge (CLAUDE.md) -- a narrower claim
-than "runs by default": a bare ``nox`` invocation actually runs all SIX
-sessions in ``nox.options.sessions`` below (``fix``, ``tests``, ``shellcheck``,
-``linkcheck``, ``docstringcheck``, ``docs``), but CLAUDE.md's merge gate only names these two:
+**Blessed gate-invocation buckets (lode-6ldh, superseding lode-vvt1's bare-nox-everywhere
+rule).** Every DEFAULT-set session (plus ``unit``) carries exactly one of three nox tags --
+``fix`` (unchanged), ``tests``, or ``everything-else`` -- and instruction-file gate prose
+(``coding.md``, ``code-reviewer.md``, ``code/SKILL.md``, ``docs/agents-workflow.md``) invokes
+gates by TAG (``nox -t fix``, ``nox -t everything-else``), never by enumerating individual
+session names -- with ONE deliberate exception, the ``tests`` bucket, which is invoked by
+session name (``nox -s unit`` for builders, ``nox -s tests`` for the reviewer and ``/land``)
+because ``nox -t tests`` would select BOTH of its views and run a redundant second pytest pass.
+A corpus-scan pytest gate (``tests/test_nox_bucket_gate.py``) fails the suite if
+a covered session carries zero or 2+ of these tags, so a newly-added session can't silently go
+ungated the way ``shellcheck`` did (lode-vvt1). Full fiat text: ``docs/conventions.md``.
 
-    nox -t fix      ruff format + ruff check --fix   (the pre-merge fixer)
-    nox -s tests    pytest                           (the test gate — the FULL suite,
-                                                        every test, no marker filter;
-                                                        this is what /land re-gates with)
+**Bucket membership:**
 
-The other four sessions in the default set, not required-before-merge by name
-but still part of a bare ``nox`` run:
+    fix (tag)               ruff format + ruff check --fix          invoke: nox -t fix
+    tests (tag)             tests + unit -- two VIEWS of one         invoke: nox -s tests (full)
+                              bucket; unit is tests' fast,                   or nox -s unit (fast)
+                              not-slow-marked projection (lode-pql)          -- NEVER `-t tests`,
+                                                                             which selects both
+    everything-else (tag)   shellcheck + linkcheck +                 invoke: nox -t everything-else
+                              docstringcheck + docs
 
-    nox -s shellcheck      lint every tracked shell script (--severity=warning)
-    nox -s linkcheck       verify every relative markdown link in docs/ and .claude/ resolves (lode-dkdg)
-    nox -s docstringcheck  verify every symbol-naming Sphinx role naming a lode.* symbol
-                             in src/ and tests/ resolves to a real symbol (lode-8oeu)
-    nox -s docs            build the mkdocs site and fail on a broken intra-doc anchor (lode-fhql.20)
+**Staged gate policy (who runs what, lode-6ldh):**
 
-Plus FIVE opt-in sessions that are **not** in the default set:
+    coding builders                 nox -t fix, then nox -s unit ONLY (lode-6ldh amendment: the
+                                     fast not-slow subset, not the full serial+slow tests run --
+                                     keeps per-builder gate cost at the fast inner-loop baseline)
+    code-reviewer / /land re-gate   nox -t fix, nox -s tests (full, not unit), and
+                                     nox -t everything-else -- ALL buckets, since these are the
+                                     last gates before trunk (resolves lode-87v7's gap)
+
+A bare ``nox`` invocation runs all SIX sessions in ``nox.options.sessions`` below (``fix``,
+``tests``, ``shellcheck``, ``linkcheck``, ``docstringcheck``, ``docs``) -- that default set is
+unaffected by the bucket scheme above, which only governs how instruction-file gate PROSE
+invokes a subset of them.
+
+Plus FIVE opt-in sessions that are **not** in the default set, and (aside from ``unit``, folded
+into the ``tests`` bucket above) NOT part of the ``tests``/``everything-else`` bucket scheme --
+the other four are invoked directly by name in their own narrow contexts (CI workflows,
+``/land``'s explicit ``lock_currency`` call), never through instruction-file gate prose, so the
+registration gate exempts them by name:
 
     nox -s unit            pytest -m "not slow"                     (fast inner loop, lode-pql)
     nox -s eval            pytest tests/test_eval_live.py           (the golden-set eval, CI-only)
@@ -236,7 +257,7 @@ def fix(session: nox.Session) -> None:
     session.run(ruff, "check", "--fix", ".")
 
 
-@nox.session
+@nox.session(tags=["tests"])
 def tests(session: nox.Session) -> None:
     """Run the FULL test suite (pytest) — the merge/landing gate.
 
@@ -260,7 +281,7 @@ def tests(session: nox.Session) -> None:
     session.run(pytest, "-m", "serial", "-n", "0")
 
 
-@nox.session
+@nox.session(tags=["everything-else"])
 def shellcheck(session: nox.Session) -> None:
     """Lint every tracked shell script (shellcheck, --severity=warning).
 
@@ -286,7 +307,7 @@ def shellcheck(session: nox.Session) -> None:
     session.run(_venv_tool(session, "shellcheck"), "--severity=warning", *files)
 
 
-@nox.session
+@nox.session(tags=["everything-else"])
 def linkcheck(session: nox.Session) -> None:
     """Verify every relative markdown link in docs/ and .claude/ resolves (lode-dkdg).
 
@@ -305,7 +326,7 @@ def linkcheck(session: nox.Session) -> None:
     session.run(_venv_tool(session, "python"), "scripts/check_links.py")
 
 
-@nox.session
+@nox.session(tags=["everything-else"])
 def docstringcheck(session: nox.Session) -> None:
     """Verify every symbol-naming Sphinx role (``:func:``, ``:class:``,
     ``:data:``, ``:meth:``, ``:attr:``, ``:mod:``, ``:exc:``, ``:obj:``) naming
@@ -327,7 +348,7 @@ def docstringcheck(session: nox.Session) -> None:
     session.run(_venv_tool(session, "python"), "scripts/check_docstring_refs.py")
 
 
-@nox.session
+@nox.session(tags=["everything-else"])
 def docs(session: nox.Session) -> None:
     """Build the mkdocs site and fail on a broken intra-doc anchor (lode-fhql.20).
 
@@ -372,7 +393,7 @@ def docs(session: nox.Session) -> None:
         session.run(mkdocs, "build", "--strict", "-d", site_dir)
 
 
-@nox.session
+@nox.session(tags=["tests"])
 def unit(session: nox.Session) -> None:
     """Run the FAST inner-loop subset — pytest with slow tests excluded (lode-pql).
 

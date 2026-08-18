@@ -74,6 +74,49 @@ A pytest corpus scan (`tests/test_except_parens_gate.py`) gates this fiat mechan
 any tracked-source bare or unmarked multi-exception `except`, so a dropped `# fmt: skip` marker turns
 `nox -s tests` red instead of degrading silently.
 
+## Nox gate invocation: by blessed bucket tag, never by enumerated session name
+
+Gate prose in instruction files (`.claude/agents/coding.md`, `.claude/agents/code-reviewer.md`,
+`.claude/skills/code/SKILL.md`, `docs/agents-workflow.md`) invokes nox gates by **blessed tag**
+— `nox -t fix`, `nox -t everything-else` — never by naming individual sessions
+(`nox -s shellcheck`, `nox -s docs`, …). Every `@nox.session` in `noxfile.py` other than the
+four CI-only/packaging sessions named in `tests/test_nox_bucket_gate.py`'s `_EXEMPT_SESSIONS`
+(`eval`, `coverage`, `build`, `lock_currency` — invoked directly by name in their own narrow
+contexts, never through this gate prose) carries **exactly one** of the three blessed tags:
+
+- `fix` — unchanged, the pre-merge formatter/lint-fixer.
+- `tests` — `tests` (the full suite) and `unit` (its fast, not-slow-marked view) are two VIEWS
+  of this **one** bucket, not two independently-tagged sessions. **This bucket is the one
+  invoked by SESSION NAME, not by its tag** — `nox -s unit` (builders) or `nox -s tests`
+  (reviewer / `/land`). `nox -t tests` selects *both* views and so runs the full suite plus a
+  redundant second, narrower pytest pass; the `tests` tag exists to make the two views
+  *registerable* as one bucket, not as an invocation target. The lag risk the tag scheme exists
+  to kill does not apply here: this bucket's membership is closed at two named views, and
+  `tests/test_nox_bucket_gate.py` asserts both still carry the tag.
+- `everything-else` — `shellcheck`, `linkcheck`, `docstringcheck`, `docs`.
+
+**Staged gate policy (who runs what):**
+
+- **Coding builders** run `fix` + the `tests` bucket's fast **`unit`** view only — not the full
+  `tests` session, and not `everything-else` at all. Keeps per-builder gate cost at the fast
+  inner-loop baseline; a change that breaks a slow test or the everything-else bucket gates green
+  at build and goes red one stage later, at review — an accepted, staged-discovery trade.
+- **`code-reviewer` and `/land`'s post-merge re-gate** run **all three buckets** — `fix`, the
+  full `tests` session (not `unit`), and every `everything-else` session — since these are the
+  last gates before `trunk`. Both run it, deliberately: the reviewer's run attributes a red to
+  *one* branch while there is still a branch to attribute it to, and `/land`'s run catches what
+  only the merged batch breaks. The duplicated cost (one extra mkdocs build plus three lint
+  passes per branch) is bought, not wasted.
+
+**Why a tag, not a hand-typed list:** `lode-vvt1` shipped a red `shellcheck` because a producer
+gate list in prose had never been updated to include it. A bucket-tag scheme replaces "did every
+instruction file remember every session" with "does every session carry a tag" — mechanically
+gated by `tests/test_nox_bucket_gate.py` (`lode-6ldh`), which fails the suite if a covered
+session carries zero or 2+ of the three blessed tags, so a newly-added session that nobody
+bucketed turns the suite red instead of silently shipping ungated. Bucket **membership** can
+still be mis-judged (reviewable drift, deliberately accepted) — what the gate makes structurally
+impossible is a session outside every bucket, which was `lode-vvt1`'s actual failure mode.
+
 ## Derive identifiers, never retype them
 
 A long opaque identifier — a full git SHA, a bd issue id, a `.claude/worktrees/` hash — is never

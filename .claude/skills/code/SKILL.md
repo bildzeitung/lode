@@ -139,7 +139,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > FETCH_HEAD` (a local name suffixed with your own launch worktree's directory — unique by
    > construction, so it never collides with a leftover checkout and the old `--detach` fallback is
    > never needed), `git merge
-   > origin/trunk`, re-gate (`nox -t fix` / `nox -s tests`), commit anything the gate loop produced,
+   > origin/trunk`, re-gate at the reviewer/`/land` level — ALL three blessed nox bucket tags
+   > (lode-6ldh): `nox -t fix`, `nox -s tests` (full, not the builder's fast `unit` view), and
+   > `nox -t everything-else` — since this cycle swaps straight to `ready-for-land` with no
+   > further review, commit anything the gate loop produced,
    > then `git push origin HEAD:land/lode-ai1` (an ordinary push by explicit refspec — the merge only
    > appends, it never rewrites what's already on `land/lode-ai1`), refresh `land_head`/`land_summary`,
    > and swap `needs-rebase` straight to `ready-for-land` yourself. Do not merge, close, or push trunk.

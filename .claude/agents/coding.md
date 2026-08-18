@@ -64,9 +64,10 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   format are all stated once, in CLAUDE.md directive 9; I don't restate them here.
 - **Simplest thing that works.** No abstraction or flexibility that wasn't asked for. Ask before
   assuming intent; flag uncertainty explicitly rather than guessing.
-- **Never background a quality gate, and never end a turn with one pending.** `nox -t fix` and
-  `nox -s tests` run in the **FOREGROUND** via `Bash` (its timeout goes up to 600000ms, which
-  comfortably covers them) and I read their output **within the same turn** I launched them. The rule
+- **Never background a quality gate, and never end a turn with one pending.** Every `nox -t <bucket>`
+  gate run (step 7's `fix` + `tests` bucket — see docs/conventions.md for the blessed-tag fiat)
+  runs in the **FOREGROUND** via `Bash` (its timeout goes up to 600000ms, which comfortably covers
+  it) and I read its output **within the same turn** I launched it. The rule
   is about the *state I leave the turn in*, not about one tool: **if a gate is still running when I
   would otherwise yield, I have already broken it.** So — no `run_in_background: true` on a gate, no
   `Monitor` armed on one, no backgrounding it by any other means (`&`, `nohup`, a detached script),
@@ -469,24 +470,37 @@ git worktree unlock "$(git rev-parse --show-toplevel)"
 
 **Run these in the FOREGROUND, in the same turn, and read the output before doing anything else.**
 No `run_in_background`, no `Monitor`, no ending the turn on a pending gate — see the non-negotiable
-above; `nox -s tests` fits well under `Bash`'s 600000ms timeout cap.
+above; both fit well under `Bash`'s 600000ms timeout cap.
+
+**Blessed gate-invocation buckets (lode-6ldh, superseding lode-vvt1's bare-`nox`-everywhere
+policy — full fiat: [docs/conventions.md](../../docs/conventions.md)).** Every gate-eligible nox
+session carries exactly one of three tags — `fix` (unchanged), `tests`, or `everything-else` —
+and gate prose here invokes by **bucket**, never by naming an *everything-else* session
+individually. The `tests` bucket is the one deliberate exception with two named VIEWS rather than
+a single tag invocation: **coding builders run `fix` + the `tests` bucket's fast `unit` view
+only** — not the full `tests` session, and not `everything-else` at all; that staged split is what
+keeps my per-build gate cost at today's fast inner-loop baseline. `code-reviewer` and `/land`'s
+post-merge re-gate run **all three buckets** (the full `tests` session, not `unit`, plus every
+`everything-else` session) since those are the last gates before `trunk` — that split is mine to
+honor, not mine to widen:
 
 ```bash
 ./scripts/python-init.sh              # first time / if no venv (builds ./venv itself)
-./venv/bin/nox -t fix             # ruff format + lint (fixes in place)
-./venv/bin/nox -s tests           # pytest
+./venv/bin/nox -t fix                 # ruff format + lint (fixes in place)
+./venv/bin/nox -s unit                # the tests bucket's FAST view -- builders only; the
+                                       # reviewer/land re-gate runs `nox -s tests` (full) instead
 ```
 
-**Call the venv's `nox` by explicit path — never `. ./venv/bin/activate`, and never a bare `nox`**
-(lode-6874). The isolation guard refuses any sourced command (and any hand-rolled
-`VIRTUAL_ENV=...`/`PATH=...` too); `nox` isn't on `PATH` unactivated; and `noxfile.py`'s
-`_venv_tool()` (lode-0yfn) already resolves the tools under `./venv/bin` regardless of activation, so
-lode-jh80 is satisfied without it. A missing venv fails loudly on its own — `./venv/bin/nox` exits 127
-naming the path; re-run `./scripts/python-init.sh` and re-gate. On a branch whose base predates
-lode-0yfn, `-s tests` instead dies with `Program pytest not found` (no `_venv_tool()` yet) — run
-`./venv/bin/pytest` directly, which is equally guard-friendly. **This overrides CLAUDE.md's
-Python-environment section**, which shows the activation form for a human at a terminal — correct
-there, refused here. Full mechanism:
+**Call the venv's `nox` by explicit path — never `. ./venv/bin/activate`, and never a bare `nox`
+command on `$PATH`** (lode-6874). The isolation guard refuses any sourced command (and any
+hand-rolled `VIRTUAL_ENV=...`/`PATH=...` too); `nox` isn't on `PATH` unactivated; and
+`noxfile.py`'s `_venv_tool()` (lode-0yfn) already resolves the tools under `./venv/bin` regardless
+of activation, so lode-jh80 is satisfied without it. A missing venv fails loudly on its own —
+`./venv/bin/nox` exits 127 naming the path; re-run `./scripts/python-init.sh` and re-gate. On a
+branch whose base predates lode-0yfn, `-s unit` instead dies with `Program pytest not found` (no
+`_venv_tool()` yet) — run `./venv/bin/pytest -m "not slow"` directly, which is equally
+guard-friendly. **This overrides CLAUDE.md's Python-environment section**, which shows the
+activation form for a human at a terminal — correct there, refused here. Full mechanism:
 [docs/agents-workflow.md](../../docs/agents-workflow.md#gating-from-an-isolated-worktree-lode-6874).
 
 A gate that fails after step 6's commit leaves my fix uncommitted — that's expected, not a problem, so
@@ -495,15 +509,22 @@ Once the gates are green, stage and commit **everything the gate loop produced**
 made to fix a red gate and any files `nox -t fix` reformatted — either amending step 6's commit
 (`git commit --amend`) or adding a follow-up commit, then re-check `git status --short` is
 empty again before step 8. Until that commit lands, the tree the gates just certified is not the tree
-`land/<id>` would receive. For any change touching `docs/` diagrams:
+`land/<id>` would receive. For any change touching `docs/` diagrams — the `docs` session (part of
+the `everything-else` bucket the reviewer runs, not the builder-side gate above) builds the mkdocs
+site but does not itself validate mermaid syntax against GitHub's renderer, so this stays a
+separate, additional call even at builder time:
 
 ```bash
 scripts/validate-mermaid.sh                          # parse every ```mermaid block
 ```
 
-A docs-only change has no Python gate — skip nox, but still validate mermaid if a diagram changed.
-**Gates must be green before I hand off.** Fix and re-run. (The reviewer re-gates after its fixes, but
-I hand off only a green branch.)
+**Gates must be green before I hand off** — `fix` + the `tests` bucket's `unit` view above,
+regardless of whether the diff touches Python, shell, or docs; a docs/shell-only change still runs
+them (they cost little and stay the one green/red signal I hand off on). The everything-else
+bucket (`shellcheck`/`linkcheck`/`docstringcheck`/`docs`) is deliberately NOT a builder-side gate
+— see the staged policy above; the reviewer runs it before the branch reaches `trunk`. Fix and
+re-run. (The reviewer re-gates after its fixes, but I hand off only a green branch on the buckets
+that are mine to run.)
 
 **Exit 2 from `validate-mermaid.sh` means the gate itself could not run — never that the mermaid is
 invalid** (distinct from exit 1, a real syntax failure) — see the [gate exit-code
@@ -750,21 +771,26 @@ exactly why my push back in step 5 can be an ordinary, non-force push (lode-cln)
 
 ### 4. Re-run the quality gates (must be green)
 
-Same gates as any build, run directly in my own worktree — no `-C`/`-f` needed, `cwd` already *is* the
-target tree — and the same FOREGROUND-only rule from the non-negotiables applies here too: no
-`run_in_background`, no `Monitor`, read the output in this turn.
+This cycle swaps the ticket straight to `ready-for-land` (step 5) with no further technical
+review, so it runs the **reviewer/`/land`-level gate set — all three buckets** (lode-6ldh), not
+the builder-level fast subset step 7 of the fresh-build cycle uses. Run directly in my own
+worktree — no `-C`/`-f` needed, `cwd` already *is* the target tree — and the same FOREGROUND-only
+rule from the non-negotiables applies here too: no `run_in_background`, no `Monitor`, read the
+output in this turn.
 
 ```bash
 ./scripts/python-init.sh              # a fresh worktree — always needs its own venv
-./venv/bin/nox -t fix             # ruff format + lint (fixes in place)
-./venv/bin/nox -s tests           # pytest
+./venv/bin/nox -t fix                 # ruff format + lint (fixes in place)
+./venv/bin/nox -s tests               # the tests bucket's FULL view (not `unit` -- this cycle
+                                       # is the last gate before trunk, same bar as the reviewer)
+./venv/bin/nox -t everything-else     # shellcheck + linkcheck + docstringcheck + docs
 scripts/validate-mermaid.sh           # only if a docs/ diagram is in the branch
 ```
 
 Same explicit-path form as the fresh-build cycle above — guard-friendly, and no activation needed
 (lode-6874); never hand-roll the activation.
 
-If `nox -t fix` reformats anything, commit it — step 3 already completed the merge commit, so this is
+If the `fix` session reformats anything, commit it — step 3 already completed the merge commit, so this is
 an ordinary commit on top of it, not something folded into the merge. **Gates must be green before I
 re-mark the ticket** — same bar as a fresh build.
 
@@ -978,7 +1004,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Rebase pickup | `needs-rebase` ticket → fetch + check out `land/<id>` into my own launch worktree, `git merge origin/trunk` (resolve a *mechanical* conflict directly with `Edit`; escalate a *genuine* one), re-gate, commit, **push it myself** (ordinary, non-force — a merge never rewrites origin), swap to `ready-for-land` myself (no review) (lode-cln) |
 | Rebase pickup's own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
 | Venv | `./venv` via `./scripts/python-init.sh` |
-| Gates | `./venv/bin/nox -t fix`, `./venv/bin/nox -s tests` — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn); `scripts/validate-mermaid.sh` for diagrams |
+| Gates | blessed bucket tags (lode-6ldh): builders run `nox -t fix` + `nox -s unit` (the `tests` bucket's fast view); `code-reviewer`/`/land`'s re-gate (and this file's rebase-pickup cycle) run `nox -t fix` + `nox -s tests` (full) + `nox -t everything-else` — never an enumerated `everything-else` session by name, so the gate list can't silently lag `noxfile.py` (lode-vvt1) — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` command on `$PATH` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn); `scripts/validate-mermaid.sh` for diagrams |
 | Clean-tree assertion | `git status --short` empty before gating, before hand-off, and before a rebase-pickup push — `nox` gates the working tree, not `HEAD`, so **the tree that gated green must be the tree committed and pushed** (lode-tpt) |
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; follow them |
 | Design source of truth | `docs/` (settled), `docs/decisions.md` (open), `docs/configuration.md` (tunables) |
