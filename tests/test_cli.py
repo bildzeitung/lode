@@ -142,6 +142,7 @@ HELP_COMMAND_ORDER = [
     "notes",
     "show",
     "status",
+    "stats",
     "reembed",
     "reindex-lexical",
     "reenrich",
