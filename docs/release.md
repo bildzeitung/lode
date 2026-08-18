@@ -158,11 +158,19 @@ This is a scoped exception, not a change of house style:
   `/land` push constantly. `build.yml`/`tests.yml`/`coverage.yml` are comparatively cheap (or, per
   the trigger-scope section above, already narrowed to `trunk`/`land/**` — the remaining cost there
   is "runs on every push", not "runs needlessly on changes it can't possibly care about").
-- **The filter:** `docs/**`, `mkdocs.yml`, `scripts/build_docs_site.py`,
-  `.github/workflows/docs.yml` itself, `pyproject.toml` (the pinned `mkdocs-material`/`typer` dev
-  extras the workflow's toolchain install step reads), and `.python-version` (the
-  `actions/setup-python` version file). `push.paths` and `pull_request.paths` are kept identical via
-  a YAML anchor (`&docs-paths` / `*docs-paths`) so they can't silently diverge.
+- **The filter:** `docs/**` (page sources *and* `docs/overrides`, `mkdocs.yml`'s theme
+  `custom_dir`), `mkdocs.yml`, `scripts/build_docs_site.py`, `src/lode/docs_slug.py` (the
+  `toc.slugify` callable `mkdocs.yml` resolves by `!!python/name:` — a change there changes every
+  rendered heading anchor), `.github/workflows/docs.yml` itself, `pyproject.toml` (which does not
+  feed the build directly — the workflow's install step carries its own exact pins — but whose
+  `mkdocs-material`/`typer` pins are required to stay in sync with them, so a bump on either side
+  should rebuild), and `.python-version` (the `actions/setup-python` version file). `push.paths` and
+  `pull_request.paths` are kept identical via a YAML anchor (`&docs-paths` / `*docs-paths`) so they
+  can't silently diverge.
+- **YAML anchors are supported here.** GitHub Actions gained anchor/alias support in September 2025
+  (within-file only; merge keys `<<:` are still **not** supported, so don't reach for one). A repo
+  pinned to an older Actions parser would reject this file outright rather than warn, which is why
+  the anchor is confined to this one place.
 - **This does not weaken `tests/test_workflow_concurrency.py`'s trigger-shape gate.** That test only
   asserts a workflow carries a `push`/`pull_request` trigger at all (branch-scoped, not tag-only); it
   does not assert the absence of a `paths:` filter, so adding one here changes nothing it pins.

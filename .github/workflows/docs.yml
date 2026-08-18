@@ -32,6 +32,7 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "scripts/build_docs_site.py"
+      - "src/lode/docs_slug.py"
       - ".github/workflows/docs.yml"
       - "pyproject.toml"
       - ".python-version"
