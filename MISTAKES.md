@@ -4,6 +4,28 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-08-18 — `--no-deps` on a mixed pip install line starved the docs-CI toolchain's dependency trees
+
+- **What happened:** lode-fhql.23 collapsed docs.yml's toolchain install into one line,
+  `pip install --no-deps -e . "mkdocs-material==9.5.44" "typer==0.27.1"`, and landed it. The
+  "trunk docs" workflow went red on the next run at `import typer` →
+  `ModuleNotFoundError: No module named 'annotated_doc'`.
+- **Root cause:** pip's `--no-deps` applies to EVERY requirement on the command line, not just the
+  one it is written next to. The flag was intended solely to keep lode's heavy unpinned runtime
+  tree out of the docs CI leg (`-e .`), but it silently also starved the pinned toolchain packages
+  of their own dependency trees. The step's comment asserted `--no-deps` was load-bearing without
+  noting its scope, so the collapse read as a safe tidy-up.
+- **Consequence:** `trunk`'s docs workflow was red — the docs site could not build until lode-xx46
+  fixed it. Caught only by CI on trunk, after landing, because no local gate exercises the
+  workflow's install line.
+- **Rule that prevents a repeat:** A pip flag that changes RESOLUTION behavior (`--no-deps`,
+  `--only-binary`, `--no-build-isolation`, `--pre`) is per-command, never per-requirement — never
+  put such a flag on a line that mixes requirements wanting different treatment. When a workflow
+  step needs one requirement treated differently from the rest, split into separate `pip install`
+  commands and say in the comment that the split is load-bearing. Corollary: a change to a CI-only
+  install line is untested by the local gates, so treat "it's just a one-line install tidy-up" as a
+  change requiring the workflow to be reasoned through, not merged on shape.
+
 ## 2026-08-14 — An extraction replaced a fenced computation with `script | tee`, swallowing its machine-fault exit
 
 - **What happened:** `land/lode-s9xe.6` moved `/land`'s stacked-branch graph derivation out of a
