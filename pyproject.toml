@@ -29,7 +29,11 @@ dependencies = [
     "typer",       # CLI (repo convention — never argparse)
     "rich",        # CLI colour/width rendering (lode-l38d.1 — see docs/stack.md)
     "anthropic",   # Claude API (enrichment Haiku, Q&A Sonnet/Opus)
-    "openai",      # OpenAI-via-Azure LLMProvider (lode-568v.3) -- Responses API
+    "openai<3",    # OpenAI-via-Azure LLMProvider (lode-568v.3) -- Responses API.
+                   # Ceiling: 3.0 swaps the default HTTP client to HTTPX2 and
+                   # stops auto-installing httpx; moving is a deliberate act --
+                   # audit our client wiring against the 3.x migration guide,
+                   # then lift this bound.
     "pydantic",    # structured outputs for the derived layer
     "fastembed",   # embeddings + reranker + NLI via bundled ONNX runtime
     "pyarrow",     # direct import in vectorstore.py (lode-zcoz) — lancedb's
@@ -64,7 +68,7 @@ dev = [
                       # indefinite stall on the landing gate; see the
                       # `[tool.pytest.ini_options]` `timeout` setting below.
     "nox",           # task runner (`nox -t fix` before merging)
-    "ruff==0.16.0",   # lint / format -- pinned to prevent unwanted churn
+    "ruff==0.16.3",   # lint / format -- pinned to prevent unwanted churn
                       # Single-tool carve-out from the otherwise-unlocked `dev`
 		      # extra (lode-g274.1) -- not a reversal of that policy
 		      # for any other dev tool.
