@@ -103,11 +103,7 @@ def test_every_covered_session_carries_exactly_one_blessed_tag() -> None:
         name: [t for t in tags if t in _BLESSED_TAGS]
         for name, tags in _covered_sessions().items()
     }
-    bad = {
-        name: matched
-        for name, matched in violations.items()
-        if len(matched) != 1
-    }
+    bad = {name: matched for name, matched in violations.items() if len(matched) != 1}
     assert not bad, (
         "these @nox.session functions carry zero or 2+ of the blessed tags "
         f"{sorted(_BLESSED_TAGS)} (lode-6ldh): {bad}. Every session not in "

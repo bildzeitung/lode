@@ -181,6 +181,13 @@ nox -s tests       # FULL suite, no marker filter — must be green before any m
 
 `nox -s tests` is what `/land` re-runs before trunk; nothing is ever skipped from it. A
 green run ending `Session tests was successful` is your "environment is wired up" signal.
+
+**Blessed gate-invocation buckets (lode-6ldh).** Agent instruction files (`.claude/agents/coding.md`
+and friends) never enumerate the shellcheck/linkcheck/docstringcheck/docs sessions by name — they
+invoke `nox -t everything-else` instead, and `nox -t tests` covers both `tests` and its fast `unit`
+view as two VIEWS of one bucket. See [`docs/conventions.md`](conventions.md) for the full fiat and
+`noxfile.py`'s module docstring for exactly which sessions carry which tag.
+
 Five opt-in sessions sit outside the default set:
 
 | Session | What it does |
