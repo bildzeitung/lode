@@ -161,7 +161,9 @@ This is a scoped exception, not a change of house style:
 - **The filter:** `docs/**` (page sources *and* `docs/overrides`, `mkdocs.yml`'s theme
   `custom_dir`), `mkdocs.yml`, `scripts/build_docs_site.py`, `src/lode/docs_slug.py` (the
   `toc.slugify` callable `mkdocs.yml` resolves by `!!python/name:` — a change there changes every
-  rendered heading anchor), `.github/workflows/docs.yml` itself, `pyproject.toml` (which does not
+  rendered heading anchor), `src/lode/fence_parsing.py` (`docs_slug.py`'s only import, and
+  `build_docs_site.py`'s — a change there changes which lines count as headings, so it moves the
+  same anchors one level down; added `lode-fhql.23`), `.github/workflows/docs.yml` itself, `pyproject.toml` (which does not
   feed the build directly — the workflow's install step carries its own exact pins — but whose
   `mkdocs-material`/`typer` pins are required to stay in sync with them, so a bump on either side
   should rebuild), and `.python-version` (the `actions/setup-python` version file). `push.paths` and
