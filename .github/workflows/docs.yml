@@ -77,7 +77,12 @@ jobs:
         # typer is here because scripts/build_docs_site.py is a Typer CLI like
         # every other Python CLI in the repo (docs/conventions.md); the pin
         # matches requirements.lock so the two can't drift silently.
-        run: pip install "mkdocs-material==9.5.44" "typer==0.27.1"
+        # `pip install -e .` (lode-fhql.23) installs the lode package itself --
+        # mkdocs.yml's `!!python/name:lode.docs_slug.github_slugify` slugify hook
+        # (lode-fhql.21) needs `lode.docs_slug` importable, which this step never
+        # provided before; locally the build passed only because ./venv already
+        # has lode installed via the normal dev setup.
+        run: pip install -e . "mkdocs-material==9.5.44" "typer==0.27.1"
 
       # mermaid-cli's image is pulled once here rather than left to the
       # first `docker run` inside build_docs_site.py, so a pull failure
