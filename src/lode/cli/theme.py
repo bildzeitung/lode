@@ -1,14 +1,17 @@
-"""``lode theme export`` -- print the fully-resolved effective TUI theme as TOML.
+"""``lode theme export`` -- print the fully-resolved effective TUI + CLI theme
+as TOML.
 
 The escape hatch the ``[tui.theme]`` design settled at ``lode-5zxt`` promises
 (``docs/decisions.md`` "lode-dmbc" entry, 2026-08-17 update, point 4): rather
 than type override keys from memory, a user runs this, pastes the output into
-``config.toml``, and edits from there.
+``config.toml``, and edits from there. ``lode-mk9j`` extends the same escape
+hatch to ``[cli.theme.styles]``.
 
-Prints every ``[tui.theme.colors]`` variable and every ``[tui.theme.syntax]``
-capture, fully resolved -- never a partial override list -- so the emitted
-block is self-contained and round-trips: pasting it back in reproduces the
-same effective theme (its own values already ARE the effective ones).
+Prints every ``[tui.theme.colors]`` variable, every ``[tui.theme.syntax]``
+capture, and every ``[cli.theme.styles]`` name, fully resolved -- never a
+partial override list -- so the emitted block is self-contained and
+round-trips: pasting it back in reproduces the same effective theme (its own
+values already ARE the effective ones).
 """
 
 from typing import Annotated
@@ -21,7 +24,7 @@ from lode.cli import app
 from lode.config import TUI_THEME_COLOR_KEYS, TuiTheme
 
 theme_app = typer.Typer(
-    help="Inspect and export the TUI's [tui.theme] configuration.",
+    help="Inspect and export the TUI's [tui.theme] and CLI's [cli.theme] configuration.",
     no_args_is_help=True,
 )
 app.add_typer(theme_app, name="theme")
@@ -30,14 +33,14 @@ app.add_typer(theme_app, name="theme")
 @theme_app.command(
     "export",
     help=(
-        "Print the fully-resolved effective TUI theme as ready-to-paste TOML.\n\n"
-        "Every [tui.theme.colors]/[tui.theme.syntax] key is printed, fully "
-        "resolved -- not just what you've overridden -- so the block is "
-        "self-contained: paste it into config.toml as your new [tui.theme] "
-        "and it reproduces exactly what you see today.\n\n"
-        "Pass NAME to preview a different base theme instead of the one in "
-        "your config; your current colour/syntax overrides still apply on "
-        "top of it."
+        "Print the fully-resolved effective TUI + CLI theme as ready-to-paste TOML.\n\n"
+        "Every [tui.theme.colors]/[tui.theme.syntax]/[cli.theme.styles] key is "
+        "printed, fully resolved -- not just what you've overridden -- so the "
+        "block is self-contained: paste it into config.toml as your new "
+        "[tui.theme]/[cli.theme] and it reproduces exactly what you see today.\n\n"
+        "Pass NAME to preview a different base TUI theme instead of the one in "
+        "your config; your current overrides (TUI and CLI alike) still apply "
+        "on top of it."
     ),
 )
 def theme_export(
@@ -48,17 +51,21 @@ def theme_export(
         ),
     ] = None,
 ) -> None:
-    """Print the fully-resolved effective TUI theme as ready-to-paste TOML.
+    """Print the fully-resolved effective TUI + CLI theme as ready-to-paste TOML.
 
-    Resolution mirrors startup wiring exactly (:mod:`lode.theming`):
+    Resolution mirrors startup wiring exactly (:mod:`lode.theming` for the
+    TUI section; :func:`lode.cli.resolve_cli_styles` for the CLI one):
     base theme name -> ``[tui.theme.colors]`` overrides -> ``[tui.theme.syntax]``
-    overrides. With no ``[tui.theme]`` configured, the base is Textual's own
-    ``textual-dark`` and there are no overrides -- so the printed block is the
-    unmodified default, still valid to paste in as a starting point.
+    overrides, then ``lode.cli.CLI_STYLES`` -> ``[cli.theme.styles]``
+    overrides. With no ``[tui.theme]``/``[cli.theme]`` configured, the base is
+    Textual's own ``textual-dark`` / ``CLI_STYLES`` unmodified -- so the
+    printed block is the unmodified default, still valid to paste in as a
+    starting point.
 
-    ``NAME`` overrides only the base theme name for this preview; any
-    ``colors``/``syntax`` overrides already in ``config.toml`` still apply on
-    top of it, exactly as they would after editing ``name`` there yourself.
+    ``NAME`` overrides only the TUI base theme name for this preview; every
+    other override already in ``config.toml`` (TUI colors/syntax, CLI
+    styles) still applies on top of it, exactly as it would after editing
+    ``name`` there yourself.
 
     A bad ``NAME`` (not a Textual-registered theme) fails the same clean way
     every other bad-input CLI error here does: a one-line stderr message
@@ -120,4 +127,10 @@ def theme_export(
         # became None).
         colour = note_body_theme.syntax_styles[capture].color
         lines.append(f'{key} = "{colour.get_truecolor().hex}"')
+
+    lines.append("")
+    lines.append("[cli.theme.styles]")
+    resolved_styles = cli.resolve_cli_styles(settings)
+    for key, style_name in cli.CLI_STYLE_KEY_TO_NAME.items():
+        lines.append(f'{key} = "{resolved_styles[style_name]}"')
     typer.echo("\n".join(lines))

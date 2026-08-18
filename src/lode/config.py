@@ -144,6 +144,28 @@ def _validate_colour(owner: str, key: str, value: str | None) -> None:
         raise ValueError(f"{owner}.{key}: invalid colour {value!r}: {exc}") from exc
 
 
+def _validate_style(owner: str, key: str, value: str | None) -> None:
+    """Fail loudly at config load if ``value`` is not a rich ``Style`` string.
+
+    Shared by ``[cli.theme.styles]`` (lode-mk9j) so a typo surfaces here,
+    naming the offending key, rather than as a render-time failure inside
+    rich. Deliberately ``rich.style.Style.parse``, NOT ``textual.color
+    .Color.parse`` (as ``[tui.theme]`` above uses): ``CLI_STYLES``'s own
+    defaults are rich STYLE strings -- ``"bold red"``, ``"dim"``, ``"bold"``
+    -- not bare colours, and ``Color.parse`` would reject the very defaults
+    this section is meant to let a user restate unchanged.
+    """
+    if value is None:
+        return
+    from rich.errors import StyleSyntaxError
+    from rich.style import Style
+
+    try:
+        Style.parse(value)
+    except StyleSyntaxError as exc:
+        raise ValueError(f"{owner}.{key}: invalid style {value!r}: {exc}") from exc
+
+
 class TuiThemeColors(BaseModel):
     """``[tui.theme.colors]`` -- overrides on the base theme's colour variables.
 
@@ -259,6 +281,76 @@ class TuiSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     theme: TuiTheme | None = None
+
+
+# --- CLI theme config (lode-mk9j, follow-on to lode-cwyk/[tui.theme]) --------
+# Mirrors the TUI pattern's shape ([cli.theme.styles], not a base-theme name --
+# the CLI has no base theme to swap, only CLI_STYLES's semantic names to
+# override) but validates with rich.style.Style.parse, not
+# textual.color.Color.parse -- see _validate_style's docstring for why.
+
+
+class CliThemeStyles(BaseModel):
+    """``[cli.theme.styles]`` -- overrides on ``lode.cli.CLI_STYLES``'s
+    semantic style names.
+
+    The field list below IS the fixed key set, one per ``CLI_STYLES`` entry,
+    with ``_`` standing in for the literal ``.`` in ``table.header`` (TOML
+    cannot key a table with a bare ``.`` anyway) -- the same ``_``-for-``.``
+    convention ``TuiThemeSyntax`` already uses for tree-sitter capture names.
+    ``lode.cli.CLI_STYLE_KEY_TO_NAME`` derives the key -> semantic-name
+    mapping straight from ``CLI_STYLES``; ``tests/test_cli_theme_config.py``
+    pins the two key sets equal.
+
+    Every field is ``str | None`` (a rich style string, or unset -- falls
+    back to ``CLI_STYLES``'s own default). ``extra="forbid"`` rejects an
+    unknown style name at load rather than silently ignoring it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    note_id: str | None = None
+    date: str | None = None
+    warn: str | None = None
+    danger: str | None = None
+    ok: str | None = None
+    table_header: str | None = None
+
+    @model_validator(mode="after")
+    def _styles_parse(self) -> CliThemeStyles:
+        for key in type(self).model_fields:
+            _validate_style("cli.theme.styles", key, getattr(self, key))
+        return self
+
+
+#: Fixed key set for ``[cli.theme.styles]``, derived from the model above so
+#: the two can never disagree. Ordered as declared -- ``lode theme export``
+#: emits its TOML in this order.
+CLI_THEME_STYLE_KEYS: tuple[str, ...] = tuple(CliThemeStyles.model_fields)
+
+
+class CliTheme(BaseModel):
+    """``[cli.theme]`` -- overrides on the CLI's semantic style names.
+
+    No base-theme name field: unlike ``[tui.theme]``, the CLI has no
+    swappable base theme to preview, only ``CLI_STYLES``'s own semantic
+    names to override.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    styles: CliThemeStyles = Field(default_factory=CliThemeStyles)
+
+
+class CliSettings(BaseModel):
+    """``[cli]`` -- CLI-only config. ``theme`` is ``None`` when the
+    ``[cli.theme]`` section is absent, leaving ``CLI_STYLES``'s current
+    defaults unchanged -- see :func:`lode.cli.resolve_cli_styles`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    theme: CliTheme | None = None
 
 
 class Settings(BaseModel):
@@ -785,6 +877,15 @@ class Settings(BaseModel):
         "TUI chrome/theme configuration. [tui.theme] (absent by default) sets "
         "a base Textual theme name plus [tui.theme.colors]/[tui.theme.syntax] "
         "overrides (lode-cwyk); absent leaves current defaults unchanged.",
+    )
+
+    # --- CLI ------------------------------------------------------------------
+    cli: CliSettings = _knob(
+        CliSettings(),
+        Kind.RUNTIME,
+        "CLI theme configuration. [cli.theme.styles] (absent by default) "
+        "overrides lode.cli.CLI_STYLES's semantic style names (lode-mk9j); "
+        "absent leaves current defaults unchanged.",
     )
 
     # --- Build constants (chosen once) ---------------------------------------

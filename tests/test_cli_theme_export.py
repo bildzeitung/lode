@@ -151,3 +151,51 @@ def test_export_unknown_theme_name_fails_cleanly_naming_the_value(
     result = runner.invoke(cli_app, ["theme", "export", "not-a-real-theme"])
     assert result.exit_code == 1
     assert "not-a-real-theme" in result.output
+
+
+# --- [cli.theme.styles] section (lode-mk9j) ----------------------------------
+
+
+def test_export_includes_the_cli_section_with_every_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from lode.cli import CLI_STYLES
+
+    output = _run_export(monkeypatch, tmp_path)
+    parsed = tomllib.loads(output)
+    styles = parsed["cli"]["theme"]["styles"]
+    for name in CLI_STYLES:
+        assert name.replace(".", "_") in styles
+
+
+def test_export_cli_section_default_round_trips(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from lode.cli import resolve_cli_styles
+
+    output = _run_export(monkeypatch, tmp_path)
+    before = resolve_cli_styles(load_settings())
+
+    (tmp_path / "config.toml").write_text(output, encoding="utf-8")
+    after = resolve_cli_styles(load_settings())
+    assert after == before
+
+
+def test_export_cli_section_with_overrides_round_trips(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from lode.cli import resolve_cli_styles
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        '[cli.theme.styles]\nnote_id = "bold magenta"\n', encoding="utf-8"
+    )
+    result = runner.invoke(cli_app, ["theme", "export"])
+    assert result.exit_code == 0, result.output
+
+    before = resolve_cli_styles(load_settings())
+    assert before["note_id"] == "bold magenta"
+
+    (tmp_path / "config.toml").write_text(result.output, encoding="utf-8")
+    after = resolve_cli_styles(load_settings())
+    assert after == before
