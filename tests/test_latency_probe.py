@@ -1,9 +1,10 @@
 """Tests for the event-loop-lag heartbeat (lode-0wj.2 lag-diagnosis instrumentation).
 
 Fast and offline: no model, no DB, just the heartbeat's own tick/log behaviour.
-To observe the real diagnostic against the seeded corpus + real embedder, run
-the app with ``LODE_LOG_LEVEL=DEBUG`` and watch the capture screen's heartbeat
-log lines (:mod:`lode.tui.latency_probe`, :mod:`lode.tui.screens.capture`).
+To observe the real diagnostic against a live notes DB and the real embedder,
+run the app with ``LODE_LOG_LEVEL=DEBUG`` and watch the capture screen's
+heartbeat log lines (:mod:`lode.tui.latency_probe`,
+:mod:`lode.tui.screens.capture`).
 """
 
 from __future__ import annotations
