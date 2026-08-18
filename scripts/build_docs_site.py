@@ -76,8 +76,28 @@ PUBLISHED_TOP_LEVEL = [
     "storage.md",
     "externals.md",
     "brand.md",
+    # lode-fhql.15's derived reference pages, wired in by lode-7uze. Each
+    # links back to its maintainer source (keybindings.md / configuration.md)
+    # by GitHub URL for whoever needs the full doc -- see DERIVED_PAGE_ALIASES
+    # below for the reverse: citations of the maintainer doc elsewhere in the
+    # published set resolve to these derived pages instead of falling through
+    # to a GitHub blob URL (docs/stack.md, lode-fhql.8/.9 "derived pages take
+    # precedence once they exist").
+    "keymap.md",
+    "settings.md",
 ]
 PUBLISHED_DIRS = ["how-to"]
+
+# docs/stack.md ("`lode-fhql.15`'s derived pages take precedence once they
+# exist"): a link elsewhere in the published set that cites one of these
+# maintainer docs resolves to its derived, published counterpart instead of
+# falling through to the one GITHUB_BASE rewrite rule. Keyed and valued by
+# root-relative (repo-root, POSIX) path, matching _rewrite_target's
+# root_rel_str.
+DERIVED_PAGE_ALIASES = {
+    "docs/keybindings.md": "docs/keymap.md",
+    "docs/configuration.md": "docs/settings.md",
+}
 
 # Static assets the theme (mkdocs.yml: theme.logo/favicon, docs/overrides/
 # main.html's OG tags) references by a docs_dir-relative path -- these are
@@ -231,6 +251,17 @@ def _rewrite_target(
 
     if root_rel_str.startswith("docs/") and root_rel_str[len("docs/") :] in published:
         return None  # stays a plain relative link between published pages
+
+    alias = DERIVED_PAGE_ALIASES.get(root_rel_str)
+    if alias is not None and alias[len("docs/") :] in published:
+        # A citation of the maintainer doc resolves to its derived, published
+        # counterpart instead of falling through to GitHub -- compute a fresh
+        # relative link from the current page's directory, since the alias
+        # target's filename differs from what the source markdown wrote.
+        current_dir = posixpath.dirname(current_rel)
+        rel_to_alias = posixpath.relpath(alias[len("docs/") :], start=current_dir or ".")
+        return f"{rel_to_alias}#{fragment}" if fragment else rel_to_alias
+
     # Everything else -- an unpublished docs/ page, a repo-root file, a source
     # file -- gets the one rewrite rule: its GitHub blob URL, fragment verbatim.
     url = f"{GITHUB_BASE}/{root_rel_str}"
