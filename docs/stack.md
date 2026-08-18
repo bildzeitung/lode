@@ -990,7 +990,8 @@ this mandate is satisfied, not amended.
 The site is about lode, not about how lode is made — it publishes a curated subset of `docs/`, not
 all of it:
 
-- **PUBLISHED**: `design.md`, `retrieval.md`, `storage.md`, `externals.md`, `brand.md`, and **all of
+- **PUBLISHED**: `design.md`, `retrieval.md`, `storage.md`, `externals.md`, `brand.md`, `keymap.md`
+  and `settings.md` (the derived pages from `lode-fhql.15`), and **all of
   `docs/how-to/`** — genuinely end-user content, already linked from `design.md`. The how-to
   directory is published **as a directory, not as a frozen file list**: it holds `README.md`,
   `config-change.md`, `jira-setup.md`, and `maintenance-commands.md` today, and a guide added there
@@ -1109,15 +1110,13 @@ carries the cited anchor**. The derived pages are curated subsets of their maint
 citation of a section they don't carry (e.g.
 `configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745`) keeps the GitHub blob
 URL: aliasing it would both lose the cited content and fail `mkdocs build --strict`, whose
-`validation.links.anchors: warn` treats a link to a nonexistent anchor as an error. (`lode-gecm`, the
-near-duplicate umbrella ticket that originally owned this follow-up, still stands open in the
-tracker; `lode-7uze` delivered its staging half, and the remainder is the nav wiring below —
-whether `lode-gecm` is closed as superseded is a human call, not one this branch makes.)
+`validation.links.anchors: warn` treats a link to a nonexistent anchor as an error.
 
-Neither page is added to `mkdocs.yml`'s `nav` — reachable by direct URL once published, but not in
-the site menu. That is outside `lode-7uze`'s acceptance criteria and tracked as **`lode-kqeb`**. It
-is safe to ship in the meantime: `mkdocs.yml` sets `validation.nav.omitted_files: ignore`, so a
-staged page absent from `nav` does not fail `mkdocs build --strict`.
+**Nav wiring landed as `lode-gecm`**: `keymap.md` and `settings.md` are now listed in `mkdocs.yml`'s
+`nav` (alongside the other top-level published pages), so both are reachable from the site menu, not
+only by direct URL. This closes `lode-gecm`'s own acceptance criteria in full; sibling `lode-kqeb`
+was filed for the same nav-wiring scope before this landed and overlaps completely — whether to close
+`lode-kqeb` as superseded is a human call, not one this branch makes.
 
 ### mkdocs.yml scaffold and the landing page (lode-fhql.10)
 

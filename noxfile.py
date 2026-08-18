@@ -351,8 +351,8 @@ def docs(session: nox.Session) -> None:
     ``scripts/build_docs_site.py`` (lode-fhql.9's HUMAN DECISION 2026-08-14 superseded the
     ``exclude_docs`` allowlist this docstring used to describe), so this session only ever
     sees the PUBLISHED set (``index``/``design``/``storage``/``retrieval``/``externals``/
-    ``brand`` + ``how-to/``) -- nothing else can ship on ``docs_dir`` by construction. Anchors
-    in and into unpublished pages -- ``decisions.md``, ``stack.md``, ``configuration.md``, ...
+    ``brand``/``keymap``/``settings`` + ``how-to/``) -- nothing else can ship on ``docs_dir``
+    by construction. Anchors in and into unpublished pages -- ``decisions.md``, ``stack.md``, ``configuration.md``, ...
     -- are ``linkcheck``'s job alone. These two gates are complements, not duplicates.
 
     Stages with ``--no-mermaid`` first (copy-only, no Docker) so this session -- in the

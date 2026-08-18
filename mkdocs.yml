@@ -66,6 +66,8 @@ nav:
   - Retrieval: retrieval.md
   - Externals: externals.md
   - Brand: brand.md
+  - Keymap: keymap.md
+  - Settings: settings.md
   - How-to:
       - Overview: how-to/README.md
       - Change a config setting: how-to/config-change.md
