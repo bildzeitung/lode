@@ -1693,7 +1693,8 @@ def test_every_land_lock_heartbeat_and_release_call_site_supplies_its_own_token(
         f"{offenders}. Since lode-yuwt land-lock.sh refuses such a call outright "
         "(exit 2), so the call site does not degrade to the pre-lode-q9pm blind "
         'behaviour -- it stops working. Pass `"$MY_TOKEN"` (re-read from '
-        f"$(git rev-parse --git-dir)/land-lock-token in that same block), or -- "
+        f"$(git rev-parse --path-format=absolute --git-common-dir)"
+        f"/land-lock-token in that same block), or -- "
         f"only if it genuinely has no token to supply -- mark the line "
         f"`{_BLIND_OK}` with a reason AND pass the explicit `{BLIND}` sentinel."
     )
@@ -1829,7 +1830,8 @@ def test_land_skill_never_reintroduces_an_inline_lock() -> None:
 
 def test_every_own_token_readback_site_warns_when_empty() -> None:
     """lode-67nk: land/SKILL.md's own-token READ-BACK sites (every place that
-    does `MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" ...)"`)
+    does `MY_TOKEN="$(cat "$(git rev-parse --path-format=absolute
+    --git-common-dir)/land-lock-token" ...)"`)
     must each be followed by a loud, non-fatal stderr diagnostic when the read
     comes back empty, rather than silently proceeding blind. `land-lock.sh`
     treats an empty own-token argument EXACTLY as an absent one, so a
@@ -1856,9 +1858,12 @@ def test_every_own_token_readback_site_warns_when_empty() -> None:
     (this ticket's acceptance criteria name it as off limits)."""
     executed = LAND_SKILL_BASH
 
-    token_reads = executed.count('cat "$(git rev-parse --git-dir)/land-lock-token"')
+    token_reads = executed.count(
+        'cat "$(git rev-parse --path-format=absolute --git-common-dir)/land-lock-token"'
+    )
     assert token_reads == 2, (
-        f"expected exactly 2 reads of $(git rev-parse --git-dir)/land-lock-token"
+        f"expected exactly 2 reads of $(git rev-parse --path-format=absolute"
+        f" --git-common-dir)/land-lock-token"
         f" in land/SKILL.md -- Section 3's two merge script call sites, the only "
         f"remaining places that need $MY_TOKEN read back from disk to forward it "
         f"via --token to land-merge-batch.sh/land-replay.sh (lode-s9xe.6 moved "
@@ -1913,7 +1918,8 @@ def test_land_merge_one_warns_on_an_empty_own_token_argument() -> None:
 # model) against a real throwaway "main checkout", then read the token back
 # exactly as Section 2a does. The three textual pins above (updated for the
 # new path) are blind to this bug BY CONSTRUCTION: they prove a line is
-# spelled "$(git rev-parse --git-dir)/land-lock-token" in the shipped file,
+# spelled "$(git rev-parse --path-format=absolute --git-common-dir)/
+# land-lock-token" in the shipped file,
 # never that the WIPE positioned between the write and every read-back site
 # leaves that file intact at run time. Only running the real fences catches
 # that -- which is exactly how this bug shipped past the three textual pins
@@ -2014,7 +2020,8 @@ def test_section_0_then_section_1_leaves_the_token_readable_by_section_2a(
     touches, so it survives.
 
     Reads the token back the same way Section 2a's own fence does: `cat
-    "$(git rev-parse --git-dir)/land-lock-token"`, run as a THIRD, separate
+    "$(git rev-parse --path-format=absolute --git-common-dir)/land-lock-token"`,
+    run as a THIRD, separate
     Bash invocation -- not a Python-side file read -- so this pin exercises
     the exact mechanism a real pass relies on, not merely the file's final
     state on disk."""
@@ -2034,7 +2041,9 @@ def test_section_0_then_section_1_leaves_the_token_readable_by_section_2a(
     )
 
     readback = _run_block(
-        'cat "$(git rev-parse --git-dir)/land-lock-token"', repo, bin_dir
+        'cat "$(git rev-parse --path-format=absolute --git-common-dir)/land-lock-token"',
+        repo,
+        bin_dir,
     )
     assert readback.returncode == 0 and readback.stdout.strip(), (
         "Section 2a's own token read-back came back empty after Section 0 "

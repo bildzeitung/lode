@@ -42,6 +42,8 @@ def _init_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "trunk")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "test")
     return repo
 
 
@@ -50,6 +52,9 @@ def _lock_path(repo: Path) -> Path:
 
 
 def _token_path(repo: Path) -> Path:
+    """The repo-GLOBAL token path (`--git-common-dir`), not a per-worktree one:
+    in a main checkout `.git` IS the common dir, and a linked worktree's own
+    private gitdir must never be used here (lode-k6h0)."""
     return repo / ".git" / "land-lock-token"
 
 
@@ -262,8 +267,6 @@ def test_heartbeat_finds_the_token_when_run_from_a_linked_worktree(
     would warn "no own-token available" and skip the heartbeat) and green
     against `--path-format=absolute --git-common-dir`."""
     repo = _init_repo(tmp_path)
-    _git(repo, "config", "user.email", "test@example.com")
-    _git(repo, "config", "user.name", "test")
     _git(repo, "commit", "-q", "--allow-empty", "-m", "base")
     worktree = tmp_path / "wt"
     _git(repo, "worktree", "add", "-q", str(worktree), "-b", "feat", "trunk")

@@ -47,8 +47,9 @@ LAND_LOCK="$(dirname "$0")/land-lock.sh"
 # --git-common-dir`, not bare `--git-dir`. From a LINKED worktree bare --git-dir
 # returns that worktree's PRIVATE gitdir, so a reader using it would look in the
 # wrong place for a token SKILL.md writes at the shared --git-common-dir path.
-# SKILL.md's write site and this read site must stay paired -- changing one alone
-# silently orphans the token (lode-k6h0).
+# SKILL.md's write site, its two Section 3 read-back sites and this read site all
+# use the one idiom and must stay paired -- changing one alone silently orphans
+# the token (lode-k6h0).
 GITDIR="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || GITDIR=""
 if [ -z "$GITDIR" ]; then
   echo "land-heartbeat: WARNING -- not inside a git repository; no $MODE performed" >&2

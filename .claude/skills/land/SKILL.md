@@ -977,7 +977,7 @@ left as a comment for the agent to implement inline, at the exact moment a confl
 STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive here -- this is a fresh Bash
 MSG_DIR="$STATE_DIR/msg"                                # invocation; nothing from 3a's block persists
 CONFLICTS_DIR="$STATE_DIR/conflicts"                    # except the FILES 3a wrote under $STATE_DIR
-MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
+MY_TOKEN="$(cat "$(git rev-parse --path-format=absolute --git-common-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
 [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check is" \
   "DISABLED for this call (lode-67nk)" >&2
 
@@ -1079,7 +1079,7 @@ it would mask the 2. Keep it there.
   STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation
   MSG_DIR="$STATE_DIR/msg"
   CONFLICTS_DIR="$STATE_DIR/conflicts"
-  MY_TOKEN="$(cat "$(git rev-parse --git-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
+  MY_TOKEN="$(cat "$(git rev-parse --path-format=absolute --git-common-dir)/land-lock-token" 2>/dev/null || true)"   # lode-q9pm
   [ -n "$MY_TOKEN" ] || echo "land: WARNING -- no own-token available; land-lock ownership check" \
     "is DISABLED for this call (lode-67nk)" >&2
 
