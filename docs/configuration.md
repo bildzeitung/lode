@@ -136,6 +136,12 @@ Runs the same read pipeline as `lode ask` ([retrieval.md](retrieval.md)) minus t
 |---|---|---|---|
 | TUI theme (`[tui.theme]`) | runtime | absent | Optional, `extra="forbid"` section. Absent leaves every current default byte-identical (Textual's own `textual-dark` chrome, lode's `NOTE_BODY_SYNTAX_STYLES` note-body palette). `name` is any theme Textual registers by default; `[tui.theme.colors]` overrides that theme's colour variables (fixed key set: `primary`, `secondary`, `warning`, `error`, `success`, `accent`, `foreground`, `background`, `surface`, `panel`, `boost`); `[tui.theme.syntax]` overrides the note-body markdown palette (closed key set: `text_literal`, `punctuation_delimiter`, `heading_marker`, `heading`, `list_marker` — `_` stands in for tree-sitter's `.`, so its vocabulary never becomes config surface). Precedence: `name` → `colors` → `syntax`. Every value is a colour-only string, parsed at config load (`textual.color.Color.parse`); a bad value or unknown key is a load error naming the offending key. Run `lode theme export` to print the fully-resolved effective theme as ready-to-paste TOML rather than typing keys from memory. Design record: [decisions.md](decisions.md)'s `lode-dmbc` entry (2026-08-17 update). |
 
+## CLI — theme (`[cli.theme]`, lode-mk9j)
+
+| Knob | Kind | Default | Notes |
+|---|---|---|---|
+| CLI theme (`[cli.theme]`) | runtime | absent | Optional, `extra="forbid"` section. Absent leaves every current default byte-identical (`lode.cli.CLI_STYLES`). `[cli.theme.styles]` overrides the CLI's semantic rich style names (fixed key set: `note_id`, `date`, `warn`, `danger`, `ok`, `table_header` — `_` stands in for the literal `.` in `table.header`, which TOML cannot key). Values are rich **style** strings, not colour-only ones (`"bold red"`, `"dim"` — `CLI_STYLES`'s own defaults are style strings), parsed at config load with `rich.style.Style.parse`; a bad value or unknown key is a load error naming the offending key. Resolved and applied once per invocation in `lode.cli.main()`, so it covers every subcommand — with `lode status` the single exception, which keeps its `lode-l38d.6` contract of surviving a broken `config.toml` (unstyled) rather than failing. Run `lode theme export` to print the fully-resolved effective theme (TUI and CLI sections alike) as ready-to-paste TOML. Design record: [decisions.md](decisions.md)'s `lode-mk9j` entry (2026-08-18). |
+
 ## Async work queue
 
 | Knob | Kind | Default | Notes |

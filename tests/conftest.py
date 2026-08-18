@@ -630,19 +630,14 @@ def _reset_cli_theme_override() -> Iterator[None]:
     shared ``console``/``err_console`` (lode-mk9j) before every test.
 
     Same shape as ``_restore_root_logger_state`` above and the same reason
-    it exists: ``lode.cli.main()`` (the Typer group callback, now running
-    ``[cli.theme]`` resolution globally) pushes an override theme onto these
-    two module-level, process-wide ``Console`` singletons with no matching
-    pop of its own -- popping happens only lazily, at the START of the
-    NEXT invocation (see ``lode.cli._apply_cli_theme``'s own docstring). A
-    test that invokes a themed CLI command via ``CliRunner`` and then never
-    invokes another command leaves that override live for whatever test the
-    suite (or an xdist worker) happens to run next -- including one like
-    ``tests/test_cli_theme.py`` that asserts directly against
-    ``console.get_style(...)`` with no command invocation of its own to
-    trigger the lazy pop. ``lode.cli._apply_cli_theme(None)`` is exactly the
-    pop-only path already used for the ``lode status``
-    config-resolution-failed case, reused here as the reset.
+    it exists: ``lode.cli.main()`` pushes the override onto two
+    module-level, process-wide ``Console`` singletons and pops it only
+    lazily, at the start of the NEXT invocation (see
+    ``lode.cli._apply_cli_theme``). A test that invokes a themed command via
+    ``CliRunner`` would otherwise leave that override live for whatever test
+    runs next -- including one like ``tests/test_cli_theme.py`` that asserts
+    on ``console.get_style(...)`` with no invocation of its own to trigger
+    the pop. ``_apply_cli_theme(None)`` is that pop-only path, reused here.
     """
     from lode.cli import _apply_cli_theme
 

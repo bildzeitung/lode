@@ -179,8 +179,8 @@ err_console = Console(theme=CLI_THEME, stderr=True, highlight=False)
 #: overrides (the ``_``-for-``.`` mapping so ``table.header`` becomes
 #: ``table_header``, since TOML cannot key a table with a literal ``.``
 #: anyway). Derived from :data:`CLI_STYLES` so the two key sets can never
-#: disagree; ``tests/test_cli_theme_config.py`` pins
-#: ``lode.config.CLI_THEME_STYLE_KEYS`` equal to this mapping's key set.
+#: disagree; ``tests/test_cli_theme_config.py`` pins this mapping's key set
+#: equal to ``lode.config.CliThemeStyles``'s declared fields.
 CLI_STYLE_KEY_TO_NAME: dict[str, str] = {
     name.replace(".", "_"): name for name in CLI_STYLES
 }
@@ -192,14 +192,15 @@ def resolve_cli_styles(settings: Settings) -> dict[str, str]:
 
     Keyed by SEMANTIC name (e.g. ``"table.header"``) -- the same shape as
     :data:`CLI_STYLES` -- so the result can be handed straight to
-    ``rich.theme.Theme``. Returns :data:`CLI_STYLES` itself, unchanged, when
-    ``[cli.theme]`` is absent (the "absent section leaves defaults
-    unchanged" acceptance criterion).
+    ``rich.theme.Theme``. Always a fresh dict -- never :data:`CLI_STYLES`
+    itself, so a caller can never mutate the shared defaults -- and equal to
+    :data:`CLI_STYLES` when ``[cli.theme]`` is absent (the "absent section
+    leaves defaults unchanged" acceptance criterion).
     """
+    resolved = dict(CLI_STYLES)
     theme_cfg = settings.cli.theme
     if theme_cfg is None:
-        return CLI_STYLES
-    resolved = dict(CLI_STYLES)
+        return resolved
     for key, name in CLI_STYLE_KEY_TO_NAME.items():
         value = getattr(theme_cfg.styles, key)
         if value is not None:
@@ -232,7 +233,11 @@ def _apply_cli_theme(settings: Settings | None) -> None:
     if settings is None:
         return
     resolved = resolve_cli_styles(settings)
-    if resolved is CLI_STYLES:
+    # Equality, not identity: a present-but-empty ``[cli.theme]`` (a bare
+    # section header, or a pasted ``lode theme export`` block edited back to
+    # the defaults) resolves to the default map too, and pushing a layer
+    # identical to the base buys nothing.
+    if resolved == CLI_STYLES:
         return
     theme = Theme(resolved)
     console.push_theme(theme)
@@ -320,22 +325,16 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     # when no subcommand is actually about to run (bare ``lode`` / ``--help``
     # under ``no_args_is_help``), since there's nothing to restyle for.
     #
-    # ``lode status`` ALONE is exempted from a config error going fatal
-    # here: its lode-l38d.6 survival contract ("a broken config.toml must
-    # never take `lode status` down") predates this ticket and stays
-    # authoritative (maintainer decision, 2026-08-18) -- resolving eagerly
-    # in main() would otherwise break
-    # tests/test_cli.py::test_status_survives_a_malformed_config_file /
-    # test_status_survives_an_unreadable_config_file. ``except Exception``,
-    # not ``except typer.Exit``, for the same reason status.py's own guard
-    # uses it: an unreadable config.toml raises a bare ``OSError`` straight
-    # through ``_resolve_settings`` for the CASE ABOVE the ``TOMLDecodeError``/
-    # ``ValidationError`` it already converts to ``typer.Exit``.
-    #
-    # Every OTHER command lets ``_resolve_settings()``'s own ``typer.Exit(1)``
-    # (or an uncaught OSError) propagate uncaught -- the accepted side effect
-    # the maintainer signed off on: any config error, not just a theme one,
-    # now fails loudly on a command that previously never read config at all.
+    # ``lode status`` ALONE swallows a failed resolution, keeping its
+    # pre-existing lode-l38d.6 survival contract; every OTHER command lets
+    # the failure propagate, so ANY config error now fails loudly even on a
+    # command that never read config before. Both halves are the maintainer's
+    # 2026-08-18 placement decision -- the rationale and the rejected
+    # alternatives live in docs/decisions.md's lode-mk9j entry, not here.
+    # ``except Exception``, not ``except typer.Exit``, for the same reason
+    # status.py's own guard uses it: an unreadable config.toml raises a bare
+    # ``OSError`` straight through ``_resolve_settings``, above the
+    # ``TOMLDecodeError``/``ValidationError`` it converts to ``typer.Exit``.
     if ctx.invoked_subcommand is not None:
         settings: Settings | None
         if ctx.invoked_subcommand == "status":

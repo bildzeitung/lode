@@ -323,12 +323,6 @@ class CliThemeStyles(BaseModel):
         return self
 
 
-#: Fixed key set for ``[cli.theme.styles]``, derived from the model above so
-#: the two can never disagree. Ordered as declared -- ``lode theme export``
-#: emits its TOML in this order.
-CLI_THEME_STYLE_KEYS: tuple[str, ...] = tuple(CliThemeStyles.model_fields)
-
-
 class CliTheme(BaseModel):
     """``[cli.theme]`` -- overrides on the CLI's semantic style names.
 
@@ -1593,5 +1587,16 @@ def knob_rows(settings: Settings) -> list[tuple[str, str, str]]:
                         f"name={theme.name} ({n_colors} colour override(s), "
                         f"{n_syntax} syntax override(s))"
                     )
+            elif isinstance(value, CliSettings):
+                # Same rationale as the TuiSettings branch above (lode-mk9j).
+                cli_theme = value.theme
+                if cli_theme is None:
+                    value = "(default)"
+                else:
+                    n_styles = sum(
+                        getattr(cli_theme.styles, key) is not None
+                        for key in CliThemeStyles.model_fields
+                    )
+                    value = f"{n_styles} style override(s)"
         rows.append((name, str(value), kind))
     return rows

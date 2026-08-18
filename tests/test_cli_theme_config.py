@@ -13,7 +13,7 @@ key), the key-set/semantic-name mapping never drifting, and
 ``resolve_cli_styles``'s resolution (override wins, absent falls back,
 absent-section identity). ``main()``'s global apply-with-status-exemption
 wiring and ``lode theme export``'s round trip each have their own test
-modules (``tests/test_cli.py``, ``tests/test_cli_theme_export.py``).
+modules (``tests/test_cli_theme_apply.py``, ``tests/test_cli_theme_export.py``).
 """
 
 from __future__ import annotations
@@ -31,11 +31,13 @@ def test_cli_theme_defaults_to_none() -> None:
     assert Settings().cli.theme is None
 
 
-def test_absent_section_resolves_to_cli_styles_identity() -> None:
-    # Identity, not just equality -- "absent section leaves defaults
-    # byte-identical" is the acceptance criterion, and this is the strongest
-    # form of that assertion.
-    assert resolve_cli_styles(Settings()) is CLI_STYLES
+def test_absent_section_resolves_to_the_cli_styles_defaults() -> None:
+    # "Absent section leaves defaults byte-identical" is the acceptance
+    # criterion -- equal, but a distinct dict, so no caller can mutate the
+    # shared CLI_STYLES through the returned map.
+    resolved = resolve_cli_styles(Settings())
+    assert resolved == CLI_STYLES
+    assert resolved is not CLI_STYLES
 
 
 # --- Config validation: good/bad styles, unknown keys ------------------------
