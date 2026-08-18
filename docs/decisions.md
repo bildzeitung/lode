@@ -5426,3 +5426,36 @@ entries below from being rewritten to chase the current tree.)
   logic change — loud and mechanical to fix, never a silent miss. If a third such loop ever
   appears, or the two loops' verdict sets converge, that would be the point to revisit unification
   — the same "three genuinely stops being fine and unextracted" trigger this file uses elsewhere.
+
+- **User-configurable colour, revisited: TUI theming settled as base-theme-plus-overrides
+  (`lode-5zxt` closed, 2026-08-17).** Appends to the `lode-dmbc` entry above (2026-08-12), which
+  deliberately deferred this. The recorded revisit trigger — a second, independent request a value
+  change cannot satisfy — was **not met**; the maintainer reopened it as a preference call, accepted
+  knowingly because inspection shrank the problem: `lode.tcss` already styles chrome *exclusively*
+  through Textual theme variables (`$primary`, `$panel`, `$accent`, …), so the only hardcoded TUI
+  colour surface is the five-entry `NOTE_BODY_SYNTAX_STYLES` dict in `_markdown_area.py`, and
+  Textual 8.x's own theme system (`Theme` / `App.register_theme`, built-in dark *and* light themes)
+  feeds those same variables. The "unifying three surfaces is an epic" objection therefore no
+  longer holds for the TUI half.
+  The settled design (TUI first; CLI is the follow-on `lode-mk9j`):
+  1. **Config shape** — a typed, `extra="forbid"` nested `[tui.theme]` section on `config.Settings`:
+     `name` (base = any registered Textual theme name), `[tui.theme.colors]` (overrides on the base
+     theme's variables, fixed key set), and `[tui.theme.syntax]` (note-body markdown colours — a
+     **closed** key set of the five capture names lode already styles, `_` for `.`, e.g.
+     `heading_marker`; tree-sitter's vocabulary never becomes public surface, answering `lode-dmbc`
+     objection 2b).
+  2. **Precedence** — base theme name → `colors` overrides overwrite that theme's variables →
+     `syntax` overrides overwrite the `NOTE_BODY_SYNTAX_STYLES` defaults. Absent section: current
+     defaults, unchanged.
+  3. **Validation at config load** — every value parsed in pydantic validators
+     (`textual.color.Color.parse`); a typo is a config-load error naming the key, not a render-time
+     failure (answering objection 2a). Values are **colour-only strings**, not full rich style
+     strings — decided explicitly; widen only on request.
+  4. **Export escape hatch** — `lode theme export [name]` prints the fully-resolved effective theme
+     (base name, every variable, every syntax style) as ready-to-paste TOML, so users edit exported
+     keys rather than typing them from memory.
+  Light-background legibility — the trigger `lode-dmbc` predicted — falls out free:
+  `name = "textual-light"` is a working light TUI for chrome on day one, with the five syntax
+  colours adjustable via export. Implementation: `lode-cwyk` (TUI), then `lode-mk9j` (CLI rich
+  `CLI_STYLES` surface, same pattern over its semantic names). The TUI-only scope is explicit in
+  the section name, keeping the original "lie by omission" concern honest rather than violated.
