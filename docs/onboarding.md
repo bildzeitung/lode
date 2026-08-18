@@ -15,6 +15,17 @@
 | **Docker** | Validates `docs/` Mermaid diagrams via `minlag/mermaid-cli`. | Only if you edit a diagram. No Node/Chromium needed on the host. |
 | **flock** (util-linux) | Serializes the single-lander lock that guards every write to `trunk` — [`scripts/land-lock.sh`](../scripts/land-lock.sh)'s `acquire` holds one exclusive `flock(1)` across its whole decision (`lode-y3dw`). | Only on a machine that runs `/land`. Present by default on Linux; **absent on macOS and stock git-bash** — `brew install util-linux` there. Without it `acquire` reports a MACHINE FAULT and **skips every tick**, failing closed rather than reverting to the two-winner-capable design it replaced. Under `/loop 5m /land` that is a stderr line inside a loop nobody watches, so the visible symptom is "the `ready-for-land` queue never drains" — hence declaring it here rather than leaving it to first failure. |
 
+### Recommended (optional) tools
+
+Nothing below gates a build — every quality gate runs without them — but they make day-to-day
+work on lode faster, for humans and agents alike:
+
+| Tool | Why | Notes |
+|---|---|---|
+| **fd** | Fast, gitignore-aware file finding — the `find` counterpart to ripgrep for "list files matching X, excluding `venv/` and `.claude/worktrees/`" sweeps. | Debian/Ubuntu package `fd-find` installs the binary as **`fdfind`**; symlink or alias to `fd` if you want the short name. `apt-get install fd-find` / `brew install fd`. |
+| **sqlite3** (CLI) | Interactive inspection of lode's SQLite stores and the on-demand docs FTS5 index — poke a database directly instead of writing a throwaway Python script. | `apt-get install sqlite3` / bundled with macOS. |
+| **hyperfine** | Statistical benchmarking (warm/cold runs, comparisons) for perf claims — capture latency, retrieval, docs-index rebuild — instead of eyeballing `time`. | `apt-get install hyperfine` / `brew install hyperfine`. |
+
 ## Install & setup
 
 All commands run from the repo root.
