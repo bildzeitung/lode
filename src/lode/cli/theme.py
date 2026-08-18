@@ -18,17 +18,7 @@ from pydantic import ValidationError
 
 from lode import cli
 from lode.cli import app
-from lode.config import (
-    TUI_THEME_COLOR_KEYS,
-    TuiTheme,
-    TuiThemeColors,
-    TuiThemeSyntax,
-)
-from lode.theming import (
-    SYNTAX_KEY_TO_CAPTURE,
-    resolve_note_body_theme_from,
-    resolve_theme_from,
-)
+from lode.config import TUI_THEME_COLOR_KEYS, TuiTheme
 
 theme_app = typer.Typer(
     help="Inspect and export the TUI's [tui.theme] configuration.",
@@ -74,17 +64,30 @@ def theme_export(
     every other bad-input CLI error here does: a one-line stderr message
     naming the value, exit 1 -- never a traceback.
     """
-    settings = cli._resolve_settings()
-    configured = settings.tui.theme
-    base_name = (
-        name
-        if name is not None
-        else (configured.name if configured else "textual-dark")
+    # Lazy, function-level import -- the lazy-import convention `lode.cli` and
+    # `lode.cli.tui` already follow "to keep CLI startup light". `lode.theming`
+    # pulls in textual.theme + textual.widgets.text_area (and, through them,
+    # tree_sitter), which measured at ~325ms of the ~660ms `import lode.cli`
+    # takes -- a cost every OTHER `lode` subcommand would pay at module level,
+    # since `_COMMAND_MODULES` imports this module on every invocation.
+    from lode.theming import (
+        SYNTAX_KEY_TO_CAPTURE,
+        resolve_note_body_theme_from,
+        resolve_theme_from,
     )
-    colors = configured.colors if configured is not None else TuiThemeColors()
-    syntax = configured.syntax if configured is not None else TuiThemeSyntax()
+
+    settings = cli._resolve_settings()
+    # `or TuiTheme()` rather than a hand-written absent-section fallback: the
+    # model already carries the base-theme default and both sub-model
+    # default_factories, so the default base theme name lives in exactly one
+    # place (TuiTheme.name) instead of being retyped here.
+    configured = settings.tui.theme or TuiTheme()
     try:
-        theme_cfg = TuiTheme(name=base_name, colors=colors, syntax=syntax)
+        theme_cfg = TuiTheme(
+            name=name if name is not None else configured.name,
+            colors=configured.colors,
+            syntax=configured.syntax,
+        )
     except ValidationError as exc:
         typer.echo(f"lode theme export: {exc}", err=True)
         raise typer.Exit(code=1) from None
@@ -110,7 +113,11 @@ def theme_export(
     lines.append("")
     lines.append("[tui.theme.syntax]")
     for key, capture in SYNTAX_KEY_TO_CAPTURE.items():
-        style = note_body_theme.syntax_styles[capture]
-        assert style.color is not None  # every default/override sets one
-        lines.append(f'{key} = "{style.color.get_truecolor().hex}"')
+        # Every entry in NOTE_BODY_SYNTAX_STYLES sets a colour, and an override
+        # can only replace it with another, so `.color` is never None here --
+        # left unasserted rather than guarded by a bare `assert`, which would
+        # vanish under `-O` anyway (the next line raises on its own if it ever
+        # became None).
+        colour = note_body_theme.syntax_styles[capture].color
+        lines.append(f'{key} = "{colour.get_truecolor().hex}"')
     typer.echo("\n".join(lines))

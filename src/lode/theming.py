@@ -33,18 +33,17 @@ from rich.style import Style
 from textual.theme import BUILTIN_THEMES, Theme
 from textual.widgets.text_area import TextAreaTheme
 
-from lode.config import Settings, TuiTheme
+from lode.config import TUI_THEME_COLOR_KEYS, Settings, TuiTheme
 from lode.tui.screens._markdown_area import NOTE_BODY_SYNTAX_STYLES, NOTE_BODY_THEME
 
 #: ``[tui.theme.syntax]`` key -> the tree-sitter capture name it overrides in
 #: ``NOTE_BODY_SYNTAX_STYLES`` (the ``_``-for-``.`` mapping ``lode-dmbc``
 #: settled, so tree-sitter's own vocabulary never becomes config surface).
+#: Derived from the styles dict rather than retyped, so the palette stays the
+#: one source for which captures exist; ``TuiThemeSyntax`` declares the config
+#: fields, and ``tests/test_tui_theme_config.py`` pins the two key sets equal.
 SYNTAX_KEY_TO_CAPTURE: dict[str, str] = {
-    "text_literal": "text.literal",
-    "punctuation_delimiter": "punctuation.delimiter",
-    "heading_marker": "heading.marker",
-    "heading": "heading",
-    "list_marker": "list.marker",
+    capture.replace(".", "_"): capture for capture in NOTE_BODY_SYNTAX_STYLES
 }
 
 
@@ -61,8 +60,8 @@ def resolve_theme_from(theme_cfg: TuiTheme) -> Theme:
     base = BUILTIN_THEMES[theme_cfg.name]
     overrides = {
         key: value
-        for key, value in theme_cfg.colors.model_dump().items()
-        if value is not None
+        for key in TUI_THEME_COLOR_KEYS
+        if (value := getattr(theme_cfg.colors, key)) is not None
     }
     return dataclasses.replace(base, **overrides) if overrides else base
 

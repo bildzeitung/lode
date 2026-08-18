@@ -122,37 +122,6 @@ _SECRET_SEED_PATTERNS: list[str] = [
 # note-body syntax colour overrides. See docs/decisions.md's lode-dmbc entry
 # (2026-08-17 update) for the full settled design and precedence rules.
 
-#: Fixed key set for ``[tui.theme.colors]`` -- every colourable field on
-#: ``textual.theme.Theme`` (``name``/``dark``/``luminosity_spread``/
-#: ``text_alpha``/``variables``/``ansi`` are not colours, so they are
-#: deliberately absent).
-TUI_THEME_COLOR_KEYS: tuple[str, ...] = (
-    "primary",
-    "secondary",
-    "warning",
-    "error",
-    "success",
-    "accent",
-    "foreground",
-    "background",
-    "surface",
-    "panel",
-    "boost",
-)
-
-#: Closed key set for ``[tui.theme.syntax]`` -- the same five capture names
-#: ``NOTE_BODY_SYNTAX_STYLES`` (``lode.tui.screens._markdown_area``) already
-#: styles, with ``_`` standing in for tree-sitter's ``.`` (e.g.
-#: ``heading_marker`` -> ``heading.marker``) so tree-sitter's own vocabulary
-#: never becomes public config surface (lode-dmbc objection 2b).
-TUI_THEME_SYNTAX_KEYS: tuple[str, ...] = (
-    "text_literal",
-    "punctuation_delimiter",
-    "heading_marker",
-    "heading",
-    "list_marker",
-)
-
 
 def _validate_colour(owner: str, key: str, value: str | None) -> None:
     """Fail loudly at config load if ``value`` is not a colour-only string.
@@ -178,6 +147,13 @@ def _validate_colour(owner: str, key: str, value: str | None) -> None:
 class TuiThemeColors(BaseModel):
     """``[tui.theme.colors]`` -- overrides on the base theme's colour variables.
 
+    The field list below IS the fixed key set: every colourable field on
+    ``textual.theme.Theme`` (``name``/``dark``/``luminosity_spread``/
+    ``text_alpha``/``variables``/``ansi`` are not colours, so they are
+    deliberately absent). :data:`TUI_THEME_COLOR_KEYS` is derived from it
+    rather than restated, so a new variable cannot be added here and silently
+    skip validation or ``lode theme export``.
+
     Every field is ``str | None`` (a colour string, or unset -- falls back to
     the base theme's own value). ``extra="forbid"`` rejects an unknown
     variable name at load rather than silently ignoring it.
@@ -199,17 +175,29 @@ class TuiThemeColors(BaseModel):
 
     @model_validator(mode="after")
     def _colours_parse(self) -> TuiThemeColors:
-        for key in TUI_THEME_COLOR_KEYS:
+        for key in type(self).model_fields:
             _validate_colour("tui.theme.colors", key, getattr(self, key))
         return self
+
+
+#: Fixed key set for ``[tui.theme.colors]``, derived from the model above so
+#: the two can never disagree. Ordered as declared -- ``lode theme export``
+#: emits its TOML in this order.
+TUI_THEME_COLOR_KEYS: tuple[str, ...] = tuple(TuiThemeColors.model_fields)
 
 
 class TuiThemeSyntax(BaseModel):
     """``[tui.theme.syntax]`` -- overrides on the note-body markdown palette.
 
-    Closed key set (:data:`TUI_THEME_SYNTAX_KEYS`) -- ``extra="forbid"``
-    rejects anything else, including a raw tree-sitter capture name (with a
-    literal ``.``), which TOML cannot key with anyway.
+    Closed key set -- the same five capture names ``NOTE_BODY_SYNTAX_STYLES``
+    (``lode.tui.screens._markdown_area``) already styles, with ``_`` standing
+    in for tree-sitter's ``.`` (e.g. ``heading_marker`` -> ``heading.marker``)
+    so tree-sitter's own vocabulary never becomes public config surface
+    (lode-dmbc objection 2b). ``extra="forbid"`` rejects anything else,
+    including a raw capture name with a literal ``.``, which TOML cannot key
+    with anyway. ``lode.theming.SYNTAX_KEY_TO_CAPTURE`` derives the
+    key -> capture mapping straight from ``NOTE_BODY_SYNTAX_STYLES``;
+    ``tests/test_tui_theme_config.py`` pins the two key sets equal.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -222,9 +210,13 @@ class TuiThemeSyntax(BaseModel):
 
     @model_validator(mode="after")
     def _syntax_parse(self) -> TuiThemeSyntax:
-        for key in TUI_THEME_SYNTAX_KEYS:
+        for key in type(self).model_fields:
             _validate_colour("tui.theme.syntax", key, getattr(self, key))
         return self
+
+
+#: Closed key set for ``[tui.theme.syntax]``, derived from the model above.
+TUI_THEME_SYNTAX_KEYS: tuple[str, ...] = tuple(TuiThemeSyntax.model_fields)
 
 
 class TuiTheme(BaseModel):
@@ -1489,10 +1481,12 @@ def knob_rows(settings: Settings) -> list[tuple[str, str, str]]:
                     value = "(default)"
                 else:
                     n_colors = sum(
-                        1 for v in theme.colors.model_dump().values() if v is not None
+                        getattr(theme.colors, key) is not None
+                        for key in TUI_THEME_COLOR_KEYS
                     )
                     n_syntax = sum(
-                        1 for v in theme.syntax.model_dump().values() if v is not None
+                        getattr(theme.syntax, key) is not None
+                        for key in TUI_THEME_SYNTAX_KEYS
                     )
                     value = (
                         f"name={theme.name} ({n_colors} colour override(s), "

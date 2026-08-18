@@ -17,12 +17,18 @@ overrides). ``lode theme export``'s own round-trip test lives in
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 from pydantic import ValidationError
 from textual.theme import BUILTIN_THEMES
 
 from lode.config import Settings, TuiTheme, TuiThemeColors, TuiThemeSyntax
-from lode.theming import resolve_note_body_theme, resolve_theme
+from lode.theming import (
+    SYNTAX_KEY_TO_CAPTURE,
+    resolve_note_body_theme,
+    resolve_theme,
+)
 from lode.tui.app import LodeApp
 from lode.tui.screens._markdown_area import NOTE_BODY_SYNTAX_STYLES, NOTE_BODY_THEME
 
@@ -114,6 +120,22 @@ def test_every_documented_syntax_key_accepts_a_colour() -> None:
     syntax = TuiThemeSyntax(**overrides)
     for key in overrides:
         assert getattr(syntax, key) == "#123456"
+
+
+def test_syntax_config_keys_and_capture_mapping_cannot_drift() -> None:
+    # TuiThemeSyntax declares the config fields; SYNTAX_KEY_TO_CAPTURE is
+    # derived from NOTE_BODY_SYNTAX_STYLES. Nothing mechanically ties the two,
+    # so a capture added to the palette without a matching config field (or
+    # vice versa) would silently be un-overridable and un-exportable. Pin them.
+    assert set(TuiThemeSyntax.model_fields) == set(SYNTAX_KEY_TO_CAPTURE)
+    assert set(SYNTAX_KEY_TO_CAPTURE.values()) == set(NOTE_BODY_SYNTAX_STYLES)
+
+
+def test_colors_config_keys_match_the_theme_fields_they_override() -> None:
+    # Every [tui.theme.colors] key must name a real textual Theme field, or
+    # dataclasses.replace() in resolve_theme_from would raise at startup.
+    theme_fields = {f.name for f in dataclasses.fields(BUILTIN_THEMES["textual-dark"])}
+    assert set(TuiThemeColors.model_fields) <= theme_fields
 
 
 # --- Precedence: base -> colors overrides -> syntax overrides ----------------

@@ -489,20 +489,13 @@ def _abort_on_provider_error(command: str, err: BaseException) -> NoReturn:
 #: at its own line -- so the statement order and the real order silently
 #: disagree. Naming the order once, here, is immune to both.
 #:
-#: ``models`` and ``theme`` each attach their own sub-``Typer`` to ``app`` at
-#: their module level rather than registering a flat ``@app.command`` --
-#: click's ``TyperGroup`` renders every sub-``Typer`` AFTER every flat
-#: command, in sub-``Typer`` registration order, regardless of where its
-#: module sits in this tuple (verified empirically: moving ``"theme"`` earlier
-#: in this tuple, ahead of ``"version"``/``"work"``/``"backfill"``, left it
-#: rendered LAST, after ``"models"``'s own sub-``Typer`` -- click groups the
-#: two kinds separately, it does not interleave them). So a sub-``Typer``
-#: module's position in this tuple only fixes its order RELATIVE TO OTHER
-#: SUB-TYPERS (here: ``theme`` before ``models``), not its absolute position
-#: in the help table -- keep such modules trailing here to avoid the tuple
-#: order silently lying about the rendered order (see
-#: tests/test_cli.py's ``HELP_COMMAND_ORDER``, which is the actual rendered
-#: order, not this tuple's).
+#: ``models`` and ``theme`` attach their own sub-``Typer`` instead of a flat
+#: ``@app.command``. click renders every sub-``Typer`` AFTER every flat
+#: command, in sub-``Typer`` registration order -- so their position here fixes
+#: only their order relative to each other, never their absolute position in
+#: the help table. Keep such modules trailing in this tuple so its order does
+#: not lie about the rendered one; the rendered order itself is asserted by
+#: tests/test_cli.py's ``HELP_COMMAND_ORDER``.
 _COMMAND_MODULES = (
     "add",
     "ask",
