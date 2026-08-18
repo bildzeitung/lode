@@ -5,12 +5,16 @@ gate list hand-typed in instruction-file prose. lode-6ldh's fix is structural,
 not another hand list: every covered ``@nox.session`` function must carry
 EXACTLY ONE of three blessed tags -- ``fix`` (unchanged), ``tests``, or
 ``everything-else`` -- so instruction files invoke gates by TAG (``nox -t
-tests``, ``nox -t everything-else``) rather than enumerating session names,
-and a session that forgets its tag (or picks up two) turns this test red
-instead of quietly falling through every bucket.
+fix``, ``nox -t everything-else``) rather than enumerating session names, and
+a session that forgets its tag (or picks up two) turns this test red instead
+of quietly falling through every bucket. (The ``tests`` bucket is the one
+deliberate exception: it is invoked by session name, ``nox -s tests`` or
+``nox -s unit``, because its tag selects both views at once -- see
+``docs/conventions.md``. Its tag still has to be there, which is what
+``test_tests_bucket_has_both_the_full_and_fast_view`` below pins.)
 
 Parsed rather than imported, via the shared ``nox_session_nodes``/
-``noxfile_tree`` helpers in ``tests/conftest.py`` -- see that module's own
+``nox_session_tags`` helpers in ``tests/conftest.py`` -- see that module's own
 comment for why importing ``noxfile.py`` a second time is unavailable here
 (nox's global session registry, ``test_noxfile_venv_tool.py``'s
 ``_load_noxfile``).
@@ -32,10 +36,9 @@ checks vacuously pass.
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
-from conftest import nox_session_nodes
+from conftest import nox_session_nodes, nox_session_tags
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NOXFILE_PATH = REPO_ROOT / "noxfile.py"
@@ -49,27 +52,10 @@ _BLESSED_TAGS = {"fix", "tests", "everything-else"}
 _EXEMPT_SESSIONS = {"eval", "coverage", "build", "lock_currency"}
 
 
-def _session_tags(node: ast.FunctionDef) -> list[str]:
-    """The strings in this session's ``@nox.session(tags=[...])``, if any."""
-    for dec in node.decorator_list:
-        if not (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)):
-            continue
-        if dec.func.attr != "session":
-            continue
-        for kw in dec.keywords:
-            if kw.arg == "tags" and isinstance(kw.value, ast.List):
-                return [
-                    elt.value
-                    for elt in kw.value.elts
-                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-                ]
-    return []
-
-
 def _covered_sessions() -> dict[str, list[str]]:
     """name -> tags, for every ``@nox.session`` NOT in ``_EXEMPT_SESSIONS``."""
     return {
-        name: _session_tags(node)
+        name: nox_session_tags(node)
         for name, node in nox_session_nodes(NOXFILE_PATH).items()
         if name not in _EXEMPT_SESSIONS
     }
@@ -99,11 +85,11 @@ def test_the_derivation_is_not_vacuous() -> None:
 
 def test_every_covered_session_carries_exactly_one_blessed_tag() -> None:
     """The core registration gate: zero or 2+ blessed tags both fail."""
-    violations = {
-        name: [t for t in tags if t in _BLESSED_TAGS]
+    bad = {
+        name: matched
         for name, tags in _covered_sessions().items()
+        if len(matched := [t for t in tags if t in _BLESSED_TAGS]) != 1
     }
-    bad = {name: matched for name, matched in violations.items() if len(matched) != 1}
     assert not bad, (
         "these @nox.session functions carry zero or 2+ of the blessed tags "
         f"{sorted(_BLESSED_TAGS)} (lode-6ldh): {bad}. Every session not in "

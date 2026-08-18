@@ -184,8 +184,9 @@ green run ending `Session tests was successful` is your "environment is wired up
 
 **Blessed gate-invocation buckets (lode-6ldh).** Agent instruction files (`.claude/agents/coding.md`
 and friends) never enumerate the shellcheck/linkcheck/docstringcheck/docs sessions by name — they
-invoke `nox -t everything-else` instead, and `nox -t tests` covers both `tests` and its fast `unit`
-view as two VIEWS of one bucket. See [`docs/conventions.md`](conventions.md) for the full fiat and
+invoke `nox -t everything-else` instead. The `tests` bucket is the one invoked by session name —
+`nox -s unit` (builders) or `nox -s tests` (reviewer, `/land`) — since `nox -t tests` selects both
+of its views and runs a redundant second pytest pass. See [`docs/conventions.md`](conventions.md) for the full fiat and
 `noxfile.py`'s module docstring for exactly which sessions carry which tag.
 
 Five opt-in sessions sit outside the default set:

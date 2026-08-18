@@ -4,25 +4,30 @@
 rule).** Every DEFAULT-set session (plus ``unit``) carries exactly one of three nox tags --
 ``fix`` (unchanged), ``tests``, or ``everything-else`` -- and instruction-file gate prose
 (``coding.md``, ``code-reviewer.md``, ``code/SKILL.md``, ``docs/agents-workflow.md``) invokes
-gates by TAG (``nox -t tests``, ``nox -t everything-else``), never by enumerating individual
-session names. A corpus-scan pytest gate (``tests/test_nox_bucket_gate.py``) fails the suite if
+gates by TAG (``nox -t fix``, ``nox -t everything-else``), never by enumerating individual
+session names -- with ONE deliberate exception, the ``tests`` bucket, which is invoked by
+session name (``nox -s unit`` for builders, ``nox -s tests`` for the reviewer and ``/land``)
+because ``nox -t tests`` would select BOTH of its views and run a redundant second pytest pass.
+A corpus-scan pytest gate (``tests/test_nox_bucket_gate.py``) fails the suite if
 a covered session carries zero or 2+ of these tags, so a newly-added session can't silently go
 ungated the way ``shellcheck`` did (lode-vvt1). Full fiat text: ``docs/conventions.md``.
 
 **Bucket membership:**
 
-    nox -t fix               ruff format + ruff check --fix        (unchanged, pre-merge fixer)
-    nox -t tests              tests + unit  (two VIEWS of one bucket -- unit is tests' fast,
-                                              not-slow-marked projection, lode-pql)
-    nox -t everything-else    shellcheck + linkcheck + docstringcheck + docs
+    fix (tag)               ruff format + ruff check --fix          invoke: nox -t fix
+    tests (tag)             tests + unit -- two VIEWS of one         invoke: nox -s tests (full)
+                              bucket; unit is tests' fast,                   or nox -s unit (fast)
+                              not-slow-marked projection (lode-pql)          -- NEVER `-t tests`,
+                                                                             which selects both
+    everything-else (tag)   shellcheck + linkcheck +                 invoke: nox -t everything-else
+                              docstringcheck + docs
 
 **Staged gate policy (who runs what, lode-6ldh):**
 
-    coding builders                 nox -t fix, then nox -t tests -- unit -- ONLY (lode-6ldh
-                                     amendment: the fast not-slow subset, not the full
-                                     serial+slow tests run -- keeps per-builder gate cost at the
-                                     fast inner-loop baseline)
-    code-reviewer / /land re-gate   nox -t fix, nox -t tests -- full tests, not unit --, and
+    coding builders                 nox -t fix, then nox -s unit ONLY (lode-6ldh amendment: the
+                                     fast not-slow subset, not the full serial+slow tests run --
+                                     keeps per-builder gate cost at the fast inner-loop baseline)
+    code-reviewer / /land re-gate   nox -t fix, nox -s tests (full, not unit), and
                                      nox -t everything-else -- ALL buckets, since these are the
                                      last gates before trunk (resolves lode-87v7's gap)
 
