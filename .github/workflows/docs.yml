@@ -101,7 +101,19 @@ jobs:
         # toolchain (lode-fhql.9's acceptance). A future docs build needing a
         # dependency-carrying lode module fails loudly here with
         # ModuleNotFoundError -- add that dependency explicitly and pinned.
-        run: pip install --no-deps -e . "mkdocs-material==9.5.44" "typer==0.27.1"
+        #
+        # THE TWO-COMMAND SPLIT BELOW IS LOAD-BEARING (lode-xx46) -- do not
+        # collapse it back into one `pip install` line. `--no-deps` applies to
+        # EVERY requirement on a single pip install line, not just `-e .`; a
+        # collapsed line starves mkdocs-material and typer of their own
+        # dependency trees (typer 0.27.1 imports `annotated_doc` at module load
+        # and dies with ModuleNotFoundError when that tree is skipped). Keeping
+        # `-e .` on its own `--no-deps` line preserves the intent above while
+        # letting the pinned toolchain packages resolve their dependencies
+        # normally on the second, un-flagged line.
+        run: |
+          pip install --no-deps -e .
+          pip install "mkdocs-material==9.5.44" "typer==0.27.1"
 
       # mermaid-cli's image is pulled once here rather than left to the
       # first `docker run` inside build_docs_site.py, so a pull failure
