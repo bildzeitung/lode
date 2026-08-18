@@ -171,9 +171,11 @@ These bind every future identity artifact (the SVG mark, the ASCII/Unicode wordm
 OG card) once drawn — this brief predates them, so the rules here are stated as constraints on
 what gets built, not as a description of something that already exists.
 
-- **Clear space.** Whatever the mark's own bounding shape ends up being, keep clear space around
-  it at least equal to the height of its tallest element on every side, before any lockup with the
-  wordmark or with surrounding text/UI chrome.
+- **Clear space.** The assembled lockup (mark + wordmark, as one unit) needs clear space around it
+  at least equal to the height of the mark's tallest element on every side, before any surrounding
+  text or UI chrome. This rule does **not** apply between the mark and its own wordmark — the
+  mark-to-wordmark gap inside the lockup is a fixed part of the lockup asset itself, not something
+  clear-space governs (decision `lode-fhql.18`, Option A).
 - **Minimum size.** The mark must stay legible (no illegible detail, no colour-fill collapsing to
   a smear) down to a 16×16 favicon rendering — this is a hard constraint on how much detail the
   mark is allowed to carry, decided here so the artist doesn't discover it after drawing something
