@@ -8,9 +8,9 @@ sleeps a fixed short interval on the **same event loop** Textual's key handling 
 run on, and logs how much *longer* each sleep actually took than requested. A free loop's
 sleeps return on time (near-zero lag); a loop starved by a GIL-holding background call comes
 back late by roughly the same amount a keystroke on that loop would also be delayed by --
-this is the keystroke->render latency proxy this spike uses (see
-``tests/test_capture_lag_diagnosis.py`` for the offline reproduction against the seeded
-corpus and the pass/fail verdict).
+this is the keystroke->render latency proxy this spike uses. To observe it against the
+real app, run with ``LODE_LOG_LEVEL=DEBUG`` and watch the capture screen's heartbeat log
+lines (see :mod:`lode.tui.screens.capture`).
 
 Entirely opt-in and zero-cost by default: :func:`probe_event_loop_lag` is only ever started
 by :mod:`lode.tui.screens.capture` when its logger is at DEBUG

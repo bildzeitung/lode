@@ -48,9 +48,8 @@ DEBUG logging is on, an event-loop-lag heartbeat
 keystroke->render latency proxy. All of it is gated behind
 ``log.isEnabledFor(logging.DEBUG)`` (``LODE_LOG_LEVEL=DEBUG``,
 :mod:`lode.logconfig`) -- zero log calls and no extra worker at the default
-``INFO`` level, so this changes no behaviour. See
-``tests/test_capture_lag_diagnosis.py`` for the offline reproduction against
-the lode-5y8.4 seed corpus and the measured verdict.
+``INFO`` level, so this changes no behaviour. Run with ``LODE_LOG_LEVEL=DEBUG``
+to see the heartbeat live (:mod:`lode.tui.latency_probe`).
 
 **Latency fix: reuse one embedder instead of one per pass (lode-0wj.4).** The
 lag-diagnosis spike (lode-0wj.2) found the related-notes pass itself non-blocking -- but
