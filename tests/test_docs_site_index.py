@@ -18,12 +18,20 @@ mkdocs.yml, so there is no second mechanism to gate here.
 import re
 from pathlib import Path
 
-from conftest import mkdocs_config
+from conftest import load_module_from_path, mkdocs_config
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INDEX = REPO_ROOT / "docs" / "index.md"
 README = REPO_ROOT / "README.md"
 STACK = REPO_ROOT / "docs" / "stack.md"
+
+# Loaded under a name distinct from test_build_docs_site.py's own
+# ``load_module_from_path("build_docs_site", ...)`` -- that helper registers
+# permanently in sys.modules for the whole test session and asserts on a
+# second load under the same name (conftest.load_module_from_path docstring).
+build_docs_site = load_module_from_path(
+    "build_docs_site_for_index_test", REPO_ROOT / "scripts" / "build_docs_site.py"
+)
 
 # The PUBLISHED set from docs/stack.md (lode-fhql.8), as an ALLOWLIST.
 #
@@ -189,6 +197,28 @@ def test_published_set_matches_stack_md() -> None:
             f"docs/{directory}/ is in this module's PUBLISHED literal but docs/stack.md's "
             "PUBLISHED bullet no longer names it -- reconcile the two."
         )
+
+
+def test_published_top_level_matches_build_docs_site() -> None:
+    """This module's PUBLISHED_TOP_LEVEL and build_docs_site's must agree (lode-zznx).
+
+    The two are independently hand-maintained: this literal gates mkdocs.yml's
+    nav, build_docs_site.PUBLISHED_TOP_LEVEL decides what actually stages (and
+    hence what actually ships). Each was anchored to docs/stack.md's PUBLISHED
+    bullet only in ONE direction (test_published_set_matches_stack_md above),
+    so a page added to one list but not the other passed every existing gate,
+    surfacing only as a page that silently does or does not ship. This closes
+    that gap directly, without collapsing the two into one derived source --
+    the test literal is held deliberately (see the module docstring above and
+    PUBLISHED_TOP_LEVEL's own comment).
+    """
+    script_stems = {Path(name).stem for name in build_docs_site.PUBLISHED_TOP_LEVEL}
+    assert script_stems == PUBLISHED_TOP_LEVEL, (
+        "scripts/build_docs_site.py's PUBLISHED_TOP_LEVEL and this module's "
+        "PUBLISHED_TOP_LEVEL have drifted apart: "
+        f"only in build_docs_site.py: {sorted(script_stems - PUBLISHED_TOP_LEVEL)}; "
+        f"only in this test module: {sorted(PUBLISHED_TOP_LEVEL - script_stems)}."
+    )
 
 
 def test_mkdocs_yml_has_no_exclude_docs() -> None:

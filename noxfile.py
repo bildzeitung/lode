@@ -350,9 +350,11 @@ def docs(session: nox.Session) -> None:
     **Coverage boundary:** ``mkdocs.yml``'s ``docs_dir`` points at the STAGED output of
     ``scripts/build_docs_site.py`` (lode-fhql.9's HUMAN DECISION 2026-08-14 superseded the
     ``exclude_docs`` allowlist this docstring used to describe), so this session only ever
-    sees the PUBLISHED set (``index``/``design``/``storage``/``retrieval``/``externals``/
-    ``brand``/``keymap``/``settings`` + ``how-to/``) -- nothing else can ship on ``docs_dir``
-    by construction. Anchors in and into unpublished pages -- ``decisions.md``, ``stack.md``, ``configuration.md``, ...
+    sees the PUBLISHED set -- ``scripts/build_docs_site.py``'s ``PUBLISHED_TOP_LEVEL`` +
+    ``PUBLISHED_DIRS`` is the authoritative enumeration; deliberately NOT restated here as a
+    third hand-maintained list (lode-zznx: a fourth copy is one more thing that can silently
+    drift from the other two) -- nothing else can ship on ``docs_dir`` by construction.
+    Anchors in and into unpublished pages -- ``decisions.md``, ``stack.md``, ``configuration.md``, ...
     -- are ``linkcheck``'s job alone. These two gates are complements, not duplicates.
 
     Stages with ``--no-mermaid`` first (copy-only, no Docker) so this session -- in the
