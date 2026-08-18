@@ -181,6 +181,7 @@ def test_note_body_syntax_styles_is_exactly_the_declared_palette() -> None:
         "text.literal": Style(color="plum3"),
         "punctuation.delimiter": Style(color="grey42"),
         "heading.marker": Style(color="steel_blue3"),
+        "heading": Style(color="steel_blue3"),
         "list.marker": Style(color="dark_sea_green4"),
     }
 
@@ -233,8 +234,10 @@ def test_markdown_constructs_render_the_palette_end_to_end() -> None:
     code = Style(color="plum3")
     fence = Style(color="grey42")
 
-    # Heading marker colours; the heading TEXT capture is deliberately unmapped.
-    assert _spans(0) == [Style(color="steel_blue3")]
+    # Heading marker and heading text both colour (the text mapping was added
+    # by maintainer revision -- lode-lab1 originally left it unmapped).
+    heading = Style(color="steel_blue3")
+    assert _spans(0) == [heading, heading]
     # Bullets, and the thematic break that shares their capture (see the
     # palette comment -- the grammar gives no way to separate the two).
     bullet = Style(color="dark_sea_green4")

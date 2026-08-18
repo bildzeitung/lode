@@ -86,7 +86,10 @@ from textual.widgets.text_area import LanguageDoesNotExist, TextAreaTheme
 #:   fence recedes behind the code it wraps. Rendered *over* the ``text.literal``
 #:   whole-line span on those two lines, which is exactly the intent.
 #: * ``heading.marker`` -- the ``#``..``######`` markers and the setext
-#:   underlines. Present without competing with the heading text.
+#:   underlines.
+#: * ``heading`` -- the heading text itself, coloured the same as its marker so
+#:   the whole heading line reads as one unit (maintainer revision: lode-lab1
+#:   originally left it unmapped, i.e. body-coloured, and that was reversed).
 #: * ``list.marker`` -- bullet and ordered markers. NOTE: the grammar puts
 #:   ``thematic_break`` (``---``) in this same capture, so horizontal rules take
 #:   the bullet colour; there is no way to separate them without a custom
@@ -100,6 +103,7 @@ NOTE_BODY_SYNTAX_STYLES: dict[str, Style] = {
     "text.literal": Style(color="plum3"),
     "punctuation.delimiter": Style(color="grey42"),
     "heading.marker": Style(color="steel_blue3"),
+    "heading": Style(color="steel_blue3"),
     "list.marker": Style(color="dark_sea_green4"),
 }
 
