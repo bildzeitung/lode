@@ -1140,11 +1140,15 @@ it would mask the 2. Keep it there.
   each `CONFLICT` id like any other needs-rebase kick-back.
 
   **If the replay reports NO `BOUNCED` and no `CONFLICT` — every accepted id `LANDED` — the red is
-  UNATTRIBUTED and I stop the pass, landing nothing** (lode-6ldh). The replay's gates are narrower
-  than the combined re-gate that sent me here: it runs `nox -t fix` / `nox -s tests` /
-  `nox -s lock_currency`, but **not** `nox -t everything-else` (lode-b9qy tracks widening it), so a
-  `shellcheck`/`linkcheck`/`docstringcheck`/`docs` regression turns the combined re-gate red and
-  then goes unreproduced here, leaving every branch looking clean. Proceeding to
+  UNATTRIBUTED and I stop the pass, landing nothing** (lode-6ldh). As of lode-b9qy the replay's
+  gate set matches the combined re-gate that sent me here — `nox -t fix` / `nox -s tests` /
+  `nox -t everything-else` / `nox -s lock_currency` — so the specific gap this guard was written
+  for (a `shellcheck`/`linkcheck`/`docstringcheck`/`docs` regression reddening the combined re-gate
+  and then going unreproduced here) is closed. **The guard stays regardless**: an all-green replay
+  under a red combined re-gate still means the red was not reproduced against any single branch —
+  a nondeterministic test, an ordering effect only the full batch exhibits, or a gate set that has
+  drifted apart again — and an unattributed red is the only honest verdict for any of those.
+  Proceeding to
   [Section 4](#4-land-the-survivors) on that all-green replay would push a `trunk` I *know* is red —
   laundering the failure rather than attributing it. So: reset local `trunk` to `origin/trunk`,
   land nothing, leave every ticket at `ready-for-land`, and surface the combined re-gate's own

@@ -226,7 +226,7 @@ def test_a_branch_that_fails_a_nox_gate_is_bounced_and_backed_out(
     `nox -t fix` and `nox -s tests` into separate arms (each arm owns its own
     bounce path, so neither is covered by the other), and lode-b9qy added
     `nox -t everything-else` (shellcheck/linkcheck/docstringcheck/docs) as a
-    fourth per-branch gate, matching lode-6ldh's staged reviewer/land gate
+    third per-branch nox gate, matching lode-6ldh's staged reviewer/land gate
     policy -- a red finding there must be attributed to the branch that
     introduced it, not silently missed."""
     repo = _init_repo(tmp_path)

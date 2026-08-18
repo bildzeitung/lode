@@ -33,9 +33,9 @@
 # everything-else / nox -s lock_currency) -- unlike land-merge-batch.sh,
 # which runs none. That is the entire reason the isolation-replay loop
 # exists: a combined merge can be green with two branches each clean in
-# isolation, so the only way to find
-# the culprit is to gate after every single merge, on a checkout no other
-# branch has touched. It also performs the two destructive resets this
+# isolation, so the only way to find the culprit is to gate after every
+# single merge, on a checkout no other branch has touched. It also
+# performs the two destructive resets this
 # whole path is named for: `git reset --hard <base-ref>` once, up front, and
 # `git reset --hard HEAD~1` per bounced branch.
 #
@@ -441,17 +441,18 @@ for id in $ACCEPTED_IDS; do
     continue
   fi
 
-  # lode-b9qy: the everything-else bucket (shellcheck/linkcheck/docstringcheck/docs),
-  # matching lode-6ldh's staged reviewer/land gate policy -- so a red finding in any of
-  # those a merged branch introduces is attributed to it here, not silently missed. Same
-  # escalate_unless_content partition as `nox -t fix` / `nox -s tests` above: exit 1 is the
-  # only content verdict, anything else is a machine fault that stops the whole replay.
+  # lode-b9qy: the everything-else bucket
+  # (shellcheck/linkcheck/docstringcheck/docs), matching lode-6ldh's staged
+  # reviewer/land gate policy -- so a red finding in any of those a merged
+  # branch introduces is attributed to it here, not silently missed. Same
+  # `escalate_unless_content` partition, and the same arm shape, as the two
+  # gates above -- see their comment for why both are written this way.
   if nox -t everything-else; then
     :
   else
-    ee_rc=$?
-    escalate_unless_content "$ee_rc" \
-      "'nox -t everything-else' failed with exit $ee_rc after merging '$id'." \
+    everything_else_rc=$?
+    escalate_unless_content "$everything_else_rc" \
+      "'nox -t everything-else' failed with exit $everything_else_rc after merging '$id'." \
       "Exit 1 is the only content verdict (lode-9i2p); a 127/126/signal here is a" \
       "machine fault, not '$id''s verdict -- do NOT bounce it on the strength of this."
     bounce "$id"
