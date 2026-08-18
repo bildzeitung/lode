@@ -733,8 +733,9 @@ Collect verdicts for the whole queue before merging — I want the full accepted
 Two branches each green *in isolation* can break when **combined** (a clean git merge with broken
 behaviour). So I merge the whole accepted set, then re-gate the combined `trunk` **once**.
 
-**Every re-gate in this section — the combined re-gate below and the isolation-replay loop's own
-`nox -s tests` / `nox -s lock_currency` — runs in the FOREGROUND, in the same turn, and its result is
+**Every re-gate in this section — the combined re-gate below (`nox -t fix`, `nox -s tests`,
+`nox -t everything-else`, `nox -s lock_currency`) and the isolation-replay loop's own narrower
+set — runs in the FOREGROUND, in the same turn, and its result is
 read from its own real exit status, never from a downstream command's.** No `run_in_background`, no
 `Monitor`, no ending a turn on a pending gate — the same lode-95o rule the producer agents already carry
 (`.claude/agents/coding.md`, `.claude/agents/code-reviewer.md`); `nox -s tests` fits well under
@@ -1031,8 +1032,15 @@ check, which a skipped `nox -t fix` leaves clean.
 
 ```bash
 . ./venv/bin/activate
-nox -t fix && nox -s tests && nox -s lock_currency     # if nox -t fix reformats merged code, commit that as part of the merge result
+nox -t fix && nox -s tests && nox -t everything-else && nox -s lock_currency     # if nox -t fix reformats merged code, commit that as part of the merge result
 ```
+
+**`nox -t everything-else` (lode-6ldh, resolving lode-87v7) runs the everything-else bucket
+(`shellcheck`/`linkcheck`/`docstringcheck`/`docs`) against the MERGED batch, not just against each
+branch individually before the merge** — two independently-green branches that together break a
+doc anchor, a cross-file markdown link, or a shell lint would otherwise land red. `lock_currency`
+stays a separate, explicit call: it needs network and is not part of the blessed-tag bucket scheme
+(full fiat: `docs/conventions.md`).
 
 **`nox -s lock_currency` (lode-sys4) catches a stale `requirements.lock` here — locally, before the
 public CI badge does.** A branch that bumped a `pyproject.toml` dependency without regenerating the
@@ -1130,6 +1138,18 @@ it would mask the 2. Keep it there.
   [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)'s job (lode-k9ef). The survivors it
   reports `LANDED` stay merged on local `trunk`; each `BOUNCED` id is handled like any other bounce, and
   each `CONFLICT` id like any other needs-rebase kick-back.
+
+  **If the replay reports NO `BOUNCED` and no `CONFLICT` — every accepted id `LANDED` — the red is
+  UNATTRIBUTED and I stop the pass, landing nothing** (lode-6ldh). The replay's gates are narrower
+  than the combined re-gate that sent me here: it runs `nox -t fix` / `nox -s tests` /
+  `nox -s lock_currency`, but **not** `nox -t everything-else` (lode-b9qy tracks widening it), so a
+  `shellcheck`/`linkcheck`/`docstringcheck`/`docs` regression turns the combined re-gate red and
+  then goes unreproduced here, leaving every branch looking clean. Proceeding to
+  [Section 4](#4-land-the-survivors) on that all-green replay would push a `trunk` I *know* is red —
+  laundering the failure rather than attributing it. So: reset local `trunk` to `origin/trunk`,
+  land nothing, leave every ticket at `ready-for-land`, and surface the combined re-gate's own
+  output as an escalation. This is a machine-fault-shaped stop, not a bounce: no branch has been
+  judged.
 
 ---
 

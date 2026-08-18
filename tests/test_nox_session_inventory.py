@@ -53,7 +53,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from conftest import nox_session_nodes, noxfile_tree
+from conftest import nox_session_nodes, nox_session_tags, noxfile_tree
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NOXFILE_PATH = REPO_ROOT / "noxfile.py"
@@ -112,23 +112,6 @@ _DOCUMENTS: dict[str, Callable[[], str]] = {
 }
 
 
-def _session_tags(node: ast.FunctionDef) -> list[str]:
-    """The strings in this session's ``@nox.session(tags=[...])``, if any."""
-    for dec in node.decorator_list:
-        if not (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)):
-            continue
-        if dec.func.attr != "session":
-            continue
-        for kw in dec.keywords:
-            if kw.arg == "tags" and isinstance(kw.value, ast.List):
-                return [
-                    elt.value
-                    for elt in kw.value.elts
-                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-                ]
-    return []
-
-
 def _session_invocations() -> dict[str, str]:
     """Map every ``@nox.session`` function name to its canonical CLI
     invocation -- ``nox -t <tag>`` for a tagged session (e.g. ``fix``),
@@ -137,7 +120,7 @@ def _session_invocations() -> dict[str, str]:
     """
     invocations = {}
     for name, node in nox_session_nodes(NOXFILE_PATH).items():
-        tags = _session_tags(node)
+        tags = nox_session_tags(node)
         invocations[name] = f"nox -t {tags[0]}" if tags else f"nox -s {name}"
     return invocations
 
@@ -151,7 +134,7 @@ def _real_invocations() -> set[str]:
     nodes = nox_session_nodes(NOXFILE_PATH)
     real = {f"nox -s {name}" for name in nodes}
     for node in nodes.values():
-        real |= {f"nox -t {tag}" for tag in _session_tags(node)}
+        real |= {f"nox -t {tag}" for tag in nox_session_tags(node)}
     return real
 
 
