@@ -114,6 +114,21 @@ class TestDocsSlugCopyAgrees:
         heading = "See [](other.md) for more"
         assert docs_slug.github_slug(heading) == github_slug(heading)
 
+    def test_anchor_slugs_agrees_on_every_docs_file(self):
+        """``docs_slug.anchor_slugs`` is the importable copy of this gate's
+        ``_slugs_for_file`` (scripts/build_docs_site.py consults it to decide
+        whether an aliased link's fragment survives, lode-7uze). Same
+        copy-plus-equivalence discipline as the slug copy above: a drift would
+        let the site builder rewrite a link onto an anchor this gate does not
+        believe exists, or vice versa."""
+        paths = sorted((REPO_ROOT / "docs").rglob("*.md"))
+        assert paths, "no docs/*.md found -- the corpus scan is not running"
+        for path in paths:
+            expected = check_links._slugs_for_file(path, {})
+            assert (
+                docs_slug.anchor_slugs(path.read_text(encoding="utf-8")) == expected
+            ), f"anchor-set copies disagree on {path}"
+
 
 class TestCheck:
     def test_clean_tree_has_no_errors(self, tmp_path):

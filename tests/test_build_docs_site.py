@@ -16,8 +16,24 @@ from pathlib import Path
 import pytest
 import yaml
 from conftest import load_module_from_path
+from test_skill_bash_state import _strip_comment
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _uncommented_lines(text: str) -> list[str]:
+    """Shell lines that actually execute -- comments and blanks dropped.
+
+    Comment stripping is delegated to ``test_skill_bash_state._strip_comment``
+    (the suite's existing quote-aware stripper, already shared by two other
+    gates) rather than re-rolled here.
+    """
+    return [
+        stripped
+        for line in text.splitlines()
+        if (stripped := _strip_comment(line).strip())
+    ]
+
 
 build_docs_site = load_module_from_path(
     "build_docs_site", REPO_ROOT / "scripts" / "build_docs_site.py"
@@ -34,6 +50,8 @@ PUBLISHED = {
     "brand.md",
     "how-to/README.md",
     "how-to/config-change.md",
+    "keymap.md",
+    "settings.md",
 }
 BASE = build_docs_site.GITHUB_BASE
 
@@ -52,12 +70,6 @@ EXCLUDED = {
     "tui.md",
     "editing.md",
     "configuration.md",
-    # lode-fhql.15's derived reference pages -- exist in docs/ but are not
-    # yet wired into the PUBLISHED set. docs/stack.md ("Publish-scope wiring
-    # is a follow-up") explicitly defers that to lode-gecm, blocked on both
-    # this ticket and .15; unpublished-for-now, not an oversight.
-    "keymap.md",
-    "settings.md",
 }
 
 
@@ -75,11 +87,6 @@ EXCLUDED = {
         ("design.md", "#a-same-page-anchor", None),
         # Published -> unpublished: the one rewrite rule.
         ("design.md", "decisions.md", f"{BASE}/docs/decisions.md"),
-        (
-            "design.md",
-            "configuration.md#models",
-            f"{BASE}/docs/configuration.md#models",
-        ),
         ("how-to/README.md", "../stack.md", f"{BASE}/docs/stack.md"),
         # Repo-root and source files -- one level up out of docs/.
         ("design.md", "../README.md", f"{BASE}/README.md"),
@@ -91,6 +98,26 @@ EXCLUDED = {
         # Escapes the repo: no blob URL can express it, so leave it verbatim
         # rather than emit a confidently-wrong link.
         ("design.md", "../../elsewhere/x.md", None),
+        # lode-fhql.15's derived pages take precedence over the GitHub
+        # fallback (docs/stack.md): a citation of the maintainer doc resolves
+        # to its published, derived counterpart instead.
+        ("design.md", "keybindings.md", "keymap.md"),
+        ("design.md", "configuration.md", "settings.md"),
+        ("design.md", "configuration.md#models", "settings.md#models"),
+        # ...but only when the derived page HAS that anchor (see
+        # build_docs_site._alias_anchors); otherwise the GitHub blob URL wins.
+        (
+            "design.md",
+            "configuration.md#not-a-section-settings-md-carries",
+            f"{BASE}/docs/configuration.md#not-a-section-settings-md-carries",
+        ),
+        (
+            "how-to/README.md",
+            "../configuration.md#no-such-section",
+            f"{BASE}/docs/configuration.md#no-such-section",
+        ),
+        ("how-to/README.md", "../keybindings.md", "../keymap.md"),
+        ("how-to/README.md", "../configuration.md", "../settings.md"),
     ],
 )
 def test_rewrite_target(current: str, target: str, expected: str | None) -> None:
@@ -218,6 +245,49 @@ def test_workflow_pins_match_their_sources() -> None:
         f"docs.yml installs typer for scripts/build_docs_site.py; pin it at "
         f"{typer_pin} to match requirements.lock."
     )
+
+
+def test_validate_mermaid_and_update_images_pin_match_build_docs_site() -> None:
+    """docs/stack.md mandates ONE mermaid-cli image shared by every consumer
+    -- not a second, independently-versioned copy (lode-3ld8). Nothing but
+    this test keeps scripts/validate-mermaid.sh's merge-gate pin and
+    scripts/update-images.sh's pull in sync with the docs-site render pin.
+
+    A drift here means the merge gate validates diagrams against one parser
+    version while the docs site renders them with another -- a diagram could
+    pass CI and still fail (or silently differ) when the site builds it.
+
+    Both checks read the scripts' *executable* lines only: validate-mermaid.sh
+    quotes its own ``IMAGE=`` assignment inside a long explanatory comment, so
+    a whole-file substring match would stay green even if the live assignment
+    were reverted to a floating tag.
+    """
+    for script, pattern in (
+        (
+            "validate-mermaid.sh",
+            rf'^IMAGE="{re.escape(build_docs_site.MERMAID_IMAGE)}"$',
+        ),
+        (
+            "update-images.sh",
+            rf"^docker pull {re.escape(build_docs_site.MERMAID_IMAGE)}$",
+        ),
+    ):
+        code = _uncommented_lines((REPO_ROOT / "scripts" / script).read_text("utf-8"))
+        assert any(re.match(pattern, line) for line in code), (
+            f"scripts/{script} must use {build_docs_site.MERMAID_IMAGE} on an "
+            "executable line -- the same tag scripts/build_docs_site.py renders "
+            f"the docs site with. Found: {[m for m in code if 'mermaid-cli' in m]}"
+        )
+        others = [
+            line
+            for line in code
+            if "minlag/mermaid-cli" in line
+            and build_docs_site.MERMAID_IMAGE not in line
+        ]
+        assert not others, (
+            f"scripts/{script} references a second mermaid-cli tag: {others}. "
+            "docs/stack.md mandates ONE shared pin."
+        )
 
 
 def test_mkdocs_material_pin_matches_pyproject() -> None:

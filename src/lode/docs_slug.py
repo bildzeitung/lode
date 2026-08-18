@@ -46,6 +46,8 @@ from __future__ import annotations
 
 import re
 
+from lode.fence_parsing import fence_flags
+
 # Character-for-character `scripts/check_links.py`'s own `_LINK_TEXT_RE`,
 # `[^\]]*` included: the two differ only on a heading whose link text is EMPTY
 # (`[](url)`), the one input the docs/-corpus equivalence test cannot cover
@@ -59,6 +61,44 @@ def github_slug(heading_text: str) -> str:
     text = _LINK_TEXT_RE.sub(r"\1", heading_text).lower()
     text = re.sub(r"[^\w\- ]", "", text)
     return text.replace(" ", "-")
+
+
+# Character-for-character `scripts/check_links.py`'s `_ATX_HEADING_RE` and
+# `_HTML_ANCHOR_RE`. Same copy-plus-equivalence-test discipline as
+# `_LINK_TEXT_RE` above: that gate cannot import this module (see the module
+# docstring), so `tests/test_check_links.py` asserts the two implementations
+# return the identical anchor set for every `docs/*.md` file instead.
+_ATX_HEADING_RE = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
+_HTML_ANCHOR_RE = re.compile(r'<a\s+(?:id|name)=["\']([^"\']+)["\']', re.IGNORECASE)
+
+
+def anchor_slugs(text: str) -> set[str]:
+    """Every anchor a markdown document offers, as GitHub addresses them.
+
+    Each heading's slug -- including GitHub's disambiguating ``-1``, ``-2``
+    suffixes when a heading repeats -- plus the literal id of every explicit
+    ``<a id="...">`` / ``<a name="...">`` anchor. Headings inside fenced code
+    blocks are not headings and are skipped; an explicit anchor tag inside one
+    is skipped for the same reason.
+
+    ``scripts/check_links.py::_slugs_for_file`` is the authority for this
+    algorithm -- this is the importable copy of it, for callers that can
+    ``import lode``.
+    """
+    lines = text.split("\n")
+    slugs: set[str] = set()
+    seen: dict[str, int] = {}
+    for line, fenced in zip(lines, fence_flags(lines), strict=True):
+        if fenced:
+            continue
+        heading = _ATX_HEADING_RE.match(line)
+        if heading:
+            base = github_slug(heading.group(1))
+            count = seen.get(base, 0)
+            seen[base] = count + 1
+            slugs.add(base if count == 0 else f"{base}-{count}")
+        slugs.update(_HTML_ANCHOR_RE.findall(line))
+    return slugs
 
 
 def github_slugify(value: str, separator: str) -> str:

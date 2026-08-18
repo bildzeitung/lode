@@ -43,14 +43,14 @@ esac
 # forced every test to plant a copy of land-lock.sh inside its throwaway repo.
 LAND_LOCK="$(dirname "$0")/land-lock.sh"
 
-# `--git-dir`, NOT land-lock.sh's `--path-format=absolute --git-common-dir`. That
-# divergence is DELIBERATE and must stay paired: SKILL.md WRITES the token file at
-# the `--git-dir` path, so the reader has to look where the writer put it. The two
-# resolve identically in the main checkout, which is the only place /land runs
-# (scripts/assert-main-checkout.sh). Harmonizing the pair onto --git-common-dir is
-# follow-up work and must move the writer and this reader together -- changing one
-# alone silently orphans the token.
-GITDIR="$(git rev-parse --git-dir 2>/dev/null)" || GITDIR=""
+# Same idiom as land-lock.sh's own $LOCK resolution: `--path-format=absolute
+# --git-common-dir`, not bare `--git-dir`. From a LINKED worktree bare --git-dir
+# returns that worktree's PRIVATE gitdir, so a reader using it would look in the
+# wrong place for a token SKILL.md writes at the shared --git-common-dir path.
+# SKILL.md's write site, its two Section 3 read-back sites and this read site all
+# use the one idiom and must stay paired -- changing one alone silently orphans
+# the token (lode-k6h0).
+GITDIR="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || GITDIR=""
 if [ -z "$GITDIR" ]; then
   echo "land-heartbeat: WARNING -- not inside a git repository; no $MODE performed" >&2
   exit 0
