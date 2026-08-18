@@ -75,6 +75,7 @@ from textual.app import App
 from textual.binding import Binding
 
 from lode.config import Settings, default_db_path
+from lode.theming import resolve_note_body_theme, resolve_theme
 from lode.tui.screens.ask import AskScreen
 from lode.tui.screens.browse import BrowseScreen
 from lode.tui.screens.capture import CaptureScreen
@@ -219,6 +220,17 @@ class LodeApp(App[str | None]):
         super().__init__()
         self.db_path = db_path or default_db_path()
         self.settings = settings or Settings()
+        # TUI theme config (lode-cwyk): note_body_theme is always set (falls
+        # back to the existing NOTE_BODY_THEME singleton -- see
+        # lode.theming's module docstring for the byte-identical-when-absent
+        # contract); the app-chrome Theme is only registered/activated when
+        # [tui.theme] is actually configured, so an absent section never
+        # touches App's own "textual-dark" default at all.
+        self.note_body_theme = resolve_note_body_theme(self.settings)
+        if self.settings.tui.theme is not None:
+            theme = resolve_theme(self.settings)
+            self.register_theme(theme)
+            self.theme = theme.name
 
     def on_mount(self) -> None:
         self.push_screen("capture")

@@ -116,6 +116,151 @@ _SECRET_SEED_PATTERNS: list[str] = [
 ]
 
 
+# --- TUI theme config (lode-cwyk, design settled lode-5zxt/lode-dmbc) --------
+# Base-theme-plus-overrides: a registered Textual theme name, plus a fixed key
+# set of colour overrides on that theme's variables, plus a closed key set of
+# note-body syntax colour overrides. See docs/decisions.md's lode-dmbc entry
+# (2026-08-17 update) for the full settled design and precedence rules.
+
+
+def _validate_colour(owner: str, key: str, value: str | None) -> None:
+    """Fail loudly at config load if ``value`` is not a colour-only string.
+
+    Shared by both ``[tui.theme.colors]`` and ``[tui.theme.syntax]`` (lode-cwyk
+    "All colour values colour-only strings, parsed at config load") so a typo
+    surfaces here, naming the offending key, rather than as a render-time
+    failure deep inside Textual (answering lode-dmbc objection 2a).
+    """
+    if value is None:
+        return
+    # Imported locally: textual is a hard dependency (see
+    # lode/tui/screens/_markdown_area.py's module docstring) but nothing else
+    # in this module needs it, so the import stays scoped to this one helper.
+    from textual.color import Color, ColorParseError
+
+    try:
+        Color.parse(value)
+    except ColorParseError as exc:
+        raise ValueError(f"{owner}.{key}: invalid colour {value!r}: {exc}") from exc
+
+
+class TuiThemeColors(BaseModel):
+    """``[tui.theme.colors]`` -- overrides on the base theme's colour variables.
+
+    The field list below IS the fixed key set: every colourable field on
+    ``textual.theme.Theme`` (``name``/``dark``/``luminosity_spread``/
+    ``text_alpha``/``variables``/``ansi`` are not colours, so they are
+    deliberately absent). :data:`TUI_THEME_COLOR_KEYS` is derived from it
+    rather than restated, so a new variable cannot be added here and silently
+    skip validation or ``lode theme export``.
+
+    Every field is ``str | None`` (a colour string, or unset -- falls back to
+    the base theme's own value). ``extra="forbid"`` rejects an unknown
+    variable name at load rather than silently ignoring it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    primary: str | None = None
+    secondary: str | None = None
+    warning: str | None = None
+    error: str | None = None
+    success: str | None = None
+    accent: str | None = None
+    foreground: str | None = None
+    background: str | None = None
+    surface: str | None = None
+    panel: str | None = None
+    boost: str | None = None
+
+    @model_validator(mode="after")
+    def _colours_parse(self) -> TuiThemeColors:
+        for key in type(self).model_fields:
+            _validate_colour("tui.theme.colors", key, getattr(self, key))
+        return self
+
+
+#: Fixed key set for ``[tui.theme.colors]``, derived from the model above so
+#: the two can never disagree. Ordered as declared -- ``lode theme export``
+#: emits its TOML in this order.
+TUI_THEME_COLOR_KEYS: tuple[str, ...] = tuple(TuiThemeColors.model_fields)
+
+
+class TuiThemeSyntax(BaseModel):
+    """``[tui.theme.syntax]`` -- overrides on the note-body markdown palette.
+
+    Closed key set -- the same five capture names ``NOTE_BODY_SYNTAX_STYLES``
+    (``lode.tui.screens._markdown_area``) already styles, with ``_`` standing
+    in for tree-sitter's ``.`` (e.g. ``heading_marker`` -> ``heading.marker``)
+    so tree-sitter's own vocabulary never becomes public config surface
+    (lode-dmbc objection 2b). ``extra="forbid"`` rejects anything else,
+    including a raw capture name with a literal ``.``, which TOML cannot key
+    with anyway. ``lode.theming.SYNTAX_KEY_TO_CAPTURE`` derives the
+    key -> capture mapping straight from ``NOTE_BODY_SYNTAX_STYLES``;
+    ``tests/test_tui_theme_config.py`` pins the two key sets equal.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    text_literal: str | None = None
+    punctuation_delimiter: str | None = None
+    heading_marker: str | None = None
+    heading: str | None = None
+    list_marker: str | None = None
+
+    @model_validator(mode="after")
+    def _syntax_parse(self) -> TuiThemeSyntax:
+        for key in type(self).model_fields:
+            _validate_colour("tui.theme.syntax", key, getattr(self, key))
+        return self
+
+
+#: Closed key set for ``[tui.theme.syntax]``, derived from the model above.
+TUI_THEME_SYNTAX_KEYS: tuple[str, ...] = tuple(TuiThemeSyntax.model_fields)
+
+
+class TuiTheme(BaseModel):
+    """``[tui.theme]`` -- base Textual theme name plus colour/syntax overrides.
+
+    ``name`` must be a theme Textual itself registers by default
+    (``textual.theme.BUILTIN_THEMES``) -- lode registers no themes of its own
+    beyond the effective one this section builds, so anything else can never
+    resolve. Precedence: ``name`` -> ``colors`` overrides -> ``syntax``
+    overrides (docs/decisions.md lode-dmbc, 2026-08-17 update).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = "textual-dark"
+    colors: TuiThemeColors = Field(default_factory=TuiThemeColors)
+    syntax: TuiThemeSyntax = Field(default_factory=TuiThemeSyntax)
+
+    @field_validator("name")
+    @classmethod
+    def _name_registered(cls, value: str) -> str:
+        from textual.theme import BUILTIN_THEMES
+
+        if value not in BUILTIN_THEMES:
+            raise ValueError(
+                f"tui.theme.name: unknown theme {value!r} -- must be one of "
+                f"{sorted(BUILTIN_THEMES)}"
+            )
+        return value
+
+
+class TuiSettings(BaseModel):
+    """``[tui]`` -- TUI-only config. ``theme`` is ``None`` when the
+    ``[tui.theme]`` section is absent, leaving every current default
+    (Textual's own ``textual-dark`` chrome, ``NOTE_BODY_SYNTAX_STYLES``)
+    byte-identical -- see :func:`lode.theming.resolve_theme` /
+    :func:`lode.theming.resolve_note_body_theme`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    theme: TuiTheme | None = None
+
+
 class Settings(BaseModel):
     """Every ``docs/configuration.md`` knob as a typed, validated field.
 
@@ -631,6 +776,15 @@ class Settings(BaseModel):
         "lode-d70n) -- a bare TOML string still coerces to a ModelTier with "
         "reasoning_effort=None and max_tokens=None (falls back to "
         "qa.MAX_TOKENS).",
+    )
+
+    # --- TUI ------------------------------------------------------------------
+    tui: TuiSettings = _knob(
+        TuiSettings(),
+        Kind.RUNTIME,
+        "TUI chrome/theme configuration. [tui.theme] (absent by default) sets "
+        "a base Textual theme name plus [tui.theme.colors]/[tui.theme.syntax] "
+        "overrides (lode-cwyk); absent leaves current defaults unchanged.",
     )
 
     # --- Build constants (chosen once) ---------------------------------------
@@ -1318,5 +1472,25 @@ def knob_rows(settings: Settings) -> list[tuple[str, str, str]]:
                 if value.max_tokens is not None:
                     parts.append(f"max_tokens={value.max_tokens}")
                 value = f"{value.model} ({', '.join(parts)})" if parts else value.model
+            elif isinstance(value, TuiSettings):
+                # Same rationale as the ModelTier branch above -- str(TuiSettings)
+                # would otherwise print the raw pydantic repr of a possibly-nested
+                # model in `lode config` + the TUI ConfigScreen.
+                theme = value.theme
+                if theme is None:
+                    value = "(default)"
+                else:
+                    n_colors = sum(
+                        getattr(theme.colors, key) is not None
+                        for key in TUI_THEME_COLOR_KEYS
+                    )
+                    n_syntax = sum(
+                        getattr(theme.syntax, key) is not None
+                        for key in TUI_THEME_SYNTAX_KEYS
+                    )
+                    value = (
+                        f"name={theme.name} ({n_colors} colour override(s), "
+                        f"{n_syntax} syntax override(s))"
+                    )
         rows.append((name, str(value), kind))
     return rows

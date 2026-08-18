@@ -47,6 +47,13 @@ See [Paths & locations](#paths--locations) below for where `config.toml` lives a
 |---|---|---|
 | Ask context chars (`ask_context_chars`) | `80` | Characters of a cited note/external's body shown before and after a citation's `quoted_span` when the ask screen groups citations by their cited note/external. Applies only to a citation whose identity resolved to a note/external — a citation whose target the store had nothing to resolve falls back to the flat, ungrouped rendering with no context. |
 
+<a id="tui--theme"></a>
+## TUI — theme
+
+| Setting | Default | Notes |
+|---|---|---|
+| TUI theme (`[tui.theme]`) | absent | Optional, `extra="forbid"` section. Absent leaves every current default byte-identical (Textual's own `textual-dark` chrome, lode's `NOTE_BODY_SYNTAX_STYLES` note-body palette). `name` is any theme Textual registers by default; `tui.theme.colors` overrides that theme's colour variables (fixed key set: `primary`, `secondary`, `warning`, `error`, `success`, `accent`, `foreground`, `background`, `surface`, `panel`, `boost`); `tui.theme.syntax` overrides the note-body markdown palette (closed key set: `text_literal`, `punctuation_delimiter`, `heading_marker`, `heading`, `list_marker` — `_` stands in for tree-sitter's `.`, so its vocabulary never becomes config surface). Precedence: `name` → `colors` → `syntax`. Every value is a colour-only string, parsed at config load (`textual.color.Color.parse`); a bad value or unknown key is a load error naming the offending key. Run `lode theme export` to print the fully-resolved effective theme as ready-to-paste TOML rather than typing keys from memory. Design record: [decisions.md](decisions.md)'s `lode-dmbc` entry (2026-08-17 update). |
+
 <a id="async-work-queue"></a>
 ## Async work queue
 

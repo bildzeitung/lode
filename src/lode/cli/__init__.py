@@ -489,9 +489,13 @@ def _abort_on_provider_error(command: str, err: BaseException) -> NoReturn:
 #: at its own line -- so the statement order and the real order silently
 #: disagree. Naming the order once, here, is immune to both.
 #:
-#: ``models`` attaches its own sub-``Typer`` to ``app`` at its module level, so
-#: it needs no special handling -- its position in this tuple is its position
-#: in the help table like every other entry.
+#: ``models`` and ``theme`` attach their own sub-``Typer`` instead of a flat
+#: ``@app.command``. click renders every sub-``Typer`` AFTER every flat
+#: command, in sub-``Typer`` registration order -- so their position here fixes
+#: only their order relative to each other, never their absolute position in
+#: the help table. Keep such modules trailing in this tuple so its order does
+#: not lie about the rendered one; the rendered order itself is asserted by
+#: tests/test_cli.py's ``HELP_COMMAND_ORDER``.
 _COMMAND_MODULES = (
     "add",
     "ask",
@@ -510,10 +514,11 @@ _COMMAND_MODULES = (
     "config",
     "verify",
     "tui",
-    "models",
     "version",
     "work",
     "backfill",
+    "theme",
+    "models",
 )
 
 for _name in _COMMAND_MODULES:

@@ -230,7 +230,7 @@ class EditScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Vertical(
-            _markdown_text_area(id=EDIT_BODY_ID),
+            _markdown_text_area(id=EDIT_BODY_ID, theme=self.app.note_body_theme),
             RelatedNotesPanel(exclude_note_id=self.note_id, id=EDIT_RELATED_ID),
         )
         yield LodeFooter()

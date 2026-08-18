@@ -156,6 +156,7 @@ HELP_COMMAND_ORDER = [
     "version",
     "work",
     "backfill",
+    "theme",
     "models",
 ]
 

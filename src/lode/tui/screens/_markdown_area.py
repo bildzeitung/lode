@@ -121,7 +121,12 @@ NOTE_BODY_THEME = TextAreaTheme(
 
 
 def _markdown_text_area(
-    text: str = "", *, id: str, read_only: bool = False, placeholder: str = ""
+    text: str = "",
+    *,
+    id: str,
+    read_only: bool = False,
+    placeholder: str = "",
+    theme: TextAreaTheme = NOTE_BODY_THEME,
 ) -> TextArea:
     """A note-body ``TextArea`` with markdown colouring, or plain text if unavailable.
 
@@ -136,6 +141,12 @@ def _markdown_text_area(
             only then). Plumbed through rather than left to the caller so a
             body stays fully declared at its ``compose`` site, the way every
             other placeholder in this TUI is.
+        theme: The ``TextAreaTheme`` to register/apply. Defaults to the
+            module's own :data:`NOTE_BODY_THEME` singleton -- a caller with a
+            live app (every real screen) passes ``self.app.note_body_theme``
+            instead, so a ``[tui.theme.syntax]`` config override (lode-cwyk)
+            reaches every note-body screen; the default keeps this function
+            usable standalone (tests, scripts) with no app required.
     """
     try:
         text_area = TextArea(
@@ -156,6 +167,6 @@ def _markdown_text_area(
     # Covering these two lines with it would let an unrelated ``ValueError``
     # from theme application silently degrade to the uncoloured fallback --
     # exactly the third failure mode the ticket forbids.
-    text_area.register_theme(NOTE_BODY_THEME)
-    text_area.theme = NOTE_BODY_THEME.name
+    text_area.register_theme(theme)
+    text_area.theme = theme.name
     return text_area
