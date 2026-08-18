@@ -38,6 +38,8 @@ PUBLISHED_TOP_LEVEL = {
     "retrieval",
     "externals",
     "brand",
+    "keymap",  # derived page (lode-fhql.15); nav-wired by lode-gecm
+    "settings",  # derived page (lode-fhql.15); nav-wired by lode-gecm
 }
 # docs/how-to/ is published as a DIRECTORY, not a frozen file list -- a guide
 # added there later is published by default (docs/stack.md).
