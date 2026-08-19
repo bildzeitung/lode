@@ -2423,7 +2423,7 @@ def test_subcommand_help_survives_a_malformed_config_file(
 
 
 def test_subcommand_help_survives_an_unreadable_config_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # The unreadable-config half of the test above (PermissionError propagates
     # straight through _resolve_settings, same as the lode-l38d.6 pair).
