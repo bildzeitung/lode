@@ -96,24 +96,17 @@ def theme_export(
 
     # Best-effort settings resolution (lode-jjol): `_resolve_settings()`
     # itself exits 1 on a bad config.toml (malformed TOML, an out-of-range
-    # theme value, ...), and a raw, unreadable file raises `OSError` straight
-    # through it -- both of which would otherwise stop the ONE command that
-    # exists to help a user recover from exactly that config. Fall back to
-    # `Settings()` (the same shape `load_settings()` returns for an absent
-    # config.toml) so the rest of this command sees ordinary, unconfigured
-    # defaults and needs no further special-casing below.
+    # theme value, ...), and a raw, unreadable file raises `OSError`
+    # straight through it -- both of which would otherwise stop the ONE
+    # command that exists to help a user recover from exactly that config.
+    # Fall back to `Settings()` (the same shape `load_settings()` returns
+    # for an absent config.toml) so the rest of this command sees ordinary,
+    # unconfigured defaults and needs no further special-casing below.
     #
-    # Read the per-invocation cache directly rather than calling
-    # `cli._resolve_settings()`/`_resolve_settings_best_effort()` again:
     # "theme" is a `_CONFIG_OPTIONAL_COMMANDS` member, so `main()` already
-    # made this invocation's one resolution attempt before dispatching here.
-    # `_resolve_settings()` caches only a *successful* resolution
-    # (lode-bsga) and never a failure, so by the time this command body runs
-    # `cli._settings_cache` already holds exactly what that one attempt
-    # produced -- a second real call would re-run `load_settings()` on the
-    # same broken file and re-echo the "invalid config file" line a second
-    # time on top of the fallback message below (lode-9otn).
-    settings = cli._settings_cache
+    # made this invocation's one attempt; that accessor's docstring owns why
+    # reading its result beats a second `_resolve_settings()` call here.
+    settings = cli._settings_resolved_this_invocation()
     if settings is None:
         typer.echo(
             "lode theme export: could not resolve config.toml -- "

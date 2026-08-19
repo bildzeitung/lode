@@ -577,6 +577,35 @@ def _resolve_settings_best_effort() -> Settings | None:
         return None
 
 
+def _settings_resolved_this_invocation() -> Settings | None:
+    """This invocation's already-resolved settings, or ``None`` if that attempt failed.
+
+    For a command in :data:`_CONFIG_OPTIONAL_COMMANDS` **only**: ``main()``
+    has already made this invocation's one resolution attempt via
+    :func:`_resolve_settings_best_effort` before dispatching, so the answer
+    is simply whatever that attempt cached. Since only a *successful*
+    resolution is ever cached (see :func:`_resolve_settings` — that
+    asymmetry is load-bearing, not incidental), ``None`` here means
+    unambiguously "the one attempt failed", and the caller can fall back
+    without a second :func:`lode.config.load_settings` call that would
+    re-parse the same broken ``config.toml`` and re-echo its "invalid config
+    file" line (lode-9otn).
+
+    Deliberately NOT a second ``_resolve_settings()`` call: for a *failed*
+    resolution that call is not a cache hit, and re-running it is exactly
+    the doubled work and doubled stderr line this exists to avoid. The
+    consequence is that a test monkeypatching ``lode.cli._resolve_settings``
+    to *succeed* is not observed through this accessor — the existing seams
+    patch it to *fail* (``tests/test_cli.py``), which this reports faithfully
+    as ``None``.
+
+    Callers outside ``_CONFIG_OPTIONAL_COMMANDS`` must not use this: for
+    them ``main()`` calls :func:`_resolve_settings` directly, which aborts
+    the command on a bad config rather than reaching a command body at all.
+    """
+    return _settings_cache
+
+
 def _enrich_immediately(
     conn: sqlite3.Connection, db_path: Path, version_id: str, settings: Settings
 ) -> None:

@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from click.testing import Result
@@ -263,51 +264,38 @@ def test_export_cli_section_with_overrides_round_trips(
 def test_export_resolves_settings_at_most_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """``lode theme export`` must not stat/read/parse config.toml twice.
+    """Pins exactly one ``load_settings()`` call per ``lode theme export``.
 
-    ``main()``'s ``[cli.theme]`` wiring (lode-mk9j) already resolves settings
-    once for every invocation (``"theme"`` is a ``_CONFIG_OPTIONAL_COMMANDS``
-    member, lode-jjol); ``theme_export`` must reuse that one resolution
-    rather than triggering a second ``load_settings()`` call. Count
-    ``load_settings`` calls directly (the load-bearing assertion) rather
-    than inferring it from output.
+    The per-invocation half of the same invariant
+    ``tests/test_cli_settings_cache.py`` pins for the cache itself: ``"theme"``
+    is a ``_CONFIG_OPTIONAL_COMMANDS`` member, so ``main()`` already resolved
+    once (lode-mk9j, lode-jjol) and the command body must not resolve again.
     """
     from lode import cli as cli_mod
 
-    calls = 0
-    real_load_settings = cli_mod.load_settings
-
-    def _counting_load_settings(**overrides: object) -> object:
-        nonlocal calls
-        calls += 1
-        return real_load_settings(**overrides)
-
     # `_resolve_settings()` calls the name `load_settings` bound into
-    # `lode.cli`'s own namespace (`from lode.config import ... load_settings`),
-    # so that's the reference to intercept -- patching `lode.config
-    # .load_settings` instead would miss every call `cli._resolve_settings`
-    # makes.
-    monkeypatch.setattr(cli_mod, "load_settings", _counting_load_settings)
+    # `lode.cli`'s own namespace, so that is the reference to intercept --
+    # patching `lode.config.load_settings` would miss every call it makes.
+    spy = mock.patch.object(cli_mod, "load_settings", wraps=cli_mod.load_settings)
+    with spy as load_settings_spy:
+        _run_export(monkeypatch, tmp_path)
 
-    _run_export(monkeypatch, tmp_path)
-    assert calls == 1, f"expected exactly one load_settings() call, got {calls}"
+    assert load_settings_spy.call_count == 1
 
 
 def test_export_reports_a_broken_config_file_at_most_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A broken config.toml prints the 'invalid config file' line exactly once.
+    """Pins one 'invalid config file' stderr line per broken-config export.
 
-    ``main()``'s best-effort resolution for ``"theme"`` (lode-jjol) already
-    attempts (and swallows) this exact failure before ``theme_export``'s own
-    body runs; a second real ``_resolve_settings()`` call there would re-echo
-    the raw "invalid config file" line on top of ``theme_export``'s own
-    user-facing fallback message. Pins the whole-invocation invariant
-    against a regression from either layer resolving twice.
+    ``main()`` already attempts (and swallows) this exact failure before the
+    command body runs, so a second resolution there would re-echo the raw
+    line on top of the user-facing fallback message (lode-9otn).
     """
     monkeypatch.setenv("LODE_HOME", str(tmp_path))
-    (tmp_path / "config.toml").write_text("not_a_real_knob = 1\n", encoding="utf-8")
+    (tmp_path / "config.toml").write_bytes(b"not valid toml [[[")
 
     result = runner.invoke(cli_app, ["theme", "export"])
-    assert result.exit_code == 0, result.output
+
+    _assert_fell_back_to_defaults(result)
     assert result.stderr.count("invalid config file") == 1, result.output
