@@ -106,21 +106,17 @@ def theme_export(
     # for an absent config.toml) so the rest of this command sees ordinary,
     # unconfigured defaults and needs no further special-casing below.
     #
-    # ``except Exception``, not a narrow ``(typer.Exit, OSError)``, for the
-    # same reason ``main()`` and ``status.py``'s guards use it: ``typer.Exit``
-    # is only what ``_resolve_settings`` raises ITSELF, and the ways a
-    # hand-edited config.toml breaks below it are open-ended -- an unreadable
-    # file raises ``OSError``, and a file with invalid UTF-8 bytes raises
-    # ``UnicodeDecodeError`` (a ``ValueError``, NOT ``TOMLDecodeError``)
-    # straight out of ``tomllib.load`` (verified). A narrow tuple leaves the
-    # recovery tool dumping a traceback on exactly the broken configs it
-    # exists to recover from.
+    # Not ``cli._resolve_settings_best_effort()``: this command needs a real
+    # ``Settings`` to keep exporting, plus a user-facing stderr line, where
+    # that helper's contract is a silent ``None``. The ``except Exception``
+    # here is the same broad catch for the same reason, and that helper's
+    # docstring owns the why.
     try:
         settings = cli._resolve_settings()
     except Exception:
-        # Logged with `exc_info` for the same reason `main()` and `status.py`
-        # do it: the stderr line above is the user's story, the traceback is
-        # the maintainer's, and it keeps the broad catch honest (and BLE001
+        # Logged with `exc_info` for the same reason the shared helper does
+        # it: the stderr line below is the user's story, the traceback is the
+        # maintainer's, and it keeps the broad catch honest (and BLE001
         # satisfied) rather than silently discarded.
         log.debug("theme export: _resolve_settings failed", exc_info=True)
         typer.echo(

@@ -428,9 +428,9 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     # maintainer's placement decisions -- the rationale and the rejected
     # alternatives live in docs/decisions.md's lode-mk9j entry (status/every
     # other command) and lode-jjol (theme), not here.
-    # status's branch uses _resolve_settings_best_effort() (the shared
-    # broad-catch helper next to _resolve_settings, lode-38rv), which owns
-    # the why.
+    # The _CONFIG_OPTIONAL_COMMANDS branch below uses
+    # _resolve_settings_best_effort() (next to _resolve_settings), whose
+    # docstring owns the why-a-broad-except rationale.
     if ctx.invoked_subcommand is not None and not _help_requested(ctx):
         settings: Settings | None
         if ctx.invoked_subcommand in _CONFIG_OPTIONAL_COMMANDS:
@@ -566,11 +566,9 @@ def _resolve_settings_best_effort() -> Settings | None:
     that would leave those cases fatal.
 
     Calls ``_resolve_settings()`` unqualified -- this module IS ``lode.cli``,
-    so the name is looked up in this module's own globals at call time,
-    which already picks up a test's ``lode.cli._resolve_settings``
-    monkeypatch the same way every other in-module caller does (see that
-    function's own docstring); an external module instead reaches this
-    helper via ``cli._resolve_settings_best_effort()``.
+    so the global lookup at call time still picks up a test's
+    ``lode.cli._resolve_settings`` monkeypatch (see that function's own
+    docstring).
     """
     try:
         return _resolve_settings()
