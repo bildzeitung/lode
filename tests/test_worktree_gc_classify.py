@@ -418,20 +418,24 @@ def test_worktree_agent_not_merged_clean_and_old_enough_is_dir_only(
     prints the bucket -- so there is nothing to assert about the ref here;
     SKILL.md's own case arm is what keeps it.
 
-    lode-ej6u: the floor is `-3600`, not `0`, because under `pytest -n 8` a
-    `date +%s` read on one vCPU can transiently observe CLOCK_REALTIME a few
-    seconds BEHIND a just-committed `git commit`'s recorded timestamp read on
-    another core, making the script's `now - last_commit_ts` negative and
-    failing even a `-ge 0` floor (same backward-wall-clock class as lode-0dnk
-    and lode-44cq, and the same "widen the boundary" fix). Any negative floor
-    exercises the identical `-ge` branch, and nothing is lost by widening it:
-    the other side of the floor is pinned by the too-young sibling below."""
+    lode-ej6u originally widened this floor to `-3600` because under
+    `pytest -n 8` a `date +%s` read on one vCPU could transiently observe
+    CLOCK_REALTIME a few seconds BEHIND a just-committed `git commit`'s
+    recorded timestamp read on another core, making the script's
+    `now - last_commit_ts` negative and failing even a `-ge 0` floor (same
+    backward-wall-clock class as lode-0dnk and lode-44cq). lode-o7rt fixed the
+    real cause instead: the script now clamps a negative age to 0 before the
+    `-ge` comparison, so with a `min_age_seconds` floor of `0` the comparison
+    is `age >= 0`, which holds unconditionally regardless of clock skew.
+    Restored to `0` (lode-d7xw) to exercise the real boundary rather than a
+    workaround-widened one; the too-young sibling below still pins the other
+    side of the floor."""
     repo = _init_repo(tmp_path)
     wt = _add_worktree(repo, ".claude/worktrees/leaked", "worktree-agent-leaked")
     sha = _commit(wt, "wip.txt", "abandoned build")
     assert not _is_ancestor(repo, sha, "trunk")
 
-    result = _run(repo, wt, sha, "0", "worktree-agent-leaked", min_age_seconds="-3600")
+    result = _run(repo, wt, sha, "0", "worktree-agent-leaked", min_age_seconds="0")
 
     assert _bucket(result) == "dir-only"
 
@@ -487,8 +491,10 @@ def test_worktree_agent_not_merged_dirty_and_old_enough_is_kept_dirty(
     """The dir-only arm gates on the SAME dirty-tree guard as full-reclaim --
     old enough and worktree-agent-shaped is not sufficient by itself.
 
-    lode-ej6u: the floor is `-3600` rather than `0` for the same reason as the
-    clean/old-enough sibling above, which documents the mechanism in full."""
+    lode-ej6u originally widened the floor to `-3600` for the same reason as
+    the clean/old-enough sibling above; lode-o7rt's clamp makes `0` the
+    deterministic floor here too, and it is restored (lode-d7xw) for the same
+    reason -- see that sibling's docstring for the mechanism in full."""
     repo = _init_repo(tmp_path)
     wt = _add_worktree(
         repo, ".claude/worktrees/leaked-dirty", "worktree-agent-leakeddirty"
@@ -496,9 +502,7 @@ def test_worktree_agent_not_merged_dirty_and_old_enough_is_kept_dirty(
     sha = _commit(wt, "wip.txt", "abandoned build")
     (wt / "scratch.tmp").write_text("uncommitted\n")
 
-    result = _run(
-        repo, wt, sha, "0", "worktree-agent-leakeddirty", min_age_seconds="-3600"
-    )
+    result = _run(repo, wt, sha, "0", "worktree-agent-leakeddirty", min_age_seconds="0")
 
     assert _bucket(result) == "keep-dirty"
 
