@@ -66,6 +66,7 @@ Both ``import`` lines below are load-bearing regardless: they are what make
 
 import logging
 import sqlite3
+import sys
 import tempfile
 import time  # noqa: F401 -- rebound by name in tests; call sites use `cli.time` (see module docstring)
 import tomllib
@@ -303,6 +304,24 @@ _DebugOption = Annotated[
 ]
 
 
+def _help_requested() -> bool:
+    """True when this invocation will end up printing ``--help`` output --
+    either at the top level or on the invoked subcommand (e.g. ``lode notes
+    --help``) -- and so has nothing to restyle or fail loudly over (lode-moq7).
+
+    Click/Typer resolve a subcommand's own remaining args (e.g. the
+    ``--help`` in ``lode notes --help``) internally and clear them off
+    ``ctx`` before the group callback (``main()``, here) ever runs -- see
+    ``TyperGroup.invoke`` in ``typer/core.py``: the subcommand's args live
+    only in a local variable there, never exposed on ``ctx``. So there is no
+    ``ctx``-based way to see this coming; check the raw argv instead, exactly
+    what Click's own default ``args=None`` resolves to (``sys.argv[1:]``) --
+    the same tokens a real invocation and a ``CliRunner.invoke(app, argv)``
+    call driven through a matching ``sys.argv`` both see.
+    """
+    return "--help" in sys.argv[1:]
+
+
 @app.callback()
 def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     """lode — capture and retrieve what you learn at work."""
@@ -323,7 +342,13 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     # main(), so it covers every subcommand, including one like ``lode
     # notes`` that never otherwise calls ``_resolve_settings()``. Skipped
     # when no subcommand is actually about to run (bare ``lode`` / ``--help``
-    # under ``no_args_is_help``), since there's nothing to restyle for.
+    # under ``no_args_is_help``), since there's nothing to restyle for --
+    # and skipped too when a SUBcommand's own ``--help`` was requested
+    # (``lode notes --help``, lode-moq7): the group callback runs before
+    # Click parses the subcommand's own args, so an unrelated malformed
+    # config.toml previously took even a pure ``--help`` invocation down.
+    # ``--help`` never reads config, so there is nothing to restyle or fail
+    # loudly over either way -- see docs/decisions.md's lode-moq7 entry.
     #
     # ``lode status`` ALONE swallows a failed resolution, keeping its
     # pre-existing lode-l38d.6 survival contract; every OTHER command lets
@@ -335,7 +360,7 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     # status.py's own guard uses it: an unreadable config.toml raises a bare
     # ``OSError`` straight through ``_resolve_settings``, above the
     # ``TOMLDecodeError``/``ValidationError`` it converts to ``typer.Exit``.
-    if ctx.invoked_subcommand is not None:
+    if ctx.invoked_subcommand is not None and not _help_requested():
         settings: Settings | None
         if ctx.invoked_subcommand == "status":
             try:

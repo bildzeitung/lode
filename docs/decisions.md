@@ -5498,3 +5498,20 @@ entries below from being rewritten to chase the current tree.)
   remains the ONLY command carrying that exemption — every other command's config resolution moved
   from lazy/per-command to eager/global in `main()`, and takes the same command down on failure a
   direct `_resolve_settings()` call always did."
+
+- **`--help` exempted from `[cli.theme]`'s global settings resolution (`lode-moq7`, follow-on to
+  `lode-mk9j`).** The `lode-mk9j` entry above's eager-in-`main()` placement has a corollary it did
+  not spell out: Typer's group callback (`main()`) runs *before* Click parses a subcommand's own
+  `--help` — Click resolves and clears a subcommand's remaining args off `ctx` internally, in a
+  local variable, before ever invoking the group callback — so a malformed/unreadable
+  `config.toml` took down `lode notes --help` too, not just `lode notes`. `--help` never reads
+  config, so requiring one to be valid was never intentional; the ticket's acceptance criteria
+  offered exempting `--help` or documenting the failure as accepted scope. **Decided: exempt.**
+  `main()` now also skips resolution when the invocation is asking for a subcommand's `--help`,
+  detected via `sys.argv` (`_help_requested()` in `lode.cli`) — `ctx` itself carries no signal by
+  the time `main()` runs, so raw argv is the only place left to look; it is exactly the same tokens
+  Click's own default `args=None` resolves to. `lode status`'s existing `lode-l38d.6` exemption is
+  unaffected — it was already unconditional, this just adds a second, narrower exemption ahead of
+  it. Covered by `tests/test_cli.py::test_subcommand_help_survives_a_malformed_config_file` /
+  `_an_unreadable_config_file`, with a control asserting a non-`--help` invocation still fails
+  loudly (`test_subcommand_without_help_still_fails_loudly_on_bad_config`).
