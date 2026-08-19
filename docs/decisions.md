@@ -5539,3 +5539,36 @@ entries below from being rewritten to chase the current tree.)
   monkeypatches removed entirely, and the non-`--help` control
   (`test_subcommand_without_help_still_fails_loudly_on_bad_config`) is unaffected. `lode status`'s
   `lode-l38d.6` survival contract is unaffected -- it never depended on `_help_requested()` at all.
+
+- **`lode theme` added to the `main()` config-optional exemption set (`lode-jjol`, 2026-08-19,
+  supersedes the `lode-mk9j` entry above's "`status` remains the ONLY command carrying that
+  exemption" sentence).** `lode theme export` is the escape hatch `[cli.theme]`/`[tui.theme]`
+  promises for recovering from a bad theme config (`lode-dmbc`) -- but the `lode-mk9j` placement
+  above made `main()`'s eager, global settings resolution fail loudly on every command except
+  `status`, so a broken `config.toml` took `lode theme export` down too, before its own body ever
+  ran: the one command that exists to help a user recover from exactly that config was blocked by
+  it. Two-layer fix: `main()`'s `status`-only exemption is now `_CONFIG_OPTIONAL_COMMANDS: Final =
+  frozenset({"status", "theme"})`, a named constant checked via `ctx.invoked_subcommand in
+  _CONFIG_OPTIONAL_COMMANDS`; and `theme_export()` itself wraps `cli._resolve_settings()` in a
+  broad `except Exception`, printing a one-line stderr warning and falling back to `Settings()`
+  defaults (an absent-`config.toml` shape) rather than propagating. The exemption is keyed off
+  `"theme"` -- the sub-`Typer` mount name (`app.add_typer(theme_app, name="theme")`), which is what
+  `ctx.invoked_subcommand` is for any `lode theme *` invocation, not `"export"` -- so it
+  deliberately covers every present and future `lode theme` subcommand, not just `export`, without
+  a further edit here when one is added.
+  **Why `except Exception`, not the narrower `(typer.Exit, OSError)` `_resolve_settings()` itself
+  raises via `typer.Exit`:** `_resolve_settings()` converts `tomllib.TOMLDecodeError` and pydantic's
+  `ValidationError` to `typer.Exit`, and an unreadable file raises `OSError` straight through
+  uncaught -- but a `config.toml` with invalid UTF-8 bytes raises `UnicodeDecodeError` out of
+  `tomllib.load` itself, which is a `ValueError`, NOT a `TOMLDecodeError` -- a narrower tuple would
+  have left the recovery tool dumping a traceback on exactly that broken config. This matches the
+  same `except Exception` reasoning `main()`'s own `status`/`theme` guard and `status.py`'s guard
+  already use, for the same underlying reason.
+  **This supersedes the `lode-mk9j` entry's closing sentence verbatim:** it no longer reads "`status`
+  remains the ONLY command carrying that exemption" -- as of this entry, `status` and `theme` both
+  carry it, `theme` for the reason above. Every command outside `_CONFIG_OPTIONAL_COMMANDS` is
+  unaffected and continues to fail loudly on any config error, exactly as `lode-mk9j` decided.
+  Covered by `tests/test_cli_theme_export.py`'s malformed-TOML, invalid-theme-value, invalid-UTF-8,
+  and unreadable-file cases (the last skipped under a root-euid test runner, where `chmod 0o000`
+  does not deny read access) -- each asserting exit 0, a stderr warning, and default-resolved
+  output; the existing valid-config round-trip tests are unchanged.

@@ -72,7 +72,7 @@ import tomllib
 import uuid  # noqa: F401 -- re-exported so `cli.uuid` resolves for tests (see module docstring)
 from importlib import import_module
 from pathlib import Path
-from typing import Annotated, Any, NoReturn
+from typing import Annotated, Any, Final, NoReturn
 
 import typer
 from pydantic import ValidationError
@@ -371,6 +371,15 @@ def _help_requested(ctx: typer.Context) -> bool:
     return bool(ctx.meta.get(_META_SUBCOMMAND_HELP_REQUESTED, False))
 
 
+#: Subcommands (as ``ctx.invoked_subcommand`` names them) that must SURVIVE a
+#: broken ``config.toml`` rather than exit 1 on it -- see ``main()``'s guard
+#: below for why each earns the exemption. Named rather than inlined so the
+#: concept has one home and a future entry has one obvious place to land.
+#: ``theme`` is the sub-Typer's MOUNT name, so it covers every ``lode theme *``
+#: subcommand, not only ``export`` (deliberate -- ``main()``'s comment explains).
+_CONFIG_OPTIONAL_COMMANDS: Final = frozenset({"status", "theme"})
+
+
 @app.callback()
 def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     """lode — capture and retrieve what you learn at work."""
@@ -408,23 +417,32 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     # (and its lode-rtcx correction: the detection below reads Click's own
     # parse state via ``_HelpAwareGroup``, not process-global ``sys.argv``).
     #
-    # ``lode status`` ALONE swallows a failed resolution, keeping its
-    # pre-existing lode-l38d.6 survival contract; every OTHER command lets
-    # the failure propagate, so ANY config error now fails loudly even on a
-    # command that never read config before. Both halves are the maintainer's
-    # 2026-08-18 placement decision -- the rationale and the rejected
-    # alternatives live in docs/decisions.md's lode-mk9j entry, not here.
+    # ``lode status`` and ``lode theme`` ALONE swallow a failed resolution:
+    # status keeps its pre-existing lode-l38d.6 survival contract, and
+    # ``theme`` (mounted as its own sub-Typer, so its ``invoked_subcommand``
+    # here is "theme", not "export" -- see lode.cli.theme) must reach its own
+    # command body even on a broken config.toml, since ``lode theme export``
+    # is precisely the recovery tool for that config (lode-jjol). Every OTHER
+    # command lets the failure propagate, so ANY config error still fails
+    # loudly on a command that never read config before. All three are the
+    # maintainer's placement decisions -- the rationale and the rejected
+    # alternatives live in docs/decisions.md's lode-mk9j entry (status/every
+    # other command) and lode-jjol (theme), not here.
     # ``except Exception``, not ``except typer.Exit``, for the same reason
     # status.py's own guard uses it: an unreadable config.toml raises a bare
     # ``OSError`` straight through ``_resolve_settings``, above the
     # ``TOMLDecodeError``/``ValidationError`` it converts to ``typer.Exit``.
     if ctx.invoked_subcommand is not None and not _help_requested(ctx):
         settings: Settings | None
-        if ctx.invoked_subcommand == "status":
+        if ctx.invoked_subcommand in _CONFIG_OPTIONAL_COMMANDS:
             try:
                 settings = _resolve_settings()
             except Exception:
-                log.debug("main: _resolve_settings failed for status", exc_info=True)
+                log.debug(
+                    "main: _resolve_settings failed for %s",
+                    ctx.invoked_subcommand,
+                    exc_info=True,
+                )
                 settings = None
         else:
             settings = _resolve_settings()

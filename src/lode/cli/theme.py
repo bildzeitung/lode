@@ -14,6 +14,7 @@ round-trips: pasting it back in reproduces the same effective theme (its own
 values already ARE the effective ones).
 """
 
+import logging
 from typing import Annotated
 
 import typer
@@ -21,7 +22,9 @@ from pydantic import ValidationError
 
 from lode import cli
 from lode.cli import app
-from lode.config import TUI_THEME_COLOR_KEYS, TuiTheme
+from lode.config import TUI_THEME_COLOR_KEYS, Settings, TuiTheme
+
+log = logging.getLogger(__name__)
 
 theme_app = typer.Typer(
     help="Inspect and export the TUI's [tui.theme] and CLI's [cli.theme] configuration.",
@@ -40,7 +43,10 @@ app.add_typer(theme_app, name="theme")
         "[tui.theme]/[cli.theme] and it reproduces exactly what you see today.\n\n"
         "Pass NAME to preview a different base TUI theme instead of the one in "
         "your config; your current overrides (TUI and CLI alike) still apply "
-        "on top of it."
+        "on top of it.\n\n"
+        "If config.toml is broken (bad syntax, unreadable, or an invalid theme "
+        "value), this still succeeds: it warns on stderr and prints the "
+        "built-in defaults instead, so you can paste over the broken block."
     ),
 )
 def theme_export(
@@ -70,6 +76,14 @@ def theme_export(
     A bad ``NAME`` (not a Textual-registered theme) fails the same clean way
     every other bad-input CLI error here does: a one-line stderr message
     naming the value, exit 1 -- never a traceback.
+
+    This command is BEST-EFFORT against a broken ``config.toml`` (lode-jjol):
+    it is precisely the tool a user reaches for to recover a known-good
+    ``[tui.theme]``/``[cli.theme]`` block, so a config.toml that is
+    malformed, unreadable, or carries an invalid theme value never blocks
+    it. On a failed settings resolution it prints a one-line warning to
+    stderr and falls back to the built-in defaults (an absent config.toml)
+    instead of exiting 1.
     """
     # Lazy, function-level import -- the lazy-import convention `lode.cli` and
     # `lode.cli.tui` already follow "to keep CLI startup light". `lode.theming`
@@ -83,7 +97,38 @@ def theme_export(
         resolve_theme_from,
     )
 
-    settings = cli._resolve_settings()
+    # Best-effort settings resolution (lode-jjol): `_resolve_settings()`
+    # itself exits 1 on a bad config.toml (malformed TOML, an out-of-range
+    # theme value, ...), and a raw, unreadable file raises `OSError`
+    # straight through it -- both of which would otherwise stop the ONE
+    # command that exists to help a user recover from exactly that config.
+    # Fall back to `Settings()` (the same shape `load_settings()` returns
+    # for an absent config.toml) so the rest of this command sees ordinary,
+    # unconfigured defaults and needs no further special-casing below.
+    #
+    # ``except Exception``, not a narrow ``(typer.Exit, OSError)``, for the
+    # same reason ``main()`` and ``status.py``'s guards use it: ``typer.Exit``
+    # is only what ``_resolve_settings`` raises ITSELF, and the ways a
+    # hand-edited config.toml breaks below it are open-ended -- an unreadable
+    # file raises ``OSError``, and a file with invalid UTF-8 bytes raises
+    # ``UnicodeDecodeError`` (a ``ValueError``, NOT ``TOMLDecodeError``)
+    # straight out of ``tomllib.load`` (verified). A narrow tuple leaves the
+    # recovery tool dumping a traceback on exactly the broken configs it
+    # exists to recover from.
+    try:
+        settings = cli._resolve_settings()
+    except Exception:
+        # Logged with `exc_info` for the same reason `main()` and `status.py`
+        # do it: the stderr line above is the user's story, the traceback is
+        # the maintainer's, and it keeps the broad catch honest (and BLE001
+        # satisfied) rather than silently discarded.
+        log.debug("theme export: _resolve_settings failed", exc_info=True)
+        typer.echo(
+            "lode theme export: could not resolve config.toml -- "
+            "falling back to built-in defaults",
+            err=True,
+        )
+        settings = Settings()
     # `or TuiTheme()` rather than a hand-written absent-section fallback: the
     # model already carries the base-theme default and both sub-model
     # default_factories, so the default base theme name lives in exactly one
