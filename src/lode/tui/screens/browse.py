@@ -297,13 +297,10 @@ class BrowseScreen(Screen[None]):
     # All of these plus the 5 shown App-level bindings (LodeApp.BINDINGS)
     # render in one footer line via the shared LodeFooter (lode-uczx).
     #
-    # lode-l38d.3 ruled out show=False here on the grounds that "the footer
-    # is the only surface these keys are discoverable on" -- that objection
-    # no longer holds (lode-2bt3.2 shipped the keybinding help overlay, which
-    # lists every binding, shown or not) so per-screen footer priority
-    # (lode-2bt3.3) is honest rather than lossy: a hidden entry stays fully
-    # live and one keypress (Ctrl+_ or '?') away, just not repeated in the
-    # footer line.
+    # A hidden binding (show=False) stays fully live and one keypress
+    # (Ctrl+_ or '?') away via the keybinding help overlay, which lists every
+    # binding whether shown or not -- hiding one from the footer line is
+    # honest rather than lossy.
     #
     # "Expand" (toggle_summary) is hidden here as the least-needed reminder
     # of the six: it is a pure display toggle (collapse/expand the Summary
@@ -312,22 +309,11 @@ class BrowseScreen(Screen[None]):
     # -- unlike those, forgetting the key costs a glance at the overlay, not
     # a workflow it silently breaks.
     #
-    # "Search" (lode-wdm0): '/' is the only search left on this screen since
-    # the progressive summary-scan search (lode-olmi.4) was retired, so the
-    # surviving binding's label no longer needs to distinguish itself from a
-    # second box -- "Search" reads sensibly on its own now. "View" ->
-    # "View content" (lode-uczx's original abbreviation) is restored in
-    # full.
+    # '/' is the only search left on this screen, so its label needs no
+    # distinguishing from a second search box.
     #
-    # MEASURED (2026-08-10, lode-wdm0's technical review, 100-column pilot):
-    # with "Expand" hidden, this screen's footer (5 of the 6 screen-level
-    # bindings shown + 5 App-level, including Help) consumes 91/100 columns,
-    # hscroll=False. The previous measurement -- 97/100, and 106/100 with
-    # "Expand" un-hidden -- was taken on 2026-08-09, before lode-wdm0 retired
-    # the seventh binding ("Find") and relabelled "Quick" to "Search"; it is
-    # the historical record of lode-2bt3.3's own call, not current fact. The
-    # live gate is tests/test_tui_footer_width_corpus.py (consumed <= 100,
-    # hscroll False), not this number.
+    # Footer width is gated by tests/test_tui_footer_width_corpus.py
+    # (consumed <= 100 columns, hscroll False), not a hand-tracked number.
     # "No-egress" (lode-82wt) is hidden for the same reason "Expand" is: a
     # pure, reversible flag toggle, used far less often than
     # Inspect/View content/Delete/Search once learned once -- an overlay-only

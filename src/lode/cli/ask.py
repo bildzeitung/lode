@@ -65,10 +65,7 @@ def ask(
     # Resolve settings once so gate-tuning knobs (entailment_threshold, etc.) come
     # from a single configured object, not from per-call Settings() defaults buried
     # inside _retrieve and cited_answer.ask. _resolve_settings() (not bare
-    # Settings()) so a config-file override actually reaches the pipeline
-    # (lode-40g) -- previously this constructed a bare Settings(), so
-    # load_settings() had zero production callers and every knob ran at
-    # hardcoded defaults.
+    # Settings()) so a config-file override actually reaches the pipeline.
     settings = cli._resolve_settings()
     conn = _open_db(db_path)
     try:

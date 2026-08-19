@@ -41,12 +41,11 @@ from lode.notes_read import short_note_id
 #: Placeholder text for an empty section -- never suppressed, just labeled.
 _NONE_TEXT = "(none)"
 
-#: Fixed row height (lode-olmi.3, tightened from 2 to 1 by lode-juz8.3) -- a
-#: long summary used to grow the row (and so the whole list) as tall as it
-#: needed via ``height=None``; every row is now capped to this many lines,
-#: with overflow ellipsized instead of wrapped. Summaries are prompted
-#: lede-first (lode-juz8.5) so the single visible line still carries the
-#: note's point.
+#: Fixed row height -- every row is capped to this many lines, with overflow
+#: ellipsized instead of wrapped, rather than growing the row (and so the
+#: whole list) as tall as a long summary needs via ``height=None``.
+#: Summaries are prompted lede-first so the single visible line still
+#: carries the note's point.
 _SUMMARY_ROW_HEIGHT = 1
 
 

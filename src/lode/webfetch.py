@@ -629,9 +629,9 @@ def fetch_and_extract(
         return _tombstone(final_url=url, reason="too_many_redirects")
 
     # Any non-OK status here is a permanent tombstone from this function's
-    # perspective — behavior-preserving with the pre-lode-gpzn.13 ``>= 400``
-    # check (``not OK`` is exactly ``>= 400``), and via the shared classifier
-    # rather than re-deriving the threshold locally. A conforming Fetcher
+    # perspective (``not OK`` is exactly ``>= 400``), via the shared
+    # classifier rather than re-deriving the threshold locally. A conforming
+    # Fetcher
     # (see the Fetcher protocol contract) raises TransientFetchError for
     # 408/429/5xx before returning, so a TRANSIENT status never reaches here
     # in practice; testing for ``not OK`` rather than ``is TOMBSTONE`` keeps
