@@ -2398,6 +2398,67 @@ def test_status_survives_an_unreadable_config_file(
     assert "No action needed." in result.output
 
 
+def test_subcommand_help_survives_a_malformed_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # lode-moq7: main() (the Typer group callback) runs BEFORE Click parses a
+    # subcommand's own --help, so an eager, global _resolve_settings() call in
+    # main() (lode-mk9j) took even a pure `lode notes --help` down on a bad
+    # config.toml -- --help never reads config, so it should never need a
+    # valid one. main() detects this via sys.argv (Click clears the
+    # subcommand's own remaining args off ctx before main() runs, so there is
+    # no ctx-based signal to read instead -- see _help_requested()'s
+    # docstring), which CliRunner does not itself populate, so this monkeypatch
+    # mirrors what a real invocation's sys.argv already looks like.
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text("embedding_model = [not valid toml\n")
+    monkeypatch.setenv("LODE_HOME", str(home))
+    monkeypatch.setattr("sys.argv", ["lode", "notes", "--help"])
+
+    result = CliRunner().invoke(app, ["notes", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "Usage:" in result.output
+
+
+def test_subcommand_help_survives_an_unreadable_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The unreadable-config half of the test above (PermissionError propagates
+    # straight through _resolve_settings, same as the lode-l38d.6 pair).
+    from lode import cli
+
+    def _boom() -> Settings:
+        raise PermissionError("config.toml is not readable")
+
+    monkeypatch.setattr(cli, "_resolve_settings", _boom)
+    monkeypatch.setattr("sys.argv", ["lode", "notes", "--help"])
+
+    result = CliRunner().invoke(app, ["notes", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "Usage:" in result.output
+
+
+def test_subcommand_without_help_still_fails_loudly_on_bad_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The control: a bad config.toml must still take a real (non---help)
+    # subcommand invocation down, exactly as lode-mk9j intended -- this
+    # ticket exempts only --help, not config resolution generally.
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text("embedding_model = [not valid toml\n")
+    monkeypatch.setenv("LODE_HOME", str(home))
+    monkeypatch.setattr("sys.argv", ["lode", "notes"])
+
+    result = CliRunner().invoke(app, ["notes"])
+
+    assert result.exit_code == 1
+    assert "invalid config file" in result.output
+
+
 def test_status_all_clear_when_no_pending_failed_and_cache_warm(
     tmp_path: Path, warm_model_cache: None
 ) -> None:
