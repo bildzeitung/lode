@@ -74,18 +74,13 @@ comment-lines-only diff, the fiat's untouchable exemptions, re-verifying each fi
 before applying, re-gating with `nox -t fix` + the `tests` bucket's `unit` view, committing as its
 own commit — are unchanged by being dispatched through me; I add nothing to its contract.
 
-**The groomer's own file stops at "commit in my worktree and report" — it checks out no branch,
-pushes nothing, and writes no bd state.** Everything past that point is mine to carry in the
-dispatch prompt, and it differs by target type. This is instruction, not new contract: I am adding
-*where the work goes*, never anything about which comments to touch.
+**The checkout and the push are the groomer's own contract** (`comment-groomer.md`) — it writes no
+bd state either way. What's left mine to carry in the dispatch prompt is only *where the work goes*
+and *whose job the hand-off is*, not the checkout or push mechanics themselves.
 
 - **Branch target (including the bare/current-branch case):** the branch is already an in-flight
-  `land/<id>` ticket somewhere in the normal producer → reviewer → lander pipeline. The groomer's
-  `isolation: worktree` starts it on a **fresh worktree off `origin/trunk`**, not on the target — so
-  the dispatch prompt must name the branch and tell it to `git fetch origin land/<id>` and check that
-  out first, exactly as the `code-reviewer` does (a groomer left on the fresh worktree would groom an
-  empty diff, `lode-k5e`). It then commits its comment-only change as an additional commit and, per
-  the same prompt, pushes back to `origin/land/<id>` — an ordinary, non-force push; it only appends.
+  `land/<id>` ticket somewhere in the normal producer → reviewer → lander pipeline. I name that
+  branch in the dispatch prompt; the groomer fetches it, checks it out, and pushes back on its own.
   Its **label stays untouched**: that branch's `ready-for-code-review`/`ready-for-land` state is owned
   by whichever stage is already driving it, not by this sweep.
 
@@ -96,7 +91,7 @@ dispatch prompt, and it differs by target type. This is instruction, not new con
 - **Path target (a whole-tree sweep with no branch already in flight):** there is no existing ticket
   to fold into — this is new, standalone work. I file a bd issue for the sweep first (`bd create
   --type=task --title="comment-audit sweep: <path>" --description="…"`), then dispatch the groomer
-  with that id, telling it to work on its own `land/<id>` branch and push it. Because the groomer
+  with that id as the branch to push its sweep to. Because the groomer
   writes no bd state, **I** do the hand-off once it reports its head SHA: set `review_head` to that
   SHA and add **`ready-for-code-review`**, so the normal `code-reviewer` → `/land` pipeline picks it
   up. I never mark it `ready-for-land` and never touch `trunk` myself.
