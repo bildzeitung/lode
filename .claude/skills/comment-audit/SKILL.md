@@ -30,9 +30,8 @@ copying any of it into this file.
 - **Bare `/comment-audit`** — defaults to the **current branch's diff** against `trunk`, same
   scoping as the branch-target case above.
 
-If the argument is ambiguous between a ref and a path (rare — a path that happens to also be a
-valid ref name), prefer treating it as a path only when no branch/ref by that name resolves;
-otherwise ask.
+An argument that resolves as **both** a ref and an existing path is genuinely ambiguous — ask. If
+only one of the two resolves, take that one without asking.
 
 ## 2. Dispatch comment-auditor, surface its findings verbatim
 
@@ -41,8 +40,7 @@ call-site `isolation` option — its own frontmatter (`isolation: worktree`) is 
 convention as every other agent dispatch in this repo.
 
 When it returns, **relay its full findings block to the user verbatim** — file:line anchors,
-taxonomy classification, and suggested action per finding, unedited. I add no commentary of my
-own on individual findings; I am not qualified to second-guess the rubric, only to sequence it.
+taxonomy classification, and suggested action per finding, unedited.
 
 If the auditor reports zero findings, say so plainly and stop — there is nothing for the groomer
 to do.
@@ -61,10 +59,9 @@ here for a disposition pass before grooming proceeds:
   build-time escalation elsewhere in this repo (surfaced, never silently dropped or silently
   applied).
 
-This threshold is a starting point, tunable by whoever operates the autonomous path — but the seam
-itself, the fact that *something* always stands between the auditor's raw output and the groomer's
-input, is not. A run that skips this step has skipped the whole point of splitting audit from
-apply.
+The threshold value is tunable by whoever operates the autonomous path; that *something* always
+stands between the auditor's raw output and the groomer's input is not. A run that skips this step
+has skipped the whole point of splitting audit from apply.
 
 If the surviving set is empty (everything vetoed, or nothing cleared the autonomous threshold),
 say so and stop — do not dispatch the groomer over nothing.
@@ -77,23 +74,32 @@ comment-lines-only diff, the fiat's untouchable exemptions, re-verifying each fi
 before applying, re-gating with `nox -t fix` + the `tests` bucket's `unit` view, committing as its
 own commit — are unchanged by being dispatched through me; I add nothing to its contract.
 
-**Where the groomer's output goes depends on the target type — decided and documented here so it
-never has to guess:**
+**The groomer's own file stops at "commit in my worktree and report" — it checks out no branch,
+pushes nothing, and writes no bd state.** Everything past that point is mine to carry in the
+dispatch prompt, and it differs by target type. This is instruction, not new contract: I am adding
+*where the work goes*, never anything about which comments to touch.
 
 - **Branch target (including the bare/current-branch case):** the branch is already an in-flight
-  `land/<id>` ticket somewhere in the normal producer → reviewer → lander pipeline. The groomer
-  works in a worktree checked out on **that same branch**, commits its comment-only change as an
-  additional commit, and pushes straight back to `origin/land/<id>` (an ordinary, non-force push —
-  it only appends). It does **not** touch the ticket's label; that branch's existing
-  `ready-for-code-review`/`ready-for-land` state is owned by whichever stage is already driving it,
-  not by this sweep.
-- **Path target (a whole-tree sweep with no branch already in flight):** there is no existing
-  ticket to fold into — this is new, standalone work. I file a bd issue for the sweep first
-  (`bd create --type=task --title="comment-audit sweep: <path>" --description="…" `), then dispatch
-  the groomer the same way a `coding` producer would build any other task: its own worktree, its
-  own `land/<id>` branch, ending at **`ready-for-code-review`** for the normal
-  `code-reviewer` → `/land` pipeline to pick up. I never mark it `ready-for-land` and never touch
-  `trunk` myself.
+  `land/<id>` ticket somewhere in the normal producer → reviewer → lander pipeline. The groomer's
+  `isolation: worktree` starts it on a **fresh worktree off `origin/trunk`**, not on the target — so
+  the dispatch prompt must name the branch and tell it to `git fetch origin land/<id>` and check that
+  out first, exactly as the `code-reviewer` does (a groomer left on the fresh worktree would groom an
+  empty diff, `lode-k5e`). It then commits its comment-only change as an additional commit and, per
+  the same prompt, pushes back to `origin/land/<id>` — an ordinary, non-force push; it only appends.
+  Its **label stays untouched**: that branch's `ready-for-code-review`/`ready-for-land` state is owned
+  by whichever stage is already driving it, not by this sweep.
+
+  Timing caveat worth stating: appending a commit to a branch already sitting at `ready-for-land`
+  moves the tip away from the `land_head` the reviewer recorded, and `/land`'s Section 2a reads that
+  as **drift**. Prefer grooming a branch before its technical review; if one is already
+  `ready-for-land`, expect the drift bounce and say so in the report.
+- **Path target (a whole-tree sweep with no branch already in flight):** there is no existing ticket
+  to fold into — this is new, standalone work. I file a bd issue for the sweep first (`bd create
+  --type=task --title="comment-audit sweep: <path>" --description="…"`), then dispatch the groomer
+  with that id, telling it to work on its own `land/<id>` branch and push it. Because the groomer
+  writes no bd state, **I** do the hand-off once it reports its head SHA: set `review_head` to that
+  SHA and add **`ready-for-code-review`**, so the normal `code-reviewer` → `/land` pipeline picks it
+  up. I never mark it `ready-for-land` and never touch `trunk` myself.
 
 Either way, **trunk writes stay `/land`'s alone** — nothing in this skill merges, closes a ticket,
 or pushes `trunk`.
@@ -105,16 +111,16 @@ Close every run with:
 - What was **applied** (the groomer's own commit, and which findings it covered).
 - What was **skipped or reverted** by the groomer itself (a finding it couldn't re-confirm against
   the code, or a hunk that touched executable bytes).
-- What is still **pending a human** — every finding vetoed in an interactive run, or that missed
-  the autonomous threshold — so nothing the auditor found silently vanishes from view.
+- What is still **pending a human** per section 3 — every finding vetoed in an interactive run, or
+  that missed the autonomous threshold.
 
 ## Constraints
 
 - **Thin wrapper only.** I carry no audit logic, no taxonomy, no rubric of my own — see the top of
   this file. If a rule needs stating twice, it belongs in the agent files, not here.
-- **Concurrency.** If a `/comment-audit` run might overlap with an active `/code` fan-out, it
-  shares the same concurrency budget those producers draw from — see the memory note on avoiding
-  concurrent `/code` pressure (`lode-pzr`/`lode-2cf`). Don't stack a sweep on top of a running
-  `/code` invocation without accounting for it.
+- **Concurrency.** `/code`'s cap is one shared budget **within a single invocation** — a separate
+  `/comment-audit` run draws from nothing and is throttled by nothing, so the two stack rather than
+  share (`lode-pzr`/`lode-2cf`). I dispatch at most one agent at a time anyway, but don't start a
+  sweep on top of a running `/code` fan-out without accounting for the extra agent yourself.
 - **No self-review.** comment-auditor and comment-groomer never call each other, and I never
   apply a finding myself outside the groomer's own mechanical verification.
