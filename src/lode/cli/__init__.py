@@ -338,6 +338,13 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     configure_logging(level=level, log_dir=log_dir())
     ctx.obj = debug
 
+    # Reset the per-invocation _resolve_settings() cache (lode-bsga) -- this
+    # is the group callback, so it runs exactly once per invocation, before
+    # any subcommand body. See _resolve_settings()'s docstring for why that
+    # reset is what makes a module-level cache safe here.
+    global _settings_cache
+    _settings_cache = None
+
     # [cli.theme] resolution + application (lode-mk9j) -- global, here in
     # main(), so it covers every subcommand, including one like ``lode
     # notes`` that never otherwise calls ``_resolve_settings()``. Skipped
@@ -414,6 +421,13 @@ def _write_draft(db_path: Path, note_id: str, body: str) -> Path:
     return Path(name)
 
 
+#: This invocation's resolved settings, or ``None`` for "not resolved yet"
+#: (lode-bsga). ``None`` is unambiguous here precisely because a *failed*
+#: resolution is never cached -- see :func:`_resolve_settings`, which is the
+#: only writer, and only ever on success.
+_settings_cache: Settings | None = None
+
+
 def _resolve_settings() -> Settings:
     """Resolve settings for one command, reporting a bad config file the CLI way.
 
@@ -424,8 +438,35 @@ def _resolve_settings() -> Settings:
     file is hand-edited by the user, so at the CLI boundary an uncaught raise
     dumps a Python traceback at the terminal over a typo. Convert it to the
     one-line stderr message + exit 1 that every other user-facing CLI failure
-    here uses (lode-40g). This is the only place a lode command resolves
-    settings; each entry point calls it once and threads the result down.
+    here uses (lode-40g). Each entry point calls it and threads the result
+    down.
+
+    **Caches the first successful resolution for the rest of this
+    invocation** (lode-bsga): ``main()`` — this Typer app's group callback —
+    already resolves settings once per invocation for ``[cli.theme]``
+    application (lode-mk9j); without a cache, the subcommand body then
+    resolved a second, redundant ``load_settings()``. ``main()`` resets the
+    cache to ``None`` at the top of every invocation, so this never leaks a
+    resolution across separate CLI invocations (or across a CliRunner test
+    suite's repeated in-process calls, which drive ``app`` many times in one
+    process).
+
+    A *failed* resolution is deliberately NOT cached, and that is
+    **load-bearing rather than merely harmless**: ``lode status``'s
+    ``lode-l38d.6`` survival contract is two independent swallowed attempts
+    — ``main()`` swallows one, ``status``'s own body re-attempts and swallows
+    again. Caching the failure would collapse those into a single attempt and
+    quietly change that contract, so the second real ``load_settings()`` call
+    on a broken ``config.toml`` is the point, not an oversight.
+    ``tests/test_cli_settings_cache.py`` pins it.
+
+    Not :func:`functools.cache`, despite the shape fitting (no arguments, and
+    ``lru_cache`` likewise declines to cache exceptions): the reset would have
+    to be ``_resolve_settings.cache_clear()``, and tests monkeypatch
+    ``lode.cli._resolve_settings`` wholesale with a plain function (see
+    ``tests/test_cli.py``'s unreadable-config case), which has no
+    ``cache_clear`` — ``main()`` would then die with ``AttributeError`` on
+    exactly the error path that seam exists to exercise.
 
     Defined here, on the package itself, rather than in a command submodule
     (lode-35nu.9): nearly every command calls this, and it is independently
@@ -434,11 +475,16 @@ def _resolve_settings() -> Settings:
     docstring for why), which only works if the name actually lives on the
     package.
     """
+    global _settings_cache
+    if _settings_cache is not None:
+        return _settings_cache
     try:
-        return load_settings()
+        settings = load_settings()
     except (tomllib.TOMLDecodeError, ValidationError) as err:
         typer.echo(f"invalid config file {config_path()}: {err}", err=True)
         raise typer.Exit(code=1) from None
+    _settings_cache = settings
+    return settings
 
 
 def _enrich_immediately(
