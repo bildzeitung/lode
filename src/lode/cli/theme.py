@@ -14,7 +14,6 @@ round-trips: pasting it back in reproduces the same effective theme (its own
 values already ARE the effective ones).
 """
 
-import logging
 from typing import Annotated
 
 import typer
@@ -23,8 +22,6 @@ from pydantic import ValidationError
 from lode import cli
 from lode.cli import app
 from lode.config import TUI_THEME_COLOR_KEYS, Settings, TuiTheme
-
-log = logging.getLogger(__name__)
 
 theme_app = typer.Typer(
     help="Inspect and export the TUI's [tui.theme] and CLI's [cli.theme] configuration.",
@@ -106,19 +103,11 @@ def theme_export(
     # for an absent config.toml) so the rest of this command sees ordinary,
     # unconfigured defaults and needs no further special-casing below.
     #
-    # Not ``cli._resolve_settings_best_effort()``: this command needs a real
-    # ``Settings`` to keep exporting, plus a user-facing stderr line, where
-    # that helper's contract is a silent ``None``. The ``except Exception``
-    # here is the same broad catch for the same reason, and that helper's
-    # docstring owns the why.
-    try:
-        settings = cli._resolve_settings()
-    except Exception:
-        # Logged with `exc_info` for the same reason the shared helper does
-        # it: the stderr line below is the user's story, the traceback is the
-        # maintainer's, and it keeps the broad catch honest (and BLE001
-        # satisfied) rather than silently discarded.
-        log.debug("theme export: _resolve_settings failed", exc_info=True)
+    # "theme" is a `_CONFIG_OPTIONAL_COMMANDS` member, so `main()` already
+    # made this invocation's one attempt; that accessor's docstring owns why
+    # reading its result beats a second `_resolve_settings()` call here.
+    settings = cli._settings_resolved_this_invocation()
+    if settings is None:
         typer.echo(
             "lode theme export: could not resolve config.toml -- "
             "falling back to built-in defaults",

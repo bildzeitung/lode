@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from click.testing import Result
@@ -255,3 +256,46 @@ def test_export_cli_section_with_overrides_round_trips(
     (tmp_path / "config.toml").write_text(result.output, encoding="utf-8")
     after = resolve_cli_styles(load_settings())
     assert after == before
+
+
+# --- settings resolved at most once per invocation (lode-up3w / lode-9otn) --
+
+
+def test_export_resolves_settings_at_most_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pins exactly one ``load_settings()`` call per ``lode theme export``.
+
+    The per-invocation half of the same invariant
+    ``tests/test_cli_settings_cache.py`` pins for the cache itself: ``"theme"``
+    is a ``_CONFIG_OPTIONAL_COMMANDS`` member, so ``main()`` already resolved
+    once (lode-mk9j, lode-jjol) and the command body must not resolve again.
+    """
+    from lode import cli as cli_mod
+
+    # `_resolve_settings()` calls the name `load_settings` bound into
+    # `lode.cli`'s own namespace, so that is the reference to intercept --
+    # patching `lode.config.load_settings` would miss every call it makes.
+    spy = mock.patch.object(cli_mod, "load_settings", wraps=cli_mod.load_settings)
+    with spy as load_settings_spy:
+        _run_export(monkeypatch, tmp_path)
+
+    assert load_settings_spy.call_count == 1
+
+
+def test_export_reports_a_broken_config_file_at_most_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pins one 'invalid config file' stderr line per broken-config export.
+
+    ``main()`` already attempts (and swallows) this exact failure before the
+    command body runs, so a second resolution there would re-echo the raw
+    line on top of the user-facing fallback message (lode-9otn).
+    """
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_bytes(b"not valid toml [[[")
+
+    result = runner.invoke(cli_app, ["theme", "export"])
+
+    _assert_fell_back_to_defaults(result)
+    assert result.stderr.count("invalid config file") == 1, result.output
