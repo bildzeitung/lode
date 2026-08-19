@@ -11,6 +11,7 @@ text.
 
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 
@@ -166,6 +167,79 @@ def test_export_includes_the_cli_section_with_every_key(
     styles = parsed["cli"]["theme"]["styles"]
     for name in CLI_STYLES:
         assert name.replace(".", "_") in styles
+
+
+# --- best-effort against a broken config.toml (lode-jjol) -------------------
+
+
+def test_export_falls_back_to_defaults_on_malformed_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text("not valid toml [[[", encoding="utf-8")
+
+    result = runner.invoke(cli_app, ["theme", "export"])
+
+    assert result.exit_code == 0, result.output
+    assert "falling back to built-in defaults" in result.stderr
+    parsed = tomllib.loads(result.stdout)
+    assert parsed["tui"]["theme"]["name"] == "textual-dark"
+
+
+def test_export_falls_back_to_defaults_on_invalid_theme_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        '[tui.theme]\nname = "not-a-real-theme"\n', encoding="utf-8"
+    )
+
+    result = runner.invoke(cli_app, ["theme", "export"])
+
+    assert result.exit_code == 0, result.output
+    assert "falling back to built-in defaults" in result.stderr
+    parsed = tomllib.loads(result.stdout)
+    assert parsed["tui"]["theme"]["name"] == "textual-dark"
+
+
+def test_export_falls_back_to_defaults_on_invalid_utf8_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Not a TOMLDecodeError: `tomllib.load` decodes the binary handle itself,
+    # so invalid UTF-8 surfaces as `UnicodeDecodeError` (a `ValueError`) and
+    # escapes `_resolve_settings` uncaught -- the case a narrow
+    # `(typer.Exit, OSError)` guard here would miss.
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_bytes(b'[tui.theme]\nname = "\xff\xfe"\n')
+
+    result = runner.invoke(cli_app, ["theme", "export"])
+
+    assert result.exit_code == 0, result.output
+    assert "falling back to built-in defaults" in result.stderr
+    parsed = tomllib.loads(result.stdout)
+    assert parsed["tui"]["theme"]["name"] == "textual-dark"
+
+
+@pytest.mark.skipif(
+    os.geteuid() == 0,
+    reason="root ignores file permission bits -- chmod 0o000 does not deny root",
+)
+def test_export_falls_back_to_defaults_on_unreadable_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    config = tmp_path / "config.toml"
+    config.write_text('[tui.theme]\nname = "textual-light"\n', encoding="utf-8")
+    config.chmod(0o000)
+    try:
+        result = runner.invoke(cli_app, ["theme", "export"])
+    finally:
+        config.chmod(0o644)
+
+    assert result.exit_code == 0, result.output
+    assert "falling back to built-in defaults" in result.stderr
+    parsed = tomllib.loads(result.stdout)
+    assert parsed["tui"]["theme"]["name"] == "textual-dark"
 
 
 def test_export_cli_section_default_round_trips(
