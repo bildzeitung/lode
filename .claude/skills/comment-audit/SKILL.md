@@ -74,10 +74,9 @@ comment-lines-only diff, the fiat's untouchable exemptions, re-verifying each fi
 before applying, re-gating with `nox -t fix` + the `tests` bucket's `unit` view, committing as its
 own commit — are unchanged by being dispatched through me; I add nothing to its contract.
 
-**The groomer now owns its own branch-target checkout and push as part of its own contract**
-(`comment-groomer.md`) — it writes no bd state either way. What's left mine to carry in the
-dispatch prompt is only *where the work goes* and *whose job the hand-off is*, not the checkout or
-push mechanics themselves.
+**The checkout and the push are the groomer's own contract** (`comment-groomer.md`) — it writes no
+bd state either way. What's left mine to carry in the dispatch prompt is only *where the work goes*
+and *whose job the hand-off is*, not the checkout or push mechanics themselves.
 
 - **Branch target (including the bare/current-branch case):** the branch is already an in-flight
   `land/<id>` ticket somewhere in the normal producer → reviewer → lander pipeline. I name that
@@ -92,7 +91,7 @@ push mechanics themselves.
 - **Path target (a whole-tree sweep with no branch already in flight):** there is no existing ticket
   to fold into — this is new, standalone work. I file a bd issue for the sweep first (`bd create
   --type=task --title="comment-audit sweep: <path>" --description="…"`), then dispatch the groomer
-  with that id, telling it to work on its own `land/<id>` branch and push it. Because the groomer
+  with that id as the branch to push its sweep to. Because the groomer
   writes no bd state, **I** do the hand-off once it reports its head SHA: set `review_head` to that
   SHA and add **`ready-for-code-review`**, so the normal `code-reviewer` → `/land` pipeline picks it
   up. I never mark it `ready-for-land` and never touch `trunk` myself.
