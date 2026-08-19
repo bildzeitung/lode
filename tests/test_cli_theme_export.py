@@ -255,3 +255,59 @@ def test_export_cli_section_with_overrides_round_trips(
     (tmp_path / "config.toml").write_text(result.output, encoding="utf-8")
     after = resolve_cli_styles(load_settings())
     assert after == before
+
+
+# --- settings resolved at most once per invocation (lode-up3w / lode-9otn) --
+
+
+def test_export_resolves_settings_at_most_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``lode theme export`` must not stat/read/parse config.toml twice.
+
+    ``main()``'s ``[cli.theme]`` wiring (lode-mk9j) already resolves settings
+    once for every invocation (``"theme"`` is a ``_CONFIG_OPTIONAL_COMMANDS``
+    member, lode-jjol); ``theme_export`` must reuse that one resolution
+    rather than triggering a second ``load_settings()`` call. Count
+    ``load_settings`` calls directly (the load-bearing assertion) rather
+    than inferring it from output.
+    """
+    from lode import cli as cli_mod
+
+    calls = 0
+    real_load_settings = cli_mod.load_settings
+
+    def _counting_load_settings(**overrides: object) -> object:
+        nonlocal calls
+        calls += 1
+        return real_load_settings(**overrides)
+
+    # `_resolve_settings()` calls the name `load_settings` bound into
+    # `lode.cli`'s own namespace (`from lode.config import ... load_settings`),
+    # so that's the reference to intercept -- patching `lode.config
+    # .load_settings` instead would miss every call `cli._resolve_settings`
+    # makes.
+    monkeypatch.setattr(cli_mod, "load_settings", _counting_load_settings)
+
+    _run_export(monkeypatch, tmp_path)
+    assert calls == 1, f"expected exactly one load_settings() call, got {calls}"
+
+
+def test_export_reports_a_broken_config_file_at_most_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A broken config.toml prints the 'invalid config file' line exactly once.
+
+    ``main()``'s best-effort resolution for ``"theme"`` (lode-jjol) already
+    attempts (and swallows) this exact failure before ``theme_export``'s own
+    body runs; a second real ``_resolve_settings()`` call there would re-echo
+    the raw "invalid config file" line on top of ``theme_export``'s own
+    user-facing fallback message. Pins the whole-invocation invariant
+    against a regression from either layer resolving twice.
+    """
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text("not_a_real_knob = 1\n", encoding="utf-8")
+
+    result = runner.invoke(cli_app, ["theme", "export"])
+    assert result.exit_code == 0, result.output
+    assert result.stderr.count("invalid config file") == 1, result.output

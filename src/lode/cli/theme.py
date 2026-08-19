@@ -14,7 +14,6 @@ round-trips: pasting it back in reproduces the same effective theme (its own
 values already ARE the effective ones).
 """
 
-import logging
 from typing import Annotated
 
 import typer
@@ -23,8 +22,6 @@ from pydantic import ValidationError
 from lode import cli
 from lode.cli import app
 from lode.config import TUI_THEME_COLOR_KEYS, Settings, TuiTheme
-
-log = logging.getLogger(__name__)
 
 theme_app = typer.Typer(
     help="Inspect and export the TUI's [tui.theme] and CLI's [cli.theme] configuration.",
@@ -99,26 +96,25 @@ def theme_export(
 
     # Best-effort settings resolution (lode-jjol): `_resolve_settings()`
     # itself exits 1 on a bad config.toml (malformed TOML, an out-of-range
-    # theme value, ...), and a raw, unreadable file raises `OSError`
-    # straight through it -- both of which would otherwise stop the ONE
-    # command that exists to help a user recover from exactly that config.
-    # Fall back to `Settings()` (the same shape `load_settings()` returns
-    # for an absent config.toml) so the rest of this command sees ordinary,
-    # unconfigured defaults and needs no further special-casing below.
+    # theme value, ...), and a raw, unreadable file raises `OSError` straight
+    # through it -- both of which would otherwise stop the ONE command that
+    # exists to help a user recover from exactly that config. Fall back to
+    # `Settings()` (the same shape `load_settings()` returns for an absent
+    # config.toml) so the rest of this command sees ordinary, unconfigured
+    # defaults and needs no further special-casing below.
     #
-    # Not ``cli._resolve_settings_best_effort()``: this command needs a real
-    # ``Settings`` to keep exporting, plus a user-facing stderr line, where
-    # that helper's contract is a silent ``None``. The ``except Exception``
-    # here is the same broad catch for the same reason, and that helper's
-    # docstring owns the why.
-    try:
-        settings = cli._resolve_settings()
-    except Exception:
-        # Logged with `exc_info` for the same reason the shared helper does
-        # it: the stderr line below is the user's story, the traceback is the
-        # maintainer's, and it keeps the broad catch honest (and BLE001
-        # satisfied) rather than silently discarded.
-        log.debug("theme export: _resolve_settings failed", exc_info=True)
+    # Read the per-invocation cache directly rather than calling
+    # `cli._resolve_settings()`/`_resolve_settings_best_effort()` again:
+    # "theme" is a `_CONFIG_OPTIONAL_COMMANDS` member, so `main()` already
+    # made this invocation's one resolution attempt before dispatching here.
+    # `_resolve_settings()` caches only a *successful* resolution
+    # (lode-bsga) and never a failure, so by the time this command body runs
+    # `cli._settings_cache` already holds exactly what that one attempt
+    # produced -- a second real call would re-run `load_settings()` on the
+    # same broken file and re-echo the "invalid config file" line a second
+    # time on top of the fallback message below (lode-9otn).
+    settings = cli._settings_cache
+    if settings is None:
         typer.echo(
             "lode theme export: could not resolve config.toml -- "
             "falling back to built-in defaults",
