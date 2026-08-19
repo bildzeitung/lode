@@ -72,7 +72,7 @@ import tomllib
 import uuid  # noqa: F401 -- re-exported so `cli.uuid` resolves for tests (see module docstring)
 from importlib import import_module
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, Any, NoReturn
 
 import typer
 from pydantic import ValidationError
@@ -132,9 +132,16 @@ class _HelpAwareGroup(typer.core.TyperGroup):
     change here.
     """
 
+    # ``Any`` on purpose: the true types are Click's ``Context``/``Command``,
+    # nameable only from typer's PRIVATE vendored ``typer._click`` (and a
+    # direct ``click`` import would trip tests/test_deps_declared.py). The
+    # public typer names would be WRONG, not merely loose -- ctx is the
+    # vendored ``Context``, not ``typer.Context``, and for a sub-``Typer``
+    # (``lode models``) the resolved command is a ``TyperGroup``, which is not
+    # a ``TyperCommand``.
     def resolve_command(
-        self, ctx: typer.Context, args: list[str]
-    ) -> tuple[str | None, typer.core.TyperCommand | None, list[str]]:
+        self, ctx: Any, args: list[str]
+    ) -> tuple[str | None, Any, list[str]]:
         cmd_name, cmd, remaining_args = super().resolve_command(ctx, args)
         ctx.meta[_META_SUBCOMMAND_HELP_REQUESTED] = any(
             arg in ctx.help_option_names for arg in remaining_args

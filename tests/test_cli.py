@@ -2455,6 +2455,39 @@ def test_subcommand_without_help_still_fails_loudly_on_bad_config(
     assert "invalid config file" in result.output
 
 
+def test_help_detection_follows_help_option_names_not_a_literal() -> None:
+    # lode-rtcx acceptance: the match is against ctx.help_option_names, not a
+    # hardcoded '--help'. The three tests above cannot see the difference --
+    # lode's own help_option_names is Click's default ['--help'] -- so a
+    # regression back to the literal would go unnoticed. Build a throwaway app
+    # on the same _HelpAwareGroup with a '-h' alias configured, and assert the
+    # group callback sees the exemption.
+    import typer
+
+    from lode import cli
+
+    probe = typer.Typer(
+        cls=cli._HelpAwareGroup,
+        context_settings={"help_option_names": ["-h", "--help"]},
+    )
+    seen: list[bool] = []
+
+    @probe.callback()
+    def _root(ctx: typer.Context) -> None:
+        seen.append(cli._help_requested(ctx))
+
+    @probe.command()
+    def sub() -> None:
+        """Sub."""
+
+    assert CliRunner().invoke(probe, ["sub", "-h"]).exit_code == 0
+    assert seen == [True]
+
+    seen.clear()
+    assert CliRunner().invoke(probe, ["sub"]).exit_code == 0
+    assert seen == [False]
+
+
 def test_status_all_clear_when_no_pending_failed_and_cache_warm(
     tmp_path: Path, warm_model_cache: None
 ) -> None:
