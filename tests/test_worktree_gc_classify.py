@@ -56,9 +56,11 @@ while everything stays green.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from _gitrepo import _git
@@ -102,10 +104,27 @@ def _add_worktree(
     return wt
 
 
-def _commit(wt: Path, filename: str, message: str) -> str:
+def _commit(
+    wt: Path, filename: str, message: str, committer_date: str | None = None
+) -> str:
+    """`committer_date` forges the committer timestamp the script reads via
+    `git log -1 --format=%ct`. It goes through a direct `subprocess.run`
+    because `_gitrepo._git` accepts no env; everything else stays on `_git`."""
     (wt / filename).write_text(f"{message}\n")
     _git(wt, "add", filename)
-    _git(wt, "commit", "-q", "-m", message)
+    if committer_date is None:
+        _git(wt, "commit", "-q", "-m", message)
+    else:
+        result = subprocess.run(
+            ["git", "commit", "-q", "-m", message],
+            cwd=wt,
+            env={**os.environ, "GIT_COMMITTER_DATE": committer_date},
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, f"git commit failed: {result.stderr}"
     return _git(wt, "rev-parse", "HEAD").stdout.strip()
 
 
@@ -413,6 +432,32 @@ def test_worktree_agent_not_merged_clean_and_old_enough_is_dir_only(
     assert not _is_ancestor(repo, sha, "trunk")
 
     result = _run(repo, wt, sha, "0", "worktree-agent-leaked", min_age_seconds="-3600")
+
+    assert _bucket(result) == "dir-only"
+
+
+def test_worktree_agent_future_dated_commit_with_zero_floor_is_dir_only(
+    tmp_path: Path,
+) -> None:
+    """lode-o7rt: a committer timestamp AHEAD of the classifying process's own
+    `date +%s` makes `now - last_commit_ts` negative, and an unclamped
+    negative age failed even a `min_age_seconds=0` floor -- the
+    `keep-notmerged` misclassification behind
+    `test_dir_only_reclaim_removes_the_directory_but_keeps_the_ref`'s flake
+    under `-n 8`. The script's own comment carries why the clock can step
+    backward; what only this test can say is that it FORGES the date rather
+    than racing a real clock, so reverting the clamp turns it red on every
+    run instead of occasionally.
+    """
+    repo = _init_repo(tmp_path)
+    wt = _add_worktree(
+        repo, ".claude/worktrees/future-dated", "worktree-agent-futuredated"
+    )
+    sha = _commit(
+        wt, "wip.txt", "abandoned build", committer_date=str(int(time.time()) + 3600)
+    )
+
+    result = _run(repo, wt, sha, "0", "worktree-agent-futuredated", min_age_seconds="0")
 
     assert _bucket(result) == "dir-only"
 

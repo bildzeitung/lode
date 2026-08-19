@@ -73,7 +73,7 @@ import uuid  # noqa: F401 -- re-exported so `cli.uuid` resolves for tests (see m
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, Any, NoReturn
 
 import typer
 from pydantic import ValidationError
@@ -103,11 +103,59 @@ from lode.storage import init_db
 
 log = logging.getLogger(__name__)
 
+#: ``ctx.meta`` key ``_HelpAwareGroup.resolve_command()`` stashes its answer
+#: under -- see that class's docstring and ``_help_requested()`` below
+#: (lode-rtcx).
+_META_SUBCOMMAND_HELP_REQUESTED = "lode.cli.subcommand_help_requested"
+
+
+class _HelpAwareGroup(typer.core.TyperGroup):
+    """``TyperGroup`` that records, in ``ctx.meta``, whether the subcommand
+    about to be dispatched will itself end up printing ``--help`` output --
+    e.g. ``lode notes --help`` (lode-rtcx, deepening lode-moq7's process-
+    global ``sys.argv`` sniff into something read off the actual invocation).
+
+    Click resolves a subcommand's own residual args (e.g. the ``--help`` in
+    ``lode notes --help``) here, in ``resolve_command()``, BEFORE the group
+    callback (``main()``, below) is ever invoked -- verified against
+    ``typer.core.TyperGroup.resolve_command`` in typer 0.27.1 (which
+    delegates to its OWN vendored fork of Click 8.3.1's ``Group
+    .resolve_command`` -- ``typer/_click/`` is a bundled copy, not the
+    separately-installed ``click`` 8.4.2 package; behaviorally identical
+    here, confirmed by reading both): ``args[1:]`` (the subcommand's own
+    remaining args) is returned as this method's third tuple element and is
+    not otherwise exposed on ``ctx`` -- see ``_help_requested()``'s
+    docstring for why that means there is no OTHER ``ctx``-based signal to
+    read once ``main()`` runs. Matches against ``ctx.help_option_names`` --
+    Click's actual configured help flags (``['--help']`` by default) --
+    rather than a hardcoded ``'--help'`` literal, so a future ``-h`` alias
+    (or any ``context_settings`` override) stays covered without a code
+    change here.
+    """
+
+    # ``Any`` on purpose: the true types are Click's ``Context``/``Command``,
+    # nameable only from typer's PRIVATE vendored ``typer._click`` (and a
+    # direct ``click`` import would trip tests/test_deps_declared.py). The
+    # public typer names would be WRONG, not merely loose -- ctx is the
+    # vendored ``Context``, not ``typer.Context``, and for a sub-``Typer``
+    # (``lode models``) the resolved command is a ``TyperGroup``, which is not
+    # a ``TyperCommand``.
+    def resolve_command(
+        self, ctx: Any, args: list[str]
+    ) -> tuple[str | None, Any, list[str]]:
+        cmd_name, cmd, remaining_args = super().resolve_command(ctx, args)
+        ctx.meta[_META_SUBCOMMAND_HELP_REQUESTED] = any(
+            arg in ctx.help_option_names for arg in remaining_args
+        )
+        return cmd_name, cmd, remaining_args
+
+
 app = typer.Typer(
     name="lode",
     help="AI-first personal knowledge base for things you learn at work.",
     no_args_is_help=True,
     add_completion=False,
+    cls=_HelpAwareGroup,
 )
 
 #: The one shared rich Theme for the whole CLI (lode-l38d.11) — style names
@@ -324,6 +372,26 @@ class CliObj:
     settings: Settings | None = None
 
 
+def _help_requested(ctx: typer.Context) -> bool:
+    """True when the subcommand this invocation is about to dispatch to will
+    itself end up printing ``--help`` output (e.g. ``lode notes --help``),
+    and so has nothing to restyle or fail loudly over (lode-moq7, deepened
+    by lode-rtcx).
+
+    Top-level ``lode --help`` never reaches here at all: Click's own
+    ``--help`` option is eager and prints/exits during argument parsing,
+    before the group callback (``main()``, this function's only caller) is
+    ever invoked -- so this only needs to cover the SUBcommand-``--help``
+    case. Reads the answer ``_HelpAwareGroup.resolve_command()`` already
+    computed off Click's own parse state and stashed on ``ctx.meta`` --
+    Click resolves a subcommand's own residual args before ``main()`` ever
+    runs, so there is no OTHER ``ctx``-based signal available at this point
+    (see ``_HelpAwareGroup``'s docstring). Defaults to ``False`` when the
+    key is absent (e.g. no subcommand was invoked at all).
+    """
+    return bool(ctx.meta.get(_META_SUBCOMMAND_HELP_REQUESTED, False))
+
+
 @app.callback()
 def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     """lode — capture and retrieve what you learn at work."""
@@ -342,11 +410,26 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     obj = CliObj(debug=debug)
     ctx.obj = obj
 
+    # Reset the per-invocation _resolve_settings() cache (lode-bsga) -- this
+    # is the group callback, so it runs exactly once per invocation, before
+    # any subcommand body. See _resolve_settings()'s docstring for why that
+    # reset is what makes a module-level cache safe here.
+    global _settings_cache
+    _settings_cache = None
+
     # [cli.theme] resolution + application (lode-mk9j) -- global, here in
     # main(), so it covers every subcommand, including one like ``lode
     # notes`` that never otherwise calls ``_resolve_settings()``. Skipped
     # when no subcommand is actually about to run (bare ``lode`` / ``--help``
-    # under ``no_args_is_help``), since there's nothing to restyle for.
+    # under ``no_args_is_help``), since there's nothing to restyle for --
+    # and skipped too when a SUBcommand's own ``--help`` was requested
+    # (``lode notes --help``, lode-moq7): the group callback runs before
+    # Click parses the subcommand's own args, so an unrelated malformed
+    # config.toml previously took even a pure ``--help`` invocation down.
+    # ``--help`` never reads config, so there is nothing to restyle or fail
+    # loudly over either way -- see docs/decisions.md's lode-moq7 entry
+    # (and its lode-rtcx correction: the detection below reads Click's own
+    # parse state via ``_HelpAwareGroup``, not process-global ``sys.argv``).
     #
     # ``lode status`` ALONE swallows a failed resolution, keeping its
     # pre-existing lode-l38d.6 survival contract; every OTHER command lets
@@ -362,7 +445,7 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     # The resolved ``settings`` is also stashed on ``obj.settings`` (lode-9otn)
     # -- ``lode theme export`` reads it back from there instead of calling
     # ``_resolve_settings()`` a second time.
-    if ctx.invoked_subcommand is not None:
+    if ctx.invoked_subcommand is not None and not _help_requested(ctx):
         settings: Settings | None
         if ctx.invoked_subcommand == "status":
             try:
@@ -417,6 +500,13 @@ def _write_draft(db_path: Path, note_id: str, body: str) -> Path:
     return Path(name)
 
 
+#: This invocation's resolved settings, or ``None`` for "not resolved yet"
+#: (lode-bsga). ``None`` is unambiguous here precisely because a *failed*
+#: resolution is never cached -- see :func:`_resolve_settings`, which is the
+#: only writer, and only ever on success.
+_settings_cache: Settings | None = None
+
+
 def _resolve_settings() -> Settings:
     """Resolve settings for one command, reporting a bad config file the CLI way.
 
@@ -438,6 +528,33 @@ def _resolve_settings() -> Settings:
     duplication tracked for migration in lode-47he, not a documented
     exemption.
 
+    **Caches the first successful resolution for the rest of this
+    invocation** (lode-bsga): ``main()`` — this Typer app's group callback —
+    already resolves settings once per invocation for ``[cli.theme]``
+    application (lode-mk9j); without a cache, the subcommand body then
+    resolved a second, redundant ``load_settings()``. ``main()`` resets the
+    cache to ``None`` at the top of every invocation, so this never leaks a
+    resolution across separate CLI invocations (or across a CliRunner test
+    suite's repeated in-process calls, which drive ``app`` many times in one
+    process).
+
+    A *failed* resolution is deliberately NOT cached, and that is
+    **load-bearing rather than merely harmless**: ``lode status``'s
+    ``lode-l38d.6`` survival contract is two independent swallowed attempts
+    — ``main()`` swallows one, ``status``'s own body re-attempts and swallows
+    again. Caching the failure would collapse those into a single attempt and
+    quietly change that contract, so the second real ``load_settings()`` call
+    on a broken ``config.toml`` is the point, not an oversight.
+    ``tests/test_cli_settings_cache.py`` pins it.
+
+    Not :func:`functools.cache`, despite the shape fitting (no arguments, and
+    ``lru_cache`` likewise declines to cache exceptions): the reset would have
+    to be ``_resolve_settings.cache_clear()``, and tests monkeypatch
+    ``lode.cli._resolve_settings`` wholesale with a plain function (see
+    ``tests/test_cli.py``'s unreadable-config case), which has no
+    ``cache_clear`` — ``main()`` would then die with ``AttributeError`` on
+    exactly the error path that seam exists to exercise.
+
     Defined here, on the package itself, rather than in a command submodule
     (lode-35nu.9): nearly every command calls this, and it is independently
     monkeypatched as ``lode.cli._resolve_settings`` — every command therefore
@@ -445,11 +562,16 @@ def _resolve_settings() -> Settings:
     docstring for why), which only works if the name actually lives on the
     package.
     """
+    global _settings_cache
+    if _settings_cache is not None:
+        return _settings_cache
     try:
-        return load_settings()
+        settings = load_settings()
     except (tomllib.TOMLDecodeError, ValidationError) as err:
         typer.echo(f"invalid config file {config_path()}: {err}", err=True)
         raise typer.Exit(code=1) from None
+    _settings_cache = settings
+    return settings
 
 
 def _enrich_immediately(

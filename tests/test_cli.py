@@ -2398,6 +2398,96 @@ def test_status_survives_an_unreadable_config_file(
     assert "No action needed." in result.output
 
 
+def test_subcommand_help_survives_a_malformed_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # lode-moq7: main() (the Typer group callback) runs BEFORE Click parses a
+    # subcommand's own --help, so an eager, global _resolve_settings() call in
+    # main() (lode-mk9j) took even a pure `lode notes --help` down on a bad
+    # config.toml -- --help never reads config, so it should never need a
+    # valid one. main() detects this via ctx.meta, populated by
+    # _HelpAwareGroup.resolve_command() off Click's own parse state
+    # (lode-rtcx) -- CliRunner drives the same Click machinery a real
+    # invocation does, so no sys.argv monkeypatch is needed here.
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text("embedding_model = [not valid toml\n")
+    monkeypatch.setenv("LODE_HOME", str(home))
+
+    result = CliRunner().invoke(app, ["notes", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "Usage:" in result.output
+
+
+def test_subcommand_help_survives_an_unreadable_config_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The unreadable-config half of the test above (PermissionError propagates
+    # straight through _resolve_settings, same as the lode-l38d.6 pair).
+    from lode import cli
+
+    def _boom() -> Settings:
+        raise PermissionError("config.toml is not readable")
+
+    monkeypatch.setattr(cli, "_resolve_settings", _boom)
+
+    result = CliRunner().invoke(app, ["notes", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "Usage:" in result.output
+
+
+def test_subcommand_without_help_still_fails_loudly_on_bad_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The control: a bad config.toml must still take a real (non---help)
+    # subcommand invocation down, exactly as lode-mk9j intended -- this
+    # ticket exempts only --help, not config resolution generally.
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text("embedding_model = [not valid toml\n")
+    monkeypatch.setenv("LODE_HOME", str(home))
+
+    result = CliRunner().invoke(app, ["notes"])
+
+    assert result.exit_code == 1
+    assert "invalid config file" in result.output
+
+
+def test_help_detection_follows_help_option_names_not_a_literal() -> None:
+    # lode-rtcx acceptance: the match is against ctx.help_option_names, not a
+    # hardcoded '--help'. The three tests above cannot see the difference --
+    # lode's own help_option_names is Click's default ['--help'] -- so a
+    # regression back to the literal would go unnoticed. Build a throwaway app
+    # on the same _HelpAwareGroup with a '-h' alias configured, and assert the
+    # group callback sees the exemption.
+    import typer
+
+    from lode import cli
+
+    probe = typer.Typer(
+        cls=cli._HelpAwareGroup,
+        context_settings={"help_option_names": ["-h", "--help"]},
+    )
+    seen: list[bool] = []
+
+    @probe.callback()
+    def _root(ctx: typer.Context) -> None:
+        seen.append(cli._help_requested(ctx))
+
+    @probe.command()
+    def sub() -> None:
+        """Sub."""
+
+    assert CliRunner().invoke(probe, ["sub", "-h"]).exit_code == 0
+    assert seen == [True]
+
+    seen.clear()
+    assert CliRunner().invoke(probe, ["sub"]).exit_code == 0
+    assert seen == [False]
+
+
 def test_status_all_clear_when_no_pending_failed_and_cache_warm(
     tmp_path: Path, warm_model_cache: None
 ) -> None:
