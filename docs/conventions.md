@@ -125,12 +125,13 @@ counter is 1-based to match the wire protocol` → keep (the code can't say this
 
 **Change-narration comments are forbidden.** A comment that describes the *edit* rather than the
 code — "now uses X", "moved from Y", "changed to handle Z" — belongs in the commit message, not the
-source. The reader of the file never sees the diff that produced it; a narration comment stops
-making sense the moment the history it refers to is no longer recent.
+source.
 
-This does not touch license headers, docstrings serving an API/help contract (Typer docstrings are
-VERBATIM by fiat, above), lint directives (`# noqa`, `# fmt: skip` — load-bearing gates in this
-repo), or a TODO/FIXME carrying a live bd id.
+**Exemptions (the single source — anything auditing comments in this repo reads this list, and
+never keeps its own copy):** license headers; docstrings serving an API/help contract (Typer
+docstrings are VERBATIM by fiat, above); lint directives (`# noqa`, `# fmt: skip` — load-bearing
+gates in this repo); a TODO/FIXME carrying a live bd id; shebang/encoding lines; comments inside
+vendored or generated files.
 
 ## Derive identifiers, never retype them
 

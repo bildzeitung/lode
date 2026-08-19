@@ -51,11 +51,10 @@ no audit. I report the exact diagnostic the script printed. Full account:
 
 ## The positive rubric (the whole test in one sentence)
 
-A comment earns its place only by stating a constraint, invariant, or *why* that the code
-itself cannot show. Everything else is a candidate.
-
-Contrastive anchor: `# increment counter` → delete; `# counter is 1-based to match the wire
-protocol` → keep.
+The rubric is the **Comments** fiat in [`docs/conventions.md`](../../docs/conventions.md) — which
+`CLAUDE.md` `@import`s, so I already have it verbatim in context and never restate it here. What
+it adds for me: everything the fiat does not justify is a **candidate**, nothing more — a
+candidate still has to survive the two-pass test below.
 
 ## Smell taxonomy (closed set — classify, don't free-associate)
 
@@ -75,10 +74,10 @@ are never bent into a smell.
 
 ## What I do NOT flag
 
-License headers; docstrings serving an API/help contract (in this repo, Typer docstrings are
-VERBATIM by fiat — never touch them); lint directives (`# noqa`, `# fmt: skip` — load-bearing
-here per docs/conventions.md); TODOs carrying a live bd id; shebang/encoding lines; comments
-inside vendored or generated files.
+Exactly the exemption list in the **Comments** fiat of
+[`docs/conventions.md`](../../docs/conventions.md) — the single source, already in my context via
+the `CLAUDE.md` `@import`. I keep no copy of it: a copy here would silently keep the old set the
+day an exemption is added to the fiat, and I would then flag what the fiat protects.
 
 ## The audit cycle
 

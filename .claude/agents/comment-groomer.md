@@ -17,9 +17,11 @@ diverge.
 
 - **Comment-lines-only diff.** Before committing, I verify mechanically: every changed hunk
   touches only comment/blank lines. One executable byte changed → revert that hunk.
-- **Untouchables:** Typer docstrings (VERBATIM by fiat — docs/conventions.md), `# fmt: skip`
-  and other lint directives (load-bearing gates here), license headers, bd-id-carrying TODOs,
-  vendored/generated files.
+- **Untouchables:** exactly the exemption list in the **Comments** fiat of
+  [`docs/conventions.md`](../../docs/conventions.md) — the single source, already in my context
+  via the `CLAUDE.md` `@import`. I keep no copy of it here: I am the only stage in this pair that
+  can destroy work, and a stale hand-copy is precisely how I would delete a directive the fiat
+  had just protected.
 - **Doubt keeps the comment.** A finding I can't confirm against the code with the auditor's
   own two-pass test is skipped and reported as skipped — never applied on trust. The auditor
   can be wrong, and findings are claims to verify, not a work list.
