@@ -5459,3 +5459,42 @@ entries below from being rewritten to chase the current tree.)
   colours adjustable via export. Implementation: `lode-cwyk` (TUI), then `lode-mk9j` (CLI rich
   `CLI_STYLES` surface, same pattern over its semantic names). The TUI-only scope is explicit in
   the section name, keeping the original "lie by omission" concern honest rather than violated.
+
+- **`[cli.theme]` placement: resolved+applied globally in `main()`, `lode status` exempted
+  (`lode-mk9j`, maintainer decision, 2026-08-18).** `lode-mk9j` (the CLI half of the `lode-dmbc`
+  entry above) implemented `[cli.theme.styles]` — a typed, `extra="forbid"` `CliThemeStyles`
+  mirroring `TuiThemeColors`'s shape, but validated with `rich.style.Style.parse`, not
+  `textual.color.Color.parse`: `lode.cli.CLI_STYLES`'s own defaults are rich STYLE strings
+  (`"bold red"`, `"dim"`, `"bold"`), not bare colours, so the TUI's colour-only validator would
+  reject the very defaults this section restates. The open question was WHERE to resolve and apply
+  it, given two contracts that don't obviously reconcile: this ticket's own "unknown keys / invalid
+  colours fail at config load naming the key" for every command including `lode notes` (which never
+  called `_resolve_settings()` before this ticket), against `lode-l38d.6`'s pre-existing "a
+  malformed/unreadable `config.toml` must never take `lode status` down" survival contract
+  (`tests/test_cli.py::test_status_survives_a_malformed_config_file` /
+  `_an_unreadable_config_file`). A first attempt resolved settings once, unconditionally, in the
+  Typer group callback (`lode.cli.main()`) for every subcommand — the only placement that reaches
+  `lode notes` at all — but that broke both `status` survival tests: a bad `config.toml` now took
+  `lode status` down too, before its own body ever ran.
+  Three options were laid out, none clearly the builder's to pick: (1) resolve+apply globally in
+  `main()`, but special-case `status` to swallow a failed resolution and skip restyling — leaves
+  `status` unthemed on a bad config, inconsistent with this ticket's own fail-loud acceptance
+  criterion for every other command; (2) resolve lazily, only inside commands that already call
+  `_resolve_settings()` — `lode notes` would then never respect `[cli.theme]` at all, failing this
+  ticket's own acceptance criterion; (3) best-effort resolve in `main()` (swallow any failure,
+  fall through to each command's own settings handling) — preserves both contracts, but a
+  `[cli.theme]` validation error becomes invisible from `status` and only visible from commands
+  that already load settings on their own path.
+  **Decided: option (1).** `lode status` is already the sanctioned, pre-existing exception to
+  fail-loud config handling (`lode-l38d.6`) — extending that same exemption to cover theme
+  resolution too is the existing contract winning, not a new inconsistency the way (2)/(3) each
+  are: both of those break this ticket's own acceptance criteria on `lode notes` (never themed, or
+  silent typos) to avoid touching `status`. **Accepted side effect, deliberate:** every subcommand
+  other than `status` now fails loudly on ANY config error — not just an invalid `[cli.theme]`
+  value — including one that previously never read `config.toml` at all (`lode notes` is the
+  concrete example); this is an improvement (a stale/typo'd config now surfaces immediately,
+  everywhere), not a regression. This extends `lode-l38d.6`'s recorded scope: that contract was
+  "a broken config must never take `lode status` down"; it now additionally reads "…and `status`
+  remains the ONLY command carrying that exemption — every other command's config resolution moved
+  from lazy/per-command to eager/global in `main()`, and takes the same command down on failure a
+  direct `_resolve_settings()` call always did."

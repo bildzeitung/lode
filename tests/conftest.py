@@ -624,6 +624,27 @@ def _restore_root_logger_state():
             handler.close()
 
 
+@pytest.fixture(autouse=True)
+def _reset_cli_theme_override() -> Iterator[None]:
+    """Pop any ``[cli.theme]`` override layer ``main()`` pushed onto the
+    shared ``console``/``err_console`` (lode-mk9j) before every test.
+
+    Same shape as ``_restore_root_logger_state`` above and the same reason
+    it exists: ``lode.cli.main()`` pushes the override onto two
+    module-level, process-wide ``Console`` singletons and pops it only
+    lazily, at the start of the NEXT invocation (see
+    ``lode.cli._apply_cli_theme``). A test that invokes a themed command via
+    ``CliRunner`` would otherwise leave that override live for whatever test
+    runs next -- including one like ``tests/test_cli_theme.py`` that asserts
+    on ``console.get_style(...)`` with no invocation of its own to trigger
+    the pop. ``_apply_cli_theme(None)`` is that pop-only path, reused here.
+    """
+    from lode.cli import _apply_cli_theme
+
+    yield
+    _apply_cli_theme(None)
+
+
 #: Set ONLY by ``tests/test_conftest_jobs_clock_anchor.py``'s own nested-subprocess repro, to
 #: measure this fixture's own effect on demand (lode-up8x) -- never set in a real test run, and
 #: never read anywhere else. Prefixed and namespaced defensively precisely because it disables a
