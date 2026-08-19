@@ -52,11 +52,11 @@ sys.path.insert(0, str(_REPO_ROOT / "src"))
 from lode.docs_slug import anchor_slugs
 from lode.fence_parsing import fence_flags
 
-# The pinned mermaid-cli image. Deliberately NOT `:latest` (scripts/validate-
-# mermaid.sh's tag) -- lode-fhql.9's own acceptance requires the toolchain
-# pinned, not floating; this is a build-output artifact (embedded in every
-# page the site ships) where an unannounced upstream change is a worse
-# surprise than in a pass/fail validation gate.
+# The pinned mermaid-cli image. Deliberately NOT `:latest` -- lode-fhql.9's
+# own acceptance requires the toolchain pinned, not floating; this is a
+# build-output artifact (embedded in every page the site ships) where an
+# unannounced upstream change is a worse surprise than in a pass/fail
+# validation gate.
 #
 # docs/stack.md mandates ONE image shared with validate-mermaid.sh, "not a
 # second, independently-versioned copy" -- converged by lode-3ld8:

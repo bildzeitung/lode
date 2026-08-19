@@ -118,11 +118,10 @@ jobs:
       # surfaces as its own clearly-named step instead of buried inside the
       # first diagram's render error.
       - name: Pull pinned mermaid-cli image
-        # Keep in sync with MERMAID_IMAGE in scripts/build_docs_site.py --
-        # deliberately a DIFFERENT pin than scripts/validate-mermaid.sh's
-        # floating `:latest` (lode-fhql.9's own acceptance requires this
-        # toolchain pinned; the separate validate-mermaid.sh gate is
-        # untouched by this ticket).
+        # Same pin as MERMAID_IMAGE in scripts/build_docs_site.py,
+        # scripts/validate-mermaid.sh, and scripts/update-images.sh -- all
+        # four sites are kept in sync against MERMAID_IMAGE by
+        # tests/test_build_docs_site.py. Bump all four together.
         run: docker pull minlag/mermaid-cli:10.9.1
 
       - name: Stage published docs + pre-render Mermaid to SVG
