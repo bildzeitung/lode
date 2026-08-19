@@ -87,11 +87,10 @@ def theme_export(
     # `main()`'s [cli.theme] wiring (lode-mk9j) already resolved settings
     # once for this invocation and stashed them on `ctx.obj` -- read that
     # back instead of resolving config.toml a second time (lode-9otn).
-    # `ctx.obj.settings` is always set by the time this command body runs:
-    # `main()` resolves it unconditionally for every subcommand but
-    # `status` (this one included), raising before dispatch on a bad config.
-    assert ctx.obj.settings is not None  # main() resolved it unconditionally, above
     settings = ctx.obj.settings
+    # Never None here: main() resolves unconditionally for every subcommand
+    # but `status`, raising before dispatch on a bad config.
+    assert settings is not None
     # `or TuiTheme()` rather than a hand-written absent-section fallback: the
     # model already carries the base-theme default and both sub-model
     # default_factories, so the default base theme name lives in exactly one

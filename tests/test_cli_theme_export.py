@@ -216,7 +216,6 @@ def test_export_resolves_settings_at_most_once(
     """
     import lode.cli as cli_mod
 
-    monkeypatch.setenv("LODE_HOME", str(tmp_path))
     calls = 0
     real_load_settings = cli_mod.load_settings
 
@@ -232,24 +231,23 @@ def test_export_resolves_settings_at_most_once(
     # makes.
     monkeypatch.setattr(cli_mod, "load_settings", _counting_load_settings)
 
-    result = runner.invoke(cli_app, ["theme", "export"])
-    assert result.exit_code == 0, result.output
+    _run_export(monkeypatch, tmp_path)
     assert calls == 1, f"expected exactly one load_settings() call, got {calls}"
 
 
 def test_export_reports_a_broken_config_file_at_most_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A broken config.toml must not print the 'invalid config file' line
-    twice -- one per (would-be) resolution.
+    """A broken config.toml prints the 'invalid config file' line exactly once.
 
     ``main()`` resolves settings before dispatching to any subcommand but
-    ``status`` (lode-mk9j), so today this already aborts before
-    ``theme_export`` ever runs; the assertion pins the invariant against a
+    ``status`` (lode-mk9j), so today this aborts before ``theme_export`` ever
+    runs; the assertion pins the whole-invocation invariant against a
     regression from either layer resolving twice.
     """
     monkeypatch.setenv("LODE_HOME", str(tmp_path))
     (tmp_path / "config.toml").write_text("not_a_real_knob = 1\n", encoding="utf-8")
 
     result = runner.invoke(cli_app, ["theme", "export"])
-    assert result.stderr.count("invalid config file") <= 1, result.output
+    assert result.exit_code == 1, result.output
+    assert result.stderr.count("invalid config file") == 1, result.output

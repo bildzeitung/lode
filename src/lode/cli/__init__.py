@@ -432,11 +432,11 @@ def _resolve_settings() -> Settings:
     ``main()`` already resolves settings once per invocation (for the
     ``[cli.theme]`` wiring, lode-mk9j) and threads the result down via
     ``ctx.obj`` (a :class:`CliObj`, lode-9otn); a command that only needs
-    that same resolution (e.g. ``lode theme export``) reads ``ctx.obj
-    .settings`` instead of calling this again. A command that genuinely
-    needs its own, separate resolution -- ``tui`` re-resolves so its
-    ``settings=`` argument is independent of ``main()``'s -- still calls
-    this itself.
+    that same resolution should read ``ctx.obj.settings`` instead of calling
+    this again. Today ``lode theme export`` is the only one that does --
+    every other command still calls this a second time, a pre-existing
+    duplication tracked for migration in lode-47he, not a documented
+    exemption.
 
     Defined here, on the package itself, rather than in a command submodule
     (lode-35nu.9): nearly every command calls this, and it is independently
