@@ -66,7 +66,6 @@ Both ``import`` lines below are load-bearing regardless: they are what make
 
 import logging
 import sqlite3
-import sys
 import tempfile
 import time  # noqa: F401 -- rebound by name in tests; call sites use `cli.time` (see module docstring)
 import tomllib
@@ -75,6 +74,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Annotated, NoReturn
 
+import click
 import typer
 from pydantic import ValidationError
 from rich import box
@@ -103,11 +103,49 @@ from lode.storage import init_db
 
 log = logging.getLogger(__name__)
 
+#: ``ctx.meta`` key ``_HelpAwareGroup.resolve_command()`` stashes its answer
+#: under -- see that class's docstring and ``_help_requested()`` below
+#: (lode-rtcx).
+_META_SUBCOMMAND_HELP_REQUESTED = "lode.cli.subcommand_help_requested"
+
+
+class _HelpAwareGroup(typer.core.TyperGroup):
+    """``TyperGroup`` that records, in ``ctx.meta``, whether the subcommand
+    about to be dispatched will itself end up printing ``--help`` output --
+    e.g. ``lode notes --help`` (lode-rtcx, deepening lode-moq7's process-
+    global ``sys.argv`` sniff into something read off the actual invocation).
+
+    Click resolves a subcommand's own residual args (e.g. the ``--help`` in
+    ``lode notes --help``) here, in ``resolve_command()``, BEFORE the group
+    callback (``main()``, below) is ever invoked -- verified against
+    ``typer.core.TyperGroup.resolve_command`` / the ``click.core.Group``
+    (formerly ``MultiCommand``) base it delegates to in typer 0.27.1 / click
+    8.4.2: ``args[1:]`` (the subcommand's own remaining args) is returned as
+    this method's third tuple element and is not otherwise exposed on
+    ``ctx`` -- see ``_help_requested()``'s docstring for why that means
+    there is no OTHER ``ctx``-based signal to read once ``main()`` runs.
+    Matches against ``ctx.help_option_names`` -- Click's actual configured
+    help flags (``['--help']`` by default) -- rather than a hardcoded
+    ``'--help'`` literal, so a future ``-h`` alias (or any
+    ``context_settings`` override) stays covered without a code change here.
+    """
+
+    def resolve_command(
+        self, ctx: click.Context, args: list[str]
+    ) -> tuple[str | None, click.Command | None, list[str]]:
+        cmd_name, cmd, remaining_args = super().resolve_command(ctx, args)
+        ctx.meta[_META_SUBCOMMAND_HELP_REQUESTED] = any(
+            arg in ctx.help_option_names for arg in remaining_args
+        )
+        return cmd_name, cmd, remaining_args
+
+
 app = typer.Typer(
     name="lode",
     help="AI-first personal knowledge base for things you learn at work.",
     no_args_is_help=True,
     add_completion=False,
+    cls=_HelpAwareGroup,
 )
 
 #: The one shared rich Theme for the whole CLI (lode-l38d.11) — style names
@@ -304,22 +342,24 @@ _DebugOption = Annotated[
 ]
 
 
-def _help_requested() -> bool:
-    """True when this invocation will end up printing ``--help`` output --
-    either at the top level or on the invoked subcommand (e.g. ``lode notes
-    --help``) -- and so has nothing to restyle or fail loudly over (lode-moq7).
+def _help_requested(ctx: typer.Context) -> bool:
+    """True when the subcommand this invocation is about to dispatch to will
+    itself end up printing ``--help`` output (e.g. ``lode notes --help``),
+    and so has nothing to restyle or fail loudly over (lode-moq7, deepened
+    by lode-rtcx).
 
-    Click/Typer resolve a subcommand's own remaining args (e.g. the
-    ``--help`` in ``lode notes --help``) internally and clear them off
-    ``ctx`` before the group callback (``main()``, here) ever runs -- see
-    ``TyperGroup.invoke`` in ``typer/core.py``: the subcommand's args live
-    only in a local variable there, never exposed on ``ctx``. So there is no
-    ``ctx``-based way to see this coming; check the raw argv instead, exactly
-    what Click's own default ``args=None`` resolves to (``sys.argv[1:]``) --
-    the same tokens a real invocation and a ``CliRunner.invoke(app, argv)``
-    call driven through a matching ``sys.argv`` both see.
+    Top-level ``lode --help`` never reaches here at all: Click's own
+    ``--help`` option is eager and prints/exits during argument parsing,
+    before the group callback (``main()``, this function's only caller) is
+    ever invoked -- so this only needs to cover the SUBcommand-``--help``
+    case. Reads the answer ``_HelpAwareGroup.resolve_command()`` already
+    computed off Click's own parse state and stashed on ``ctx.meta`` --
+    Click resolves a subcommand's own residual args before ``main()`` ever
+    runs, so there is no OTHER ``ctx``-based signal available at this point
+    (see ``_HelpAwareGroup``'s docstring). Defaults to ``False`` when the
+    key is absent (e.g. no subcommand was invoked at all).
     """
-    return "--help" in sys.argv[1:]
+    return bool(ctx.meta.get(_META_SUBCOMMAND_HELP_REQUESTED, False))
 
 
 @app.callback()
@@ -348,7 +388,9 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     # Click parses the subcommand's own args, so an unrelated malformed
     # config.toml previously took even a pure ``--help`` invocation down.
     # ``--help`` never reads config, so there is nothing to restyle or fail
-    # loudly over either way -- see docs/decisions.md's lode-moq7 entry.
+    # loudly over either way -- see docs/decisions.md's lode-moq7 entry
+    # (and its lode-rtcx correction: the detection below reads Click's own
+    # parse state via ``_HelpAwareGroup``, not process-global ``sys.argv``).
     #
     # ``lode status`` ALONE swallows a failed resolution, keeping its
     # pre-existing lode-l38d.6 survival contract; every OTHER command lets
@@ -360,7 +402,7 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     # status.py's own guard uses it: an unreadable config.toml raises a bare
     # ``OSError`` straight through ``_resolve_settings``, above the
     # ``TOMLDecodeError``/``ValidationError`` it converts to ``typer.Exit``.
-    if ctx.invoked_subcommand is not None and not _help_requested():
+    if ctx.invoked_subcommand is not None and not _help_requested(ctx):
         settings: Settings | None
         if ctx.invoked_subcommand == "status":
             try:

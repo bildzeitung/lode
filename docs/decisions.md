@@ -5515,3 +5515,25 @@ entries below from being rewritten to chase the current tree.)
   it. Covered by `tests/test_cli.py::test_subcommand_help_survives_a_malformed_config_file` /
   `_an_unreadable_config_file`, with a control asserting a non-`--help` invocation still fails
   loudly (`test_subcommand_without_help_still_fails_loudly_on_bad_config`).
+
+- **Correction (`lode-rtcx`) to the `lode-moq7` entry above's "raw argv is the only place left to
+  look" sentence.** That was true of `ctx` alone at the point `main()` runs, but not of Click's
+  parse machinery as a whole: `TyperGroup.resolve_command()` (typer 0.27.1 / `click.core.Group`,
+  formerly `MultiCommand`, in click 8.4.2) receives the subcommand's own residual args -- the
+  `--help` in `lode notes --help` -- as its `args` parameter, and returns them as its third tuple
+  element, BEFORE the group callback (`main()`) is ever invoked. A `_HelpAwareGroup(TyperGroup)`
+  subclass, wired via `cls=` on the `typer.Typer(...)` construction, overrides `resolve_command()`
+  to stash whether those residual args match `ctx.help_option_names` into `ctx.meta`; `main()`'s
+  `_help_requested(ctx)` reads that stashed answer instead of sniffing process-global `sys.argv`.
+  This closes the three gaps `lode-moq7`'s own ticket text (filed as `lode-rtcx`, discovered while
+  reviewing `lode-moq7`) flagged as one level too shallow: `sys.argv` is process-global, so a
+  programmatic/embedded invocation (`CliRunner`, the TUI) saw the HOST process's argv rather than
+  the args actually passed to `invoke()`, forcing all three `lode-moq7` tests to monkeypatch
+  `sys.argv` to compensate; the literal `'--help'` string hardcoded Click's help-option config
+  rather than matching `ctx.help_option_names`, so a future `-h` alias (or any
+  `context_settings` override) would have silently gone un-exempted; and a bare substring/token
+  match was looser than the real condition (e.g. `--help` after `--`, or as an option's value,
+  would also have skipped resolution). All three `lode-moq7` tests now pass with their `sys.argv`
+  monkeypatches removed entirely, and the non-`--help` control
+  (`test_subcommand_without_help_still_fails_loudly_on_bad_config`) is unaffected. `lode status`'s
+  `lode-l38d.6` survival contract is unaffected -- it never depended on `_help_requested()` at all.
