@@ -72,7 +72,7 @@ import tomllib
 import uuid  # noqa: F401 -- re-exported so `cli.uuid` resolves for tests (see module docstring)
 from importlib import import_module
 from pathlib import Path
-from typing import Annotated, NoReturn, cast
+from typing import Annotated, NoReturn
 
 import typer
 from pydantic import ValidationError
@@ -319,17 +319,12 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     configure_logging(level=level, log_dir=log_dir())
     ctx.obj = debug
 
-    # Reset the per-invocation _resolve_settings() cache (lode-bsga). main()
-    # is this Typer app's group callback -- it runs exactly once per CLI
-    # invocation, before any subcommand body -- so resetting here keeps each
-    # invocation independent even under CliRunner, which calls `app`
-    # repeatedly IN-PROCESS across a test suite; without the reset, one
-    # test's resolved config would leak into the next. Within a single
-    # invocation, though, this lets main()'s resolution below and the
-    # subcommand's own later `cli._resolve_settings()` call share the one
-    # actual `load_settings()` call.
+    # Reset the per-invocation _resolve_settings() cache (lode-bsga) -- this
+    # is the group callback, so it runs exactly once per invocation, before
+    # any subcommand body. See _resolve_settings()'s docstring for why that
+    # reset is what makes a module-level cache safe here.
     global _settings_cache
-    _settings_cache = _SETTINGS_UNSET
+    _settings_cache = None
 
     # [cli.theme] resolution + application (lode-mk9j) -- global, here in
     # main(), so it covers every subcommand, including one like ``lode
@@ -401,13 +396,11 @@ def _write_draft(db_path: Path, note_id: str, body: str) -> Path:
     return Path(name)
 
 
-#: Sentinel distinguishing "no successful resolution yet this invocation" from
-#: a legitimately resolved ``Settings()`` (lode-bsga) -- ``None`` is not
-#: usable as the unset marker since callers elsewhere in this module already
-#: pass a resolved-or-``None`` ``Settings`` around (see ``main()``'s own
-#: ``settings: Settings | None``).
-_SETTINGS_UNSET = object()
-_settings_cache: Settings | object = _SETTINGS_UNSET
+#: This invocation's resolved settings, or ``None`` for "not resolved yet"
+#: (lode-bsga). ``None`` is unambiguous here precisely because a *failed*
+#: resolution is never cached -- see :func:`_resolve_settings`, which is the
+#: only writer, and only ever on success.
+_settings_cache: Settings | None = None
 
 
 def _resolve_settings() -> Settings:
@@ -428,13 +421,27 @@ def _resolve_settings() -> Settings:
     already resolves settings once per invocation for ``[cli.theme]``
     application (lode-mk9j); without a cache, the subcommand body then
     resolved a second, redundant ``load_settings()``. ``main()`` resets the
-    cache to ``_SETTINGS_UNSET`` at the top of every invocation, so this never
-    leaks a resolution across separate CLI invocations (or across a
-    CliRunner test suite's repeated in-process calls). A *failed* resolution
-    is deliberately NOT cached — it's an edge path (a broken config.toml),
-    re-raising via a second real ``load_settings()`` call is harmless, and
-    caching a raise would complicate the control flow for no behavioural
-    gain here.
+    cache to ``None`` at the top of every invocation, so this never leaks a
+    resolution across separate CLI invocations (or across a CliRunner test
+    suite's repeated in-process calls, which drive ``app`` many times in one
+    process).
+
+    A *failed* resolution is deliberately NOT cached, and that is
+    **load-bearing rather than merely harmless**: ``lode status``'s
+    ``lode-l38d.6`` survival contract is two independent swallowed attempts
+    — ``main()`` swallows one, ``status``'s own body re-attempts and swallows
+    again. Caching the failure would collapse those into a single attempt and
+    quietly change that contract, so the second real ``load_settings()`` call
+    on a broken ``config.toml`` is the point, not an oversight.
+    ``tests/test_cli_settings_cache.py`` pins it.
+
+    Not :func:`functools.cache`, despite the shape fitting (no arguments, and
+    ``lru_cache`` likewise declines to cache exceptions): the reset would have
+    to be ``_resolve_settings.cache_clear()``, and tests monkeypatch
+    ``lode.cli._resolve_settings`` wholesale with a plain function (see
+    ``tests/test_cli.py``'s unreadable-config case), which has no
+    ``cache_clear`` — ``main()`` would then die with ``AttributeError`` on
+    exactly the error path that seam exists to exercise.
 
     Defined here, on the package itself, rather than in a command submodule
     (lode-35nu.9): nearly every command calls this, and it is independently
@@ -444,8 +451,8 @@ def _resolve_settings() -> Settings:
     package.
     """
     global _settings_cache
-    if _settings_cache is not _SETTINGS_UNSET:
-        return cast(Settings, _settings_cache)
+    if _settings_cache is not None:
+        return _settings_cache
     try:
         settings = load_settings()
     except (tomllib.TOMLDecodeError, ValidationError) as err:
