@@ -56,9 +56,11 @@ while everything stays green.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from _gitrepo import _git
@@ -413,6 +415,47 @@ def test_worktree_agent_not_merged_clean_and_old_enough_is_dir_only(
     assert not _is_ancestor(repo, sha, "trunk")
 
     result = _run(repo, wt, sha, "0", "worktree-agent-leaked", min_age_seconds="-3600")
+
+    assert _bucket(result) == "dir-only"
+
+
+def test_worktree_agent_future_dated_commit_with_zero_floor_is_dir_only(
+    tmp_path: Path,
+) -> None:
+    """lode-o7rt: a commit whose committer timestamp reads AHEAD of the
+    classifying process's own `date +%s` (real-world cause: an NTP
+    correction, or a CPU-saturated guest VM's clock catching up after being
+    descheduled by the hypervisor under `-n 8` load -- the exact flake
+    reported against `test_dir_only_reclaim_removes_the_directory_but_keeps_
+    the_ref`, which passes `LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS=0`) makes
+    `now - last_commit_ts` negative. Before this ticket's fix, an unclamped
+    negative age failed even a `min_age_seconds=0` floor -- "no age floor at
+    all" -- and fell through to `keep-notmerged`, exactly the flake's
+    observed misclassification. Reproduced HERE deterministically (a forged
+    committer date, not a real clock race) so this is sabotage-provable
+    rather than depending on scheduler timing: reverting the clamp turns this
+    red on every run, not occasionally.
+    """
+    repo = _init_repo(tmp_path)
+    wt = _add_worktree(
+        repo, ".claude/worktrees/future-dated", "worktree-agent-futuredated"
+    )
+    future = str(int(time.time()) + 3600)
+    (wt / "wip.txt").write_text("abandoned build\n")
+    _git(wt, "add", "wip.txt")
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "abandoned build"],
+        cwd=wt,
+        check=True,
+        env={
+            **os.environ,
+            "GIT_COMMITTER_DATE": future,
+            "GIT_AUTHOR_DATE": future,
+        },
+    )
+    sha = _git(wt, "rev-parse", "HEAD").stdout.strip()
+
+    result = _run(repo, wt, sha, "0", "worktree-agent-futuredated", min_age_seconds="0")
 
     assert _bucket(result) == "dir-only"
 

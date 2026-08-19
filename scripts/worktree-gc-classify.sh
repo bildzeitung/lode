@@ -207,7 +207,32 @@ case "$br" in
     # is kept either way, so no commit is ever lost).
     last_commit_ts=$(git -C "$wt" log -1 --format=%ct 2>/dev/null) || last_commit_ts=""
     now=$(date +%s)
-    if [ -n "$last_commit_ts" ] && [ $((now - last_commit_ts)) -ge "$min_age_seconds" ]; then
+    # CLAMP A NEGATIVE AGE TO 0 (lode-o7rt): `now` and the commit's committer
+    # timestamp are each whole-second reads of the SAME wall clock, taken a
+    # few milliseconds apart by two different processes (this script's `date`
+    # call runs strictly after the commit that produced $last_commit_ts), so
+    # ordinarily `now - last_commit_ts` cannot go negative. It can under a
+    # genuine backward step of the wall clock between those two reads (an NTP
+    # correction, or -- suspected here, flaky specifically under `-n 8` -- a
+    # CPU-saturated guest VM catching up its clock with a small backward
+    # correction after being descheduled by the hypervisor under load). The
+    # unclamped comparison only ever tests a negative age against
+    # $min_age_seconds via `-ge`, which fails even when $min_age_seconds is 0
+    # -- exactly the age floor
+    # test_dir_only_reclaim_removes_the_directory_but_keeps_the_ref sets to
+    # mean "no floor at all", turning a routine, real commit into a spurious
+    # keep-notmerged. A commit whose apparent age reads negative is, for
+    # classification purposes, a commit that just happened -- age 0, never
+    # "impossibly not old enough" -- so clamp before comparing. This changes
+    # behavior only when $min_age_seconds is 0: an unclamped negative already
+    # failed any -ge check for a wider floor, same as a clamped age of 0
+    # would. With the production default (21600s) a clock-skewed commit still
+    # correctly reads as too young to reclaim.
+    age=$((now - last_commit_ts))
+    if [ -n "$last_commit_ts" ] && [ "$age" -lt 0 ]; then
+      age=0
+    fi
+    if [ -n "$last_commit_ts" ] && [ "$age" -ge "$min_age_seconds" ]; then
       if wt_provably_clean "$wt"; then
         echo "dir-only"
       else
