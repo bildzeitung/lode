@@ -48,8 +48,42 @@ On a failure here I stop — full stop: no `EnterWorktree` retry, no `git worktr
 self-rescue, no edits. I report the exact diagnostic the script printed. Full account:
 [docs/agents-workflow.md — Isolation guard](../../docs/agents-workflow.md#isolation-guard-lode-ska2--lode-jk44).
 
+## Branch-target checkout and push (lode-15qh)
+
+I am dispatched two ways: **path target** (a whole-tree sweep, no branch in flight — I just work in
+my own fresh launch worktree, no checkout needed) or **branch target** (`land/<id>`, the common
+case — the branch is already in flight through the normal producer → reviewer → lander pipeline).
+For a branch target, my `isolation: worktree` hand-off starts me on a **fresh worktree off
+`origin/trunk`**, not on the named branch — grooming there would silently apply my findings to an
+empty diff (the `lode-k5e` trap). So when my dispatch names a target branch, checking it out is
+step 0 of my own cycle below, not something the dispatcher has to spell out in prose each time.
+
+Modelled on `code-reviewer.md`'s step 2 — same mechanism, same rationale, not restated in full
+here:
+
+```bash
+git fetch origin land/<id>
+TOP=$(git rev-parse --show-toplevel)                   # my own launch worktree's root
+git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # worktree-unique local name (lode-em6v)
+git rev-parse --abbrev-ref HEAD     # confirm off trunk — land/<id>--<worktree-suffix>
+```
+
+After my comment-only commit (step 5) and re-gate (step 4), I push back with an **ordinary,
+non-force** push — I only append:
+
+```bash
+git status --short          # MUST be empty before pushing
+git push origin HEAD:land/<id>
+```
+
+I write no bd state myself — no label, no metadata field. Whoever dispatched me (the
+`comment-audit` skill, or a human) owns the ticket's pipeline state and does whatever hand-off that
+target needs with the head SHA I report. My own report always includes that head SHA when I pushed.
+
 ## The cycle
 
+0. **Branch target only:** fetch and check out the named branch into my own launch worktree, per
+   above.
 1. Take the findings block (or run the comment-auditor rubric myself if dispatched bare —
    same taxonomy, same don't-flag list).
 2. Apply accepted actions with `Edit`, one file at a time.
@@ -57,10 +91,14 @@ self-rescue, no edits. I report the exact diagnostic the script printed. Full ac
 4. Gate: `nox -t fix` and `nox -s unit` (a deleted comment can still break a gate — e.g. a
    stripped `# fmt: skip` turns the except-parens corpus scan red).
 5. Commit comment changes as their **own commit** ("comments: <summary> (audit)"), never mixed
-   into a feature commit. Report applied / skipped / reverted, and STOP.
+   into a feature commit. **Branch target only:** push per above. Report applied / skipped /
+   reverted (and the pushed head SHA, if I pushed), and STOP.
 
 ## Anti-patterns
 
 - "While I'm here" code fixes. File a bd ticket instead.
 - Applying a finding whose rationale I couldn't reproduce.
 - Rewriting a flagged comment into a longer one.
+- Writing a bd label or metadata field myself — that stays the dispatcher's job.
+- Force-pushing, or pushing on a dirty tree, or pushing when nothing was dispatched as a branch
+  target.
