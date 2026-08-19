@@ -428,22 +428,13 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     # maintainer's placement decisions -- the rationale and the rejected
     # alternatives live in docs/decisions.md's lode-mk9j entry (status/every
     # other command) and lode-jjol (theme), not here.
-    # ``except Exception``, not ``except typer.Exit``, for the same reason
-    # status.py's own guard uses it: an unreadable config.toml raises a bare
-    # ``OSError`` straight through ``_resolve_settings``, above the
-    # ``TOMLDecodeError``/``ValidationError`` it converts to ``typer.Exit``.
+    # status's branch uses _resolve_settings_best_effort() (the shared
+    # broad-catch helper next to _resolve_settings, lode-38rv), which owns
+    # the why.
     if ctx.invoked_subcommand is not None and not _help_requested(ctx):
         settings: Settings | None
         if ctx.invoked_subcommand in _CONFIG_OPTIONAL_COMMANDS:
-            try:
-                settings = _resolve_settings()
-            except Exception:
-                log.debug(
-                    "main: _resolve_settings failed for %s",
-                    ctx.invoked_subcommand,
-                    exc_info=True,
-                )
-                settings = None
+            settings = _resolve_settings_best_effort()
         else:
             settings = _resolve_settings()
         _apply_cli_theme(settings)
@@ -554,6 +545,38 @@ def _resolve_settings() -> Settings:
         raise typer.Exit(code=1) from None
     _settings_cache = settings
     return settings
+
+
+def _resolve_settings_best_effort() -> Settings | None:
+    """Resolve settings, swallowing any resolution failure as ``None`` (lode-38rv).
+
+    Shared by every call site that needs settings but must survive a broken
+    ``$LODE_HOME/config.toml`` rather than abort: ``main()``'s ``[cli.theme]``
+    application for ``status``/``theme`` (lode-mk9j, lode-jjol), and
+    ``status.py``'s queue-health probe (lode-l38d.6) -- both want "best effort,
+    or nothing" rather than :func:`_resolve_settings`'s abort-the-command
+    contract.
+
+    ``except Exception``, not ``except typer.Exit``: ``typer.Exit`` is only
+    what ``_resolve_settings`` itself raises for a ``TOMLDecodeError`` /
+    ``ValidationError``. An unreadable config.toml instead propagates a bare
+    ``OSError`` (verified) straight through, and a config that decodes to
+    invalid UTF-8 raises ``UnicodeDecodeError`` -- both must be caught here
+    too, so the broad ``except Exception`` is deliberate, not a narrower type
+    that would leave those cases fatal.
+
+    Calls ``_resolve_settings()`` unqualified -- this module IS ``lode.cli``,
+    so the name is looked up in this module's own globals at call time,
+    which already picks up a test's ``lode.cli._resolve_settings``
+    monkeypatch the same way every other in-module caller does (see that
+    function's own docstring); an external module instead reaches this
+    helper via ``cli._resolve_settings_best_effort()``.
+    """
+    try:
+        return _resolve_settings()
+    except Exception:
+        log.debug("_resolve_settings_best_effort: resolution failed", exc_info=True)
+        return None
 
 
 def _enrich_immediately(

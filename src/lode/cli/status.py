@@ -547,37 +547,19 @@ def status(db: _DbOption = None) -> None:
         )
 
     pending_or_failed = job_counts.get("pending", 0) + job_counts.get("failed", 0)
-    # _resolve_settings() is the "I need valid settings to do my job, abort
-    # otherwise" contract every OTHER command wants: on a malformed
-    # $LODE_HOME/config.toml it echoes a message and raises typer.Exit(1)
-    # (lode-40g). `lode status` reports QUEUE health, which needs no config at
-    # all -- so calling it UNGUARDED made a single config.toml typo exit 1 after
-    # the table had already printed, killing the footer outright. That is both a
-    # regression against trunk (where status never read the config and exited 0)
-    # and a direct breach of lode-l38d.6's "a probe error means no hint, never a
-    # failed `lode status`" -- and it lands on decision 3's exact failure mode,
-    # an absent hint read as an absent check. The guard inside
-    # _model_cache_probe could never catch this: it sits BELOW settings
-    # resolution. The stderr message _resolve_settings already emitted still
-    # reaches the user, so a broken config stays visible -- it just no longer
-    # takes the command down.
+    # `lode status` reports QUEUE health, which needs no config at all -- so
+    # it must survive a broken $LODE_HOME/config.toml rather than abort
+    # (lode-l38d.6). cli._resolve_settings_best_effort() owns that broad-catch
+    # rationale; the stderr message _resolve_settings emits internally still
+    # reaches the user, so a broken config stays visible without taking the
+    # command down.
     #
-    # The try covers ONLY the resolution, and _cold_model_cache stays OUTSIDE
-    # it, deliberately: that function documents "Never raises" and
-    # test_cold_model_cache_is_never_fatal pins it, so folding it in here would
-    # swallow a future bug in its internal guard into a silently-wrong "No
-    # action needed." and leave the contract unenforceable.
-    #
-    # `except Exception` rather than `except typer.Exit`, equally deliberately:
-    # typer.Exit is only the raise _resolve_settings RAISES ITSELF: an
-    # unreadable config.toml propagates PermissionError straight through it
-    # (verified), so catching the narrow type would leave that case fatal --
-    # the same bug in a smaller box.
-    try:
-        settings = cli._resolve_settings()
-    except Exception:
-        log.debug("status: _resolve_settings failed", exc_info=True)
-        settings = None
+    # _cold_model_cache stays OUTSIDE the resolution, deliberately: that
+    # function documents "Never raises" and test_cold_model_cache_is_never_fatal
+    # pins it, so folding it in here would swallow a future bug in its
+    # internal guard into a silently-wrong "No action needed." and leave the
+    # contract unenforceable.
+    settings = cli._resolve_settings_best_effort()
     cache_cold = False if settings is None else cli._cold_model_cache(settings)
     # Same non-fatal contract as cache_cold above, and the same reason it stays
     # OUTSIDE the settings try: _model_revision_status documents "Never raises"
