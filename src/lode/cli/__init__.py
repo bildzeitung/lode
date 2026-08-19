@@ -74,7 +74,6 @@ from importlib import import_module
 from pathlib import Path
 from typing import Annotated, NoReturn
 
-import click
 import typer
 from pydantic import ValidationError
 from rich import box
@@ -118,21 +117,24 @@ class _HelpAwareGroup(typer.core.TyperGroup):
     Click resolves a subcommand's own residual args (e.g. the ``--help`` in
     ``lode notes --help``) here, in ``resolve_command()``, BEFORE the group
     callback (``main()``, below) is ever invoked -- verified against
-    ``typer.core.TyperGroup.resolve_command`` / the ``click.core.Group``
-    (formerly ``MultiCommand``) base it delegates to in typer 0.27.1 / click
-    8.4.2: ``args[1:]`` (the subcommand's own remaining args) is returned as
-    this method's third tuple element and is not otherwise exposed on
-    ``ctx`` -- see ``_help_requested()``'s docstring for why that means
-    there is no OTHER ``ctx``-based signal to read once ``main()`` runs.
-    Matches against ``ctx.help_option_names`` -- Click's actual configured
-    help flags (``['--help']`` by default) -- rather than a hardcoded
-    ``'--help'`` literal, so a future ``-h`` alias (or any
-    ``context_settings`` override) stays covered without a code change here.
+    ``typer.core.TyperGroup.resolve_command`` in typer 0.27.1 (which
+    delegates to its OWN vendored fork of Click 8.3.1's ``Group
+    .resolve_command`` -- ``typer/_click/`` is a bundled copy, not the
+    separately-installed ``click`` 8.4.2 package; behaviorally identical
+    here, confirmed by reading both): ``args[1:]`` (the subcommand's own
+    remaining args) is returned as this method's third tuple element and is
+    not otherwise exposed on ``ctx`` -- see ``_help_requested()``'s
+    docstring for why that means there is no OTHER ``ctx``-based signal to
+    read once ``main()`` runs. Matches against ``ctx.help_option_names`` --
+    Click's actual configured help flags (``['--help']`` by default) --
+    rather than a hardcoded ``'--help'`` literal, so a future ``-h`` alias
+    (or any ``context_settings`` override) stays covered without a code
+    change here.
     """
 
     def resolve_command(
-        self, ctx: click.Context, args: list[str]
-    ) -> tuple[str | None, click.Command | None, list[str]]:
+        self, ctx: typer.Context, args: list[str]
+    ) -> tuple[str | None, typer.core.TyperCommand | None, list[str]]:
         cmd_name, cmd, remaining_args = super().resolve_command(ctx, args)
         ctx.meta[_META_SUBCOMMAND_HELP_REQUESTED] = any(
             arg in ctx.help_option_names for arg in remaining_args

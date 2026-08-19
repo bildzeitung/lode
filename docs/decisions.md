@@ -5518,8 +5518,10 @@ entries below from being rewritten to chase the current tree.)
 
 - **Correction (`lode-rtcx`) to the `lode-moq7` entry above's "raw argv is the only place left to
   look" sentence.** That was true of `ctx` alone at the point `main()` runs, but not of Click's
-  parse machinery as a whole: `TyperGroup.resolve_command()` (typer 0.27.1 / `click.core.Group`,
-  formerly `MultiCommand`, in click 8.4.2) receives the subcommand's own residual args -- the
+  parse machinery as a whole: `TyperGroup.resolve_command()` (typer 0.27.1, which delegates to its
+  own bundled fork of Click 8.3.1's `Group.resolve_command` under `typer/_click/` -- distinct from
+  the separately-installed `click` 8.4.2 package, behaviorally identical here) receives the
+  subcommand's own residual args -- the
   `--help` in `lode notes --help` -- as its `args` parameter, and returns them as its third tuple
   element, BEFORE the group callback (`main()`) is ever invoked. A `_HelpAwareGroup(TyperGroup)`
   subclass, wired via `cls=` on the `typer.Typer(...)` construction, overrides `resolve_command()`
