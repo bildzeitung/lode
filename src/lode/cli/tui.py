@@ -17,7 +17,7 @@ def tui(ctx: typer.Context, db: _DbOption = None) -> None:
     TUI takes over the screen. The top-level --debug flag still raises the
     log file's verbosity.
     """
-    level = logging.DEBUG if ctx.obj else None
+    level = logging.DEBUG if ctx.obj.debug else None
     # Looked up through the package (`cli.configure_logging`, not a plain
     # imported name) because tests spy on this SECOND, file-only reconfigure
     # call via `monkeypatch.setattr(cli, "configure_logging", ...)` -- see

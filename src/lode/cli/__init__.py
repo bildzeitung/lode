@@ -70,6 +70,7 @@ import tempfile
 import time  # noqa: F401 -- rebound by name in tests; call sites use `cli.time` (see module docstring)
 import tomllib
 import uuid  # noqa: F401 -- re-exported so `cli.uuid` resolves for tests (see module docstring)
+from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -303,6 +304,26 @@ _DebugOption = Annotated[
 ]
 
 
+@dataclass
+class CliObj:
+    """``ctx.obj`` payload threaded from ``main()`` down to every subcommand.
+
+    ``debug`` is the resolved ``--debug`` flag, preserved so ``tui``'s
+    file-only re-configure (lode-1i8.2) can carry it across that second
+    ``configure_logging`` call. ``settings`` is the ``Settings`` ``main()``
+    already resolved once for this invocation (via the ``[cli.theme]``
+    wiring below, lode-mk9j) -- threaded down so a subcommand that needs the
+    identical resolution (e.g. ``lode theme export``) reads it back instead
+    of resolving ``config.toml`` a second time (lode-9otn). ``None`` only
+    when ``main()`` never got to that resolution at all: no subcommand is
+    about to run (bare ``lode`` / ``--help`` under ``no_args_is_help``), or
+    ``lode status``'s swallow-on-failure path.
+    """
+
+    debug: bool
+    settings: Settings | None = None
+
+
 @app.callback()
 def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     """lode — capture and retrieve what you learn at work."""
@@ -313,11 +334,13 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     # (lode-1i8.3) resolves to an explicit DEBUG level, which takes precedence
     # over the LODE_LOG_LEVEL env fallback (configure_logging's ``level=None``
     # path); without it, behavior is unchanged. The resolved flag is stashed on
-    # ``ctx.obj`` so ``tui``'s file-only re-configure (lode-1i8.2) can preserve
-    # it across that second ``configure_logging`` call.
+    # ``ctx.obj`` (a :class:`CliObj`) so ``tui``'s file-only re-configure
+    # (lode-1i8.2) can preserve it across that second ``configure_logging``
+    # call.
     level = logging.DEBUG if debug else None
     configure_logging(level=level, log_dir=log_dir())
-    ctx.obj = debug
+    obj = CliObj(debug=debug)
+    ctx.obj = obj
 
     # [cli.theme] resolution + application (lode-mk9j) -- global, here in
     # main(), so it covers every subcommand, including one like ``lode
@@ -335,6 +358,10 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     # status.py's own guard uses it: an unreadable config.toml raises a bare
     # ``OSError`` straight through ``_resolve_settings``, above the
     # ``TOMLDecodeError``/``ValidationError`` it converts to ``typer.Exit``.
+    #
+    # The resolved ``settings`` is also stashed on ``obj.settings`` (lode-9otn)
+    # -- ``lode theme export`` reads it back from there instead of calling
+    # ``_resolve_settings()`` a second time.
     if ctx.invoked_subcommand is not None:
         settings: Settings | None
         if ctx.invoked_subcommand == "status":
@@ -345,6 +372,7 @@ def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
                 settings = None
         else:
             settings = _resolve_settings()
+        obj.settings = settings
         _apply_cli_theme(settings)
 
 
@@ -399,8 +427,16 @@ def _resolve_settings() -> Settings:
     file is hand-edited by the user, so at the CLI boundary an uncaught raise
     dumps a Python traceback at the terminal over a typo. Convert it to the
     one-line stderr message + exit 1 that every other user-facing CLI failure
-    here uses (lode-40g). This is the only place a lode command resolves
-    settings; each entry point calls it once and threads the result down.
+    here uses (lode-40g).
+
+    ``main()`` already resolves settings once per invocation (for the
+    ``[cli.theme]`` wiring, lode-mk9j) and threads the result down via
+    ``ctx.obj`` (a :class:`CliObj`, lode-9otn); a command that only needs
+    that same resolution (e.g. ``lode theme export``) reads ``ctx.obj
+    .settings`` instead of calling this again. A command that genuinely
+    needs its own, separate resolution -- ``tui`` re-resolves so its
+    ``settings=`` argument is independent of ``main()``'s -- still calls
+    this itself.
 
     Defined here, on the package itself, rather than in a command submodule
     (lode-35nu.9): nearly every command calls this, and it is independently

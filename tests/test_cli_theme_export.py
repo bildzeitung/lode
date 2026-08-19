@@ -199,3 +199,57 @@ def test_export_cli_section_with_overrides_round_trips(
     (tmp_path / "config.toml").write_text(result.output, encoding="utf-8")
     after = resolve_cli_styles(load_settings())
     assert after == before
+
+
+# --- resolve settings at most once per invocation (lode-9otn) ----------------
+
+
+def test_export_resolves_settings_at_most_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``lode theme export`` must not stat/read/parse config.toml twice.
+
+    ``main()``'s global [cli.theme] wiring (lode-mk9j) already resolves
+    settings once for every invocation; ``theme_export`` used to resolve the
+    identical config a second time. Count ``load_settings`` calls directly
+    (the load-bearing assertion) rather than inferring it from output.
+    """
+    import lode.cli as cli_mod
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    calls = 0
+    real_load_settings = cli_mod.load_settings
+
+    def _counting_load_settings(**overrides: object) -> object:
+        nonlocal calls
+        calls += 1
+        return real_load_settings(**overrides)
+
+    # `_resolve_settings()` calls the name `load_settings` bound into
+    # `lode.cli`'s own namespace (`from lode.config import ... load_settings`),
+    # so that's the reference to intercept -- patching `lode.config
+    # .load_settings` instead would miss every call `cli._resolve_settings`
+    # makes.
+    monkeypatch.setattr(cli_mod, "load_settings", _counting_load_settings)
+
+    result = runner.invoke(cli_app, ["theme", "export"])
+    assert result.exit_code == 0, result.output
+    assert calls == 1, f"expected exactly one load_settings() call, got {calls}"
+
+
+def test_export_reports_a_broken_config_file_at_most_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A broken config.toml must not print the 'invalid config file' line
+    twice -- one per (would-be) resolution.
+
+    ``main()`` resolves settings before dispatching to any subcommand but
+    ``status`` (lode-mk9j), so today this already aborts before
+    ``theme_export`` ever runs; the assertion pins the invariant against a
+    regression from either layer resolving twice.
+    """
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text("not_a_real_knob = 1\n", encoding="utf-8")
+
+    result = runner.invoke(cli_app, ["theme", "export"])
+    assert result.stderr.count("invalid config file") <= 1, result.output
