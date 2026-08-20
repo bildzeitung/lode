@@ -76,10 +76,9 @@ def backfill(
     backfill pass -- see the command's own help on that flag.
     """
     if connector is None and not list_connectors:
-        # Mirrors click's own no_args_is_help body verbatim. Under a rich
-        # build get_help() prints as a side effect and returns "", so the
-        # echo looks redundant -- it is the non-rich path, where get_help()
-        # returns the text and nothing else prints it.
+        # Under a rich build get_help() prints as a side effect and returns
+        # "", so the echo looks redundant -- it is the non-rich path, where
+        # get_help() returns the text and nothing else prints it.
         typer.echo(ctx.get_help())
         return
 
