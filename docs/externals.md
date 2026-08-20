@@ -341,7 +341,10 @@ one case a periodic sweep structurally can't cover: an operator who just fixed t
 cause and wants that specific already-tombstoned target retried now, not on a schedule.
 
 **`jira` connector (`lode-gpzn.10`).** `lode.jira_backfill` registers `"jira"` — the first real
-connector plugged into the framework. Its handler reclassifies every existing explicit
+connector plugged into the framework. `lode backfill` (`src/lode/cli/backfill.py`) registers it
+explicitly on **every invocation**, the same explicit per-invocation pattern `confluence` uses below
+(see `lode.confluence_backfill.register`'s own docstring for why — not a bare module-level
+`register_backfill(...)` call at import time). Its handler reclassifies every existing explicit
 (`source='user'`) edge's *original* `quoted_text` through `lode.drawdown._classify_atlassian`, the
 exact same synchronous, network-free classifier the live paste-time path uses — so a link migrates
 only when it would route to JIRA **under current routing** (flag on, credentials resolved, matched

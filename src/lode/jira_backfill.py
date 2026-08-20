@@ -122,8 +122,18 @@ def _jira_backfill(
     )
 
 
-# See src/lode/cli/__init__.py's top-level `import lode.jira_backfill` for
-# why this module is imported eagerly (not lazily, unlike
-# lode.backfill/lode.reconcile themselves) -- test determinism under
-# pytest-xdist.
-register_backfill("jira", _jira_backfill)
+def register() -> None:
+    """Register :func:`_jira_backfill` under the name ``"jira"``.
+
+    Deliberately a **function**, not a bare module-level
+    ``register_backfill(...)`` statement — ``lode backfill``
+    (``src/lode/cli/backfill.py``) calls it explicitly on every invocation.
+    The rationale is stated once, in
+    :func:`lode.confluence_backfill.register`'s own docstring; this connector
+    follows the identical pattern. Calling it more than once is always safe
+    (:func:`~lode.backfill.register_backfill` is a plain dict assignment).
+    """
+    register_backfill("jira", _jira_backfill)
+
+
+__all__ = ["register"]

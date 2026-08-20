@@ -109,9 +109,11 @@ class BackfillError(Exception):
 
 
 def register_backfill(name: str, handler: BackfillHandler) -> None:
-    """Register ``handler`` under ``name`` — the registry seam a connector's
-    own backfill module calls at import time (mirrors
-    :func:`lode.reconcile.register_step`)."""
+    """Register ``handler`` under ``name`` — the registry seam a connector's own
+    ``register()`` function calls, and ``lode.cli.backfill`` calls per-invocation
+    (see :func:`lode.confluence_backfill.register` for why). Same ``dict``-assignment
+    shape as :func:`lode.reconcile.register_step`, but not the same calling
+    convention: ``register_step`` itself still fires at import time."""
     _REGISTRY[name] = handler
 
 

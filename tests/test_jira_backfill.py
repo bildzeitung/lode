@@ -14,9 +14,9 @@ from pathlib import Path
 
 import pytest
 
-from lode.backfill import needs_refresh
+from lode.backfill import needs_refresh, registered_backfills
 from lode.config import load_settings
-from lode.jira_backfill import _jira_backfill
+from lode.jira_backfill import _jira_backfill, register
 from lode.storage import init_db
 
 # ---------------------------------------------------------------------------
@@ -36,9 +36,8 @@ def conn(tmp_path: Path) -> sqlite3.Connection:
 @pytest.fixture(autouse=True)
 def _clean_registry():
     """Isolate the module-level registry across tests -- mirrors
-    tests/test_backfill.py's own fixture; importing lode.jira_backfill
-    registers "jira" as a side effect and that must not leak between
-    tests/files (register_backfill mutates shared module state)."""
+    tests/test_backfill.py's own fixture; register_backfill mutates shared
+    module state that must not leak between tests."""
     import lode.backfill as backfill_mod
 
     saved = dict(backfill_mod._REGISTRY)
@@ -115,17 +114,14 @@ def _job_statuses(conn: sqlite3.Connection, external_id: str) -> list[str]:
 
 
 class TestRegistration:
-    def test_registers_jira_on_import(self):
-        import lode.backfill as backfill_mod
-        import lode.jira_backfill as jira_backfill_mod
+    def test_registers_under_jira_name(self):
+        register()
+        assert registered_backfills() == ["jira"]
 
-        # The fixture cleared the registry for this test; the module is
-        # already imported (module caching), so re-registering explicitly
-        # confirms the registrant IS this module's own handler -- the same
-        # thing its own module-load-time `register_backfill("jira", ...)`
-        # call did the one time it actually ran.
-        jira_backfill_mod.register_backfill("jira", jira_backfill_mod._jira_backfill)
-        assert backfill_mod._REGISTRY["jira"] is jira_backfill_mod._jira_backfill
+    def test_idempotent_to_call_more_than_once(self):
+        register()
+        register()
+        assert registered_backfills() == ["jira"]
 
 
 # ---------------------------------------------------------------------------

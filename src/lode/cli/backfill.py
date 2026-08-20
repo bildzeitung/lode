@@ -62,8 +62,8 @@ def backfill(
     framework's registry (lode.backfill.register_backfill) -- this command
     is just the dispatcher; the framework itself ships no connector logic of
     its own (see 'jira', lode-gpzn.10, and 'confluence', lode-gpzn.11 --
-    both built in). 'confluence' registers itself explicitly on every
-    invocation of this command rather than relying on a bare module-level
+    both built in). Both register themselves explicitly on every invocation
+    of this command rather than relying on a bare module-level
     register_backfill(...) import-time side effect (see
     lode.confluence_backfill.register's own docstring for why). With no
     CONNECTOR argument (or --list), the registered names are printed instead
@@ -82,8 +82,10 @@ def backfill(
     # connector module's import to trigger a bare module-level
     # register_backfill(...) side effect.
     from lode.confluence_backfill import register as _register_confluence
+    from lode.jira_backfill import register as _register_jira
 
     _register_confluence()
+    _register_jira()
 
     if list_connectors or connector is None:
         names = registered_backfills()
