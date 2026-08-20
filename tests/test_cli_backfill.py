@@ -15,6 +15,7 @@ built-ins that ``lode backfill`` registers itself on every invocation
 real registration silently clobber (or be clobbered by) the fake.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,13 @@ from typer.testing import CliRunner
 from lode.cli import app
 
 runner = CliRunner()
+
+#: Strips ANSI SGR escapes (e.g. ``\x1b[1m``) Rich can still emit even under
+#: ``NO_COLOR=1`` -- see tests/test_cli_help_corpus_gate.py's identical
+#: constant, whose docstring records that COLUMNS+NO_COLOR+TERM=dumb is what
+#: it takes to zero them out, and that the strip is a deliberate second layer
+#: in case a future detection heuristic ignores that env anyway.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 @pytest.fixture(autouse=True)
@@ -102,11 +110,16 @@ def test_no_argument_prints_full_help(tmp_path: Path):
     """lode-6hi3: a bare invocation (no CONNECTOR, no --list) must print the
     full command help -- usage, options, connector guidance -- not just the
     bare connector-name list --list produces."""
-    result = runner.invoke(app, ["backfill", "--db", str(tmp_path / "lode.db")])
+    result = runner.invoke(
+        app,
+        ["backfill", "--db", str(tmp_path / "lode.db")],
+        env={"COLUMNS": "80", "NO_COLOR": "1", "TERM": "dumb"},
+    )
+    output = _ANSI_ESCAPE_RE.sub("", result.output)
     assert result.exit_code == 0
-    assert "Usage" in result.output
-    assert "--list" in result.output
-    assert "--dry-run" in result.output
+    assert "Usage" in output
+    assert "--list" in output
+    assert "--dry-run" in output
 
 
 def test_list_flag_lists_without_running_anything(tmp_path: Path):
