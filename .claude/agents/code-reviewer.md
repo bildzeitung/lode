@@ -525,6 +525,23 @@ Commit the review fixes with a clear message ending in:
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ```
 
+### 6a. Pre-handoff check: no dangling cross-references to lines this branch deleted
+
+Two incidents share one shape: prose (a comment or docstring) — either left over from before the
+diff, or newly added by the SAME diff — pointing at a line, symbol, or import that the SAME branch's
+diff deletes. In one case a comment sweep introduced three such dangling references, caught only
+here at review; in another, a docstring cited an import the same commit removed, missed by both the
+producer and this review and caught only by `land-review`, which bounced the branch. The defect is
+diff-aware, so I check for it myself, on the full branch diff, before re-pushing:
+
+For every line the branch's diff **deletes** relative to `trunk` (`git diff origin/trunk...HEAD`),
+grep the branch's current tree for prose that still references it — a file path, a symbol/function
+name, or a "see X" pointer — including prose the same diff **adds** (whether the builder's or my own
+step-4 fixes). A hit means either the prose is stale (fix or remove it) or the deletion was wrong
+(restore what's referenced); reconcile before continuing. This covers the builder's diff too, not
+just my own additions — I am the last technical gate before `land-review`, so a dangling reference
+the producer missed is mine to catch here.
+
 ### 7. Re-push the branch
 
 My commits sit on top of the builder's pushed head, so this is normally a fast-forward to the same

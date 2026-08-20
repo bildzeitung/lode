@@ -68,6 +68,7 @@ candidate still has to survive the two-pass test below.
 | too-much-information | essay where the constraint is one line; belongs in docs/ | low |
 | vague / irrelevant | adds words, not information | low |
 | non-local | only makes sense against distant or removed code | low |
+| dangling cross-reference | points at a file/symbol/line the SAME branch's diff deletes (check `trunk...HEAD`'s deletions, including prose the diff itself adds) | high |
 
 Everything not matching a category is **keep** — the escape class exists so ordinary comments
 are never bent into a smell.
