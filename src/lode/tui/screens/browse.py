@@ -314,6 +314,7 @@ class BrowseScreen(Screen[None]):
     #
     # Footer width is gated by tests/test_tui_footer_width_corpus.py
     # (consumed <= 100 columns, hscroll False), not a hand-tracked number.
+    #
     # "No-egress" (lode-82wt) is hidden for the same reason "Expand" is: a
     # pure, reversible flag toggle, used far less often than
     # Inspect/View content/Delete/Search once learned once -- an overlay-only

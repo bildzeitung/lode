@@ -160,8 +160,9 @@ class CaptureScreen(Screen[None]):
     # shared footer widget exists instead of per-screen compact/palette
     # flags.
     #
-    # ctrl+s deliberately keeps its full "Save & new": the
-    # stays and resets, it doesn't exit -- so spelling out "& new" is the
+    # ctrl+s deliberately keeps its full "Save & new": a shortened "Save"
+    # alone would not name what happens next -- the buffer stays and resets,
+    # it doesn't exit -- so spelling out "& new" is the
     # discoverability cost show=False was ruled out for. Only ONE of "Save &
     # new" and "Discard & quit" can be spelled out in full without the other
     # -- Escape keeps the short "Discard" because it still names its

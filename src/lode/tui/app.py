@@ -142,8 +142,8 @@ class LodeApp(App[str | None]):
         Binding("ctrl+q", "quit", "Quit", priority=True, show=False),
         # "Cfg" stays abbreviated: it is an App-level binding, so it renders
         # in every screen's footer, and BrowseScreen is the tightest
-        # footer-bearing screen (see lode.tui.screens.browse.BrowseScreen's
-        # own BINDINGS comment for that screen's budget) -- swapping in
+        # footer-bearing screen (gated by
+        # tests/test_tui_footer_width_corpus.py) -- swapping in
         # "Config" fails BrowseScreen's "fits without hscroll" bar. Do not
         # restore "Config" without re-measuring BrowseScreen's footer, not
         # just EditScreen's -- an App-level label change is judged against

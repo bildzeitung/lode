@@ -58,8 +58,8 @@ edges points at a real ``externals`` row (a drawn-down web link, ``lode-
 w0h.2``/``lode-w0h.3``), :attr:`EnrichmentEdge.external` carries that
 external's current snapshot -- source URL (the edge's own ``to_id``),
 ``source_type``, the head ``snapshot_id``, ``fetched_at``, and a three-valued
-``state``. ``state`` reflects only the head snapshot's own recorded facts; it fabricates
-no liveness signal beyond them:
+``state``. ``state`` reflects only the head snapshot's own recorded facts; it
+fabricates no liveness signal beyond them:
 
 - ``"withheld"`` -- ``externals.no_egress`` is set (``docs/externals.md``
   "No-egress tier": captured and locally retrievable, never sent to Claude).

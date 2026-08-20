@@ -83,8 +83,8 @@ OPUS_MODEL = "claude-opus-5"
 
 #: Output cap for the synthesis call; claims are a compact, bounded structure,
 #: not long prose. Sized to give headroom for adaptive thinking to share this
-#: budget with the claims response: an explicit
-#: ``thinking={"type": "disabled"}`` used to guarantee zero thinking tokens
+#: budget with the claims response: an explicit ``thinking={"type":
+#: "disabled"}`` used to guarantee zero thinking tokens
 #: here, but that value 400s on Fable-class models at any effort and on Opus 5
 #: at effort xhigh/max (lode-3dlt), so
 #: :class:`~lode.llm_provider.AnthropicProvider` no longer sends it at all --
@@ -97,12 +97,15 @@ OPUS_MODEL = "claude-opus-5"
 #: SDK's non-streaming guard: that guard is skipped outright whenever an
 #: explicit ``timeout`` is passed, and the provider seam always passes one. (Its
 #: threshold is ~21K output tokens for the models lode uses -- see
-#: ``_calculate_nonstreaming_timeout``.) So this value
-#: is headroom, not a hard truncation guarantee; exhausting **this budget**
+#: ``_calculate_nonstreaming_timeout``.) So this value is headroom, not a hard
+#: truncation guarantee; exhausting **this budget**
 #: raises :class:`~lode.llm_provider.LLMProviderError` from the provider rather
 #: than yielding a malformed answer. See that class's docstring for the full
 #: rationale.
 #:
+#: Raising this cap while also allowing adaptive thinking pushes wall-clock up
+#: on the think-harder path twice over, and a ``max_tokens`` override
+#: invalidates ``qa_call_timeout_s``'s derived default outright.
 #: ``qa_call_timeout_s`` is the call's own timeout knob, split off the shared
 #: :attr:`~lode.config.Settings.enrich_call_timeout_s`. Full rationale for its
 #: default and derivation: ``docs/configuration.md`` "Q&A call timeout split

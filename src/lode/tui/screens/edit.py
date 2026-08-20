@@ -175,14 +175,13 @@ class EditScreen(Screen[None]):
     #
     # "Cfg" (App-level, :mod:`lode.tui.app`) stays abbreviated: it renders in
     # every screen's footer, and BrowseScreen -- not this screen -- is the
-    # binding constraint (see that screen's BINDINGS comment). This screen
+    # binding constraint. This screen
     # alone has slack to spare for "Config", but the abbreviation is a
     # shared App-level label, not something this screen can change on its
     # own.
     #
-    # Footer width is gated by this screen's own test in
-    # tests/test_tui_browse_screen.py (alongside BrowseScreen's), not a
-    # hand-tracked number.
+    # Footer width is gated by tests/test_tui_footer_width_corpus.py
+    # (consumed <= 100 columns, hscroll False), not a hand-tracked number.
     BINDINGS: ClassVar = [
         Binding("ctrl+s", "save", "Save"),
         Binding("escape", "cancel", "Back"),

@@ -631,8 +631,7 @@ def fetch_and_extract(
     # Any non-OK status here is a permanent tombstone from this function's
     # perspective (``not OK`` is exactly ``>= 400``), via the shared
     # classifier rather than re-deriving the threshold locally. A conforming
-    # Fetcher
-    # (see the Fetcher protocol contract) raises TransientFetchError for
+    # Fetcher (see the Fetcher protocol contract) raises TransientFetchError for
     # 408/429/5xx before returning, so a TRANSIENT status never reaches here
     # in practice; testing for ``not OK`` rather than ``is TOMBSTONE`` keeps
     # the original defensive behavior for a non-conforming custom fetcher

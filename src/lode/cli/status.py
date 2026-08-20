@@ -517,7 +517,7 @@ def status(db: _DbOption = None) -> None:
     #   distinguishing 3 from 0 is the only one not red. repr.* is also
     #   undeclared colour arriving from rich's inherited defaults, cutting
     #   against lode-l38d.11's rule that colour comes from CLI_STYLES by
-    #   semantic name. The shared Console (lode.cli) now hoists this flag too
+    #   semantic name. The shared Console (lode.cli) already hoists this flag
     #   (lode-re0s), so this explicit kwarg is redundant defense, not the only
     #   thing preventing the defect. Table cells need none of this: rich runs
     #   no highlighter over them.

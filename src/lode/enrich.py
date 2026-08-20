@@ -671,7 +671,7 @@ def submit_enrich_batch(
     # Gate each version; build batch requests only for valid ones.
     requests: list[BatchRequest] = []
     skip_ids: list[int] = []
-    submitted_job_ids: list[int] = []  # job_ids included in the batch
+    submitted_job_ids: list[int] = []
     submitted_version_ids: list[str] = []
     redactions: dict[str, int] = {}
 
