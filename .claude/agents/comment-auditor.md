@@ -62,12 +62,13 @@ candidate still has to survive the two-pass test below.
 |---|---|---|
 | misleading / drifted | contradicts adjacent code (quote both) | high |
 | change-narration | describes the *edit*, not the code ("now uses X", "moved from…") | high |
+| dangling cross-reference | points at a file/symbol/line the audited diff deletes — diff-scoped audits only, and includes prose the diff itself adds | high |
 | commented-out code | dead code preserved as comment (git already has it) | medium |
 | redundant / narrating | restates the next line | medium |
 | task rot | TODO/FIXME with no tracked bd id, or referencing done work | medium |
 | too-much-information | essay where the constraint is one line; belongs in docs/ | low |
 | vague / irrelevant | adds words, not information | low |
-| non-local | only makes sense against distant or removed code | low |
+| non-local | only makes sense against distant code, or code removed *before* the audited scope | low |
 
 Everything not matching a category is **keep** — the escape class exists so ordinary comments
 are never bent into a smell.

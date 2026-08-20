@@ -426,6 +426,25 @@ code my ticket needs to change/fix lives only on a `land/<other-id>` branch, not
 Full contract: [docs/agents-workflow.md — Stacked land
 branches](../../docs/agents-workflow.md#stacked-land-branches-lode-02v).
 
+### 5a. Before committing: no dangling cross-references to lines this diff deletes
+
+Two incidents share one shape: prose (a comment or docstring) — either left over from before the
+diff, or newly added by the SAME diff — pointing at a line, symbol, or import that the SAME diff
+deletes. In one, a comment sweep introduced three such dangling references; in the other, a
+docstring cited an import the same commit removed, and it reached `land-review`, which bounced the
+branch. The defect is diff-aware, so I check for it myself, on my own diff:
+
+For every line my diff **deletes** (`git diff origin/trunk...HEAD`, plus `git diff HEAD` for work not
+yet committed), grep the tree for prose that still references it — a file path, a symbol/function
+name, or a "see X" pointer — including prose the same diff **adds**. A hit means either the prose is
+stale (fix or remove it) or the deletion was wrong (restore what's referenced); reconcile it now.
+This is a manual grep-and-read pass, not a new script or gate.
+
+It runs **here, before step 6's commit and step 7's gates** — deliberately: a reconciliation edit is
+an ordinary uncommitted change at this point, whereas the same edit found after the gates would mean
+amending the commit and re-running the whole gate set to keep the pushed tree the gated tree
+(lode-tpt).
+
 ### 6. Commit implementation work (granular, attributed)
 
 **Re-assert isolation once more before the first `git commit` (lode-6wgc)** — same one-liner as step

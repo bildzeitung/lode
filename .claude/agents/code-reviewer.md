@@ -390,6 +390,14 @@ recheck against a tree that may hold my own uncommitted review fixes.)
        touches.
      - Read the diff's own test coverage specifically, not just trust the blanket `tests` session in
        step 5 to have exercised the new failure modes.
+     - **Dangling cross-references.** For every line the diff **deletes**, grep the branch's current
+       tree for prose — a comment or docstring — that still references it: a file path, a
+       symbol/function name, a "see X" pointer. This includes prose the same diff **adds**, whether
+       the builder's or my own fixes below. A hit means either the prose is stale (fix or remove it)
+       or the deletion was wrong (restore what's referenced). Two incidents motivate it: a comment
+       sweep that introduced three such references, and a docstring citing an import the same commit
+       removed, which reached `land-review` and bounced the branch. I am the last technical gate
+       before `land-review`, so one the producer missed is mine to catch.
      - **If the diff touches `docs/decisions.md`, run the silent-rewrite guard (lode-d7pm):**
 
        ```bash
