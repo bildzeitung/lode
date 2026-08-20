@@ -156,52 +156,32 @@ EDIT_RELATED_ID = "edit-related-notes"
 class EditScreen(Screen[None]):
     """An existing note's live head, loaded editable (lode-0wj.6)."""
 
-    # This screen has always been the tightest footer of the ten
-    # (lode-uczx/lode-ev5j.3/lode-11io each shortened a label -- "View
-    # content"->"View", "Related"->"Rel", "History"->"Hist" -- to keep it
-    # under the 100-column bound as new bindings landed). lode-2bt3.3 retires
-    # that pattern: per-screen footer priority (Binding show=False, honest
-    # now that lode-2bt3.2's help overlay lists every binding, shown or not)
-    # replaces "abbreviate a label" as the way to pay for width, and the
-    # labels that pattern shortened are paid back in full where the
-    # recovered budget allows.
+    # Per-screen footer priority (Binding show=False) is how this screen pays
+    # for width, honest because the help overlay lists every binding whether
+    # shown or not.
     #
-    # "Related" and "History" are restored to full words -- both are core,
+    # "Related" and "History" stay shown as full words -- both are core,
     # frequent actions on this screen (jump to the related-notes panel /
-    # this note's version history) and stay shown.
+    # this note's version history).
     #
-    # "View content" (view external content, lode-0sjj) and "Link" (open the
-    # URL under the cursor, lode-ev5j.3) are hidden instead of shortened.
-    # Both are the least-needed reminders of the eight: each applies only to
-    # a subset of notes (an externally-retrieved note; a note whose cursor
+    # "View content" (view external content) and "Link" (open the URL under
+    # the cursor) are hidden instead of shortened. Both apply only to a
+    # subset of notes (an externally-retrieved note; a note whose cursor
     # currently sits on a URL) rather than every note this screen edits, so
     # they cost little as an overlay-only lookup and a lot as a permanent
     # footer line item. "Inspect" stays shown, un-hidden and un-shortened --
     # it applies to every note (the enrichment inspector) the same as
     # Save/Back.
     #
-    # "Cfg" (App-level, :mod:`lode.tui.app`) is RE-MEASURED here, not
-    # inherited, per this ticket's own instruction -- and stays abbreviated.
-    # Restoring it to "Config" is an App-level change (it renders in every
-    # screen's footer, not just this one) and BrowseScreen -- not this
-    # screen -- is now the binding constraint: with "Config" swapped in,
-    # BrowseScreen's own footer (see that screen's BINDINGS comment) lands
-    # at exactly 100/100 with show_horizontal_scrollbar flipping True
-    # (measured), which fails the "fits without hscroll" bar. This screen
-    # itself has ample slack for "Config" alone (89/100 with "Cfg"; "Config"
-    # would cost +3) -- the abbreviation survives only because it is a
-    # shared App-level label, not because this screen needs it kept short.
+    # "Cfg" (App-level, :mod:`lode.tui.app`) stays abbreviated: it renders in
+    # every screen's footer, and BrowseScreen -- not this screen -- is the
+    # binding constraint. This screen
+    # alone has slack to spare for "Config", but the abbreviation is a
+    # shared App-level label, not something this screen can change on its
+    # own.
     #
-    # MEASURED (2026-08-09, post-lode-2bt3.2 trunk, 100-column pilot,
-    # tests/test_tui_browse_screen.py's own harness -- this screen's footer
-    # test lives there alongside BrowseScreen's, not in
-    # tests/test_tui_edit_screen.py): with "View content" and
-    # "Link" hidden and "Related"/"History" restored, this screen's footer
-    # (6 shown screen-level + 4 App-level, including Help) consumes 89/100
-    # columns, hscroll=False -- 11 columns' slack, intentionally not spent
-    # (see "Cfg" above; the slack that exists here can't cover the App-level
-    # cost everywhere else). Un-hiding "View content" at full length alone
-    # blows the budget (105/100, hscroll=True) -- confirmed, not assumed.
+    # Footer width is gated by tests/test_tui_footer_width_corpus.py
+    # (consumed <= 100 columns, hscroll False), not a hand-tracked number.
     BINDINGS: ClassVar = [
         Binding("ctrl+s", "save", "Save"),
         Binding("escape", "cancel", "Back"),

@@ -163,9 +163,8 @@ class AskScreen(Screen[None]):
         yield Vertical(
             Input(id=QUESTION_ID, placeholder=_PLACEHOLDER),
             VerticalScroll(
-                # LodeStatic defaults markup=False (lode-3dz2, was a per-site
-                # markup=False kwarg here -- lode-ix4i): render_ask_result
-                # emits literal bracket groups ("[version <id>, as of <ts>]",
+                # LodeStatic defaults markup=False: render_ask_result emits
+                # literal bracket groups ("[version <id>, as of <ts>]",
                 # "[withheld] ...") around verbatim user text, and a
                 # markup=True Static -- the stock default -- would silently
                 # eat them.

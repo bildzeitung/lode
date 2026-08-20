@@ -58,11 +58,8 @@ edges points at a real ``externals`` row (a drawn-down web link, ``lode-
 w0h.2``/``lode-w0h.3``), :attr:`EnrichmentEdge.external` carries that
 external's current snapshot -- source URL (the edge's own ``to_id``),
 ``source_type``, the head ``snapshot_id``, ``fetched_at``, and a three-valued
-``state``. This ticket's only dependencies are ``lode-ay5.1`` and ``lode-
-w0h.2``, so ``state`` is scoped to what those two land: it does **not**
-attempt the refresh-cadence or re-enrich-materiality signals the epic
-description imagines (``lode-w0h.5``/``lode-w0h.6`` -- neither has landed,
-and this module fabricates no field for data that does not exist yet):
+``state``. ``state`` reflects only the head snapshot's own recorded facts; it
+fabricates no liveness signal beyond them:
 
 - ``"withheld"`` -- ``externals.no_egress`` is set (``docs/externals.md``
   "No-egress tier": captured and locally retrievable, never sent to Claude).
@@ -71,11 +68,10 @@ and this module fabricates no field for data that does not exist yet):
   fetch failed; there is no fresh mirrored content to trust,
   :func:`lode.externals.tombstone_body`).
 - ``"un-refreshed"`` -- otherwise: an ``"ok"`` snapshot, not withheld. Named
-  for what is actually true today rather than implying liveness that
-  ``lode-w0h.6``'s refresh policy (TTL / on-access revalidation) alone would
-  earn -- nothing currently re-fetches a source on a schedule, so every
-  un-tombstoned, non-withheld external is exactly as fresh as its one
-  ``fetched_at``, and no more.
+  for what is actually true rather than implying liveness the TTL sweep
+  (:func:`lode.reconcile._refresh_stale_step`) alone would earn -- a snapshot
+  is exactly as fresh as its one ``fetched_at``, whether or not that sweep
+  has run since.
 
 No writes; this module only reads.
 """

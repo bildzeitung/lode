@@ -817,9 +817,6 @@ del _name
 # (unlike the call-through-the-package names documented in this module's own
 # docstring, which are never imported anywhere -- every INTERNAL call site
 # reaches them via `cli.<name>` instead).
-#
-# `_retrieve` used to be re-exported here; it now lives in `lode.retrieval`
-# (lode-z3es), which every caller imports directly.
 from lode.cli.ask import (  # noqa: F401
     _ABSTAIN_LINE,
     _format_citation,

@@ -20,10 +20,11 @@ different lengths on purpose; this is not a mismatch to reconcile).
 
 from __future__ import annotations
 
-#: THE short version-id length across the codebase -- matches the pre-existing
-#: ``cli._short`` 12-char version-id abbreviation (log lines, ``lode work``'s
-#: per-job outcome echo). Distinct from ``lode.notes_read.SHORT_NOTE_ID_LENGTH``
-#: (8), which abbreviates NOTE ids, not version ids.
+#: THE short version-id length across the codebase -- ``cli.status._short``
+#: (log lines, ``lode work``'s per-job outcome echo) delegates to this
+#: constant rather than each keeping its own value. Distinct from
+#: ``lode.notes_read.SHORT_NOTE_ID_LENGTH`` (8), which abbreviates NOTE ids,
+#: not version ids.
 SHORT_VERSION_ID_LENGTH = 12
 
 

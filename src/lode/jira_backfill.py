@@ -122,10 +122,8 @@ def _jira_backfill(
     )
 
 
-# Register the "jira" connector on module load -- mirrors
-# lode.reconcile's own register_step(...) calls at module load. See
-# src/lode/cli/__init__.py's top-level `import lode.jira_backfill` for *why*
-# this
-# module is imported eagerly (not lazily, unlike lode.backfill/lode.reconcile
-# themselves) -- test determinism under pytest-xdist, not a style change.
+# See src/lode/cli/__init__.py's top-level `import lode.jira_backfill` for
+# why this module is imported eagerly (not lazily, unlike
+# lode.backfill/lode.reconcile themselves) -- test determinism under
+# pytest-xdist.
 register_backfill("jira", _jira_backfill)

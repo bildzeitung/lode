@@ -1327,9 +1327,8 @@ def model_cache_dir() -> Path:
 #: probe via this pin            1019ms     1039ms
 #: ===========================  =========  =========
 #:
-#: So the probe's real cost was ~+330-460ms (~1.4x, NOT the "2-4x" the
-#: escalation reported and this comment once repeated -- that figure came from a
-#: 3.03s outlier no later run reproduced), and the pin removes ~65-70% of it.
+#: So the probe's real cost was ~+330-460ms (~1.4x), and the pin removes
+#: ~65-70% of it.
 #: The residual ~+120-155ms is ``huggingface_hub``'s own import and is the
 #: accepted price of the hint: the pin does NOT make ``lode status`` as fast as
 #: trunk, and cannot -- it strictly adds work to a pure DB read.

@@ -136,32 +136,23 @@ class LodeApp(App[str | None]):
         # itself stays fully live (priority=True, unchanged) -- only
         # show=False changes.
         #
-        # RE-VERIFIED, not inherited (lode-2bt3.3, as lode-2bt3.2 required):
-        # now that per-screen footer priority is a general mechanism and not
-        # a one-off, the same reasoning still holds -- ctrl+q is one of the
-        # most universally-known TUI conventions, Escape covers the same
-        # ground on most screens, and every screen's help overlay (Ctrl+_,
-        # below) lists it regardless. Dropping it stays the right call.
+        # ctrl+q is one of the most universally-known TUI conventions, Escape
+        # covers the same ground on most screens, and every screen's help
+        # overlay (Ctrl+_, below) lists it regardless.
         Binding("ctrl+q", "quit", "Quit", priority=True, show=False),
-        # "Cfg" stays abbreviated -- RE-MEASURED (lode-2bt3.3), not
-        # inherited, and the constraint that pins it has changed. It is an
-        # App-level binding, so it renders in every screen's footer;
-        # BrowseScreen is now the tightest of the eleven footer-bearing
-        # screens (lode-2bt3.3 recovered EditScreen's slack by hiding
-        # "View content"/"Link" there instead -- see
-        # lode.tui.screens.edit.EditScreen's own BINDINGS comment).
-        # MEASURED: swapping in "Config" lands BrowseScreen's footer at
-        # exactly 100/100 with show_horizontal_scrollbar flipping True (see
-        # lode.tui.screens.browse.BrowseScreen's own BINDINGS comment for
-        # that screen's full budget) -- fails the "fits without hscroll"
-        # bar, so "Cfg" stays. Do not restore "Config" without re-measuring
-        # BrowseScreen's footer, not just EditScreen's -- an App-level label
-        # change is judged against the tightest screen, and which screen
-        # that is can change ticket to ticket.
+        # "Cfg" stays abbreviated: it is an App-level binding, so it renders
+        # in every screen's footer, and BrowseScreen is the tightest
+        # footer-bearing screen (gated by
+        # tests/test_tui_footer_width_corpus.py) -- swapping in
+        # "Config" fails BrowseScreen's "fits without hscroll" bar. Do not
+        # restore "Config" without re-measuring BrowseScreen's footer, not
+        # just EditScreen's -- an App-level label change is judged against
+        # the tightest screen, and which screen that is can change ticket to
+        # ticket.
         # These four use Textual's own builtin push_screen(name) action
         # string (App.action_push_screen) rather than a one-line hand-rolled
-        # action_show_* wrapper (lode-pijc) -- each wrapper did nothing but
-        # self.push_screen(name), pure duplication of the builtin.
+        # action_show_* wrapper -- that would be pure duplication of the
+        # builtin.
         Binding("ctrl+o", "push_screen('config')", "Cfg"),
         Binding("ctrl+b", "push_screen('browse')", "Browse"),
         Binding("ctrl+t", "push_screen('tags')", "Tags"),

@@ -100,9 +100,7 @@ from lode.externals import _insert_external
 BackfillHandler = Callable[[sqlite3.Connection, Settings, bool, bool], str]
 
 #: Module-level registry, populated by :func:`register_backfill` — mirrors
-#: :data:`lode.reconcile._STEPS`'s shape. Empty until a connector (e.g.
-#: ``lode-gpzn.10``/``.11``) registers into it; this ticket ships no
-#: registrant of its own.
+#: :data:`lode.reconcile._STEPS`'s shape.
 _REGISTRY: dict[str, BackfillHandler] = {}
 
 

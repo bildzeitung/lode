@@ -35,10 +35,8 @@ def _config_path_table(rows: list[tuple[str, str, str]]) -> SafeTable:
     table.add_column("Value", overflow="fold")
     table.add_column("Note", overflow="fold")
     for label, value, note in rows:
-        # Parenthesized to match the pre-lode-l38d.4 baked-in text
-        # (f"{value}  ({note})") -- moving it to its own column fixes the
-        # actual bug (that text used to distort the Value column's computed
-        # width), not the visual convention of wrapping it in parens.
+        # Parenthesized to preserve the visual convention of the original
+        # baked-in "value (note)" text now that note is its own column.
         table.add_row(label, value, f"({note})" if note else "")
     return table
 

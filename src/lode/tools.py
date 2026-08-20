@@ -96,29 +96,13 @@ The **final** URL after any redirect is re-checked the same way before the
 snapshot is persisted, alongside the ``no_egress`` re-check — see
 :func:`_fetch_web`.
 
-**Two known residual gaps, not closed here** (both recorded as open in
-``docs/decisions.md``):
-
-1. *Redirect chains.* :mod:`lode.webfetch` follows redirects transparently
-   inside one ``httpx`` client call with no per-hop hook, so a public,
-   allowed host can still make the client *issue* a request to a private
-   address mid-chain. The final-URL re-check keeps that response from being
-   persisted or returned to the model, leaving a blind fetch rather than a
-   read; closing it fully needs per-hop validation in :mod:`lode.webfetch`.
-2. *TOCTOU / DNS rebinding.* This guard resolves the host, and ``httpx``
-   then resolves it **again** for the actual request. A hostile resolver
-   answering with a short TTL can return a public address to the guard and a
-   private one to the client, defeating the check entirely. Closing it
-   requires pinning the validated address for the connection (a custom
-   transport that dials the resolved IP with the original ``Host`` header).
-   This is the standard, well-known limitation of address-guarding by
-   hostname — the guard raises the cost of the direct attack, it does not
-   make the path SSRF-proof.
-
-Both are deferred on effort, **not** blast radius: the right home for both is
-a ``HttpxFetcher`` subclass injected only by the ask path via the ``fetcher=``
-seam :func:`fetch_for_ask` already threads, which would leave the draw-down
-and JIRA/Confluence fetchers untouched. Tracked as ``lode-xwah``.
+This module's own guard (above) checks only the initial destination and,
+separately, the final URL — it does not validate mid-chain redirect hops or
+pin the resolved address against DNS rebinding. Those two gaps are closed,
+not here, but in :class:`~lode.webfetch.GuardedHttpxFetcher` (``lode-xwah``),
+a ``HttpxFetcher`` subclass injected only by the ask path via the
+``fetcher=`` seam :func:`fetch_for_ask` threads — deliberately, so the
+draw-down and JIRA/Confluence fetchers are unaffected.
 """
 
 from __future__ import annotations

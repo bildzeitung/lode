@@ -155,16 +155,14 @@ class CaptureScreen(Screen[None]):
     viewers; see :meth:`action_open_link`.
     """
 
-    # Descriptions kept short (lode-3rvw), unchanged by the LodeFooter
-    # extraction (lode-uczx): show=False stays ruled out, only description
+    # Descriptions kept short: show=False stays ruled out, only description
     # text is ever shortened -- see :mod:`lode.tui.widgets.lode_footer` for why a
     # shared footer widget exists instead of per-screen compact/palette
     # flags.
     #
-    # ctrl+s deliberately keeps its full "Save & new" (lode-3rvw review,
-    # carried over from the retired ctrl+n binding by lode-bsmc): the
-    # shortened "Save" alone no longer names what happens next -- the buffer
-    # stays and resets, it doesn't exit -- so spelling out "& new" is the
+    # ctrl+s deliberately keeps its full "Save & new": a shortened "Save"
+    # alone would not name what happens next -- the buffer stays and resets,
+    # it doesn't exit -- so spelling out "& new" is the
     # discoverability cost show=False was ruled out for. Only ONE of "Save &
     # new" and "Discard & quit" can be spelled out in full without the other
     # -- Escape keeps the short "Discard" because it still names its

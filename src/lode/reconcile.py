@@ -130,9 +130,8 @@ StepFn = Callable[[sqlite3.Connection, Settings], int]
 
 #: Module-level step registry — list of ``(name, fn)`` pairs in run order.
 #:
-#: Populated at module load by :func:`register_step`; the ``embed_gap`` step is
-#: registered here. Tests inject a custom list into :func:`reconcile` instead of
-#: touching this directly.
+#: Populated at module load by :func:`register_step`. Tests inject a custom
+#: list into :func:`reconcile` instead of touching this directly.
 _STEPS: list[tuple[str, StepFn]] = []
 
 
@@ -294,7 +293,6 @@ def _embed_gap_step(conn: sqlite3.Connection, settings: Settings | None = None) 
     return len(gap_versions)
 
 
-# Register the embed-gap step on module load.
 register_step("embed_gap", _embed_gap_step)
 
 
@@ -379,7 +377,6 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
     return len(gap_versions)
 
 
-# Register the enrich-gap step on module load.
 register_step("enrich_gap", _enrich_gap_step)
 
 
@@ -486,7 +483,6 @@ def _refresh_stale_step(
     return len(stale_externals)
 
 
-# Register the refresh-stale step on module load.
 register_step("refresh_stale", _refresh_stale_step)
 
 
@@ -605,5 +601,4 @@ def _lexical_gap_step(
     return len(gap_versions)
 
 
-# Register the lexical-gap step on module load.
 register_step("lexical_gap", _lexical_gap_step)

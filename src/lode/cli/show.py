@@ -121,11 +121,8 @@ def show_(
             raise typer.Exit(code=1)
         created, body, op = head
 
-        # The shared TUI+CLI seam (lode-ay5.1): this command no longer builds
-        # its own display.py assembly. `conn` is already open and `note_id`
-        # already resolved, so the conn-taking variant avoids a second
-        # connection (lode-ay5.1's review note; enrichment_view_conn was
-        # promoted public for exactly this caller).
+        # `conn` is already open and `note_id` already resolved, so the
+        # conn-taking variant avoids a second connection.
         view = enrichment_view_conn(conn, note_id)
     finally:
         conn.close()

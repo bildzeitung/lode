@@ -168,13 +168,13 @@ log = logging.getLogger(__name__)
 #: already used in lode-w0h.2's own tests).
 SOURCE_TYPE_WEB = "web"
 
-#: ``externals.source_type`` for a JIRA Cloud issue (lode-gpzn.2). The fetch
-#: unit that actually calls the JIRA REST API is built in lode-gpzn.3.
+#: ``externals.source_type`` for a JIRA Cloud issue. The fetch unit that
+#: calls the JIRA REST API is :func:`~lode.jira_fetch.fetch_jira_issue`.
 SOURCE_TYPE_JIRA = "jira"
 
-#: ``externals.source_type`` for a Confluence Cloud page (lode-gpzn.2). The
-#: fetch unit that actually calls the Confluence REST API is built in
-#: lode-gpzn.4.
+#: ``externals.source_type`` for a Confluence Cloud page. The fetch unit
+#: that calls the Confluence REST API is
+#: :func:`~lode.confluence.fetch_confluence_page`.
 SOURCE_TYPE_CONFLUENCE = "confluence"
 
 #: JIRA Cloud's canonical issue permalink shape ("copy link" on an issue):

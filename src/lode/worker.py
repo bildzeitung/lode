@@ -248,7 +248,8 @@ def dead_letter_remediation(job_type: str) -> str | None:
 #: - ``"self_healing"`` -- the type derives from a note version
 #:   (:data:`lode.jobs.DERIVE_JOB_TYPES`) and has no dead-letter hook; the
 #:   next reconciliation gap-sweep re-enqueues it on its own (not a universal
-#:   guarantee -- see the caller's own caveats, docs/storage.md:552).
+#:   guarantee -- see the caller's own caveats, ``docs/storage.md`` "Schema
+#:   decisions").
 #: - ``"unclassified"`` -- has a registered run handler
 #:   (:func:`registered_types`) but matches neither of the above: a job type
 #:   this module hasn't classified for dead-letter recovery yet.
@@ -1462,7 +1463,6 @@ def _embed_handler(
     return outcome
 
 
-# Register the embed handler on module load.
 register("embed", _embed_handler)
 
 
@@ -1507,7 +1507,6 @@ def _enrich_handler(
     return format_enrich_outcome(target_version, result)
 
 
-# Register the enrich handler on module load.
 register("enrich", _enrich_handler)
 
 
@@ -1544,7 +1543,6 @@ def _refresh_handler(
     return refresh_external(conn, target_version, settings)
 
 
-# Register the refresh handler on module load.
 register("refresh", _refresh_handler)
 
 
@@ -1693,7 +1691,6 @@ def _refresh_dead_letter_hook(
         )
 
 
-# Register the refresh dead-letter hook on module load.
 register_dead_letter(
     "refresh",
     _refresh_dead_letter_hook,

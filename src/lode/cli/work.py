@@ -100,9 +100,7 @@ def work(
     from lode.worker import drain as _drain
 
     # _resolve_settings() (not bare Settings()) so a config-file override -- e.g.
-    # refresh_ttl_s -- actually reaches reconcile()'s steps and the drain loop
-    # (lode-40g; lode-09n threaded settings through reconcile(), but nothing was
-    # flowing through it since this constructed a bare Settings() default).
+    # refresh_ttl_s -- actually reaches reconcile()'s steps and the drain loop.
     settings = cli._resolve_settings()
     db_path = db or default_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)

@@ -56,10 +56,8 @@ def notes_(
         # which is false whenever live notes exist (lode-d32.2).
         typer.echo("no deleted notes" if deleted else "no notes")
         return
-    # lode-bau6/lode-l38d.12: every row in ``--deleted`` mode is a tombstone
-    # by construction of the flag, so this is computed once, not per-row --
-    # empty in live mode, which is what keeps that path byte-identical to
-    # before this ticket.
+    # Every row in ``--deleted`` mode is a tombstone by construction of the
+    # flag, so this is computed once, not per-row -- empty in live mode.
     marker = " [deleted]" if deleted else ""
     for i, row in enumerate(rows):
         if i:

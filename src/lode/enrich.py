@@ -670,8 +670,8 @@ def submit_enrich_batch(
 
     # Gate each version; build batch requests only for valid ones.
     requests: list[BatchRequest] = []
-    skip_ids: list[int] = []  # job_ids whose versions are skipped (gate out)
-    submitted_job_ids: list[int] = []  # job_ids included in the batch
+    skip_ids: list[int] = []
+    submitted_job_ids: list[int] = []
     submitted_version_ids: list[str] = []
     redactions: dict[str, int] = {}
 
@@ -730,8 +730,7 @@ def submit_enrich_batch(
             [(batch_id, jid) for jid in submitted_job_ids],
         )
 
-    # Audit: one egress_log row per batch submission. `provider_name` (not
-    # `provider`) to avoid shadowing the LLMProvider instance bound above.
+    # Audit: one egress_log row per batch submission.
     log_egress(
         conn,
         "enrich",
@@ -825,8 +824,6 @@ def collect_enrich_batch(
     # Raw wall clock, formatted by jobs.iso — an enrichment record timestamp,
     # not a queue predicate (see enrich_version above).
     ts = jobs.iso(datetime.now(UTC))
-    # Provenance (lode-568v.4): `provider_name`, not `provider`, to avoid
-    # shadowing the LLMProvider instance bound above.
     provider_name = provider_identity(settings)
 
     for result in batch_results:
