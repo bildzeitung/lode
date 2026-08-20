@@ -426,6 +426,25 @@ code my ticket needs to change/fix lives only on a `land/<other-id>` branch, not
 Full contract: [docs/agents-workflow.md — Stacked land
 branches](../../docs/agents-workflow.md#stacked-land-branches-lode-02v).
 
+### 5a. Before committing: no dangling cross-references to lines this diff deletes
+
+Two incidents share one shape: prose (a comment or docstring) — either left over from before the
+diff, or newly added by the SAME diff — pointing at a line, symbol, or import that the SAME diff
+deletes. In one, a comment sweep introduced three such dangling references; in the other, a
+docstring cited an import the same commit removed, and it reached `land-review`, which bounced the
+branch. The defect is diff-aware, so I check for it myself, on my own diff:
+
+For every line my diff **deletes** (`git diff origin/trunk...HEAD`, plus `git diff HEAD` for work not
+yet committed), grep the tree for prose that still references it — a file path, a symbol/function
+name, or a "see X" pointer — including prose the same diff **adds**. A hit means either the prose is
+stale (fix or remove it) or the deletion was wrong (restore what's referenced); reconcile it now.
+This is a manual grep-and-read pass, not a new script or gate.
+
+It runs **here, before step 6's commit and step 7's gates** — deliberately: a reconciliation edit is
+an ordinary uncommitted change at this point, whereas the same edit found after the gates would mean
+amending the commit and re-running the whole gate set to keep the pushed tree the gated tree
+(lode-tpt).
+
 ### 6. Commit implementation work (granular, attributed)
 
 **Re-assert isolation once more before the first `git commit` (lode-6wgc)** — same one-liner as step
@@ -538,22 +557,6 @@ gate is an **escalation, not a skip**: I never hand-verify the diagram, never ha
 silently skipped, and never read a docker complaint as a green light to proceed without it. Only a
 human can fix the machine. I revert to the last green commit, push, and follow the build-time
 escalation path below, passing the exact exit-2 message through as the decision a human needs.
-
-### 7a. Pre-handoff check: no dangling cross-references to lines this branch deleted
-
-Two incidents share one shape: prose (a comment or docstring) — either left over from before the
-diff, or newly added by the SAME diff — pointing at a line, symbol, or import that the SAME branch's
-diff deletes. In one case a comment sweep introduced three such dangling references, caught only by
-the reviewer; in another, a docstring cited an import the same commit removed, missed by both the
-producer and the reviewer and caught only by `land-review`, which bounced the branch. The defect is
-diff-aware, so I check for it myself, on my own diff, before pushing:
-
-For every line my branch's diff **deletes** (`git diff origin/trunk...HEAD`), grep the branch's
-current tree for prose that still references it — a file path, a symbol/function name, or a "see X"
-pointer — including prose the same diff **adds**. A hit means either the prose is stale (fix or
-remove it) or the deletion was wrong (restore what's referenced); reconcile before continuing. This
-is a manual grep-and-read pass, not a new script or gate — cheap enough to do on every hand-off, and
-it catches exactly the class of defect a mechanical diff can't: prose correctness, not syntax.
 
 ### 8. Push the branch to origin
 
