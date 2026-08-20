@@ -13,17 +13,18 @@ from lode.cli import _DbOption, _open_db, app
         "Re-run a connector's draw-down under current routing.\n\n"
         "Run this when links you already captured should now resolve "
         "differently -- typically after a connector that handles those URLs "
-        "became available. Pass no CONNECTOR to see the registered names, "
-        "and try --dry-run before a real pass."
+        "became available. Pass no CONNECTOR to see this help; pass --list "
+        "to see just the registered names. Try --dry-run before a real pass."
     )
 )
 def backfill(
+    ctx: typer.Context,
     connector: Annotated[
         str | None,
         typer.Argument(
             help=(
                 "Registered connector name (see 'lode backfill --list'). Omit to "
-                "list registered connectors."
+                "see this help."
             )
         ),
     ] = None,
@@ -87,7 +88,11 @@ def backfill(
     _register_confluence()
     _register_jira()
 
-    if list_connectors or connector is None:
+    if connector is None and not list_connectors:
+        typer.echo(ctx.get_help())
+        return
+
+    if list_connectors:
         names = registered_backfills()
         if not names:
             typer.echo("no connectors registered for backfill")

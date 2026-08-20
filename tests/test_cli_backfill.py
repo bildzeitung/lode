@@ -41,34 +41,34 @@ def _clean_registry():
         backfill_mod._REGISTRY.update(saved)
 
 
-def test_no_argument_lists_registered_connectors(tmp_path: Path):
+def test_list_flag_lists_registered_connectors(tmp_path: Path):
     from lode.backfill import register_backfill
 
     register_backfill("fake-one", lambda *a: "ok")
     register_backfill("fake-two", lambda *a: "ok")
-    result = runner.invoke(app, ["backfill", "--db", str(tmp_path / "lode.db")])
+    result = runner.invoke(app, ["backfill", "--list", "--db", str(tmp_path / "lode.db")])
     assert result.exit_code == 0
     assert "fake-one" in result.output
     assert "fake-two" in result.output
 
 
-def test_no_argument_lists_confluence_as_a_built_in_connector(tmp_path: Path):
-    """lode-gpzn.11: unlike test_no_argument_lists_registered_connectors above
+def test_list_flag_lists_confluence_as_a_built_in_connector(tmp_path: Path):
+    """lode-gpzn.11: unlike test_list_flag_lists_registered_connectors above
     (manually-registered fakes), "confluence" is now a real, always-available
     built-in -- lode.cli.backfill registers it itself on every invocation, no
     manual registration needed. This supersedes the old "no connectors
     registered" behavior from before any connector shipped (lode-gpzn.9)."""
-    result = runner.invoke(app, ["backfill", "--db", str(tmp_path / "lode.db")])
+    result = runner.invoke(app, ["backfill", "--list", "--db", str(tmp_path / "lode.db")])
     assert result.exit_code == 0
     assert "confluence" in result.output
 
 
-def test_no_argument_lists_jira_as_a_built_in_connector(tmp_path: Path):
+def test_list_flag_lists_jira_as_a_built_in_connector(tmp_path: Path):
     """lode-gpzn.10 / lode-2uil: "jira" is a real, always-available built-in
     too -- lode.cli.backfill registers it itself on every invocation, the
     same explicit per-invocation pattern as "confluence" (no eager,
     import-time registration for either)."""
-    result = runner.invoke(app, ["backfill", "--db", str(tmp_path / "lode.db")])
+    result = runner.invoke(app, ["backfill", "--list", "--db", str(tmp_path / "lode.db")])
     assert result.exit_code == 0
     assert "jira" in result.output
 
@@ -84,10 +84,21 @@ def test_both_built_ins_survive_a_cleared_registry_across_repeated_invocations(
     non-deterministic. Two invocations in the same test exercise exactly
     that repeated-registration path."""
     for _ in range(2):
-        result = runner.invoke(app, ["backfill", "--db", str(tmp_path / "lode.db")])
+        result = runner.invoke(app, ["backfill", "--list", "--db", str(tmp_path / "lode.db")])
         assert result.exit_code == 0
         assert "jira" in result.output
         assert "confluence" in result.output
+
+
+def test_no_argument_prints_full_help(tmp_path: Path):
+    """lode-6hi3: a bare invocation (no CONNECTOR, no --list) must print the
+    full command help -- usage, options, connector guidance -- not just the
+    bare connector-name list --list produces."""
+    result = runner.invoke(app, ["backfill", "--db", str(tmp_path / "lode.db")])
+    assert result.exit_code == 0
+    assert "Usage" in result.output
+    assert "--list" in result.output
+    assert "--dry-run" in result.output
 
 
 def test_list_flag_lists_without_running_anything(tmp_path: Path):
