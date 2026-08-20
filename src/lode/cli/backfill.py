@@ -13,8 +13,9 @@ from lode.cli import _DbOption, _open_db, app
         "Re-run a connector's draw-down under current routing.\n\n"
         "Run this when links you already captured should now resolve "
         "differently -- typically after a connector that handles those URLs "
-        "became available. Pass no CONNECTOR to see this help; pass --list "
-        "to see just the registered names. Try --dry-run before a real pass."
+        "became available. CONNECTOR is required -- omitting it prints this "
+        "help and exits 2; pass --list to see just the registered names. Try "
+        "--dry-run before a real pass."
     )
 )
 def backfill(
@@ -23,8 +24,8 @@ def backfill(
         str | None,
         typer.Argument(
             help=(
-                "Registered connector name (see 'lode backfill --list'). Omit to "
-                "see this help."
+                "Registered connector name (see 'lode backfill --list'). "
+                "Required -- omitting it is a usage error (exit 2)."
             )
         ),
     ] = None,
@@ -67,8 +68,10 @@ def backfill(
     of this command rather than relying on a bare module-level
     register_backfill(...) import-time side effect (see
     lode.confluence_backfill.register's own docstring for why). With no
-    CONNECTOR argument this command prints its own help; --list prints just
-    the registered names. Neither runs anything.
+    CONNECTOR argument this command prints its own help and exits 2 -- a
+    usage error, uniformly, whatever other flags accompany it (lode-pk54);
+    --list prints just the registered names and exits 0. Neither runs
+    anything.
 
     --dry-run reports what the connector's handler would change without
     writing. --retry-tombstoned is the explicit, human-driven opt-in to also
@@ -76,11 +79,15 @@ def backfill(
     backfill pass -- see the command's own help on that flag.
     """
     if connector is None and not list_connectors:
-        # Under a rich build get_help() prints as a side effect and returns
-        # "", so the echo looks redundant -- it is the non-rich path, where
-        # get_help() returns the text and nothing else prints it.
-        typer.echo(ctx.get_help())
-        return
+        # Missing CONNECTOR means the command cannot run regardless of any
+        # other flag (e.g. --dry-run/--db) -- one uniform usage error, no
+        # exit-0 help branch (lode-pk54, superseding lode-6hi3's exit-0
+        # bare-invocation behavior). Under a rich build get_help() prints as
+        # a side effect and returns "", so the echo looks redundant -- it is
+        # the non-rich path, where get_help() returns the text and nothing
+        # else prints it.
+        typer.echo(ctx.get_help(), err=True)
+        raise typer.Exit(code=2)
 
     from lode.backfill import BackfillError, registered_backfills, run_backfill
 
