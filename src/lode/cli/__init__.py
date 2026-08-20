@@ -82,6 +82,7 @@ from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
+
 from lode.config import Settings, config_path, default_db_path, load_settings, log_dir
 from lode.config import model_cache_dir as model_cache_dir
 from lode.llm_provider import LLMProviderError, provider_identity  # noqa: F401
