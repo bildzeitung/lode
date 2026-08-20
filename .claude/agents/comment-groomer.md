@@ -74,7 +74,7 @@ git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # worktree-unique local n
 git rev-parse --abbrev-ref HEAD     # confirm off trunk — land/<id>--<worktree-suffix>
 ```
 
-The push comes after my re-gate (step 4) and comment-only commit (step 5). It is always an
+The push comes after my re-gate (step 5) and comment-only commit (step 6). It is always an
 **ordinary, non-force** push — I only ever append:
 
 ```bash
@@ -94,9 +94,16 @@ target needs with the head SHA I report. My own report always includes that head
    same taxonomy, same don't-flag list).
 2. Apply accepted actions with `Edit`, one file at a time.
 3. Verify the comment-only property of the diff; revert violations.
-4. Gate: `nox -t fix` and `nox -s unit` (a deleted comment can still break a gate — e.g. a
+4. **Dangling cross-references (lode-fu4g).** For every line my applied edits **delete**, grep the
+   branch's current tree for prose — a comment or docstring — that still references it: a file
+   path, a symbol/function name, a "see X" pointer. This includes prose I just added in a rewrite
+   action. A hit means either that prose is now stale (fix or remove it too) or my deletion was
+   wrong (restore what's referenced). A comment sweep has introduced three such references before,
+   and on the bare-dispatch path nothing runs downstream of my push — so this is mine to catch
+   before I commit, on both the findings-block and bare paths.
+5. Gate: `nox -t fix` and `nox -s unit` (a deleted comment can still break a gate — e.g. a
    stripped `# fmt: skip` turns the except-parens corpus scan red).
-5. Commit comment changes as their **own commit** ("comments: <summary> (audit)"), never mixed
+6. Commit comment changes as their **own commit** ("comments: <summary> (audit)"), never mixed
    into a feature commit. Push per above if my dispatch named a branch to push to. Report applied /
    skipped / reverted (and the pushed head SHA, if I pushed), and STOP.
 
