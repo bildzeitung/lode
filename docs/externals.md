@@ -314,7 +314,8 @@ already-processed links under **current** routing — `lode.backfill`, `src/lode
 plugs its own backfill logic into (`lode.backfill.register_backfill`, mirroring
 `lode.reconcile.register_step`'s shape) — it deliberately does **not** build one monolithic
 "detect everything at once" sweep, and ships no connector registered by default. `lode backfill`
-with no connector argument (or `--list`) reports the registered names instead of running anything.
+with no connector argument prints the command's own help; `--list` reports just the registered
+names. Neither runs anything (`lode-6hi3`).
 **CLI only — no TUI surface**, and it runs per-machine wherever the notes' DB lives (`$LODE_HOME`);
 it does not travel on the Dolt/git wire.
 
