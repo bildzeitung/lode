@@ -82,17 +82,6 @@ from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
-
-# Registers the "jira" connector into lode.backfill's registry on import
-# (lode-gpzn.10) -- deliberately a MODULE-LEVEL import here, not the lazy,
-# inside-the-command-function style `backfill`/`reconcile`/`work` otherwise
-# use to keep CLI startup light. Registration must happen exactly once, at
-# collection/process-start time, before any test's own registry-isolation
-# fixture runs -- a lazy import inside the `backfill` command races
-# tests/test_cli_backfill.py's fake-handler injection under pytest-xdist
-# (parallel worker processes make "which test calls `backfill()` first"
-# non-deterministic run to run).
-import lode.jira_backfill  # noqa: F401
 from lode.config import Settings, config_path, default_db_path, load_settings, log_dir
 from lode.config import model_cache_dir as model_cache_dir
 from lode.llm_provider import LLMProviderError, provider_identity  # noqa: F401

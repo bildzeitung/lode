@@ -122,8 +122,22 @@ def _jira_backfill(
     )
 
 
-# See src/lode/cli/__init__.py's top-level `import lode.jira_backfill` for
-# why this module is imported eagerly (not lazily, unlike
-# lode.backfill/lode.reconcile themselves) -- test determinism under
-# pytest-xdist.
-register_backfill("jira", _jira_backfill)
+def register() -> None:
+    """Register :func:`_jira_backfill` under the name ``"jira"``.
+
+    Deliberately a **function**, not a bare module-level
+    ``register_backfill(...)`` statement: ``lode backfill`` (``src/lode/
+    cli/backfill.py``) calls this explicitly on every invocation, because a bare
+    module-level call would only ever fire once per process (Python's
+    import caching means the module body doesn't re-execute on a second
+    ``import``) — which is fine for a script that runs once, but not for a
+    CLI whose in-process test suite re-invokes the command many times
+    against a registry an autouse fixture deliberately clears before each
+    test (``tests/test_cli_backfill.py``'s ``_clean_registry``).
+    :func:`~lode.backfill.register_backfill` is a plain dict assignment, so
+    calling this more than once is always safe.
+    """
+    register_backfill("jira", _jira_backfill)
+
+
+__all__ = ["register"]
