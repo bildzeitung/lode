@@ -107,16 +107,37 @@ def test_both_built_ins_survive_a_cleared_registry_across_repeated_invocations(
 
 
 def test_no_argument_prints_full_help(tmp_path: Path):
-    """lode-6hi3: a bare invocation (no CONNECTOR, no --list) must print the
-    full command help -- usage, options, connector guidance -- not just the
-    bare connector-name list --list produces."""
+    """lode-pk54 (supersedes lode-6hi3's exit-0 behavior): a bare invocation
+    (no CONNECTOR, no --list) must print the full command help -- usage,
+    options, connector guidance -- not just the bare connector-name list
+    --list produces -- and exit 2 (usage error), since a missing CONNECTOR
+    means the command cannot run."""
     result = runner.invoke(
         app,
         ["backfill", "--db", str(tmp_path / "lode.db")],
         env={"COLUMNS": "80", "NO_COLOR": "1", "TERM": "dumb"},
     )
     output = _ANSI_ESCAPE_RE.sub("", result.output)
-    assert result.exit_code == 0
+    assert result.exit_code == 2
+    assert "Usage" in output
+    assert "--list" in output
+    assert "--dry-run" in output
+
+
+def test_flags_without_connector_also_prints_full_help_and_exits_2(tmp_path: Path):
+    """lode-pk54: a missing CONNECTOR is a usage error no matter what other
+    flags accompany it -- --dry-run/--db alone (no CONNECTOR, no --list)
+    must behave identically to the bare invocation above, not silently
+    succeed. This is the flags-but-no-connector shape lode-6hi3's exit-0 fix
+    left uncovered (an unset shell variable in a scripted --dry-run call
+    would previously exit 0)."""
+    result = runner.invoke(
+        app,
+        ["backfill", "--dry-run", "--db", str(tmp_path / "lode.db")],
+        env={"COLUMNS": "80", "NO_COLOR": "1", "TERM": "dumb"},
+    )
+    output = _ANSI_ESCAPE_RE.sub("", result.output)
+    assert result.exit_code == 2
     assert "Usage" in output
     assert "--list" in output
     assert "--dry-run" in output

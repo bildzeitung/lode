@@ -5572,3 +5572,20 @@ entries below from being rewritten to chase the current tree.)
   and unreadable-file cases (the last skipped under a root-euid test runner, where `chmod 0o000`
   does not deny read access) -- each asserting exit 0, a stderr warning, and default-resolved
   output; the existing valid-config round-trip tests are unchanged.
+- **`lode backfill` with no CONNECTOR is a usage error, uniformly (`lode-pk54`, decided
+  2026-08-20).** Every connector-less invocation of `lode backfill` -- bare, or with flags like
+  `--dry-run`/`--db` -- now prints the full command help and exits **2** (usage error). A missing
+  `CONNECTOR` means the command cannot run at all, regardless of which other flags accompany it, so
+  there is no longer a separate exit-0 help branch.
+  **Update (lode-pk54):** this supersedes `lode-6hi3`'s bare-invocation behavior, which printed the
+  full help but exited **0**. That exit-0 shape let a scripted invocation with an unset `CONNECTOR`
+  shell variable (e.g. `lode backfill --dry-run --db "$DB"` with `$CONNECTOR` empty and no
+  positional argument reaching the command at all) succeed silently -- discovered while technically
+  reviewing `lode-6hi3` itself. `--list` is unaffected either way: it still short-circuits to the
+  bare connector-name list (exit 0) whether or not a `CONNECTOR` is also given, per `lode-6hi3`'s
+  original decision.
+  Help text goes to **stderr** (`typer.echo(ctx.get_help(), err=True)`), matching click's own
+  usage-error convention (a `UsageError`'s own help dump also goes to stderr) and keeping stdout
+  reserved for a successful run's actual output. Implemented in `src/lode/cli/backfill.py`; covered
+  by `tests/test_cli_backfill.py`'s `test_no_argument_prints_full_help` (bare invocation) and
+  `test_flags_without_connector_also_prints_full_help_and_exits_2` (flags-but-no-connector).

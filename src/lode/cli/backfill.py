@@ -76,11 +76,15 @@ def backfill(
     backfill pass -- see the command's own help on that flag.
     """
     if connector is None and not list_connectors:
-        # Under a rich build get_help() prints as a side effect and returns
-        # "", so the echo looks redundant -- it is the non-rich path, where
-        # get_help() returns the text and nothing else prints it.
-        typer.echo(ctx.get_help())
-        return
+        # Missing CONNECTOR means the command cannot run regardless of any
+        # other flag (e.g. --dry-run/--db) -- one uniform usage error, no
+        # exit-0 help branch (lode-pk54, superseding lode-6hi3's exit-0
+        # bare-invocation behavior). Under a rich build get_help() prints as
+        # a side effect and returns "", so the echo looks redundant -- it is
+        # the non-rich path, where get_help() returns the text and nothing
+        # else prints it.
+        typer.echo(ctx.get_help(), err=True)
+        raise typer.Exit(code=2)
 
     from lode.backfill import BackfillError, registered_backfills, run_backfill
 
