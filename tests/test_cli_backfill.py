@@ -106,15 +106,15 @@ def test_both_built_ins_survive_a_cleared_registry_across_repeated_invocations(
         assert "confluence" in result.output
 
 
-def test_no_argument_prints_full_help(tmp_path: Path):
+def test_no_argument_prints_full_help():
     """lode-pk54 (supersedes lode-6hi3's exit-0 behavior): a bare invocation
-    (no CONNECTOR, no --list) must print the full command help -- usage,
-    options, connector guidance -- not just the bare connector-name list
-    --list produces -- and exit 2 (usage error), since a missing CONNECTOR
-    means the command cannot run."""
+    (no CONNECTOR, no --list, no flags at all) must print the full command
+    help -- usage, options, connector guidance -- not just the bare
+    connector-name list --list produces -- and exit 2 (usage error), since a
+    missing CONNECTOR means the command cannot run."""
     result = runner.invoke(
         app,
-        ["backfill", "--db", str(tmp_path / "lode.db")],
+        ["backfill"],
         env={"COLUMNS": "80", "NO_COLOR": "1", "TERM": "dumb"},
     )
     output = _ANSI_ESCAPE_RE.sub("", result.output)
@@ -141,6 +141,9 @@ def test_flags_without_connector_also_prints_full_help_and_exits_2(tmp_path: Pat
     assert "Usage" in output
     assert "--list" in output
     assert "--dry-run" in output
+    # The usage error short-circuits before _open_db, so the --db path is
+    # never created.
+    assert not (tmp_path / "lode.db").exists()
 
 
 def test_list_flag_lists_without_running_anything(tmp_path: Path):

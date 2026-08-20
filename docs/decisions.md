@@ -5584,8 +5584,13 @@ entries below from being rewritten to chase the current tree.)
   reviewing `lode-6hi3` itself. `--list` is unaffected either way: it still short-circuits to the
   bare connector-name list (exit 0) whether or not a `CONNECTOR` is also given, per `lode-6hi3`'s
   original decision.
-  Help text goes to **stderr** (`typer.echo(ctx.get_help(), err=True)`), matching click's own
-  usage-error convention (a `UsageError`'s own help dump also goes to stderr) and keeping stdout
-  reserved for a successful run's actual output. Implemented in `src/lode/cli/backfill.py`; covered
+  The echo is `typer.echo(ctx.get_help(), err=True)`, which sends the help to **stderr on the
+  non-rich path only** -- matching click's own usage-error convention (a `UsageError`'s own help
+  dump also goes to stderr) and keeping stdout reserved for a successful run's actual output.
+  Under the rich build this repo actually ships, `ctx.get_help()` renders to **stdout** as a side
+  effect and returns `""`, so the help lands on stdout and only a bare newline reaches stderr; the
+  stream is therefore NOT something a caller can rely on, and the tests deliberately assert against
+  the combined output. The **exit code** is the contract here, not the stream. Implemented in
+  `src/lode/cli/backfill.py`; covered
   by `tests/test_cli_backfill.py`'s `test_no_argument_prints_full_help` (bare invocation) and
   `test_flags_without_connector_also_prints_full_help_and_exits_2` (flags-but-no-connector).
