@@ -64,8 +64,6 @@ import json
 from dataclasses import dataclass
 from urllib.parse import quote
 
-import httpx2
-
 from lode.config import AtlassianCredentials, Settings, resolve_confluence_credentials
 from lode.fetch_outcome import HttpOutcome, classify_http_status
 from lode.webfetch import (
@@ -93,8 +91,8 @@ class HttpxConfluenceFetcher(HttpxFetcher):
     classify_http_status/:class:`~lode.webfetch.RawResponse` handling are
     all inherited unchanged. This subclass supplies HTTP Basic auth (the
     resolved Confluence :class:`~lode.config.AtlassianCredentials`), an
-    ``Accept: application/json`` header, ``follow_redirects=False``, and a
-    connection-establishment-retrying transport
+    ``Accept: application/json`` header, ``follow_redirects=False``, and
+    ``retry_connect=True``
     (:attr:`~lode.config.Settings.atlassian_connect_retries`, lode-lq9u): a
     REST API endpoint answering an authenticated GET has no legitimate
     reason to 3xx the way a user-pasted web page does (the parent follows up
@@ -105,19 +103,13 @@ class HttpxConfluenceFetcher(HttpxFetcher):
     def __init__(
         self, credentials: AtlassianCredentials, settings: Settings | None = None
     ) -> None:
-        settings = settings or Settings()
         super().__init__(
             settings,
             user_agent=_USER_AGENT,
             auth=(credentials.email, credentials.token),
             extra_headers={"Accept": "application/json"},
             follow_redirects=False,
-            # Connection-establishment-only retries (lode-lq9u) -- never a
-            # sent request, so idempotency-safe. See
-            # Settings.atlassian_connect_retries for the rationale and why
-            # this is deliberately not applied to webfetch.py's ask-path
-            # GuardedHttpxFetcher.
-            transport=httpx2.HTTPTransport(retries=settings.atlassian_connect_retries),
+            retry_connect=True,
         )
 
 

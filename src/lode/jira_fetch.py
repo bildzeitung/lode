@@ -91,7 +91,7 @@ class JiraHttpFetcher(HttpxFetcher):
 
     A thin :class:`~lode.webfetch.HttpxFetcher` subclass (lode-88iv) —
     credentials become Basic auth, an ``Accept: application/json`` header,
-    and a connection-establishment-retrying transport
+    and ``retry_connect=True``
     (:attr:`~lode.config.Settings.atlassian_connect_retries`, lode-lq9u),
     passed straight through to the parent's ``__init__``; ``fetch`` itself
     (the httpx2.Client construction, the four-arm except ladder, and the
@@ -102,18 +102,12 @@ class JiraHttpFetcher(HttpxFetcher):
     def __init__(
         self, credentials: AtlassianCredentials, settings: Settings | None = None
     ) -> None:
-        settings = settings or Settings()
         super().__init__(
             settings,
             user_agent=_USER_AGENT,
             auth=httpx2.BasicAuth(credentials.email, credentials.token),
             extra_headers={"Accept": "application/json"},
-            # Connection-establishment-only retries (lode-lq9u) -- never a
-            # sent request, so idempotency-safe. See
-            # Settings.atlassian_connect_retries for the rationale and why
-            # this is deliberately not applied to webfetch.py's ask-path
-            # GuardedHttpxFetcher.
-            transport=httpx2.HTTPTransport(retries=settings.atlassian_connect_retries),
+            retry_connect=True,
         )
 
 

@@ -270,13 +270,13 @@ class HttpxFetcher:
     ladder (lode-88iv) — the only real per-connector deltas are the
     ``User-Agent`` value, an optional auth credential, extra headers (e.g.
     ``Accept: application/json``), whether redirects are followed at all,
-    and an optional connection-establishment-retrying ``transport`` (JIRA
-    and Confluence only, lode-lq9u) — so those are the seams exposed here
-    rather than duplicating the whole method. ``transport`` defaults to
-    ``None`` (httpx2's own default: zero connection-establishment retries);
-    :class:`GuardedHttpxFetcher` never passes one, and builds its own client
-    via its own :meth:`_client` rather than going through this ``__init__``'s
-    stored ``self._transport`` at all, so its one-hop
+    and whether connection *establishment* is retried (``retry_connect``,
+    JIRA and Confluence only, lode-lq9u —
+    :attr:`~lode.config.Settings.atlassian_connect_retries` carries the why)
+    — so those are the seams exposed here rather than duplicating the whole
+    method. ``retry_connect`` defaults to ``False``, and
+    :class:`GuardedHttpxFetcher` builds its own client via its own
+    :meth:`_client` regardless, so the ask path's one-hop
     verify-the-peer-before-reading design is unaffected either way.
     """
 
@@ -288,20 +288,21 @@ class HttpxFetcher:
         auth: httpx2.Auth | tuple[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         follow_redirects: bool = True,
-        transport: httpx2.HTTPTransport | None = None,
+        retry_connect: bool = False,
     ) -> None:
         self._settings = settings or Settings()
         self._headers = {"User-Agent": user_agent, **(extra_headers or {})}
         self._auth = auth
         self._follow_redirects = follow_redirects
-        # None (the default) means httpx2's own default transport --
-        # zero connection-establishment retries. Only the JIRA/Confluence
-        # connector subclasses pass an explicit retrying transport
-        # (lode-lq9u); GuardedHttpxFetcher never does, and builds its own
-        # client via _client() below rather than going through fetch() at
-        # all, so this default never reaches the ask path's SSRF-guarded
-        # one-hop verify-the-peer-before-reading fetcher.
-        self._transport = transport
+        # Built once per fetcher, not once per fetch: a caller-supplied
+        # transport is the one httpx2.Client kwarg that stops Client from
+        # constructing (and CA-bundle-parsing) a transport of its own on
+        # every request. None leaves that per-request default in place.
+        self._transport = (
+            httpx2.HTTPTransport(retries=self._settings.atlassian_connect_retries)
+            if retry_connect
+            else None
+        )
 
     def fetch(self, url: str) -> RawResponse:
         settings = self._settings
