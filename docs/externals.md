@@ -621,7 +621,7 @@ optional `config.toml` fallback — no secret is *required* to live on disk, but
 plaintext; there is no OS-keyring integration ([decisions.md](decisions.md) records this as a
 deliberate deferral, not an oversight).
 
-**Raw `httpx`, no Atlassian SDK.** Both `lode.jira_fetch.JiraHttpFetcher` and
+**Raw `httpx2`, no Atlassian SDK.** Both `lode.jira_fetch.JiraHttpFetcher` and
 `lode.confluence.HttpxConfluenceFetcher` are single-purpose, hand-rolled clients that implement
 the exact same `lode.webfetch.Fetcher` protocol (`fetch(url: str) -> RawResponse`) the web
 connector's `HttpxFetcher` already does — production wires the real client, tests inject a
@@ -923,16 +923,16 @@ reads of same-box services are both otherwise reachable.
 `lode.tools._fetch_web` and injected via the `fetcher=` seam `fetch_for_ask` already threads — never
 the draw-down path, never JIRA/Confluence) closes two gaps a single pre-fetch address check cannot:
 
-1. **Redirect chains.** httpx's own follower has no per-hop hook, so an allowed public host's 3xx
+1. **Redirect chains.** httpx2's own follower has no per-hop hook, so an allowed public host's 3xx
    response could still point the *next* request at an internal address without ever being
    inspected. `GuardedHttpxFetcher` follows redirects manually (`follow_redirects=False` on every
    per-hop client) and validates every hop's destination — the original URL, and every redirect
    `Location` — **before** that hop's request is issued, not merely before its response is trusted.
-2. **DNS rebinding / TOCTOU.** The pre-hop check resolves the host itself; httpx's transport resolves
+2. **DNS rebinding / TOCTOU.** The pre-hop check resolves the host itself; httpx2's transport resolves
    the same host again, separately, for the real connection. A hostile short-TTL resolver can answer
    the two differently and defeat a pre-check-only guard outright — the cheaper of the two attacks
    for an adversary who already controls the domain and its TTL, not a corner case. `GuardedHttpxFetcher`
-   additionally validates the address httpx **actually connected to**
+   additionally validates the address httpx2 **actually connected to**
    (`response.extensions['network_stream'].get_extra_info('server_addr')`) after every hop, before
    that hop's response is used for anything (followed as a redirect, or returned as the final
    result) — so a rebind that fools the pre-check is still caught.
@@ -1008,11 +1008,11 @@ problem:
 1. **Redirect chains.** The guard validates the initial destination, and again the **final** URL
    before the snapshot is persisted (same place the `no_egress` re-check happens). What it cannot do
    is stop the intermediate request: `lode.webfetch`'s fetcher follows redirects transparently inside
-   one `httpx` client call with no per-hop validation hook, so a public, allowed host can still cause
+   one `httpx2` client call with no per-hop validation hook, so a public, allowed host can still cause
    the client to *issue* a GET against an internal address. The final-URL check keeps that response
    from being persisted as a citable snapshot or returned to the model, so the vector is a **blind**
    fetch, not a read-and-exfiltrate. Closing it fully needs per-hop validation inside `lode.webfetch`.
-2. **TOCTOU / DNS rebinding.** The guard resolves the hostname, then `httpx` resolves it *again* when
+2. **TOCTOU / DNS rebinding.** The guard resolves the hostname, then `httpx2` resolves it *again* when
    it makes the request. A hostile resolver serving a short TTL can answer the guard with a public
    address and the client with a private one, defeating the check outright. This is the standard,
    well-known limitation of validating a destination by hostname. Closing it requires pinning the

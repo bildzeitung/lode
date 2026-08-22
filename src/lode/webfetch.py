@@ -447,9 +447,9 @@ def _refuse_if_unsafe_peer(response: httpx2.Response) -> None:
     refused, never waved through. :meth:`GuardedHttpxFetcher._get_one` always
     calls this against a *still-streaming* response for exactly this reason:
     once the body has been read the connection may already be released, and
-    httpcore's ``get_extra_info('server_addr')`` then raises
+    the transport's ``get_extra_info('server_addr')`` then raises
     ``OSError: Bad file descriptor`` (reproduced against any ``Connection:
-    close`` / HTTP/1.0 server on the pinned httpx2 -- lode-xwah review).
+    close`` / HTTP/1.0 server -- lode-xwah review).
     """
     network_stream = response.extensions.get("network_stream")
     if network_stream is None:

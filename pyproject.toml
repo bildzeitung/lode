@@ -48,21 +48,17 @@ dependencies = [
     "lancedb",     # on-disk vector store (ANN + metadata filtering)
     "networkx",    # in-memory knowledge-graph traversal
     "xxhash",      # 128-bit content-address hash (docs/storage.md)
-    "httpx2",      # web draw-down HTTP client (lode-w0h.1 — see docs/stack.md;
-                   # migrated off the unmaintained httpx to its Pydantic-
-                   # stewarded fork, lode-6wly) AND the fork anthropic >= 1.0
-                   # itself runs on -- imported directly in
-                   # llm_provider.py's collect_batch to catch the SDK's
-                   # mid-stream httpx2.HTTPError.
-    "httpx",       # NOT lode's own client (lode-6wly migrated those to
-                   # httpx2 above) -- cli/models.py's `lode models pull`
-                   # catches httpx.TransportError specifically because
-                   # huggingface_hub itself still imports the legacy httpx
-                   # package internally; catching httpx2.TransportError there
-                   # would never match what huggingface_hub actually raises.
-                   # Declared direct because we import it directly (test_deps_
-                   # declared.py), though it's satisfied transitively via
-                   # huggingface-hub/openai today.
+    "httpx2",      # web draw-down HTTP client (lode-w0h.1 — see docs/stack.md),
+                   # and the fork anthropic >= 1.0 itself runs on — imported
+                   # directly in llm_provider.py's collect_batch to catch the
+                   # SDK's mid-stream httpx2.HTTPError.
+    "httpx",       # the LEGACY package, kept for exactly one reason:
+                   # cli/models.py's `lode models pull` catches
+                   # httpx.TransportError because huggingface_hub itself still
+                   # imports legacy httpx internally, so httpx2.TransportError
+                   # would never match what it actually raises. Satisfied
+                   # transitively via huggingface-hub/openai today; declared
+                   # anyway because we import it directly.
     "trafilatura>=2.1,<2.2", # web draw-down readability extraction
                              # (lode-w0h.1 — see docs/stack.md). Bounded to the
                              # 2.1.x series (lode-g274.1) so the lock resolves

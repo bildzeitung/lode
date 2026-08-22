@@ -33,6 +33,10 @@ class _ConsoleHttpxFilter(logging.Filter):
     handler is untouched, so ``lode.log`` still records every httpx request
     for debugging, while the console stays quiet for successful requests.
     httpx WARNING+ (e.g. retries, errors) still reaches the console.
+
+    The prefix match is deliberate, not incidental: it must cover both the
+    legacy ``httpx`` logger (huggingface_hub's transport) and the ``httpx2``
+    one lode's own clients and the anthropic SDK log on.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
