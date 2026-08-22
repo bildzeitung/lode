@@ -12,7 +12,7 @@ holds no plain helpers" rule -- conftest.py deliberately keeps several
 (docs/tui.md "One home: tests/conftest.py", lode-lcju).
 
 Its callers drive a REAL `anthropic.Anthropic` client answered in-process by
-`httpx.MockTransport` rather than a MagicMock -- `_real_anthropic_client`
+`httpx2.MockTransport` rather than a MagicMock -- `_real_anthropic_client`
 below has the reasoning, deferring to `_wrong_shape_result`'s docstring in
 src/lode/llm_provider.py and in turn to docs/stack.md "Error contract".
 
@@ -28,11 +28,11 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-import httpx
+import httpx2
 
 
 def _real_anthropic_client(
-    handler: Callable[[httpx.Request], httpx.Response],
+    handler: Callable[[httpx2.Request], httpx2.Response],
 ) -> Any:
     """A REAL SDK client answered in-process by ``handler``.
 
@@ -42,7 +42,7 @@ def _real_anthropic_client(
     caller carries ``@pytest.mark.network`` to lift
     ``tests/conftest.py``'s autouse
     ``_block_unmocked_network_and_llm_access`` guard (lode-85q);
-    ``httpx.MockTransport``
+    ``httpx2.MockTransport``
     answers in-process, so no socket is ever opened.
     """
     import anthropic
@@ -50,19 +50,19 @@ def _real_anthropic_client(
     return anthropic.Anthropic(
         api_key="test-key",
         max_retries=0,  # keep the SDK's own retry ladder out of the assertion
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        http_client=httpx2.Client(transport=httpx2.MockTransport(handler)),
     )
 
 
 def _results_handler(
-    batch_id: str, make_results: Callable[[], httpx.Response]
-) -> Callable[[httpx.Request], httpx.Response]:
+    batch_id: str, make_results: Callable[[], httpx2.Response]
+) -> Callable[[httpx2.Request], httpx2.Response]:
     """Route ``/results`` to ``make_results()``, everything else to ``retrieve``."""
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path.endswith("/results"):
             return make_results()
-        return httpx.Response(200, json=_ended_batch_body(batch_id))
+        return httpx2.Response(200, json=_ended_batch_body(batch_id))
 
     return handler
 

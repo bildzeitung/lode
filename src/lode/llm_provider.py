@@ -1110,7 +1110,10 @@ class AnthropicProvider:
     ) -> tuple[Literal["pending"], None] | tuple[Literal["ended"], list[BatchResult]]:
         # Both deferred -- lode-4q97; needed by the `except` clauses below.
         import anthropic
-        import httpx
+
+        # httpx2, not httpx: anthropic >= 1.0 runs on the httpx2 fork, so a
+        # mid-stream transport failure surfaces as httpx2.HTTPError.
+        import httpx2
 
         # These two SDK calls carry no `reasoning_effort`, so no pairing 400
         # (lode-90o7) can arise here -- but a 429/5xx/404 while polling still
@@ -1158,7 +1161,7 @@ class AnthropicProvider:
             """
             try:
                 yield from batch_results
-            except (httpx.HTTPError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            except (httpx2.HTTPError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 context = (
                     f"batches.results handle={handle} failed while streaming JSONL "
                     f"results ({len(results)} result(s) already decoded, now "
