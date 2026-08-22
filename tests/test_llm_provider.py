@@ -127,8 +127,8 @@ def _anthropic_bad_request() -> object:
     import anthropic
 
     message = "effort not supported for this model"
-    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-    response = httpx.Response(
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx2.Response(
         400,
         request=request,
         headers={"request-id": "req-test-1"},
