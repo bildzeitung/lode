@@ -11,7 +11,7 @@ so the gate never makes a real network request.
 import socket
 from typing import Self
 
-import httpx
+import httpx2
 import pytest
 
 from lode.config import load_settings
@@ -376,7 +376,7 @@ def test_redirect_final_url_differs_from_requested_url():
 
 
 class _FakeResponse:
-    """Stands in for an httpx.Response without any transport."""
+    """Stands in for an httpx2.Response without any transport."""
 
     def __init__(self, status_code: int, url: str = _URL, text: str = "") -> None:
         self.status_code = status_code
@@ -385,7 +385,7 @@ class _FakeResponse:
 
 
 def _fake_client_cls(status_code: int, captured: dict) -> type:
-    """Build a stand-in for httpx.Client that always answers ``status_code``.
+    """Build a stand-in for httpx2.Client that always answers ``status_code``.
 
     HttpxFetcher constructs its own client, so this is how we reach its
     status-classification branch without a transport. ``captured`` receives the
@@ -417,7 +417,7 @@ class TestHttpxFetcher:
     * exception translation — driven against targets that fail before any DNS
       or non-loopback connect (an unparseable URL, and a refused connection to
       loopback port 1);
-    * status-code classification — driven against a fake ``httpx.Client``, since
+    * status-code classification — driven against a fake ``httpx2.Client``, since
       HttpxFetcher constructs its own client and exposes no transport seam.
 
     "Does a live GET actually work" is left to the deliberately opt-in smoke
@@ -426,10 +426,10 @@ class TestHttpxFetcher:
     """
 
     def test_invalid_scheme_is_transient(self):
-        """An unsupported/garbage URL surfaces as a transient httpx error.
+        """An unsupported/garbage URL surfaces as a transient httpx2 error.
 
         HttpxFetcher has no special-cased "malformed input" path (see its
-        module docstring) — it maps any otherwise-unclassified httpx.HTTPError
+        module docstring) — it maps any otherwise-unclassified httpx2.HTTPError
         to TransientFetchError, which is the documented, deliberate default.
         """
         fetcher = HttpxFetcher(load_settings(fetch_timeout_s=1.0))
@@ -445,7 +445,7 @@ class TestHttpxFetcher:
             fetcher.fetch("http://127.0.0.1:1/")
 
     def test_unparseable_url_is_transient_not_uncaught(self):
-        """httpx.InvalidURL is NOT an httpx.HTTPError — it must still be caught.
+        """httpx2.InvalidURL is NOT an httpx2.HTTPError — it must still be caught.
 
         Regression guard: an unparseable URL used to escape HttpxFetcher.fetch()
         entirely, reaching the caller as an unclassified exception rather than a
@@ -463,7 +463,7 @@ class TestHttpxFetcher:
         408 in particular is a server-reported timeout: tombstoning it would
         permanently mark a live URL dead, defeating link-rot immunity.
         """
-        monkeypatch.setattr(httpx, "Client", _fake_client_cls(status_code, {}))
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(status_code, {}))
         fetcher = HttpxFetcher(load_settings())
 
         with pytest.raises(TransientFetchError, match=str(status_code)):
@@ -474,7 +474,7 @@ class TestHttpxFetcher:
         self, monkeypatch, status_code
     ):
         """Everything else comes back for fetch_and_extract to classify."""
-        monkeypatch.setattr(httpx, "Client", _fake_client_cls(status_code, {}))
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(status_code, {}))
         fetcher = HttpxFetcher(load_settings())
 
         response = fetcher.fetch(_URL)
@@ -483,9 +483,9 @@ class TestHttpxFetcher:
         assert response.final_url == _URL
 
     def test_config_knobs_are_wired_into_the_client(self, monkeypatch):
-        """fetch_max_redirects / fetch_timeout_s must actually reach httpx."""
+        """fetch_max_redirects / fetch_timeout_s must actually reach httpx2."""
         captured: dict = {}
-        monkeypatch.setattr(httpx, "Client", _fake_client_cls(200, captured))
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(200, captured))
         fetcher = HttpxFetcher(
             load_settings(fetch_max_redirects=3, fetch_timeout_s=2.5)
         )
@@ -497,7 +497,7 @@ class TestHttpxFetcher:
         assert captured["follow_redirects"] is True
 
     def test_user_agent_is_a_bare_product_token(self, monkeypatch):
-        """The UA reaches httpx and advertises no ``(+<url>)`` contact link.
+        """The UA reaches httpx2 and advertises no ``(+<url>)`` contact link.
 
         Regression guard (lode-yzv): this constant once shipped a fabricated
         ``+<url>`` pointing at a repo that did not exist. A ``+<url>`` names the
@@ -507,7 +507,7 @@ class TestHttpxFetcher:
         version does not break the guard.
         """
         captured: dict = {}
-        monkeypatch.setattr(httpx, "Client", _fake_client_cls(200, captured))
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(200, captured))
         fetcher = HttpxFetcher(load_settings())
 
         fetcher.fetch(_URL)
@@ -518,9 +518,9 @@ class TestHttpxFetcher:
 
 
 class _GuardedFakeResponse:
-    """Stands in for an httpx.Response, with the bits GuardedHttpxFetcher reads.
+    """Stands in for an httpx2.Response, with the bits GuardedHttpxFetcher reads.
 
-    ``url`` is a real ``httpx.URL`` (not a bare string) so ``.join(location)``
+    ``url`` is a real ``httpx2.URL`` (not a bare string) so ``.join(location)``
     behaves exactly as it does against a real response. ``server_addr``
     defaults to a public address so the fail-closed peer check in
     :func:`lode.webfetch._refuse_if_unsafe_peer` passes; pass
@@ -545,7 +545,7 @@ class _GuardedFakeResponse:
         peer_oserror: bool = False,
     ) -> None:
         self.status_code = status_code
-        self.url = httpx.URL(url)
+        self.url = httpx2.URL(url)
         self.text = text
         self.headers = {"location": location} if location else {}
         self.read_count = 0
@@ -579,7 +579,7 @@ class _FakeNetworkStream:
 
 
 def _guarded_fake_client_cls(responses: list, calls: list) -> type:
-    """Stand in for ``httpx.Client``, answering ``responses`` in order.
+    """Stand in for ``httpx2.Client``, answering ``responses`` in order.
 
     ``calls`` records every URL a request was actually issued against -- the
     assertion surface for "a redirect to an internal address does not issue
@@ -615,7 +615,7 @@ def _guarded_fake_client_cls(responses: list, calls: list) -> type:
 class TestGuardedHttpxFetcher:
     """Exercises the redirect-chain + DNS-rebinding closure (lode-xwah), offline.
 
-    Every test drives GuardedHttpxFetcher through a monkeypatched httpx.Client
+    Every test drives GuardedHttpxFetcher through a monkeypatched httpx2.Client
     (no real socket ever opens) plus, where DNS matters, a monkeypatched
     socket.getaddrinfo -- the same offline-fixture convention TestHttpxFetcher
     above uses.
@@ -626,7 +626,7 @@ class TestGuardedHttpxFetcher:
     ):
         """A literal loopback/private host needs no DNS -- refused immediately."""
         calls: list = []
-        monkeypatch.setattr(httpx, "Client", _guarded_fake_client_cls([], calls))
+        monkeypatch.setattr(httpx2, "Client", _guarded_fake_client_cls([], calls))
         fetcher = GuardedHttpxFetcher(load_settings())
 
         with pytest.raises(UnsafeWebDestinationError):
@@ -638,7 +638,7 @@ class TestGuardedHttpxFetcher:
         response = _GuardedFakeResponse(200, "http://93.184.216.34/", text="ok")
         calls: list = []
         monkeypatch.setattr(
-            httpx, "Client", _guarded_fake_client_cls([response], calls)
+            httpx2, "Client", _guarded_fake_client_cls([response], calls)
         )
         fetcher = GuardedHttpxFetcher(load_settings())
 
@@ -656,7 +656,7 @@ class TestGuardedHttpxFetcher:
             302, "http://93.184.216.34/", location="http://127.0.0.1/admin"
         )
         calls: list = []
-        monkeypatch.setattr(httpx, "Client", _guarded_fake_client_cls([first], calls))
+        monkeypatch.setattr(httpx2, "Client", _guarded_fake_client_cls([first], calls))
         fetcher = GuardedHttpxFetcher(load_settings())
 
         with pytest.raises(UnsafeWebDestinationError):
@@ -673,7 +673,7 @@ class TestGuardedHttpxFetcher:
         second = _GuardedFakeResponse(200, "http://93.184.216.35/final", text="landed")
         calls: list = []
         monkeypatch.setattr(
-            httpx, "Client", _guarded_fake_client_cls([first, second], calls)
+            httpx2, "Client", _guarded_fake_client_cls([first, second], calls)
         )
         fetcher = GuardedHttpxFetcher(load_settings())
 
@@ -693,7 +693,7 @@ class TestGuardedHttpxFetcher:
         )
         calls: list = []
         monkeypatch.setattr(
-            httpx, "Client", _guarded_fake_client_cls([hop0, hop1], calls)
+            httpx2, "Client", _guarded_fake_client_cls([hop0, hop1], calls)
         )
         fetcher = GuardedHttpxFetcher(settings)
 
@@ -716,7 +716,7 @@ class TestGuardedHttpxFetcher:
         )
         calls: list = []
         monkeypatch.setattr(
-            httpx, "Client", _guarded_fake_client_cls([response], calls)
+            httpx2, "Client", _guarded_fake_client_cls([response], calls)
         )
         fetcher = GuardedHttpxFetcher(load_settings())
 
@@ -741,7 +741,7 @@ class TestGuardedHttpxFetcher:
         )
         calls: list = []
         monkeypatch.setattr(
-            httpx, "Client", _guarded_fake_client_cls([response], calls)
+            httpx2, "Client", _guarded_fake_client_cls([response], calls)
         )
         fetcher = GuardedHttpxFetcher(load_settings())
 
@@ -764,7 +764,7 @@ class TestGuardedHttpxFetcher:
         response = _GuardedFakeResponse(status_code, "http://93.184.216.34/")
         calls: list = []
         monkeypatch.setattr(
-            httpx, "Client", _guarded_fake_client_cls([response], calls)
+            httpx2, "Client", _guarded_fake_client_cls([response], calls)
         )
         fetcher = GuardedHttpxFetcher(load_settings())
 
@@ -775,7 +775,7 @@ class TestGuardedHttpxFetcher:
         """Passing follow_redirects=True must not defeat manual per-hop control.
 
         This is a defense-in-depth guard against a future caller accidentally
-        (or maliciously) re-enabling httpx's own follower and bypassing the
+        (or maliciously) re-enabling httpx2's own follower and bypassing the
         per-hop checks entirely -- verified via the private attribute
         HttpxFetcher.__init__ actually sets.
         """
@@ -810,7 +810,7 @@ class TestGuardedHttpxFetcher:
             lambda *a, **k: [(socket.AF_INET, None, 6, "", (address, 0))],
         )
         calls: list = []
-        monkeypatch.setattr(httpx, "Client", _guarded_fake_client_cls([], calls))
+        monkeypatch.setattr(httpx2, "Client", _guarded_fake_client_cls([], calls))
         fetcher = GuardedHttpxFetcher(load_settings())
 
         with pytest.raises(UnsafeWebDestinationError):
@@ -820,11 +820,11 @@ class TestGuardedHttpxFetcher:
 
     @pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://example.com/x"])
     def test_non_http_scheme_is_refused(self, monkeypatch, url):
-        """A non-http(s) hop is refused outright, not left to httpx to reject
+        """A non-http(s) hop is refused outright, not left to httpx2 to reject
         as a (retryable) transient client error.
         """
         calls: list = []
-        monkeypatch.setattr(httpx, "Client", _guarded_fake_client_cls([], calls))
+        monkeypatch.setattr(httpx2, "Client", _guarded_fake_client_cls([], calls))
         fetcher = GuardedHttpxFetcher(load_settings())
 
         with pytest.raises(UnsafeWebDestinationError, match="scheme"):
@@ -839,7 +839,7 @@ class TestGuardedHttpxFetcher:
         )
         calls: list = []
         monkeypatch.setattr(
-            httpx, "Client", _guarded_fake_client_cls([response], calls)
+            httpx2, "Client", _guarded_fake_client_cls([response], calls)
         )
         fetcher = GuardedHttpxFetcher(load_settings())
 
@@ -854,7 +854,7 @@ class TestGuardedHttpxFetcher:
         response.extensions["network_stream"] = _FakeNetworkStream(None, oserror=True)
         calls: list = []
         monkeypatch.setattr(
-            httpx, "Client", _guarded_fake_client_cls([response], calls)
+            httpx2, "Client", _guarded_fake_client_cls([response], calls)
         )
         fetcher = GuardedHttpxFetcher(load_settings())
 
@@ -875,7 +875,7 @@ class TestGuardedHttpxFetcher:
         )
         calls: list = []
         monkeypatch.setattr(
-            httpx, "Client", _guarded_fake_client_cls([response], calls)
+            httpx2, "Client", _guarded_fake_client_cls([response], calls)
         )
         fetcher = GuardedHttpxFetcher(load_settings())
 

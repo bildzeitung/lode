@@ -10,7 +10,7 @@ network request).
 import json
 from typing import Self
 
-import httpx
+import httpx2
 import pytest
 
 from lode.config import AtlassianCredentials, load_settings
@@ -263,7 +263,7 @@ def test_missing_credentials_raises_without_a_fetcher(monkeypatch):
 
 
 class _FakeResponse:
-    """Stands in for an httpx.Response without any transport."""
+    """Stands in for an httpx2.Response without any transport."""
 
     def __init__(self, status_code: int, url: str = "", text: str = "") -> None:
         self.status_code = status_code
@@ -291,7 +291,7 @@ def _fake_client_cls(status_code: int, captured: dict) -> type:
 class TestHttpxConfluenceFetcher:
     def test_basic_auth_and_headers_wired_into_the_client(self, monkeypatch):
         captured: dict = {}
-        monkeypatch.setattr(httpx, "Client", _fake_client_cls(200, captured))
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(200, captured))
         creds = AtlassianCredentials(email="me@example.com", token="secret-tok")
         fetcher = HttpxConfluenceFetcher(creds, load_settings())
 
@@ -307,7 +307,7 @@ class TestHttpxConfluenceFetcher:
 
     @pytest.mark.parametrize("status_code", [408, 429, 500, 502, 503])
     def test_transient_status_codes_raise(self, monkeypatch, status_code):
-        monkeypatch.setattr(httpx, "Client", _fake_client_cls(status_code, {}))
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(status_code, {}))
         creds = AtlassianCredentials(email="me@example.com", token="tok")
         fetcher = HttpxConfluenceFetcher(creds, load_settings())
 
@@ -318,7 +318,7 @@ class TestHttpxConfluenceFetcher:
     def test_non_transient_status_codes_return_a_response(
         self, monkeypatch, status_code
     ):
-        monkeypatch.setattr(httpx, "Client", _fake_client_cls(status_code, {}))
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(status_code, {}))
         creds = AtlassianCredentials(email="me@example.com", token="tok")
         fetcher = HttpxConfluenceFetcher(creds, load_settings())
 
