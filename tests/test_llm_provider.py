@@ -15,6 +15,7 @@ from typing import ClassVar
 from unittest import mock
 
 import httpx
+import httpx2
 import pytest
 from _anthropic_rig import (
     _jsonl,
@@ -124,7 +125,6 @@ def _anthropic_bad_request() -> object:
     class, not just something that happens to have the right attributes.
     """
     import anthropic
-    import httpx
 
     message = "effort not supported for this model"
     request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
@@ -1191,7 +1191,7 @@ def test_collect_batch_wraps_a_real_sdk_status_error_from_the_results_url() -> N
     client = _real_anthropic_client(
         _results_handler(
             "batch-1",
-            lambda: httpx.Response(
+            lambda: httpx2.Response(
                 429,
                 headers={"request-id": "req-test-2"},
                 json={"error": {"type": "rate_limit_error", "message": "slow down"}},
@@ -1220,7 +1220,7 @@ def test_collect_batch_wraps_a_malformed_jsonl_line_from_the_results_stream() ->
     """
     client = _real_anthropic_client(
         _results_handler(
-            "batch-1", lambda: httpx.Response(200, content=b"not valid json\n")
+            "batch-1", lambda: httpx2.Response(200, content=b"not valid json\n")
         )
     )
 
@@ -1248,7 +1248,7 @@ def test_collect_batch_wraps_an_undecodable_utf8_byte_in_the_results_stream() ->
     client = _real_anthropic_client(
         _results_handler(
             "batch-1",
-            lambda: httpx.Response(200, content=b'{"custom_id": "\xff\xfe\xfd"}\n'),
+            lambda: httpx2.Response(200, content=b'{"custom_id": "\xff\xfe\xfd"}\n'),
         )
     )
 
@@ -1273,26 +1273,26 @@ def test_collect_batch_discards_partial_results_on_a_mid_stream_transport_failur
     call (there is no resume-after-N-lines cursor), so nothing already-good is
     permanently lost. Pins that `collect_batch` never returns a tuple here.
 
-    Two lines, not one, is load-bearing: httpx's 64-byte chunker holds the tail
+    Two lines, not one, is load-bearing: httpx2's 64-byte chunker holds the tail
     of the last raw chunk back, so a single line's trailing newline never
     reaches the JSONL decoder and NOTHING would be decoded before the error --
     the "partial" in this test's name would be a fiction. The second line
     flushes the first. Asserting the decoded COUNT is what keeps that honest.
     """
 
-    class _FlakyStream(httpx.SyncByteStream):
+    class _FlakyStream(httpx2.SyncByteStream):
         """Yields two good JSONL lines, then dies as if the connection reset."""
 
         def __iter__(self) -> Iterator[bytes]:
             yield _succeeded_jsonl_line("ver-one")
             yield _succeeded_jsonl_line("ver-two")
-            raise httpx.ReadError("connection reset mid-stream")
+            raise httpx2.ReadError("connection reset mid-stream")
 
         def close(self) -> None:
             pass
 
     client = _real_anthropic_client(
-        _results_handler("batch-1", lambda: httpx.Response(200, stream=_FlakyStream()))
+        _results_handler("batch-1", lambda: httpx2.Response(200, stream=_FlakyStream()))
     )
 
     with pytest.raises(LLMProviderError) as excinfo:
@@ -1302,7 +1302,7 @@ def test_collect_batch_discards_partial_results_on_a_mid_stream_transport_failur
     assert err.provider == "anthropic"
     assert "batch-1" in str(err)
     assert "1 result(s) already decoded" in str(err)
-    assert isinstance(err.__cause__, httpx.HTTPError)
+    assert isinstance(err.__cause__, httpx2.HTTPError)
 
 
 @pytest.mark.network
@@ -1337,7 +1337,7 @@ def test_collect_batch_degrades_a_wrong_shape_line_missing_a_field(
     payload = _payload_without(_succeeded_payload("ver-shape"), *path)
     client = _real_anthropic_client(
         _results_handler(
-            "batch-1", lambda: httpx.Response(200, content=_jsonl(payload))
+            "batch-1", lambda: httpx2.Response(200, content=_jsonl(payload))
         )
     )
 
@@ -1373,7 +1373,7 @@ def test_collect_batch_degrades_a_wrong_shape_line_with_a_non_object_content_blo
     payload["result"]["message"]["content"] = [None]
     client = _real_anthropic_client(
         _results_handler(
-            "batch-1", lambda: httpx.Response(200, content=_jsonl(payload))
+            "batch-1", lambda: httpx2.Response(200, content=_jsonl(payload))
         )
     )
 
@@ -1407,7 +1407,7 @@ def test_collect_batch_substitutes_a_placeholder_for_a_line_that_is_not_an_objec
     """
     line = (json.dumps(None) + "\n").encode()
     client = _real_anthropic_client(
-        _results_handler("batch-1", lambda: httpx.Response(200, content=line))
+        _results_handler("batch-1", lambda: httpx2.Response(200, content=line))
     )
 
     status, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
@@ -1489,7 +1489,7 @@ def test_collect_batch_substitutes_a_placeholder_when_only_custom_id_is_unusable
     payload = mutate(_succeeded_payload("ver-shape"))
     client = _real_anthropic_client(
         _results_handler(
-            "batch-1", lambda: httpx.Response(200, content=_jsonl(payload))
+            "batch-1", lambda: httpx2.Response(200, content=_jsonl(payload))
         )
     )
 
@@ -1619,7 +1619,6 @@ def _openai_bad_request() -> object:
     :func:`_anthropic_bad_request`; see that helper for why a real instance
     rather than a duck-typed fake.
     """
-    import httpx
     import openai
 
     message = "reasoning.effort is not supported for this model"

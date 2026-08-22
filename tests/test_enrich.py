@@ -21,7 +21,7 @@ import sqlite3
 from pathlib import Path
 from unittest import mock
 
-import httpx
+import httpx2
 import pytest
 from _anthropic_rig import (
     _jsonl,
@@ -1736,7 +1736,7 @@ def test_collect_enrich_batch_survives_a_results_line_with_no_usable_custom_id(
     ``AnthropicProvider.collect_batch``), against the REAL SDK -- a
     ``MagicMock``-based ``fake_batch_client`` can't reproduce
     ``construct_type_unchecked``'s leniency, so this uses
-    ``httpx.MockTransport`` instead.
+    ``httpx2.MockTransport`` instead.
 
     Two distinct shapes reach the same hazard, and only the first is a
     *wrong-shape* line in the ``_wrong_shape_result`` sense:
@@ -1764,7 +1764,7 @@ def test_collect_enrich_batch_survives_a_results_line_with_no_usable_custom_id(
         )
 
     client = _real_anthropic_client(
-        _results_handler("batch-nonobj", lambda: httpx.Response(200, content=line))
+        _results_handler("batch-nonobj", lambda: httpx2.Response(200, content=line))
     )
 
     ended = collect_enrich_batch(
