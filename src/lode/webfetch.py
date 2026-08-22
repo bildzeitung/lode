@@ -67,15 +67,15 @@ unrelated policies.
 
 ## Library choice (SPIKE deliverable, per the ticket)
 
-**HTTP client — httpx**, over `requests` and stdlib `urllib.request`:
+**HTTP client — httpx2**, over `requests` and stdlib `urllib.request`:
 
 - vs `requests`: the honest differentiator is maintenance status, *not*
-  features. `requests` is in long-term maintenance mode; httpx is its actively
+  features. `requests` is in long-term maintenance mode; httpx2 is its actively
   developed equivalent with the same synchronous call shape this module needs.
   Both expose a redirect cap (``requests.Session.max_redirects``) and a typed
   exception hierarchy (``TooManyRedirects``/``Timeout``/``ConnectionError``), so
-  neither of those is a reason to prefer httpx over `requests` — only over
-  stdlib. httpx additionally ships an async client if a later connector wants
+  neither of those is a reason to prefer httpx2 over `requests` — only over
+  stdlib. httpx2 additionally ships an async client if a later connector wants
   one; this module does not.
 - vs stdlib ``urllib.request``: it would avoid a dependency, but its redirect
   cap is a hardcoded class attribute (``HTTPRedirectHandler.max_redirections``
@@ -83,9 +83,9 @@ unrelated policies.
   (d) could not be honored without subclassing the handler. It also has no
   connect/read timeout split and a much less ergonomic exception model — not
   worth hand-rolling for a first connector.
-- httpx's exception hierarchy maps onto the taxonomy above
+- httpx2's exception hierarchy maps onto the taxonomy above
   (``TooManyRedirects`` / ``TimeoutException`` / ``NetworkError``), but note
-  ``httpx.InvalidURL`` is **not** an ``HTTPError`` subclass — an unparseable
+  ``httpx2.InvalidURL`` is **not** an ``HTTPError`` subclass — an unparseable
   URL must be caught by name or it escapes uncaught (see :meth:`HttpxFetcher.fetch`).
 
 **Readability extraction — trafilatura**, named in the decision itself
@@ -123,14 +123,14 @@ from enum import Enum
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2
 import trafilatura
 
 from lode.config import Settings
 from lode.fetch_outcome import HttpOutcome, classify_http_status
 
 #: Sent on every fetch so a server sees an identifiable, non-empty UA rather
-#: than a bare httpx default (some sites 403 a missing/generic UA outright).
+#: than a bare httpx2 default (some sites 403 a missing/generic UA outright).
 #:
 #: Deliberately a bare product token, with no ``(+<url>)`` contact link. That
 #: convention identifies a *centrally operated* crawler, so an operator can
@@ -222,7 +222,7 @@ class Fetcher(Protocol):
         Returns a :class:`RawResponse` for any outcome :func:`fetch_and_extract`
         can classify itself (2xx, 401/403, other permanent 4xx). Raises
         :class:`TransientFetchError` for 408/429/5xx/network/timeout conditions
-        (and for a URL httpx cannot parse), and :class:`TooManyRedirectsError`
+        (and for a URL httpx2 cannot parse), and :class:`TooManyRedirectsError`
         if the redirect chain exceeds the cap. It raises nothing else.
         """
         ...
@@ -230,38 +230,38 @@ class Fetcher(Protocol):
 
 @contextmanager
 def _httpx_errors_classified() -> Iterator[None]:
-    """Map httpx's exception surface onto this module's fetch-error taxonomy.
+    """Map httpx2's exception surface onto this module's fetch-error taxonomy.
 
     The single home for that mapping, so :meth:`HttpxFetcher.fetch` and
     :meth:`GuardedHttpxFetcher._get_one` cannot drift apart on how a given
-    httpx failure is classified (they did, as two hand-copied ladders, before
+    httpx2 failure is classified (they did, as two hand-copied ladders, before
     this was extracted).
 
-    Anything not raised by httpx -- notably
+    Anything not raised by httpx2 -- notably
     :class:`UnsafeWebDestinationError` from the guard checks that run inside
     this block -- passes straight through unclassified, which is what keeps a
     refused destination non-retryable.
     """
     try:
         yield
-    except httpx.TooManyRedirects as exc:
+    except httpx2.TooManyRedirects as exc:
         raise TooManyRedirectsError(str(exc)) from exc
-    except httpx.TimeoutException as exc:
+    except httpx2.TimeoutException as exc:
         raise TransientFetchError(f"timeout: {exc}") from exc
-    except httpx.NetworkError as exc:
+    except httpx2.NetworkError as exc:
         raise TransientFetchError(f"network error: {exc}") from exc
-    except (httpx.HTTPError, httpx.InvalidURL) as exc:
-        # Any other httpx-level failure (e.g. a malformed response, or a
-        # URL httpx cannot even parse) — no sharper classification is
+    except (httpx2.HTTPError, httpx2.InvalidURL) as exc:
+        # Any other httpx2-level failure (e.g. a malformed response, or a
+        # URL httpx2 cannot even parse) — no sharper classification is
         # available, so default to retryable rather than silently
-        # tombstoning on an unrecognized condition. httpx.InvalidURL is
-        # NOT an httpx.HTTPError subclass, so it must be named explicitly
+        # tombstoning on an unrecognized condition. httpx2.InvalidURL is
+        # NOT an httpx2.HTTPError subclass, so it must be named explicitly
         # or it escapes this method entirely, unclassified.
         raise TransientFetchError(f"http client error: {exc}") from exc
 
 
 class HttpxFetcher:
-    """Default :class:`Fetcher`: a single synchronous GET via ``httpx``.
+    """Default :class:`Fetcher`: a single synchronous GET via ``httpx2``.
 
     The JIRA and Confluence connectors
     (:class:`lode.jira_fetch.JiraHttpFetcher`,
@@ -279,7 +279,7 @@ class HttpxFetcher:
         settings: Settings | None = None,
         *,
         user_agent: str = _USER_AGENT,
-        auth: httpx.Auth | tuple[str, str] | None = None,
+        auth: httpx2.Auth | tuple[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         follow_redirects: bool = True,
     ) -> None:
@@ -291,13 +291,13 @@ class HttpxFetcher:
     def fetch(self, url: str) -> RawResponse:
         settings = self._settings
         # max_redirects is a Client-constructor knob, not accepted by the
-        # module-level httpx.get() shortcut — a short-lived client is the
+        # module-level httpx2.get() shortcut — a short-lived client is the
         # correct way to set it for one request. Harmless to pass even
         # when follow_redirects=False (a subclass's choice, e.g.
-        # HttpxConfluenceFetcher): httpx simply never consults it then.
+        # HttpxConfluenceFetcher): httpx2 simply never consults it then.
         with (
             _httpx_errors_classified(),
-            httpx.Client(
+            httpx2.Client(
                 follow_redirects=self._follow_redirects,
                 max_redirects=settings.fetch_max_redirects,
                 timeout=settings.fetch_timeout_s,
@@ -385,7 +385,7 @@ def _resolve_host_addresses(host: str, port: int) -> list[str]:
     A literal IP host (``http://127.0.0.1/...``) is returned as-is with no
     DNS lookup -- both because none is needed and because a literal-IP host
     can't rebind between two lookups the way a domain name can. A name is
-    resolved via :func:`socket.getaddrinfo`, the same resolver httpx's own
+    resolved via :func:`socket.getaddrinfo`, the same resolver httpx2's own
     transport uses, so a public-then-private multi-answer response is
     inspected in full rather than only its first answer.
     """
@@ -409,8 +409,8 @@ def _refuse_if_unsafe_host(url: str) -> None:
     never reaches the network at all, not merely fails to persist.
 
     Also enforces an http(s) scheme allowlist. Without it a ``file://`` or
-    ``ftp://`` hop is not judged here at all, and reaches httpx to fail as an
-    unrecognized-protocol :class:`httpx.HTTPError` -- which this module
+    ``ftp://`` hop is not judged here at all, and reaches httpx2 to fail as an
+    unrecognized-protocol :class:`httpx2.HTTPError` -- which this module
     classifies as *transient*, so the async worker would retry a destination
     that should have been refused outright.
     """
@@ -430,14 +430,14 @@ def _refuse_if_unsafe_host(url: str) -> None:
             )
 
 
-def _refuse_if_unsafe_peer(response: httpx.Response) -> None:
+def _refuse_if_unsafe_peer(response: httpx2.Response) -> None:
     """Refuse a response whose *actual* connected peer is unsafe.
 
     This is the DNS-rebinding half of the guard (lode-xwah): the pre-hop
     check in :func:`_refuse_if_unsafe_host` resolves the host itself, a
     lookup a hostile short-TTL resolver can answer differently a moment
-    later when httpx's transport resolves the same host again for the real
-    connection. This checks the address httpx actually connected to
+    later when httpx2's transport resolves the same host again for the real
+    connection. This checks the address httpx2 actually connected to
     (``response.extensions['network_stream']``), so a rebind that fools the
     pre-check is still caught before the response is used for anything.
 
@@ -447,9 +447,9 @@ def _refuse_if_unsafe_peer(response: httpx.Response) -> None:
     refused, never waved through. :meth:`GuardedHttpxFetcher._get_one` always
     calls this against a *still-streaming* response for exactly this reason:
     once the body has been read the connection may already be released, and
-    httpcore's ``get_extra_info('server_addr')`` then raises
+    the transport's ``get_extra_info('server_addr')`` then raises
     ``OSError: Bad file descriptor`` (reproduced against any ``Connection:
-    close`` / HTTP/1.0 server on the pinned httpx -- lode-xwah review).
+    close`` / HTTP/1.0 server -- lode-xwah review).
     """
     network_stream = response.extensions.get("network_stream")
     if network_stream is None:
@@ -485,11 +485,11 @@ class GuardedHttpxFetcher(HttpxFetcher):
        :func:`_refuse_if_unsafe_host` *before* that hop's request is issued.
        Redirects are therefore followed manually here
        (``follow_redirects=False`` passed to every per-hop client), never
-       left to httpx's own follower, which has no per-hop hook.
+       left to httpx2's own follower, which has no per-hop hook.
     2. **DNS rebinding / TOCTOU.** Even a validated hop's *actual* connected
        peer is re-checked via :func:`_refuse_if_unsafe_peer` -- post-connect
        but *pre-body*, on the still-streaming response (see
-       :meth:`_get_one`) -- since the pre-hop check's resolution and httpx's
+       :meth:`_get_one`) -- since the pre-hop check's resolution and httpx2's
        own transport resolution are two separate lookups a hostile short-TTL
        resolver can answer differently. Unverifiable peers are refused, not
        waved through.
@@ -517,7 +517,7 @@ class GuardedHttpxFetcher(HttpxFetcher):
         # One client for the whole chain: the hops of a redirect chain are
         # ordinary same-session requests (http->https, bare->www, a tracker),
         # so a client per hop would throw away the connection pool and pay a
-        # fresh TCP+TLS handshake each time. httpx's own follower reuses one
+        # fresh TCP+TLS handshake each time. httpx2's own follower reuses one
         # client for exactly this reason; driving the loop by hand should not
         # cost more than delegating it.
         with _httpx_errors_classified(), self._client() as client:
@@ -544,21 +544,21 @@ class GuardedHttpxFetcher(HttpxFetcher):
             f"{url}: exceeded {settings.fetch_max_redirects} redirects"
         )
 
-    def _client(self) -> httpx.Client:
+    def _client(self) -> httpx2.Client:
         settings = self._settings
-        return httpx.Client(
+        return httpx2.Client(
             follow_redirects=False,
             timeout=settings.fetch_timeout_s,
             headers=self._headers,
             auth=self._auth,
         )
 
-    def _get_one(self, client: httpx.Client, url: str) -> httpx.Response:
+    def _get_one(self, client: httpx2.Client, url: str) -> httpx2.Response:
         """Issue exactly one hop, verifying the connected peer before reading it.
 
         The request is sent with ``stream=True`` and
         :func:`_refuse_if_unsafe_peer` runs on the still-open stream, *before*
-        :meth:`httpx.Response.read`. Two reasons, both load-bearing:
+        :meth:`httpx2.Response.read`. Two reasons, both load-bearing:
 
         * a rebound connection to an internal host is refused before any of
           its body is pulled across, not merely before that body is used; and
@@ -570,7 +570,7 @@ class GuardedHttpxFetcher(HttpxFetcher):
           legitimate) server. Streaming is what makes fail-closed correct
           rather than merely strict (lode-xwah review).
 
-        httpx-level failures are classified by the caller's
+        httpx2-level failures are classified by the caller's
         :func:`_httpx_errors_classified` block, the same mapping
         :meth:`HttpxFetcher.fetch` uses.
         """

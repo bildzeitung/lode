@@ -11,7 +11,7 @@ Two layers of test, mirroring tests/test_webfetch.py's own split:
 * :func:`fetch_jira_issue` against a stub :class:`~lode.webfetch.Fetcher`
   (``_QueueFetcher``) — the fetch/classify/render pipeline, entirely
   transport-agnostic.
-* :class:`JiraHttpFetcher` itself against a fake ``httpx.Client`` (mirrors
+* :class:`JiraHttpFetcher` itself against a fake ``httpx2.Client`` (mirrors
   tests/test_webfetch.py's ``TestHttpxFetcher``) — proves the real
   transport actually wires Basic auth and reaches the shared classifier,
   not just that the pipeline *would* handle a transient status if it saw
@@ -21,7 +21,7 @@ Two layers of test, mirroring tests/test_webfetch.py's own split:
 import json
 from typing import Self
 
-import httpx
+import httpx2
 import pytest
 
 from lode.config import AtlassianCredentials, load_settings
@@ -277,7 +277,7 @@ def test_default_fetcher_raises_without_resolvable_credentials():
 
 
 # ---------------------------------------------------------------------------
-# JiraHttpFetcher — real transport wiring, entirely offline (fake httpx.Client)
+# JiraHttpFetcher — real transport wiring, entirely offline (fake httpx2.Client)
 # ---------------------------------------------------------------------------
 
 
@@ -313,7 +313,7 @@ class TestJiraHttpFetcher:
     def test_transient_status_codes_raise_via_shared_classifier(
         self, monkeypatch, status_code
     ):
-        monkeypatch.setattr(httpx, "Client", _fake_client_cls(status_code, {}))
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(status_code, {}))
         fetcher = JiraHttpFetcher(_CREDS, load_settings())
 
         with pytest.raises(TransientFetchError, match=str(status_code)):
@@ -323,7 +323,7 @@ class TestJiraHttpFetcher:
     def test_non_transient_status_codes_return_a_response(
         self, monkeypatch, status_code
     ):
-        monkeypatch.setattr(httpx, "Client", _fake_client_cls(status_code, {}))
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(status_code, {}))
         fetcher = JiraHttpFetcher(_CREDS, load_settings())
 
         response = fetcher.fetch(_ISSUE_URL)
@@ -332,17 +332,17 @@ class TestJiraHttpFetcher:
 
     def test_basic_auth_credentials_are_wired_into_the_client(self, monkeypatch):
         captured: dict = {}
-        monkeypatch.setattr(httpx, "Client", _fake_client_cls(200, captured))
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(200, captured))
         fetcher = JiraHttpFetcher(_CREDS, load_settings())
 
         fetcher.fetch(_ISSUE_URL)
 
         auth = captured["auth"]
-        assert isinstance(auth, httpx.BasicAuth)
+        assert isinstance(auth, httpx2.BasicAuth)
 
     def test_config_knobs_are_wired_into_the_client(self, monkeypatch):
         captured: dict = {}
-        monkeypatch.setattr(httpx, "Client", _fake_client_cls(200, captured))
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(200, captured))
         fetcher = JiraHttpFetcher(
             _CREDS, load_settings(fetch_max_redirects=3, fetch_timeout_s=2.5)
         )
@@ -362,7 +362,7 @@ class TestJiraHttpFetcher:
 
 class TestFetchJiraIssueDefaultFetcherWiring:
     """Proves the production path (no fetcher override) really builds a
-    JiraHttpFetcher and reaches real httpx -- the same lesson
+    JiraHttpFetcher and reaches real httpx2 -- the same lesson
     tests/test_drawdown.py::TestRefreshExternalRealWiring encodes for the
     web connector (an injectable seam that makes tests offline can leave
     the *default* implementation's wiring unexercised)."""
@@ -371,7 +371,7 @@ class TestFetchJiraIssueDefaultFetcherWiring:
         self, monkeypatch
     ):
         captured: dict = {}
-        monkeypatch.setattr(httpx, "Client", _fake_client_cls(200, captured))
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(200, captured))
 
         settings = load_settings(
             jira_enabled=True, jira_token="tok", jira_email="a@example.com"
@@ -381,26 +381,26 @@ class TestFetchJiraIssueDefaultFetcherWiring:
             # No fetcher= override -- the exact call drawdown._refresh_atlassian
             # makes in production. The fake client returns empty text, so JSON
             # parsing fails -- proof enough that a *real* JiraHttpFetcher
-            # (not a stub) was built and actually called through to httpx,
+            # (not a stub) was built and actually called through to httpx2,
             # with credentials, without asserting anything about a full
             # successful fetch (that's fetch_jira_issue's own suite above).
             fetch_jira_issue(_KEY, _API_BASE, settings=settings)
 
-        assert isinstance(captured["auth"], httpx.BasicAuth)
+        assert isinstance(captured["auth"], httpx2.BasicAuth)
 
     def test_401_tombstone_never_echoes_the_token(self, monkeypatch):
         """lode-gpzn.5 acceptance: "the token value is never printed."
 
         Exercises the real, credential-consuming path (the default
         JiraHttpFetcher -- no stub fetcher override) with a real token
-        wired all the way into httpx.BasicAuth, forces a 401, and asserts
+        wired all the way into httpx2.BasicAuth, forces a 401, and asserts
         the resulting FetchResult -- the object drawdown._refresh_jira folds
         into 'lode work's visible outcome line (lode-gpzn.5) -- carries no
         trace of the token anywhere: not in the classified tombstone
         reason, not in the raw payload it keeps for provenance.
         """
         captured: dict = {}
-        monkeypatch.setattr(httpx, "Client", _fake_client_cls(401, captured))
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(401, captured))
 
         fake_token = "super-secret-jira-token-xyz"
         settings = load_settings(
@@ -412,7 +412,7 @@ class TestFetchJiraIssueDefaultFetcherWiring:
         # Proves the real credential-consuming path was reached (same check
         # as the sibling wiring test above), token included.
         auth = captured["auth"]
-        assert isinstance(auth, httpx.BasicAuth)
+        assert isinstance(auth, httpx2.BasicAuth)
 
         assert result.status is FetchStatus.TOMBSTONE
         assert result.tombstone_reason == "http_401"

@@ -7,7 +7,7 @@ unchanged: this module reuses :class:`~lode.webfetch.FetchResult`,
 protocol, and :class:`~lode.webfetch.TransientFetchError` directly rather
 than defining parallel types — this is *the same seam*, applied to a second
 connector, not a new one. :class:`JiraHttpFetcher` itself is a thin
-:class:`~lode.webfetch.HttpxFetcher` subclass (lode-88iv): the httpx.Client
+:class:`~lode.webfetch.HttpxFetcher` subclass (lode-88iv): the httpx2.Client
 construction, the four-arm except ladder, the classify_http_status/
 :class:`~lode.webfetch.RawResponse` handling all live once in the parent —
 this module supplies only the auth/header deltas.
@@ -64,7 +64,7 @@ import logging
 from dataclasses import dataclass
 from urllib.parse import quote
 
-import httpx
+import httpx2
 
 from lode.config import AtlassianCredentials, Settings, resolve_jira_credentials
 from lode.fetch_outcome import HttpOutcome, classify_http_status
@@ -92,7 +92,7 @@ class JiraHttpFetcher(HttpxFetcher):
     A thin :class:`~lode.webfetch.HttpxFetcher` subclass (lode-88iv) —
     credentials become Basic auth and an ``Accept: application/json`` header,
     passed straight through to the parent's ``__init__``; ``fetch`` itself
-    (the httpx.Client construction, the four-arm except ladder, and the
+    (the httpx2.Client construction, the four-arm except ladder, and the
     classify_http_status/RawResponse handling) is entirely inherited, not
     re-housed here.
     """
@@ -103,7 +103,7 @@ class JiraHttpFetcher(HttpxFetcher):
         super().__init__(
             settings,
             user_agent=_USER_AGENT,
-            auth=httpx.BasicAuth(credentials.email, credentials.token),
+            auth=httpx2.BasicAuth(credentials.email, credentials.token),
             extra_headers={"Accept": "application/json"},
         )
 

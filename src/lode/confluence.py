@@ -87,7 +87,7 @@ class HttpxConfluenceFetcher(HttpxFetcher):
     """Default :class:`~lode.webfetch.Fetcher` for the Confluence Cloud REST API.
 
     A thin :class:`~lode.webfetch.HttpxFetcher` subclass (lode-88iv): the
-    httpx.Client construction, the except ladder, and the
+    httpx2.Client construction, the except ladder, and the
     classify_http_status/:class:`~lode.webfetch.RawResponse` handling are
     all inherited unchanged. This subclass supplies HTTP Basic auth (the
     resolved Confluence :class:`~lode.config.AtlassianCredentials`), an

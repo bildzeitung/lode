@@ -67,6 +67,10 @@ def _warm(warm: Callable[[], None], model_id: str) -> None:
     doesn't carry fastembed's specific exhausted-sources signature -- propagates
     unchanged: a real defect must never read as a network problem.
     """
+    # Deliberately the LEGACY httpx, not the httpx2 fork lode's own clients use
+    # (webfetch/jira_fetch/confluence): the exception caught below is raised
+    # inside huggingface_hub, which still imports legacy httpx itself, so
+    # httpx2.TransportError would never match it.
     import httpx
 
     try:

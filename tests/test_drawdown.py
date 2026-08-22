@@ -12,7 +12,7 @@ and the ``refresh_external`` source_type dispatcher (``TestRefreshExternalDispat
 
 All fetch-touching tests use a stub :class:`~lode.webfetch.Fetcher` (the seam
 lode-w0h.1 built) so the gate never makes a real network request -- except one
-negative-controlled "real wiring" test that monkeypatches ``httpx.Client``
+negative-controlled "real wiring" test that monkeypatches ``httpx2.Client``
 itself (the same technique tests/test_webfetch.py uses for HttpxFetcher's own
 classification), to prove `refresh_external`'s production path (no fetcher
 override) actually reaches the real `HttpxFetcher`, not just a test-only stub
@@ -24,7 +24,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2
 import pytest
 
 from lode.config import load_settings
@@ -725,7 +725,7 @@ class TestRefreshExternalRealWiring:
             def get(self, url: str) -> _FakeResponse:
                 return _FakeResponse(200, url, html)
 
-        monkeypatch.setattr(httpx, "Client", _FakeClient)
+        monkeypatch.setattr(httpx2, "Client", _FakeClient)
 
         # No `fetcher=` override -- this is the exact call the registered
         # worker handler makes in production.

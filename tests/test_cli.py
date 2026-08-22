@@ -7360,11 +7360,16 @@ def test_huggingface_hub_still_declares_httpx_as_its_transport() -> None:
     mentions httpx). The ``httpx.TransportError`` ``_warm()`` catches is raised
     by **huggingface_hub**, which fastembed delegates model downloads to.
 
+    Note the library is the *legacy* ``httpx``, not the ``httpx2`` fork lode's
+    own clients (webfetch/jira_fetch/confluence) and ``anthropic`` run on:
+    ``_warm()`` must catch whatever huggingface_hub actually raises, so that
+    arm cannot follow the rest of the tree to httpx2.
+
     The obvious cheap guard -- "if the transport changes, our own `import
     httpx` breaks" -- does NOT work: httpx is a *direct* lode dependency
-    (``pyproject.toml``, for the unrelated web draw-down client) and is also
-    required independently by ``anthropic``, so ``import httpx`` keeps
-    succeeding no matter what fastembed/huggingface_hub do. There is no
+    (``pyproject.toml``, declared for exactly this catch) and is also pulled in
+    transitively by ``huggingface_hub`` and ``openai``, so ``import httpx``
+    keeps succeeding no matter what fastembed/huggingface_hub do. There is no
     ImportError to key off.
 
     So this pins the actual coupling via package metadata instead of behavior:
