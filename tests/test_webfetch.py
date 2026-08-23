@@ -529,6 +529,40 @@ class TestHttpxFetcher:
 
         assert captured["transport"] is None
 
+    def test_client_is_reused_across_fetches_not_closed_each_call(self, monkeypatch):
+        """Regression guard (lode-s54x): one httpx2.Client per fetcher, not
+        one per fetch() call. HttpxFetcher.fetch() used to build the client
+        in a `with` block, so Client.close() drained the (possibly
+        caller-supplied) transport's connection pool after every single
+        call -- defeating the whole point of the per-fetcher transport
+        lode-lq9u introduced. jira_fetch._fetch_comments is the caller that
+        actually reuses one fetcher across many fetch() calls (pagination).
+        """
+        construct_count = 0
+        close_count = 0
+
+        class _CountingClient:
+            def __init__(self, **kwargs) -> None:
+                nonlocal construct_count
+                construct_count += 1
+
+            def get(self, url: str) -> _FakeResponse:
+                return _FakeResponse(200, url)
+
+            def close(self) -> None:
+                nonlocal close_count
+                close_count += 1
+
+        monkeypatch.setattr(httpx2, "Client", _CountingClient)
+        fetcher = HttpxFetcher(load_settings())
+
+        fetcher.fetch(_URL)
+        fetcher.fetch(_URL)
+        fetcher.fetch(_URL)
+
+        assert construct_count == 1
+        assert close_count == 0
+
 
 class _GuardedFakeResponse:
     """Stands in for an httpx2.Response, with the bits GuardedHttpxFetcher reads.

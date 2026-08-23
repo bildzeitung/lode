@@ -303,26 +303,31 @@ class HttpxFetcher:
             if retry_connect
             else None
         )
+        # Built lazily on the first fetch(), then reused for every
+        # subsequent one on this fetcher instance -- a `with`-scoped Client
+        # unconditionally closes its transport on exit (even a
+        # caller-supplied one), which drained the pool above after every
+        # single call and defeated the point of a per-fetcher transport
+        # (lode-s54x). Lazy rather than built here in __init__: a
+        # GuardedHttpxFetcher never calls this class's fetch() at all (it
+        # builds its own per-redirect-chain client via _client()), so eager
+        # construction here would pay CA-bundle-parsing cost on every
+        # ask-path fetch for a client that subclass never uses.
+        self._pooled_client: httpx2.Client | None = None
 
     def fetch(self, url: str) -> RawResponse:
         settings = self._settings
-        # max_redirects is a Client-constructor knob, not accepted by the
-        # module-level httpx2.get() shortcut — a short-lived client is the
-        # correct way to set it for one request. Harmless to pass even
-        # when follow_redirects=False (a subclass's choice, e.g.
-        # HttpxConfluenceFetcher): httpx2 simply never consults it then.
-        with (
-            _httpx_errors_classified(),
-            httpx2.Client(
+        if self._pooled_client is None:
+            self._pooled_client = httpx2.Client(
                 follow_redirects=self._follow_redirects,
                 max_redirects=settings.fetch_max_redirects,
                 timeout=settings.fetch_timeout_s,
                 headers=self._headers,
                 auth=self._auth,
                 transport=self._transport,
-            ) as client,
-        ):
-            response = client.get(url)
+            )
+        with _httpx_errors_classified():
+            response = self._pooled_client.get(url)
 
         if classify_http_status(response.status_code) is HttpOutcome.TRANSIENT:
             raise TransientFetchError(f"http {response.status_code}")
