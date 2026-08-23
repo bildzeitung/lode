@@ -821,6 +821,28 @@ class TestGuardedHttpxFetcher:
 
         assert fetcher._follow_redirects is False
 
+    def test_guarded_client_never_adopts_a_shared_transport(self, monkeypatch):
+        """The guarded delta is asserted at the construction site.
+
+        Since lode-tvrb this client is built by inheriting HttpxFetcher's
+        factory and overriding two kwargs, so a dropped ``transport=None``
+        would silently hand the ask path the connectors' retrying transport
+        (lode-lq9u) instead of httpx2's per-request default.
+        """
+        captured: dict = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(httpx2, "Client", _capture)
+        fetcher = GuardedHttpxFetcher(load_settings(), retry_connect=True)
+
+        fetcher._client()
+
+        assert captured["transport"] is None
+        assert captured["follow_redirects"] is False
+
     @pytest.mark.parametrize(
         "address",
         [
