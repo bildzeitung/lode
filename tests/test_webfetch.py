@@ -397,12 +397,6 @@ def _fake_client_cls(status_code: int, captured: dict) -> type:
         def __init__(self, **kwargs) -> None:
             captured.update(kwargs)
 
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(self, *exc) -> bool:
-            return False
-
         def get(self, url: str) -> _FakeResponse:
             return _FakeResponse(status_code, url)
 
@@ -528,6 +522,37 @@ class TestHttpxFetcher:
         fetcher.fetch(_URL)
 
         assert captured["transport"] is None
+
+    def test_client_is_reused_across_fetches_not_closed_each_call(self, monkeypatch):
+        """Regression guard (lode-s54x): one httpx2.Client per fetcher, never
+        closed per call -- Client.close() would drain the caller-supplied
+        transport's connection pool (lode-lq9u), which jira_fetch's comment
+        pagination reuses one fetcher precisely to keep warm.
+        """
+        construct_count = 0
+        close_count = 0
+
+        class _CountingClient:
+            def __init__(self, **kwargs) -> None:
+                nonlocal construct_count
+                construct_count += 1
+
+            def get(self, url: str) -> _FakeResponse:
+                return _FakeResponse(200, url)
+
+            def close(self) -> None:
+                nonlocal close_count
+                close_count += 1
+
+        monkeypatch.setattr(httpx2, "Client", _CountingClient)
+        fetcher = HttpxFetcher(load_settings())
+
+        fetcher.fetch(_URL)
+        fetcher.fetch(_URL)
+        fetcher.fetch(_URL)
+
+        assert construct_count == 1
+        assert close_count == 0
 
 
 class _GuardedFakeResponse:

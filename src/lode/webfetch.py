@@ -120,6 +120,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
+from functools import cached_property
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -304,25 +305,38 @@ class HttpxFetcher:
             else None
         )
 
+    @cached_property
+    def _pooled_client(self) -> httpx2.Client:
+        """One client per fetcher, shared by every :meth:`fetch` and never closed.
+
+        ``Client.close()`` closes its transport unconditionally, including a
+        caller-supplied one, so a ``with``-scoped client would drain
+        ``_transport``'s connection pool on every call (lode-s54x) -- exactly
+        what the per-fetcher transport exists to avoid.
+
+        Cached rather than built in ``__init__`` because
+        :class:`GuardedHttpxFetcher` inherits that constructor but never calls
+        this class's :meth:`fetch`: it would otherwise pay CA-bundle parsing on
+        every ask-path fetch for a client it never uses.
+
+        ``max_redirects`` is a Client-constructor knob, not accepted by the
+        module-level ``httpx2.get()`` shortcut. It is harmless to pass even
+        when ``follow_redirects=False`` (a subclass's choice, e.g.
+        :class:`~lode.confluence.HttpxConfluenceFetcher`) -- httpx2 simply
+        never consults it then.
+        """
+        return httpx2.Client(
+            follow_redirects=self._follow_redirects,
+            max_redirects=self._settings.fetch_max_redirects,
+            timeout=self._settings.fetch_timeout_s,
+            headers=self._headers,
+            auth=self._auth,
+            transport=self._transport,
+        )
+
     def fetch(self, url: str) -> RawResponse:
-        settings = self._settings
-        # max_redirects is a Client-constructor knob, not accepted by the
-        # module-level httpx2.get() shortcut — a short-lived client is the
-        # correct way to set it for one request. Harmless to pass even
-        # when follow_redirects=False (a subclass's choice, e.g.
-        # HttpxConfluenceFetcher): httpx2 simply never consults it then.
-        with (
-            _httpx_errors_classified(),
-            httpx2.Client(
-                follow_redirects=self._follow_redirects,
-                max_redirects=settings.fetch_max_redirects,
-                timeout=settings.fetch_timeout_s,
-                headers=self._headers,
-                auth=self._auth,
-                transport=self._transport,
-            ) as client,
-        ):
-            response = client.get(url)
+        with _httpx_errors_classified():
+            response = self._pooled_client.get(url)
 
         if classify_http_status(response.status_code) is HttpOutcome.TRANSIENT:
             raise TransientFetchError(f"http {response.status_code}")
