@@ -308,10 +308,10 @@ class HttpxFetcher:
     def _client(self, **overrides: Any) -> httpx2.Client:
         """Construct an ``httpx2.Client`` from this fetcher's settings.
 
-        ``overrides`` replaces individual kwargs of the default construction
-        -- :class:`GuardedHttpxFetcher` uses this to express its per-hop
-        client as a delta (``follow_redirects=False``, no shared transport)
-        instead of a parallel kwarg block (lode-tvrb).
+        ``overrides`` replaces individual kwargs, so a subclass can express
+        its client as a delta -- :class:`GuardedHttpxFetcher`'s per-hop
+        client is this construction minus redirect-following and minus the
+        shared transport.
 
         ``max_redirects`` is a Client-constructor knob, not accepted by the
         module-level ``httpx2.get()`` shortcut. It is harmless to pass even
@@ -588,13 +588,11 @@ class GuardedHttpxFetcher(HttpxFetcher):
         )
 
     def _client(self, **overrides: Any) -> httpx2.Client:
-        # Per-redirect-chain client (lode-xwah): no shared pooled transport,
-        # and follow_redirects=False named explicitly so this delta reads as
-        # guarded semantics rather than an inherited default (it is already
-        # self._follow_redirects via __init__, which forces it False).
-        # max_redirects is inherited harmlessly unused -- httpx2 never
-        # consults it while follow_redirects=False (see base _client's
-        # docstring).
+        # transport=None keeps the ask path on httpx2's own default transport:
+        # the shared one is the connectors' retrying transport (lode-lq9u),
+        # which this path never opts into. follow_redirects=False is stated
+        # here rather than left to __init__'s forcing, so the guarded semantics
+        # (lode-xwah) survive any future change to that default.
         return super()._client(follow_redirects=False, transport=None, **overrides)
 
     def _get_one(self, client: httpx2.Client, url: str) -> httpx2.Response:
