@@ -305,6 +305,31 @@ class HttpxFetcher:
             else None
         )
 
+    def _client(self, **overrides: Any) -> httpx2.Client:
+        """Construct an ``httpx2.Client`` from this fetcher's settings.
+
+        ``overrides`` replaces individual kwargs of the default construction
+        -- :class:`GuardedHttpxFetcher` uses this to express its per-hop
+        client as a delta (``follow_redirects=False``, no shared transport)
+        instead of a parallel kwarg block (lode-tvrb).
+
+        ``max_redirects`` is a Client-constructor knob, not accepted by the
+        module-level ``httpx2.get()`` shortcut. It is harmless to pass even
+        when ``follow_redirects=False`` (a subclass's choice, e.g.
+        :class:`~lode.confluence.HttpxConfluenceFetcher`) -- httpx2 simply
+        never consults it then.
+        """
+        kwargs: dict[str, Any] = {
+            "follow_redirects": self._follow_redirects,
+            "max_redirects": self._settings.fetch_max_redirects,
+            "timeout": self._settings.fetch_timeout_s,
+            "headers": self._headers,
+            "auth": self._auth,
+            "transport": self._transport,
+        }
+        kwargs.update(overrides)
+        return httpx2.Client(**kwargs)
+
     @cached_property
     def _pooled_client(self) -> httpx2.Client:
         """One client per fetcher, shared by every :meth:`fetch` and never closed.
@@ -318,21 +343,8 @@ class HttpxFetcher:
         :class:`GuardedHttpxFetcher` inherits that constructor but never calls
         this class's :meth:`fetch`: it would otherwise pay CA-bundle parsing on
         every ask-path fetch for a client it never uses.
-
-        ``max_redirects`` is a Client-constructor knob, not accepted by the
-        module-level ``httpx2.get()`` shortcut. It is harmless to pass even
-        when ``follow_redirects=False`` (a subclass's choice, e.g.
-        :class:`~lode.confluence.HttpxConfluenceFetcher`) -- httpx2 simply
-        never consults it then.
         """
-        return httpx2.Client(
-            follow_redirects=self._follow_redirects,
-            max_redirects=self._settings.fetch_max_redirects,
-            timeout=self._settings.fetch_timeout_s,
-            headers=self._headers,
-            auth=self._auth,
-            transport=self._transport,
-        )
+        return self._client()
 
     def fetch(self, url: str) -> RawResponse:
         with _httpx_errors_classified():
@@ -575,14 +587,15 @@ class GuardedHttpxFetcher(HttpxFetcher):
             f"{url}: exceeded {settings.fetch_max_redirects} redirects"
         )
 
-    def _client(self) -> httpx2.Client:
-        settings = self._settings
-        return httpx2.Client(
-            follow_redirects=False,
-            timeout=settings.fetch_timeout_s,
-            headers=self._headers,
-            auth=self._auth,
-        )
+    def _client(self, **overrides: Any) -> httpx2.Client:
+        # Per-redirect-chain client (lode-xwah): no shared pooled transport,
+        # and follow_redirects=False named explicitly so this delta reads as
+        # guarded semantics rather than an inherited default (it is already
+        # self._follow_redirects via __init__, which forces it False).
+        # max_redirects is inherited harmlessly unused -- httpx2 never
+        # consults it while follow_redirects=False (see base _client's
+        # docstring).
+        return super()._client(follow_redirects=False, transport=None, **overrides)
 
     def _get_one(self, client: httpx2.Client, url: str) -> httpx2.Response:
         """Issue exactly one hop, verifying the connected peer before reading it.
