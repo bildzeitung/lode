@@ -516,6 +516,19 @@ class TestHttpxFetcher:
         assert user_agent.startswith("lode-webfetch/")
         assert "+" not in user_agent
 
+    def test_no_transport_by_default(self, monkeypatch):
+        """lode-lq9u: plain HttpxFetcher (the web draw-down path) gets no
+        explicit transport -- only the JIRA/Confluence connector subclasses
+        pass one. ``None`` here means httpx2's own default (zero
+        connection-establishment retries)."""
+        captured: dict = {}
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(200, captured))
+        fetcher = HttpxFetcher(load_settings())
+
+        fetcher.fetch(_URL)
+
+        assert captured["transport"] is None
+
 
 class _GuardedFakeResponse:
     """Stands in for an httpx2.Response, with the bits GuardedHttpxFetcher reads.

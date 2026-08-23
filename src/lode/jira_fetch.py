@@ -90,7 +90,9 @@ class JiraHttpFetcher(HttpxFetcher):
     """Default JIRA :class:`~lode.webfetch.Fetcher`: one authenticated GET.
 
     A thin :class:`~lode.webfetch.HttpxFetcher` subclass (lode-88iv) —
-    credentials become Basic auth and an ``Accept: application/json`` header,
+    credentials become Basic auth, an ``Accept: application/json`` header,
+    and ``retry_connect=True``
+    (:attr:`~lode.config.Settings.atlassian_connect_retries`, lode-lq9u),
     passed straight through to the parent's ``__init__``; ``fetch`` itself
     (the httpx2.Client construction, the four-arm except ladder, and the
     classify_http_status/RawResponse handling) is entirely inherited, not
@@ -105,6 +107,7 @@ class JiraHttpFetcher(HttpxFetcher):
             user_agent=_USER_AGENT,
             auth=httpx2.BasicAuth(credentials.email, credentials.token),
             extra_headers={"Accept": "application/json"},
+            retry_connect=True,
         )
 
 

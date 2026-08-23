@@ -359,6 +359,20 @@ class TestJiraHttpFetcher:
         with pytest.raises(TransientFetchError):
             fetcher.fetch("http://127.0.0.1:1/")
 
+    def test_carries_a_connection_retrying_transport(self, monkeypatch):
+        """lode-lq9u: the client is built with an explicit httpx2.HTTPTransport
+        carrying Settings.atlassian_connect_retries, not the bare default (zero
+        connection-establishment retries)."""
+        captured: dict = {}
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(200, captured))
+        fetcher = JiraHttpFetcher(_CREDS, load_settings(atlassian_connect_retries=3))
+
+        fetcher.fetch(_ISSUE_URL)
+
+        transport = captured["transport"]
+        assert isinstance(transport, httpx2.HTTPTransport)
+        assert transport._pool._retries == 3
+
 
 class TestFetchJiraIssueDefaultFetcherWiring:
     """Proves the production path (no fetcher override) really builds a

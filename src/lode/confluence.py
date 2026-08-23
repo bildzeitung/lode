@@ -91,7 +91,9 @@ class HttpxConfluenceFetcher(HttpxFetcher):
     classify_http_status/:class:`~lode.webfetch.RawResponse` handling are
     all inherited unchanged. This subclass supplies HTTP Basic auth (the
     resolved Confluence :class:`~lode.config.AtlassianCredentials`), an
-    ``Accept: application/json`` header, and ``follow_redirects=False``: a
+    ``Accept: application/json`` header, ``follow_redirects=False``, and
+    ``retry_connect=True``
+    (:attr:`~lode.config.Settings.atlassian_connect_retries`, lode-lq9u): a
     REST API endpoint answering an authenticated GET has no legitimate
     reason to 3xx the way a user-pasted web page does (the parent follows up
     to ``fetch_max_redirects`` hops for exactly that reason; this fetcher has
@@ -107,6 +109,7 @@ class HttpxConfluenceFetcher(HttpxFetcher):
             auth=(credentials.email, credentials.token),
             extra_headers={"Accept": "application/json"},
             follow_redirects=False,
+            retry_connect=True,
         )
 
 

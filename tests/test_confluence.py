@@ -334,6 +334,23 @@ class TestHttpxConfluenceFetcher:
         with pytest.raises(TransientFetchError):
             fetcher.fetch("http://127.0.0.1:1/wiki/rest/api/content/1")
 
+    def test_carries_a_connection_retrying_transport(self, monkeypatch):
+        """lode-lq9u: the client is built with an explicit httpx2.HTTPTransport
+        carrying Settings.atlassian_connect_retries, not the bare default (zero
+        connection-establishment retries)."""
+        captured: dict = {}
+        monkeypatch.setattr(httpx2, "Client", _fake_client_cls(200, captured))
+        creds = AtlassianCredentials(email="me@example.com", token="tok")
+        fetcher = HttpxConfluenceFetcher(
+            creds, load_settings(atlassian_connect_retries=3)
+        )
+
+        fetcher.fetch(_build_url(_PAGE_ID, _API_BASE))
+
+        transport = captured["transport"]
+        assert isinstance(transport, httpx2.HTTPTransport)
+        assert transport._pool._retries == 3
+
 
 # ---------------------------------------------------------------------------
 # search_confluence_pages (lode-8hsk) -- ids + titles only, CQL text search

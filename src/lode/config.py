@@ -748,6 +748,20 @@ class Settings(BaseModel):
         "(secret=True).",
         secret=True,
     )
+    atlassian_connect_retries: int = _knob(
+        1,
+        Kind.BUILD,
+        "Connection-ESTABLISHMENT retries (httpx2.HTTPTransport(retries=N), "
+        "lode-lq9u) for the JIRA/Confluence connector HTTP clients only -- "
+        "never a sent request, so retrying is idempotency-safe. Absorbs a "
+        "one-off connect blip in-process instead of costing a full "
+        "TransientFetchError -> work-queue retry round-trip. Deliberately "
+        "NOT applied to webfetch.py's ask-path GuardedHttpxFetcher, whose "
+        "one-hop verify-the-peer-before-reading design must not get a "
+        "silent transport-level reconnect to a different peer than the one "
+        "verified.",
+        ge=0,
+    )
 
     # --- Privacy & egress -----------------------------------------------------
     no_egress_default: bool = _knob(

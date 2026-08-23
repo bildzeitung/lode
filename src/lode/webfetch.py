@@ -269,9 +269,15 @@ class HttpxFetcher:
     than re-housing :meth:`fetch`'s try/except+classify+:class:`RawResponse`
     ladder (lode-88iv) — the only real per-connector deltas are the
     ``User-Agent`` value, an optional auth credential, extra headers (e.g.
-    ``Accept: application/json``), and whether redirects are followed at
-    all, so those are the seams exposed here rather than duplicating the
-    whole method.
+    ``Accept: application/json``), whether redirects are followed at all,
+    and whether connection *establishment* is retried (``retry_connect``,
+    JIRA and Confluence only, lode-lq9u —
+    :attr:`~lode.config.Settings.atlassian_connect_retries` carries the why)
+    — so those are the seams exposed here rather than duplicating the whole
+    method. ``retry_connect`` defaults to ``False``, and
+    :class:`GuardedHttpxFetcher` builds its own client via its own
+    :meth:`_client` regardless, so the ask path's one-hop
+    verify-the-peer-before-reading design is unaffected either way.
     """
 
     def __init__(
@@ -282,11 +288,21 @@ class HttpxFetcher:
         auth: httpx2.Auth | tuple[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         follow_redirects: bool = True,
+        retry_connect: bool = False,
     ) -> None:
         self._settings = settings or Settings()
         self._headers = {"User-Agent": user_agent, **(extra_headers or {})}
         self._auth = auth
         self._follow_redirects = follow_redirects
+        # Built once per fetcher, not once per fetch: a caller-supplied
+        # transport is the one httpx2.Client kwarg that stops Client from
+        # constructing (and CA-bundle-parsing) a transport of its own on
+        # every request. None leaves that per-request default in place.
+        self._transport = (
+            httpx2.HTTPTransport(retries=self._settings.atlassian_connect_retries)
+            if retry_connect
+            else None
+        )
 
     def fetch(self, url: str) -> RawResponse:
         settings = self._settings
@@ -303,6 +319,7 @@ class HttpxFetcher:
                 timeout=settings.fetch_timeout_s,
                 headers=self._headers,
                 auth=self._auth,
+                transport=self._transport,
             ) as client,
         ):
             response = client.get(url)
