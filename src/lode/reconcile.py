@@ -437,12 +437,12 @@ def _refresh_stale_step(
     a fresh draw-down.
 
     **Idempotency:** the ``NOT EXISTS`` guard skips any external with a
-    ``pending``/``running`` ``refresh`` job already in flight, mirroring
-    :func:`_embed_gap_step`/:func:`_enrich_gap_step`'s own live-job guard;
+    ``pending``/``running``/``failed`` ``refresh`` job already in flight (a
+    ``failed`` job is in backoff, not gone — mirroring :func:`_enrich_gap_step`'s
+    own three-state live-job guard), so running this step repeatedly (or
+    concurrently with the guard momentarily stale) enqueues no duplicate row;
     the underlying :func:`lode.jobs.enqueue_derive_jobs` INSERT is also
-    ``ON CONFLICT DO NOTHING`` against ``idx_jobs_live``, so running this step
-    repeatedly (or concurrently with the guard momentarily stale) enqueues no
-    duplicate row.
+    ``ON CONFLICT DO NOTHING`` against ``idx_jobs_live`` as a second layer.
 
     Returns the count of stale externals found (each triggered one
     ``enqueue_derive_jobs`` call).
@@ -467,7 +467,7 @@ def _refresh_stale_step(
               SELECT 1 FROM jobs j
               WHERE j.type = 'refresh'
                 AND j.target_version = e.external_id
-                AND j.status IN ('pending', 'running')
+                AND j.status IN ('pending', 'running', 'failed')
           )
         """,
         (cutoff,),

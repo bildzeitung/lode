@@ -1645,6 +1645,46 @@ def test_reset_leaves_future_failed_alone(
     assert _job(conn, job_id)["status"] == "failed"
 
 
+def test_reset_skips_failed_row_colliding_with_existing_live_row(
+    conn: sqlite3.Connection, db_path: Path
+) -> None:
+    """A failed row whose reset would collide on idx_jobs_live is left alone.
+
+    Reproduces lode-8a37: an enqueuer already re-created a live (pending) row
+    for the same (type, target_version, prompt_ver) key while the original
+    was in backoff. The bare UPDATE this guards used to raise IntegrityError
+    and abort the whole reset; now it must skip just this row and leave
+    everything else -- including the one live row -- alone.
+    """
+    failed_id = _insert_job(conn, status="failed", next_attempt_at=_past_iso())
+    pending_id = _insert_job(conn, status="pending")
+
+    count = _reset_retryable(conn, _now_iso())
+
+    assert count == 0
+    assert _job(conn, failed_id)["status"] == "failed"
+    assert _job(conn, pending_id)["status"] == "pending"
+
+
+def test_reset_resets_only_one_of_two_retryable_failed_siblings(
+    conn: sqlite3.Connection, db_path: Path
+) -> None:
+    """Two failed rows sharing the live key: reset the older, leave the rest.
+
+    ``idx_jobs_live`` does not cover ``'failed'``, so duplicate failed rows for
+    one key are legal -- but flipping both to ``'pending'`` in a single UPDATE
+    violates the index and used to abort the whole pass (lode-8a37).
+    """
+    first_id = _insert_job(conn, status="failed", next_attempt_at=_past_iso())
+    second_id = _insert_job(conn, status="failed", next_attempt_at=_past_iso())
+
+    count = _reset_retryable(conn, _now_iso())
+
+    assert count == 1
+    assert _job(conn, first_id)["status"] == "pending"
+    assert _job(conn, second_id)["status"] == "failed"
+
+
 def test_reset_does_not_touch_pending_or_dead(
     conn: sqlite3.Connection, db_path: Path
 ) -> None:
