@@ -940,8 +940,9 @@ job WHERE status != 'dead')`, so a guarded-out embed success would leave
 `refresh` is the exception that proves the rule: guarding it would change
 nothing, because its sweep never reads the job row's terminal status at all.
 The refresh sweep keys on the TTL (`s.fetched_at <= now - refresh_ttl_s`,
-`reconcile.py:439`) and suppresses only on an *in-flight* job (`status IN
-('pending', 'running')`) — there is **no dead-job arm**, so a `'dead'` refresh
+`reconcile.py:439`) and suppresses only on a live job (`status IN
+('pending', 'running', 'failed')` — `'failed'` is in backoff, not gone, and was
+added by lode-8a37) — there is **no dead-job arm**, so a `'dead'` refresh
 row neither blocks nor triggers a re-fetch. A guarded-out refresh success would
 therefore leave only an inert lie in the job row. What the sweep *does* exclude
 is a tombstoned head (`s.status != 'tombstone'`, `reconcile.py:438`) — and that
