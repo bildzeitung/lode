@@ -604,6 +604,23 @@ def test_refresh_stale_no_gap_when_refresh_job_running(
     assert _pending_refresh_jobs(conn, "ext-1") == ["running"]
 
 
+def test_refresh_stale_no_gap_when_refresh_job_failed(
+    conn: sqlite3.Connection,
+) -> None:
+    """A failed refresh job (in backoff) means no gap -- do not duplicate.
+
+    A ``failed`` job is retried by the worker's own backoff/reset machinery
+    (:func:`lode.worker._reset_retryable`), not by re-enqueueing a second row
+    here (lode-8a37).
+    """
+    _insert_external_snapshot(conn, "ext-1", "snap-1", fetched_at=_old_timestamp(7200))
+    _insert_refresh_job(conn, "ext-1", status="failed")
+    settings = Settings(refresh_ttl_s=3600)
+    count = _refresh_stale_step(conn, settings)
+    assert count == 0
+    assert _pending_refresh_jobs(conn, "ext-1") == ["failed"]
+
+
 def test_refresh_stale_reenqueues_when_prior_job_done(
     conn: sqlite3.Connection,
 ) -> None:

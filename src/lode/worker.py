@@ -331,14 +331,49 @@ def _reset_retryable(conn: sqlite3.Connection, now: str) -> int:
     Jobs set to ``'failed'`` *within* the current pass have a
     ``next_attempt_at`` in the future, so they are not flipped here and stay
     failed until the next pass (one-shot) or next poll tick (``--loop``).
+
+    A failed row is excluded from the reset (left ``'failed'``, logged at
+    ``warning``) when flipping it to ``'pending'`` would collide with an
+    existing live row on ``idx_jobs_live`` (same ``type``, ``target_version``,
+    ``COALESCE(prompt_ver, '')``, status already ``pending``/``running``) —
+    e.g. an enqueuer already re-created the job while this one was in backoff.
+    Without this exclusion the bare UPDATE below raises IntegrityError on the
+    first such collision and aborts every remaining reset in the same pass.
     """
     with conn:
         cur = conn.execute(
             "UPDATE jobs SET status = 'pending' "
-            "WHERE status = 'failed' AND next_attempt_at <= ?",
+            "WHERE status = 'failed' AND next_attempt_at <= ? "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM jobs live"
+            "  WHERE live.type = jobs.type"
+            "    AND live.target_version = jobs.target_version"
+            "    AND COALESCE(live.prompt_ver, '') = COALESCE(jobs.prompt_ver, '')"
+            "    AND live.status IN ('pending', 'running')"
+            ")",
             (now,),
         )
-    return cur.rowcount
+        reset = cur.rowcount
+        skipped_cur = conn.execute(
+            "SELECT COUNT(*) FROM jobs"
+            "  WHERE status = 'failed' AND next_attempt_at <= ? "
+            "  AND EXISTS ("
+            "    SELECT 1 FROM jobs live"
+            "    WHERE live.type = jobs.type"
+            "      AND live.target_version = jobs.target_version"
+            "      AND COALESCE(live.prompt_ver, '') = COALESCE(jobs.prompt_ver, '')"
+            "      AND live.status IN ('pending', 'running')"
+            "  )",
+            (now,),
+        )
+        skipped = skipped_cur.fetchone()[0]
+    if skipped:
+        log.warning(
+            "_reset_retryable: skipped %d failed job(s) whose reset would "
+            "collide with an existing live row on idx_jobs_live; left 'failed'",
+            skipped,
+        )
+    return reset
 
 
 def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
