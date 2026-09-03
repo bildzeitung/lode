@@ -4,6 +4,7 @@ Asserts the acceptance criteria: schema.sql creates every data-shape table in a
 fresh WAL DB, and a round-trip insert/select on notes+versions succeeds.
 """
 
+import re
 import sqlite3
 from pathlib import Path
 from unittest import mock
@@ -11,7 +12,7 @@ from unittest import mock
 import pytest
 
 from lode import storage
-from lode.jobs import now_iso
+from lode.jobs import LIVE_JOB_STATUSES, now_iso
 from lode.storage import (
     _SCHEMA_VERSION,
     _migrate_v1_egress_log_tool_purpose,
@@ -756,3 +757,24 @@ def test_jobs_live_index_migration_is_idempotent(tmp_path: Path) -> None:
         assert remaining == 2  # ver-a's pending + ver-b's surviving failed
     finally:
         conn.close()
+
+
+def test_schema_index_predicate_matches_live_job_statuses() -> None:
+    """``idx_jobs_live``'s WHERE clause and ``jobs.LIVE_JOB_STATUSES`` are one set.
+
+    ``schema.sql`` spells the live statuses as SQL literals and Python spells
+    them as a tuple; nothing but this assertion binds the two, and the whole
+    point of the constant (lode-uri7) is that adding a fourth status cannot
+    silently leave the index behind.
+    """
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.executescript(storage.schema_sql())
+        (index_sql,) = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'idx_jobs_live'"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    predicate = index_sql.split("WHERE", 1)[1]
+    assert set(re.findall(r"'([a-z]+)'", predicate)) == set(LIVE_JOB_STATUSES)

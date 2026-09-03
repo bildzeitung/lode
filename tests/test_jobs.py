@@ -4,8 +4,9 @@ Covers: a capture enqueues exactly the embed + enrich derive jobs as pending
 rows targeting the version (schema defaults applied, prompt_ver left NULL); the
 enqueue runs on the caller's connection inside the caller's transaction (lode-i05.1
 — no longer its own transaction); and idempotency constraints from lode-i05.6 —
-duplicate enqueue of a live (pending/running) job is a no-op (ON CONFLICT DO
-NOTHING against idx_jobs_live), while re-enqueue after done/dead IS allowed.
+duplicate enqueue of a live (pending/running/failed -- widened by lode-uri7)
+job is a no-op (ON CONFLICT DO NOTHING against idx_jobs_live), while re-enqueue
+after done/dead IS allowed.
 """
 
 from datetime import timedelta
@@ -127,8 +128,9 @@ def test_reenqueue_after_terminal_status_is_allowed(conn, terminal_status: str) 
     """After a job reaches a terminal status, the same (type, version) can be
     re-enqueued.
 
-    The partial index is scoped to pending/running only; 'done' and 'dead' rows
-    fall outside the WHERE clause and do not block a new enqueue. 'dead' is the
+    The partial index is scoped to the live statuses (pending/running/failed);
+    'done' and 'dead' rows fall outside the WHERE clause and do not block a new
+    enqueue. 'dead' is the
     poison terminal at max-attempts (lode-i05.6).
     """
     enqueue_derive_jobs(conn, "ver-1")

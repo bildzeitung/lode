@@ -675,7 +675,7 @@ def gate_reenrich(
 
     **Material** → enqueues one ``enrich`` job for ``snapshot_id``
     (:func:`lode.jobs.enqueue_derive_jobs`, idempotent — a live job already
-    pending/running is a no-op).
+    pending/running/failed is a no-op).
 
     **Immaterial** → enqueues nothing; instead carries the predecessor's
     AI-derived annotations/edges forward by re-anchoring them

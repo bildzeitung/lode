@@ -593,7 +593,7 @@ row up on its own; the `failed` row is redundant), and among an all-`failed`
 group keeping the newest (highest `id`) and discarding the older duplicates'
 `last_error` history. `reconcile.py`'s two live-status `IN (...)` clauses and
 `enrichment_view.py`'s own copy of the tuple are now one shared constant,
-`lode.jobs._LIVE_JOB_STATUSES`, imported everywhere the predicate is needed
+`lode.jobs.LIVE_JOB_STATUSES`, imported everywhere the predicate is needed
 rather than re-spelled — `jobs_read.outstanding_jobs` is the one deliberate
 holdout: it backs `lode work --wait`'s "still outstanding" report, which is
 scoped to `pending`/`running` (currently being worked, or about to be) by

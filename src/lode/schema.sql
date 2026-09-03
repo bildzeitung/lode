@@ -240,10 +240,12 @@ CREATE INDEX IF NOT EXISTS idx_edges_to ON edges (to_id);
 --   (type, target_version, prompt_ver) for enrich
 -- NULL prompt_ver would be DISTINCT in a naive UNIQUE, so embed rows cannot be
 -- deduped that way. Instead, a partial UNIQUE index over COALESCE(prompt_ver, '')
--- scoped to live (pending/running) jobs enforces deduplication; enqueue uses
--- INSERT ... ON CONFLICT DO NOTHING. Scoping to pending/running is load-bearing:
--- it dedupes in-flight work but STILL ALLOWS a re-enqueue after done/dead (a
--- prompt_ver bump or re-derive must be able to enqueue again).
+-- scoped to live (pending/running/failed -- widened from pending/running only,
+-- DECIDED lode-uri7) jobs enforces deduplication; enqueue uses INSERT ... ON
+-- CONFLICT DO NOTHING. Scoping to the live set is load-bearing: it dedupes
+-- in-flight work (a 'failed' job in backoff included -- it has a retry coming)
+-- but STILL ALLOWS a re-enqueue after done/dead (a prompt_ver bump or
+-- re-derive must be able to enqueue again).
 --
 -- Backoff scheduling (PINNED 2026-06-28, lode-i05.6): next_attempt_at (ISO-8601
 -- UTC) lets the worker durably schedule a retry; claim selects WHERE
@@ -309,7 +311,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status);
 -- pending/running-only scope; full rationale in docs/storage.md's "Schema
 -- decisions" section) -- so done/dead rows do not block re-enqueue, but a
 -- failed job awaiting retry does. Mirrored in Python as
--- lode.jobs._LIVE_JOB_STATUSES, the single source every query needing the
+-- lode.jobs.LIVE_JOB_STATUSES, the single source every query needing the
 -- same predicate imports rather than re-spelling. A database created before
 -- lode-uri7 gets this widened scope via storage.py's versioned migration
 -- (_migrate_v2_jobs_live_includes_failed), which first collapses any

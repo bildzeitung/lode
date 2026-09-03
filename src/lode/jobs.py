@@ -56,7 +56,18 @@ DERIVE_JOB_TYPES = ("embed", "enrich")
 #: "which statuses count as live" -- ``idx_jobs_live`` (schema.sql,
 #: lode-uri7) is scoped to exactly this set, and every module that needs the
 #: same predicate imports it from here rather than re-spelling it.
-_LIVE_JOB_STATUSES = ("pending", "running", "failed")
+#: ``tests/test_storage.py`` pins the schema's index predicate to this tuple,
+#: so the two spellings cannot drift.
+LIVE_JOB_STATUSES = ("pending", "running", "failed")
+
+#: :data:`LIVE_JOB_STATUSES` as a ready-to-interpolate SQL list body, for use
+#: as ``status IN ({LIVE_JOB_STATUSES_SQL})``. SQLite can only prove a query
+#: implies a PARTIAL index's own WHERE clause when the statuses are written as
+#: LITERALS -- bound ``?`` parameters demote the ``idx_jobs_live`` composite
+#: seek to a scan over ``idx_jobs_status``, which matters because every
+#: consumer sits in a correlated per-row subquery. These values are a frozen
+#: module constant, never caller input, so interpolating them is safe.
+LIVE_JOB_STATUSES_SQL = ", ".join(f"'{status}'" for status in LIVE_JOB_STATUSES)
 
 
 def enqueue_derive_jobs(
@@ -76,8 +87,9 @@ def enqueue_derive_jobs(
 
     The INSERT uses ``ON CONFLICT DO NOTHING`` against the partial unique index
     ``idx_jobs_live`` (``src/lode/schema.sql``): a duplicate enqueue of the same
-    live (pending/running) ``(type, target_version[, prompt_ver])`` job is a
-    no-op. Re-enqueue after the prior job is ``done``/``dead`` IS allowed because
+    live (:data:`LIVE_JOB_STATUSES` -- pending/running/failed)
+    ``(type, target_version[, prompt_ver])`` job is a no-op. Re-enqueue after
+    the prior job is ``done``/``dead`` IS allowed because
     the index is scoped to live statuses only (``docs/storage.md`` §E2 idempotency
     key decisions, pinned 2026-06-28).
 

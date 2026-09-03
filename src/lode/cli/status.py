@@ -27,8 +27,8 @@ log = logging.getLogger(__name__)
 
 #: Dead-lettered ``embed``/``enrich`` jobs are NOT terminal in most cases --
 #: reconcile.py's gap sweep re-enqueues them on its next scan regardless of
-#: prior dead-letters (the ``idx_jobs_live`` unique index is scoped to
-#: pending/running precisely so that's legal, docs/storage.md:552) -- so a
+#: prior dead-letters (the ``idx_jobs_live`` unique index excludes ``dead``
+#: precisely so that's legal -- docs/storage.md, "Schema decisions") -- so a
 #: dead-letter of one of these types usually self-heals without user action,
 #: and ``lode work``/``lode reembed``/``lode reenrich`` force it now
 #: (lode-8vcq). That is NOT universal, though (lode-tix0): the gap sweep

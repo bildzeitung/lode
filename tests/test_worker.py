@@ -2407,9 +2407,9 @@ def test_drain_still_runs_embed_jobs_when_a_batch_poll_is_stuck(
     _insert_note_worker(conn, note_id="note-1", version_id="ver-1")
     _insert_job(conn, "enrich", "ver-1", status="running", batch_handle="poison-batch")
     # A DIFFERENT version -- idx_jobs_live's partial unique index (type,
-    # target_version, prompt_ver) spans both 'pending' and 'running', so a
-    # second live enrich job for the SAME version_id would collide with the
-    # one above.
+    # target_version, prompt_ver) spans every live status ('pending',
+    # 'running', 'failed'), so a second live enrich job for the SAME
+    # version_id would collide with the one above.
     _insert_note_worker(conn, note_id="note-2", version_id="ver-2")
     pending_job = _insert_job(conn, "enrich", "ver-2", status="pending")
 

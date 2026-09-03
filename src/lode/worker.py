@@ -332,14 +332,15 @@ def _reset_retryable(conn: sqlite3.Connection, now: str) -> int:
     ``next_attempt_at`` in the future, so they are not flipped here and stay
     failed until the next pass (one-shot) or next poll tick (``--loop``).
 
-    ``idx_jobs_live`` (schema.sql) is scoped to ``status IN ('pending',
-    'running', 'failed')`` (DECIDED lode-uri7, widened from pending/running
-    only), so it is impossible for a live pending/running row and a failed
-    row to already share a key by the time this runs — the bare UPDATE below
-    cannot collide. Earlier, when the index did not cover ``'failed'``, that
-    collision was possible and wedged drain outright (lode-8a37); the
-    exclusion clauses that survived it are retired along with the widening
-    that makes the state they guarded against unrepresentable.
+    The bare UPDATE below cannot collide on ``idx_jobs_live``: that index
+    covers every live status, ``'failed'`` included
+    (:data:`lode.jobs.LIVE_JOB_STATUSES`), so a ``'failed'`` row never
+    already shares its ``(type, target_version, COALESCE(prompt_ver, ''))``
+    key with another live row — flipping it to ``'pending'`` leaves the key
+    unchanged, and the row is the only live one holding it. A narrower index
+    scope once let that duplicate exist, and this UPDATE then wedged drain
+    outright (lode-8a37); ``docs/storage.md``'s "Schema decisions" carries
+    the reasoning.
     """
     with conn:
         cur = conn.execute(

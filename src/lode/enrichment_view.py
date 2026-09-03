@@ -84,7 +84,7 @@ from pathlib import Path
 from typing import Literal
 
 from lode.display import display_annotations, display_edges
-from lode.jobs import _LIVE_JOB_STATUSES
+from lode.jobs import LIVE_JOB_STATUSES
 from lode.sql_ids import placeholders
 from lode.storage import init_db
 
@@ -460,7 +460,7 @@ def _enrichment_state(
     conn: sqlite3.Connection, note_id: str, head_version_id: str
 ) -> EnrichmentState:
     """Apply the pinned three-state predicate (see module docstring) to the head."""
-    if _has_enrich_job(conn, head_version_id, _LIVE_JOB_STATUSES):
+    if _has_enrich_job(conn, head_version_id, LIVE_JOB_STATUSES):
         return "pending"
     if _has_enrich_job(
         conn, head_version_id, _DEAD_JOB_STATUSES
