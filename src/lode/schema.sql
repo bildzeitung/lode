@@ -304,10 +304,19 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status);
 
 -- Partial unique index for live-job idempotency (see notes above). Scoped to
--- status IN ('pending','running') so done/dead rows do not block re-enqueue.
+-- status IN ('pending','running','failed') -- 'failed' is in-flight backoff,
+-- not a terminal outcome (DECIDED lode-uri7, widening this from the earlier
+-- pending/running-only scope; full rationale in docs/storage.md's "Schema
+-- decisions" section) -- so done/dead rows do not block re-enqueue, but a
+-- failed job awaiting retry does. Mirrored in Python as
+-- lode.jobs._LIVE_JOB_STATUSES, the single source every query needing the
+-- same predicate imports rather than re-spelling. A database created before
+-- lode-uri7 gets this widened scope via storage.py's versioned migration
+-- (_migrate_v2_jobs_live_includes_failed), which first collapses any
+-- pre-existing duplicate live rows per key -- see that function's docstring.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_live ON jobs (
     type, target_version, COALESCE(prompt_ver, '')
-) WHERE status IN ('pending', 'running');
+) WHERE status IN ('pending', 'running', 'failed');
 
 -- egress_log — cloud-egress audit trail (docs/storage.md §8, externals.md
 -- privacy). One row per time content leaves the box, so exposure is auditable.

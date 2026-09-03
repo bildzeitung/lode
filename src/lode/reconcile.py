@@ -103,6 +103,7 @@ from lode.config import Settings
 from lode.enrich import ENRICH_PROMPT_VER
 from lode.lexical import LexicalCacheBackend
 from lode.progress import op_progress
+from lode.sql_ids import placeholders
 
 log = logging.getLogger(__name__)
 
@@ -342,7 +343,7 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
     Returns the count of gap versions found (each triggered one enqueue call).
     """
     gap_versions = conn.execute(
-        """
+        f"""
         SELECT n.head_version_id
         FROM notes n
         JOIN versions v ON v.version_id = n.head_version_id
@@ -354,7 +355,7 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
               SELECT 1 FROM jobs j
               WHERE j.type = 'enrich'
                 AND j.target_version = n.head_version_id
-                AND j.status IN ('pending', 'running', 'failed')
+                AND j.status IN ({placeholders(len(jobs._LIVE_JOB_STATUSES))})
           )
           AND NOT EXISTS (
               SELECT 1 FROM jobs j
@@ -364,7 +365,7 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
                 AND j.prompt_ver = ?
           )
         """,
-        (ENRICH_PROMPT_VER,),
+        (*jobs._LIVE_JOB_STATUSES, ENRICH_PROMPT_VER),
     ).fetchall()
 
     if not gap_versions:
@@ -456,7 +457,7 @@ def _refresh_stale_step(
     cutoff = jobs.iso(datetime.now(UTC) - timedelta(seconds=settings.refresh_ttl_s))
 
     stale_externals = conn.execute(
-        """
+        f"""
         SELECT e.external_id
         FROM externals e
         JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id
@@ -467,10 +468,10 @@ def _refresh_stale_step(
               SELECT 1 FROM jobs j
               WHERE j.type = 'refresh'
                 AND j.target_version = e.external_id
-                AND j.status IN ('pending', 'running', 'failed')
+                AND j.status IN ({placeholders(len(jobs._LIVE_JOB_STATUSES))})
           )
         """,
-        (cutoff,),
+        (cutoff, *jobs._LIVE_JOB_STATUSES),
     ).fetchall()
 
     if not stale_externals:

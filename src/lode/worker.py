@@ -332,58 +332,22 @@ def _reset_retryable(conn: sqlite3.Connection, now: str) -> int:
     ``next_attempt_at`` in the future, so they are not flipped here and stay
     failed until the next pass (one-shot) or next poll tick (``--loop``).
 
-    A failed row is excluded from the reset (left ``'failed'``, logged at
-    ``warning``) when flipping it to ``'pending'`` would collide on
-    ``idx_jobs_live`` — keyed ``(type, target_version, COALESCE(prompt_ver,
-    ''))`` over ``status IN ('pending', 'running')``.  Two collision sources,
-    both excluded by the clauses below:
-
-    * an enqueuer already re-created the job as ``pending``/``running`` while
-      this one sat in backoff;
-    * two or more *failed* rows share the key and are all retryable this pass
-      (``idx_jobs_live`` does not cover ``'failed'``, so it permits them) —
-      the ``MIN(id)`` grouping resets only the oldest, the rest wait for a
-      later pass.
-
-    Without these exclusions the bare UPDATE raises IntegrityError on the first
-    collision and aborts every remaining reset in the same pass, wedging drain
-    permanently (lode-8a37).
-
-    A row skipped for the first reason stays skipped on every subsequent pass
-    for as long as the live row lives, so the warning repeats each pass for a
-    genuinely stuck row.  That is intended: the repetition *is* the signal, and
-    the alternative (warn once) would hide a queue that never drains.
+    ``idx_jobs_live`` (schema.sql) is scoped to ``status IN ('pending',
+    'running', 'failed')`` (DECIDED lode-uri7, widened from pending/running
+    only), so it is impossible for a live pending/running row and a failed
+    row to already share a key by the time this runs — the bare UPDATE below
+    cannot collide. Earlier, when the index did not cover ``'failed'``, that
+    collision was possible and wedged drain outright (lode-8a37); the
+    exclusion clauses that survived it are retired along with the widening
+    that makes the state they guarded against unrepresentable.
     """
     with conn:
-        retryable = conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE status = 'failed' AND next_attempt_at <= ?",
-            (now,),
-        ).fetchone()[0]
         cur = conn.execute(
             "UPDATE jobs SET status = 'pending' "
-            "WHERE status = 'failed' AND next_attempt_at <= ? "
-            "AND id IN ("
-            "  SELECT MIN(id) FROM jobs"
-            "  WHERE status = 'failed' AND next_attempt_at <= ?"
-            "  GROUP BY type, target_version, COALESCE(prompt_ver, '')"
-            ") "
-            "AND NOT EXISTS ("
-            "  SELECT 1 FROM jobs live"
-            "  WHERE live.type = jobs.type"
-            "    AND live.target_version = jobs.target_version"
-            "    AND COALESCE(live.prompt_ver, '') = COALESCE(jobs.prompt_ver, '')"
-            "    AND live.status IN ('pending', 'running')"
-            ")",
-            (now, now),
+            "WHERE status = 'failed' AND next_attempt_at <= ?",
+            (now,),
         )
         reset = cur.rowcount
-    skipped = retryable - reset
-    if skipped:
-        log.warning(
-            "_reset_retryable: skipped %d failed job(s) whose reset would "
-            "collide with a live row on idx_jobs_live; left 'failed'",
-            skipped,
-        )
     return reset
 
 

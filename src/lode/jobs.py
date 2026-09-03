@@ -49,6 +49,15 @@ from lode.config import Settings
 #: (``docs/storage.md`` "embed > enrich"). ``refresh`` arrives with connectors.
 DERIVE_JOB_TYPES = ("embed", "enrich")
 
+#: Live (in-flight or about-to-retry) job statuses -- schema.sql's
+#: ``pending -> running -> done`` happy path, plus ``failed`` (DECIDED
+#: 2026-07-08, bd lode-bvg): a ``'failed'`` job always has a retry coming, so
+#: it is pending work, not a terminal outcome. This is the single source for
+#: "which statuses count as live" -- ``idx_jobs_live`` (schema.sql,
+#: lode-uri7) is scoped to exactly this set, and every module that needs the
+#: same predicate imports it from here rather than re-spelling it.
+_LIVE_JOB_STATUSES = ("pending", "running", "failed")
+
 
 def enqueue_derive_jobs(
     conn: sqlite3.Connection,
