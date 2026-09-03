@@ -37,9 +37,10 @@ def reembed(db: _DbOption = None) -> None:
 
     **Forces regeneration regardless of any prior job's outcome** -- unlike
     the passive reconciliation scan's embed-gap step (``lode.reconcile``),
-    which only re-enqueues a head with no live (pending/running) embed job at
-    all. A head whose embed job already reached ``done`` -- the overwhelming
-    common case for an established corpus -- is exactly what needs a *fresh*
+    which only re-enqueues a head with no live (pending/running/failed) embed
+    job at all. A head whose embed job already reached ``done`` -- the
+    overwhelming common case for an established corpus -- is exactly what
+    needs a *fresh*
     job here, since ``done`` is what a stale ``model_revision`` looks like.
     Reuses :func:`lode.jobs.enqueue_derive_jobs`, the same enqueue primitive
     every capture uses (``types=("embed",)`` only -- this never touches

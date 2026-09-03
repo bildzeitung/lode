@@ -84,6 +84,7 @@ from pathlib import Path
 from typing import Literal
 
 from lode.display import display_annotations, display_edges
+from lode.jobs import LIVE_JOB_STATUSES
 from lode.sql_ids import placeholders
 from lode.storage import init_db
 
@@ -95,13 +96,6 @@ EnrichmentState = Literal["pending", "ready", "failed"]
 #: docstring's "External-snapshot introspection" section for the exact
 #: predicate (lode-8d2).
 ExternalState = Literal["un-refreshed", "stale", "withheld"]
-
-#: Live (in-flight or about-to-retry) job statuses -- schema.sql's
-#: ``pending -> running -> done`` happy path, plus ``failed`` (DECIDED
-#: 2026-07-08, bd lode-bvg): worker.py writes ``status='failed'`` ONLY in the
-#: else-branch of the max-attempts gate, so a ``'failed'`` job always has a
-#: retry coming -- it is pending work, not a terminal outcome.
-_LIVE_JOB_STATUSES = ("pending", "running", "failed")
 
 #: Terminal-bad job status -- ``dead``, the poison terminal (schema.sql "The
 #: UI surfaces 'dead' rows as dead-letters"). With no live job and no AI
@@ -466,7 +460,7 @@ def _enrichment_state(
     conn: sqlite3.Connection, note_id: str, head_version_id: str
 ) -> EnrichmentState:
     """Apply the pinned three-state predicate (see module docstring) to the head."""
-    if _has_enrich_job(conn, head_version_id, _LIVE_JOB_STATUSES):
+    if _has_enrich_job(conn, head_version_id, LIVE_JOB_STATUSES):
         return "pending"
     if _has_enrich_job(
         conn, head_version_id, _DEAD_JOB_STATUSES

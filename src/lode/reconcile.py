@@ -246,8 +246,8 @@ def _embed_gap_step(conn: sqlite3.Connection, settings: Settings | None = None) 
     **Enqueue:** calls :func:`lode.jobs.enqueue_derive_jobs` with
     ``types=("embed",)`` inside a single ``with conn:`` transaction.  The INSERT
     is ``ON CONFLICT DO NOTHING`` against ``idx_jobs_live``, so a target whose
-    embed job is already pending or running produces no duplicate row — the scan
-    is entirely idempotent.
+    embed job is already live (pending/running/failed) produces no duplicate
+    row — the scan is entirely idempotent.
 
     Returns the count of gap targets found (each triggered one
     ``enqueue_derive_jobs`` call; some may be no-ops for in-flight jobs).
@@ -342,7 +342,7 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
     Returns the count of gap versions found (each triggered one enqueue call).
     """
     gap_versions = conn.execute(
-        """
+        f"""
         SELECT n.head_version_id
         FROM notes n
         JOIN versions v ON v.version_id = n.head_version_id
@@ -354,7 +354,7 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
               SELECT 1 FROM jobs j
               WHERE j.type = 'enrich'
                 AND j.target_version = n.head_version_id
-                AND j.status IN ('pending', 'running', 'failed')
+                AND j.status IN ({jobs.LIVE_JOB_STATUSES_SQL})
           )
           AND NOT EXISTS (
               SELECT 1 FROM jobs j
@@ -456,7 +456,7 @@ def _refresh_stale_step(
     cutoff = jobs.iso(datetime.now(UTC) - timedelta(seconds=settings.refresh_ttl_s))
 
     stale_externals = conn.execute(
-        """
+        f"""
         SELECT e.external_id
         FROM externals e
         JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id
@@ -467,7 +467,7 @@ def _refresh_stale_step(
               SELECT 1 FROM jobs j
               WHERE j.type = 'refresh'
                 AND j.target_version = e.external_id
-                AND j.status IN ('pending', 'running', 'failed')
+                AND j.status IN ({jobs.LIVE_JOB_STATUSES_SQL})
           )
         """,
         (cutoff,),

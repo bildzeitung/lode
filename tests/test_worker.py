@@ -1645,44 +1645,37 @@ def test_reset_leaves_future_failed_alone(
     assert _job(conn, job_id)["status"] == "failed"
 
 
-def test_reset_skips_failed_row_colliding_with_existing_live_row(
+def test_jobs_live_index_rejects_failed_row_colliding_with_existing_live_row(
     conn: sqlite3.Connection, db_path: Path
 ) -> None:
-    """A failed row whose reset would collide on idx_jobs_live is left alone.
+    """``idx_jobs_live`` (widened, lode-uri7) now rejects this at INSERT time.
 
-    Reproduces lode-8a37: an enqueuer already re-created a live (pending) row
-    for the same (type, target_version, prompt_ver) key while the original
-    was in backoff. The bare UPDATE this guards used to raise IntegrityError
-    and abort the whole reset; now it must skip just this row and leave
-    everything else -- including the one live row -- alone.
+    Reproduces the lode-8a37 shape -- an enqueuer creating a live (pending)
+    row for the same ``(type, target_version, prompt_ver)`` key while a
+    ``failed`` sibling sits in backoff -- and asserts the state is now
+    unrepresentable rather than merely tolerated by ``_reset_retryable``:
+    the widened index raises before a duplicate row can even be created, so
+    ``_reset_retryable`` (see below) never needs to guard against it.
     """
-    failed_id = _insert_job(conn, status="failed", next_attempt_at=_past_iso())
-    pending_id = _insert_job(conn, status="pending")
+    _insert_job(conn, status="failed", next_attempt_at=_past_iso())
 
-    count = _reset_retryable(conn, _now_iso())
-
-    assert count == 0
-    assert _job(conn, failed_id)["status"] == "failed"
-    assert _job(conn, pending_id)["status"] == "pending"
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_job(conn, status="pending")
 
 
-def test_reset_resets_only_one_of_two_retryable_failed_siblings(
+def test_jobs_live_index_rejects_two_failed_siblings_sharing_a_key(
     conn: sqlite3.Connection, db_path: Path
 ) -> None:
-    """Two failed rows sharing the live key: reset the older, leave the rest.
+    """Two failed rows sharing the live key are now unrepresentable too.
 
-    ``idx_jobs_live`` does not cover ``'failed'``, so duplicate failed rows for
-    one key are legal -- but flipping both to ``'pending'`` in a single UPDATE
-    violates the index and used to abort the whole pass (lode-8a37).
+    Before the index widened (lode-uri7) this was legal, and flipping both to
+    ``'pending'`` in one UPDATE used to abort the whole ``_reset_retryable``
+    pass (lode-8a37). The widened index refuses the second INSERT outright.
     """
-    first_id = _insert_job(conn, status="failed", next_attempt_at=_past_iso())
-    second_id = _insert_job(conn, status="failed", next_attempt_at=_past_iso())
+    _insert_job(conn, status="failed", next_attempt_at=_past_iso())
 
-    count = _reset_retryable(conn, _now_iso())
-
-    assert count == 1
-    assert _job(conn, first_id)["status"] == "pending"
-    assert _job(conn, second_id)["status"] == "failed"
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_job(conn, status="failed", next_attempt_at=_past_iso())
 
 
 def test_reset_does_not_touch_pending_or_dead(
@@ -2414,9 +2407,9 @@ def test_drain_still_runs_embed_jobs_when_a_batch_poll_is_stuck(
     _insert_note_worker(conn, note_id="note-1", version_id="ver-1")
     _insert_job(conn, "enrich", "ver-1", status="running", batch_handle="poison-batch")
     # A DIFFERENT version -- idx_jobs_live's partial unique index (type,
-    # target_version, prompt_ver) spans both 'pending' and 'running', so a
-    # second live enrich job for the SAME version_id would collide with the
-    # one above.
+    # target_version, prompt_ver) spans every live status ('pending',
+    # 'running', 'failed'), so a second live enrich job for the SAME
+    # version_id would collide with the one above.
     _insert_note_worker(conn, note_id="note-2", version_id="ver-2")
     pending_job = _insert_job(conn, "enrich", "ver-2", status="pending")
 

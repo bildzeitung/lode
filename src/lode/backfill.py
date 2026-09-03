@@ -301,8 +301,9 @@ def enqueue_fresh_refresh(
     (:func:`lode.jobs.enqueue_derive_jobs`, ``types=("refresh",)``) — the
     same one the paste-time trigger and the ``refresh_stale`` reconciliation
     step both use. ``ON CONFLICT DO NOTHING`` against ``idx_jobs_live`` means
-    a target with an already-pending/running ``refresh`` job is a no-op, so
-    calling this more than once for the same target is always safe.
+    a target with an already-live (pending/running/failed) ``refresh`` job is
+    a no-op, so calling this more than once for the same target is always
+    safe.
 
     ``dry_run=True`` performs no write.
     """

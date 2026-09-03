@@ -182,12 +182,68 @@ def _migrate_v1_egress_log_tool_purpose(conn: sqlite3.Connection) -> None:
         pass  # column already present — idempotent
 
 
-_SCHEMA_VERSION = 1
+def _migrate_v2_jobs_live_includes_failed(conn: sqlite3.Connection) -> None:
+    """lode-uri7: widen ``idx_jobs_live`` to cover ``status='failed'`` too.
+
+    ``schema.sql``'s partial unique index on ``(type, target_version,
+    COALESCE(prompt_ver, ''))`` was scoped to ``pending``/``running`` only, so
+    a ``failed`` job in backoff was invisible to it and a duplicate
+    ``pending`` row for the same key could be (and, on at least one deployed
+    install, was — lode-8a37) enqueued alongside it. Widening the index to
+    include ``failed`` makes that duplicate state unrepresentable at the DB
+    layer, retiring the compensation code lode-8a37 added to
+    :func:`lode.worker._reset_retryable` to survive it.
+
+    A `CREATE UNIQUE INDEX` over data that already violates the new
+    constraint fails outright, so this must run **before** the index is
+    rebuilt: collapse every existing duplicate live-key group (any row with
+    ``status IN ('pending', 'running', 'failed')`` sharing a key) down to one
+    row, in two passes --
+
+    1. A ``failed`` row that shares a key with a ``pending``/``running``
+       sibling is redundant (drain will pick the live row up on its own) —
+       delete it, discarding its `last_error` history.
+    2. Among any remaining `failed`-only duplicate group (no `pending`/
+       `running` sibling), keep the newest (highest ``id``, most recent
+       attempt/`last_error`) and delete the rest — mirrors
+       ``_reset_retryable``'s own per-key grouping, just picking the newest
+       row instead of the oldest since there is no "resume it next pass"
+       future for the ones being deleted here.
+
+    Once no duplicate remains, the index is dropped and recreated in the
+    widened shape — ``schema.sql``'s ``CREATE INDEX IF NOT EXISTS`` would
+    otherwise leave the old, narrower index in place under the same name.
+    """
+    conn.execute(
+        "DELETE FROM jobs WHERE status = 'failed' AND EXISTS ("
+        "  SELECT 1 FROM jobs live"
+        "  WHERE live.type = jobs.type"
+        "    AND live.target_version = jobs.target_version"
+        "    AND COALESCE(live.prompt_ver, '') = COALESCE(jobs.prompt_ver, '')"
+        "    AND live.status IN ('pending', 'running')"
+        ")"
+    )
+    conn.execute(
+        "DELETE FROM jobs WHERE status = 'failed' AND id NOT IN ("
+        "  SELECT MAX(id) FROM jobs WHERE status = 'failed'"
+        "  GROUP BY type, target_version, COALESCE(prompt_ver, '')"
+        ")"
+    )
+    conn.execute("DROP INDEX IF EXISTS idx_jobs_live")
+    conn.execute(
+        "CREATE UNIQUE INDEX idx_jobs_live ON jobs ("
+        "  type, target_version, COALESCE(prompt_ver, '')"
+        ") WHERE status IN ('pending', 'running', 'failed')"
+    )
+
+
+_SCHEMA_VERSION = 2
 """Target ``PRAGMA user_version`` — bump alongside a new entry in
 :data:`_VERSIONED_MIGRATIONS`."""
 
 _VERSIONED_MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _migrate_v1_egress_log_tool_purpose),
+    (2, _migrate_v2_jobs_live_includes_failed),
 ]
 """Rebuild-shaped migrations, gated by ``PRAGMA user_version`` (see module
 docstring). Ordered ascending; each entry runs once, the first time

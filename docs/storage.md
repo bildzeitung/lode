@@ -534,24 +534,71 @@ both unchanged.
 `idx_jobs_live` partial unique index (below), so a duplicate or reconcile
 re-enqueue of a live job is silently dropped.
 
-### Schema decisions — pinned 2026-06-28 (lode-i05.6)
+### Schema decisions — pinned 2026-06-28 (lode-i05.6); `idx_jobs_live` widened 2026-09-03 (lode-uri7)
 
 **Idempotency key — partial UNIQUE index with COALESCE.**
 Job identity is `(type, target_version)` for `embed` (prompt_ver always NULL) and
 `(type, target_version, prompt_ver)` for `enrich`. A naive `UNIQUE(type,
 target_version, prompt_ver)` would not dedupe embed jobs because SQLite treats
 NULLs as distinct in UNIQUE constraints. Instead the schema uses a partial unique
-index over a COALESCE expression, scoped to live (pending/running) jobs only:
+index over a COALESCE expression, scoped to live jobs only:
 
 ```sql
 CREATE UNIQUE INDEX idx_jobs_live ON jobs(type, target_version, COALESCE(prompt_ver, ''))
-    WHERE status IN ('pending', 'running');
+    WHERE status IN ('pending', 'running', 'failed');
 ```
 
-Scoping to `pending`/`running` is load-bearing: it dedupes in-flight work but
-**still allows** a re-enqueue after the prior job reached `done`/`dead` (a
-`prompt_ver` bump or re-derive must be able to enqueue again — the reconciliation
-scan depends on this). Enqueue uses `INSERT ... ON CONFLICT DO NOTHING`.
+Scoping to live statuses is load-bearing: it dedupes in-flight work but **still
+allows** a re-enqueue after the prior job reached `done`/`dead` (a `prompt_ver`
+bump or re-derive must be able to enqueue again — the reconciliation scan depends
+on this). Enqueue uses `INSERT ... ON CONFLICT DO NOTHING`.
+
+**`'failed'` joined the live scope 2026-09-03 (lode-uri7, evaluating a proposal
+raised during lode-8a37's review).** Originally scoped to `pending`/`running`
+only — `'failed'` was left out under the theory that a failed job is not really
+"in flight". That theory didn't survive contact with the rest of the codebase:
+`enrichment_view.py`'s enrichment-state predicate (`lode-bvg`, above) and both of
+`reconcile.py`'s gap-query guards already treated `'failed'` as live reads — a
+job in backoff has a retry coming, so it is pending work, not a terminal outcome
+(same reasoning as the `EnrichmentState` predicate's `"pending"` bucket). The
+narrower index was the one place still disagreeing, and the disagreement was not
+academic: `reconcile._refresh_stale_step`'s guard originally missed `'failed'`
+too, so it could enqueue a duplicate `pending` refresh job for a target whose
+prior attempt was merely in backoff — invisible to both the *application-level*
+guard and (because the index didn't cover `'failed'` either) the `ON CONFLICT DO
+NOTHING` idempotency layer meant to catch exactly this. lode-8a37 fixed the
+immediate crash (the duplicate then wedged `worker._reset_retryable`'s
+`failed -> pending` UPDATE with an `IntegrityError` on collision) by widening the
+*application*-level guard and teaching `_reset_retryable` to tolerate the
+resulting duplicate-key state, rather than by widening the index itself — the
+index change needs a migration over deployed data (below), which was
+out of scope for a same-day bug fix.
+
+lode-uri7 made that migration and widened the index, retiring lode-8a37's
+`_reset_retryable` compensation code: with `'failed'` now covered, the duplicate
+state `_reset_retryable` had to tolerate is unrepresentable by construction (a
+second live-key row can't be inserted while a `'failed'` row for that key
+exists), so its collision-exclusion clauses (the `NOT EXISTS` guard and the
+`MIN(id)`-per-group split for duplicate `'failed'` siblings) are gone; the
+function is now a bare `UPDATE ... WHERE status = 'failed' AND next_attempt_at <=
+?`. **Migration (`storage._migrate_v2_jobs_live_includes_failed`, `PRAGMA
+user_version` 1 → 2):** a `CREATE UNIQUE INDEX` over data that already violates
+the new constraint fails outright, so a database that predates this ticket may
+already hold the exact duplicate-key states lode-8a37 was written to tolerate
+(a `failed` row shadowed by a live `pending`/`running` sibling, or two-or-more
+`failed` rows sharing a key with no live sibling) and the migration collapses
+each such group to one row *before* the index is rebuilt — preferring a
+live `pending`/`running` sibling over a `failed` one (drain will pick the live
+row up on its own; the `failed` row is redundant), and among an all-`failed`
+group keeping the newest (highest `id`) and discarding the older duplicates'
+`last_error` history. `reconcile.py`'s two live-status `IN (...)` clauses and
+`enrichment_view.py`'s own copy of the tuple are now one shared constant,
+`lode.jobs.LIVE_JOB_STATUSES`, imported everywhere the predicate is needed
+rather than re-spelled — `jobs_read.outstanding_jobs` is the one deliberate
+holdout: it backs `lode work --wait`'s "still outstanding" report, which is
+scoped to `pending`/`running` (currently being worked, or about to be) by
+design, not to the full live set — a job sitting in backoff is not what that
+report means by "outstanding".
 
 **Backoff scheduling — `next_attempt_at`.**
 The `next_attempt_at TEXT NOT NULL` column (ISO-8601 UTC) lets the worker durably

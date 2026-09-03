@@ -105,6 +105,11 @@ def outstanding_jobs(conn: sqlite3.Connection) -> list[tuple[int, str, str, str]
     batch-backed enrich jobs still ``running`` on an in-flight Batches API
     request (they are not a bug -- see ``lode.cli.work.work``'s ``--wait``
     docstring).
+
+    Deliberately narrower than ``lode.jobs.LIVE_JOB_STATUSES`` (DECIDED
+    lode-uri7): "outstanding" here means being worked right now or about to
+    be, not merely retryable -- a job sitting ``'failed'`` in backoff is not
+    what ``--wait``'s "still outstanding" report means by that word.
     """
     return conn.execute(
         "SELECT id, type, status, target_version FROM jobs "

@@ -4,6 +4,7 @@ Asserts the acceptance criteria: schema.sql creates every data-shape table in a
 fresh WAL DB, and a round-trip insert/select on notes+versions succeeds.
 """
 
+import re
 import sqlite3
 from pathlib import Path
 from unittest import mock
@@ -11,7 +12,7 @@ from unittest import mock
 import pytest
 
 from lode import storage
-from lode.jobs import now_iso
+from lode.jobs import LIVE_JOB_STATUSES, now_iso
 from lode.storage import (
     _SCHEMA_VERSION,
     _migrate_v1_egress_log_tool_purpose,
@@ -643,3 +644,137 @@ def test_existing_qa_enrich_egress_log_insert_unchanged(tmp_path: Path) -> None:
         assert row == ("qa", "claude-sonnet-4-6", '["ver-1"]', "2")
     finally:
         conn.close()
+
+
+def _seed_pre_lode_uri7_db(db: Path) -> None:
+    """A pre-migration DB: ``jobs`` shaped correctly, ``idx_jobs_live`` scoped
+    to ``pending``/``running`` only (the pre-lode-uri7 shape) -- and carrying
+    two duplicate-live-key states the widened index cannot tolerate:
+
+    - ``ver-a``: a ``failed`` row alongside a live ``pending`` row for the
+      same key (the lode-8a37 shape).
+    - ``ver-b``: two ``failed`` rows sharing a key, no live sibling.
+    """
+    seed = sqlite3.connect(db)
+    seed.execute(
+        "CREATE TABLE notes ("
+        "  note_id TEXT PRIMARY KEY,"
+        "  head_version_id TEXT,"
+        "  created TEXT NOT NULL DEFAULT '2026-01-01T00:00:00.000Z'"
+        ")"
+    )
+    seed.execute(
+        "CREATE TABLE jobs ("
+        "    id                     INTEGER PRIMARY KEY,"
+        "    type                   TEXT NOT NULL,"
+        "    target_version         TEXT NOT NULL,"
+        "    prompt_ver             TEXT,"
+        "    status                 TEXT NOT NULL DEFAULT 'pending',"
+        "    attempts               INTEGER NOT NULL DEFAULT 0,"
+        "    last_error             TEXT,"
+        "    batch_handle           TEXT,"
+        "    batch_collect_failures INTEGER NOT NULL DEFAULT 0,"
+        "    claimed_at             TEXT,"
+        "    next_attempt_at        TEXT NOT NULL,"
+        "    created                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+        ")"
+    )
+    seed.execute(
+        "CREATE UNIQUE INDEX idx_jobs_live ON jobs ("
+        "  type, target_version, COALESCE(prompt_ver, '')"
+        ") WHERE status IN ('pending', 'running')"
+    )
+    seed.executemany(
+        "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+        "VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z')",
+        [
+            ("embed", "ver-a", "failed"),
+            ("embed", "ver-a", "pending"),
+            ("embed", "ver-b", "failed"),
+            ("embed", "ver-b", "failed"),
+        ],
+    )
+    seed.commit()
+    seed.close()
+
+
+def test_jobs_live_index_migration_dedupes_and_widens(tmp_path: Path) -> None:
+    """lode-uri7: ``idx_jobs_live`` widens to include ``failed``, dedup first.
+
+    Reproduces both duplicate shapes a deployed DB could hold from before the
+    widening -- a failed row shadowed by a live pending sibling (lode-8a37's
+    exact bug), and two failed rows sharing a key with no live sibling -- and
+    asserts each key ends up with exactly one live row, plus that the
+    resulting index really is widened (a fresh insert violating it now
+    raises, where it previously wouldn't have).
+    """
+    db = tmp_path / "lode.db"
+    _seed_pre_lode_uri7_db(db)
+
+    conn = init_db(db)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == _SCHEMA_VERSION
+
+        ver_a_rows = conn.execute(
+            "SELECT status FROM jobs WHERE target_version = 'ver-a' "
+            "AND status IN ('pending', 'running', 'failed')"
+        ).fetchall()
+        assert ver_a_rows == [("pending",)]  # the failed shadow was dropped
+
+        ver_b_rows = conn.execute(
+            "SELECT status FROM jobs WHERE target_version = 'ver-b' "
+            "AND status IN ('pending', 'running', 'failed')"
+        ).fetchall()
+        assert ver_b_rows == [("failed",)]  # one of the two duplicates survives
+
+        index_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'idx_jobs_live'"
+        ).fetchone()[0]
+        assert "'failed'" in index_sql
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+                "VALUES ('embed', 'ver-b', 'pending', '2026-01-01T00:00:00.000Z')"
+            )
+    finally:
+        conn.close()
+
+
+def test_jobs_live_index_migration_is_idempotent(tmp_path: Path) -> None:
+    db = tmp_path / "lode.db"
+    _seed_pre_lode_uri7_db(db)
+
+    init_db(db).close()
+    # Re-running init_db must not raise (DROP INDEX IF EXISTS / CREATE UNIQUE
+    # INDEX with no name collision), and must not re-run the dedup DELETEs
+    # against rows that no longer exist.
+    conn = init_db(db)
+    try:
+        remaining = conn.execute(
+            "SELECT count(*) FROM jobs WHERE status IN ('pending', 'running', 'failed')"
+        ).fetchone()[0]
+        assert remaining == 2  # ver-a's pending + ver-b's surviving failed
+    finally:
+        conn.close()
+
+
+def test_schema_index_predicate_matches_live_job_statuses() -> None:
+    """``idx_jobs_live``'s WHERE clause and ``jobs.LIVE_JOB_STATUSES`` are one set.
+
+    ``schema.sql`` spells the live statuses as SQL literals and Python spells
+    them as a tuple; nothing but this assertion binds the two, and the whole
+    point of the constant (lode-uri7) is that adding a fourth status cannot
+    silently leave the index behind.
+    """
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.executescript(storage.schema_sql())
+        (index_sql,) = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'idx_jobs_live'"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    predicate = index_sql.split("WHERE", 1)[1]
+    assert set(re.findall(r"'([a-z]+)'", predicate)) == set(LIVE_JOB_STATUSES)
