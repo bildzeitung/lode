@@ -49,8 +49,8 @@
 #      below), and if the rollback rebuild itself also fails, a loud
 #      warning after the report says so and points at
 #      scripts/python-init.sh as the manual recovery.
-#   6. On promote (step 5's GREEN path only -- never on --dry-run, never on
-#      a failed/rolled-back run), file ONE bd stub ticket carrying the
+#   6. On a green run (step 5's GREEN path only -- never on --dry-run,
+#      never on a failed/rolled-back run), file ONE bd stub ticket carrying the
 #      VERSION DIFF as a durable work order for a human/producer to read
 #      upstream changelogs and judge required-work vs. judgment-call in the
 #      context of lode's actual call sites (lode-i642). This is a WORK
@@ -96,7 +96,16 @@
 # and printed BEFORE the lock is restored or that rollback rebuild is
 # attempted (not after), so a hiccup during either step (e.g. a transient
 # network failure on `pip install -U uv`) can never swallow the report --
-# the two are independent by construction, not by ordering luck.
+# the two are independent by construction, not by ordering luck. The restore
+# is ALSO armed on an EXIT trap (RESTORE_LOCK_ON_EXIT) for the window between
+# the step-3 promotion and step 5 deciding an outcome, so a Ctrl-C, a SIGTERM
+# or an errexit abort mid-gate cannot leave an UNGATED candidate on disk that a
+# human would then read as a gated one -- the very failure this ordering exists
+# to prevent. The one residual no trap can cover is a SIGKILL (or a power cut):
+# there, note that $LOCK is git-tracked where ./venv is not, so `git checkout --
+# requirements.lock` is the last-resort restore. $SAVED_LOCK rather than git is
+# what the script itself uses, because the lock may legitimately be dirty when
+# a run starts.
 
 set -uo pipefail
 
@@ -145,12 +154,28 @@ fi
 
 CANDIDATE="$(mktemp)"
 SAVED_LOCK="$(mktemp)"
-trap 'rm -f "$CANDIDATE" "$SAVED_LOCK"' EXIT
-cp "$LOCK" "$SAVED_LOCK"   # last-known-good copy -- restored on any failure below (lode-2zi9)
+# The candidate is promoted over $LOCK BEFORE the gates run (lode-2zi9), so from
+# that promotion until this script decides an outcome there is a window in which
+# an UNGATED lock sits on disk looking exactly like a gated one. A death in that
+# window -- Ctrl-C during the long `nox -s tests`, SIGTERM, an errexit abort --
+# must not strand it, which is the very defect this ticket exists to kill. So the
+# restore hangs off process EXIT, not off the handled-failure path alone;
+# RESTORE_LOCK_ON_EXIT is cleared the moment the outcome IS decided (green: keep
+# the candidate; failed: the explicit restore below already ran).
+RESTORE_LOCK_ON_EXIT=0
+cleanup() {
+  if [ "$RESTORE_LOCK_ON_EXIT" -eq 1 ]; then
+    cp -f "$SAVED_LOCK" "$LOCK"
+    echo "update-deps.sh: died after promoting the candidate -- restored the committed $LOCK." >&2
+  fi
+  rm -f "$CANDIDATE" "$SAVED_LOCK"
+}
+trap cleanup EXIT
+cp -f "$LOCK" "$SAVED_LOCK"
 
 if [ -n "$PACKAGE" ]; then
-  cp "$LOCK" "$CANDIDATE"   # seed with the committed lock so uv reuses every
-                            # other package's pinned version as a preference
+  cp -f "$LOCK" "$CANDIDATE"   # seed with the committed lock so uv reuses every
+                               # other package's pinned version as a preference
   "$REPO/scripts/compile-lock.sh" --upgrade-package "$PACKAGE" -q -o "$CANDIDATE"
 else
   # -q: uv pip compile otherwise echoes the ENTIRE compiled lock (every
@@ -180,12 +205,6 @@ echo "$DIFF_TEXT"
 if [ "$DRY_RUN" -eq 1 ]; then
   exit 0
 fi
-
-# Promote BEFORE gating (lode-2zi9): the gates below run against whatever is
-# on disk at $LOCK, so a test that reads the committed lock must see the
-# candidate, not the pins it is about to replace. On any failure below, the
-# $SAVED_LOCK copy above is restored byte-for-byte -- see FAILURE HANDLING.
-cp "$CANDIDATE" "$LOCK"
 
 # File ONE bd stub ticket carrying the VERSION DIFF as a durable work order
 # (lode-i642) -- only called from the GREEN promote path (step 5). Every
@@ -259,6 +278,11 @@ rebuild_venv() {
     install_locked_venv "$lockfile"
 }
 
+# Promote BEFORE gating (lode-2zi9) -- see step 3 and FAILURE HANDLING above.
+# Everything from here to the verdict below runs with an UNGATED lock on disk.
+cp -f "$CANDIDATE" "$LOCK"
+RESTORE_LOCK_ON_EXIT=1
+
 echo "update-deps.sh: installing the candidate lock into a freshly rebuilt ./venv..."
 FAILED_AT=""
 if ! rebuild_venv "$LOCK"; then
@@ -273,6 +297,7 @@ else
 fi
 
 if [ -z "$FAILED_AT" ]; then
+  RESTORE_LOCK_ON_EXIT=0
   echo "update-deps.sh: gates green -- $LOCK already holds the promoted candidate."
   echo "update-deps.sh: review and commit it yourself: git diff -- $LOCK"
   file_churn_stub
@@ -282,13 +307,9 @@ fi
 echo "update-deps.sh: FAILED ($FAILED_AT) -- restoring the committed $LOCK." >&2
 
 # Build and print the report BEFORE restoring the lock or attempting the
-# rollback rebuild, and regardless of whether either succeeds -- see
-# FAILURE HANDLING in the header. The "restored" line below describes what
-# this script is ABOUT to do next, not a result already confirmed -- but
-# the restore itself is a single `cp` from a tmpfile already on this same
-# filesystem, so treating it as certain here (rather than reporting after)
-# is what keeps the report independent of the rollback rebuild's own
-# success, which is the actual failure-prone step.
+# rollback rebuild, and regardless of whether either succeeds -- see FAILURE
+# HANDLING in the header. So the "restored" line below states what this script
+# is about to do, not a result already confirmed.
 REPORT="$(cat <<REPORT_EOF
 === update-deps.sh FAILURE REPORT (paste into a bd ticket) ===
 Attempted update: $( [ -n "$PACKAGE" ] && echo "single package '$PACKAGE'" || echo "full lock recompile" )
@@ -301,7 +322,10 @@ REPORT_EOF
 )"
 echo "$REPORT"
 
-cp "$SAVED_LOCK" "$LOCK"
+# Eager, not left to the trap: rebuild_venv below installs from $LOCK, so the
+# restore has to land before it or the rollback would reinstall the rejection.
+cp -f "$SAVED_LOCK" "$LOCK"
+RESTORE_LOCK_ON_EXIT=0
 echo "update-deps.sh: trashing ./venv and rebuilding clean from the restored $LOCK..." >&2
 if ! rebuild_venv "$LOCK"; then
   echo "update-deps.sh: WARNING -- the clean rollback rebuild from $LOCK ALSO failed." >&2

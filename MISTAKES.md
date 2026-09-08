@@ -4,6 +4,31 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-09-08 — A promotion gate certified the artifact it was about to replace, not the one it would ship
+
+- **What happened:** `scripts/update-deps.sh` ran its gates (`nox -t fix`, `nox -s tests`) with the
+  CANDIDATE lock installed into `./venv` but the OLD `requirements.lock` still on disk, copying the
+  candidate over the committed lock only after the gates went green. A full-lock recompile moved
+  `typer` 0.27.1 -> 0.27.2; `tests/test_build_docs_site.py::test_workflow_pins_match_their_sources`
+  (which asserts `.github/workflows/docs.yml`'s duplicated typer pin equals the lock's) was green
+  inside the script -- it compared `docs.yml` against the still-old lock -- and red on the very next
+  run.
+- **Root cause:** the gate's inputs were not the artifact the run was about to ship. The script held
+  the new pins in one place (`./venv`) and the old pins in another (`requirements.lock`), so every
+  test that reads the committed lock from disk was structurally blind to the change being certified.
+  "Gates green" was therefore exactly the wrong signal: it was true, and it meant nothing.
+- **Consequence:** a lock commit whose own test suite is red on bare `trunk`. `/land` runs
+  `nox -s tests` on bare `origin/trunk` before its isolation loop and reads a red there as "predates
+  every branch, stop the pass", so this stalls the whole landing loop; CI's tests job reddens on the
+  push too. Caught only because that session happened to re-run the suite after promotion.
+- **Rule that prevents a repeat:** a gate that certifies an artifact must run against that artifact
+  in its FINAL location, not against a staged copy alongside the version it is replacing. When a
+  script gates-then-promotes, invert it: promote first, gate, and roll back on red -- and make the
+  rollback hang off process EXIT, not off the handled-failure path alone, or a signal mid-gate
+  strands an UNGATED artifact on disk that is indistinguishable from a gated one. Corollary: a pin
+  duplicated between two files (a lock and a CI workflow) needs a test that reads BOTH from disk, so
+  siting that test on the wrong side of a promotion is what makes it useless.
+
 ## 2026-08-18 — `--no-deps` on a mixed pip install line starved the docs-CI toolchain's dependency trees
 
 - **What happened:** lode-fhql.23 collapsed docs.yml's toolchain install into one line,
