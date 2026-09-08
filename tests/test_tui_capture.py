@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from lode.config import Settings
 from lode.hashing import NO_PARENT, content_version_id
 from lode.storage import init_db
 from lode.tui.services import capture as capture_mod
@@ -48,8 +49,6 @@ def test_save_capture_explicit_no_egress_seeds_the_root_create(
     """lode-pky9: an explicit ``no_egress=True`` lands in the SAME create as
     the note row, not a follow-up write — the pending flag CaptureScreen's
     palette command flips before Ctrl+S."""
-    from lode.config import Settings
-
     db_path = tmp_path / "lode.db"
     result = save_capture(
         db_path, "sensitive", settings=Settings(no_egress_default=False), no_egress=True
@@ -63,8 +62,6 @@ def test_save_capture_explicit_no_egress_seeds_the_root_create(
 def test_save_capture_no_egress_none_keeps_settings_default(tmp_path: Path) -> None:
     """``no_egress=None`` (the default, every non-capture-screen caller) must
     not disturb the existing ``settings.no_egress_default`` seeding."""
-    from lode.config import Settings
-
     db_path = tmp_path / "lode.db"
     result = save_capture(
         db_path, "ordinary", settings=Settings(no_egress_default=True)

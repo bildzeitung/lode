@@ -111,7 +111,10 @@ from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
 from lode.tui.latency_probe import probe_event_loop_lag
-from lode.tui.no_egress_command import NoEgressCommandProvider
+from lode.tui.no_egress_command import (
+    NO_EGRESS_BORDER_CLASS,
+    NoEgressCommandProvider,
+)
 from lode.tui.screens._link_open import open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.screens.discard_confirm import DiscardConfirmScreen
@@ -131,12 +134,6 @@ BODY_ID = "capture-body"
 #: The passive "related past notes" panel's widget id (lode-mkc.3) — read back
 #: in tests.
 RELATED_ID = "related-notes"
-
-#: CSS class toggled on the body TextArea to show a red border while the
-#: pending capture is marked no-egress (lode-pky9) -- no extra widget, per
-#: the human decision on this ticket. Same class :class:`~lode.tui.screens.edit.EditScreen`
-#: uses, styled once in ``lode.tcss``.
-NO_EGRESS_BORDER_CLASS = "no-egress-border"
 
 
 class CaptureScreen(Screen[None]):
@@ -217,10 +214,8 @@ class CaptureScreen(Screen[None]):
     def on_mount(self) -> None:
         # lode-pky9: seeded from settings here, not __init__ -- self.app
         # needs a running app context __init__ cannot rely on.
-        self._no_egress_pending = self.app.settings.no_egress_default
-        text_area = self.query_one(f"#{BODY_ID}", TextArea)
-        text_area.set_class(self._no_egress_pending, NO_EGRESS_BORDER_CLASS)
-        text_area.focus()
+        self._set_no_egress_pending(self.app.settings.no_egress_default)
+        self.query_one(f"#{BODY_ID}", TextArea).focus()
         # lode-0wj.2: the event-loop-lag heartbeat only ever runs while DEBUG
         # logging is on -- gating the *start* (not just the log calls inside it)
         # means the default INFO level spawns no extra worker at all.
@@ -317,8 +312,7 @@ class CaptureScreen(Screen[None]):
         # persisted atomically with that note's create; it does not carry
         # forward. Only reached past the guard above, so a refused/CAS-
         # rejected save leaves both untouched, per the ticket.
-        self._no_egress_pending = self.app.settings.no_egress_default
-        text_area.set_class(self._no_egress_pending, NO_EGRESS_BORDER_CLASS)
+        self._set_no_egress_pending(self.app.settings.no_egress_default)
         text_area.focus()
         self.notify("Saved. New note.")
 
@@ -354,9 +348,18 @@ class CaptureScreen(Screen[None]):
         brand-new capture, so nothing is persisted (or made cloud-eligible)
         until :meth:`action_save`/:meth:`_save_and_exit` actually saves.
         """
-        self._no_egress_pending = not self._no_egress_pending
+        self._set_no_egress_pending(not self._no_egress_pending)
+
+    def _set_no_egress_pending(self, pending: bool) -> None:
+        """Set the pending flag and its border together.
+
+        The only writer of ``_no_egress_pending``: the border is the whole of
+        the on-screen signal, so a state change that skipped it would leave
+        the screen lying about what the next save will persist.
+        """
+        self._no_egress_pending = pending
         self.query_one(f"#{BODY_ID}", TextArea).set_class(
-            self._no_egress_pending, NO_EGRESS_BORDER_CLASS
+            pending, NO_EGRESS_BORDER_CLASS
         )
 
     def action_focus_related(self) -> None:

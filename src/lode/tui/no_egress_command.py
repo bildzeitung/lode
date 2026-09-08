@@ -24,6 +24,13 @@ from typing import Protocol
 
 from textual.command import DiscoveryHit, Hit, Hits, Provider
 
+#: CSS class both screens toggle on their body TextArea to show a red border
+#: while the note (or, on Capture, the pending flag) is withheld from cloud
+#: egress -- no extra widget, per the human decision on this ticket. Styled
+#: once in ``lode.tcss``; single-sourced here because both screens use the
+#: identical class name.
+NO_EGRESS_BORDER_CLASS = "no-egress-border"
+
 
 class NoEgressCommandTarget(Protocol):
     """What a screen must supply to host the no-egress palette command."""
@@ -51,13 +58,18 @@ class NoEgressCommandProvider(Provider):
     ``isinstance`` branching is needed here.
     """
 
-    async def discover(self) -> Hits:
+    def _target(self) -> NoEgressCommandTarget:
         target: NoEgressCommandTarget = self.screen  # type: ignore[assignment]
-        text = _command_text(target.no_egress_pending())
-        yield DiscoveryHit(text, target.no_egress_toggle)
+        return target
+
+    async def discover(self) -> Hits:
+        target = self._target()
+        yield DiscoveryHit(
+            _command_text(target.no_egress_pending()), target.no_egress_toggle
+        )
 
     async def search(self, query: str) -> Hits:
-        target: NoEgressCommandTarget = self.screen  # type: ignore[assignment]
+        target = self._target()
         text = _command_text(target.no_egress_pending())
         matcher = self.matcher(query)
         if (score := matcher.match(text)) > 0:

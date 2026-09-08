@@ -25,27 +25,20 @@ from pathlib import Path
 
 from textual.widgets import TextArea
 
+from lode.config import Settings
 from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.no_egress_command import NoEgressCommandProvider, _command_text
+from lode.tui.no_egress_command import (
+    NO_EGRESS_BORDER_CLASS,
+    NoEgressCommandProvider,
+    _command_text,
+)
 from lode.tui.screens.capture import BODY_ID as CAPTURE_BODY_ID
-from lode.tui.screens.capture import NO_EGRESS_BORDER_CLASS as CAPTURE_BORDER_CLASS
 from lode.tui.screens.capture import CaptureScreen
 from lode.tui.screens.edit import EDIT_BODY_ID, EditScreen
-from lode.tui.screens.edit import NO_EGRESS_BORDER_CLASS as EDIT_BORDER_CLASS
 from lode.tui.screens.no_egress_confirm import NoEgressClearConfirmScreen
+from lode.tui.services.no_egress import note_no_egress
 from lode.versions import save, set_no_egress
-
-
-def _no_egress_flag(db_path: Path, note_id: str) -> int:
-    conn = sqlite3.connect(db_path)
-    try:
-        row = conn.execute(
-            "SELECT no_egress FROM notes WHERE note_id = ?", (note_id,)
-        ).fetchone()
-        return row[0]
-    finally:
-        conn.close()
 
 
 def test_command_text_reflects_current_state() -> None:
@@ -91,7 +84,7 @@ def test_edit_screen_toggle_sets_immediately_no_confirm(tmp_path: Path) -> None:
         conn.close()
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> tuple[bool, int, bool]:
+    async def _drive() -> tuple[bool, bool, bool]:
         async with app.run_test() as pilot:
             await app.push_screen(EditScreen("note-edit-toggle"))
             await pilot.pause()
@@ -102,13 +95,13 @@ def test_edit_screen_toggle_sets_immediately_no_confirm(tmp_path: Path) -> None:
             body = screen.query_one(f"#{EDIT_BODY_ID}", TextArea)
             return (
                 screen.no_egress_pending(),
-                _no_egress_flag(db_path, "note-edit-toggle"),
-                body.has_class(EDIT_BORDER_CLASS),
+                note_no_egress(db_path, "note-edit-toggle"),
+                body.has_class(NO_EGRESS_BORDER_CLASS),
             )
 
     pending, flag, has_border = asyncio.run(_drive())
     assert pending is True
-    assert flag == 1
+    assert flag is True
     assert has_border is True
 
 
@@ -122,7 +115,7 @@ def test_edit_screen_toggle_clearing_confirms_first(tmp_path: Path) -> None:
         conn.close()
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> tuple[bool, int]:
+    async def _drive() -> tuple[bool, bool]:
         async with app.run_test() as pilot:
             await app.push_screen(EditScreen("note-edit-withheld"))
             await pilot.pause()
@@ -133,18 +126,16 @@ def test_edit_screen_toggle_clearing_confirms_first(tmp_path: Path) -> None:
             is_confirm = isinstance(app.screen, NoEgressClearConfirmScreen)
             await pilot.press("y")
             await pilot.pause()
-            return is_confirm, _no_egress_flag(db_path, "note-edit-withheld")
+            return is_confirm, note_no_egress(db_path, "note-edit-withheld")
 
     is_confirm, flag_after = asyncio.run(_drive())
     assert is_confirm is True
-    assert flag_after == 0
+    assert flag_after is False
 
 
 def test_capture_screen_pending_flag_initialises_from_settings_default(
     tmp_path: Path,
 ) -> None:
-    from lode.config import Settings
-
     db_path = tmp_path / "lode.db"
     app = LodeApp(db_path=db_path, settings=Settings(no_egress_default=True))
 
@@ -155,7 +146,7 @@ def test_capture_screen_pending_flag_initialises_from_settings_default(
             screen = app.screen
             assert isinstance(screen, CaptureScreen)
             body = screen.query_one(f"#{CAPTURE_BODY_ID}", TextArea)
-            return screen.no_egress_pending(), body.has_class(CAPTURE_BORDER_CLASS)
+            return screen.no_egress_pending(), body.has_class(NO_EGRESS_BORDER_CLASS)
 
     pending, has_border = asyncio.run(_drive())
     assert pending is True
@@ -177,7 +168,7 @@ def test_capture_screen_toggle_is_pure_in_memory_and_border_tracks_it(
             screen.no_egress_toggle()
             await pilot.pause()
             body = screen.query_one(f"#{CAPTURE_BODY_ID}", TextArea)
-            return screen.no_egress_pending(), body.has_class(CAPTURE_BORDER_CLASS)
+            return screen.no_egress_pending(), body.has_class(NO_EGRESS_BORDER_CLASS)
 
     pending, _has_border = asyncio.run(_drive())
     assert pending is True
@@ -209,7 +200,7 @@ def test_capture_save_persists_pending_flag_atomically(tmp_path: Path) -> None:
             return row[0]
 
     note_id = asyncio.run(_drive())
-    assert _no_egress_flag(db_path, note_id) == 1
+    assert note_no_egress(db_path, note_id) is True
 
 
 def test_capture_save_and_new_resets_pending_flag_to_settings_default(
@@ -230,7 +221,7 @@ def test_capture_save_and_new_resets_pending_flag_to_settings_default(
             await pilot.press("ctrl+s")
             await pilot.pause()
             body = screen.query_one(f"#{CAPTURE_BODY_ID}", TextArea)
-            return screen.no_egress_pending(), body.has_class(CAPTURE_BORDER_CLASS)
+            return screen.no_egress_pending(), body.has_class(NO_EGRESS_BORDER_CLASS)
 
     pending_after, has_border_after = asyncio.run(_drive())
     assert pending_after is False

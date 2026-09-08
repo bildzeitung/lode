@@ -271,7 +271,11 @@ from lode.tui.screens.edit import EditScreen
 from lode.tui.screens.enrichment_modal import EnrichmentModalScreen
 from lode.tui.screens.no_egress_confirm import NoEgressClearConfirmScreen
 from lode.tui.services.edit import delete_note, load_head
-from lode.tui.services.no_egress import note_no_egress, toggle_note_no_egress
+from lode.tui.services.no_egress import (
+    no_egress_notice,
+    note_no_egress,
+    toggle_note_no_egress,
+)
 from lode.tui.widgets.lode_data_table import LodeDataTable
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.versions import HeadConflictError
@@ -629,17 +633,13 @@ class BrowseScreen(Screen[None]):
         """Flip the flag, report the RESULTING state, and re-render.
 
         Both arms of ``n`` land here. The notify text comes from
+        :func:`~lode.tui.services.no_egress.no_egress_notice`, keyed on
         :func:`~lode.tui.services.no_egress.toggle_note_no_egress`'s return
         value -- the state actually written -- rather than from the direction
         the caller expected, so a note flipped elsewhere between the confirm
         popping up and this running is still described accurately.
         """
-        if toggle_note_no_egress(self.app.db_path, note_id):
-            self.notify(
-                "Marked no-egress: this note is now withheld from cloud egress."
-            )
-        else:
-            self.notify("Cleared no-egress: this note is cloud-eligible again.")
+        self.notify(no_egress_notice(toggle_note_no_egress(self.app.db_path, note_id)))
         self._reload_rows()
 
     def action_delete_selected(self) -> None:

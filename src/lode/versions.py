@@ -253,7 +253,7 @@ def _save_core(
         # deferred FK permits this), satisfying the version's note_id FK.
         # Root create seeds the note-scoped ``no_egress`` flag from
         # Settings.no_egress_default unless the caller passed an explicit
-        # value (lode-pky9); the schema DEFAULT 0 never consulted either
+        # value (lode-pky9); the schema DEFAULT 0 is consulted by neither
         # (lode-a43n).
         seeded_no_egress = (
             settings.no_egress_default if no_egress is None else no_egress

@@ -73,3 +73,18 @@ def toggle_note_no_egress(db_path: Path, note_id: str) -> bool:
         return new_state
     finally:
         conn.close()
+
+
+def no_egress_notice(state: bool) -> str:
+    """The user-facing notify text for a flag that just settled on ``state``.
+
+    Every screen that flips the flag reports it in these exact words -- the
+    text lives beside the single write path rather than in each screen, so
+    Browse's ``n`` and the editor screens' palette command cannot drift apart
+    on the wording. Phrased from the RESULTING state, never the direction the
+    caller expected, so a note flipped elsewhere mid-confirm is still
+    described accurately.
+    """
+    if state:
+        return "Marked no-egress: this note is now withheld from cloud egress."
+    return "Cleared no-egress: this note is cloud-eligible again."

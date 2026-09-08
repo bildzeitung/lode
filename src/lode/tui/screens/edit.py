@@ -127,7 +127,10 @@ from textual.widgets import Header, TextArea
 
 from lode.notes_read import NO_EGRESS_MARKER
 from lode.storage import init_db
-from lode.tui.no_egress_command import NoEgressCommandProvider
+from lode.tui.no_egress_command import (
+    NO_EGRESS_BORDER_CLASS,
+    NoEgressCommandProvider,
+)
 from lode.tui.screens._content_view import _view_note_external_content
 from lode.tui.screens._link_open import open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
@@ -143,7 +146,11 @@ from lode.tui.services.edit import (
     load_head_conn,
     save_edit,
 )
-from lode.tui.services.no_egress import note_no_egress_conn, toggle_note_no_egress
+from lode.tui.services.no_egress import (
+    no_egress_notice,
+    note_no_egress_conn,
+    toggle_note_no_egress,
+)
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.versions import SaveResult
@@ -153,10 +160,6 @@ EDIT_BODY_ID = "note-edit-body"
 #: The edit screen's passive related-notes panel widget id (lode-aoc) -- read
 #: back in tests.
 EDIT_RELATED_ID = "edit-related-notes"
-#: CSS class toggled on the body TextArea to show a red border while the note
-#: is withheld from cloud egress (lode-pky9) -- no extra widget, per the
-#: human decision on this ticket.
-NO_EGRESS_BORDER_CLASS = "no-egress-border"
 
 
 class EditScreen(Screen[None]):
@@ -247,8 +250,7 @@ class EditScreen(Screen[None]):
         conn = init_db(self.app.db_path)
         try:
             self._no_egress = note_no_egress_conn(conn, self.note_id)
-            marker = f" [{NO_EGRESS_MARKER}]" if self._no_egress else ""
-            self.sub_title = f"{self.note_id}{marker}"
+            self._refresh_no_egress_sub_title()
             head = load_head_conn(conn, self.note_id)
         finally:
             conn.close()
@@ -383,20 +385,24 @@ class EditScreen(Screen[None]):
 
     def _apply_no_egress_toggle(self) -> None:
         """Flip the flag through the single write path, report the RESULTING
-        state (same notify text as Browse's ``n``), and refresh the border +
-        sub_title marker in step."""
+        state (:func:`~lode.tui.services.no_egress.no_egress_notice`, the same
+        words Browse's ``n`` uses), and refresh the border + sub_title marker
+        in step."""
         self._no_egress = toggle_note_no_egress(self.app.db_path, self.note_id)
-        if self._no_egress:
-            self.notify(
-                "Marked no-egress: this note is now withheld from cloud egress."
-            )
-        else:
-            self.notify("Cleared no-egress: this note is cloud-eligible again.")
-        marker = f" [{NO_EGRESS_MARKER}]" if self._no_egress else ""
-        self.sub_title = f"{self.note_id}{marker}"
+        self.notify(no_egress_notice(self._no_egress))
+        self._refresh_no_egress_sub_title()
         self.query_one(f"#{EDIT_BODY_ID}", TextArea).set_class(
             self._no_egress, NO_EGRESS_BORDER_CLASS
         )
+
+    def _refresh_no_egress_sub_title(self) -> None:
+        """Render the sub_title from ``self._no_egress``.
+
+        One place spells the ``[no-egress]`` marker, so the mount-time title
+        and the post-toggle one cannot diverge on its format.
+        """
+        marker = f" [{NO_EGRESS_MARKER}]" if self._no_egress else ""
+        self.sub_title = f"{self.note_id}{marker}"
 
     def action_save(self) -> None:
         """Ctrl+S: append a new version onto this note's chain, or explain why not."""
