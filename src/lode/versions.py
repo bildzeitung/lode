@@ -219,6 +219,7 @@ def _save_core(
     *,
     parent: str = NO_PARENT,
     settings: Settings,
+    no_egress: bool | None = None,
 ) -> SaveResult:
     """Create or update ``note_id`` to ``body`` on ``conn`` — no transaction boundary.
 
@@ -230,6 +231,15 @@ def _save_core(
     :func:`lode.repository.Repository.save` calls this inside its own ``with
     conn:`` so that the version-write and the derive-job enqueue commit atomically.
     :func:`save` (below) wraps this in ``with conn:`` for direct, standalone use.
+
+    ``no_egress`` only matters on a root create: ``None`` (every caller but
+    the TUI capture screen) keeps the existing ``settings.no_egress_default``
+    seeding; an explicit ``bool`` (lode-pky9's pending capture-screen flag)
+    seeds the row with that value instead, atomically with the create, so
+    the note is never briefly cloud-eligible between the create and a
+    follow-up write. Ignored on an update — the flag is only ever set at
+    create time by this parameter; existing notes flip it via
+    :func:`set_no_egress`.
     """
     head, head_body = _head(conn, note_id)
 
@@ -242,11 +252,15 @@ def _save_core(
         # Note row first: its head points at the not-yet-written version (the
         # deferred FK permits this), satisfying the version's note_id FK.
         # Root create seeds the note-scoped ``no_egress`` flag from
-        # Settings.no_egress_default; the schema DEFAULT 0 never consulted it
+        # Settings.no_egress_default unless the caller passed an explicit
+        # value (lode-pky9); the schema DEFAULT 0 never consulted either
         # (lode-a43n).
+        seeded_no_egress = (
+            settings.no_egress_default if no_egress is None else no_egress
+        )
         conn.execute(
             "INSERT INTO notes (note_id, head_version_id, no_egress) VALUES (?, ?, ?)",
-            (note_id, version_id, int(settings.no_egress_default)),
+            (note_id, version_id, int(seeded_no_egress)),
         )
         _write_version(conn, version_id, note_id, NO_PARENT, body, "create")
         return SaveResult(note_id, version_id, "create")

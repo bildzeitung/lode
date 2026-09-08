@@ -166,3 +166,12 @@ HelpScreen BindingsTable > .bindings-table--header {
 DataTable {
     height: 1fr;
 }
+
+/* Editor no-egress border (lode-pky9). CaptureScreen and EditScreen toggle
+ * this class on their body TextArea when the note (or, on Capture, the
+ * pending flag) is withheld from cloud egress -- a red border is the whole
+ * of the on-screen signal (human decision 2026-09-08: no extra widget).
+ * $error rather than a hard-coded hex so it stays theme-aware. */
+.no-egress-border {
+    border: solid $error;
+}

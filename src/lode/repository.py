@@ -186,8 +186,17 @@ class Repository:
         *,
         parent: str = NO_PARENT,
         settings: Settings | None = None,
+        no_egress: bool | None = None,
     ) -> SaveResult:
         """Create/update ``note_id`` and enqueue its derive jobs, atomically.
+
+        ``no_egress`` is forwarded to :func:`~lode.versions._save_core`
+        untouched — ``None`` (every caller but the TUI capture screen) keeps
+        the ``settings.no_egress_default`` seeding on a root create; an
+        explicit ``bool`` seeds the row with that value instead, atomically
+        with the create (lode-pky9), so a note pending no-egress in the
+        capture screen is never briefly cloud-eligible between the create and
+        a follow-up write. No effect on an update.
 
         Wraps :func:`~lode.versions._save_core` (the CAS-guarded version-write)
         and :func:`~lode.jobs.enqueue_derive_jobs` in a single ``with conn:``
@@ -230,7 +239,12 @@ class Repository:
         settings = settings or default_settings_for_missing_arg("Repository.save")
         with self.conn:
             result = versions._save_core(
-                self.conn, note_id, body, parent=parent, settings=settings
+                self.conn,
+                note_id,
+                body,
+                parent=parent,
+                settings=settings,
+                no_egress=no_egress,
             )
             if not result.deduped:
                 # Enqueue both embed and enrich atomically with the version

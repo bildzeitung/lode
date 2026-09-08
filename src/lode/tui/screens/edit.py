@@ -127,12 +127,14 @@ from textual.widgets import Header, TextArea
 
 from lode.notes_read import NO_EGRESS_MARKER
 from lode.storage import init_db
+from lode.tui.no_egress_command import NoEgressCommandProvider
 from lode.tui.screens._content_view import _view_note_external_content
 from lode.tui.screens._link_open import open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.screens.ask import AskScreen
 from lode.tui.screens.discard_confirm import DiscardConfirmScreen
 from lode.tui.screens.enrichment_modal import EnrichmentModalScreen
+from lode.tui.screens.no_egress_confirm import NoEgressClearConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 from lode.tui.screens.version_history import VersionHistoryScreen
 from lode.tui.services.edit import (
@@ -141,7 +143,7 @@ from lode.tui.services.edit import (
     load_head_conn,
     save_edit,
 )
-from lode.tui.services.no_egress import note_no_egress_conn
+from lode.tui.services.no_egress import note_no_egress_conn, toggle_note_no_egress
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.versions import SaveResult
@@ -151,6 +153,10 @@ EDIT_BODY_ID = "note-edit-body"
 #: The edit screen's passive related-notes panel widget id (lode-aoc) -- read
 #: back in tests.
 EDIT_RELATED_ID = "edit-related-notes"
+#: CSS class toggled on the body TextArea to show a red border while the note
+#: is withheld from cloud egress (lode-pky9) -- no extra widget, per the
+#: human decision on this ticket.
+NO_EGRESS_BORDER_CLASS = "no-egress-border"
 
 
 class EditScreen(Screen[None]):
@@ -195,6 +201,11 @@ class EditScreen(Screen[None]):
         Binding("ctrl+l", "ask_about_note", "Ask"),
     ]
 
+    # No new keybinding for the no-egress toggle (human decision, lode-pky9)
+    # -- it lives in the command palette instead. docs/keybindings.md carries
+    # the "spent no key" note.
+    COMMANDS: ClassVar = {NoEgressCommandProvider}
+
     def __init__(self, note_id: str) -> None:
         super().__init__()
         self.note_id = note_id
@@ -206,6 +217,11 @@ class EditScreen(Screen[None]):
         #: a normal race worth a soft fallback.
         self._loaded_head = ""
         self._loaded_body = ""
+        #: Mirrors ``notes.no_egress`` for this note (lode-pky9) -- read once
+        #: on mount, then kept in sync by :meth:`no_egress_toggle` so the
+        #: palette command's label and the body border never need a second
+        #: DB read after mount.
+        self._no_egress = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -230,11 +246,8 @@ class EditScreen(Screen[None]):
         # this screen alone reaches for the _conn variants.
         conn = init_db(self.app.db_path)
         try:
-            marker = (
-                f" [{NO_EGRESS_MARKER}]"
-                if note_no_egress_conn(conn, self.note_id)
-                else ""
-            )
+            self._no_egress = note_no_egress_conn(conn, self.note_id)
+            marker = f" [{NO_EGRESS_MARKER}]" if self._no_egress else ""
             self.sub_title = f"{self.note_id}{marker}"
             head = load_head_conn(conn, self.note_id)
         finally:
@@ -249,6 +262,7 @@ class EditScreen(Screen[None]):
         # related notes for its starting content, not only once the user
         # types further.
         text_area.text = self._loaded_body
+        text_area.set_class(self._no_egress, NO_EGRESS_BORDER_CLASS)
         text_area.focus()
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
@@ -336,6 +350,53 @@ class EditScreen(Screen[None]):
         away, from Browse -- shadowed, not removed.
         """
         self.app.push_screen(AskScreen(note_id=self.note_id))
+
+    def no_egress_pending(self) -> bool:
+        """Read back by :class:`~lode.tui.no_egress_command.NoEgressCommandProvider`
+        to label the palette entry -- this screen's local mirror of
+        ``notes.no_egress``, not a fresh DB read (see ``__init__``)."""
+        return self._no_egress
+
+    def no_egress_toggle(self) -> None:
+        """The palette command's callback (lode-pky9): flip this note's no_egress flag.
+
+        Applies **immediately** -- same semantics as
+        :meth:`~lode.tui.screens.browse.BrowseScreen.action_toggle_no_egress`,
+        not deferred to Ctrl+S. Mirrors that method's confirm-on-clear split:
+        SETTING (currently not withheld) is the safe direction and applies at
+        once; CLEARING (currently withheld) confirms first via
+        :class:`~lode.tui.screens.no_egress_confirm.NoEgressClearConfirmScreen`,
+        since it makes an explicitly withheld note cloud-eligible again.
+        """
+        if self._no_egress:
+            self.app.push_screen(
+                NoEgressClearConfirmScreen(), self._on_no_egress_clear_confirm
+            )
+            return
+        self._apply_no_egress_toggle()
+
+    def _on_no_egress_clear_confirm(self, confirmed: bool | None) -> None:
+        """Act on the clear-confirm dialog's answer: clear-then-redraw, or leave untouched."""
+        if not confirmed:
+            return
+        self._apply_no_egress_toggle()
+
+    def _apply_no_egress_toggle(self) -> None:
+        """Flip the flag through the single write path, report the RESULTING
+        state (same notify text as Browse's ``n``), and refresh the border +
+        sub_title marker in step."""
+        self._no_egress = toggle_note_no_egress(self.app.db_path, self.note_id)
+        if self._no_egress:
+            self.notify(
+                "Marked no-egress: this note is now withheld from cloud egress."
+            )
+        else:
+            self.notify("Cleared no-egress: this note is cloud-eligible again.")
+        marker = f" [{NO_EGRESS_MARKER}]" if self._no_egress else ""
+        self.sub_title = f"{self.note_id}{marker}"
+        self.query_one(f"#{EDIT_BODY_ID}", TextArea).set_class(
+            self._no_egress, NO_EGRESS_BORDER_CLASS
+        )
 
     def action_save(self) -> None:
         """Ctrl+S: append a new version onto this note's chain, or explain why not."""

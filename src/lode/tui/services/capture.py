@@ -57,7 +57,11 @@ class EmptyCaptureError(Exception):
 
 
 def save_capture(
-    db_path: Path, body: str, *, settings: Settings | None = None
+    db_path: Path,
+    body: str,
+    *,
+    settings: Settings | None = None,
+    no_egress: bool | None = None,
 ) -> SaveResult | Conflict:
     """Persist a captured note instantly — no AI call anywhere in this path.
 
@@ -70,6 +74,15 @@ def save_capture(
     :func:`lode.tui.services.reconcile.conflict_from_error`, which preserves the
     buffer as a draft and returns the :class:`~lode.tui.services.reconcile.Conflict`
     the reconcile screen (lode-mkc.4) diffs and resolves.
+
+    ``no_egress`` (lode-pky9) is forwarded to :meth:`Repository.save` and, from
+    there, to the root-create INSERT itself — ``None`` (every caller but
+    :class:`~lode.tui.screens.capture.CaptureScreen`) keeps the existing
+    ``settings.no_egress_default`` seeding; an explicit ``bool`` (the capture
+    screen's pending flag) seeds the row atomically with the create, so the
+    note is never briefly cloud-eligible before a follow-up write could apply
+    it — the derive jobs this same transaction enqueues could otherwise be
+    picked up before a post-hoc flag landed.
     """
     if not body.strip():
         raise EmptyCaptureError("refusing to save an empty note")
@@ -83,7 +96,7 @@ def save_capture(
     try:
         repo = Repository(conn, cache=CompositeCache([LexicalCacheBackend(conn)]))
         try:
-            return repo.save(note_id, body, settings=settings)
+            return repo.save(note_id, body, settings=settings, no_egress=no_egress)
         except HeadConflictError as exc:
             return conflict_from_error(db_path, exc)
     finally:
