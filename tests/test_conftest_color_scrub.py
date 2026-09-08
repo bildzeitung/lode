@@ -61,6 +61,19 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: always runs with the scrub active.
 _CANARY_TEST = "tests/test_cli.py::test_config_output_has_no_ansi_when_piped"
 
+#: Canary for the ``COLUMNS`` pin that sits next to the four pops: the test that went red when
+#: ``scripts/update-deps.sh`` ran the suite from a ~115-column terminal (its footer phrase
+#: ``'lode reembed'/'lode reenrich'`` splits across a line break at that width). Polluting the
+#: nested run's environment with ``COLUMNS=115`` reproduces that incident without a pty: rich
+#: bakes an ambient ``COLUMNS`` into the shared console at import, exactly as it would probe a
+#: real 115-column terminal, so the pin is the only thing standing between this canary and red.
+#: Sabotage recipe: comment out ``os.environ["COLUMNS"] = "80"`` in ``tests/conftest.py``.
+_WIDTH_CANARY_TEST = "tests/test_cli.py::test_status_hints_self_healing_dead_letters"
+
+#: A width at which the width canary's phrase is known to split (it does at 42 of the widths
+#: between 40 and 300; 115 is the one the incident was observed at).
+_POLLUTED_COLUMNS = "115"
+
 #: Comfortably above the ~15-20s this nested run measures unloaded, while staying under the outer
 #: ``@pytest.mark.timeout`` below so a genuinely wedged subprocess surfaces as a legible
 #: ``TimeoutExpired`` from here rather than as an opaque outer kill. Both are raised above
@@ -74,7 +87,9 @@ _NESTED_TIMEOUT_S = 240
 def test_canary_passes_with_force_color_set_in_ambient_env() -> None:
     """``tests/conftest.py``'s scrub neutralizes an ambient ``FORCE_COLOR=3`` before the canary
     test's module (and so ``lode.cli``) is ever imported -- reproducing lode-kq4v's exact incident
-    and proving it is fixed.
+    and proving it is fixed. The ``COLUMNS`` pin beside the scrub is proven the same way in the
+    same run: an ambient ``COLUMNS=115`` would otherwise bake a 115-column width into the shared
+    console and split the width canary's footer phrase.
 
     No "control" companion asserting the canary also passes with ``FORCE_COLOR`` *unset*: that
     case is the scrub doing nothing, it asserts the identical ``returncode == 0``, and the outer
@@ -87,6 +102,10 @@ def test_canary_passes_with_force_color_set_in_ambient_env() -> None:
     """
     env = dict(os.environ)
     env["FORCE_COLOR"] = "3"
+    # Both pollutants ride the SAME nested run: a second ~15-20s nested pytest session per
+    # landing-gate pass buys nothing over one, and each canary can only be reddened by its own
+    # pollutant, so the assertion message still attributes a red to the right pin.
+    env["COLUMNS"] = _POLLUTED_COLUMNS
     # -p no:cacheprovider keeps the nested run off .pytest_cache state shared with the outer run;
     # -p no:xdist keeps it single-process -- a direct, minimal repro of what lode-kq4v observed,
     # with nothing about xdist's worker fan-out in the way.
@@ -101,6 +120,7 @@ def test_canary_passes_with_force_color_set_in_ambient_env() -> None:
             "no:xdist",
             "-q",
             _CANARY_TEST,
+            _WIDTH_CANARY_TEST,
         ],
         env=env,
         cwd=REPO_ROOT,

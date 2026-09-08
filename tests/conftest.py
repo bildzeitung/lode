@@ -297,6 +297,29 @@ os.environ.pop("TTY_COMPATIBLE", None)
 os.environ.pop("TTY_INTERACTIVE", None)
 os.environ.pop("NO_COLOR", None)
 
+#: Pin the shared ``console``/``err_console`` render WIDTH for the same reason, in the same
+#: place, under the same ordering constraint as the four pops above. rich's ``Console.size``
+#: (rich 15.0.0, ``rich/console.py``) takes one of two paths: when ``COLUMNS`` was in the
+#: environment at CONSTRUCTION it bakes ``_width`` from it and never looks again; when it was
+#: NOT, ``_width`` stays ``None`` and every render re-probes ``os.get_terminal_size`` over fds
+#: 0/1/2 -- the REAL inherited descriptors, which pytest's capture and ``CliRunner``'s
+#: ``sys.stdout`` swap never touch. A ``pytest-xdist`` worker launched from a terminal
+#: therefore renders at whatever width that terminal window happens to be, while CI (no tty,
+#: no ``COLUMNS``) renders at rich's 80-column fallback. Any test asserting a multi-word
+#: phrase ``in result.stdout`` then passes or fails on the human's window size: OBSERVED as a
+#: single red ``test_status_hints_self_healing_dead_letters`` that rolled back an otherwise
+#: green ``scripts/update-deps.sh`` run from a ~115-column terminal, with the identical tree
+#: green at 80 and 93 (the phrase ``'lode reembed'/'lode reenrich'`` splits at 42 of the
+#: widths between 40 and 300). Setting ``COLUMNS`` here -- unconditionally, so an ambient
+#: value exported by a shell or multiplexer cannot re-open the same gap -- makes the bake
+#: path the only path, at the width the corpus gate and every ``env={"COLUMNS": "80"}``
+#: subprocess test already assume. Per-test overrides still work via ``set_console_width``
+#: below (it patches the baked ``_width`` directly), and Typer's own per-invocation console
+#: still honours ``CliRunner.invoke(..., env={"COLUMNS": ...})`` because that console is
+#: constructed fresh inside the override. Same nested-subprocess proof as the pops:
+#: ``tests/test_conftest_color_scrub.py``.
+os.environ["COLUMNS"] = "80"
+
 #: lode-sx17: cut huggingface_hub's agent-harness registry fetch at its SOURCE, so the guard below
 #: never has to catch it. ``utils/_headers.py``'s ``_http_user_agent()`` -- reached from
 #: ``build_hf_headers()``, i.e. while building the headers for EVERY Hub request -- calls
@@ -751,18 +774,21 @@ def set_console_width(
     present in the environment at that moment (verified against the installed
     rich 15.0.0). Once baked, ``Console.size`` short-circuits on ``self._width
     is not None`` and never re-reads the environment again -- for the REST OF
-    THE PROCESS'S LIFETIME.
+    THE PROCESS'S LIFETIME. (When ``COLUMNS`` is ABSENT at construction the
+    width is instead re-probed from the real terminal on every render -- the
+    module-level pin next to the lode-kq4v scrub above exists to rule that path
+    out; read that comment for the mechanism and the incident.)
 
     For a real one-shot ``lode config`` invocation that is harmless (import time
     and render time are the same moment). It is NOT harmless in this test suite:
     pytest-xdist imports ``lode.cli`` ONCE per worker process and reuses the same
-    ``console`` singleton across every test that worker runs -- so whichever
-    ``COLUMNS`` happened to be in THAT worker's environment at its first import
-    of ``lode.cli`` (observed here: '80', inherited from outside pytest's own
-    control) freezes the console's width for every subsequent test in that
-    worker, and a later ``runner.invoke(..., env={"COLUMNS": ...})`` override has
-    NO effect -- confirmed empirically: it changes ``os.environ`` for the call,
-    but ``console.size``'s early-return never re-reads it.
+    ``console`` singleton across every test that worker runs -- so the
+    ``COLUMNS`` in THAT worker's environment at its first import of ``lode.cli``
+    (always '80' now, pinned by this conftest at import) freezes the console's
+    width for every subsequent test in that worker, and a later
+    ``runner.invoke(..., env={"COLUMNS": ...})`` override has NO effect --
+    confirmed empirically: it changes ``os.environ`` for the call, but
+    ``console.size``'s early-return never re-reads it.
 
     This reaches past that freeze by monkeypatching the private
     ``_width``/``_height`` attributes (auto-reverted after the test). Reaching

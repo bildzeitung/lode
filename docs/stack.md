@@ -349,7 +349,11 @@ own copy of the `uv pip compile` command string:
   the failure predates every branch in the set and is not attributable to any of them — stop the
   pass, don't isolate. (`tests/conftest.py` also scrubs the specific ambient colour/tty env vars
   rich reads — `FORCE_COLOR`/`NO_COLOR`/`TTY_COMPATIBLE`/`TTY_INTERACTIVE` — at collection time for
-  every pytest invocation, closing the root cause `lode-kq4v` found; the baseline here is the
+  every pytest invocation, closing the root cause `lode-kq4v` found, and pins `COLUMNS=80` in the
+  same block so the shared `Console` never re-probes the *real* inherited terminal width from an
+  xdist worker's fds — a width-dependent line wrap otherwise reddens a CLI test from one terminal
+  window size and not another, as a `scripts/update-deps.sh` run from a ~115-column terminal
+  showed; the baseline here is the
   independent blast-radius fix, so `/land` stays safe even against a *different* source of
   tree-alone-defying redness nobody has scrubbed yet.)
 

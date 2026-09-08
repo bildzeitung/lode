@@ -111,7 +111,7 @@ jobs:
         # mkdocs-material and typer resolve normally.
         run: |
           pip install --no-deps -e .
-          pip install "mkdocs-material==9.5.44" "typer==0.27.1"
+          pip install "mkdocs-material==9.5.44" "typer==0.27.2"
 
       # mermaid-cli's image is pulled once here rather than left to the
       # first `docker run` inside build_docs_site.py, so a pull failure
