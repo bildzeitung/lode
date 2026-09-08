@@ -58,16 +58,22 @@ Re-activate in every new shell; re-run the script only when dependencies change.
 `scripts/update-deps.sh` is the **only** sanctioned way to move `requirements.lock` —
 never hand-edit it or run a bare `uv pip compile`. It recompiles a candidate lock from
 `pyproject.toml`, prints a readable version diff against the committed lock (names and
-versions only, no hash noise — the diff is the point), then installs the candidate into
-a freshly rebuilt `./venv` and runs the quality gates (`nox -t fix`, `nox -s tests`). On
-green it promotes the candidate over `requirements.lock` for you to review and commit.
+versions only, no hash noise — the diff is the point), then promotes that candidate over
+`requirements.lock` **before** installing it into a freshly rebuilt `./venv` and running
+the quality gates (`nox -t fix`, `nox -s tests`). Promoting first is deliberate: a test
+that reads the committed lock from disk has to gate against the pins the update is
+introducing, not the ones it is about to replace (`lode-2zi9`). On green the candidate
+simply stays where it is, for you to review and commit.
 
 On ANY other failure — the candidate install itself (an uninstallable or
 hash-mismatched pin, a yanked release, a network blip) just as much as a red gate — it
-prints a failure report meant to be pasted straight into a bd ticket, then trashes
-whatever venv state exists and rebuilds `./venv` clean from the unchanged committed
-lock. The committed lock is never touched by a failed update, in every case. The venv
-rebuild itself is best-effort: it's expected to succeed, but if that rollback rebuild
+prints a failure report meant to be pasted straight into a bd ticket, then restores
+`requirements.lock` byte-for-byte from the copy it saved before promoting, trashes
+whatever venv state exists and rebuilds `./venv` clean from that restored lock. A failed
+update always leaves the committed lock back on its pre-update pins — including when the
+script is killed outright mid-gate (a Ctrl-C during the long `nox -s tests`), which an
+EXIT trap covers, so an ungated candidate is never left sitting on disk looking like a
+gated one. The venv rebuild itself is best-effort: it's expected to succeed, but if that rollback rebuild
 also hits a failure (e.g. its own network blip), the script prints a loud warning after
 the report — rather than silently losing the report — and tells you to re-run
 `scripts/python-init.sh` by hand to restore `./venv`.

@@ -25,24 +25,32 @@
 #      versions only, no hash noise: "pkg  OLD -> NEW" for a bump, "+ pkg
 #      VERSION" for an addition, "- pkg  VERSION (removed)". This diff is
 #      the whole point of the script: it is the artifact, not the install.
-#   3. --dry-run stops here, having touched nothing. Otherwise: trash
-#      ./venv and rebuild it FRESH from the candidate lock (see NO -x /
+#   3. --dry-run stops here, having touched nothing. Otherwise: save a copy
+#      of the currently-committed lock, then PROMOTE the candidate over
+#      requirements.lock immediately -- BEFORE any gating (lode-2zi9). Any
+#      test that reads the committed lock from disk (a workflow-pin gate, a
+#      docs table, a future lock-vs-pyproject consistency check) must see
+#      what the update is about to change, not the pins it is about to
+#      replace; gating with the old lock still on disk is exactly the wrong
+#      signal (see the ticket for the incident this fixes). Then trash
+#      ./venv and rebuild it FRESH from that now-promoted lock (see NO -x /
 #      TRASH-NOT-REPAIR below -- never patched in place).
-#   4. Run the gates: nox -t fix, nox -s tests.
-#   5. GREEN (candidate installs AND both gates pass) -> promote the
-#      candidate over requirements.lock. This script never commits --
-#      review (`git diff -- requirements.lock`) and commit it yourself.
-#      ANY OTHER FAILURE -- the candidate install itself (uninstallable /
-#      hash-mismatched pin, yanked release, network blip) just as much as a
-#      red nox gate -- prints the paste-into-bd failure report FIRST, then
-#      trashes whatever venv state exists and rebuilds clean from the
-#      UNCHANGED committed requirements.lock. The report does not depend on
-#      that rollback rebuild succeeding (see FAILURE HANDLING below): the
-#      lock is always left untouched either way, and if the rollback
-#      rebuild itself also fails, a loud warning after the report says so
-#      and points at scripts/python-init.sh as the manual recovery.
-#   6. On promote (step 5's GREEN path only -- never on --dry-run, never on
-#      a failed/rolled-back run), file ONE bd stub ticket carrying the
+#   4. Run the gates: nox -t fix, nox -s tests -- against the promoted lock.
+#   5. GREEN (candidate installs AND both gates pass) -> nothing further to
+#      do to the lock; it already holds the candidate. This script never
+#      commits -- review (`git diff -- requirements.lock`) and commit it
+#      yourself. ANY OTHER FAILURE -- the candidate install itself
+#      (uninstallable / hash-mismatched pin, yanked release, network blip)
+#      just as much as a red nox gate -- prints the paste-into-bd failure
+#      report FIRST, then RESTORES the committed lock from the saved copy
+#      byte-for-byte, trashes whatever venv state exists, and rebuilds
+#      clean from that restored lock. The report does not depend on the
+#      restore or that rollback rebuild succeeding (see FAILURE HANDLING
+#      below), and if the rollback rebuild itself also fails, a loud
+#      warning after the report says so and points at
+#      scripts/python-init.sh as the manual recovery.
+#   6. On a green run (step 5's GREEN path only -- never on --dry-run,
+#      never on a failed/rolled-back run), file ONE bd stub ticket carrying the
 #      VERSION DIFF as a durable work order for a human/producer to read
 #      upstream changelogs and judge required-work vs. judgment-call in the
 #      context of lode's actual call sites (lode-i642). This is a WORK
@@ -81,13 +89,23 @@
 # just bury it in line noise.
 #
 # FAILURE HANDLING -- rollback is never "reverse a partial install"
-# (2026-07-19 user decision, lode-g274 notes): it is always `rm -rf ./venv`
-# + a clean rebuild from a known-good lock, so there is no half-migrated
-# state to reason about *if the rebuild succeeds*. The failure report is
-# built and printed BEFORE that rollback rebuild is attempted (not after),
-# so a hiccup during the rollback rebuild itself (e.g. a transient network
-# failure on `pip install -U uv`) can never swallow the report -- the two
-# are independent by construction, not by ordering luck.
+# (2026-07-19 user decision, lode-g274 notes): it is always restore the
+# saved committed lock byte-for-byte, then `rm -rf ./venv` + a clean rebuild
+# from that restored lock, so there is no half-migrated state to reason
+# about *if the restore and rebuild succeed*. The failure report is built
+# and printed BEFORE the lock is restored or that rollback rebuild is
+# attempted (not after), so a hiccup during either step (e.g. a transient
+# network failure on `pip install -U uv`) can never swallow the report --
+# the two are independent by construction, not by ordering luck. The restore
+# is ALSO armed on an EXIT trap (RESTORE_LOCK_ON_EXIT) for the window between
+# the step-3 promotion and step 5 deciding an outcome, so a Ctrl-C, a SIGTERM
+# or an errexit abort mid-gate cannot leave an UNGATED candidate on disk that a
+# human would then read as a gated one -- the very failure this ordering exists
+# to prevent. The one residual no trap can cover is a SIGKILL (or a power cut):
+# there, note that $LOCK is git-tracked where ./venv is not, so `git checkout --
+# requirements.lock` is the last-resort restore. $SAVED_LOCK rather than git is
+# what the script itself uses, because the lock may legitimately be dirty when
+# a run starts.
 
 set -uo pipefail
 
@@ -135,11 +153,29 @@ fi
                         # scratch before anything is gated (see rebuild_venv).
 
 CANDIDATE="$(mktemp)"
-trap 'rm -f "$CANDIDATE"' EXIT
+SAVED_LOCK="$(mktemp)"
+# The candidate is promoted over $LOCK BEFORE the gates run (lode-2zi9), so from
+# that promotion until this script decides an outcome there is a window in which
+# an UNGATED lock sits on disk looking exactly like a gated one. A death in that
+# window -- Ctrl-C during the long `nox -s tests`, SIGTERM, an errexit abort --
+# must not strand it, which is the very defect this ticket exists to kill. So the
+# restore hangs off process EXIT, not off the handled-failure path alone;
+# RESTORE_LOCK_ON_EXIT is cleared the moment the outcome IS decided (green: keep
+# the candidate; failed: the explicit restore below already ran).
+RESTORE_LOCK_ON_EXIT=0
+cleanup() {
+  if [ "$RESTORE_LOCK_ON_EXIT" -eq 1 ]; then
+    cp -f "$SAVED_LOCK" "$LOCK"
+    echo "update-deps.sh: died after promoting the candidate -- restored the committed $LOCK." >&2
+  fi
+  rm -f "$CANDIDATE" "$SAVED_LOCK"
+}
+trap cleanup EXIT
+cp -f "$LOCK" "$SAVED_LOCK"
 
 if [ -n "$PACKAGE" ]; then
-  cp "$LOCK" "$CANDIDATE"   # seed with the committed lock so uv reuses every
-                            # other package's pinned version as a preference
+  cp -f "$LOCK" "$CANDIDATE"   # seed with the committed lock so uv reuses every
+                               # other package's pinned version as a preference
   "$REPO/scripts/compile-lock.sh" --upgrade-package "$PACKAGE" -q -o "$CANDIDATE"
 else
   # -q: uv pip compile otherwise echoes the ENTIRE compiled lock (every
@@ -242,9 +278,14 @@ rebuild_venv() {
     install_locked_venv "$lockfile"
 }
 
+# Promote BEFORE gating (lode-2zi9) -- see step 3 and FAILURE HANDLING above.
+# Everything from here to the verdict below runs with an UNGATED lock on disk.
+cp -f "$CANDIDATE" "$LOCK"
+RESTORE_LOCK_ON_EXIT=1
+
 echo "update-deps.sh: installing the candidate lock into a freshly rebuilt ./venv..."
 FAILED_AT=""
-if ! rebuild_venv "$CANDIDATE"; then
+if ! rebuild_venv "$LOCK"; then
   FAILED_AT="candidate install (rebuild_venv failed partway -- see output above)"
 else
   echo "update-deps.sh: running gates (nox -t fix, nox -s tests)..."
@@ -256,36 +297,40 @@ else
 fi
 
 if [ -z "$FAILED_AT" ]; then
-  cp "$CANDIDATE" "$LOCK"
-  echo "update-deps.sh: gates green -- promoted candidate to $LOCK."
+  RESTORE_LOCK_ON_EXIT=0
+  echo "update-deps.sh: gates green -- $LOCK already holds the promoted candidate."
   echo "update-deps.sh: review and commit it yourself: git diff -- $LOCK"
   file_churn_stub
   exit 0
 fi
 
-echo "update-deps.sh: FAILED ($FAILED_AT) -- discarding the candidate." >&2
+echo "update-deps.sh: FAILED ($FAILED_AT) -- restoring the committed $LOCK." >&2
 
-# Build and print the report BEFORE attempting the rollback rebuild, and
-# regardless of whether that rebuild succeeds -- see FAILURE HANDLING in
-# the header. The committed lock is untouched either way; that line in the
-# report is true even if the rebuild below also fails.
+# Build and print the report BEFORE restoring the lock or attempting the
+# rollback rebuild, and regardless of whether either succeeds -- see FAILURE
+# HANDLING in the header. So the "restored" line below states what this script
+# is about to do, not a result already confirmed.
 REPORT="$(cat <<REPORT_EOF
 === update-deps.sh FAILURE REPORT (paste into a bd ticket) ===
 Attempted update: $( [ -n "$PACKAGE" ] && echo "single package '$PACKAGE'" || echo "full lock recompile" )
 Failed at:         $FAILED_AT (see output above for the actual error)
 Candidate diff that was attempted:
 $DIFF_TEXT
-Committed $LOCK:   unchanged -- nothing to revert.
+Committed $LOCK:   restored to its pre-update pins.
 === end report ===
 REPORT_EOF
 )"
 echo "$REPORT"
 
-echo "update-deps.sh: trashing ./venv and rebuilding clean from the last-good $LOCK..." >&2
+# Eager, not left to the trap: rebuild_venv below installs from $LOCK, so the
+# restore has to land before it or the rollback would reinstall the rejection.
+cp -f "$SAVED_LOCK" "$LOCK"
+RESTORE_LOCK_ON_EXIT=0
+echo "update-deps.sh: trashing ./venv and rebuilding clean from the restored $LOCK..." >&2
 if ! rebuild_venv "$LOCK"; then
   echo "update-deps.sh: WARNING -- the clean rollback rebuild from $LOCK ALSO failed." >&2
   echo "update-deps.sh: ./venv may now be missing or broken. The report above is still" >&2
-  echo "update-deps.sh: accurate (the committed $LOCK itself was never touched); re-run" >&2
+  echo "update-deps.sh: accurate ($LOCK was restored to its pre-update pins); re-run" >&2
   echo "update-deps.sh: scripts/python-init.sh by hand to restore ./venv." >&2
 fi
 
