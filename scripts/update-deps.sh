@@ -25,22 +25,30 @@
 #      versions only, no hash noise: "pkg  OLD -> NEW" for a bump, "+ pkg
 #      VERSION" for an addition, "- pkg  VERSION (removed)". This diff is
 #      the whole point of the script: it is the artifact, not the install.
-#   3. --dry-run stops here, having touched nothing. Otherwise: trash
-#      ./venv and rebuild it FRESH from the candidate lock (see NO -x /
+#   3. --dry-run stops here, having touched nothing. Otherwise: save a copy
+#      of the currently-committed lock, then PROMOTE the candidate over
+#      requirements.lock immediately -- BEFORE any gating (lode-2zi9). Any
+#      test that reads the committed lock from disk (a workflow-pin gate, a
+#      docs table, a future lock-vs-pyproject consistency check) must see
+#      what the update is about to change, not the pins it is about to
+#      replace; gating with the old lock still on disk is exactly the wrong
+#      signal (see the ticket for the incident this fixes). Then trash
+#      ./venv and rebuild it FRESH from that now-promoted lock (see NO -x /
 #      TRASH-NOT-REPAIR below -- never patched in place).
-#   4. Run the gates: nox -t fix, nox -s tests.
-#   5. GREEN (candidate installs AND both gates pass) -> promote the
-#      candidate over requirements.lock. This script never commits --
-#      review (`git diff -- requirements.lock`) and commit it yourself.
-#      ANY OTHER FAILURE -- the candidate install itself (uninstallable /
-#      hash-mismatched pin, yanked release, network blip) just as much as a
-#      red nox gate -- prints the paste-into-bd failure report FIRST, then
-#      trashes whatever venv state exists and rebuilds clean from the
-#      UNCHANGED committed requirements.lock. The report does not depend on
-#      that rollback rebuild succeeding (see FAILURE HANDLING below): the
-#      lock is always left untouched either way, and if the rollback
-#      rebuild itself also fails, a loud warning after the report says so
-#      and points at scripts/python-init.sh as the manual recovery.
+#   4. Run the gates: nox -t fix, nox -s tests -- against the promoted lock.
+#   5. GREEN (candidate installs AND both gates pass) -> nothing further to
+#      do to the lock; it already holds the candidate. This script never
+#      commits -- review (`git diff -- requirements.lock`) and commit it
+#      yourself. ANY OTHER FAILURE -- the candidate install itself
+#      (uninstallable / hash-mismatched pin, yanked release, network blip)
+#      just as much as a red nox gate -- prints the paste-into-bd failure
+#      report FIRST, then RESTORES the committed lock from the saved copy
+#      byte-for-byte, trashes whatever venv state exists, and rebuilds
+#      clean from that restored lock. The report does not depend on the
+#      restore or that rollback rebuild succeeding (see FAILURE HANDLING
+#      below), and if the rollback rebuild itself also fails, a loud
+#      warning after the report says so and points at
+#      scripts/python-init.sh as the manual recovery.
 #   6. On promote (step 5's GREEN path only -- never on --dry-run, never on
 #      a failed/rolled-back run), file ONE bd stub ticket carrying the
 #      VERSION DIFF as a durable work order for a human/producer to read
@@ -81,13 +89,14 @@
 # just bury it in line noise.
 #
 # FAILURE HANDLING -- rollback is never "reverse a partial install"
-# (2026-07-19 user decision, lode-g274 notes): it is always `rm -rf ./venv`
-# + a clean rebuild from a known-good lock, so there is no half-migrated
-# state to reason about *if the rebuild succeeds*. The failure report is
-# built and printed BEFORE that rollback rebuild is attempted (not after),
-# so a hiccup during the rollback rebuild itself (e.g. a transient network
-# failure on `pip install -U uv`) can never swallow the report -- the two
-# are independent by construction, not by ordering luck.
+# (2026-07-19 user decision, lode-g274 notes): it is always restore the
+# saved committed lock byte-for-byte, then `rm -rf ./venv` + a clean rebuild
+# from that restored lock, so there is no half-migrated state to reason
+# about *if the restore and rebuild succeed*. The failure report is built
+# and printed BEFORE the lock is restored or that rollback rebuild is
+# attempted (not after), so a hiccup during either step (e.g. a transient
+# network failure on `pip install -U uv`) can never swallow the report --
+# the two are independent by construction, not by ordering luck.
 
 set -uo pipefail
 
@@ -135,7 +144,9 @@ fi
                         # scratch before anything is gated (see rebuild_venv).
 
 CANDIDATE="$(mktemp)"
-trap 'rm -f "$CANDIDATE"' EXIT
+SAVED_LOCK="$(mktemp)"
+trap 'rm -f "$CANDIDATE" "$SAVED_LOCK"' EXIT
+cp "$LOCK" "$SAVED_LOCK"   # last-known-good copy -- restored on any failure below (lode-2zi9)
 
 if [ -n "$PACKAGE" ]; then
   cp "$LOCK" "$CANDIDATE"   # seed with the committed lock so uv reuses every
@@ -169,6 +180,12 @@ echo "$DIFF_TEXT"
 if [ "$DRY_RUN" -eq 1 ]; then
   exit 0
 fi
+
+# Promote BEFORE gating (lode-2zi9): the gates below run against whatever is
+# on disk at $LOCK, so a test that reads the committed lock must see the
+# candidate, not the pins it is about to replace. On any failure below, the
+# $SAVED_LOCK copy above is restored byte-for-byte -- see FAILURE HANDLING.
+cp "$CANDIDATE" "$LOCK"
 
 # File ONE bd stub ticket carrying the VERSION DIFF as a durable work order
 # (lode-i642) -- only called from the GREEN promote path (step 5). Every
@@ -244,7 +261,7 @@ rebuild_venv() {
 
 echo "update-deps.sh: installing the candidate lock into a freshly rebuilt ./venv..."
 FAILED_AT=""
-if ! rebuild_venv "$CANDIDATE"; then
+if ! rebuild_venv "$LOCK"; then
   FAILED_AT="candidate install (rebuild_venv failed partway -- see output above)"
 else
   echo "update-deps.sh: running gates (nox -t fix, nox -s tests)..."
@@ -256,36 +273,40 @@ else
 fi
 
 if [ -z "$FAILED_AT" ]; then
-  cp "$CANDIDATE" "$LOCK"
-  echo "update-deps.sh: gates green -- promoted candidate to $LOCK."
+  echo "update-deps.sh: gates green -- $LOCK already holds the promoted candidate."
   echo "update-deps.sh: review and commit it yourself: git diff -- $LOCK"
   file_churn_stub
   exit 0
 fi
 
-echo "update-deps.sh: FAILED ($FAILED_AT) -- discarding the candidate." >&2
+echo "update-deps.sh: FAILED ($FAILED_AT) -- restoring the committed $LOCK." >&2
 
-# Build and print the report BEFORE attempting the rollback rebuild, and
-# regardless of whether that rebuild succeeds -- see FAILURE HANDLING in
-# the header. The committed lock is untouched either way; that line in the
-# report is true even if the rebuild below also fails.
+# Build and print the report BEFORE restoring the lock or attempting the
+# rollback rebuild, and regardless of whether either succeeds -- see
+# FAILURE HANDLING in the header. The "restored" line below describes what
+# this script is ABOUT to do next, not a result already confirmed -- but
+# the restore itself is a single `cp` from a tmpfile already on this same
+# filesystem, so treating it as certain here (rather than reporting after)
+# is what keeps the report independent of the rollback rebuild's own
+# success, which is the actual failure-prone step.
 REPORT="$(cat <<REPORT_EOF
 === update-deps.sh FAILURE REPORT (paste into a bd ticket) ===
 Attempted update: $( [ -n "$PACKAGE" ] && echo "single package '$PACKAGE'" || echo "full lock recompile" )
 Failed at:         $FAILED_AT (see output above for the actual error)
 Candidate diff that was attempted:
 $DIFF_TEXT
-Committed $LOCK:   unchanged -- nothing to revert.
+Committed $LOCK:   restored to its pre-update pins.
 === end report ===
 REPORT_EOF
 )"
 echo "$REPORT"
 
-echo "update-deps.sh: trashing ./venv and rebuilding clean from the last-good $LOCK..." >&2
+cp "$SAVED_LOCK" "$LOCK"
+echo "update-deps.sh: trashing ./venv and rebuilding clean from the restored $LOCK..." >&2
 if ! rebuild_venv "$LOCK"; then
   echo "update-deps.sh: WARNING -- the clean rollback rebuild from $LOCK ALSO failed." >&2
   echo "update-deps.sh: ./venv may now be missing or broken. The report above is still" >&2
-  echo "update-deps.sh: accurate (the committed $LOCK itself was never touched); re-run" >&2
+  echo "update-deps.sh: accurate ($LOCK was restored to its pre-update pins); re-run" >&2
   echo "update-deps.sh: scripts/python-init.sh by hand to restore ./venv." >&2
 fi
 
