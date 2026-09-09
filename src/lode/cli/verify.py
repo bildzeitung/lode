@@ -188,6 +188,14 @@ def _run_verify(
         markup=False,
         highlight=False,
     )
+    if jira:
+        # Confluence has no bare-key analogue (lode-2o45, "Out of scope") --
+        # jira_projects is JIRA-only, so this line is skipped for --confluence.
+        console.print(
+            f"jira_projects: {settings.jira_projects or '(none -- bare-key detection off)'}",
+            markup=False,
+            highlight=False,
+        )
 
     if not active:
         reasons = []

@@ -708,6 +708,18 @@ class Settings(BaseModel):
         "from the pasted link at detection time. Validated as a well-formed "
         "http(s) URL when non-empty.",
     )
+    jira_projects: list[str] = _knob(
+        [],
+        Kind.RUNTIME,
+        "JIRA project key allowlist (e.g. ['PROJ']) gating BARE issue-key "
+        "detection (lode-2o45) -- a plain 'PROJ-123' in note prose, not just "
+        "a pasted /browse/ permalink. Empty (default) means bare-key "
+        "detection is OFF, byte-for-byte today's behavior. Case-SENSITIVE, "
+        "whole-key match: 'PROJ' matches 'PROJ-123' but not 'PROD-123' or "
+        "'PROJECT-1'. Detection additionally requires jira_active(settings) "
+        "and a non-empty jira_base_url -- see drawdown.py's module "
+        "docstring, 'Bare JIRA issue keys' section.",
+    )
     jira_email: str = _knob(
         "",
         Kind.RUNTIME,

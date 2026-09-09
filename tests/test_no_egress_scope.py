@@ -5,7 +5,40 @@ which is the whole point of a scope rule: it must work for a candidate
 ``(external_id, source_type)`` that has no ``externals`` row at all.
 """
 
+from lode.config import load_settings
+from lode.drawdown import detect_and_enqueue_drawdown
 from lode.no_egress_scope import NoEgressScopeRule, is_no_egress_scoped
+from lode.storage import init_db
+
+
+def test_bare_jira_key_external_is_scoped_exactly_like_a_url_derived_one(
+    tmp_path,
+) -> None:
+    """A bare-key-detected (lode-2o45) external_id is the same string shape
+    (the issue key) a URL-derived JIRA external_id already is -- so it is
+    subject to the identical scope rule, with no drawdown/scope-side change
+    needed. Exercised end-to-end via the real detector rather than a
+    hand-typed key, so this fails if that shape ever drifted.
+    """
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        settings = load_settings(
+            jira_enabled=True,
+            jira_token="tok",
+            jira_email="a@example.com",
+            jira_projects=["PROJ"],
+            jira_base_url="https://acme.atlassian.net",
+        )
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", "see PROJ-42 for context", settings=settings
+            )
+    finally:
+        conn.close()
+
+    (external_id,) = external_ids
+    rules = [NoEgressScopeRule(source_type="jira", match="PROJ")]
+    assert is_no_egress_scoped(external_id, "jira", rules) is True
 
 
 def test_jira_project_key_prefix_matches() -> None:

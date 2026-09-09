@@ -715,6 +715,17 @@ def test_atlassian_base_url_accepts_well_formed_http_url() -> None:
     assert s.confluence_base_url == "http://internal.example.com/wiki"
 
 
+def test_jira_projects_defaults_empty() -> None:
+    """Default [] means bare-key detection is OFF (lode-2o45)."""
+    s = Settings()
+    assert s.jira_projects == []
+
+
+def test_jira_projects_accepts_a_configured_allowlist() -> None:
+    s = Settings(jira_projects=["PROJ", "OPS"])
+    assert s.jira_projects == ["PROJ", "OPS"]
+
+
 def test_atlassian_credential_fields_default_empty() -> None:
     s = Settings()
     assert s.jira_email == ""

@@ -118,6 +118,9 @@ def _write_config(home: Path, **kv: object) -> None:
     for key, value in kv.items():
         if isinstance(value, bool):
             lines.append(f"{key} = {'true' if value else 'false'}")
+        elif isinstance(value, list):
+            items = ", ".join(f'"{item}"' for item in value)
+            lines.append(f"{key} = [{items}]")
         else:
             lines.append(f'{key} = "{value}"')
     (home / "config.toml").write_text("\n".join(lines) + "\n")
@@ -271,6 +274,52 @@ def test_verify_jira_probes_the_documented_myself_endpoint(
     )
     assert result.exit_code == 0
     assert fetcher.calls == [f"{_BASE}/rest/api/3/myself"]
+
+
+def test_verify_jira_shows_resolved_jira_projects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    _write_config(
+        home, jira_enabled=True, jira_base_url=_BASE, jira_projects=["PROJ", "OPS"]
+    )
+    fetcher = _QueueFetcher([_response({"displayName": "Alice"})])
+    monkeypatch.setattr(cli, "_default_verify_fetcher", lambda *a, **k: fetcher)
+
+    result = runner.invoke(
+        app,
+        ["verify", "--jira"],
+        env={
+            "LODE_HOME": str(home),
+            "LODE_JIRA_EMAIL": "alice@example.com",
+            "LODE_JIRA_TOKEN": "tok",
+        },
+    )
+    assert result.exit_code == 0
+    assert "jira_projects" in result.stdout
+    assert "PROJ" in result.stdout
+    assert "OPS" in result.stdout
+
+
+def test_verify_jira_projects_line_absent_for_confluence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    _write_config(home, confluence_enabled=True, confluence_base_url=_BASE)
+    fetcher = _QueueFetcher([_response({"displayName": "Alice"})])
+    monkeypatch.setattr(cli, "_default_verify_fetcher", lambda *a, **k: fetcher)
+
+    result = runner.invoke(
+        app,
+        ["verify", "--confluence"],
+        env={
+            "LODE_HOME": str(home),
+            "LODE_CONFLUENCE_EMAIL": "alice@example.com",
+            "LODE_CONFLUENCE_TOKEN": "tok",
+        },
+    )
+    assert result.exit_code == 0
+    assert "jira_projects" not in result.stdout
 
 
 def test_verify_confluence_probes_the_documented_current_user_endpoint(
