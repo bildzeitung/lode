@@ -456,6 +456,15 @@ recheck against a tree that may hold my own uncommitted review fixes.)
    [`.claude/agents/coding.md`](coding.md#5-implement) and
    [docs/agents-workflow.md](../../docs/agents-workflow.md#filing-follow-up-work-blocks-vs-discovered-from-lode-c0t3).
 
+   **A wording-only doc nit outside this branch's scope is not a new ticket** — the remedy is purely
+   *how to say it*, never a judgment call about *what to say* (lode-t551; decision and discriminator:
+   [docs/agents-workflow.md](../../docs/agents-workflow.md#wording-only-doc-nits-go-to-the-docs-nits-collector-lode-t551)).
+   I append it to the docs-nits collector instead: `bd list --label docs-nits --limit 0 --json`
+   locates it (never a hardcoded id); `bd update <collector> --append-notes` in patch shape (file,
+   `grep -n`-derived line, anchor quoted verbatim, exact replacement, note prefixed `NIT`), then
+   `scripts/bd-dolt-push.sh`. If no open `docs-nits` ticket exists, I fall back to reporting it in my
+   hand-off instead — I never create one myself.
+
 If the review finds nothing to change, that is a valid outcome — the branch passes as-is.
 
 ### 5. Re-gate (must be green)

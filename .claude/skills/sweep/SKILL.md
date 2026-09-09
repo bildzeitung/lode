@@ -274,17 +274,19 @@ status, before the loop ever starts, is what actually surfaces the failure.
 
 `--limit 0` for the same reason as §1 — same `$CURRENT`, same wholesale §6 rewrite.
 
-## Report-only sections (§2a, §2b, §2c) — shared contract
+## Report-only sections (§2a, §2b, §2c, §2d) — shared contract
 
-§2a (`deferred` tickets), §2b (stranded `in_progress` tickets), and §2c (dependency-blocked `human`
-tickets) are three report-only lists that share a **rendering contract** — how each list's result is
-persisted and what it's excluded from — stated once here rather than three times below. §2a and §2b
-additionally share a **collection contract** — how each list's own `bd` query is run. §2c has no
-collection contract of its own: its data is the `bd blocked --json` call §1 already makes (to
-compute the `$HUMAN` subtraction, lode-csxh), not an independent read — see §2c's own section below
-for what stands in its place.
+§2a (`deferred` tickets), §2b (stranded `in_progress` tickets), §2c (dependency-blocked `human`
+tickets), and §2d (open docs-nits collectors, lode-t551) are four report-only lists that share a
+**rendering contract** — how each list's result is persisted and what it's excluded from — stated
+once here rather than four times below. §2a, §2b, and §2d additionally share a **collection
+contract** — how each list's own `bd` query is run. §2c has no collection contract of its own: its
+data is the `bd blocked --json` call §1 already makes (to compute the `$HUMAN` subtraction,
+lode-csxh), not an independent read — see §2c's own section below for what stands in its place. §2d's
+own section below notes the one way its **rendering** deliberately differs from §2a/§2b/§2c (a count
+per collector, not a list of `<id>\t<title>` rows) while still honoring this same exclusion contract.
 
-### Rendering contract (§2a, §2b, §2c — no exceptions)
+### Rendering contract (§2a, §2b, §2c, §2d — no exceptions)
 
 **The sentinel, and why it can't collide with a real row.** Each section persists its result to its
 own `$SWEEP_TMP` file (`$SWEEP_TMP/deferred` for §2a, `$SWEEP_TMP/stranded` for §2b,
@@ -302,12 +304,12 @@ single line with **no tab**, which is structurally impossible for a real row to 
 invariant. §8 checks for the sentinel by exact match before treating a file's content as data.
 
 **Deliberately excluded from everything else in this skill.** None of `$DEFERRED` (§2a),
-`$STRANDED` (§2b), or the blocked-human rows (§2c) ever feed `$CURRENT` (§3) — none may enter
-`$CURRENT_IDS`/`$NEW_IDS` (§5), drive the digest rewrite/no-op decision, or trigger the §7
-`PushNotification`. None is ever written into the digest body (§6), and none carries **dedup
-state** of its own — each is recomputed fresh, in full, every pass, straight into the §8 report.
-(What a ticket entering or leaving each list *means* differs by section — see each section's own
-note below.)
+`$STRANDED` (§2b), the blocked-human rows (§2c), or the docs-nits collector rows (§2d) ever feed
+`$CURRENT` (§3) — none may enter `$CURRENT_IDS`/`$NEW_IDS` (§5), drive the digest rewrite/no-op
+decision, or trigger the §7 `PushNotification`. None is ever written into the digest body (§6), and
+none carries **dedup state** of its own — each is recomputed fresh, in full, every pass, straight
+into the §8 report. (What a ticket entering or leaving each list *means* differs by section — see
+each section's own note below.)
 
 §8 owns what each state renders as — see its three-state rule, and
 [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
@@ -366,7 +368,7 @@ printf '%s' "$DEFERRED" > "$SWEEP_TMP/deferred"
 
 The persistence/sentinel convention, the `(. // [])`/`@tsv` guards, the `--limit 0` stake, and what
 this section is deliberately excluded from are all stated once, for both this section and §2b, in
-[Report-only sections (§2a, §2b, §2c) — shared contract](#report-only-sections-2a-2b-2c--shared-contract)
+[Report-only sections (§2a, §2b, §2c, §2d) — shared contract](#report-only-sections-2a-2b-2c-2d--shared-contract)
 just above. A ticket moving into (or out of) `deferred` is not a new human-decision item.
 
 **The one deliberate overlap:** a ticket that is simultaneously `land-escalated` (§1) and `deferred`
@@ -419,7 +421,7 @@ printf '%s' "$STRANDED" > "$SWEEP_TMP/stranded"
 
 The persistence/sentinel convention, the `(. // [])`/`@tsv` guards, the `--limit 0` stake, and what
 this section is deliberately excluded from are all stated once, for both this section and §2a, in
-[Report-only sections (§2a, §2b, §2c) — shared contract](#report-only-sections-2a-2b-2c--shared-contract)
+[Report-only sections (§2a, §2b, §2c, §2d) — shared contract](#report-only-sections-2a-2b-2c-2d--shared-contract)
 above. A ticket becoming (or ceasing to be) stranded is not a new human-decision item — it is
 surfaced so a human notices it, not resolved by this skill.
 
@@ -466,8 +468,8 @@ separate fenced block here to run, and so no `--limit 0`/`set -o pipefail` colle
 own: `bd blocked` exposes no `--limit` flag at all (checked directly against `bd blocked --help`), so
 there is nothing to pin. The rendering contract — the persistence/sentinel convention, the
 three-state file contract, and what this section is deliberately excluded from — is stated once, for
-this section and §2a/§2b both, in [Report-only sections (§2a, §2b, §2c) — shared
-contract](#report-only-sections-2a-2b-2c--shared-contract) above, and applies to §2c identically,
+this section and §2a/§2b both, in [Report-only sections (§2a, §2b, §2c, §2d) — shared
+contract](#report-only-sections-2a-2b-2c-2d--shared-contract) above, and applies to §2c identically,
 with one difference in how its failure surfaces: since §2c's data is §1's `bd blocked` call rather
 than a query of its own, a failure there writes `source_query_failed` (§1) *and* the
 `SWEEP-QUERY-ERROR` sentinel into `$SWEEP_TMP/blocked_human`, both at once — rather than the sentinel
@@ -478,6 +480,39 @@ blocking dependency closes) is exactly what makes the ticket enter `$CURRENT` fo
 §1/§3, which *does* trigger a fresh `PushNotification` on that later pass (§5/§7) — the sign-off push
 arrives exactly when the artifact it signs off on exists. That is the decided, deliberate point of
 this section, not a side effect: lode-csxh in [docs/decisions.md](../../../docs/decisions.md).
+
+## 2d. Docs nits pending (report-only — never touches the digest or notify path; lode-t551)
+
+A sixth, independent list — visibility onto the standing docs-nits collector(s), so a human can see
+when the batch is worth draining with one `/code` pass. Decision, discriminator, and the label-not-id
+locator are recorded once, in
+[docs/agents-workflow.md](../../../docs/agents-workflow.md#wording-only-doc-nits-go-to-the-docs-nits-collector-lode-t551);
+this section only surfaces the count, never a decision.
+
+```bash
+SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
+
+set -o pipefail   # REQUIRED, not hygiene -- see the shared report-only contract above.
+
+# On a query error (bd or jq), overwrite the capture -- which may be partial or garbled -- with
+# the sentinel. §8 tells that apart from both a missing file and a legitimately empty one.
+if ! DOCS_NITS=$(bd list --label docs-nits --limit 0 --json \
+  | jq -r '(. // []) | .[] | [.id, .title, (.notes // "" | [scan("(?m)^NIT")] | length)] | @tsv'); then
+  DOCS_NITS="SWEEP-QUERY-ERROR"
+fi
+printf '%s' "$DOCS_NITS" > "$SWEEP_TMP/docs_nits"
+```
+
+The persistence/sentinel convention, the `(. // [])` guard, the `--limit 0` stake, and what this
+section is deliberately excluded from are all stated once, for this section and §2a/§2b/§2c, in
+[Report-only sections (§2a, §2b, §2c, §2d) — shared
+contract](#report-only-sections-2a-2b-2c-2d--shared-contract) above. **Rendering differs from
+§2a/§2b/§2c on one point:** each row here is `<id>\t<title>\t<count>`, not the plain `<id>\t<title>`
+those sections use, because this section's whole point is the `^NIT`-prefixed note count per
+collector, not the collector's own title alone (the note-prefix convention `docs/agents-workflow.md`
+above establishes). A collector entering or leaving this list, or its count changing, is never a new
+human-decision item — it never enters `$CURRENT`, the digest, or notify; a human decides on their own
+schedule whether the batch is worth draining.
 
 ## 3. Build the current queue (dedup on stable IDs)
 
@@ -737,9 +772,9 @@ report — never fail a pass over the notify channel.
 
 ## 8. Publish and report
 
-This is its own, separate Bash tool invocation — nothing from §1/§2a/§2b survives into it (§0's
-governing rule) — so `$DEFERRED`, `$STRANDED`, and `$BLOCKED_HUMAN` are re-derived from the scratch
-files §1/§2a/§2b already wrote, not from in-context memory of those blocks' output:
+This is its own, separate Bash tool invocation — nothing from §1/§2a/§2b/§2d survives into it (§0's
+governing rule) — so `$DEFERRED`, `$STRANDED`, `$BLOCKED_HUMAN`, and `$DOCS_NITS` are re-derived from
+the scratch files §1/§2a/§2b/§2d already wrote, not from in-context memory of those blocks' output:
 
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
@@ -781,6 +816,15 @@ else
   BLOCKED_HUMAN_STATE=missing
 fi
 
+# lode-3oik: NOT retrofitted onto scripts/land-state-load.sh -- a missing $SWEEP_TMP/docs_nits is a
+# non-fatal third state, same reason as the three reads above (lode-t551).
+if DOCS_NITS="$(cat "$SWEEP_TMP/docs_nits" 2>/dev/null)"; then
+  DOCS_NITS_STATE=ok
+  [ "$DOCS_NITS" = "SWEEP-QUERY-ERROR" ] && DOCS_NITS_STATE=error
+else
+  DOCS_NITS_STATE=missing
+fi
+
 # §1/§2's shared marker (written there, enforced in §5). Read from DISK, like everything else in
 # this block: §5's stderr message is in-context state, which §0 says this file never relies on.
 if [ -f "$SWEEP_TMP/source_query_failed" ]; then SOURCE_STATE=error; else SOURCE_STATE=ok; fi
@@ -811,31 +855,32 @@ ACTIONABLE_NOW=$(printf '%s\n' "$CURRENT" | awk -F'\t' '
 ')
 ```
 
-The rule is one rule, over all three report-only lists — for each `<list>` in {`deferred`,
-`stranded`, `blocked_human`} there are three mutually exclusive states, and §8 must not confuse
-them:
+The rule is one rule, over all four report-only lists — for each `<list>` in {`deferred`,
+`stranded`, `blocked_human`, `docs_nits`} there are three mutually exclusive states, and §8 must not
+confuse them:
 
 - **`missing`** — the block that writes that section's file never ran this pass at all (e.g. it
-  crashed before reaching its `printf`) — §2a's or §2b's own block, or, for `blocked_human`, **§1**
-  (which writes that file as part of partitioning `$HUMAN`; §2c has no block of its own). Section
-  body: "`<list>` list unavailable this pass"; summary field: `unavailable`, never `0`.
+  crashed before reaching its `printf`) — §2a's, §2b's, or §2d's own block, or, for `blocked_human`,
+  **§1** (which writes that file as part of partitioning `$HUMAN`; §2c has no block of its own).
+  Section body: "`<list>` list unavailable this pass"; summary field: `unavailable`, never `0`.
 - **`error`** — that writing block *did* run, but its `bd`/`jq` query failed and wrote the
   sentinel. Section body: "`<list>` query failed this pass"; summary field: `error` — never `0`,
   and never `unavailable`, which is a different failure with a different remedy.
 - **`ok`** — the query succeeded; report it normally, including the legitimately-empty case
   (section body `(none)`, summary field `<len $<LIST>>`, which may be `0`).
 
-None of the three states aborts this block (the digest push above still has to run), and none
+None of the four states aborts this block (the digest push above still has to run), and none
 suppresses or is suppressed by the §1/§2 escalation/human/epic reporting or by the other
 report-only sections — every one of these reads its own, separately-persisted scratch file, and
-each of the three lists is judged solely on its own file's content.
+each of the four lists is judged solely on its own file's content.
 
 Report exactly one line, then the deferred section (§2a, always present), the stranded section
-(§2b, always present), and the blocked-human section (§2c, always present), plus, when non-empty,
-the loud new-items block, and finally the always-present **Actionable now** section (last):
+(§2b, always present), the blocked-human section (§2c, always present), and the docs-nits section
+(§2d, always present), plus, when non-empty, the loud new-items block, and finally the
+always-present **Actionable now** section (last):
 
 ```
-sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-to-close rows> closable, <deferred field> deferred, <stranded field> stranded, <blocked_human field> blocked
+sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-to-close rows> closable, <deferred field> deferred, <stranded field> stranded, <blocked_human field> blocked, <docs_nits field> docs-nits collectors pending
 
 ## Deferred (surfaced, not reviewed) (<deferred field>)
 <id> <title>
@@ -849,6 +894,11 @@ sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-
 
 ## Blocked human tickets (dependency-blocked, not yet decidable) (<blocked_human field>)
 <id> <title>
+...
+(none) | unavailable this pass | query failed this pass
+
+## Docs nits pending (<docs_nits field>)
+<id> <title> (<count> NIT notes)
 ...
 (none) | unavailable this pass | query failed this pass
 ```
@@ -888,8 +938,9 @@ unchanged — no `(deferred)` annotation is needed here since deferred rows are 
 (none)
 ```
 
-This is distinct from the three report-only lists above (§2a/§2b/§2c list *parked/stranded/
-not-yet-decidable* work `bd ready` already hides) and from the `NEW HUMAN-DECISION ITEMS` block
+This is distinct from the four report-only lists above (§2a/§2b/§2c list *parked/stranded/
+not-yet-decidable* work `bd ready` already hides, and §2d lists open docs-nits collectors pending a
+human drain) and from the `NEW HUMAN-DECISION ITEMS` block
 above it (that block is delta-only — new since the last digest, deferred rows included and
 annotated). This section is the standing, decidable-now queue — `land-escalated`, open `human`, and
 `epic-ready-to-close` rows minus anything deferred — every pass, so a human reading the transcript

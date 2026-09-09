@@ -1396,6 +1396,46 @@ a `/code` fan-out would dispatch it into a live batch and return a confident, wo
 class of constraint is documented, not solved: it needs a human to run the ticket by hand in a quiet
 window.
 
+### Wording-only doc nits go to the docs-nits collector (lode-t551)
+
+DECISION (human, 2026-09-08): a **wording-only** nit in `docs/` or in a skill/agent markdown file —
+phrasing that is stale or imprecise but not *wrong* (e.g. "green promote" in `docs/stack.md` after
+`lode-2zi9` moved promotion before gating) — is no longer dropped at report time, and no longer filed
+as its own one-off ticket. It is **appended as a note** to the single standing collector ticket
+carrying the reserved label **`docs-nits`** (currently `lode-59da`, `chore`, `P4`), which a human
+drains with one `/code` pass once the batch is worth it.
+
+**The discriminator, stated plainly:** wording-only means the whole remedy is *how to say it*. The
+moment the fix needs a judgment call about *what to say* — which of two behaviors is correct, whether
+a rule should exist at all — it is not a nit; it stays an ordinary reported discovery for a human to
+decide.
+
+**Locate the collector by LABEL, never by id.** `bd list --label docs-nits --limit 0 --json` — every
+file that appends a nit does it this way; nothing hardcodes `lode-59da` as the mechanism (naming it as
+the *current instance* in prose, as this paragraph does, is fine — the mechanism is still the label).
+
+**Note-prefix convention.** Each appended note begins with `NIT` on its own, so `/sweep`'s §2d can
+count them cheaply (`^NIT`) without parsing patch bodies.
+
+**No auto-create.** If `bd list --label docs-nits` returns no open ticket, the fallback is the same as
+before this decision: report the nit as an ordinary finding. No file this decision touches creates the
+collector itself — a human opens it.
+
+**This is a deliberate, narrow carve-out** from `/land`'s "never file a bd ticket for an incidental
+discovery" rule ([What I never
+do](../.claude/skills/land/SKILL.md#what-i-never-do)) — it is one human-sanctioned ticket, located by
+label, so it does not reopen the dupe generator that rule exists to kill: there is nothing to dedup
+against, because every nit lands on the same ticket.
+
+**`/sweep` is visibility-only here.** Its §2d renders the open collector(s) and each one's `^NIT`
+note count so a human can see when the batch is worth draining; it never enters `$CURRENT`, the
+digest, or notify.
+
+Every instruction-file edit implementing this decision — `.claude/skills/land/SKILL.md`,
+`.claude/agents/land-review.md`, `.claude/agents/coding.md`, `.claude/agents/code-reviewer.md`,
+`.claude/skills/code/SKILL.md`, `.claude/skills/sweep/SKILL.md` — links back to this subsection
+instead of restating the rationale.
+
 ### Never write to an external tracker under the user's identity (lode-o29m)
 
 **USER RULE (hard):** an agent must never WRITE to an external tracker — GitHub, an upstream repo, any
