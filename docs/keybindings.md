@@ -192,6 +192,17 @@ parameter rather than becoming a second screen module — the zero-arg form (`SC
 App-level push) is the unchanged corpus-wide behaviour. A future ticket needing a genuinely *new*
 action on one of these screens still faces the exhausted pool above; this one didn't need to.
 
+**`lode-pky9` needed an editor-screen no-egress toggle and spent no key at all, letter or
+otherwise** -- the same "spent no new letter" precedent `lode-35nu.11.3` set above, taken one step
+further: with the pool exhausted (no formally-safe `ctrl+`letter left on either screen) this one
+doesn't reuse an existing binding either, it skips the binding chain entirely. `CaptureScreen` and
+`EditScreen` each declare a `Screen.COMMANDS` entry (`NoEgressCommandProvider`,
+`lode.tui.no_egress_command`) instead: a command-palette-only (`ctrl+p`) action, invisible to this
+table and to the footer, since it isn't a `Binding` at all. The toggle is infrequent enough that the
+extra `ctrl+p` -> type -> enter hop costs little, and the palette entry's own text ("Mark
+no-egress" / "Clear no-egress", reflecting the CURRENT state) doubles as the status readout a
+footer entry would otherwise have to spell out.
+
 ### Screen-level
 
 | Screen | File | Key | Action | Body TextArea |

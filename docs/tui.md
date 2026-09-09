@@ -446,3 +446,33 @@ pass armed by one test cannot still be running when a later test starts." The `R
 measurement above establishes exactly that, per test, without any code change. A green full suite is
 not the evidence (nothing failed before this decision either); the `shutdown_default_executor()`
 mechanism is.
+
+## Editor no-egress: a border colour, not a widget (`lode-pky9`)
+
+`CaptureScreen` and `EditScreen` both show whether the note they're editing (or, on Capture, the
+*pending* value the next save will seed) is withheld from cloud egress purely as a **red border**
+on the body `TextArea` -- the `.no-egress-border` CSS class, defined once in `lode.tcss`
+(`border: solid $error`, so it stays theme-aware rather than a hard-coded hex). This is a human
+decision (2026-09-08), not a default this project would otherwise reach for: the marker costs zero
+vertical space and reuses a widget both screens already render, instead of adding a status line or
+badge widget. `EditScreen` additionally keeps its existing `[no-egress]` `sub_title` marker
+(`lode-82wt`) -- the border is the at-a-glance cue while the cursor is in the body; the sub_title is
+what a screenshot or terminal-scrollback reader without live colour still sees.
+
+Both screens toggle the class themselves (`text_area.set_class(pending, NO_EGRESS_BORDER_CLASS)`)
+at the same points they change the underlying value -- `on_mount`, the palette command's callback,
+and (Capture only) the post-"Save & new" reset -- rather than the border being computed from a
+reactive watcher. On `CaptureScreen` all three go through the one setter
+(`_set_no_egress_pending`), so state and border cannot be updated apart. There is exactly one value to track per screen (`EditScreen._no_egress`,
+`CaptureScreen._no_egress_pending`), so a watcher would be one more moving part for no gain; a test
+asserting the class matches state after each of those calls is cheaper to write and read than
+threading a `reactive[bool]` through both screens for a single boolean's sake.
+
+The **toggle itself is not a keybinding** -- see `docs/keybindings.md`'s "spent no key" note on this
+ticket -- it is a `Screen.COMMANDS` entry (`lode.tui.no_egress_command.NoEgressCommandProvider`),
+reachable only via the command palette (`ctrl+p`). One `Provider` class serves both screens: each
+satisfies `NoEgressCommandTarget` (`no_egress_pending() -> bool`, `no_egress_toggle() -> None`), and
+the provider reads/calls through that protocol rather than branching on the screen's concrete type.
+The palette re-instantiates the provider fresh every time it opens, so the command's displayed text
+("Mark no-egress" / "Clear no-egress") is always read live off the active screen, never stale from
+a previous open.

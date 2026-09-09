@@ -111,6 +111,10 @@ from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
 from lode.tui.latency_probe import probe_event_loop_lag
+from lode.tui.no_egress_command import (
+    NO_EGRESS_BORDER_CLASS,
+    NoEgressCommandProvider,
+)
 from lode.tui.screens._link_open import open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.screens.discard_confirm import DiscardConfirmScreen
@@ -178,6 +182,21 @@ class CaptureScreen(Screen[None]):
         Binding("ctrl+n", "open_link", "Link"),
     ]
 
+    # No new keybinding for the no-egress toggle (human decision, lode-pky9)
+    # -- it lives in the command palette instead. docs/keybindings.md carries
+    # the "spent no key" note.
+    COMMANDS: ClassVar = {NoEgressCommandProvider}
+
+    def __init__(self) -> None:
+        super().__init__()
+        #: A brand-new capture has no notes row yet to flip -- this is the
+        #: value :meth:`~lode.tui.services.capture.save_capture` will seed
+        #: the root create with atomically, not a post-hoc write (lode-pky9).
+        #: Set for real in :meth:`on_mount` (``self.app`` needs a running app
+        #: context this constructor cannot rely on); starts ``False`` here
+        #: purely as a typed placeholder.
+        self._no_egress_pending = False
+
     def compose(self) -> ComposeResult:
         yield Header()
         yield Vertical(
@@ -193,6 +212,9 @@ class CaptureScreen(Screen[None]):
         yield LodeFooter()
 
     def on_mount(self) -> None:
+        # lode-pky9: seeded from settings here, not __init__ -- self.app
+        # needs a running app context __init__ cannot rely on.
+        self._set_no_egress_pending(self.app.settings.no_egress_default)
         self.query_one(f"#{BODY_ID}", TextArea).focus()
         # lode-0wj.2: the event-loop-lag heartbeat only ever runs while DEBUG
         # logging is on -- gating the *start* (not just the log calls inside it)
@@ -237,7 +259,12 @@ class CaptureScreen(Screen[None]):
         body = self.query_one(f"#{BODY_ID}", TextArea).text
         app = self.app
         try:
-            result = save_capture(app.db_path, body, settings=app.settings)
+            result = save_capture(
+                app.db_path,
+                body,
+                settings=app.settings,
+                no_egress=self._no_egress_pending,
+            )
         except EmptyCaptureError:
             self.notify("Refusing to save an empty note.", severity="warning")
             return None
@@ -280,6 +307,12 @@ class CaptureScreen(Screen[None]):
         self.query_one(RelatedNotesPanel).reset()
         text_area = self.query_one(f"#{BODY_ID}", TextArea)
         text_area.clear()
+        # Reset the pending flag (and its border) back to the settings
+        # default for the next note (lode-pky9) -- the just-saved value was
+        # persisted atomically with that note's create; it does not carry
+        # forward. Only reached past the guard above, so a refused/CAS-
+        # rejected save leaves both untouched, per the ticket.
+        self._set_no_egress_pending(self.app.settings.no_egress_default)
         text_area.focus()
         self.notify("Saved. New note.")
 
@@ -302,6 +335,32 @@ class CaptureScreen(Screen[None]):
     def action_cancel(self) -> None:
         """Escape: exit immediately if the buffer is empty, else confirm first."""
         self.confirm_quit()
+
+    def no_egress_pending(self) -> bool:
+        """Read back by :class:`~lode.tui.no_egress_command.NoEgressCommandProvider`
+        to label the palette entry."""
+        return self._no_egress_pending
+
+    def no_egress_toggle(self) -> None:
+        """The palette command's callback (lode-pky9): flip the pending flag.
+
+        No DB write and no confirm dialog -- there is no notes row yet for a
+        brand-new capture, so nothing is persisted (or made cloud-eligible)
+        until :meth:`action_save`/:meth:`_save_and_exit` actually saves.
+        """
+        self._set_no_egress_pending(not self._no_egress_pending)
+
+    def _set_no_egress_pending(self, pending: bool) -> None:
+        """Set the pending flag and its border together.
+
+        The only writer of ``_no_egress_pending``: the border is the whole of
+        the on-screen signal, so a state change that skipped it would leave
+        the screen lying about what the next save will persist.
+        """
+        self._no_egress_pending = pending
+        self.query_one(f"#{BODY_ID}", TextArea).set_class(
+            pending, NO_EGRESS_BORDER_CLASS
+        )
 
     def action_focus_related(self) -> None:
         """Ctrl+F: move focus onto the related-notes panel (lode-olmi.9).
