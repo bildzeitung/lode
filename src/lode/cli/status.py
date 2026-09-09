@@ -16,7 +16,8 @@ from lode import cli
 # THIS module's namespace (lode-nftw) -- see
 # tests/test_cli.py::test_status_dead_line_is_uniformly_danger_not_repr_highlighted.
 from lode.cli import _DbOption, _open_db, _tabular_table, app, console
-from lode.config import Settings, default_db_path, jira_active, lance_dir
+from lode.config import Settings, default_db_path, lance_dir
+from lode.drawdown import bare_jira_misconfigured
 from lode.enrichment_view import stale_enrichment_heads
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.jobs_read import dead_letter_jobs, egress_purpose_counts, job_status_counts
@@ -582,13 +583,9 @@ def status(db: _DbOption = None) -> None:
     # empty -- this is the misconfiguration case the module docstring
     # ("Bare JIRA issue keys") says must surface here, not crash or warn
     # per save.
-    jira_bare_key_misconfigured = False
-    if settings is not None:
-        jira_bare_key_misconfigured = (
-            jira_active(settings)
-            and bool(settings.jira_projects)
-            and not settings.jira_base_url
-        )
+    jira_bare_key_misconfigured = settings is not None and bare_jira_misconfigured(
+        settings
+    )
     # Independent of `settings` (the query needs none), unlike the three
     # probes above -- but still non-fatal (returns 0 on any failure) and run
     # in the same "outside any try, own connection" style, per lode-cyly.

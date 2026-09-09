@@ -163,9 +163,11 @@ Matched case-SENSITIVELY, whole-key (word-boundary both sides, so
 ``PROJ-42`` and a pasted ``/browse/PROJ-42`` dedup onto the same
 ``externals`` row. Detection stays synchronous and network-free, same as
 the URL path. A bare key inside a pasted URL's own span is not
-double-detected — :func:`detect_and_enqueue_drawdown` skips a bare-key
-match whose span overlaps any :func:`iter_url_spans` span, since the URL
-already routes through :func:`_classify_atlassian`.
+double-detected — a bare-key match whose span overlaps any
+:func:`iter_url_spans` span is skipped, since the URL already routes
+through :func:`_classify_atlassian`. Gate, allow-listed match and that
+exclusion together are :func:`iter_bare_jira_keys`, the single detector the
+save path and the JIRA backfill (:mod:`lode.jira_backfill`) both call.
 """
 
 from __future__ import annotations
@@ -298,12 +300,29 @@ def _bare_jira_scan_active(settings: Settings) -> bool:
     )
 
 
+def bare_jira_misconfigured(settings: Settings) -> bool:
+    """True iff the bare-key scan is *configured* but inert for want of a base URL.
+
+    The negative reading of :func:`_bare_jira_scan_active`'s third conjunct,
+    expressed here rather than retyped at its call site, so both readings of
+    the gate move together. This is the one bare-key state worth telling the
+    user about (``lode verify --jira`` / ``lode status``'s "Action needed"
+    line) — connector active and ``jira_projects`` set, but no
+    ``jira_base_url`` to rebuild an API base from, so every bare key is
+    silently inert. Not an error: see the module docstring's "Bare JIRA
+    issue keys" section for why this degrades quietly rather than crashing.
+    """
+    return bool(
+        jira_active(settings) and settings.jira_projects and not settings.jira_base_url
+    )
+
+
 def _bare_jira_key_pattern(projects: Sequence[str]) -> re.Pattern[str]:
     """Compile the case-sensitive, whole-key bare-JIRA-key pattern for *projects*.
 
     Word-boundary anchored on both sides with an explicit character class
-    (not ``\\b``, which treats ``-`` as a non-word char and would let
-    ``XPROJ-123`` match at the ``P`` right after the hyphen) — no
+    (not ``\\b``, which treats ``-`` as a non-word char and so would match
+    the ``PROJ-123`` tail of ``FOO-PROJ-123``) — no
     ``re.IGNORECASE`` flag, matching the owner's case-sensitive decision
     (module docstring).
     """
@@ -346,8 +365,7 @@ def _classify_bare_jira_key(
     """
     if not _bare_jira_scan_active(settings):
         return None
-    spans = list(iter_bare_jira_key_spans(key, settings.jira_projects))
-    if len(spans) != 1 or (spans[0][0], spans[0][1]) != (0, len(key)):
+    if not _bare_jira_key_pattern(settings.jira_projects).fullmatch(key):
         return None
     return (SOURCE_TYPE_JIRA, key, settings.jira_base_url.rstrip("/"))
 
@@ -410,6 +428,41 @@ def iter_url_spans(text: str) -> Iterator[tuple[int, int, str]]:
             url = url[:-1]
         if url:
             yield match.start(), match.start() + len(url), url
+
+
+#: ``edges.reason`` for a link opened from a bare JIRA key rather than a
+#: pasted URL. One literal, shared by the save path and the backfill, so the
+#: two can never write different reasons for the same logical link.
+BARE_JIRA_KEY_REASON = "bare JIRA key"
+
+
+def iter_bare_jira_keys(text: str, settings: Settings) -> Iterator[str]:
+    """Yield every bare, allow-listed JIRA key in *text* not already inside a URL.
+
+    The whole bare-key detection rule in one place — activation gate
+    (:func:`_bare_jira_scan_active`), allow-listed whole-key match
+    (:func:`iter_bare_jira_key_spans`), and the URL-span exclusion that keeps
+    a key inside a pasted ``/browse/`` link from being detected twice (the
+    URL already routes through :func:`_classify_atlassian`). Yields nothing
+    at all when the scan is inactive.
+
+    Both the save path (:func:`detect_and_enqueue_drawdown`) and the backfill
+    (:func:`lode.jira_backfill._bare_jira_key_backfill`) drive off this one
+    generator: the "same detector on both sides" property the docs promise is
+    a shared call, not two copies kept in step by hand.
+    """
+    if not _bare_jira_scan_active(settings):
+        return
+    url_spans = [(start, end) for start, end, _ in iter_url_spans(text)]
+    for key_start, key_end, key in iter_bare_jira_key_spans(
+        text, settings.jira_projects
+    ):
+        if any(
+            key_start < url_end and key_end > url_start
+            for url_start, url_end in url_spans
+        ):
+            continue
+        yield key
 
 
 def extract_urls(body: str) -> list[str]:
@@ -644,29 +697,19 @@ def detect_and_enqueue_drawdown(
             reason="pasted URL",
         )
 
-    if _bare_jira_scan_active(settings):
-        url_spans = [(start, end) for start, end, _ in iter_url_spans(body)]
-        api_base = settings.jira_base_url.rstrip("/")
-        for key_start, key_end, key in iter_bare_jira_key_spans(
-            body, settings.jira_projects
-        ):
-            if any(
-                key_start < url_end and key_end > url_start
-                for url_start, url_end in url_spans
-            ):
-                continue  # already routed via the URL loop above
-            _link_and_enqueue(
-                conn,
-                note_id,
-                version_id,
-                settings,
-                external_ids,
-                source_type=SOURCE_TYPE_JIRA,
-                external_id=key,
-                api_base=api_base,
-                quoted_text=key,
-                reason="bare JIRA key",
-            )
+    for key in iter_bare_jira_keys(body, settings):
+        _link_and_enqueue(
+            conn,
+            note_id,
+            version_id,
+            settings,
+            external_ids,
+            source_type=SOURCE_TYPE_JIRA,
+            external_id=key,
+            api_base=settings.jira_base_url.rstrip("/"),
+            quoted_text=key,
+            reason=BARE_JIRA_KEY_REASON,
+        )
 
     return external_ids
 
@@ -904,5 +947,6 @@ __all__ = [
     "detect_and_enqueue_drawdown",
     "extract_urls",
     "iter_bare_jira_key_spans",
+    "iter_bare_jira_keys",
     "refresh_external",
 ]

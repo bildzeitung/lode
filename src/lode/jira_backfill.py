@@ -42,12 +42,12 @@ A bare key (``PROJ-42``, no URL) predating ``jira_projects`` listing its
 prefix — or predating the whole feature — was never linked at save time (the
 detector didn't run yet), so unlike a URL there is no ``source='user'`` edge
 to reclassify for it. :func:`_bare_jira_key_backfill` closes that gap by
-scanning every live note head's body directly with the exact same detector
-:func:`lode.drawdown.detect_and_enqueue_drawdown` uses at save time
-(:func:`~lode.drawdown._bare_jira_scan_active` +
-:func:`~lode.drawdown.iter_bare_jira_key_spans`, with the same URL-span
-overlap exclusion) and links + enqueues any match the note doesn't already
-have an edge for. Idempotent: a key already linked from a given note is
+scanning every live note head's body directly through
+:func:`~lode.drawdown.iter_bare_jira_keys` — the *same call*
+:func:`lode.drawdown.detect_and_enqueue_drawdown` makes at save time, so the
+activation gate, the allow-listed match, and the URL-span overlap exclusion
+are shared rather than mirrored — and links + enqueues any match the note
+doesn't already have an edge for. Idempotent: a key already linked from a given note is
 skipped by the edge-existence check, so a second pass finds nothing new to
 do. :func:`_classify_bare_jira_key` (used by :func:`_jira_backfill`'s
 existing-edge loop below) is the same helper the save path's bare-key
@@ -94,12 +94,12 @@ from lode.backfill import (
 )
 from lode.config import Settings
 from lode.drawdown import (
+    BARE_JIRA_KEY_REASON,
     SOURCE_TYPE_JIRA,
     _bare_jira_scan_active,
     _classify_atlassian,
     _classify_bare_jira_key,
-    iter_bare_jira_key_spans,
-    iter_url_spans,
+    iter_bare_jira_keys,
 )
 
 
@@ -192,16 +192,7 @@ def _bare_jira_key_backfill(
         """
     ).fetchall()
     for note_id, version_id, body in rows:
-        url_spans = [(start, end) for start, end, _ in iter_url_spans(body)]
-        for key_start, key_end, key in iter_bare_jira_key_spans(
-            body, settings.jira_projects
-        ):
-            if any(
-                key_start < url_end and key_end > url_start
-                for url_start, url_end in url_spans
-            ):
-                continue  # already routed via the URL form -- see it above
-
+        for key in iter_bare_jira_keys(body, settings):
             exists = conn.execute(
                 "SELECT 1 FROM edges WHERE from_id = ? AND to_id = ? "
                 "AND source = 'user' LIMIT 1",
@@ -225,7 +216,7 @@ def _bare_jira_key_backfill(
                         "(from_id, to_id, source, reason, confidence, "
                         "source_version, quoted_text, status) "
                         "VALUES (?, ?, 'user', ?, 1.0, ?, ?, 'fresh')",
-                        (note_id, key, "bare JIRA key", version_id, key),
+                        (note_id, key, BARE_JIRA_KEY_REASON, version_id, key),
                     )
             linked += 1
 

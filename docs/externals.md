@@ -716,7 +716,7 @@ note body (Ctrl+N, rebuilding `{jira_base_url}/browse/{KEY}`) is a
 records as deferred — that module is deliberately pure (no `Settings`
 dependency), and threading one through it was judged out of proportion to
 this ticket's core (save-path + backfill) scope. Tracked as its own
-follow-up, blocked on this ticket.
+follow-up, `lode-dube`, blocked on this ticket.
 
 ### Confluence: only an id-bearing URL routes (decision F)
 
