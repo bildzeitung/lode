@@ -1,6 +1,6 @@
 ---
 name: sweep
-description: The third `/loop` leg — a SURFACE-ONLY human-decision surfacer. Scans bd for work that has stopped waiting on a human and nothing else consumes (`land-escalated` branches, `human`-labeled decision tickets that are not dependency-blocked, epics ready for a human close-decision), dedups against a durable cross-machine digest issue, and surfaces new items; every pass's report ends with the full "Actionable now" list of what's decidable right now (every current, non-deferred row, in full — not just the delta), and also lists every `deferred`-status ticket (§2a), every `in_progress` ticket claimed more than 24h ago that carries no pipeline label (§2b), and every dependency-blocked `human`-labeled ticket (§2c) in its report each pass (read-only, no dedup, never in the digest) so parked, stranded, and not-yet-decidable work stays visible. Writes no `trunk`, makes no decisions, dispatches no builders/landers/auditors. Run self-paced as `/loop 30m /sweep`. Examples — "/sweep", "/loop 30m /sweep", "what needs a human decision right now?", "sweep the human-decision queue".
+description: The third `/loop` leg — a SURFACE-ONLY human-decision surfacer. Scans bd for work that has stopped waiting on a human and nothing else consumes (`land-escalated` branches, `human`-labeled decision tickets that are not dependency-blocked, epics ready for a human close-decision), dedups against a durable cross-machine digest issue, and surfaces new items; every pass's report ends with the full "Actionable now" list of what's decidable right now (every current, non-deferred row, in full — not just the delta), and also lists every `deferred`-status ticket (§2a), every `in_progress` ticket claimed more than 24h ago that carries no pipeline label (§2b), every dependency-blocked `human`-labeled ticket (§2c), and every open docs-nits collector with its pending nit count (§2d) in its report each pass (read-only, no dedup, never in the digest) so parked, stranded, not-yet-decidable, and pending-nit work stays visible. Writes no `trunk`, makes no decisions, dispatches no builders/landers/auditors. Run self-paced as `/loop 30m /sweep`. Examples — "/sweep", "/loop 30m /sweep", "what needs a human decision right now?", "sweep the human-decision queue".
 ---
 
 # sweep
@@ -20,8 +20,9 @@ work that fell out of every consumer's sight (`bd ready` excludes it because it'
 every pipeline leg keys on a label it doesn't have) — and every open `human`-labeled ticket that is
 currently dependency-blocked (§2c) — a sign-off placeholder whose artifact does not exist yet, so it
 is not decidable and is subtracted from §1's `$HUMAN` source before it can reach `$CURRENT`/the
-digest/the push (lode-csxh). All three are report-only: no dedup state, no digest rewrite, no
-notification.
+digest/the push (lode-csxh) — and every open docs-nits collector with its pending `^NIT` note count
+(§2d, lode-t551), so a human can see when that batch is worth draining. All four are report-only: no
+dedup state, no digest rewrite, no notification.
 
 I am the **lowest-privilege** loop leg, deliberately: I write **one** self-owned bookkeeping issue
 (a running digest) and nothing else. The full design record — why this exists, what was challenged,
@@ -290,8 +291,8 @@ per collector, not a list of `<id>\t<title>` rows) while still honoring this sam
 
 **The sentinel, and why it can't collide with a real row.** Each section persists its result to its
 own `$SWEEP_TMP` file (`$SWEEP_TMP/deferred` for §2a, `$SWEEP_TMP/stranded` for §2b,
-`$SWEEP_TMP/blocked_human` for §2c) the same way §1 persists `$ESCALATED`/`$HUMAN` — §8 (a later,
-separate Bash invocation) reads it back from disk rather than relying on the model's in-context
+`$SWEEP_TMP/blocked_human` for §2c, `$SWEEP_TMP/docs_nits` for §2d) the same way §1 persists
+`$ESCALATED`/`$HUMAN` — §8 (a later, separate Bash invocation) reads it back from disk rather than relying on the model's in-context
 memory of the block's output, which is not the mechanism §0 says this file uses. On a query error
 (`bd` or `jq`), the writer overwrites the capture — which may be partial or garbled — with the
 literal string `SWEEP-QUERY-ERROR` instead of letting the pass abort. That gives each file three
@@ -314,7 +315,7 @@ each section's own note below.)
 §8 owns what each state renders as — see its three-state rule, and
 [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
 
-### Collection contract (§2a, §2b only)
+### Collection contract (§2a, §2b, §2d)
 
 **`set -o pipefail` is what makes the failure detectable at all** — it is the load-bearing line in
 each section's block, not hygiene. Without it, `VAR=$(bd … | jq …)` carries the exit status of the
@@ -496,6 +497,9 @@ set -o pipefail   # REQUIRED, not hygiene -- see the shared report-only contract
 
 # On a query error (bd or jq), overwrite the capture -- which may be partial or garbled -- with
 # the sentinel. §8 tells that apart from both a missing file and a legitimately empty one.
+#
+# (?m) is LOAD-BEARING, not dead syntax: in jq 1.7's Oniguruma a bare ^ anchors at string start
+# only, so dropping it counts 1 per collector no matter how many nits it holds (measured).
 if ! DOCS_NITS=$(bd list --label docs-nits --limit 0 --json \
   | jq -r '(. // []) | .[] | [.id, .title, (.notes // "" | [scan("(?m)^NIT")] | length)] | @tsv'); then
   DOCS_NITS="SWEEP-QUERY-ERROR"
@@ -510,7 +514,9 @@ contract](#report-only-sections-2a-2b-2c-2d--shared-contract) above. **Rendering
 §2a/§2b/§2c on one point:** each row here is `<id>\t<title>\t<count>`, not the plain `<id>\t<title>`
 those sections use, because this section's whole point is the `^NIT`-prefixed note count per
 collector, not the collector's own title alone (the note-prefix convention `docs/agents-workflow.md`
-above establishes). A collector entering or leaving this list, or its count changing, is never a new
+above establishes). Listing **every** open collector is deliberate even though the appenders expect
+exactly one (see the docs subsection linked above): a second one appearing is precisely what a human
+needs to see, and this section is the only place it becomes visible. A collector entering or leaving this list, or its count changing, is never a new
 human-decision item — it never enters `$CURRENT`, the digest, or notify; a human decides on their own
 schedule whether the batch is worth draining.
 
@@ -781,8 +787,8 @@ SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocat
 
 # Deliberately NOT §3's `|| { ... exit 1; }` guard: §8 must finish either way (the digest push
 # below is unrelated to the deferred/stranded lists), so a missing file degrades that section alone.
-# One 3-valued state per list, not a pair of booleans: `missing` (§2a/§2b's block never ran this
-# pass), `error` (it ran, but its query failed -- the SWEEP-QUERY-ERROR sentinel), or `ok` (real
+# One 3-valued state per list, not a pair of booleans: `missing` (§2a's/§2b's/§2d's block never
+# ran this pass), `error` (it ran, but its query failed -- the SWEEP-QUERY-ERROR sentinel), or `ok` (real
 # content, possibly legitimately empty). One variable makes the three mutually exclusive by
 # construction, so no combination has to be ruled out in prose.
 #
@@ -840,7 +846,7 @@ scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over ref
 # dedup state; no PushNotification change, §7 unchanged). Missing is fatal here the same way it is
 # for §5/§7's own re-derivation of $CURRENT: §3 must have run for this section to have anything to
 # show — a hard exit here is deliberate and does NOT contradict this block's opening note, which
-# scopes "§8 must finish either way" to the three report-only lists (a missing $SWEEP_TMP/deferred
+# scopes "§8 must finish either way" to the four report-only lists (a missing $SWEEP_TMP/deferred
 # is an ordinary third state; a missing $SWEEP_TMP/current means the pass itself never happened).
 # It runs AFTER the digest push above and never before it precisely so that exit can never suppress
 # the publish.
@@ -880,7 +886,7 @@ Report exactly one line, then the deferred section (§2a, always present), the s
 always-present **Actionable now** section (last):
 
 ```
-sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-to-close rows> closable, <deferred field> deferred, <stranded field> stranded, <blocked_human field> blocked, <docs_nits field> docs-nits collectors pending
+sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-to-close rows> closable, <deferred field> deferred, <stranded field> stranded, <blocked_human field> blocked, <docs_nits field> nits pending
 
 ## Deferred (surfaced, not reviewed) (<deferred field>)
 <id> <title>
@@ -903,11 +909,16 @@ sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-
 (none) | unavailable this pass | query failed this pass
 ```
 
-`<deferred field>`/`<stranded field>`/`<blocked_human field>` and the alternatives on the last line
-of each section are the three states above, per that list's `$<LIST>_STATE`. On `ok`, each section
-lists every current row (id + title) each pass, in full, with no dedup.
+`<deferred field>`/`<stranded field>`/`<blocked_human field>`/`<docs_nits field>` and the
+alternatives on the last line of each section are the three states above, per that list's
+`$<LIST>_STATE`. On `ok`, each section lists every current row each pass, in full, with no dedup —
+id + title, plus §2d's own trailing `^NIT` count. **§2d's summary field deviates deliberately:** on
+`ok` it is the **sum of the third column** — total pending nits across every open collector — not
+`<len $DOCS_NITS>`, which would count *collectors*, a number that reads `1` essentially forever and
+says nothing about whether the batch is worth draining. `unavailable`/`error` render as for every
+other list.
 
-When `$SWEEP_TMP/new_annotated` (§7) is non-empty, follow the three sections above with:
+When `$SWEEP_TMP/new_annotated` (§7) is non-empty, follow the four sections above with:
 
 ```
 ## NEW HUMAN-DECISION ITEMS (<count of rows in new_annotated>)
@@ -939,9 +950,8 @@ unchanged — no `(deferred)` annotation is needed here since deferred rows are 
 ```
 
 This is distinct from the four report-only lists above (§2a/§2b/§2c list *parked/stranded/
-not-yet-decidable* work `bd ready` already hides, and §2d lists open docs-nits collectors pending a
-human drain) and from the `NEW HUMAN-DECISION ITEMS` block
-above it (that block is delta-only — new since the last digest, deferred rows included and
+not-yet-decidable* work `bd ready` already hides, and §2d open docs-nits collectors pending a human
+drain) and from the `NEW HUMAN-DECISION ITEMS` block above it (that block is delta-only — new since the last digest, deferred rows included and
 annotated). This section is the standing, decidable-now queue — `land-escalated`, open `human`, and
 `epic-ready-to-close` rows minus anything deferred — every pass, so a human reading the transcript
 never has to run `bd show` to see what is still waiting on them and can act on it without first
@@ -953,7 +963,8 @@ vs. "what's decidable now" answer different questions.
 
 If §4 found `N > 1` duplicate digests, any sub-step in §1/§2 failed (`$SOURCE_STATE` = `error`, in
 which case also say that §6 and §7 were skipped and the prior digest is stale but intact), or the
-§2a deferred, §2b stranded, or §2c blocked-human query failed, say so plainly in the same report —
+§2a deferred, §2b stranded, §2c blocked-human, or §2d docs-nits query failed, say so plainly in
+the same report —
 the pass still ends cleanly either way. A failed `bd blocked` query is both at once: it sets
 `$SOURCE_STATE = error` (via §1's shared marker) *and* `$BLOCKED_HUMAN_STATE = error` (via its own
 sentinel) — report both, not just one.
@@ -977,13 +988,13 @@ real items from the durable record a human relies on.
 - If §4 finds `N > 1` digests, the write path stops for the pass (that anomaly is reported, never
   guessed at).
 - **A report-only section's failure is isolated to that section alone** — this covers §2a
-  (deferred) and §2b (stranded) identically: if either query errors, its block writes the
-  `SWEEP-QUERY-ERROR` sentinel instead of the (possibly-partial) query output, and §8's three-state
+  (deferred), §2b (stranded) and §2d (docs-nits) identically: if one query errors, its block writes
+  the `SWEEP-QUERY-ERROR` sentinel instead of the (possibly-partial) query output, and §8's three-state
   rule — the canonical statement of what each state renders as — reports it. Neither a failed query
   nor a missing scratch file may suppress the §6 rewrite or §7 notification for the (unrelated)
-  escalation/human/epic queue; the reverse holds too (a §1/§2 failure never suppresses §2a or §2b,
-  neither of which has a rewrite to protect), and so does the §2a-vs-§2b case — each is its own
-  isolated read. **§2c is the one exception, deliberately:** its query is §1's own `bd blocked`
+  escalation/human/epic queue; the reverse holds too (a §1/§2 failure never suppresses §2a, §2b or
+  §2d, none of which has a rewrite to protect), and so does the case of any two of them against each
+  other — each is its own isolated read. **§2c is the one exception, deliberately:** its query is §1's own `bd blocked`
   call, so a failure there is *not* isolated the way §2a/§2b's are — it writes both
   `$SWEEP_TMP/blocked_human`'s `SWEEP-QUERY-ERROR` sentinel (for §8's report) *and*
   `$SWEEP_TMP/source_query_failed` (§1's shared marker, since a failed `bd blocked` must not be
@@ -1013,7 +1024,7 @@ real items from the durable record a human relies on.
 
 When the pass ends I report: the one-line summary (§8), the deferred section (§2a, always present),
 the stranded section (§2b, always present), the blocked-human section (§2c, always present), the
-full **NEW HUMAN-DECISION ITEMS** block when `$NEW_IDS` is non-empty (annotated `(deferred)`
+docs-nits section (§2d, always present), the full **NEW HUMAN-DECISION ITEMS** block when `$NEW_IDS` is non-empty (annotated `(deferred)`
 per-row where applicable, per §7 — lode-o7ai), and finally — always, last — the **Actionable now**
 section (every non-`deferred` row of `$CURRENT`, in full, every pass — DECIDED lode-8xl2), plus any
 duplicate-digest anomaly and any sub-step that failed. A clean, unchanged queue is a valid, common
