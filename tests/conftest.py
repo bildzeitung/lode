@@ -1792,8 +1792,7 @@ def non_comment_fence_body(blocks: list[str]) -> str:
     """``blocks`` joined into one string with ``#``-comment lines stripped --
     what a scan for an inline recipe must ignore, since a fence may cite the
     thing it delegates to in a comment rather than carrying a second copy of
-    it (lode-2r1q; previously duplicated in ``test_bd_docs_nit.py`` and
-    ``test_sweep_digest_id.py``).
+    it (lode-2r1q).
     """
     return "\n".join(
         line
