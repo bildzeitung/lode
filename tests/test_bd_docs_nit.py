@@ -25,6 +25,7 @@ from conftest import (
     LAND_SKILL_TEXT,
     SWEEP_SKILL_BLOCKS,
     fake_bin_env,
+    non_comment_fence_body,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -320,12 +321,7 @@ def _assert_delegates_to_the_script(text: str, *, label: str) -> None:
 def test_sweep_skill_count_call_site_uses_the_script() -> None:
     # Comment lines are stripped first: §2d's block cites the script's internals
     # in a comment, which is documentation, not a second copy of the query.
-    body = "\n".join(
-        line
-        for block in SWEEP_SKILL_BLOCKS
-        for line in block.splitlines()
-        if not line.strip().startswith("#")
-    )
+    body = non_comment_fence_body(SWEEP_SKILL_BLOCKS)
     _assert_delegates_to_the_script(body, label="sweep/SKILL.md")
     assert "scripts/bd-docs-nit.sh count" in body
 
