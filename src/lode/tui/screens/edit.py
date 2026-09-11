@@ -132,7 +132,7 @@ from lode.tui.no_egress_command import (
     NoEgressCommandProvider,
 )
 from lode.tui.screens._content_view import _view_note_external_content
-from lode.tui.screens._link_open import open_link_under_cursor
+from lode.tui.screens._link_open import bare_jira_open_args, open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.screens.ask import AskScreen
 from lode.tui.screens.discard_confirm import DiscardConfirmScreen
@@ -329,11 +329,17 @@ class EditScreen(Screen[None]):
         accounting) -- freed by ``lode-bsmc``'s Ctrl+S consolidation.
         :func:`~lode.tui.screens._link_open.open_link_under_cursor` does the
         actual extraction + browser-safety work, shared with
-        :class:`~lode.tui.screens.version_view.VersionViewScreen` and
+        :class:`~lode.tui.screens.capture.CaptureScreen`,
+        :class:`~lode.tui.screens.version_view.VersionViewScreen`, and
         :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen`.
+        Also opens a bare JIRA key under the cursor (lode-dube), via
+        :func:`~lode.tui.screens._link_open.bare_jira_open_args`.
         """
         text_area = self.query_one(f"#{EDIT_BODY_ID}", TextArea)
-        open_link_under_cursor(self, text_area)
+        jira_projects, jira_base_url = bare_jira_open_args(self.app.settings)
+        open_link_under_cursor(
+            self, text_area, jira_projects=jira_projects, jira_base_url=jira_base_url
+        )
 
     def action_ask_about_note(self) -> None:
         """Ctrl+L: open Ask, scoped to this note (lode-35nu.11.3).

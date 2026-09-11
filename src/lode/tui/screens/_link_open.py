@@ -19,15 +19,17 @@ here means Ctrl+N can open a different URL than the one lode recorded as the
 external for that very character position. Only the two markdown shapes
 below -- which drawdown has no interest in -- are matched locally.
 
-**Bare JIRA keys (lode-2o45) are NOT openable from here -- deferred.** A bare
-key (`PROJ-42`) would need `{jira_base_url}/browse/{KEY}` rebuilt from
-`Settings`, but every function in this module is deliberately pure (no
-`Settings`/config dependency at all, by design -- see "Two pieces" below),
-and `extract_link_at_cursor`'s only caller, `open_link_under_cursor`, is
-itself given no settings today. Threading one through three screens'
-`action_open_link` handlers for this alone was judged out of proportion to
-lode-2o45's core ask; tracked as its own follow-up, `lode-dube`, rather
-than folded in here silently.
+**Bare JIRA keys (lode-2o45 / lode-dube) are openable too, via plain values,
+not a ``Settings`` dependency.** A bare key (`PROJ-42`) needs
+`{jira_base_url}/browse/{KEY}` rebuilt using the exact same
+:func:`~lode.drawdown.iter_bare_jira_key_spans` matcher the save path uses,
+so "what opens == what draws down" holds for bare keys too. Both
+:func:`extract_link_at_cursor` and :func:`open_link_under_cursor` stay pure
+-- they take ``jira_projects``/``jira_base_url`` as plain values (empty by
+default), never a ``Settings`` object -- so the ``jira_active(settings) and
+settings.jira_projects and settings.jira_base_url`` gate (identical to
+:func:`~lode.drawdown._bare_jira_scan_active`'s) is each caller's own job,
+via :func:`bare_jira_open_args`, before it reaches into this module.
 
 Split into a leaf module (underscore-prefixed per `docs/conventions.md` --
 it hosts no `Screen`/`Widget` of its own, so it doesn't count against the
@@ -80,16 +82,19 @@ import os
 import re
 import sys
 import webbrowser
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from textual import work
 
-from lode.drawdown import iter_url_spans
+from lode.config import jira_active
+from lode.drawdown import iter_bare_jira_key_spans, iter_url_spans
 
 if TYPE_CHECKING:
     from textual.screen import Screen
     from textual.widgets import TextArea
+
+    from lode.config import Settings
 
 #: `[text](url)` -- the whole construct (brackets, text, parens, url) is the
 #: match span, so a cursor anywhere in the visible link -- not just over the
@@ -111,13 +116,28 @@ _INLINE_LINK_RE = re.compile(r"\[[^\[\]]*\]\(((?:[^()\s]|\([^()\s]*\))+)\)")
 _REFERENCE_LINK_RE = re.compile(r"^\s*\[[^\[\]]+\]:\s*(\S+)")
 
 
-def extract_link_at_cursor(line: str, column: int) -> str | None:
+def extract_link_at_cursor(
+    line: str,
+    column: int,
+    *,
+    jira_projects: Sequence[str] = (),
+    jira_base_url: str = "",
+) -> str | None:
     """The URL under *column* on *line*, or ``None`` if the cursor is on no link.
 
     Pure function -- no Textual/Screen/IO dependency -- so it's unit
-    testable on its own (this ticket's Testing note). Covers the three
+    testable on its own (this ticket's Testing note). Covers the four
     shapes a note body can hold a link as: an inline link (`[text](url)`), a
-    reference-style link definition (`[label]: url`), and a bare URL.
+    reference-style link definition (`[label]: url`), a bare URL, and (given
+    *jira_projects* and *jira_base_url*) a bare JIRA key.
+
+    *jira_projects* and *jira_base_url* are plain values, not a ``Settings``
+    object, so this stays pure; pass both only once the caller has already
+    applied the same gate :func:`~lode.drawdown._bare_jira_scan_active`
+    uses (see :func:`bare_jira_open_args`) -- an empty *jira_projects* (the
+    default) simply matches no bare key, mirroring
+    :func:`~lode.drawdown.iter_bare_jira_key_spans`'s own "yields nothing
+    when *projects* is empty" contract.
 
     *column* must fall strictly within the matched span
     (``start <= column < end``): landing exactly one column past the link's
@@ -149,7 +169,33 @@ def extract_link_at_cursor(line: str, column: int) -> str | None:
     for start, end, url in iter_url_spans(line):
         if start <= column < end:
             return url
+
+    # Bare JIRA key spans come from `drawdown.iter_bare_jira_key_spans` --
+    # the SAME matcher the save path uses to decide which bare keys draw an
+    # external edge down (`drawdown.detect_and_enqueue_drawdown`). Sharing
+    # it, rather than a second key-shaped regex here, is what keeps "what
+    # opens == what draws down" true for bare keys the same way it already
+    # holds for bare URLs above.
+    for start, end, key in iter_bare_jira_key_spans(line, jira_projects):
+        if start <= column < end:
+            return f"{jira_base_url.rstrip('/')}/browse/{key}"
     return None
+
+
+def bare_jira_open_args(settings: Settings) -> tuple[Sequence[str], str]:
+    """The ``(jira_projects, jira_base_url)`` pair to open a bare key with, or empty.
+
+    Mirrors :func:`~lode.drawdown._bare_jira_scan_active`'s gate -- ALL of
+    :func:`~lode.config.jira_active`, ``settings.jira_projects`` non-empty,
+    and ``settings.jira_base_url`` set -- so a bare key opens under exactly
+    the condition the save path draws one down under. The only place in
+    this module that touches ``Settings`` at all; every ``action_open_link``
+    call site calls this once and passes the plain result into
+    :func:`open_link_under_cursor`, which stays pure.
+    """
+    if jira_active(settings) and settings.jira_projects and settings.jira_base_url:
+        return settings.jira_projects, settings.jira_base_url
+    return (), ""
 
 
 def _has_display(env: Mapping[str, str], *, is_macos: bool) -> bool:
@@ -201,11 +247,20 @@ def resolve_link_open(
     return True, f"opened in browser -- link: {url}"
 
 
-def open_link_under_cursor(screen: Screen[object], text_area: TextArea) -> None:
+def open_link_under_cursor(
+    screen: Screen[object],
+    text_area: TextArea,
+    *,
+    jira_projects: Sequence[str] = (),
+    jira_base_url: str = "",
+) -> None:
     """Ctrl+N: open the link under *text_area*'s cursor, or explain there isn't one.
 
     Shared glue between the two pure functions above and a live screen, and
-    the only piece the three ``action_open_link`` handlers call.
+    the only piece the four ``action_open_link`` handlers call. *jira_projects*
+    and *jira_base_url* are forwarded, unchanged, to
+    :func:`extract_link_at_cursor` -- see :func:`bare_jira_open_args` for how
+    a caller derives them from ``Settings``.
 
     **Runs on the Textual event loop, and reads the widget there on purpose.**
     Everything this function itself does is cheap and non-blocking -- one
@@ -224,7 +279,9 @@ def open_link_under_cursor(screen: Screen[object], text_area: TextArea) -> None:
     """
     row, column = text_area.cursor_location
     line = text_area.document.get_line(row)
-    url = extract_link_at_cursor(line, column)
+    url = extract_link_at_cursor(
+        line, column, jira_projects=jira_projects, jira_base_url=jira_base_url
+    )
     if url is None:
         screen.notify("no link under the cursor", severity="warning")
         return

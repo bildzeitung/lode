@@ -19,7 +19,7 @@ from textual.screen import ModalScreen
 from textual.widgets import TextArea
 
 from lode.notes_read import SnapshotRow, read_snapshot
-from lode.tui.screens._link_open import open_link_under_cursor
+from lode.tui.screens._link_open import bare_jira_open_args, open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.widgets.lode_footer import LodeFooter
 
@@ -125,7 +125,12 @@ class SnapshotViewerScreen(ModalScreen[None]):
         Works against whichever body is currently showing -- the extracted
         text or the raw HTML, per :attr:`_showing_raw` -- since both are the
         same ``TextArea`` (:data:`SNAPSHOT_VIEWER_BODY_ID`), just swapped by
-        :meth:`action_toggle_raw`.
+        :meth:`action_toggle_raw`. Also opens a bare JIRA key under the
+        cursor (lode-dube), via
+        :func:`~lode.tui.screens._link_open.bare_jira_open_args`.
         """
         text_area = self.query_one(f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea)
-        open_link_under_cursor(self, text_area)
+        jira_projects, jira_base_url = bare_jira_open_args(self.app.settings)
+        open_link_under_cursor(
+            self, text_area, jira_projects=jira_projects, jira_base_url=jira_base_url
+        )
