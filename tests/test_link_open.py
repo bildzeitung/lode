@@ -14,8 +14,13 @@ import webbrowser
 
 import pytest
 
+from lode.config import load_settings
 from lode.tui.screens import _link_open
-from lode.tui.screens._link_open import extract_link_at_cursor, resolve_link_open
+from lode.tui.screens._link_open import (
+    bare_jira_open_args,
+    extract_link_at_cursor,
+    resolve_link_open,
+)
 
 
 #: A stand-in for a real GUI-browser controller (Firefox/Chrome/etc.) -- any
@@ -173,6 +178,93 @@ def test_bare_url_inside_an_inline_link_does_not_shadow_the_inline_match() -> No
     # the parens can never win with a differently-trimmed span.
     line = "[docs](https://example.com/a.)"
     assert extract_link_at_cursor(line, line.index("docs")) == "https://example.com/a."
+
+
+# ---------------------------------------------------------------------------
+# extract_link_at_cursor -- bare JIRA keys (lode-dube)
+# ---------------------------------------------------------------------------
+
+
+def test_bare_jira_key_cursor_inside_matches() -> None:
+    line = "see PROJ-123 for details"
+    column = line.index("PROJ")
+    assert (
+        extract_link_at_cursor(
+            line,
+            column,
+            jira_projects=["PROJ"],
+            jira_base_url="https://acme.atlassian.net",
+        )
+        == "https://acme.atlassian.net/browse/PROJ-123"
+    )
+
+
+def test_bare_jira_key_base_url_trailing_slash_is_stripped() -> None:
+    line = "PROJ-123"
+    assert (
+        extract_link_at_cursor(
+            line, 0, jira_projects=["PROJ"], jira_base_url="https://acme.atlassian.net/"
+        )
+        == "https://acme.atlassian.net/browse/PROJ-123"
+    )
+
+
+def test_bare_jira_key_project_not_in_allowlist_does_not_match() -> None:
+    line = "see PROJ-123 for details"
+    column = line.index("PROJ")
+    assert (
+        extract_link_at_cursor(
+            line,
+            column,
+            jira_projects=["OTHER"],
+            jira_base_url="https://acme.atlassian.net",
+        )
+        is None
+    )
+
+
+def test_bare_jira_key_with_no_projects_configured_does_not_match() -> None:
+    line = "see PROJ-123 for details"
+    column = line.index("PROJ")
+    assert extract_link_at_cursor(line, column) is None
+
+
+# ---------------------------------------------------------------------------
+# bare_jira_open_args -- the Settings-reading gate (lode-dube)
+# ---------------------------------------------------------------------------
+
+
+def _jira_settings(**overrides):
+    return load_settings(
+        jira_enabled=True, jira_token="tok", jira_email="a@example.com", **overrides
+    )
+
+
+def test_bare_jira_open_args_fully_configured_returns_projects_and_base_url() -> None:
+    settings = _jira_settings(
+        jira_projects=["PROJ"], jira_base_url="https://acme.atlassian.net"
+    )
+    assert bare_jira_open_args(settings) == (
+        ["PROJ"],
+        "https://acme.atlassian.net",
+    )
+
+
+def test_bare_jira_open_args_no_base_url_returns_empty() -> None:
+    settings = _jira_settings(jira_projects=["PROJ"])  # no jira_base_url
+    assert bare_jira_open_args(settings) == ((), "")
+
+
+def test_bare_jira_open_args_no_projects_returns_empty() -> None:
+    settings = _jira_settings(jira_base_url="https://acme.atlassian.net")
+    assert bare_jira_open_args(settings) == ((), "")
+
+
+def test_bare_jira_open_args_jira_not_enabled_returns_empty() -> None:
+    settings = load_settings(
+        jira_projects=["PROJ"], jira_base_url="https://acme.atlassian.net"
+    )
+    assert bare_jira_open_args(settings) == ((), "")
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +439,50 @@ def test_open_link_under_cursor_extracts_the_url_synchronously(
 
     assert captured == ["https://example.com/path"]
     assert screen.notified == []
+
+
+def test_open_link_under_cursor_opens_a_bare_jira_key_given_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The settings gate lives here, so the four screens pass only ``Settings``.
+
+    Pins the collapsed path end to end: ``Settings`` in, the
+    ``bare_jira_open_args`` gate applied once, the rebuilt browse URL out.
+    """
+    captured: list[str] = []
+    monkeypatch.setattr(
+        _link_open, "_open_url", lambda screen, url: captured.append(url)
+    )
+    screen = _FakeScreen()
+    text_area = _FakeTextArea(["see PROJ-123 for details"], (0, 5))
+    settings = _jira_settings(
+        jira_projects=["PROJ"], jira_base_url="https://acme.atlassian.net"
+    )
+
+    _link_open.open_link_under_cursor(screen, text_area, settings)  # type: ignore[arg-type]
+
+    assert captured == ["https://acme.atlassian.net/browse/PROJ-123"]
+    assert screen.notified == []
+
+
+def test_open_link_under_cursor_leaves_a_bare_jira_key_inert_when_gated_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Connector off: the same line has no link at all, not a half-built URL."""
+    captured: list[str] = []
+    monkeypatch.setattr(
+        _link_open, "_open_url", lambda screen, url: captured.append(url)
+    )
+    screen = _FakeScreen()
+    text_area = _FakeTextArea(["see PROJ-123 for details"], (0, 5))
+    settings = load_settings(
+        jira_projects=["PROJ"], jira_base_url="https://acme.atlassian.net"
+    )
+
+    _link_open.open_link_under_cursor(screen, text_area, settings)  # type: ignore[arg-type]
+
+    assert captured == []
+    assert screen.notified == [("no link under the cursor", "warning")]
 
 
 def test_open_link_under_cursor_notifies_synchronously_when_there_is_no_link(

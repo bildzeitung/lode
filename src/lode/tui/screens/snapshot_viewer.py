@@ -125,7 +125,9 @@ class SnapshotViewerScreen(ModalScreen[None]):
         Works against whichever body is currently showing -- the extracted
         text or the raw HTML, per :attr:`_showing_raw` -- since both are the
         same ``TextArea`` (:data:`SNAPSHOT_VIEWER_BODY_ID`), just swapped by
-        :meth:`action_toggle_raw`.
+        :meth:`action_toggle_raw`. Also opens a bare JIRA key under the
+        cursor (lode-dube), when the JIRA connector and
+        ``jira_projects``/``jira_base_url`` are configured.
         """
         text_area = self.query_one(f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea)
-        open_link_under_cursor(self, text_area)
+        open_link_under_cursor(self, text_area, self.app.settings)

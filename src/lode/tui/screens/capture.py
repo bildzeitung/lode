@@ -384,9 +384,11 @@ class CaptureScreen(Screen[None]):
         one key, every screen that can show a link.
         :func:`~lode.tui.screens._link_open.open_link_under_cursor` does the
         actual extraction + browser-safety work, shared with all three.
+        Also opens a bare JIRA key under the cursor (lode-dube), when the
+        JIRA connector and ``jira_projects``/``jira_base_url`` are configured.
         """
         text_area = self.query_one(f"#{BODY_ID}", TextArea)
-        open_link_under_cursor(self, text_area)
+        open_link_under_cursor(self, text_area, self.app.settings)
 
     def confirm_quit(self) -> None:
         """Exit immediately if the buffer is empty, else confirm first.

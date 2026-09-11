@@ -329,11 +329,14 @@ class EditScreen(Screen[None]):
         accounting) -- freed by ``lode-bsmc``'s Ctrl+S consolidation.
         :func:`~lode.tui.screens._link_open.open_link_under_cursor` does the
         actual extraction + browser-safety work, shared with
-        :class:`~lode.tui.screens.version_view.VersionViewScreen` and
+        :class:`~lode.tui.screens.capture.CaptureScreen`,
+        :class:`~lode.tui.screens.version_view.VersionViewScreen`, and
         :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen`.
+        Also opens a bare JIRA key under the cursor (lode-dube), when the
+        JIRA connector and ``jira_projects``/``jira_base_url`` are configured.
         """
         text_area = self.query_one(f"#{EDIT_BODY_ID}", TextArea)
-        open_link_under_cursor(self, text_area)
+        open_link_under_cursor(self, text_area, self.app.settings)
 
     def action_ask_about_note(self) -> None:
         """Ctrl+L: open Ask, scoped to this note (lode-35nu.11.3).

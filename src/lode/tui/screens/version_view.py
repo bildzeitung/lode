@@ -71,10 +71,12 @@ class VersionViewScreen(Screen[None]):
         read-only-body exception) -- ``Ctrl+N`` is used anyway, matching
         :class:`~lode.tui.screens.edit.EditScreen`'s binding exactly, so the
         same keypress opens a link on every screen that has one, whether the
-        body happens to be editable here or not.
+        body happens to be editable here or not. Also opens a bare JIRA key
+        under the cursor (lode-dube), when the JIRA connector and
+        ``jira_projects``/``jira_base_url`` are configured.
         """
         text_area = self.query_one(f"#{VERSION_BODY_ID}", TextArea)
-        open_link_under_cursor(self, text_area)
+        open_link_under_cursor(self, text_area, self.app.settings)
 
     def action_ask_about_note(self) -> None:
         """Ctrl+L: open Ask, scoped to this note (lode-35nu.11.3).
