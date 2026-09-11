@@ -1951,13 +1951,15 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   dropped** (lode-t551; decision and discriminator:
   [`docs/agents-workflow.md` — Wording-only doc nits go to the docs-nits
   collector](../../../docs/agents-workflow.md#wording-only-doc-nits-go-to-the-docs-nits-collector-lode-t551)).
-  A nit is mine, or a `land-review` DOCS NIT finding — either way: `bd list --label docs-nits --limit
-  0 --json` to locate the collector (never a hardcoded id), then `bd update <collector>
-  --append-notes` in the same patch shape [If the whole remedy is a one-line doc
+  A nit is mine, or a `land-review` DOCS NIT finding — either way:
+  `scripts/bd-docs-nit.sh append --source "<attribution>" --file <path> --line <n> --anchor
+  "<verbatim>" --replacement "<text>"` locates the collector by label (never a hardcoded id),
+  appends the note in the mandated patch shape [If the whole remedy is a one-line doc
   change](#if-the-whole-remedy-is-a-one-line-doc-change-report-the-patch--not-the-gap) already
-  mandates (file, `grep -n`-derived line, anchor line quoted verbatim, exact replacement text) with
-  the note prefixed `NIT`, then `scripts/bd-dolt-push.sh`. If no open `docs-nits` ticket exists, I
-  fall back to reporting it as today — I do **not** create one; the human opens the collector.
+  requires, with the `NIT` prefix the script owns, and pushes it (lode-y86u). **Exit 1 means the
+  script refused — read its stderr before deciding what to do**: with *no* open collector I fall back
+  to reporting the nit as today (I do **not** create one; the human opens the collector); with *two
+  or more* I report the duplicate-collector ambiguity itself, and never pick one.
 
   **Not filing is not the same as leaving work for the human.** When the discovery's whole remedy is
   a one-line doc change, the report must carry the *patch* — exact text, file, derived line number —

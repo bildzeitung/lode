@@ -2114,13 +2114,26 @@ SWEEP_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
 #: roots, so the constant belongs here for the same reason the skill ones do.
 CODE_REVIEWER_AGENT = _CHECKOUT_ROOT / ".claude" / "agents" / "code-reviewer.md"
 
-#: :func:`bash_fence_blocks` over :data:`CODE_REVIEWER_AGENT`, once per session.
-#: See :data:`LAND_SKILL_TEXT` for why this is cached at all. No separate
-#: ``_TEXT`` constant: unlike ``LAND_SKILL_TEXT`` (several modules read the raw
-#: prose), nothing needs the text itself yet, so the read is inlined here rather
-#: than exported dead. Sourced from :func:`markdown_corpus_text` via
-#: :func:`_corpus_text` rather than its own ``read_text`` call (lode-es1i).
-CODE_REVIEWER_AGENT_BLOCKS = bash_fence_blocks(_corpus_text(CODE_REVIEWER_AGENT))
+#: The code-reviewer agent definition's raw text, read once per session -- see
+#: :data:`LAND_SKILL_TEXT`. Sourced from :func:`markdown_corpus_text` via
+#: :func:`_corpus_text` rather than a second ``read_text`` call (lode-es1i).
+CODE_REVIEWER_AGENT_TEXT = _corpus_text(CODE_REVIEWER_AGENT)
+
+#: :func:`bash_fence_blocks` over :data:`CODE_REVIEWER_AGENT_TEXT`, once per
+#: session. See :data:`LAND_SKILL_TEXT` for why this is cached at all.
+CODE_REVIEWER_AGENT_BLOCKS = bash_fence_blocks(CODE_REVIEWER_AGENT_TEXT)
+
+#: The coding-producer agent definition, derived the same way as
+#: CODE_REVIEWER_AGENT above -- ``tests/test_no_hand_derived_skill_md_path.py``
+#: covers this root too, so the constant belongs here for the same reason the
+#: others do.
+CODING_AGENT = _CHECKOUT_ROOT / ".claude" / "agents" / "coding.md"
+
+#: The coding-producer agent definition's raw text, sourced from
+#: :func:`markdown_corpus_text` via :func:`_corpus_text` rather than a second
+#: ``read_text`` call (lode-es1i), exactly like
+#: :data:`CODE_REVIEWER_AGENT_TEXT`.
+CODING_AGENT_TEXT = _corpus_text(CODING_AGENT)
 
 #: The sweep skill doc's text, read once per session rather than once per test
 #: (lode-pxwn) -- the same fix LAND_SKILL_TEXT above applied to LAND_SKILL.

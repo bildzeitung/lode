@@ -280,11 +280,14 @@ status, before the loop ever starts, is what actually surfaces the failure.
 §2a (`deferred` tickets), §2b (stranded `in_progress` tickets), §2c (dependency-blocked `human`
 tickets), and §2d (open docs-nits collectors, lode-t551) are four report-only lists that share a
 **rendering contract** — how each list's result is persisted and what it's excluded from — stated
-once here rather than four times below. §2a, §2b, and §2d additionally share a **collection
-contract** — how each list's own `bd` query is run. §2c has no collection contract of its own: its
+once here rather than four times below. §2a and §2b additionally share a **collection contract** —
+how each list's own `bd` query is run. §2c and §2d have no collection contract of their own: §2d's
+query moved wholesale into `scripts/bd-docs-nit.sh count` (lode-y86u), which owns the `bd`/`jq`
+pipeline, the null-vs-empty guard and the `--limit 0` pin and reports a failed query as its own exit
+2 — so §2d's block has no pipeline to guard. §2c's
 data is the `bd blocked --json` call §1 already makes (to compute the `$HUMAN` subtraction,
-lode-csxh), not an independent read — see §2c's own section below for what stands in its place. §2d's
-own section below notes the one way its **rendering** deliberately differs from §2a/§2b/§2c (a count
+lode-csxh), not an independent read — see §2c's own section below for what stands in its place.
+§2d's own section below notes the one way its **rendering** deliberately differs from §2a/§2b/§2c (a count
 per collector, not a list of `<id>\t<title>` rows) while still honoring this same exclusion contract.
 
 ### Rendering contract (§2a, §2b, §2c, §2d — no exceptions)
@@ -315,7 +318,7 @@ each section's own note below.)
 §8 owns what each state renders as — see its three-state rule, and
 [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
 
-### Collection contract (§2a, §2b, §2d)
+### Collection contract (§2a, §2b)
 
 **`set -o pipefail` is what makes the failure detectable at all** — it is the load-bearing line in
 each section's block, not hygiene. Without it, `VAR=$(bd … | jq …)` carries the exit status of the
@@ -493,22 +496,19 @@ this section only surfaces the count, never a decision.
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
 
-set -o pipefail   # REQUIRED, not hygiene -- see the shared report-only contract above.
-
-# On a query error (bd or jq), overwrite the capture -- which may be partial or garbled -- with
-# the sentinel. §8 tells that apart from both a missing file and a legitimately empty one.
-#
-# (?m) is LOAD-BEARING, not dead syntax: in jq 1.7's Oniguruma a bare ^ anchors at string start
-# only, so dropping it counts 1 per collector no matter how many nits it holds (measured).
-if ! DOCS_NITS=$(bd list --label docs-nits --limit 0 --json \
-  | jq -r '(. // []) | .[] | [.id, .title, (.notes // "" | [scan("(?m)^NIT")] | length)] | @tsv'); then
+# No `set -o pipefail` here, unlike §2a/§2b: there is no pipeline left to guard. The query, its
+# null-vs-empty guard and the per-collector count all live in scripts/bd-docs-nit.sh (lode-y86u),
+# which reports a failed query as its own exit 2 -- so the capture below already fails loudly.
+# On that error, overwrite the capture -- which may be partial or garbled -- with the sentinel.
+# §8 tells that apart from both a missing file and a legitimately empty one.
+if ! DOCS_NITS=$(scripts/bd-docs-nit.sh count); then
   DOCS_NITS="SWEEP-QUERY-ERROR"
 fi
 printf '%s' "$DOCS_NITS" > "$SWEEP_TMP/docs_nits"
 ```
 
-The persistence/sentinel convention, the `(. // [])` guard, the `--limit 0` stake, and what this
-section is deliberately excluded from are all stated once, for this section and §2a/§2b/§2c, in
+The persistence/sentinel convention and what this section is deliberately excluded from are stated
+once, for this section and §2a/§2b/§2c, in
 [Report-only sections (§2a, §2b, §2c, §2d) — shared
 contract](#report-only-sections-2a-2b-2c-2d--shared-contract) above. **Rendering differs from
 §2a/§2b/§2c on one point:** each row here is `<id>\t<title>\t<count>`, not the plain `<id>\t<title>`

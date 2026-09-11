@@ -393,10 +393,12 @@ mode is destructive repair, appropriate as a one-time precondition, not as a mid
     never a judgment call about *what to say* — is **not** a new ticket at all: I append it to the
     docs-nits collector instead (lode-t551; decision and discriminator:
     [docs/agents-workflow.md](../../docs/agents-workflow.md#wording-only-doc-nits-go-to-the-docs-nits-collector-lode-t551)).
-    `bd list --label docs-nits --limit 0 --json` locates it (never a hardcoded id); `bd update
-    <collector> --append-notes` in patch shape (file, `grep -n`-derived line, anchor quoted verbatim,
-    exact replacement, note prefixed `NIT`), then `scripts/bd-dolt-push.sh`. If no open `docs-nits`
-    ticket exists, I fall back to reporting it in my hand-off instead — I never create one myself.
+    `scripts/bd-docs-nit.sh append --source "<attribution>" --file <path> --line <n> --anchor
+    "<verbatim>" --replacement "<text>"` locates the collector by label (never a hardcoded id),
+    appends the note in patch shape with the `NIT` prefix the script owns, and pushes it (lode-y86u).
+    **Exit 1 means the script refused — read its stderr before deciding what to do**: with *no* open
+    collector I fall back to reporting the nit in my hand-off (I never create one myself); with *two
+    or more* I report the duplicate-collector ambiguity itself, and never pick one.
 
 **Building on top of an unlanded `land/<id>` branch (rare — stacked branches, lode-02v).**
 Occasionally a ticket's fix only makes sense once *another* ticket's still-unlanded code exists — the
