@@ -23,7 +23,12 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import SWEEP_SKILL_BLOCKS, bash_fence_blocks, fake_bin_env
+from conftest import (
+    SWEEP_SKILL_BLOCKS,
+    bash_fence_blocks,
+    fake_bin_env,
+    non_comment_fence_body,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "sweep-digest-id.sh"
@@ -173,12 +178,7 @@ def test_both_sweep_call_sites_use_the_script_not_an_inline_query() -> None:
     # Comments are not executed, and these blocks deliberately EXPLAIN the
     # `.[0].id` guess they no longer make -- scanning that prose would make
     # this pin fire on its own rationale.
-    body = "\n".join(
-        line
-        for block in SWEEP_SKILL_BLOCKS
-        for line in block.splitlines()
-        if not line.strip().startswith("#")
-    )
+    body = non_comment_fence_body(SWEEP_SKILL_BLOCKS)
 
     assert body.count("scripts/sweep-digest-id.sh") == 2, (
         "expected exactly the two call sites (§5 read, §6 write) -- §7 no longer "
