@@ -19,6 +19,13 @@
 # scripts/sweep-digest-id.sh (lode-x495), the direct precedent this script follows
 # for its resolve-by-label + refusal contract.
 #
+# `resolve_one_collector()`'s own query/refusal body has since moved into
+# scripts/bd-label-single-id.sh (lode-ayfm), shared with sweep-digest-id.sh --
+# that near line-for-line duplicate turned up during lode-y86u's own technical
+# review. This script keeps its own `list_collectors()` (cmd_count needs every
+# row, not a single resolved one) and supplies its own per-label advisory
+# wording to the shared resolver for the append path's N==0/N>1 refusal.
+#
 # Usage:
 #   scripts/bd-docs-nit.sh append --source <text> --file <path> --line <n> \
 #     --anchor <text> --replacement <text> [--what <text>]
@@ -76,27 +83,15 @@ list_collectors() {
 resolve_one_collector() {
   # Prints the single open docs-nits collector's id to stdout on success;
   # returns 1 (not exactly one) or 2 (machine fault), per the header contract.
-  local rows n
-  rows="$(list_collectors)" || return 2
-  # `(. // [])` -- bd serializes an empty result set as `null`, not `[]`.
-  if ! n="$(printf '%s' "$rows" | jq '(. // []) | length' 2>/dev/null)"; then
-    echo "bd-docs-nit.sh: could not parse the docs-nits query JSON" >&2
-    return 2
-  fi
-  if [ "$n" -ne 1 ]; then
-    echo "bd-docs-nit.sh: expected exactly 1 open issue labelled docs-nits, found $n." >&2
-    if [ "$n" -eq 0 ]; then
-      echo "  No collector exists yet -- fall back to reporting this nit in your own" >&2
-      echo "  hand-off instead. Do not create one; a human opens the collector." >&2
-    else
-      echo "  Duplicate collectors -- do NOT guess which is authoritative. Report the" >&2
-      echo "  ids and let a human consolidate (keep one, strip the docs-nits label off" >&2
-      echo "  the rest):" >&2
-      printf '%s' "$rows" | jq -r '(. // []) | .[] | "    \(.id)\t\(.title)"' >&2
-    fi
-    return 1
-  fi
-  printf '%s' "$rows" | jq -r '.[0].id'
+  # The query + refusal body itself lives in scripts/bd-label-single-id.sh
+  # (lode-ayfm) -- this wraps it with docs-nits' own label and advisory
+  # wording, and remaps its exit codes 1:1 (no `--all`: an open-only query).
+  "$SCRIPT_DIR/bd-label-single-id.sh" docs-nits \
+    --zero-advisory "  No collector exists yet -- fall back to reporting this nit in your own
+  hand-off instead. Do not create one; a human opens the collector." \
+    --dup-advisory "  Duplicate collectors -- do NOT guess which is authoritative. Report the
+  ids and let a human consolidate (keep one, strip the docs-nits label off
+  the rest):"
 }
 
 cmd_append() {

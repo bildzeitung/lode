@@ -30,6 +30,11 @@ from conftest import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "bd-docs-nit.sh"
 _SCRIPT_TEXT = SCRIPT.read_text()
+# bd-docs-nit.sh's resolve_one_collector() delegates to this sibling (lode-ayfm)
+# by relative path -- the scratch scripts/ dir the harness below builds needs
+# its own copy too, or every append call site 404s at "$SCRIPT_DIR/...".
+_LABEL_HELPER = REPO_ROOT / "scripts" / "bd-label-single-id.sh"
+_LABEL_HELPER_TEXT = _LABEL_HELPER.read_text()
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the script shells out to jq"
@@ -95,13 +100,17 @@ def _run(
     list_exit: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Run scripts/bd-docs-nit.sh from a scratch scripts/ directory containing
-    a copy of the real script alongside fakes for `bd` (on PATH) and
-    `bd-dolt-push.sh` (resolved by the script relative to its own dir)."""
+    a copy of the real script and its bd-label-single-id.sh dependency,
+    alongside fakes for `bd` (on PATH) and `bd-dolt-push.sh` (both resolved
+    by the script relative to its own dir)."""
     scratch_scripts = tmp_path / "scripts"
     scratch_scripts.mkdir()
     script_copy = scratch_scripts / "bd-docs-nit.sh"
     script_copy.write_text(_SCRIPT_TEXT)
     script_copy.chmod(0o755)
+    label_helper_copy = scratch_scripts / "bd-label-single-id.sh"
+    label_helper_copy.write_text(_LABEL_HELPER_TEXT)
+    label_helper_copy.chmod(0o755)
     dolt_marker = _fake_dolt_push(scratch_scripts, ok=dolt_ok)
 
     bin_dir = tmp_path / "fakebin"

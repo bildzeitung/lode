@@ -17,6 +17,12 @@
 # scripts/release-latest-tag.sh (lode-b2bf) and scripts/release-bump.sh
 # (lode-ns3r).
 #
+# The resolve-by-label query and the 0/1/2 refusal contract itself now live in
+# scripts/bd-label-single-id.sh (lode-ayfm), shared with scripts/bd-docs-nit.sh
+# -- this script is a thin wrapper supplying the `sweep-digest` label, `--all`
+# (a closed digest is still a duplicate a human must resolve), and its own
+# per-label advisory wording for the N==0 and N>1 refusal paths.
+#
 # Usage: scripts/sweep-digest-id.sh
 #
 # Exit 0  -> prints the digest issue's id to stdout. Exactly one exists.
@@ -26,51 +32,31 @@
 #              N == 0  section 4's bootstrap/no-op path owns this. Either the
 #                      queue is empty (a clean no-op pass) or section 4 has not
 #                      created the digest yet.
-#              N >  1  section 4's anomaly path owns this: "do not guess which is
-#                      authoritative and do not write anything." A human
+#              N >  1  section 4's anomaly path owns this: "do not guess which
+#                      is authoritative and do not write anything." A human
 #                      consolidates by hand. Picking `.[0].id` here would
 #                      silently overwrite whichever duplicate happened to sort
 #                      first -- the precise failure section 4 forbids, and the
 #                      reason this refusal is mechanical rather than prose.
-# Exit 2  -> MACHINE FAULT (bd or jq failed, malformed JSON). Same "exit 2 is the
-#            machine, never the content" convention as scripts/release-bump.sh /
+# Exit 2  -> MACHINE FAULT (bd or jq failed, malformed JSON, or a bad
+#            invocation of the shared helper). Same "exit 2 is the machine,
+#            never the content" convention as scripts/release-bump.sh /
 #            scripts/release-latest-tag.sh / scripts/merge-precheck.sh.
 #
 # Read-only: only ever calls `bd list`, never a bd write.
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 if [ "$#" -ne 0 ]; then
   echo "sweep-digest-id.sh: takes no arguments (got: $*)" >&2
   exit 2
 fi
 
-# --all so a CLOSED digest still counts (a closed duplicate is still a duplicate a
-# human must resolve, and silently ignoring it would resurrect the N>1 ambiguity).
-# --limit 0 for the same reason every `bd list` in /sweep passes it: no truncation.
-if ! rows="$(bd list --label sweep-digest --all --limit 0 --json 2>/dev/null)"; then
-  echo "sweep-digest-id.sh: \`bd list --label sweep-digest\` failed" >&2
-  exit 2
-fi
-
-# `(. // [])` because bd serializes an empty result set as `null`, not `[]`.
-if ! n="$(printf '%s' "$rows" | jq '(. // []) | length' 2>/dev/null)"; then
-  echo "sweep-digest-id.sh: could not parse \`bd list\` JSON" >&2
-  exit 2
-fi
-
-if [ "$n" -ne 1 ]; then
-  echo "sweep-digest-id.sh: expected exactly 1 issue labelled sweep-digest, found $n." >&2
-  if [ "$n" -eq 0 ]; then
-    echo "  No digest exists yet -- /sweep section 4's N==0 path owns this (bootstrap, or" >&2
-    echo "  a clean no-op pass on an empty queue). Do not read or write a digest here." >&2
-  else
-    echo "  Duplicate digests -- /sweep section 4's N>1 anomaly path owns this. Do NOT guess" >&2
-    echo "  which is authoritative and do NOT write. Report the ids and let a human" >&2
-    echo "  consolidate (keep one, strip the sweep-digest label off the rest):" >&2
-    printf '%s' "$rows" | jq -r '(. // []) | .[] | "    \(.id)\t\(.title)"' >&2
-  fi
-  exit 1
-fi
-
-printf '%s' "$rows" | jq -r '.[0].id'
+exec "$SCRIPT_DIR/bd-label-single-id.sh" sweep-digest --all \
+  --zero-advisory "  No digest exists yet -- /sweep section 4's N==0 path owns this (bootstrap, or
+  a clean no-op pass on an empty queue). Do not read or write a digest here." \
+  --dup-advisory "  Duplicate digests -- /sweep section 4's N>1 anomaly path owns this. Do NOT guess
+  which is authoritative and do NOT write. Report the ids and let a human
+  consolidate (keep one, strip the sweep-digest label off the rest):"
