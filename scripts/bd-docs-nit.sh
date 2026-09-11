@@ -19,6 +19,12 @@
 # scripts/sweep-digest-id.sh (lode-x495), the direct precedent this script follows
 # for its resolve-by-label + refusal contract.
 #
+# `resolve_one_collector()` is a thin wrapper over
+# scripts/bd-label-single-id.sh, which owns the resolve-by-label query and the
+# 0/1/2 refusal contract for every reserved-label singleton (lode-ayfm); this
+# script supplies only docs-nits' own advisory wording. `list_collectors()`
+# stays local because `count` needs every row, not a single resolved id.
+#
 # Usage:
 #   scripts/bd-docs-nit.sh append --source <text> --file <path> --line <n> \
 #     --anchor <text> --replacement <text> [--what <text>]
@@ -56,6 +62,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
+# The one place the collector's label is spelled. `count` queries it directly
+# (below) while `append` hands it to scripts/bd-label-single-id.sh, so the two
+# subcommands no longer share a single query -- naming the label once is what
+# keeps a rename from half-landing between them.
+readonly DOCS_NITS_LABEL="docs-nits"
+
 usage() {
   cat >&2 <<'EOF'
 usage:
@@ -65,9 +77,9 @@ EOF
 }
 
 list_collectors() {
-  # The one place the label query is spelled -- both subcommands read it from
-  # here, so a label or --limit change cannot half-land.
-  if ! bd list --label docs-nits --limit 0 --json 2>/dev/null; then
+  # `cmd_count`'s query: it needs every row, not a single resolved id, so it
+  # does not go through bd-label-single-id.sh the way `append` does.
+  if ! bd list --label "$DOCS_NITS_LABEL" --limit 0 --json 2>/dev/null; then
     echo "bd-docs-nit.sh: the docs-nits label query failed" >&2
     return 2
   fi
@@ -76,27 +88,15 @@ list_collectors() {
 resolve_one_collector() {
   # Prints the single open docs-nits collector's id to stdout on success;
   # returns 1 (not exactly one) or 2 (machine fault), per the header contract.
-  local rows n
-  rows="$(list_collectors)" || return 2
-  # `(. // [])` -- bd serializes an empty result set as `null`, not `[]`.
-  if ! n="$(printf '%s' "$rows" | jq '(. // []) | length' 2>/dev/null)"; then
-    echo "bd-docs-nit.sh: could not parse the docs-nits query JSON" >&2
-    return 2
-  fi
-  if [ "$n" -ne 1 ]; then
-    echo "bd-docs-nit.sh: expected exactly 1 open issue labelled docs-nits, found $n." >&2
-    if [ "$n" -eq 0 ]; then
-      echo "  No collector exists yet -- fall back to reporting this nit in your own" >&2
-      echo "  hand-off instead. Do not create one; a human opens the collector." >&2
-    else
-      echo "  Duplicate collectors -- do NOT guess which is authoritative. Report the" >&2
-      echo "  ids and let a human consolidate (keep one, strip the docs-nits label off" >&2
-      echo "  the rest):" >&2
-      printf '%s' "$rows" | jq -r '(. // []) | .[] | "    \(.id)\t\(.title)"' >&2
-    fi
-    return 1
-  fi
-  printf '%s' "$rows" | jq -r '.[0].id'
+  # scripts/bd-label-single-id.sh owns the query and the refusal; this passes
+  # docs-nits' label and advisory wording and propagates its exit code 1:1 (no
+  # `--all` -- an open-only query).
+  "$SCRIPT_DIR/bd-label-single-id.sh" "$DOCS_NITS_LABEL" \
+    --zero-advisory "  No collector exists yet -- fall back to reporting this nit in your own
+  hand-off instead. Do not create one; a human opens the collector." \
+    --dup-advisory "  Duplicate collectors -- do NOT guess which is authoritative. Report the
+  ids and let a human consolidate (keep one, strip the docs-nits label off
+  the rest):"
 }
 
 cmd_append() {

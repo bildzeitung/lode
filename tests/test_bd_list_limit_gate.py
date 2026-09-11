@@ -234,17 +234,20 @@ _INLINE_SPAN_RE = re.compile(r"`([^`\n]+)`")
 # Executed context: a fenced ```bash/```sh line, or a line of a `.sh` script.
 SKIP_EXECUTED: dict[tuple[str, str], str] = {
     (
-        "scripts/sweep-digest-id.sh",
-        'echo "sweep-digest-id.sh: \\`bd list --label sweep-digest\\` failed" >&2',
+        "scripts/bd-label-single-id.sh",
+        'echo "bd-label-single-id.sh: \\`bd list --label $label\\` failed" >&2',
     ): (
         "A diagnostic string for a FAILED bd invocation, quoting the command name for "
-        "a human reading stderr -- not a second invocation. The real call two lines "
-        'above (`if ! rows="$(bd list --label sweep-digest --all --limit 0 --json '
-        '2>/dev/null)"; then`) already carries --limit 0.'
+        "a human reading stderr -- not a second invocation. The real call just above "
+        'it (`rows="$(bd list --label "$label" --limit 0 --json ${all_args...} '
+        '2>/dev/null)"`) carries --limit 0 literally, up to the optional --all '
+        "suffix, precisely so this gate can see it. This entry sits here rather than "
+        "on scripts/sweep-digest-id.sh because that script now delegates to this one "
+        "(lode-ayfm) and carries no bd-list diagnostic of its own."
     ),
     (
-        "scripts/sweep-digest-id.sh",
-        'echo "sweep-digest-id.sh: could not parse \\`bd list\\` JSON" >&2',
+        "scripts/bd-label-single-id.sh",
+        'echo "bd-label-single-id.sh: could not parse \\`bd list\\` JSON" >&2',
     ): (
         "Same shape as the entry above -- a diagnostic string for a JSON-parse "
         "failure, quoting the command name, not a second invocation."
