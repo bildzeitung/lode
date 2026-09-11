@@ -657,6 +657,67 @@ This is a general seam, not Atlassian-specific plumbing: any
 future connector whose semantic id isn't itself a URL can reuse the same "persist the base at
 detection, rebuild at fetch time" shape.
 
+### Bare JIRA issue keys (lode-2o45)
+
+A JIRA issue only drew down when the note carried the full permalink
+(`https://acme.atlassian.net/browse/PROJ-123`) — a bare `PROJ-123` in prose
+never entered the pipeline. `jira_projects`
+([configuration.md](configuration.md#bare-jira-issue-keys-allowlist-not-a-pattern-lode-2o45),
+runtime, `list[str]`, default `[]`) turns that on, but **only** for an
+explicitly configured project-key allowlist — never a generic
+`[A-Z]+-\d+` scan, which would false-positive on `UTF-8`, `SHA-256`,
+`COVID-19`, `ISO-8601`, and similar hyphenated tokens that are common in
+notes but are not issue keys.
+
+**Allowlist-not-pattern, and case-sensitive (owner decisions, 2026-09-08).**
+`["PROJ"]` matches `PROJ-1234` but not `PROD-1234` or `PROJECT-1` — the same
+whole-key-boundary rule the no-egress-scope `source_type="jira"` match
+already uses. The match is case-**sensitive**: `proj-123` in prose does not
+match a configured `PROJ` — tickets should visually stand out in a note,
+and lowering the false-positive surface matters more here than symmetry
+with the URL path (which persists whatever case the pasted URL used). The
+key is persisted exactly as matched (case preserved), so a bare `PROJ-42`
+and a pasted `/browse/PROJ-42` dedup onto the same `externals` row — one
+row, one edge per note, one job, exactly like two equivalent URL forms.
+
+**Activation: an add-on that cannot fire until the connector itself is
+active.** The bare-key scan requires **all** of: `jira_active(settings)`
+(flag on + credentials resolve), `jira_projects` non-empty, and
+`jira_base_url` set. `jira_base_url` is **mandatory** here — unlike the URL
+path, where it's an optional override — because a bare key carries no host
+of its own to infer an API base from. Its absence is *not* a `Settings()`
+construction error: the connector's URL-based routing keeps working exactly
+as today, and the bare-key scan is simply inert. That misconfiguration
+(connector active + `jira_projects` set + `jira_base_url` empty) is
+surfaced through `lode verify --jira` and `lode status`'s "Action needed"
+line — never as a per-save warning or a crash. With any gate false, a bare
+key is inert text: there is no generic-web fallback for it (no URL to
+scrape), so silence is the correct degradation.
+
+**Synchronous and network-free**, same as the URL path (owner decision F,
+above) — a regex over the body with the configured prefixes alternated,
+word-boundary anchored on both sides (`src/lode/drawdown.py::iter_bare_jira_key_spans`).
+A key inside a pasted URL's own span is not double-detected: the URL
+already routes through `_classify_atlassian`, and
+`detect_and_enqueue_drawdown` skips a bare-key match whose span overlaps
+any URL span.
+
+**Backfill (in scope).** `lode.jira_backfill._jira_backfill` reclassifies
+every existing explicit edge under current routing (unchanged for URLs),
+*and* separately scans every live note head's body directly for a bare key
+that predates `jira_projects` listing its prefix — such a key was never
+linked at save time, so there is no existing edge to reclassify. Both legs
+share the identical detector the save path uses, and both are idempotent: a
+key already linked from a given note is a no-op on the next backfill pass.
+
+**TUI link-open: deferred.** Whether a bare key should be openable from the
+note body (Ctrl+N, rebuilding `{jira_base_url}/browse/{KEY}`) is a
+`src/lode/tui/screens/_link_open.py` decision the module's own docstring
+records as deferred — that module is deliberately pure (no `Settings`
+dependency), and threading one through it was judged out of proportion to
+this ticket's core (save-path + backfill) scope. Tracked as its own
+follow-up, `lode-dube`, blocked on this ticket.
+
 ### Confluence: only an id-bearing URL routes (decision F)
 
 Only `/wiki/spaces/{SPACE}/pages/{id}/...` — Confluence Cloud's page-id-bearing URL shape — routes

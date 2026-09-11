@@ -1,4 +1,4 @@
-"""URL detection, explicit edges, and the one-hop web draw-down trigger (lode-w0h.3).
+r"""URL detection, explicit edges, and the one-hop web draw-down trigger (lode-w0h.3).
 
 The trigger that turns note capture into connector activity (E12 web draw-down
 connector). Two halves, both wired atomically into the note-save path
@@ -140,6 +140,34 @@ URLs dedup via :func:`canonicalize_url`.
 drives (see its own docstring below) — a real refactor of what used to be a
 single web-only handler, not free reuse (owner decision B, bd lode-gpzn.2
 notes).
+
+## Bare JIRA issue keys (lode-2o45)
+
+A bare key in prose (``see PROJ-42 for context``, no ``https://``) also
+routes to the JIRA connector — but ONLY for an explicit, configured project
+prefix (``settings.jira_projects``, default ``[]``), never a generic
+``[A-Z]+-\d+`` scan (owner decision, 2026-09-08: false-positives on UTF-8,
+SHA-256, COVID-19, ISO-8601, ...). Gated on ALL of: :func:`~lode.config.jira_active`,
+``settings.jira_projects`` non-empty, and ``settings.jira_base_url`` set — a
+bare key has no host to infer an API base from, so ``jira_base_url`` is
+mandatory here even though it's optional for the URL path above. Any gate
+false means the key is inert text: no generic-web fallback (no URL to
+scrape), so silence is the correct degradation (surfaced instead via ``lode
+verify --jira`` / ``lode status``'s "Action needed" line, never a per-save
+warning or a crash). See :func:`_bare_jira_scan_active`.
+
+Matched case-SENSITIVELY, whole-key (word-boundary both sides, so
+``PROJ-123`` inside ``XPROJ-123`` or ``PROJ-123a`` never matches) — see
+:func:`iter_bare_jira_key_spans`. Persisted with the key exactly as matched
+(case preserved), the same way ``_JIRA_ISSUE_RE`` does for URLs, so a bare
+``PROJ-42`` and a pasted ``/browse/PROJ-42`` dedup onto the same
+``externals`` row. Detection stays synchronous and network-free, same as
+the URL path. A bare key inside a pasted URL's own span is not
+double-detected — a bare-key match whose span overlaps any
+:func:`iter_url_spans` span is skipped, since the URL already routes
+through :func:`_classify_atlassian`. Gate, allow-listed match and that
+exclusion together are :func:`iter_bare_jira_keys`, the single detector the
+save path and the JIRA backfill (:mod:`lode.jira_backfill`) both call.
 """
 
 from __future__ import annotations
@@ -147,7 +175,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from lode import jobs
@@ -257,6 +285,91 @@ def _classify_atlassian(url: str, settings: Settings) -> tuple[str, str, str] | 
     return None
 
 
+def _bare_jira_scan_active(settings: Settings) -> bool:
+    """True iff a bare-JIRA-key scan should run at all (lode-2o45).
+
+    ALL of: :func:`~lode.config.jira_active` (flag on + credentials
+    resolve), ``settings.jira_projects`` non-empty, and
+    ``settings.jira_base_url`` set — see the module docstring's "Bare JIRA
+    issue keys" section. ``jira_base_url`` is mandatory here (unlike the URL
+    path, where it's an optional override) — a bare key carries no host of
+    its own to infer an API base from.
+    """
+    return bool(
+        jira_active(settings) and settings.jira_projects and settings.jira_base_url
+    )
+
+
+def bare_jira_misconfigured(settings: Settings) -> bool:
+    """True iff the bare-key scan is *configured* but inert for want of a base URL.
+
+    The negative reading of :func:`_bare_jira_scan_active`'s third conjunct,
+    expressed here rather than retyped at its call site, so both readings of
+    the gate move together. This is the one bare-key state worth telling the
+    user about (``lode verify --jira`` / ``lode status``'s "Action needed"
+    line) — connector active and ``jira_projects`` set, but no
+    ``jira_base_url`` to rebuild an API base from, so every bare key is
+    silently inert. Not an error: see the module docstring's "Bare JIRA
+    issue keys" section for why this degrades quietly rather than crashing.
+    """
+    return bool(
+        jira_active(settings) and settings.jira_projects and not settings.jira_base_url
+    )
+
+
+def _bare_jira_key_pattern(projects: Sequence[str]) -> re.Pattern[str]:
+    """Compile the case-sensitive, whole-key bare-JIRA-key pattern for *projects*.
+
+    Word-boundary anchored on both sides with an explicit character class
+    (not ``\\b``, which treats ``-`` as a non-word char and so would match
+    the ``PROJ-123`` tail of ``FOO-PROJ-123``) — no
+    ``re.IGNORECASE`` flag, matching the owner's case-sensitive decision
+    (module docstring).
+    """
+    alternation = "|".join(re.escape(project) for project in projects)
+    return re.compile(rf"(?<![A-Za-z0-9-])(?:{alternation})-\d+(?![A-Za-z0-9-])")
+
+
+def iter_bare_jira_key_spans(
+    text: str, projects: Sequence[str]
+) -> Iterator[tuple[int, int, str]]:
+    """Yield ``(start, end, key)`` for every bare, allow-listed JIRA key in *text*.
+
+    Pure pattern match, no settings/activation gating of its own — the
+    caller (:func:`detect_and_enqueue_drawdown`, the bare-key backfill scan,
+    :func:`_classify_bare_jira_key`) is responsible for calling
+    :func:`_bare_jira_scan_active` first. Yields nothing at all when
+    *projects* is empty, so a caller may call this unconditionally once it
+    already knows the scan is active.
+    """
+    if not projects:
+        return
+    for match in _bare_jira_key_pattern(projects).finditer(text):
+        yield match.start(), match.end(), match.group(0)
+
+
+def _classify_bare_jira_key(
+    key: str, settings: Settings
+) -> tuple[str, str, str] | None:
+    """Classify *key* as a bare, allow-listed JIRA key, or ``None``.
+
+    The bare-key counterpart to :func:`_classify_atlassian` (which only ever
+    parses a URL): given a candidate string that is *not* a URL, decide
+    whether it is itself a routable bare JIRA key. Returns
+    ``(SOURCE_TYPE_JIRA, key, api_base)`` — the same triple shape
+    :func:`_classify_atlassian` returns — iff :func:`_bare_jira_scan_active`
+    and *key* is, in its entirety, one allow-listed bare-key match (not just
+    a substring of it). Used by the JIRA backfill (lode-2o45) to reclassify
+    an already-linked edge whose ``quoted_text`` is a bare key rather than a
+    URL.
+    """
+    if not _bare_jira_scan_active(settings):
+        return None
+    if not _bare_jira_key_pattern(settings.jira_projects).fullmatch(key):
+        return None
+    return (SOURCE_TYPE_JIRA, key, settings.jira_base_url.rstrip("/"))
+
+
 #: One http(s) URL run: no whitespace, angle brackets, or quotes (the
 #: characters most likely to be prose delimiters around a pasted URL, not
 #: legal in an unencoded URL anyway).
@@ -315,6 +428,41 @@ def iter_url_spans(text: str) -> Iterator[tuple[int, int, str]]:
             url = url[:-1]
         if url:
             yield match.start(), match.start() + len(url), url
+
+
+#: ``edges.reason`` for a link opened from a bare JIRA key rather than a
+#: pasted URL. One literal, shared by the save path and the backfill, so the
+#: two can never write different reasons for the same logical link.
+BARE_JIRA_KEY_REASON = "bare JIRA key"
+
+
+def iter_bare_jira_keys(text: str, settings: Settings) -> Iterator[str]:
+    """Yield every bare, allow-listed JIRA key in *text* not already inside a URL.
+
+    The whole bare-key detection rule in one place — activation gate
+    (:func:`_bare_jira_scan_active`), allow-listed whole-key match
+    (:func:`iter_bare_jira_key_spans`), and the URL-span exclusion that keeps
+    a key inside a pasted ``/browse/`` link from being detected twice (the
+    URL already routes through :func:`_classify_atlassian`). Yields nothing
+    at all when the scan is inactive.
+
+    Both the save path (:func:`detect_and_enqueue_drawdown`) and the backfill
+    (:func:`lode.jira_backfill._bare_jira_key_backfill`) drive off this one
+    generator: the "same detector on both sides" property the docs promise is
+    a shared call, not two copies kept in step by hand.
+    """
+    if not _bare_jira_scan_active(settings):
+        return
+    url_spans = [(start, end) for start, end, _ in iter_url_spans(text)]
+    for key_start, key_end, key in iter_bare_jira_key_spans(
+        text, settings.jira_projects
+    ):
+        if any(
+            key_start < url_end and key_end > url_start
+            for url_start, url_end in url_spans
+        ):
+            continue
+        yield key
 
 
 def extract_urls(body: str) -> list[str]:
@@ -409,6 +557,58 @@ def canonicalize_url(url: str, settings: Settings | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _link_and_enqueue(
+    conn: sqlite3.Connection,
+    note_id: str,
+    version_id: str,
+    settings: Settings,
+    external_ids: list[str],
+    *,
+    source_type: str | None,
+    external_id: str,
+    api_base: str | None,
+    quoted_text: str,
+    reason: str,
+) -> None:
+    """Create the explicit edge + enqueue refresh for one detected link, if new.
+
+    Shared by :func:`detect_and_enqueue_drawdown`'s URL loop and its
+    bare-JIRA-key loop (lode-2o45) — identical dedup-by-external_id-within-
+    this-call, dedup-by-existing-edge, externals-insert, and edge-insert +
+    enqueue shape; only *quoted_text* and *reason* differ per caller.
+    """
+    if external_id in external_ids:
+        return
+    external_ids.append(external_id)
+
+    exists = conn.execute(
+        "SELECT 1 FROM edges WHERE from_id = ? AND to_id = ? AND source = 'user' LIMIT 1",
+        (note_id, external_id),
+    ).fetchone()
+    if exists:
+        return
+
+    if source_type is not None:
+        # Owner decision A: persist source_type + api_base on the
+        # externals row NOW, synchronously — the async refresh handler
+        # can no longer derive them from external_id alone once
+        # external_id is a semantic key rather than a URL. The shared
+        # first-write-wins insert (idempotent for a second note linking
+        # the same already-known external, and the one place no_egress is
+        # seeded) lives in lode.externals._insert_external — see there.
+        _insert_external(conn, external_id, source_type, settings, api_base=api_base)
+
+    conn.execute(
+        "INSERT INTO edges "
+        "(from_id, to_id, source, reason, confidence, source_version, "
+        "quoted_text, status) "
+        "VALUES (?, ?, 'user', ?, 1.0, ?, ?, 'fresh')",
+        (note_id, external_id, reason, version_id, quoted_text),
+    )
+    jobs.enqueue_derive_jobs(conn, external_id, types=("refresh",))
+    log.debug("drawdown: linked %s -> %s, enqueued refresh", note_id, external_id)
+
+
 def detect_and_enqueue_drawdown(
     conn: sqlite3.Connection,
     note_id: str,
@@ -453,9 +653,17 @@ def detect_and_enqueue_drawdown(
        paste of the same still-live URL, before the first refresh drains,
        enqueues nothing new).
 
-    Returns the ``external_id`` for every URL detected in ``body`` (deduped
-    within this call), whether or not it was newly linked — mostly useful
-    for tests/logging, not required by any caller today.
+    After the URL loop, a **second** pass (lode-2o45) scans ``body`` for a
+    bare JIRA issue key (e.g. ``PROJ-42``, no URL) — gated on
+    :func:`_bare_jira_scan_active` — skipping any match whose span overlaps
+    a URL span already handled above (so a key inside a pasted URL is never
+    double-detected). Each new match links + enqueues exactly like a URL
+    match, with ``quoted_text`` = the literal bare key. See the module
+    docstring's "Bare JIRA issue keys" section for the full gating rule.
+
+    Returns the ``external_id`` for every URL or bare key detected in
+    ``body`` (deduped within this call), whether or not it was newly linked
+    — mostly useful for tests/logging, not required by any caller today.
     """
     settings = settings or default_settings_for_missing_arg(
         "drawdown.detect_and_enqueue_drawdown"
@@ -476,38 +684,32 @@ def detect_and_enqueue_drawdown(
             source_type = None
             api_base = None
 
-        if external_id in external_ids:
-            continue
-        external_ids.append(external_id)
-
-        exists = conn.execute(
-            "SELECT 1 FROM edges WHERE from_id = ? AND to_id = ? AND source = 'user' LIMIT 1",
-            (note_id, external_id),
-        ).fetchone()
-        if exists:
-            continue
-
-        if source_type is not None:
-            # Owner decision A: persist source_type + api_base on the
-            # externals row NOW, synchronously — the async refresh handler
-            # can no longer derive them from external_id alone once
-            # external_id is a semantic key rather than a URL. The shared
-            # first-write-wins insert (idempotent for a second note linking
-            # the same already-known external, and the one place no_egress is
-            # seeded) lives in lode.externals._insert_external — see there.
-            _insert_external(
-                conn, external_id, source_type, settings, api_base=api_base
-            )
-
-        conn.execute(
-            "INSERT INTO edges "
-            "(from_id, to_id, source, reason, confidence, source_version, "
-            "quoted_text, status) "
-            "VALUES (?, ?, 'user', ?, 1.0, ?, ?, 'fresh')",
-            (note_id, external_id, "pasted URL", version_id, url),
+        _link_and_enqueue(
+            conn,
+            note_id,
+            version_id,
+            settings,
+            external_ids,
+            source_type=source_type,
+            external_id=external_id,
+            api_base=api_base,
+            quoted_text=url,
+            reason="pasted URL",
         )
-        jobs.enqueue_derive_jobs(conn, external_id, types=("refresh",))
-        log.debug("drawdown: linked %s -> %s, enqueued refresh", note_id, external_id)
+
+    for key in iter_bare_jira_keys(body, settings):
+        _link_and_enqueue(
+            conn,
+            note_id,
+            version_id,
+            settings,
+            external_ids,
+            source_type=SOURCE_TYPE_JIRA,
+            external_id=key,
+            api_base=settings.jira_base_url.rstrip("/"),
+            quoted_text=key,
+            reason=BARE_JIRA_KEY_REASON,
+        )
 
     return external_ids
 
@@ -744,5 +946,7 @@ __all__ = [
     "canonicalize_url",
     "detect_and_enqueue_drawdown",
     "extract_urls",
+    "iter_bare_jira_key_spans",
+    "iter_bare_jira_keys",
     "refresh_external",
 ]

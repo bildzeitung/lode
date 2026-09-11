@@ -36,6 +36,24 @@ Mirrors the reference shape in ``tests/test_backfill.py``'s
 lode-gpzn.9, to foreshadow this exact connector): iterate, mint, repoint,
 gate-on-``needs_refresh``, enqueue — no hand-rolled SQL of this module's own.
 
+## Bare JIRA issue keys (lode-2o45)
+
+A bare key (``PROJ-42``, no URL) predating ``jira_projects`` listing its
+prefix — or predating the whole feature — was never linked at save time (the
+detector didn't run yet), so unlike a URL there is no ``source='user'`` edge
+to reclassify for it. :func:`_bare_jira_key_backfill` closes that gap by
+scanning every live note head's body directly through
+:func:`~lode.drawdown.iter_bare_jira_keys` — the *same call*
+:func:`lode.drawdown.detect_and_enqueue_drawdown` makes at save time, so the
+activation gate, the allow-listed match, and the URL-span overlap exclusion
+are shared rather than mirrored — and links + enqueues any match the note
+doesn't already have an edge for. Idempotent: a key already linked from a given note is
+skipped by the edge-existence check, so a second pass finds nothing new to
+do. :func:`_classify_bare_jira_key` (used by :func:`_jira_backfill`'s
+existing-edge loop below) is the same helper the save path's bare-key
+routing gates on — reused, not reimplemented — for the narrower case of an
+edge whose ``quoted_text`` is already a bare key rather than a URL.
+
 ## Idempotent re-run, including the tombstone-exclusion override
 
 Every linked edge is reclassified from its **original** ``quoted_text`` on
@@ -75,7 +93,14 @@ from lode.backfill import (
     repoint_edges,
 )
 from lode.config import Settings
-from lode.drawdown import SOURCE_TYPE_JIRA, _classify_atlassian
+from lode.drawdown import (
+    BARE_JIRA_KEY_REASON,
+    SOURCE_TYPE_JIRA,
+    _bare_jira_scan_active,
+    _classify_atlassian,
+    _classify_bare_jira_key,
+    iter_bare_jira_keys,
+)
 
 
 def _jira_backfill(
@@ -86,7 +111,11 @@ def _jira_backfill(
 ) -> str:
     """The registered ``"jira"`` :data:`lode.backfill.BackfillHandler`.
 
-    Returns a one-line human-readable summary — the outcome-line convention
+    Two passes (module docstring, "Bare JIRA issue keys"): reclassify every
+    existing explicit edge under current routing (URL or already-linked
+    bare key), then scan live note bodies directly for a bare key that was
+    never linked in the first place. Returns a one-line human-readable
+    summary — the outcome-line convention
     :func:`lode.drawdown.refresh_external` / ``lode work`` already use.
     """
     migrated = 0
@@ -95,6 +124,8 @@ def _jira_backfill(
         if not link.quoted_text:
             continue
         classified = _classify_atlassian(link.quoted_text, settings)
+        if classified is None:
+            classified = _classify_bare_jira_key(link.quoted_text, settings)
         if classified is None or classified[0] != SOURCE_TYPE_JIRA:
             continue
         _, key, api_base = classified
@@ -117,9 +148,83 @@ def _jira_backfill(
             enqueue_fresh_refresh(conn, key, dry_run=dry_run)
             refreshed += 1
 
+    bare_linked, bare_refreshed = _bare_jira_key_backfill(
+        conn, settings, dry_run=dry_run, retry_tombstoned=retry_tombstoned
+    )
+    migrated += bare_linked
+    refreshed += bare_refreshed
+
     return (
         f"jira backfill: migrated {migrated} link(s), enqueued {refreshed} refresh(es)"
     )
+
+
+def _bare_jira_key_backfill(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    *,
+    dry_run: bool,
+    retry_tombstoned: bool,
+) -> tuple[int, int]:
+    """Scan every live note head's body for an un-linked bare JIRA key and link it.
+
+    See the module docstring's "Bare JIRA issue keys" section. Mirrors
+    :func:`lode.reconcile._embed_gap_step`'s own live-head query shape
+    (``head_version_id`` joined to ``versions``, excluding a soft-deleted
+    or hard-purged head) rather than inventing a second one. Returns
+    ``(linked, refreshed)`` counts, folded into :func:`_jira_backfill`'s
+    own summary.
+    """
+    if not _bare_jira_scan_active(settings):
+        return 0, 0
+
+    api_base = settings.jira_base_url.rstrip("/")
+    linked = 0
+    refreshed = 0
+    rows = conn.execute(
+        """
+        SELECT n.note_id, n.head_version_id, v.body
+        FROM notes n
+        JOIN versions v ON v.version_id = n.head_version_id
+        WHERE n.head_version_id IS NOT NULL
+          AND v.op != 'delete'
+          AND v.purged_at IS NULL
+        """
+    ).fetchall()
+    for note_id, version_id, body in rows:
+        for key in iter_bare_jira_keys(body, settings):
+            exists = conn.execute(
+                "SELECT 1 FROM edges WHERE from_id = ? AND to_id = ? "
+                "AND source = 'user' LIMIT 1",
+                (note_id, key),
+            ).fetchone()
+            if exists:
+                continue  # already linked from THIS note -- fully idempotent
+
+            mint_external(
+                conn,
+                key,
+                SOURCE_TYPE_JIRA,
+                api_base,
+                settings=settings,
+                dry_run=dry_run,
+            )
+            if not dry_run:
+                with conn:
+                    conn.execute(
+                        "INSERT INTO edges "
+                        "(from_id, to_id, source, reason, confidence, "
+                        "source_version, quoted_text, status) "
+                        "VALUES (?, ?, 'user', ?, 1.0, ?, ?, 'fresh')",
+                        (note_id, key, BARE_JIRA_KEY_REASON, version_id, key),
+                    )
+            linked += 1
+
+            if needs_refresh(conn, key, retry_tombstoned=retry_tombstoned):
+                enqueue_fresh_refresh(conn, key, dry_run=dry_run)
+                refreshed += 1
+
+    return linked, refreshed
 
 
 def register() -> None:

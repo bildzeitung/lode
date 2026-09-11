@@ -19,6 +19,16 @@ here means Ctrl+N can open a different URL than the one lode recorded as the
 external for that very character position. Only the two markdown shapes
 below -- which drawdown has no interest in -- are matched locally.
 
+**Bare JIRA keys (lode-2o45) are NOT openable from here -- deferred.** A bare
+key (`PROJ-42`) would need `{jira_base_url}/browse/{KEY}` rebuilt from
+`Settings`, but every function in this module is deliberately pure (no
+`Settings`/config dependency at all, by design -- see "Two pieces" below),
+and `extract_link_at_cursor`'s only caller, `open_link_under_cursor`, is
+itself given no settings today. Threading one through three screens'
+`action_open_link` handlers for this alone was judged out of proportion to
+lode-2o45's core ask; tracked as its own follow-up, `lode-dube`, rather
+than folded in here silently.
+
 Split into a leaf module (underscore-prefixed per `docs/conventions.md` --
 it hosts no `Screen`/`Widget` of its own, so it doesn't count against the
 one-Screen/Widget-per-module fiat), shared by

@@ -557,6 +557,133 @@ class TestAtlassianDetection:
 
 
 # ---------------------------------------------------------------------------
+# Bare JIRA issue keys (lode-2o45)
+# ---------------------------------------------------------------------------
+
+
+def _bare_key_settings(**overrides):
+    return _jira_settings(
+        jira_projects=["PROJ"],
+        jira_base_url="https://acme.atlassian.net",
+        **overrides,
+    )
+
+
+class TestBareJiraKeys:
+    def test_allow_listed_bare_key_creates_jira_edge(self, conn) -> None:
+        settings = _bare_key_settings()
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", "see PROJ-42 for context", settings=settings
+            )
+
+        assert external_ids == ["PROJ-42"]
+        rows = _edges_from(conn, "note-1")
+        assert len(rows) == 1
+        to_id, source, confidence, quoted_text, status, source_version = rows[0]
+        assert to_id == "PROJ-42"
+        assert source == "user"
+        assert confidence == 1.0
+        assert quoted_text == "PROJ-42"
+        assert status == "fresh"
+        assert source_version == "ver-1"
+        assert _jobs_for(conn, "PROJ-42") == [("refresh", "pending")]
+        assert _external_row(conn, "PROJ-42") == (
+            SOURCE_TYPE_JIRA,
+            "https://acme.atlassian.net",
+        )
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "see PROD-42 for context",
+            "see PROJECT-1 for context",
+            "see XPROJ-42 for context",
+            "see PROJ-42a for context",
+            "see PROJ42 for context",
+        ],
+    )
+    def test_non_matching_shapes_create_nothing(self, conn, body: str) -> None:
+        settings = _bare_key_settings()
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", body, settings=settings
+            )
+        assert external_ids == []
+        assert _edges_from(conn, "note-1") == []
+
+    def test_case_sensitive_lowercase_key_creates_nothing(self, conn) -> None:
+        settings = _bare_key_settings()
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", "see proj-42 for context", settings=settings
+            )
+        assert external_ids == []
+        assert _edges_from(conn, "note-1") == []
+
+    def test_bare_key_and_equivalent_url_dedup_to_one_edge(self, conn) -> None:
+        settings = _bare_key_settings()
+        body = "see PROJ-42 and https://acme.atlassian.net/browse/PROJ-42"
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", body, settings=settings
+            )
+        assert external_ids == ["PROJ-42"]
+        assert len(_edges_from(conn, "note-1")) == 1
+        (n,) = conn.execute(
+            "SELECT COUNT(*) FROM externals WHERE external_id = 'PROJ-42'"
+        ).fetchone()
+        assert n == 1
+        (jobs_n,) = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE target_version = 'PROJ-42'"
+        ).fetchone()
+        assert jobs_n == 1
+
+    def test_empty_jira_projects_default_is_byte_for_byte_unchanged(self, conn) -> None:
+        """jira_projects=[] (default) -- no behavior change anywhere."""
+        settings = _jira_settings(jira_base_url="https://acme.atlassian.net")
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", "see PROJ-42 for context", settings=settings
+            )
+        assert external_ids == []
+        assert _edges_from(conn, "note-1") == []
+
+    def test_jira_projects_set_but_base_url_empty_is_inert(self, conn) -> None:
+        settings = _jira_settings(jira_projects=["PROJ"])  # no jira_base_url
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", "see PROJ-42 for context", settings=settings
+            )
+        assert external_ids == []
+        assert _edges_from(conn, "note-1") == []
+
+    def test_jira_flag_off_is_inert_even_with_projects_configured(self, conn) -> None:
+        settings = load_settings(
+            jira_projects=["PROJ"], jira_base_url="https://acme.atlassian.net"
+        )
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", "see PROJ-42 for context", settings=settings
+            )
+        assert external_ids == []
+        assert _edges_from(conn, "note-1") == []
+
+    def test_no_credentials_is_inert_even_with_projects_configured(self, conn) -> None:
+        settings = load_settings(
+            jira_enabled=True,
+            jira_projects=["PROJ"],
+            jira_base_url="https://acme.atlassian.net",
+        )
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", "see PROJ-42 for context", settings=settings
+            )
+        assert external_ids == []
+        assert _edges_from(conn, "note-1") == []
+
+
+# ---------------------------------------------------------------------------
 # refresh_external
 # ---------------------------------------------------------------------------
 

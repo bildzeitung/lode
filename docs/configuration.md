@@ -176,8 +176,9 @@ Cloud-only, Basic auth (account email + API token); JIRA REST v3 and Confluence 
 |---|---|---|---|
 | `jira_enabled` | runtime | `false` | Feature flag for the JIRA Cloud API connector. |
 | `confluence_enabled` | runtime | `false` | Feature flag for the Confluence Cloud API connector. |
-| `jira_base_url` | runtime | `""` (empty) | API base override, e.g. `https://acme.atlassian.net`. Empty means infer from the pasted link at detection time. A non-empty value must be a well-formed `http(s)` URL — a malformed one fails validation at `Settings()` construction. |
+| `jira_base_url` | runtime | `""` (empty) | API base override, e.g. `https://acme.atlassian.net`. Empty means infer from the pasted link at detection time. A non-empty value must be a well-formed `http(s)` URL — a malformed one fails validation at `Settings()` construction. **Mandatory** (not just an override) for bare-issue-key detection below — a bare key has no host of its own to infer a base from. |
 | `confluence_base_url` | runtime | `""` (empty) | Same shape as `jira_base_url`, for Confluence. |
+| `jira_projects` | runtime | `[]` (empty) | JIRA project-key allowlist gating BARE issue-key detection (`lode-2o45`) — a plain `PROJ-123` in note prose, not just a pasted `/browse/` permalink. Empty (default) means bare-key detection is off, byte-for-byte today's behavior. See "Bare JIRA issue keys" below. |
 | `LODE_JIRA_TOKEN` env var / `jira_token` (config.toml fallback) | runtime | unset / `""` | JIRA Cloud API token. Resolved **env-var PRIMARY**: `LODE_JIRA_TOKEN` is checked first, then the `jira_token` key in `config.toml` as fallback. No secret is required to live in `config.toml`. **The raw value is never logged, echoed, or shown by `lode config`** — `secret=True` (`src/lode/config.py::_knob`) shows only a presence indicator in the knob table, never the value (see below). |
 | `LODE_JIRA_EMAIL` env var / `jira_email` (config.toml fallback) | runtime | unset / `""` | JIRA Cloud Basic-auth account email — same env-first, config.toml-fallback resolution as the token, and the same `secret=True` presence-only treatment (lode-dx4r). |
 | `LODE_CONFLUENCE_TOKEN` env var / `confluence_token` (config.toml fallback) | runtime | unset / `""` | Confluence Cloud API token — same resolution and secrecy guarantee as `jira_token`. |
@@ -187,6 +188,28 @@ Cloud-only, Basic auth (account email + API token); JIRA REST v3 and Confluence 
 A missing token or email — from either source — resolves to a clean **"connector inactive"** state (`resolve_jira_credentials`/`resolve_confluence_credentials` return `None`), never an exception; the link falls through to the generic web fetcher. This is a deliberately different shape from the LLM provider credential chain ([below](#models), `src/lode/auth.py`/`src/lode/llm_provider.py`, [decisions.md](decisions.md)): that chain never reads `config.toml` at all and raises `AuthError` (Anthropic) or `LLMAuthError` (OpenAI/Azure) on "nothing resolved" (there is no "connector inactive" fallback path for the LLM calls lode's own core loop depends on), whereas an Atlassian connector is opt-in per product and must degrade quietly when unconfigured.
 
 `lode verify --jira` / `lode verify --confluence` (`lode-04lz`) is a read-only preflight that confirms these knobs resolved the way you intended — which flag/credential/base-URL source is in effect, and whether the resolved credentials actually reach the tenant — without writing anything; see [externals.md](externals.md#atlassian-connectors-jira--confluence-cloud-lode-gpzn) for the full manual smoke-test procedure it's the fast first step of. No new knob is introduced by it.
+
+### Bare JIRA issue keys (allowlist, not a pattern) (`lode-2o45`)
+
+`jira_projects` gates a **second, additional** detector — a bare key
+(`PROJ-123`) in note prose, not just a pasted `/browse/PROJ-123` permalink —
+that only ever routes an **explicitly allow-listed** project prefix, never a
+generic `[A-Z]+-\d+` scan (owner decision: that pattern false-positives on
+`UTF-8`, `SHA-256`, `COVID-19`, `ISO-8601`, ...). The bare-key scan runs only
+when **all** of: the JIRA connector is active (`jira_active(settings)`),
+`jira_projects` is non-empty, and `jira_base_url` is set — `jira_base_url`
+is mandatory here (unlike the URL path, where it's an optional override),
+since a bare key carries no host of its own to infer an API base from. Any
+gate false means the key is inert prose — no generic-web fallback (there's
+no URL to scrape), so silence is the correct degradation; a `jira_projects`
+set with `jira_base_url` empty is a misconfiguration surfaced via `lode
+verify --jira` and `lode status`'s "Action needed" line, never a per-save
+warning or a crash.
+
+The match is **case-SENSITIVE** and whole-key (`PROJ` matches `PROJ-123` but
+not `PROD-123`, `PROJECT-1`, or `proj-123`) — see
+[externals.md](externals.md#bare-jira-issue-keys-lode-2o45) for the full
+rationale and `src/lode/drawdown.py`'s module docstring for the exact regex.
 
 ### Atlassian credentials show a presence indicator in `lode config` / the TUI knob table (lode-dx4r)
 

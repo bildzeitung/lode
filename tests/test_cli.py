@@ -2510,6 +2510,85 @@ def test_status_all_clear_when_no_pending_failed_and_cache_warm(
     assert "Action needed" not in result.stdout
 
 
+def test_status_hints_jira_bare_key_misconfiguration(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    """lode-2o45: jira_projects set + connector active + jira_base_url empty
+    -- bare-key detection is inert, and lode status must say so under
+    "Action needed", never crash or stay silent."""
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text('jira_enabled = true\njira_projects = ["PROJ"]\n')
+
+    result = runner.invoke(
+        app,
+        ["status", "--db", str(db_path)],
+        env={
+            "LODE_HOME": str(home),
+            "LODE_JIRA_EMAIL": "alice@example.com",
+            "LODE_JIRA_TOKEN": "tok",
+        },
+    )
+    assert result.exit_code == 0
+    assert "Action needed" in result.stdout
+    assert "jira_base_url" in result.stdout
+    assert "No action needed." not in result.stdout
+
+
+def test_status_no_jira_hint_when_base_url_configured(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        'jira_enabled = true\njira_projects = ["PROJ"]\n'
+        'jira_base_url = "https://acme.atlassian.net"\n'
+    )
+
+    result = runner.invoke(
+        app,
+        ["status", "--db", str(db_path)],
+        env={
+            "LODE_HOME": str(home),
+            "LODE_JIRA_EMAIL": "alice@example.com",
+            "LODE_JIRA_TOKEN": "tok",
+        },
+    )
+    assert result.exit_code == 0
+    assert "Action needed" not in result.stdout
+    assert "No action needed." in result.stdout
+
+
+def test_status_no_jira_hint_when_projects_empty(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    """jira_enabled + no jira_base_url, but jira_projects is the (default)
+    empty list -- not a misconfiguration, since bare-key detection was never
+    requested."""
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text("jira_enabled = true\n")
+
+    result = runner.invoke(
+        app,
+        ["status", "--db", str(db_path)],
+        env={
+            "LODE_HOME": str(home),
+            "LODE_JIRA_EMAIL": "alice@example.com",
+            "LODE_JIRA_TOKEN": "tok",
+        },
+    )
+    assert result.exit_code == 0
+    assert "Action needed" not in result.stdout
+    assert "No action needed." in result.stdout
+
+
 def test_jobs_empty_db_says_no_jobs(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     result = runner.invoke(app, ["jobs", "--db", str(db_path)])
