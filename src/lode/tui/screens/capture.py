@@ -115,7 +115,7 @@ from lode.tui.no_egress_command import (
     NO_EGRESS_BORDER_CLASS,
     NoEgressCommandProvider,
 )
-from lode.tui.screens._link_open import bare_jira_open_args, open_link_under_cursor
+from lode.tui.screens._link_open import open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.screens.discard_confirm import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
@@ -384,14 +384,11 @@ class CaptureScreen(Screen[None]):
         one key, every screen that can show a link.
         :func:`~lode.tui.screens._link_open.open_link_under_cursor` does the
         actual extraction + browser-safety work, shared with all three.
-        Also opens a bare JIRA key under the cursor (lode-dube), via
-        :func:`~lode.tui.screens._link_open.bare_jira_open_args`.
+        Also opens a bare JIRA key under the cursor (lode-dube), when the
+        JIRA connector and ``jira_projects``/``jira_base_url`` are configured.
         """
         text_area = self.query_one(f"#{BODY_ID}", TextArea)
-        jira_projects, jira_base_url = bare_jira_open_args(self.app.settings)
-        open_link_under_cursor(
-            self, text_area, jira_projects=jira_projects, jira_base_url=jira_base_url
-        )
+        open_link_under_cursor(self, text_area, self.app.settings)
 
     def confirm_quit(self) -> None:
         """Exit immediately if the buffer is empty, else confirm first.

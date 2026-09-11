@@ -710,13 +710,17 @@ linked at save time, so there is no existing edge to reclassify. Both legs
 share the identical detector the save path uses, and both are idempotent: a
 key already linked from a given note is a no-op on the next backfill pass.
 
-**TUI link-open: deferred.** Whether a bare key should be openable from the
-note body (Ctrl+N, rebuilding `{jira_base_url}/browse/{KEY}`) is a
-`src/lode/tui/screens/_link_open.py` decision the module's own docstring
-records as deferred — that module is deliberately pure (no `Settings`
-dependency), and threading one through it was judged out of proportion to
-this ticket's core (save-path + backfill) scope. Tracked as its own
-follow-up, `lode-dube`, blocked on this ticket.
+**TUI link-open: built (`lode-dube`).** A bare key under the cursor opens as
+`{jira_base_url}/browse/{KEY}` on Ctrl+N, from every screen that binds it,
+via the same `iter_bare_jira_key_spans` matcher the save path uses — so
+"what opens == what draws down" holds for bare keys too, not just URLs.
+`src/lode/tui/screens/_link_open.py` stays pure: its functions take
+`jira_projects`/`jira_base_url` as plain values. The activation gate is
+`drawdown._bare_jira_scan_active` itself, applied in exactly one place
+(`bare_jira_open_args`, called by the module's glue function), never a
+second copy of it. A
+cursor inside a pasted URL still yields the URL — the URL spans are matched
+first — so the two shapes never contend.
 
 ### Confluence: only an id-bearing URL routes (decision F)
 

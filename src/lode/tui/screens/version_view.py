@@ -21,7 +21,7 @@ from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
 from lode.notes_read import version_body
-from lode.tui.screens._link_open import bare_jira_open_args, open_link_under_cursor
+from lode.tui.screens._link_open import open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.widgets.lode_footer import LodeFooter
 
@@ -72,14 +72,11 @@ class VersionViewScreen(Screen[None]):
         :class:`~lode.tui.screens.edit.EditScreen`'s binding exactly, so the
         same keypress opens a link on every screen that has one, whether the
         body happens to be editable here or not. Also opens a bare JIRA key
-        under the cursor (lode-dube), via
-        :func:`~lode.tui.screens._link_open.bare_jira_open_args`.
+        under the cursor (lode-dube), when the JIRA connector and
+        ``jira_projects``/``jira_base_url`` are configured.
         """
         text_area = self.query_one(f"#{VERSION_BODY_ID}", TextArea)
-        jira_projects, jira_base_url = bare_jira_open_args(self.app.settings)
-        open_link_under_cursor(
-            self, text_area, jira_projects=jira_projects, jira_base_url=jira_base_url
-        )
+        open_link_under_cursor(self, text_area, self.app.settings)
 
     def action_ask_about_note(self) -> None:
         """Ctrl+L: open Ask, scoped to this note (lode-35nu.11.3).

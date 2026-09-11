@@ -453,8 +453,8 @@ def test_snapshot_viewer_screen_footer_shows_the_link_binding(
 # SnapshotViewerScreen get above, not the four EditScreen carries. EditScreen
 # was first, so it drove the guard scenarios (generic-browser controller,
 # headless, no-link-under-cursor) end to end once; those guards live entirely
-# inside open_link_under_cursor, which takes (screen, text_area) and so cannot
-# behave differently per screen, and each is already covered in isolation in
+# inside open_link_under_cursor, which takes (screen, text_area, settings) and
+# so cannot behave differently per screen, and each is already covered in isolation in
 # tests/test_link_open.py. Re-running them here would assert the same facts a
 # third time and pin the guards' wording in one more place. What IS
 # screen-specific -- that Ctrl+N is bound and reaches the helper -- is what
