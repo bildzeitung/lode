@@ -495,13 +495,11 @@ SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocat
 
 set -o pipefail   # REQUIRED, not hygiene -- see the shared report-only contract above.
 
-# On a query error (bd or jq), overwrite the capture -- which may be partial or garbled -- with
-# the sentinel. §8 tells that apart from both a missing file and a legitimately empty one.
-#
-# (?m) is LOAD-BEARING, not dead syntax: in jq 1.7's Oniguruma a bare ^ anchors at string start
-# only, so dropping it counts 1 per collector no matter how many nits it holds (measured).
-if ! DOCS_NITS=$(bd list --label docs-nits --limit 0 --json \
-  | jq -r '(. // []) | .[] | [.id, .title, (.notes // "" | [scan("(?m)^NIT")] | length)] | @tsv'); then
+# On a query error, overwrite the capture -- which may be partial or garbled -- with the
+# sentinel. §8 tells that apart from both a missing file and a legitimately empty one.
+# scripts/bd-docs-nit.sh count (lode-y86u) owns the resolve-by-label query, the `(. // [])`
+# null-vs-empty guard, and the `(?m)^NIT` per-collector count.
+if ! DOCS_NITS=$(scripts/bd-docs-nit.sh count); then
   DOCS_NITS="SWEEP-QUERY-ERROR"
 fi
 printf '%s' "$DOCS_NITS" > "$SWEEP_TMP/docs_nits"
