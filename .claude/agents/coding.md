@@ -389,6 +389,15 @@ mode is destructive repair, appropriate as a one-time precondition, not as a mid
     bd create --title="…" --description="…" --type=task --deps discovered-from:<id>
     ```
 
+  - **A wording-only doc nit outside this branch's scope** — the remedy is purely *how to say it*,
+    never a judgment call about *what to say* — is **not** a new ticket at all: I append it to the
+    docs-nits collector instead (lode-t551; decision and discriminator:
+    [docs/agents-workflow.md](../../docs/agents-workflow.md#wording-only-doc-nits-go-to-the-docs-nits-collector-lode-t551)).
+    `bd list --label docs-nits --limit 0 --json` locates it (never a hardcoded id); `bd update
+    <collector> --append-notes` in patch shape (file, `grep -n`-derived line, anchor quoted verbatim,
+    exact replacement, note prefixed `NIT`), then `scripts/bd-dolt-push.sh`. If no open `docs-nits`
+    ticket exists, I fall back to reporting it in my hand-off instead — I never create one myself.
+
 **Building on top of an unlanded `land/<id>` branch (rare — stacked branches, lode-02v).**
 Occasionally a ticket's fix only makes sense once *another* ticket's still-unlanded code exists — the
 code my ticket needs to change/fix lives only on a `land/<other-id>` branch, not yet on `trunk`

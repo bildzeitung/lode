@@ -1396,6 +1396,53 @@ a `/code` fan-out would dispatch it into a live batch and return a confident, wo
 class of constraint is documented, not solved: it needs a human to run the ticket by hand in a quiet
 window.
 
+### Wording-only doc nits go to the docs-nits collector (lode-t551)
+
+DECISION (human, 2026-09-08): a **wording-only** nit in `docs/` or in a skill/agent markdown file —
+phrasing that is stale or imprecise but not *wrong* (e.g. "green promote" in `docs/stack.md` after
+`lode-2zi9` moved promotion before gating) — is no longer dropped at report time, and no longer filed
+as its own one-off ticket. It is **appended as a note** to the single standing collector ticket
+carrying the reserved label **`docs-nits`** (currently `lode-59da`, `chore`, `P4`), which a human
+drains with one `/code` pass once the batch is worth it.
+
+**The discriminator is not new here — it is `/land`'s existing one-line-doc-patch escape hatch,
+reused verbatim:** [`.claude/skills/land/SKILL.md` — If the whole remedy is a one-line doc
+change](../.claude/skills/land/SKILL.md#if-the-whole-remedy-is-a-one-line-doc-change-report-the-patch--not-the-gap)
+owns the wording ("purely *how to word it*"; a judgment call about *what to say* is not a nit; and
+length is the symptom, not the test). That paragraph stays the single source — this decision only
+changes where a qualifying nit *goes*, never what qualifies.
+
+**Locate the collector by LABEL, never by id.** `bd list --label docs-nits --limit 0 --json` — every
+file that appends a nit does it this way; nothing hardcodes `lode-59da` as the mechanism (naming it as
+the *current instance* in prose, as this paragraph does, is fine — the mechanism is still the label).
+
+**Note-prefix convention.** Each appended note starts a fresh line with the literal prefix `NIT`, so
+`/sweep`'s §2d can count them cheaply (`^NIT`) without parsing patch bodies. The prefix may carry a
+suffix (`NIT 3`, `NIT 3 addendum`) — §2d counts `^NIT` line starts, so an addendum line counts as its
+own row; the count is a rough batch-size signal, not an exact nit tally.
+
+**Exactly one open collector is expected — 0 and 2+ both mean "report, don't guess."** With **none**
+open, the fallback is the same as before this decision: report the nit as an ordinary finding. No
+agent creates the collector itself; a human opens it. With **two or more**, do not pick one — append
+nothing and report the ambiguity, the same refusal
+[`scripts/sweep-digest-id.sh`](../scripts/sweep-digest-id.sh) makes for the other reserved-label
+singleton (`sweep-digest`). Splitting nits silently across two collectors is the failure this closes:
+a human drains one and the other rots, while `/sweep`'s §2d looks healthy because it lists both.
+
+**This is a deliberate, narrow carve-out** from `/land`'s "never file a bd ticket for an incidental
+discovery" rule ([What I never
+do](../.claude/skills/land/SKILL.md#what-i-never-do)) — it is one human-sanctioned ticket, located by
+label, so it does not reopen the dupe generator that rule exists to kill: there is nothing to dedup
+against, because every nit lands on the same ticket.
+
+**`/sweep` is visibility-only here.** Its §2d renders the open collector(s) and each one's `^NIT`
+note count so a human can see when the batch is worth draining; it never enters `$CURRENT`, the
+digest, or notify.
+
+Every instruction file implementing this decision links back to this subsection instead of restating
+the rationale — no roster of them is kept here, since a hand-typed one would lag the next file that
+adopts or drops the rule (`grep -rn docs-nits .claude/` is the live answer).
+
 ### Never write to an external tracker under the user's identity (lode-o29m)
 
 **USER RULE (hard):** an agent must never WRITE to an external tracker — GitHub, an upstream repo, any

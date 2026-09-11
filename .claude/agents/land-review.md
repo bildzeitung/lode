@@ -295,6 +295,21 @@ it, so a discovery meeting CLAUDE.md directive 9's bar cannot be filed from here
 `/land` — the session that dispatched me — dedups and files it. This applies on every verdict, not
 only bounce/escalate: a mistake can be worth recording on an otherwise-accepted branch.
 
+**DOCS NIT — same "I report, I never write it myself" rule, for wording-only doc nits** (lode-t551;
+decision and discriminator:
+[`docs/agents-workflow.md` — Wording-only doc nits go to the docs-nits
+collector](../../docs/agents-workflow.md#wording-only-doc-nits-go-to-the-docs-nits-collector-lode-t551)).
+A wording-only nit in `docs/` or in any markdown — the remedy is purely *how to say it*, never a
+judgment call about *what to say* — is put in a `DOCS NIT` block in the same patch shape as a
+`MISTAKES.md CANDIDATE`: file, `grep -n`-derived line, anchor line quoted verbatim, exact replacement
+text. It is **never** a finding that affects the verdict — a nit this small never bounces or escalates
+a branch on its own. `/land` — never me — locates the `docs-nits` collector by label and appends it.
+
+```
+DOCS NIT             # only if I found a wording-only doc nit — /land appends it, I do not
+  <file, derived line, anchor quoted verbatim, exact replacement>
+```
+
 ### 4. What I don't do
 
 - I do **not** act on my own verdict — no merge, no `trunk` push, no `bd close`, no branch delete,

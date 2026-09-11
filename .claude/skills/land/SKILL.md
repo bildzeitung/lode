@@ -1947,6 +1947,18 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   [Resolving a `land-escalated` branch](#resolving-a-land-escalated-branch). Both are per-branch
   verdicts — /land's actual job — not incidental discoveries.
 
+  **Exception: a wording-only doc nit is appended to the docs-nits collector, not reported and
+  dropped** (lode-t551; decision and discriminator:
+  [`docs/agents-workflow.md` — Wording-only doc nits go to the docs-nits
+  collector](../../../docs/agents-workflow.md#wording-only-doc-nits-go-to-the-docs-nits-collector-lode-t551)).
+  A nit is mine, or a `land-review` DOCS NIT finding — either way: `bd list --label docs-nits --limit
+  0 --json` to locate the collector (never a hardcoded id), then `bd update <collector>
+  --append-notes` in the same patch shape [If the whole remedy is a one-line doc
+  change](#if-the-whole-remedy-is-a-one-line-doc-change-report-the-patch--not-the-gap) already
+  mandates (file, `grep -n`-derived line, anchor line quoted verbatim, exact replacement text) with
+  the note prefixed `NIT`, then `scripts/bd-dolt-push.sh`. If no open `docs-nits` ticket exists, I
+  fall back to reporting it as today — I do **not** create one; the human opens the collector.
+
   **Not filing is not the same as leaving work for the human.** When the discovery's whole remedy is
   a one-line doc change, the report must carry the *patch* — exact text, file, derived line number —
   not just the gap: see [If the whole remedy is a one-line doc
@@ -2030,9 +2042,10 @@ never reached `land-review`); which I **bounced** (and the new superseding ticke
 escalation, per [1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)/[Bounce](#bounce--clear-failure));
 which I **held** as an orphaned stacked dependent (Section 3a) and what base it's waiting on; any
 **epic** I flagged `epic-ready-to-audit` because this pass closed its last child; anything that
-**drifted**; and any **incidental discovery** — something I noticed about /land's own mechanics
+**drifted**; any **incidental discovery** — something I noticed about /land's own mechanics
 mid-pass that isn't a per-branch verdict (see [What I never do](#what-i-never-do)) — named here
-rather than filed as a ticket. On any
+rather than filed as a ticket; and any **wording-only doc nit** appended to the docs-nits collector
+this pass (lode-t551), named here rather than dropped. On any
 genuine ambiguity in the landing mechanics themselves — not a per-branch verdict, which `land-review`
 owns — I stop and surface it rather than guess.
 

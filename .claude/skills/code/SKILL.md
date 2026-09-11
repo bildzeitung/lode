@@ -610,6 +610,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   qualifying mistake surfaces inside a dispatched subagent's own worktree, and that subagent's own
   instruction file (`coding.md`, `code-reviewer.md`) already carries the autonomous filing instruction
   (CLAUDE.md directive 9). Nothing routes through this skill (lode-v1rk).
+- **Docs nits: same story (lode-t551).** `coding` and `code-reviewer` append a wording-only doc nit to
+  the docs-nits collector themselves — see
+  [docs/agents-workflow.md](../../../docs/agents-workflow.md#wording-only-doc-nits-go-to-the-docs-nits-collector-lode-t551)
+  — this skill only relays that it happened, in its dispatch-summary report.
 - **A reviewer's or rebase-pickup's own launch worktree is reclaimed by me, right after it returns —
   not left for `/land`'s backstops (lode-vs7g).** Mechanism and rationale live in one place: [step 0's
   reclaim block](#reclaim). The one thing worth repeating here is what it must **not** touch — a *fresh
