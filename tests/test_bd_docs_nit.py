@@ -20,8 +20,8 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-    CODE_REVIEWER_AGENT,
-    CODING_AGENT,
+    CODE_REVIEWER_AGENT_TEXT,
+    CODING_AGENT_TEXT,
     LAND_SKILL_TEXT,
     SWEEP_SKILL_BLOCKS,
     fake_bin_env,
@@ -29,13 +29,16 @@ from conftest import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "bd-docs-nit.sh"
+_SCRIPT_TEXT = SCRIPT.read_text()
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the script shells out to jq"
 )
 
 
-def _fake_bd(bin_dir: Path, list_rows: object, *, update_ok: bool = True) -> None:
+def _fake_bd(
+    bin_dir: Path, list_rows: object, *, update_ok: bool = True, list_exit: int = 0
+) -> None:
     """A fake `bd` on PATH that serves `list_rows` as the JSON body of
     `bd list --label docs-nits --limit 0 --json` and records any
     `bd update <id> --append-notes <note>` invocation to `bin_dir/update.log`
@@ -51,6 +54,9 @@ def _fake_bd(bin_dir: Path, list_rows: object, *, update_ok: bool = True) -> Non
             #!/usr/bin/env bash
             set -euo pipefail
             if [ "$1" = "list" ]; then
+              if [ {list_exit} -ne 0 ]; then
+                exit {list_exit}
+              fi
               cat {payload}
               exit 0
             fi
@@ -69,11 +75,8 @@ def _fake_bd(bin_dir: Path, list_rows: object, *, update_ok: bool = True) -> Non
 
 
 def _fake_dolt_push(bin_dir: Path, *, ok: bool = True) -> Path:
-    """A fake scripts/bd-dolt-push.sh the script under test shells out to by
-    relative path from its own directory -- so this stubs the REAL file at
-    that path is never reachable from a bare PATH lookup; instead we run the
-    real script from a scratch copy of the repo's scripts/ dir with
-    bd-dolt-push.sh replaced. See `_run` below."""
+    """Stub bd-dolt-push.sh at the path the script under test resolves relative
+    to its own directory -- a PATH entry would never be consulted. See `_run`."""
     marker = bin_dir / "dolt_push_called"
     script = bin_dir / "bd-dolt-push.sh"
     exit_code = "0" if ok else "1"
@@ -89,6 +92,7 @@ def _run(
     *,
     update_ok: bool = True,
     dolt_ok: bool = True,
+    list_exit: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Run scripts/bd-docs-nit.sh from a scratch scripts/ directory containing
     a copy of the real script alongside fakes for `bd` (on PATH) and
@@ -96,13 +100,13 @@ def _run(
     scratch_scripts = tmp_path / "scripts"
     scratch_scripts.mkdir()
     script_copy = scratch_scripts / "bd-docs-nit.sh"
-    script_copy.write_text(SCRIPT.read_text())
+    script_copy.write_text(_SCRIPT_TEXT)
     script_copy.chmod(0o755)
     dolt_marker = _fake_dolt_push(scratch_scripts, ok=dolt_ok)
 
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir()
-    _fake_bd(bin_dir, list_rows, update_ok=update_ok)
+    _fake_bd(bin_dir, list_rows, update_ok=update_ok, list_exit=list_exit)
 
     result = subprocess.run(
         [str(script_copy), *args],
@@ -202,6 +206,20 @@ def test_append_missing_required_argument_is_exit_2(tmp_path: Path) -> None:
     assert r.stdout == ""
 
 
+def test_append_flag_with_no_value_is_exit_2_not_exit_1(tmp_path: Path) -> None:
+    """A trailing flag missing its value is a machine fault. Without the
+    explicit arity check it dies on `set -u` with exit 1 -- the code reserved
+    for "not exactly one collector", so a typo'd invocation would read to the
+    caller as "no collector exists, fall back to reporting"."""
+    r, dolt_marker = _run(
+        tmp_path, ["append", "--source"], [{"id": "lode-59da", "title": "x"}]
+    )
+    assert r.returncode == 2
+    assert r.stdout == ""
+    assert "requires a value" in r.stderr
+    assert not dolt_marker.exists()
+
+
 def test_append_bd_update_failure_is_exit_2(tmp_path: Path) -> None:
     r, dolt_marker = _run(
         tmp_path, _APPEND_ARGS, [{"id": "lode-59da", "title": "x"}], update_ok=False
@@ -274,70 +292,46 @@ def test_no_subcommand_is_exit_2(tmp_path: Path) -> None:
 def test_bd_list_failure_is_exit_2_not_exit_1(tmp_path: Path) -> None:
     """A machine fault must stay distinguishable from "no collector": exit 2
     vs 1 -- collapsing them would let a broken bd read as a clean empty state."""
-    scratch_scripts = tmp_path / "scripts"
-    scratch_scripts.mkdir()
-    script_copy = scratch_scripts / "bd-docs-nit.sh"
-    script_copy.write_text(SCRIPT.read_text())
-    script_copy.chmod(0o755)
-    _fake_dolt_push(scratch_scripts, ok=True)
-
-    bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
-    fake_bd = bin_dir / "bd"
-    fake_bd.write_text("#!/usr/bin/env bash\nexit 3\n")
-    fake_bd.chmod(0o755)
-
-    r = subprocess.run(
-        [str(script_copy), *_APPEND_ARGS],
-        capture_output=True,
-        text=True,
-        env=fake_bin_env(bin_dir),
-        cwd=REPO_ROOT,
-        check=False,
-    )
+    r, dolt_marker = _run(tmp_path, _APPEND_ARGS, [], list_exit=3)
     assert r.returncode == 2
     assert r.stdout == ""
+    assert not dolt_marker.exists()
 
 
-def _fence_scan_no_inline_docs_nits_query(blocks: list[str], *, label: str) -> None:
-    body = "\n".join(
-        line
-        for block in blocks
-        for line in block.splitlines()
-        if not line.strip().startswith("#")
-    )
-    assert "bd list --label docs-nits" not in body, (
-        f"{label}: a fenced bash block re-inlines the docs-nits resolve query -- "
+def _assert_delegates_to_the_script(text: str, *, label: str) -> None:
+    """No call site may keep its own copy of the resolve query -- that drift is
+    the whole reason scripts/bd-docs-nit.sh exists."""
+    assert "bd list --label docs-nits" not in text, (
+        f"{label}: still carries the inline docs-nits resolve recipe -- "
         "this is the drift scripts/bd-docs-nit.sh exists to remove"
     )
+    assert "scripts/bd-docs-nit.sh" in text
 
 
 def test_sweep_skill_count_call_site_uses_the_script() -> None:
-    _fence_scan_no_inline_docs_nits_query(SWEEP_SKILL_BLOCKS, label="sweep/SKILL.md")
-    body = "\n".join(SWEEP_SKILL_BLOCKS)
+    # Comment lines are stripped first: §2d's block cites the script's internals
+    # in a comment, which is documentation, not a second copy of the query.
+    body = "\n".join(
+        line
+        for block in SWEEP_SKILL_BLOCKS
+        for line in block.splitlines()
+        if not line.strip().startswith("#")
+    )
+    _assert_delegates_to_the_script(body, label="sweep/SKILL.md")
     assert "scripts/bd-docs-nit.sh count" in body
 
 
-def _no_inline_docs_nits_prose_query(text: str, *, label: str) -> None:
-    assert "bd list --label docs-nits" not in text, (
-        f"{label}: still carries the inline docs-nits resolve recipe in prose -- "
-        "this is the drift scripts/bd-docs-nit.sh exists to remove"
-    )
+@pytest.mark.parametrize(
+    ("text", "label"),
+    [
+        # Every append call site states the recipe in plain prose with inline
+        # backtick commands, not a fenced bash block -- so these scan the cached
+        # raw text rather than the fence-parse locator §2d's test uses.
+        (LAND_SKILL_TEXT, "land/SKILL.md"),
+        (CODING_AGENT_TEXT, "coding.md"),
+        (CODE_REVIEWER_AGENT_TEXT, "code-reviewer.md"),
+    ],
+)
+def test_append_call_sites_use_the_script(text: str, label: str) -> None:
+    _assert_delegates_to_the_script(text, label=label)
     assert "scripts/bd-docs-nit.sh append" in text
-
-
-def test_land_skill_append_call_site_uses_the_script() -> None:
-    # The recipe lives in plain prose with inline backtick commands, not a
-    # fenced bash block -- use the cached raw text rather than the
-    # fence-parse locators the other tests in this module use for §2d.
-    _no_inline_docs_nits_prose_query(LAND_SKILL_TEXT, label="land/SKILL.md")
-
-
-def test_coding_agent_append_call_site_uses_the_script() -> None:
-    text = CODING_AGENT.read_text(encoding="utf-8")
-    _no_inline_docs_nits_prose_query(text, label="coding.md")
-
-
-def test_code_reviewer_agent_append_call_site_uses_the_script() -> None:
-    text = CODE_REVIEWER_AGENT.read_text(encoding="utf-8")
-    _no_inline_docs_nits_prose_query(text, label="code-reviewer.md")

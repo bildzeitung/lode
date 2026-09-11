@@ -1956,9 +1956,10 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   "<verbatim>" --replacement "<text>"` locates the collector by label (never a hardcoded id),
   appends the note in the mandated patch shape [If the whole remedy is a one-line doc
   change](#if-the-whole-remedy-is-a-one-line-doc-change-report-the-patch--not-the-gap) already
-  requires, with the `NIT` prefix the script owns, and pushes it (lode-y86u). If no open `docs-nits`
-  ticket exists (the script exits 1), I fall back to reporting it as today — I do **not** create one;
-  the human opens the collector.
+  requires, with the `NIT` prefix the script owns, and pushes it (lode-y86u). **Exit 1 means the
+  script refused — read its stderr before deciding what to do**: with *no* open collector I fall back
+  to reporting the nit as today (I do **not** create one; the human opens the collector); with *two
+  or more* I report the duplicate-collector ambiguity itself, and never pick one.
 
   **Not filing is not the same as leaving work for the human.** When the discovery's whole remedy is
   a one-line doc change, the report must carry the *patch* — exact text, file, derived line number —

@@ -64,14 +64,20 @@ usage:
 EOF
 }
 
+list_collectors() {
+  # The one place the label query is spelled -- both subcommands read it from
+  # here, so a label or --limit change cannot half-land.
+  if ! bd list --label docs-nits --limit 0 --json 2>/dev/null; then
+    echo "bd-docs-nit.sh: the docs-nits label query failed" >&2
+    return 2
+  fi
+}
+
 resolve_one_collector() {
   # Prints the single open docs-nits collector's id to stdout on success;
   # returns 1 (not exactly one) or 2 (machine fault), per the header contract.
   local rows n
-  if ! rows="$(bd list --label docs-nits --limit 0 --json 2>/dev/null)"; then
-    echo "bd-docs-nit.sh: the docs-nits label query failed" >&2
-    return 2
-  fi
+  rows="$(list_collectors)" || return 2
   # `(. // [])` -- bd serializes an empty result set as `null`, not `[]`.
   if ! n="$(printf '%s' "$rows" | jq '(. // []) | length' 2>/dev/null)"; then
     echo "bd-docs-nit.sh: could not parse the docs-nits query JSON" >&2
@@ -96,6 +102,19 @@ resolve_one_collector() {
 cmd_append() {
   local source="" file="" line="" anchor="" replacement="" what="" id
   while [ "$#" -gt 0 ]; do
+    # A flag whose value is missing must be a MACHINE FAULT (exit 2), not the
+    # `set -u` unbound-variable death that exits 1 -- exit 1 is reserved for
+    # "not exactly one collector", and a caller distinguishing the two on the
+    # exit code alone would read a typo'd invocation as "no collector exists".
+    case "$1" in
+      --source|--file|--line|--anchor|--replacement|--what)
+        if [ "$#" -lt 2 ]; then
+          echo "bd-docs-nit.sh append: $1 requires a value" >&2
+          usage
+          return 2
+        fi
+        ;;
+    esac
     case "$1" in
       --source) source="$2"; shift 2 ;;
       --file) file="$2"; shift 2 ;;
@@ -118,11 +137,9 @@ cmd_append() {
     return "$rc"
   fi
 
-  # The mandated patch shape (land/SKILL.md's "report the patch, not the gap"):
-  # file, a grep -n-derived line number, the anchor quoted verbatim, and the
-  # exact replacement text. `NIT` is the literal prefix this script owns --
-  # /sweep section 2d's `^NIT` scan depends on every appended note starting
-  # with it, so it is never left to the caller to type.
+  # `NIT` is the literal prefix this script owns -- /sweep section 2d's `^NIT`
+  # scan depends on every appended note starting with it, so it is never left
+  # to the caller to type.
   local note
   note="NIT ($source): $file:$line
 Anchor (verbatim): \"$anchor\"
@@ -145,10 +162,7 @@ What it changes: $what"
 
 cmd_count() {
   local rows
-  if ! rows="$(bd list --label docs-nits --limit 0 --json 2>/dev/null)"; then
-    echo "bd-docs-nit.sh: the docs-nits label query failed" >&2
-    return 2
-  fi
+  rows="$(list_collectors)" || return 2
   # (?m) is load-bearing, not decoration: in jq 1.7's Oniguruma a bare ^
   # anchors at string start only, so dropping it would count at most 1 per
   # collector regardless of how many NIT notes it actually holds.

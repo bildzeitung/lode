@@ -1415,6 +1415,14 @@ changes where a qualifying nit *goes*, never what qualifies.
 **Locate the collector by LABEL, never by id.** `bd list --label docs-nits --limit 0 --json` — every
 file that appends a nit does it this way; nothing hardcodes `lode-59da` as the mechanism (naming it as
 the *current instance* in prose, as this paragraph does, is fine — the mechanism is still the label).
+**[`scripts/bd-docs-nit.sh`](../scripts/bd-docs-nit.sh) owns that query** (lode-y86u): call sites run
+`scripts/bd-docs-nit.sh append …` to resolve-and-append and `scripts/bd-docs-nit.sh count` for §2d's
+per-collector tally, rather than re-inlining the `bd list`/`jq` pipeline in markdown where nothing
+gates it. The query, the 0-vs-2+ refusal below, the `NIT` prefix and the `bd dolt push` all live in
+that one script; only the wording-only *discriminator* stays restated per file, because that half is
+genuinely per-stage judgment. The script's optional `--what` flag adds the "What it changes:" clause
+several hand-written notes on the collector already carry — a one-line summary of the effect, never a
+substitute for the four mandated fields.
 
 **Note-prefix convention.** Each appended note starts a fresh line with the literal prefix `NIT`, so
 `/sweep`'s §2d can count them cheaply (`^NIT`) without parsing patch bodies. The prefix may carry a
