@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 #
 # Resolve the single bd issue carrying a given reserved LABEL, and REFUSE
-# unless there is exactly one -- the resolve-by-label + 0/1/2 refusal contract
-# scripts/sweep-digest-id.sh (lode-x495) and scripts/bd-docs-nit.sh's
-# resolve_one_collector() (lode-y86u) each carried as a near line-for-line
-# copy: same `bd list --label L --limit 0 --json`, same jq length, same -ne 1
-# refusal with a 0-vs-2+ diagnostic, same `jq -r '.[0].id'`. Extracted per
-# lode-ayfm once that second copy turned up during lode-y86u's technical
-# review -- the same "logic shared by two call sites belongs in scripts/,
-# never duplicated" rule docs/agents-workflow.md states, one level up from
-# markdown into script bodies themselves.
+# unless there is exactly one. The sole owner of that query and of the 0/1/2
+# refusal contract below, for every reserved-label singleton in this repo:
+# scripts/sweep-digest-id.sh (sweep-digest) and scripts/bd-docs-nit.sh
+# (docs-nits) are both thin callers, per the "logic shared by two call sites
+# belongs in scripts/, never duplicated" rule docs/agents-workflow.md states
+# (lode-ayfm).
 #
 # Usage:
 #   scripts/bd-label-single-id.sh LABEL [--all] \
@@ -23,10 +20,9 @@
 #   printed verbatim (may be multi-line) on the N==0 / N>1 refusal path
 #   respectively, right after this script's own diagnostic line -- neither is
 #   required, and the base diagnostic plus (on N>1) the list of matching
-#   ids/titles always print regardless. This is the one piece of the old
-#   duplicated bodies that is NOT collapsed here by design: the two
-#   callers' advisory paragraphs differ in wording and audience, and per
-#   lode-ayfm's acceptance criteria that wording stays with each caller.
+#   ids/titles always print regardless. Deliberately NOT owned here: the two
+#   callers' advisory paragraphs differ in wording and audience, so that
+#   wording stays with each caller (lode-ayfm).
 #
 # Exit 0 -> prints the single matching issue's id to stdout. Exactly one
 #           match.
@@ -93,10 +89,17 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-list_args=(list --label "$label" --limit 0 --json)
-[ "$all" -eq 1 ] && list_args+=(--all)
+# `--limit 0` for the same reason every `bd list` in this repo passes it: no
+# truncation. The invocation is spelled literally up to the optional `--all`
+# suffix, rather than built wholesale from an array: tests/test_bd_list_limit_gate.py
+# only sees a literal `bd ... list` carrying `--limit` in the same command
+# segment, and this is now the ONLY resolve-by-label query in the tree -- an
+# array-built call would leave that flag ungated everywhere (sabotage-checked:
+# the array form stayed green with `--limit 0` deleted).
+all_args=()
+[ "$all" -eq 1 ] && all_args+=(--all)
 
-if ! rows="$(bd "${list_args[@]}" 2>/dev/null)"; then
+if ! rows="$(bd list --label "$label" --limit 0 --json "${all_args[@]}" 2>/dev/null)"; then
   echo "bd-label-single-id.sh: \`bd list --label $label\` failed" >&2
   exit 2
 fi

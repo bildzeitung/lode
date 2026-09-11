@@ -238,11 +238,12 @@ SKIP_EXECUTED: dict[tuple[str, str], str] = {
         'echo "bd-label-single-id.sh: \\`bd list --label $label\\` failed" >&2',
     ): (
         "A diagnostic string for a FAILED bd invocation, quoting the command name for "
-        "a human reading stderr -- not a second invocation. The real call a few lines "
-        'above (`if ! rows="$(bd "${list_args[@]}" 2>/dev/null)"; then`, where '
-        "list_args always carries --limit 0) already carries it. Moved here from "
-        "scripts/sweep-digest-id.sh per lode-ayfm's extraction; that script's own "
-        "diagnostic strings no longer exist -- it delegates to this one."
+        "a human reading stderr -- not a second invocation. The real call just above "
+        'it (`rows="$(bd list --label "$label" --limit 0 --json ${all_args...} '
+        '2>/dev/null)"`) carries --limit 0 literally, up to the optional --all '
+        "suffix, precisely so this gate can see it. This entry sits here rather than "
+        "on scripts/sweep-digest-id.sh because that script now delegates to this one "
+        "(lode-ayfm) and carries no bd-list diagnostic of its own."
     ),
     (
         "scripts/bd-label-single-id.sh",

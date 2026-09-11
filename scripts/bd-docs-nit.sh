@@ -19,12 +19,11 @@
 # scripts/sweep-digest-id.sh (lode-x495), the direct precedent this script follows
 # for its resolve-by-label + refusal contract.
 #
-# `resolve_one_collector()`'s own query/refusal body has since moved into
-# scripts/bd-label-single-id.sh (lode-ayfm), shared with sweep-digest-id.sh --
-# that near line-for-line duplicate turned up during lode-y86u's own technical
-# review. This script keeps its own `list_collectors()` (cmd_count needs every
-# row, not a single resolved one) and supplies its own per-label advisory
-# wording to the shared resolver for the append path's N==0/N>1 refusal.
+# `resolve_one_collector()` is a thin wrapper over
+# scripts/bd-label-single-id.sh, which owns the resolve-by-label query and the
+# 0/1/2 refusal contract for every reserved-label singleton (lode-ayfm); this
+# script supplies only docs-nits' own advisory wording. `list_collectors()`
+# stays local because `count` needs every row, not a single resolved id.
 #
 # Usage:
 #   scripts/bd-docs-nit.sh append --source <text> --file <path> --line <n> \
@@ -63,6 +62,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
+# The one place the collector's label is spelled. `count` queries it directly
+# (below) while `append` hands it to scripts/bd-label-single-id.sh, so the two
+# subcommands no longer share a single query -- naming the label once is what
+# keeps a rename from half-landing between them.
+readonly DOCS_NITS_LABEL="docs-nits"
+
 usage() {
   cat >&2 <<'EOF'
 usage:
@@ -72,9 +77,9 @@ EOF
 }
 
 list_collectors() {
-  # The one place the label query is spelled -- both subcommands read it from
-  # here, so a label or --limit change cannot half-land.
-  if ! bd list --label docs-nits --limit 0 --json 2>/dev/null; then
+  # `cmd_count`'s query: it needs every row, not a single resolved id, so it
+  # does not go through bd-label-single-id.sh the way `append` does.
+  if ! bd list --label "$DOCS_NITS_LABEL" --limit 0 --json 2>/dev/null; then
     echo "bd-docs-nit.sh: the docs-nits label query failed" >&2
     return 2
   fi
@@ -83,10 +88,10 @@ list_collectors() {
 resolve_one_collector() {
   # Prints the single open docs-nits collector's id to stdout on success;
   # returns 1 (not exactly one) or 2 (machine fault), per the header contract.
-  # The query + refusal body itself lives in scripts/bd-label-single-id.sh
-  # (lode-ayfm) -- this wraps it with docs-nits' own label and advisory
-  # wording, and remaps its exit codes 1:1 (no `--all`: an open-only query).
-  "$SCRIPT_DIR/bd-label-single-id.sh" docs-nits \
+  # scripts/bd-label-single-id.sh owns the query and the refusal; this passes
+  # docs-nits' label and advisory wording and propagates its exit code 1:1 (no
+  # `--all` -- an open-only query).
+  "$SCRIPT_DIR/bd-label-single-id.sh" "$DOCS_NITS_LABEL" \
     --zero-advisory "  No collector exists yet -- fall back to reporting this nit in your own
   hand-off instead. Do not create one; a human opens the collector." \
     --dup-advisory "  Duplicate collectors -- do NOT guess which is authoritative. Report the

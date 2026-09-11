@@ -17,11 +17,11 @@
 # scripts/release-latest-tag.sh (lode-b2bf) and scripts/release-bump.sh
 # (lode-ns3r).
 #
-# The resolve-by-label query and the 0/1/2 refusal contract itself now live in
-# scripts/bd-label-single-id.sh (lode-ayfm), shared with scripts/bd-docs-nit.sh
-# -- this script is a thin wrapper supplying the `sweep-digest` label, `--all`
-# (a closed digest is still a duplicate a human must resolve), and its own
-# per-label advisory wording for the N==0 and N>1 refusal paths.
+# A thin wrapper over scripts/bd-label-single-id.sh, which owns the
+# resolve-by-label query and the 0/1/2 refusal contract below (lode-ayfm).
+# This script supplies the `sweep-digest` label, `--all` (a closed digest is
+# still a duplicate a human must resolve), and /sweep's own advisory wording
+# for the N==0 and N>1 refusal paths.
 #
 # Usage: scripts/sweep-digest-id.sh
 #

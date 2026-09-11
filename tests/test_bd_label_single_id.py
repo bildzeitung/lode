@@ -1,17 +1,13 @@
 """Tests for scripts/bd-label-single-id.sh (lode-ayfm).
 
-The resolve-single-issue-by-reserved-label query and its exit 0/1/2 refusal
-contract used to be a near line-for-line duplicate between
-scripts/sweep-digest-id.sh (lode-x495) and scripts/bd-docs-nit.sh's
-resolve_one_collector() (lode-y86u): same `bd list --label L --limit 0
---json`, same jq length, same -ne 1 refusal with a 0-vs-2+ diagnostic, same
-`jq -r '.[0].id'`. This is the one script that now owns that recipe; both
-callers wrap it with their own label, `--all`-or-not, and per-label advisory
-wording. Same fake-`bd`-on-PATH pattern as tests/test_sweep_digest_id.py and
-tests/test_bd_docs_nit.py, which now exercise this script indirectly through
-their own callers -- this module pins the shared script's own contract
-directly, including the pieces neither caller alone exercises (e.g. an
-open-only query with no advisory at all).
+That script is the single owner of the resolve-single-issue-by-reserved-label
+query and its exit 0/1/2 refusal contract; scripts/sweep-digest-id.sh and
+scripts/bd-docs-nit.sh are both thin callers, wrapping it with their own
+label, `--all`-or-not, and per-label advisory wording. This module pins the
+shared contract DIRECTLY -- including the pieces neither caller alone
+exercises (an open-only query with no advisory at all) -- since
+tests/test_sweep_digest_id.py and tests/test_bd_docs_nit.py reach it only
+through their own callers. Same fake-`bd`-on-PATH pattern as both.
 """
 
 from __future__ import annotations
@@ -34,21 +30,30 @@ pytestmark = pytest.mark.skipif(
 
 
 def _run(
-    tmp_path: Path, args: list[str], rows: object, *, list_exit: int = 0
+    tmp_path: Path,
+    args: list[str],
+    rows: object,
+    *,
+    list_exit: int = 0,
+    call_log: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the script with a fake `bd` on PATH that serves `rows` as the JSON
     body of whatever `bd list --label ... --limit 0 --json [--all]` it runs,
-    or fails the list with `list_exit` when nonzero."""
+    or fails the list with `list_exit` when nonzero. `call_log`, when given, is
+    the file the fake `bd` appends each invocation's argv to -- the only way to
+    assert on flags the script passes rather than on what it prints."""
     payload = tmp_path / "rows.json"
     payload.write_text(json.dumps(rows) if rows is not None else "null")
 
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir()
+    log_line = f'echo "$*" >> {call_log}' if call_log is not None else ":"
     fake_bd = bin_dir / "bd"
     fake_bd.write_text(
         textwrap.dedent(f"""\
             #!/usr/bin/env bash
             set -euo pipefail
+            {log_line}
             [ "$1" = "list" ] || {{ echo "unsupported: $*" >&2; exit 1; }}
             if [ {list_exit} -ne 0 ]; then
               exit {list_exit}
@@ -176,57 +181,25 @@ def test_bd_failure_is_exit_2_not_exit_1(tmp_path: Path) -> None:
     assert r.stdout == ""
 
 
-def test_all_flag_is_forwarded_to_bd_list(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
-    call_log = bin_dir / "call.log"
-    fake_bd = bin_dir / "bd"
-    fake_bd.write_text(
-        textwrap.dedent(f"""\
-            #!/usr/bin/env bash
-            set -euo pipefail
-            echo "$*" >> {call_log}
-            echo '[{{"id": "lode-abc1", "title": "x"}}]'
-        """)
-    )
-    fake_bd.chmod(0o755)
-    r = subprocess.run(
-        [str(SCRIPT), "some-label", "--all"],
-        capture_output=True,
-        text=True,
-        env=fake_bin_env(bin_dir),
-        cwd=REPO_ROOT,
-        check=False,
+@pytest.mark.parametrize(
+    ("args", "expect_all"),
+    [(["some-label", "--all"], True), (["some-label"], False)],
+)
+def test_all_flag_is_forwarded_to_bd_list_only_when_asked(
+    tmp_path: Path, args: list[str], expect_all: bool
+) -> None:
+    """`--all` is the one thing that differs between the two callers
+    (sweep-digest needs closed rows, docs-nits is open-only), so it is pinned
+    on the wire rather than inferred from the script's output."""
+    call_log = tmp_path / "call.log"
+    r = _run(
+        tmp_path,
+        args,
+        [{"id": "lode-abc1", "title": "x"}],
+        call_log=call_log,
     )
     assert r.returncode == 0, r.stderr
     call = call_log.read_text().strip()
     assert "--label some-label" in call
     assert "--limit 0" in call
-    assert "--all" in call
-
-
-def test_without_all_flag_bd_list_omits_all(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
-    call_log = bin_dir / "call.log"
-    fake_bd = bin_dir / "bd"
-    fake_bd.write_text(
-        textwrap.dedent(f"""\
-            #!/usr/bin/env bash
-            set -euo pipefail
-            echo "$*" >> {call_log}
-            echo '[{{"id": "lode-abc1", "title": "x"}}]'
-        """)
-    )
-    fake_bd.chmod(0o755)
-    r = subprocess.run(
-        [str(SCRIPT), "some-label"],
-        capture_output=True,
-        text=True,
-        env=fake_bin_env(bin_dir),
-        cwd=REPO_ROOT,
-        check=False,
-    )
-    assert r.returncode == 0, r.stderr
-    call = call_log.read_text().strip()
-    assert "--all" not in call
+    assert ("--all" in call) is expect_all
