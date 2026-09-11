@@ -2122,6 +2122,15 @@ CODE_REVIEWER_AGENT = _CHECKOUT_ROOT / ".claude" / "agents" / "code-reviewer.md"
 #: :func:`_corpus_text` rather than its own ``read_text`` call (lode-es1i).
 CODE_REVIEWER_AGENT_BLOCKS = bash_fence_blocks(_corpus_text(CODE_REVIEWER_AGENT))
 
+#: The coding-producer agent definition, derived the same way as
+#: CODE_REVIEWER_AGENT above. Added by lode-y86u's tests/test_bd_docs_nit.py,
+#: the first module to read this file's raw prose rather than only its fenced
+#: bash (its docs-nits recipe lives in plain prose with inline backtick
+#: commands, not a fence) -- tests/test_no_hand_derived_skill_md_path.py
+#: covers this root too, so the constant belongs here for the same reason the
+#: others do.
+CODING_AGENT = _CHECKOUT_ROOT / ".claude" / "agents" / "coding.md"
+
 #: The sweep skill doc's text, read once per session rather than once per test
 #: (lode-pxwn) -- the same fix LAND_SKILL_TEXT above applied to LAND_SKILL.
 #: All five tests/test_sweep_*.py modules that previously called

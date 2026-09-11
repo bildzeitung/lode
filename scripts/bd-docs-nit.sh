@@ -69,12 +69,12 @@ resolve_one_collector() {
   # returns 1 (not exactly one) or 2 (machine fault), per the header contract.
   local rows n
   if ! rows="$(bd list --label docs-nits --limit 0 --json 2>/dev/null)"; then
-    echo "bd-docs-nit.sh: \`bd list --label docs-nits\` failed" >&2
+    echo "bd-docs-nit.sh: the docs-nits label query failed" >&2
     return 2
   fi
   # `(. // [])` -- bd serializes an empty result set as `null`, not `[]`.
   if ! n="$(printf '%s' "$rows" | jq '(. // []) | length' 2>/dev/null)"; then
-    echo "bd-docs-nit.sh: could not parse \`bd list\` JSON" >&2
+    echo "bd-docs-nit.sh: could not parse the docs-nits query JSON" >&2
     return 2
   fi
   if [ "$n" -ne 1 ]; then
@@ -146,7 +146,7 @@ What it changes: $what"
 cmd_count() {
   local rows
   if ! rows="$(bd list --label docs-nits --limit 0 --json 2>/dev/null)"; then
-    echo "bd-docs-nit.sh: \`bd list --label docs-nits\` failed" >&2
+    echo "bd-docs-nit.sh: the docs-nits label query failed" >&2
     return 2
   fi
   # (?m) is load-bearing, not decoration: in jq 1.7's Oniguruma a bare ^
@@ -154,7 +154,7 @@ cmd_count() {
   # collector regardless of how many NIT notes it actually holds.
   if ! printf '%s' "$rows" \
     | jq -r '(. // []) | .[] | [.id, .title, (.notes // "" | [scan("(?m)^NIT")] | length)] | @tsv'; then
-    echo "bd-docs-nit.sh: could not parse \`bd list\` JSON" >&2
+    echo "bd-docs-nit.sh: could not parse the docs-nits query JSON" >&2
     return 2
   fi
 }

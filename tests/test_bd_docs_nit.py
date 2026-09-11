@@ -19,13 +19,16 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import SWEEP_SKILL_BLOCKS, fake_bin_env
+from conftest import (
+    CODE_REVIEWER_AGENT,
+    CODING_AGENT,
+    LAND_SKILL_TEXT,
+    SWEEP_SKILL_BLOCKS,
+    fake_bin_env,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "bd-docs-nit.sh"
-CODING_AGENT = REPO_ROOT / ".claude" / "agents" / "coding.md"
-LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
-CODE_REVIEWER_AGENT = REPO_ROOT / ".claude" / "agents" / "code-reviewer.md"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the script shells out to jq"
@@ -117,7 +120,7 @@ _APPEND_ARGS = [
     "--source",
     "test",
     "--file",
-    "docs/example.md",
+    "README.md",
     "--line",
     "42",
     "--anchor",
@@ -137,7 +140,7 @@ def test_append_with_one_collector_resolves_appends_and_pushes(tmp_path: Path) -
 
     log = (tmp_path / "fakebin" / "update.log").read_text()
     assert log.startswith("lode-59da\n---\n")
-    assert "NIT (test): docs/example.md:42" in log
+    assert "NIT (test): README.md:42" in log
     assert 'Anchor (verbatim): "the old text"' in log
     assert 'Replacement: "the new text"' in log
 
@@ -193,7 +196,7 @@ def test_append_duplicate_collectors_refuses_and_never_picks_one(
 
 
 def test_append_missing_required_argument_is_exit_2(tmp_path: Path) -> None:
-    args = ["append", "--source", "test", "--file", "docs/example.md"]
+    args = ["append", "--source", "test", "--file", "README.md"]
     r, _ = _run(tmp_path, args, [{"id": "lode-59da", "title": "x"}])
     assert r.returncode == 2
     assert r.stdout == ""
@@ -325,10 +328,9 @@ def _no_inline_docs_nits_prose_query(text: str, *, label: str) -> None:
 
 def test_land_skill_append_call_site_uses_the_script() -> None:
     # The recipe lives in plain prose with inline backtick commands, not a
-    # fenced bash block -- read the raw text directly rather than through the
+    # fenced bash block -- use the cached raw text rather than the
     # fence-parse locators the other tests in this module use for §2d.
-    text = LAND_SKILL.read_text(encoding="utf-8")
-    _no_inline_docs_nits_prose_query(text, label="land/SKILL.md")
+    _no_inline_docs_nits_prose_query(LAND_SKILL_TEXT, label="land/SKILL.md")
 
 
 def test_coding_agent_append_call_site_uses_the_script() -> None:
