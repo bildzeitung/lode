@@ -396,9 +396,20 @@ mode is destructive repair, appropriate as a one-time precondition, not as a mid
     `scripts/bd-docs-nit.sh append --source "<attribution>" --file <path> --line <n> --anchor
     "<verbatim>" --replacement "<text>"` locates the collector by label (never a hardcoded id),
     appends the note in patch shape with the `NIT` prefix the script owns, and pushes it (lode-y86u).
-    **Exit 1 means the script refused — read its stderr before deciding what to do**: with *no* open
-    collector I fall back to reporting the nit in my hand-off (I never create one myself); with *two
-    or more* I report the duplicate-collector ambiguity itself, and never pick one.
+    With **no** open collector it creates one itself (lode-z1n5 part 1 — I never see this as a
+    refusal). **Exit 1 means the script refused because 2+ open collectors exist and at least one
+    carries a non-standard title** — read its stderr, report the duplicate-collector ambiguity in my
+    hand-off, and never pick one.
+
+  - **If I am the builder draining a docs-nits collector itself** (the ticket I was dispatched at
+    carries the `docs-nits` label), every `NIT` note on it gets a disposition before I hand off
+    (lode-z1n5 part 5): **applied** (the normal case); **carried over** — re-appended to the
+    successor collector via `scripts/bd-docs-nit.sh append` when I decline to apply it but it is
+    still wording-only, just not applicable this pass; **filed as its own ticket** when declining it
+    needs a judgment call a collector note can't carry; or **dropped as anchor-gone** — the one
+    exception to "never closes silently with the batch" — when the nit's verbatim anchor line is no
+    longer present anywhere in the file (already fixed by an intervening comment-groomer or land). My
+    hand-off note lists every nit's disposition, one line each.
 
 **Building on top of an unlanded `land/<id>` branch (rare — stacked branches, lode-02v).**
 Occasionally a ticket's fix only makes sense once *another* ticket's still-unlanded code exists — the

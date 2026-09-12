@@ -9,13 +9,18 @@
 # (lode-ayfm).
 #
 # Usage:
-#   scripts/bd-label-single-id.sh LABEL [--all] \
+#   scripts/bd-label-single-id.sh LABEL [--all] [--status VALUE] \
 #     [--zero-advisory TEXT] [--dup-advisory TEXT]
 #
 # LABEL is the reserved bd label to query (e.g. sweep-digest, docs-nits).
 # --all also counts CLOSED issues (sweep-digest-id.sh's own need: a closed
 #   duplicate is still a duplicate a human must resolve). Omit it for an
 #   open-only query (bd-docs-nit.sh's own need).
+# --status VALUE is OPT-IN: passed straight through as `bd list --status
+#   VALUE` only when a caller supplies it. sweep-digest-id.sh never passes it
+#   and is unaffected (lode-z1n5): docs-nits' own resolve needs open-only
+#   (an in_progress collector a builder has already claimed must be invisible
+#   to it), which this flag lets a caller ask for without touching --all.
 # --zero-advisory / --dup-advisory carry the CALLER's own per-label wording,
 #   printed verbatim (may be multi-line) on the N==0 / N>1 refusal path
 #   respectively, right after this script's own diagnostic line -- neither is
@@ -39,7 +44,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: bd-label-single-id.sh LABEL [--all] [--zero-advisory TEXT] [--dup-advisory TEXT]" >&2
+  echo "usage: bd-label-single-id.sh LABEL [--all] [--status VALUE] [--zero-advisory TEXT] [--dup-advisory TEXT]" >&2
 }
 
 if [ "$#" -eq 0 ]; then
@@ -57,6 +62,7 @@ if [ -z "$label" ]; then
 fi
 
 all=0
+status=""
 zero_advisory=""
 dup_advisory=""
 while [ "$#" -gt 0 ]; do
@@ -65,7 +71,7 @@ while [ "$#" -gt 0 ]; do
       all=1
       shift
       ;;
-    --zero-advisory | --dup-advisory)
+    --status | --zero-advisory | --dup-advisory)
       # A flag whose value is missing is a MACHINE FAULT (exit 2), not the
       # `set -u` unbound-variable death that would otherwise exit 1 -- exit 1
       # is reserved for "not exactly one match", so a typo'd invocation must
@@ -76,6 +82,7 @@ while [ "$#" -gt 0 ]; do
         exit 2
       fi
       case "$1" in
+        --status) status="$2" ;;
         --zero-advisory) zero_advisory="$2" ;;
         --dup-advisory) dup_advisory="$2" ;;
       esac
@@ -98,6 +105,7 @@ done
 # the array form stayed green with `--limit 0` deleted).
 all_args=()
 [ "$all" -eq 1 ] && all_args+=(--all)
+[ -n "$status" ] && all_args+=(--status "$status")
 
 if ! rows="$(bd list --label "$label" --limit 0 --json "${all_args[@]}" 2>/dev/null)"; then
   echo "bd-label-single-id.sh: \`bd list --label $label\` failed" >&2

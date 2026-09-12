@@ -1080,21 +1080,23 @@ def test_every_skill_and_agent_file_is_covered() -> None:
 
 def test_code_skill_blockquoted_blocks_are_visible_and_clean() -> None:
     """Sabotage-verified against the REAL file, not a synthetic snippet (lode-wroz's
-    acceptance criteria). `code/SKILL.md` carries ten bash blocks; four open with a
-    blockquoted fence (~lines 65, 307, 339, 388) and were invisible to `_bash_blocks`
-    before this fix. Both regressions were re-measured against this exact file rather
-    than estimated: drop the blockquote strip from `bash_fence_blocks` and
-    `len(blocks) == 10` fails at **6**; regress it further to the pre-lode-ovgs column-0
+    acceptance criteria). `code/SKILL.md` carries twelve bash blocks (ten at lode-wroz,
+    plus two added by lode-z1n5's docs-nits threshold-gate + claim-time successor-open
+    call sites); four open with a blockquoted fence (~lines 65, 307, 339, 388) and were
+    invisible to `_bash_blocks` before the lode-wroz fix. Both regressions were
+    re-measured against this exact file rather than estimated: drop the blockquote
+    strip from `bash_fence_blocks` and this count fails at **8** (6 plus the same two
+    lode-z1n5 additions); regress it further to the pre-lode-ovgs column-0
     `line.startswith("```")` scanner and it fails at **0**.
 
-    The count alone is not enough -- a delimiters-only strip also parses to 10, measured.
-    The load-bearing assertion is the last one: block 0 (~lines 65-68) is the real
-    `$REPO_ROOT` assign-then-use pair the synthetic
+    The count alone is not enough -- a delimiters-only strip also parses to the same
+    count, measured. The load-bearing assertion is the last one: block 0 (~lines 65-68)
+    is the real `$REPO_ROOT` assign-then-use pair the synthetic
     `test_blockquoted_fence_content_lines_are_also_unmarked` above covers in miniature,
     and it reports `{"REPO_ROOT"}` rather than `set()` under that partial fix."""
     text = (SKILLS_DIR / "code" / "SKILL.md").read_text(encoding="utf-8")
     blocks = _bash_blocks(text)
-    assert len(blocks) == 10, blocks
+    assert len(blocks) == 12, blocks
     assert "REPO_ROOT" in blocks[0], blocks[0]
     assert _violations_in_block(blocks[0]) == set(), blocks[0]
 

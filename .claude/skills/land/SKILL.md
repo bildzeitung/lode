@@ -1288,6 +1288,21 @@ for id in $LANDED; do
     # also why this closes the reopen hazard: with the label gone there is nothing left to re-admit.
 done
 
+# Reopen-on-close backstop (lode-z1n5 part 4): if this pass closed a ticket carrying the docs-nits
+# label and there is now NO open docs-nits collector, open a new, empty one -- once per pass, after
+# the close loop, via the SAME create script part 1's agent-open path uses (never an inline `bd
+# create` here). This is a BACKSTOP, not the primary path: /code's own claim-time successor-open
+# (part 3) means this fires only on a manual-close / hand-driven path that skipped /code entirely. A
+# cross-machine duplicate this might occasionally produce is converged by part 1a on the next append.
+DOCS_NITS_CLOSED=0
+for id in $LANDED; do
+  LABELS=$(bd show "$id" --json | jq -r '(.[0].labels // []) | index("docs-nits") // empty')
+  [ -n "$LABELS" ] && DOCS_NITS_CLOSED=1
+done
+if [ "$DOCS_NITS_CLOSED" -eq 1 ] && ! scripts/bd-docs-nit.sh has-open; then
+  scripts/bd-docs-nit-create.sh
+fi
+
 # Closing the last child of an epic completes it — flag it for the closing-side review.
 # I only NOTICE completion here (I am the one that closed it); the review itself is the
 # separate `/epic-audit` skill. For each just-closed ticket, `scripts/epic-completion-check.sh`
@@ -1956,16 +1971,26 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   "<verbatim>" --replacement "<text>"` locates the collector by label (never a hardcoded id),
   appends the note in the mandated patch shape [If the whole remedy is a one-line doc
   change](#if-the-whole-remedy-is-a-one-line-doc-change-report-the-patch--not-the-gap) already
-  requires, with the `NIT` prefix the script owns, and pushes it (lode-y86u). **Exit 1 means the
-  script refused — read its stderr before deciding what to do**: with *no* open collector I fall back
-  to reporting the nit as today (I do **not** create one; the human opens the collector); with *two
-  or more* I report the duplicate-collector ambiguity itself, and never pick one.
+  requires, with the `NIT` prefix the script owns, and pushes it (lode-y86u). With **no** open
+  collector the script now **creates one itself** (lode-z1n5 part 1, reversing the old "a human opens
+  it" rule) rather than refusing — I never see that as a failure. With **two or more**, all carrying
+  the standard title, it **converges** on the smallest id without my involvement (part 1a). **Exit 1
+  means the script refused because at least one of 2+ open collectors carries a NON-standard
+  title** — read its stderr and report the duplicate-collector ambiguity, and never pick one.
 
   **Not filing is not the same as leaving work for the human.** When the discovery's whole remedy is
   a one-line doc change, the report must carry the *patch* — exact text, file, derived line number —
   not just the gap: see [If the whole remedy is a one-line doc
   change](#if-the-whole-remedy-is-a-one-line-doc-change-report-the-patch--not-the-gap). That is what
   keeps "don't file a ticket" from silently becoming "hand the human a research task."
+
+  **A second, narrow exception: the reopen-on-close backstop (lode-z1n5 part 4).** After the close
+  loop, if this pass closed a `docs-nits`-labeled ticket and no open collector remains, I create one
+  via `scripts/bd-docs-nit-create.sh` — the same create script `scripts/bd-docs-nit.sh append`'s own
+  agent-open path uses. This is **not** a reopening of the dupe generator either: it creates the one
+  standing collector, located by label, never a one-off ticket for an incidental discovery — the same
+  reasoning as the append exception just above, applied to a different trigger (a close, rather than a
+  nit in hand).
 
   *Why not-filing loses nothing:* every pass **executes** this skill's own code, so every pass gets
   the same opportunity to notice the same flaw — the observation recurs on its own, without a ticket
@@ -2046,8 +2071,10 @@ which I **held** as an orphaned stacked dependent (Section 3a) and what base it'
 **epic** I flagged `epic-ready-to-audit` because this pass closed its last child; anything that
 **drifted**; any **incidental discovery** — something I noticed about /land's own mechanics
 mid-pass that isn't a per-branch verdict (see [What I never do](#what-i-never-do)) — named here
-rather than filed as a ticket; and any **wording-only doc nit** appended to the docs-nits collector
-this pass (lode-t551), named here rather than dropped. On any
+rather than filed as a ticket; any **wording-only doc nit** appended to the docs-nits collector
+this pass (lode-t551), named here rather than dropped; and whether the **reopen-on-close backstop**
+fired this pass (lode-z1n5 part 4) — say so even when it did not, so a run that closed a
+docs-nits-labeled ticket without needing the backstop reads as checked, not skipped. On any
 genuine ambiguity in the landing mechanics themselves — not a per-branch verdict, which `land-review`
 owns — I stop and surface it rather than guess.
 

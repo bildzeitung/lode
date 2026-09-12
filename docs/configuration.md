@@ -707,6 +707,22 @@ change only adds `effort` alongside that omission, the combination cannot
 occur; the `AnthropicProvider` docstring carries a standing note against
 reintroducing an explicit `disabled`.
 
+## `LODE_DOCS_NITS_THRESHOLD` — docs-nits batch-worth-building gate (lode-z1n5)
+
+An env var, set the same way as `LODE_CODE_MAX_CONCURRENT_AGENTS` (a shell export, or
+`.claude/settings.local.json`'s `"env"` block) — CLAUDE.md routes tunables to this file, so the knob
+lives here even though `LODE_CODE_MAX_CONCURRENT_AGENTS` itself is documented in
+[`docs/agents-workflow.md`](agents-workflow.md), not here; that file is a precedent for the mechanism,
+not for the location.
+
+`scripts/docs-nits-threshold-gate.sh` reads it (default **3**) to decide whether `/code`'s auto-select
+should build a docs-nits collector ticket yet: `SKIP` while the collector's own `^NIT` note count is
+below the threshold, `BUILD` once it meets or exceeds it. The count comes from
+`scripts/bd-docs-nit.sh count`'s own `^NIT` line count for that one ticket — a **rough batch-size
+signal**, not an exact nit tally (an addendum line, e.g. `NIT 3 addendum`, counts as its own row). Do
+not add a second parser for a more precise count; the roughness is accepted, per
+[`docs/agents-workflow.md`](agents-workflow.md#wording-only-doc-nits-go-to-the-docs-nits-collector-lode-t551).
+
 ## Build constants (chosen once)
 
 | Knob | Kind | Default | Notes |

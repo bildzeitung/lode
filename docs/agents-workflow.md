@@ -1418,10 +1418,11 @@ the *current instance* in prose, as this paragraph does, is fine — the mechani
 **[`scripts/bd-docs-nit.sh`](../scripts/bd-docs-nit.sh) owns that query** (lode-y86u): call sites run
 `scripts/bd-docs-nit.sh append …` to resolve-and-append and `scripts/bd-docs-nit.sh count` for §2d's
 per-collector tally, rather than re-inlining the `bd list`/`jq` pipeline in markdown where nothing
-gates it. The query, the 0-vs-2+ refusal below, the `NIT` prefix and the `bd dolt push` all live in
-that one script; only the wording-only *discriminator* stays restated per file, because that half is
-genuinely per-stage judgment. The script's optional `--what` flag adds the "What it changes:" clause
-several hand-written notes on the collector already carry — a one-line summary of the effect, never a
+gates it. The query, the lifecycle policy below, the `NIT` prefix and the `bd dolt push` all live in
+that one script (plus its sibling [`scripts/bd-docs-nit-create.sh`](../scripts/bd-docs-nit-create.sh));
+only the wording-only *discriminator* stays restated per file, because that half is genuinely
+per-stage judgment. The script's optional `--what` flag adds the "What it changes:" clause several
+hand-written notes on the collector already carry — a one-line summary of the effect, never a
 substitute for the four mandated fields.
 
 **Note-prefix convention.** Each appended note starts a fresh line with the literal prefix `NIT`, so
@@ -1429,22 +1430,65 @@ substitute for the four mandated fields.
 suffix (`NIT 3`, `NIT 3 addendum`) — §2d counts `^NIT` line starts, so an addendum line counts as its
 own row; the count is a rough batch-size signal, not an exact nit tally.
 
-**Exactly one open collector is expected — 0 and 2+ both mean "report, don't guess."** With **none**
-open, the fallback is the same as before this decision: report the nit as an ordinary finding. No
-agent creates the collector itself; a human opens it. With **two or more**, do not pick one — append
-nothing and report the ambiguity, the same refusal
-[`scripts/sweep-digest-id.sh`](../scripts/sweep-digest-id.sh) makes for the other reserved-label
-singleton (`sweep-digest`). Splitting nits silently across two collectors is the failure this closes:
-a human drains one and the other rots, while `/sweep`'s §2d looks healthy because it lists both.
+**Lifecycle policy (lode-z1n5, reverses the original "0 and 2+ both mean report, don't guess"
+rule).** The original decision above left a gap: once the standing collector closes, nothing opens
+the next one, and every subsequent nit was silently lost. The policy now is:
+
+- **Agent-open on first nit.** `append` resolves against **open** collectors only (an `in_progress`
+  one — a builder has already claimed it for its batch — is invisible to `append`, so nits never keep
+  landing on a batch mid-fix). When it finds **zero** open collectors, it **creates one itself** via
+  `scripts/bd-docs-nit-create.sh` — the standard title `"Docs wording nits: batch fix in the next docs
+  pass"`, the reserved `docs-nits` label, and how-to-add/how-to-fix description text — then appends to
+  it. No agent create is trusted by its own exit status: `bd`'s on-create validation is warn-only
+  (`.beads/config.yaml` `validation.on-create: warn`), so the create script confirms with a follow-up
+  `bd list` instead.
+- **Convergence on every append.** When `append` finds **two or more** open collectors that **all**
+  carry the standard title, it converges without a human: the lexically smallest id survives, every
+  `^NIT` note on each loser migrates (appended) onto the survivor, each loser is closed naming the
+  survivor, and the nit is then appended to the survivor. This covers the same-machine create race,
+  the cross-machine Dolt-sync race, and `/code`'s claim-time successor / `/land`'s reopen-on-close
+  routes into the same state. The human-consolidates refusal now fires **only** when at least one of
+  the 2+ carries a **non-standard** title — that is the signal a human opened one on purpose, and
+  `append` still refuses (exit 1) and reports the ids rather than guessing, the same refusal
+  [`scripts/sweep-digest-id.sh`](../scripts/sweep-digest-id.sh) makes for the other reserved-label
+  singleton (`sweep-digest`).
+- **In-flight collectors stop accumulating.** The moment `/code` dispatches a builder at a collector
+  (claiming it `in_progress`), it opens an empty successor collector first (same create script), so
+  there is never a window where the only collector is the one being drained.
+- **`/land` reopen-on-close is a backstop, not the primary path.** After its close loop, if `/land`
+  has closed a ticket carrying the `docs-nits` label and finds no open collector, it opens one, once
+  per pass, via the same create script — never an inline `bd create` in `SKILL.md`. With the
+  `/code`-side successor open in place this fires only on manual-close / hand-driven paths.
+- **`/code`'s threshold gate.** [`scripts/docs-nits-threshold-gate.sh`](../scripts/docs-nits-threshold-gate.sh)
+  (shaped like `scripts/epic-debate-gate.sh`) takes any candidate id and prints `BUILD <id>` unless
+  the ticket carries `docs-nits` **and** its own `^NIT` count is below `LODE_DOCS_NITS_THRESHOLD`
+  (default 3, documented next to the knob in [`docs/configuration.md`](configuration.md)), in which
+  case it prints `SKIP <id> docs-nits below threshold (n/N)`. `/code` runs it on every candidate that
+  survives the human/epic filter, on the auto-select paths only (bare `/code`, `--all-ready`,
+  `--single`) — `--single` takes the next survivor, same as the human/epic filter. An explicitly-named
+  id (`/code lode-59da`) is an operator override and is never gated.
+- **Declined nits carry over, with an anchor-gone exception.** A nit the batch builder declines to
+  apply is, before hand-off, either re-appended to the successor collector (still wording-only, just
+  not applicable this pass) or filed as its own ticket (a judgment call). It never closes silently
+  with the batch — **except** a nit whose verbatim anchor line is no longer present anywhere in the
+  file: that nit is already fixed (e.g. by an intervening comment-groomer or land), so the builder
+  drops it and says so in the hand-off note. Every nit's disposition — applied / carried over / filed
+  as ticket / dropped as anchor-gone — is listed in the hand-off note.
+- **Scope includes source comments.** Wording-only drift in a shell/Python comment is a docs-nit,
+  same patch shape as a doc-prose nit — `/comment-audit`'s own misleading/drifted smell is unaffected;
+  the overlap is benign because of the anchor-gone rule above (whichever fixes it first, the other
+  finds no anchor and drops it). Comments serving an API/help contract (Typer docstrings, VERBATIM by
+  fiat) stay out of scope.
 
 **This is a deliberate, narrow carve-out** from `/land`'s "never file a bd ticket for an incidental
 discovery" rule ([What I never
-do](../.claude/skills/land/SKILL.md#what-i-never-do)) — it is one human-sanctioned ticket, located by
-label, so it does not reopen the dupe generator that rule exists to kill: there is nothing to dedup
-against, because every nit lands on the same ticket.
+do](../.claude/skills/land/SKILL.md#what-i-never-do)) — it is a collector located by label, so it does
+not reopen the dupe generator that rule exists to kill: even the agent-open path above only ever
+creates the collector, never a one-off ticket for an individual nit, and every append still lands on
+the same collector by construction (converged, if a race briefly produced two).
 
-**`/sweep` is visibility-only here.** Its §2d renders the open collector(s) and each one's `^NIT`
-note count so a human can see when the batch is worth draining; it never enters `$CURRENT`, the
+**`/sweep` is visibility-only here.** Its §2d renders the open/in_progress collector(s) and each one's
+`^NIT` note count so a human can see when the batch is worth draining; it never enters `$CURRENT`, the
 digest, or notify.
 
 Every instruction file implementing this decision links back to this subsection instead of restating

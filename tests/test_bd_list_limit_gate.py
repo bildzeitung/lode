@@ -252,6 +252,22 @@ SKIP_EXECUTED: dict[tuple[str, str], str] = {
         "Same shape as the entry above -- a diagnostic string for a JSON-parse "
         "failure, quoting the command name, not a second invocation."
     ),
+    (
+        "scripts/bd-docs-nit-create.sh",
+        'echo "bd-docs-nit-create.sh: the follow-up \\`bd list --id $id\\` failed" >&2',
+    ): (
+        "A diagnostic string for a FAILED confirm-query bd invocation, quoting the "
+        "command name for a human reading stderr -- not a second invocation. The "
+        "real call just above it carries --limit 0 literally."
+    ),
+    (
+        "scripts/bd-docs-nit-create.sh",
+        'echo "bd-docs-nit-create.sh: follow-up \\`bd list\\` could not confirm $id was created open" >&2',
+    ): (
+        "Same shape as the entry above -- a diagnostic string for a confirm-query "
+        "result that came back empty, quoting the command name, not a second "
+        "invocation."
+    ),
 }
 
 # Prose context: an inline single-backtick span outside any fence.
