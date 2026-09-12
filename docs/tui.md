@@ -463,7 +463,8 @@ Both screens toggle the class themselves (`text_area.set_class(pending, NO_EGRES
 at the same points they change the underlying value -- `on_mount`, the palette command's callback,
 and (Capture only) the post-"Save & new" reset -- rather than the border being computed from a
 reactive watcher. On `CaptureScreen` all three go through the one setter
-(`_set_no_egress_pending`), so state and border cannot be updated apart. There is exactly one value to track per screen (`EditScreen._no_egress`,
+(`_set_no_egress_pending`), so state and border cannot be updated apart. There is exactly one
+value to track per screen (`EditScreen._no_egress`,
 `CaptureScreen._no_egress_pending`), so a watcher would be one more moving part for no gain; a test
 asserting the class matches state after each of those calls is cheaper to write and read than
 threading a `reactive[bool]` through both screens for a single boolean's sake.

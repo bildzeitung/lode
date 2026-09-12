@@ -516,7 +516,8 @@ those sections use, because this section's whole point is the `^NIT`-prefixed no
 collector, not the collector's own title alone (the note-prefix convention `docs/agents-workflow.md`
 above establishes). Listing **every** open collector is deliberate even though the appenders expect
 exactly one (see the docs subsection linked above): a second one appearing is precisely what a human
-needs to see, and this section is the only place it becomes visible. A collector entering or leaving this list, or its count changing, is never a new
+needs to see, and this section is the only place it becomes visible. A collector entering or
+leaving this list, or its count changing, is never a new
 human-decision item — it never enters `$CURRENT`, the digest, or notify; a human decides on their own
 schedule whether the batch is worth draining.
 
@@ -1024,7 +1025,8 @@ real items from the durable record a human relies on.
 
 When the pass ends I report: the one-line summary (§8), the deferred section (§2a, always present),
 the stranded section (§2b, always present), the blocked-human section (§2c, always present), the
-docs-nits section (§2d, always present), the full **NEW HUMAN-DECISION ITEMS** block when `$NEW_IDS` is non-empty (annotated `(deferred)`
+docs-nits section (§2d, always present), the full **NEW HUMAN-DECISION ITEMS** block when
+`$NEW_IDS` is non-empty (annotated `(deferred)`
 per-row where applicable, per §7 — lode-o7ai), and finally — always, last — the **Actionable now**
 section (every non-`deferred` row of `$CURRENT`, in full, every pass — DECIDED lode-8xl2), plus any
 duplicate-digest anomaly and any sub-step that failed. A clean, unchanged queue is a valid, common

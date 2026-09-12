@@ -718,8 +718,8 @@ via the same `iter_bare_jira_key_spans` matcher the save path uses — so
 `jira_projects`/`jira_base_url` as plain values. The activation gate is
 `drawdown._bare_jira_scan_active` itself, applied in exactly one place
 (`bare_jira_open_args`, called by the module's glue function), never a
-second copy of it. A
-cursor inside a pasted URL still yields the URL — the URL spans are matched
+second copy of it. A cursor inside a pasted URL still yields the URL — the
+URL spans are matched
 first — so the two shapes never contend.
 
 ### Confluence: only an id-bearing URL routes (decision F)

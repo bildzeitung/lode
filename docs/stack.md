@@ -200,10 +200,10 @@ only catches a lock that has fallen *behind* a `pyproject.toml` constraint chang
 fallen behind PyPI — uv's preference seeding, described in that same section. Moving the runtime set
 forward is always a deliberate `scripts/update-deps.sh` run, never something CI notices on its own.
 
-**A green promote files a churn-evaluation bd stub, not a finding (`lode-i642`).** Reading upstream
+**A green run files a churn-evaluation bd stub, not a finding (`lode-i642`).** Reading upstream
 changelogs for the packages that moved, and judging required-work-vs-judgment-call in the context of
 lode's actual call sites, worked by hand once (it produced `lode-cai6`) but depends on remembering.
-`scripts/update-deps.sh` now files exactly one bd ticket on its GREEN promote path (step 6 in the
+`scripts/update-deps.sh` now files exactly one bd ticket on its GREEN run path (step 6 in the
 script's own header), carrying the VERSION DIFF it already computed as a durable work order — the
 script never does the evaluation itself. Filing policy for that ticket's own executor is
 **required-only**: open follow-up tickets only for churn that demonstrably breaks or degrades a lode
