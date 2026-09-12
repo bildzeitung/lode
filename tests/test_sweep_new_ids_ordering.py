@@ -39,11 +39,16 @@ from a bash variable/digest read is a per-block question.
 from __future__ import annotations
 
 import shutil
-import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import _CHECKOUT_ROOT, SWEEP_SKILL_BLOCKS, only_block_with, run_block
+from conftest import (
+    _CHECKOUT_ROOT,
+    SWEEP_SKILL_BLOCKS,
+    fake_bd,
+    only_block_with,
+    run_block,
+)
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the skill's fenced blocks shell out to jq"
@@ -161,25 +166,18 @@ def _fake_bd(bin_dir: Path, description: str) -> Path:
     every call, so a `body_file.write_text(...)` takes effect on the NEXT
     `bd show`, exactly as Section 6's real digest rewrite would.
     """
-    fake_bd = bin_dir / "bd"
     body_file = bin_dir / "digest_body.txt"
     body_file.write_text(description)
-    fake_bd.write_text(
-        textwrap.dedent(f"""\
-            #!/usr/bin/env bash
-            set -euo pipefail
-            if [ "$1" = "list" ]; then
-              echo '[{{"id": "lode-dig1", "title": "Human-decision digest"}}]'
-            elif [ "$1" = "show" ]; then
-              body=$(cat {body_file})
-              jq -n --arg d "$body" '[{{"description": $d}}]'
-            else
-              echo "unsupported: $*" >&2
-              exit 1
-            fi
-        """)
+    fake_bd(
+        bin_dir,
+        {
+            "list": 'echo \'[{"id": "lode-dig1", "title": "Human-decision digest"}]\'',
+            "show": f"""
+                body=$(cat {body_file})
+                jq -n --arg d "$body" '[{{"description": $d}}]'
+            """,
+        },
     )
-    fake_bd.chmod(0o755)
     return body_file
 
 

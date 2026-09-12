@@ -107,6 +107,7 @@ from conftest import (
     LAND_SKILL_BLOCKS,
     LAND_SKILL_TEXT,
     bash_fence_blocks,
+    fake_bd,
     fake_bin_env,
     only_block_with,
 )
@@ -1981,11 +1982,7 @@ def _fake_bd_dir(tmp_path: Path) -> Path:
     (Section 1 only calls `bd dolt pull`) with success and nothing else --
     this test exercises the lock/token mechanism, not bd itself."""
     bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
-    fake_bd = bin_dir / "bd"
-    fake_bd.write_text("#!/usr/bin/env bash\nexit 0\n")
-    fake_bd.chmod(0o755)
-    return bin_dir
+    return fake_bd(bin_dir, default="exit 0")
 
 
 def _run_block(block: str, repo: Path, bin_dir: Path) -> subprocess.CompletedProcess:

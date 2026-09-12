@@ -15,11 +15,10 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import fake_bin_env
+from conftest import fake_bd, fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "bd-label-single-id.sh"
@@ -46,22 +45,18 @@ def _run(
     payload.write_text(json.dumps(rows) if rows is not None else "null")
 
     bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
-    log_line = f'echo "$*" >> {call_log}' if call_log is not None else ":"
-    fake_bd = bin_dir / "bd"
-    fake_bd.write_text(
-        textwrap.dedent(f"""\
-            #!/usr/bin/env bash
-            set -euo pipefail
-            {log_line}
-            [ "$1" = "list" ] || {{ echo "unsupported: $*" >&2; exit 1; }}
-            if [ {list_exit} -ne 0 ]; then
-              exit {list_exit}
-            fi
-            cat {payload}
-        """)
+    fake_bd(
+        bin_dir,
+        {
+            "list": f"""
+                if [ {list_exit} -ne 0 ]; then
+                  exit {list_exit}
+                fi
+                cat {payload}
+            """
+        },
+        call_log=call_log,
     )
-    fake_bd.chmod(0o755)
 
     return subprocess.run(
         [str(SCRIPT), *args],

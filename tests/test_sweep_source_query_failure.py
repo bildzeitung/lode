@@ -23,11 +23,16 @@ tests/conftest.py::bash_fence_blocks (lode-kjei).
 from __future__ import annotations
 
 import shutil
-import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import _CHECKOUT_ROOT, SWEEP_SKILL_BLOCKS, only_block_with, run_block
+from conftest import (
+    _CHECKOUT_ROOT,
+    SWEEP_SKILL_BLOCKS,
+    fake_bd,
+    only_block_with,
+    run_block,
+)
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the skill's fenced blocks shell out to jq"
@@ -97,32 +102,14 @@ def _fake_bd(bin_dir: Path, *, failing: str | None) -> None:
     on stdout, non-zero exit (the measured bd 1.1.0 behaviour this whole ticket
     turns on); every other subcommand returns a well-formed empty-ish result.
     """
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    fail_branch = (
-        textwrap.dedent(f"""\
-            if [ "$1" = "{failing}" ]; then
-              echo "Error: simulated bd failure" >&2
-              exit 1
-            fi
-        """)
-        if failing is not None
-        else ""
-    )
-    fake_bd = bin_dir / "bd"
-    fake_bd.write_text(
-        "#!/usr/bin/env bash\nset -uo pipefail\n"
-        + fail_branch
-        + textwrap.dedent("""\
-            if [ "$1" = "human" ]; then
-              # A genuinely empty `bd human list` serializes as literal null,
-              # not [] -- the case the `(. // [])` guard exists for.
-              echo 'null'
-            else
-              echo '[]'
-            fi
-        """)
-    )
-    fake_bd.chmod(0o755)
+    subcommands = {
+        # A genuinely empty `bd human list` serializes as literal null,
+        # not [] -- the case the `(. // [])` guard exists for.
+        "human": "echo 'null'",
+    }
+    if failing is not None:
+        subcommands[failing] = 'echo "Error: simulated bd failure" >&2\nexit 1'
+    fake_bd(bin_dir, subcommands, default="echo '[]'")
 
 
 @pytest.mark.parametrize(
