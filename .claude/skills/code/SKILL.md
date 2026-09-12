@@ -375,6 +375,33 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > `ready-for-code-review` re-entries — both pick up tickets already mid-flight, past this gate, and
    > re-gating them here would strand in-flight work behind a retroactively-applied check.
 
+   > **Auto-select paths only — also gate a docs-nits collector below the batch-worth-building
+   > threshold (lode-z1n5 part 2).** For **every candidate that survives the two filters above** (same
+   > three auto-select paths, same exclusion of explicitly-named IDs), run:
+   >
+   > ```bash
+   > scripts/docs-nits-threshold-gate.sh <candidate-id>
+   > ```
+   >
+   > It prints `BUILD <id>` (not a `docs-nits`-labeled ticket, or its own `^NIT` count already meets
+   > `LODE_DOCS_NITS_THRESHOLD`, default 3 — [`docs/configuration.md`](../../../docs/configuration.md))
+   > or `SKIP <id> docs-nits below threshold (n/N)`. Keep every `BUILD` in the buildable set; **report
+   > every `SKIP`** — id + reason — in step 5's skip list, right alongside the `human`/epic and
+   > epic-debate skips. **`--single` takes the next survivor** exactly as the human/epic filter does —
+   > a skipped collector is not "dispatch nothing," it just isn't buildable *yet*. The gate is
+   > read-only (`bd show` + `scripts/bd-docs-nit.sh count`, itself read-only); it never writes bd
+   > state.
+   >
+   > **At the point a docs-nits collector *is* claimed for dispatch — any path, an explicitly-named id
+   > included — open its empty successor collector first (lode-z1n5 part 3),** unconditional, unlike
+   > the threshold gate above which only runs on the auto-select paths (an explicitly-named dispatch,
+   > `/code lode-59da`, skips the gate but still needs this). The claim call below (right after this
+   > step's own `bd update <id> --claim`) is where this actually runs — see the note right under it.
+   > This never contends with `scripts/bd-docs-nit.sh append`'s own create-on-zero path (part 1) or
+   > `/land`'s reopen-on-close (part 4) — a resulting 2+-open-collectors race is exactly what append's
+   > convergence step exists to resolve on the next append, no different from any other create race
+   > this policy already tolerates.
+
 3. **Phase 1 — dispatch one `coding` builder per task** via the Agent tool with
    `subagent_type: "coding"` — **no call-site `isolation` option.** A subagent is pinned at the repo
    root and **cannot** call `EnterWorktree` to *create* its own, so it needs the harness to hand it a
@@ -410,6 +437,15 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > names a task, not a ticket, and the builder files the issue and claims it itself. Claiming here is
    > what actually makes the `in_progress` invariant that steps 0/1 and Phase 2 assume hold true, rather
    > than assumed.
+
+   > **If the just-claimed ticket carries the `docs-nits` label, open its empty successor collector
+   > right here (lode-z1n5 part 3)** — unconditional on every path, an explicitly-named id included,
+   > since the claim above just made this collector `in_progress` and therefore invisible to
+   > `scripts/bd-docs-nit.sh append`'s open-only resolve:
+   >
+   > ```bash
+   > scripts/bd-docs-nit-create.sh
+   > ```
 
    - **Solo** (`/code <id>`, `/code --single`, free-text): dispatch **exactly one** builder in the
      foreground.
@@ -536,7 +572,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    say so — which cap value was in effect and roughly how the queue drained — so a fan-out that took
    longer than the ticket count alone would suggest isn't mistaken for a stall. On an auto-select run
    (no argument, `--all-ready`, or `--single`), also report **every ticket the `human`/epic filter
-   passed over** — id + reason (`human`-labeled or epic). You did that filtering yourself in step 2 on
+   passed over** — id + reason (`human`-labeled or epic), every ticket the epic-debate gate skipped —
+   id + `epic not debated (<epic-id>)`, and every docs-nits collector the threshold gate skipped — id +
+   `docs-nits below threshold (n/N)`. You did that filtering yourself in step 2 on
    all three paths, so report it directly. Say so explicitly **even when nothing was
    skipped** ("no `human`/epic tickets on the frontier"), so the operator can tell a filter that found
    nothing from a filter that never ran. Mention the launch-worktree reclaims (lode-vs7g) only as a

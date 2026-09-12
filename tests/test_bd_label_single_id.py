@@ -198,3 +198,27 @@ def test_all_flag_is_forwarded_to_bd_list_only_when_asked(
     assert "--label some-label" in call
     assert "--limit 0" in call
     assert ("--all" in call) is expect_all
+
+
+def test_status_flag_is_opt_in_and_forwarded_when_given(tmp_path: Path) -> None:
+    """--status (lode-z1n5) is OPT-IN: omitted entirely unless a caller passes
+    it, so sweep-digest-id.sh (which never passes it) sees no behavior change
+    -- test_all_flag_is_forwarded... above already pins that the no-args call
+    carries no --status at all."""
+    call_log = tmp_path / "call.log"
+    r = _run(
+        tmp_path,
+        ["some-label", "--status", "open"],
+        [{"id": "lode-abc1", "title": "x"}],
+        call_log=call_log,
+    )
+    assert r.returncode == 0, r.stderr
+    call = call_log.read_text().strip()
+    assert "--status open" in call
+
+
+def test_status_flag_with_no_value_is_exit_2(tmp_path: Path) -> None:
+    r = _run(tmp_path, ["some-label", "--status"], [])
+    assert r.returncode == 2
+    assert r.stdout == ""
+    assert "requires a value" in r.stderr

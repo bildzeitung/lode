@@ -81,6 +81,8 @@ scripts/epic-completion-check.sh
 scripts/epic-debate-gate.sh
 scripts/sweep-digest-id.sh
 scripts/bd-docs-nit.sh
+scripts/bd-docs-nit-create.sh
+scripts/docs-nits-threshold-gate.sh
 scripts/code-concurrency-cap.sh
 scripts/bd-dolt-push.sh
 scripts/python-init.sh
