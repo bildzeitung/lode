@@ -42,11 +42,10 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import fake_bin_env
+from conftest import fake_bd, fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "epic-completion-check.sh"
@@ -73,37 +72,22 @@ def _fake_bd(
     list_path.write_text(json.dumps(list_fixtures))
 
     bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
-
-    fake_bd = bin_dir / "bd"
-    fake_bd.write_text(
-        textwrap.dedent(f"""\
-            #!/usr/bin/env bash
-            # Fake `bd show`/`bd list --parent` for testing epic-completion-check.sh.
-            set -euo pipefail
-            case "$1" in
-              show)
+    return fake_bd(
+        bin_dir,
+        {
+            "show": f"""
                 id="$2"
-                jq -c --arg id "$id" \\
-                  '.[$id] // error("no show fixture for \\($id)")' "{show_path}"
-                ;;
-              list)
+                jq -c --arg id "$id" '.[$id] // error("no show fixture for \\($id)")' "{show_path}"
+            """,
+            "list": f"""
                 # invoked as: bd list --parent <id> --all --limit 0 --json
                 # -- the id is $3, so a new flag must go AFTER it (inserting one
                 # before --parent shifts $3 and fails these tests loudly).
                 parent="$3"
-                jq -c --arg id "$parent" \\
-                  '.[$id] // error("no list fixture for \\($id)")' "{list_path}"
-                ;;
-              *)
-                echo "unsupported: $*" >&2
-                exit 1
-                ;;
-            esac
-            """)
+                jq -c --arg id "$parent" '.[$id] // error("no list fixture for \\($id)")' "{list_path}"
+            """,
+        },
     )
-    fake_bd.chmod(0o755)
-    return bin_dir
 
 
 def _run(

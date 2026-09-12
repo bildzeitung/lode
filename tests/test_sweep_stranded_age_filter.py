@@ -32,7 +32,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import _CHECKOUT_ROOT, SWEEP_SKILL_BLOCKS, only_block_with, run_block
+from conftest import (
+    _CHECKOUT_ROOT,
+    SWEEP_SKILL_BLOCKS,
+    fake_bd,
+    only_block_with,
+    run_block,
+)
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the skill's fenced blocks shell out to jq"
@@ -79,20 +85,11 @@ def _fake_bd(bin_dir: Path, rows: list[dict]) -> None:
     The heredoc terminator must stay at column 0 -- the payload is interpolated
     unindented and `<<'JSON'` (not `<<-`) matches only an unindented terminator.
     """
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    fake_bd = bin_dir / "bd"
-    fake_bd.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -uo pipefail\n"
-        'if [ "$1" = "list" ]; then\n'
-        "  cat <<'JSON'\n"
-        f"{json.dumps(rows)}\n"
-        "JSON\n"
-        "else\n"
-        "  echo '[]'\n"
-        "fi\n"
+    fake_bd(
+        bin_dir,
+        {"list": "cat <<'JSON'\n" + json.dumps(rows) + "\nJSON"},
+        default="echo '[]'",
     )
-    fake_bd.chmod(0o755)
 
 
 def _rows() -> list[dict]:

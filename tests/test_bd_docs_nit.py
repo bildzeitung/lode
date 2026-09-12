@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -24,6 +23,7 @@ from conftest import (
     CODING_AGENT_TEXT,
     LAND_SKILL_TEXT,
     SWEEP_SKILL_BLOCKS,
+    fake_bd,
     fake_bin_env,
     non_comment_fence_body,
 )
@@ -54,30 +54,24 @@ def _fake_bd(
     payload.write_text(json.dumps(list_rows) if list_rows is not None else "null")
     update_log = bin_dir / "update.log"
     update_exit = "0" if update_ok else "1"
-    fake_bd = bin_dir / "bd"
-    fake_bd.write_text(
-        textwrap.dedent(f"""\
-            #!/usr/bin/env bash
-            set -euo pipefail
-            if [ "$1" = "list" ]; then
-              if [ {list_exit} -ne 0 ]; then
-                exit {list_exit}
-              fi
-              cat {payload}
-              exit 0
-            fi
-            if [ "$1" = "update" ]; then
-              id="$2"
-              # --append-notes is the last argument in every call site.
-              note="${{@: -1}}"
-              printf '%s\\n---\\n%s\\n===\\n' "$id" "$note" >> {update_log}
-              exit {update_exit}
-            fi
-            echo "unsupported: $*" >&2
-            exit 1
-        """)
+    fake_bd(
+        bin_dir,
+        {
+            "list": f"""
+                if [ {list_exit} -ne 0 ]; then
+                  exit {list_exit}
+                fi
+                cat {payload}
+            """,
+            "update": f"""
+                id="$2"
+                # --append-notes is the last argument in every call site.
+                note="${{@: -1}}"
+                printf '%s\\n---\\n%s\\n===\\n' "$id" "$note" >> {update_log}
+                exit {update_exit}
+            """,
+        },
     )
-    fake_bd.chmod(0o755)
 
 
 def _fake_dolt_push(bin_dir: Path, *, ok: bool = True) -> Path:

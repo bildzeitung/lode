@@ -42,11 +42,10 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import fake_bin_env
+from conftest import fake_bd, fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GUARD_SCRIPT = REPO_ROOT / "scripts" / "bd-dolt-push-guard.sh"
@@ -56,62 +55,47 @@ pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the guard shells out to jq"
 )
 
-FAKE_BD_SOURCE = textwrap.dedent("""\
-    #!/usr/bin/env bash
-    # Fake `bd` for testing bd-dolt-push-guard.sh / bd-dolt-push.sh. Behavior
-    # is driven entirely by env vars so tests need no fixture files.
-    # `set -u` (as in the sibling shims) so a future test that forgets to set an
-    # env var fails loudly here rather than handing back a silently-empty
-    # payload that looks like a legitimate "cannot assess" fail-open.
-    set -euo pipefail
-    case "$1" in
-      where)
-        exit_code="${BD_FAKE_WHERE_EXIT:-0}"
-        if [ "$exit_code" != "0" ]; then
-          echo "fake bd: where forced failure" >&2
-          exit "$exit_code"
-        fi
-        printf '%s' "$BD_FAKE_WHERE_JSON"
+# Behavior is driven entirely by env vars so tests need no fixture files.
+_WHERE_BODY = """
+    exit_code="${BD_FAKE_WHERE_EXIT:-0}"
+    if [ "$exit_code" != "0" ]; then
+      echo "fake bd: where forced failure" >&2
+      exit "$exit_code"
+    fi
+    printf '%s' "$BD_FAKE_WHERE_JSON"
+"""
+_COUNT_BODY = """
+    exit_code="${BD_FAKE_COUNT_EXIT:-0}"
+    if [ "$exit_code" != "0" ]; then
+      echo "fake bd: count forced failure" >&2
+      exit "$exit_code"
+    fi
+    printf '%s' "$BD_FAKE_COUNT_JSON"
+"""
+_DOLT_BODY = """
+    case "$2" in
+      push)
+        echo "push-called" >>"$BD_FAKE_CALL_LOG"
+        exit "${BD_FAKE_PUSH_EXIT:-0}"
         ;;
-      count)
-        exit_code="${BD_FAKE_COUNT_EXIT:-0}"
-        if [ "$exit_code" != "0" ]; then
-          echo "fake bd: count forced failure" >&2
-          exit "$exit_code"
-        fi
-        printf '%s' "$BD_FAKE_COUNT_JSON"
-        ;;
-      dolt)
-        case "$2" in
-          push)
-            echo "push-called" >>"$BD_FAKE_CALL_LOG"
-            exit "${BD_FAKE_PUSH_EXIT:-0}"
-            ;;
-          pull)
-            echo "pull-called" >>"$BD_FAKE_CALL_LOG"
-            exit "${BD_FAKE_PULL_EXIT:-0}"
-            ;;
-          *)
-            echo "fake bd: unsupported dolt subcommand: $*" >&2
-            exit 1
-            ;;
-        esac
+      pull)
+        echo "pull-called" >>"$BD_FAKE_CALL_LOG"
+        exit "${BD_FAKE_PULL_EXIT:-0}"
         ;;
       *)
-        echo "fake bd: unsupported: $*" >&2
+        echo "fake bd: unsupported dolt subcommand: $*" >&2
         exit 1
         ;;
     esac
-    """)
+"""
 
 
 def _fake_bin(tmp_path: Path) -> Path:
     bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir(exist_ok=True)
-    fake_bd = bin_dir / "bd"
-    fake_bd.write_text(FAKE_BD_SOURCE)
-    fake_bd.chmod(0o755)
-    return bin_dir
+    return fake_bd(
+        bin_dir,
+        {"where": _WHERE_BODY, "count": _COUNT_BODY, "dolt": _DOLT_BODY},
+    )
 
 
 def _db_dir(tmp_path: Path) -> Path:

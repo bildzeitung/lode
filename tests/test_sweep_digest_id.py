@@ -26,6 +26,7 @@ import pytest
 from conftest import (
     SWEEP_SKILL_BLOCKS,
     bash_fence_blocks,
+    fake_bd,
     fake_bin_env,
     non_comment_fence_body,
 )
@@ -46,16 +47,7 @@ def _run(tmp_path: Path, rows: object) -> subprocess.CompletedProcess[str]:
 
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir()
-    fake_bd = bin_dir / "bd"
-    fake_bd.write_text(
-        textwrap.dedent(f"""\
-            #!/usr/bin/env bash
-            set -euo pipefail
-            [ "$1" = "list" ] || {{ echo "unsupported: $*" >&2; exit 1; }}
-            cat {payload}
-        """)
-    )
-    fake_bd.chmod(0o755)
+    fake_bd(bin_dir, {"list": f"cat {payload}"})
 
     return subprocess.run(
         [str(SCRIPT)],
@@ -134,9 +126,7 @@ def test_bd_failure_is_exit_2_not_exit_1(tmp_path: Path) -> None:
     hard precondition exists for."""
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir()
-    fake_bd = bin_dir / "bd"
-    fake_bd.write_text("#!/usr/bin/env bash\nexit 3\n")
-    fake_bd.chmod(0o755)
+    fake_bd(bin_dir, default="exit 3")
     r = subprocess.run(
         [str(SCRIPT)],
         capture_output=True,

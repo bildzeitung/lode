@@ -177,6 +177,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import traceback
@@ -1821,6 +1822,55 @@ def only_block_with(blocks: list[str], *needles: str, what: str) -> str:
         "hand before adjusting the locator"
     )
     return hits[0]
+
+
+def fake_bd(
+    bin_dir: Path,
+    subcommands: dict[str, str] | None = None,
+    *,
+    default: str | None = None,
+    call_log: Path | None = None,
+    prelude: str = "",
+) -> Path:
+    """Write an executable ``bd`` shim into ``bin_dir`` (for :func:`fake_bin_env`
+    to put on ``PATH``) and return ``bin_dir`` (lode-ww8o).
+
+    ``subcommands`` maps a subcommand name (``bd``'s ``$1``) to the bash body
+    run for it -- the part every call site supplies itself, since it differs
+    too much (a canned JSON payload, a fixture lookup by id, a multi-call
+    script) to unify further. A subcommand with no matching body falls
+    through to ``default`` (its own bash body) when given, else to the
+    "unsupported: $*" / exit 1 refusal every fake ``bd`` wants for a
+    subcommand it never expected to see. ``call_log``, when given, has each
+    invocation's full argv appended to that file before dispatch -- the only
+    way a caller can assert on flags the script under test passes rather than
+    on what it prints. ``prelude``, when given, is bash spliced in before
+    dispatch, for a fault-injection branch that must run -- and can override
+    -- ahead of the ordinary per-subcommand handling.
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    log_line = f'echo "$*" >> {call_log}\n' if call_log is not None else ""
+    fallback = (
+        textwrap.dedent(default).strip("\n")
+        if default is not None
+        else 'echo "unsupported: $*" >&2\nexit 1'
+    )
+    branches = list((subcommands or {}).items())
+    if branches:
+        dispatch = ""
+        for i, (name, body) in enumerate(branches):
+            keyword = "if" if i == 0 else "elif"
+            dispatch += f'{keyword} [ "$1" = "{name}" ]; then\n'
+            dispatch += textwrap.dedent(body).strip("\n") + "\n"
+        dispatch += f"else\n{fallback}\nfi\n"
+    else:
+        dispatch = fallback + "\n"
+    fake_bd_path = bin_dir / "bd"
+    fake_bd_path.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n" + log_line + prelude + dispatch
+    )
+    fake_bd_path.chmod(0o755)
+    return bin_dir
 
 
 def fake_bin_env(bin_dir: Path) -> dict[str, str]:

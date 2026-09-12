@@ -44,11 +44,10 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import fake_bin_env
+from conftest import fake_bd, fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "blocks-dependents.sh"
@@ -67,31 +66,24 @@ def _fake_bd(tmp_path: Path, show_fixtures: dict[str, list[dict]]) -> Path:
     show_path.write_text(json.dumps(show_fixtures))
 
     bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
-
-    fake_bd = bin_dir / "bd"
-    fake_bd.write_text(
-        textwrap.dedent(f"""\
-            #!/usr/bin/env bash
-            # Fake `bd show <id> --json --include-dependents` for testing
-            # blocks-dependents.sh. Deliberately rejects any invocation that
-            # drops --include-dependents, so a script regression that removes
-            # the flag fails LOUDLY here instead of silently returning [].
-            set -euo pipefail
-            [ "$1" = "show" ] || {{ echo "unsupported: $*" >&2; exit 1; }}
-            id="$2"
-            shift 2
-            case " $* " in
-              *" --include-dependents "*) ;;
-              *) echo "fake bd: refusing bd show without --include-dependents" >&2
-                 exit 1 ;;
-            esac
-            jq -c --arg id "$id" \\
-              '.[$id] // error("no show fixture for \\($id)")' "{show_path}"
-            """)
+    return fake_bd(
+        bin_dir,
+        {
+            # Deliberately rejects any invocation that drops
+            # --include-dependents, so a script regression that removes the
+            # flag fails LOUDLY here instead of silently returning [].
+            "show": f"""
+                id="$2"
+                shift 2
+                case " $* " in
+                  *" --include-dependents "*) ;;
+                  *) echo "fake bd: refusing bd show without --include-dependents" >&2
+                     exit 1 ;;
+                esac
+                jq -c --arg id "$id" '.[$id] // error("no show fixture for \\($id)")' "{show_path}"
+            """
+        },
     )
-    fake_bd.chmod(0o755)
-    return bin_dir
 
 
 def _run(

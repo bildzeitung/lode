@@ -20,11 +20,10 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import fake_bin_env
+from conftest import fake_bd, fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "epic-debate-gate.sh"
@@ -64,21 +63,15 @@ def _fake_bd(tmp_path: Path, fixtures: dict[str, list[dict]]) -> Path:
     fixtures_path.write_text(json.dumps(fixtures))
 
     bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
-
-    fake_bd = bin_dir / "bd"
-    fake_bd.write_text(
-        textwrap.dedent(f"""\
-            #!/usr/bin/env bash
-            # Fake `bd show <id> --json` for testing epic-debate-gate.sh.
-            set -euo pipefail
-            [ "$1" = "show" ] || {{ echo "unsupported: $*" >&2; exit 1; }}
-            id="$2"
-            jq -c --arg id "$id" '.[$id] // error("no fixture for \\($id)")' "{fixtures_path}"
-            """)
+    return fake_bd(
+        bin_dir,
+        {
+            "show": f"""
+                id="$2"
+                jq -c --arg id "$id" '.[$id] // error("no fixture for \\($id)")' "{fixtures_path}"
+            """
+        },
     )
-    fake_bd.chmod(0o755)
-    return bin_dir
 
 
 def _run(
