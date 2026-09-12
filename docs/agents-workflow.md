@@ -2303,7 +2303,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 |---|---|
 | Default branch | `trunk` — **never** edit directly *and never landed by a producer*; `/land` owns every write to it |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured), pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
-| Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr) |
+| Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr); a reviewer/pickup launch worktree's harness lock is not reliably cleared on agent exit, so `/code`'s per-ticket reclaim (`scripts/code-reclaim-launch-worktree.sh`) unlocks it itself when the lock reason names that worktree's own directory, on the orchestrator's own completion evidence (lode-7ndi) |
 | Isolation guard | builder, reviewer, and `land-review` all run `scripts/isolation-guard.sh` (lode-ska2) as their FIRST action, before even the recycled-worktree guard — the harness has been observed handing a dispatched agent NO worktree at all (cwd on the main checkout, on `trunk`); a failure is a hard stop, never a self-provisioned `git worktree add` — [full account above](#isolation-guard-lode-ska2--lode-jk44) (lode-ska2, lode-jk44) |
 | Isolation guard (mid-session) | builder and reviewer also re-run `scripts/isolation-guard.sh` immediately before their first mutating `Edit`/`Write`, and again before the builder's first `git commit` / the reviewer's gate loop — a worktree can pass both start-of-cycle guards and still be destroyed mid-session (observed under a resumed `SendMessage` turn), after which a `git commit` silently lands **on `trunk`**. The toplevel is substituted inline, never carried across fenced blocks (lode-lv04). A markdown checkpoint is a mitigation, not the structurally correct altitude — a `PreToolUse` hook is that altitude, and it now ships as `scripts/trunk-write-guard.sh` (lode-p8zl, [below](#isolation-guard-mid-session-re-assertion-lode-6wgc)) — [full account above](#isolation-guard-mid-session-re-assertion-lode-6wgc) (lode-6wgc) |
 | Recycled-worktree guard | **Canonical row (lode-zt62) — `coding.md`'s and `code-reviewer.md`'s quick cards link here rather than restate it.** Builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>` — the ref belongs to another ticket), resets onto `origin/trunk` HEAD (never bare local `trunk`, which `/land` can leave carrying un-pushed, un-gated merges for its whole merge window — lode-isl3) — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. `git clean -fd` then runs **unconditionally**, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef` was investigated (lode-r7ow) and its reuse semantics found to be a documented, mechanism-level match for the recycling; the human decision to switch it has since been made and applied — it is now the explicit `"fresh"` (lode-jzbz), not the harness default by omission — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow, lode-jzbz, lode-3v1p, lode-isl3, lode-ivth) |
@@ -3078,6 +3078,33 @@ time the pickup returns, its worktree holds nothing `origin/land/<id>` doesn't a
 backstops 1-4 stay untouched as a partial net (they still only reach a branch that eventually merges).
 Same mechanism, same reasoning, applies to `code-reviewer`'s launch worktree (Phase 2 and the step-1
 stranded-review sweep) — see `.claude/skills/code/SKILL.md` and `docs/decisions.md`'s lode-vs7g entry.
+
+**The reclaim's premise — "the harness unlocks a launch worktree on agent exit, so a still-locked one
+just means wait" — is falsified in production (lode-7ndi).** Observed: one of two finished
+`code-reviewer` dispatches stayed locked for 10+ minutes after its completion notification, and a
+60-second retry loop of the single `--force` never cleared it. The lock's pid + starttime token is
+the **orchestrating session's own**, not the agent's (already measured independently, lode-yrtu) — so
+while that session stays alive, nothing (this reclaim, `/land`'s sweep, `worktree-lock-stale.sh`) can
+ever prove the pid dead; a lock like this is invisible to every existing backstop for the whole
+session's lifetime. But the orchestrator holds evidence no liveness probe can: the completion
+notification for that exact agent, naming the worktree that is now definitely finished. The reclaim
+therefore acts on that positive evidence instead of waiting on the harness: it unlocks a worktree
+whose lock reason names **its own** directory (`agent-<dirname>`) before the single-`--force` remove,
+and leaves alone — reporting, never touching — a lock whose reason names anything else (a human's own
+lock, a lock recorded with no reason at all, or any reason that doesn't match). **The safety of that
+unlock is entirely in the CALL TIMING, which the script cannot verify**: a running agent's launch
+lock is indistinguishable from a finished one's, so the reclaim runs only after the completion
+notification for that exact agent — never speculatively. The old single-`--force` rule made an early
+call structurally harmless; this one does not, and that trade is the price of reclaiming a lock the
+harness never clears. The destructive calls (`git worktree unlock`, `remove
+--force`, `branch -D`) live in `scripts/code-reclaim-launch-worktree.sh` (shellcheck'd,
+`tests/test_code_reclaim_launch_worktree.py` against real git repos), not inline in
+`.claude/skills/code/SKILL.md` — the same "destructive shell in a markdown fence gets neither
+shellcheck nor a unit test" reasoning that moved `/land`'s own worktree GC out of prose
+(lode-9owc/lode-h1vn). `/land`'s sweep and `worktree-lock-stale.sh` are untouched: their stale-session
+path (proving a *dead* pid via `/proc` starttime comparison) is a different, still-correct predicate
+for the case where the orchestrator itself is gone — this fix only covers the case where the
+orchestrator is alive and holds the evidence the sweep structurally cannot.
 
 ### Stacked land branches (lode-02v)
 

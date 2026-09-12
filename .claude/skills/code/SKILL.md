@@ -177,18 +177,13 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    left for the ticket to land. **This same block is the reclaim referenced by step 1 and Phase 2
    below; it is the only copy.** I don't need the agent to tell me *which* worktree was its own — since
    lode-em6v every reviewer / rebase pickup checks the branch out as `land/<id>--<its-own-worktree-dir>`,
-   so the ticket id alone **derives** both the path and the branch:
+   so the ticket id alone **derives** both the path and the branch. The destructive calls
+   (`git worktree unlock`/`remove --force`, `git branch -D`) live in a `scripts/` helper, not inline
+   here — the same reasoning that moved `/land`'s worktree GC out of markdown (lode-9owc/lode-h1vn):
 
    ```bash
    ID=lode-ai1   # the ticket I just dispatched at
-   git worktree list --porcelain | awk '
-     /^worktree /{p=$2} /^branch /{sub("refs/heads/","",$2); print p"\t"$2}' \
-   | while IFS="$(printf '\t')" read -r WT BR; do
-       case "$BR" in "land/$ID--"*)
-         git worktree remove --force "$WT" 2>/dev/null   # single -f: fails SAFE if still locked
-         git branch -D "$BR" >/dev/null 2>&1 || true ;;  # worktree first — git won't delete a
-       esac                                              # branch that's still checked out
-     done
+   scripts/code-reclaim-launch-worktree.sh "$ID"
    ```
 
    Deriving rather than trusting a reported string is what makes this **actually** close the leak: it
@@ -200,12 +195,23 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    *all* local worktree GC (it discovers worktrees live off `git worktree list --porcelain`; the old
    per-ticket loop that keyed off `review_worktree` is gone).
 
-   One detail that is load-bearing, verified against live `git` behaviour:
-   - **A single `--force`, never `-f -f`.** The harness *locks* a launch worktree while its agent runs
-     (`locked claude agent <name> (pid …)`) and unlocks it on exit. A single `--force` therefore removes
-     a finished agent's worktree but **refuses** a still-locked one — it fails safe. `-f -f` would
-     override the lock and rip the worktree out from under a live agent; if a reclaim ever looks like a
-     no-op, the agent is still running, and the answer is to wait, not to escalate the flag.
+   **The harness does not reliably unlock a launch worktree on agent exit (lode-7ndi) — a task
+   notification means the agent has stopped, not that the lock is clear.** Measured one-of-two in
+   production: one finished dispatch stayed locked for 10+ minutes, and the lock's pid + starttime
+   token is the *orchestrating session's own*, not the agent's (already known independently,
+   lode-yrtu) — so while I stay alive, nothing can ever prove that pid dead. I hold better evidence
+   than any liveness probe: the completion notification for that exact agent. So the helper, on
+   that evidence alone, unlocks a worktree whose lock reason names **its own** directory, then does
+   the single-`--force` remove — never `-f -f`, and never touching a lock whose reason names anything
+   else (a human's own lock, or a lock recorded with no reason at all, is left alone and reported).
+
+   **That unlock is only safe because of WHEN I call it, and the script cannot check that for me:**
+   the lock reason of a *running* agent's worktree looks identical to a finished one's, so the
+   completion notification is the whole of the evidence. Run it **only** after collecting that
+   agent's result — never speculatively, never "to see if it's done", never on a ticket whose
+   dispatch is still outstanding. Called early, it would rip a live agent's worktree out from under
+   it, which is exactly what the old single-`--force` rule made structurally impossible and this one
+   does not.
 
    Safe on **both** outcomes: by the time the agent returns, everything in its worktree is already on
    `origin/land/<id>` — a clean pickup pushes first, and an escalation's aborted merge leaves the
