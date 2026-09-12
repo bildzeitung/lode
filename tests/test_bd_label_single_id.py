@@ -45,7 +45,6 @@ def _run(
     payload.write_text(json.dumps(rows) if rows is not None else "null")
 
     bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
     fake_bd(
         bin_dir,
         {

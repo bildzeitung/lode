@@ -1830,7 +1830,6 @@ def fake_bd(
     *,
     default: str | None = None,
     call_log: Path | None = None,
-    prelude: str = "",
 ) -> Path:
     """Write an executable ``bd`` shim into ``bin_dir`` (for :func:`fake_bin_env`
     to put on ``PATH``) and return ``bin_dir`` (lode-ww8o).
@@ -1844,9 +1843,10 @@ def fake_bd(
     subcommand it never expected to see. ``call_log``, when given, has each
     invocation's full argv appended to that file before dispatch -- the only
     way a caller can assert on flags the script under test passes rather than
-    on what it prints. ``prelude``, when given, is bash spliced in before
-    dispatch, for a fault-injection branch that must run -- and can override
-    -- ahead of the ordinary per-subcommand handling.
+    on what it prints.
+
+    ``$1`` is read as ``${1-}`` so a shim built with ``default`` alone still
+    tolerates a zero-argument invocation under ``set -u``.
     """
     bin_dir.mkdir(parents=True, exist_ok=True)
     log_line = f'echo "$*" >> {call_log}\n' if call_log is not None else ""
@@ -1855,19 +1855,13 @@ def fake_bd(
         if default is not None
         else 'echo "unsupported: $*" >&2\nexit 1'
     )
-    branches = list((subcommands or {}).items())
-    if branches:
-        dispatch = ""
-        for i, (name, body) in enumerate(branches):
-            keyword = "if" if i == 0 else "elif"
-            dispatch += f'{keyword} [ "$1" = "{name}" ]; then\n'
-            dispatch += textwrap.dedent(body).strip("\n") + "\n"
-        dispatch += f"else\n{fallback}\nfi\n"
-    else:
-        dispatch = fallback + "\n"
+    dispatch = 'case "${1-}" in\n'
+    for name, body in (subcommands or {}).items():
+        dispatch += f"{name})\n" + textwrap.dedent(body).strip("\n") + "\n;;\n"
+    dispatch += f"*)\n{fallback}\n;;\nesac\n"
     fake_bd_path = bin_dir / "bd"
     fake_bd_path.write_text(
-        "#!/usr/bin/env bash\nset -euo pipefail\n" + log_line + prelude + dispatch
+        "#!/usr/bin/env bash\nset -euo pipefail\n" + log_line + dispatch
     )
     fake_bd_path.chmod(0o755)
     return bin_dir

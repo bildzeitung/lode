@@ -46,7 +46,6 @@ def _run(tmp_path: Path, rows: object) -> subprocess.CompletedProcess[str]:
     payload.write_text(json.dumps(rows) if rows is not None else "null")
 
     bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
     fake_bd(bin_dir, {"list": f"cat {payload}"})
 
     return subprocess.run(
@@ -125,7 +124,6 @@ def test_bd_failure_is_exit_2_not_exit_1(tmp_path: Path) -> None:
     "a failed query is indistinguishable from an empty one" hazard section 5's
     hard precondition exists for."""
     bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
     fake_bd(bin_dir, default="exit 3")
     r = subprocess.run(
         [str(SCRIPT)],

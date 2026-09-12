@@ -23,7 +23,6 @@ tests/conftest.py::bash_fence_blocks (lode-kjei).
 from __future__ import annotations
 
 import shutil
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -103,26 +102,14 @@ def _fake_bd(bin_dir: Path, *, failing: str | None) -> None:
     on stdout, non-zero exit (the measured bd 1.1.0 behaviour this whole ticket
     turns on); every other subcommand returns a well-formed empty-ish result.
     """
-    fail_branch = (
-        textwrap.dedent(f"""\
-            if [ "$1" = "{failing}" ]; then
-              echo "Error: simulated bd failure" >&2
-              exit 1
-            fi
-        """)
-        if failing is not None
-        else ""
-    )
-    fake_bd(
-        bin_dir,
-        {
-            # A genuinely empty `bd human list` serializes as literal null,
-            # not [] -- the case the `(. // [])` guard exists for.
-            "human": "echo 'null'",
-        },
-        default="echo '[]'",
-        prelude=fail_branch,
-    )
+    subcommands = {
+        # A genuinely empty `bd human list` serializes as literal null,
+        # not [] -- the case the `(. // [])` guard exists for.
+        "human": "echo 'null'",
+    }
+    if failing is not None:
+        subcommands[failing] = 'echo "Error: simulated bd failure" >&2\nexit 1'
+    fake_bd(bin_dir, subcommands, default="echo '[]'")
 
 
 @pytest.mark.parametrize(
