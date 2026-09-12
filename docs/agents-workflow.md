@@ -3091,7 +3091,12 @@ notification for that exact agent, naming the worktree that is now definitely fi
 therefore acts on that positive evidence instead of waiting on the harness: it unlocks a worktree
 whose lock reason names **its own** directory (`agent-<dirname>`) before the single-`--force` remove,
 and leaves alone — reporting, never touching — a lock whose reason names anything else (a human's own
-lock, or any reason that doesn't match). The destructive calls (`git worktree unlock`, `remove
+lock, a lock recorded with no reason at all, or any reason that doesn't match). **The safety of that
+unlock is entirely in the CALL TIMING, which the script cannot verify**: a running agent's launch
+lock is indistinguishable from a finished one's, so the reclaim runs only after the completion
+notification for that exact agent — never speculatively. The old single-`--force` rule made an early
+call structurally harmless; this one does not, and that trade is the price of reclaiming a lock the
+harness never clears. The destructive calls (`git worktree unlock`, `remove
 --force`, `branch -D`) live in `scripts/code-reclaim-launch-worktree.sh` (shellcheck'd,
 `tests/test_code_reclaim_launch_worktree.py` against real git repos), not inline in
 `.claude/skills/code/SKILL.md` — the same "destructive shell in a markdown fence gets neither

@@ -203,7 +203,15 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    than any liveness probe: the completion notification for that exact agent. So the helper, on
    that evidence alone, unlocks a worktree whose lock reason names **its own** directory, then does
    the single-`--force` remove — never `-f -f`, and never touching a lock whose reason names anything
-   else (a human's own lock is left alone and reported).
+   else (a human's own lock, or a lock recorded with no reason at all, is left alone and reported).
+
+   **That unlock is only safe because of WHEN I call it, and the script cannot check that for me:**
+   the lock reason of a *running* agent's worktree looks identical to a finished one's, so the
+   completion notification is the whole of the evidence. Run it **only** after collecting that
+   agent's result — never speculatively, never "to see if it's done", never on a ticket whose
+   dispatch is still outstanding. Called early, it would rip a live agent's worktree out from under
+   it, which is exactly what the old single-`--force` rule made structurally impossible and this one
+   does not.
 
    Safe on **both** outcomes: by the time the agent returns, everything in its worktree is already on
    `origin/land/<id>` — a clean pickup pushes first, and an escalation's aborted merge leaves the

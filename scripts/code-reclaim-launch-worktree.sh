@@ -45,18 +45,32 @@
 #     existing reclaim -- git refuses to delete a branch that is still
 #     checked out anywhere.
 #
+# TWO DELIBERATE ABSTENTIONS, both matching scripts/worktree-gc-sweep.sh:
+#   * Not sourced from scripts/gate-lib.sh, though the "GATE COULD NOT RUN"
+#     banner below is that library's -- gate-lib.sh's exit 2 means "could not
+#     judge the CONTENT", and this is a reclaim with a precondition guard, not
+#     a content gate.
+#   * scripts/worktree-gc-classify.sh is NOT consulted. Its keep-dirty /
+#     keep-notmerged arms exist for a BUILDER worktree, whose uncommitted work
+#     may be the only copy. A launch worktree's content is already on
+#     `origin/land/<id>` by the time its agent returns (SKILL.md's "safe on
+#     both outcomes"), so there is nothing here for those arms to protect --
+#     which is also why this reclaim predates the classifier rather than
+#     diverging from it.
+#
 # Usage: scripts/code-reclaim-launch-worktree.sh <ticket-id>
 #
 # For every worktree whose branch matches `land/<ticket-id>--*`:
 #   - unlocked                         -> remove + delete branch (unlocked-and-clean case)
 #   - locked, reason names own dirname -> unlock, remove + delete branch
 #   - locked, reason names something else -> KEPT, reported on stdout
+#   - locked with NO reason at all        -> KEPT, reported on stdout
 #   - branch is `worktree-agent-*`     -> never matched by the glob; untouched
 #
 # No matching worktree at all is a silent no-op (exit 0) -- most tickets
 # never had a reviewer/pickup dispatch.
 #
-# Exit codes: 0 always, on both a successful sweep and a foreign-lock skip --
+# Exit codes: 0 always, on both a successful sweep and a kept-lock skip --
 # this mirrors the existing inline reclaim's own contract (best-effort
 # housekeeping, not a gate). Exit 2 only for a usage error / not a git repo.
 set -u
@@ -72,30 +86,33 @@ TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   exit 2
 }
 
-RECLAIMED=0
-KEPT_FOREIGN_LOCK=0
+# Run from a worktree, this would enumerate that worktree's own siblings --
+# same precondition, same guard, as scripts/worktree-gc-sweep.sh.
+"$TOP/scripts/assert-main-checkout.sh" || exit 2
 
-# FIELD ORDER: path first, branch last -- same rationale as
-# worktree-gc-sweep.sh's own porcelain read (a detached worktree's empty
-# branch must be a TRAILING field, never a middle one, or it silently
-# shifts every field after it left).
-while IFS=$'\t' read -r WT BR; do
+RECLAIMED=0
+KEPT_LOCKED=0
+
+# ONE porcelain pass supplies path, branch and lock state together. IFS is an
+# explicit tab, not whitespace, so an empty field keeps its own column instead
+# of shifting the ones after it -- a detached worktree's missing branch is safe
+# here even though it is no longer the trailing field.
+#
+# The "L" prefix on the lock field is what separates "locked" from "locked WITH
+# a reason": a bare `git worktree lock` records no reason at all, but it is
+# still a lock, and an unprefixed empty string would read as unlocked -- such a
+# worktree would then be silently skipped by a remove that quietly fails on the
+# lock, instead of being kept and reported.
+while IFS=$'\t' read -r WT BR LOCK_INFO; do
   case "$BR" in
     "land/$ID--"*) ;;
     *) continue ;;
   esac
 
-  DIRNAME="$(basename "$WT")"
+  DIRNAME="${WT##*/}"
 
-  LOCK_REASON=$(git -C "$TOP" worktree list --porcelain | awk -v want="$WT" '
-    /^worktree / { path=$2; reason="" }
-    /^locked/    { reason=substr($0,8) }
-    /^$/         { if (path==want) { print reason; exit }; path="" }
-  ')
-  LOCKED=0
-  [ -n "$LOCK_REASON" ] && LOCKED=1
-
-  if [ "$LOCKED" = "1" ]; then
+  if [ -n "$LOCK_INFO" ]; then
+    LOCK_REASON="${LOCK_INFO#L}"
     case "$LOCK_REASON" in
       *"$DIRNAME"*)
         # Positive evidence: the lock names THIS worktree's own directory --
@@ -105,22 +122,25 @@ while IFS=$'\t' read -r WT BR; do
         git -C "$TOP" worktree unlock "$WT" 2>/dev/null || true
         ;;
       *)
-        echo "kept (foreign lock, not reclaimed): $WT (reason: $LOCK_REASON)"
-        KEPT_FOREIGN_LOCK=$((KEPT_FOREIGN_LOCK + 1))
+        echo "kept (lock is not this worktree's own launch lock): $WT (reason: ${LOCK_REASON:-<none recorded>})"
+        KEPT_LOCKED=$((KEPT_LOCKED + 1))
         continue
         ;;
     esac
   fi
 
-  # Single --force: fails safe if the worktree is, despite the above,
-  # somehow still locked (e.g. the unlock above raced or failed) or dirty
-  # in a way this script does not otherwise judge -- never `-f -f`.
+  # Single --force still: it fails safe if the unlock above raced or failed --
+  # never `-f -f`.
   if git -C "$TOP" worktree remove --force "$WT" 2>/dev/null; then
     git -C "$TOP" branch -D "$BR" >/dev/null 2>&1 || true
     RECLAIMED=$((RECLAIMED + 1))
   fi
 done < <(git -C "$TOP" worktree list --porcelain | awk '
-  /^worktree /{p=$2} /^branch /{sub("refs/heads/","",$2); print p"\t"$2}')
+  /^worktree /{p=$2; b=""; l=""}
+  /^branch /  {b=$2; sub("refs/heads/","",b)}
+  /^locked/   {l="L" substr($0,8)}
+  /^$/        {if (p!="") print p"\t"b"\t"l; p=""}
+  END         {if (p!="") print p"\t"b"\t"l}')
 
-echo "code-reclaim-launch-worktree($ID): reclaimed=$RECLAIMED kept-foreign-lock=$KEPT_FOREIGN_LOCK"
+echo "code-reclaim-launch-worktree($ID): reclaimed=$RECLAIMED kept-locked=$KEPT_LOCKED"
 exit 0

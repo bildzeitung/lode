@@ -9,13 +9,14 @@ Cases:
   * unlocked-and-clean                 -> reclaimed (worktree + branch gone)
   * harness-locked, reason names own dirname -> unlocked then reclaimed
   * locked, reason names something else (foreign / human lock) -> kept, reported
+  * locked with no reason at all             -> kept, reported
   * a `worktree-agent-*` builder worktree is never touched
   * no matching `land/<id>--*` worktree at all -> no-op, exit 0
 """
 
 from __future__ import annotations
 
-import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -33,26 +34,33 @@ def _repo(tmp_path: Path) -> Path:
     _git(repo, "config", "user.name", "t")
     _git(repo, "commit", "-q", "--allow-empty", "-m", "init")
     (repo / ".claude" / "worktrees").mkdir(parents=True)
+    # The script calls scripts/assert-main-checkout.sh out of its OWN toplevel,
+    # so the fixture repo needs a real copy of it -- same reason
+    # tests/test_worktree_gc_sweep.py copies scripts/ wholesale.
+    shutil.copytree(REPO_ROOT / "scripts", repo / "scripts")
     return repo
 
 
-def _add_wt(repo: Path, name: str, branch: str, start: str = "trunk") -> Path:
+def _add_wt(repo: Path, name: str, branch: str) -> None:
     _git(
-        repo, "worktree", "add", "-q", "-b", branch, f".claude/worktrees/{name}", start
+        repo,
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        branch,
+        f".claude/worktrees/{name}",
+        "trunk",
     )
-    return repo / ".claude" / "worktrees" / name
 
 
-def _reclaim(
-    repo: Path, ticket_id: str, *, cwd: Path
-) -> subprocess.CompletedProcess[str]:
+def _reclaim(repo: Path, ticket_id: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(SCRIPT), ticket_id],
-        cwd=cwd,
+        cwd=repo,
         capture_output=True,
         text=True,
         check=False,
-        env={**os.environ},
     )
 
 
@@ -66,7 +74,7 @@ def _branches(repo: Path) -> str:
 
 def test_no_matching_worktree_is_a_noop(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    r = _reclaim(repo, "lode-abc", cwd=repo)
+    r = _reclaim(repo, "lode-abc")
     assert r.returncode == 0, r.stderr
     assert "reclaimed=0" in r.stdout
 
@@ -74,7 +82,7 @@ def test_no_matching_worktree_is_a_noop(tmp_path: Path) -> None:
 def test_unlocked_and_clean_is_reclaimed(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _add_wt(repo, "agent-a", "land/lode-abc--agent-a")
-    r = _reclaim(repo, "lode-abc", cwd=repo)
+    r = _reclaim(repo, "lode-abc")
     assert r.returncode == 0, r.stderr
     assert "reclaimed=1" in r.stdout
     assert "agent-a" not in _worktrees(repo)
@@ -95,7 +103,7 @@ def test_harness_locked_finished_is_unlocked_and_reclaimed(tmp_path: Path) -> No
         "claude agent agent-b (pid 12345 start 999)",
         ".claude/worktrees/agent-b",
     )
-    r = _reclaim(repo, "lode-abc", cwd=repo)
+    r = _reclaim(repo, "lode-abc")
     assert r.returncode == 0, r.stderr
     assert "reclaimed=1" in r.stdout
     assert "agent-b" not in _worktrees(repo)
@@ -116,9 +124,9 @@ def test_foreign_reason_lock_is_kept_and_reported(tmp_path: Path) -> None:
         "held by a human, do not touch",
         ".claude/worktrees/agent-c",
     )
-    r = _reclaim(repo, "lode-abc", cwd=repo)
+    r = _reclaim(repo, "lode-abc")
     assert r.returncode == 0, r.stderr
-    assert "kept-foreign-lock=1" in r.stdout
+    assert "kept-locked=1" in r.stdout
     assert "reclaimed=0" in r.stdout
     assert "agent-c" in _worktrees(repo)
     assert "land/lode-abc--agent-c" in _branches(repo)
@@ -129,7 +137,7 @@ def test_builder_worktree_is_never_touched(tmp_path: Path) -> None:
     excluded by construction, not by a separate predicate."""
     repo = _repo(tmp_path)
     _add_wt(repo, "agent-d", "worktree-agent-d")
-    r = _reclaim(repo, "lode-abc", cwd=repo)
+    r = _reclaim(repo, "lode-abc")
     assert r.returncode == 0, r.stderr
     assert "reclaimed=0" in r.stdout
     assert "agent-d" in _worktrees(repo)
@@ -141,7 +149,7 @@ def test_only_matches_the_named_ticket(tmp_path: Path) -> None:
     reclaim -- the glob is anchored on the exact ticket id, not a prefix match."""
     repo = _repo(tmp_path)
     _add_wt(repo, "agent-e", "land/lode-other--agent-e")
-    r = _reclaim(repo, "lode-abc", cwd=repo)
+    r = _reclaim(repo, "lode-abc")
     assert r.returncode == 0, r.stderr
     assert "reclaimed=0" in r.stdout
     assert "agent-e" in _worktrees(repo)
@@ -149,5 +157,19 @@ def test_only_matches_the_named_ticket(tmp_path: Path) -> None:
 
 def test_usage_error_on_missing_ticket_id(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    r = _reclaim(repo, "", cwd=repo)
+    r = _reclaim(repo, "")
     assert r.returncode == 2
+
+
+def test_reasonless_lock_is_kept_and_reported(tmp_path: Path) -> None:
+    """A bare `git worktree lock` records no reason at all. It is still a lock,
+    so it must be kept -- and REPORTED, not silently skipped by a remove that
+    quietly fails."""
+    repo = _repo(tmp_path)
+    _add_wt(repo, "agent-f", "land/lode-abc--agent-f")
+    _git(repo, "worktree", "lock", ".claude/worktrees/agent-f")
+    r = _reclaim(repo, "lode-abc")
+    assert r.returncode == 0, r.stderr
+    assert "kept-locked=1" in r.stdout
+    assert "reclaimed=0" in r.stdout
+    assert "agent-f" in _worktrees(repo)
