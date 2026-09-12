@@ -88,6 +88,9 @@ def _run(
     scratch_scripts.mkdir()
     script_copy = scratch_scripts / "bd-docs-nit-create.sh"
     script_copy.write_text(SCRIPT.read_text())
+    (scratch_scripts / "docs-nits-constants.sh").write_text(
+        (REPO_ROOT / "scripts" / "docs-nits-constants.sh").read_text()
+    )
     script_copy.chmod(0o755)
 
     marker = scratch_scripts / "dolt_push_called"

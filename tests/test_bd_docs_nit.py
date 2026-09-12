@@ -36,6 +36,7 @@ CREATE_SCRIPT = REPO_ROOT / "scripts" / "bd-docs-nit-create.sh"
 _CREATE_SCRIPT_TEXT = CREATE_SCRIPT.read_text()
 _LABEL_HELPER = REPO_ROOT / "scripts" / "bd-label-single-id.sh"
 _LABEL_HELPER_TEXT = _LABEL_HELPER.read_text()
+_CONSTANTS_TEXT = (REPO_ROOT / "scripts" / "docs-nits-constants.sh").read_text()
 
 STANDARD_TITLE = "Docs wording nits: batch fix in the next docs pass"
 
@@ -164,6 +165,7 @@ def _run(
         ("bd-docs-nit.sh", _SCRIPT_TEXT),
         ("bd-docs-nit-create.sh", _CREATE_SCRIPT_TEXT),
         ("bd-label-single-id.sh", _LABEL_HELPER_TEXT),
+        ("docs-nits-constants.sh", _CONSTANTS_TEXT),
     ):
         copy = scratch_scripts / name
         copy.write_text(text)
@@ -434,6 +436,77 @@ def test_count_takes_no_arguments(tmp_path: Path) -> None:
     r, _ = _run(tmp_path, ["count", "unexpected"], all_rows=[])
     assert r.returncode == 2
     assert r.stdout == ""
+
+
+def test_ensure_open_creates_when_a_docs_nits_ticket_closed_and_none_is_open(
+    tmp_path: Path,
+) -> None:
+    """/land's whole reopen-on-close backstop (lode-z1n5 part 4) is this one call,
+    so the branch is tested here rather than as prose in land/SKILL.md."""
+    r, _ = _run(
+        tmp_path,
+        ["ensure-open", "lode-59da"],
+        open_rows=[],
+        show_fixtures={"lode-59da": [{"id": "lode-59da", "labels": ["docs-nits"]}]},
+    )
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "fakebin" / "create.log").exists()
+
+
+def test_ensure_open_is_a_noop_when_a_collector_is_already_open(tmp_path: Path) -> None:
+    r, _ = _run(
+        tmp_path,
+        ["ensure-open", "lode-59da"],
+        open_rows=[{"id": "lode-59da", "title": STANDARD_TITLE}],
+        show_fixtures={"lode-59da": [{"id": "lode-59da", "labels": ["docs-nits"]}]},
+    )
+    assert r.returncode == 0, r.stderr
+    assert not (tmp_path / "fakebin" / "create.log").exists()
+
+
+def test_ensure_open_is_a_noop_when_no_closed_ticket_was_a_collector(
+    tmp_path: Path,
+) -> None:
+    r, _ = _run(
+        tmp_path,
+        ["ensure-open", "lode-abcd"],
+        open_rows=[],
+        show_fixtures={"lode-abcd": [{"id": "lode-abcd", "labels": ["other"]}]},
+    )
+    assert r.returncode == 0, r.stderr
+    assert not (tmp_path / "fakebin" / "create.log").exists()
+
+
+def test_ensure_open_with_no_ids_is_a_noop(tmp_path: Path) -> None:
+    """An empty $LANDED (a pass that closed nothing) is legitimate, not a fault."""
+    r, _ = _run(tmp_path, ["ensure-open"], open_rows=[])
+    assert r.returncode == 0, r.stderr
+    assert not (tmp_path / "fakebin" / "create.log").exists()
+
+
+def test_ensure_open_bd_failure_is_exit_2_and_creates_nothing(tmp_path: Path) -> None:
+    """A broken `bd` must not read as "no open collector" -- that would mint a
+    duplicate collector on every failing /land pass."""
+    r, _ = _run(
+        tmp_path,
+        ["ensure-open", "lode-59da"],
+        open_rows=[],
+        show_fixtures={"lode-59da": [{"id": "lode-59da", "labels": ["docs-nits"]}]},
+        list_exit=3,
+    )
+    assert r.returncode == 2
+    assert not (tmp_path / "fakebin" / "create.log").exists()
+
+
+def test_ensure_open_create_failure_is_exit_2(tmp_path: Path) -> None:
+    r, _ = _run(
+        tmp_path,
+        ["ensure-open", "lode-59da"],
+        open_rows=[],
+        show_fixtures={"lode-59da": [{"id": "lode-59da", "labels": ["docs-nits"]}]},
+        create_ok=False,
+    )
+    assert r.returncode == 2
 
 
 def test_unknown_subcommand_is_exit_2(tmp_path: Path) -> None:

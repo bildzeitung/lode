@@ -21,7 +21,7 @@
 #   scripts/bd-docs-nit.sh append --source <text> --file <path> --line <n> \
 #     --anchor <text> --replacement <text> [--what <text>]
 #   scripts/bd-docs-nit.sh count
-#   scripts/bd-docs-nit.sh has-open
+#   scripts/bd-docs-nit.sh ensure-open [<closed-id> ...]
 #
 # `append` resolves the OPEN docs-nits collector(s) (never in_progress -- an
 # in_progress collector is one a builder has already claimed, per lode-z1n5
@@ -50,21 +50,23 @@
 # one per line, where <count> is the number of `^NIT`-prefixed notes in that
 # issue. Does not refuse on 0 or 2+; an empty result set prints nothing.
 #
-# `has-open` is a plain read-only predicate: exit 0 if at least one OPEN
-# docs-nits collector exists, exit 1 if none. /land's reopen-on-close backstop
-# (lode-z1n5 part 4) calls this instead of inlining its own `bd list --label
-# docs-nits` query.
+# `ensure-open` is /land's reopen-on-close backstop (lode-z1n5 part 4) in one
+# call: given the ids a pass just closed, it opens a successor collector --
+# via scripts/bd-docs-nit-create.sh, never an inline `bd create` -- if and
+# only if one of those ids carried the docs-nits label and no OPEN collector
+# is left. No ids, no docs-nits id among them, or a collector already open:
+# no-op. It is deliberately the WHOLE backstop rather than a bare predicate,
+# so the branch lives under pytest instead of in a markdown bash block.
 #
 # Exit 0  -> success. `append`: collector id on stdout. `count`: TSV rows (or
-#            nothing, if 0 collectors) on stdout. `has-open`: at least one open
-#            collector exists (nothing on stdout).
+#            nothing, if 0 collectors) on stdout. `ensure-open`: an open
+#            collector exists now, whether or not this call created it.
 # Exit 1  -> `append`: 2+ open collectors exist and at least one carries a
 #            NON-standard title, so convergence does not apply -- do not guess
 #            which is authoritative. Diagnostic + the id/title list to stderr,
 #            nothing to stdout. A human opened one on purpose; report both ids
 #            and let a human consolidate (keep one, strip the label off the
-#            rest). `has-open`: no open collector exists -- a legitimate state,
-#            not a fault.
+#            rest).
 # Exit 2  -> MACHINE FAULT (bad arguments, `bd`/`jq` failed, the create or the
 #            migrate-and-close convergence step failed). Same "exit 2 is the
 #            machine, never the content" convention as sweep-digest-id.sh.
@@ -73,18 +75,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# The one place the collector's label and standard title are spelled for the
-# APPEND/CONVERGE path (scripts/bd-docs-nit-create.sh spells its own copy of
-# the title for the CREATE path -- see that script's header for why there is
-# no single shared constant across two independent bash scripts).
-readonly DOCS_NITS_LABEL="docs-nits"
-readonly STANDARD_TITLE="Docs wording nits: batch fix in the next docs pass"
+# shellcheck source=scripts/docs-nits-constants.sh
+. "$SCRIPT_DIR/docs-nits-constants.sh"
 
 usage() {
   cat >&2 <<'EOF'
 usage:
   bd-docs-nit.sh append --source <text> --file <path> --line <n> --anchor <text> --replacement <text> [--what <text>]
   bd-docs-nit.sh count
+  bd-docs-nit.sh ensure-open [<closed-id> ...]
 EOF
 }
 
@@ -97,25 +96,37 @@ list_collectors() {
   fi
 }
 
-resolve_open_collector() {
-  # Prints the collector id to append to on stdout; returns 1 (2+ with a
-  # non-standard title, human must consolidate) or 2 (machine fault), per the
-  # header contract. Never sees an in_progress collector -- `--status open`
-  # via scripts/bd-label-single-id.sh's opt-in flag.
-  local rows n all_standard survivor losers loser
+open_collector_rows() {
+  # The OPEN-only query both `append`'s resolve and `ensure-open` run (never
+  # in_progress -- an in_progress collector is one a builder has already
+  # claimed, per lode-z1n5 part 3). Prints the raw JSON rows; returns 2 on a
+  # machine fault, having already diagnosed it.
+  #
   # scripts/bd-label-single-id.sh's --status opt-in flag (lode-z1n5) makes its
   # underlying query the same one this needs, but its generic 0-vs-2+ refusal
   # contract collapses N==0 and N>1 into a single "not exactly one" exit 1 --
-  # this needs to tell them apart (create vs. converge-or-refuse), so it
-  # queries directly instead of going through that helper.
+  # the callers here need to tell them apart (create vs. converge-or-refuse),
+  # so this queries directly instead of going through that helper.
+  local rows
   if ! rows="$(bd list --label "$DOCS_NITS_LABEL" --status open --limit 0 --json 2>/dev/null)"; then
     echo "bd-docs-nit.sh: the docs-nits open-collector query failed" >&2
     return 2
   fi
-  if ! n="$(printf '%s' "$rows" | jq '(. // []) | length' 2>/dev/null)"; then
+  if ! printf '%s' "$rows" | jq -e '(. // []) | length >= 0' >/dev/null 2>&1; then
     echo "bd-docs-nit.sh: could not parse the docs-nits open-collector query JSON" >&2
     return 2
   fi
+  printf '%s' "$rows"
+}
+
+resolve_open_collector() {
+  # Prints the collector id to append to on stdout; returns 1 (2+ with a
+  # non-standard title, human must consolidate) or 2 (machine fault), per the
+  # header contract. Never sees an in_progress collector -- `open_collector_rows`
+  # queries `--status open`.
+  local rows n all_standard survivor losers loser
+  rows="$(open_collector_rows)" || return 2
+  n="$(printf '%s' "$rows" | jq '(. // []) | length')"
 
   if [ "$n" -eq 0 ]; then
     if ! "$SCRIPT_DIR/bd-docs-nit-create.sh"; then
@@ -228,30 +239,51 @@ What it changes: $what"
     echo "bd-docs-nit.sh append: \`bd update $id --append-notes\` failed" >&2
     return 2
   fi
-  if ! "$SCRIPT_DIR/bd-dolt-push.sh"; then
+  # Same reason as the create script's own push call: stdout carries the
+  # collector id a caller may capture, so the push writes to stderr only.
+  if ! "$SCRIPT_DIR/bd-dolt-push.sh" >&2; then
     echo "bd-docs-nit.sh append: scripts/bd-dolt-push.sh failed" >&2
     return 2
   fi
   printf '%s\n' "$id"
 }
 
-cmd_has_open() {
-  # Read-only: exit 0 if at least one OPEN docs-nits collector exists, exit 1
-  # if none (never conflated with append's 2+ convergence/refusal cases --
-  # this predicate only cares about zero-vs-some). /land's reopen-on-close
-  # backstop (lode-z1n5 part 4) calls this instead of inlining its own `bd
-  # list --label docs-nits` query, which the append-recipe delegation tests
-  # (tests/test_bd_docs_nit.py) refuse to let any call site duplicate.
-  local rows n
-  if ! rows="$(bd list --label "$DOCS_NITS_LABEL" --status open --limit 0 --json 2>/dev/null)"; then
-    echo "bd-docs-nit.sh has-open: the docs-nits open-collector query failed" >&2
+cmd_ensure_open() {
+  # /land's reopen-on-close backstop (lode-z1n5 part 4), whole: given the ids
+  # a pass just closed, open the successor collector -- via
+  # scripts/bd-docs-nit-create.sh, never an inline `bd create` -- if and only
+  # if one of those ids carried the docs-nits label and no OPEN collector is
+  # left. Lives here rather than as a loop in .claude/skills/land/SKILL.md
+  # because nothing gates inline shell in a fenced markdown block, which is
+  # the reason this script exists at all.
+  #
+  # No ids (an empty $LANDED -- a legitimate pass that closed nothing) is a
+  # no-op, exit 0. A machine fault is exit 2, never a silent create: reading a
+  # broken `bd` as "none open" would mint a duplicate collector on every
+  # failing pass -- the state convergence exists to clean up, not to generate.
+  local id ticket rows closed_a_collector=0
+  for id in "$@"; do
+    if ! ticket="$(bd show "$id" --json 2>/dev/null)"; then
+      echo "bd-docs-nit.sh ensure-open: could not read $id" >&2
+      return 2
+    fi
+    if printf '%s' "$ticket" \
+      | jq -e --arg l "$DOCS_NITS_LABEL" '(.[0].labels // []) | any(. == $l)' \
+        >/dev/null 2>&1; then
+      closed_a_collector=1
+      break
+    fi
+  done
+  [ "$closed_a_collector" -eq 1 ] || return 0
+
+  rows="$(open_collector_rows)" || return 2
+  if [ "$(printf '%s' "$rows" | jq '(. // []) | length')" -gt 0 ]; then
+    return 0
+  fi
+  if ! "$SCRIPT_DIR/bd-docs-nit-create.sh"; then
+    echo "bd-docs-nit.sh ensure-open: no open docs-nits collector, and creating one failed" >&2
     return 2
   fi
-  if ! n="$(printf '%s' "$rows" | jq '(. // []) | length' 2>/dev/null)"; then
-    echo "bd-docs-nit.sh has-open: could not parse the docs-nits open-collector query JSON" >&2
-    return 2
-  fi
-  [ "$n" -gt 0 ]
 }
 
 cmd_count() {
@@ -283,13 +315,7 @@ case "$subcmd" in
     fi
     cmd_count
     ;;
-  has-open)
-    if [ "$#" -ne 0 ]; then
-      echo "bd-docs-nit.sh has-open: takes no arguments (got: $*)" >&2
-      exit 2
-    fi
-    cmd_has_open
-    ;;
+  ensure-open) cmd_ensure_open "$@" ;;
   *)
     echo "bd-docs-nit.sh: unknown subcommand: $subcmd" >&2
     usage

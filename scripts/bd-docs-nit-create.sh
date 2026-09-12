@@ -35,13 +35,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# The one place this literal is spelled for the CREATE path. scripts/bd-docs-nit.sh
-# also spells it (its own convergence check needs to compare against it without
-# depending on this script's create having already run), so a rename must touch
-# both -- there is no single source for a build-time string constant across two
-# independent bash scripts, only the discipline to grep for it.
-readonly DOCS_NITS_LABEL="docs-nits"
-readonly STANDARD_TITLE="Docs wording nits: batch fix in the next docs pass"
+# shellcheck source=scripts/docs-nits-constants.sh
+. "$SCRIPT_DIR/docs-nits-constants.sh"
 readonly DESCRIPTION="Collector for wording-only doc/comment nits (docs/agents-workflow.md \"Wording-only doc nits go to the docs-nits collector\", lode-t551 / lode-z1n5).
 
 How a nit gets here: an agent finds a wording-only nit and runs \`scripts/bd-docs-nit.sh append\`, which appends a NIT-prefixed note here in the mandated patch shape (file, line, verbatim anchor, exact replacement).
@@ -76,7 +71,10 @@ if ! printf '%s' "$confirm_rows" | jq -e '(. // []) | length == 1' >/dev/null 2>
   exit 2
 fi
 
-if ! "$SCRIPT_DIR/bd-dolt-push.sh"; then
+# stdout is this script's RETURN CHANNEL (the new collector id), and
+# scripts/bd-docs-nit.sh append captures it in a command substitution -- so the
+# push's own chatter must not land there. Its diagnostics stay visible on stderr.
+if ! "$SCRIPT_DIR/bd-dolt-push.sh" >&2; then
   echo "bd-docs-nit-create.sh: scripts/bd-dolt-push.sh failed" >&2
   exit 2
 fi

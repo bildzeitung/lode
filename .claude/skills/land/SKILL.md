@@ -1289,19 +1289,14 @@ for id in $LANDED; do
 done
 
 # Reopen-on-close backstop (lode-z1n5 part 4): if this pass closed a ticket carrying the docs-nits
-# label and there is now NO open docs-nits collector, open a new, empty one -- once per pass, after
-# the close loop, via the SAME create script part 1's agent-open path uses (never an inline `bd
-# create` here). This is a BACKSTOP, not the primary path: /code's own claim-time successor-open
-# (part 3) means this fires only on a manual-close / hand-driven path that skipped /code entirely. A
-# cross-machine duplicate this might occasionally produce is converged by part 1a on the next append.
-DOCS_NITS_CLOSED=0
-for id in $LANDED; do
-  LABELS=$(bd show "$id" --json | jq -r '(.[0].labels // []) | index("docs-nits") // empty')
-  [ -n "$LABELS" ] && DOCS_NITS_CLOSED=1
-done
-if [ "$DOCS_NITS_CLOSED" -eq 1 ] && ! scripts/bd-docs-nit.sh has-open; then
-  scripts/bd-docs-nit-create.sh
-fi
+# label and no open docs-nits collector is left, open a new, empty one -- once per pass, after the
+# close loop. The whole branch (label probe, open-collector check, create) lives in the script, not
+# here: nothing gates inline shell in a markdown fence, and this must never inline a `bd create` of
+# its own. A no-op when $LANDED closed no collector, or one is already open. This is a BACKSTOP, not
+# the primary path -- /code's own claim-time successor-open (part 3) means it fires only on a
+# manual-close / hand-driven path that skipped /code entirely. A cross-machine duplicate it might
+# occasionally produce is converged by part 1a on the next append.
+scripts/bd-docs-nit.sh ensure-open $LANDED   # word-split deliberately: $LANDED is an id list
 
 # Closing the last child of an epic completes it — flag it for the closing-side review.
 # I only NOTICE completion here (I am the one that closed it); the review itself is the
@@ -1985,9 +1980,9 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   keeps "don't file a ticket" from silently becoming "hand the human a research task."
 
   **A second, narrow exception: the reopen-on-close backstop (lode-z1n5 part 4).** After the close
-  loop, if this pass closed a `docs-nits`-labeled ticket and no open collector remains, I create one
-  via `scripts/bd-docs-nit-create.sh` — the same create script `scripts/bd-docs-nit.sh append`'s own
-  agent-open path uses. This is **not** a reopening of the dupe generator either: it creates the one
+  loop, `scripts/bd-docs-nit.sh ensure-open $LANDED` creates a collector if this pass closed a
+  `docs-nits`-labeled ticket and no open one remains — reaching the same
+  `scripts/bd-docs-nit-create.sh` that `scripts/bd-docs-nit.sh append`'s own agent-open path uses. This is **not** a reopening of the dupe generator either: it creates the one
   standing collector, located by label, never a one-off ticket for an incidental discovery — the same
   reasoning as the append exception just above, applied to a different trigger (a close, rather than a
   nit in hand).
