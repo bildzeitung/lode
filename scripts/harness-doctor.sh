@@ -100,6 +100,7 @@ scripts/land-merge-batch.sh
 scripts/land-replay.sh
 scripts/stacked-graph.sh
 scripts/worktree-gc-sweep.sh
+scripts/code-reclaim-launch-worktree.sh
 "
 for s in $required_scripts; do
   if [ ! -f "$s" ]; then
