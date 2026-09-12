@@ -10,6 +10,7 @@ generator's `--check` mode -- the same one a human/CI would run -- against the r
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -150,6 +151,72 @@ def test_a_renamed_source_column_fails_loud(
     )
     assert result.returncode != 0
     assert "SourceDocChanged" in result.stderr
+
+
+def _headings(markdown: str) -> set[str]:
+    """The set of heading texts (with the leading `#`s stripped) present in a derived page --
+    what a `See "X" below` reference in that same page must name to be resolvable in place."""
+    return {
+        line.lstrip("#").strip()
+        for line in markdown.splitlines()
+        if line.startswith("#")
+    }
+
+
+def _dangling_see_below_rows(markdown: str) -> list[str]:
+    """Rows of a derived table (`| ... |` lines) that cite prose the page itself never carries --
+    either a `See "X" below` pointer where X is not a heading on this same page, or a bare
+    `(see below)` / `see below` cross-reference with no named destination at all (lode-0teo). A
+    derived page has table rows only, so any such row is a dangling pointer at the section a
+    source-doc prose block lived in, which regeneration never carries across."""
+    headings = _headings(markdown)
+    violations = []
+    for line in markdown.splitlines():
+        if not line.startswith("|"):
+            continue
+        quoted_matches = list(re.finditer(r'See "([^"]+)" below', line))
+        for match in quoted_matches:
+            if match.group(1) not in headings:
+                violations.append(line)
+        # A bare "(see below)" / "see below" carries no destination at all -- always dangling.
+        # Skip a line already flagged via the quoted form above, so it isn't double-counted.
+        if not quoted_matches and re.search(
+            r"\(see below\)|\bsee below\b", line, re.IGNORECASE
+        ):
+            violations.append(line)
+    return violations
+
+
+def test_settings_md_has_no_dangling_see_below_rows() -> None:
+    """Regression gate for lode-0teo: docs/settings.md is derived from docs/configuration.md's
+    knob TABLES ONLY -- prose sections (headings, paragraphs) never reach it, so a source row that
+    says 'See "X" below' or a bare '(see below)' is pointing at text the derived page doesn't have."""
+    settings_md = (REPO_ROOT / "docs" / "settings.md").read_text(encoding="utf-8")
+    assert _dangling_see_below_rows(settings_md) == []
+
+
+def test_dangling_see_below_scan_catches_the_pre_fix_rows() -> None:
+    """Sabotage check: the scan must actually flag the exact pre-fix row shapes lode-0teo fixed --
+    proving the scan's own logic, not just that today's settings.md happens to pass it."""
+    quoted_row = (
+        '| `jira_projects` | `[]` (empty) | ... See "Bare JIRA issue keys" below. |'
+    )
+    paren_row = "| `jira_token` | unset | ... never the value (see below). |"
+    bare_row = "| `no_egress_scopes` | `[]` | Declarative no_egress SCOPE rules -- see below. |"
+    markdown = (
+        f"# lode -- settings you can change\n\n{quoted_row}\n{paren_row}\n{bare_row}"
+    )
+    violations = _dangling_see_below_rows(markdown)
+    assert quoted_row in violations
+    assert paren_row in violations
+    assert bare_row in violations
+
+    # A quoted reference to a heading that IS present on the page is not dangling.
+    resolvable = '| `jira_projects` | `[]` | ... See "Bare JIRA issue keys" below. |'
+    resolvable_markdown = (
+        "# lode -- settings you can change\n\n## Bare JIRA issue keys\n\n" + resolvable
+    )
+    assert _dangling_see_below_rows(resolvable_markdown) == []
 
 
 def test_emitted_anchor_ids_match_the_link_gates_github_slug() -> None:
