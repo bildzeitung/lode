@@ -289,7 +289,8 @@ internals now fold in lode-3v1p's fix too: `git clean -fd` runs unconditionally 
 a `land/<other-id>` that has *since landed* — whose `HEAD` is already an ancestor of `origin/trunk`,
 passing the check trivially — still gets its untracked leftovers swept. Full reasoning lives in the
 script's own header comment and
-[docs/decisions.md](../../docs/decisions.md) (`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`) — one place, not duplicated
+[docs/decisions.md](../../docs/decisions.md)
+(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`) — one place, not duplicated
 across every call site, which is the whole point of the extraction.
 
 **Lock the worktree before touching a single file.** A freshly created worktree has **zero commits**
@@ -749,7 +750,8 @@ the `case`/ancestor check, not just on a failed one (lode-3v1p) — so a recycle
 *is* an ancestor of `origin/trunk` (e.g. recycled onto a `land/<other-id>` that has since landed) still gets
 its untracked leftovers swept before they can pollute my `git status --short` assertions and the `nox`
 run; full reasoning in the script's own header and [docs/decisions.md](../../docs/decisions.md)
-(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). The `[ -x "$GUARD" ]` check on the `||` path distinguishes a genuinely
+(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). The `[ -x "$GUARD" ]` check on the
+`||` path distinguishes a genuinely
 missing/non-executable script (bootstrap gap — report and stop) from the script running and
 legitimately exiting 1 (already reported by the script itself; this just propagates it).
 

@@ -143,7 +143,8 @@ even though one fix now closes both: my own **correctness** exposure to a recycl
 nil regardless (I never check anything out — see above), and this guard has always been purely a
 worktree-**leak** fix, never a correctness one. Full reasoning:
 [docs/agents-workflow.md](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) and
-[docs/decisions.md](../../docs/decisions.md) (`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`).
+[docs/decisions.md](../../docs/decisions.md)
+(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`).
 
 **When the branch is a stacked dependent** — it merged another still-unlanded `land/<base>` branch
 because its ticket needed that base's code (see

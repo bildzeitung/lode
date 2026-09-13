@@ -219,7 +219,8 @@ rescue ref in my hand-off. The script's `git clean -fd` now runs unconditionally
 an ancestor of `origin/trunk` (e.g. recycled onto a `land/<other-id>` that has since landed) still gets its
 untracked leftovers swept before they can pollute the `git status --short` assertions and the `nox`
 run; full reasoning in the script's own header and [docs/decisions.md](../../docs/decisions.md)
-(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). The `[ -x "$GUARD" ]` check on the `||` path distinguishes a genuinely missing
+(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). The `[ -x "$GUARD" ]` check on the
+`||` path distinguishes a genuinely missing
 or non-executable script (bootstrap gap — report and stop) from the script running and legitimately
 exiting 1 (already reported by the script itself; this just propagates it).
 

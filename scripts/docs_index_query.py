@@ -21,6 +21,11 @@ it, FTS5's own quoting rule), and join with a space -- FTS5's implicit AND
 between phrase terms. A double-quoted phrase is matched as a literal string
 by the FTS5 query grammar, so no character inside it (hyphen, slash, digit)
 is ever parsed as query syntax.
+
+Implicit AND alone is over-strict for a natural multi-term phrase, which
+rarely lands every term in one unit, so :func:`query` retries a zero-hit
+search with the same tokens joined by ``OR`` (:func:`_escape_query_or`) and
+flags those rows as fallback hits (``lode-qcp0``).
 """
 
 from __future__ import annotations
@@ -78,7 +83,7 @@ def _load_build() -> ModuleType:
 _build = _load_build()
 
 
-def _escape_query(raw: str) -> str:
+def _escape_query(raw: str, joiner: str = " ") -> str:
     """Tokenize ``raw`` on whitespace and quote each term as an FTS5 phrase.
 
     See the module docstring for the measured failures this fixes and why.
@@ -90,23 +95,16 @@ def _escape_query(raw: str) -> str:
     it mid-token and FTS5 raises ``unterminated string`` -- verified at
     technical review. Unreachable from argv (execve forbids NUL) but not from
     a library caller, so it is handled here rather than assumed away.
+
+    ``joiner`` selects the combining semantics: the default single space is
+    FTS5's implicit AND (the primary mode), ``" OR "`` the fallback mode's
+    (``lode-qcp0`` -- a natural multi-term phrase almost never lands every
+    term in one unit, so AND-only is over-strict as the ONLY mode). Both
+    modes share this one copy of the quoting rule, so an escaping fix can
+    never reach one mode and miss the other.
     """
     terms = raw.replace("\x00", "").split()
-    return " ".join('"' + term.replace('"', '""') + '"' for term in terms)
-
-
-def _escape_query_or(raw: str) -> str:
-    """Same tokenize-and-quote as :func:`_escape_query`, joined with ``OR``.
-
-    A natural multi-term phrase almost never lands every term in the same
-    unit (``lode-qcp0`` -- measured ~50% zero-hit rate on real queries), so
-    the AND-only form in :func:`_escape_query` is over-strict as the ONLY
-    query mode. This is the fallback mode's query string, tried only after
-    an AND search comes back empty (see :func:`query`) -- never the primary
-    mode, since AND-first still ranks the tightest match highest.
-    """
-    terms = raw.replace("\x00", "").split()
-    return " OR ".join('"' + term.replace('"', '""') + '"' for term in terms)
+    return joiner.join('"' + term.replace('"', '""') + '"' for term in terms)
 
 
 def _search(
@@ -164,8 +162,8 @@ def query(
         rows = _search(conn, match, doc_class, limit)
         used_fallback = False
         if not rows:
-            or_match = _escape_query_or(raw_query)
-            if or_match and or_match != match:
+            or_match = _escape_query(raw_query, " OR ")
+            if or_match != match:
                 rows = _search(conn, or_match, doc_class, limit)
                 used_fallback = bool(rows)
     finally:
@@ -186,7 +184,8 @@ def query(
         "a short snippet, and nothing else: read the cited range yourself. It "
         "never prints a whole unit and never writes prose of its own.\n\nThe "
         "index is rebuilt from docs/ on every run, so results are never "
-        "stale."
+        "stale.\n\nWhen nothing matches every term at once, it retries "
+        "matching ANY term and marks those rows as an OR-match fallback."
     )
 )
 def main(
