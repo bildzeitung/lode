@@ -5655,3 +5655,35 @@ entries below from being rewritten to chase the current tree.)
   machine's real transcripts to confirm it reproduces the 2026-09-13 retrospective baseline (56
   index invocations / 118 direct greps / ~50% miss) within tolerance, per this ticket's acceptance
   criteria — recorded here rather than silently claimed as done.
+
+  **Technical-review addendum (2026-09-13, `lode-dozi`) — the baseline did NOT reproduce; the
+  main-vs-subagent split needed a different signal, which this ticket's own log design already
+  names.** The paragraph above asked for a real-transcript run; the technical review was able to make
+  it (the producer's PII-classifier block did not apply there) and reports three things.
+
+  1. **The numbers do not match, and lean the other way.** Against 153 transcripts the script
+     produces **25 index invocations / 158 direct `docs/*.md` accesses** (a 14% index share), not the
+     retrospective **56 / 118**. So the index looks *less* used, and direct grepping *more* common,
+     than the hand count suggested. Whether 25 / 158 is the true baseline and the hand-mined 56 / 118
+     was differently scoped — or the classifier is still mis-scoped — is left to a human; this entry
+     records the measured figure rather than quietly claiming the criterion met.
+  2. **The `~50% miss` figure is not produced at all, by design.** The script reads only `tool_use`
+     blocks, never `tool_result`, precisely because `tool_result` content shape is inconsistent (see
+     the caveats in that module's docstring). Hit/miss therefore has to come from the invocation log's
+     own `hit_count`, which is what `docs_index_log.py stats` reports — the two instruments split this
+     dimension between them rather than both parsing it.
+  3. **`isSidechain` alone cannot carry the main-vs-subagent split on this Claude Code version.** It
+     is present on all 16,751 message entries in these transcripts and **`false` on every one**, so
+     the `per_role` section could only ever print a single `main:` row — dead output that reads as
+     data. Fixed at review by falling back to the `cwd` of the transcript entry: a
+     `.claude/worktrees/<hash>` cwd is the *same* main-checkout-vs-producer proxy this ticket's
+     invocation log already uses for its own `cwd` field, so this is the ticket's own design applied
+     consistently, not a new signal invented at review. With the fallback the split is real
+     (`main: index=25 direct=148`, `subagent: index=0 direct=10`).
+
+  Also at review: an **unnarrowed `Grep`** (no `path` and no `glob`, so it defaults to the whole repo
+  and *might* have read `docs/`) was being counted as a `direct` access, which would inflate the
+  headline ratio with cases that cannot be confirmed. It is now its own `ambiguous` bucket, reported
+  on its own line and excluded from the index-vs-direct ratio. On this machine that bucket is **0**,
+  so the 158 above does not depend on the change — but the headline number is no longer able to
+  silently absorb unconfirmable hits.

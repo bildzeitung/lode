@@ -7,7 +7,8 @@ instrument: ``scripts/docs_index_usage_report.py``, ``lode-dozi``'s second
 half). Log location follows the SAME fallback rule as the index's own build
 target -- :func:`docs_index_build.cache_db_path` -- so it lands outside the
 repo worktree for the identical reason: nothing here may ever become a
-tracked file. See ``docs/configuration.md`` for the field list and rationale.
+tracked file. See ``docs/decisions.md``'s ``lode-dozi`` entry for the
+field list and rationale.
 
 This module is deliberately independent of ``docs_index_query.py``'s own
 logic (query escaping, FTS5, ranking) -- it only appends and later
@@ -23,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -119,16 +121,17 @@ def compute_stats(entries: list[dict[str, Any]], top: int = 5) -> dict[str, Any]
     """Summarize invocation log entries: total count, miss rate (hit_count
     == 0), and the top zero-hit queries by frequency."""
     total = len(entries)
-    misses = [e for e in entries if e.get("hit_count") == 0]
-    zero_hit_counts: dict[str, int] = {}
-    for e in misses:
-        q = e.get("query", "")
-        zero_hit_counts[q] = zero_hit_counts.get(q, 0) + 1
+    zero_hit_counts = Counter(
+        e.get("query", "") for e in entries if e.get("hit_count") == 0
+    )
+    misses = sum(zero_hit_counts.values())
+    # Ties broken by query text, so the output is stable across runs --
+    # Counter.most_common() ties by insertion order instead.
     top_zero_hit = sorted(zero_hit_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:top]
     return {
         "invocations": total,
-        "misses": len(misses),
-        "miss_rate": (len(misses) / total) if total else 0.0,
+        "misses": misses,
+        "miss_rate": (misses / total) if total else 0.0,
         "top_zero_hit_queries": top_zero_hit,
     }
 

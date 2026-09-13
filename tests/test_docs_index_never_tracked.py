@@ -144,3 +144,22 @@ def test_gate_catches_a_build_target_moved_inside_the_worktree() -> None:
     sabotaged = REPO_ROOT / ".lode" / "docs-index.sqlite3"
     with pytest.raises(AssertionError):
         _assert_outside_worktree(sabotaged)
+
+
+def test_default_invocation_log_resolves_outside_the_worktree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The usage log (lode-dozi) shares the build target's never-tracked
+    constraint, so it needs the same structural check.
+
+    Check 1 above already catches a *committed* ``docs-index-log.jsonl`` (its
+    basename contains "docs-index"), but nothing asserted that
+    ``log_path()`` resolves outside the worktree in the first place -- the
+    structural half of the pair. Added at technical review.
+    """
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    log = load_module_from_path(
+        "_docs_index_never_tracked_gate_log_impl",
+        REPO_ROOT / "scripts" / "docs_index_log.py",
+    )
+    _assert_outside_worktree(log.log_path())

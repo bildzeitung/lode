@@ -33,11 +33,12 @@ def _write_transcript(path: Path, entries: list[dict]) -> None:
 
 
 def _tool_use_entry(
-    *, timestamp: str, is_subagent: bool, name: str, tool_input: dict
+    *, timestamp: str, is_subagent: bool, name: str, tool_input: dict, cwd: str = ""
 ) -> dict:
     return {
         "timestamp": timestamp,
         "isSidechain": is_subagent,
+        "cwd": cwd,
         "message": {
             "content": [
                 {"type": "tool_use", "name": name, "input": tool_input},
@@ -206,3 +207,55 @@ def test_report_cli_handles_no_transcripts_found(tmp_path: Path) -> None:
     result = runner.invoke(app, ["--projects-dir", str(tmp_path / "nonexistent")])
     assert result.exit_code == 0, result.output
     assert "index invocations: 0" in result.output
+
+
+def test_scan_treats_a_launch_dir_cwd_as_a_subagent_when_issidechain_is_false(
+    tmp_path: Path,
+) -> None:
+    """isSidechain reads False on every entry on Claude Code 2.1.270 even
+    though subagents ran, so the cwd of the recording session is the fallback
+    discriminator -- the same main-checkout-vs-producer proxy the invocation
+    log uses. Added at technical review (lode-dozi)."""
+    transcript = tmp_path / "proj" / "s1.jsonl"
+    _write_transcript(
+        transcript,
+        [
+            _tool_use_entry(
+                timestamp="2026-09-13T10:00:00Z",
+                is_subagent=False,
+                cwd="/repo/.claude/worktrees/agent-deadbeef",
+                name="Read",
+                tool_input={"file_path": "/repo/docs/design.md"},
+            )
+        ],
+    )
+    rows = scan(tmp_path)
+    assert [r["is_subagent"] for r in rows] == [True]
+
+
+def test_scan_buckets_an_unnarrowed_grep_as_ambiguous_not_direct(
+    tmp_path: Path,
+) -> None:
+    """A Grep with neither path nor glob defaults to the whole repo, so it
+    only MIGHT have read docs/ -- it must not inflate the headline
+    index-vs-direct ratio. A docs-scoped Grep still counts as direct.
+    Added at technical review (lode-dozi)."""
+    transcript = tmp_path / "proj" / "s1.jsonl"
+    _write_transcript(
+        transcript,
+        [
+            _tool_use_entry(
+                timestamp="2026-09-13T10:00:00Z",
+                is_subagent=False,
+                name="Grep",
+                tool_input={"pattern": "anything"},
+            ),
+            _tool_use_entry(
+                timestamp="2026-09-13T10:00:00Z",
+                is_subagent=False,
+                name="Grep",
+                tool_input={"pattern": "anything", "path": "docs"},
+            ),
+        ],
+    )
+    assert summarize(scan(tmp_path))["totals"] == {"ambiguous": 1, "direct": 1}
