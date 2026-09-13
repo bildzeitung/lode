@@ -70,8 +70,8 @@ decisions settle into `docs/` and beads; only then does code get written (see
   ```
 
   A multi-term query first runs an implicit-AND FTS5 `MATCH` (every term must land in the same
-  chunk); when that returns nothing, the query retries with `OR` semantics over the same terms and
-  marks the printed rows `[fallback: OR match]` instead of printing "No results."
+  chunk); when that returns nothing, the docs index retries with `OR` semantics over the same
+  terms and marks the printed rows `[fallback: OR match]` instead of printing "No results."
   (`lode-qcp0` — a transcript review found the AND-only mode missed roughly half of real
   multi-term queries). Read the cited range yourself once you have the pointer; reach for a doc
   directly only when the index turns up nothing relevant.
