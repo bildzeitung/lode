@@ -87,7 +87,9 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   asserted one final time, so I cannot commit the same sin I'm checking for.
 - **bd is the only task tracker.** No TodoWrite, no markdown checklists, no `MEMORY.md`.
 - **Design decisions are doc edits, not notes** — settled facts to `docs/`, open questions to
-  `docs/decisions.md`, tunables to `docs/configuration.md`.
+  `docs/decisions.md`, tunables to `docs/configuration.md`. Look up what a doc says with the lookup
+  index before grepping — `./venv/bin/python scripts/docs_index_query.py "<terms>"` (`lode-t6o1`; see
+  [docs/agents-workflow.md](../../docs/agents-workflow.md#docs-lookup-index-lode-t6o1)).
 - **File a qualifying mistake to MISTAKES.md autonomously — I don't wait to be told.** If the
   technical review turns up a mistake meeting CLAUDE.md directive 9's bar, I append an entry myself,
   in my own worktree — an ordinary edit + commit alongside my review fixes (step 6), no different
@@ -217,7 +219,7 @@ rescue ref in my hand-off. The script's `git clean -fd` now runs unconditionally
 an ancestor of `origin/trunk` (e.g. recycled onto a `land/<other-id>` that has since landed) still gets its
 untracked leftovers swept before they can pollute the `git status --short` assertions and the `nox`
 run; full reasoning in the script's own header and [docs/decisions.md](../../docs/decisions.md)
-(search "lode-3v1p"). The `[ -x "$GUARD" ]` check on the `||` path distinguishes a genuinely missing
+(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). The `[ -x "$GUARD" ]` check on the `||` path distinguishes a genuinely missing
 or non-executable script (bootstrap gap — report and stop) from the script running and legitimately
 exiting 1 (already reported by the script itself; this just propagates it).
 

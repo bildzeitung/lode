@@ -56,6 +56,10 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
 - **Design decisions are doc edits, not notes.** A settled architectural fact goes into the relevant
   file under `docs/` (in the worktree); open questions to `docs/decisions.md`; tunables to
   `docs/configuration.md`. A design fact recorded only in a bd note or memory **forks the record**.
+  Before grepping a doc for what it says on something, try the lookup index first —
+  `./venv/bin/python scripts/docs_index_query.py "<terms>"` — it returns ranked
+  `path:line_lo-line_hi` pointers into `docs/*.md` without loading a whole file (`lode-t6o1`; see
+  [docs/agents-workflow.md](../../docs/agents-workflow.md#docs-lookup-index-lode-t6o1)).
 - **File a qualifying mistake to MISTAKES.md autonomously — I don't wait to be told.** If, while
   building, I discover a mistake meeting CLAUDE.md directive 9's bar, I append an entry myself, the
   moment I find it — not only when a human orders it. I'm already in a worktree, so this is an
@@ -285,7 +289,7 @@ internals now fold in lode-3v1p's fix too: `git clean -fd` runs unconditionally 
 a `land/<other-id>` that has *since landed* — whose `HEAD` is already an ancestor of `origin/trunk`,
 passing the check trivially — still gets its untracked leftovers swept. Full reasoning lives in the
 script's own header comment and
-[docs/decisions.md](../../docs/decisions.md) (search "lode-3v1p") — one place, not duplicated
+[docs/decisions.md](../../docs/decisions.md) (`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`) — one place, not duplicated
 across every call site, which is the whole point of the extraction.
 
 **Lock the worktree before touching a single file.** A freshly created worktree has **zero commits**
@@ -745,7 +749,7 @@ the `case`/ancestor check, not just on a failed one (lode-3v1p) — so a recycle
 *is* an ancestor of `origin/trunk` (e.g. recycled onto a `land/<other-id>` that has since landed) still gets
 its untracked leftovers swept before they can pollute my `git status --short` assertions and the `nox`
 run; full reasoning in the script's own header and [docs/decisions.md](../../docs/decisions.md)
-(search "lode-3v1p"). The `[ -x "$GUARD" ]` check on the `||` path distinguishes a genuinely
+(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). The `[ -x "$GUARD" ]` check on the `||` path distinguishes a genuinely
 missing/non-executable script (bootstrap gap — report and stop) from the script running and
 legitimately exiting 1 (already reported by the script itself; this just propagates it).
 

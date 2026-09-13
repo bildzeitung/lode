@@ -143,7 +143,7 @@ even though one fix now closes both: my own **correctness** exposure to a recycl
 nil regardless (I never check anything out — see above), and this guard has always been purely a
 worktree-**leak** fix, never a correctness one. Full reasoning:
 [docs/agents-workflow.md](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) and
-[docs/decisions.md](../../docs/decisions.md) (search "lode-3v1p").
+[docs/decisions.md](../../docs/decisions.md) (`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`).
 
 **When the branch is a stacked dependent** — it merged another still-unlanded `land/<base>` branch
 because its ticket needed that base's code (see
@@ -208,7 +208,10 @@ Form no opinion until I've read **both sides** — the ticket as written and the
 - **The design source of truth:** where the branch touches an architectural fact, I cross-check it
   against `docs/` (start with `docs/design.md`). A branch that contradicts a settled decision — or
   that *makes* a new decision the branch records only in code or a bd note instead of `docs/` — is a
-  finding. So is a `docs/` decision recorded by the branch that the ticket never sanctioned.
+  finding. So is a `docs/` decision recorded by the branch that the ticket never sanctioned. For
+  what a doc says on a specific point, try the lookup index before grepping —
+  `./venv/bin/python scripts/docs_index_query.py "<terms>"` (`lode-t6o1`; see
+  [docs/agents-workflow.md](../../docs/agents-workflow.md#docs-lookup-index-lode-t6o1)).
 
 ### 2. Judge on the axes that apply
 

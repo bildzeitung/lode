@@ -26,6 +26,7 @@ is ever parsed as query syntax.
 from __future__ import annotations
 
 import importlib.util
+import sqlite3
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -94,6 +95,41 @@ def _escape_query(raw: str) -> str:
     return " ".join('"' + term.replace('"', '""') + '"' for term in terms)
 
 
+def _escape_query_or(raw: str) -> str:
+    """Same tokenize-and-quote as :func:`_escape_query`, joined with ``OR``.
+
+    A natural multi-term phrase almost never lands every term in the same
+    unit (``lode-qcp0`` -- measured ~50% zero-hit rate on real queries), so
+    the AND-only form in :func:`_escape_query` is over-strict as the ONLY
+    query mode. This is the fallback mode's query string, tried only after
+    an AND search comes back empty (see :func:`query`) -- never the primary
+    mode, since AND-first still ranks the tightest match highest.
+    """
+    terms = raw.replace("\x00", "").split()
+    return " OR ".join('"' + term.replace('"', '""') + '"' for term in terms)
+
+
+def _search(
+    conn: sqlite3.Connection,
+    match: str,
+    doc_class: str | None,
+    limit: int,
+) -> list[tuple[str, int, int, str, str]]:
+    """Run one MATCH query and return raw ``(path, line_lo, line_hi,
+    first_line, body)`` rows -- shared by the AND pass and the OR fallback
+    pass in :func:`query`, so the SQL shape lives in exactly one place."""
+    sql = (
+        "SELECT path, line_lo, line_hi, first_line, body FROM units WHERE units MATCH ?"
+    )
+    params: list[str | int] = [match]
+    if doc_class is not None:
+        sql += " AND doc_class = ?"
+        params.append(doc_class)
+    sql += " ORDER BY bm25(units) LIMIT ?"
+    params.append(limit)
+    return conn.execute(sql, params).fetchall()
+
+
 def _snippet(body: str) -> str:
     """A short, single-line preview of a unit's body -- never the whole unit."""
     flat = " ".join(body.split())
@@ -106,10 +142,18 @@ def query(
     raw_query: str,
     doc_class: str | None = None,
     limit: int = 5,
-) -> list[tuple[str, int, int, str, str]]:
+) -> list[tuple[str, int, int, str, str, bool]]:
     """Run ``raw_query`` against a freshly built index and return the top
     ``limit`` hits, ranked by FTS5's ``bm25()``, as ``(path, line_lo,
-    line_hi, first_line, snippet)`` tuples. Never returns a whole unit body.
+    line_hi, first_line, snippet, used_fallback)`` tuples. Never returns a
+    whole unit body.
+
+    ``used_fallback`` is ``True`` on every row when the AND-only search (the
+    primary mode) returned zero hits and an OR search over the same terms
+    was retried instead (``lode-qcp0`` -- measured ~50% zero-hit rate on
+    real multi-term queries). The OR retry only fires on a genuine zero-hit
+    AND result, and only when it actually differs from the AND query (a
+    single-term query has no OR/AND distinction, so no second query is run).
     """
     match = _escape_query(raw_query)
     if not match:
@@ -117,22 +161,18 @@ def query(
 
     conn = _build.build_index()
     try:
-        sql = (
-            "SELECT path, line_lo, line_hi, first_line, body FROM units "
-            "WHERE units MATCH ?"
-        )
-        params: list[str | int] = [match]
-        if doc_class is not None:
-            sql += " AND doc_class = ?"
-            params.append(doc_class)
-        sql += " ORDER BY bm25(units) LIMIT ?"
-        params.append(limit)
-        rows = conn.execute(sql, params).fetchall()
+        rows = _search(conn, match, doc_class, limit)
+        used_fallback = False
+        if not rows:
+            or_match = _escape_query_or(raw_query)
+            if or_match and or_match != match:
+                rows = _search(conn, or_match, doc_class, limit)
+                used_fallback = bool(rows)
     finally:
         conn.close()
 
     return [
-        (path, line_lo, line_hi, first_line, _snippet(body))
+        (path, line_lo, line_hi, first_line, _snippet(body), used_fallback)
         for path, line_lo, line_hi, first_line, body in rows
     ]
 
@@ -189,8 +229,9 @@ def main(
         print("No results.")
         return
 
-    for path, line_lo, line_hi, first_line, snippet in results:
-        print(f"{path}:{line_lo}-{line_hi}  {first_line}")
+    for path, line_lo, line_hi, first_line, snippet, used_fallback in results:
+        marker = " [fallback: OR match]" if used_fallback else ""
+        print(f"{path}:{line_lo}-{line_hi}{marker}  {first_line}")
         print(f"    {snippet}")
 
 

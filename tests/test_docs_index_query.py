@@ -144,11 +144,43 @@ def test_query_never_returns_a_whole_unit_body() -> None:
     inspection (a short unit's whole body legitimately fits in a snippet)."""
     results = query("lode-nt98", limit=5)
     assert results
-    for path, line_lo, line_hi, first_line, snippet in results:
+    for path, line_lo, line_hi, first_line, snippet, used_fallback in results:
         assert isinstance(path, str)
         assert line_lo <= line_hi
         assert first_line
         assert len(snippet) <= _query_module._SNIPPET_CHARS + len("...")
+        assert used_fallback is False  # a real bd id hits on the AND pass
+
+
+def test_query_falls_back_to_or_when_and_query_has_zero_hits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for lode-qcp0: a multi-term query whose terms are all
+    present in the corpus, but never together in one chunk, must still
+    return pointers -- via an OR retry -- instead of the AND-only zero-hit
+    result the implicit-AND MATCH semantics would otherwise produce."""
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "a.md").write_text("# Alpha section\n\nzeeqx term appears here.\n")
+    (docs_dir / "b.md").write_text("# Beta section\n\nwyvox term appears here.\n")
+
+    real_build_index = _query_module._build.build_index
+    monkeypatch.setattr(
+        _query_module._build,
+        "build_index",
+        lambda *args, **kwargs: real_build_index(docs_dir=docs_dir),
+    )
+
+    and_only_conn = real_build_index(docs_dir=docs_dir)
+    try:
+        and_match = _escape_query("zeeqx wyvox")
+        assert not _query_module._search(and_only_conn, and_match, None, 5)
+    finally:
+        and_only_conn.close()
+
+    results = query("zeeqx wyvox", limit=5)
+    assert results
+    assert all(used_fallback for *_rest, used_fallback in results)
 
 
 def test_query_class_filter_restricts_to_the_requested_class() -> None:
