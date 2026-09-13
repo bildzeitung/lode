@@ -1983,7 +1983,8 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   **A second, narrow exception: the reopen-on-close backstop (lode-z1n5 part 4).** After the close
   loop, `scripts/bd-docs-nit.sh ensure-open $LANDED` creates a collector if this pass closed a
   `docs-nits`-labeled ticket and no open one remains — reaching the same
-  `scripts/bd-docs-nit-create.sh` that `scripts/bd-docs-nit.sh append`'s own agent-open path uses. This is **not** a reopening of the dupe generator either: it creates the one
+  `scripts/bd-docs-nit-create.sh` that `scripts/bd-docs-nit.sh append`'s own agent-open path uses.
+  This is **not** a reopening of the dupe generator either: it creates the one
   standing collector, located by label, never a one-off ticket for an incidental discovery — the same
   reasoning as the append exception just above, applied to a different trigger (a close, rather than a
   nit in hand).

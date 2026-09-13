@@ -207,7 +207,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 # File ONE bd stub ticket carrying the VERSION DIFF as a durable work order
-# (lode-i642) -- only called from the GREEN promote path (step 5). Every
+# (lode-i642) -- only called from the GREEN run path (step 6). Every
 # failure mode here WARNS and returns 0: filing must never change this
 # script's exit status or the lock promotion outcome.
 file_churn_stub() {
