@@ -55,14 +55,18 @@ def _iter_transcript_paths(projects_dir: Path) -> list[Path]:
     return sorted(projects_dir.glob("*/*.jsonl"))
 
 
-def _iter_tool_uses(transcript_path: Path) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+def _iter_tool_uses(
+    transcript_path: Path,
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """Yield ``(entry, tool_use_block)`` pairs for every tool_use block in a
     transcript file. ``entry`` is the outer JSON object (carries
     ``timestamp``/``isSidechain``); ``tool_use_block`` is the inner dict with
     ``name``/``input``."""
     pairs = []
     try:
-        lines = transcript_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = transcript_path.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
     except OSError:
         return pairs
     for line in lines:
@@ -170,15 +174,20 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
 )
 def report(
     projects_dir: Annotated[
-        Path,
+        Path | None,
         typer.Option(
             "--projects-dir",
             help="Root directory of Claude Code session transcripts.",
         ),
-    ] = Path.home() / ".claude" / "projects",
+    ] = None,
 ) -> None:
     """Print the index-vs-direct-access baseline mined from transcripts."""
-    rows = scan(projects_dir)
+    resolved_projects_dir = (
+        projects_dir
+        if projects_dir is not None
+        else Path.home() / ".claude" / "projects"
+    )
+    rows = scan(resolved_projects_dir)
     result = summarize(rows)
     totals = result["totals"]
     index_count = totals.get("index", 0)
@@ -190,11 +199,15 @@ def report(
     print()
     print("per day:")
     for day, counts in result["per_day"].items():
-        print(f"    {day}: index={counts.get('index', 0)} direct={counts.get('direct', 0)}")
+        print(
+            f"    {day}: index={counts.get('index', 0)} direct={counts.get('direct', 0)}"
+        )
     print()
     print("main vs subagent:")
     for role, counts in result["per_role"].items():
-        print(f"    {role}: index={counts.get('index', 0)} direct={counts.get('direct', 0)}")
+        print(
+            f"    {role}: index={counts.get('index', 0)} direct={counts.get('direct', 0)}"
+        )
 
 
 if __name__ == "__main__":

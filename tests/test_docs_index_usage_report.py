@@ -55,7 +55,9 @@ def test_scan_classifies_index_invocation_via_bash(tmp_path: Path) -> None:
                 timestamp="2026-09-13T10:00:00.000Z",
                 is_subagent=False,
                 name="Bash",
-                tool_input={"command": "python scripts/docs_index_query.py 'lode-nt98'"},
+                tool_input={
+                    "command": "python scripts/docs_index_query.py 'lode-nt98'"
+                },
             )
         ],
     )
@@ -179,7 +181,9 @@ def test_report_cli_prints_totals_and_splits(tmp_path: Path) -> None:
                 timestamp="2026-09-13T10:00:00.000Z",
                 is_subagent=False,
                 name="Bash",
-                tool_input={"command": "python scripts/docs_index_query.py 'lode-nt98'"},
+                tool_input={
+                    "command": "python scripts/docs_index_query.py 'lode-nt98'"
+                },
             ),
             _tool_use_entry(
                 timestamp="2026-09-13T11:00:00.000Z",

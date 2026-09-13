@@ -131,13 +131,25 @@ def test_compute_stats_on_empty_log_does_not_divide_by_zero() -> None:
 def test_stats_cli_prints_summary_from_a_sample_log(tmp_path: Path) -> None:
     target = tmp_path / "log.jsonl"
     append_invocation(
-        query_text="lode-nt98", hit_count=0, fallback_fired=False, elapsed_ms=1.0, path=target
+        query_text="lode-nt98",
+        hit_count=0,
+        fallback_fired=False,
+        elapsed_ms=1.0,
+        path=target,
     )
     append_invocation(
-        query_text="lode-nt98", hit_count=0, fallback_fired=False, elapsed_ms=1.0, path=target
+        query_text="lode-nt98",
+        hit_count=0,
+        fallback_fired=False,
+        elapsed_ms=1.0,
+        path=target,
     )
     append_invocation(
-        query_text="retrieval", hit_count=4, fallback_fired=False, elapsed_ms=1.0, path=target
+        query_text="retrieval",
+        hit_count=4,
+        fallback_fired=False,
+        elapsed_ms=1.0,
+        path=target,
     )
     result = runner.invoke(app, ["--log-path", str(target)])
     assert result.exit_code == 0, result.output
