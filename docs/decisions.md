@@ -5609,3 +5609,49 @@ entries below from being rewritten to chase the current tree.)
   `src/lode/cli/backfill.py`; covered
   by `tests/test_cli_backfill.py`'s `test_no_argument_prints_full_help` (bare invocation) and
   `test_flags_without_connector_also_prints_full_help_and_exits_2` (flags-but-no-connector).
+
+- **2026-09-13 (`lode-dozi`) — docs-index usage instrumentation: log location, fields, and the
+  transcript-mining split.** Two instruments, both outside git and independent of each other, added
+  because `lode-t6o1` shipped the docs FTS5 index (see this file's `lode-t6o1` entry above) as
+  guesswork with nothing measuring whether it helps.
+
+  1. **Invocation log** (`scripts/docs_index_log.py`): every run of `scripts/docs_index_query.py`
+     appends one JSON line to `$XDG_CACHE_HOME/lode/docs-index-log.jsonl` (falling back to
+     `~/.cache/lode/docs-index-log.jsonl` the same way, and under the same relative-path-ignored
+     rule, as `docs_index_build.cache_db_path()` — deliberately duplicated rather than imported, to
+     avoid a second independent load path for `docs_index_build`; see that module's own
+     `_load_build`/`_load_log` docstrings on why two independent loads of the same module is
+     unsafe). Fields per line: `timestamp`, `query`, `hit_count`, `fallback_fired` (always `False` in
+     this diff — no AND->OR fallback exists yet; the field is reserved so the sibling ticket adding
+     one, `lode-qcp0`, needs no second schema change), `elapsed_ms`, `cwd` (main checkout vs a
+     `.claude/worktrees/<hash>` path is a proxy for main session vs producer), plus a fixed
+     allowlist of harness env vars when set (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`,
+     `CLAUDE_CODE_CHILD_SESSION` — never a full `os.environ` dump, which would leak unrelated
+     secrets into a cache-dir file with no access controls). `scripts/docs_index_log.py stats`
+     summarizes a log: invocation count, miss rate, top zero-hit queries.
+  2. **Transcript-mining script** (`scripts/docs_index_usage_report.py`): reads
+     `~/.claude/projects/**/*.jsonl` (Claude Code session transcripts) and classifies each
+     `tool_use` block as an index invocation (a `Bash` command containing `docs_index_query.py`) or
+     a direct, read-style access to `docs/*.md` (`Bash` grep/sed/head/cat/tail/awk mentioning
+     `docs/` and `.md`; the `Read` tool on a `docs/*.md` path; the `Grep` tool with no
+     path/glob narrowing it away from `docs/`), split by day (`timestamp[:10]`) and main-session vs
+     subagent (`isSidechain`). It reads only `tool_use` blocks — never `tool_result`, whose content
+     shape is inconsistent (a plain string in some transcripts, a list of content blocks in others)
+     — and a JSON-parse failure on any one line is skipped, not fatal, matching the invocation log's
+     own degrade-not-crash rule. It writes nothing under `~/.claude/projects`.
+
+  **Why this needs a second instrument at all, not just the log:** the log records the index's OWN
+  use; it cannot show the comparison against a hand grep of `docs/*.md`, because a producer that
+  greps `docs/*.md` by hand never touches the index or its log. Only mining transcripts can show
+  index-vs-grep.
+
+  **Not verified end-to-end against this machine's real transcripts as part of this ticket** — auto
+  mode's own PII classifier denies reading `~/.claude/projects/**/*.jsonl` content directly from a
+  producer's Bash tool, so `scripts/docs_index_usage_report.py` is tested here only against
+  synthetic fixtures under `tmp_path` (`tests/test_docs_index_usage_report.py`) that reproduce the
+  transcript shapes actually observed (`isSidechain`, `timestamp`, `message.content[].type ==
+  "tool_use"`) without reading real session content. A human (or an agent context this classifier
+  doesn't gate) should run `./venv/bin/python scripts/docs_index_usage_report.py` against this
+  machine's real transcripts to confirm it reproduces the 2026-09-13 retrospective baseline (56
+  index invocations / 118 direct greps / ~50% miss) within tolerance, per this ticket's acceptance
+  criteria — recorded here rather than silently claimed as done.

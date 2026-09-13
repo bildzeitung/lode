@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import Annotated
@@ -75,6 +76,29 @@ def _load_build() -> ModuleType:
 
 
 _build = _load_build()
+
+
+def _load_log() -> ModuleType:
+    """Load scripts/docs_index_log.py under a PRIVATE sys.modules name.
+
+    Same rationale as :func:`_load_build`: ``scripts/`` is not an installed
+    package, and this module's own test loads THIS module by path, without
+    ``scripts/`` on ``sys.path`` -- a plain ``import docs_index_log`` would
+    fail there.
+    """
+    name = "_docs_index_query_log_impl"
+    if name in sys.modules:
+        return sys.modules[name]
+    path = Path(__file__).resolve().parent / "docs_index_log.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_log = _load_log()
 
 
 def _escape_query(raw: str) -> str:
@@ -184,7 +208,16 @@ def main(
         )
         raise typer.Exit(1)
 
+    start = time.perf_counter()
     results = query(text, doc_class=doc_class, limit=limit)
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    _log.append_invocation(
+        query_text=text,
+        hit_count=len(results),
+        fallback_fired=False,
+        elapsed_ms=elapsed_ms,
+    )
+
     if not results:
         print("No results.")
         return
