@@ -8,6 +8,7 @@ question, and a hyphenated term must each return clean results -- never a
 sqlite3 error).
 """
 
+import functools
 import sqlite3
 from pathlib import Path
 
@@ -64,6 +65,15 @@ def test_escape_query_empty_input_yields_empty_string() -> None:
     assert _escape_query("   ") == ""
 
 
+def test_escape_query_or_joiner_combines_the_same_quoted_terms() -> None:
+    """The fallback mode differs from the primary mode in the joiner only --
+    the quoting rule has exactly one implementation (lode-qcp0)."""
+    assert _escape_query("lode-3v1p guard", " OR ") == '"lode-3v1p" OR "guard"'
+    assert _escape_query("lode-3v1p", " OR ") == '"lode-3v1p"'
+    assert _escape_query("", " OR ") == ""
+
+
+@pytest.mark.parametrize("joiner", [" ", " OR "])
 @pytest.mark.parametrize(
     "raw",
     [
@@ -87,11 +97,13 @@ def test_escape_query_empty_input_yields_empty_string() -> None:
         "nul\x00byte",
     ],
 )
-def test_escaped_query_never_errors_against_fts5(raw: str) -> None:
+def test_escaped_query_never_errors_against_fts5(raw: str, joiner: str) -> None:
     """No user string may reach MATCH as an operator, and none may raise --
     probed beyond the three cited regressions at technical review. FTS5
     operators, unbalanced quotes, unicode, NUL, and very long input all have
-    to parse as literal phrases.
+    to parse as literal phrases. Both combining modes are probed: the default
+    implicit AND and the ``" OR "`` fallback mode query() retries with, since
+    an escaping hole in either one reaches MATCH the same way.
 
     Run against a throwaway in-memory table using the build module's OWN
     schema, not a full corpus rebuild: the property under test is the FTS5
@@ -104,7 +116,7 @@ def test_escaped_query_never_errors_against_fts5(raw: str) -> None:
         conn.execute(
             "INSERT INTO units VALUES ('a.md', 1, 9, 'hi', 'hello NEAR OR', 'x')"
         )
-        match = _escape_query(raw)
+        match = _escape_query(raw, joiner)
         if not match:
             return
         conn.execute("SELECT path FROM units WHERE units MATCH ?", [match]).fetchall()
@@ -144,11 +156,37 @@ def test_query_never_returns_a_whole_unit_body() -> None:
     inspection (a short unit's whole body legitimately fits in a snippet)."""
     results = query("lode-nt98", limit=5)
     assert results
-    for path, line_lo, line_hi, first_line, snippet in results:
+    for path, line_lo, line_hi, first_line, snippet, used_fallback in results:
         assert isinstance(path, str)
         assert line_lo <= line_hi
         assert first_line
         assert len(snippet) <= _query_module._SNIPPET_CHARS + len("...")
+        assert used_fallback is False  # a real bd id hits on the AND pass
+
+
+def test_query_falls_back_to_or_when_and_query_has_zero_hits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for lode-qcp0: a multi-term query whose terms are all
+    present in the corpus, but never together in one chunk, must still
+    return pointers -- via an OR retry -- instead of the AND-only zero-hit
+    result the implicit-AND MATCH semantics would otherwise produce."""
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "a.md").write_text("# Alpha section\n\nzeeqx term appears here.\n")
+    (docs_dir / "b.md").write_text("# Beta section\n\nwyvox term appears here.\n")
+
+    monkeypatch.setattr(
+        _query_module._build,
+        "build_index",
+        functools.partial(_query_module._build.build_index, docs_dir=docs_dir),
+    )
+
+    # The flag is set only on the path taken after a zero-hit AND pass, so
+    # asserting it also asserts that "zeeqx wyvox" matched no single unit.
+    results = query("zeeqx wyvox", limit=5)
+    assert results
+    assert all(used_fallback for *_rest, used_fallback in results)
 
 
 def test_query_class_filter_restricts_to_the_requested_class() -> None:

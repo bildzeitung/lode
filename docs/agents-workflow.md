@@ -57,6 +57,27 @@ decisions settle into `docs/` and beads; only then does code get written (see
 
 ---
 
+## Docs lookup index (`lode-t6o1`)
+
+- **The docs lookup index is where "what did we decide about X" starts.** `docs/decisions.md` alone
+  is 400K+ and none of the design docs fit in context whole, so this docs lookup starts with an
+  index query, not a read. `scripts/docs_index_query.py` rebuilds a never-tracked SQLite FTS5 index
+  over every `docs/*.md` file on each invocation and prints ranked `path:line_lo-line_hi` pointers
+  with a short snippet — never a whole doc, never a synthesized answer:
+
+  ```bash
+  ./venv/bin/python scripts/docs_index_query.py "<search terms — a bd id, a phrase, anything>"
+  ```
+
+  A multi-term query first runs an implicit-AND FTS5 `MATCH` (every term must land in the same
+  chunk); when that returns nothing, the docs index retries with `OR` semantics over the same
+  terms and marks the printed rows `[fallback: OR match]` instead of printing "No results."
+  (`lode-qcp0` — a transcript review found the AND-only mode missed roughly half of real
+  multi-term queries). Read the cited range yourself once you have the pointer; reach for a doc
+  directly only when the index turns up nothing relevant.
+
+---
+
 ## The design loop — `challenge`
 
 `challenge` is a single, non-looping pass whose only job is to **argue with the plan**. You give it
