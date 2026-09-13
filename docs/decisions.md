@@ -1013,6 +1013,21 @@ entries below from being rewritten to chase the current tree.)
   (both now say plainly that they neither remove nor report their own launch worktree). Docs-only
   change, no code/tests affected — same shape as lode-em6v.
 
+  **Update (lode-7ndi): the unlock-on-exit premise above is falsified in production.** "The harness
+  locks a launch worktree while its agent runs and unlocks it on exit, so a single `--force` removes a
+  finished agent's worktree but refuses a still-locked one" does not hold: one of two finished
+  `code-reviewer` dispatches stayed locked for 10+ minutes after its completion notification, and a
+  60-second retry loop of the single `--force` never cleared it. The lock's pid+starttime token turned
+  out to be the **orchestrating session's own**, not the agent's — so while that session stays alive,
+  nothing can prove the pid dead, and the lock is invisible to every liveness-based backstop for the
+  whole session's lifetime. The single `--force` is kept, but it is no longer what makes the reclaim
+  safe — the call **timing** is: the reclaim now runs only after the agent's own completion
+  notification, the positive evidence that the agent has actually stopped, and it unlocks explicitly
+  (only when the lock reason names that worktree's own directory) before the single-`--force` remove,
+  rather than waiting on a harness unlock that may never come. Full rule:
+  [`docs/agents-workflow.md`'s lode-7ndi discussion](agents-workflow.md#the-step-0-pickup-merges-it-never-rebases-lode-cln)
+  and `scripts/code-reclaim-launch-worktree.sh`'s own header comment.
+
 - **Builder worktree retention — kept as-is; the builder keeps its worktree through the whole
   build → review → land lifecycle, and `/land`'s GC still reclaims it only on a clean land (lode-3ci,
   a follow-up to lode-k5e/lode-8k3 above).** After the reviewer/rebase-pickup architecture change,
