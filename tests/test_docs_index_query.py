@@ -189,6 +189,45 @@ def test_query_falls_back_to_or_when_and_query_has_zero_hits(
     assert all(used_fallback for *_rest, used_fallback in results)
 
 
+def test_cli_logs_fallback_fired_true_only_when_the_or_fallback_actually_fires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-i5ww: the CLI's one append_invocation call site must pass the
+    REAL per-invocation fallback flag, not a hardcoded False -- so a query
+    that trips the AND->OR fallback logs fallback_fired=true, and one that
+    doesn't logs false. The autouse _private_index_cache fixture already
+    points XDG_CACHE_HOME at tmp_path, which is also where the invocation
+    log lands (docs_index_log.log_path() follows the same XDG rule)."""
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "a.md").write_text("# Alpha section\n\nzeeqx term appears here.\n")
+    (docs_dir / "b.md").write_text("# Beta section\n\nwyvox term appears here.\n")
+
+    monkeypatch.setattr(
+        _query_module._build,
+        "build_index",
+        functools.partial(_query_module._build.build_index, docs_dir=docs_dir),
+    )
+
+    # Zero-hit AND pass, so the query only succeeds via the OR retry.
+    result = runner.invoke(app, ["zeeqx wyvox"])
+    assert result.exit_code == 0, result.output
+
+    # Both terms live in the same unit, so the AND pass hits directly and
+    # the fallback is never reached. Kept multi-term deliberately: a
+    # single-term query can't fall back at all (the OR rewrite is identical
+    # to the AND one), which would assert False for the wrong reason.
+    result = runner.invoke(app, ["zeeqx term"])
+    assert result.exit_code == 0, result.output
+
+    # The CLI's own accessor, not a second load-by-path: _load_sibling caches
+    # on sys.modules, so this is the exact module object the CLI logged through.
+    # Read-only here -- calling append_invocation would bypass the thing tested.
+    log_module = _query_module._load_log()
+    entries = log_module.read_log(log_module.log_path())
+    assert [e["fallback_fired"] for e in entries] == [True, False]
+
+
 def test_query_class_filter_restricts_to_the_requested_class() -> None:
     for doc_class in ("decision-record", "reference/process"):
         results = query("the", doc_class=doc_class, limit=20)
