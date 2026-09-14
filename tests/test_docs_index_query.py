@@ -29,13 +29,6 @@ _escape_query = _query_module._escape_query
 query = _query_module.query
 app = _query_module.app
 
-# Loaded separately (private name) only to read back the invocation log the
-# CLI writes via its own _load_log() -- never to call append_invocation
-# directly, which would bypass the thing under test.
-_log_module_for_reading = load_module_from_path(
-    "docs_index_log_read_by_query_test", REPO_ROOT / "scripts" / "docs_index_log.py"
-)
-
 runner = CliRunner()
 
 
@@ -220,12 +213,18 @@ def test_cli_logs_fallback_fired_true_only_when_the_or_fallback_actually_fires(
     result = runner.invoke(app, ["zeeqx wyvox"])
     assert result.exit_code == 0, result.output
 
-    # Both terms present together in "zeeqx" alone, so the AND pass hits
-    # directly and the fallback never fires.
-    result = runner.invoke(app, ["zeeqx"])
+    # Both terms live in the same unit, so the AND pass hits directly and
+    # the fallback is never reached. Kept multi-term deliberately: a
+    # single-term query can't fall back at all (the OR rewrite is identical
+    # to the AND one), which would assert False for the wrong reason.
+    result = runner.invoke(app, ["zeeqx term"])
     assert result.exit_code == 0, result.output
 
-    entries = _log_module_for_reading.read_log(_log_module_for_reading.log_path())
+    # The CLI's own accessor, not a second load-by-path: _load_sibling caches
+    # on sys.modules, so this is the exact module object the CLI logged through.
+    # Read-only here -- calling append_invocation would bypass the thing tested.
+    log_module = _query_module._load_log()
+    entries = log_module.read_log(log_module.log_path())
     assert [e["fallback_fired"] for e in entries] == [True, False]
 
 
