@@ -33,6 +33,7 @@ from __future__ import annotations
 import importlib.util
 import sqlite3
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import Annotated
@@ -52,6 +53,28 @@ _DOC_CLASSES = ("decision-record", "reference/process")
 _SNIPPET_CHARS = 240
 
 
+def _load_sibling(name: str, filename: str) -> ModuleType:
+    """Load a ``scripts/`` sibling module under a PRIVATE ``sys.modules`` name.
+
+    ``scripts/`` is not an installed package, so a plain ``import`` fails from
+    a caller that does not have it on ``sys.path`` -- which includes this
+    module's own tests, loaded by path via ``tests/conftest.py``'s
+    ``load_module_from_path``. The private name is what keeps this load from
+    colliding with any other loader of the same file; the cache-on-``name``
+    check is what keeps one name mapped to exactly ONE module object, which
+    the callers below depend on.
+    """
+    if name in sys.modules:
+        return sys.modules[name]
+    path = Path(__file__).resolve().parent / filename
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_build() -> ModuleType:
     """Load scripts/docs_index_build.py under a PRIVATE sys.modules name.
 
@@ -68,19 +91,26 @@ def _load_build() -> ModuleType:
     second independent load of ``docs_index_chunker.py`` would create a
     distinct ``Unit`` class object and break ``isinstance`` silently.
     """
-    name = "_docs_index_query_build_impl"
-    if name in sys.modules:
-        return sys.modules[name]
-    path = Path(__file__).resolve().parent / "docs_index_build.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+    return _load_sibling("_docs_index_query_build_impl", "docs_index_build.py")
 
 
 _build = _load_build()
+
+
+def _load_log() -> ModuleType:
+    """Load scripts/docs_index_log.py under a PRIVATE sys.modules name.
+
+    Same rationale as :func:`_load_build`: ``scripts/`` is not an installed
+    package, and this module's own test loads THIS module by path, without
+    ``scripts/`` on ``sys.path`` -- a plain ``import docs_index_log`` would
+    fail there.
+
+    Called at the one logging site rather than at import, so a query that
+    never reaches it -- a `--class` validation error, or a library caller of
+    :func:`query` -- does not pay to load a module it will not use.
+    ``_load_sibling`` caches on ``sys.modules``, so repeat calls are free.
+    """
+    return _load_sibling("_docs_index_query_log_impl", "docs_index_log.py")
 
 
 def _escape_query(raw: str, joiner: str = " ") -> str:
@@ -223,15 +253,33 @@ def main(
         )
         raise typer.Exit(1)
 
+    start = time.perf_counter()
     results = query(text, doc_class=doc_class, limit=limit)
-    if not results:
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    fallback_fired = False
+    if results:
+        for path, line_lo, line_hi, first_line, snippet, used_fallback in results:
+            fallback_fired = fallback_fired or used_fallback
+            marker = " [fallback: OR match]" if used_fallback else ""
+            print(f"{path}:{line_lo}-{line_hi}{marker}  {first_line}")
+            print(f"    {snippet}")
+    else:
         print("No results.")
-        return
 
-    for path, line_lo, line_hi, first_line, snippet, used_fallback in results:
-        marker = " [fallback: OR match]" if used_fallback else ""
-        print(f"{path}:{line_lo}-{line_hi}{marker}  {first_line}")
-        print(f"    {snippet}")
+    # Logged AFTER the results are printed, and failing open: instrumentation
+    # must never break or delay the thing it measures. An unwritable cache dir
+    # (OSError) or an undeterminable home directory (RuntimeError from
+    # Path.home()) costs one log line, not the answer the caller asked for --
+    # CLAUDE.md routes every agent through this CLI first.
+    try:
+        _load_log().append_invocation(
+            query_text=text,
+            hit_count=len(results),
+            fallback_fired=fallback_fired,
+            elapsed_ms=elapsed_ms,
+        )
+    except (OSError, RuntimeError):  # fmt: skip
+        pass
 
 
 if __name__ == "__main__":

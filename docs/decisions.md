@@ -5609,3 +5609,140 @@ entries below from being rewritten to chase the current tree.)
   `src/lode/cli/backfill.py`; covered
   by `tests/test_cli_backfill.py`'s `test_no_argument_prints_full_help` (bare invocation) and
   `test_flags_without_connector_also_prints_full_help_and_exits_2` (flags-but-no-connector).
+
+- **2026-09-13 (`lode-dozi`) — docs-index usage instrumentation: log location, fields, and the
+  transcript-mining split.** Two instruments, both outside git and independent of each other, added
+  because `lode-t6o1` shipped the docs FTS5 index (see this file's `lode-t6o1` entry above) as
+  guesswork with nothing measuring whether it helps.
+
+  1. **Invocation log** (`scripts/docs_index_log.py`): every run of `scripts/docs_index_query.py`
+     appends one JSON line to `$XDG_CACHE_HOME/lode/docs-index-log.jsonl` (falling back to
+     `~/.cache/lode/docs-index-log.jsonl` the same way, and under the same relative-path-ignored
+     rule, as `docs_index_build.cache_db_path()` — deliberately duplicated rather than imported, to
+     avoid a second independent load path for `docs_index_build`; see that module's own
+     `_load_build`/`_load_log` docstrings on why two independent loads of the same module is
+     unsafe). Fields per line: `timestamp`, `query`, `hit_count`, `fallback_fired` (always `False` in
+     this diff — no AND->OR fallback exists yet; the field is reserved so the sibling ticket adding
+     one, `lode-qcp0`, needs no second schema change), `elapsed_ms`, `cwd` (main checkout vs a
+     `.claude/worktrees/<hash>` path is a proxy for main session vs producer), plus a fixed
+     allowlist of harness env vars when set (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`,
+     `CLAUDE_CODE_CHILD_SESSION` — never a full `os.environ` dump, which would leak unrelated
+     secrets into a cache-dir file with no access controls). `scripts/docs_index_log.py stats`
+     summarizes a log: invocation count, miss rate, top zero-hit queries.
+  2. **Transcript-mining script** (`scripts/docs_index_usage_report.py`): reads
+     `~/.claude/projects/**/*.jsonl` (Claude Code session transcripts) and classifies each
+     `tool_use` block as an index invocation (a `Bash` command containing `docs_index_query.py`) or
+     a direct, read-style access to `docs/*.md` (`Bash` grep/sed/head/cat/tail/awk mentioning
+     `docs/` and `.md`; the `Read` tool on a `docs/*.md` path; the `Grep` tool with no
+     path/glob narrowing it away from `docs/`), split by day (`timestamp[:10]`) and main-session vs
+     subagent (`isSidechain`). It reads only `tool_use` blocks — never `tool_result`, whose content
+     shape is inconsistent (a plain string in some transcripts, a list of content blocks in others)
+     — and a JSON-parse failure on any one line is skipped, not fatal, matching the invocation log's
+     own degrade-not-crash rule. It writes nothing under `~/.claude/projects`.
+
+  **Why this needs a second instrument at all, not just the log:** the log records the index's OWN
+  use; it cannot show the comparison against a hand grep of `docs/*.md`, because a producer that
+  greps `docs/*.md` by hand never touches the index or its log. Only mining transcripts can show
+  index-vs-grep.
+
+  **Not verified end-to-end against this machine's real transcripts as part of this ticket** — auto
+  mode's own PII classifier denies reading `~/.claude/projects/**/*.jsonl` content directly from a
+  producer's Bash tool, so `scripts/docs_index_usage_report.py` is tested here only against
+  synthetic fixtures under `tmp_path` (`tests/test_docs_index_usage_report.py`) that reproduce the
+  transcript shapes actually observed (`isSidechain`, `timestamp`, `message.content[].type ==
+  "tool_use"`) without reading real session content. A human (or an agent context this classifier
+  doesn't gate) should run `./venv/bin/python scripts/docs_index_usage_report.py` against this
+  machine's real transcripts to confirm it reproduces the 2026-09-13 retrospective baseline (56
+  index invocations / 118 direct greps / ~50% miss) within tolerance, per this ticket's acceptance
+  criteria — recorded here rather than silently claimed as done.
+
+  **Technical-review addendum (2026-09-13, `lode-dozi`) — the baseline did NOT reproduce; the
+  main-vs-subagent split needed a different signal, which this ticket's own log design already
+  names.** The paragraph above asked for a real-transcript run; the technical review was able to make
+  it (the producer's PII-classifier block did not apply there) and reports three things.
+
+  1. **The numbers do not match, and lean the other way.** Against 153 transcripts the script
+     produces **25 index invocations / 158 direct `docs/*.md` accesses** (a 14% index share), not the
+     retrospective **56 / 118**. So the index looks *less* used, and direct grepping *more* common,
+     than the hand count suggested. Whether 25 / 158 is the true baseline and the hand-mined 56 / 118
+     was differently scoped — or the classifier is still mis-scoped — is left to a human; this entry
+     records the measured figure rather than quietly claiming the criterion met.
+  2. **The `~50% miss` figure is not produced at all, by design.** The script reads only `tool_use`
+     blocks, never `tool_result`, precisely because `tool_result` content shape is inconsistent (see
+     the caveats in that module's docstring). Hit/miss therefore has to come from the invocation log's
+     own `hit_count`, which is what `docs_index_log.py stats` reports — the two instruments split this
+     dimension between them rather than both parsing it.
+  3. **`isSidechain` alone cannot carry the main-vs-subagent split on this Claude Code version.** It
+     is present on all 16,751 message entries in these transcripts and **`false` on every one**, so
+     the `per_role` section could only ever print a single `main:` row — dead output that reads as
+     data. Fixed at review by falling back to the `cwd` of the transcript entry: a
+     `.claude/worktrees/<hash>` cwd is the *same* main-checkout-vs-producer proxy this ticket's
+     invocation log already uses for its own `cwd` field, so this is the ticket's own design applied
+     consistently, not a new signal invented at review. With the fallback the split is real
+     (`main: index=25 direct=148`, `subagent: index=0 direct=10`).
+
+  Also at review: an **unnarrowed `Grep`** (no `path` and no `glob`, so it defaults to the whole repo
+  and *might* have read `docs/`) was being counted as a `direct` access, which would inflate the
+  headline ratio with cases that cannot be confirmed. It is now its own `ambiguous` bucket, reported
+  on its own line and excluded from the index-vs-direct ratio. On this machine that bucket is **0**,
+  so the 158 above does not depend on the change — but the headline number is no longer able to
+  silently absorb unconfirmable hits.
+
+- **2026-09-14 (`lode-dozi`) — CORRECTION to the two entries above: the tightened classifier, and
+  the transcript depth those earlier numbers were measured at.** Appended, not rewritten in place,
+  per this file's preamble. The `/land` escalation the entry above records was resolved by a human
+  as option 2 — the classifier over-counted `direct` — and acceptance criterion 3 was rewritten
+  accordingly: the pinned `56 / 118` figure is **dropped** (hand-mined at a different scope, not
+  reproducible), and the `~50% miss` half is **reassigned** to `docs_index_log.py stats`, which is
+  the instrument that can actually see `hit_count`. The measured figures in both entries above
+  (`25 / 158`, and the `27 / 176` the human re-measured) are therefore superseded by what this entry
+  records.
+
+  **Three classifier narrowings, each with a unit test on a synthetic transcript**
+  (`tests/test_docs_index_usage_report.py`), so that `direct` means a READ of `docs/*.md`:
+
+  1. **Command names match at command POSITIONS, not as substrings of the whole line**
+     (`_bash_command_names`). A `bd create --description="...docs/x.md... ahead ..."` spells `head`
+     and names a docs file, and was counted as a read of it; 12 of the 176 rows on the calibration
+     machine were exactly that. A name is recognized at the start of the command or after a
+     separator (`;` `|` `&` `(` newline, backtick, `$(`) or an argument-forwarding wrapper
+     (`xargs`/`sudo`/`time`/`env`/`nohup`). A wrapper not on that list is *missed*, which
+     under-counts — the direction this fix exists to move.
+  2. **Write and version-control forms are excluded** (`_is_write_or_git_form`): a redirect into
+     `docs/*.md`, any heredoc, an in-place `sed`, a `tee`, and `git
+     commit/add/show/diff/log/mv/rm/checkout` naming a docs file. 64 of the 176 rows were the
+     pipeline WRITING docs, counted as if it had read them.
+  3. **The scan is scoped to the current project by default** (`project_scope_dirs`), deriving the
+     transcript directory name from cwd the way Claude Code encodes it (every non-alphanumeric
+     character becomes `-`), with `--all-projects` to widen. A cwd inside `.claude/worktrees/<name>`
+     is normalized back to the project root first, so running this from a producer's worktree still
+     scopes to the whole project; a session started in a worktree gets its own transcript directory,
+     so those are included alongside the root's. Unscoped, an unrelated project on this machine
+     (`harness-export`) alone contributed 53 direct and 0 index.
+
+  **Transcript depth — a real under-count, not the cosmetic nit it was filed as.** The earlier
+  review flagged that `scan()` globbed `*/*.jsonl` (depth 2) while its docstring promised
+  `**/*.jsonl`. Fixing the *code* to match the docstring turns out to matter: subagent transcripts
+  live one level deeper, at `<project>/<session-uuid>/subagents/*.jsonl`, so the depth-2 glob saw
+  **only main-session transcripts** — and criterion 3's "split by main session vs subagent" was
+  therefore splitting a population that contained essentially no subagents (the earlier
+  `subagent: index=0 direct=10` came from `cwd`-fallback rows inside *main* transcripts, not from
+  subagent transcripts at all). `scan()` now recurses.
+
+  **Measured on this machine after the change** (`./venv/bin/python
+  scripts/docs_index_usage_report.py`, default scope): **142 index / 431 direct** (25% index share),
+  split `main: index=26 direct=59`, `subagent: index=116 direct=372`. Note the corpus is LIVE — it
+  grows while it is being measured, by the very session doing the measuring, so the totals are only
+  reproducible to within the traffic since. Over three runs during this review the totals moved
+  (130/411 → 142/431) while the `main:` row did not.
+
+  The human's re-measured lode-only figure of **27 / 67** is reproduced by that stable `main:` row —
+  and restricting this same code to depth-1 (main transcripts only) gives **26 / 64**, the same
+  figure modulo corpus growth. So the classifier tightening lands where the human measured it, and
+  the rest of the difference is the subagent half the depth-2 glob had been dropping on the floor.
+  The headline share barely moves between the two views (29% vs 25%), so including subagents does
+  not flatter the index.
+
+  Also fixed: `_print_split` omitted the `ambiguous` bucket from its per-day and per-role rows, so a
+  bucket that exists precisely to keep unconfirmable rows OUT of the headline ratio was invisible in
+  every breakdown. It is now a third column (0 across the board on this machine).

@@ -229,3 +229,20 @@ def test_cli_slash_prefixed_query_does_not_crash() -> None:
 def test_cli_hyphenated_query_does_not_crash() -> None:
     result = runner.invoke(app, ["push-vs-pull"])
     assert result.exit_code == 0
+
+
+def test_cli_still_prints_results_when_the_invocation_log_cannot_be_written(
+    tmp_path: Path,
+) -> None:
+    """The usage log (lode-dozi) is instrumentation, not a dependency.
+
+    Occupying the log path with a DIRECTORY makes append_invocation's open()
+    raise, while leaving the index cache dir itself writable so the query
+    still succeeds. Before the guard, this crashed with a traceback AFTER the
+    results had already been computed -- on the CLI CLAUDE.md sends every
+    agent through first.
+    """
+    (tmp_path / "lode" / "docs-index-log.jsonl").mkdir(parents=True)
+    result = runner.invoke(app, ["lode-nt98"])
+    assert result.exit_code == 0, result.output
+    assert "docs/" in result.output
