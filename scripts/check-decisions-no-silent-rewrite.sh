@@ -17,8 +17,8 @@
 #
 # SCOPE is base...head, not full repository history: a full-history replay
 # was tried and rejected as permanently noisy (paragraph rewrapping alone
-# flags dozens of legitimate commits). Full reasoning: docs/decisions.md via
-# the docs-index lookup "lode-rl6s".
+# flags dozens of legitimate commits). Full reasoning in docs/decisions.md
+# (./venv/bin/python scripts/docs_index_query.py "lode-rl6s").
 #
 # Usage: scripts/check-decisions-no-silent-rewrite.sh <base-ref> [<head-ref>]
 #   <head-ref> defaults to HEAD. Pass an ordinary ref (e.g. origin/trunk) --
