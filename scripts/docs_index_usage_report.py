@@ -16,7 +16,7 @@ design, same as the log this ticket's other half writes
 needed, and what it was worth on real transcripts: docs/decisions.md's
 ``lode-dozi`` entries. A Bash command LINE is split into segments
 (:func:`_split_segments`) before either of the first two narrowings runs --
-``lode-wtk2``, documented at :data:`_SEGMENT_SPLIT_RE`.
+``lode-wtk2``, documented at :data:`_SEGMENT_PUNCTUATION_CHARS`.
 
 The invocation log records the index's OWN use; it cannot show the
 comparison against direct grep/read access, because a producer that greps
@@ -63,14 +63,25 @@ _INDEX_SCRIPT_MARKER = "docs_index_query.py"
 _DIRECT_BASH_COMMANDS = frozenset({"grep", "sed", "head", "cat", "tail", "awk"})
 
 #: Separators that break one Bash command LINE into independent segments --
-#: ``;``/newline, ``|``/``||``, ``&``/``&&``, and subshell grouping ``(``/``)``.
+#: ``;``, ``|``/``||``, ``&``/``&&``, and subshell grouping ``(``/``)`` (a
+#: newline is handled before this, by splitting the command into lines).
 #: ``_classify`` used to judge a whole line at once (lode-wtk2): a genuine
 #: read piped into ``tee`` was excluded wholesale because the write check saw
 #: ``tee`` anywhere on the line, and a line merely pairing a docs path with
 #: an unrelated read still counted as direct because the docs-path check saw
 #: ``docs/*.md`` anywhere on the line. Splitting first and classifying each
 #: piece independently collapses both failure modes into one rule.
-_SEGMENT_SPLIT_RE = re.compile(r"[;\n]+|\|\|?|&&?|[()]")
+#:
+#: Splitting is done by :mod:`shlex`, not by a regex, because a separator
+#: only separates OUTSIDE quotes: a raw-character split cuts
+#: ``grep -n "foo|bar" docs/design.md`` in half, leaving two fragments with
+#: unbalanced quotes that nothing downstream can tokenize, so a genuine read
+#: is dropped. That is worth a third of the direct rows on the calibration
+#: corpus, all in the direction that inflates the index share this script
+#: exists to measure. Redirects (``<``/``>``) are deliberately NOT separators:
+#: :data:`_REDIRECT_TO_DOCS_RE` and the heredoc check need them to stay inside
+#: the segment they qualify.
+_SEGMENT_PUNCTUATION_CHARS = "();&|"
 
 #: Argument-forwarding wrappers a real command name can follow -- same
 #: allowlist and same under-count-not-over-count rationale as lode-dozi's
@@ -90,12 +101,41 @@ _SED_INPLACE_RE = re.compile(r"\bsed\b[^|;&\n]*(?:-[A-Za-z]*i\b|--in-place)")
 _GIT_NON_READ_RE = re.compile(r"\bgit\s+(?:commit|add|show|diff|log|mv|rm|checkout)\b")
 
 
+def _split_line_segments(line: str) -> list[str]:
+    """Split ONE line on the shell separators listed at
+    :data:`_SEGMENT_PUNCTUATION_CHARS`, honouring quoting.
+
+    A line shlex cannot tokenize at all (an unbalanced quote) is returned
+    whole, which degrades that one line to the pre-``lode-wtk2`` line-level
+    behaviour rather than dropping it.
+    """
+    lexer = shlex.shlex(line, posix=False, punctuation_chars=_SEGMENT_PUNCTUATION_CHARS)
+    lexer.whitespace_split = True
+    segments: list[str] = []
+    current: list[str] = []
+    try:
+        for token in lexer:
+            if token and all(char in _SEGMENT_PUNCTUATION_CHARS for char in token):
+                if current:
+                    segments.append(" ".join(current))
+                current = []
+            else:
+                current.append(token)
+    except ValueError:
+        return [line]
+    if current:
+        segments.append(" ".join(current))
+    return segments
+
+
 def _split_segments(command: str) -> list[str]:
-    """Split a Bash command LINE into independent segments on the usual
-    shell separators (see :data:`_SEGMENT_SPLIT_RE`), dropping any segment
-    with no non-whitespace content (an empty piece between two adjacent
-    separators, or at either end of the line)."""
-    return [seg for seg in _SEGMENT_SPLIT_RE.split(command) if seg.strip()]
+    """Split a Bash command into independent segments -- first on newlines,
+    then on the in-line shell separators -- dropping any segment with no
+    non-whitespace content."""
+    segments: list[str] = []
+    for line in command.splitlines():
+        segments.extend(_split_line_segments(line))
+    return [seg for seg in segments if seg.strip()]
 
 
 def _segment_command_name(segment: str) -> str | None:
@@ -114,7 +154,12 @@ def _segment_command_name(segment: str) -> str | None:
     try:
         tokens = shlex.split(segment)
     except ValueError:
-        return None
+        # An unbalanced quote (shlex's only failure) leaves the command name
+        # itself perfectly readable -- it sits before the quote. Approximate
+        # with whitespace splitting rather than discarding the segment, which
+        # would silently under-count exactly the rows this narrowing exists to
+        # count (lode-wtk2).
+        tokens = segment.split()
     for tok in tokens:
         if _ASSIGNMENT_RE.match(tok):
             continue
@@ -223,6 +268,11 @@ def _classify(tool_name: str, tool_input: dict[str, Any]) -> str | None:
         if _INDEX_SCRIPT_MARKER in command:
             return "index"
         if _is_git_non_read_form(command):
+            return None
+        # No segment can mention a docs path the whole line doesn't, so this
+        # is a safe superset test -- and it keeps the segment split, the only
+        # expensive step here, off the overwhelming majority of commands.
+        if not _mentions_docs_md(command):
             return None
         for segment in _split_segments(command):
             if _classify_bash_segment(segment) == "direct":

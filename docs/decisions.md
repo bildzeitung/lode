@@ -5757,9 +5757,23 @@ entries below from being rewritten to chase the current tree.)
   was counted as direct because the docs-path check saw `docs/*.md` anywhere on the line. The command
   line is now split into segments on the usual shell separators (`;`/newline, `|`/`||`, `&`/`&&`,
   `(`/`)`) and each segment is classified independently; a line counts as `direct` if ANY segment does.
+  The split itself is done with `shlex`, not a regex, so a separator only counts OUTSIDE quotes:
+  a regex split cut `grep -n "foo|bar" docs/design.md` in half, leaving two fragments with
+  unbalanced quotes that `shlex` then refused to tokenize, so the read was dropped entirely. That
+  cost a third of the genuine direct rows (33 counted where 49 existed, on one worktree's scope) and
+  would have inflated the index share this script exists to measure. A line `shlex` cannot tokenize
+  at all is classified whole, i.e. degraded to the pre-`lode-wtk2` line-level behaviour, never
+  dropped. Redirects (`<`/`>`) are deliberately not separators -- the redirect and heredoc write
+  checks need them inside the segment they qualify.
   Command-name extraction per segment now uses `shlex.split()` instead of the hand-rolled
   `_COMMAND_POSITION_RE` regex, since a pre-split segment holds at most one simple command and shlex
-  tokenizes it correctly (respecting quoting) rather than approximating it with a character class. The
+  tokenizes it correctly (respecting quoting) rather than approximating it with a character class.
+  Consequently the two narrowings the entry above names as `_bash_command_names` and
+  `_is_write_or_git_form` no longer exist under those names: they are now `_segment_command_name` and
+  `_is_write_form`/`_is_git_non_read_form`. One separator the old regex recognized is deliberately
+  NOT carried over: a backtick substitution no longer splits, so a read reached only through
+  backticks is missed -- an under-count, the same direction every other gap in this classifier
+  leans, and worth 0 rows on the current corpus. The
   one narrowing kept at LINE granularity, deliberately: the git non-read check
   (`commit/add/show/diff/log/mv/rm/checkout`) still disqualifies the whole line, since a
   `git checkout ... -- docs/x.md && cat docs/x.md` line is a version-control operation on the file that
@@ -5775,8 +5789,8 @@ entries below from being rewritten to chase the current tree.)
   delegate to.
 
   **Re-measured on this machine** (`./venv/bin/python scripts/docs_index_usage_report.py`, default
-  scope, after the segment-classifier change): **215 index / 306 direct** (41% index share), split
-  `main: index=30 direct=31`, `subagent: index=185 direct=275`. This is not directly comparable to the
+  scope, after the segment-classifier change): **224 index / 438 direct** (34% index share), split
+  `main: index=30 direct=50`, `subagent: index=194 direct=388`. This is not directly comparable to the
   **142 / 431** (25%) figure two entries above -- the corpus is LIVE (it has grown by the traffic of
   every session since, including this one), and the classifier itself changed in this entry, so some
   of the movement is real traffic and some is reclassification. Recorded here as the current baseline

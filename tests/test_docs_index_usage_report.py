@@ -374,6 +374,60 @@ def test_scan_does_not_count_a_docs_path_paired_with_an_unrelated_read(
     assert scan(tmp_path) == []
 
 
+def test_scan_does_not_split_inside_quotes(tmp_path: Path) -> None:
+    """(v) A separator character INSIDE a quoted argument is not a segment
+    boundary -- `grep -n "foo|bar" docs/design.md` is one read, not two
+    unparseable halves. Splitting on the raw characters dropped a third of
+    the genuine direct reads on the calibration corpus (lode-wtk2)."""
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": 'grep -n "foo|bar; baz" docs/design.md'},
+            )
+        ],
+    )
+    assert [r["kind"] for r in scan(tmp_path)] == ["direct"]
+
+
+def test_scan_keeps_a_quoted_command_substitution_intact(tmp_path: Path) -> None:
+    """(vi) A quoted ``$(...)`` keeps the docs path attached to the command
+    that reads it, instead of the parentheses cutting the path into its own
+    nameless segment (lode-wtk2)."""
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": 'head -50 "$(pwd)/docs/design.md"'},
+            )
+        ],
+    )
+    assert [r["kind"] for r in scan(tmp_path)] == ["direct"]
+
+
+def test_scan_survives_an_unbalanced_quote(tmp_path: Path) -> None:
+    """(vii) A line shlex cannot tokenize is classified whole rather than
+    dropped or crashing the scan (lode-wtk2)."""
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": 'cat docs/design.md "unclosed'},
+            )
+        ],
+    )
+    assert [r["kind"] for r in scan(tmp_path)] == ["direct"]
+
+
 def test_report_scopes_to_the_current_project_unless_widened(
     tmp_path: Path, monkeypatch
 ) -> None:
