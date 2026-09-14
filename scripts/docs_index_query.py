@@ -68,17 +68,19 @@ def _load_sibling(name: str, filename: str) -> ModuleType:
     every ``scripts/`` sibling loader in this repo now shares -- this
     function's body used to be that implementation; it is now a thin
     pass-through kept so every call site below stays unchanged.
+
+    The bootstrap that loads ``docs_index_loader.py`` ITSELF is deliberately
+    UNCACHED (``lode-7l68``, choice (c)): that module is stateless -- it
+    defines only ``load_sibling()``, no top-level state -- so a second
+    independent load anywhere else in the process is harmless, and skipping
+    the ``sys.modules`` cache here means this bootstrap never needs a
+    private cache name of its own, and so can never collide with anything.
     """
-    loader_name = "_docs_index_query_loader_impl"
-    if loader_name in sys.modules:
-        loader = sys.modules[loader_name]
-    else:
-        loader_path = Path(__file__).resolve().parent / "docs_index_loader.py"
-        spec = importlib.util.spec_from_file_location(loader_name, loader_path)
-        assert spec is not None and spec.loader is not None
-        loader = importlib.util.module_from_spec(spec)
-        sys.modules[loader_name] = loader
-        spec.loader.exec_module(loader)
+    loader_path = Path(__file__).resolve().parent / "docs_index_loader.py"
+    spec = importlib.util.spec_from_file_location("docs_index_loader", loader_path)
+    assert spec is not None and spec.loader is not None
+    loader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loader)
     return loader.load_sibling(name, filename)
 
 

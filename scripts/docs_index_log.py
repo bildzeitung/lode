@@ -23,7 +23,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import sys
 import time
 from collections import Counter
 from pathlib import Path
@@ -46,17 +45,19 @@ def _load_build():
     ``load_sibling`` here removes that risk: any caller asking for
     ``docs_index_build`` under its own private name gets the SAME cached
     module object back, never a second one.
+
+    The bootstrap that loads ``docs_index_loader.py`` ITSELF is deliberately
+    UNCACHED (``lode-7l68``, choice (c)): that module is stateless -- it
+    defines only ``load_sibling()``, no top-level state -- so a second
+    independent load anywhere else in the process is harmless, and skipping
+    the ``sys.modules`` cache here means this bootstrap never needs a
+    private cache name of its own, and so can never collide with anything.
     """
-    name = "_docs_index_log_loader_impl"
-    if name in sys.modules:
-        loader = sys.modules[name]
-    else:
-        path = Path(__file__).resolve().parent / "docs_index_loader.py"
-        spec = importlib.util.spec_from_file_location(name, path)
-        assert spec is not None and spec.loader is not None
-        loader = importlib.util.module_from_spec(spec)
-        sys.modules[name] = loader
-        spec.loader.exec_module(loader)
+    path = Path(__file__).resolve().parent / "docs_index_loader.py"
+    spec = importlib.util.spec_from_file_location("docs_index_loader", path)
+    assert spec is not None and spec.loader is not None
+    loader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loader)
     return loader.load_sibling("_docs_index_log_build_impl", "docs_index_build.py")
 
 
