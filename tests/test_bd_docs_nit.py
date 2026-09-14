@@ -252,6 +252,41 @@ def test_append_with_what_appends_a_what_it_changes_line(tmp_path: Path) -> None
     assert "What it changes: retargets a dangling cross-reference" in log
 
 
+def test_append_targeting_decisions_md_adds_append_only_reminder(tmp_path: Path) -> None:
+    """lode-9e5o: a nit in this patch shape looks like an in-place edit, and a
+    builder following it literally on docs/decisions.md violates that file's
+    append-only preamble every time (observed on lode-61w6). The note itself
+    must say so at the point of use."""
+    args = [
+        "append",
+        "--source",
+        "test",
+        "--file",
+        "docs/decisions.md",
+        "--line",
+        "7",
+        "--anchor",
+        "the old text",
+        "--replacement",
+        "the new text",
+    ]
+    r, _ = _run(tmp_path, args, open_rows=[{"id": "lode-59da", "title": STANDARD_TITLE}])
+    assert r.returncode == 0, r.stderr
+    log = (tmp_path / "fakebin" / "update.log").read_text()
+    assert (
+        "Reminder: docs/decisions.md is append-only -- apply this as an appended "
+        "**Update (<id>, <date>):** marker per that file's preamble, never as an "
+        "in-place replacement." in log
+    )
+
+
+def test_append_targeting_other_file_has_no_decisions_md_reminder(tmp_path: Path) -> None:
+    r, _ = _run(tmp_path, _APPEND_ARGS, open_rows=[{"id": "lode-59da", "title": STANDARD_TITLE}])
+    assert r.returncode == 0, r.stderr
+    log = (tmp_path / "fakebin" / "update.log").read_text()
+    assert "Reminder: docs/decisions.md is append-only" not in log
+
+
 def test_append_no_open_collector_creates_one_then_appends(tmp_path: Path) -> None:
     """lode-z1n5 part 1: reverses the old "a human opens it" rule -- append
     creates the collector itself when zero are open, rather than refusing."""

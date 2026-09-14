@@ -234,6 +234,16 @@ Replacement: \"$replacement\""
     note="$note
 What it changes: $what"
   fi
+  # lode-9e5o: docs/decisions.md is append-only (its own preamble) -- a nit
+  # in this exact patch shape (verbatim anchor + replacement) looks like an
+  # in-place edit, and a builder following it literally gets it wrong every
+  # time (observed on lode-61w6, caught only at review by
+  # scripts/check-decisions-no-silent-rewrite.sh). Say so at the point of
+  # use instead of relying on review to catch it.
+  if [ "$file" = "docs/decisions.md" ]; then
+    note="$note
+Reminder: docs/decisions.md is append-only -- apply this as an appended **Update (<id>, <date>):** marker per that file's preamble, never as an in-place replacement."
+  fi
 
   if ! bd update "$id" --append-notes "$note" >/dev/null; then
     echo "bd-docs-nit.sh append: \`bd update $id --append-notes\` failed" >&2
