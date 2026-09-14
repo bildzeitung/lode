@@ -39,6 +39,24 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+#: docs_index_loader.py is loaded the same bootstrap way its own docstring
+#: describes for every OTHER scripts/ sibling: scripts/ is not an installed
+#: package, so this has to resolve the file by path rather than `import`.
+#: Once loaded it supplies load_sibling(), which every further sibling load
+#: in this module goes through -- one bootstrap, not a second copy of the
+#: spec_from_file_location dance this ticket exists to consolidate.
+_loader_name = "_docs_index_build_loader_impl"
+if _loader_name in sys.modules:
+    _loader_module = sys.modules[_loader_name]
+else:
+    _loader_path = Path(__file__).resolve().parent / "docs_index_loader.py"
+    _loader_spec = importlib.util.spec_from_file_location(_loader_name, _loader_path)
+    assert _loader_spec is not None and _loader_spec.loader is not None
+    _loader_module = importlib.util.module_from_spec(_loader_spec)
+    sys.modules[_loader_name] = _loader_module
+    _loader_spec.loader.exec_module(_loader_module)
+load_sibling = _loader_module.load_sibling
+
 
 def _load_chunker() -> ModuleType:
     """Load scripts/docs_index_chunker.py under a PRIVATE sys.modules name.
@@ -58,16 +76,7 @@ def _load_chunker() -> ModuleType:
     the collision entirely, at the cost of a harmless second copy of the
     chunker module object if both are loaded in the same session.
     """
-    name = "_docs_index_build_chunker_impl"
-    if name in sys.modules:
-        return sys.modules[name]
-    path = Path(__file__).resolve().parent / "docs_index_chunker.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+    return load_sibling("_docs_index_build_chunker_impl", "docs_index_chunker.py")
 
 
 _chunker = _load_chunker()
@@ -86,24 +95,33 @@ _SCHEMA = (
 )
 
 
-def cache_db_path() -> Path:
-    """The on-disk index location: always OUTSIDE the repo worktree.
+def cache_dir() -> Path:
+    """The lode cache directory: always OUTSIDE the repo worktree.
 
-    ``$XDG_CACHE_HOME/lode/docs-index.sqlite3`` if ``XDG_CACHE_HOME`` is set
-    to an ABSOLUTE path, else ``~/.cache/lode/docs-index.sqlite3`` -- the
-    standard XDG Base Directory fallback. Neither path can resolve inside a git
-    worktree under normal operation, which is the structural half of the
-    never-tracked constraint (the gate-test half is ``lode-t6o1.4``).
+    ``$XDG_CACHE_HOME/lode`` if ``XDG_CACHE_HOME`` is set to an ABSOLUTE
+    path, else ``~/.cache/lode`` -- the standard XDG Base Directory fallback.
+    Neither path can resolve inside a git worktree under normal operation,
+    which is the structural half of the never-tracked constraint (the
+    gate-test half is ``lode-t6o1.4``).
 
     The absoluteness check is not pedantry about the spec (which does say a
     non-absolute value must be ignored): a relative ``XDG_CACHE_HOME`` is
     resolved against the *current* directory, so for a process running in the
-    checkout it would place the index INSIDE the worktree -- defeating the
-    structural half of the constraint this function exists to provide.
+    checkout it would place the cache dir INSIDE the worktree -- defeating
+    the structural half of the constraint this function exists to provide.
+
+    Shared with ``docs_index_log.log_path`` (``lode-wtk2``) so the fallback
+    rule has exactly one implementation instead of two that must be kept in
+    sync by hand.
     """
     xdg_cache_home = Path(os.environ.get("XDG_CACHE_HOME") or "")
     base = xdg_cache_home if xdg_cache_home.is_absolute() else Path.home() / ".cache"
-    return base / "lode" / "docs-index.sqlite3"
+    return base / "lode"
+
+
+def cache_db_path() -> Path:
+    """The on-disk index location: ``cache_dir() / "docs-index.sqlite3"``."""
+    return cache_dir() / "docs-index.sqlite3"
 
 
 def build_index(

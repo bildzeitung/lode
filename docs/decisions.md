@@ -5756,3 +5756,84 @@ entries below from being rewritten to chase the current tree.)
   Also fixed: `_print_split` omitted the `ambiguous` bucket from its per-day and per-role rows, so a
   bucket that exists precisely to keep unconfirmable rows OUT of the headline ratio was invisible in
   every breakdown. It is now a third column (0 across the board on this machine).
+
+- **2026-09-14 (`lode-wtk2`) — CORRECTION: `_classify` now judges Bash SEGMENTS, not
+  whole lines, and the baseline figure above is re-measured.** Appended, not rewritten in place, per
+  this file's preamble. `_classify` used to run its write/version-control exclusion and its
+  docs-path/direct-command check against the WHOLE Bash command line, which had two consequences: a
+  genuine read piped into `tee` (e.g. `cat docs/design.md | tee /tmp/out`) was excluded wholesale
+  because the write check saw `tee` anywhere on the line, and a line that merely PAIRED a docs path in
+  one clause with an unrelated read in another (e.g. `echo see docs/design.md && cat /etc/hostname`)
+  was counted as direct because the docs-path check saw `docs/*.md` anywhere on the line. The command
+  line is now split into segments on the usual shell separators (`;`/newline, `|`/`||`, `&`/`&&`,
+  `(`/`)`) and each segment is classified independently; a line counts as `direct` if ANY segment does.
+  The split itself is done with `shlex`, not a regex, so a separator only counts OUTSIDE quotes:
+  a regex split cut `grep -n "foo|bar" docs/design.md` in half, leaving two fragments with
+  unbalanced quotes that `shlex` then refused to tokenize, so the read was dropped entirely. That
+  cost a third of the genuine direct rows (33 counted where 49 existed, on one worktree's scope) and
+  would have inflated the index share this script exists to measure. A line `shlex` cannot tokenize
+  at all is classified whole, i.e. degraded to the pre-`lode-wtk2` line-level behaviour, never
+  dropped. Redirects (`<`/`>`) are deliberately not separators -- the redirect and heredoc write
+  checks need them inside the segment they qualify.
+  Command-name extraction per segment now uses `shlex.split()` instead of the hand-rolled
+  `_COMMAND_POSITION_RE` regex, since a pre-split segment holds at most one simple command and shlex
+  tokenizes it correctly (respecting quoting) rather than approximating it with a character class.
+  Consequently the two narrowings the entry above names as `_bash_command_names` and
+  `_is_write_or_git_form` no longer exist under those names: they are now `_segment_command_name` and
+  `_is_write_form`/`_is_git_non_read_form`. One separator the old regex recognized is deliberately
+  NOT carried over: a backtick substitution no longer splits, so a read reached only through
+  backticks is missed -- an under-count, the same direction every other gap in this classifier
+  leans, and worth 0 rows on the current corpus. The
+  one narrowing kept at LINE granularity, deliberately: the git non-read check
+  (`commit/add/show/diff/log/mv/rm/checkout`) still disqualifies the whole line, since a
+  `git checkout ... -- docs/x.md && cat docs/x.md` line is a version-control operation on the file that
+  happens to be followed by a same-line read, and the calibration corpus (40 rows) treats that whole
+  pattern as a write, not a direct read.
+
+  Also consolidated (same ticket): `docs_index_build` now exports `cache_dir()` (the shared
+  `$XDG_CACHE_HOME`-or-`~/.cache` fallback resolution), and `docs_index_log.log_path()` calls it
+  through the same private-`sys.modules` sibling-loader pattern the rest of `scripts/` uses, replacing
+  a byte-for-byte duplicate of the XDG rule. The `spec_from_file_location` loader body that
+  `docs_index_build._load_chunker` and `docs_index_query._load_sibling` each carried their own copy of
+  is now one implementation, `scripts/docs_index_loader.py`, that both load under a private name and
+  delegate to.
+
+  **Re-measured on this machine** (`./venv/bin/python scripts/docs_index_usage_report.py`, default
+  scope, after the segment-classifier change): **224 index / 438 direct** (34% index share), split
+  `main: index=30 direct=50`, `subagent: index=194 direct=388`. This is not directly comparable to the
+  **142 / 431** (25%) figure two entries above -- the corpus is LIVE (it has grown by the traffic of
+  every session since, including this one), and the classifier itself changed in this entry, so some
+  of the movement is real traffic and some is reclassification. Recorded here as the current baseline
+  rather than left silently stale.
+
+  - **Update (`lode-wtk2`, 2026-09-14) — the version-control narrowing is DELETED, heredoc bodies
+    are stripped, and the baseline is re-measured.** This supersedes the "one narrowing kept at LINE
+    granularity" paragraph in the entry above: that paragraph is wrong, and the code it described is
+    gone. Human ruling on the `/land` escalation, measured on this machine's corpus by running the
+    branch's own classifier both ways. Moving the version-control check per-segment flipped 8 rows
+    (438 -> 446 direct); 7 of the 8 are genuine docs reads the line-level check wrongly discarded
+    (e.g. `sed -n '5710,5722p' docs/decisions.md` followed on the same line by an unrelated
+    version-control command). The justifying pattern the paragraph above cites --
+    `git checkout -- docs/stack.md && cat docs/stack.md` -- occurs **0 times** in the corpus, and
+    `lode-dozi`'s 40-row calibration figure was produced by the PRE-segment classifier, so it does
+    not transfer: under per-segment classification a `git ...` segment already classifies as `None`
+    because `git` is not in `_DIRECT_BASH_COMMANDS`. The check was therefore dead code, not a
+    deliberate exception, and `_is_git_non_read_form` is removed rather than relocated.
+
+    The 8th flipped row exposed a separate hole, closed in the same change: `_split_segments` split
+    a heredoc BODY on newlines and classified each body line as its own segment, so
+    `cat >> docs/stack.md <<'EOF'` followed by prose mentioning `grep foo docs/design.md`
+    counted as a direct read. On the branch as it stood that row was excluded only by luck (its body happened to mention
+    a version-control verb, which the now-deleted line-level check caught). Heredoc bodies -- the
+    lines between a `<<WORD` opener in any quoting form (`<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`) and
+    its terminating `WORD` line -- are now stripped before segmentation. The opener line itself is
+    kept, so `_is_write_form` still sees the `<<` and disqualifies that segment. The `tee` clause
+    inside `_is_write_form` went the same way as the version-control one, and for the same reason:
+    `tee` is not in `_DIRECT_BASH_COMMANDS` either, so that clause could never fire.
+
+    **Re-measured after both changes** (`./venv/bin/python scripts/docs_index_usage_report.py`,
+    default scope): **237 index / 451 direct** (34% index share), split `main: index=31 direct=52`,
+    `subagent: index=206 direct=399`. Not directly comparable to the **224 / 438** figure above: the
+    corpus is live and has grown by every session since, including the one that made this change, so
+    part of the movement is traffic and part is reclassification. The headline share is unmoved at
+    34%, which is the substantive result -- the narrowing decided rows, not the ratio.

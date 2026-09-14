@@ -20,8 +20,10 @@ zero-hit fallback (lode-qcp0) that lives in ``docs_index_query.query``.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import sys
 import time
 from collections import Counter
 from pathlib import Path
@@ -32,15 +34,30 @@ import typer
 app = typer.Typer(add_completion=False)
 
 
-#: Same absolute-path fallback rule as docs_index_build.cache_db_path() --
-#: duplicated rather than imported, because importing docs_index_build here
-#: would give this module a second, independent load path for that module
-#: (see docs_index_query.py's own _load_build docstring on why that's
-#: unsafe: two independent loads make two distinct module objects). The rule
-#: itself is two lines and has no state to drift out of sync.
-def _xdg_cache_home() -> Path:
-    xdg_cache_home = Path(os.environ.get("XDG_CACHE_HOME") or "")
-    return xdg_cache_home if xdg_cache_home.is_absolute() else Path.home() / ".cache"
+def _load_build():
+    """Load scripts/docs_index_build.py under a PRIVATE sys.modules name, via
+    the shared scripts/docs_index_loader.py bootstrap (``lode-wtk2``).
+
+    ``log_path`` used to hand-duplicate ``docs_index_build``'s XDG fallback
+    rule rather than import it, specifically to avoid a SECOND, independent
+    load path for that module (two independent loads would create two
+    distinct module objects -- see ``docs_index_query.py``'s own
+    ``_load_build`` docstring). Going through the shared, cached
+    ``load_sibling`` here removes that risk: any caller asking for
+    ``docs_index_build`` under its own private name gets the SAME cached
+    module object back, never a second one.
+    """
+    name = "_docs_index_log_loader_impl"
+    if name in sys.modules:
+        loader = sys.modules[name]
+    else:
+        path = Path(__file__).resolve().parent / "docs_index_loader.py"
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        loader = importlib.util.module_from_spec(spec)
+        sys.modules[name] = loader
+        spec.loader.exec_module(loader)
+    return loader.load_sibling("_docs_index_log_build_impl", "docs_index_build.py")
 
 
 def log_path() -> Path:
@@ -48,7 +65,7 @@ def log_path() -> Path:
     if ``XDG_CACHE_HOME`` is set to an absolute path, else
     ``~/.cache/lode/docs-index-log.jsonl`` -- outside the repo worktree,
     same as the index db itself (see module docstring)."""
-    return _xdg_cache_home() / "lode" / "docs-index-log.jsonl"
+    return _load_build().cache_dir() / "docs-index-log.jsonl"
 
 
 #: Env vars that identify the calling harness/session, when present. Values

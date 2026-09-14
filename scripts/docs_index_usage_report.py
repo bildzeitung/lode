@@ -11,10 +11,13 @@ design, same as the log this ticket's other half writes
 (``scripts/docs_index_log.py``).
 
 "Direct" means a READ of ``docs/*.md``, which costs three narrowings --
-:func:`_bash_command_names`, :func:`_is_write_or_git_form` and
+:func:`_segment_command_name`, :func:`_is_write_form` and
 :func:`project_scope_dirs`, each documented where it lives. Why each was
 needed, and what it was worth on real transcripts: docs/decisions.md's
-``lode-dozi`` entries.
+``lode-dozi`` entries. A Bash command LINE has its heredoc bodies stripped
+and is then split into segments (:func:`_split_segments`) before either of
+the first two narrowings runs -- ``lode-wtk2``, documented at
+:data:`_SEGMENT_PUNCTUATION_CHARS`.
 
 The invocation log records the index's OWN use; it cannot show the
 comparison against direct grep/read access, because a producer that greps
@@ -43,6 +46,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from collections import Counter, defaultdict
 from collections.abc import Iterator
 from pathlib import Path
@@ -59,51 +63,170 @@ app = typer.Typer(add_completion=False)
 _INDEX_SCRIPT_MARKER = "docs_index_query.py"
 _DIRECT_BASH_COMMANDS = frozenset({"grep", "sed", "head", "cat", "tail", "awk"})
 
-#: A command NAME occupies the start of the command line, or follows a
-#: separator (``;`` ``|`` ``&`` ``(`` a newline, a backtick, ``$(``). Anything
-#: else that merely spells "cat" or "head" -- most importantly a bd issue body
-#: passed as ``--description=...`` -- is a substring, not a command, and must
-#: not be counted (lode-dozi: 12 of 176 "direct" rows on the calibration
-#: machine were exactly that). A name reached only through an
-#: argument-forwarding wrapper (``xargs``, ``sudo``) is missed, which
-#: under-counts rather than over-counts -- the direction this fix exists to
-#: move, and worth 0 rows of difference on the calibration corpus.
-_COMMAND_POSITION_RE = re.compile(
-    r"(?:\A|[\n;|&(`]|\$\()\s*(?:[\w./~-]*/)?([A-Za-z][\w.-]*)"
-)
+#: Separators that break one Bash command LINE into independent segments --
+#: ``;``, ``|``/``||``, ``&``/``&&``, and subshell grouping ``(``/``)`` (a
+#: newline is handled before this, by splitting the command into lines).
+#: ``_classify`` used to judge a whole line at once (lode-wtk2): a genuine
+#: read piped into ``tee`` was excluded wholesale because the write check saw
+#: ``tee`` anywhere on the line, and a line merely pairing a docs path with
+#: an unrelated read still counted as direct because the docs-path check saw
+#: ``docs/*.md`` anywhere on the line. Splitting first and classifying each
+#: piece independently collapses both failure modes into one rule.
+#:
+#: Splitting is done by :mod:`shlex`, not by a regex, because a separator
+#: only separates OUTSIDE quotes: a raw-character split cuts
+#: ``grep -n "foo|bar" docs/design.md`` in half, leaving two fragments with
+#: unbalanced quotes that nothing downstream can tokenize, so a genuine read
+#: is dropped. That is worth a third of the direct rows on the calibration
+#: corpus, all in the direction that inflates the index share this script
+#: exists to measure. Redirects (``<``/``>``) are deliberately NOT separators:
+#: :data:`_REDIRECT_TO_DOCS_RE` and the heredoc check need them to stay inside
+#: the segment they qualify.
+_SEGMENT_PUNCTUATION_CHARS = "();&|"
 
-#: Forms that WRITE a docs file (or ask git about one) rather than read it.
-#: The criterion is "direct" == a READ of docs/*.md, so each of these
-#: disqualifies the whole command, not just one token of it. The git clause
-#: is NOT subsumed by the command-name allowlist below: `git` alone never
-#: matches that allowlist, but `git show <ref>:docs/design.md | grep ...` does,
-#: and it decides 40 rows on the calibration corpus.
+#: Argument-forwarding wrappers a real command name can follow -- same
+#: allowlist and same under-count-not-over-count rationale as lode-dozi's
+#: original design (a wrapper not on this list is simply missed).
+_WRAPPER_COMMANDS = frozenset({"xargs", "sudo", "time", "env", "nohup"})
+_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_COMMAND_NAME_RE = re.compile(r"^[A-Za-z][\w.-]*$")
+
+#: Forms that WRITE a docs file rather than read it. The criterion is
+#: "direct" == a READ of docs/*.md, so each of these disqualifies the whole
+#: SEGMENT, not just one token of it. A version-control segment needs no
+#: clause of its own: `git` is not in :data:`_DIRECT_BASH_COMMANDS`, so a
+#: `git ...` segment is already unclassified by command name (lode-wtk2).
 _REDIRECT_TO_DOCS_RE = re.compile(r">>?\s*\S*docs/\S*\.md")
 _SED_INPLACE_RE = re.compile(r"\bsed\b[^|;&\n]*(?:-[A-Za-z]*i\b|--in-place)")
-_GIT_NON_READ_RE = re.compile(r"\bgit\s+(?:commit|add|show|diff|log|mv|rm|checkout)\b")
+
+#: A heredoc opener: ``<<WORD``, ``<<-WORD``, ``<<'WORD'``, ``<<"WORD"``.
+#: ``<<<`` (a herestring, which has no body) is excluded by the lookahead.
+_HEREDOC_OPEN_RE = re.compile(r"(?<!<)<<(?!<)(-?)\s*([\'\"]?)(\w+)\2")
 
 
-def _bash_command_names(command: str) -> set[str]:
-    """The set of command names actually INVOKED by a Bash command string.
+def _split_line_segments(line: str) -> list[str]:
+    """Split ONE line on the shell separators listed at
+    :data:`_SEGMENT_PUNCTUATION_CHARS`, honouring quoting.
 
-    Command-position matching, never a substring scan over the whole line --
-    see :data:`_COMMAND_POSITION_RE`.
+    A line shlex cannot tokenize at all (an unbalanced quote) is returned
+    whole, which degrades that one line to the pre-``lode-wtk2`` line-level
+    behaviour rather than dropping it.
     """
-    return set(_COMMAND_POSITION_RE.findall(command))
+    lexer = shlex.shlex(line, posix=False, punctuation_chars=_SEGMENT_PUNCTUATION_CHARS)
+    lexer.whitespace_split = True
+    segments: list[str] = []
+    current: list[str] = []
+    try:
+        for token in lexer:
+            if token and all(char in _SEGMENT_PUNCTUATION_CHARS for char in token):
+                if current:
+                    segments.append(" ".join(current))
+                current = []
+            else:
+                current.append(token)
+    except ValueError:
+        return [line]
+    if current:
+        segments.append(" ".join(current))
+    return segments
 
 
-def _is_write_or_git_form(command: str) -> bool:
-    """Whether this command writes a docs file or is a git operation naming
-    one, rather than reading it: a redirect into ``docs/*.md``, a heredoc, an
-    in-place ``sed``, a ``tee``, or ``git commit/add/show/diff/log/mv/rm/
-    checkout``."""
+def _strip_heredoc_bodies(command: str) -> list[str]:
+    """The command's lines with every heredoc BODY removed -- the lines
+    between a ``<<WORD`` opener and its terminating ``WORD`` line, the
+    terminator included. The opener line itself is kept, so
+    :func:`_is_write_form` still sees the ``<<`` and disqualifies it.
+
+    Heredoc body text is data, not commands: ``cat >> docs/stack.md <<'EOF'``
+    followed by prose mentioning ``grep foo docs/design.md`` would otherwise be
+    split into segments and one body line classified as a genuine direct read
+    (lode-wtk2). Delimiters opened on one line are consumed in order, and a
+    ``<<-`` body may indent its terminator.
+    """
+    kept: list[str] = []
+    pending: list[tuple[bool, str]] = []
+    for line in command.splitlines():
+        if pending:
+            dash, word = pending[0]
+            if (line.strip() if dash else line.rstrip()) == word:
+                pending.pop(0)
+            continue
+        kept.append(line)
+        pending.extend(
+            (bool(m.group(1)), m.group(3)) for m in _HEREDOC_OPEN_RE.finditer(line)
+        )
+    return kept
+
+
+def _split_segments(command: str) -> list[str]:
+    """Split a Bash command into independent segments -- heredoc bodies
+    stripped first, then on newlines, then on the in-line shell separators --
+    dropping any segment with no non-whitespace content."""
+    segments: list[str] = []
+    for line in _strip_heredoc_bodies(command):
+        segments.extend(_split_line_segments(line))
+    return [seg for seg in segments if seg.strip()]
+
+
+def _segment_command_name(segment: str) -> str | None:
+    """The one command name actually invoked by a single (already-split)
+    segment, or ``None`` if it can't be determined.
+
+    Tokenizes with :mod:`shlex` -- replacing the previous hand-rolled
+    command-POSITION regex, which existed only to find a command name
+    after a separator; once the line is pre-split into segments, each
+    segment holds at most one simple command, and shlex tokenizes it
+    correctly (respecting quoting) rather than approximating it with a
+    character-class regex. A leading ``VAR=val`` assignment or an
+    argument-forwarding wrapper (see :data:`_WRAPPER_COMMANDS`) is skipped
+    so the token after it is taken as the command name.
+    """
+    try:
+        tokens = shlex.split(segment)
+    except ValueError:
+        # An unbalanced quote (shlex's only failure) leaves the command name
+        # itself perfectly readable -- it sits before the quote. Approximate
+        # with whitespace splitting rather than discarding the segment, which
+        # would silently under-count exactly the rows this narrowing exists to
+        # count (lode-wtk2).
+        tokens = segment.split()
+    for tok in tokens:
+        if _ASSIGNMENT_RE.match(tok):
+            continue
+        base = tok.rsplit("/", 1)[-1]
+        if base in _WRAPPER_COMMANDS:
+            continue
+        if _COMMAND_NAME_RE.match(base):
+            return base
+        return None
+    return None
+
+
+def _is_write_form(segment: str) -> bool:
+    """Whether this SEGMENT writes a docs file rather than reading it: a
+    redirect into ``docs/*.md``, a heredoc opener, or an in-place ``sed``.
+
+    A ``tee`` needs no clause of its own, for the same reason a version-control
+    verb does not: it is not in :data:`_DIRECT_BASH_COMMANDS`, so its own
+    segment is already unclassified by command name.
+    """
     return bool(
-        _REDIRECT_TO_DOCS_RE.search(command)
-        or "<<" in command
-        or _SED_INPLACE_RE.search(command)
-        or "tee" in _bash_command_names(command)
-        or _GIT_NON_READ_RE.search(command)
+        _REDIRECT_TO_DOCS_RE.search(segment)
+        or "<<" in segment
+        or _SED_INPLACE_RE.search(segment)
     )
+
+
+def _classify_bash_segment(segment: str) -> str | None:
+    """Classify one already-split Bash command segment: ``"direct"`` if it
+    reads ``docs/*.md``, else ``None``."""
+    if not _mentions_docs_md(segment):
+        return None
+    if _segment_command_name(segment) not in _DIRECT_BASH_COMMANDS:
+        return None
+    if _is_write_form(segment):
+        return None
+    return "direct"
 
 
 def _iter_tool_uses(
@@ -158,13 +281,15 @@ def _classify(tool_name: str, tool_input: dict[str, Any]) -> str | None:
         command = str(tool_input.get("command", ""))
         if _INDEX_SCRIPT_MARKER in command:
             return "index"
+        # No segment can mention a docs path the whole line doesn't, so this
+        # is a safe superset test -- and it keeps the segment split, the only
+        # expensive step here, off the overwhelming majority of commands.
         if not _mentions_docs_md(command):
             return None
-        if not _bash_command_names(command) & _DIRECT_BASH_COMMANDS:
-            return None
-        if _is_write_or_git_form(command):
-            return None
-        return "direct"
+        for segment in _split_segments(command):
+            if _classify_bash_segment(segment) == "direct":
+                return "direct"
+        return None
     elif tool_name == "Read":
         if _mentions_docs_md(str(tool_input.get("file_path", ""))):
             return "direct"

@@ -308,12 +308,13 @@ def test_scan_does_not_count_a_command_name_spelled_inside_an_argument(
         "git commit -m 'tweak' docs/design.md",
         "git mv docs/stack.md docs/storage.md",
         "git rm docs/externals.md",
-        # These four reach a read command through a pipe, so the command-name
-        # allowlist alone would count them; only the git clause rejects them.
+        # These pipe a version-control read into a read command: the
+        # version-control segment carries the docs path but is not an allowed
+        # command name, and the piped segment names no docs file at all.
         "git show HEAD:docs/design.md | grep -n foo",
         "git diff -- docs/design.md | head -30",
         "git log --oneline docs/design.md | tail -5",
-        "git checkout trunk -- docs/design.md && cat docs/design.md",
+        "git show HEAD:docs/design.md | wc -l",
     ],
 )
 def test_scan_excludes_a_write_or_version_control_form(
@@ -333,6 +334,127 @@ def test_scan_excludes_a_write_or_version_control_form(
         ],
     )
     assert scan(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git checkout trunk -- docs/design.md && cat docs/design.md",
+        "sed -n '1,5p' docs/design.md; git diff --stat",
+    ],
+)
+def test_scan_counts_a_read_sharing_a_line_with_a_version_control_command(
+    tmp_path: Path, command: str
+) -> None:
+    """A genuine read counts even when a version-control command shares its
+    line: under per-segment classification the read is a segment of its own,
+    and the whole-line version-control exclusion these used to fall under was
+    dead code once segments carried the verdict (lode-wtk2)."""
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": command},
+            )
+        ],
+    )
+    assert [r["kind"] for r in scan(tmp_path)] == ["direct"]
+
+
+def test_scan_classifies_a_read_piped_into_tee_as_direct(tmp_path: Path) -> None:
+    """(iii) A genuine read of docs/*.md piped into `tee` (to also save the
+    output) is a direct read -- the write-form check applies to `tee`'s OWN
+    segment, not to the earlier segment that actually reads the file
+    (lode-wtk2)."""
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": "cat docs/design.md | tee /tmp/out.txt"},
+            )
+        ],
+    )
+    assert [r["kind"] for r in scan(tmp_path)] == ["direct"]
+
+
+def test_scan_does_not_count_a_docs_path_paired_with_an_unrelated_read(
+    tmp_path: Path,
+) -> None:
+    """(iv) A line that merely MENTIONS a docs path in one segment and reads
+    something unrelated in another segment is not a read of docs/*.md -- each
+    segment is classified independently (lode-wtk2)."""
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": "echo see docs/design.md && cat /etc/hostname"},
+            )
+        ],
+    )
+    assert scan(tmp_path) == []
+
+
+def test_scan_does_not_split_inside_quotes(tmp_path: Path) -> None:
+    """(v) A separator character INSIDE a quoted argument is not a segment
+    boundary -- `grep -n "foo|bar" docs/design.md` is one read, not two
+    unparseable halves. Splitting on the raw characters dropped a third of
+    the genuine direct reads on the calibration corpus (lode-wtk2)."""
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": 'grep -n "foo|bar; baz" docs/design.md'},
+            )
+        ],
+    )
+    assert [r["kind"] for r in scan(tmp_path)] == ["direct"]
+
+
+def test_scan_keeps_a_quoted_command_substitution_intact(tmp_path: Path) -> None:
+    """(vi) A quoted ``$(...)`` keeps the docs path attached to the command
+    that reads it, instead of the parentheses cutting the path into its own
+    nameless segment (lode-wtk2)."""
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": 'head -50 "$(pwd)/docs/design.md"'},
+            )
+        ],
+    )
+    assert [r["kind"] for r in scan(tmp_path)] == ["direct"]
+
+
+def test_scan_survives_an_unbalanced_quote(tmp_path: Path) -> None:
+    """(vii) A line shlex cannot tokenize is classified whole rather than
+    dropped or crashing the scan (lode-wtk2)."""
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": 'cat docs/design.md "unclosed'},
+            )
+        ],
+    )
+    assert [r["kind"] for r in scan(tmp_path)] == ["direct"]
 
 
 def test_report_scopes_to_the_current_project_unless_widened(
@@ -377,3 +499,64 @@ def test_report_scopes_to_the_current_project_unless_widened(
     )
     assert widened.exit_code == 0, widened.output
     assert "direct docs/*.md access: 3" in widened.output
+
+
+@pytest.mark.parametrize(
+    ("opener", "terminator"),
+    [
+        ("<<EOF", "EOF"),
+        ("<<'EOF'", "EOF"),
+        ('<<"EOF"', "EOF"),
+        ("<<-EOF", "\tEOF"),
+    ],
+)
+def test_scan_ignores_docs_paths_inside_a_heredoc_body(
+    tmp_path: Path, opener: str, terminator: str
+) -> None:
+    """A heredoc BODY is data, not commands: prose inside one that mentions a
+    read of docs/*.md must not classify as direct (lode-wtk2)."""
+    transcript = tmp_path / "proj" / "s1.jsonl"
+    command = "\n".join(
+        [
+            f"cat >> docs/stack.md {opener}",
+            "Earlier we ran grep foo docs/design.md to find it.",
+            terminator,
+        ]
+    )
+    _write_transcript(
+        transcript,
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00.000Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": command},
+            )
+        ],
+    )
+    assert scan(tmp_path) == []
+
+
+def test_scan_still_counts_a_read_after_a_heredoc_terminator(tmp_path: Path) -> None:
+    """Stripping stops at the terminator -- a real read on a later line is still
+    classified (lode-wtk2)."""
+    transcript = tmp_path / "proj" / "s1.jsonl"
+    command = (
+        "cat >> docs/stack.md <<'EOF'\n"
+        "grep foo docs/design.md\n"
+        "EOF\n"
+        "grep -n bar docs/decisions.md"
+    )
+    _write_transcript(
+        transcript,
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00.000Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": command},
+            )
+        ],
+    )
+    rows = scan(tmp_path)
+    assert [r["kind"] for r in rows] == ["direct"]
