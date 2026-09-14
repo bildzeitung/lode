@@ -14,9 +14,8 @@ This module is deliberately independent of ``docs_index_query.py``'s own
 logic (query escaping, FTS5, ranking) -- it only appends and later
 summarizes JSON lines. Keeping it separate means the query CLI's own diff for
 this ticket is a single import plus a single call at its one exit point,
-which matters because a sibling ticket (lode-qcp0) is editing
-``docs_index_query.py`` concurrently for an unrelated reason (an AND/OR
-zero-hit fallback).
+which keeps the query CLI's own diff small and independent of the AND/OR
+zero-hit fallback (lode-qcp0) that lives in ``docs_index_query.query``.
 """
 
 from __future__ import annotations
@@ -78,11 +77,8 @@ def append_invocation(
 ) -> None:
     """Append one JSON line describing an index invocation.
 
-    ``fallback_fired`` records whether a zero-hit AND->OR fallback fired --
-    that fallback does not exist in this diff (a sibling ticket, lode-qcp0,
-    is adding it concurrently); callers without one pass ``False`` always,
-    and the field is here so this log format does not need a second schema
-    change once that fallback lands.
+    ``fallback_fired`` records whether the query's zero-hit AND->OR fallback
+    (lode-qcp0) fired for this invocation.
     """
     resolved = path if path is not None else log_path()
     entry: dict[str, Any] = {
