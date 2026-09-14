@@ -5629,6 +5629,11 @@ entries below from being rewritten to chase the current tree.)
      `CLAUDE_CODE_CHILD_SESSION` — never a full `os.environ` dump, which would leak unrelated
      secrets into a cache-dir file with no access controls). `scripts/docs_index_log.py stats`
      summarizes a log: invocation count, miss rate, top zero-hit queries.
+
+     **Update (lode-61w6, 2026-09-14):** the AND->OR fallback (`lode-qcp0`) landed on trunk before
+     `lode-dozi` did, and the trunk-merge pickup wired `fallback_fired` to the real per-invocation
+     flag, so the field is live, not reserved — the always-`False` statement above describes the
+     pre-merge branch only.
   2. **Transcript-mining script** (`scripts/docs_index_usage_report.py`): reads
      `~/.claude/projects/**/*.jsonl` (Claude Code session transcripts) and classifies each
      `tool_use` block as an index invocation (a `Bash` command containing `docs_index_query.py`) or
@@ -5708,6 +5713,11 @@ entries below from being rewritten to chase the current tree.)
      separator (`;` `|` `&` `(` newline, backtick, `$(`) or an argument-forwarding wrapper
      (`xargs`/`sudo`/`time`/`env`/`nohup`). A wrapper not on that list is *missed*, which
      under-counts — the direction this fix exists to move.
+
+     **Update (lode-61w6, 2026-09-14):** the sentence above inverts what the code does.
+     `_COMMAND_POSITION_RE` knows nothing about argument-forwarding wrappers, so a name reached
+     only through `xargs`/`sudo`/`time`/`env`/`nohup` is the case that is *missed*. The
+     under-counting direction, and the conclusion drawn from it, are unaffected.
   2. **Write and version-control forms are excluded** (`_is_write_or_git_form`): a redirect into
      `docs/*.md`, any heredoc, an in-place `sed`, a `tee`, and `git
      commit/add/show/diff/log/mv/rm/checkout` naming a docs file. 64 of the 176 rows were the
