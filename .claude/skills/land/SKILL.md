@@ -687,7 +687,8 @@ fired there, and the recycled worktree's untracked leftovers survived to trip th
 (`coding.md`, `code-reviewer.md`, `land-review.md`) — still scoped to `.claude/worktrees/` only by the
 same `case` precondition. Nothing in Section 4 needed to change for this either; the fix lives
 entirely at the dispatch-time guard, same layer as the rest of this fix. Full reasoning:
-[docs/decisions.md](../../../docs/decisions.md) (search "lode-3v1p").
+[docs/decisions.md](../../../docs/decisions.md)
+(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`).
 
 Normally that is the end of this very pass: Section 4 is
 reached even when the accepted set is **empty** (nothing between 2c and 4 exits early on that
@@ -1982,7 +1983,8 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   **A second, narrow exception: the reopen-on-close backstop (lode-z1n5 part 4).** After the close
   loop, `scripts/bd-docs-nit.sh ensure-open $LANDED` creates a collector if this pass closed a
   `docs-nits`-labeled ticket and no open one remains — reaching the same
-  `scripts/bd-docs-nit-create.sh` that `scripts/bd-docs-nit.sh append`'s own agent-open path uses. This is **not** a reopening of the dupe generator either: it creates the one
+  `scripts/bd-docs-nit-create.sh` that `scripts/bd-docs-nit.sh append`'s own agent-open path uses.
+  This is **not** a reopening of the dupe generator either: it creates the one
   standing collector, located by label, never a one-off ticket for an incidental discovery — the same
   reasoning as the append exception just above, applied to a different trigger (a close, rather than a
   nit in hand).

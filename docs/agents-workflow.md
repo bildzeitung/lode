@@ -57,6 +57,13 @@ decisions settle into `docs/` and beads; only then does code get written (see
 
 ---
 
+## Docs lookup index (`lode-t6o1`)
+
+- The docs-index rule, command, output contract, and AND→OR fallback are single-sourced in
+  [`docs/docs-index.md`](docs-index.md) (`@import`ed by `CLAUDE.md`) — not repeated here.
+
+---
+
 ## The design loop — `challenge`
 
 `challenge` is a single, non-looping pass whose only job is to **argue with the plan**. You give it
@@ -619,7 +626,7 @@ rescue branch matters, why `origin/trunk` and never bare `trunk`, why the `case`
 fails to reach the agent that needs it, right when it needs it, outweighs the drift cost of three
 copies. `docs/decisions.md`'s three re-narrations of the same material carried no such argument —
 nothing reads `decisions.md` immediately before a destructive command — so those were trimmed to
-decision-timeline pointers instead (search "lode-zt62").
+decision-timeline pointers instead (`./venv/bin/python scripts/docs_index_query.py "lode-zt62"`).
 
 **Scope: only the fresh-build start state (`coding.md` step 3) and each cycle's own pre-checkout start
 state (`coding.md`'s rebase-pickup step 2, `code-reviewer.md` step 2) — never a reason to avoid the
@@ -668,8 +675,9 @@ leftover dirt on an undetected recycle. **The two axes stay documented as distin
 fix now closes both:** `land-review`'s correctness exposure to a recycled worktree remains nil
 regardless (unchanged from above — it never checks anything out), and this was, and remains, purely a
 worktree-**leak** fix on that role. Full reasoning, including the two runner-up options considered and
-why the unconditional-clean shape won: [docs/decisions.md](decisions.md) (search "lode-3v1p"). Full
-account of the guard sites: [land-review.md](../.claude/agents/land-review.md),
+why the unconditional-clean shape won: [docs/decisions.md](decisions.md)
+(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). Full account of the guard sites:
+[land-review.md](../.claude/agents/land-review.md),
 [coding.md](../.claude/agents/coding.md), [code-reviewer.md](../.claude/agents/code-reviewer.md), and
 [Isolating `land-review` dispatches](#isolating-land-review-dispatches-lode-g387), below.
 
@@ -792,7 +800,8 @@ roles. As a result, `code/SKILL.md`'s call-site `isolation: "worktree"` option f
 `code-reviewer` was **dropped** as redundant, matching `land-review`'s treatment after `lode-p2vi`.
 Full probe detail, both runs' results, and the two explicit limits on what this licenses — the
 contrast is between *whole* agent definitions rather than a single-variable ablation of the key, and
-the load was light — are in [`docs/decisions.md`](decisions.md) (search "lode-09td").
+the load was light — are in [`docs/decisions.md`](decisions.md)
+(`./venv/bin/python scripts/docs_index_query.py "lode-09td"`).
 
 **Root cause: still not fully determinable from this repo — the sufficiency question is closed, the
 fan-out question is not.** `isolation: "worktree"` is a harness feature implemented outside this codebase;
@@ -964,7 +973,8 @@ as `lode-p8zl` — which escalated both questions for a maintainer ruling and th
 `scripts/trunk-write-guard.sh`: a `PreToolUse(Edit|Write)` hook, gated on the current BRANCH (not an
 attempt to disambiguate subagent from main session — the payload cannot support that), returning
 `permissionDecision: "ask"` rather than `"deny"` when `HEAD` is `trunk`, and needing no `jq`. Full
-rulings and rationale: [`docs/decisions.md`](decisions.md) (search "lode-p8zl").
+rulings and rationale: [`docs/decisions.md`](decisions.md)
+(`./venv/bin/python scripts/docs_index_query.py "lode-p8zl"`).
 
 ### Precondition guards (the 0/1/2 family) (lode-t6ni)
 
@@ -1036,10 +1046,11 @@ is safe where it is.)
 blocks in the skill markdown under `.claude/skills/` print the identical "GATE COULD NOT RUN:" banner
 on a machine/checkout fault and then exit 1 rather than 2 — this is correct, not an inconsistency with
 the convention above, and the call sites are not to be changed. The canonical statement of why lives in
-`scripts/gate-lib.sh`'s own header (search "lode-vmnx"): the exit-2 convention exists for a **calling
-script** to classify a subprocess's exit code programmatically; an agent-executed skill fence has no
-calling script, only the agent itself reading the stderr banner directly, so the distinction
-`gate-lib.sh` enforces doesn't apply there.
+`scripts/gate-lib.sh`'s own header
+(`./venv/bin/python scripts/docs_index_query.py "lode-vmnx"`): the exit-2 convention exists for a
+**calling script** to classify a subprocess's exit code programmatically; an agent-executed skill
+fence has no calling script, only the agent itself reading the stderr banner directly, so the
+distinction `gate-lib.sh` enforces doesn't apply there.
 
 **Every `git` call is wrapped — raw 128 must never escape.** When a guard's own dependency fails
 (`git rev-parse` answering with a `fatal:` instead of a path), the guard converts that into **its own
@@ -2438,7 +2449,7 @@ suppressed for such a row (a human has already seen it, by construction — defe
 hidden from `bd ready`, so nothing can re-escalate one without a human touching it first), but the
 report still lists it, annotated `(deferred)`, alongside its unconditional appearance in the
 deferred-ticket section. Full rationale, including the accepted un-defer residual, in
-[decisions.md](decisions.md) (search "lode-o7ai").
+[decisions.md](decisions.md) (`./venv/bin/python scripts/docs_index_query.py "lode-o7ai"`).
 
 ---
 
@@ -2985,7 +2996,8 @@ no-op on a genuinely fresh worktree and clears exactly the leftover dirt on an u
 `land-review` still commits nothing and cleans nothing *itself*, but the guard it already runs leaves
 nothing dirty behind either way. Full reasoning for why unconditional-clean was chosen over the other
 two options on the table (having the sweep judge recycling-dirt separately, or asserting a clean tree
-after the guard as a distinct step): [docs/decisions.md](decisions.md) (search "lode-3v1p").
+after the guard as a distinct step): [docs/decisions.md](decisions.md)
+(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`).
 
 This is purely a worktree-leak fix: `land-review`'s **correctness** exposure to a recycled worktree
 was, and remains, nil, since it never reads anything from the checked-out state regardless of what
@@ -3012,7 +3024,7 @@ nothing in the system ever revisits it, and its ~100MB worktree (dominated by a 
 mostly hardlinked, so `du -sh` on one worktree wildly overstates what removing it actually frees)
 leaks forever. Measured on the landing machine: 8 of 14–18 worktree directories in this bucket.
 Human decision, and the full measurement/verification trail: [docs/decisions.md](decisions.md)
-(search "lode-yrtu"). In short:
+(`./venv/bin/python scripts/docs_index_query.py "lode-yrtu"`). In short:
 
 - **Chosen: widen `/land`'s existing Section 4 sweep** (not a new `/gc` entry point, not `/sweep`
   with a charter amendment — both considered and rejected, reasons in decisions.md).

@@ -1003,13 +1003,13 @@ all of it:
   `maintenance-commands.md`; `how-to/README.md`'s index table links it, so a frozen list would have
   shipped a dangling link).
 - **EXCLUDED**: `decisions.md`, `agents-workflow.md`, `stack.md` (this file), `conventions.md`,
-  `release.md`, `test-suite-audit.md`, `onboarding.md`, `keybindings.md`, `tui.md`, `editing.md`,
-  `configuration.md`. The last four are the interesting exclusions — they're about lode by title but
-  addressed to whoever *builds* it next, not whoever *uses* it (`keybindings.md`: "Consult this doc
-  before adding or rebinding a key"; `tui.md`: layout rules for the next screen; `configuration.md`:
-  build-time knobs alongside runtime ones; `editing.md`: TextArea internals). Their genuinely
-  user-facing content is picked up as **derived pages** by `lode-fhql.15`, not by publishing the
-  maintainer originals verbatim.
+  `docs-index.md`, `release.md`, `test-suite-audit.md`, `onboarding.md`, `keybindings.md`, `tui.md`,
+  `editing.md`, `configuration.md`. The last four are the interesting exclusions — they're about
+  lode by title but addressed to whoever *builds* it next, not whoever *uses* it (`keybindings.md`:
+  "Consult this doc before adding or rebinding a key"; `tui.md`: layout rules for the next screen;
+  `configuration.md`: build-time knobs alongside runtime ones; `editing.md`: TextArea
+  internals). Their genuinely user-facing content is picked up as **derived pages** by
+  `lode-fhql.15`, not by publishing the maintainer originals verbatim.
 
 **PUBLISHED is the authoritative list; EXCLUDED is commentary.** The published set is a closed
 enumeration and everything else under `docs/` is unpublished — including material the excluded list

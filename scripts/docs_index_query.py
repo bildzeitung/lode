@@ -21,11 +21,17 @@ it, FTS5's own quoting rule), and join with a space -- FTS5's implicit AND
 between phrase terms. A double-quoted phrase is matched as a literal string
 by the FTS5 query grammar, so no character inside it (hyphen, slash, digit)
 is ever parsed as query syntax.
+
+Implicit AND alone is over-strict for a natural multi-term phrase, which
+rarely lands every term in one unit, so :func:`query` retries a zero-hit
+search with the same tokens joined by ``OR`` (:func:`_escape_query_or`) and
+flags those rows as fallback hits (``lode-qcp0``).
 """
 
 from __future__ import annotations
 
 import importlib.util
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -107,7 +113,7 @@ def _load_log() -> ModuleType:
     return _load_sibling("_docs_index_query_log_impl", "docs_index_log.py")
 
 
-def _escape_query(raw: str) -> str:
+def _escape_query(raw: str, joiner: str = " ") -> str:
     """Tokenize ``raw`` on whitespace and quote each term as an FTS5 phrase.
 
     See the module docstring for the measured failures this fixes and why.
@@ -119,9 +125,37 @@ def _escape_query(raw: str) -> str:
     it mid-token and FTS5 raises ``unterminated string`` -- verified at
     technical review. Unreachable from argv (execve forbids NUL) but not from
     a library caller, so it is handled here rather than assumed away.
+
+    ``joiner`` selects the combining semantics: the default single space is
+    FTS5's implicit AND (the primary mode), ``" OR "`` the fallback mode's
+    (``lode-qcp0`` -- a natural multi-term phrase almost never lands every
+    term in one unit, so AND-only is over-strict as the ONLY mode). Both
+    modes share this one copy of the quoting rule, so an escaping fix can
+    never reach one mode and miss the other.
     """
     terms = raw.replace("\x00", "").split()
-    return " ".join('"' + term.replace('"', '""') + '"' for term in terms)
+    return joiner.join('"' + term.replace('"', '""') + '"' for term in terms)
+
+
+def _search(
+    conn: sqlite3.Connection,
+    match: str,
+    doc_class: str | None,
+    limit: int,
+) -> list[tuple[str, int, int, str, str]]:
+    """Run one MATCH query and return raw ``(path, line_lo, line_hi,
+    first_line, body)`` rows -- shared by the AND pass and the OR fallback
+    pass in :func:`query`, so the SQL shape lives in exactly one place."""
+    sql = (
+        "SELECT path, line_lo, line_hi, first_line, body FROM units WHERE units MATCH ?"
+    )
+    params: list[str | int] = [match]
+    if doc_class is not None:
+        sql += " AND doc_class = ?"
+        params.append(doc_class)
+    sql += " ORDER BY bm25(units) LIMIT ?"
+    params.append(limit)
+    return conn.execute(sql, params).fetchall()
 
 
 def _snippet(body: str) -> str:
@@ -136,10 +170,18 @@ def query(
     raw_query: str,
     doc_class: str | None = None,
     limit: int = 5,
-) -> list[tuple[str, int, int, str, str]]:
+) -> list[tuple[str, int, int, str, str, bool]]:
     """Run ``raw_query`` against a freshly built index and return the top
     ``limit`` hits, ranked by FTS5's ``bm25()``, as ``(path, line_lo,
-    line_hi, first_line, snippet)`` tuples. Never returns a whole unit body.
+    line_hi, first_line, snippet, used_fallback)`` tuples. Never returns a
+    whole unit body.
+
+    ``used_fallback`` is ``True`` on every row when the AND-only search (the
+    primary mode) returned zero hits and an OR search over the same terms
+    was retried instead (``lode-qcp0`` -- measured ~50% zero-hit rate on
+    real multi-term queries). The OR retry only fires on a genuine zero-hit
+    AND result, and only when it actually differs from the AND query (a
+    single-term query has no OR/AND distinction, so no second query is run).
     """
     match = _escape_query(raw_query)
     if not match:
@@ -147,22 +189,18 @@ def query(
 
     conn = _build.build_index()
     try:
-        sql = (
-            "SELECT path, line_lo, line_hi, first_line, body FROM units "
-            "WHERE units MATCH ?"
-        )
-        params: list[str | int] = [match]
-        if doc_class is not None:
-            sql += " AND doc_class = ?"
-            params.append(doc_class)
-        sql += " ORDER BY bm25(units) LIMIT ?"
-        params.append(limit)
-        rows = conn.execute(sql, params).fetchall()
+        rows = _search(conn, match, doc_class, limit)
+        used_fallback = False
+        if not rows:
+            or_match = _escape_query(raw_query, " OR ")
+            if or_match != match:
+                rows = _search(conn, or_match, doc_class, limit)
+                used_fallback = bool(rows)
     finally:
         conn.close()
 
     return [
-        (path, line_lo, line_hi, first_line, _snippet(body))
+        (path, line_lo, line_hi, first_line, _snippet(body), used_fallback)
         for path, line_lo, line_hi, first_line, body in rows
     ]
 
@@ -176,7 +214,8 @@ def query(
         "a short snippet, and nothing else: read the cited range yourself. It "
         "never prints a whole unit and never writes prose of its own.\n\nThe "
         "index is rebuilt from docs/ on every run, so results are never "
-        "stale."
+        "stale.\n\nWhen nothing matches every term at once, it retries "
+        "matching ANY term and marks those rows as an OR-match fallback."
     )
 )
 def main(
@@ -217,9 +256,12 @@ def main(
     start = time.perf_counter()
     results = query(text, doc_class=doc_class, limit=limit)
     elapsed_ms = (time.perf_counter() - start) * 1000
+    fallback_fired = False
     if results:
-        for path, line_lo, line_hi, first_line, snippet in results:
-            print(f"{path}:{line_lo}-{line_hi}  {first_line}")
+        for path, line_lo, line_hi, first_line, snippet, used_fallback in results:
+            fallback_fired = fallback_fired or used_fallback
+            marker = " [fallback: OR match]" if used_fallback else ""
+            print(f"{path}:{line_lo}-{line_hi}{marker}  {first_line}")
             print(f"    {snippet}")
     else:
         print("No results.")
@@ -233,7 +275,7 @@ def main(
         _load_log().append_invocation(
             query_text=text,
             hit_count=len(results),
-            fallback_fired=False,
+            fallback_fired=fallback_fired,
             elapsed_ms=elapsed_ms,
         )
     except (OSError, RuntimeError):  # fmt: skip

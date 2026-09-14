@@ -262,7 +262,8 @@
 # argument to zero): there is no self-reading form that keeps `release`'s
 # "a caller that never held the lock can call it harmlessly" contract, so
 # per-call-site threading is the correct end state, not a stopgap. Full
-# reasoning lives in docs/decisions.md (search "lode-yuwt") and
+# reasoning lives in docs/decisions.md
+# (./venv/bin/python scripts/docs_index_query.py "lode-yuwt") and
 # docs/agents-workflow.md -- deliberately not re-expanded here (lode-1n4x).
 #
 # For WHY this check exists (the self-concealing-overlap hazard: a displaced
