@@ -63,6 +63,7 @@ EXCLUDED = {
     "agents-workflow.md",
     "stack.md",
     "conventions.md",
+    "docs-index.md",
     "release.md",
     "test-suite-audit.md",
     "onboarding.md",
