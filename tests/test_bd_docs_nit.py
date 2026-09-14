@@ -252,7 +252,9 @@ def test_append_with_what_appends_a_what_it_changes_line(tmp_path: Path) -> None
     assert "What it changes: retargets a dangling cross-reference" in log
 
 
-def test_append_targeting_decisions_md_adds_append_only_reminder(tmp_path: Path) -> None:
+def test_append_targeting_decisions_md_adds_append_only_reminder(
+    tmp_path: Path,
+) -> None:
     """lode-9e5o: a nit in this patch shape looks like an in-place edit, and a
     builder following it literally on docs/decisions.md violates that file's
     append-only preamble every time (observed on lode-61w6). The note itself
@@ -270,7 +272,9 @@ def test_append_targeting_decisions_md_adds_append_only_reminder(tmp_path: Path)
         "--replacement",
         "the new text",
     ]
-    r, _ = _run(tmp_path, args, open_rows=[{"id": "lode-59da", "title": STANDARD_TITLE}])
+    r, _ = _run(
+        tmp_path, args, open_rows=[{"id": "lode-59da", "title": STANDARD_TITLE}]
+    )
     assert r.returncode == 0, r.stderr
     log = (tmp_path / "fakebin" / "update.log").read_text()
     assert (
@@ -280,8 +284,12 @@ def test_append_targeting_decisions_md_adds_append_only_reminder(tmp_path: Path)
     )
 
 
-def test_append_targeting_other_file_has_no_decisions_md_reminder(tmp_path: Path) -> None:
-    r, _ = _run(tmp_path, _APPEND_ARGS, open_rows=[{"id": "lode-59da", "title": STANDARD_TITLE}])
+def test_append_targeting_other_file_has_no_decisions_md_reminder(
+    tmp_path: Path,
+) -> None:
+    r, _ = _run(
+        tmp_path, _APPEND_ARGS, open_rows=[{"id": "lode-59da", "title": STANDARD_TITLE}]
+    )
     assert r.returncode == 0, r.stderr
     log = (tmp_path / "fakebin" / "update.log").read_text()
     assert "Reminder: docs/decisions.md is append-only" not in log
