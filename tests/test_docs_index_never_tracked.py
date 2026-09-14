@@ -38,6 +38,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # no other sqlite-backed artifact that should ever be committed).
 _INDEX_ARTIFACT_NAME_SUBSTRINGS = ("docs-index", "docs_index.sqlite")
 _INDEX_ARTIFACT_SUFFIXES = (".sqlite3", ".sqlite", ".db")
+# Extensions a sqlite artifact can never wear. The name-substring arm is
+# keyed on a bare word ("docs-index"), so it also matches prose files ABOUT
+# the index -- docs/docs-index.md is the single-sourced guidance page
+# (lode-zk7e), not the index. The suffix arm below is unaffected, so a
+# `docs-index.sqlite3`, a `docs-index.db`, or an extensionless `docs-index`
+# is still caught.
+_PROSE_SUFFIXES = (".md",)
 
 
 def _find_index_artifacts(tracked_paths: list[str]) -> list[str]:
@@ -47,9 +54,10 @@ def _find_index_artifacts(tracked_paths: list[str]) -> list[str]:
     offenders = []
     for raw in tracked_paths:
         name = Path(raw).name
-        if any(sub in name for sub in _INDEX_ARTIFACT_NAME_SUBSTRINGS) or any(
-            name.endswith(suf) for suf in _INDEX_ARTIFACT_SUFFIXES
-        ):
+        named_like_index = any(
+            sub in name for sub in _INDEX_ARTIFACT_NAME_SUBSTRINGS
+        ) and not name.endswith(_PROSE_SUFFIXES)
+        if named_like_index or name.endswith(_INDEX_ARTIFACT_SUFFIXES):
             offenders.append(raw)
     return offenders
 
@@ -114,6 +122,17 @@ def test_gate_catches_any_committed_sqlite_artifact_by_suffix() -> None:
     scan isn't keyed to today's exact filename."""
     tracked = ["docs/design.md", ".lode/cache.db"]
     assert _find_index_artifacts(tracked) == [".lode/cache.db"]
+
+
+def test_prose_about_the_index_is_not_an_artifact() -> None:
+    """The guidance page (`docs/docs-index.md`, lode-zk7e) carries the
+    artifact's name but is prose, not a sqlite file -- it must not be flagged,
+    while an extensionless or sqlite-suffixed sibling still is."""
+    tracked = ["docs/docs-index.md", "docs/docs-index", "docs/docs-index.sqlite3"]
+    assert _find_index_artifacts(tracked) == [
+        "docs/docs-index",
+        "docs/docs-index.sqlite3",
+    ]
 
 
 def test_gate_composes_real_discovery_with_the_match() -> None:
