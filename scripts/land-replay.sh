@@ -114,11 +114,12 @@
 # and this script stops rather than blaming (and deleting) whichever branch
 # happened to merge first. `nox -t fix` baselines on BOTH its exit code
 # (red) and its effect on the tree (a reformat, possible even on exit 0) --
-# see the baseline block below and docs/decisions.md (search "lode-mps0")
-# for why a dirty baseline reformat is gate-could-not-run, never committed
-# invisibly or discarded. `nox -t everything-else` needs neither check --
-# every session in that bucket (shellcheck/linkcheck/docstringcheck/docs) is
-# a read-only check with no tracked-tree side effect, same as `nox -s
+# see the baseline block below and docs/decisions.md
+# (./venv/bin/python scripts/docs_index_query.py "lode-mps0") for why a
+# dirty baseline reformat is gate-could-not-run, never committed invisibly
+# or discarded. `nox -t everything-else` needs neither check -- every
+# session in that bucket (shellcheck/linkcheck/docstringcheck/docs) is a
+# read-only check with no tracked-tree side effect, same as `nox -s
 # tests`, so it baselines on its exit code alone.
 #
 # Output (stdout), one line per id processed, in accepted-set order:
