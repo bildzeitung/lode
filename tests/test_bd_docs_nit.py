@@ -14,6 +14,7 @@ its resolve-by-label + refusal contract.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -197,19 +198,23 @@ def _run(
     return result, dolt_marker
 
 
-_APPEND_ARGS = [
-    "append",
-    "--source",
-    "test",
-    "--file",
-    "README.md",
-    "--line",
-    "42",
-    "--anchor",
-    "the old text",
-    "--replacement",
-    "the new text",
-]
+def _append_args(file: str = "README.md", line: str = "42") -> list[str]:
+    return [
+        "append",
+        "--source",
+        "test",
+        "--file",
+        file,
+        "--line",
+        line,
+        "--anchor",
+        "the old text",
+        "--replacement",
+        "the new text",
+    ]
+
+
+_APPEND_ARGS = _append_args()
 
 
 def test_append_with_one_open_collector_resolves_appends_and_pushes(
@@ -252,28 +257,19 @@ def test_append_with_what_appends_a_what_it_changes_line(tmp_path: Path) -> None
     assert "What it changes: retargets a dangling cross-reference" in log
 
 
+@pytest.mark.parametrize("spelling", ["docs/decisions.md", "./docs/decisions.md"])
 def test_append_targeting_decisions_md_adds_append_only_reminder(
-    tmp_path: Path,
+    tmp_path: Path, spelling: str
 ) -> None:
     """lode-9e5o: a nit in this patch shape looks like an in-place edit, and a
     builder following it literally on docs/decisions.md violates that file's
     append-only preamble every time (observed on lode-61w6). The note itself
-    must say so at the point of use."""
-    args = [
-        "append",
-        "--source",
-        "test",
-        "--file",
-        "docs/decisions.md",
-        "--line",
-        "7",
-        "--anchor",
-        "the old text",
-        "--replacement",
-        "the new text",
-    ]
+    must say so at the point of use -- including for the `./`-prefixed spelling
+    a caller is free to pass, since nothing else validates --file."""
     r, _ = _run(
-        tmp_path, args, open_rows=[{"id": "lode-59da", "title": STANDARD_TITLE}]
+        tmp_path,
+        _append_args(spelling, line="7"),
+        open_rows=[{"id": "lode-59da", "title": STANDARD_TITLE}],
     )
     assert r.returncode == 0, r.stderr
     log = (tmp_path / "fakebin" / "update.log").read_text()
@@ -282,6 +278,9 @@ def test_append_targeting_decisions_md_adds_append_only_reminder(
         "**Update (<id>, <date>):** marker per that file's preamble, never as an "
         "in-place replacement." in log
     )
+    # /sweep section 2d counts notes by `(?m)^NIT`; a reminder line starting
+    # with that literal would inflate every decisions.md nit to two.
+    assert len(re.findall(r"(?m)^NIT", log)) == 1
 
 
 def test_append_targeting_other_file_has_no_decisions_md_reminder(
