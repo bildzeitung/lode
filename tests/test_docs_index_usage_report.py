@@ -308,12 +308,13 @@ def test_scan_does_not_count_a_command_name_spelled_inside_an_argument(
         "git commit -m 'tweak' docs/design.md",
         "git mv docs/stack.md docs/storage.md",
         "git rm docs/externals.md",
-        # These four reach a read command through a pipe, so the command-name
-        # allowlist alone would count them; only the git clause rejects them.
+        # These pipe a version-control read into a read command: the
+        # version-control segment carries the docs path but is not an allowed
+        # command name, and the piped segment names no docs file at all.
         "git show HEAD:docs/design.md | grep -n foo",
         "git diff -- docs/design.md | head -30",
         "git log --oneline docs/design.md | tail -5",
-        "git checkout trunk -- docs/design.md && cat docs/design.md",
+        "git show HEAD:docs/design.md | wc -l",
     ],
 )
 def test_scan_excludes_a_write_or_version_control_form(
@@ -333,6 +334,34 @@ def test_scan_excludes_a_write_or_version_control_form(
         ],
     )
     assert scan(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git checkout trunk -- docs/design.md && cat docs/design.md",
+        "sed -n '1,5p' docs/design.md; git diff --stat",
+    ],
+)
+def test_scan_counts_a_read_sharing_a_line_with_a_version_control_command(
+    tmp_path: Path, command: str
+) -> None:
+    """A genuine read counts even when a version-control command shares its
+    line: under per-segment classification the read is a segment of its own,
+    and the whole-line version-control exclusion these used to fall under was
+    dead code once segments carried the verdict (lode-wtk2)."""
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": command},
+            )
+        ],
+    )
+    assert [r["kind"] for r in scan(tmp_path)] == ["direct"]
 
 
 def test_scan_classifies_a_read_piped_into_tee_as_direct(tmp_path: Path) -> None:
@@ -470,3 +499,64 @@ def test_report_scopes_to_the_current_project_unless_widened(
     )
     assert widened.exit_code == 0, widened.output
     assert "direct docs/*.md access: 3" in widened.output
+
+
+@pytest.mark.parametrize(
+    ("opener", "terminator"),
+    [
+        ("<<EOF", "EOF"),
+        ("<<'EOF'", "EOF"),
+        ('<<"EOF"', "EOF"),
+        ("<<-EOF", "\tEOF"),
+    ],
+)
+def test_scan_ignores_docs_paths_inside_a_heredoc_body(
+    tmp_path: Path, opener: str, terminator: str
+) -> None:
+    """A heredoc BODY is data, not commands: prose inside one that mentions a
+    read of docs/*.md must not classify as direct (lode-wtk2)."""
+    transcript = tmp_path / "proj" / "s1.jsonl"
+    command = "\n".join(
+        [
+            f"cat >> docs/stack.md {opener}",
+            "Earlier we ran grep foo docs/design.md to find it.",
+            terminator,
+        ]
+    )
+    _write_transcript(
+        transcript,
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00.000Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": command},
+            )
+        ],
+    )
+    assert scan(tmp_path) == []
+
+
+def test_scan_still_counts_a_read_after_a_heredoc_terminator(tmp_path: Path) -> None:
+    """Stripping stops at the terminator -- a real read on a later line is still
+    classified (lode-wtk2)."""
+    transcript = tmp_path / "proj" / "s1.jsonl"
+    command = (
+        "cat >> docs/stack.md <<'EOF'\n"
+        "grep foo docs/design.md\n"
+        "EOF\n"
+        "grep -n bar docs/decisions.md"
+    )
+    _write_transcript(
+        transcript,
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00.000Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": command},
+            )
+        ],
+    )
+    rows = scan(tmp_path)
+    assert [r["kind"] for r in rows] == ["direct"]

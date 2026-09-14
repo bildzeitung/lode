@@ -5795,3 +5795,35 @@ entries below from being rewritten to chase the current tree.)
   every session since, including this one), and the classifier itself changed in this entry, so some
   of the movement is real traffic and some is reclassification. Recorded here as the current baseline
   rather than left silently stale.
+
+  - **Update (`lode-wtk2`, 2026-09-14) — the version-control narrowing is DELETED, heredoc bodies
+    are stripped, and the baseline is re-measured.** This supersedes the "one narrowing kept at LINE
+    granularity" paragraph in the entry above: that paragraph is wrong, and the code it described is
+    gone. Human ruling on the `/land` escalation, measured on this machine's corpus by running the
+    branch's own classifier both ways. Moving the version-control check per-segment flipped 8 rows
+    (438 -> 446 direct); 7 of the 8 are genuine docs reads the line-level check wrongly discarded
+    (e.g. `sed -n '5710,5722p' docs/decisions.md` followed on the same line by an unrelated
+    version-control command). The justifying pattern the paragraph above cites --
+    `git checkout -- docs/stack.md && cat docs/stack.md` -- occurs **0 times** in the corpus, and
+    `lode-dozi`'s 40-row calibration figure was produced by the PRE-segment classifier, so it does
+    not transfer: under per-segment classification a `git ...` segment already classifies as `None`
+    because `git` is not in `_DIRECT_BASH_COMMANDS`. The check was therefore dead code, not a
+    deliberate exception, and `_is_git_non_read_form` is removed rather than relocated.
+
+    The 8th flipped row exposed a separate hole, closed in the same change: `_split_segments` split
+    a heredoc BODY on newlines and classified each body line as its own segment, so
+    `cat >> docs/stack.md <<'EOF'` followed by prose mentioning `grep foo docs/design.md`
+    counted as a direct read. On the branch as it stood that row was excluded only by luck (its body happened to mention
+    a version-control verb, which the now-deleted line-level check caught). Heredoc bodies -- the
+    lines between a `<<WORD` opener in any quoting form (`<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`) and
+    its terminating `WORD` line -- are now stripped before segmentation. The opener line itself is
+    kept, so `_is_write_form` still sees the `<<` and disqualifies that segment. The `tee` clause
+    inside `_is_write_form` went the same way as the version-control one, and for the same reason:
+    `tee` is not in `_DIRECT_BASH_COMMANDS` either, so that clause could never fire.
+
+    **Re-measured after both changes** (`./venv/bin/python scripts/docs_index_usage_report.py`,
+    default scope): **237 index / 451 direct** (34% index share), split `main: index=31 direct=52`,
+    `subagent: index=206 direct=399`. Not directly comparable to the **224 / 438** figure above: the
+    corpus is live and has grown by every session since, including the one that made this change, so
+    part of the movement is traffic and part is reclassification. The headline share is unmoved at
+    34%, which is the substantive result -- the narrowing decided rows, not the ratio.

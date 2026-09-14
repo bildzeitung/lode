@@ -11,12 +11,13 @@ design, same as the log this ticket's other half writes
 (``scripts/docs_index_log.py``).
 
 "Direct" means a READ of ``docs/*.md``, which costs three narrowings --
-:func:`_segment_command_name`, :func:`_is_write_form`/:func:`_is_git_non_read_form` and
+:func:`_segment_command_name`, :func:`_is_write_form` and
 :func:`project_scope_dirs`, each documented where it lives. Why each was
 needed, and what it was worth on real transcripts: docs/decisions.md's
-``lode-dozi`` entries. A Bash command LINE is split into segments
-(:func:`_split_segments`) before either of the first two narrowings runs --
-``lode-wtk2``, documented at :data:`_SEGMENT_PUNCTUATION_CHARS`.
+``lode-dozi`` entries. A Bash command LINE has its heredoc bodies stripped
+and is then split into segments (:func:`_split_segments`) before either of
+the first two narrowings runs -- ``lode-wtk2``, documented at
+:data:`_SEGMENT_PUNCTUATION_CHARS`.
 
 The invocation log records the index's OWN use; it cannot show the
 comparison against direct grep/read access, because a producer that greps
@@ -90,15 +91,17 @@ _WRAPPER_COMMANDS = frozenset({"xargs", "sudo", "time", "env", "nohup"})
 _ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _COMMAND_NAME_RE = re.compile(r"^[A-Za-z][\w.-]*$")
 
-#: Forms that WRITE a docs file (or ask git about one) rather than read it.
-#: The criterion is "direct" == a READ of docs/*.md, so each of these
-#: disqualifies the whole SEGMENT, not just one token of it. The git clause
-#: is NOT subsumed by the command-name allowlist below: `git` alone never
-#: matches that allowlist, but `git show <ref>:docs/design.md | grep ...` does,
-#: and it decides 40 rows on the calibration corpus.
+#: Forms that WRITE a docs file rather than read it. The criterion is
+#: "direct" == a READ of docs/*.md, so each of these disqualifies the whole
+#: SEGMENT, not just one token of it. A version-control segment needs no
+#: clause of its own: `git` is not in :data:`_DIRECT_BASH_COMMANDS`, so a
+#: `git ...` segment is already unclassified by command name (lode-wtk2).
 _REDIRECT_TO_DOCS_RE = re.compile(r">>?\s*\S*docs/\S*\.md")
 _SED_INPLACE_RE = re.compile(r"\bsed\b[^|;&\n]*(?:-[A-Za-z]*i\b|--in-place)")
-_GIT_NON_READ_RE = re.compile(r"\bgit\s+(?:commit|add|show|diff|log|mv|rm|checkout)\b")
+
+#: A heredoc opener: ``<<WORD``, ``<<-WORD``, ``<<'WORD'``, ``<<"WORD"``.
+#: ``<<<`` (a herestring, which has no body) is excluded by the lookahead.
+_HEREDOC_OPEN_RE = re.compile(r"(?<!<)<<(?!<)(-?)\s*([\'\"]?)(\w+)\2")
 
 
 def _split_line_segments(line: str) -> list[str]:
@@ -128,12 +131,39 @@ def _split_line_segments(line: str) -> list[str]:
     return segments
 
 
-def _split_segments(command: str) -> list[str]:
-    """Split a Bash command into independent segments -- first on newlines,
-    then on the in-line shell separators -- dropping any segment with no
-    non-whitespace content."""
-    segments: list[str] = []
+def _strip_heredoc_bodies(command: str) -> list[str]:
+    """The command's lines with every heredoc BODY removed -- the lines
+    between a ``<<WORD`` opener and its terminating ``WORD`` line, the
+    terminator included. The opener line itself is kept, so
+    :func:`_is_write_form` still sees the ``<<`` and disqualifies it.
+
+    Heredoc body text is data, not commands: ``cat >> docs/stack.md <<'EOF'``
+    followed by prose mentioning ``grep foo docs/design.md`` would otherwise be
+    split into segments and one body line classified as a genuine direct read
+    (lode-wtk2). Delimiters opened on one line are consumed in order, and a
+    ``<<-`` body may indent its terminator.
+    """
+    kept: list[str] = []
+    pending: list[tuple[bool, str]] = []
     for line in command.splitlines():
+        if pending:
+            dash, word = pending[0]
+            if (line.strip() if dash else line.rstrip()) == word:
+                pending.pop(0)
+            continue
+        kept.append(line)
+        pending.extend(
+            (bool(m.group(1)), m.group(3)) for m in _HEREDOC_OPEN_RE.finditer(line)
+        )
+    return kept
+
+
+def _split_segments(command: str) -> list[str]:
+    """Split a Bash command into independent segments -- heredoc bodies
+    stripped first, then on newlines, then on the in-line shell separators --
+    dropping any segment with no non-whitespace content."""
+    segments: list[str] = []
+    for line in _strip_heredoc_bodies(command):
         segments.extend(_split_line_segments(line))
     return [seg for seg in segments if seg.strip()]
 
@@ -174,33 +204,17 @@ def _segment_command_name(segment: str) -> str | None:
 
 def _is_write_form(segment: str) -> bool:
     """Whether this SEGMENT writes a docs file rather than reading it: a
-    redirect into ``docs/*.md``, a heredoc, an in-place ``sed``, or a
-    ``tee``. The git non-read check is deliberately NOT here -- see
-    :func:`_is_git_non_read_form`."""
+    redirect into ``docs/*.md``, a heredoc opener, or an in-place ``sed``.
+
+    A ``tee`` needs no clause of its own, for the same reason a version-control
+    verb does not: it is not in :data:`_DIRECT_BASH_COMMANDS`, so its own
+    segment is already unclassified by command name.
+    """
     return bool(
         _REDIRECT_TO_DOCS_RE.search(segment)
         or "<<" in segment
         or _SED_INPLACE_RE.search(segment)
-        or _segment_command_name(segment) == "tee"
     )
-
-
-def _is_git_non_read_form(command: str) -> bool:
-    """Whether the whole command LINE (not one segment) contains a git
-    operation naming a docs file rather than reading it: ``git
-    commit/add/show/diff/log/mv/rm/checkout``.
-
-    Checked at the LINE level, deliberately not per-segment: a
-    ``git checkout ... -- <path> && cat <path>`` line naming the same
-    ``docs/*.md`` file twice is a version-control operation that happens to
-    be followed by a read of the same file on the same line, and the
-    calibration corpus treats the whole line as a version-control op, not a
-    direct read (40 rows decided by this clause; see docs/decisions.md's
-    ``lode-dozi`` entry). This is the one narrowing this ticket
-    (``lode-wtk2``) deliberately keeps at line granularity rather than
-    moving to :func:`_classify_bash_segment`.
-    """
-    return bool(_GIT_NON_READ_RE.search(command))
 
 
 def _classify_bash_segment(segment: str) -> str | None:
@@ -267,8 +281,6 @@ def _classify(tool_name: str, tool_input: dict[str, Any]) -> str | None:
         command = str(tool_input.get("command", ""))
         if _INDEX_SCRIPT_MARKER in command:
             return "index"
-        if _is_git_non_read_form(command):
-            return None
         # No segment can mention a docs path the whole line doesn't, so this
         # is a safe superset test -- and it keeps the segment split, the only
         # expensive step here, off the overwhelming majority of commands.
