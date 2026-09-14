@@ -5714,10 +5714,10 @@ entries below from being rewritten to chase the current tree.)
      (`xargs`/`sudo`/`time`/`env`/`nohup`). A wrapper not on that list is *missed*, which
      under-counts — the direction this fix exists to move.
 
-     **Update (lode-61w6, 2026-09-14):** the sentence above inverts what the code does. Only the
-     separators are recognized; `_COMMAND_POSITION_RE` knows nothing about argument-forwarding
-     wrappers, so a name reached only through `xargs`/`sudo`/`time`/`env`/`nohup` is the case that
-     is *missed*. The under-counting direction, and the conclusion drawn from it, are unaffected.
+     **Update (lode-61w6, 2026-09-14):** the sentence above inverts what the code does.
+     `_COMMAND_POSITION_RE` knows nothing about argument-forwarding wrappers, so a name reached
+     only through `xargs`/`sudo`/`time`/`env`/`nohup` is the case that is *missed*. The
+     under-counting direction, and the conclusion drawn from it, are unaffected.
   2. **Write and version-control forms are excluded** (`_is_write_or_git_form`): a redirect into
      `docs/*.md`, any heredoc, an in-place `sed`, a `tee`, and `git
      commit/add/show/diff/log/mv/rm/checkout` naming a docs file. 64 of the 176 rows were the

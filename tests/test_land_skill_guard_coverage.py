@@ -124,9 +124,8 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 # liveness pin, mirroring the precedent `test_skill_bash_state.py::_dead_allowlist_keys`
 # set. Whether these hand-written pins should share one mechanism was decided
 # (rejected extraction, in favor of shared discipline instead) in
-# docs/decisions.md (lode-7zap) -- find the entry with:
-#   ./venv/bin/python scripts/docs_index_query.py "hand-written liveness pins stay separate"
-# Do not re-litigate here.
+# docs/decisions.md
+# (./venv/bin/python scripts/docs_index_query.py "lode-7zap"). Do not re-litigate here.
 #
 # DECISION (lode-eu04): `_dead_allowlist_entries`' live set also ignored
 # `_unguarded_mutations`' BLOCK-level guard state (a key reachable only inside
