@@ -29,6 +29,13 @@ _escape_query = _query_module._escape_query
 query = _query_module.query
 app = _query_module.app
 
+# Loaded separately (private name) only to read back the invocation log the
+# CLI writes via its own _load_log() -- never to call append_invocation
+# directly, which would bypass the thing under test.
+_log_module_for_reading = load_module_from_path(
+    "docs_index_log_read_by_query_test", REPO_ROOT / "scripts" / "docs_index_log.py"
+)
+
 runner = CliRunner()
 
 
@@ -187,6 +194,39 @@ def test_query_falls_back_to_or_when_and_query_has_zero_hits(
     results = query("zeeqx wyvox", limit=5)
     assert results
     assert all(used_fallback for *_rest, used_fallback in results)
+
+
+def test_cli_logs_fallback_fired_true_only_when_the_or_fallback_actually_fires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-i5ww: the CLI's one append_invocation call site must pass the
+    REAL per-invocation fallback flag, not a hardcoded False -- so a query
+    that trips the AND->OR fallback logs fallback_fired=true, and one that
+    doesn't logs false. The autouse _private_index_cache fixture already
+    points XDG_CACHE_HOME at tmp_path, which is also where the invocation
+    log lands (docs_index_log.log_path() follows the same XDG rule)."""
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "a.md").write_text("# Alpha section\n\nzeeqx term appears here.\n")
+    (docs_dir / "b.md").write_text("# Beta section\n\nwyvox term appears here.\n")
+
+    monkeypatch.setattr(
+        _query_module._build,
+        "build_index",
+        functools.partial(_query_module._build.build_index, docs_dir=docs_dir),
+    )
+
+    # Zero-hit AND pass, so the query only succeeds via the OR retry.
+    result = runner.invoke(app, ["zeeqx wyvox"])
+    assert result.exit_code == 0, result.output
+
+    # Both terms present together in "zeeqx" alone, so the AND pass hits
+    # directly and the fallback never fires.
+    result = runner.invoke(app, ["zeeqx"])
+    assert result.exit_code == 0, result.output
+
+    entries = _log_module_for_reading.read_log(_log_module_for_reading.log_path())
+    assert [e["fallback_fired"] for e in entries] == [True, False]
 
 
 def test_query_class_filter_restricts_to_the_requested_class() -> None:
