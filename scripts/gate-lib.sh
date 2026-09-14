@@ -95,8 +95,9 @@
 # cross-references it rather than restating it.
 #
 # GATE_ADVISORY (lode-ysr6): this section is the OPERATIVE record of the
-# contract -- correct it in place. docs/decisions.md (search "lode-ysr6") also
-# carries a dated snapshot of the decision and the alternative that was
+# contract -- correct it in place. docs/decisions.md (docs-index lookup
+# "lode-ysr6") also carries a dated snapshot of the decision and the
+# alternative that was
 # weighed; changing anything below means marking that entry superseded rather
 # than editing it, per that file's own preamble.
 #
@@ -167,8 +168,8 @@
 # one, and losing the bash array at the point the value is built (a
 # newline-joined string reconstituted with mapfile is more machinery, not
 # less). Not a demonstrated improvement over the sentinel below; full
-# reasoning in docs/decisions.md (search "lode-nwqb") -- and it is THAT
-# entry, not lode-ysr6's, that this paragraph's own scope note refers to:
+# reasoning in docs/decisions.md (docs-index lookup "lode-nwqb") -- and it is
+# THAT entry, not lode-ysr6's, that this paragraph's own scope note refers to:
 # revisiting the rejection means marking the lode-nwqb entry superseded.
 if [ "$#" -eq 1 ] && [ "$1" = "--no-advisory" ]; then
   GATE_ADVISORY=()

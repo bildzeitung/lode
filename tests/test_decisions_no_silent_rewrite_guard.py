@@ -19,7 +19,7 @@ existing one, never a silent rewrite").
 SCOPE is base...head, not full repository history, and the exit-2 arm comes
 from the shared gate_could_not_run (scripts/gate-lib.sh, lode-9i2p) -- both
 are the script's own contract; see its header and docs/decisions.md
-(search "lode-rl6s") rather than a third retelling here.
+(docs-index lookup "lode-rl6s") rather than a third retelling here.
 
 All tests below run the ACTUAL script against real throwaway git repos built
 in `tmp_path` -- no fake git, no mocked subprocess -- per the lode-verb
