@@ -70,7 +70,9 @@ The source of truth is the design under [`docs/`](docs/). Read [`docs/design.md`
 - [`docs/configuration.md`](docs/configuration.md) — every tunable knob and build constant
 - [`docs/decisions.md`](docs/decisions.md) — open decisions, deferred but not forgotten
 
-Before reading any doc above to answer "what did we decide about X", start with the docs lookup index:
+How to look anything up in those docs without reading one whole is single-sourced in
+[`docs/docs-index.md`](docs/docs-index.md), imported below so it loads into every session; add new
+docs-index guidance there, not here.
 
 @docs/docs-index.md
 
