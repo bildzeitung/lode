@@ -4,6 +4,30 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-09-14 — A needs-rebase pickup resolved the conflicting hunks and left the branch's own prose describing the pre-merge world
+
+- **What happened:** the `/land` needs-rebase pickup on `lode-dozi` merged `trunk` @ `e3437e3` into
+  `land/lode-dozi` and resolved the `scripts/docs_index_query.py` conflict correctly at the code level
+  (kept trunk's `lode-qcp0` AND->OR fallback, wired `fallback_fired` to the real per-result flag). It
+  left three prose statements untouched — one in `docs/decisions.md` (the `lode-dozi` log-fields
+  entry) and two docstrings in `scripts/docs_index_log.py` — each asserting that no AND->OR fallback
+  exists yet and that `fallback_fired` is always `False`. The `code-reviewer` and `land-review` both
+  passed the branch; `land-review` caught it as non-blocking, and it landed on `trunk` with the
+  merge (`lode-dozi`, 2026-09-14).
+- **Root cause:** a trunk-merge pickup resolves the conflicting HUNKS. Prose elsewhere in the branch
+  that describes the conflicting file's behaviour is not a conflict, so nothing surfaces it, and the
+  merge silently turns true statements false. Every gate downstream reads the code, and the code was
+  right.
+- **Consequence:** `docs/` — this repo's source of truth — shipped a false description of a live
+  field's semantics, and a docstring under `docstringcheck` repeats it. No behaviour impact.
+- **Rule that prevents a repeat:** a trunk-merge resolution is not complete until the branch's own
+  prose still describes the post-merge world. After a needs-rebase pickup, grep the branch's diff
+  (`git diff origin/trunk...HEAD`) for prose naming the conflicting file, the feature that caused the
+  conflict, or the sibling ticket that landed it — phrases like "does not exist yet", "in this diff",
+  "concurrently", and the sibling's bd id — and re-read each hit against the merged result before
+  pushing. The `code-reviewer` that follows a pickup owes the same grep: the pickup's `land_summary`
+  names the conflicting file, so the search terms are already on the ticket.
+
 ## 2026-09-08 — A promotion gate certified the artifact it was about to replace, not the one it would ship
 
 - **What happened:** `scripts/update-deps.sh` ran its gates (`nox -t fix`, `nox -s tests`) with the
