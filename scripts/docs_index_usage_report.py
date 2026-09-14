@@ -11,10 +11,12 @@ design, same as the log this ticket's other half writes
 (``scripts/docs_index_log.py``).
 
 "Direct" means a READ of ``docs/*.md``, which costs three narrowings --
-:func:`_bash_command_names`, :func:`_is_write_or_git_form` and
+:func:`_segment_command_name`, :func:`_is_write_form`/:func:`_is_git_non_read_form` and
 :func:`project_scope_dirs`, each documented where it lives. Why each was
 needed, and what it was worth on real transcripts: docs/decisions.md's
-``lode-dozi`` entries.
+``lode-dozi`` entries. A Bash command LINE is split into segments
+(:func:`_split_segments`) before either of the first two narrowings runs --
+``lode-wtk2``, documented at :data:`_SEGMENT_SPLIT_RE`.
 
 The invocation log records the index's OWN use; it cannot show the
 comparison against direct grep/read access, because a producer that greps
@@ -43,6 +45,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from collections import Counter, defaultdict
 from collections.abc import Iterator
 from pathlib import Path
@@ -59,22 +62,26 @@ app = typer.Typer(add_completion=False)
 _INDEX_SCRIPT_MARKER = "docs_index_query.py"
 _DIRECT_BASH_COMMANDS = frozenset({"grep", "sed", "head", "cat", "tail", "awk"})
 
-#: A command NAME occupies the start of the command line, or follows a
-#: separator (``;`` ``|`` ``&`` ``(`` a newline, a backtick, ``$(``). Anything
-#: else that merely spells "cat" or "head" -- most importantly a bd issue body
-#: passed as ``--description=...`` -- is a substring, not a command, and must
-#: not be counted (lode-dozi: 12 of 176 "direct" rows on the calibration
-#: machine were exactly that). A name reached only through an
-#: argument-forwarding wrapper (``xargs``, ``sudo``) is missed, which
-#: under-counts rather than over-counts -- the direction this fix exists to
-#: move, and worth 0 rows of difference on the calibration corpus.
-_COMMAND_POSITION_RE = re.compile(
-    r"(?:\A|[\n;|&(`]|\$\()\s*(?:[\w./~-]*/)?([A-Za-z][\w.-]*)"
-)
+#: Separators that break one Bash command LINE into independent segments --
+#: ``;``/newline, ``|``/``||``, ``&``/``&&``, and subshell grouping ``(``/``)``.
+#: ``_classify`` used to judge a whole line at once (lode-wtk2): a genuine
+#: read piped into ``tee`` was excluded wholesale because the write check saw
+#: ``tee`` anywhere on the line, and a line merely pairing a docs path with
+#: an unrelated read still counted as direct because the docs-path check saw
+#: ``docs/*.md`` anywhere on the line. Splitting first and classifying each
+#: piece independently collapses both failure modes into one rule.
+_SEGMENT_SPLIT_RE = re.compile(r"[;\n]+|\|\|?|&&?|[()]")
+
+#: Argument-forwarding wrappers a real command name can follow -- same
+#: allowlist and same under-count-not-over-count rationale as lode-dozi's
+#: original design (a wrapper not on this list is simply missed).
+_WRAPPER_COMMANDS = frozenset({"xargs", "sudo", "time", "env", "nohup"})
+_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_COMMAND_NAME_RE = re.compile(r"^[A-Za-z][\w.-]*$")
 
 #: Forms that WRITE a docs file (or ask git about one) rather than read it.
 #: The criterion is "direct" == a READ of docs/*.md, so each of these
-#: disqualifies the whole command, not just one token of it. The git clause
+#: disqualifies the whole SEGMENT, not just one token of it. The git clause
 #: is NOT subsumed by the command-name allowlist below: `git` alone never
 #: matches that allowlist, but `git show <ref>:docs/design.md | grep ...` does,
 #: and it decides 40 rows on the calibration corpus.
@@ -83,27 +90,84 @@ _SED_INPLACE_RE = re.compile(r"\bsed\b[^|;&\n]*(?:-[A-Za-z]*i\b|--in-place)")
 _GIT_NON_READ_RE = re.compile(r"\bgit\s+(?:commit|add|show|diff|log|mv|rm|checkout)\b")
 
 
-def _bash_command_names(command: str) -> set[str]:
-    """The set of command names actually INVOKED by a Bash command string.
+def _split_segments(command: str) -> list[str]:
+    """Split a Bash command LINE into independent segments on the usual
+    shell separators (see :data:`_SEGMENT_SPLIT_RE`), dropping any segment
+    with no non-whitespace content (an empty piece between two adjacent
+    separators, or at either end of the line)."""
+    return [seg for seg in _SEGMENT_SPLIT_RE.split(command) if seg.strip()]
 
-    Command-position matching, never a substring scan over the whole line --
-    see :data:`_COMMAND_POSITION_RE`.
+
+def _segment_command_name(segment: str) -> str | None:
+    """The one command name actually invoked by a single (already-split)
+    segment, or ``None`` if it can't be determined.
+
+    Tokenizes with :mod:`shlex` -- replacing the previous hand-rolled
+    command-POSITION regex, which existed only to find a command name
+    after a separator; once the line is pre-split into segments, each
+    segment holds at most one simple command, and shlex tokenizes it
+    correctly (respecting quoting) rather than approximating it with a
+    character-class regex. A leading ``VAR=val`` assignment or an
+    argument-forwarding wrapper (see :data:`_WRAPPER_COMMANDS`) is skipped
+    so the token after it is taken as the command name.
     """
-    return set(_COMMAND_POSITION_RE.findall(command))
+    try:
+        tokens = shlex.split(segment)
+    except ValueError:
+        return None
+    for tok in tokens:
+        if _ASSIGNMENT_RE.match(tok):
+            continue
+        base = tok.rsplit("/", 1)[-1]
+        if base in _WRAPPER_COMMANDS:
+            continue
+        if _COMMAND_NAME_RE.match(base):
+            return base
+        return None
+    return None
 
 
-def _is_write_or_git_form(command: str) -> bool:
-    """Whether this command writes a docs file or is a git operation naming
-    one, rather than reading it: a redirect into ``docs/*.md``, a heredoc, an
-    in-place ``sed``, a ``tee``, or ``git commit/add/show/diff/log/mv/rm/
-    checkout``."""
+def _is_write_form(segment: str) -> bool:
+    """Whether this SEGMENT writes a docs file rather than reading it: a
+    redirect into ``docs/*.md``, a heredoc, an in-place ``sed``, or a
+    ``tee``. The git non-read check is deliberately NOT here -- see
+    :func:`_is_git_non_read_form`."""
     return bool(
-        _REDIRECT_TO_DOCS_RE.search(command)
-        or "<<" in command
-        or _SED_INPLACE_RE.search(command)
-        or "tee" in _bash_command_names(command)
-        or _GIT_NON_READ_RE.search(command)
+        _REDIRECT_TO_DOCS_RE.search(segment)
+        or "<<" in segment
+        or _SED_INPLACE_RE.search(segment)
+        or _segment_command_name(segment) == "tee"
     )
+
+
+def _is_git_non_read_form(command: str) -> bool:
+    """Whether the whole command LINE (not one segment) contains a git
+    operation naming a docs file rather than reading it: ``git
+    commit/add/show/diff/log/mv/rm/checkout``.
+
+    Checked at the LINE level, deliberately not per-segment: a
+    ``git checkout ... -- <path> && cat <path>`` line naming the same
+    ``docs/*.md`` file twice is a version-control operation that happens to
+    be followed by a read of the same file on the same line, and the
+    calibration corpus treats the whole line as a version-control op, not a
+    direct read (40 rows decided by this clause; see docs/decisions.md's
+    ``lode-dozi`` entry). This is the one narrowing this ticket
+    (``lode-wtk2``) deliberately keeps at line granularity rather than
+    moving to :func:`_classify_bash_segment`.
+    """
+    return bool(_GIT_NON_READ_RE.search(command))
+
+
+def _classify_bash_segment(segment: str) -> str | None:
+    """Classify one already-split Bash command segment: ``"direct"`` if it
+    reads ``docs/*.md``, else ``None``."""
+    if not _mentions_docs_md(segment):
+        return None
+    if _segment_command_name(segment) not in _DIRECT_BASH_COMMANDS:
+        return None
+    if _is_write_form(segment):
+        return None
+    return "direct"
 
 
 def _iter_tool_uses(
@@ -158,13 +222,12 @@ def _classify(tool_name: str, tool_input: dict[str, Any]) -> str | None:
         command = str(tool_input.get("command", ""))
         if _INDEX_SCRIPT_MARKER in command:
             return "index"
-        if not _mentions_docs_md(command):
+        if _is_git_non_read_form(command):
             return None
-        if not _bash_command_names(command) & _DIRECT_BASH_COMMANDS:
-            return None
-        if _is_write_or_git_form(command):
-            return None
-        return "direct"
+        for segment in _split_segments(command):
+            if _classify_bash_segment(segment) == "direct":
+                return "direct"
+        return None
     elif tool_name == "Read":
         if _mentions_docs_md(str(tool_input.get("file_path", ""))):
             return "direct"

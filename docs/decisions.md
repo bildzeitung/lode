@@ -5746,3 +5746,38 @@ entries below from being rewritten to chase the current tree.)
   Also fixed: `_print_split` omitted the `ambiguous` bucket from its per-day and per-role rows, so a
   bucket that exists precisely to keep unconfirmable rows OUT of the headline ratio was invisible in
   every breakdown. It is now a third column (0 across the board on this machine).
+
+- **2026-09-14 (`lode-wtk2`) — CORRECTION: `_classify` now judges Bash SEGMENTS, not
+  whole lines, and the baseline figure above is re-measured.** Appended, not rewritten in place, per
+  this file's preamble. `_classify` used to run its write/version-control exclusion and its
+  docs-path/direct-command check against the WHOLE Bash command line, which had two consequences: a
+  genuine read piped into `tee` (e.g. `cat docs/design.md | tee /tmp/out`) was excluded wholesale
+  because the write check saw `tee` anywhere on the line, and a line that merely PAIRED a docs path in
+  one clause with an unrelated read in another (e.g. `echo see docs/design.md && cat /etc/hostname`)
+  was counted as direct because the docs-path check saw `docs/*.md` anywhere on the line. The command
+  line is now split into segments on the usual shell separators (`;`/newline, `|`/`||`, `&`/`&&`,
+  `(`/`)`) and each segment is classified independently; a line counts as `direct` if ANY segment does.
+  Command-name extraction per segment now uses `shlex.split()` instead of the hand-rolled
+  `_COMMAND_POSITION_RE` regex, since a pre-split segment holds at most one simple command and shlex
+  tokenizes it correctly (respecting quoting) rather than approximating it with a character class. The
+  one narrowing kept at LINE granularity, deliberately: the git non-read check
+  (`commit/add/show/diff/log/mv/rm/checkout`) still disqualifies the whole line, since a
+  `git checkout ... -- docs/x.md && cat docs/x.md` line is a version-control operation on the file that
+  happens to be followed by a same-line read, and the calibration corpus (40 rows) treats that whole
+  pattern as a write, not a direct read.
+
+  Also consolidated (same ticket): `docs_index_build` now exports `cache_dir()` (the shared
+  `$XDG_CACHE_HOME`-or-`~/.cache` fallback resolution), and `docs_index_log.log_path()` calls it
+  through the same private-`sys.modules` sibling-loader pattern the rest of `scripts/` uses, replacing
+  a byte-for-byte duplicate of the XDG rule. The `spec_from_file_location` loader body that
+  `docs_index_build._load_chunker` and `docs_index_query._load_sibling` each carried their own copy of
+  is now one implementation, `scripts/docs_index_loader.py`, that both load under a private name and
+  delegate to.
+
+  **Re-measured on this machine** (`./venv/bin/python scripts/docs_index_usage_report.py`, default
+  scope, after the segment-classifier change): **215 index / 306 direct** (41% index share), split
+  `main: index=30 direct=31`, `subagent: index=185 direct=275`. This is not directly comparable to the
+  **142 / 431** (25%) figure two entries above -- the corpus is LIVE (it has grown by the traffic of
+  every session since, including this one), and the classifier itself changed in this entry, so some
+  of the movement is real traffic and some is reclassification. Recorded here as the current baseline
+  rather than left silently stale.

@@ -335,6 +335,45 @@ def test_scan_excludes_a_write_or_version_control_form(
     assert scan(tmp_path) == []
 
 
+def test_scan_classifies_a_read_piped_into_tee_as_direct(tmp_path: Path) -> None:
+    """(iii) A genuine read of docs/*.md piped into `tee` (to also save the
+    output) is a direct read -- the write-form check applies to `tee`'s OWN
+    segment, not to the earlier segment that actually reads the file
+    (lode-wtk2)."""
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": "cat docs/design.md | tee /tmp/out.txt"},
+            )
+        ],
+    )
+    assert [r["kind"] for r in scan(tmp_path)] == ["direct"]
+
+
+def test_scan_does_not_count_a_docs_path_paired_with_an_unrelated_read(
+    tmp_path: Path,
+) -> None:
+    """(iv) A line that merely MENTIONS a docs path in one segment and reads
+    something unrelated in another segment is not a read of docs/*.md -- each
+    segment is classified independently (lode-wtk2)."""
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": "echo see docs/design.md && cat /etc/hostname"},
+            )
+        ],
+    )
+    assert scan(tmp_path) == []
+
+
 def test_report_scopes_to_the_current_project_unless_widened(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -63,16 +63,23 @@ def _load_sibling(name: str, filename: str) -> ModuleType:
     colliding with any other loader of the same file; the cache-on-``name``
     check is what keeps one name mapped to exactly ONE module object, which
     the callers below depend on.
+
+    Delegates to ``scripts/docs_index_loader.py`` (``lode-wtk2``), which
+    every ``scripts/`` sibling loader in this repo now shares -- this
+    function's body used to be that implementation; it is now a thin
+    pass-through kept so every call site below stays unchanged.
     """
-    if name in sys.modules:
-        return sys.modules[name]
-    path = Path(__file__).resolve().parent / filename
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+    loader_name = "_docs_index_query_loader_impl"
+    if loader_name in sys.modules:
+        loader = sys.modules[loader_name]
+    else:
+        loader_path = Path(__file__).resolve().parent / "docs_index_loader.py"
+        spec = importlib.util.spec_from_file_location(loader_name, loader_path)
+        assert spec is not None and spec.loader is not None
+        loader = importlib.util.module_from_spec(spec)
+        sys.modules[loader_name] = loader
+        spec.loader.exec_module(loader)
+    return loader.load_sibling(name, filename)
 
 
 def _load_build() -> ModuleType:
