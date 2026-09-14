@@ -186,7 +186,7 @@ resolve_open_collector() {
 }
 
 cmd_append() {
-  local source="" file="" line="" anchor="" replacement="" what="" id
+  local source="" file="" line="" anchor="" replacement="" what="" id toplevel
   while [ "$#" -gt 0 ]; do
     # A flag whose value is missing must be a MACHINE FAULT (exit 2), not the
     # `set -u` unbound-variable death that exits 1 -- exit 1 is reserved for
@@ -206,8 +206,30 @@ cmd_append() {
       # Repo-relative is the only spelling a later builder in a different
       # worktree can act on, and it is what the docs/decisions.md test below
       # matches -- so strip a `./` prefix once, here, rather than at either
-      # consumer.
-      --file) file="${2#./}"; shift 2 ;;
+      # consumer. An absolute --file is normalized against the repo toplevel
+      # (lode-v4ks); one outside it is refused (exit 2, the machine-fault
+      # code) rather than recorded verbatim -- a `.claude/worktrees/...`
+      # prefix in the shared, cross-machine collector note is unusable by a
+      # builder in a different worktree.
+      --file)
+        file="${2#./}"
+        case "$file" in
+          /*)
+            toplevel="$(git rev-parse --show-toplevel)" || {
+              echo "bd-docs-nit.sh append: --file is absolute but \`git rev-parse --show-toplevel\` failed" >&2
+              return 2
+            }
+            case "$file" in
+              "$toplevel"/*) file="${file#"$toplevel"/}" ;;
+              *)
+                echo "bd-docs-nit.sh append: --file must be repo-relative (got an absolute path outside $toplevel): $file" >&2
+                return 2
+                ;;
+            esac
+            ;;
+        esac
+        shift 2
+        ;;
       --line) line="$2"; shift 2 ;;
       --anchor) anchor="$2"; shift 2 ;;
       --replacement) replacement="$2"; shift 2 ;;

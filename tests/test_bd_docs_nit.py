@@ -294,6 +294,42 @@ def test_append_targeting_other_file_has_no_decisions_md_reminder(
     assert "Reminder: docs/decisions.md is append-only" not in log
 
 
+def test_append_absolute_file_inside_repo_normalizes_to_repo_relative(
+    tmp_path: Path,
+) -> None:
+    """lode-v4ks: an absolute --file under the repo toplevel (the worktree
+    root, when called from inside a worktree) must be normalized to the same
+    repo-relative spelling a builder in a DIFFERENT worktree can still act
+    on -- never recorded with a `.claude/worktrees/...`-style machine-specific
+    prefix."""
+    absolute_file = str(REPO_ROOT / "docs" / "decisions.md")
+    r, _ = _run(
+        tmp_path,
+        _append_args(absolute_file, line="7"),
+        open_rows=[{"id": "lode-59da", "title": STANDARD_TITLE}],
+    )
+    assert r.returncode == 0, r.stderr
+    log = (tmp_path / "fakebin" / "update.log").read_text()
+    assert "NIT (test): docs/decisions.md:7" in log
+    assert str(REPO_ROOT) not in log
+    assert ".claude/worktrees" not in log
+
+
+def test_append_absolute_file_outside_repo_refuses_exit_2(tmp_path: Path) -> None:
+    """An absolute --file that does not lie under the repo toplevel at all
+    (not just a different worktree) cannot be normalized to anything a later
+    builder could act on -- refuse rather than record it verbatim."""
+    r, dolt_marker = _run(
+        tmp_path,
+        _append_args("/tmp/some-unrelated-file.md", line="1"),
+        open_rows=[{"id": "lode-59da", "title": STANDARD_TITLE}],
+    )
+    assert r.returncode == 2
+    assert r.stdout == ""
+    assert "must be repo-relative" in r.stderr
+    assert not dolt_marker.exists()
+
+
 def test_append_no_open_collector_creates_one_then_appends(tmp_path: Path) -> None:
     """lode-z1n5 part 1: reverses the old "a human opens it" rule -- append
     creates the collector itself when zero are open, rather than refusing."""
