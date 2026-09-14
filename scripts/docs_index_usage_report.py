@@ -10,6 +10,12 @@ Read tool, or the Grep tool), split by main session vs subagent
 design, same as the log this ticket's other half writes
 (``scripts/docs_index_log.py``).
 
+"Direct" means a READ of ``docs/*.md``, which costs three narrowings --
+:func:`_bash_command_names`, :func:`_is_write_or_git_form` and
+:func:`project_scope_dirs`, each documented where it lives. Why each was
+needed, and what it was worth on real transcripts: docs/decisions.md's
+``lode-dozi`` entries.
+
 The invocation log records the index's OWN use; it cannot show the
 comparison against direct grep/read access, because a producer that greps
 ``docs/*.md`` by hand never touches the index at all. This script is the
@@ -36,6 +42,7 @@ TRANSCRIPT-ENCODING CAVEATS (hit while writing this):
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter, defaultdict
 from collections.abc import Iterator
 from pathlib import Path
@@ -45,12 +52,58 @@ import typer
 
 app = typer.Typer(add_completion=False)
 
-#: Bash command substrings that count as a docs-index invocation vs a
+#: Bash command names that count as a docs-index invocation vs a
 #: direct, read-style access to docs/*.md. Order matters: index check first,
 #: since "python scripts/docs_index_query.py ... docs/design.md" (unlikely,
 #: but possible in an argument) must not double-count as a direct access too.
 _INDEX_SCRIPT_MARKER = "docs_index_query.py"
-_DIRECT_BASH_COMMANDS = ("grep", "sed", "head", "cat", "tail", "awk")
+_DIRECT_BASH_COMMANDS = frozenset({"grep", "sed", "head", "cat", "tail", "awk"})
+
+#: A command NAME occupies the start of the command line, or follows a
+#: separator (``;`` ``|`` ``&`` ``(`` a newline, a backtick, ``$(``). Anything
+#: else that merely spells "cat" or "head" -- most importantly a bd issue body
+#: passed as ``--description=...`` -- is a substring, not a command, and must
+#: not be counted (lode-dozi: 12 of 176 "direct" rows on the calibration
+#: machine were exactly that). A name reached only through an
+#: argument-forwarding wrapper (``xargs``, ``sudo``) is missed, which
+#: under-counts rather than over-counts -- the direction this fix exists to
+#: move, and worth 0 rows of difference on the calibration corpus.
+_COMMAND_POSITION_RE = re.compile(
+    r"(?:\A|[\n;|&(`]|\$\()\s*(?:[\w./~-]*/)?([A-Za-z][\w.-]*)"
+)
+
+#: Forms that WRITE a docs file (or ask git about one) rather than read it.
+#: The criterion is "direct" == a READ of docs/*.md, so each of these
+#: disqualifies the whole command, not just one token of it. The git clause
+#: is NOT subsumed by the command-name allowlist below: `git` alone never
+#: matches that allowlist, but `git show <ref>:docs/design.md | grep ...` does,
+#: and it decides 40 rows on the calibration corpus.
+_REDIRECT_TO_DOCS_RE = re.compile(r">>?\s*\S*docs/\S*\.md")
+_SED_INPLACE_RE = re.compile(r"\bsed\b[^|;&\n]*(?:-[A-Za-z]*i\b|--in-place)")
+_GIT_NON_READ_RE = re.compile(r"\bgit\s+(?:commit|add|show|diff|log|mv|rm|checkout)\b")
+
+
+def _bash_command_names(command: str) -> set[str]:
+    """The set of command names actually INVOKED by a Bash command string.
+
+    Command-position matching, never a substring scan over the whole line --
+    see :data:`_COMMAND_POSITION_RE`.
+    """
+    return set(_COMMAND_POSITION_RE.findall(command))
+
+
+def _is_write_or_git_form(command: str) -> bool:
+    """Whether this command writes a docs file or is a git operation naming
+    one, rather than reading it: a redirect into ``docs/*.md``, a heredoc, an
+    in-place ``sed``, a ``tee``, or ``git commit/add/show/diff/log/mv/rm/
+    checkout``."""
+    return bool(
+        _REDIRECT_TO_DOCS_RE.search(command)
+        or "<<" in command
+        or _SED_INPLACE_RE.search(command)
+        or "tee" in _bash_command_names(command)
+        or _GIT_NON_READ_RE.search(command)
+    )
 
 
 def _iter_tool_uses(
@@ -67,7 +120,11 @@ def _iter_tool_uses(
     with handle:
         for line in handle:
             line = line.strip()
-            if not line:
+            # A strict prefilter: any line carrying a tool_use block spells
+            # the literal. Skipping the rest unparsed is the difference
+            # between reading and json.loads-ing multi-MB transcripts whose
+            # tool_use turns are a small minority.
+            if not line or '"tool_use"' not in line:
                 continue
             try:
                 entry = json.loads(line)
@@ -101,10 +158,13 @@ def _classify(tool_name: str, tool_input: dict[str, Any]) -> str | None:
         command = str(tool_input.get("command", ""))
         if _INDEX_SCRIPT_MARKER in command:
             return "index"
-        if _mentions_docs_md(command) and any(
-            cmd in command for cmd in _DIRECT_BASH_COMMANDS
-        ):
-            return "direct"
+        if not _mentions_docs_md(command):
+            return None
+        if not _bash_command_names(command) & _DIRECT_BASH_COMMANDS:
+            return None
+        if _is_write_or_git_form(command):
+            return None
+        return "direct"
     elif tool_name == "Read":
         if _mentions_docs_md(str(tool_input.get("file_path", ""))):
             return "direct"
@@ -121,6 +181,12 @@ def _day(timestamp: str) -> str:
     return timestamp[:10] if timestamp else "unknown"
 
 
+#: The path segment that marks a producer/reviewer launch worktree. One
+#: spelling, used both to tell a subagent's cwd from the main checkout's and
+#: to normalize a worktree cwd back to its project root.
+_LAUNCH_WORKTREE_MARKER = "/.claude/worktrees/"
+
+
 def _is_subagent(entry: dict[str, Any]) -> bool:
     """Whether this tool_use came from a subagent rather than the main session.
 
@@ -134,14 +200,43 @@ def _is_subagent(entry: dict[str, Any]) -> bool:
     """
     if entry.get("isSidechain"):
         return True
-    return ".claude/worktrees/" in str(entry.get("cwd", ""))
+    return _LAUNCH_WORKTREE_MARKER in str(entry.get("cwd", ""))
+
+
+def encode_project_dir_name(path: Path) -> str:
+    """Encode a project path the way Claude Code names its transcript
+    directory under ``~/.claude/projects`` -- every non-alphanumeric
+    character becomes ``-`` (so ``/home/u/PROJECTS/lode`` becomes
+    ``-home-u-PROJECTS-lode``, and a worktree's ``.claude`` becomes
+    ``-claude``)."""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(path))
+
+
+def project_scope_dirs(projects_dir: Path, cwd: Path) -> list[Path]:
+    """The transcript directories belonging to the project containing ``cwd``.
+
+    A session started inside ``.claude/worktrees/<name>`` gets its OWN
+    transcript directory, named for the worktree path, so the scope is the
+    project root's directory plus every worktree directory derived from it.
+    ``cwd`` itself is normalized back to the project root first, so running
+    this script from a producer's worktree still scopes to the whole project
+    rather than to that one worktree.
+    """
+    root = str(cwd.resolve()).split(_LAUNCH_WORKTREE_MARKER)[0]
+    encoded = encode_project_dir_name(Path(root))
+    return [
+        child
+        for child in projects_dir.glob("*")
+        if child.is_dir()
+        and (child.name == encoded or child.name.startswith(encoded + "--"))
+    ]
 
 
 def scan(projects_dir: Path) -> list[dict[str, Any]]:
-    """Scan every transcript under ``projects_dir`` and return one row per
-    classified tool_use: ``{day, session, is_subagent, kind}``."""
+    """Scan every transcript under ``projects_dir`` (at any depth) and return
+    one row per classified tool_use: ``{day, session, is_subagent, kind}``."""
     rows: list[dict[str, Any]] = []
-    for transcript_path in sorted(projects_dir.glob("*/*.jsonl")):
+    for transcript_path in sorted(projects_dir.rglob("*.jsonl")):
         for entry, tool_use in _iter_tool_uses(transcript_path):
             kind = _classify(tool_use.get("name", ""), tool_use.get("input") or {})
             if kind is None:
@@ -179,7 +274,9 @@ def _print_split(label: str, split: dict[str, dict[str, int]]) -> None:
     print(f"{label}:")
     for key, counts in split.items():
         print(
-            f"    {key}: index={counts.get('index', 0)} direct={counts.get('direct', 0)}"
+            f"    {key}: index={counts.get('index', 0)} "
+            f"direct={counts.get('direct', 0)} "
+            f"ambiguous={counts.get('ambiguous', 0)}"
         )
 
 
@@ -190,7 +287,9 @@ def _print_split(label: str, split: dict[str, dict[str, int]]) -> None:
         "docs/*.md, split by main session vs subagent, per day.\n\nRun this "
         "to reproduce the retrospective comparison the docs-index log alone "
         "cannot show, since a hand grep of docs/*.md never touches the "
-        "index. Reads ~/.claude/projects; writes nothing there."
+        "index. Reads ~/.claude/projects; writes nothing there.\n\nScoped to "
+        "the current project's transcripts by default; pass --all-projects "
+        "to widen to every project on the machine."
     )
 )
 def report(
@@ -201,6 +300,13 @@ def report(
             help="Root directory of Claude Code session transcripts.",
         ),
     ] = None,
+    all_projects: Annotated[
+        bool,
+        typer.Option(
+            "--all-projects",
+            help="Scan every project's transcripts, not just this project's.",
+        ),
+    ] = False,
 ) -> None:
     """Print the index-vs-direct-access baseline mined from transcripts."""
     resolved_projects_dir = (
@@ -208,7 +314,17 @@ def report(
         if projects_dir is not None
         else Path.home() / ".claude" / "projects"
     )
-    rows = scan(resolved_projects_dir)
+    roots = (
+        [resolved_projects_dir]
+        if all_projects
+        else project_scope_dirs(resolved_projects_dir, Path.cwd())
+    )
+    if not roots:
+        print(
+            "no transcripts for this project under "
+            f"{resolved_projects_dir} -- pass --all-projects to widen"
+        )
+    rows = [row for root in roots for row in scan(root)]
     result = summarize(rows)
     totals = result["totals"]
     index_count = totals.get("index", 0)

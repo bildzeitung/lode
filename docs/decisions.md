@@ -5687,3 +5687,62 @@ entries below from being rewritten to chase the current tree.)
   on its own line and excluded from the index-vs-direct ratio. On this machine that bucket is **0**,
   so the 158 above does not depend on the change — but the headline number is no longer able to
   silently absorb unconfirmable hits.
+
+- **2026-09-14 (`lode-dozi`) — CORRECTION to the two entries above: the tightened classifier, and
+  the transcript depth those earlier numbers were measured at.** Appended, not rewritten in place,
+  per this file's preamble. The `/land` escalation the entry above records was resolved by a human
+  as option 2 — the classifier over-counted `direct` — and acceptance criterion 3 was rewritten
+  accordingly: the pinned `56 / 118` figure is **dropped** (hand-mined at a different scope, not
+  reproducible), and the `~50% miss` half is **reassigned** to `docs_index_log.py stats`, which is
+  the instrument that can actually see `hit_count`. The measured figures in both entries above
+  (`25 / 158`, and the `27 / 176` the human re-measured) are therefore superseded by what this entry
+  records.
+
+  **Three classifier narrowings, each with a unit test on a synthetic transcript**
+  (`tests/test_docs_index_usage_report.py`), so that `direct` means a READ of `docs/*.md`:
+
+  1. **Command names match at command POSITIONS, not as substrings of the whole line**
+     (`_bash_command_names`). A `bd create --description="...docs/x.md... ahead ..."` spells `head`
+     and names a docs file, and was counted as a read of it; 12 of the 176 rows on the calibration
+     machine were exactly that. A name is recognized at the start of the command or after a
+     separator (`;` `|` `&` `(` newline, backtick, `$(`) or an argument-forwarding wrapper
+     (`xargs`/`sudo`/`time`/`env`/`nohup`). A wrapper not on that list is *missed*, which
+     under-counts — the direction this fix exists to move.
+  2. **Write and version-control forms are excluded** (`_is_write_or_git_form`): a redirect into
+     `docs/*.md`, any heredoc, an in-place `sed`, a `tee`, and `git
+     commit/add/show/diff/log/mv/rm/checkout` naming a docs file. 64 of the 176 rows were the
+     pipeline WRITING docs, counted as if it had read them.
+  3. **The scan is scoped to the current project by default** (`project_scope_dirs`), deriving the
+     transcript directory name from cwd the way Claude Code encodes it (every non-alphanumeric
+     character becomes `-`), with `--all-projects` to widen. A cwd inside `.claude/worktrees/<name>`
+     is normalized back to the project root first, so running this from a producer's worktree still
+     scopes to the whole project; a session started in a worktree gets its own transcript directory,
+     so those are included alongside the root's. Unscoped, an unrelated project on this machine
+     (`harness-export`) alone contributed 53 direct and 0 index.
+
+  **Transcript depth — a real under-count, not the cosmetic nit it was filed as.** The earlier
+  review flagged that `scan()` globbed `*/*.jsonl` (depth 2) while its docstring promised
+  `**/*.jsonl`. Fixing the *code* to match the docstring turns out to matter: subagent transcripts
+  live one level deeper, at `<project>/<session-uuid>/subagents/*.jsonl`, so the depth-2 glob saw
+  **only main-session transcripts** — and criterion 3's "split by main session vs subagent" was
+  therefore splitting a population that contained essentially no subagents (the earlier
+  `subagent: index=0 direct=10` came from `cwd`-fallback rows inside *main* transcripts, not from
+  subagent transcripts at all). `scan()` now recurses.
+
+  **Measured on this machine after the change** (`./venv/bin/python
+  scripts/docs_index_usage_report.py`, default scope): **142 index / 431 direct** (25% index share),
+  split `main: index=26 direct=59`, `subagent: index=116 direct=372`. Note the corpus is LIVE — it
+  grows while it is being measured, by the very session doing the measuring, so the totals are only
+  reproducible to within the traffic since. Over three runs during this review the totals moved
+  (130/411 → 142/431) while the `main:` row did not.
+
+  The human's re-measured lode-only figure of **27 / 67** is reproduced by that stable `main:` row —
+  and restricting this same code to depth-1 (main transcripts only) gives **26 / 64**, the same
+  figure modulo corpus growth. So the classifier tightening lands where the human measured it, and
+  the rest of the difference is the subagent half the depth-2 glob had been dropping on the floor.
+  The headline share barely moves between the two views (29% vs 25%), so including subagents does
+  not flatter the index.
+
+  Also fixed: `_print_split` omitted the `ambiguous` bucket from its per-day and per-role rows, so a
+  bucket that exists precisely to keep unconfirmable rows OUT of the headline ratio was invisible in
+  every breakdown. It is now a third column (0 across the board on this machine).

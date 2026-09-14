@@ -85,7 +85,6 @@ def append_invocation(
     change once that fallback lands.
     """
     resolved = path if path is not None else log_path()
-    resolved.parent.mkdir(parents=True, exist_ok=True)
     entry: dict[str, Any] = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "query": query_text,
@@ -95,8 +94,17 @@ def append_invocation(
         "cwd": cwd if cwd is not None else str(Path.cwd()),
     }
     entry.update(_harness_context())
-    with resolved.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
+    line = json.dumps(entry) + "\n"
+    # Create the cache dir only when it is actually missing -- this runs on
+    # the path CLAUDE.md routes every agent through, and after the first run
+    # ever the directory is always there.
+    try:
+        with resolved.open("a", encoding="utf-8") as f:
+            f.write(line)
+    except FileNotFoundError:
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        with resolved.open("a", encoding="utf-8") as f:
+            f.write(line)
 
 
 def read_log(path: Path | None = None) -> list[dict[str, Any]]:
@@ -106,14 +114,17 @@ def read_log(path: Path | None = None) -> list[dict[str, Any]]:
     if not resolved.exists():
         return []
     entries = []
-    for line in resolved.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entries.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
+    # Streamed, not slurped: this log is append-only and grows by one line
+    # per docs lookup from every agent, forever.
+    with resolved.open(encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
     return entries
 
 

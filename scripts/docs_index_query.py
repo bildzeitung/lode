@@ -98,11 +98,13 @@ def _load_log() -> ModuleType:
     package, and this module's own test loads THIS module by path, without
     ``scripts/`` on ``sys.path`` -- a plain ``import docs_index_log`` would
     fail there.
+
+    Called at the one logging site rather than at import, so a query that
+    never reaches it -- a `--class` validation error, or a library caller of
+    :func:`query` -- does not pay to load a module it will not use.
+    ``_load_sibling`` caches on ``sys.modules``, so repeat calls are free.
     """
     return _load_sibling("_docs_index_query_log_impl", "docs_index_log.py")
-
-
-_log = _load_log()
 
 
 def _escape_query(raw: str) -> str:
@@ -228,7 +230,7 @@ def main(
     # Path.home()) costs one log line, not the answer the caller asked for --
     # CLAUDE.md routes every agent through this CLI first.
     try:
-        _log.append_invocation(
+        _load_log().append_invocation(
             query_text=text,
             hit_count=len(results),
             fallback_fired=False,

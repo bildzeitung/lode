@@ -10,6 +10,7 @@ this script's whole point is to be pointed at a directory via
 import json
 from pathlib import Path
 
+import pytest
 from conftest import load_module_from_path
 from typer.testing import CliRunner
 
@@ -194,7 +195,7 @@ def test_report_cli_prints_totals_and_splits(tmp_path: Path) -> None:
             ),
         ],
     )
-    result = runner.invoke(app, ["--projects-dir", str(tmp_path)])
+    result = runner.invoke(app, ["--projects-dir", str(tmp_path), "--all-projects"])
     assert result.exit_code == 0, result.output
     assert "index invocations: 1" in result.output
     assert "direct docs/*.md access: 1" in result.output
@@ -204,7 +205,9 @@ def test_report_cli_prints_totals_and_splits(tmp_path: Path) -> None:
 
 
 def test_report_cli_handles_no_transcripts_found(tmp_path: Path) -> None:
-    result = runner.invoke(app, ["--projects-dir", str(tmp_path / "nonexistent")])
+    result = runner.invoke(
+        app, ["--projects-dir", str(tmp_path / "nonexistent"), "--all-projects"]
+    )
     assert result.exit_code == 0, result.output
     assert "index invocations: 0" in result.output
 
@@ -259,3 +262,118 @@ def test_scan_buckets_an_unnarrowed_grep_as_ambiguous_not_direct(
         ],
     )
     assert summarize(scan(tmp_path))["totals"] == {"ambiguous": 1, "direct": 1}
+
+
+def test_scan_does_not_count_a_command_name_spelled_inside_an_argument(
+    tmp_path: Path,
+) -> None:
+    """(i) Command names match at command positions, not as substrings: a bd
+    issue body that happens to contain 'docs/design.md' and the word 'head' is not
+    a read of docs/. AMENDED criterion 3 (lode-dozi)."""
+    transcript = tmp_path / "proj" / "s1.jsonl"
+    _write_transcript(
+        transcript,
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={
+                    "command": (
+                        "bd create --title=x "
+                        '--description="see docs/design.md, ahead of the cat '
+                        'and the catalogue"'
+                    )
+                },
+            ),
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:01Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": "head -20 docs/design.md"},
+            ),
+        ],
+    )
+    assert [r["kind"] for r in scan(tmp_path)] == ["direct"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat > docs/stack.md",
+        "cat <<'EOF' >> docs/stack.md\nbody\nEOF",
+        "sed -i 's/a/b/' docs/design.md",
+        "echo hi | tee docs/design.md",
+        "git add docs/design.md",
+        "git commit -m 'tweak' docs/design.md",
+        "git mv docs/stack.md docs/storage.md",
+        "git rm docs/externals.md",
+        # These four reach a read command through a pipe, so the command-name
+        # allowlist alone would count them; only the git clause rejects them.
+        "git show HEAD:docs/design.md | grep -n foo",
+        "git diff -- docs/design.md | head -30",
+        "git log --oneline docs/design.md | tail -5",
+        "git checkout trunk -- docs/design.md && cat docs/design.md",
+    ],
+)
+def test_scan_excludes_a_write_or_version_control_form(
+    tmp_path: Path, command: str
+) -> None:
+    """(ii) Writes and version-control operations are not reads of docs/.
+    AMENDED criterion 3 (lode-dozi)."""
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-09-14T10:00:00Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": command},
+            )
+        ],
+    )
+    assert scan(tmp_path) == []
+
+
+def test_report_scopes_to_the_current_project_unless_widened(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """(iii) Default scope is the current project's transcript directory,
+    derived from cwd the way Claude Code encodes it, and it still resolves to
+    the whole project when run from a worktree; --all-projects widens.
+    AMENDED criterion 3 (lode-dozi)."""
+    encode = _report_module.encode_project_dir_name
+    project_root = tmp_path / "PROJECTS" / "lode"
+    worktree = project_root / ".claude" / "worktrees" / "agent-dead"
+    worktree.mkdir(parents=True)
+    projects_dir = tmp_path / "projects"
+    for directory, command in (
+        (projects_dir / encode(project_root), "grep -n foo docs/design.md"),
+        (projects_dir / encode(worktree), "grep -n foo docs/storage.md"),
+        (
+            projects_dir / encode(tmp_path / "PROJECTS" / "elsewhere"),
+            "grep -n foo docs/retrieval.md",
+        ),
+    ):
+        _write_transcript(
+            directory / "s.jsonl",
+            [
+                _tool_use_entry(
+                    timestamp="2026-09-14T10:00:00Z",
+                    is_subagent=False,
+                    name="Bash",
+                    tool_input={"command": command},
+                )
+            ],
+        )
+
+    monkeypatch.chdir(worktree)
+    scoped = runner.invoke(app, ["--projects-dir", str(projects_dir)])
+    assert scoped.exit_code == 0, scoped.output
+    assert "direct docs/*.md access: 2" in scoped.output
+
+    widened = runner.invoke(
+        app, ["--projects-dir", str(projects_dir), "--all-projects"]
+    )
+    assert widened.exit_code == 0, widened.output
+    assert "direct docs/*.md access: 3" in widened.output
