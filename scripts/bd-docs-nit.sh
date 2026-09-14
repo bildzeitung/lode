@@ -203,7 +203,11 @@ cmd_append() {
     esac
     case "$1" in
       --source) source="$2"; shift 2 ;;
-      --file) file="$2"; shift 2 ;;
+      # Repo-relative is the only spelling a later builder in a different
+      # worktree can act on, and it is what the docs/decisions.md test below
+      # matches -- so strip a `./` prefix once, here, rather than at either
+      # consumer.
+      --file) file="${2#./}"; shift 2 ;;
       --line) line="$2"; shift 2 ;;
       --anchor) anchor="$2"; shift 2 ;;
       --replacement) replacement="$2"; shift 2 ;;
@@ -233,6 +237,15 @@ Replacement: \"$replacement\""
   if [ -n "$what" ]; then
     note="$note
 What it changes: $what"
+  fi
+  # lode-9e5o: docs/decisions.md is append-only (its own preamble), but a nit
+  # in this patch shape (verbatim anchor + replacement) reads as an in-place
+  # edit, so a builder following it literally gets it wrong every time
+  # (observed on lode-61w6). Say so at the point of use rather than leaving it
+  # to scripts/check-decisions-no-silent-rewrite.sh to catch at review.
+  if [ "$file" = "docs/decisions.md" ]; then
+    note="$note
+Reminder: docs/decisions.md is append-only -- apply this as an appended **Update (<id>, <date>):** marker per that file's preamble, never as an in-place replacement."
   fi
 
   if ! bd update "$id" --append-notes "$note" >/dev/null; then
