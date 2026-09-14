@@ -315,18 +315,36 @@ def test_append_absolute_file_inside_repo_normalizes_to_repo_relative(
     assert ".claude/worktrees" not in log
 
 
-def test_append_absolute_file_outside_repo_refuses_exit_2(tmp_path: Path) -> None:
-    """An absolute --file that does not lie under the repo toplevel at all
-    (not just a different worktree) cannot be normalized to anything a later
-    builder could act on -- refuse rather than record it verbatim."""
+_WORKTREE_SPELLING = ".claude/worktrees/agent-abc/docs/decisions.md"
+
+
+@pytest.mark.parametrize(
+    ("spelling", "expected_stderr"),
+    [
+        # Not under the toplevel at all -- nothing to normalize against.
+        ("/tmp/some-unrelated-file.md", "must be repo-relative"),
+        # Repo-relative is necessary but not sufficient: called from the main
+        # checkout, an absolute path into a worktree normalizes cleanly to
+        # this spelling, which is still only actionable on the machine that
+        # made it. Both spellings must be refused (lode-v4ks).
+        (_WORKTREE_SPELLING, "not inside a worktree checkout"),
+        (str(REPO_ROOT / _WORKTREE_SPELLING), "not inside a worktree checkout"),
+    ],
+)
+def test_append_unusable_file_path_refuses_exit_2(
+    tmp_path: Path, spelling: str, expected_stderr: str
+) -> None:
+    """A --file value that cannot be reduced to a spelling a later builder in
+    a different worktree (or on a different machine) could act on is refused
+    with the machine-fault code, rather than recorded verbatim."""
     r, dolt_marker = _run(
         tmp_path,
-        _append_args("/tmp/some-unrelated-file.md", line="1"),
+        _append_args(spelling, line="1"),
         open_rows=[{"id": "lode-59da", "title": STANDARD_TITLE}],
     )
     assert r.returncode == 2
     assert r.stdout == ""
-    assert "must be repo-relative" in r.stderr
+    assert expected_stderr in r.stderr
     assert not dolt_marker.exists()
 
 
