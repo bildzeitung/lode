@@ -323,9 +323,9 @@ _WORKTREE_SPELLING = ".claude/worktrees/agent-abc/docs/decisions.md"
     [
         # Not under the toplevel at all -- nothing to normalize against.
         ("/tmp/some-unrelated-file.md", "must be repo-relative"),
-        # A `../`-relative value matches neither the absolute arm nor the
-        # `.claude/worktrees/` arm, but still escapes the toplevel once
-        # resolved -- must be refused the same as the absolute case (lode-1gpc).
+        # A `../`-relative value still escapes the toplevel once resolved
+        # against it -- refused the same as an absolute path outside the
+        # toplevel, whatever the spelling (lode-1gpc).
         ("../../somewhere/else.md", "must be repo-relative"),
         # Repo-relative is necessary but not sufficient: called from the main
         # checkout, an absolute path into a worktree normalizes cleanly to
