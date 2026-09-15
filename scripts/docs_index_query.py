@@ -53,6 +53,17 @@ _DOC_CLASSES = ("decision-record", "reference/process")
 _SNIPPET_CHARS = 240
 
 
+#: Bootstraps docs_index_loader.py itself: scripts/ is not an installed package,
+#: so it has to be resolved by path rather than imported. Deliberately UNCACHED
+#: -- see the lode-7l68 entry in docs/decisions.md (that module must stay
+#: stateless).
+_loader_path = Path(__file__).resolve().parent / "docs_index_loader.py"
+_loader_spec = importlib.util.spec_from_file_location("docs_index_loader", _loader_path)
+assert _loader_spec is not None and _loader_spec.loader is not None
+_loader_module = importlib.util.module_from_spec(_loader_spec)
+_loader_spec.loader.exec_module(_loader_module)
+
+
 def _load_sibling(name: str, filename: str) -> ModuleType:
     """Load a ``scripts/`` sibling module under a PRIVATE ``sys.modules`` name.
 
@@ -68,18 +79,9 @@ def _load_sibling(name: str, filename: str) -> ModuleType:
     every ``scripts/`` sibling loader in this repo now shares -- this
     function's body used to be that implementation; it is now a thin
     pass-through kept so every call site below stays unchanged.
+
     """
-    loader_name = "_docs_index_query_loader_impl"
-    if loader_name in sys.modules:
-        loader = sys.modules[loader_name]
-    else:
-        loader_path = Path(__file__).resolve().parent / "docs_index_loader.py"
-        spec = importlib.util.spec_from_file_location(loader_name, loader_path)
-        assert spec is not None and spec.loader is not None
-        loader = importlib.util.module_from_spec(spec)
-        sys.modules[loader_name] = loader
-        spec.loader.exec_module(loader)
-    return loader.load_sibling(name, filename)
+    return _loader_module.load_sibling(name, filename)
 
 
 def _load_build() -> ModuleType:
@@ -115,7 +117,8 @@ def _load_log() -> ModuleType:
     Called at the one logging site rather than at import, so a query that
     never reaches it -- a `--class` validation error, or a library caller of
     :func:`query` -- does not pay to load a module it will not use.
-    ``_load_sibling`` caches on ``sys.modules``, so repeat calls are free.
+    The loaded module is cached on ``sys.modules`` under that private name,
+    so repeat calls return the same object.
     """
     return _load_sibling("_docs_index_query_log_impl", "docs_index_log.py")
 

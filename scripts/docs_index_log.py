@@ -23,7 +23,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import sys
 import time
 from collections import Counter
 from pathlib import Path
@@ -32,6 +31,17 @@ from typing import Annotated, Any
 import typer
 
 app = typer.Typer(add_completion=False)
+
+
+#: Bootstraps docs_index_loader.py itself: scripts/ is not an installed package,
+#: so it has to be resolved by path rather than imported. Deliberately UNCACHED
+#: -- see the lode-7l68 entry in docs/decisions.md (that module must stay
+#: stateless).
+_loader_path = Path(__file__).resolve().parent / "docs_index_loader.py"
+_loader_spec = importlib.util.spec_from_file_location("docs_index_loader", _loader_path)
+assert _loader_spec is not None and _loader_spec.loader is not None
+_loader_module = importlib.util.module_from_spec(_loader_spec)
+_loader_spec.loader.exec_module(_loader_module)
 
 
 def _load_build():
@@ -46,18 +56,11 @@ def _load_build():
     ``load_sibling`` here removes that risk: any caller asking for
     ``docs_index_build`` under its own private name gets the SAME cached
     module object back, never a second one.
+
     """
-    name = "_docs_index_log_loader_impl"
-    if name in sys.modules:
-        loader = sys.modules[name]
-    else:
-        path = Path(__file__).resolve().parent / "docs_index_loader.py"
-        spec = importlib.util.spec_from_file_location(name, path)
-        assert spec is not None and spec.loader is not None
-        loader = importlib.util.module_from_spec(spec)
-        sys.modules[name] = loader
-        spec.loader.exec_module(loader)
-    return loader.load_sibling("_docs_index_log_build_impl", "docs_index_build.py")
+    return _loader_module.load_sibling(
+        "_docs_index_log_build_impl", "docs_index_build.py"
+    )
 
 
 def log_path() -> Path:

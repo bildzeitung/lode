@@ -35,26 +35,18 @@ from __future__ import annotations
 import importlib.util
 import os
 import sqlite3
-import sys
 from pathlib import Path
 from types import ModuleType
 
-#: docs_index_loader.py is loaded the same bootstrap way its own docstring
-#: describes for every OTHER scripts/ sibling: scripts/ is not an installed
-#: package, so this has to resolve the file by path rather than `import`.
-#: Once loaded it supplies load_sibling(), which every further sibling load
-#: in this module goes through -- one bootstrap, not a second copy of the
-#: spec_from_file_location dance this ticket exists to consolidate.
-_loader_name = "_docs_index_build_loader_impl"
-if _loader_name in sys.modules:
-    _loader_module = sys.modules[_loader_name]
-else:
-    _loader_path = Path(__file__).resolve().parent / "docs_index_loader.py"
-    _loader_spec = importlib.util.spec_from_file_location(_loader_name, _loader_path)
-    assert _loader_spec is not None and _loader_spec.loader is not None
-    _loader_module = importlib.util.module_from_spec(_loader_spec)
-    sys.modules[_loader_name] = _loader_module
-    _loader_spec.loader.exec_module(_loader_module)
+#: Bootstraps docs_index_loader.py itself: scripts/ is not an installed package,
+#: so it has to be resolved by path rather than imported. Deliberately UNCACHED
+#: -- see the lode-7l68 entry in docs/decisions.md (that module must stay
+#: stateless).
+_loader_path = Path(__file__).resolve().parent / "docs_index_loader.py"
+_loader_spec = importlib.util.spec_from_file_location("docs_index_loader", _loader_path)
+assert _loader_spec is not None and _loader_spec.loader is not None
+_loader_module = importlib.util.module_from_spec(_loader_spec)
+_loader_spec.loader.exec_module(_loader_module)
 load_sibling = _loader_module.load_sibling
 
 
