@@ -81,7 +81,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
   cat >&2 <<'EOF'
 usage:
-  bd-docs-nit.sh append --source <text> --file <path> --line <n> --anchor <text> --replacement <text> [--what <text>]
+  bd-docs-nit.sh append --source <text> --file <repo-relative-path> --line <n> --anchor <text> --replacement <text> [--what <text>]
+      --file must be repo-relative (an absolute path is normalized against this checkout's
+      toplevel); a cross-tree or .claude/worktrees/ spelling is refused, exit 2.
   bd-docs-nit.sh count
   bd-docs-nit.sh ensure-open [<closed-id> ...]
 EOF
