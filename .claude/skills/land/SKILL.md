@@ -1967,12 +1967,16 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   "<verbatim>" --replacement "<text>"` locates the collector by label (never a hardcoded id),
   appends the note in the mandated patch shape [If the whole remedy is a one-line doc
   change](#if-the-whole-remedy-is-a-one-line-doc-change-report-the-patch--not-the-gap) already
-  requires, with the `NIT` prefix the script owns, and pushes it (lode-y86u). With **no** open
-  collector the script now **creates one itself** (lode-z1n5 part 1, reversing the old "a human opens
-  it" rule) rather than refusing — I never see that as a failure. With **two or more**, all carrying
-  the standard title, it **converges** on the smallest id without my involvement (part 1a). **Exit 1
-  means the script refused because at least one of 2+ open collectors carries a NON-standard
-  title** — read its stderr and report the duplicate-collector ambiguity, and never pick one.
+  requires, with the `NIT` prefix the script owns, and pushes it (lode-y86u). `--file` is
+  **repo-relative** (e.g. `docs/decisions.md`); an absolute path is normalized against the current
+  checkout and refused (exit 2) if it falls outside it, as is any `.claude/worktrees/`-spelled path
+  ([docs/agents-workflow.md](../../../docs/agents-workflow.md#the---file-value-is-repo-relative-not-worktree-specific-lode-4xj1)).
+  With **no** open collector the script now **creates one itself** (lode-z1n5 part 1, reversing the
+  old "a human opens it" rule) rather than refusing — I never see that as a failure. With **two or
+  more**, all carrying the standard title, it **converges** on the smallest id without my
+  involvement (part 1a). **Exit 1 means the script refused because at least one of 2+ open
+  collectors carries a NON-standard title** — read its stderr and report the duplicate-collector
+  ambiguity, and never pick one.
 
   **Not filing is not the same as leaving work for the human.** When the discovery's whole remedy is
   a one-line doc change, the report must carry the *patch* — exact text, file, derived line number —

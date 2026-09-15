@@ -465,8 +465,12 @@ recheck against a tree that may hold my own uncommitted review fixes.)
    I append it to the docs-nits collector instead: `scripts/bd-docs-nit.sh append --source
    "<attribution>" --file <path> --line <n> --anchor "<verbatim>" --replacement "<text>"` locates the
    collector by label (never a hardcoded id), appends the note in patch shape with the `NIT` prefix
-   the script owns, and pushes it (lode-y86u). With **no** open collector it creates one itself
-   (lode-z1n5 part 1 — not a refusal). **Exit 1 means the script refused because 2+ open collectors
+   the script owns, and pushes it (lode-y86u). `--file` is **repo-relative** (e.g.
+   `docs/decisions.md`); an absolute path is normalized against the current checkout and refused
+   (exit 2) if it falls outside it, as is any `.claude/worktrees/`-spelled path
+   ([docs/agents-workflow.md](../../docs/agents-workflow.md#the---file-value-is-repo-relative-not-worktree-specific-lode-4xj1)).
+   With **no** open collector it creates one itself (lode-z1n5 part 1 — not a refusal). **Exit 1
+   means the script refused because 2+ open collectors
    exist and at least one carries a non-standard title** — I report the duplicate-collector ambiguity
    in my hand-off, and never pick one.
 
