@@ -33,6 +33,17 @@ import typer
 app = typer.Typer(add_completion=False)
 
 
+#: Bootstraps docs_index_loader.py itself: scripts/ is not an installed package,
+#: so it has to be resolved by path rather than imported. Deliberately UNCACHED
+#: -- see the lode-7l68 entry in docs/decisions.md (that module must stay
+#: stateless).
+_loader_path = Path(__file__).resolve().parent / "docs_index_loader.py"
+_loader_spec = importlib.util.spec_from_file_location("docs_index_loader", _loader_path)
+assert _loader_spec is not None and _loader_spec.loader is not None
+_loader_module = importlib.util.module_from_spec(_loader_spec)
+_loader_spec.loader.exec_module(_loader_module)
+
+
 def _load_build():
     """Load scripts/docs_index_build.py under a PRIVATE sys.modules name, via
     the shared scripts/docs_index_loader.py bootstrap (``lode-wtk2``).
@@ -46,19 +57,10 @@ def _load_build():
     ``docs_index_build`` under its own private name gets the SAME cached
     module object back, never a second one.
 
-    The bootstrap that loads ``docs_index_loader.py`` ITSELF is deliberately
-    UNCACHED (``lode-7l68``, choice (c)): that module is stateless -- it
-    defines only ``load_sibling()``, no top-level state -- so a second
-    independent load anywhere else in the process is harmless, and skipping
-    the ``sys.modules`` cache here means this bootstrap never needs a
-    private cache name of its own, and so can never collide with anything.
     """
-    path = Path(__file__).resolve().parent / "docs_index_loader.py"
-    spec = importlib.util.spec_from_file_location("docs_index_loader", path)
-    assert spec is not None and spec.loader is not None
-    loader = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(loader)
-    return loader.load_sibling("_docs_index_log_build_impl", "docs_index_build.py")
+    return _loader_module.load_sibling(
+        "_docs_index_log_build_impl", "docs_index_build.py"
+    )
 
 
 def log_path() -> Path:

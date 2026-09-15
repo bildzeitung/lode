@@ -1,83 +1,109 @@
-"""Pins the choice (c) semantics lode-7l68 made for scripts/docs_index_loader.py's
-OWN bootstrap -- distinct from the caching load_sibling() itself does for the
-modules it loads.
+"""Pins the choice (c) semantics ``lode-7l68`` chose for the bootstrap each
+``scripts/docs_index_*.py`` caller uses to reach scripts/docs_index_loader.py:
+uncached, registering no public ``sys.modules`` name, while ``load_sibling()``'s
+own caching still holds. Rationale, rejected alternatives, and the
+stateless-loader invariant this rests on: the ``lode-7l68`` entry in
+docs/decisions.md.
 
-lode-wtk2 consolidated the sibling-loader BODY into docs_index_loader.py's
-load_sibling(), but each of docs_index_build.py, docs_index_log.py, and
-docs_index_query.py still needs to load docs_index_loader.py itself first,
-via the same spec_from_file_location/exec_module dance the loader exists to
-remove one level up. lode-7l68 chose to leave that one, innermost bootstrap
-UNCACHED: docs_index_loader.py defines only load_sibling(), no top-level
-state, so a second independent load of it is harmless, and skipping the
-sys.modules registration means the bootstrap never needs a private cache
-name of its own -- so it can never collide with a test's own private name
-for docs_index_build/docs_index_log/docs_index_query (the actual hazard the
-ticket's constraint warns about; see conftest.load_module_from_path's own
-assert).
-
-This is a small, deliberate design choice among three non-free candidates
-(see the ticket), so it is pinned here rather than left to be silently
-undone by a future "helpful" refactor that re-adds caching.
+These assert against the SHIPPED callers and the shipped loader, never against a
+copy of the bootstrap defined here -- a test that re-implements the dance would
+stay green through exactly the regression it exists to catch.
 """
 
+import ast
 import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-_LOADER_PATH = REPO_ROOT / "scripts" / "docs_index_loader.py"
+_SCRIPTS = REPO_ROOT / "scripts"
+_LOADER_PATH = _SCRIPTS / "docs_index_loader.py"
+
+#: The three callers that each carry their own bootstrap (the ticket's choice
+#: (c): three short uncached ones, not one shared one).
+_CALLERS = (
+    "docs_index_build.py",
+    "docs_index_log.py",
+    "docs_index_query.py",
+)
 
 
-def _load_loader_uncached() -> object:
-    """Mirror each caller's own bootstrap exactly: no sys.modules lookup or
-    registration, a fresh load every call."""
-    spec = importlib.util.spec_from_file_location("docs_index_loader", _LOADER_PATH)
+def _load_uncached(path: Path, name: str) -> ModuleType:
+    """Load ``path`` without registering ``name`` in ``sys.modules``."""
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def test_repeated_loads_are_independent_module_objects() -> None:
-    """Two independent bootstraps (as docs_index_build.py and
-    docs_index_query.py each run their own) must NOT be the same object --
-    that is the whole point of leaving this one bootstrap uncached."""
-    first = _load_loader_uncached()
-    second = _load_loader_uncached()
-    assert first is not second
-    assert first.load_sibling is not second.load_sibling
+def test_no_caller_registers_a_sys_modules_name_for_its_loader_bootstrap() -> None:
+    """The regression pin: re-adding ``sys.modules[...] = loader`` to any
+    caller's bootstrap must turn this red. Scanned in the source rather than
+    observed at runtime, because the failure is a *write* that a passing import
+    would leave behind only on the first load of the session."""
+    for filename in _CALLERS:
+        source = (_SCRIPTS / filename).read_text()
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if not isinstance(target, ast.Subscript):
+                    continue
+                assert not (
+                    isinstance(target.value, ast.Attribute)
+                    and target.value.attr == "modules"
+                ), (
+                    f"scripts/{filename} line {node.lineno} writes to sys.modules; "
+                    "each caller's docs_index_loader.py bootstrap must stay "
+                    "uncached (lode-7l68) so it needs no private cache name"
+                )
 
 
-def test_uncached_loads_never_register_a_public_sys_modules_name() -> None:
-    """The bootstrap must never leave a 'docs_index_loader' entry in
-    sys.modules -- that public name is exactly what candidates (a) and (b)
-    would have registered, and what this choice avoids needing at all."""
+def test_loading_a_caller_leaves_no_public_loader_name_in_sys_modules() -> None:
+    """The public name ``docs_index_loader`` is what candidates (a) and (b)
+    would have registered, and what this choice avoids needing at all -- so
+    conftest.load_module_from_path's 'name not already in sys.modules' assert
+    can never be tripped by it."""
     sys.modules.pop("docs_index_loader", None)
-    _load_loader_uncached()
-    assert "docs_index_loader" not in sys.modules
+    for filename in _CALLERS:
+        _load_uncached(_SCRIPTS / filename, f"_pin_lode_7l68_{filename[:-3]}")
+        assert "docs_index_loader" not in sys.modules
 
 
-def test_downstream_sibling_caching_still_works_across_independent_loader_copies() -> (
-    None
-):
-    """Even though the loader module itself is loaded twice, independently,
-    load_sibling()'s OWN caching (a module-global sys.modules lookup, not
-    loader-instance state) still returns the SAME downstream module object
-    for the same private name -- which is the guarantee the three real
-    callers, and their tests, depend on."""
+def test_loader_module_is_stateless() -> None:
+    """The invariant choice (c) rests on: N independent loads of
+    docs_index_loader.py are harmless only while it holds no top-level state.
+    A dataclass/enum or a module-level value would make a second load create a
+    DISTINCT class object and break ``isinstance`` silently."""
+    tree = ast.parse(_LOADER_PATH.read_text())
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef)):
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            continue  # the module docstring
+        raise AssertionError(
+            f"scripts/docs_index_loader.py line {node.lineno} adds top-level "
+            f"{type(node).__name__} state; the uncached bootstrap in each caller "
+            "(lode-7l68) is only sound while this module stays stateless"
+        )
+
+
+def test_downstream_sibling_caching_survives_independent_loader_copies() -> None:
+    """Even loaded twice, independently, ``load_sibling()``'s own caching (a
+    ``sys.modules`` lookup, not loader-instance state) returns the SAME
+    downstream module object for one private name -- the guarantee the three
+    callers and their tests depend on."""
     private_name = "_test_docs_index_loader_pin_chunker"
     sys.modules.pop(private_name, None)
     try:
-        loader_copy_1 = _load_loader_uncached()
-        loader_copy_2 = _load_loader_uncached()
-        assert loader_copy_1 is not loader_copy_2
-
-        chunker_via_1 = loader_copy_1.load_sibling(
+        first = _load_uncached(_LOADER_PATH, "_pin_lode_7l68_loader_a")
+        second = _load_uncached(_LOADER_PATH, "_pin_lode_7l68_loader_b")
+        assert first is not second
+        assert first.load_sibling(
             private_name, "docs_index_chunker.py"
-        )
-        chunker_via_2 = loader_copy_2.load_sibling(
-            private_name, "docs_index_chunker.py"
-        )
-        assert chunker_via_1 is chunker_via_2
+        ) is second.load_sibling(private_name, "docs_index_chunker.py")
     finally:
         sys.modules.pop(private_name, None)

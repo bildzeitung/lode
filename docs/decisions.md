@@ -5837,3 +5837,39 @@ entries below from being rewritten to chase the current tree.)
     corpus is live and has grown by every session since, including the one that made this change, so
     part of the movement is traffic and part is reclassification. The headline share is unmoved at
     34%, which is the substantive result -- the narrowing decided rows, not the ratio.
+
+- **`scripts/` sibling loading keeps three short UNCACHED bootstraps, not one shared one
+  (`lode-7l68`, 2026-09-14).** `lode-wtk2` consolidated the sibling-loader *body* into
+  [`scripts/docs_index_loader.py`](../scripts/docs_index_loader.py)'s `load_sibling()`, but each of
+  `docs_index_build.py`, `docs_index_log.py` and `docs_index_query.py` still has to reach that file
+  by path first — `scripts/` is not an installed package, so the bootstrap needs the very
+  `spec_from_file_location`/`exec_module` mechanism the loader exists to remove one level up. Three
+  candidates were weighed; **choice (c) is what shipped**: keep one bootstrap per caller, but drop
+  its `sys.modules` caching. Each is then five lines (`spec_from_file_location` →
+  `module_from_spec` → `exec_module`), with no cache lookup, no registration, and — the point — **no
+  private cache name of its own**, so there is nothing left that could collide with anything.
+
+  **Rejected: (a) `scripts/__init__.py` + relative imports, and (b) a `sys.path` shim in each
+  caller.** Both would give a genuinely single bootstrap, and both were declined for the same
+  reason: they register the loader under the **public** `sys.modules` name `docs_index_loader`.
+  [`tests/conftest.py`](../tests/conftest.py)'s `load_module_from_path` asserts that the name it is
+  about to load is *not* already in `sys.modules`, so any later test loading
+  `scripts/docs_index_loader.py` by path under its natural name would trip that assert — precisely
+  the collision the private-name design exists to prevent. Neither buys anything over (c), which
+  needs no new module and no public name. A `runpy.run_path` one-liner was also considered and
+  declined as churn on an already-green branch.
+
+  **Invariant this choice depends on:** `scripts/docs_index_loader.py` must stay **stateless** — it
+  defines only `load_sibling()`, with no top-level state and no `dataclass`/`enum`, and it never
+  looks itself up via `sys.modules[__name__]`. That is what makes N independent loads of it
+  harmless, and it is the whole basis of (c). If that module ever gains top-level state or a
+  `dataclass`, the uncached bootstrap breaks silently (a second load would create a *distinct* class
+  object and break `isinstance`) and the caching must come back. Note the contrast with
+  `load_sibling()` itself, which *does* cache: the modules it loads carry real top-level state that
+  callers depend on getting back as the same object every time.
+  [`tests/test_docs_index_loader.py`](../tests/test_docs_index_loader.py) pins this against the
+  SHIPPED code, not against a copy of the bootstrap: it AST-scans all three callers for any
+  `sys.modules[...]` write, AST-scans the loader itself for any top-level state, checks that
+  importing each caller leaves no public `docs_index_loader` entry behind, and checks that
+  `load_sibling()`'s own caching still returns one module object per private name across two
+  independent loader copies.

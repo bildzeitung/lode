@@ -38,21 +38,10 @@ import sqlite3
 from pathlib import Path
 from types import ModuleType
 
-#: docs_index_loader.py is loaded the same bootstrap way its own docstring
-#: describes for every OTHER scripts/ sibling: scripts/ is not an installed
-#: package, so this has to resolve the file by path rather than `import`.
-#: Once loaded it supplies load_sibling(), which every further sibling load
-#: in this module goes through.
-#:
-#: Deliberately UNCACHED (lode-7l68, choice (c) of that ticket's candidates):
-#: docs_index_loader.py is stateless -- it defines only load_sibling(), no
-#: top-level state -- so a second independent load anywhere else in the
-#: process is harmless, and skipping the sys.modules cache here means this
-#: one bootstrap never needs a private cache name of its own, and so can
-#: never collide with anything. Contrast load_sibling() itself, which DOES
-#: cache (see its own docstring): the modules it loads (docs_index_build,
-#: docs_index_chunker, ...) carry real top-level state that callers depend
-#: on getting back as the SAME object every time.
+#: Bootstraps docs_index_loader.py itself: scripts/ is not an installed package,
+#: so it has to be resolved by path rather than imported. Deliberately UNCACHED
+#: -- see the lode-7l68 entry in docs/decisions.md (that module must stay
+#: stateless).
 _loader_path = Path(__file__).resolve().parent / "docs_index_loader.py"
 _loader_spec = importlib.util.spec_from_file_location("docs_index_loader", _loader_path)
 assert _loader_spec is not None and _loader_spec.loader is not None
