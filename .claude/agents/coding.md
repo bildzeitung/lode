@@ -399,7 +399,11 @@ mode is destructive repair, appropriate as a one-time precondition, not as a mid
     docs-nits collector instead (lode-t551; decision and discriminator:
     [docs/agents-workflow.md](../../docs/agents-workflow.md#wording-only-doc-nits-go-to-the-docs-nits-collector-lode-t551)).
     `scripts/bd-docs-nit.sh append --source "<attribution>" --file <path> --line <n> --anchor
-    "<verbatim>" --replacement "<text>"` locates the collector by label (never a hardcoded id),
+    "<verbatim>" --replacement "<text>"` — `--file` is **repo-relative** (e.g. `docs/decisions.md`);
+    an absolute path is normalized against the current checkout, and any cross-tree or
+    `.claude/worktrees/`-spelled path is refused, exit 2
+    ([docs/agents-workflow.md](../../docs/agents-workflow.md#the---file-value-is-repo-relative-not-worktree-specific-lode-4xj1))
+    — locates the collector by label (never a hardcoded id),
     appends the note in patch shape with the `NIT` prefix the script owns, and pushes it (lode-y86u).
     With **no** open collector it creates one itself (lode-z1n5 part 1 — I never see this as a
     refusal). **Exit 1 means the script refused because 2+ open collectors exist and at least one

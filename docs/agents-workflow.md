@@ -1441,6 +1441,16 @@ substitute for the four mandated fields.
 suffix (`NIT 3`, `NIT 3 addendum`) — §2d counts `^NIT` line starts, so an addendum line counts as its
 own row; the count is a rough batch-size signal, not an exact nit tally.
 
+### The `--file` value is repo-relative, not worktree-specific (lode-4xj1)
+
+`append` normalizes `--file` before recording it (`lode-v4ks`): a **repo-relative** path (e.g.
+`docs/decisions.md`) is preferred and passes through unchanged; an **absolute** path is normalized
+against the current checkout's toplevel, so pass one only when it actually falls under that
+toplevel; and any value that resolves **outside** the current checkout, or that spells a
+`.claude/worktrees/` segment in either the repo-relative or absolute form, is **refused with exit
+2** — a note carrying a worktree-specific path is unusable to any other machine that later reads
+the collector. Pass the plain repo-relative form and this never comes up.
+
 **Lifecycle policy (lode-z1n5, reverses the original "0 and 2+ both mean report, don't guess"
 rule).** The original decision above left a gap: once the standing collector closes, nothing opens
 the next one, and every subsequent nit was silently lost. The policy now is:

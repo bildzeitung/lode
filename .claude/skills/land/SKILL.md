@@ -1964,7 +1964,11 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   collector](../../../docs/agents-workflow.md#wording-only-doc-nits-go-to-the-docs-nits-collector-lode-t551)).
   A nit is mine, or a `land-review` DOCS NIT finding — either way:
   `scripts/bd-docs-nit.sh append --source "<attribution>" --file <path> --line <n> --anchor
-  "<verbatim>" --replacement "<text>"` locates the collector by label (never a hardcoded id),
+  "<verbatim>" --replacement "<text>"` — `--file` is **repo-relative** (e.g. `docs/decisions.md`); an
+  absolute path is normalized against the current checkout, and any cross-tree or
+  `.claude/worktrees/`-spelled path is refused, exit 2
+  ([docs/agents-workflow.md](../../../docs/agents-workflow.md#the---file-value-is-repo-relative-not-worktree-specific-lode-4xj1))
+  — locates the collector by label (never a hardcoded id),
   appends the note in the mandated patch shape [If the whole remedy is a one-line doc
   change](#if-the-whole-remedy-is-a-one-line-doc-change-report-the-patch--not-the-gap) already
   requires, with the `NIT` prefix the script owns, and pushes it (lode-y86u). With **no** open
