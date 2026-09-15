@@ -194,20 +194,28 @@ resolve_open_collector() {
 # reminder matches, so the normalization happens once, here, rather than at
 # either consumer.
 normalize_nit_file() {
-  local file="${1#./}" toplevel
+  local file="${1#./}" toplevel abs resolved
+  toplevel="$(git rev-parse --show-toplevel)" || {
+    echo "bd-docs-nit.sh append: --file resolution failed -- \`git rev-parse --show-toplevel\` did not succeed" >&2
+    return 2
+  }
   case "$file" in
-    /*)
-      toplevel="$(git rev-parse --show-toplevel)" || {
-        echo "bd-docs-nit.sh append: --file is absolute but \`git rev-parse --show-toplevel\` failed" >&2
-        return 2
-      }
-      case "$file" in
-        "$toplevel"/*) file="${file#"$toplevel"/}" ;;
-        *)
-          echo "bd-docs-nit.sh append: --file must be repo-relative (got an absolute path outside $toplevel): $file" >&2
-          return 2
-          ;;
-      esac
+    /*) abs="$file" ;;
+    *) abs="$toplevel/$file" ;;
+  esac
+  # `realpath -m` resolves `..` segments (and an absolute spelling) without
+  # requiring the target to exist -- a nit's --file is usually a real doc, but
+  # nothing here depends on that. This is what catches a `../`-relative value
+  # that escapes the toplevel, the same as an absolute one always did.
+  resolved="$(realpath -m -- "$abs")" || {
+    echo "bd-docs-nit.sh append: --file could not be resolved: $file" >&2
+    return 2
+  }
+  case "$resolved" in
+    "$toplevel"/*) file="${resolved#"$toplevel"/}" ;;
+    *)
+      echo "bd-docs-nit.sh append: --file must be repo-relative (resolves outside $toplevel): $file" >&2
+      return 2
       ;;
   esac
   # Repo-relative is necessary but not sufficient: the toplevel is the CALLING
