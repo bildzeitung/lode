@@ -294,6 +294,60 @@ def test_append_targeting_other_file_has_no_decisions_md_reminder(
     assert "Reminder: docs/decisions.md is append-only" not in log
 
 
+def test_append_absolute_file_inside_repo_normalizes_to_repo_relative(
+    tmp_path: Path,
+) -> None:
+    """lode-v4ks: an absolute --file under the repo toplevel (the worktree
+    root, when called from inside a worktree) must be normalized to the same
+    repo-relative spelling a builder in a DIFFERENT worktree can still act
+    on -- never recorded with a `.claude/worktrees/...`-style machine-specific
+    prefix."""
+    absolute_file = str(REPO_ROOT / "docs" / "decisions.md")
+    r, _ = _run(
+        tmp_path,
+        _append_args(absolute_file, line="7"),
+        open_rows=[{"id": "lode-59da", "title": STANDARD_TITLE}],
+    )
+    assert r.returncode == 0, r.stderr
+    log = (tmp_path / "fakebin" / "update.log").read_text()
+    assert "NIT (test): docs/decisions.md:7" in log
+    assert str(REPO_ROOT) not in log
+    assert ".claude/worktrees" not in log
+
+
+_WORKTREE_SPELLING = ".claude/worktrees/agent-abc/docs/decisions.md"
+
+
+@pytest.mark.parametrize(
+    ("spelling", "expected_stderr"),
+    [
+        # Not under the toplevel at all -- nothing to normalize against.
+        ("/tmp/some-unrelated-file.md", "must be repo-relative"),
+        # Repo-relative is necessary but not sufficient: called from the main
+        # checkout, an absolute path into a worktree normalizes cleanly to
+        # this spelling, which is still only actionable on the machine that
+        # made it. Both spellings must be refused (lode-v4ks).
+        (_WORKTREE_SPELLING, "not inside a worktree checkout"),
+        (str(REPO_ROOT / _WORKTREE_SPELLING), "not inside a worktree checkout"),
+    ],
+)
+def test_append_unusable_file_path_refuses_exit_2(
+    tmp_path: Path, spelling: str, expected_stderr: str
+) -> None:
+    """A --file value that cannot be reduced to a spelling a later builder in
+    a different worktree (or on a different machine) could act on is refused
+    with the machine-fault code, rather than recorded verbatim."""
+    r, dolt_marker = _run(
+        tmp_path,
+        _append_args(spelling, line="1"),
+        open_rows=[{"id": "lode-59da", "title": STANDARD_TITLE}],
+    )
+    assert r.returncode == 2
+    assert r.stdout == ""
+    assert expected_stderr in r.stderr
+    assert not dolt_marker.exists()
+
+
 def test_append_no_open_collector_creates_one_then_appends(tmp_path: Path) -> None:
     """lode-z1n5 part 1: reverses the old "a human opens it" rule -- append
     creates the collector itself when zero are open, rather than refusing."""
