@@ -3471,11 +3471,15 @@ assumption would not have closed it.
   the same mutex instead of only the reclaim half of it.
 
   **Portability tradeoff, deliberate and accepted**: `flock(1)` ships in util-linux — present on
-  essentially every Linux distribution, absent on macOS and stock git-bash, both of which this repo's
-  "New machine setup" contemplates. `acquire` checks for it explicitly and, if missing, reports a
-  MACHINE FAULT and skips the tick — landing stays blocked rather than silently reverting to the
-  two-winner-capable pre-flock behaviour. `/land` is documented to run on ONE machine, so this is a
-  one-time environment gap per machine (installable via Homebrew on macOS), not a per-tick cost.
+  essentially every Linux distribution, absent on macOS and stock git-bash. `/land` (and the rest of
+  the dev/workflow tooling under `scripts/`, `.claude/`, `noxfile.py`) carries a decided Linux/WSL
+  floor (`lode-dz92`; docs/decisions.md), so this absence is expected, not a portability gap this
+  repo needs to close — macOS is a supported target only for the shipped app under `src/lode/`, not
+  for the machine that runs `/land`. `acquire` checks for `flock(1)` explicitly and, if missing,
+  reports a MACHINE FAULT and skips the tick — landing stays blocked rather than silently reverting
+  to the two-winner-capable pre-flock behaviour. `/land` is documented to run on ONE machine, so this
+  is a one-time environment gap per machine (installable via Homebrew, for anyone who still wants to
+  run `/land` from macOS or git-bash despite the undocumented floor), not a per-tick cost.
 
   **The lock record's owner token (5th field, lode-ao95) is unaffected by this change** — it exists for
   a *different* reclaim-adjacent concern, and remains lode-q9pm's scope: see below.
