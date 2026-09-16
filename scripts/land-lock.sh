@@ -24,7 +24,7 @@
 # later block/section). PID liveness cannot distinguish "the pass is still
 # running, just between Bash calls" from "the pass crashed" here.
 #
-# THE FIX: no trap, no PID-liveness check. Liveness is instead a wall-clock
+# THE FIX: no trap, no PID-liveness check. Liveness is instead a
 # STALENESS TOKEN -- the lock records when it was acquired, and a later
 # `acquire` reclaims it only once that timestamp is older than
 # LAND_LOCK_STALE_SECONDS (default 1800s / 30min -- see CAVEAT 1 for why the
@@ -39,6 +39,33 @@
 # the TTL instead -- see the two caveats below, and
 # docs/agents-workflow.md's single-lander-lock bullet, which is the design
 # home for this mechanism and for LAND_LOCK_STALE_SECONDS.
+#
+# CLOCK SOURCE (lode-3874): the staleness AGE itself is judged by a
+# non-stepping clock, never the wall clock. OBSERVED LIVE 2026-09-16: a WSL2
+# host's wall clock stepped ~99 minutes forward (`hv_utils` TimeSync resync)
+# in the middle of a /land pass, and the NEXT acquire computed a bogus
+# `age >= LAND_LOCK_STALE_SECONDS` against the wall-clock epoch the first
+# pass had recorded moments earlier, reclaiming a LIVE lock -- two landers on
+# `trunk`. A backward step has the opposite failure: it can make a genuinely
+# abandoned lock look fresh forever (wedge). Neither direction is rare enough
+# to ignore on a VM host with NTP/hyper-v time sync -- `date -u +%s` is not a
+# safe basis for AGE, full stop.
+#
+# The fix: age is computed from `/proc/uptime` (seconds since boot -- a
+# CLOCK_BOOTTIME reading; nothing NTP or a hypervisor resync does moves it)
+# plus the kernel `boot_id` (`/proc/sys/kernel/random/boot_id`) recorded
+# alongside it. A `boot_id` mismatch against the current boot means the boot
+# that recorded the lock is GONE (crash, VM restart) -- unconditionally
+# stale, regardless of the recorded age, since nothing from that boot can
+# still be running to hold it. The wall-clock epoch (field 3) and its ISO
+# rendering (field 4) are kept, unchanged in format and position, for human
+# display ONLY -- `epoch_of`/field 3 is read back only as the FALLBACK basis
+# for an old-format record (see `monotonic_of`/`bootid_of` below) that
+# predates this fix and carries no boot-relative fields at all; nothing in
+# the current reclaim path uses it when the newer fields are present. This is
+# per lode's own platform floor (`docs/decisions.md`, `lode-dz92`):
+# `scripts/` is Linux/WSL-only, so `/proc` is always present -- no portability
+# fallback is needed the way `flock` (CAVEAT 2) needed one for macOS.
 #
 # CAVEAT 1 -- the TTL measures IDLE time rather than acquisition age ACROSS
 # THE TWO LOOPS the `heartbeat` subcommand brackets (lode-m87j), and
@@ -598,17 +625,38 @@ new_token() {
   od -An -N8 -tx1 /dev/urandom | tr -d ' \n'
 }
 
+boot_uptime() {
+  # Whole seconds since this boot, from /proc/uptime -- a CLOCK_BOOTTIME-style
+  # reading that a wall-clock step (NTP/hv_utils resync) never perturbs
+  # (lode-3874). `awk` truncates the fractional part; empty output if
+  # /proc/uptime is unreadable, so callers fall back to the wall-clock epoch
+  # (field 3) exactly as they did before this field existed.
+  awk '{print int($1)}' /proc/uptime 2>/dev/null
+}
+
+boot_id() {
+  # This boot's unique id (lode-3874). A MISMATCH against a record's stored
+  # boot_id means the boot that wrote the record is gone (crash, VM restart,
+  # host swap) -- unconditionally stale, since nothing from that boot can
+  # still be running to hold the lock, regardless of the recorded age. Empty
+  # if unreadable.
+  cat /proc/sys/kernel/random/boot_id 2>/dev/null
+}
+
 lock_record() {
   # The one definition of the record's shape. Field order is load-bearing:
-  # the reclaim path below reads field 3 (epoch) and nothing else, so fields
-  # 1-4 (pid, host, epoch, ISO stamp) keep their original positions -- only
-  # field 5 (owner token) is new, appended rather than inserted, so nothing
-  # that reads field 3 needs to change. Fields 1, 2 and 4 are for a human
-  # reading the file by hand; field 5 (via `token_of`) is read back and
-  # threaded straight through by `heartbeat` below, so the field survives
-  # repeated heartbeat calls unchanged, and is also what `heartbeat`/
-  # `release`'s own ownership check (lode-q9pm) compares an `[own-token]`
-  # argument against.
+  # fields 1-4 (pid, host, epoch, ISO stamp) keep their original positions,
+  # field 5 (owner token) was appended by lode-ao95/lode-q9pm, and fields 6-7
+  # (boot-relative uptime, boot_id -- lode-3874) are appended the same way,
+  # so nothing that reads fields 1-5 needs to change. Fields 1, 2 and 4 are
+  # for a human reading the file by hand; field 3 is now display-only (see
+  # the header's CLOCK SOURCE section) -- the reclaim path judges staleness
+  # from fields 6-7 whenever both are present, falling back to field 3 only
+  # for a record written before this fix. Field 5 (via `token_of`) is read
+  # back and threaded straight through by `heartbeat` below, so the field
+  # survives repeated heartbeat calls unchanged, and is also what
+  # `heartbeat`/`release`'s own ownership check (lode-q9pm) compares an
+  # `[own-token]` argument against.
   #
   # The token is a MANDATORY positional, and that is deliberate -- see the
   # MERGE RESOLUTION note in the header. Defaulting it (`${1:-...}`) would
@@ -618,7 +666,8 @@ lock_record() {
   # exists to provide, with trunk's five heartbeat tests still green.
   # Requiring it makes that mistake fail loudly instead. Do not "fix" this
   # by adding a default -- `heartbeat` below supplies its own via `token_of`.
-  printf '%s %s %s %s %s\n' "$$" "$(hostname)" "$(date -u +%s)" "$(date -u +%FT%TZ)" "$1"
+  printf '%s %s %s %s %s %s %s\n' "$$" "$(hostname)" "$(date -u +%s)" \
+    "$(date -u +%FT%TZ)" "$1" "$(boot_uptime)" "$(boot_id)"
 }
 
 epoch_of() {
@@ -647,6 +696,27 @@ token_of() {
   # shellcheck disable=SC2086  # deliberate word-split of the record
   set -- $1
   printf '%s' "${5:-}"
+}
+
+monotonic_of() {
+  # Field 6 (boot-relative uptime seconds, lode-3874) of a lock record if
+  # legible, empty otherwise -- including for a record written before this
+  # field existed (five fields or fewer), which is exactly the signal the
+  # reclaim path uses to fall back to the wall-clock epoch instead.
+  # shellcheck disable=SC2086  # deliberate word-split of the record
+  set -- $1
+  case "${6:-}" in
+    ''|*[!0-9]*) ;;
+    *) printf '%s' "$6" ;;
+  esac
+}
+
+bootid_of() {
+  # Field 7 (recording boot's boot_id, lode-3874) of a lock record, empty if
+  # the record predates the field or is otherwise malformed.
+  # shellcheck disable=SC2086  # deliberate word-split of the record
+  set -- $1
+  printf '%s' "${7:-}"
 }
 
 skip_lock_still_held() {
@@ -833,21 +903,49 @@ if [ ! -e "$LOCK" ]; then
   exit 1
 fi
 
-# Read the recorded acquire time (3rd field: epoch seconds) to judge staleness
-# -- never the PID (1st field), which is human-only (see header). One `read`
-# serves both the staleness check and the diagnostics below. A malformed or
-# unreadable record (truncated write, hand-edited, ...) is treated as "age
-# unknown" rather than crashing: stay conservative and skip rather than guess.
+# Read the recorded acquire time to judge staleness -- never the PID (1st
+# field), which is human-only (see header). One `read` serves both the
+# staleness check and the diagnostics below. A malformed or unreadable
+# record (truncated write, hand-edited, ...) is treated as "age unknown"
+# rather than crashing: stay conservative and skip rather than guess.
 RECORD=""
 read -r RECORD < "$LOCK" || true
 RECORDED_EPOCH="$(epoch_of "$RECORD")"
+RECORDED_MONO="$(monotonic_of "$RECORD")"
+RECORDED_BOOTID="$(bootid_of "$RECORD")"
 
-if [ -z "$RECORDED_EPOCH" ]; then
+if [ -z "$RECORDED_EPOCH" ] && [ -z "$RECORDED_MONO" ]; then
   skip_lock_still_held "$RECORD"
 fi
 
-AGE=$(( $(date -u +%s) - RECORDED_EPOCH ))
-if [ "$AGE" -lt "$STALE_SECONDS" ]; then
+# lode-3874: judge staleness from the non-stepping boot clock whenever the
+# record carries both boot-relative fields -- see the header's CLOCK SOURCE
+# section. A record without them (written before those fields existed) is
+# judged by the wall-clock epoch instead.
+CURRENT_BOOTID="$(boot_id)"
+RECLAIM_REASON=""
+if [ -n "$RECORDED_MONO" ] && [ -n "$RECORDED_BOOTID" ] && [ -n "$CURRENT_BOOTID" ]; then
+  if [ "$RECORDED_BOOTID" != "$CURRENT_BOOTID" ]; then
+    # The recording boot is gone -- nothing from it can still hold this
+    # lock, regardless of the recorded age. Unconditionally stale.
+    RECLAIM_REASON="the recording boot is gone (boot_id mismatch)"
+  else
+    AGE=$(( $(boot_uptime) - RECORDED_MONO ))
+    if [ "$AGE" -lt "$STALE_SECONDS" ]; then
+      skip_lock_still_held "$RECORD"
+    fi
+    RECLAIM_REASON="age ${AGE}s >= ${STALE_SECONDS}s"
+  fi
+elif [ -n "$RECORDED_EPOCH" ]; then
+  AGE=$(( $(date -u +%s) - RECORDED_EPOCH ))
+  if [ "$AGE" -lt "$STALE_SECONDS" ]; then
+    skip_lock_still_held "$RECORD"
+  fi
+  RECLAIM_REASON="age ${AGE}s >= ${STALE_SECONDS}s"
+else
+  # No usable wall-clock epoch, and the boot-relative path is unusable
+  # (a boot field missing, or this boot's boot_id unreadable) -- stay
+  # conservative.
   skip_lock_still_held "$RECORD"
 fi
 
@@ -855,7 +953,7 @@ fi
 # this section, so the reclaim itself needs no further coordination: no
 # retry loop, no gate object, no ownership re-check. This IS the atomic
 # reclaim (CAVEAT 2).
-echo "land-lock: reclaiming stale lock (age ${AGE}s >= ${STALE_SECONDS}s)," \
+echo "land-lock: reclaiming stale lock (${RECLAIM_REASON})," \
   "previously held by: $RECORD"
 rm -f "$LOCK"
 if write_lock "$TOKEN"; then
