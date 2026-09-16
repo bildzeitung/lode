@@ -45,18 +45,11 @@ def conn(tmp_path: Path):
         c.close()
 
 
-@pytest.fixture(autouse=True)
-def _stub_dns(monkeypatch):
-    """Every web_fetch destination in this module resolves to a genuinely
-    public, globally-routable address (93.184.216.34 -- example.com's own
-    real address; note TEST-NET-3/RFC 5737 ranges are classified
-    ``is_private`` by Python's ``ipaddress`` module, so they don't work here)
-    unless a test overrides this stub -- fetch_for_ask now does its own DNS
-    resolution for the SSRF guard (lode-ejfv), and this keeps the whole
-    suite network-free, per this module's own docstring."""
-    monkeypatch.setattr(
-        "lode.tools._resolve_host_addresses", lambda host: ["93.184.216.34"]
-    )
+# DNS resolution for lode.tools._resolve_host_addresses (the SSRF guard's
+# preflight, lode-ejfv) is stubbed suite-wide by conftest.py's
+# ``_stub_resolve_host_addresses`` autouse fixture (lode-azkh) -- tests below
+# that need a different resolution (private address, raise, …) override it
+# with their own ``monkeypatch.setattr`` inside the test body, same as before.
 
 
 class _StubFetcher:
