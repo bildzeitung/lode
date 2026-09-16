@@ -919,14 +919,13 @@ if [ -z "$RECORDED_EPOCH" ] && [ -z "$RECORDED_MONO" ]; then
 fi
 
 # lode-3874: judge staleness from the non-stepping boot clock whenever the
-# record carries both boot-relative fields (i.e. it was written by this fix
-# or later) -- see the header's CLOCK SOURCE section. A record predating this
-# fix (RECORDED_MONO empty) falls back to the old wall-clock computation
-# unchanged, which is exactly what acceptance criterion 3 asks for: it still
-# parses, judged by the pre-existing policy, nothing more.
+# record carries both boot-relative fields -- see the header's CLOCK SOURCE
+# section. A record without them (written before those fields existed) is
+# judged by the wall-clock epoch instead.
+CURRENT_BOOTID="$(boot_id)"
 RECLAIM_REASON=""
-if [ -n "$RECORDED_MONO" ] && [ -n "$RECORDED_BOOTID" ] && [ -n "$(boot_id)" ]; then
-  if [ "$RECORDED_BOOTID" != "$(boot_id)" ]; then
+if [ -n "$RECORDED_MONO" ] && [ -n "$RECORDED_BOOTID" ] && [ -n "$CURRENT_BOOTID" ]; then
+  if [ "$RECORDED_BOOTID" != "$CURRENT_BOOTID" ]; then
     # The recording boot is gone -- nothing from it can still hold this
     # lock, regardless of the recorded age. Unconditionally stale.
     RECLAIM_REASON="the recording boot is gone (boot_id mismatch)"
@@ -944,8 +943,9 @@ elif [ -n "$RECORDED_EPOCH" ]; then
   fi
   RECLAIM_REASON="age ${AGE}s >= ${STALE_SECONDS}s"
 else
-  # Boot fields present but /proc's own boot_id is unreadable right now, and
-  # no wall-clock epoch to fall back to either -- stay conservative.
+  # No usable wall-clock epoch, and the boot-relative path is unusable
+  # (a boot field missing, or this boot's boot_id unreadable) -- stay
+  # conservative.
   skip_lock_still_held "$RECORD"
 fi
 
