@@ -817,7 +817,7 @@ def test_wall_clock_jump_does_not_reclaim_a_live_lock(tmp_path: Path) -> None:
         "#!/usr/bin/env bash\n"
         'case "$*" in\n'
         '  *"+%s"*) echo 999999999999 ;;\n'
-        '  *) echo 2099-01-01T00:00:00Z ;;\n'
+        "  *) echo 2099-01-01T00:00:00Z ;;\n"
         "esac\n"
     )
     date_shim.chmod(0o755)
