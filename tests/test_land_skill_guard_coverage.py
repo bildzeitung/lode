@@ -631,7 +631,7 @@ def test_sweep_allowlist_match_is_exact_text_not_shape() -> None:
     )
 
 
-def test_land_replay_fence_activates_the_venv(tmp_path) -> None:
+def test_land_replay_fence_activates_the_venv() -> None:
     """lode-04zb: the isolation-replay fence runs `scripts/land-replay.sh`,
     which itself invokes `nox`, in a FRESH Bash invocation -- Section 3's own
     combined re-gate fence activates the venv as its first line for exactly

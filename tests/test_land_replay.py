@@ -173,8 +173,7 @@ def _run_with_no_nox_on_path(
     conflicts_dir: Path,
     landed: Path,
 ) -> subprocess.CompletedProcess:
-    """Same as `_run`, but with every PATH entry that could resolve a real
-    `nox` (this repo's own `./venv/bin`, or any other venv's `bin`) stripped
+    """Same as `_run`, but with every PATH entry that resolves a `nox` stripped
     out -- reproducing lode-04zb's actual failure: a caller that never
     activated the venv before invoking this script."""
     _git(repo, "checkout", "-q", "trunk")
@@ -194,7 +193,7 @@ def _run_with_no_nox_on_path(
     kept = [
         p
         for p in env.get("PATH", "").split(os.pathsep)
-        if "venv" not in p and not (Path(p) / "nox").exists()
+        if not (Path(p) / "nox").exists()
     ]
     env["PATH"] = os.pathsep.join(kept)
     return subprocess.run(
