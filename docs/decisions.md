@@ -5873,3 +5873,29 @@ entries below from being rewritten to chase the current tree.)
   importing each caller leaves no public `docs_index_loader` entry behind, and checks that
   `load_sibling()`'s own caching still returns one module object per private name across two
   independent loader copies.
+
+- **The platform floor: the shipped app must run on macOS; dev/workflow tooling is Linux/WSL-only
+  (`lode-dz92`, 2026-09-15, maintainer decision).** macOS support is required **only** for the
+  shipping app — the `lode` package under `src/lode/` (TUI, CLI, storage, retrieval). Everything
+  under `scripts/`, `.claude/` (skills, agents, hooks), and `noxfile.py` — the dev/workflow tooling
+  that builds, gates, and lands lode itself — carries a **Linux/WSL floor** and may freely depend on
+  GNU/util-linux-only tools (`flock(1)`, GNU `realpath -m`, GNU coreutils flags generally). This is
+  not a new constraint so much as a naming of one that already existed piecemeal and untitled: two
+  incidents on the same day guessed at the boundary in opposite directions because nothing in `docs/`
+  stated it.
+  - **`lode-y3dw`** (2026-08-05, entry above in this file — "`/land` requires `flock(1)` — a
+    portability floor") had already decided `/land` may hard-require `flock(1)`, framing it narrowly
+    as a single-script tradeoff ("`/land` is documented to run on ONE machine") rather than the
+    general rule that all dev/workflow tooling gets the same floor.
+  - **`lode-1gpc`'s technical review** flagged `scripts/bd-docs-nit.sh`'s `realpath -m` as a
+    macOS-portability risk, guessing the repo is Linux-only.
+  - **`lode-xjdr`**, filed the same day from that review, guessed the opposite way — that "macOS
+    support is required" meant dev scripts too, and proposed porting `realpath -m` off GNU coreutils.
+    Closed as misfiled once this split was decided: both `scripts/bd-docs-nit.sh` and
+    `scripts/release.sh` are dev-side tooling, so the Linux/WSL floor applies to them and there was no
+    portability defect to fix.
+
+  **Acceptance test for future reviewers, stated plainly so this stops being re-litigated ticket by
+  ticket:** a GNU-only or Linux-only dependency in `scripts/`, `.claude/`, or `noxfile.py` is **not**
+  a defect — it's within the documented floor. The identical dependency reached from `src/lode/` **is**
+  a defect — that code must run on the shipped app's target platforms, which include macOS.

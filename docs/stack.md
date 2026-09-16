@@ -4,6 +4,12 @@
 job-harness ecosystem (Python + Textual + Typer + SQLite) so there's no new framework risk. This
 is the storage realization of the ownership boundary and data shape in [storage.md](storage.md).
 
+**Platform floor.** The shipped app described by this stack — the `lode` package under `src/lode/`
+— must run on macOS (as well as Linux/WSL). The dev/workflow tooling that builds, gates, and lands
+it (`scripts/`, `.claude/`, `noxfile.py`) is a separate, Linux/WSL-only surface and may depend on
+GNU/util-linux-only tools freely — see [decisions.md](decisions.md) ("The platform floor",
+`lode-dz92`) for the decided split and its acceptance test.
+
 | Layer | Choice | Notes |
 |---|---|---|
 | Language | **Python** | Richest LLM/embedding tooling; matches the existing harness |
