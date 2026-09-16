@@ -242,9 +242,10 @@ def test_acquire_on_a_fresh_repo_succeeds_and_writes_a_lock_file(
     lock = _lock_path(repo)
     assert lock.exists()
     fields = lock.read_text().split()
-    assert len(fields) == 5, fields  # pid hostname epoch iso8601 owner-token
+    # pid hostname epoch iso8601 owner-token boot-uptime boot-id (lode-3874)
+    assert len(fields) == 7, fields
     assert fields[0].isdigit()  # pid, recorded for humans only (see header)
-    assert fields[2].isdigit()  # epoch seconds -- the ONLY field acquire reads back
+    assert fields[2].isdigit()  # epoch seconds -- display-only (see header)
     # Owner token (lode-ao95): opaque, non-empty, distinct across acquisitions
     # -- not read back by anything in THIS script yet (see CAVEAT 2 / lode-q9pm)
     # but must actually be present and vary, or a future ownership check has
@@ -522,7 +523,7 @@ def test_heartbeat_preserves_the_existing_owner_token(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     fields = lock.read_text().split()
-    assert len(fields) == 5, fields
+    assert len(fields) == 7, fields  # 5 legacy fields + boot-uptime + boot-id
     assert fields[4] == original_token, (
         "heartbeat changed the owner token -- it must PRESERVE field 5, "
         "never regenerate or blank it (see MERGE RESOLUTION in "
@@ -549,7 +550,7 @@ def test_heartbeat_on_a_pre_token_four_field_lock_mints_a_fresh_token(
 
     assert result.returncode == 0, result.stdout + result.stderr
     fields = lock.read_text().split()
-    assert len(fields) == 5, fields
+    assert len(fields) == 7, fields  # 5 legacy fields + boot-uptime + boot-id
     assert fields[4], "heartbeat left field 5 empty instead of minting a token"
 
 
@@ -791,6 +792,70 @@ def test_stale_lock_is_reclaimed(tmp_path: Path) -> None:
     # The lock file now reflects the NEW acquisition, not the stale one.
     new_fields = lock.read_text().split()
     assert int(new_fields[2]) > old_epoch
+
+
+def test_wall_clock_jump_does_not_reclaim_a_live_lock(tmp_path: Path) -> None:
+    """lode-3874: OBSERVED LIVE 2026-09-16 -- a WSL2 host's wall clock stepped
+    ~99 minutes forward mid-/land-pass, and the next `acquire` computed a
+    bogus `age >= LAND_LOCK_STALE_SECONDS` against the wall-clock epoch a
+    still-live pass had recorded moments earlier, reclaiming a LIVE lock
+    (two landers on trunk). Reproduce the corrupted clock with a `date` shim
+    that lies wildly forward on every call, and assert the second acquire is
+    refused rather than reclaiming: staleness must be judged by
+    /proc/uptime + boot_id (lode-3874), never by `date`."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    first = _run("acquire", repo=repo)
+    assert first.returncode == 0, first.stdout + first.stderr
+    fields = lock.read_text().split()
+    assert len(fields) == 7, fields  # must be a new-format record to prove this
+
+    shim_dir = tmp_path / "lying-date"
+    shim_dir.mkdir()
+    date_shim = shim_dir / "date"
+    date_shim.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$*" in\n'
+        '  *"+%s"*) echo 999999999999 ;;\n'
+        '  *) echo 2099-01-01T00:00:00Z ;;\n'
+        "esac\n"
+    )
+    date_shim.chmod(0o755)
+    lying_path = f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+
+    second = _run(
+        "acquire",
+        repo=repo,
+        env_overrides={"PATH": lying_path, "LAND_LOCK_STALE_SECONDS": "60"},
+    )
+
+    assert second.returncode == 1, second.stdout + second.stderr
+    assert "skipping this tick" in second.stderr
+
+
+def test_boot_id_mismatch_reclaims_regardless_of_recorded_age(
+    tmp_path: Path,
+) -> None:
+    """The other half of lode-3874's fix: a record naming a boot_id that is
+    not this boot's own must be reclaimed unconditionally -- the boot that
+    held the lock is gone, so nothing from it can still be running, no
+    matter how young the recorded age looks. A huge staleness threshold
+    proves the reclaim is NOT coming from the ordinary age check."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    first = _run("acquire", repo=repo)
+    assert first.returncode == 0, first.stdout + first.stderr
+    fields = lock.read_text().split()
+    assert len(fields) == 7, fields
+    fields[6] = "0" * len(fields[6])  # a boot_id no live boot can have
+    lock.write_text(" ".join(fields) + "\n")
+
+    result = _run(
+        "acquire", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "999999"}
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "boot_id mismatch" in result.stdout
 
 
 def test_fresh_lock_is_not_reclaimed_under_a_large_threshold(
@@ -2050,7 +2115,7 @@ def test_section_0_then_section_1_leaves_the_token_readable_by_section_2a(
     )
 
     lock_record = (repo / ".git" / "land.lock").read_text(encoding="utf-8").split()
-    assert len(lock_record) == 5, lock_record
+    assert len(lock_record) == 7, lock_record  # 5 legacy fields + boot-uptime + boot-id
     assert readback.stdout.strip() == lock_record[4], (
         "the token read back by Section 2a does not match field 5 (the owner "
         f"token) of the lock record this pass itself just wrote -- "

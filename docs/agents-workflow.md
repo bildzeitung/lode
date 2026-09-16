@@ -3354,7 +3354,18 @@ assumption would not have closed it.
   seam toward real CI.
 
   **The guard is `scripts/land-lock.sh` (`acquire` / `heartbeat` / `release`), and its liveness
-  signal is a wall-clock staleness token — never a PID (lode-aps3).** Section 0 of `land/SKILL.md`
+  signal is a staleness token — never a PID (lode-aps3), and never the wall clock (lode-3874).**
+  The token's AGE is judged from `/proc/uptime` (a boot-relative, CLOCK_BOOTTIME-style reading) plus
+  the kernel `boot_id`, not `date`: OBSERVED LIVE 2026-09-16, a WSL2 host's wall clock stepped ~99
+  minutes forward mid-pass (an `hv_utils` TimeSync resync), and the next `acquire` computed a bogus
+  age against the wall-clock epoch a still-live pass had just recorded, reclaiming a LIVE lock — two
+  landers on `trunk`. A backward step has the opposite failure (a genuinely stale lock reads as
+  fresh forever). A record's `boot_id` differing from the current boot's is unconditionally stale —
+  the boot that recorded it is gone, so nothing from it can still hold the lock, regardless of the
+  recorded age. The wall-clock epoch/ISO fields are kept, unchanged in position, for **human display
+  only**, and remain the fallback basis for a record written before this fix (no boot-relative
+  fields at all) — see `scripts/land-lock.sh`'s own header (CLOCK SOURCE) for the full account.
+  Section 0 of `land/SKILL.md`
   used to manage the lockfile inline, and it was **inert**: the release was a `trap … EXIT`, which
   fires when its own fenced block's shell exits — *before Section 1 runs* — so the lock was held for
   one Bash call rather than the pass (VERIFIED LIVE, 2026-07-27). It failed doubly open, because the
