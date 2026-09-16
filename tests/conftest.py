@@ -1508,7 +1508,7 @@ def fake_tool_turn_client(
     Pass the returned ``web_fetcher`` as the ``web_fetcher=`` kwarg so the
     fetch tool call resolves ``html`` for ``url`` without a real network call.
     ``url``'s host itself needs no stubbing here -- conftest's
-    ``_stub_resolve_host_addresses`` autouse fixture (below) keeps the SSRF
+    ``_stub_resolve_host_addresses`` autouse fixture (above) keeps the SSRF
     preflight (``lode.tools._resolve_host_addresses``) off the real DNS
     resolver for every test, this one included (lode-azkh).
     """
