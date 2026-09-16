@@ -178,6 +178,26 @@ if ! "$SCRIPT_DIR/assert-main-checkout.sh"; then
     "machine/dispatch fault, never a branch conflict."
 fi
 
+# `nox` on PATH is a precondition of every gate this script runs, baseline
+# and per-branch alike. Checked here, once, up front -- BEFORE any gate runs
+# -- so a caller that forgot to activate the venv is reported as exactly
+# that, never misread as a content verdict. OBSERVED (lode-04zb): the
+# baseline `nox -t fix`/`nox -s tests`/`nox -t everything-else` checks below
+# treat every nonzero exit alike (there is deliberately no
+# `escalate_unless_content` split on the baseline arms -- see that block's
+# own comment), so a bare "command not found" 127 fell straight into the
+# "'nox -t fix' is red on bare '$BASE_REF' ... needs a human's fix" message.
+# That message is false when nox never ran at all -- checking PATH up front
+# closes the gap at its source rather than re-deriving "was this 127" in
+# three separate baseline arms.
+command -v nox >/dev/null 2>&1 || gate_could_not_run \
+  "'nox' is not on PATH -- this script cannot run any gate (baseline or" \
+  "per-branch)." \
+  "Most likely the caller's shell never activated the venv before invoking" \
+  "this script (missing '. ./venv/bin/activate', lode-04zb)." \
+  "This is a machine/dispatch fault, never a baseline or branch verdict --" \
+  "nothing below has run yet."
+
 ACCEPTED=""
 MSG_DIR=""
 CONFLICTS_DIR=""

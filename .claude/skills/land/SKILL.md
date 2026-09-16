@@ -1085,6 +1085,7 @@ it would mask the 2. Keep it there.
   over the most destructive code in this file.
 
   ```bash
+  . ./venv/bin/activate   # fresh Bash invocation (lode-04zb) -- land-replay.sh runs nox itself
   STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation
   MSG_DIR="$STATE_DIR/msg"
   CONFLICTS_DIR="$STATE_DIR/conflicts"

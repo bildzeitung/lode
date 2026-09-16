@@ -629,3 +629,27 @@ def test_sweep_allowlist_match_is_exact_text_not_shape() -> None:
         "a cosmetically-changed allowlisted command must not silently keep "
         "matching its old allowlist entry"
     )
+
+
+def test_land_replay_fence_activates_the_venv() -> None:
+    """lode-04zb: the isolation-replay fence runs `scripts/land-replay.sh`,
+    which itself invokes `nox`, in a FRESH Bash invocation -- Section 3's own
+    combined re-gate fence activates the venv as its first line for exactly
+    this reason (shell state, including PATH, never survives between fenced
+    blocks). OBSERVED: without it, `nox` was not on PATH, and
+    `land-replay.sh`'s baseline `nox -t fix` check misreported the resulting
+    `command not found` as 'origin/trunk is red'."""
+    replay_fence = next(
+        (b for b in LAND_SKILL_BLOCKS if "scripts/land-replay.sh" in b),
+        None,
+    )
+    assert replay_fence is not None, (
+        "no fenced block invokes scripts/land-replay.sh anymore"
+    )
+
+    lines = [_strip_comment(line) for line in replay_fence.splitlines()]
+    non_blank = next((line for line in lines if line.strip()), "")
+    assert non_blank.strip() == ". ./venv/bin/activate", (
+        "the land-replay.sh fence's first executable line must activate the "
+        f"venv, same as Section 3's combined re-gate fence; got: {non_blank!r}"
+    )
