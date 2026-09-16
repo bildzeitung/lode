@@ -166,6 +166,42 @@ def _run(
     )
 
 
+def _run_with_no_nox_on_path(
+    repo: Path,
+    accepted: Path,
+    msg_dir: Path,
+    conflicts_dir: Path,
+    landed: Path,
+) -> subprocess.CompletedProcess:
+    """Same as `_run`, but with every PATH entry that could resolve a real
+    `nox` (this repo's own `./venv/bin`, or any other venv's `bin`) stripped
+    out -- reproducing lode-04zb's actual failure: a caller that never
+    activated the venv before invoking this script."""
+    _git(repo, "checkout", "-q", "trunk")
+    args = [
+        "bash",
+        str(SCRIPT),
+        "--accepted",
+        str(accepted),
+        "--msg-dir",
+        str(msg_dir),
+        "--conflicts-dir",
+        str(conflicts_dir),
+        "--landed",
+        str(landed),
+    ]
+    env = dict(os.environ)
+    kept = [
+        p
+        for p in env.get("PATH", "").split(os.pathsep)
+        if "venv" not in p and not (Path(p) / "nox").exists()
+    ]
+    env["PATH"] = os.pathsep.join(kept)
+    return subprocess.run(
+        args, cwd=repo, capture_output=True, text=True, timeout=30, check=False, env=env
+    )
+
+
 def test_two_clean_merges_both_land(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     fake_nox = _fake_nox_bin(tmp_path)
@@ -889,3 +925,39 @@ def test_explicit_base_ref_is_honored(tmp_path: Path) -> None:
     assert result.stdout == "LANDED\tlode-a\n"
     assert (repo / "only-on-other-base.txt").exists()
     assert (repo / "a.txt").exists()
+
+
+def test_missing_nox_on_path_is_reported_as_a_missing_nox_never_a_red_baseline(
+    tmp_path: Path,
+) -> None:
+    """OBSERVED (lode-04zb): a caller that never activated the venv before
+    invoking this script hits `nox: command not found` (127) on the very
+    first baseline gate (`nox -t fix`). The baseline arms deliberately treat
+    every nonzero exit alike (no `escalate_unless_content` split there -- see
+    that block's own comment), so the 127 fell straight into "'nox -t fix' is
+    red on bare '$BASE_REF' ... needs a human's fix" -- a FALSE diagnostic,
+    since nothing ever ran. This must instead be caught up front, before any
+    gate runs, and reported as a missing `nox`/venv-activation problem."""
+    repo = _init_repo(tmp_path)
+    _branch_from(repo, "trunk", "origin/land/lode-a")
+    _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
+
+    msg_dir = tmp_path / "msgs"
+    _write_msg(msg_dir, "lode-a", "Merge land/lode-a: A (lode-a)")
+    conflicts_dir = tmp_path / "conflicts"
+    conflicts_dir.mkdir()
+    accepted = _accepted(tmp_path, "lode-a")
+    landed = tmp_path / "landed"
+
+    result = _run_with_no_nox_on_path(repo, accepted, msg_dir, conflicts_dir, landed)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == "", (
+        "no gate may run, and nothing may merge, before this check"
+    )
+    assert not (repo / "a.txt").exists()
+    assert "not on PATH" in result.stderr
+    assert "venv" in result.stderr
+    assert "is red on bare" not in result.stderr, (
+        "must never misreport a missing nox as a baseline gate content verdict"
+    )
