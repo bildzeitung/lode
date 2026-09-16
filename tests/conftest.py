@@ -1555,7 +1555,9 @@ def fake_tool_turn_client(
             for block in message["content"]
             if block.get("type") == "tool_result"
         ]
-        assert fetch_results, "expected a fetch tool_result before the forced-schema turn"
+        assert fetch_results, (
+            "expected a fetch tool_result before the forced-schema turn"
+        )
         fetch_result = fetch_results[0]
         assert not fetch_result.startswith("error:"), (
             f"fetch tool returned an error: {fetch_result}"
