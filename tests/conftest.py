@@ -36,10 +36,10 @@ reports "this test touched the network":
 - **keyed** (a dev machine with the key exported): construction succeeds and a
   real, billed Haiku/Sonnet call goes out.
 
-``_block_unmocked_network_and_llm_access`` below closes both gaps with two
+``_block_unmocked_network_and_llm_access`` below closes both gaps with three
 independent guards. Each one **records** the violation to a process-global list
 *and* raises ``pytest.fail(...)``, and an autouse teardown check fails the test
-if anything was left on that list. The two halves are deliberately redundant;
+if anything was left on that list. The halves are deliberately redundant;
 the redundancy is the whole point (lode-sx17), so read them as one mechanism:
 
 * The **raise** stops the test where it happens, with a traceback pointing at
@@ -50,7 +50,7 @@ the redundancy is the whole point (lode-sx17), so read them as one mechanism:
 * The **record** is what makes the guard hold when the raise never reaches
   pytest at all — see "Why the raise alone is not enough" below.
 
-The two guards:
+The guards:
 
 1. **LLM-client construction** — patches ``anthropic.Anthropic.__init__``
    (+ ``AsyncAnthropic`` if present) to fail unconditionally, before the SDK's own
@@ -70,6 +70,17 @@ The two guards:
    out in a plain ``socket.connect`` (for HTTPS, ``httpcore`` connects the TCP
    socket first and only then wraps it in TLS, so ``ssl.SSLSocket.connect`` is
    never reached).
+3. **Real DNS resolution** (lode-azkh) — patches ``socket.getaddrinfo`` to fail
+   loudly on any non-loopback host. Guard 2 alone does not catch this: DNS
+   resolution can succeed or transiently fail *before* a socket ever reaches
+   ``connect()``, and lode-8bn8 observed exactly that flake (a hiccup
+   resolving ``example.com`` in tests/conftest.py's own ``fake_tool_turn_client``
+   turned a fetch into an error, with no live-network signal from guard 2 at
+   all, since no ``connect()`` was ever attempted). Loopback hosts are exempt
+   the same way guard 2 exempts loopback destinations, so tests that
+   deliberately connect to a refused local port (e.g.
+   tests/test_jira_fetch.py's ``test_connection_error_is_transient``) still
+   resolve ``127.0.0.1`` without opting in.
 
 **Why the raise alone is not enough (lode-sx17).** Until this ticket the guard
 rested entirely on ``Failed`` being a ``BaseException``, and that turned out to
@@ -583,6 +594,32 @@ def _make_guarded_connect(method_name: str):
     return _guarded
 
 
+def _make_guarded_getaddrinfo():
+    """Wrap ``socket.getaddrinfo`` so a non-loopback DNS lookup fails the test
+    (guard 3, lode-azkh) -- see the module docstring for why this is a
+    separate guard from ``_make_guarded_connect`` above rather than folded
+    into it.
+
+    ``host is None`` (e.g. resolving the wildcard address to *bind* a local
+    listener, ``AI_PASSIVE``) is exempt outright -- that is local setup, not
+    outbound resolution, and ``_is_loopback(None)`` would otherwise read as
+    non-loopback and misfire on it.
+    """
+    real = socket.getaddrinfo
+
+    def _guarded(host, *args, **kwargs):
+        if host is not None and not _is_loopback(host):
+            _record_and_fail(
+                f"test attempted a real DNS resolution for {host!r} "
+                "(socket.getaddrinfo) -- no fake was installed for it. If "
+                "this test genuinely needs live DNS, opt in with "
+                "@pytest.mark.network (tests/conftest.py)."
+            )
+        return real(host, *args, **kwargs)
+
+    return _guarded
+
+
 @pytest.fixture(autouse=True)
 def _isolate_lode_home(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
@@ -1068,6 +1105,11 @@ def _block_unmocked_network_and_llm_access(
                 socket.socket, _method, _make_guarded_connect(_method), raising=True
             )
 
+        # Guard 3: real DNS resolution (lode-azkh) -- see module docstring.
+        monkeypatch.setattr(
+            socket, "getaddrinfo", _make_guarded_getaddrinfo(), raising=True
+        )
+
     yield
 
     with _GUARD_VIOLATIONS_LOCK:
@@ -1422,6 +1464,31 @@ def _text_block() -> mock.MagicMock:
     return block
 
 
+@pytest.fixture(autouse=True)
+def _stub_resolve_host_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub ``lode.tools._resolve_host_addresses`` suite-wide (lode-azkh).
+
+    ``lode.tools._fetch_web`` calls ``_refuse_private_web_destination()`` --
+    and so ``_resolve_host_addresses()``, real ``socket.getaddrinfo`` -- ahead
+    of the injected ``web_fetcher``, so a test that stubs only the fetcher
+    still reaches the real DNS resolver for the SSRF preflight. A transient
+    resolver hiccup there turns the fetch tool_result into an error with no
+    snapshot persisted (OBSERVED in /land's re-gate on lode-8bn8: flaked,
+    passed on rerun).
+
+    Every ``web_fetch`` destination in the suite resolves to a genuinely
+    public, globally-routable address (93.184.216.34 -- example.com's own
+    real address; TEST-NET-3/RFC 5737 ranges are classified ``is_private`` by
+    Python's ``ipaddress`` module, so they don't work here) unless a test
+    overrides this stub with its own ``monkeypatch.setattr`` -- which, run
+    inside the test body, wins over this autouse default the same way any
+    other autouse fixture's default is overridden.
+    """
+    monkeypatch.setattr(
+        "lode.tools._resolve_host_addresses", lambda host: ["93.184.216.34"]
+    )
+
+
 def fake_tool_turn_client(
     conn: sqlite3.Connection, url: str, html: str, quoted_span: str
 ) -> tuple[mock.MagicMock, StubWebFetcher]:
@@ -1440,6 +1507,10 @@ def fake_tool_turn_client(
 
     Pass the returned ``web_fetcher`` as the ``web_fetcher=`` kwarg so the
     fetch tool call resolves ``html`` for ``url`` without a real network call.
+    ``url``'s host itself needs no stubbing here -- conftest's
+    ``_stub_resolve_host_addresses`` autouse fixture (below) keeps the SSRF
+    preflight (``lode.tools._resolve_host_addresses``) off the real DNS
+    resolver for every test, this one included (lode-azkh).
     """
     # Deferred, not module-scope -- see the import note at the top of this file.
     from lode.tool_dispatch import FETCH
@@ -1463,10 +1534,26 @@ def fake_tool_turn_client(
     def _create_side_effect(**_kwargs):
         if _responses:
             return _responses.pop(0)
-        # Third call, the final forced-schema turn: the fetch has already run
-        # (first free turn) and persisted a snapshot by now -- read it back to
-        # build a claim that cites the real snapshot_id, the same way a model
-        # would echo back what the tool_result told it.
+        # Third call, the final forced-schema turn. Check the fetch tool_result
+        # the first free turn produced BEFORE trusting a snapshot was persisted
+        # (lode-azkh): a transient fetch failure (e.g. an unstubbed live DNS
+        # hiccup) turns that tool_result into "error: ..." with no row written,
+        # and reading that back as a NoneType-unpacking crash (the original
+        # lode-8bn8 symptom) buries the real cause behind a confusing traceback.
+        fetch_results = [
+            block["content"]
+            for message in _kwargs["messages"]
+            if message["role"] == "user" and isinstance(message["content"], list)
+            for block in message["content"]
+            if block.get("type") == "tool_result"
+        ]
+        assert fetch_results, (
+            "expected a fetch tool_result before the forced-schema turn"
+        )
+        fetch_result = fetch_results[0]
+        assert not fetch_result.startswith("error:"), (
+            f"fetch tool returned an error: {fetch_result}"
+        )
         snapshot_id, body = conn.execute(
             "SELECT snapshot_id, body FROM snapshots WHERE external_id = ?",
             (url,),
