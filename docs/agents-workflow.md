@@ -3479,7 +3479,7 @@ assumption would not have closed it.
   reports a MACHINE FAULT and skips the tick — landing stays blocked rather than silently reverting
   to the two-winner-capable pre-flock behaviour. `/land` is documented to run on ONE machine, so this
   is a one-time environment gap per machine (installable via Homebrew, for anyone who still wants to
-  run `/land` from macOS or git-bash despite the undocumented floor), not a per-tick cost.
+  run `/land` from macOS or git-bash despite that floor), not a per-tick cost.
 
   **The lock record's owner token (5th field, lode-ao95) is unaffected by this change** — it exists for
   a *different* reclaim-adjacent concern, and remains lode-q9pm's scope: see below.
