@@ -1968,8 +1968,9 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   appends the note in the mandated patch shape [If the whole remedy is a one-line doc
   change](#if-the-whole-remedy-is-a-one-line-doc-change-report-the-patch--not-the-gap) already
   requires, with the `NIT` prefix the script owns, and pushes it (lode-y86u). `--file` is
-  **repo-relative** (e.g. `docs/decisions.md`); an absolute path is normalized against the current
-  checkout and refused (exit 2) if it falls outside it, as is any `.claude/worktrees/`-spelled path
+  **repo-relative** (e.g. `docs/decisions.md`); an absolute path — and a `../`-relative one, resolved
+  the same way — is normalized against the current checkout and refused (exit 2) if it falls outside
+  it, as is any `.claude/worktrees/`-spelled path
   ([docs/agents-workflow.md](../../../docs/agents-workflow.md#the---file-value-is-repo-relative-not-worktree-specific-lode-4xj1)).
   With **no** open collector the script now **creates one itself** (lode-z1n5 part 1, reversing the
   old "a human opens it" rule) rather than refusing — I never see that as a failure. With **two or
