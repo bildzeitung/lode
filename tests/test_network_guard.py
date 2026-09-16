@@ -87,6 +87,20 @@ def test_real_outbound_connect_ex_fails_loudly() -> None:
         sock.close()
 
 
+@pytest.mark.trips_network_guard
+def test_real_dns_resolution_fails_loudly() -> None:
+    """A non-loopback ``getaddrinfo`` fails before any resolver is queried."""
+    with pytest.raises(pytest.fail.Exception, match="real DNS resolution"):
+        socket.getaddrinfo("example.com", 443)
+
+
+def test_loopback_and_passive_dns_resolution_is_permitted() -> None:
+    """``localhost``, a literal loopback IP, and ``host=None`` stay unguarded."""
+    assert socket.getaddrinfo("localhost", 1)
+    assert socket.getaddrinfo("127.0.0.1", 1)
+    assert socket.getaddrinfo(None, 1, flags=socket.AI_PASSIVE)
+
+
 def test_loopback_alias_in_127_block_is_permitted() -> None:
     """The whole ``127.0.0.0/8`` block is loopback, not just ``127.0.0.1``.
 

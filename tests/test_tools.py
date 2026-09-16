@@ -49,7 +49,7 @@ def conn(tmp_path: Path):
 # preflight, lode-ejfv) is stubbed suite-wide by conftest.py's
 # ``_stub_resolve_host_addresses`` autouse fixture (lode-azkh) -- tests below
 # that need a different resolution (private address, raise, …) override it
-# with their own ``monkeypatch.setattr`` inside the test body, same as before.
+# with their own ``monkeypatch.setattr`` inside the test body.
 
 
 class _StubFetcher:

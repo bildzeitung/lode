@@ -1483,14 +1483,6 @@ def _stub_resolve_host_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
     overrides this stub with its own ``monkeypatch.setattr`` -- which, run
     inside the test body, wins over this autouse default the same way any
     other autouse fixture's default is overridden.
-
-    This ONE fixture replaces four separately-maintained stubs of the same
-    symbol (lode-azkh's AC2): ``fake_tool_turn_client`` below (shared by
-    tests/test_qa.py and tests/test_cited_answer.py), tests/test_tools.py's
-    former module-local ``_stub_dns``, and the two call sites that had none
-    at all and so were still doing live DNS -- tests/test_tool_dispatch.py's
-    ``TestDispatchFetch`` and tests/test_cli.py's
-    ``test_egress_purpose_tool_round_trips_a_row_written_by_fetch_for_ask``.
     """
     monkeypatch.setattr(
         "lode.tools._resolve_host_addresses", lambda host: ["93.184.216.34"]
