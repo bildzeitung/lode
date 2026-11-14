@@ -101,8 +101,11 @@ target needs with the head SHA I report. My own report always includes that head
    wrong (restore what's referenced). A comment sweep has introduced three such references before,
    and on the bare-dispatch path nothing runs downstream of my push — so this is mine to catch
    before I commit, on both the findings-block and bare paths.
-5. Gate: `nox -t fix` and `nox -s unit` (a deleted comment can still break a gate — e.g. a
-   stripped `# fmt: skip` turns the except-parens corpus scan red).
+5. Gate: `./scripts/python-init.sh` (a fresh worktree has no venv), then `./venv/bin/nox -t fix`
+   and `./venv/bin/nox -s unit` — explicit path, never a bare `nox` or a sourced activate, same as
+   `coding.md` step 7 (lode-6874) — in the foreground, reading the result in the same turn (a
+   deleted comment can still break a gate — e.g. a stripped `# fmt: skip` turns the except-parens
+   corpus scan red).
 6. Commit comment changes as their **own commit** ("comments: <summary> (audit)"), never mixed
    into a feature commit. Push per above if my dispatch named a branch to push to. Report applied /
    skipped / reverted (and the pushed head SHA, if I pushed), and STOP.

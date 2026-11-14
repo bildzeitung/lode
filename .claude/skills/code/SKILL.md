@@ -34,7 +34,7 @@ invocation*. `/code` covers both:
 - **`/code <id>`** or **`/code --single`** — **one** producer.
 
 Both subagents already own *how producer work flows* in lode (they honor `CLAUDE.md` / `AGENTS.md`,
-`docs/agents-workflow.md`, and the phase-a skeleton order) — this skill's only job is to launch them
+`docs/agents-workflow.md`) — this skill's only job is to launch them
 correctly **in order, build then review**, one task at a time, and relay what came back.
 
 ## What to do when invoked
@@ -45,8 +45,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 > *concurrent* invocations**: both sweeps select on a ticket's label (`needs-rebase` /
 > `ready-for-code-review`), and that label is only swapped at the very **end** of the dispatched
 > agent's work — so invocation B's sweep can select a ticket whose agent from invocation A is still
-> live, and dispatch a **second** agent onto the same worktree via `git -C`. Today's consequence is
-> benign (the loser's push non-fast-forward-rejects; clean-tree assertions guard the worktree), but
+> live, and dispatch a **second** agent at the same ticket (each in its own launch worktree, both
+> pushing `land/<id>`). Today's consequence is benign (the loser's push non-fast-forward-rejects), but
 > it is a real race, not an invariant — don't start a second `/code` while one is still running
 > against this repo. Need more parallelism? Pass more IDs (or use bare `/code`) to the **same**
 > invocation instead of launching a second one.
@@ -287,7 +287,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 2. **Resolve the task set** from the argument:
    - **No argument** (the **default**), or **`--all-ready`** → read the filtered `bd ready --json`
      frontier (callout below) and **fan out** across the **independent, unblocked** frontier (honoring
-     the dependency graph and phase-a ordering).
+     the dependency graph).
      Don't dispatch a ticket whose blocker is also in the batch — surface that instead of guessing the
      order.
    - **`--single`** (no ID) → one producer; `/code` resolves the pick **itself** — build the same
@@ -463,7 +463,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > `origin/land/<id>` → mark `ready-for-code-review`, recording `review_head` →
    > keep the worktree → stop). Do **not** review your own work, merge, close, or push trunk. Stop and
    > escalate (revert to green, annotate `land-escalated`, don't hand off) if a clarifying decision is
-   > needed during the build; stop and report if a gate fails.
+   > needed during the build. A red gate is yours to fix and re-run — hand off only on green.
 
    `--single` dispatches the same way, with the single id `/code` already resolved in step 2 — the
    builder never re-reads `bd ready` to pick its own ticket.
@@ -591,8 +591,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   `/code`.** See the topology note above [What to do when invoked](#what-to-do-when-invoked) — the
   step 0 / step 1 sweeps race across concurrent invocations (lode-pzr), because a ticket's
   `needs-rebase` / `ready-for-code-review` label is only cleared at the *end* of the agent dispatched
-  at it, so a second invocation's sweep can still select it and double-dispatch onto the same
-  worktree. Fan-out within a single invocation never hits this: each producer/reviewer pair is
+  at it, so a second invocation's sweep can still select it and double-dispatch at the same
+  ticket. Fan-out within a single invocation never hits this: each producer/reviewer pair is
   dispatched once, by that invocation's own Phase 1/2, for a ticket only that invocation resolved.
 - **Two phases, in order: build then review.** Phase 1 (`coding`, Sonnet) builds and **keeps its
   worktree**; phase 2 (`code-reviewer`, Fable) fetches the pushed branch into its *own* launch worktree

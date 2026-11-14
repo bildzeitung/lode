@@ -166,7 +166,7 @@ Argument resolution:
 
 - **No argument** (the default) / **`--all-ready`** → fan out across the **independent, unblocked**
   frontier of the filtered `bd ready --json` read (see the callout below), honoring the dependency
-  graph and the phase-a skeleton order.
+  graph.
 - **`--single`** → one task: `/code` resolves the pick **itself** — the same filtered frontier as
   above, top entry, dispatched as an explicitly-named id. The subagent never re-reads `bd ready` to
   pick its own ticket; `--single` collapses to "bare `/code`, limited to one ticket" — same
@@ -303,7 +303,7 @@ flowchart TD
     INV["Human: /code &lt;arg&gt;<br>(bare /code fans out — one builder per ready task)"] --> RES{"Resolve arg"}
     RES -->|"bd id(s)"| T1["Resolve to named id(s)"]
     RES -->|"free text"| T2["Agent files the issue + claims it, then codes"]
-    RES -->|"--single / none / --all-ready"| T3["/code picks from filtered bd ready<br>(human/epic excluded · phase-a order)<br>--single: top entry only"]
+    RES -->|"--single / none / --all-ready"| T3["/code picks from filtered bd ready<br>(human/epic excluded)<br>--single: top entry only"]
 
     T1 --> OCLAIM["/code claims each resolved id<br>(bd update --claim) BEFORE dispatch<br>(lode-xr8v · not the free-text path)"]
     T3 --> OCLAIM

@@ -1,6 +1,6 @@
 ---
 name: coding
-description: Builds a single lode coding/docs task in an isolated git worktree as a PRODUCER — claim a bd issue, build in the worktree, pass quality gates, push the branch to origin, and hand off at ready-for-code-review. It does NOT run the technical review (a separate Fable code-reviewer does), and never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Also runs a second "rebase pickup" cycle when dispatched at a needs-rebase ticket (a /land conflict kick-back): fetches land/<id> and checks it out into its own launch worktree, merges trunk in (resolving a mechanical conflict directly, escalating a genuine one), re-gates, and pushes the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping the ticket straight to ready-for-land itself (lode-cln). Use for any task that changes the lode repo (code, docs, configs). Honors the phase-a skeleton order and the project invariants in CLAUDE.md / AGENTS.md.
+description: Builds a single lode coding/docs task in an isolated git worktree as a PRODUCER — claim a bd issue, build in the worktree, pass quality gates, push the branch to origin, and hand off at ready-for-code-review. It does NOT run the technical review (a separate Fable code-reviewer does), and never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Also runs a second "rebase pickup" cycle when dispatched at a needs-rebase ticket (a /land conflict kick-back): fetches land/<id> and checks it out into its own launch worktree, merges trunk in (resolving a mechanical conflict directly, escalating a genuine one), re-gates, and pushes the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping the ticket straight to ready-for-land itself (lode-cln). Use for any task that changes the lode repo (code, docs, configs). Honors the project invariants in CLAUDE.md / AGENTS.md.
 isolation: worktree
 model: sonnet
 ---
@@ -149,12 +149,9 @@ bd create --title="…" --description="…" --type=task    # then continue with 
 merely gave it an id. (`code/SKILL.md` delegates exactly this behavior here — "it files the bd issue
 itself before coding, per its own rules"; this is that rule.)
 
-The dependency graph and phase-a ordering are still useful context for **judging** the ticket I was
-handed — not a picking procedure I run myself:
+One thing about the ticket I was handed is still mine to **judge** — not a picking procedure I run
+myself:
 
-- **`phase-a`-labelled** tickets take priority until the walking skeleton's exit gate (`lode-6w1.1`)
-  closes. If I'm handed a deepening task (rerank, graph, NLI, queue-migration, …) before that gate has
-  closed, something upstream sequenced out of order — that's worth flagging, not silently building.
 - If the ticket I was handed carries the **`human`** label or is an **epic**, `/code`'s auto-select
   filter is *not* what sent it to me — that filter excludes both (lode-8pqv), so the id was named
   explicitly. What my prompt won't tell me is *why*. So unless the dispatch says outright that a human
@@ -657,7 +654,8 @@ is not auto-removed anyway). I just
 removes the worktree after a successful land; reclaiming it is never mine.)
 
 Then I **stop** and report: which ticket, that the gates are green, the `land/<id>` branch and head
-SHA, the **worktree path** I left for the reviewer, and a one-line summary of what I built — or, on a
+SHA, the **worktree path** I left on disk (for `/land`'s GC — the reviewer never opens it), and a
+one-line summary of what I built — or, on a
 build-time escalation, exactly what decision the human owes.
 
 **Build-time escalation — the only thing that pulls a human in.** If a **clarifying decision** is

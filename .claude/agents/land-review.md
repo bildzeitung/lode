@@ -3,6 +3,7 @@ name: land-review
 description: Semantically review a built, ready-for-land branch against its ticket before it lands — the build-side twin of `challenge`. Judges a finished branch on whether it should land: acceptance met? scope clean (no silent creep)? design + lode invariants honored? approach right? Returns a structured verdict accept | bounce | escalate with findings, with enough detail to open a rebuild ticket or surface a decision. It is `/land`'s first task, run once per ready-for-land branch by the lander (not the builder). Distinct from the producer's technical review (a hand-reasoned correctness pass plus `simplify` = bugs/cleanup); this is semantic — "should this land". Examples — "land-review this branch against lode-123", "semantic-review the ready-for-land queue", "should this branch land?".
 isolation: worktree
 model: opus
+effort: high
 ---
 
 # land-review
