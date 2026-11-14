@@ -55,7 +55,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Caps a hung docker pull / mermaid render. Ladder + rationale:
     # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
     timeout-minutes: 15
@@ -149,7 +149,7 @@ jobs:
     # neither does a push to a land/** branch (still pre-review/pre-land).
     if: github.event_name == 'push' && github.ref == 'refs/heads/trunk'
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       pages: write

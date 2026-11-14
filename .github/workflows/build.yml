@@ -39,7 +39,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Caps a hung step (e.g. a stalled pip/PyPI fetch). Ladder + rationale:
     # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
     timeout-minutes: 15
