@@ -572,6 +572,17 @@ entries below from being rewritten to chase the current tree.)
   pass (see `.claude/agents/code-reviewer.md` step 4 and `docs/agents-workflow.md`'s landing-loop
   section).
 
+  **Update (lode-1fyb, 2026-11-14) — thread RE-OPENED on explicit maintainer request; upstream has
+  restored model invocation.** On Claude Code 2.1.325, `code-review` is back in the `Skill` tool's
+  listing for the main session and for a dispatched general-purpose subagent (both asked only whether
+  it was listed; nothing was invoked). So the claims above and in the instruction files that it "never
+  appears in the skill listing" and is "unreachable from any model context" no longer hold. Not yet
+  verified: that a dispatched `code-reviewer` can invoke it against the checked-out `land/<id>` diff,
+  and what a run costs. Whether the reviewer keeps the hand-reasoned pass, adds `/code-review`, or
+  replaces the pass with it is an open human decision carried by `lode-1fyb` — a one-off decision
+  ticket, not a successor watch ticket. Until it is decided, `code-reviewer.md` step 4 stands as
+  written. The rejection of a hand-rolled project-scope copy, just above, is unaffected.
+
   **Update (lode-905v, 2026-07-20) — the multi-agent bug hunt is rebuilt as a Workflow, invoked by the
   `/code` ORCHESTRATOR, not by the reviewer.** lode-axyq made the definitions honest about the loss
   above; this ticket restores the CAPABILITY without touching the two rejected paths (extraction from

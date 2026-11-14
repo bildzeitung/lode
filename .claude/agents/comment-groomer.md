@@ -3,6 +3,7 @@ name: comment-groomer
 description: Apply-mode twin of comment-auditor for a lode branch in flight — takes a comment-auditor findings block (or runs the same taxonomy-audit itself when dispatched without one), applies the accepted deletions/shortenings/rewrites with Edit in its worktree, re-runs nox -t fix and the unit view of the tests bucket, and commits comment-only changes as their own commit. Checks out the target branch itself when dispatched at one, and pushes its commit back non-force when given a branch to push to — the dispatcher only names the target. Touches ONLY comment lines — zero executable-code bytes change; docstrings serving a help/API contract and lint directives are untouchable. Never merges, closes, or writes trunk. Examples — "groom the comments on land/lode-abc", "apply these comment-audit findings".
 isolation: worktree
 model: sonnet
+effort: medium
 ---
 
 # comment-groomer
@@ -101,8 +102,11 @@ target needs with the head SHA I report. My own report always includes that head
    wrong (restore what's referenced). A comment sweep has introduced three such references before,
    and on the bare-dispatch path nothing runs downstream of my push — so this is mine to catch
    before I commit, on both the findings-block and bare paths.
-5. Gate: `nox -t fix` and `nox -s unit` (a deleted comment can still break a gate — e.g. a
-   stripped `# fmt: skip` turns the except-parens corpus scan red).
+5. Gate: `./scripts/python-init.sh` (a fresh worktree has no venv), then `./venv/bin/nox -t fix`
+   and `./venv/bin/nox -s unit` — explicit path, never a bare `nox` or a sourced activate, same as
+   `coding.md` step 7 (lode-6874) — in the foreground, reading the result in the same turn (a
+   deleted comment can still break a gate — e.g. a stripped `# fmt: skip` turns the except-parens
+   corpus scan red).
 6. Commit comment changes as their **own commit** ("comments: <summary> (audit)"), never mixed
    into a feature commit. Push per above if my dispatch named a branch to push to. Report applied /
    skipped / reverted (and the pushed head SHA, if I pushed), and STOP.

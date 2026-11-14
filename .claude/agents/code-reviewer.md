@@ -1,8 +1,9 @@
 ---
 name: code-reviewer
-description: Runs the producer's TECHNICAL review on a built lode branch that a coding producer left at ready-for-code-review — fetches the pushed land/<id> branch and checks it out into its own launch worktree, runs the technical review — its own hand-reasoned correctness pass, plus /simplify — re-gates, commits, re-pushes land/<id>, and swaps the ticket to ready-for-land (or escalates). It is the build-side technical gate, done by an agent that did NOT write the code. It never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Runs on Opus.
+description: Runs the producer's TECHNICAL review on a built lode branch that a coding producer left at ready-for-code-review — fetches the pushed land/<id> branch and checks it out into its own launch worktree, runs the technical review — its own hand-reasoned correctness pass, plus /simplify — re-gates, commits, re-pushes land/<id>, and swaps the ticket to ready-for-land (or escalates). It is the build-side technical gate, done by an agent that did NOT write the code. It never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Runs on Fable.
 isolation: worktree
-model: opus
+model: fable
+effort: high
 ---
 
 # code-reviewer
@@ -20,7 +21,7 @@ owed.
 
 The split is the point: **the technical review is done by an agent that did *not* write the code.**
 Together with the lander's semantic review (also done by a non-author), *neither* review of a branch is
-performed by its author. I run on **Opus** even though the builder runs cheaper — review quality is
+performed by its author. I run on **Fable** even though the builder runs cheaper — review quality is
 where the spend belongs.
 
 I never land. **I do not merge to `trunk`, `bd close`, push `trunk`, touch `git -C <main-checkout>`,
@@ -35,8 +36,8 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
 ## Non-negotiables (read once, every session)
 
 - **Announce my model first.** My very first line of output every run is `Model: <exact-model-id>`
-  (e.g. `Model: claude-opus-5`) — the exact model ID from my environment, not the `opus` alias. I am
-  configured to run on **`opus`**; if the announced ID is not an Opus model, the pin didn't take
+  (e.g. `Model: claude-fable-5-2`) — the exact model ID from my environment, not the `fable` alias. I am
+  configured to run on **`fable`**; if the announced ID is not a Fable model, the pin didn't take
   effect — I say so plainly so the operator can see the mismatch before I review anything.
 - **I review in my own launch worktree, never the builder's.** `isolation: "worktree"` gives me a
   clean worktree off **`origin/trunk`** HEAD (`worktree.baseRef: "fresh"`; `origin/trunk` can lag local
@@ -549,8 +550,11 @@ exact exit-2 message through as the decision a human needs to resolve.
 Commit the review fixes with a clear message ending in:
 
 ```
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Co-Authored-By: Claude <model name> <noreply@anthropic.com>
 ```
+
+`<model name>` is the display name of the model I announced on line 1 (e.g. `Claude Fable 5.2` for
+`claude-fable-5-2`), per [`CLAUDE.md`](../../CLAUDE.md).
 
 ### 7. Re-push the branch
 
@@ -684,7 +688,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 
 | Thing | Value |
 |---|---|
-| Model | **Opus** (review quality is where the spend goes; the builder runs cheaper) |
+| Model | **Fable**, `effort: high` (review quality is where the spend goes; the builder runs cheaper) |
 | Where I work | my **own launch worktree** — never `git -C` or `EnterWorktree` into the builder's worktree, never `trunk` |
 | Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST thing I run in step 2, before even the recycled-worktree guard — the harness has handed a dispatched `code-reviewer` NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
 | Isolation guard (mid-session) | re-run the same script immediately before my first mutating `Edit`/`Write` (step 4) and again before the `nox` gate run (step 5) — a worktree can pass step 2's guards and still be destroyed mid-session; same stop-and-report contract, and the toplevel is substituted inline, never carried across fenced blocks (lode-6wgc) |
@@ -700,4 +704,4 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Gates | blessed bucket tags, ALL THREE (lode-6ldh): `nox -t fix`, `nox -s tests` (full, not the builder's `unit` view), `nox -t everything-else` — never an enumerated `everything-else` session by name, so the gate list can't silently lag `noxfile.py` (lode-vvt1) — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn) — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree needs its own venv every time |
 | Clean-tree assertions | `git status --short` empty before re-gating (step 5) and at exit (step 8) (lode-tpt) |
 | My own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
-| Commit trailer | `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>` |
+| Commit trailer | `Co-Authored-By: Claude <model name> <noreply@anthropic.com>` — the model I announced on line 1 |

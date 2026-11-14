@@ -1,6 +1,8 @@
 ---
 name: land
 description: Drain the ready-for-land queue — the SINGLE owner of every write to `trunk`. Per pass: cheap-precheck each `ready-for-land` branch (drift + does it still merge onto `trunk` — a conflict is kicked back `needs-rebase`, no review spent); semantic-review the survivors (via the `land-review` agent) → accept | bounce | escalate; batch-merge the accepted set `--no-ff` into `trunk`, re-gate once, isolate the culprit on red; then push `trunk`, `bd close` the landed tickets, flag any epic whose last child this pass closed with `epic-ready-to-audit` (for `/epic-audit`), `bd dolt push`, and GC the merged `land/<id>` branches and the local builder worktrees. Bounces open a new linked ticket carrying the findings; escalations leave the branch for a human and land nothing. Run self-paced as `/loop 5m /land` on ONE machine; a local lockfile guard skips a tick that would overlap a still-running land. Producers (`/code`) never land their own work — this skill does. Examples — "/land", "/loop 5m /land", "drain the ready-for-land queue", "land the reviewed branches".
+model: opus
+effort: high
 ---
 
 # land
@@ -19,10 +21,12 @@ I run on the **main checkout, on `trunk`** — I am the *one* agent allowed to. 
 inverse: they may never touch `trunk`. I never touch a producer's worktree.) I am typically invoked
 self-paced as **`/loop 5m /land`** so I drain the queue while you work, with no daemon to manage.
 
-**Run me from an Opus session.** I am a skill, not a subagent — I have no model of my own and inherit
-the model of the session that runs the `/loop 5m /land`. My semantic review and combined re-gate are
-exactly where Opus judgment earns its keep, so don't `/fast` the lander (the `coding` builder is the
-one that runs cheaper on Sonnet; the `code-reviewer` and I stay on Opus).
+**I pin my own model: `model: opus`, `effort: high` in this file's frontmatter.** A skill's pin
+applies for the turn that runs it, so the lander no longer depends on which session starts the
+`/loop 5m /land`. Whether the pin is re-applied on every `/loop` tick is not documented upstream —
+if a tick's output shows a non-Opus model, say so in the report rather than carrying on silently.
+(The `coding` builder runs cheaper on Sonnet; the `code-reviewer` runs on Fable; the `land-review`
+agent I dispatch pins Opus itself.)
 
 ## The merge decision belongs to the agent that didn't write the code
 

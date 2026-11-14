@@ -13,8 +13,12 @@ If you find yourself about to run `Edit`, `Write`, or any mutating command while
 **Commit after each completed task** for a granular record of changes. Merge with `--no-ff` so a unit of work lands grouped. End commit messages with:
 
 ```
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Co-Authored-By: Claude <model name> <noreply@anthropic.com>
 ```
+
+`<model name>` is the model actually running the session or agent that makes the commit (e.g.
+`Claude Fable 5.2`), read from its own environment — a hardcoded name goes stale at every model
+release and is wrong whenever the session model is switched.
 
 ## Non-interactive shell commands
 

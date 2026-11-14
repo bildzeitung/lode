@@ -1,6 +1,6 @@
 ---
 name: code
-description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Opus) to fetch that branch and check it out into its own launch worktree, run the technical review (its own hand-reasoned correctness pass, plus /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to merge trunk in, re-gate, and push the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping each straight back to ready-for-land itself (lode-cln) — self-heals a clean merge or a mechanical (independent, non-overlapping) conflict on its own; a conflict where the two sides genuinely disagree still needs a human. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier, throttled to a shared concurrency cap (builders + reviewers + sweep dispatches combined; memory-derived default, user-overridable, lode-2cf) so the fan-out never runs more agents at once than the machine can gate safely. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
+description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Fable) to fetch that branch and check it out into its own launch worktree, run the technical review (its own hand-reasoned correctness pass, plus /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to merge trunk in, re-gate, and push the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping each straight back to ready-for-land itself (lode-cln) — self-heals a clean merge or a mechanical (independent, non-overlapping) conflict on its own; a conflict where the two sides genuinely disagree still needs a human. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier, throttled to a shared concurrency cap (builders + reviewers + sweep dispatches combined; memory-derived default, user-overridable, lode-2cf) so the fan-out never runs more agents at once than the machine can gate safely. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
 ---
 
 # code
@@ -10,7 +10,7 @@ description: Build one or more lode tasks as PRODUCERS in two phases — dispatc
 1. **Build — `coding` subagent (Sonnet):** **claim → worktree → working code → green gates → branch
    pushed to `origin/land/<id>` → ticket marked `ready-for-code-review` → keep the worktree → stop.**
    The builder does **not** review its own work.
-2. **Technical review — `code-reviewer` subagent (Opus):** fetches the pushed `land/<id>` branch and
+2. **Technical review — `code-reviewer` subagent (Fable):** fetches the pushed `land/<id>` branch and
    checks it out into its own launch worktree (never `EnterWorktree`, never the builder's worktree),
    runs its own reasoned **correctness pass** against the diff — that pass *is* the correctness review,
    with no `correctness-review` Workflow behind it (lode-rlyx reversed lode-905v on measured cost;
@@ -18,7 +18,7 @@ description: Build one or more lode tasks as PRODUCERS in two phases — dispatc
    genuinely tool-backed **`/simplify`**, re-gates, re-pushes `land/<id>`, and swaps the ticket to
    **`ready-for-land`** (or escalates).
 
-Splitting build (cheap) from review (Opus) means the technical review is done by an agent that didn't
+Splitting build (cheap) from review (Fable) means the technical review is done by an agent that didn't
 write the code — and the lander's later semantic review is too, so *neither* review of a branch is its
 author's. A producer **never** merges to `trunk`, closes the ticket, pushes `trunk`, or writes the
 main checkout — a single `/land` lander owns every write to `trunk` and lands reviewed branches.
@@ -34,7 +34,7 @@ invocation*. `/code` covers both:
 - **`/code <id>`** or **`/code --single`** — **one** producer.
 
 Both subagents already own *how producer work flows* in lode (they honor `CLAUDE.md` / `AGENTS.md`,
-`docs/agents-workflow.md`, and the phase-a skeleton order) — this skill's only job is to launch them
+`docs/agents-workflow.md`) — this skill's only job is to launch them
 correctly **in order, build then review**, one task at a time, and relay what came back.
 
 ## What to do when invoked
@@ -45,8 +45,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 > *concurrent* invocations**: both sweeps select on a ticket's label (`needs-rebase` /
 > `ready-for-code-review`), and that label is only swapped at the very **end** of the dispatched
 > agent's work — so invocation B's sweep can select a ticket whose agent from invocation A is still
-> live, and dispatch a **second** agent onto the same worktree via `git -C`. Today's consequence is
-> benign (the loser's push non-fast-forward-rejects; clean-tree assertions guard the worktree), but
+> live, and dispatch a **second** agent at the same ticket (each in its own launch worktree, both
+> pushing `land/<id>`). Today's consequence is benign (the loser's push non-fast-forward-rejects), but
 > it is a real race, not an invariant — don't start a second `/code` while one is still running
 > against this repo. Need more parallelism? Pass more IDs (or use bare `/code`) to the **same**
 > invocation instead of launching a second one.
@@ -287,7 +287,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 2. **Resolve the task set** from the argument:
    - **No argument** (the **default**), or **`--all-ready`** → read the filtered `bd ready --json`
      frontier (callout below) and **fan out** across the **independent, unblocked** frontier (honoring
-     the dependency graph and phase-a ordering).
+     the dependency graph).
      Don't dispatch a ticket whose blocker is also in the batch — surface that instead of guessing the
      order.
    - **`--single`** (no ID) → one producer; `/code` resolves the pick **itself** — build the same
@@ -463,7 +463,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > `origin/land/<id>` → mark `ready-for-code-review`, recording `review_head` →
    > keep the worktree → stop). Do **not** review your own work, merge, close, or push trunk. Stop and
    > escalate (revert to green, annotate `land-escalated`, don't hand off) if a clarifying decision is
-   > needed during the build; stop and report if a gate fails.
+   > needed during the build. A red gate is yours to fix and re-run — hand off only on green.
 
    `--single` dispatches the same way, with the single id `/code` already resolved in step 2 — the
    builder never re-reads `bd ready` to pick its own ticket.
@@ -591,11 +591,11 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   `/code`.** See the topology note above [What to do when invoked](#what-to-do-when-invoked) — the
   step 0 / step 1 sweeps race across concurrent invocations (lode-pzr), because a ticket's
   `needs-rebase` / `ready-for-code-review` label is only cleared at the *end* of the agent dispatched
-  at it, so a second invocation's sweep can still select it and double-dispatch onto the same
-  worktree. Fan-out within a single invocation never hits this: each producer/reviewer pair is
+  at it, so a second invocation's sweep can still select it and double-dispatch at the same
+  ticket. Fan-out within a single invocation never hits this: each producer/reviewer pair is
   dispatched once, by that invocation's own Phase 1/2, for a ticket only that invocation resolved.
 - **Two phases, in order: build then review.** Phase 1 (`coding`, Sonnet) builds and **keeps its
-  worktree**; phase 2 (`code-reviewer`, Opus) fetches the pushed branch into its *own* launch worktree
+  worktree**; phase 2 (`code-reviewer`, Fable) fetches the pushed branch into its *own* launch worktree
   (never `EnterWorktree`, never the builder's worktree) and runs the technical review. The review must
   run on the *built* branch, so always dispatch the reviewer *after* its builder returns
   `ready-for-code-review` — never in parallel with its own build. Don't dispatch a reviewer for a
