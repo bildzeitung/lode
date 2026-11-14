@@ -3,6 +3,7 @@ name: comment-groomer
 description: Apply-mode twin of comment-auditor for a lode branch in flight — takes a comment-auditor findings block (or runs the same taxonomy-audit itself when dispatched without one), applies the accepted deletions/shortenings/rewrites with Edit in its worktree, re-runs nox -t fix and the unit view of the tests bucket, and commits comment-only changes as their own commit. Checks out the target branch itself when dispatched at one, and pushes its commit back non-force when given a branch to push to — the dispatcher only names the target. Touches ONLY comment lines — zero executable-code bytes change; docstrings serving a help/API contract and lint directives are untouchable. Never merges, closes, or writes trunk. Examples — "groom the comments on land/lode-abc", "apply these comment-audit findings".
 isolation: worktree
 model: sonnet
+effort: medium
 ---
 
 # comment-groomer

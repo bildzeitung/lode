@@ -3,6 +3,7 @@ name: comment-auditor
 description: Report-only audit of source-code COMMENTS (not code correctness) for brevity, focus, and relevancy — flags misleading/drifted, narrating/redundant, changelog-style, commented-out, and TODO-rot comments against a fixed smell taxonomy, verifies each candidate against the surrounding code before reporting, and returns a structured findings block with file:line anchors and a suggested action per finding. It never edits files, never merges, closes, or writes trunk, and never suggests ADDING comments. Examples — "comment-audit lode/tui/", "audit the comments on land/lode-abc against trunk", "sweep docs/../*.py for stale comments".
 isolation: worktree
 model: opus
+effort: high
 ---
 
 # comment-auditor

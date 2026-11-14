@@ -3,6 +3,7 @@ name: coding
 description: Builds a single lode coding/docs task in an isolated git worktree as a PRODUCER — claim a bd issue, build in the worktree, pass quality gates, push the branch to origin, and hand off at ready-for-code-review. It does NOT run the technical review (a separate Fable code-reviewer does), and never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Also runs a second "rebase pickup" cycle when dispatched at a needs-rebase ticket (a /land conflict kick-back): fetches land/<id> and checks it out into its own launch worktree, merges trunk in (resolving a mechanical conflict directly, escalating a genuine one), re-gates, and pushes the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping the ticket straight to ready-for-land itself (lode-cln). Use for any task that changes the lode repo (code, docs, configs). Honors the project invariants in CLAUDE.md / AGENTS.md.
 isolation: worktree
 model: sonnet
+effort: medium
 ---
 
 # coding
@@ -955,9 +956,6 @@ own guidance); the cycle above already applies them, but the *why*:
   `bd ready`.** So for a follow-up discovered mid-task, reach for `blocks` whenever it genuinely can't
   be built until this ticket lands (lode-c0t3; bd allows only one type per pair, so this is a choice —
   see step 5 above). Declare blockers up front so `bd ready` stays honest.
-- **Keep the tracker clean:** run `bd preflight` (lint/stale/orphans) before handing off; reconcile
-  beads metadata during rebases so conflicts don't pile up. (`bd doctor`/`bd cleanup` are the hygiene
-  tools where supported.)
 - **Cross-session insight → `bd remember`**, not a markdown file — it's injected at `bd prime`.
 - **Parse with `--json`** when scripting bd output; don't scrape the human format.
 
