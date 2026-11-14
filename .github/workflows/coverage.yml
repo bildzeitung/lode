@@ -58,7 +58,7 @@ env:
   LODE_HOME: ${{ github.workspace }}/.lode-ci-home
   # Same pin as tests.yml, for the same reason: noxfile.py's
   # _xdist_workers() defaults to 8 (sized for an 8-core dev machine).
-  # GitHub's free ubuntu-latest runners are 2-core/7GB; 8 workers each
+  # GitHub's free hosted Ubuntu runners are 2-core/7GB; 8 workers each
   # loading a ~1.1GB ONNX reranker would risk OOM. See tests.yml's comment
   # for the known cost of this pin (it muzzles the CPU-starvation flakes the
   # 8-wide default exists to keep visible -- lode-t1y/lode-9vns/lode-64jn --
@@ -67,7 +67,7 @@ env:
 
 jobs:
   coverage:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Same cap as tests.yml -- coverage is within noise of tests, not slower. A
     # hang catcher, not a perf budget: warm runs land at ~2-4min, and cold is no
     # different (tests.yml run 29783519618 populated the shared 958MB weights
