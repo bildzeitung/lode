@@ -210,7 +210,15 @@ def test_deduped_passage_still_contributes_its_char_range_to_the_offset(conn) ->
         passage_text=second_block,
     )
 
-    answer = ask(conn, "q", [kept, dropped], provider=AnthropicProvider(client))
+    # "uses OAuth" is not extractively coupled to its span, so the claim reaches
+    # the step-3 entailment gate -- stubbed, or it loads the real model.
+    answer = ask(
+        conn,
+        "q",
+        [kept, dropped],
+        provider=AnthropicProvider(client),
+        scorer=_StubScorer(1.0),
+    )
 
     assert _user_prompt(client).count(body) == 1  # the duplicate was dropped
     (claim,) = answer.claims
@@ -241,7 +249,14 @@ def test_surviving_claim_stamps_body_offset_from_its_own_retrieved_passage(
         ),
     ]
 
-    answer = ask(conn, "q", context, provider=AnthropicProvider(client))
+    # Same step-3 reach as the dedup test above: stub the entailment scorer.
+    answer = ask(
+        conn,
+        "q",
+        context,
+        provider=AnthropicProvider(client),
+        scorer=_StubScorer(1.0),
+    )
 
     assert not answer.abstained
     (claim,) = answer.claims
