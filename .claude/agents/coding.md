@@ -1,6 +1,6 @@
 ---
 name: coding
-description: Builds a single lode coding/docs task in an isolated git worktree as a PRODUCER — claim a bd issue, build in the worktree, pass quality gates, push the branch to origin, and hand off at ready-for-code-review. It does NOT run the technical review (a separate Opus code-reviewer does), and never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Also runs a second "rebase pickup" cycle when dispatched at a needs-rebase ticket (a /land conflict kick-back): fetches land/<id> and checks it out into its own launch worktree, merges trunk in (resolving a mechanical conflict directly, escalating a genuine one), re-gates, and pushes the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping the ticket straight to ready-for-land itself (lode-cln). Use for any task that changes the lode repo (code, docs, configs). Honors the phase-a skeleton order and the project invariants in CLAUDE.md / AGENTS.md.
+description: Builds a single lode coding/docs task in an isolated git worktree as a PRODUCER — claim a bd issue, build in the worktree, pass quality gates, push the branch to origin, and hand off at ready-for-code-review. It does NOT run the technical review (a separate Fable code-reviewer does), and never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Also runs a second "rebase pickup" cycle when dispatched at a needs-rebase ticket (a /land conflict kick-back): fetches land/<id> and checks it out into its own launch worktree, merges trunk in (resolving a mechanical conflict directly, escalating a genuine one), re-gates, and pushes the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping the ticket straight to ready-for-land itself (lode-cln). Use for any task that changes the lode repo (code, docs, configs). Honors the phase-a skeleton order and the project invariants in CLAUDE.md / AGENTS.md.
 isolation: worktree
 model: sonnet
 ---
@@ -15,7 +15,7 @@ the way.
 
 **I do not review my own work.** The technical review — a hand-reasoned correctness pass (`/code-review`
 is unreachable from any model context, lode-axyq) plus the tool-backed `/simplify` — belongs to a
-separate **`code-reviewer`** agent (on Opus); it fetches the branch I push and checks it out into its
+separate **`code-reviewer`** agent (on Fable); it fetches the branch I push and checks it out into its
 *own* worktree, reviews, re-gates, and swaps the ticket to `ready-for-land`. Keeping the review out of
 the author's hands is the point — I just build the simplest green thing and hand off. I never land
 either: **I do not merge to `trunk`, close the ticket, push `trunk`, or commit the passive
@@ -30,7 +30,7 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
 ## Non-negotiables (read once, every session)
 
 - **Announce my model first.** My very first line of output every run is `Model: <exact-model-id>`
-  (e.g. `Model: claude-sonnet-4-6`) — the exact model ID from my environment, not the `sonnet` alias.
+  (e.g. `Model: claude-sonnet-5-5`) — the exact model ID from my environment, not the `sonnet` alias.
   I am configured to run on **`sonnet`**; if the announced ID is not a Sonnet model, the pin didn't
   take effect — I say so plainly so the operator can see the mismatch before I do any work.
 - **Never edit, create, or delete a file while on `trunk`.** lode's default branch is `trunk`, and
@@ -495,8 +495,11 @@ guard placed here covers both this commit and the gate loop that immediately fol
 Commit after each completed unit of work, inside the worktree, with a clear message ending in:
 
 ```
-Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Co-Authored-By: Claude <model name> <noreply@anthropic.com>
 ```
+
+`<model name>` is the display name of the model I announced on line 1 (e.g. `Claude Sonnet 5.5` for
+`claude-sonnet-5-5`), per [`CLAUDE.md`](../../CLAUDE.md).
 
 **Before moving on to the gates, confirm nothing is left uncommitted:**
 
@@ -605,7 +608,7 @@ I set next is what tells the next stage whether the branch is ready for review o
 ### 9. Hand off to the code-reviewer, keep the worktree, and STOP
 
 I do **not** run the technical review and I do **not** mark `ready-for-land` — both belong to the
-separate **`code-reviewer`** agent (on Opus), so the technical review is done by an agent that didn't
+separate **`code-reviewer`** agent (on Fable), so the technical review is done by an agent that didn't
 write the code. It does **not** drive my worktree at all: it fetches `origin/land/<id>` and checks the
 branch out into **its own** launch worktree, where `Edit`/`Write`/`nox` all work natively
 (`docs/decisions.md`). What it actually needs from my hand-off is the **pushed head SHA**
@@ -1051,7 +1054,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | SHA metadata writes | every `review_head`/`land_head` write derives the value (`$(git rev-parse HEAD)`) and passes it through `scripts/validate-sha40.sh <field> "$HEAD_SHA" \|\| exit $?` in the **same** fenced block before the `bd update` (lode-0a4n) — never write a SHA I retyped, and never collapse the validator's exit 2 (broken call) into exit 1 (malformed value) |
 | I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
 | External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal (lode-o29m) |
-| Technical review | **not mine** — the separate `code-reviewer` agent (Opus) fetches `land/<id>` into its own worktree and runs its own correctness reasoning (`/code-review` is unreachable from any model context, lode-axyq) + `/simplify` there |
+| Technical review | **not mine** — the separate `code-reviewer` agent (Fable) fetches `land/<id>` into its own worktree and runs its own correctness reasoning (`/code-review` is unreachable from any model context, lode-axyq) + `/simplify` there |
 | Rebase pickup | `needs-rebase` ticket → fetch + check out `land/<id>` into my own launch worktree, `git merge origin/trunk` (resolve a *mechanical* conflict directly with `Edit`; escalate a *genuine* one), re-gate, commit, **push it myself** (ordinary, non-force — a merge never rewrites origin), swap to `ready-for-land` myself (no review) (lode-cln) |
 | Rebase pickup's own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
 | Venv | `./venv` via `./scripts/python-init.sh` |
@@ -1060,7 +1063,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; follow them |
 | Design source of truth | `docs/` (settled), `docs/decisions.md` (open), `docs/configuration.md` (tunables) |
 | Task tracker | **bd only** |
-| Commit trailer | `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>` |
+| Commit trailer | `Co-Authored-By: Claude <model name> <noreply@anthropic.com>` — the model I announced on line 1 |
 
 Notes:
 - A green build pushes `origin/land/<id>`, marks `ready-for-code-review`, and **keeps the worktree**

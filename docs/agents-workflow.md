@@ -3,7 +3,7 @@
 How lode is *built*. The other docs describe the system; this one describes the **agent
 loops that produce it** — a **design loop** that stress-tests a plan before it's built, a
 **coding loop** in which a *builder* (Sonnet) produces a green branch and a separate *code-reviewer*
-(Opus) runs the technical review on it (solo, or fanned out across several tasks at once with
+(Fable) runs the technical review on it (solo, or fanned out across several tasks at once with
 `/code <id> <id> …`), and a **landing loop** in which a single `/land` lander is the **only** thing
 that writes `trunk`. The three are the last three sections of this doc. See [design.md](design.md)
 for the thesis and the build sequencing the work flows through.
@@ -28,7 +28,7 @@ Work moves through three passes, with the human as the hinge:
    captured as beads issues, `/code` runs each task in **two dispatched phases**. First a `coding`
    **builder** (Sonnet) carries it through an orderly cycle in an isolated worktree: claim → build →
    green gates → push a `land/<id>` branch → mark **`ready-for-code-review`** → **keep the worktree**
-   → stop. Then a `code-reviewer` (Opus) fetches that pushed branch and checks it out into its **own**
+   → stop. Then a `code-reviewer` (Fable) fetches that pushed branch and checks it out into its **own**
    launch worktree, runs the technical review — a correctness pass it reasons through by hand plus
    `/simplify` (`/code-review` itself is a bundled skill that is user-gated and unreachable from any
    model context, lode-axyq; see `.claude/agents/code-reviewer.md` step 4) — re-gates, re-pushes, and
@@ -133,7 +133,7 @@ flowchart TD
 
 `/code` is the **only** sanctioned way to start coding work from the main session (which is
 otherwise told not to spawn agents). The skill resolves the task from its argument and runs each task
-in **two dispatched phases** — a `coding` **builder** (Sonnet), then a `code-reviewer` (Opus). **Bare
+in **two dispatched phases** — a `coding` **builder** (Sonnet), then a `code-reviewer` (Fable). **Bare
 `/code`** fans out across the filtered ready frontier; `/code --single` does the top one task of that
 same frontier (`/code` resolves the pick **itself** — the subagent never re-reads `bd ready` to choose
 its own ticket); `/code <id>` / `/code <id> <id> …` name the work explicitly — in every case it's **N
@@ -261,7 +261,7 @@ that works, takes it green through the gates, then **pushes a `land/<id>` branch
 ticket `ready-for-code-review` (recording its worktree path), keeps the worktree, and stops** — it
 does **not** review its own work.
 
-Then `/code` dispatches a **`code-reviewer`** (Opus) for that ticket. It fetches the pushed `land/<id>`
+Then `/code` dispatches a **`code-reviewer`** (Fable) for that ticket. It fetches the pushed `land/<id>`
 branch and checks it out **into its own launch worktree** — never `git -C` into the builder's
 worktree, never `EnterWorktree`, and never the builder's worktree at all — runs the **technical
 review** (its own reasoned correctness pass — `/code-review` is unreachable from any model context,
@@ -332,7 +332,7 @@ flowchart TD
     PUSH --> CLEAN2{"git status --short<br>empty?"}
     CLEAN2 -->|"no — edits after push,<br>never gated"| COMMIT
     CLEAN2 -->|"yes"| HANDOFF["Builder: mark ready-for-code-review<br>(worktree path · head SHA) ·<br>KEEP worktree · bd dolt push · STOP"]
-    HANDOFF --> REV["Phase 2 — code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>own correctness pass + simplify --fix · re-gate"]
+    HANDOFF --> REV["Phase 2 — code-reviewer (Fable):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>own correctness pass + simplify --fix · re-gate"]
     REV --> MARKL["Swap to ready-for-land<br>(head SHA · summary) ·<br>re-push land/&lt;id&gt; · bd dolt push · STOP"]
     MARKL --> DONE["/land lands it (separate loop) ·<br>/code relays both phases"]
 
@@ -2372,7 +2372,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Isolation guard | builder, reviewer, and `land-review` all run `scripts/isolation-guard.sh` (lode-ska2) as their FIRST action, before even the recycled-worktree guard — the harness has been observed handing a dispatched agent NO worktree at all (cwd on the main checkout, on `trunk`); a failure is a hard stop, never a self-provisioned `git worktree add` — [full account above](#isolation-guard-lode-ska2--lode-jk44) (lode-ska2, lode-jk44) |
 | Isolation guard (mid-session) | builder and reviewer also re-run `scripts/isolation-guard.sh` immediately before their first mutating `Edit`/`Write`, and again before the builder's first `git commit` / the reviewer's gate loop — a worktree can pass both start-of-cycle guards and still be destroyed mid-session (observed under a resumed `SendMessage` turn), after which a `git commit` silently lands **on `trunk`**. The toplevel is substituted inline, never carried across fenced blocks (lode-lv04). A markdown checkpoint is a mitigation, not the structurally correct altitude — a `PreToolUse` hook is that altitude, and it now ships as `scripts/trunk-write-guard.sh` (lode-p8zl, [below](#isolation-guard-mid-session-re-assertion-lode-6wgc)) — [full account above](#isolation-guard-mid-session-re-assertion-lode-6wgc) (lode-6wgc) |
 | Recycled-worktree guard | **Canonical row (lode-zt62) — `coding.md`'s and `code-reviewer.md`'s quick cards link here rather than restate it.** Builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>` — the ref belongs to another ticket), resets onto `origin/trunk` HEAD (never bare local `trunk`, which `/land` can leave carrying un-pushed, un-gated merges for its whole merge window — lode-isl3) — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. `git clean -fd` then runs **unconditionally**, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef` was investigated (lode-r7ow) and its reuse semantics found to be a documented, mechanism-level match for the recycling; the human decision to switch it has since been made and applied — it is now the explicit `"fresh"` (lode-jzbz), not the harness default by omission — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow, lode-jzbz, lode-3v1p, lode-isl3, lode-ivth) |
-| Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
+| Models | builder on **Sonnet** (cheap), code-reviewer on **Fable** (review quality); neither reviews work it authored |
 | Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |
 | Design decisions | doc edits under `docs/`, never a bd note or memory (that forks the record) |
@@ -2466,7 +2466,7 @@ deferred-ticket section. Full rationale, including the accepted un-defer residua
 ## The landing loop — build, review, land
 
 > **One landing path for everything.** Producers (the coding loop above) build a branch and a separate
-> Opus code-reviewer technically reviews it; once it carries `ready-for-land`, a single `/land` lander
+> Fable code-reviewer technically reviews it; once it carries `ready-for-land`, a single `/land` lander
 > is the **only** thing that ever writes `trunk` — solo or batch, one machine or several. This
 > decouples *landing* from *building* through a durable hand-off, so the merge decision lands with the
 > agent that *didn't* write the code.
@@ -2494,7 +2494,7 @@ Review splits along a clean seam, and — crucially — **neither half is done b
 code:**
 
 - **Technical review — *the second phase of the coding loop*.** Bugs, cleanup, over-design,
-  complexity. A separate **`code-reviewer` (Opus) owns this** — it fetches the pushed branch, checks
+  complexity. A separate **`code-reviewer` (Fable) owns this** — it fetches the pushed branch, checks
   it out into its *own* worktree, and fixes problems there, but it did **not** write the code.
   Splitting it out (the builder runs cheaper, on Sonnet) is what buys the independence *and* puts the
   review spend where it matters. It runs **autonomously** and you only hear about it on a real fork
@@ -2667,9 +2667,9 @@ site in any skill). Any future "where do we call X" audit across `.claude/` shou
 pattern covering every way the call can legitimately be spelled, from the start — the failure mode
 was the enumeration method, not any one missed file.
 
-### The code-review pass — `code-reviewer` (Opus)
+### The code-review pass — `code-reviewer` (Fable)
 
-`/code` then dispatches a **`code-reviewer`** (Opus) for each `ready-for-code-review` ticket. Because
+`/code` then dispatches a **`code-reviewer`** (Fable) for each `ready-for-code-review` ticket. Because
 the technical review now lives in its own agent — not the builder — **neither review of a branch is
 done by its author** (the lander's semantic review is the other). The reviewer:
 
@@ -2706,7 +2706,7 @@ flowchart TD
     BUILD --> BESC{"build-time<br>clarifying decision?"}
     BESC -->|"yes"| BHOLD["Revert to green · push ·<br>record review_head ·<br>land-escalated · surface async"]
     BESC -->|"no"| PUSH["git push -u origin land/&lt;id&gt; ·<br>mark ready-for-code-review<br>(review_head SHA) · KEEP worktree"]
-    PUSH --> REV["code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>own correctness pass + simplify --fix · re-gate"]
+    PUSH --> REV["code-reviewer (Fable):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>own correctness pass + simplify --fix · re-gate"]
     REV --> RESC{"clarifying decision?<br>or making it worse?"}
     RESC -->|"yes"| RHOLD["Revert to green · re-push ·<br>land-escalated · surface async"]
     RESC -->|"no"| MARK["Swap to ready-for-land<br>(SHA · summary) · re-push land/&lt;id&gt; · STOP"]
