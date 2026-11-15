@@ -9,6 +9,7 @@ locking the exact real-world case that motivated the gate.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -556,7 +557,7 @@ def test_cli_exits_nonzero_and_names_source_line_and_target_on_breakage(tmp_path
 
     result = subprocess.run(
         [
-            "python",
+            sys.executable,
             str(REPO_ROOT / "scripts" / "check_links.py"),
             "--root",
             str(tmp_path),
@@ -578,7 +579,7 @@ def test_cli_exits_zero_on_clean_tree(tmp_path):
 
     result = subprocess.run(
         [
-            "python",
+            sys.executable,
             str(REPO_ROOT / "scripts" / "check_links.py"),
             "--root",
             str(tmp_path),
