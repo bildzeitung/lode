@@ -2681,7 +2681,7 @@ done by its author** (the lander's semantic review is the other). The reviewer:
    produced an empty-diff review (lode-k5e). Checking the pushed branch out locally sidesteps both.
 2. **Runs the technical review** — its own reasoned pass against the diff for bugs (`/code-review` is
    invocable but deliberately unused pending lode-1fyb; `.claude/agents/code-reviewer.md` step 4 has the
-   mechanism and what the pass covers, `docs/decisions.md` the version pin) and the tool-backed
+   history and what the pass covers, `docs/decisions.md` the version pin) and the tool-backed
    `/simplify` (over-design /
    complexity) — then **re-gates**, keeping the last **green** commit; if a refinement breaks the gates
    unrecoverably or trades simplicity for complexity, it **reverts to green**.
