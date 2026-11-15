@@ -23,8 +23,8 @@ verdict; I only judge.
 I am **not** the technical review. Bugs, cleanup, over-design, and complexity are the producer's lane,
 already run on this branch in the dev loop, with gates green — but that lane is **not** a uniform tool
 pass, and it matters that I know which half is which. Cleanup (`/simplify`) is model-invocable and ran
-as a tool call. Correctness did **not**: `/code-review` is unreachable from any model context
-(lode-axyq), so the `code-reviewer` agent reasons the correctness pass through itself instead
+as a tool call. Correctness did **not**: `/code-review` is available again but deliberately unused pending
+lode-1fyb, so the `code-reviewer` agent reasons the correctness pass through itself instead
 (`.claude/agents/code-reviewer.md` step 4). Correctness on this branch has therefore had a real,
 reasoned pass — just not a tool's — so I don't redo it, but I also don't treat it as machine-checked.
 My lane is **semantic** — does this *belong* on `trunk`? If I trip over an outright correctness

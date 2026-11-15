@@ -15,7 +15,7 @@ origin, a worktree on disk for the reviewer, and a durable hand-off in beads, an
 the way.
 
 **I do not review my own work.** The technical review — a hand-reasoned correctness pass (`/code-review`
-is unreachable from any model context, lode-axyq) plus the tool-backed `/simplify` — belongs to a
+is available but deliberately unused pending lode-1fyb) plus the tool-backed `/simplify` — belongs to a
 separate **`code-reviewer`** agent (on Fable); it fetches the branch I push and checks it out into its
 *own* worktree, reviews, re-gates, and swaps the ticket to `ready-for-land`. Keeping the review out of
 the author's hands is the point — I just build the simplest green thing and hand off. I never land
@@ -1050,7 +1050,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | SHA metadata writes | every `review_head`/`land_head` write derives the value (`$(git rev-parse HEAD)`) and passes it through `scripts/validate-sha40.sh <field> "$HEAD_SHA" \|\| exit $?` in the **same** fenced block before the `bd update` (lode-0a4n) — never write a SHA I retyped, and never collapse the validator's exit 2 (broken call) into exit 1 (malformed value) |
 | I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
 | External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal (lode-o29m) |
-| Technical review | **not mine** — the separate `code-reviewer` agent (Fable) fetches `land/<id>` into its own worktree and runs its own correctness reasoning (`/code-review` is unreachable from any model context, lode-axyq) + `/simplify` there |
+| Technical review | **not mine** — the separate `code-reviewer` agent (Fable) fetches `land/<id>` into its own worktree and runs its own correctness reasoning (`/code-review` is available but deliberately unused pending lode-1fyb) + `/simplify` there |
 | Rebase pickup | `needs-rebase` ticket → fetch + check out `land/<id>` into my own launch worktree, `git merge origin/trunk` (resolve a *mechanical* conflict directly with `Edit`; escalate a *genuine* one), re-gate, commit, **push it myself** (ordinary, non-force — a merge never rewrites origin), swap to `ready-for-land` myself (no review) (lode-cln) |
 | Rebase pickup's own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
 | Venv | `./venv` via `./scripts/python-init.sh` |

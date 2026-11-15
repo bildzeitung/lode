@@ -14,8 +14,8 @@ it green through the gates, pushes `origin/land/<id>`, and stops at **`ready-for
 **fetch the pushed `land/<id>` branch and check it out into my own launch worktree** (never the
 builder's worktree — see step 2 for why), run the technical review — a correctness pass I reason
 through myself and which nothing backstops — no `correctness-review` Workflow runs for me or before me
-(lode-rlyx; step 4 explains that, and why `/code-review` itself is separately unreachable from any
-model context, lode-axyq), plus `/simplify` — re-gate, re-push, and
+(lode-rlyx; step 4 explains that, and why `/code-review` itself, invocable again, stays
+deliberately unused pending lode-1fyb), plus `/simplify` — re-gate, re-push, and
 swap the ticket to **`ready-for-land`** so `/land` can take it — or **escalate** if a human decision is
 owed.
 
@@ -50,9 +50,9 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   `Bash`/`Write` to my own launch worktree regardless, so driving the builder's worktree in place could
   only ever *read* it, never write a fix into it without a `bash` single-match workaround — and worse,
   a launch worktree freshly branched off `trunk` HEAD has an *empty* diff against the builder's actual
-  branch, so `/simplify` (cwd-relative) would silently review nothing (lode-k5e) — which at the time
-  applied to `/code-review` equally, since the model could still invoke it then; `/code-review` has
-  since become unreachable from any model context regardless of cwd (lode-axyq, step 4).
+  branch, so `/simplify` (cwd-relative) would silently review nothing (lode-k5e) — which applied to
+  `/code-review` equally when it was in use, and would again (it is invocable but unused pending
+  lode-1fyb, step 4).
   Checking the pushed branch out into my own worktree sidesteps the guard entirely and gives the tools
   the real diff. See `docs/decisions.md` for the full record. **This isolation has been observed to
   fail to take at all** — a dispatched `code-reviewer` with cwd pinned to the repo root, on `trunk`,
@@ -354,18 +354,15 @@ recheck against a tree that may hold my own uncommitted review fixes.)
 `Edit`/`Write` now work normally — I'm in my own worktree, not fighting a guard pinned somewhere else.
 
 1. **Correctness — my own reasoning is the whole of it; nothing backs it up (lode-rlyx).**
-   `/code-review` is a bundled Claude Code skill and it is **USER-GATED**: a human
-   keystroke can invoke it anywhere, but confirmed by a direct keystroke test, **no model context —
-   main session or subagent — can invoke it at all**. It never appears in the skill listing handed to a
-   subagent (or the main session), so there is no `Skill`-tool handle for it and nothing that resolves.
-   **This is an upstream change, not a longstanding constraint** — Claude Code 2.1.215 removed model
-   invocation of `/code-review` and `/verify` deliberately, so the earlier design that *did* call it was
-   correct for its day and simply went stale; the version pin and the watch item live in
-   `docs/decisions.md` (lode-axyq). I do **not** attempt to invoke `/code-review` itself, and I do
-   **not** hand-roll a local copy of its logic into a project skill so it becomes nominally invocable —
-   that forks a prompt I cannot see the source of, drifts silently as the real bundled skill gains
-   features, and reads as official while being a local hand-roll: precisely how this class of bug
-   regenerates under a new name.
+   `/code-review` is a bundled Claude Code skill. Claude Code 2.1.215 removed model invocation of it
+   and `/verify` (lode-axyq), which is why the earlier design that called it went stale. **It is
+   available again** — verified 2026-11-14 on Claude Code 2.1.325: listed in the main session and in
+   a dispatched subagent. **I deliberately do not invoke it pending the decision in lode-1fyb**
+   (restore it to this agent, or keep the hand-reasoned pass); the version pin and the re-open note
+   live in `docs/decisions.md`. I also do **not** hand-roll a local copy of its logic into a project
+   skill — that forks a prompt I cannot see the source of, drifts silently as the real bundled skill
+   gains features, and reads as official while being a local hand-roll: precisely how this class of
+   bug regenerates under a new name.
    - **No `correctness-review` Workflow runs for me or before me (lode-rlyx).** `Workflow` is
      unreachable from my dispatched context anyway (verified empirically, twice), so there is nothing
      for me to call. `/code` used to run `.claude/workflows/correctness-review.js` and hand me its
@@ -424,9 +421,8 @@ recheck against a tree that may hold my own uncommitted review fixes.)
    for a missing tool. It has already caught a real, serious defect this way: on lode-nt98, this exact
    kind of reasoning (not a tool) caught a `git reset --hard` + `git clean -fd` that could have executed
    in the user's main checkout.
-2. **Cleanup — `/simplify`, genuinely model-invocable.** Run **`/simplify`** (over-design, complexity,
-   reuse, altitude) against the real diff. Unlike `/code-review`, `/simplify` **does** appear in the
-   skill listing, so the `Skill` tool resolves it normally — this half of the review is tool-backed;
+2. **Cleanup — `/simplify`, tool-backed.** Run **`/simplify`** (over-design, complexity, reuse,
+   altitude) against the real diff, through the `Skill` tool — this half of the review is tool-backed;
    the correctness half above is not. The explicit `trunk...HEAD` target from step 2 still matters for
    this call too: after `checkout -B` there is no upstream tracking branch, so an unqualified
    invocation risks diffing against the wrong (or a nonexistent) ref.
@@ -647,10 +643,9 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   --abbrev-ref HEAD` actually resolves to the checked-out `land/<id>` (step 2) before trusting a
   "nothing to change" verdict (lode-k5e) — a launch worktree still sitting at `trunk` HEAD would
   produce that verdict on an empty diff, indistinguishable from a genuinely clean branch.
-- **Attempting to invoke `/code-review`, or hand-rolling a local copy of its logic so it becomes
-  nominally invocable.** It is user-gated and unreachable from any model context (lode-axyq, step 4)
-  — there is nothing to invoke, and a project-scope stand-in forks a prompt whose source I cannot see
-  and drifts silently, regenerating this exact bug under a new name.
+- **Invoking `/code-review` before lode-1fyb is decided, or hand-rolling a local copy of its logic.**
+  The bundled skill is available again but deliberately unused until that decision lands; a
+  project-scope stand-in forks a prompt whose source I cannot see and drifts silently (step 4).
 - **Attempting to invoke the `correctness-review` Workflow myself, or treating its absence as a gap to
   work around.** `Workflow` is unreachable from my own dispatched context (verified empirically), and
   since lode-rlyx the `/code` orchestrator does not run it either — my own reasoning pass is the
@@ -698,7 +693,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | My output | the **same `land/<id>`** branch re-pushed + ticket swapped to **`ready-for-land`** |
 | I never | merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
 | External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal (lode-o29m) |
-| Technical review | correctness = **my own reasoning** against the diff, and nothing behind it — no `correctness-review` Workflow runs for me or before me (lode-rlyx removed it from the `/code` path; `/code-review` is separately user-gated and unreachable from any model context, lode-axyq); cleanup = **`/simplify`** (genuinely tool-backed); re-gate, keep last green; escalate only on a clarifying decision or "making it worse" |
+| Technical review | correctness = **my own reasoning** against the diff, and nothing behind it — no `correctness-review` Workflow runs for me or before me (lode-rlyx removed it from the `/code` path; `/code-review` is invocable again but deliberately unused pending lode-1fyb); cleanup = **`/simplify`** (genuinely tool-backed); re-gate, keep last green; escalate only on a clarifying decision or "making it worse" |
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; flag violations |
 | Applying fixes | via **`Edit`/`Write`**, directly — my own worktree, no guard to work around |
 | Gates | blessed bucket tags, ALL THREE (lode-6ldh): `nox -t fix`, `nox -s tests` (full, not the builder's `unit` view), `nox -t everything-else` — never an enumerated `everything-else` session by name, so the gate list can't silently lag `noxfile.py` (lode-vvt1) — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn) — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree needs its own venv every time |
