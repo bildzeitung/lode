@@ -44,8 +44,8 @@
 #
 #   * `nox -t fix` / `nox -s tests` are gated the SAME way `nox -s
 #     lock_currency` already was: exit 1 is the only content verdict either
-#     command has, via gate-lib.sh's `escalate_unless_content` -- a 127 (nox
-#     not on PATH mid-run), 126, or 128+n (signal) is a machine fault and
+#     command has, via gate-lib.sh's `escalate_unless_content` -- a 127 (the
+#     venv's nox gone mid-run), 126, or 128+n (signal) is a machine fault and
 #     stops the whole replay, never a bounce of the branch that happened to
 #     be merged when it hit.
 #   * a `nox -t fix` reformat on the LANDED path is folded into the merge
@@ -428,7 +428,7 @@ for id in $ACCEPTED_IDS; do
   # -s tests`. Each is checked separately, never via `if ! CMD_A || ! CMD_B`
   # (that idiom collapses BOTH commands' exit codes into one boolean and
   # cannot tell a genuine content failure (exit 1) from a non-verdict
-  # mid-loop fault -- 127 (not on PATH), 126, or 128+n (signal) -- which
+  # mid-loop fault -- 127 (nox gone), 126, or 128+n (signal) -- which
   # would otherwise BOUNCE an innocent branch (lode-lmu9). Same
   # `escalate_unless_content` partition gate-lib.sh already gives
   # `nox -s lock_currency` two paragraphs below: exit 1 is the only content

@@ -13,7 +13,6 @@ split out of it (lode-2thl).
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from conftest import LAND_SKILL_BASH, LAND_SKILL_BLOCKS, bash_fence_blocks
 
@@ -636,22 +635,12 @@ def test_land_skill_never_activates_the_venv() -> None:
     """lode-xx90: /land gates unactivated, venv tools by explicit path, in
     parity with the code-reviewer. Activation puts `./venv/bin` first on PATH
     and hides tests that spawn a tool by bare name (lode-p3ks). No fenced
-    block may source the activate script, and `land-replay.sh` resolves its own
-    `nox` by explicit path rather than depending on PATH (lode-04zb's missing-nox
-    diagnostic, now keyed on the venv's nox)."""
+    block may source the activate script. That `land-replay.sh` itself never
+    depends on PATH for `nox` is pinned by running it, in
+    tests/test_land_replay.py -- every gate call site against a repo whose only
+    nox is `venv/bin/nox`, and a missing venv nox with a green one on PATH."""
     for block in LAND_SKILL_BLOCKS:
         for line in block.splitlines():
             assert "venv/bin/activate" not in _strip_comment(line), (
                 f"a land/SKILL.md fence activates the venv: {line!r}"
             )
-
-    replay = (
-        Path(__file__).resolve().parents[1] / "scripts" / "land-replay.sh"
-    ).read_text()
-    executable = [
-        line for line in replay.splitlines() if not line.lstrip().startswith("#")
-    ]
-    assert not any(re.match(r"\s*(if !? ?)?nox\b", line) for line in executable), (
-        "land-replay.sh runs a bare nox"
-    )
-    assert any("venv/bin/nox" in line for line in executable)

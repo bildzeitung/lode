@@ -1045,6 +1045,9 @@ hides any test that spawns a tool by bare name (`python`, `typer`, …): such a 
 reviewer's unactivated gate but green under an activated one, which let a trunk red slip past the
 last gate before `trunk` (lode-p3ks). Never `. ./venv/bin/activate` in a fence here;
 [`scripts/land-replay.sh`](../../../scripts/land-replay.sh) resolves the venv's `nox` itself.
+Unactivated, `lock_currency`'s `uv` resolves from the ambient `PATH`, never `./venv/bin/uv`
+(deliberate — `noxfile.py`'s `_venv_tool` docstring), so the landing machine needs a `uv` installed
+outside the venv; without one the session exits 2, a machine fault (below).
 
 **`nox -t everything-else` (lode-6ldh, resolving lode-87v7) runs the everything-else bucket
 (`shellcheck`/`linkcheck`/`docstringcheck`/`docs`) against the MERGED batch, not just against each

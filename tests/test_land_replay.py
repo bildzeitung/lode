@@ -11,7 +11,8 @@ repositories built in `tmp_path`, driving its real dependencies
 (`land-merge-one.sh`, `drop-from-accepted.sh`, `land-state-load.sh`,
 `assert-main-checkout.sh`) rather than mocking any of them -- the same
 sabotage-provable bar tests/test_land_merge_batch.py uses. The one thing
-that IS faked is `nox` itself: a tiny stand-in placed first on PATH, whose
+that IS faked is `nox` itself: a tiny stand-in installed at the throwaway
+repo's own `venv/bin/nox` -- the explicit path the script resolves -- whose
 verdict is driven by marker files committed into a branch, so a gate's
 pass/fail is tied to the actual working tree content at the moment
 land-replay.sh runs it -- exactly the property real `nox -s tests` has, and
@@ -21,6 +22,7 @@ behavior around a bounced branch.
 
 from __future__ import annotations
 
+import os
 import shutil
 import stat
 import subprocess
@@ -90,6 +92,14 @@ def _init_repo(tmp_path: Path) -> Path:
     _git(repo, "init", "-q", "-b", "trunk")
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "test")
+    # The fake nox lives at `<repo>/venv/bin/nox`, untracked. Excluded here, in
+    # the one repo this function just created, so it never reads as a dirty
+    # tree -- and so the path is built from `repo`, never resolved through git
+    # (a linked worktree of this repo shares the same exclude file).
+    exclude = repo / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(exist_ok=True)
+    with exclude.open("a") as f:
+        f.write("/venv/\n")
     (repo / "f.txt").write_text("line1\nline2\nline3\n")
     _git(repo, "add", "f.txt")
     _git(repo, "commit", "-q", "-m", "base")
@@ -129,28 +139,11 @@ def _graph(tmp_path: Path, *edges: tuple[str, str, str]) -> Path:
 
 def _install_fake_nox(repo: Path, fake_nox: Path) -> None:
     """Place the stand-in at `<repo>/venv/bin/nox` -- the explicit path the
-    script resolves its gates from (lode-xx90) -- and keep it out of `git status`."""
+    script resolves its gates from (lode-xx90). `_init_repo` already keeps
+    `venv/` out of `git status`."""
     dest = repo / "venv" / "bin"
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copy2(fake_nox / "nox", dest / "nox")
-    exclude = Path(
-        subprocess.run(
-            [
-                "git",
-                "rev-parse",
-                "--path-format=absolute",
-                "--git-path",
-                "info/exclude",
-            ],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-    )
-    exclude.parent.mkdir(exist_ok=True)
-    with exclude.open("a") as f:
-        f.write("/venv/\n")
 
 
 def _run(
@@ -166,6 +159,8 @@ def _run(
     script: Path = SCRIPT,
     fake_nox: Path | None = None,
 ) -> subprocess.CompletedProcess:
+    """Run the script from `repo`. `fake_nox=None` leaves the repo with no
+    `venv/bin/nox` at all -- the missing-venv machine fault."""
     _git(repo, "checkout", "-q", on_branch)
     args = [
         "bash",
@@ -185,34 +180,6 @@ def _run(
         args += ["--base-ref", base_ref]
     if fake_nox is not None:
         _install_fake_nox(repo, fake_nox)
-    return subprocess.run(
-        args, cwd=repo, capture_output=True, text=True, timeout=30, check=False
-    )
-
-
-def _run_with_no_venv_nox(
-    repo: Path,
-    accepted: Path,
-    msg_dir: Path,
-    conflicts_dir: Path,
-    landed: Path,
-) -> subprocess.CompletedProcess:
-    """Same as `_run`, but the repo has no `venv/bin/nox` -- the machine fault
-    lode-04zb guarded (then a missing activation, now a missing venv). An
-    ambient `nox` on PATH must NOT rescue it (lode-xx90)."""
-    _git(repo, "checkout", "-q", "trunk")
-    args = [
-        "bash",
-        str(SCRIPT),
-        "--accepted",
-        str(accepted),
-        "--msg-dir",
-        str(msg_dir),
-        "--conflicts-dir",
-        str(conflicts_dir),
-        "--landed",
-        str(landed),
-    ]
     return subprocess.run(
         args, cwd=repo, capture_output=True, text=True, timeout=30, check=False
     )
@@ -604,7 +571,7 @@ def test_mid_loop_lock_currency_machine_fault_stops_the_pass(tmp_path: Path) -> 
 def test_mid_loop_nonverdict_nox_exit_stops_the_pass_without_bouncing(
     tmp_path: Path, sentinel: str, gate: str
 ) -> None:
-    """A 127 (nox not on PATH mid-run) from ANY per-branch nox gate after a
+    """A 127 (the venv's nox gone mid-run) from ANY per-branch nox gate after a
     clean merge is a machine fault, not that id's verdict -- it must stop the
     replay, never bounce the branch that happened to be merged when it hit
     (lode-lmu9, extended to `nox -t everything-else` by lode-b9qy). All three
@@ -944,7 +911,7 @@ def test_explicit_base_ref_is_honored(tmp_path: Path) -> None:
 
 
 def test_missing_venv_nox_is_reported_as_a_missing_nox_never_a_red_baseline(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """OBSERVED (lode-04zb): a missing nox hit `command not found` (127) on the
     very first baseline gate (`nox -t fix`). The baseline arms deliberately treat
@@ -952,7 +919,12 @@ def test_missing_venv_nox_is_reported_as_a_missing_nox_never_a_red_baseline(
     that block's own comment), so the 127 fell straight into "'nox -t fix' is
     red on bare '$BASE_REF' ... needs a human's fix" -- a FALSE diagnostic,
     since nothing ever ran. This must instead be caught up front, before any
-    gate runs, and reported as a missing venv `nox` (exit 2)."""
+    gate runs, and reported as a missing venv `nox` (exit 2).
+
+    An always-green `nox` sits first on PATH throughout: an ambient one must
+    NOT rescue a missing venv (lode-xx90). A script that fell back to PATH
+    would land lode-a and exit 0 here."""
+    monkeypatch.setenv("PATH", str(_fake_nox_bin(tmp_path)), prepend=os.pathsep)
     repo = _init_repo(tmp_path)
     _branch_from(repo, "trunk", "origin/land/lode-a")
     _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
@@ -964,7 +936,7 @@ def test_missing_venv_nox_is_reported_as_a_missing_nox_never_a_red_baseline(
     accepted = _accepted(tmp_path, "lode-a")
     landed = tmp_path / "landed"
 
-    result = _run_with_no_venv_nox(repo, accepted, msg_dir, conflicts_dir, landed)
+    result = _run(repo, accepted, msg_dir, conflicts_dir, landed)
 
     assert result.returncode == 2, result.stdout + result.stderr
     assert result.stdout == "", (
