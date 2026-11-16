@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from lode.llm_provider import (
     EFFORT_LEVELS_BY_PROVIDER,
-    FORCED_TOOL_CHOICE_REJECTING_MODEL_PREFIXES,
+    FORCED_TOOL_CHOICE_REJECTING_MODELS,
     ModelTier,
 )
 from lode.lock import lock_path
@@ -1057,20 +1057,25 @@ class Settings(BaseModel):
     def _enrichment_model_accepts_forced_tool_choice(self) -> Settings:
         """Fail loudly at load if enrichment_llm names a model that 400s on forced tool_choice.
 
-        Enrichment (immediate and batch) still forces its tool; Sonnet 5.5 and
-        Opus 5.5 reject that with a 400 on every call, and a batch only fails at
-        collect time after its handle is persisted (lode-eidi). Applies to the
+        Enrichment (immediate and batch) still forces its tool; a model that
+        rejects that 400s on every call, and a batch only fails at collect time
+        after its handle is persisted (lode-eidi). Unlike the effort check
+        above, this one *does* predict a model capability at load -- a narrow,
+        recorded exception to lode-3dlt option 1; see ``docs/configuration.md``
+        for why, and for what an unlisted model still does. Applies to the
         anthropic provider only -- under ``openai`` the model is a deployment
         name.
         """
         model = self.enrichment_llm.model
-        if self.llm_provider == "anthropic" and model.startswith(
-            FORCED_TOOL_CHOICE_REJECTING_MODEL_PREFIXES
+        if (
+            self.llm_provider == "anthropic"
+            and model in FORCED_TOOL_CHOICE_REJECTING_MODELS
         ):
+            default = type(self).model_fields["enrichment_llm"].default.model
             raise ValueError(
                 f"enrichment_llm.model={model!r} rejects a forced tool_choice, "
                 f"which enrichment requires -- use a model that accepts it "
-                f"(e.g. the default claude-haiku-5-5)"
+                f"(e.g. the default {default})"
             )
         return self
 

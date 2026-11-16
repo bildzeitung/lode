@@ -687,9 +687,11 @@ class AnthropicProvider:
     thinking-capable model that accepts a forced ``tool_choice`` (Opus 5,
     Sonnet 5) may still think, sharing ``max_tokens`` with the tool-call JSON
     -- lode-3dlt tracked this as a real but then-unreachable risk rather than
-    fixing it -- while an override to a model that rejects it (Sonnet 5.5,
-    Opus 5.5; see :data:`FORCED_TOOL_CHOICE_REJECTING_MODEL_PREFIXES`) is
-    refused at config load for ``enrichment_llm`` (lode-eidi). **lode-jgus closes it:** :data:`lode.enrich.MAX_TOKENS` was
+    fixing it. (A model that rejects a forced ``tool_choice`` 400s here
+    instead, surfaced as :class:`LLMProviderError` by the ``APIStatusError``
+    wrap; ``Settings`` refuses the known ones for ``enrichment_llm`` at config
+    load -- :data:`FORCED_TOOL_CHOICE_REJECTING_MODELS`, lode-eidi.)
+    **lode-jgus closes the thinking risk:** :data:`lode.enrich.MAX_TOKENS` was
     raised (1024 -> 2048, later 3072) for the same headroom reason
     :data:`lode.qa.MAX_TOKENS` was, and the branch below now guards the
     symptom of running out of that budget -- a response whose whole
@@ -1385,20 +1387,29 @@ _OPENAI_EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "m
 # source of truth (and stay pinned to their installed SDK's own `Literal` by
 # the meta-tests) -- this mapping is a thin, load-order-safe re-export, not a
 # second copy.
-#: Anthropic model-id prefixes that 400 on a forced ``tool_choice``
-#: (lode-eidi). Enrichment is the only caller still on the forced-tool-use wire
-#: shape, so ``Settings`` refuses these for ``enrichment_llm`` at load. A short
-#: known-rejects list, not a capability predicate (lode-3dlt option 1): a
-#: prefix also covers a dated snapshot of the same model.
-FORCED_TOOL_CHOICE_REJECTING_MODEL_PREFIXES: tuple[str, ...] = (
-    "claude-sonnet-5-5",
-    "claude-opus-5-5",
-)
-
 EFFORT_LEVELS_BY_PROVIDER: Mapping[Literal["anthropic", "openai"], tuple[str, ...]] = {
     "anthropic": _ANTHROPIC_EFFORT_LEVELS,
     "openai": _OPENAI_EFFORT_LEVELS,
 }
+
+#: Anthropic model ids that 400 on a forced ``tool_choice`` (``any``/``tool``).
+#: Enrichment is the only caller still on the forced-tool-use wire shape, so
+#: ``Settings`` refuses these for ``enrichment_llm`` at load (lode-eidi).
+#: Matched exactly, never by prefix: these ids have no dated-snapshot form, and
+#: ``claude-fable-5-2`` as a prefix would also catch a suffixed
+#: ``claude-fable-5`` id -- a model that accepts a forced ``tool_choice``.
+#: Hand-kept, so it lags new releases: an unlisted rejecting model still fails
+#: at the seam as :class:`LLMProviderError`.
+FORCED_TOOL_CHOICE_REJECTING_MODELS: frozenset[str] = frozenset(
+    {
+        "claude-sonnet-5-5",
+        "claude-opus-5-5",
+        "claude-fable-5-1",
+        "claude-fable-5-2",
+        "claude-mythos-5-1",
+        "claude-mythos-5-2",
+    }
+)
 
 
 def _openai_effort_kwargs(
