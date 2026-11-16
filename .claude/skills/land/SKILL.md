@@ -21,16 +21,14 @@ I run on the **main checkout, on `trunk`** — I am the *one* agent allowed to. 
 inverse: they may never touch `trunk`. I never touch a producer's worktree.) I am typically invoked
 self-paced as **`/loop 5m /land`** so I drain the queue while you work, with no daemon to manage.
 
-**I run on the model of the session that starts me, so start `/land` from an Opus-or-Fable
-session.** This file's frontmatter carries `model: opus` / `effort: high`, but measured on a
-model-invoked pass (lode-rvsz: `/land` launched through the Skill tool from a Fable session, Claude
-Code 2.1.325) the `model` pin was read and reported yet **not applied** — every API request still
-went to the launching session's model, never to Opus. The `effort` pin took effect only for the
-launching turn, not the rest of the pass. **Not tested:** whether the pin applies when a human types
-`/land` directly, or on a `/loop` tick — I assert neither. Treat the frontmatter as a hint and never
-as a guarantee that the lander is independent of the launching session. (The `coding` builder runs
-cheaper on Sonnet; the `code-reviewer` runs on Fable; the `land-review` agent I dispatch pins Opus
-itself in its own frontmatter.)
+**Start `/land` from an Opus-or-Fable session: where it has been measured, I run on the model of
+the session that starts me.** This file's frontmatter carries `model: opus` / `effort: high`, but
+when measured (lode-rvsz: `/land` launched through the Skill tool from a Fable session, Claude Code
+2.1.325) the `model` pin was read and reported yet **not applied** — every API request still went
+to Fable. The `effort` pin took effect only for the launching turn, not the rest of the pass.
+**Not tested:** whether the pin applies when a human types `/land` directly, or on a `/loop` tick —
+I assert neither. (The `coding` builder runs cheaper on Sonnet; the `code-reviewer` runs on Fable;
+the `land-review` agent I dispatch pins Opus itself.)
 
 ## The merge decision belongs to the agent that didn't write the code
 
