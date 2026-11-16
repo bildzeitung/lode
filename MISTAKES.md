@@ -4,6 +4,26 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-11-15 — The last gate before trunk ran in a more lenient environment than the gate before it
+
+- **What happened:** `lode-6874` moved the `code-reviewer` (and the rebase pickup) to gating
+  unactivated, by `./venv/bin/nox`. `/land`'s combined re-gate and `scripts/land-replay.sh` kept
+  `. ./venv/bin/activate` plus a bare `nox`. When `.python-version` moved to 3.14.10 (`fd817d5`), two
+  tests in `tests/test_check_links.py` that spawned a bare `python` went red under the reviewer's
+  gate on `trunk` itself (`lode-p3ks`); the same tree would have passed `/land`'s activated re-gate.
+- **Root cause:** two gates certified the same tree in two environments. Activation puts
+  `./venv/bin` first on `PATH`, so anything a test spawns by bare name resolves to the venv's copy
+  and the defect is invisible; `noxfile.py`'s `_venv_tool()` only pins the tools nox itself launches.
+  The lenient environment belonged to the gate that owns `trunk`.
+- **Consequence:** the `tests` bucket was red for every reviewer on that machine while the one
+  stage that writes `trunk` could not see it; `lode-d6t7`, a wording-only branch, was escalated on a
+  red it did not cause. No work was lost.
+- **Rule that prevents a repeat:** every gate before `trunk` runs in the same environment, and a
+  later gate is never more lenient than an earlier one. Gates call the venv's tools by explicit
+  path and never activate (`lode-xx90`); a test that launches an interpreter uses `sys.executable`,
+  never a bare name. When one stage's gate invocation changes, change every stage's in the same
+  ticket.
+
 ## 2026-09-14 — A needs-rebase pickup resolved the conflicting hunks and left the branch's own prose describing the pre-merge world
 
 - **What happened:** the `/land` needs-rebase pickup on `lode-dozi` merged `trunk` @ `e3437e3` into

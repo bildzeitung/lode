@@ -44,8 +44,8 @@
 #
 #   * `nox -t fix` / `nox -s tests` are gated the SAME way `nox -s
 #     lock_currency` already was: exit 1 is the only content verdict either
-#     command has, via gate-lib.sh's `escalate_unless_content` -- a 127 (nox
-#     not on PATH mid-run), 126, or 128+n (signal) is a machine fault and
+#     command has, via gate-lib.sh's `escalate_unless_content` -- a 127 (the
+#     venv's nox gone mid-run), 126, or 128+n (signal) is a machine fault and
 #     stops the whole replay, never a bounce of the branch that happened to
 #     be merged when it hit.
 #   * a `nox -t fix` reformat on the LANDED path is folded into the merge
@@ -178,23 +178,26 @@ if ! "$SCRIPT_DIR/assert-main-checkout.sh"; then
     "machine/dispatch fault, never a branch conflict."
 fi
 
-# `nox` on PATH is a precondition of every gate this script runs, baseline
-# and per-branch alike. Checked here, once, up front -- BEFORE any gate runs
-# -- so a caller that forgot to activate the venv is reported as exactly
-# that, never misread as a content verdict. OBSERVED (lode-04zb): the
-# baseline `nox -t fix`/`nox -s tests`/`nox -t everything-else` checks below
-# treat every nonzero exit alike (there is deliberately no
-# `escalate_unless_content` split on the baseline arms -- see that block's
-# own comment), so a bare "command not found" 127 fell straight into the
-# "'nox -t fix' is red on bare '$BASE_REF' ... needs a human's fix" message.
-# That message is false when nox never ran at all -- checking PATH up front
-# closes the gap at its source rather than re-deriving "was this 127" in
-# three separate baseline arms.
-command -v nox >/dev/null 2>&1 || gate_could_not_run \
-  "'nox' is not on PATH -- this script cannot run any gate (baseline or" \
-  "per-branch)." \
-  "Most likely the caller's shell never activated the venv before invoking" \
-  "this script (missing '. ./venv/bin/activate', lode-04zb)." \
+# The venv's own nox, by explicit path, is a precondition of every gate this
+# script runs, baseline and per-branch alike -- never `nox` resolved from PATH
+# (lode-xx90: /land gates unactivated, in parity with the code-reviewer, so a
+# test that spawns a tool by bare name fails here exactly as it does at review
+# instead of being masked by an activated PATH). Checked once, up front --
+# BEFORE any gate runs -- so a missing venv is reported as exactly that, never
+# misread as a content verdict. OBSERVED (lode-04zb): the baseline
+# `nox -t fix`/`nox -s tests`/`nox -t everything-else` checks below treat every
+# nonzero exit alike (there is deliberately no `escalate_unless_content` split
+# on the baseline arms -- see that block's own comment), so a "command not
+# found" 127 fell straight into the "'nox -t fix' is red on bare '$BASE_REF'
+# ... needs a human's fix" message, which is false when nox never ran at all.
+# Resolved from the git toplevel, since this script is cwd-resolved in the
+# main checkout.
+NOX="$(git rev-parse --show-toplevel)/venv/bin/nox"
+[ -x "$NOX" ] || gate_could_not_run \
+  "the venv's nox ('$NOX') is missing or not executable -- this script" \
+  "cannot run any gate (baseline or per-branch)." \
+  "Most likely the venv was never built in this checkout (run" \
+  "./scripts/python-init.sh, lode-xx90/lode-04zb)." \
   "This is a machine/dispatch fault, never a baseline or branch verdict --" \
   "nothing below has run yet."
 
@@ -304,7 +307,7 @@ git reset --hard -q "$BASE_REF" \
 # "lode-mps0"). No `escalate_unless_content` partition here -- like the
 # `nox -s tests` baseline arm below, every nonzero stops the pass, so there
 # is no mid-loop rc to split into content-vs-machine.
-if ! nox -t fix; then
+if ! "$NOX" -t fix; then
   gate_could_not_run "'nox -t fix' is red on bare '$BASE_REF', before any branch merged." \
     "Not attributable to anything in --accepted. '$BASE_REF' itself needs a human's fix" \
     "(see lode-mps0's decision in docs/decisions.md)."
@@ -322,19 +325,19 @@ if [ -n "$fix_reformat_paths" ]; then
     "directly to '$BASE_REF' (see lode-mps0's decision in docs/decisions.md)."
 fi
 
-if ! nox -s tests; then
+if ! "$NOX" -s tests; then
   gate_could_not_run "'nox -s tests' is red on bare '$BASE_REF', before any branch merged." \
     "Not attributable to anything in --accepted. Check the calling shell's own" \
     "environment (FORCE_COLOR / NO_COLOR / TTY_COMPATIBLE / TTY_INTERACTIVE, lode-kq4v)" \
     "before assuming this is a genuine regression on '$BASE_REF' itself."
 fi
-if ! nox -t everything-else; then
+if ! "$NOX" -t everything-else; then
   gate_could_not_run "'nox -t everything-else' is red on bare '$BASE_REF', before any branch merged." \
     "Not attributable to anything in --accepted -- '$BASE_REF' itself needs a human's fix" \
     "(shellcheck/linkcheck/docstringcheck/docs bucket, lode-6ldh)."
 fi
 lc_rc=0
-nox -s lock_currency || lc_rc=$?
+"$NOX" -s lock_currency || lc_rc=$?
 case "$lc_rc" in
   0) : ;;
   2) gate_could_not_run "'nox -s lock_currency' machine-faulted (exit 2) on bare '$BASE_REF'." \
@@ -425,7 +428,7 @@ for id in $ACCEPTED_IDS; do
   # -s tests`. Each is checked separately, never via `if ! CMD_A || ! CMD_B`
   # (that idiom collapses BOTH commands' exit codes into one boolean and
   # cannot tell a genuine content failure (exit 1) from a non-verdict
-  # mid-loop fault -- 127 (not on PATH), 126, or 128+n (signal) -- which
+  # mid-loop fault -- 127 (nox gone), 126, or 128+n (signal) -- which
   # would otherwise BOUNCE an innocent branch (lode-lmu9). Same
   # `escalate_unless_content` partition gate-lib.sh already gives
   # `nox -s lock_currency` two paragraphs below: exit 1 is the only content
@@ -438,7 +441,7 @@ for id in $ACCEPTED_IDS; do
   # `fi` could never read anything but "bounce" (dead state). `rc=$?` must
   # still be the FIRST command in the else arm, and the condition must stay
   # un-negated: `if ! CMD; then rc=$?` captures the NEGATION's status.
-  if nox -t fix; then
+  if "$NOX" -t fix; then
     :
   else
     fix_rc=$?
@@ -450,7 +453,7 @@ for id in $ACCEPTED_IDS; do
     continue
   fi
 
-  if nox -s tests; then
+  if "$NOX" -s tests; then
     :
   else
     tests_rc=$?
@@ -468,7 +471,7 @@ for id in $ACCEPTED_IDS; do
   # branch introduces is attributed to it here, not silently missed. Same
   # `escalate_unless_content` partition, and the same arm shape, as the two
   # gates above -- see their comment for why both are written this way.
-  if nox -t everything-else; then
+  if "$NOX" -t everything-else; then
     :
   else
     everything_else_rc=$?
@@ -504,7 +507,7 @@ for id in $ACCEPTED_IDS; do
   fi
 
   lc_rc=0
-  nox -s lock_currency || lc_rc=$?
+  "$NOX" -s lock_currency || lc_rc=$?
   case "$lc_rc" in
     0)
       printf 'LANDED\t%s\n' "$id"

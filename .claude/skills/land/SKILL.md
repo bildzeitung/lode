@@ -1036,9 +1036,18 @@ special-casing: Section 4's reformat commit is already behind its own `git statu
 check, which a skipped `nox -t fix` leaves clean.
 
 ```bash
-. ./venv/bin/activate
-nox -t fix && nox -s tests && nox -t everything-else && nox -s lock_currency     # if nox -t fix reformats merged code, commit that as part of the merge result
+./venv/bin/nox -t fix && ./venv/bin/nox -s tests && ./venv/bin/nox -t everything-else && ./venv/bin/nox -s lock_currency     # if nox -t fix reformats merged code, commit that as part of the merge result
 ```
+
+**This re-gate runs UNACTIVATED, venv tools by explicit path — the same way the `code-reviewer`
+gates (lode-xx90, parity with lode-6874).** Activation puts `./venv/bin` first on `PATH` and so
+hides any test that spawns a tool by bare name (`python`, `typer`, …): such a test is red under the
+reviewer's unactivated gate but green under an activated one, which let a trunk red slip past the
+last gate before `trunk` (lode-p3ks). Never `. ./venv/bin/activate` in a fence here;
+[`scripts/land-replay.sh`](../../../scripts/land-replay.sh) resolves the venv's `nox` itself.
+Unactivated, `lock_currency`'s `uv` resolves from the ambient `PATH`, never `./venv/bin/uv`
+(deliberate — `noxfile.py`'s `_venv_tool` docstring), so the landing machine needs a `uv` installed
+outside the venv; without one the session exits 2, a machine fault (below).
 
 **`nox -t everything-else` (lode-6ldh, resolving lode-87v7) runs the everything-else bucket
 (`shellcheck`/`linkcheck`/`docstringcheck`/`docs`) against the MERGED batch, not just against each
@@ -1089,7 +1098,6 @@ it would mask the 2. Keep it there.
   over the most destructive code in this file.
 
   ```bash
-  . ./venv/bin/activate   # fresh Bash invocation (lode-04zb) -- land-replay.sh runs nox itself
   STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation
   MSG_DIR="$STATE_DIR/msg"
   CONFLICTS_DIR="$STATE_DIR/conflicts"
