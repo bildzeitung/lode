@@ -280,11 +280,6 @@ SKIP_PROSE: dict[tuple[str, str], str] = {
         "executes -- the real, --limit-pinned invocation lives at "
         ".claude/skills/code/SKILL.md:121."
     ),
-    (".claude/skills/land/SKILL.md", "bd list --label land-escalated"): (
-        "Prose illustrating how a human resolves a land-escalated branch (`bd list "
-        "--label land-escalated` reaching empty once every branch is resolved) -- "
-        "not a command /land itself runs."
-    ),
     (".claude/skills/release/SKILL.md", "bd list"): (
         "Prose describing bd list's general sort order ('bd list sorts "
         "priority-major, not by date') -- not an invocation. The real, "
