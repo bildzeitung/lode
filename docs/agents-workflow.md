@@ -2824,7 +2824,7 @@ escalation and a `coding` build-time clarification (the arguable case, decided: 
 *ambiguity* is resolved, not that the branch is finished — the `code-reviewer` can still escalate a
 half-built branch), and `needs-rebase` for a `coding` rebase-pickup conflict; full mechanics and
 per-source table in
-[`land/SKILL.md`](../.claude/skills/land/SKILL.md#re-entry-per-escalating-source--re-enter-at-the-gate-that-escalated)
+[`land-escalation-runbook.md`](land-escalation-runbook.md#re-entry-per-escalating-source--re-enter-at-the-gate-that-escalated)
 (`lode-08g`, extended by `lode-wp2r`, further extended by `lode-2m93`).
 
 **Making the `ready-for-code-review` re-entry executable (lode-08g's decision had two gaps, both

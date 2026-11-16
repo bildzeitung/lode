@@ -251,4 +251,3 @@ rather than silently risky:
    slips past that too.
 3. Re-entry at `ready-for-code-review` for the build-time source means "the decision is made, re-run
    the pipeline from technical review" — **not** "this branch is done."
-

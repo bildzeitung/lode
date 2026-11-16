@@ -545,7 +545,7 @@ explicitly in the escalation findings — "malformed `land_head` metadata, not d
 owes: **re-derive** the value mechanically per
 [`docs/conventions.md`](../../../docs/conventions.md)'s "Derive identifiers, never retype them" fiat
 (`git rev-parse` / `git ls-remote` — never retyped, `lode-fpmi`), re-write the field, and re-enter the
-ticket per the [re-entry table](#re-entry-per-escalating-source--re-enter-at-the-gate-that-escalated)
+ticket per the [re-entry table](../../../docs/land-escalation-runbook.md#re-entry-per-escalating-source--re-enter-at-the-gate-that-escalated)
 (this gate escalated and the resolution needs no branch edit, so it re-enters at `ready-for-land`).
 
 **Why escalate rather than bounce or repair.** A corrupt hand-off record means **no drift evidence
