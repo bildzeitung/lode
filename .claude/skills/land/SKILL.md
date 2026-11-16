@@ -1664,9 +1664,9 @@ remove the label and let the branch go.)
 
 `land-escalated` is **not terminal**, but resolving it is a human action taken outside a `/land` pass
 (`/land` only ever *sets* the label, never clears it) — so the procedure is not in this file. Open
-[`docs/land-escalation-runbook.md`](../../../docs/land-escalation-runbook.md) when you are a human
-resolving a `land-escalated` ticket (the four exits and the re-entry-per-source table); a `/land` tick
-never needs it.
+[`docs/land-escalation-runbook.md`](../../../docs/land-escalation-runbook.md) when a human is
+resolving a `land-escalated` ticket, or has asked me to carry out a resolution they decided (the four
+exits and the re-entry-per-source table); a `/land` tick never needs it.
 
 ---
 

@@ -4,7 +4,14 @@ A human runbook, not an instruction a `/land` tick executes: how a person resolv
 `/land` (or a build-time escalation) parked with the `land-escalated` label. The `/land` skill
 ([`land/SKILL.md`](../.claude/skills/land/SKILL.md)) only ever *sets* that label; this page is the
 procedure for clearing it. The section below was moved here verbatim from `land/SKILL.md`; only its
-links into `land/SKILL.md` were repointed to that file's path.
+links into `land/SKILL.md` were repointed to that file's path. So where it says "above", "this
+skill", or a bare section number (Section 2a, 2b, Section 3), it means `land/SKILL.md`.
+
+**No test gates the bash blocks on this page.** The fenced-block gates (shell state carried between
+blocks, SHA validation before a metadata write, `bd list` limits) scan only
+`.claude/skills/*/SKILL.md` and `.claude/agents/*.md`, so the six blocks below left that coverage
+when they left `land/SKILL.md`. Accepted (`lode-w18a.1`): a human runs them one at a time and sees
+each result, unlike an unattended tick.
 
 ## Resolving a `land-escalated` branch
 

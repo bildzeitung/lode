@@ -183,8 +183,7 @@ _KNOWN_LAND_SKILL_MUTATIONS: dict[str, str] = {
         "(Section 4's per-ticket branch GC)"
     ),
     'git push origin --delete "land/<id>"': (
-        "ref-addressed delete (explicit remote+branch); cwd-independent "
-        "(Bounce / Escalate-exit-(b) / Escalate-exit-(c))"
+        "ref-addressed delete (explicit remote+branch); cwd-independent (Bounce)"
     ),
     # --- path-addressed to the passive bd export, never real work ---
     "git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true": (
