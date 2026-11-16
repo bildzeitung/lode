@@ -1282,7 +1282,7 @@ contract](stack.md#llm-provider-seam-decided-lode-568v1).)
 ### Enrichment latency: interactive now, batch for bulk
 
 A freshly-captured note enriches via **one immediate enrichment-LLM call** (seconds; the default
-Anthropic Claude Haiku 4.5 price is tiny per note) so its tags/entities/edges appear promptly. Only
+Anthropic Claude Haiku 5.5 price is tiny per note) so its tags/entities/edges appear promptly. Only
 **bulk / backfill / re-enrichment** goes through the provider's batch path — Anthropic's 50%-off
 **Batches API** (≤24h, non-interactive) under the default provider, or serialized sequential calls
 under a provider with no batch API ([LLM provider seam](stack.md#llm-provider-seam-decided-lode-568v1)).

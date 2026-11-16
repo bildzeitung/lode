@@ -210,7 +210,7 @@ class ModelTier(BaseModel):
     override makes (``lode-d70n``).
 
     A bare TOML string (every existing ``config.toml`` today, e.g.
-    ``enrichment_llm = "claude-haiku-4-5"``) coerces to
+    ``enrichment_llm = "claude-haiku-5-5"``) coerces to
     ``ModelTier(model=<string>)`` -- back-compat, no migration required.
     """
 
@@ -680,15 +680,16 @@ class AnthropicProvider:
     has never sent ``thinking`` at all (lode-d1sr never touched it), so it
     already followed the "never explicitly disable" rule before this class
     existed; no Fable-class 400 is reachable there. Haiku 5.5 (the
-    ``enrichment_llm`` default) thinks adaptively by default, but a forced
-    ``tool_choice`` skips thinking on every model that accepts it, so the
-    default tier spends its whole budget on the tool-call JSON. A
-    ``Kind.RUNTIME`` override to a model that rejects forced ``tool_choice``
-    (Sonnet 5.5, Opus 5.5) 400s here, surfaced as :class:`LLMProviderError`
-    by the ``APIStatusError`` wrap; an override that accepts it without
-    skipping thinking would share ``max_tokens`` with the tool-call JSON --
-    lode-3dlt tracked this as a real but then-unreachable risk rather than
-    fixing it. **lode-jgus closes it:** :data:`lode.enrich.MAX_TOKENS` was
+    ``enrichment_llm`` default) thinks adaptively by default, but on that
+    model a forced ``tool_choice`` skips thinking, so the default tier spends
+    its whole budget on the tool-call JSON. That is a property of Haiku 5.5,
+    not of forced tool use: a ``Kind.RUNTIME`` override to another
+    thinking-capable model that accepts a forced ``tool_choice`` (Opus 5,
+    Sonnet 5) may still think, sharing ``max_tokens`` with the tool-call JSON
+    -- lode-3dlt tracked this as a real but then-unreachable risk rather than
+    fixing it -- while an override to a model that rejects it (Sonnet 5.5,
+    Opus 5.5) 400s here, surfaced as :class:`LLMProviderError` by the
+    ``APIStatusError`` wrap. **lode-jgus closes it:** :data:`lode.enrich.MAX_TOKENS` was
     raised (1024 -> 2048) for the same headroom reason
     :data:`lode.qa.MAX_TOKENS` was, and the branch below now guards the
     symptom of running out of that budget -- a response whose whole
@@ -752,13 +753,8 @@ class AnthropicProvider:
         max_tokens: int,
         timeout: float,
         effort_kwargs: Mapping[str, Any],
-        where: str = "",
-    ) -> tuple[BaseModelT, int]:
+    ) -> BaseModelT:
         """One forced-tool-use ``messages.create`` decoded into ``output_schema``.
-
-        Returns the decoded model and this turn's ``usage.output_tokens``
-        (lode-9594); :meth:`structured_call`, its only caller, discards the
-        second element.
 
         Anthropic's forced-schema wire shape, used for the enrichment tier
         (Haiku 5.5 accepts a forced ``tool_choice``; Sonnet 5.5 and Opus 5.5
@@ -792,7 +788,7 @@ class AnthropicProvider:
             # lode-90o7 -- see `_anthropic_error_from_exception` and the class
             # docstring.
             raise _anthropic_error_from_exception(
-                exc, context=f"model={model}{where}"
+                exc, context=f"model={model}"
             ) from exc
         tool_block = next((b for b in response.content if b.type == "tool_use"), None)
         if tool_block is None:
@@ -804,13 +800,13 @@ class AnthropicProvider:
             stop_reason = getattr(response, "stop_reason", None)
             raise LLMProviderError(
                 f"Anthropic response contained no tool_use block to decode "
-                f"into {output_schema.__name__}{where} (model={model}, "
+                f"into {output_schema.__name__} (model={model}, "
                 f"max_tokens={max_tokens}, "
                 f"stop_reason={stop_reason!r}) "
                 f"{_budget_hint(stop_reason)}",
                 provider="anthropic",
             )
-        return output_schema.model_validate(tool_block.input), _output_tokens(response)
+        return output_schema.model_validate(tool_block.input)
 
     def _parsed_turn(
         self,
@@ -846,7 +842,7 @@ class AnthropicProvider:
         import anthropic  # deferred -- lode-4q97; needed by the `except` below
 
         tool_kwargs: dict[str, Any] = (
-            {"tools": list(tools), "tool_choice": {"type": "none"}} if tools else {}
+            {"tools": tools, "tool_choice": {"type": "none"}} if tools else {}
         )
         try:
             # `.parse()` merges an `output_config` we pass with the
@@ -922,7 +918,7 @@ class AnthropicProvider:
         # rather than `None`. See `_anthropic_effort_kwargs`.
         effort_kwargs = _anthropic_effort_kwargs(reasoning_effort, model=model)
         if tool_name is not None:
-            parsed, _output_tokens_spent = self._forced_schema_turn(
+            return self._forced_schema_turn(
                 model=model,
                 system=system,
                 messages=[{"role": "user", "content": user_prompt}],
@@ -933,10 +929,9 @@ class AnthropicProvider:
                 timeout=timeout_s,
                 effort_kwargs=effort_kwargs,
             )
-            # Single-call path: no multi-turn bound to compare a spend
-            # total against, so the count is discarded here (lode-9594).
-            return parsed
 
+        # Single-call path: no multi-turn bound to compare a spend total
+        # against, so the token count is discarded here (lode-9594).
         parsed, _output_tokens_spent = self._parsed_turn(
             model=model,
             system=system,

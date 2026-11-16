@@ -1530,11 +1530,6 @@ def fake_tool_turn_client(
     second_free_turn_response.content = [_text_block()]
     second_free_turn_response.stop_reason = "end_turn"
 
-    _responses = [free_turn_response, second_free_turn_response]
-
-    def _create_side_effect(**_kwargs):
-        return _responses.pop(0)
-
     def _parse_side_effect(**_kwargs):
         # The final structured-output turn (lode-ugj5). Check the fetch
         # tool_result the first free turn produced BEFORE trusting a snapshot
@@ -1582,7 +1577,7 @@ def fake_tool_turn_client(
         return response
 
     client = mock.MagicMock()
-    client.messages.create.side_effect = _create_side_effect
+    client.messages.create.side_effect = [free_turn_response, second_free_turn_response]
     client.messages.parse.side_effect = _parse_side_effect
 
     return client, web_fetcher

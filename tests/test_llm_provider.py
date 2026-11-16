@@ -201,6 +201,10 @@ def test_structured_call_uses_messages_parse_when_no_tool_name() -> None:
     # `disabled` (lode-d1sr) 400s on Fable-class models at any effort and on
     # Opus 5 at effort xhigh/max. See the AnthropicProvider docstring.
     assert "thinking" not in kwargs
+    # Tool definitions belong only to run_tool_turns' final turn; the
+    # single-shot wire shape carries none.
+    assert "tools" not in kwargs
+    assert "tool_choice" not in kwargs
     client.messages.create.assert_not_called()
 
 
@@ -295,7 +299,7 @@ def test_structured_call_wraps_a_schema_validation_failure() -> None:
 def test_structured_call_wraps_a_bad_request_from_the_forced_tool_use_branch() -> None:
     # lode-90o7: the reachable gap lode-wnz1 left open -- reasoning_effort set
     # to a legal *value* on a tier whose *model* doesn't support it (e.g. any
-    # effort on the Haiku 4.5 enrichment default) reaches the API and comes
+    # effort on Haiku 4.5, once the enrichment default) reaches the API and comes
     # back as anthropic.BadRequestError. Must not escape raw -- callers of
     # this seam only expect LLMProviderError.
     client = mock.MagicMock()
@@ -476,8 +480,8 @@ def test_structured_call_omits_output_config_when_reasoning_effort_is_none() -> 
 
 
 def test_structured_call_sends_effort_on_the_forced_tool_use_branch() -> None:
-    # NOT the enrichment default (claude-haiku-4-5): effort errors outright on
-    # Haiku 4.5, and xhigh does not exist below Opus 4.7. lode validates the
+    # NOT claude-haiku-4-5 (once the enrichment default): effort errors outright
+    # on Haiku 4.5, and xhigh does not exist below Opus 4.7. lode validates the
     # value, not the value/model pairing (lode-90o7), so a mock would happily
     # accept that combination -- don't enshrine an illegal one as the example.
     client = _fake_tool_use_client({"name": "widget", "count": 3})
@@ -586,11 +590,13 @@ def _tool_use_response(
     return response
 
 
-def _parsed_response(parsed: object, *, output_tokens: int = 0) -> SimpleNamespace:
+def _parsed_response(
+    parsed: object, *, output_tokens: int = 0, stop_reason: str = "end_turn"
+) -> SimpleNamespace:
     """A ``messages.parse`` response: what the final structured-output turn gets."""
     return SimpleNamespace(
         parsed_output=parsed,
-        stop_reason="end_turn",
+        stop_reason=stop_reason,
         usage=SimpleNamespace(output_tokens=output_tokens),
     )
 
@@ -654,12 +660,10 @@ def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> 
         output_schema=_Widget,
         max_tokens=100,
         timeout_s=30.0,
-        tool_name="extract_widget",
-        tool_description="Extract a widget.",
         # One free turn only -- the loop otherwise asks again after a tool
         # result to see whether the model wants another tool, which needs a
         # third mock response; max_tool_turns=1 isolates exactly the shape
-        # this test asserts (one tool call, then the forced final turn).
+        # this test asserts (one tool call, then the final turn).
         max_tool_turns=1,
     )
 
@@ -747,7 +751,7 @@ def test_run_tool_turns_forces_the_final_turn_when_the_model_never_calls_a_tool(
     None
 ):
     # The model may decline to call any tool on the first free turn -- the run
-    # still proceeds straight to the forced final turn.
+    # still proceeds straight to the final turn.
     tool = ToolSpec(
         name="lookup_widget", description="Look up a widget.", input_schema={}
     )
@@ -875,13 +879,16 @@ def test_run_tool_turns_wraps_a_bad_request_from_the_final_structured_turn() -> 
         )
     assert excinfo.value.provider == "anthropic"
     assert excinfo.value.status_code == 400
+    # Distinguishes this from the free-turn wrap above, which reports the
+    # same provider and status.
+    assert "final structured-output turn" in str(excinfo.value)
 
 
 def test_run_tool_turns_raises_when_the_final_turn_has_no_text_block() -> None:
     tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
     free_turn = _tool_use_response("lookup_widget", {"id": "w"})
     # Budget spent on thinking: the SDK's parsed_output is None.
-    no_text = SimpleNamespace(parsed_output=None, stop_reason="max_tokens")
+    no_text = _parsed_response(None, stop_reason="max_tokens")
     client = mock.MagicMock()
     client.messages.create.side_effect = [free_turn]
     client.messages.parse.return_value = no_text
@@ -898,7 +905,7 @@ def test_run_tool_turns_raises_when_the_final_turn_has_no_text_block() -> None:
             output_schema=_Widget,
             max_tokens=2048,
             timeout_s=30.0,
-            max_tool_turns=1,  # isolate the one free turn + forced final turn
+            max_tool_turns=1,  # isolate the one free turn + final turn
         )
 
 
@@ -1067,8 +1074,8 @@ def test_submit_batch_sends_effort_when_reasoning_effort_is_set() -> None:
     client.beta.messages.batches.create.return_value = SimpleNamespace(id="batch-3")
     provider = AnthropicProvider(client)
 
-    # Override the Haiku 4.5 default model too -- effort errors on Haiku 4.5;
-    # see the forced-tool-use test above and lode-90o7.
+    # Override `_batch_request`'s Haiku 4.5 model too -- effort errors on
+    # Haiku 4.5; see the forced-tool-use test above and lode-90o7.
     provider.submit_batch(
         [_batch_request(model="claude-opus-5", reasoning_effort="medium")],
         timeout_s=30.0,

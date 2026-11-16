@@ -864,7 +864,7 @@ was added — these are the same two knobs `structured_call` already took, and a
 [configuration.md](configuration.md#models)) carry over unchanged.
 
 - **`timeout_s` — per-RUN, implemented literally.** `AnthropicProvider` sets one deadline at the top
-  of the run and sends each `messages.create` the *remaining* wall clock (`timeout_s` minus elapsed),
+  of the run and sends each SDK call the *remaining* wall clock (`timeout_s` minus elapsed),
   raising `LLMProviderError` rather than starting a further call once it is exhausted, instead of
   resetting the clock every turn. A run therefore cannot outlive `timeout_s` however many turns it
   takes.
