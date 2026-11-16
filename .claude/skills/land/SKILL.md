@@ -34,8 +34,8 @@ the `land-review` agent I dispatch pins Opus itself.)
 
 My **first task per branch is a semantic review I do not perform myself** — I dispatch the
 [`land-review`](../../agents/land-review.md) agent (the build-side twin of `challenge`). The independence is
-the point: the producer already ran the *technical* review (its own reasoned correctness pass —
-`/code-review` is available but deliberately unused pending lode-1fyb — plus the tool-backed `/simplify` =
+the point: the producer already ran the *technical* review (`/code-review` medium plus its own
+reasoned correctness pass (lode-1fyb), plus the tool-backed `/simplify` =
 bugs & cleanup) on its own branch with gates green; I add the *semantic* gate — *should this land?* — from
 the outside. I do **not** re-run the technical review and I assume the branch is green until my
 re-gate says otherwise.

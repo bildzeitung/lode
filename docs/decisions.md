@@ -5926,3 +5926,27 @@ entries below from being rewritten to chase the current tree.)
     compatibility wrappers.**
   - **`lode-sys4`'s derive-the-target-interpreter-from-`.python-version` machinery is superseded:** uv
     reads `.python-version` natively, so nothing needs to pass `--python-version` by hand.
+
+- **Code-reviewer runs `/code-review` medium as well as its hand pass (`lode-1fyb`, decided
+  2026-11-16, maintainer decision; implemented by `lode-bldq`).** Resolves the open decision carried by
+  the `lode-1fyb` update in the `/code-review` thread above: option (b), run the skill AND keep the
+  hand-reasoned correctness pass. The maintainer values correctness over speed in code review.
+  - **Order and flags:** `/code-review` FIRST, at effort `medium`, against `trunk...HEAD`, before the
+    reviewer forms its own view of the diff; never `--fix`, never `--comment`. Always run, with no
+    diff-size threshold.
+  - **The hand pass is not replaced** and verifies each `/code-review` finding against the code before
+    acting on it: the skill's recipe is dedup only, no verify, and it fixes nothing, so its findings
+    are unverified candidates.
+  - **Failure fallback:** skill missing from the listing, or invocation fails: retry once, never
+    hand-roll a substitute, record what happened in the hand-off, carry on with the hand pass.
+  - **Unchanged:** no correctness-review Workflow (`lode-rlyx`), and the standing rejection of a
+    hand-rolled project-scope copy of the skill.
+  - **Trial 1 (`lode-ck0l`, on `lode-s09w.1`):** invoked fine, saw the real diff, added one wording
+    fix; 154 s.
+  - **Trial 2 (`lode-v5jc`, on `lode-ugj5`, separate reviewers):** `/code-review` reproduced the hand
+    pass's five shared findings and found one real issue it missed (`lode-eidi`); the hand pass found
+    two real issues `/code-review` missed (`lode-9ytb`, `lode-fc39`); 83 s. Full figures on
+    `lode-1fyb`.
+  - **Open unknown 1:** whether the skill's internal agent inherits the invoking reviewer's
+    conversation. The two trials disagree.
+  - **Open unknown 2:** which recipe `medium` selects; the observed prompt was headed "high effort".

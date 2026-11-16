@@ -12,9 +12,9 @@ description: Build one or more lode tasks as PRODUCERS in two phases — dispatc
    The builder does **not** review its own work.
 2. **Technical review — `code-reviewer` subagent (Fable):** fetches the pushed `land/<id>` branch and
    checks it out into its own launch worktree (never `EnterWorktree`, never the builder's worktree),
-   runs its own reasoned **correctness pass** against the diff — that pass *is* the correctness review,
-   with no `correctness-review` Workflow behind it (lode-rlyx reversed lode-905v on measured cost;
-   `/code-review` is invocable again but deliberately unused pending lode-1fyb) — plus the
+   runs `/code-review` at medium first, then its own reasoned **correctness pass** against the diff,
+   verifying that skill's findings (lode-1fyb) — with no `correctness-review` Workflow behind either
+   (lode-rlyx reversed lode-905v on measured cost) — plus the
    genuinely tool-backed **`/simplify`**, re-gates, re-pushes `land/<id>`, and swaps the ticket to
    **`ready-for-land`** (or escalates).
 
@@ -535,10 +535,11 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > fetch origin land/lode-ai1 trunk`, then `TOP=$(git rev-parse --show-toplevel)` and `git checkout
    > -B "land/lode-ai1--${TOP##*/}" FETCH_HEAD` (a local name suffixed with your own launch
    > worktree's directory — unique by construction, so no `--detach` fallback is ever needed) into your
-   > own launch worktree. Your own reasoned correctness pass against `trunk...HEAD` **is** the
-   > correctness review — there are no pre-computed findings, by design, not by failure (lode-rlyx;
-   > `/code-review` is invocable again but deliberately unused pending lode-1fyb — see code-reviewer.md
-   > step 4). Then `/simplify`, re-gate, commit, `git push origin HEAD:land/lode-ai1`, and swap the
+   > own launch worktree. Run `/code-review` at effort medium first (always; never `--fix`/`--comment`),
+   > then your own reasoned correctness pass against `trunk...HEAD`, verifying each of its findings
+   > against the code before acting on it; if the skill is missing or fails, retry once, carry on with
+   > the hand pass, and record it in your hand-off (lode-1fyb; see code-reviewer.md step 4). There is
+   > no `correctness-review` Workflow and no pre-computed findings (lode-rlyx). Then `/simplify`, re-gate, commit, `git push origin HEAD:land/lode-ai1`, and swap the
    > ticket to `ready-for-land`. Do **not** merge, close, or push trunk. Escalate (revert to green, swap
    > to `land-escalated`, don't mark ready) only on a clarifying decision or "making it worse."
 
