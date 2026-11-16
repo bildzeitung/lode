@@ -499,18 +499,27 @@ _CONTEXT_WINDOW_EXCEEDED_HINT = (
 )
 
 
-def _budget_hint(stop_reason: str | None) -> str:
+def _budget_hint(stop_reason: str | None, stop_details: Any = None) -> str:
     """Pick the right "why is the block missing" hint for ``stop_reason``.
 
     ``model_context_window_exceeded`` gets its own diagnostic --
     :data:`_CONTEXT_WINDOW_EXCEEDED_HINT` -- because its remedy (shrink the
     input) is the opposite of the ``max_tokens`` remedy (this function's
     default, :data:`_BUDGET_EXHAUSTED_HINT`, which is about the *output*
-    budget). Anything else falls back to the ``max_tokens`` hint, unchanged
-    from before this branch existed.
+    budget). ``refusal`` is a safety-classifier decline (HTTP 200, no usable
+    content): no budget change helps, so the hint says so and carries
+    ``stop_details.category`` when the API supplied one (lode-fc39).
+    Anything else falls back to the ``max_tokens`` hint.
     """
     if stop_reason == "model_context_window_exceeded":
         return _CONTEXT_WINDOW_EXCEEDED_HINT
+    if stop_reason == "refusal":
+        category = getattr(stop_details, "category", None)
+        suffix = f" (category={category!r})" if category else ""
+        return (
+            f"-- the model declined the request as a policy refusal{suffix}; "
+            "raising max_tokens will not help"
+        )
     return _BUDGET_EXHAUSTED_HINT
 
 
@@ -803,7 +812,7 @@ class AnthropicProvider:
                 f"into {output_schema.__name__} (model={model}, "
                 f"max_tokens={max_tokens}, "
                 f"stop_reason={stop_reason!r}) "
-                f"{_budget_hint(stop_reason)}",
+                f"{_budget_hint(stop_reason, getattr(response, 'stop_details', None))}",
                 provider="anthropic",
             )
         return output_schema.model_validate(tool_block.input)
@@ -895,7 +904,7 @@ class AnthropicProvider:
                 f"{output_schema.__name__}{where} (model={model}, "
                 f"max_tokens={max_tokens}, "
                 f"stop_reason={stop_reason!r}) "
-                f"{_budget_hint(stop_reason)}",
+                f"{_budget_hint(stop_reason, getattr(response, 'stop_details', None))}",
                 provider="anthropic",
             )
         return parsed, _output_tokens(response)
@@ -1252,7 +1261,7 @@ class AnthropicProvider:
                                 f"no tool_use block in batch result "
                                 f"(model={getattr(message, 'model', None)!r}, "
                                 f"stop_reason={batch_stop_reason!r}) "
-                                f"{_budget_hint(batch_stop_reason)}",
+                                f"{_budget_hint(batch_stop_reason, getattr(message, 'stop_details', None))}",
                                 provider="anthropic",
                             ),
                         )

@@ -1608,6 +1608,122 @@ def test_collect_batch_handles_a_succeeded_result_missing_a_tool_use_block() -> 
     assert "stop_reason='max_tokens'" in message
 
 
+def _assert_refusal_hint(message: str) -> None:
+    assert "stop_reason='refusal'" in message
+    assert "policy refusal" in message
+    assert "category='cyber'" in message
+    assert "raising max_tokens will not help" in message
+    assert "consumed by thinking" not in message
+
+
+def test_refusal_hint_omits_category_when_absent() -> None:
+    from lode.llm_provider import _budget_hint
+
+    hint = _budget_hint("refusal", None)
+    assert "policy refusal" in hint
+    assert "category" not in hint
+
+
+def test_structured_call_names_a_refusal_on_the_tool_use_branch() -> None:
+    # lode-fc39: a safety decline is HTTP 200 with no content; the remedy is
+    # not "raise max_tokens".
+    response = mock.MagicMock()
+    response.content = []
+    response.stop_reason = "refusal"
+    response.stop_details = SimpleNamespace(category="cyber")
+    client = mock.MagicMock()
+    client.messages.create.return_value = response
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).structured_call(
+            model="claude-opus-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=2048,
+            timeout_s=1.0,
+            tool_name="extract_widget",
+            tool_description="Extract a widget.",
+        )
+
+    assert "no tool_use block" in str(excinfo.value)
+    _assert_refusal_hint(str(excinfo.value))
+
+
+def test_structured_call_names_a_refusal_on_the_parse_branch() -> None:
+    client = mock.MagicMock()
+    client.messages.parse.return_value = SimpleNamespace(
+        parsed_output=None,
+        stop_reason="refusal",
+        stop_details=SimpleNamespace(category="cyber"),
+    )
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).structured_call(
+            model="claude-opus-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=8192,
+            timeout_s=1.0,
+        )
+
+    assert "no text block" in str(excinfo.value)
+    _assert_refusal_hint(str(excinfo.value))
+
+
+def test_run_tool_turns_final_turn_names_a_refusal() -> None:
+    tool = ToolSpec(
+        name="lookup_widget", description="Look up a widget.", input_schema={}
+    )
+    final_turn = _parsed_response(None, stop_reason="refusal")
+    final_turn.stop_details = SimpleNamespace(category="cyber")
+    client = mock.MagicMock()
+    client.messages.create.side_effect = [_tool_use_response("lookup_widget", {})]
+    client.messages.parse.return_value = final_turn
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).run_tool_turns(
+            model="claude-sonnet-4-6",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: "r",
+            output_schema=_Widget,
+            max_tokens=100,
+            timeout_s=30.0,
+            max_tool_turns=1,
+        )
+
+    assert "no text block" in str(excinfo.value)
+    _assert_refusal_hint(str(excinfo.value))
+
+
+def test_collect_batch_names_a_refusal_on_a_succeeded_result() -> None:
+    client = mock.MagicMock()
+    client.beta.messages.batches.retrieve.return_value = SimpleNamespace(
+        processing_status="ended"
+    )
+    bad = mock.MagicMock()
+    bad.custom_id = "ver-3"
+    bad.result.type = "succeeded"
+    bad.result.message.content = []
+    bad.result.message.model = "claude-haiku-5-5"
+    bad.result.message.stop_reason = "refusal"
+    bad.result.message.stop_details = SimpleNamespace(category="cyber")
+    client.beta.messages.batches.results.return_value = iter([bad])
+
+    _, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    (result,) = results
+    assert result.outcome == "errored"
+    assert "no tool_use block" in str(result.error)
+    _assert_refusal_hint(str(result.error))
+
+
 # ---------------------------------------------------------------------------
 # OpenAIProvider.structured_call (lode-568v.3)
 # ---------------------------------------------------------------------------
