@@ -109,7 +109,9 @@ _TOOL_NAME = "extract_enrichment"
 #: Output cap for the forced tool-use extraction call -- shared by both routes
 #: (:func:`_call_haiku` and :func:`_build_batch_request`, which must send the
 #: byte-for-byte identical value, ``lode-568v.2``'s wire-equivalence bar).
-#: Raised 1024 -> 2048 (lode-jgus) for the same reason
+#: Raised 2048 -> 3072 (lode-ugj5) for the ~30% more tokens Haiku 5.5's
+#: tokenizer produces for the same text as Haiku 4.5. Previously raised
+#: 1024 -> 2048 (lode-jgus) for the same reason
 #: :data:`lode.qa.MAX_TOKENS` was raised 4096 -> 8192 (lode-3dlt): the forced
 #: tool-use branch of :meth:`~lode.llm_provider.AnthropicProvider.structured_call`
 #: never sends ``thinking`` at all -- a property it already had before
@@ -151,7 +153,7 @@ _TOOL_NAME = "extract_enrichment"
 #: :meth:`~lode.llm_provider.ModelTier.resolve_max_tokens`, so the
 #: byte-for-byte equivalence above survives the override. See
 #: ``docs/configuration.md`` "Models" for the decision.
-MAX_TOKENS = 2048
+MAX_TOKENS = 3072
 
 _SYSTEM = (
     "You are a knowledge-extraction assistant. Extract structured information from "

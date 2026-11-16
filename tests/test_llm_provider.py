@@ -586,6 +586,15 @@ def _tool_use_response(
     return response
 
 
+def _parsed_response(parsed: object, *, output_tokens: int = 0) -> SimpleNamespace:
+    """A ``messages.parse`` response: what the final structured-output turn gets."""
+    return SimpleNamespace(
+        parsed_output=parsed,
+        stop_reason="end_turn",
+        usage=SimpleNamespace(output_tokens=output_tokens),
+    )
+
+
 def test_run_tool_turns_with_empty_tools_delegates_to_structured_call() -> None:
     # lode-35nu.11.6 acceptance bar: the degenerate case is byte-for-byte
     # identical to calling structured_call directly -- no messages.create loop
@@ -617,15 +626,16 @@ def test_run_tool_turns_with_empty_tools_delegates_to_structured_call() -> None:
 
 def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> None:
     # The full run this ticket's acceptance criteria names: free tool turn ->
-    # tool result returned -> final forced-schema turn producing a validated
+    # tool result returned -> final structured-output turn producing a validated
     # output_schema instance.
     tool = ToolSpec(
         name="lookup_widget", description="Look up a widget.", input_schema={}
     )
     free_turn = _tool_use_response("lookup_widget", {"id": "w-1"})
-    final_turn = _tool_use_response("_Widget", {"name": "widget", "count": 3})
+    final_turn = _parsed_response(_Widget(name="widget", count=3))
     client = mock.MagicMock()
-    client.messages.create.side_effect = [free_turn, final_turn]
+    client.messages.create.side_effect = [free_turn]
+    client.messages.parse.return_value = final_turn
     provider = AnthropicProvider(client)
 
     calls: list[tuple[str, dict]] = []
@@ -655,7 +665,8 @@ def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> 
 
     assert result == _Widget(name="widget", count=3)
     assert calls == [("lookup_widget", {"id": "w-1"})]
-    assert client.messages.create.call_count == 2
+    assert client.messages.create.call_count == 1
+    client.messages.parse.assert_called_once()
 
     free_kwargs = client.messages.create.call_args_list[0].kwargs
     assert free_kwargs["tool_choice"] == {"type": "auto"}
@@ -672,15 +683,14 @@ def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> 
     # asserted via `final_kwargs["messages"]` below instead.
     assert free_kwargs["messages"][0] == {"role": "user", "content": "find widget w-1"}
 
-    final_kwargs = client.messages.create.call_args_list[1].kwargs
-    assert final_kwargs["tool_choice"] == {"type": "tool", "name": "extract_widget"}
-    assert final_kwargs["tools"] == [
-        {
-            "name": "extract_widget",
-            "description": "Extract a widget.",
-            "input_schema": _Widget.model_json_schema(),
-        }
-    ]
+    # lode-ugj5: the final turn is structured output (`output_format` ->
+    # `output_config.format`), never a forced tool_choice (400s on Sonnet 5.5 /
+    # Opus 5.5). The tool definitions stay because the history carries
+    # tool_use blocks; `none` makes a further call impossible.
+    final_kwargs = client.messages.parse.call_args.kwargs
+    assert final_kwargs["output_format"] is _Widget
+    assert final_kwargs["tool_choice"] == {"type": "none"}
+    assert final_kwargs["tools"] == free_kwargs["tools"]
     final_messages = final_kwargs["messages"]
     assert final_messages[0] == {"role": "user", "content": "find widget w-1"}
     assert final_messages[1] == {"role": "assistant", "content": free_turn.content}
@@ -701,15 +711,14 @@ def test_run_tool_turns_logs_total_output_tokens_against_the_worst_case_bound(
 ) -> None:
     # lode-9594 -- the measurement lode-csl2's deferral trigger waits on: a
     # completed run logs its total output-token spend (free turn +
-    # unconditional final forced-schema turn) next to the
+    # unconditional final structured-output turn) next to the
     # (max_tool_turns + 1) x max_tokens worst-case bound.
     tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
     free_turn = _tool_use_response("lookup_widget", {"id": "w"}, output_tokens=40)
-    final_turn = _tool_use_response(
-        "_Widget", {"name": "w", "count": 1}, output_tokens=25
-    )
+    final_turn = _parsed_response(_Widget(name="w", count=1), output_tokens=25)
     client = mock.MagicMock()
-    client.messages.create.side_effect = [free_turn, final_turn]
+    client.messages.create.side_effect = [free_turn]
+    client.messages.parse.return_value = final_turn
     provider = AnthropicProvider(client)
 
     with caplog.at_level(logging.INFO, logger="lode.llm_provider"):
@@ -744,9 +753,10 @@ def test_run_tool_turns_forces_the_final_turn_when_the_model_never_calls_a_tool(
     )
     text_only = mock.MagicMock()
     text_only.content = [_text_block()]
-    final_turn = _tool_use_response("_Widget", {"name": "w", "count": 0})
+    final_turn = _parsed_response(_Widget(name="w", count=0))
     client = mock.MagicMock()
-    client.messages.create.side_effect = [text_only, final_turn]
+    client.messages.create.side_effect = [text_only]
+    client.messages.parse.return_value = final_turn
     provider = AnthropicProvider(client)
 
     result = provider.run_tool_turns(
@@ -762,10 +772,9 @@ def test_run_tool_turns_forces_the_final_turn_when_the_model_never_calls_a_tool(
     )
 
     assert result == _Widget(name="w", count=0)
-    assert client.messages.create.call_count == 2
-    # No tool_name given -- forced tool name falls back to the schema name.
-    final_kwargs = client.messages.create.call_args_list[1].kwargs
-    assert final_kwargs["tool_choice"] == {"type": "tool", "name": "_Widget"}
+    assert client.messages.create.call_count == 1
+    final_kwargs = client.messages.parse.call_args.kwargs
+    assert final_kwargs["tool_choice"] == {"type": "none"}
 
 
 def test_run_tool_turns_stops_after_max_tool_turns_and_still_forces_the_final_turn() -> (
@@ -773,15 +782,12 @@ def test_run_tool_turns_stops_after_max_tool_turns_and_still_forces_the_final_tu
 ):
     tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
     always_calls_tool = _tool_use_response("lookup_widget", {"id": "w"})
-    final_turn = _tool_use_response("_Widget", {"name": "w", "count": 9})
+    final_turn = _parsed_response(_Widget(name="w", count=9))
     client = mock.MagicMock()
-    # 2 free turns (max_tool_turns=2) always calling the tool, then the forced
-    # final turn -- 3 calls total.
-    client.messages.create.side_effect = [
-        always_calls_tool,
-        always_calls_tool,
-        final_turn,
-    ]
+    # 2 free turns (max_tool_turns=2) always calling the tool, then the
+    # structured-output final turn.
+    client.messages.create.side_effect = [always_calls_tool, always_calls_tool]
+    client.messages.parse.return_value = final_turn
     provider = AnthropicProvider(client)
 
     result = provider.run_tool_turns(
@@ -798,7 +804,8 @@ def test_run_tool_turns_stops_after_max_tool_turns_and_still_forces_the_final_tu
     )
 
     assert result == _Widget(name="w", count=9)
-    assert client.messages.create.call_count == 3
+    assert client.messages.create.call_count == 2
+    client.messages.parse.assert_called_once()
 
 
 def test_run_tool_turns_raises_when_the_run_timeout_is_exhausted() -> None:
@@ -844,17 +851,18 @@ def test_run_tool_turns_wraps_a_bad_request_from_the_free_turn() -> None:
     assert excinfo.value.status_code == 400
 
 
-def test_run_tool_turns_wraps_a_bad_request_from_the_final_forced_turn() -> None:
+def test_run_tool_turns_wraps_a_bad_request_from_the_final_structured_turn() -> None:
     tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
     free_turn = _tool_use_response("lookup_widget", {"id": "w"})
     bad_request = _anthropic_bad_request()
     client = mock.MagicMock()
-    client.messages.create.side_effect = [free_turn, bad_request]
+    client.messages.create.side_effect = [free_turn]
+    client.messages.parse.side_effect = bad_request
     provider = AnthropicProvider(client)
 
     with pytest.raises(LLMProviderError) as excinfo:
         provider.run_tool_turns(
-            model="claude-haiku-4-5",
+            model="claude-sonnet-5-5",
             reasoning_effort=None,
             system="sys",
             user_prompt="p",
@@ -863,26 +871,25 @@ def test_run_tool_turns_wraps_a_bad_request_from_the_final_forced_turn() -> None
             output_schema=_Widget,
             max_tokens=10,
             timeout_s=30.0,
+            max_tool_turns=1,
         )
     assert excinfo.value.provider == "anthropic"
     assert excinfo.value.status_code == 400
 
 
-def test_run_tool_turns_raises_when_the_final_turn_has_no_tool_use_block() -> None:
+def test_run_tool_turns_raises_when_the_final_turn_has_no_text_block() -> None:
     tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
     free_turn = _tool_use_response("lookup_widget", {"id": "w"})
-    thinking_block = mock.MagicMock()
-    thinking_block.type = "thinking"
-    no_tool_use = mock.MagicMock()
-    no_tool_use.content = [thinking_block]
-    no_tool_use.stop_reason = "max_tokens"
+    # Budget spent on thinking: the SDK's parsed_output is None.
+    no_text = SimpleNamespace(parsed_output=None, stop_reason="max_tokens")
     client = mock.MagicMock()
-    client.messages.create.side_effect = [free_turn, no_tool_use]
+    client.messages.create.side_effect = [free_turn]
+    client.messages.parse.return_value = no_text
     provider = AnthropicProvider(client)
 
-    with pytest.raises(LLMProviderError, match="no tool_use block"):
+    with pytest.raises(LLMProviderError, match="no text block"):
         provider.run_tool_turns(
-            model="claude-opus-5",
+            model="claude-opus-5-5",
             reasoning_effort=None,
             system="sys",
             user_prompt="p",

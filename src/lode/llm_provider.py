@@ -114,9 +114,10 @@ against exactly; read that first for the *why*. This module owns the *what*:
 - :class:`ToolSpec` + :meth:`LLMProvider.run_tool_turns` -- the seam's second
   call surface, alongside :meth:`structured_call`: N free tool turns (the
   model may call any of ``tools``, resolved via a caller-supplied
-  ``tool_result`` callback) followed by exactly one final FORCED-schema turn,
-  since free tool choice and a forced ``output_schema`` are mutually
-  exclusive within one call. This ticket adds the mechanism only -- it
+  ``tool_result`` callback) followed by exactly one final schema-constrained
+  turn (``output_config.format``, tool calls disabled), since free tool
+  choice and a constrained ``output_schema`` are mutually exclusive within
+  one call. This ticket adds the mechanism only -- it
   defines no tool schemas (lode-35nu.11.2's job) and :mod:`lode.qa` calls it
   with ``tools=()`` for now, so every provider's empty-``tools`` case MUST
   delegate straight to :meth:`structured_call` -- the acceptance bar is
@@ -124,7 +125,9 @@ against exactly; read that first for the *why*. This module owns the *what*:
 - **Provider parity, settled here: Anthropic-only.**
   :class:`AnthropicProvider.run_tool_turns` implements the real loop
   (``messages.create`` with ``tool_choice={"type": "auto"}``, tool results fed
-  back as ``tool_result`` content blocks, then a forced final turn).
+  back as ``tool_result`` content blocks, then a ``messages.parse`` final
+  turn -- not a forced ``tool_choice``, which Sonnet 5.5/Opus 5.5 reject,
+  lode-ugj5).
   :class:`OpenAIProvider.run_tool_turns` implements only the degenerate
   empty-``tools`` delegation; a non-empty ``tools`` raises
   :class:`LLMProviderError` rather than silently ignoring the tools and
@@ -146,7 +149,7 @@ against exactly; read that first for the *why*. This module owns the *what*:
   (maintainer, lode-3dh1), not a gap left over from lode-35nu.11.6's
   acceptance wording: decrementing ``max_tokens`` against each turn's
   ``usage.output_tokens`` was considered and rejected, because it silently
-  shrinks the budget left for the final forced-schema turn and can truncate
+  shrinks the budget left for the final structured-output turn and can truncate
   the answer. Total output spend for a run is instead bounded by the turn
   count (``_DEFAULT_MAX_TOOL_TURNS``) -- see ``docs/stack.md`` "LLM provider
   seam" / lode-3dh1 for the full write-up, and ``docs/decisions.md``
@@ -379,24 +382,24 @@ class LLMProvider(Protocol):
         tool_description: str | None = None,
         max_tool_turns: int = _DEFAULT_MAX_TOOL_TURNS,
     ) -> BaseModelT:
-        """N free tool turns, then one final FORCED-schema turn (lode-35nu.11.6).
+        """N free tool turns, then one final schema-constrained turn (lode-35nu.11.6).
 
-        Free tool choice and a forced structured-output schema are mutually
+        Free tool choice and a constrained structured-output schema are mutually
         exclusive within a single call, so a run is: up to ``max_tool_turns``
         turns where the model may freely call a tool from ``tools`` (each
         ``tool_result(name, input)`` call resolves one, its return value fed
         back as the tool result, until the model stops calling tools or the
-        turn budget is exhausted), followed by exactly one final call with
-        tool choice forced to ``output_schema`` -- identical in spirit to
-        :meth:`structured_call`'s forced-tool-use branch, but continuing the
-        accumulated conversation instead of a single user turn.
+        turn budget is exhausted), followed by exactly one final call whose
+        response is constrained to ``output_schema`` and may not call tools --
+        identical in spirit to :meth:`structured_call`'s no-tool branch, but
+        continuing the accumulated conversation instead of a single user turn.
 
         ``timeout_s`` is a budget for the **whole run**, not one call each
         (``docs/configuration.md``): the deadline is set once and each turn is
         sent only the remaining wall clock. ``max_tokens`` is **not** spread
         across turns -- it stays a per-response output cap, applied to each
         turn, so a run may emit up to ``(max_tool_turns + 1) x max_tokens``
-        output tokens -- the ``+ 1`` being the final forced-schema turn, which
+        output tokens -- the ``+ 1`` being the final structured-output turn, which
         is spent after the free-turn loop and is not covered by
         ``max_tool_turns``. That asymmetry is a DECIDED design choice
         (maintainer, lode-3dh1), not an open gap: total output spend for a run
@@ -658,10 +661,9 @@ class AnthropicProvider:
     no tools, and the schema-constrained ``output_format`` contains leakage).
     :data:`lode.qa.MAX_TOKENS` was raised accordingly to give the now-possible
     adaptive thinking headroom to share with the claims response. Net effect:
-    Sonnet 4.6 (``qa_llm`` default) is unaffected -- it does not think when
-    ``thinking`` is omitted, matching pre-lode-d1sr behavior. Opus 5
-    (``qa_think_harder_llm`` default) now runs adaptive thinking instead of
-    disabled, a deliberate change. Fable-class overrides now work.
+    Sonnet 5.5 (``qa_llm`` default) and Opus 5.5 (``qa_think_harder_llm``
+    default) both run adaptive thinking -- ``disabled`` is a 400 on both, so
+    it could not be sent anyway -- and Fable-class overrides work.
 
     The raised cap is headroom, not a guarantee, so this branch now also
     *handles* running out of it. Thinking shares ``max_tokens`` with the answer
@@ -677,13 +679,14 @@ class AnthropicProvider:
     *The forced tool-use branch never needed the Fable-class-400 fix* -- it
     has never sent ``thinking`` at all (lode-d1sr never touched it), so it
     already followed the "never explicitly disable" rule before this class
-    existed; no Fable-class 400 is reachable there. That is a property of the
-    enrichment tier's *default* (``enrichment_llm`` = Haiku 4.5 predates
-    thinking-on-by-default), not of forced tool use itself -- on the
-    first-party Claude API a forced ``tool_choice`` does not preclude thinking
-    (only Amazon Bedrock requires an explicit ``disabled`` alongside it), so a
-    ``Kind.RUNTIME`` override to a thinking-capable model runs adaptive
-    thinking here too, sharing ``max_tokens`` with the tool-call JSON --
+    existed; no Fable-class 400 is reachable there. Haiku 5.5 (the
+    ``enrichment_llm`` default) thinks adaptively by default, but a forced
+    ``tool_choice`` skips thinking on every model that accepts it, so the
+    default tier spends its whole budget on the tool-call JSON. A
+    ``Kind.RUNTIME`` override to a model that rejects forced ``tool_choice``
+    (Sonnet 5.5, Opus 5.5) 400s here, surfaced as :class:`LLMProviderError`
+    by the ``APIStatusError`` wrap; an override that accepts it without
+    skipping thinking would share ``max_tokens`` with the tool-call JSON --
     lode-3dlt tracked this as a real but then-unreachable risk rather than
     fixing it. **lode-jgus closes it:** :data:`lode.enrich.MAX_TOKENS` was
     raised (1024 -> 2048) for the same headroom reason
@@ -718,9 +721,9 @@ class AnthropicProvider:
     checked, but an unsupported pairing now fails clean instead of raw
     (lode-90o7).** ``effort`` is not universally accepted: it errors outright
     on Haiku 4.5 and Sonnet 4.5, and ``xhigh``/``max`` do not exist on the 4.6
-    generation (``xhigh`` arrived with Opus 4.7). All three tiers are
-    ``Kind.RUNTIME`` and two default to affected models -- ``enrichment_llm``
-    = Haiku 4.5, ``qa_llm`` = Sonnet 4.6 -- so e.g.
+    generation (``xhigh`` arrived with Opus 4.7). All three default tiers
+    (Haiku 5.5, Sonnet 5.5, Opus 5.5) accept every level, but all three are
+    ``Kind.RUNTIME``, so e.g.
     ``enrichment_llm = {model = "claude-haiku-4-5", reasoning_effort = "low"}``
     reaches the API and gets rejected, where before this change that would
     have been a raw ``anthropic.BadRequestError`` escaping the seam. A
@@ -754,21 +757,16 @@ class AnthropicProvider:
         """One forced-tool-use ``messages.create`` decoded into ``output_schema``.
 
         Returns the decoded model and this turn's ``usage.output_tokens``
-        (lode-9594) -- :meth:`run_tool_turns` folds the second element into
-        its per-run spend total; :meth:`structured_call` discards it.
+        (lode-9594); :meth:`structured_call`, its only caller, discards the
+        second element.
 
-        The single implementation of Anthropic's forced-schema wire shape,
-        shared by :meth:`structured_call`'s ``tool_name is not None`` branch
-        (one user turn) and :meth:`run_tool_turns`' final turn (the whole
-        accumulated history) -- they differ only in ``messages``, ``timeout``
-        and the ``where`` diagnostic suffix, so extracting this keeps
-        ``lode-jgus``' missing-``tool_use`` guard, ``lode-90o7``'s
-        ``APIStatusError`` wrap and ``lode-wnz1``'s ``effort_kwargs`` on one
-        maintained path instead of two near-clones (lode-35nu.11.6 review).
+        Anthropic's forced-schema wire shape, used for the enrichment tier
+        (Haiku 5.5 accepts a forced ``tool_choice``; Sonnet 5.5 and Opus 5.5
+        400 on it, which is why the Q&A path -- :meth:`run_tool_turns`' final
+        turn -- uses :meth:`_parsed_turn` instead, lode-ugj5).
 
-        No ``thinking`` is ever sent here (lode-d1sr): the enrichment tier
-        predates thinking-on-by-default. That is a model property, NOT a
-        consequence of forced tool use -- see the class docstring.
+        No ``thinking`` is ever sent here (lode-d1sr) -- see the class
+        docstring.
 
         """
         import anthropic  # deferred -- lode-4q97; needed by the `except` below
@@ -814,6 +812,98 @@ class AnthropicProvider:
             )
         return output_schema.model_validate(tool_block.input), _output_tokens(response)
 
+    def _parsed_turn(
+        self,
+        *,
+        model: str,
+        system: str,
+        messages: Sequence[Mapping[str, Any]],
+        output_schema: type[BaseModelT],
+        max_tokens: int,
+        timeout: float,
+        effort_kwargs: Mapping[str, Any],
+        where: str = "",
+        tools: Sequence[Mapping[str, Any]] | None = None,
+    ) -> tuple[BaseModelT, int]:
+        """One ``messages.parse`` turn decoded into ``output_schema``.
+
+        Returns the decoded model and this turn's ``usage.output_tokens``.
+        The single implementation of the structured-output
+        (``output_config.format``) wire shape, shared by :meth:`structured_call`'s
+        no-tool branch (one user turn) and :meth:`run_tool_turns`' final turn
+        (the whole accumulated history, ``tools`` set).
+
+        ``tools`` is passed only by the final turn: the API requires the tool
+        definitions to stay in the request whenever the history carries
+        ``tool_use``/``tool_result`` blocks, so they are re-sent with
+        ``tool_choice={"type": "none"}`` -- no further tool call is possible
+        and the response is the schema-constrained text block. Forced
+        ``tool_choice`` is not an option here: it 400s on Sonnet 5.5 and
+        Opus 5.5 (lode-ugj5).
+
+        ``thinking`` is never sent (lode-3dlt) -- see the class docstring.
+        """
+        import anthropic  # deferred -- lode-4q97; needed by the `except` below
+
+        tool_kwargs: dict[str, Any] = (
+            {"tools": list(tools), "tool_choice": {"type": "none"}} if tools else {}
+        )
+        try:
+            # `.parse()` merges an `output_config` we pass with the
+            # `output_format`-derived `{"format": ...}` it builds internally, so
+            # sending `effort` here does not clobber the schema wiring (the test
+            # suite asserts both kwargs reach the SDK).
+            response = self._client.messages.parse(
+                model=model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=messages,
+                output_format=output_schema,
+                timeout=timeout,
+                **tool_kwargs,
+                **effort_kwargs,
+            )
+        except anthropic.APIStatusError as exc:
+            # lode-90o7 -- see `_anthropic_error_from_exception` and the class
+            # docstring.
+            raise _anthropic_error_from_exception(
+                exc, context=f"model={model}{where}"
+            ) from exc
+        except ValidationError as exc:
+            # ``messages.parse`` validates the response text against
+            # ``output_schema`` inside the SDK, so a schema violation -- or a
+            # text block truncated mid-JSON because thinking ate the budget --
+            # surfaces as a raw pydantic error from the SDK's own
+            # post-processing. Wrap it: callers of this seam see
+            # LLMProviderError, exactly as OpenAIProvider already guarantees.
+            raise LLMProviderError(
+                f"Anthropic response did not match {output_schema.__name__}"
+                f"{where} (model={model}, max_tokens={max_tokens}) -- a response "
+                f"truncated mid-JSON is indistinguishable from a genuine "
+                f"schema violation here: {exc}",
+                provider="anthropic",
+            ) from exc
+
+        parsed = response.parsed_output
+        if parsed is None:
+            # ``parsed_output`` scans ``content`` for a TEXT block and returns
+            # None when there is none. A response that spent its whole budget
+            # inside thinking carries only a thinking block and
+            # ``stop_reason="max_tokens"`` -- reachable precisely because
+            # lode-3dlt stopped pinning thinking off. Unguarded, that None
+            # escapes under this method's return annotation and fails as an
+            # AttributeError inside :func:`lode.qa.answer_question`.
+            stop_reason = getattr(response, "stop_reason", None)
+            raise LLMProviderError(
+                f"Anthropic response contained no text block to decode into "
+                f"{output_schema.__name__}{where} (model={model}, "
+                f"max_tokens={max_tokens}, "
+                f"stop_reason={stop_reason!r}) "
+                f"{_budget_hint(stop_reason)}",
+                provider="anthropic",
+            )
+        return parsed, _output_tokens(response)
+
     def structured_call(
         self,
         *,
@@ -827,8 +917,6 @@ class AnthropicProvider:
         tool_name: str | None = None,
         tool_description: str | None = None,
     ) -> BaseModelT:
-        import anthropic  # deferred -- lode-4q97; needed by the `except` below
-
         # reasoning_effort -> output_config.effort (lode-wnz1): validated up
         # front, then splatted -- empty when unset, so the kwarg is absent
         # rather than `None`. See `_anthropic_effort_kwargs`.
@@ -849,65 +937,15 @@ class AnthropicProvider:
             # total against, so the count is discarded here (lode-9594).
             return parsed
 
-        # `thinking` is never sent here (lode-3dlt, superseding lode-d1sr's
-        # unconditional `disabled` pin) -- an explicit `disabled` 400s on
-        # Fable-class models at any effort and on Opus 5 at effort xhigh/max;
-        # omitting it lets every model run its own default (no thinking on
-        # Sonnet 4.6, adaptive thinking on Opus 5/Fable-class). See the class
-        # docstring for the full rationale, and its note on not reintroducing
-        # `disabled` alongside `output_config.effort`.
-        try:
-            # `.parse()` merges an `output_config` we pass with the
-            # `output_format`-derived `{"format": ...}` it builds internally, so
-            # sending `effort` here does not clobber the schema wiring (the test
-            # suite asserts both kwargs reach the SDK).
-            response = self._client.messages.parse(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user_prompt}],
-                output_format=output_schema,
-                timeout=timeout_s,
-                **effort_kwargs,
-            )
-        except anthropic.APIStatusError as exc:
-            # lode-90o7 -- see the forced-tool-use branch above.
-            raise _anthropic_error_from_exception(
-                exc, context=f"model={model}"
-            ) from exc
-        except ValidationError as exc:
-            # ``messages.parse`` validates the response text against
-            # ``output_schema`` inside the SDK, so a schema violation -- or a
-            # text block truncated mid-JSON because thinking ate the budget --
-            # surfaces as a raw pydantic error from the SDK's own
-            # post-processing. Wrap it: callers of this seam see
-            # LLMProviderError, exactly as OpenAIProvider already guarantees.
-            raise LLMProviderError(
-                f"Anthropic response did not match {output_schema.__name__} "
-                f"(model={model}, max_tokens={max_tokens}) -- a response "
-                f"truncated mid-JSON is indistinguishable from a genuine "
-                f"schema violation here: {exc}",
-                provider="anthropic",
-            ) from exc
-
-        parsed = response.parsed_output
-        if parsed is None:
-            # ``parsed_output`` scans ``content`` for a TEXT block and returns
-            # None when there is none. A response that spent its whole budget
-            # inside thinking carries only a thinking block and
-            # ``stop_reason="max_tokens"`` -- reachable precisely because
-            # lode-3dlt stopped pinning thinking off. Unguarded, that None
-            # escapes under this method's ``-> BaseModelT`` annotation and
-            # fails as an AttributeError inside :func:`lode.qa.answer_question`.
-            stop_reason = getattr(response, "stop_reason", None)
-            raise LLMProviderError(
-                f"Anthropic response contained no text block to decode into "
-                f"{output_schema.__name__} (model={model}, "
-                f"max_tokens={max_tokens}, "
-                f"stop_reason={stop_reason!r}) "
-                f"{_budget_hint(stop_reason)}",
-                provider="anthropic",
-            )
+        parsed, _output_tokens_spent = self._parsed_turn(
+            model=model,
+            system=system,
+            messages=[{"role": "user", "content": user_prompt}],
+            output_schema=output_schema,
+            max_tokens=max_tokens,
+            timeout=timeout_s,
+            effort_kwargs=effort_kwargs,
+        )
         return parsed
 
     def run_tool_turns(
@@ -934,9 +972,12 @@ class AnthropicProvider:
         (``tool_choice={"type": "auto"}``) ``messages.create`` turns --
         feeding each tool_use block through ``tool_result`` and appending the
         result as a ``tool_result`` content block -- then one final
-        ``messages.create`` with ``tool_choice`` forced to
-        ``tool_name or output_schema.__name__``, continuing the same message
-        history. ``timeout_s`` bounds the whole run (``max_tokens`` does not --
+        ``messages.parse`` (``output_config.format`` structured output, tools
+        kept with ``tool_choice`` ``none``), continuing the same message
+        history. Forced ``tool_choice`` is not used: Sonnet 5.5 and Opus 5.5
+        reject it (lode-ugj5), so ``tool_name``/``tool_description`` only
+        matter on the empty-``tools`` delegation to :meth:`structured_call`.
+        ``timeout_s`` bounds the whole run (``max_tokens`` does not --
         see the module docstring): each SDK
         call is sent the *remaining* wall-clock budget, and the run raises
         :class:`LLMProviderError` rather than starting a call once that
@@ -1015,23 +1056,22 @@ class AnthropicProvider:
             ]
             messages.append({"role": "user", "content": result_blocks})
 
-        remaining = _remaining_or_raise("starting the final forced-schema turn")
+        remaining = _remaining_or_raise("starting the final structured-output turn")
 
-        result, final_turn_output_tokens = self._forced_schema_turn(
+        result, final_turn_output_tokens = self._parsed_turn(
             model=model,
             system=system,
             messages=messages,
             output_schema=output_schema,
-            tool_name=tool_name or output_schema.__name__,
-            tool_description=tool_description,
+            tools=anthropic_tools,
             max_tokens=max_tokens,
             timeout=remaining,
             effort_kwargs=effort_kwargs,
-            where=" on run_tool_turns' final forced-schema turn",
+            where=" on run_tool_turns' final structured-output turn",
         )
         total_output_tokens += final_turn_output_tokens
         # lode-9594 -- the completed run's total spend (free turns + the
-        # unconditional final forced-schema turn) logged next to the bound it
+        # unconditional final structured-output turn) logged next to the bound it
         # should be compared against, so the GAP against
         # (max_tool_turns + 1) x max_tokens is readable without arithmetic.
         # Nothing here can raise: every operand is an int via

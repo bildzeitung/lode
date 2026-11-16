@@ -577,7 +577,7 @@ class Settings(BaseModel):
         "ONLY (qa.py's structured_call) -- split off enrich_call_timeout_s "
         "(lode-wfyx), which still governs every enrich.py call site "
         "unchanged. Needed because lode-3dlt let the think-harder tier "
-        "(qa_think_harder_llm, Opus 5 by default) run adaptive thinking it "
+        "(qa_think_harder_llm, Opus 5.5 by default) run adaptive thinking it "
         "previously never did, while enrich_call_timeout_s stayed at 120s -- "
         "plausibly too short once thinking shares qa.MAX_TOKENS with the "
         "claims response. The default is DERIVED, NOT a measured p95 (a live "
@@ -863,27 +863,27 @@ class Settings(BaseModel):
         gt=0.0,
     )
     enrichment_llm: ModelTier = _knob(
-        ModelTier(model="claude-haiku-4-5"),
+        ModelTier(model="claude-haiku-5-5"),
         Kind.RUNTIME,
-        "High-volume background extraction LLM (Claude Haiku 4.5). A "
+        "High-volume background extraction LLM (Claude Haiku 5.5). A "
         "(model, reasoning_effort, max_tokens) tier (lode-568v.2; max_tokens "
         "lode-d70n) -- a bare TOML string still coerces to a ModelTier with "
         "reasoning_effort=None and max_tokens=None (falls back to "
         "enrich.MAX_TOKENS).",
     )
     qa_llm: ModelTier = _knob(
-        ModelTier(model="claude-sonnet-4-6"),
+        ModelTier(model="claude-sonnet-5-5"),
         Kind.RUNTIME,
-        "Default interactive Q&A synthesis LLM (Claude Sonnet 4.6). A "
+        "Default interactive Q&A synthesis LLM (Claude Sonnet 5.5). A "
         "(model, reasoning_effort, max_tokens) tier (lode-568v.2; max_tokens "
         "lode-d70n) -- a bare TOML string still coerces to a ModelTier with "
         "reasoning_effort=None and max_tokens=None (falls back to "
         "qa.MAX_TOKENS).",
     )
     qa_think_harder_llm: ModelTier = _knob(
-        ModelTier(model="claude-opus-5"),
+        ModelTier(model="claude-opus-5-5"),
         Kind.RUNTIME,
-        "Higher-quality 'think harder' Q&A LLM on demand (Claude Opus 5). A "
+        "Higher-quality 'think harder' Q&A LLM on demand (Claude Opus 5.5). A "
         "(model, reasoning_effort, max_tokens) tier (lode-568v.2; max_tokens "
         "lode-d70n) -- a bare TOML string still coerces to a ModelTier with "
         "reasoning_effort=None and max_tokens=None (falls back to "

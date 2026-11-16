@@ -77,8 +77,8 @@ app-side (RRF) with a local cross-encoder **reranker**, and **networkx** for in-
 traversal. Accessed from **Python**
 behind a thin repository interface, with a **Textual** TUI. Indexing is fully on-box — embeddings,
 reranking, and citation-checking all run **locally** (fastembed/ONNX), so **content never leaves the
-box for indexing or retrieval**. **Claude** does background enrichment (Haiku 4.5) and cited Q&A
-(Sonnet 4.6 / Opus 5) — these are *explicit, logged egress*, and notes/sources marked `no_egress`
+box for indexing or retrieval**. **Claude** does background enrichment (Haiku 5.5) and cited Q&A
+(Sonnet 5.5 / Opus 5.5) — these are *explicit, logged egress*, and notes/sources marked `no_egress`
 are kept local and never sent to the cloud. See [`docs/stack.md`](docs/stack.md) for the full
 rationale (including why a split store over a unified Oracle/Postgres engine) and
 [`docs/externals.md`](docs/externals.md#privacy-consequence-of-aggregation) for the privacy model.

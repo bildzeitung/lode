@@ -22,8 +22,8 @@ GNU/util-linux-only tools freely — see [decisions.md](decisions.md) ("The plat
 | Embeddings | **Local, on-machine** | Open model via fastembed/ONNX (`nomic-ai/nomic-embed-text-v1.5`, **768-dim** — pinned + verified in `lode-txh.6`) — CPU-only, no torch. **Loaded in-process via `fastembed` (a thin wrapper over `onnxruntime` + tokenizers) — there is no model server or daemon; this is *not* Ollama.** The reranker and faithfulness-NLI models below run the same way, in the same process. **Chosen specifically to honor [privacy](externals.md#privacy-consequence-of-aggregation)**: note/email/ticket content is never sent off-box *for indexing*. The resulting vectors land in LanceDB. Accepts slightly lower retrieval quality + a bundled model file (~100–500MB) in exchange |
 | Reranker | **Local cross-encoder** (`BAAI/bge-reranker-base`) | First-class retrieval stage ([retrieval.md](retrieval.md)), wired in v1 behind a toggle. Runs on the **same ONNX runtime** as embeddings via `fastembed` — no new stack, content stays on-box. (`fastembed` does not ship `bge-reranker-v2-m3`; `bge-reranker-base` is the loadable bge-family pick — verified in `lode-txh.6`.) Biggest single quality lever for cited Q&A; model/threshold tuning deferred until there's a corpus ([decisions.md](decisions.md)) |
 | Faithfulness NLI | **Local cross-encoder repurposed** (`BAAI/bge-reranker-base` via `fastembed`'s `TextCrossEncoder`) | Entailment leg of the [faithfulness gate](retrieval.md#faithfulness-verify-citations-dont-just-require-them): scores whether cited spans jointly entail a synthesized claim, so multi-note synthesis is answered rather than refused. `fastembed` ships **no** dedicated NLI model, so the cross-encoder is repurposed as the entailment scorer — same **ONNX runtime**, on-box, no separate loader (verified in `lode-txh.6`). Ships in v1 **conservative and fail-closed**; the model + acceptance **threshold ship untuned** and are revisited against the eval harness ([decisions.md](decisions.md)) |
-| Enrichment LLM | Provider-selected via `llm_provider` ([LLM provider seam](#llm-provider-seam-decided-lode-568v1), `lode-568v.2`/`.3`); default **Anthropic Claude Haiku 4.5** (`claude-haiku-4-5`, $1/$5 per Mtok), or an OpenAI/Azure deployment when `llm_provider = "openai"` | High-volume background tagging/extraction. Use **structured outputs** so the derived layer gets validated JSON. A **fresh note enriches interactively** (one immediate call) for promptness; **bulk / backfill / re-enrichment** goes through the provider's batch path — Anthropic's **Batches API** (50% off, non-interactive) under the default provider, or serialized sequential calls under a provider with no batch API (`lode-568v.3`). Driven by the durable [work queue](storage.md#the-async-work-queue); submitted batch handles are persisted so a restart resumes rather than resubmits. **`no_egress` notes are skipped** (never enriched); every send is redacted-before-egress and recorded in the [egress log](externals.md#privacy-consequence-of-aggregation) |
-| Q&A LLM | Provider-selected via `llm_provider` (same seam); default **Anthropic Claude Sonnet 4.6** (`claude-sonnet-4-6`, $3/$15) with **Opus 5** (`claude-opus-5`, $5/$25) as a "think harder" toggle, or OpenAI/Azure deployments under `qa_llm`/`qa_think_harder_llm` when `llm_provider = "openai"` | Low-volume, interactive, quality-sensitive synthesis. Returns **structured claims**, each pinned to a verbatim span of a specific version; a [faithfulness gate](retrieval.md#faithfulness-verify-citations-dont-just-require-them) verifies the evidence and abstains rather than emit an unsupported claim — citations are enforced by *verification*, not just by the response schema. **`no_egress` passages are excluded from the cloud context** (cited as "withheld from synthesis"); the context sent is redacted-before-egress and recorded in the [egress log](externals.md#privacy-consequence-of-aggregation) |
+| Enrichment LLM | Provider-selected via `llm_provider` ([LLM provider seam](#llm-provider-seam-decided-lode-568v1), `lode-568v.2`/`.3`); default **Anthropic Claude Haiku 5.5** (`claude-haiku-5-5`, $0.10/$0.50 per Mtok), or an OpenAI/Azure deployment when `llm_provider = "openai"` | High-volume background tagging/extraction. Use **structured outputs** so the derived layer gets validated JSON. A **fresh note enriches interactively** (one immediate call) for promptness; **bulk / backfill / re-enrichment** goes through the provider's batch path — Anthropic's **Batches API** (50% off, non-interactive) under the default provider, or serialized sequential calls under a provider with no batch API (`lode-568v.3`). Driven by the durable [work queue](storage.md#the-async-work-queue); submitted batch handles are persisted so a restart resumes rather than resubmits. **`no_egress` notes are skipped** (never enriched); every send is redacted-before-egress and recorded in the [egress log](externals.md#privacy-consequence-of-aggregation) |
+| Q&A LLM | Provider-selected via `llm_provider` (same seam); default **Anthropic Claude Sonnet 5.5** (`claude-sonnet-5-5`, $2/$10) with **Opus 5.5** (`claude-opus-5-5`, $4/$20) as a "think harder" toggle, or OpenAI/Azure deployments under `qa_llm`/`qa_think_harder_llm` when `llm_provider = "openai"` | Low-volume, interactive, quality-sensitive synthesis. Returns **structured claims**, each pinned to a verbatim span of a specific version; a [faithfulness gate](retrieval.md#faithfulness-verify-citations-dont-just-require-them) verifies the evidence and abstains rather than emit an unsupported claim — citations are enforced by *verification*, not just by the response schema. **`no_egress` passages are excluded from the cloud context** (cited as "withheld from synthesis"); the context sent is redacted-before-egress and recorded in the [egress log](externals.md#privacy-consequence-of-aggregation) |
 | Web-fetch HTTP client | **`httpx2`** | First connector (E12 web draw-down, `lode-w0h.1`) — synchronous GET with an explicit `follow_redirects`/`max_redirects` cap and a typed exception hierarchy (`TooManyRedirects`/`TimeoutException`/`NetworkError`) that maps onto the fetch-outcome taxonomy ([externals.md](externals.md#draw-down-rules)). Chosen over `requests` purely on maintenance status — `requests` is in long-term maintenance mode, httpx (of which httpx2 is the Pydantic-stewarded successor fork, `lode-6wly`) is the actively developed equivalent with the same sync call shape (both have a redirect cap and typed exceptions; that pair differentiates only against stdlib). Chosen over stdlib `urllib.request` because its redirect cap is a hardcoded `HTTPRedirectHandler.max_redirections = 10`, not a per-request knob, so the `fetch_max_redirects` setting could not be honored without subclassing |
 | Web-fetch readability extraction | **`trafilatura`** | Same ticket. Named directly in the fetch-outcome decision: `extract()` returns `str \| None`, and `None` on failed/empty extraction *is* the taxonomy's testable "not real content" signal, combined with a configured length floor for short-but-non-`None` teasers (paywalls). Verified locally against synthetic JS-shell/paywall/article fixtures during the build. Chosen over `readability-lxml` (stale, weaker boilerplate removal) and `boilerpy3` (thinner API) |
 
@@ -644,7 +644,7 @@ budget (`qa.MAX_TOKENS` / `enrich.MAX_TOKENS`); see
 [configuration.md](configuration.md#per-tier-max_tokens-override-decided-lode-d70n), which owns that
 decision.
 
-A bare TOML string (every existing `config.toml` today, e.g. `enrichment_llm = "claude-haiku-4-5"`)
+A bare TOML string (every existing `config.toml` today, e.g. `enrichment_llm = "claude-haiku-5-5"`)
 coerces to `ModelTier(model=<string>)` — back-compat, no migration required for existing configs; an
 inline table (`qa_think_harder_llm = { model = "gpt-5.5", reasoning_effort = "high" }`) sets the
 fields explicitly. This directly answers the challenge's three-way crux ("does 'think harder' select
@@ -847,13 +847,16 @@ call site passes real tools yet.
 
 **Shape**: `LLMProvider.run_tool_turns(*, …, tools: Sequence[ToolSpec], tool_result: Callable[[str,
 dict], str], output_schema, max_tokens, timeout_s, tool_name=None, tool_description=None,
-max_tool_turns=8) -> BaseModelT`. Free tool choice and a forced structured-output schema are mutually
+max_tool_turns=8) -> BaseModelT`. Free tool choice and a constrained structured-output schema are mutually
 exclusive within one call, so a run is: up to `max_tool_turns` free turns (the model may call any
 tool in `tools`; each call is resolved via `tool_result(name, input)` and fed back as a tool result,
-until the model stops calling tools or the turn budget runs out), then **exactly one** final call
-with tool choice forced to `tool_name or output_schema.__name__` — the same forced-tool-use mechanism
-`structured_call`'s enrichment branch already uses, now continuing the accumulated conversation
-instead of a single user turn.
+until the model stops calling tools or the turn budget runs out), then **exactly one** final
+`messages.parse` call — `output_config.format` structured output, with `tools` kept (the API needs the
+definitions while the history carries `tool_use` blocks) and `tool_choice` `none` — the same mechanism
+`structured_call`'s no-tool branch uses, now continuing the accumulated conversation instead of a single
+user turn. The final turn used a forced `tool_choice` until `lode-ugj5`; Sonnet 5.5 and Opus 5.5 400 on
+that, so it was replaced (decision record: [configuration.md](configuration.md#default-llm-tiers-moved-to-the-55-generation-decided-lode-ugj5)).
+`strict: true` stays off ([`lode-568v.3`](#llm-provider-seam-decided-lode-568v1)).
 
 **`timeout_s` is a budget for the whole run; `max_tokens` deliberately is not.** No new config knob
 was added — these are the same two knobs `structured_call` already took, and a call site's existing
@@ -870,13 +873,13 @@ was added — these are the same two knobs `structured_call` already took, and a
   now a settled design decision, not a known gap awaiting a fix. `max_tokens` is not a spend meter —
   it is Anthropic's hard cap on a *single response*, so "per-run" could only be emulated by
   decrementing it against each turn's `usage.output_tokens`. That emulation was **rejected**: it
-  silently shrinks the budget available to the **final forced-schema turn**, so a run that narrated
+  silently shrinks the budget available to the **final structured-output turn**, so a run that narrated
   its way through several tool calls would produce a truncated `_ClaimsEnvelope` and fail with the
   budget-exhausted diagnostic — turning a cost overshoot into a wrong answer on the user-visible Q&A
   path. Instead, total spend for a run is bounded by the turn count
   ([`_DEFAULT_MAX_TOOL_TURNS`](configuration.md#models) = 8) rather than by decrementing `max_tokens`:
   the worst case is `(max_tool_turns + 1) × max_tokens` output tokens per run — the `+ 1` is the
-  final forced-schema turn, spent *after* the free-turn loop and not covered by the constant, so the
+  final structured-output turn, spent *after* the free-turn loop and not covered by the constant, so the
   ceiling at today's default is 9 × `max_tokens`. A bound is the property that matters here.
 - **A separate per-run ceiling remains available, deferred not rejected.** A dedicated
   `max_output_tokens_per_run` knob is the principled fix if real cost pressure ever shows up, and
