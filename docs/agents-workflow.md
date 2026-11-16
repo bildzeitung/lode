@@ -425,46 +425,66 @@ audience split is the reason the two texts differ, not an oversight in either.
 ### The harness's worktree-isolation classifier: the `eval` word and `$(git ...)` refusals (lode-emx5)
 
 **Both refusals come from the harness, not from this repo, so there is nothing here to narrow or
-test.** Every refusal opens "This agent is isolated in the worktree `<path>`, but this command …",
-and that text appears nowhere in `scripts/`, `.claude/`, `tests/` or `lode/` (the four
-`PreToolUse(Bash)` hooks in `.claude/settings.json` run `bd-deps-blocks-guard.sh`, `gh-write-guard.sh`,
-`sha-fabrication-guard.sh` and `trunk-write-guard.sh`, none of which emit it). It is the same
-classifier that refuses `. ./venv/bin/activate` (lode-6874, above). It fires only for a
-worktree-isolated subagent; the main session was not tested (no dispatched agent can reach it).
-Reproduced from a worktree-isolated dispatch, Claude Code 2.1.325, with two distinct messages:
+test; what an agent does about one is this section's last paragraph — split, never disguise.** Every
+refusal opens "This agent is isolated in the worktree `<path>`, but this command …",
+and that text appears nowhere in `scripts/`, `.claude/`, `tests/` or `lode/`: the three
+`PreToolUse(Bash)` hooks in `.claude/settings.json` run `bd-deps-blocks-guard.sh`, `gh-write-guard.sh`
+and `sha-fabrication-guard.sh`, the one `PreToolUse(Edit|Write)` hook runs `trunk-write-guard.sh`, and
+none of them emits it. The message template sits in the Claude Code executable itself (`grep -a -F "is
+isolated in the worktree"` matches the installed 2.1.325 and 2.1.326 binaries). It is the same
+classifier that refuses `. ./venv/bin/activate` (lode-6874, above), whose message is the `eval` one
+below with `.` in place of the word.
+
+**Scope: observations, not a contract.** Everything below was observed from worktree-isolated
+dispatched agents only — recorded by the builder on Claude Code 2.1.325 and re-run by the technical
+review on 2.1.326. The main session was not tested (no dispatched agent can reach it); the message is
+worded for an isolated agent, which suggests but does not show that the main session is unaffected.
+Two rules, three message texts:
 
 - **`eval`** — "… but this command runs a string through eval, which can't be verified to stay inside
-  the worktree. Refusing to run it …". The classifier looks for the shell builtin `eval` by *shape*,
-  and over-matches: any shell word whose text, case-insensitively and after quote removal, is `eval`
-  or ends in a path segment `eval` is refused, wherever it sits in the command, including as a plain
-  argument to `echo`, `grep` or `ls`. Refused: `nox -s eval`, `ls lode/eval`, `grep -i 'eval' f`,
-  `echo Eval`, `echo lode/eval`. Accepted: `evaluate`, `retrieval`, `eval_x`, `tests/test_eval_live.py`,
-  `lode/eval/x` (the segment is not last), `--session=eval`, and `eval` embedded in a larger quoted
-  string (`echo "x eval y"`). Impact: `nox -s eval` cannot be invoked by an isolated agent;
-  `scripts/docs_index_query.py "eval harness"` is accepted only because the word sits inside one
-  quoted argument.
-- **`$(git …)`** — "… but this command names git in a form too complex to verify that it stays inside
-  the worktree. Refusing to run it … Split it into plain, separate commands …". A different rule of
-  the same classifier. Refused: `"$(git rev-parse --show-toplevel)/scripts/isolation-guard.sh" || { …
-  }` (a `$(git …)` word as the command), `echo $(git rev-parse HEAD)` (unquoted), `TOP=$(git …) && echo
-  "${TOP##*/}"` (a git-derived variable in a parameter expansion), and any chain of several `git`
-  commands joined with `&&`. Accepted: a bare `HEAD_SHA=$(git rev-parse HEAD)` as its own command,
-  `echo "$(git rev-parse --short HEAD)"`, `TOP=$(git …) && "$ISOGUARD" || { … }`. The rule is not a
-  clean predicate, so the only reliable form is one simple `git` command per `Bash` call.
-  Consequence: the multi-line blocks in `coding.md` / `code-reviewer.md` / `comment-*.md` that derive
-  `HEAD_SHA` and then validate it, or call `"$(git rev-parse --show-toplevel)/scripts/…"`, can be
-  refused as written.
+  the worktree. Refusing to run it …" (the word is echoed as typed — "a string through Eval"). The
+  classifier looks for the shell builtin `eval` by *shape*, and over-matches: any shell word whose
+  text, case-insensitively and after quote removal, is `eval` or ends in a path segment `eval` is
+  refused, wherever it sits in the command. Refused: `nox -s eval`, `ls lode/eval`, `ls lode/eval/`,
+  `grep -i 'eval' f`, `echo Eval`, `echo lode/eval`, `scripts/docs_index_query.py "eval"`. Accepted:
+  `evaluate`, `retrieval`, `eval_x`, `tests/test_eval_live.py`, `lode/eval/x` (the segment is not
+  last), `--session=eval`, and `eval` embedded in a larger quoted string (`echo "x eval y"`,
+  `scripts/docs_index_query.py "eval harness"`). Every 2.1.325 observation reproduced on 2.1.326,
+  which added the trailing-slash and bare-word docs-index cases. Impact: `nox -s eval` is refused as
+  written. (`--session=eval` getting through is a gap in the over-match, not a workaround this
+  section relies on.)
+- **"too complex to verify"** — "… but this command names git in a form too complex to verify that it
+  stays inside the worktree. Refusing to run it … Split it into plain, separate commands …", and a
+  second text that drops "names git in a form" ("… but this command is too complex to verify …").
+  A different rule of the same classifier, reaching well past `$(git …)`, and **not a clean
+  predicate.** On 2.1.326, refused: `echo $(git rev-parse HEAD)` and its quoted form `echo "$(git
+  rev-parse --short HEAD)"`; `TOP=$(git rev-parse --show-toplevel) && echo "$TOP"` (likewise with
+  `"${TOP##*/}"`); `HEAD_SHA=$(git rev-parse HEAD)` followed by a second command using `$HEAD_SHA`
+  (`echo`, the validator). With the second text and no `git` anywhere in the call,
+  `scripts/isolation-guard.sh || { echo "STOP"; exit 1; }` is refused, but accepted once the quotes
+  around `STOP` are dropped. Accepted: a bare `HEAD_SHA=$(git rev-parse HEAD)` as the whole call;
+  `"$(git rev-parse --show-toplevel)/scripts/isolation-guard.sh"` as the whole call; `X=HEAD` then
+  `git rev-parse "$X"`; and plain `git` commands chained with `&&` or `;`. The 2.1.325 dispatch
+  recorded the quoted `echo "$(git …)"` as accepted and `&&`-chained `git` commands as refused;
+  neither reproduced. The only form both runs agree on is one plain `git` command with literal
+  arguments per `Bash` call.
+  Consequence: every multi-line block of `code-reviewer.md` the review reached — each carries a
+  derived value into a later command, or ends in a `|| { … }` tail — was refused as written, and
+  `coding.md` / `comment-*.md` carry the same shapes. lode-fvg0 itemizes and rewrites them.
 
 **Sanctioned workaround — split, never disguise.** Run the underlying command in separate plain calls
-and carry the value by hand between them. For the `$(git …)` refusal that means one call for `git
-rev-parse HEAD`, then the validator and `bd update` with the printed SHA pasted in (read the
-[fabricated-SHA guard](#guard-against-fabricated-shas-lode-fpmi) first: a pasted SHA must be one a
-command printed in this session). For
+and carry the value by hand between them. For a "too complex" refusal that means one call for `git
+rev-parse HEAD`, then the validator and `bd update` with the printed SHA pasted in — copied from that
+call's output, which is what
+[Derive identifiers, never retype them](conventions.md#derive-identifiers-never-retype-them) comes to
+when the `$(git rev-parse …)` it prescribes is refused (the
+[fabricated-SHA guard](#guard-against-fabricated-shas-lode-fpmi) denies a 40-hex string that is not a
+real object, but cannot tell a real one from the *right* one). For
 `nox -s eval`, run its body directly (it is CI-only and spends API credits, so only with the
 maintainer's go-ahead): `LODE_RUN_LIVE_EVAL=1 ./venv/bin/pytest tests/test_eval_live.py -v` with
-`ANTHROPIC_API_KEY` set. Do **not** quote-split the word (`ev""al`), build it by expansion, or any
-other obfuscation: the classifier strips quotes and the point of the guard is that the shape is
-unverifiable, so hiding it is routing around the fence, not a workaround.
+`ANTHROPIC_API_KEY` set. Do **not** disguise the word — quote-splitting (`ev""al`), building it by
+expansion, or any other obfuscation: the guard exists because the shape is unverifiable, so hiding
+it routes around the fence rather than working within it.
 
 ### Recycled-worktree guard (lode-nt98)
 
