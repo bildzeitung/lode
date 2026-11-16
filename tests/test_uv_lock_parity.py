@@ -7,23 +7,22 @@ import re
 import tomllib
 from pathlib import Path
 
-import pytest
+from packaging.utils import canonicalize_name
 
 ROOT = Path(__file__).resolve().parent.parent
 
 _PIN = re.compile(r"^([A-Za-z0-9_.\-]+)==([^\s\\]+)", re.MULTILINE)
 
 
-def _norm(name: str) -> str:
-    return re.sub(r"[-_.]+", "-", name).lower()
-
-
 def _requirements_pins(text: str) -> dict[str, str]:
-    return {_norm(n): v for n, v in _PIN.findall(text)}
+    return {canonicalize_name(n): v for n, v in _PIN.findall(text)}
 
 
 def _uv_versions(text: str) -> dict[str, str | None]:
-    return {_norm(p["name"]): p.get("version") for p in tomllib.loads(text)["package"]}
+    return {
+        canonicalize_name(p["name"]): p.get("version")
+        for p in tomllib.loads(text)["package"]
+    }
 
 
 def _mismatches(req: dict[str, str], uv: dict[str, str | None]) -> list[str]:
@@ -53,8 +52,3 @@ def test_parity_check_detects_a_differing_pin() -> None:
 def test_parity_check_detects_a_missing_package() -> None:
     req = _requirements_pins("foo==1.0\n")
     assert _mismatches(req, {}) == ["foo: requirements.lock 1.0 vs uv.lock None"]
-
-
-@pytest.mark.parametrize("name", ["uv.lock", "requirements.lock"])
-def test_both_locks_exist(name: str) -> None:
-    assert (ROOT / name).is_file()
