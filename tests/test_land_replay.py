@@ -21,7 +21,6 @@ behavior around a bounced branch.
 
 from __future__ import annotations
 
-import os
 import shutil
 import stat
 import subprocess
@@ -128,6 +127,18 @@ def _graph(tmp_path: Path, *edges: tuple[str, str, str]) -> Path:
     return p
 
 
+def _install_fake_nox(repo: Path, fake_nox: Path) -> None:
+    """Place the stand-in at `<repo>/venv/bin/nox` -- the explicit path the
+    script resolves its gates from (lode-xx90) -- and keep it out of `git status`."""
+    dest = repo / "venv" / "bin"
+    dest.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(fake_nox / "nox", dest / "nox")
+    exclude = repo / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(exist_ok=True)
+    with exclude.open("a") as f:
+        f.write("/venv/\n")
+
+
 def _run(
     repo: Path,
     accepted: Path,
@@ -158,24 +169,23 @@ def _run(
         args += ["--graph", str(graph)]
     if base_ref is not None:
         args += ["--base-ref", base_ref]
-    env = dict(os.environ)
     if fake_nox is not None:
-        env["PATH"] = f"{fake_nox}{os.pathsep}{env.get('PATH', '')}"
+        _install_fake_nox(repo, fake_nox)
     return subprocess.run(
-        args, cwd=repo, capture_output=True, text=True, timeout=30, check=False, env=env
+        args, cwd=repo, capture_output=True, text=True, timeout=30, check=False
     )
 
 
-def _run_with_no_nox_on_path(
+def _run_with_no_venv_nox(
     repo: Path,
     accepted: Path,
     msg_dir: Path,
     conflicts_dir: Path,
     landed: Path,
 ) -> subprocess.CompletedProcess:
-    """Same as `_run`, but with every PATH entry that resolves a `nox` stripped
-    out -- reproducing lode-04zb's actual failure: a caller that never
-    activated the venv before invoking this script."""
+    """Same as `_run`, but the repo has no `venv/bin/nox` -- the machine fault
+    lode-04zb guarded (then a missing activation, now a missing venv). An
+    ambient `nox` on PATH must NOT rescue it (lode-xx90)."""
     _git(repo, "checkout", "-q", "trunk")
     args = [
         "bash",
@@ -189,15 +199,8 @@ def _run_with_no_nox_on_path(
         "--landed",
         str(landed),
     ]
-    env = dict(os.environ)
-    kept = [
-        p
-        for p in env.get("PATH", "").split(os.pathsep)
-        if not (Path(p) / "nox").exists()
-    ]
-    env["PATH"] = os.pathsep.join(kept)
     return subprocess.run(
-        args, cwd=repo, capture_output=True, text=True, timeout=30, check=False, env=env
+        args, cwd=repo, capture_output=True, text=True, timeout=30, check=False
     )
 
 
@@ -926,17 +929,16 @@ def test_explicit_base_ref_is_honored(tmp_path: Path) -> None:
     assert (repo / "a.txt").exists()
 
 
-def test_missing_nox_on_path_is_reported_as_a_missing_nox_never_a_red_baseline(
+def test_missing_venv_nox_is_reported_as_a_missing_nox_never_a_red_baseline(
     tmp_path: Path,
 ) -> None:
-    """OBSERVED (lode-04zb): a caller that never activated the venv before
-    invoking this script hits `nox: command not found` (127) on the very
-    first baseline gate (`nox -t fix`). The baseline arms deliberately treat
+    """OBSERVED (lode-04zb): a missing nox hit `command not found` (127) on the
+    very first baseline gate (`nox -t fix`). The baseline arms deliberately treat
     every nonzero exit alike (no `escalate_unless_content` split there -- see
     that block's own comment), so the 127 fell straight into "'nox -t fix' is
     red on bare '$BASE_REF' ... needs a human's fix" -- a FALSE diagnostic,
     since nothing ever ran. This must instead be caught up front, before any
-    gate runs, and reported as a missing `nox`/venv-activation problem."""
+    gate runs, and reported as a missing venv `nox` (exit 2)."""
     repo = _init_repo(tmp_path)
     _branch_from(repo, "trunk", "origin/land/lode-a")
     _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
@@ -948,14 +950,14 @@ def test_missing_nox_on_path_is_reported_as_a_missing_nox_never_a_red_baseline(
     accepted = _accepted(tmp_path, "lode-a")
     landed = tmp_path / "landed"
 
-    result = _run_with_no_nox_on_path(repo, accepted, msg_dir, conflicts_dir, landed)
+    result = _run_with_no_venv_nox(repo, accepted, msg_dir, conflicts_dir, landed)
 
     assert result.returncode == 2, result.stdout + result.stderr
     assert result.stdout == "", (
         "no gate may run, and nothing may merge, before this check"
     )
     assert not (repo / "a.txt").exists()
-    assert "not on PATH" in result.stderr
+    assert "missing or not executable" in result.stderr
     assert "venv" in result.stderr
     assert "is red on bare" not in result.stderr, (
         "must never misreport a missing nox as a baseline gate content verdict"

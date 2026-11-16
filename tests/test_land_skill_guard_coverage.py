@@ -13,6 +13,7 @@ split out of it (lode-2thl).
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from conftest import LAND_SKILL_BASH, LAND_SKILL_BLOCKS, bash_fence_blocks
 
@@ -631,25 +632,26 @@ def test_sweep_allowlist_match_is_exact_text_not_shape() -> None:
     )
 
 
-def test_land_replay_fence_activates_the_venv() -> None:
-    """lode-04zb: the isolation-replay fence runs `scripts/land-replay.sh`,
-    which itself invokes `nox`, in a FRESH Bash invocation -- Section 3's own
-    combined re-gate fence activates the venv as its first line for exactly
-    this reason (shell state, including PATH, never survives between fenced
-    blocks). OBSERVED: without it, `nox` was not on PATH, and
-    `land-replay.sh`'s baseline `nox -t fix` check misreported the resulting
-    `command not found` as 'origin/trunk is red'."""
-    replay_fence = next(
-        (b for b in LAND_SKILL_BLOCKS if "scripts/land-replay.sh" in b),
-        None,
-    )
-    assert replay_fence is not None, (
-        "no fenced block invokes scripts/land-replay.sh anymore"
-    )
+def test_land_skill_never_activates_the_venv() -> None:
+    """lode-xx90: /land gates unactivated, venv tools by explicit path, in
+    parity with the code-reviewer. Activation puts `./venv/bin` first on PATH
+    and hides tests that spawn a tool by bare name (lode-p3ks). No fenced
+    block may source the activate script, and `land-replay.sh` resolves its own
+    `nox` by explicit path rather than depending on PATH (lode-04zb's missing-nox
+    diagnostic, now keyed on the venv's nox)."""
+    for block in LAND_SKILL_BLOCKS:
+        for line in block.splitlines():
+            assert "venv/bin/activate" not in _strip_comment(line), (
+                f"a land/SKILL.md fence activates the venv: {line!r}"
+            )
 
-    lines = [_strip_comment(line) for line in replay_fence.splitlines()]
-    non_blank = next((line for line in lines if line.strip()), "")
-    assert non_blank.strip() == ". ./venv/bin/activate", (
-        "the land-replay.sh fence's first executable line must activate the "
-        f"venv, same as Section 3's combined re-gate fence; got: {non_blank!r}"
+    replay = (
+        Path(__file__).resolve().parents[1] / "scripts" / "land-replay.sh"
+    ).read_text()
+    executable = [
+        line for line in replay.splitlines() if not line.lstrip().startswith("#")
+    ]
+    assert not any(re.match(r"\s*(if !? ?)?nox\b", line) for line in executable), (
+        "land-replay.sh runs a bare nox"
     )
+    assert any("venv/bin/nox" in line for line in executable)
