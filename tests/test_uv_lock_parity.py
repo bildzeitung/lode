@@ -23,10 +23,7 @@ def _requirements_pins(text: str) -> dict[str, str]:
 
 
 def _uv_versions(text: str) -> dict[str, str | None]:
-    return {
-        _norm(p["name"]): p.get("version")
-        for p in tomllib.loads(text)["package"]
-    }
+    return {_norm(p["name"]): p.get("version") for p in tomllib.loads(text)["package"]}
 
 
 def _mismatches(req: dict[str, str], uv: dict[str, str | None]) -> list[str]:
