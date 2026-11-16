@@ -390,7 +390,8 @@ This unblocks `lode-g274.4` (embedder manifest + `lode status` check) and `lode-
 > the "No attempt to pin" bullet, describe the *former* default. No pin target
 > exists for the current default, so the open PIN-vs-DETECT question in
 > [decisions.md](decisions.md) is moot for it (it still applies to a user who
-> pins the old model). The write-up below is left as written at decision time.
+> sets `enrichment_llm` back to the old model). The write-up below is left as
+> written at decision time.
 
 `lode-crh8`'s DB-invalidation scoping also covers the **enrichment LLM** (`enrichment_llm`, [Models](#models) above) — its output (tags, entities, summaries, inferred edges) persists into `annotations`/`edges` the same way the embedder's output persists into `embeddings`, so a silent model change is the same class of problem for enrichment as for embedding. Whether a given Anthropic model ID has a **dated-snapshot form** to pin against varies per model and shifts as the lineup changes — check the authoritative catalog (Anthropic's `GET /v1/models/{id}`, or the `claude-api` skill's model table) rather than inferring it from a sibling model or an earlier generation. `enrichment_llm`'s own default has one: `claude-haiku-4-5-20251001`, a distinct pinnable identifier alongside the bare `claude-haiku-4-5`. So a pin target *does* exist for the one model whose output persists into the DB, and whether to use it is an open question, deliberately not settled here — see [decisions.md](decisions.md) (`./venv/bin/python scripts/docs_index_query.py "lode-sdjb"`) for the tracking entry. lode pins nothing today regardless — the mechanism is record + detect:
 
