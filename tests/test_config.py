@@ -356,6 +356,21 @@ def test_illegal_reasoning_effort_rejected_at_load(
 
 
 @pytest.mark.parametrize(
+    "model", ["claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-5-5-20260101"]
+)
+def test_enrichment_llm_rejecting_forced_tool_choice_refused_at_load(
+    model: str,
+) -> None:
+    with pytest.raises(ValidationError, match=f"enrichment_llm.*{model}.*tool_choice"):
+        Settings(enrichment_llm={"model": model})
+
+
+def test_forced_tool_choice_guard_scoped_to_enrichment_and_anthropic() -> None:
+    Settings(qa_llm={"model": "claude-sonnet-5-5"})
+    Settings(llm_provider="openai", enrichment_llm={"model": "claude-sonnet-5-5"})
+
+
+@pytest.mark.parametrize(
     ("provider", "model", "effort"),
     [
         ("anthropic", "claude-sonnet-4-6", "high"),

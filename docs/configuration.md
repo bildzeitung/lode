@@ -600,6 +600,27 @@ surface, and works on every model regardless of whether it thinks.
 technical review and deferred at the time (`lode-d70n`), and is now decided;**
 see [below](#per-tier-max_tokens-override-decided-lode-d70n).
 
+### enrichment_llm refuses models that reject a forced `tool_choice` (decided, lode-eidi)
+
+Enrichment (immediate and batch) still forces its tool with
+`tool_choice={"type": "tool", ...}`. Sonnet 5.5 and Opus 5.5 reject that with a
+400, so an `enrichment_llm` override to either failed on every call — and a
+batch failed only at collect time, after it was submitted and its handle
+persisted. Q&A is unaffected: its final turn uses `output_config.format`
+(`lode-ugj5`).
+
+**Decided: refuse at config load.** `Settings` raises a `ValueError` naming the
+model and the cause when `llm_provider = "anthropic"` and `enrichment_llm.model`
+starts with a prefix in `llm_provider.FORCED_TOOL_CHOICE_REJECTING_MODEL_PREFIXES`
+(`claude-sonnet-5-5`, `claude-opus-5-5`; a prefix also covers dated snapshots).
+Routing enrichment through `output_config.format` instead was rejected as out of
+scope: it changes the batch decode path and the default tier's wire shape. This
+is a short known-rejects list, deliberately not the model→capability predicate
+`lode-3dlt` rejected — a newly-released model that rejects forced `tool_choice`
+still surfaces as an `LLMProviderError` at the seam until its prefix is added.
+`qa_llm`/`qa_think_harder_llm` and the `openai` provider (where `model` is a
+deployment name) are not checked.
+
 ### Per-tier `max_tokens` override (decided, lode-d70n)
 
 The gap the section above named: `enrichment_llm` / `qa_llm` /

@@ -688,9 +688,9 @@ class AnthropicProvider:
     Sonnet 5) may still think, sharing ``max_tokens`` with the tool-call JSON
     -- lode-3dlt tracked this as a real but then-unreachable risk rather than
     fixing it -- while an override to a model that rejects it (Sonnet 5.5,
-    Opus 5.5) 400s here, surfaced as :class:`LLMProviderError` by the
-    ``APIStatusError`` wrap. **lode-jgus closes it:** :data:`lode.enrich.MAX_TOKENS` was
-    raised (1024 -> 2048) for the same headroom reason
+    Opus 5.5; see :data:`FORCED_TOOL_CHOICE_REJECTING_MODEL_PREFIXES`) is
+    refused at config load for ``enrichment_llm`` (lode-eidi). **lode-jgus closes it:** :data:`lode.enrich.MAX_TOKENS` was
+    raised (1024 -> 2048, later 3072) for the same headroom reason
     :data:`lode.qa.MAX_TOKENS` was, and the branch below now guards the
     symptom of running out of that budget -- a response whose whole
     ``max_tokens`` was spent on thinking carries no ``tool_use`` block at
@@ -1385,6 +1385,16 @@ _OPENAI_EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "m
 # source of truth (and stay pinned to their installed SDK's own `Literal` by
 # the meta-tests) -- this mapping is a thin, load-order-safe re-export, not a
 # second copy.
+#: Anthropic model-id prefixes that 400 on a forced ``tool_choice``
+#: (lode-eidi). Enrichment is the only caller still on the forced-tool-use wire
+#: shape, so ``Settings`` refuses these for ``enrichment_llm`` at load. A short
+#: known-rejects list, not a capability predicate (lode-3dlt option 1): a
+#: prefix also covers a dated snapshot of the same model.
+FORCED_TOOL_CHOICE_REJECTING_MODEL_PREFIXES: tuple[str, ...] = (
+    "claude-sonnet-5-5",
+    "claude-opus-5-5",
+)
+
 EFFORT_LEVELS_BY_PROVIDER: Mapping[Literal["anthropic", "openai"], tuple[str, ...]] = {
     "anthropic": _ANTHROPIC_EFFORT_LEVELS,
     "openai": _OPENAI_EFFORT_LEVELS,

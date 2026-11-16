@@ -119,8 +119,9 @@ _TOOL_NAME = "extract_enrichment"
 #: hit the Fable-class 400 that fix exists to dodge. But ``enrichment_llm`` is
 #: ``Kind.RUNTIME``, and omitting ``thinking`` does not disable it -- each
 #: model still runs its own default. A user override to a thinking-capable
-#: model (Opus 5, Sonnet 5, Fable-class) therefore runs adaptive thinking on
-#: this call too, sharing ``max_tokens`` with the forced tool-call JSON
+#: model that accepts a forced ``tool_choice`` (Opus 5, Sonnet 5, Fable-class)
+#: therefore runs adaptive thinking on this call too (Sonnet 5.5 / Opus 5.5
+#: 400 on it and are refused at config load, lode-eidi), sharing ``max_tokens`` with the forced tool-call JSON
 #: payload -- the identical truncation hazard lode-3dlt's Q&A fix exists to
 #: avoid, on a path lode-3dlt named as a real but then-unreachable follow-up
 #: (this ticket).
