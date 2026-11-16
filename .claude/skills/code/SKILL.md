@@ -1,6 +1,6 @@
 ---
 name: code
-description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Fable) to fetch that branch and check it out into its own launch worktree, run the technical review (its own hand-reasoned correctness pass, plus /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to merge trunk in, re-gate, and push the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping each straight back to ready-for-land itself (lode-cln) — self-heals a clean merge or a mechanical (independent, non-overlapping) conflict on its own; a conflict where the two sides genuinely disagree still needs a human. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier, throttled to a shared concurrency cap (builders + reviewers + sweep dispatches combined; memory-derived default, user-overridable, lode-2cf) so the fan-out never runs more agents at once than the machine can gate safely. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
+description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Fable) to fetch that branch and check it out into its own launch worktree, run the technical review (/code-review at effort medium, then its own hand-reasoned correctness pass, plus /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to merge trunk in, re-gate, and push the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping each straight back to ready-for-land itself (lode-cln) — self-heals a clean merge or a mechanical (independent, non-overlapping) conflict on its own; a conflict where the two sides genuinely disagree still needs a human. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier, throttled to a shared concurrency cap (builders + reviewers + sweep dispatches combined; memory-derived default, user-overridable, lode-2cf) so the fan-out never runs more agents at once than the machine can gate safely. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
 ---
 
 # code
@@ -274,8 +274,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    needing a human to re-escalate or rebuild instead. Otherwise dispatch a `code-reviewer`
    exactly as Phase 2 does below (`subagent_type: "code-reviewer"` — no call-site `isolation` option,
    per the frontmatter sufficiency stated at Phase 1 below), same
-   prompt shape: read `review_head`, fetch + check out `land/<id>` into its own launch worktree, own
-   correctness pass + `/simplify`, re-gate, re-push, swap to `ready-for-land` or escalate again).
+   prompt shape: read `review_head`, fetch + check out `land/<id>` into its own launch worktree,
+   `/code-review` medium + own correctness pass + `/simplify`, re-gate, re-push, swap to `ready-for-land` or escalate again).
    Dispatch every hit **concurrently** with each other, with any step-0 rebase pickups, and with this
    invocation's own Phase 1 builds, **subject to the same concurrency cap** — a stranded re-entry
    never shares a ticket with a fresh build or rebase pickup, so none of these collide, but all of
@@ -494,8 +494,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 
    <a id="no-correctness-workflow"></a>
    **Do NOT run a `correctness-review` Workflow here, or anywhere in this skill (lode-rlyx).** Phase 2
-   dispatches the reviewer directly once the hand-off verifies. The reviewer's own reasoned correctness
-   pass **is** the correctness review — not a backstop to one.
+   dispatches the reviewer directly once the hand-off verifies. The reviewer's `/code-review` run and
+   its own reasoned correctness pass **are** the correctness review (lode-1fyb) — not a backstop to
+   one.
 
    **The measure** (2026-07-26 fan-out): four workflow runs consumed **~8.1M subagent tokens, about 80%
    of the entire invocation's spend** — against ~1.6M for eleven builders and ~0.4M for five reviewers
@@ -535,13 +536,15 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > fetch origin land/lode-ai1 trunk`, then `TOP=$(git rev-parse --show-toplevel)` and `git checkout
    > -B "land/lode-ai1--${TOP##*/}" FETCH_HEAD` (a local name suffixed with your own launch
    > worktree's directory — unique by construction, so no `--detach` fallback is ever needed) into your
-   > own launch worktree. Run `/code-review` at effort medium first (always; never `--fix`/`--comment`),
-   > then your own reasoned correctness pass against `trunk...HEAD`, verifying each of its findings
-   > against the code before acting on it; if the skill is missing or fails, retry once, carry on with
-   > the hand pass, and record it in your hand-off (lode-1fyb; see code-reviewer.md step 4). There is
-   > no `correctness-review` Workflow and no pre-computed findings (lode-rlyx). Then `/simplify`, re-gate, commit, `git push origin HEAD:land/lode-ai1`, and swap the
-   > ticket to `ready-for-land`. Do **not** merge, close, or push trunk. Escalate (revert to green, swap
-   > to `land-escalated`, don't mark ready) only on a clarifying decision or "making it worse."
+   > own launch worktree. Run `/code-review` at effort medium against `trunk...HEAD` first (always;
+   > never `--fix`/`--comment`), then your own reasoned correctness pass over the same diff, verifying
+   > each of the skill's findings against the code before acting on it; if the skill is missing or
+   > fails, retry once, carry on with the hand pass, and record it in your hand-off (lode-1fyb; see
+   > code-reviewer.md step 4). There is no `correctness-review` Workflow and no pre-computed findings
+   > (lode-rlyx). Then `/simplify`, re-gate, commit, `git push origin HEAD:land/lode-ai1`, and swap
+   > the ticket to `ready-for-land`. Do **not** merge, close, or push trunk. Escalate (revert to
+   > green, swap to `land-escalated`, don't mark ready) only on a clarifying decision or "making it
+   > worse."
 
    Give the reviewer whatever *context* is genuinely useful — which sibling branches in this fan-out
    touch the same files, what the ticket's own hand-off notes warn about, any specific claim worth
@@ -601,8 +604,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   run on the *built* branch, so always dispatch the reviewer *after* its builder returns
   `ready-for-code-review` — never in parallel with its own build. Don't dispatch a reviewer for a
   ticket that escalated at build time.
-- **Phase 2 runs NO `correctness-review` Workflow — the reviewer's own reasoned pass is the whole
-  correctness review (lode-rlyx, reversing lode-905v on measured cost).** The script no longer exists —
+- **Phase 2 runs NO `correctness-review` Workflow — the reviewer's `/code-review` run plus its own
+  reasoned pass is the whole correctness review (lode-rlyx, reversing lode-905v on measured cost;
+  lode-1fyb).** The script no longer exists —
   it was deleted outright once its manual-use grace period produced zero runs (lode-blrl). Rationale,
   numbers, and the retrieval SHA: [the Phase 2 note above](#no-correctness-workflow).
 - **`isolation: "worktree"` has been observed handing a dispatched agent a *recycled* worktree still

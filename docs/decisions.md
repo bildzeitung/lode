@@ -583,6 +583,11 @@ entries below from being rewritten to chase the current tree.)
   ticket, not a successor watch ticket. Until it is decided, `code-reviewer.md` step 4 stands as
   written. The rejection of a hand-rolled project-scope copy, just above, is unaffected.
 
+  **Update (lode-bldq, 2026-11-16) — DECIDED: option (b), `/code-review` at effort medium first, then
+  the hand-reasoned pass.** The decision, both trials and the two open unknowns are recorded in the
+  `lode-1fyb` entry at the end of this file; `code-reviewer.md` step 4 no longer stands as it was
+  written when the update above was made.
+
   **Update (lode-905v, 2026-07-20) — the multi-agent bug hunt is rebuilt as a Workflow, invoked by the
   `/code` ORCHESTRATOR, not by the reviewer.** lode-axyq made the definitions honest about the loss
   above; this ticket restores the CAPABILITY without touching the two rejected paths (extraction from
@@ -5930,7 +5935,8 @@ entries below from being rewritten to chase the current tree.)
 - **Code-reviewer runs `/code-review` medium as well as its hand pass (`lode-1fyb`, decided
   2026-11-16, maintainer decision; implemented by `lode-bldq`).** Resolves the open decision carried by
   the `lode-1fyb` update in the `/code-review` thread above: option (b), run the skill AND keep the
-  hand-reasoned correctness pass. The maintainer values correctness over speed in code review.
+  hand-reasoned correctness pass. The maintainer values correctness over speed in code review. The
+  live procedure is `.claude/agents/code-reviewer.md` step 4; this entry is the dated record.
   - **Order and flags:** `/code-review` FIRST, at effort `medium`, against `trunk...HEAD`, before the
     reviewer forms its own view of the diff; never `--fix`, never `--comment`. Always run, with no
     diff-size threshold.
