@@ -124,6 +124,9 @@ jobs:
       - name: Fail if the recompiled lock differs from the committed one
         run: git diff --exit-code requirements.lock
 
+      - name: Fail if uv.lock is stale against pyproject.toml
+        run: uv lock --check
+
   tests:
     runs-on: ubuntu-26.04
     # Caps a hung model download (the exact failure the weights cache exists to

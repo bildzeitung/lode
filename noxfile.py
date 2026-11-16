@@ -534,6 +534,20 @@ def lock_currency(session: nox.Session) -> None:
                 "scripts/update-deps.sh (or scripts/compile-lock.sh -o "
                 "requirements.lock) and commit the regenerated lock."
             )
+    # uv.lock coexists with requirements.lock until lode-s09w's retire child.
+    # `--check` exits 1 on a stale lock (content) but also on a resolve failure
+    # it cannot distinguish; the shared exit-2 machine-fault path above already
+    # proved uv and PyPI reachable moments ago, so 1 is attributed to content.
+    uv_check = subprocess.run(
+        ["uv", "lock", "--check"],
+        check=False,  # non-zero means "uv.lock is stale" -- inspected below
+    )
+    if uv_check.returncode != 0:
+        session.error(
+            "uv.lock is STALE -- pyproject.toml resolves to something different "
+            "than the committed uv.lock. Run `uv lock` (seeded from "
+            "requirements.lock so the two locks agree) and commit it."
+        )
 
 
 @nox.session
