@@ -846,8 +846,7 @@ ticket adds the seam **mechanism** only; it defines no tool schemas (`lode-35nu.
 call site passes real tools yet.
 
 **Shape**: `LLMProvider.run_tool_turns(*, …, tools: Sequence[ToolSpec], tool_result: Callable[[str,
-dict], str], output_schema, max_tokens, timeout_s, tool_name=None, tool_description=None,
-max_tool_turns=8) -> BaseModelT`. Free tool choice and a constrained structured-output schema are mutually
+dict], str], output_schema, max_tokens, timeout_s, max_tool_turns=8) -> BaseModelT`. Free tool choice and a constrained structured-output schema are mutually
 exclusive within one call, so a run is: up to `max_tool_turns` free turns (the model may call any
 tool in `tools`; each call is resolved via `tool_result(name, input)` and fed back as a tool result,
 until the model stops calling tools or the turn budget runs out), then **exactly one** final

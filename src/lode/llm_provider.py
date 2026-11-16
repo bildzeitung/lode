@@ -378,8 +378,6 @@ class LLMProvider(Protocol):
         output_schema: type[BaseModelT],
         max_tokens: int,
         timeout_s: float,
-        tool_name: str | None = None,
-        tool_description: str | None = None,
         max_tool_turns: int = _DEFAULT_MAX_TOOL_TURNS,
     ) -> BaseModelT:
         """N free tool turns, then one final schema-constrained turn (lode-35nu.11.6).
@@ -413,6 +411,11 @@ class LLMProvider(Protocol):
         existing single-shot call site (:mod:`lode.enrich`, and
         :mod:`lode.qa` until lode-35nu.11.2 wires real tools in) is
         unaffected in behavior by this method's existence.
+
+        There is deliberately no ``tool_name``/``tool_description`` here: the
+        final turn is structured output, never a forced tool call, and an
+        empty ``tools`` delegates to the no-``tool_name`` branch of
+        :meth:`structured_call` (lode-66ve).
         """
         ...
 
@@ -955,8 +958,6 @@ class AnthropicProvider:
         output_schema: type[BaseModelT],
         max_tokens: int,
         timeout_s: float,
-        tool_name: str | None = None,
-        tool_description: str | None = None,
         max_tool_turns: int = _DEFAULT_MAX_TOOL_TURNS,
     ) -> BaseModelT:
         """lode-35nu.11.6 -- see :meth:`LLMProvider.run_tool_turns` for the shape.
@@ -970,8 +971,8 @@ class AnthropicProvider:
         ``messages.parse`` (``output_config.format`` structured output, tools
         kept with ``tool_choice`` ``none``), continuing the same message
         history. Forced ``tool_choice`` is not used: Sonnet 5.5 and Opus 5.5
-        reject it (lode-ugj5), so ``tool_name``/``tool_description`` only
-        matter on the empty-``tools`` delegation to :meth:`structured_call`.
+        reject it (lode-ugj5), so ``run_tool_turns`` takes no
+        ``tool_name``/``tool_description`` (lode-66ve).
         ``timeout_s`` bounds the whole run (``max_tokens`` does not --
         see the module docstring): each SDK
         call is sent the *remaining* wall-clock budget, and the run raises
@@ -987,8 +988,6 @@ class AnthropicProvider:
                 output_schema=output_schema,
                 max_tokens=max_tokens,
                 timeout_s=timeout_s,
-                tool_name=tool_name,
-                tool_description=tool_description,
             )
 
         import anthropic  # deferred -- lode-4q97; needed by the `except` below
@@ -1505,8 +1504,6 @@ class OpenAIProvider:
         output_schema: type[BaseModelT],
         max_tokens: int,
         timeout_s: float,
-        tool_name: str | None = None,
-        tool_description: str | None = None,
         max_tool_turns: int = _DEFAULT_MAX_TOOL_TURNS,
     ) -> BaseModelT:
         """OpenAI/Azure degradation (lode-35nu.11.6, ``docs/stack.md``): the
@@ -1534,8 +1531,6 @@ class OpenAIProvider:
             output_schema=output_schema,
             max_tokens=max_tokens,
             timeout_s=timeout_s,
-            tool_name=tool_name,
-            tool_description=tool_description,
         )
 
     def submit_batch(
