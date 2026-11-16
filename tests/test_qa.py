@@ -4,7 +4,7 @@ Asserts the acceptance criteria offline (the Anthropic client is mocked, so no
 network call is ever made and the gates run without credentials):
 
 - structured claims are parsed via the anthropic ``messages.parse`` + Pydantic path;
-- Claude Sonnet 4.6 is the default model, Opus 5 the "think harder" toggle;
+- Claude Sonnet 5.5 is the default model, Opus 5.5 the "think harder" toggle;
 - ``no_egress`` passages are EXCLUDED from the cloud context (and surfaced as
   present-but-withheld);
 - redaction is applied to the context BEFORE it is sent;
@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from conftest import _text_block, _tool_use_block, fake_tool_turn_client
+from conftest import _text_block, fake_tool_turn_client
 
 from lode.answer import Answer, Claim, Support
 from lode.config import Settings
@@ -119,10 +119,10 @@ def test_opus_when_think_harder(conn) -> None:
 def test_thinking_not_disabled_for_think_harder_call(conn) -> None:
     # lode-3dlt (supersedes lode-d1sr's disabled pin): end-to-end companion to
     # test_llm_provider.py's provider-level assertion -- confirms the
-    # think-harder (Opus 5 by default) path never sends an explicit
+    # think-harder (Opus 5.5 by default) path never sends an explicit
     # thinking={"type": "disabled"}, since that value 400s on Fable-class
-    # models at any effort and on Opus 5 at effort xhigh/max. Opus 5 now runs
-    # adaptive thinking instead; MAX_TOKENS was raised to give it headroom.
+    # models, Sonnet 5.5 and Opus 5.5. They run adaptive thinking instead;
+    # MAX_TOKENS was raised to give it headroom.
     client = _FakeClient(_envelope([]))
     answer_question(
         conn,
@@ -476,20 +476,15 @@ def test_tools_enabled_with_no_connector_active_still_sends_tool_aware_prompt(
     # tool-aware prompt (not notes-only) is selected.
     settings = Settings(ask_tools_enabled=True)
     client = mock.MagicMock()
-    client.messages.parse.side_effect = AssertionError(
-        "structured_call/.parse must not be used when tools is non-empty"
-    )
     # Free turn: the model calls no tool -- breaks the free-tool-turn loop
     # immediately (there is nothing to search/fetch for this test).
     free_turn_response = mock.MagicMock()
     free_turn_response.content = [_text_block()]
     free_turn_response.stop_reason = "end_turn"
-    # Final forced-schema turn: an empty claims envelope.
-    envelope_block = _tool_use_block("_ClaimsEnvelope", {"claims": []}, "toolu_1")
-    final_response = mock.MagicMock()
-    final_response.content = [envelope_block]
-    final_response.stop_reason = "tool_use"
-    client.messages.create.side_effect = [free_turn_response, final_response]
+    client.messages.create.side_effect = [free_turn_response]
+    # Final structured-output turn (`.parse`, tools kept): an empty claims
+    # envelope.
+    client.messages.parse.return_value = SimpleNamespace(parsed_output=_envelope([]))
 
     answer_question(
         conn,
@@ -511,7 +506,7 @@ def test_end_to_end_tool_turn_cites_a_fetched_snapshot_the_unmodified_gate_verif
     """lode-8hsk's headline acceptance criterion.
 
     A stub provider drives answer_question(tools_enabled=True) through a free
-    tool turn (fetch) -> tool_result -> final forced-schema turn, producing a
+    tool turn (fetch) -> tool_result -> final structured-output turn, producing a
     claim whose support cites the snapshot_id the fetch call wrote via
     lode.tools.fetch_for_ask. The claim is then run through the UNMODIFIED
     faithfulness gate (lode.gate.apply_gate) against the stored snapshot
@@ -537,7 +532,8 @@ def test_end_to_end_tool_turn_cites_a_fetched_snapshot_the_unmodified_gate_verif
         web_fetcher=web_fetcher,
     )
 
-    assert client.messages.create.call_count == 3
+    assert client.messages.create.call_count == 2
+    client.messages.parse.assert_called_once()
     (claim,) = result.answer.claims
     (support,) = claim.support
     assert support.snapshot_id
@@ -567,14 +563,10 @@ def test_deleting_the_tools_pass_through_would_break_the_end_to_end_test(
     free_turn_response = mock.MagicMock()
     free_turn_response.content = [_text_block()]
     free_turn_response.stop_reason = "end_turn"
-    envelope_block = _tool_use_block("_ClaimsEnvelope", {"claims": []}, "toolu_1")
-    final_response = mock.MagicMock()
-    final_response.content = [envelope_block]
-    final_response.stop_reason = "tool_use"
 
     client = mock.MagicMock()
     client.messages.parse.return_value = SimpleNamespace(parsed_output=_envelope([]))
-    client.messages.create.side_effect = [free_turn_response, final_response]
+    client.messages.create.side_effect = [free_turn_response]
 
     answer_question(
         conn,
@@ -587,7 +579,8 @@ def test_deleting_the_tools_pass_through_would_break_the_end_to_end_test(
 
     # If build_ask_tools()/make_tool_result() stopped reaching run_tool_turns
     # (i.e. answer_question silently fell back to an empty tools tuple), the
-    # provider would take the empty-tools .parse() path instead of .create() --
-    # this assertion is exactly what would then fail.
+    # provider would take the empty-tools .parse() path (no free .create()
+    # turn, no `tools` on the .parse() call) -- these assertions are exactly
+    # what would then fail.
     client.messages.create.assert_called()
-    client.messages.parse.assert_not_called()
+    assert client.messages.parse.call_args.kwargs["tools"]

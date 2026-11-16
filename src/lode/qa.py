@@ -10,9 +10,9 @@ verifies the evidence and abstains; citations are enforced by verification, not
 by this response schema (``docs/retrieval.md``).
 
 **Model tier (``docs/stack.md`` "Q&A LLM").** The model is read from
-``settings.qa_llm`` (default Claude **Sonnet 4.6**, :data:`SONNET_MODEL`) or, when
+``settings.qa_llm`` (default Claude **Sonnet 5.5**, :data:`SONNET_MODEL`) or, when
 ``think_harder=True``, from ``settings.qa_think_harder_llm`` (default **Opus
-5**, :data:`OPUS_MODEL`) -- both ``Kind.RUNTIME`` knobs in :mod:`lode.config`,
+5.5**, :data:`OPUS_MODEL`) -- both ``Kind.RUNTIME`` knobs in :mod:`lode.config`,
 each a :class:`~lode.llm_provider.ModelTier` (model + reasoning_effort +
 max_tokens; lode-568v.2, lode-d70n), so a user override actually reaches the
 call. The call itself is
@@ -72,25 +72,25 @@ from lode.llm_provider import LLMProvider, ToolSpec, build_provider
 from lode.tool_dispatch import ToolBudget, build_ask_tools, make_tool_result
 from lode.webfetch import Fetcher
 
-#: Default Q&A model -- Claude Sonnet 4.6 (``docs/stack.md`` "Q&A LLM"). Mirrors
+#: Default Q&A model -- Claude Sonnet 5.5 (``docs/stack.md`` "Q&A LLM"). Mirrors
 #: :attr:`lode.config.Settings.qa_llm`'s default; the live value always comes
 #: from settings, never this constant directly (lode-obms).
-SONNET_MODEL = "claude-sonnet-4-6"
-#: "Think harder" toggle -- Claude Opus 5 (``docs/stack.md`` "Q&A LLM").
+SONNET_MODEL = "claude-sonnet-5-5"
+#: "Think harder" toggle -- Claude Opus 5.5 (``docs/stack.md`` "Q&A LLM").
 #: Mirrors :attr:`lode.config.Settings.qa_think_harder_llm`'s default; the live
 #: value always comes from settings, never this constant directly (lode-obms).
-OPUS_MODEL = "claude-opus-5"
+OPUS_MODEL = "claude-opus-5-5"
 
 #: Output cap for the synthesis call; claims are a compact, bounded structure,
 #: not long prose. Sized to give headroom for adaptive thinking to share this
 #: budget with the claims response: an explicit ``thinking={"type":
 #: "disabled"}`` used to guarantee zero thinking tokens
-#: here, but that value 400s on Fable-class models at any effort and on Opus 5
-#: at effort xhigh/max (lode-3dlt), so
+#: here, but that value 400s on Fable-class models, Sonnet 5.5 and Opus 5.5 at
+#: any effort (lode-3dlt), so
 #: :class:`~lode.llm_provider.AnthropicProvider` no longer sends it at all --
-#: Sonnet 4.6 (the ``qa_llm`` default) is unaffected (no thinking when the
-#: param is omitted), while Opus 5 (``qa_think_harder_llm`` default) and any
-#: Fable-class override now run adaptive thinking.
+#: both default tiers (Sonnet 5.5, Opus 5.5) and any Fable-class override run
+#: adaptive thinking. Re-baselined 8192 -> 10752 (lode-ugj5) for the ~30%
+#: more tokens the 5.x tokenizer produces for the same text as Sonnet 4.6.
 #:
 #: What bounds this call in practice is
 #: :attr:`~lode.config.Settings.qa_call_timeout_s` (300s), NOT the Anthropic
@@ -122,7 +122,7 @@ OPUS_MODEL = "claude-opus-5"
 #: when set, resolved in :func:`answer_question` through
 #: :meth:`~lode.llm_provider.ModelTier.resolve_max_tokens`. See
 #: ``docs/configuration.md`` "Models" for the decision.
-MAX_TOKENS = 8192
+MAX_TOKENS = 10752
 
 #: Notes-only prompt (no tools offered). Byte-for-byte unchanged from before
 #: lode-8hsk, asserted by test_qa.py -- the tools_enabled=False /

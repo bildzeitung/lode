@@ -834,7 +834,7 @@ def test_end_to_end_tool_turn_cites_a_fetched_snapshot_at_the_ask_layer(
 
     A real 'lode ask' with settings.ask_tools_enabled=True answers a question
     requiring a live lookup: a stub provider drives a free tool turn (fetch)
-    -> tool_result -> final forced-schema turn, producing a claim whose
+    -> tool_result -> final structured-output turn, producing a claim whose
     support cites the snapshot the fetch tool persisted. That snapshot has NO
     entry in the context-derived bodies map (nothing in ``context`` cites it)
     -- it only reaches the gate because cited_answer.ask resolves

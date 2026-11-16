@@ -31,7 +31,7 @@ working state. Create it if it's not there:
 
 refresh_ttl_s     = 1800
 no_egress_default = true
-qa_llm            = "claude-sonnet-4-6"
+qa_llm            = "claude-sonnet-5-5"
 ```
 
 Types follow TOML: bare numbers for ints/floats, `true`/`false` for bools, quoted

@@ -1395,7 +1395,7 @@ def _make_batch_result(
 # tool turn at all (both of test_qa.py's callers are non-fetch tests).
 #
 # tests/test_qa.py's and tests/test_cited_answer.py's end-to-end tool-turn
-# tests each drove an identical fetch -> tool_result -> forced-schema-turn
+# tests each drove an identical fetch -> tool_result -> structured-output-turn
 # scenario against a real, unmodified answer_question()/ask() and the real
 # faithfulness gate: a fetch tool call persists a snapshot, a second free
 # turn ends the loop early, and the final turn echoes the snapshot_id back
@@ -1495,12 +1495,13 @@ def fake_tool_turn_client(
     """Build the (client, web_fetcher) pair for the shared fetch-then-cite
     tool-turn scenario.
 
-    ``client.messages.create`` is wired for exactly three calls:
+    ``client.messages.create`` is wired for the two free turns and
+    ``client.messages.parse`` for the final structured-output turn:
 
     1. a free tool turn that calls the fetch tool against ``url``;
     2. a second free turn with no further tool call, ending the loop early
        (rather than exhausting run_tool_turns' default max_tool_turns=8);
-    3. the final forced-schema turn, which reads the snapshot the fetch tool
+    3. (``parse``) the final structured-output turn, which reads the snapshot the fetch tool
        just persisted back out of ``conn`` and echoes its snapshot_id into a
        claim citing ``quoted_span`` -- the same way a real model would from
        the tool_result content.
@@ -1529,17 +1530,16 @@ def fake_tool_turn_client(
     second_free_turn_response.content = [_text_block()]
     second_free_turn_response.stop_reason = "end_turn"
 
-    _responses = [free_turn_response, second_free_turn_response]
+    def _parse_side_effect(**_kwargs):
+        # The final structured-output turn (lode-ugj5). Check the fetch
+        # tool_result the first free turn produced BEFORE trusting a snapshot
+        # was persisted (lode-azkh): a transient fetch failure (e.g. an
+        # unstubbed live DNS hiccup) turns that tool_result into "error: ..."
+        # with no row written, and reading that back as a NoneType-unpacking
+        # crash (the original lode-8bn8 symptom) buries the real cause behind
+        # a confusing traceback.
+        from lode.qa import _ClaimsEnvelope
 
-    def _create_side_effect(**_kwargs):
-        if _responses:
-            return _responses.pop(0)
-        # Third call, the final forced-schema turn. Check the fetch tool_result
-        # the first free turn produced BEFORE trusting a snapshot was persisted
-        # (lode-azkh): a transient fetch failure (e.g. an unstubbed live DNS
-        # hiccup) turns that tool_result into "error: ..." with no row written,
-        # and reading that back as a NoneType-unpacking crash (the original
-        # lode-8bn8 symptom) buries the real cause behind a confusing traceback.
         fetch_results = [
             block["content"]
             for message in _kwargs["messages"]
@@ -1548,7 +1548,7 @@ def fake_tool_turn_client(
             if block.get("type") == "tool_result"
         ]
         assert fetch_results, (
-            "expected a fetch tool_result before the forced-schema turn"
+            "expected a fetch tool_result before the structured-output turn"
         )
         fetch_result = fetch_results[0]
         assert not fetch_result.startswith("error:"), (
@@ -1559,8 +1559,7 @@ def fake_tool_turn_client(
             (url,),
         ).fetchone()
         assert quoted_span in body
-        claim_block = _tool_use_block(
-            "_ClaimsEnvelope",
+        envelope = _ClaimsEnvelope.model_validate(
             {
                 "claims": [
                     {
@@ -1570,16 +1569,16 @@ def fake_tool_turn_client(
                         ],
                     }
                 ]
-            },
-            "toolu_2",
+            }
         )
         response = mock.MagicMock()
-        response.content = [claim_block]
-        response.stop_reason = "tool_use"
+        response.parsed_output = envelope
+        response.stop_reason = "end_turn"
         return response
 
     client = mock.MagicMock()
-    client.messages.create.side_effect = _create_side_effect
+    client.messages.create.side_effect = [free_turn_response, second_free_turn_response]
+    client.messages.parse.side_effect = _parse_side_effect
 
     return client, web_fetcher
 
