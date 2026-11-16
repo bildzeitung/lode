@@ -971,8 +971,7 @@ class AnthropicProvider:
         ``messages.parse`` (``output_config.format`` structured output, tools
         kept with ``tool_choice`` ``none``), continuing the same message
         history. Forced ``tool_choice`` is not used: Sonnet 5.5 and Opus 5.5
-        reject it (lode-ugj5), so ``run_tool_turns`` takes no
-        ``tool_name``/``tool_description`` (lode-66ve).
+        reject it (lode-ugj5).
         ``timeout_s`` bounds the whole run (``max_tokens`` does not --
         see the module docstring): each SDK
         call is sent the *remaining* wall-clock budget, and the run raises
