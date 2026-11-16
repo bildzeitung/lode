@@ -5910,3 +5910,19 @@ entries below from being rewritten to chase the current tree.)
   ticket:** a GNU-only or Linux-only dependency in `scripts/`, `.claude/`, or `noxfile.py` is **not**
   a defect — it's within the documented floor. The identical dependency reached from `src/lode/` **is**
   a defect — that code must run on the shipped app's target platforms, which include macOS.
+
+- **Port harness-export's uv-first Python workflow to lode (`lode-s09w`, 2026-11-16, maintainer
+  decision).** lode adopts `uv.lock` + `uv run --frozen` gates in four steps; this entry records the
+  decisions the whole epic rests on. Step 1 (`lode-s09w.1`) is purely additive: `uv.lock` is committed
+  alongside `requirements.lock`, seeded so every runtime pin is identical in both (a transitional
+  parity test, `tests/test_uv_lock_parity.py`, is the drift backstop), and `nox -s lock_currency` plus
+  CI's `lock-currency` job additionally run `uv lock --check`. **Dependency freeze:** from that step
+  landing until the retire child lands, `scripts/update-deps.sh` must not run and neither lock may move.
+  - **The `dev` group is locked.** This **reverses `lode-g274`'s open question #1** (dev tools left
+    unlocked); `ruff==0.16.3` stops being a single-tool carve-out and becomes an ordinary lock pin.
+  - **The venv moves to `./.venv`** (uv's default), and the `dev` extra moves to
+    `[dependency-groups]`.
+  - **`scripts/python-init.sh`, `venv-install` and `compile-lock.sh` are deleted outright, with no
+    compatibility wrappers.**
+  - **`lode-sys4`'s derive-the-target-interpreter-from-`.python-version` machinery is superseded:** uv
+    reads `.python-version` natively, so nothing needs to pass `--python-version` by hand.

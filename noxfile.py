@@ -45,7 +45,7 @@ registration gate exempts them by name:
     nox -s unit            pytest -m "not slow"                     (fast inner loop, lode-pql)
     nox -s eval            pytest tests/test_eval_live.py           (the golden-set eval, CI-only)
     nox -s coverage        pytest --cov=lode --cov-report=xml ...   (coverage measurement, CI-only, lode-qxdn.3)
-    nox -s lock_currency   verify requirements.lock is current      (local mirror of CI's lock-currency
+    nox -s lock_currency   verify both committed locks are current  (local mirror of CI's lock-currency
                                                                        job, lode-sys4 -- run by /land's
                                                                        re-gate so a stale lock never lands)
     nox -s build           build a wheel + sdist, assert package-data ships (packaging, not a code gate)
@@ -447,6 +447,9 @@ def lock_currency(session: nox.Session) -> None:
     of the ``uv pip compile`` invocation -- then diffs the scratch copy
     against the real committed file.
 
+    Then runs ``uv lock --check`` against the committed ``uv.lock``, which
+    coexists with ``requirements.lock`` until lode-s09w's retire child lands.
+
     Kept OUT of the default ``nox`` session set (like ``eval``/``build``):
     this needs network (PyPI) to resolve, so a bare ``nox`` / ``nox -s tests``
     stays offline.
@@ -461,13 +464,14 @@ def lock_currency(session: nox.Session) -> None:
     two failure kinds carry two different exit statuses, exactly as
     ``scripts/validate-mermaid.sh`` does (lode-9i2p):
 
-    - **exit 1 -- CONTENT.** The committed lock genuinely disagrees with what
-      ``pyproject.toml`` resolves to. Some branch's diff caused this; ``/land``
-      may isolate and bounce on it.
-    - **exit 2 -- MACHINE.** The gate could not run: ``uv`` is absent, or
+    - **exit 1 -- CONTENT.** A committed lock (either one) genuinely disagrees
+      with what ``pyproject.toml`` resolves to. Some branch's diff caused this;
+      ``/land`` may isolate and bounce on it.
+    - **exit 2 -- MACHINE.** The gate could not run: ``uv`` is absent,
       ``scripts/compile-lock.sh`` could not resolve at all (PyPI unreachable, a
-      5xx, DNS). This says *nothing* about the content being gated, and
-      ``/land`` must stop the pass rather than isolate -- otherwise a transient
+      5xx, DNS), or ``uv lock --check`` exited with anything but its own
+      "needs to be updated" status. This says *nothing* about the content
+      being gated, and ``/land`` must stop the pass rather than isolate -- otherwise a transient
       network blip bounces (and deletes) every reviewed branch in the pass,
       each with a fabricated "stale lock" finding. That distinction matters
       more here than for any other gate this repo has: unlike ``nox -t
@@ -534,6 +538,25 @@ def lock_currency(session: nox.Session) -> None:
                 "scripts/update-deps.sh (or scripts/compile-lock.sh -o "
                 "requirements.lock) and commit the regenerated lock."
             )
+    # uv's own exit status carries the content/machine split (measured on uv
+    # 0.11.7): 1 is "the lockfile needs to be updated"; 2 is everything that
+    # stopped it deciding -- no usable interpreter, an unreachable index, a
+    # build-backend failure, an unreadable lock.
+    uv_check = subprocess.run(["uv", "lock", "--check"], check=False)
+    if uv_check.returncode == 1:
+        session.error(
+            "uv.lock is STALE -- pyproject.toml no longer matches the committed "
+            "uv.lock. Run `uv lock` and commit it; until lode-s09w's retire "
+            "child lands, its runtime pins must still equal requirements.lock's "
+            "(tests/test_uv_lock_parity.py)."
+        )
+    elif uv_check.returncode != 0:
+        _machine_fault(
+            session,
+            f"`uv lock --check` exited {uv_check.returncode} without a verdict "
+            "(its own output above names the cause). uv.lock has NOT been "
+            "shown to be stale.",
+        )
 
 
 @nox.session
