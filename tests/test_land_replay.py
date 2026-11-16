@@ -133,7 +133,21 @@ def _install_fake_nox(repo: Path, fake_nox: Path) -> None:
     dest = repo / "venv" / "bin"
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copy2(fake_nox / "nox", dest / "nox")
-    exclude = repo / ".git" / "info" / "exclude"
+    exclude = Path(
+        subprocess.run(
+            [
+                "git",
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                "info/exclude",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    )
     exclude.parent.mkdir(exist_ok=True)
     with exclude.open("a") as f:
         f.write("/venv/\n")
