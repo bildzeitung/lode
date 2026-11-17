@@ -640,8 +640,9 @@ scripts/handoff-sha.sh <id> review_head --add-label ready-for-code-review
 ```
 
 Exit 0 is the write done. Exit 1 = the derived value is malformed (nothing was written), 2 = this
-CALL is broken (fix the invocation), 3 = `bd update` itself failed — fix and re-run; a nonzero exit
-writes nothing. Then publish it:
+CALL is broken (fix the invocation), 3 = `bd update` itself failed, 4 = origin's `land/<id>` is not
+at `HEAD` (push first), 5 = `git ls-remote origin` failed — fix and re-run; a nonzero exit writes
+nothing. Then publish it:
 
 ```bash
 scripts/bd-dolt-push.sh
@@ -896,7 +897,7 @@ scripts/handoff-sha.sh <id> land_head --remove-label needs-rebase --add-label re
 ```
 
 Exit 0 is done; nonzero writes nothing (1 = the derived value is malformed, 2 = this CALL is broken,
-3 = `bd update` failed).
+3 = `bd update` failed, 4 = origin's `land/<id>` is not `HEAD`, 5 = `ls-remote` failed).
 
 ```bash
 scripts/bd-dolt-push.sh
@@ -1066,7 +1067,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
 | Review context | head SHA (`review_head`) is the only metadata field the hand-off writes — `review_worktree`/`review_branch` are retired (lode-2m89: nobody read them) (bd metadata, read via `bd show --json`) |
-| SHA metadata writes | every `review_head`/`land_head` write is one call to `scripts/handoff-sha.sh <id> <field> [bd-update-args…]`, which derives `HEAD`, validates it and runs the `bd update` in a single process (lode-qh1m, lode-0a4n) — no SHA is ever copied between calls; exit 1 = malformed value, 2 = broken call, 3 = `bd update` failed |
+| SHA metadata writes | every `review_head`/`land_head` write is one call to `scripts/handoff-sha.sh <id> <field> [bd-update-args…]`, which derives `HEAD`, validates it and runs the `bd update` in a single process (lode-qh1m, lode-0a4n) — no SHA is ever copied between calls; exit 1 = malformed value, 2 = broken call, 3 = `bd update` failed, 4 = origin's `land/<id>` is not `HEAD`, 5 = `ls-remote` failed |
 | I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
 | External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal (lode-o29m) |
 | Technical review | **not mine** — the separate `code-reviewer` agent (Fable) fetches `land/<id>` into its own worktree and runs `/code-review` medium, then its own correctness reasoning verifying that skill's findings (lode-1fyb), + `/simplify` there |

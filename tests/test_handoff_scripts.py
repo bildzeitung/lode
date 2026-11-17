@@ -66,12 +66,23 @@ def _run(
     )
 
 
+@pytest.fixture
+def pushed(repo: Path, tmp_path: Path) -> Path:
+    """`repo` with an origin whose land/lode-x is HEAD (the state the call
+    sites guarantee before running handoff-sha.sh)."""
+    origin = tmp_path / "origin.git"
+    _git(tmp_path, "init", "-q", "--bare", str(origin))
+    _git(repo, "remote", "add", "origin", str(origin))
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/land/lode-x")
+    return repo
+
+
 def test_handoff_writes_the_derived_head_and_passes_extra_args(
-    repo: Path, bd: Path
+    pushed: Path, bd: Path
 ) -> None:
-    head = _out(repo, "rev-parse", "HEAD")
+    head = _out(pushed, "rev-parse", "HEAD")
     r = _run(
-        "handoff-sha.sh", repo, "lode-x", "land_head", "--add-label", "l", bindir=bd
+        "handoff-sha.sh", pushed, "lode-x", "land_head", "--add-label", "l", bindir=bd
     )
     assert r.returncode == 0, r.stderr
     assert _bd_log(bd).read_text().strip() == (
@@ -79,30 +90,53 @@ def test_handoff_writes_the_derived_head_and_passes_extra_args(
     )
 
 
-def test_handoff_broken_call_is_exit_2_and_writes_nothing(repo: Path, bd: Path) -> None:
-    assert _run("handoff-sha.sh", repo, "lode-x", bindir=bd).returncode == 2
-    assert _run("handoff-sha.sh", repo, "lode-x", "nope", bindir=bd).returncode == 2
+def test_handoff_broken_call_is_exit_2_and_writes_nothing(
+    pushed: Path, bd: Path
+) -> None:
+    assert _run("handoff-sha.sh", pushed, "lode-x", bindir=bd).returncode == 2
+    assert _run("handoff-sha.sh", pushed, "lode-x", "nope", bindir=bd).returncode == 2
     assert not _bd_log(bd).exists()
 
 
-def test_handoff_bd_failure_is_exit_3(repo: Path, bd: Path) -> None:
+def test_handoff_bd_failure_is_exit_3(pushed: Path, bd: Path) -> None:
     fake_bd(bd, default="exit 1")
-    r = _run("handoff-sha.sh", repo, "lode-x", "review_head", bindir=bd)
+    r = _run("handoff-sha.sh", pushed, "lode-x", "review_head", bindir=bd)
     assert r.returncode == 3
     assert "NOT written" in r.stderr
 
 
 def test_handoff_validates_the_derived_value_before_writing(
-    repo: Path, bd: Path
+    pushed: Path, bd: Path
 ) -> None:
     """The validator call is what stands between a malformed derive and the
     write: a `git` that prints a 39-character SHA must reach no `bd update`."""
     fake_git = bd / "git"
     fake_git.write_text(f"#!/usr/bin/env bash\necho {'a' * 39}\n")
     fake_git.chmod(0o755)
-    r = _run("handoff-sha.sh", repo, "lode-x", "land_head", bindir=bd)
+    r = _run("handoff-sha.sh", pushed, "lode-x", "land_head", bindir=bd)
     assert r.returncode == 1
     assert "MALFORMED" in r.stderr
+    assert not _bd_log(bd).exists()
+
+
+def test_handoff_refuses_when_origin_lacks_head(pushed: Path, bd: Path) -> None:
+    _git(pushed, "commit", "-q", "--allow-empty", "-m", "late")
+    r = _run("handoff-sha.sh", pushed, "lode-x", "review_head", bindir=bd)
+    assert r.returncode == 4
+    assert "push HEAD first" in r.stderr
+    assert not _bd_log(bd).exists()
+
+
+def test_handoff_refuses_when_land_branch_absent(pushed: Path, bd: Path) -> None:
+    r = _run("handoff-sha.sh", pushed, "lode-y", "review_head", bindir=bd)
+    assert r.returncode == 4
+    assert "absent" in r.stderr
+    assert not _bd_log(bd).exists()
+
+
+def test_handoff_without_origin_is_exit_5(repo: Path, bd: Path) -> None:
+    r = _run("handoff-sha.sh", repo, "lode-x", "review_head", bindir=bd)
+    assert r.returncode == 5
     assert not _bd_log(bd).exists()
 
 
