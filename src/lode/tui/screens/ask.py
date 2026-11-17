@@ -207,10 +207,13 @@ class AskScreen(Screen[None]):
     def _ask(self, question: str, generation: int) -> None:
         """Run the ask pipeline off the UI thread -- it does DB + network I/O.
 
-        Deferred import -- :class:`~lode.auth.AuthError` lives in a module
-        that pulls in the Anthropic SDK, which nothing in this screen's own
-        module scope may load (mirrors ``lode.cli.ask``'s own deferred import
-        of the same name, for the same reason).
+        Deferred import -- :class:`~lode.auth.AuthError` and
+        :class:`~lode.llm_provider.LLMProviderError` live in modules that pull
+        in the Anthropic SDK, which nothing in this screen's own module scope
+        may load (mirrors ``lode.cli.ask``'s own deferred import of the same
+        names, for the same reason). ``LLMProviderError`` is caught alongside
+        ``AuthError`` because an uncaught worker exception takes the whole app
+        down (``exit_on_error``); ``LLMAuthError`` is *not* an ``AuthError``.
 
         ``generation`` is the counter's value at the moment *this* question
         was submitted, passed in by :meth:`on_input_submitted`; every write it
@@ -219,6 +222,7 @@ class AskScreen(Screen[None]):
         that guard exists for.
         """
         from lode.auth import AuthError
+        from lode.llm_provider import LLMProviderError
 
         app = self.app
 
@@ -233,7 +237,7 @@ class AskScreen(Screen[None]):
                 on_stage=_on_stage,
                 pinned_note_id=self._note_id,
             )
-        except AuthError as err:
+        except (AuthError, LLMProviderError) as err:
             self.app.call_from_thread(self._finish, generation, _PLACEHOLDER, None)
             self.app.call_from_thread(self.notify, str(err), severity="error")
             return
@@ -277,7 +281,8 @@ class AskScreen(Screen[None]):
 
         Dropped (spinner left running for whichever worker *is* current) if
         a newer question has since superseded this one -- the late-write
-        guard. ``result`` is ``None`` on the ``AuthError`` path (nothing to
+        guard. ``result`` is ``None`` on the ``AuthError``/``LLMProviderError``
+        path (nothing to
         navigate) and on an abstained answer's own citation set is simply
         empty -- either way :meth:`_update_citation_status` clears the status
         line rather than special-casing them here.

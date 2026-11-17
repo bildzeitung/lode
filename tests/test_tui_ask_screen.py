@@ -1138,3 +1138,63 @@ def test_declining_save_as_note_writes_nothing(
 
     assert note_count == 1, "no new note on decline"
     assert edge_count == 0, "no edge on decline"
+
+
+@pytest.mark.parametrize("error_cls_name", ["LLMProviderError", "LLMAuthError"])
+def test_a_provider_error_leaves_the_app_running_with_placeholder_and_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_cls_name: str
+) -> None:
+    from lode import llm_provider
+
+    error_cls = getattr(llm_provider, error_cls_name)
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+    notices: list[tuple[str, str]] = []
+
+    def _raise(db_path: Path, question: str, **kwargs: object) -> AskResult:
+        raise error_cls("model declined to answer", provider="anthropic")
+
+    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _raise)
+
+    async def _drive() -> tuple[bool, str]:
+        async with app.run_test() as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            screen = app.screen
+            monkeypatch.setattr(
+                screen,
+                "notify",
+                lambda message, *, severity="information", **_kw: notices.append(
+                    (str(message), severity)
+                ),
+            )
+            screen.query_one(f"#{QUESTION_ID}").value = "anything at all?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            return app.is_running, str(screen.query_one(f"#{RESULTS_ID}").content)
+
+    running, rendered = asyncio.run(_drive())
+
+    assert running
+    assert rendered == _placeholder()
+    assert any(
+        "model declined to answer" in msg and sev == "error" for msg, sev in notices
+    )
+
+
+def _placeholder() -> str:
+    from lode.tui.screens import ask
+
+    return ask._PLACEHOLDER
+
+
+def test_importing_the_ask_screen_module_does_not_load_the_anthropic_sdk() -> None:
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, lode.tui.screens.ask; "
+        "sys.exit(1 if 'anthropic' in sys.modules else 0)"
+    )
+    assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0
