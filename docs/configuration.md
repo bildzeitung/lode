@@ -644,6 +644,41 @@ render it alongside `reasoning_effort` when set (e.g. `claude-opus-5
 (effort=high, max_tokens=4096)`), via the same `knob_rows` `ModelTier`
 rendering `reasoning_effort` already used — extended, not duplicated.
 
+### enrichment_llm refuses models that reject a forced `tool_choice` (decided, lode-eidi)
+
+Enrichment (immediate and batch) still forces its tool with
+`tool_choice={"type": "tool", ...}`, and `enrichment_llm` is `Kind.RUNTIME`.
+Six current models reject a forced `tool_choice` with a 400: Sonnet 5.5 and
+Opus 5.5 (live-probed under `lode-ugj5`), and Fable 5.1 / 5.2 and Mythos 5.1 /
+5.2 (per Anthropic's migration notes, not live-probed here). Haiku 5.5, Opus 5,
+Sonnet 5 and Fable 5 accept it. An override to a rejecting model failed on
+every call — and a batch failed only at collect time, after it was submitted
+and its handle persisted. Q&A is unaffected: its final turn uses
+`output_config.format`
+([`lode-ugj5`](#default-llm-tiers-moved-to-the-55-generation-decided-lode-ugj5)).
+
+**Decided: refuse at config load.** `Settings` raises a `ValueError` naming the
+model and the cause when `llm_provider = "anthropic"` and `enrichment_llm.model`
+is one of `llm_provider.FORCED_TOOL_CHOICE_REJECTING_MODELS`. The match is
+exact, not a prefix: these ids have no dated-snapshot form, and
+`claude-fable-5-2` as a prefix would also catch a suffixed `claude-fable-5` id —
+a model that accepts a forced `tool_choice`. `qa_llm`/`qa_think_harder_llm` and
+the `openai` provider (where `model` is a deployment name) are not checked.
+Routing enrichment through `output_config.format` instead — the fix that needs
+no model list — was passed over as out of scope: it changes the batch decode
+path and the default tier's wire shape.
+
+**This is a model→capability check at config load — the shape `lode-3dlt`
+passed over (its options 1 and 4), and that `lode-90o7` / `lode-tvps`
+[reaffirmed against](#reasoning_effort-wired-to-output_configeffort-decided-lode-wnz1)
+for the effort/model pairing.** It is a narrow exception, not a reversal: in
+those cases a fix that works on every model, or a clean failure at the seam,
+was enough; here the seam-level failure arrives too late on the batch route.
+The cost `lode-3dlt` named is real — the list is hand-kept and lags releases
+(as first built it named two of the six) — so a rejecting model not yet listed
+still surfaces as an `LLMProviderError` at the seam, per call or at batch
+collect, exactly as before this change.
+
 ### `reasoning_effort` wired to `output_config.effort` (decided, lode-wnz1)
 
 A `ModelTier`'s `reasoning_effort` reaches Anthropic as `output_config.effort`

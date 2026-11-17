@@ -119,11 +119,14 @@ _TOOL_NAME = "extract_enrichment"
 #: hit the Fable-class 400 that fix exists to dodge. But ``enrichment_llm`` is
 #: ``Kind.RUNTIME``, and omitting ``thinking`` does not disable it -- each
 #: model still runs its own default. A user override to a thinking-capable
-#: model (Opus 5, Sonnet 5, Fable-class) therefore runs adaptive thinking on
-#: this call too, sharing ``max_tokens`` with the forced tool-call JSON
-#: payload -- the identical truncation hazard lode-3dlt's Q&A fix exists to
-#: avoid, on a path lode-3dlt named as a real but then-unreachable follow-up
-#: (this ticket).
+#: model that accepts a forced ``tool_choice`` (Opus 5, Sonnet 5, Fable 5)
+#: therefore runs adaptive thinking on this call too, sharing ``max_tokens``
+#: with the forced tool-call JSON payload -- the identical truncation hazard
+#: lode-3dlt's Q&A fix exists to avoid, on a path lode-3dlt named as a real
+#: but then-unreachable follow-up (this ticket). A model that rejects a forced
+#: ``tool_choice`` (Sonnet 5.5, Opus 5.5, Fable 5.1 and later) 400s instead,
+#: and the known ones are refused at config load
+#: (:data:`~lode.llm_provider.FORCED_TOOL_CHOICE_REJECTING_MODELS`, lode-eidi).
 #:
 #: **The two routes are bounded differently** -- neither by the Anthropic SDK's
 #: non-streaming timeout guard, which never applies here for the reason
