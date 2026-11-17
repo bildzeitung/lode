@@ -4,6 +4,39 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-11-17 — `/land` rebuilt its accepted set from the live queue and picked up a ticket it had never vetted
+
+- **What happened:** a `/land` pass vetted and semantically reviewed three branches (`lode-gro8`,
+  `lode-mzuk`, `lode-5x01`). At Section 3a the lander filled `$ACCEPTED` by re-running
+  `bd list --label ready-for-land` instead of listing the three ids it held accept verdicts for.
+  `lode-1wwi` had reached `ready-for-land` mid-pass, so it entered `.git/land-state/accepted` and
+  got a merge message with no drift check, no conflict precheck and no `land-review`. The lander
+  saw the fourth id in its own output and removed it before `scripts/land-merge-batch.sh` ran.
+- **Root cause:** the queue was treated as equal to the reviewed set. It is only equal at the
+  instant Section 1 reads it; producers add to it for the whole length of the pass.
+- **Consequence:** none landed. One command further and an unreviewed branch would have merged to
+  `trunk` under a green re-gate, with nothing downstream to catch it.
+- **Rule that prevents a repeat:** the accepted set is written only from the ids that received a
+  `land-review` accept this pass. Never re-read the `ready-for-land` queue after Section 1; a
+  ticket that arrives mid-pass waits for the next pass. Before the merge, compare the accepted
+  file's ids against the verdicts in hand.
+
+## 2026-11-17 — A needs-rebase pickup took trunk's side of a conflict and dropped a reviewed edit whose target text survived
+
+- **What happened:** the second needs-rebase pickup on `land/lode-5x01` (merge `e59b630`) hit
+  conflicts in `docs/configuration.md` and `docs/settings.md` against `lode-188q`. It took trunk's
+  text and dropped the branch's applied, reviewed nit2 edit. Trunk's rewrite still contained the
+  exact sentence that nit corrected. The ticket's bd note kept saying "nit2 APPLIED".
+  `land-review` caught it.
+- **Root cause:** "take trunk's side" was treated as finishing the resolution. The pickup did not
+  check whether the edit it discarded still applied to trunk's version of the text.
+- **Consequence:** a reviewed docs fix was lost from the landed branch and the ticket's disposition
+  record was false. `/land` carried the nit over to the docs-nits collector by hand.
+- **Rule that prevents a repeat:** when a pickup takes trunk's side of a conflicting hunk, grep the
+  merged text for the anchor of each branch edit it discards. If the anchor survives, re-apply the
+  edit on trunk's text. If it is gone, record the edit as superseded in `land_summary`, never as
+  "dropped".
+
 ## 2026-11-15 — The last gate before trunk ran in a more lenient environment than the gate before it
 
 - **What happened:** `lode-6874` moved the `code-reviewer` (and the rebase pickup) to gating
