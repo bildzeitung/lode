@@ -3268,7 +3268,30 @@ What each consumer of the lock sees:
 notices.** The dirty-tree guard (lode-9hgu) still keeps uncommitted work, but a clean, zero-commit
 worktree could be reclaimed under a live builder; the [mid-session isolation
 guard](#isolation-guard-mid-session-re-assertion-lode-6wgc) then stops the builder rather than
-letting it write on `trunk`. Whether to assert the lock mechanically is lode-gro8.
+letting it write on `trunk`.
+
+**Decision (lode-gro8): the residual is accepted; no assertion is added.** What was established on
+Claude Code 2.1.326, read from `git worktree list --porcelain`: every live launch worktree of the
+running fan-out carried the harness lock (`claude agent agent-<hash> (pid N start M)`, all naming the
+orchestrating session's pid), including fresh-build builders at zero commits. The one unlocked
+`worktree-agent-*` entry was a leftover from an earlier session whose HEAD differed, not a live
+launch. Still not established: the version at which locking began, a rebase pickup's worktree, and a
+resumed `SendMessage` turn. Why no check:
+
+- **The exposed window is narrow.** It needs a harness that stopped locking, **and** a `/land`
+  backstop sweep landing between launch and the builder's first commit, **and** a clean tree. The
+  first commit makes the branch diverge from `trunk`, which ends the window; uncommitted work is
+  already kept by the dirty-tree guard (lode-9hgu).
+- **The cost is a recreated worktree, never a trunk write or lost committed work.** The mid-session
+  isolation guard (lode-6wgc) and `scripts/trunk-write-guard.sh` stop the builder, which pushes
+  nothing and is re-dispatched.
+- **A check has no good response.** The builder cannot take the lock itself without reopening the
+  lock/unlock pairing lode-t76f removed, so a failed check could only stop the build, converting a
+  possible reclaim into a certain abort on an assumption about the harness nobody has seen fail.
+
+Revisit if a launch worktree is ever observed unlocked at builder start; the check would then be a
+read-only `locked` line test on the worktree's own `git worktree list --porcelain` entry, before
+the first write, with stop-and-report on a miss.
 
 ### The step-0 pickup merges, it never rebases (lode-cln)
 
