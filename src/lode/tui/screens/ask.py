@@ -283,10 +283,10 @@ class AskScreen(Screen[None]):
 
         Dropped (spinner left running for whichever worker *is* current) if
         a newer question has since superseded this one -- the late-write
-        guard. ``result`` is ``None`` on the ``AuthError``/``LLMProviderError``
-        path (nothing to navigate) and on an abstained answer's own citation
-        set is simply empty -- either way :meth:`_update_citation_status`
-        clears the status line rather than special-casing them here.
+        guard. ``result`` is ``None`` on the error path (nothing to navigate)
+        and on an abstained answer's own citation set is simply empty --
+        either way :meth:`_update_citation_status` clears the status line
+        rather than special-casing them here.
         """
         if generation != self._ask_generation:
             return

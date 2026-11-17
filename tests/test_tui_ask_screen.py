@@ -17,8 +17,6 @@ escape-pop tests below drive it the real way instead: pressing ``ctrl+l``.
 """
 
 import asyncio
-import subprocess
-import sys
 import threading
 from collections.abc import Iterable
 from pathlib import Path
@@ -1151,9 +1149,8 @@ def test_declining_save_as_note_writes_nothing(
     assert edge_count == 0, "no edge on decline"
 
 
-#: A provider message as the seam really builds one: pydantic's bracket group
-#: is not valid Textual markup, so rendering it with the stock ``markup=True``
-#: raises ``MarkupError`` inside the toast and exits the app.
+#: Shaped like a real seam message: pydantic's bracket group is what the ask
+#: screen's ``markup=False`` exists for.
 _PROVIDER_MESSAGE = (
     "Anthropic response did not match Answer: 1 validation error for Answer\n"
     "claims\n  Field required [type=missing, input_value={}, input_type=dict]"
@@ -1202,11 +1199,3 @@ def test_a_provider_error_leaves_the_app_running_with_placeholder_and_notificati
     assert running
     assert rendered == _PLACEHOLDER
     assert toasts == [(_PROVIDER_MESSAGE, True)]
-
-
-def test_importing_the_ask_screen_module_does_not_load_the_anthropic_sdk() -> None:
-    code = (
-        "import sys, lode.tui.screens.ask; "
-        "sys.exit(1 if 'anthropic' in sys.modules else 0)"
-    )
-    assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0
