@@ -931,9 +931,15 @@ def test_submit_batch_builds_correct_schema_per_output_schema_in_a_heterogeneous
     gadget_schema = anthropic.transform_schema(_Gadget)
     reqs = client.beta.messages.batches.create.call_args.kwargs["requests"]
     by_id = {req["custom_id"]: req for req in reqs}
-    assert by_id["ver-1"]["params"]["output_config"]["format"]["schema"] == widget_schema
-    assert by_id["ver-2"]["params"]["output_config"]["format"]["schema"] == gadget_schema
-    assert by_id["ver-3"]["params"]["output_config"]["format"]["schema"] == widget_schema
+    assert (
+        by_id["ver-1"]["params"]["output_config"]["format"]["schema"] == widget_schema
+    )
+    assert (
+        by_id["ver-2"]["params"]["output_config"]["format"]["schema"] == gadget_schema
+    )
+    assert (
+        by_id["ver-3"]["params"]["output_config"]["format"]["schema"] == widget_schema
+    )
 
 
 def test_submit_batch_sends_effort_when_reasoning_effort_is_set() -> None:

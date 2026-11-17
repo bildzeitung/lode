@@ -1307,6 +1307,7 @@ EFFORT_LEVELS_BY_PROVIDER: Mapping[Literal["anthropic", "openai"], tuple[str, ..
     "openai": _OPENAI_EFFORT_LEVELS,
 }
 
+
 def _openai_effort_kwargs(
     reasoning_effort: str | None, *, model: str, provider_id: str
 ) -> dict[str, dict[str, str]]:
