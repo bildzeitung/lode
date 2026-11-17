@@ -336,4 +336,6 @@ def _open_url(screen: Screen[object], url: str) -> None:
     )
     if should_open:
         webbrowser.open(url)
-    screen.app.call_from_thread(screen.notify, message)
+    # markup=False: *message* embeds the note's raw URL, and a bracket group in
+    # it is eaten or raises MarkupError at toast render (exits the app).
+    screen.app.call_from_thread(screen.notify, message, markup=False)
