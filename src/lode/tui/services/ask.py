@@ -139,8 +139,8 @@ def run_ask(
     is unaffected.
 
     Imports the retrieval/Q&A stack here, not at module scope:
-    ``retrieval._retrieve`` pulls in the vector stack (pyarrow) and
-    ``cited_answer`` pulls in the Anthropic SDK, neither of which the capture
+    ``retrieval._retrieve`` and ``cited_answer`` (which imports retrieval)
+    pull in the vector stack (pyarrow), which neither the capture
     path -- or merely importing this module to register the ask screen in
     ``LodeApp.SCREENS`` -- may load.
     """
