@@ -1,0 +1,7 @@
+[
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "announce-model-first",
+    "phrase": "My very first line of output every run is"
+  }
+]

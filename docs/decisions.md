@@ -5956,3 +5956,19 @@ entries below from being rewritten to chase the current tree.)
   - **Open unknown 1:** whether the skill's internal agent inherits the invoking reviewer's
     conversation. The two trials disagree.
   - **Open unknown 2:** which recipe `medium` selects; the observed prompt was headed "high effort".
+- **Instruction-file dedupe: allowed, shortening is not (`lode-9d9t`, 2026-11-16, maintainer
+  decision).** Rules for trimming `.claude/agents/*.md` and `.claude/skills/*/SKILL.md` to cut
+  per-dispatch cost. Baseline that justified it (`lode-w18a.2`): cost scales with turn count, and the
+  `code-reviewer` is the cost centre.
+  - **Dedupe is ALLOWED.** A rule retold in several places in one file is kept once, at full strength,
+    with its existing link to `docs/`.
+  - **Shortening is NOT allowed.** A long-form rule keeps its wording: each was lengthened after an
+    observed failure, and nothing shows the current models follow the short form.
+  - **A verbatim move is allowed** of a self-contained second job to its own agent file (e.g. the
+    rebase-pickup cycle in `coding.md`).
+  - **A cut is accepted on a three-part check:** (1) a human-approved rule inventory per file, each
+    rule with one pinned phrase, and a pytest gate asserting every phrase is still present
+    (`tests/instruction_rules.json` + `tests/test_instruction_rule_inventory_gate.py`); (2) one file
+    per ticket; (3) a watch period: the next 5 dispatches of the trimmed agent are checked against a
+    short list of incident-derived behaviours, and a miss reverts the cut.
+  - **Accepted limit:** 5 dispatches do not exercise rare paths.

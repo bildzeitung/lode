@@ -2423,6 +2423,22 @@ judgment and `land-review` returns its verdict in conversation only. **That is a
 nature** — the entry becomes removable if `land-review` is ever changed to persist its verdict
 machine-readably, which is the removal condition recorded next to the entry itself.
 
+### Trimming instruction files: dedupe yes, shortening no (lode-9d9t)
+
+The standing rule for any ticket that cuts an agent or skill file to save per-dispatch cost
+(decision recorded in [decisions.md](decisions.md); baseline `lode-w18a.2`):
+
+- **Dedupe is allowed:** a rule retold in several places in one file is kept once, at full strength,
+  with its existing link to `docs/`.
+- **Shortening is not:** a long-form rule keeps its wording, because each was lengthened after an
+  observed failure.
+- **A verbatim move** of a self-contained second job to its own agent file is allowed.
+- **A cut is accepted only on all three:** a human-approved rule inventory for the file, each rule with
+  one pinned phrase, in `tests/instruction_rules.json` (the `tests/test_instruction_rule_inventory_gate.py`
+  gate fails when a pinned phrase is missing); one file per ticket; and a watch period in which the
+  next 5 dispatches of the trimmed agent are checked against incident-derived behaviours, a miss
+  reverting the cut. Five dispatches do not exercise rare paths; that limit is accepted.
+
 ### Invariants the coding loop never breaks
 
 A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents/coding.md) and
