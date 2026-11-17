@@ -1240,6 +1240,10 @@ entries below from being rewritten to chase the current tree.)
   technical review: `git worktree list --porcelain` reported the reviewer's worktree `locked`, with the
   harness's pid-keyed reason, though the reviewer never locked anything itself.
 
+  **Update (lode-t76f, 2026-11-17): `coding.md` takes no explicit lock any more.** With the harness
+  lock already present, that lock call exited 128 and took nothing, and the matching unlock removed
+  the harness's lock. See the `lode-t76f` entry at the end of this file.
+
   So the widened arm can only reach an **exited** agent's worktree, which at zero divergence holds
   nothing but uncommitted, ungated scratch from a run that never finished — while the authoritative
   content sits on `origin/land/<id>` and the ticket is re-reviewed from there. That is *precisely* the
@@ -1275,6 +1279,10 @@ entries below from being rewritten to chase the current tree.)
   all work), and an **exited** agent's leftover scratch are all unlocked. Each of those, sitting at
   trunk HEAD with uncommitted edits, was a live candidate for the lode-oqr failure mode (which
   destroyed two builds' uncommitted work) every time `/land` ticked (it self-paces on a 5-minute loop).
+
+  **Update (lode-t76f, 2026-11-17): one lock source now, the harness.** `coding.md` no longer locks
+  or unlocks its build worktree, and "releases it on exit" was already found unreliable
+  (`lode-7ndi`). See the `lode-t76f` entry at the end of this file.
 
   **Considered:** (a) add a dirty-tree guard testing the actual invariant directly; (b) narrow the
   path guard to a harness-owned directory convention (e.g. `.claude/worktrees/agent-*`) — rejected,
@@ -1545,6 +1553,11 @@ entries below from being rewritten to chase the current tree.)
   practice, the correct behavior is the one this change produces anyway: leave a locked, in-use worktree
   alone rather than force-remove it out from under whoever holds the lock — per the ticket's own
   framing, "arguably the correct behavior."
+
+  **Update (lode-t76f, 2026-11-17): reachable now.** The builder no longer unlocks, so a landed
+  builder's worktree is locked at GC time whenever the harness left its launch lock behind
+  (`lode-7ndi`) and the orchestrating session is still alive. The sweep keeps it until that session
+  ends. See the `lode-t76f` entry at the end of this file.
 
   **Why the per-ticket loop and the generalized backstop deliberately used different predicates before
   this change — so a future reader does not "unify" them back into a silent leak by re-adding a
@@ -3177,6 +3190,10 @@ entries below from being rewritten to chase the current tree.)
     long as a session still holds it would let the sweep separate "idle 6h because abandoned" from
     "idle 6h because between commits" exactly, instead of guessing from commit age. Not built here —
     it touches the producer/harness session lifecycle, well outside `/land`.
+    **Update (lode-t76f, 2026-11-17): the builder no longer unlocks, so a live build does not run
+    unlocked.** The age floor stays, for a different reason: every candidate that reaches the
+    dir-only arm is unlocked by then (released when its agent exited, or its stale lock cleared), so
+    there is still no token to compare. See the `lode-t76f` entry at the end of this file.
   - **Criterion 6 answered: the lock IS per-session, not per-agent, and the resulting leak class is
     fixed here, folded in per the human note (not split into a separate ticket).** Confirmed live:
     raw `.git/worktrees/<name>/locked` reasons showed 3 of 4 (and, in the original 2026-07-28
@@ -5983,3 +6000,28 @@ entries below from being rewritten to chase the current tree.)
     per ticket; (3) a watch period: the next 5 dispatches of the trimmed agent are checked against a
     short list of incident-derived behaviours, and a miss reverts the cut.
   - **Accepted limit:** 5 dispatches do not exercise rare paths.
+- **The builder takes no worktree lock of its own, and its unlock is dropped (`lode-t76f`,
+  2026-11-17).** `coding.md`'s fresh-build cycle told the builder to `git worktree lock .` before its
+  first write and `git worktree unlock .` after its first commit (`lode-oqr`). On Claude Code 2.1.326
+  the harness already holds a lock on every launch worktree, so the lock call exited 128 and took
+  nothing, and the unlock exited 0 and removed the harness's lock. Both steps are deleted. The live
+  account is [agents-workflow.md](agents-workflow.md#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f);
+  this entry is the dated record.
+  - **The other shape the ticket offered, not taken:** keep the lock call and tolerate exit 128.
+    It leaves the unlock undecidable (an unlock is right only when the builder's own lock was the
+    one taken), and a builder-held lock records no pid, so `scripts/worktree-lock-stale.sh` could
+    never clear it for a builder that died holding it.
+  - **Earlier entries that reasoned from "the builder unlocks after its first commit"** each carry
+    an `Update (lode-t76f, 2026-11-17)` marker: the `lode-amif` entry's note on `coding.md`'s explicit lock, the
+    `lode-9hgu` entry's "exactly two lock sources", the `lode-ux1n` answer that a locked landed
+    builder worktree is "believed unreachable", and the `lode-yrtu` age-floor rationale.
+  - **Cost taken on, in the safe direction.** A finished builder's worktree whose harness lock was
+    not released at agent exit (`lode-7ndi`: one of two for reviewers, unmeasured for builders) is
+    `keep-locked` to `/land`'s sweep, landed or abandoned, until the orchestrating session's process
+    ends. `/code`'s per-ticket reclaim does not cover it: it matches only `land/<id>--*`. A directory
+    held for the rest of a session, never lost work. Measuring it and deciding who releases such a
+    lock: `lode-lo0q`.
+  - **Not established.** The Claude Code version at which the harness began locking: the builds
+    `lode-oqr` lost (2026-07-10) were recorded as unlocked, and a harness lock is first on record a
+    few days later (`lode-amif`). Nothing asserts the lock is present when a build starts; whether
+    to: `lode-gro8`.

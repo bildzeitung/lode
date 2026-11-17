@@ -5,9 +5,8 @@
 #
 # WHY THIS EXISTS: /land's Section 4 worktree-GC backstop skips every
 # `locked` worktree unconditionally, before any other predicate runs. The
-# lock recorded by the Claude Code harness (every `isolation: "worktree"`
-# launch worktree, plus `.claude/agents/coding.md`'s own explicit
-# pre-first-commit lock) is PER-SESSION, not per-agent -- confirmed by
+# lock recorded by the Claude Code harness (on every `isolation: "worktree"`
+# launch worktree) is PER-SESSION, not per-agent -- confirmed by
 # measurement (lode-yrtu): several worktrees can share ONE lock-owner pid
 # (the session/parent process), so a dead session leaves EVERY worktree it
 # ever locked stuck behind the `locked` check forever -- `locked` is tested
