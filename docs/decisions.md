@@ -5987,13 +5987,16 @@ entries below from being rewritten to chase the current tree.)
   2026-11-17, maintainer decision; docs rewrite `lode-188q`).** `lode-ugj5` raised `qa.MAX_TOKENS`
   8192 -> 10752, and the `lode-wfyx` SDK-estimate formula (35.6 tok/s) put a full-cap response at
   ~302s, so the default had no headroom on paper.
-  - **2026-11-16: measure first.** Chosen over raising the knob or extending the SDK estimate,
-    because model speeds have changed.
+  - **2026-11-16: measure first.** Chosen over re-deriving a higher value from the same SDK
+    estimate (~400s) and over keeping 300s without data, because model speeds have changed.
   - **Result (anthropic SDK 1.4.0, 33 golden questions x 1 rep per cell):** real tiers run at
-    100-150 tok/s; a full 10752-token call projects to ~82-106s at p5 speed; max observed call
-    11.5s; 0 of 281 calls within 20% of 300s.
-  - **2026-11-17: keep 300s.** It has roughly 3x headroom; the derivation text in
-    `docs/configuration.md` now cites the measurement (Update note under the `lode-wfyx` section).
-  - **Not taken: lowering the bound.** Near-cap multi-turn tool runs were not exercised.
-  - **Accepted limit:** no call exceeded 12% of the cap, so the full-cap figure is extrapolated;
-    n=33 per cell, single rep, one time of day.
+    roughly 100-150 tok/s (p5 to p50, on calls with >= 500 output tokens); a full 10752-token
+    call projects to ~82-106s at p5 speed; max observed call 11.5s; 0 of 281 calls within 20% of
+    300s.
+  - **2026-11-17: keep 300s.** It has roughly 3x headroom over one full-cap call; the derivation
+    text in `docs/configuration.md` now cites the measurement (Update note under the `lode-wfyx`
+    section).
+  - **Not taken: lowering the bound.** The bound is per-run, and near-cap multi-turn tool runs
+    were not exercised.
+  - **Accepted limit:** no call exceeded ~12% of the cap (largest 1333 of 10752 output tokens), so
+    the full-cap figure is extrapolated; n=33 per cell, single rep, one time of day.

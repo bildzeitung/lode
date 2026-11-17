@@ -576,19 +576,22 @@ class Settings(BaseModel):
     qa_call_timeout_s: float = _knob(
         300.0,
         Kind.RUNTIME,
-        "Per-call client-side timeout (seconds) for the Q&A synthesis call "
-        "ONLY (qa.py's structured_call) -- split off enrich_call_timeout_s "
-        "(lode-wfyx), which still governs every enrich.py call site "
-        "unchanged. Needed because lode-3dlt let the think-harder tier "
+        "Per-run client-side timeout (seconds) for the Q&A synthesis call "
+        "ONLY (qa.py, via run_tool_turns: one call with the Ask tools off, "
+        "the whole tool-turns-then-answer run with them on) -- split off "
+        "enrich_call_timeout_s (lode-wfyx), which still governs every "
+        "enrich.py call site unchanged. "
+        "Needed because lode-3dlt let the think-harder tier "
         "(qa_think_harder_llm, Opus 5.5 by default) run adaptive thinking it "
         "previously never did, while enrich_call_timeout_s stayed at 120s -- "
         "plausibly too short once thinking shares qa.MAX_TOKENS with the "
         "claims response. The default was DERIVED from the SDK's estimate at "
         "decision time and is now backed by a live measurement instead "
-        "(lode-9i6y; see the Update note in the doc below). The derivation, the SDK-retry interaction it was "
-        "chosen alongside, and the ModelTier.max_tokens override that "
-        "invalidates it all live in ONE place -- docs/configuration.md 'Q&A "
-        "call timeout split from llm_call_timeout_s' -- deliberately not "
+        "(lode-9i6y). The derivation, the measurement, the SDK-retry "
+        "interaction it was chosen alongside, and the ModelTier.max_tokens "
+        "override this knob is coupled to all live in ONE place -- "
+        "docs/configuration.md 'Q&A call timeout split from "
+        "llm_call_timeout_s' -- deliberately not "
         "restated here, because the numbers have already drifted once across "
         "the copies.",
         gt=0.0,

@@ -350,7 +350,7 @@ citation target.
 | Enrichment LLM (`enrichment_llm`) | runtime | Claude Haiku 5.5 (default provider) | High-volume background extraction. A `(model, reasoning_effort, max_tokens)` `ModelTier` (`lode-568v.2`; `max_tokens` `lode-d70n`) — a bare TOML string still coerces to a `ModelTier` with `reasoning_effort=None` and `max_tokens=None`. `model` is interpreted **against the active `llm_provider`**: an Anthropic model id under the default provider, or an Azure/OpenAI deployment name under `llm_provider = "openai"`. `max_tokens`, when set, overrides [`enrich.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (3072) for both the immediate and batch enrichment calls. Persists into the DB (`annotations`/`edges`) — DB-affecting; the model (and, once non-Anthropic, the provider) is recorded per-row on `annotations.model`/`annotations.provider` and drift is detected from it, never pinned. ([below](#model-provenance-the-enrichment-llm-decided-lode-g2745)) |
 | Q&A LLM (`qa_llm`) | runtime | Claude Sonnet 5.5 (default provider) | Default interactive synthesis model. A `ModelTier`, same shape as Enrichment LLM — `model` is likewise interpreted against the active `llm_provider` (an Azure/OpenAI deployment name under `llm_provider = "openai"`). `max_tokens`, when set, overrides [`qa.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (10752). Answer-time only, persists nothing — recorded default, no provenance machinery. |
 | Q&A "think harder" (`qa_think_harder_llm`) | runtime | Opus 5.5, `reasoning_effort = high` (toggle, default provider) | Higher-quality, higher-cost synthesis on demand. A `ModelTier`, same provider-relative interpretation as the two knobs above — "think harder" can be a deployment swap (today's Anthropic Sonnet→Opus default), a `reasoning_effort` bump, a `max_tokens` override, or any combination, on the same deployment. Answer-time only, persists nothing — recorded default, no provenance machinery. |
-| Q&A call timeout (`qa_call_timeout_s`) | runtime | `300s` | Budget for the Q&A synthesis call (`qa.py`, routed through `LLMProvider.run_tool_turns` — `lode-35nu.11.6`), split off `enrich_call_timeout_s` (`lode-wfyx`) — [below](#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx). **Per-RUN, not per-call** (`lode-35nu.11.6`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)): with `tools_enabled=False` (or `ask_tools_enabled=false`, above) a "run" is exactly one call and this is unchanged from before lode-35nu.11.6; with the [Ask tools](#tool-augmented-ask-lode-8hsk--lode-35nu112--lode-8vvp) enabled, this same value bounds the whole free-tool-turns-then-final-answer run, not each turn individually. **Derived from the SDK estimate at decision time; 300s is now backed by a live measurement instead (Update note in the write-up).** Does not reach `enrich.py`'s three call sites — those stay on `enrich_call_timeout_s` (120s) unchanged, and are unaffected by this ticket (still calling `structured_call` directly). The derivation, the retained SDK retry-on-timeout it was chosen alongside, and the `ModelTier.max_tokens` override that invalidates it are all in the write-up linked above, deliberately not restated here. |
+| Q&A call timeout (`qa_call_timeout_s`) | runtime | `300s` | Budget for the Q&A synthesis call (`qa.py`, routed through `LLMProvider.run_tool_turns` — `lode-35nu.11.6`), split off `enrich_call_timeout_s` (`lode-wfyx`) — [below](#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx). **Per-RUN, not per-call** (`lode-35nu.11.6`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)): with `tools_enabled=False` (or `ask_tools_enabled=false`, above) a "run" is exactly one call and this is unchanged from before lode-35nu.11.6; with the [Ask tools](#tool-augmented-ask-lode-8hsk--lode-35nu112--lode-8vvp) enabled, this same value bounds the whole free-tool-turns-then-final-answer run, not each turn individually. **Derived from the SDK estimate at decision time; 300s is now backed by a live measurement instead (Update note in the write-up).** Does not reach `enrich.py`'s three call sites — those stay on `enrich_call_timeout_s` (120s) unchanged, and are unaffected by this ticket (still calling `structured_call` directly). The derivation, the measurement, the retained SDK retry-on-timeout it was chosen alongside, and the `ModelTier.max_tokens` override this knob is coupled to are all in the write-up linked above, deliberately not restated here. |
 | Max free tool turns (`_DEFAULT_MAX_TOOL_TURNS`) | build | `8` | Not a `Settings` knob — an internal constant (`src/lode/llm_provider.py`) bounding `LLMProvider.run_tool_turns`'s free-tool-choice phase. This is the mechanism that bounds a run's **total** output-token spend: `max_tokens` is per-**turn**, not per-run — a deliberate asymmetry with `qa_call_timeout_s` above, decided rather than left open (`lode-3dh1`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)) — so the worst case for one `run_tool_turns` call is `(max_tool_turns + 1) × max_tokens` output tokens — **9×** today's per-tier `max_tokens` default, not 8×, because this constant bounds only the *free* tool turns and the final structured-output turn is spent on top. Lower this (or override the `max_tool_turns` parameter at a call site) to tighten that bound; a separate per-run token ceiling was considered and deferred, not built (`lode-csl2`). Why per-turn was chosen over decrementing, and the rejected alternative, are in the write-up linked above — deliberately not restated here. |
 | HF probe timeout (`hf_probe_timeout_s`) | runtime | `5s` | Per-call timeout passed to `huggingface_hub.model_info()` by the indexing-side revision probe (`resolve_model_revision`, below). Bounds a black-holed network to this instead of the OS TCP connect timeout, which the probe used to block for before falling back to `model_revision = NULL` anyway (`lode-w5nr`). Matches `httpx`'s own default rather than the Fetch timeout below (`10s`, web content fetches) — this is a small metadata GET, not a page fetch. Bounds the probe only, **not** `fastembed`'s weights download (next section). What a float timeout actually bounds in `httpx`, with the measurement: `docs/decisions.md`, the `lode-w5nr` entry. |
 
@@ -453,39 +453,48 @@ was then unreachable and tracked as a follow-up; it is now closed, see
 > **Update (lode-188q, decided lode-9i6y, 2026-11-17):** `qa_call_timeout_s`
 > **stays 300s**, but it is no longer justified by the SDK-estimate derivation
 > below; it is justified by a live measurement. Read decision (1)'s "derived,
-> not measured" and the ~230s / ~35.6 tok/s arithmetic below as decision-time
+> not measured" and every figure below that comes from the SDK's ~35.6 tok/s
+> model (the ~230s expectation, the ~562s override example) as decision-time
 > history. Why it was reopened: `lode-ugj5` raised `qa.MAX_TOKENS` 8192 →
 > 10752, and the SDK's 35.6 tok/s model puts a full-cap response at ~302s, i.e.
 > no headroom under 300s. The maintainer chose to measure first (2026-11-16),
 > then to keep 300s (2026-11-17).
 >
 > **Measurement** (anthropic SDK **1.4.0** — the derivation below is pinned to
-> 0.117.1; golden set of 33 questions x 1 rep per cell, four cells run
-> concurrently; timeout raised to 590s for the run so slow calls were seen
-> uncensored; real Q&A path through `cited_answer.ask`, SDK client
-> instrumented):
+> 0.117.1, and `_calculate_nonstreaming_timeout`'s 3600s-per-128000-tokens
+> model is unchanged in 1.4.0; golden set of 33 questions x 1 rep per cell,
+> four cells run concurrently; timeout raised to 590s for the run so slow
+> calls were seen uncensored; real Q&A path through `cited_answer.ask`, SDK
+> client instrumented):
 >
 > - Sonnet 5.5, default effort, no tools: call wall p50 3.0s / p95 4.8s / max
 >   6.9s; output tokens p50 258 / p95 648 / max 1075.
-> - Sonnet 5.5, tools on (145 calls): call p50 2.1s / p95 4.9s / max 7.6s; LLM
->   time per run p50 10.1s / p95 18.9s / max 22.8s; calls per run p50 4 / max 9.
+> - Sonnet 5.5, tools on (fetch only; 145 calls, 79 `tool_use`): call p50 2.1s
+>   / p95 4.9s / max 7.6s; LLM time per run p50 10.1s / p95 18.9s / max 22.8s;
+>   calls per run p50 4 / max 9; max output tokens 1123.
 > - Opus 5.5, effort=high, no tools: call p50 4.2s / p95 6.7s / max 9.3s;
 >   output tokens p50 421 / p95 822 / max 1163.
-> - Opus 5.5, high, tools on (70 calls): call p50 4.3s / p95 9.4s / max 11.5s;
->   LLM time per run p50 8.7s / p95 16.2s / max 21.4s; max output tokens 1333.
-> - Observed speed on calls with >= 500 output tokens: Sonnet p5 113-132 tok/s,
->   Opus p5 101-107 tok/s (the SDK model assumes 35.6). Projected full
->   10752-token call at p5 speed: Sonnet 82-95s, Opus 101-106s, so 300s has
->   roughly 3x headroom.
+> - Opus 5.5, high, tools on (70 calls, 4 `tool_use`): call p50 4.3s / p95 9.4s
+>   / max 11.5s; LLM time per run p50 8.7s / p95 16.2s / max 21.4s; max output
+>   tokens 1333.
+> - Observed speed on calls with >= 500 output tokens: Sonnet p5 113-132 tok/s
+>   (p50 125-149), Opus p5 101-107 tok/s (p50 114-117); the SDK model assumes
+>   35.6. Projected full 10752-token call at p5 speed: Sonnet 82-95s, Opus
+>   101-106s, so 300s has roughly 3x headroom over **one** full-cap call.
 > - 0 of 281 calls came within 20% of 300s; 0 retries, 0 errors; stop_reason
 >   was only `end_turn` or `tool_use`, never `max_tokens`.
 >
-> **Limits of the measurement:** no call exceeded 12% of the cap, so the
-> full-cap figure is an extrapolation from short outputs, not an observation;
-> n=33 per cell, single rep, one time of day. Near-cap multi-turn tool runs
-> were not exercised, which is why lowering the bound was considered and not
-> taken. The "raise `qa_call_timeout_s` alongside any `max_tokens` override"
-> coupling warning below is kept: it still holds for large overrides.
+> **Limits of the measurement:** no call exceeded ~12% of the cap (the largest
+> was 1333 of 10752 output tokens), so the full-cap figure is an extrapolation
+> from short outputs, not an observation; n=33 per cell, single rep, one time
+> of day. The ~3x figure is for one call, while `qa_call_timeout_s` is a
+> per-run budget ([Models](#models) above): a tools-on run of several near-cap
+> turns could still exhaust it. Such near-cap multi-turn tool runs were not
+> exercised, which is why lowering the bound was considered and not taken. The
+> "raise `qa_call_timeout_s` alongside any `max_tokens` override" coupling
+> warning below is kept: it still holds for large overrides. At the measured
+> Opus p5 speed its 20000-token example projects to roughly 190-200s for one
+> call rather than ~562s, but two such turns in one tools-on run exceed 300s.
 
 `lode-3dlt` (see [above](#thinking-on-the-qa-synthesis-call-decided-lode-3dlt)) raised
 `qa.MAX_TOKENS` 4096 → 8192 and stopped disabling thinking on the Q&A
@@ -838,12 +847,18 @@ carry the sources). The older decision sections above are left as written at dec
 - **Tokenizer:** Haiku 5.5 and Sonnet 5.5 produce ~30% more tokens than Haiku 4.5 / Sonnet 4.6
   for the same text (Opus 5.5 shares Opus 5's tokenizer). `enrich.MAX_TOKENS` 2048 → 3072 and
   `qa.MAX_TOKENS` 8192 → 10752 (~×1.3). The per-tier `max_tokens` override is unchanged.
-- **`qa_call_timeout_s` stays 300s.** The [`lode-wfyx` write-up](#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx)
-  put a full 8192-token response at ~230s by the SDK's own model; the same model puts a full
-  10752-token response at ~302s, which would leave no headroom. That SDK estimate turned out to
-  be pessimistic: the `lode-9i6y` measurement (recorded in that section's Update note, `lode-188q`)
-  found 100-150 tok/s on the real tiers, so 300s keeps roughly 3x headroom and is kept on that
-  basis, not on the SDK estimate.
+- **`qa_call_timeout_s` stays 300s, which is no longer the margin its derivation describes.**
+  The [`lode-wfyx` write-up](#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx)
+  put a full 8192-token response at ~230s by the SDK's own model and added ~30% headroom; the
+  same model puts a full 10752-token response at ~302s, so at the default cap the headroom is
+  gone — the coupling that write-up warns about for a `max_tokens` override, now true of the
+  default. The bound is a human-decided value traded against the retry worst case, so it is
+  not re-derived here; whether to raise it is open (`lode-9i6y`).
+  **Update (lode-188q, 2026-11-17):** decided on `lode-9i6y` — 300s is kept, and the headroom
+  is gone only on paper. A live measurement (recorded in that write-up's Update note) found the
+  real tiers generating at roughly 100-150 tok/s (p5 to p50) against the SDK model's 35.6, so
+  one full-cap call projects to ~82-106s, roughly 3x under the bound. 300s now rests on that
+  measurement, not on the SDK estimate.
 - **Enrichment provenance.** `claude-haiku-5-5` is a fixed ID with no dated-snapshot form, so
   the "a pin target *does* exist" observation in
   [Model provenance](#model-provenance-the-enrichment-llm-decided-lode-g2745) describes the
