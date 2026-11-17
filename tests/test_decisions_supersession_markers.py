@@ -78,6 +78,24 @@ _OFF_PATTERNS: dict[str, re.Pattern[str]] = {
     # harmless, since every consumer asks only whether a line matched at all.
     "ALL-CAPS 'SUPERSEDED' marker keyword": re.compile(r"\bSUPERSEDED\b"),
     "'<claim> is falsified by <id>' sentence": re.compile(r"is falsified by lode-"),
+    # Narrower than the bare keyword on purpose: "**Correction the original
+    # proposal did not anticipate..." and "**Correction to this entry's first
+    # draft:**" are an entry narrating its OWN history, which the preamble
+    # exempts. Only "Correction (" / "Correction, " -- an id or date follows --
+    # is a backwards-pointing marker (lode-zkki).
+    "Correction-style lead-in opening a bold span, blockquote, or parenthetical": re.compile(
+        r"(?:\*\*|\(|^\s*>\s*\**)(?:Correction|Corrected|CORRECTION|CORRECTED)(?:\s*\(|,\s)"
+    ),
+}
+
+# Pre-existing off-pattern lead-ins that stay as written, each with its reason.
+# A lead-in rewrite would delete a committed line, which
+# scripts/check-decisions-no-silent-rewrite.sh forbids and the preamble bars.
+_ALLOWLIST: dict[str, str] = {
+    "**Correction (`lode-rtcx`) to the `lode-moq7` entry above": (
+        "committed before the Correction pattern existed; rewriting its lead-in "
+        "would delete a committed line (lode-zkki)"
+    ),
 }
 
 
@@ -91,7 +109,9 @@ def _off_pattern_markers(lines: list[str]) -> list[str]:
         f"  L{lineno} ({description}): {line.strip()}"
         for lineno, line in enumerate(lines, start=1)
         for description, pattern in _OFF_PATTERNS.items()
-        if pattern.search(line) and "Update (" not in line
+        if pattern.search(line)
+        and "Update (" not in line
+        and not any(allowed in line for allowed in _ALLOWLIST)
     ]
 
 
@@ -156,6 +176,10 @@ def test_off_pattern_scan_catches_a_reintroduced_marker() -> None:
         "**OBSOLETE (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
         "**FALSIFIED (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
         "**OUTDATED (lode-zzzz):** all-caps lead-in for the remaining keywords (lode-bv9o).",
+        "**Correction, 2026-11-16 (lode-zzzz)** to the lode-yyyy entry above.",
+        "- **Correction (`lode-zzzz`) to the lode-yyyy entry above's sentence.**",
+        "  > **CORRECTION (lode-zzzz, 2026-01-01) - the blockquote.**",
+        "- **(Corrected, lode-zzzz: the parenthetical.)**",
     ]
     # Scanned one line at a time on purpose: a whole-list count can be met by
     # one line matching two patterns while another matches none, which would
@@ -177,6 +201,9 @@ def test_off_pattern_scan_ignores_lowercase_narrative_prose() -> None:
         "  `lode-hwbm`'s reviewer falsified its ticket's entire premise with two",
         "  decision gets off, and is now **closed as superseded**, not built",
         "  behind by a *previous*, already-superseded dispatch (the guard runs)",
+        "  - **Correction the original proposal did not anticipate, verified on bash:** x",
+        "  **Correction to this entry's first draft:** it asserted the guard would be",
+        "  the correction (see below) was applied; corrected in place by the author",
     ]
 
     assert not _off_pattern_markers(narrative), (
