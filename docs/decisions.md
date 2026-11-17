@@ -6099,3 +6099,31 @@ entries below from being rewritten to chase the current tree.)
   - **Revisit trigger:** a live launch worktree seen without a `locked` line, or a fresh build that
     stops with its worktree gone while a `/land` sweep reported a full reclaim. Nothing watches for
     either.
+- **A rebase pickup refreshes `land_head` and leaves `land_summary` to the reviewer; its account of
+  the merge is a ticket note (`lode-jb2q`, 2026-11-17, builder call refined in technical review, not
+  a maintainer ruling).** The ticket asked whether the pickup should leave `land_summary` untouched
+  and said to settle that, then build. No maintainer settled it; confirming or reversing this entry
+  is `lode-gcbg`.
+  - **Why.** `/land` builds each merge commit as `Merge land/<id>: <land_summary> (<id>)`. The
+    pickup overwrote `land_summary` with a merge note, so a branch that took a pickup landed as
+    "Merged trunk @ ... into the branch" and the reviewer's description of the branch never reached
+    `trunk` (`c16e1f0`, `ef74569`, `7b8d5a4`). The trunk commit a pickup merged is already the
+    second parent of the branch's own merge commit.
+  - **Decided (builder).** The pickup's hand-off call refreshes `land_head` and passes no
+    `land_summary`.
+  - **Added in review: the merge note moves, it is not dropped.** Pickups had been writing which
+    files conflicted and how they resolved them into `land_summary`. That was the only prose record
+    of a resolution no technical reviewer sees. It now goes on the ticket through the same call,
+    as `--append-notes "REBASE PICKUP: ..."`; `land-review` reads ticket notes.
+  - **Added in review: one exception.** When a resolution removes or changes something
+    `land_summary` states, the pickup passes a corrected summary in the same call. The pickups on
+    `lode-9tj4`, `lode-ge7w` and `lode-mzuk` each kept trunk's deletion of code their branch had
+    changed; a summary left alone in that case puts a description of work the branch no longer
+    carries into `trunk` history. The corrected text describes the branch, not the merge.
+  - **Not taken.** Appending the merge note to the reviewer's summary: a read-modify-write of a bd
+    value across two calls. Writing the resolution into the pickup's own merge commit message:
+    `land-review` reads the ticket, and the `lode-dozi` rule in `MISTAKES.md` expects the
+    conflicting file's name there.
+  - **Accepted limits.** Nothing checks the pickup's judgment that a summary went false. A ticket
+    whose `land_summary` an earlier pickup already replaced keeps the merge note. A ticket that
+    reaches `needs-rebase` with no `land_summary` lands under its title, `/land`'s fallback.

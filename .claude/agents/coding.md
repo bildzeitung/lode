@@ -705,7 +705,8 @@ my dispatch, I run this instead of ["The producer cycle"](#the-producer-cycle) a
 ### 1. Read the hand-off
 
 ```bash
-bd show <id> --json     # confirm needs-rebase label; metadata.review_head is informational only
+bd show <id> --json     # confirm needs-rebase label; metadata.review_head is informational only;
+                        # note metadata.land_summary -- step 5's one exception needs it
 ```
 
 **Guard:** the ticket **must** carry `needs-rebase`. If it doesn't (already rebased, escalated, or
@@ -892,11 +893,11 @@ hand-off metadata and swap the label myself, with the same one-script derive →
 fresh-build hand-off:
 
 ```bash
-scripts/handoff-sha.sh <id> land_head --remove-label needs-rebase --add-label ready-for-land --set-metadata land_summary="Merged trunk into the branch"
+scripts/handoff-sha.sh <id> land_head --remove-label needs-rebase --add-label ready-for-land --append-notes "REBASE PICKUP: merged trunk into the branch; <clean merge, or each conflicting file and which side's content survived>"
 ```
 
 Exit 0 is done; nonzero writes nothing (1 = the derived value is malformed, 2 = this CALL is broken,
-3 = `bd update` failed).
+3 = `bd update` failed). The note is the only prose record of my merge, and `land-review` reads it.
 
 ```bash
 scripts/bd-dolt-push.sh
@@ -906,7 +907,14 @@ The push publishes the label swap + refreshed SHA over `refs/dolt/data`.
 
 `land_head`/`land_summary` is the one field-name convention the whole loop uses — the same keys
 `code-reviewer` sets when it first marks a ticket `ready-for-land`, and what `/land`'s 2a drift
-precheck reads. I leave `review_head` untouched — it still correctly describes the original build, and
+precheck reads. I refresh `land_head` and **leave `land_summary` as the reviewer wrote it**: `/land`
+builds the merge commit message from it (`Merge land/<id>: <land_summary> (<id>)`), so it must stay
+a description of what the branch does, never a note about my trunk merge — that goes in the
+`REBASE PICKUP` note above (lode-jb2q). **One exception:** if resolving a conflict removed or changed
+something `land_summary` states (I kept trunk's deletion of a function the summary names, say), the
+summary is now false and nothing downstream checks it, so I add `--set-metadata
+land_summary="<the reviewer's summary, corrected to what the branch still does>"` to the same call.
+I leave `review_head` untouched — it still correctly describes the original build, and
 it's live, but its readers are *not* `/land`: they are the **code-reviewer** (which checks it out and
 diffs it for drift) and **`/code`'s step-1 stranded-review guard** (which refuses a ticket whose
 `review_head` is empty). `/land`'s 2a precheck reads `land_head`, the field I just refreshed above.
@@ -924,9 +932,9 @@ reclaim still works if I crash or escalate. By then this worktree holds nothing 
 doesn't already have — a clean pass pushed first (above), and an escalation's aborted merge leaves the
 checkout an exact mirror of what was fetched — so removing it can never lose work.
 
-I **stop** and report: which ticket, that the merge was clean and the gates are green, the refreshed
-head SHA, and that it's back at `ready-for-land` — or, on an escalation, which kind of conflict it was
-and why.
+I **stop** and report: which ticket, whether the merge was clean or which conflicts I resolved and
+how, that the gates are green, the refreshed head SHA, and that it's back at `ready-for-land` — or, on
+an escalation, which kind of conflict it was and why.
 
 An **escalation** is different and stays mine: on a genuine-disagreement conflict I abort, leave the
 branch exactly as it was (no push — nothing changed to push), and set `land-escalated` myself (step
