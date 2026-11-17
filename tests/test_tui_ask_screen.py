@@ -26,13 +26,22 @@ from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.widgets import Footer, Input, Static, TextArea
 from textual.widgets._footer import FooterKey
+from textual.widgets._toast import Toast
 
 from lode.answer import Claim, Support
+from lode.auth import AuthError
 from lode.cited_answer import CitedAnswer
 from lode.egress import WithheldCitation
+from lode.llm_provider import LLMAuthError, LLMProviderError
 from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.screens.ask import CITATION_STATUS_ID, QUESTION_ID, RESULTS_ID, AskScreen
+from lode.tui.screens.ask import (
+    _PLACEHOLDER,
+    CITATION_STATUS_ID,
+    QUESTION_ID,
+    RESULTS_ID,
+    AskScreen,
+)
 from lode.tui.screens.capture import CaptureScreen
 from lode.tui.screens.edit import EditScreen
 from lode.tui.screens.save_as_note_confirm import (
@@ -1138,3 +1147,55 @@ def test_declining_save_as_note_writes_nothing(
 
     assert note_count == 1, "no new note on decline"
     assert edge_count == 0, "no edge on decline"
+
+
+#: Shaped like a real seam message: pydantic's bracket group is what the ask
+#: screen's ``markup=False`` exists for.
+_PROVIDER_MESSAGE = (
+    "Anthropic response did not match Answer: 1 validation error for Answer\n"
+    "claims\n  Field required [type=missing, input_value={}, input_type=dict]"
+)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        LLMProviderError(_PROVIDER_MESSAGE, provider="anthropic"),
+        LLMAuthError(_PROVIDER_MESSAGE, provider="openai"),
+        AuthError(_PROVIDER_MESSAGE),
+    ],
+    ids=["LLMProviderError", "LLMAuthError", "AuthError"],
+)
+def test_a_provider_error_leaves_the_app_running_with_placeholder_and_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    app = LodeApp(db_path=tmp_path / "lode.db")
+
+    def _raise(db_path: Path, question: str, **kwargs: object) -> AskResult:
+        raise error
+
+    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _raise)
+
+    async def _drive() -> tuple[bool, str, list[tuple[str, bool]]]:
+        # notifications=True: the pilot disables toasts by default, and the
+        # toast's own render is where a markup-parsed message blows up.
+        async with app.run_test(notifications=True) as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            screen = app.screen
+            screen.query_one(f"#{QUESTION_ID}").value = "anything at all?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            toasts = [
+                (str(toast.render()), toast.has_class("-error"))
+                for toast in screen.query(Toast)
+            ]
+            rendered = str(screen.query_one(f"#{RESULTS_ID}").content)
+            return app.is_running, rendered, toasts
+
+    running, rendered, toasts = asyncio.run(_drive())
+
+    assert running
+    assert rendered == _PLACEHOLDER
+    assert toasts == [(_PROVIDER_MESSAGE, True)]
