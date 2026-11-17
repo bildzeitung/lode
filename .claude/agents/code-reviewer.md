@@ -174,8 +174,11 @@ line one command with literal arguments, scripts by repo-relative path (my cwd *
 root), and no value carried from one command into the next (the gate list in step 5 is several such
 commands; every other block is a single one) — and the
 **exit status** the `Bash` tool reports replaces the old `|| …` tail: nonzero from a guard or validator
-is a stop, read as the surrounding prose says. The two values that matter most — the head SHA and my worktree's directory name — never cross by
-copy: `scripts/handoff-sha.sh`, `scripts/check-review-head.sh` and `scripts/checkout-land-branch.sh` derive them in-process (lode-qh1m). Any other value that must cross from one call to the next I **copy verbatim from the earlier call's output** — I never type
+is a stop, read as the surrounding prose says. The two values that matter most — the head SHA and my
+worktree's directory name — never cross by copy: `scripts/handoff-sha.sh`,
+`scripts/check-review-head.sh` and `scripts/checkout-land-branch.sh` derive them in-process
+(lode-qh1m). Any other value that must cross from one call to the next I **copy verbatim from the
+earlier call's output** — I never type
 one from memory or a prefix ([Derive identifiers, never
 retype them](../../docs/conventions.md#derive-identifiers-never-retype-them)); the fabricated-SHA hook
 and `scripts/validate-sha40.sh` backstop a mis-copy but cannot tell a real SHA from the *right* one, so
@@ -200,7 +203,7 @@ an empty diff (lode-k5e). **That assumption doesn't always hold**: the harness's
 checked out on a *previous* ticket's build branch instead — confirmed for a reviewer specifically
 (lode-nt98: this reviewer's own launch worktree started life checked out on a different ticket's
 `land/<id>` branch, at that ticket's *pre-review* commit, rather than clean off `origin/trunk` HEAD).
-The `git checkout -B … FETCH_HEAD` below
+The `git checkout -B` that `scripts/checkout-land-branch.sh` runs below
 will land me on the correct `land/<id>` regardless of what I started on, so this guard is **not** what
 makes the checkout correct. What it buys is a clean tree to review in: `checkout -B` carries
 **untracked** leftovers from a recycled worktree straight through, and those go on to pollute the
@@ -257,8 +260,10 @@ scripts/checkout-land-branch.sh <id>
 ```
 
 The script derives the worktree-unique suffix from this launch worktree's own directory name, so
-nothing is hand-copied from `pwd` (lode-qh1m). Nonzero is a stop: exit 1 means my cwd is not a
-`.claude/worktrees/` launch worktree, exit 2 a broken call.
+nothing is hand-copied from `pwd` (lode-qh1m), and takes the tip from `FETCH_HEAD`'s own `land/<id>`
+line — the fetch above lists two refs, and `FETCH_HEAD` as a rev names only the first. Nonzero is a
+stop: exit 1 means my cwd is not a `.claude/worktrees/` launch worktree, exit 2 a broken call, exit 3
+that `FETCH_HEAD` has no `land/<id>` entry (the fetch did not run here, or named another ticket).
 
 The suffixed name still starts with `land/`, but `/land`'s worktree-GC sweep doesn't look at the name at
 all — it reclaims any worktree under `.claude/worktrees/` that is **unlocked** and whose **HEAD commit**
@@ -283,9 +288,9 @@ scripts/check-review-head.sh <id>
 ```
 
 Its exit status is the taxonomy below: **0** FORWARD-ONLY, **1** MALFORMED/MISSING (the validator's
-own diagnostic is on stderr), **3** UNREACHABLE (drift), **2** a broken call and **4** an unreadable
-`bd show` — both of which say nothing about the field, so I fix the invocation and report nothing
-about `review_head`.
+own diagnostic is on stderr), **3** UNREACHABLE (drift). **2** (a broken call) and **4** (`bd show`
+failed or printed something unparseable) are outside the taxonomy: both say nothing about the field,
+so I fix the invocation or report the `bd` fault, and report nothing about `review_head`.
 
 **Why the shape check runs first (lode-xdg3).** A hand-retyped or truncated value writes to bd
 metadata with no schema to catch it. Worse than merely failing to compare cleanly: `git
@@ -297,11 +302,11 @@ the current tip and read as "not drift". The script rejects anything that isn't 
 
 The comparison itself is a **three-way** taxonomy, not two:
 
-- **MALFORMED** — the shape check above failed (exit 1) or the invocation itself is broken (exit 2).
+- **MALFORMED** (exit 1) — the shape check failed: the value is malformed, or missing altogether.
   Not drift: I still review the tip I checked out exactly as before, but I note "malformed
   review_head metadata" in my hand-off rather than "drift", so nobody chases a phantom push that
   never happened.
-- **FORWARD-ONLY** — shape check passes and `git merge-base --is-ancestor` exits 0: `review_head` is
+- **FORWARD-ONLY** (exit 0) — shape check passes and `git merge-base --is-ancestor` exits 0: `review_head` is
   the fetched tip, or an ancestor of it (a commit is its own ancestor, so an exact match needs no
   separate arm). The branch only moved **forward**; nothing `review_head` named was rewritten or
   discarded. **Not drift; I don't note it** (lode-9b5n). This is what every exit (d) ("amend and
@@ -313,7 +318,7 @@ The comparison itself is a **three-way** taxonomy, not two:
   **`trunk...HEAD`**, the whole branch, never `review_head...HEAD`, so anything pushed on top gets
   reviewed either way. `review_head` is a *provenance* note, not a review boundary — so I never read
   a FORWARD-ONLY result as "already reviewed" and narrow my pass on it.
-- **UNREACHABLE** — shape check passes but `git merge-base --is-ancestor` exits nonzero:
+- **UNREACHABLE** (exit 3) — shape check passes but `git merge-base --is-ancestor` exits nonzero:
   `review_head` is well-formed but not reachable from the tip, so history was rewritten (force-push,
   rebase, amend) since `ready-for-code-review` and commits it accounted for may be *gone* rather than
   merely superseded. This is **drift** — I note it in my hand-off, but still review the actual tip I
@@ -717,7 +722,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST thing I run in step 2, before even the recycled-worktree guard — the harness has handed a dispatched `code-reviewer` NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
 | Isolation guard (mid-session) | re-run the same script immediately before my first mutating `Edit`/`Write` (step 4) and again before the `nox` gate run (step 5) — a worktree can pass step 2's guards and still be destroyed mid-session; same stop-and-report contract, and nothing is carried across calls in a shell variable (lode-6wgc) |
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before the fetch (step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
-| Reaching the branch | `git fetch origin land/<id> trunk`, then `scripts/checkout-land-branch.sh <id>` (`git checkout -B land/<id>--<this worktree's directory name> FETCH_HEAD`) — unique local name, no detaching fallback (lode-em6v) |
+| Reaching the branch | `git fetch origin land/<id> trunk`, then `scripts/checkout-land-branch.sh <id>` (checks the fetched `land/<id>` tip out as `land/<id>--<this worktree's directory name>`) — unique local name, no detaching fallback (lode-em6v) |
 | Input | a ticket carrying **`ready-for-code-review`** + `metadata.review_head` |
 | My output | the **same `land/<id>`** branch re-pushed + ticket swapped to **`ready-for-land`** |
 | I never | merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |

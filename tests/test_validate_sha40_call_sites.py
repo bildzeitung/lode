@@ -21,11 +21,12 @@ Two shapes, two rules:
   `$(...)` (lode-fvg0) -- and copying a SHA from one call's output into the next
   let the validator check one paste while the other was written (lode-0a4n).
   So (lode-qh1m) an agent file may NOT write either field via `--set-metadata`
-  nor read it with `jq`; it calls `scripts/handoff-sha.sh` (derive + validate +
-  write in one process) and `scripts/check-review-head.sh` (read + validate +
-  ancestor check in one process). Those scripts call the validator themselves,
-  which this file pins too. No block-distance heuristic is needed: the rule is
-  "the agent file calls the script", checked by exact path.
+  (anywhere in the file, prose and inline code included) nor read it with `jq`;
+  it calls `scripts/handoff-sha.sh` (derive + validate + write in one process)
+  and `scripts/check-review-head.sh` (read + validate + ancestor check in one
+  process). The rule is "the agent file calls the script", checked by exact
+  path; that the scripts themselves validate before using the value is pinned
+  by behaviour in `tests/test_handoff_scripts.py`.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ import re
 from pathlib import Path
 
 import pytest
-from conftest import markdown_corpus_blocks
+from conftest import markdown_corpus_blocks, markdown_corpus_text
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -76,8 +77,19 @@ CALL_SITES: list[tuple[str, list[str]]] = [
     for path, blocks in markdown_corpus_blocks()
 ]
 
-AGENT_SITES = [(p, b) for p, b in CALL_SITES if p.startswith(".claude/agents/")]
-SKILL_SITES = [(p, b) for p, b in CALL_SITES if not p.startswith(".claude/agents/")]
+AGENTS_PREFIX = ".claude/agents/"
+
+AGENT_SITES = [(p, b) for p, b in CALL_SITES if p.startswith(AGENTS_PREFIX)]
+SKILL_SITES = [(p, b) for p, b in CALL_SITES if not p.startswith(AGENTS_PREFIX)]
+
+#: Raw text of every agent file: a hand-copied write is as dangerous in an
+#: inline code span or a list item as in a fenced block, and the blocks view
+#: cannot see those.
+AGENT_TEXT = {
+    rel: text
+    for path, text in markdown_corpus_text()
+    if (rel := str(path.relative_to(REPO_ROOT))).startswith(AGENTS_PREFIX)
+}
 
 
 def _validator_lines(block: str, field: str) -> list[str]:
@@ -135,6 +147,18 @@ def test_every_skill_read_is_shape_checked_in_its_own_block() -> None:
     )
 
 
+def test_skill_write_site_still_exists() -> None:
+    """Non-vacuity for the one-block write gate below: with the agent files'
+    writes moved into `scripts/handoff-sha.sh`, the skills hold the only
+    `--set-metadata <field>=` sites left for it to check."""
+    assert any(
+        _write_site_indices(b, field) for _, b in SKILL_SITES for field in DRIFT_FIELDS
+    ), (
+        "expected a skill block writing a drift SHA via --set-metadata, found "
+        "none -- update this gate rather than deleting it"
+    )
+
+
 def test_every_skill_write_is_shape_checked_on_the_same_variable() -> None:
     """A write must be `--set-metadata <field>="$VAR"` with the validator called
     on that same `"$VAR"` in the same block (lode-uvjr, lode-0a4n)."""
@@ -155,11 +179,12 @@ def test_every_skill_write_is_shape_checked_on_the_same_variable() -> None:
 @pytest.mark.parametrize("field", DRIFT_FIELDS)
 def test_no_agent_file_writes_or_reads_a_drift_field_by_hand(field: str) -> None:
     """Strict (lode-qh1m): agent files go through the scripts, never a
-    hand-copied `--set-metadata <field>=` or a `jq` read of the field."""
+    hand-copied `--set-metadata <field>=` (anywhere in the file) or a `jq`
+    read of the field."""
     offenders = [
         path
         for path, blocks in AGENT_SITES
-        if _write_site_indices(blocks, field)
+        if WRITE_VALUE_PATTERNS[field].search(AGENT_TEXT[path])
         or any(f"metadata.{field}" in b and "jq" in b for b in blocks)
     ]
     assert not offenders, (
@@ -191,8 +216,3 @@ def test_script_is_executable(script: str) -> None:
     path = REPO_ROOT / script
     assert path.exists(), f"{script} is missing"
     assert os.access(path, os.X_OK), f"{script} is not executable"
-
-
-@pytest.mark.parametrize("script", [HANDOFF, REVIEW_HEAD_CHECK])
-def test_hand_off_scripts_call_the_validator(script: str) -> None:
-    assert "validate-sha40.sh" in (REPO_ROOT / script).read_text()

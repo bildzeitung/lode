@@ -193,8 +193,9 @@ with literal arguments, scripts called by their repo-relative path (my cwd *is* 
 and no value carried from one command into the next (the gate lists, the `builds_on` fetch + merge
 and the rebase-pickup escalation are several such commands; every other block is a single one) — and
 the **exit status** the `Bash` tool reports replaces the old `|| …` tail: a nonzero status from a guard or
-validator is a stop, read as the surrounding prose says. The two values that matter most — the head SHA and my worktree's directory name — never cross by copy:
-`scripts/handoff-sha.sh` and `scripts/checkout-land-branch.sh` derive them in-process (lode-qh1m). Any other
+validator is a stop, read as the surrounding prose says. The two values that matter most — the head
+SHA and my worktree's directory name — never cross by copy: `scripts/handoff-sha.sh` and
+`scripts/checkout-land-branch.sh` derive them in-process (lode-qh1m). Any other
 value that must cross from one call to the next I **copy verbatim from the earlier call's output** — I
 never type one from memory or from a prefix, which is what [Derive identifiers, never
 retype them](../../docs/conventions.md#derive-identifiers-never-retype-them) forbids; the
@@ -746,8 +747,8 @@ handing a dispatched agent a **recycled** worktree still checked out on a *previ
 branch, carrying that ticket's commits, instead of a fresh branch off `origin/trunk` HEAD — confirmed in
 production for both a fresh-build producer and a `code-reviewer` (lode-eshl's technical review; full
 account in
-[`docs/agents-workflow.md`](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)). The `git checkout -B …
-FETCH_HEAD` below *will* land me on the correct `land/<id>` regardless, so this guard is **not** what
+[`docs/agents-workflow.md`](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)). The `git checkout -B` that
+`scripts/checkout-land-branch.sh` runs below *will* land me on the correct `land/<id>` regardless, so this guard is **not** what
 makes the checkout correct. What it buys is a clean tree to work in: `checkout -B` carries **untracked**
 leftovers from a recycled worktree straight through, and those go on to pollute my `git status` and the
 `nox` run I gate on. So, before the fetch, I assert this launch worktree actually started clean — via
@@ -803,8 +804,10 @@ git fetch origin land/<id> trunk
 scripts/checkout-land-branch.sh <id>
 ```
 
-The script derives the suffix from this launch worktree's own directory name (lode-qh1m); a nonzero
-exit is a stop (1 = cwd is not a `.claude/worktrees/` launch worktree, 2 = a broken call).
+The script derives the suffix from this launch worktree's own directory name (lode-qh1m) and takes
+the tip from `FETCH_HEAD`'s own `land/<id>` line, not from whichever ref the fetch listed first; a
+nonzero exit is a stop (1 = cwd is not a `.claude/worktrees/` launch worktree, 2 = a broken call, 3 =
+`FETCH_HEAD` has no `land/<id>` entry — the fetch above did not run here, or named another ticket).
 
 ```bash
 git rev-parse --abbrev-ref HEAD

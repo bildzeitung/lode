@@ -481,7 +481,8 @@ Two rules, three message texts:
   - **Carrying a value across calls: copy from output, stated outright.** No *in-shell* carry is
     accepted — a variable or `$(…)` is exactly a refused shape, and a scratch file is a new
     side channel. The agent files say so: a SHA or a worktree directory name goes from one call's
-    printed output, verbatim, into the next call (e.g. the unstacked merge-base SHA → `git diff`) —
+    printed output, verbatim, into the next call (e.g. the stacked off-trunk merge-base SHA → `git
+    diff` in `land-review.md`) —
     the sanctioned workaround below, applied to every block rather than improvised per run.
     **What that cost, and how lode-qh1m removed it for the two values that matter:** pasting the SHA
     twice meant the write-side validator checked the first paste while the second was written —
@@ -493,8 +494,11 @@ Two rules, three message texts:
     update` failed), `scripts/check-review-head.sh <id>` (the code-reviewer's read + validate +
     ancestor check; 0 forward-only, 1 malformed/missing, 2 broken call, 3 unreachable = drift, 4
     `bd show` unreadable) and `scripts/checkout-land-branch.sh <id>` (the worktree-suffixed
-    `checkout -B`, suffix taken from the worktree's own directory). Copy-from-output remains only
-    for values with no script, e.g. the unstacked merge-base SHA in `land-review.md`.
+    `checkout -B`: suffix taken from the worktree's own directory, tip taken from `FETCH_HEAD`'s own
+    `land/<id>` line rather than from `FETCH_HEAD` as a rev, which names only the first ref of a
+    multi-ref fetch; 1 not a launch worktree, 2 broken call, 3 no `land/<id>` entry in `FETCH_HEAD`).
+    Copy-from-output remains only for values with no script, e.g. the stacked off-trunk merge-base
+    SHA in `land-review.md`.
   - **The `|| { echo STOP …; exit 1; }` tails are gone, and their diagnostics moved to prose.** The
     `Bash` tool reports the exit status of the bare call, so the stop condition is "nonzero". The
     bootstrap-gap message (script missing → bash exits 127, "No such file or directory"; exec bit
@@ -506,9 +510,9 @@ Two rules, three message texts:
   (validator on the same `"$VAR"` in the same block) and is strict for the agent files (lode-qh1m):
   they may not write a drift field via `--set-metadata` or `jq`-read it at all, and must call the
   scripts above — no block-distance heuristic.
-  The stacked-diff merge-base loop in `land-review.md` is likewise unrolled into plain calls, as is
-  the unstacked diff (`git merge-base origin/trunk origin/land/<id>`, then `git diff
-  <sha>..origin/land/<id>`), which lode-fvg0 had left as an inline `$(…)` (converted in lode-qh1m).
+  The stacked-diff merge-base loop in `land-review.md` is likewise unrolled into plain calls. Its
+  unstacked diff, which lode-fvg0 had left as an inline `$(git merge-base …)`, is one plain call with
+  no SHA to carry — the three-dot form, `git diff origin/trunk...origin/land/<id>` (lode-qh1m).
 
 **Sanctioned workaround — split, never disguise.** Run the underlying command in separate plain calls
 and carry the value by hand between them. For a "too complex" refusal that means one call for `git
@@ -2261,6 +2265,20 @@ lines; with two pastes it does not, and neither does `|| exit $?` (the agent rea
 exit status from the call). The gate described below is adjusted to match: same block for a one-block
 site, the adjacent block for a plain-call sequence. Main-session skills are unchanged. Restoring the
 guarantee needs the derive-validate-write in one process — lode-qh1m.
+
+**RESTORED by lode-qh1m (2026-11-17) — the dispatched-agent files derive, validate and use the value
+in one process again.** `coding.md` and `code-reviewer.md` no longer run the three plain calls above:
+every `review_head`/`land_head` write is one call to
+[`scripts/handoff-sha.sh`](../scripts/handoff-sha.sh), and the code-reviewer's read, shape check and
+ancestor test are one call to [`scripts/check-review-head.sh`](../scripts/check-review-head.sh). Each
+holds the value in a single shell variable for the validator and for the write or comparison, so the
+value validated is the value used — the lode-0a4n guarantee, in a shape the classifier accepts (a
+script is a plain call). The gate follows: for an agent file it no longer looks for a validator
+*near* a write; it forbids a `--set-metadata <field>=` anywhere in the file and a `jq` read of the
+field in any fenced block, and requires the script calls to be present (its non-vacuity pin). That
+the scripts themselves validate before writing or comparing is pinned by behaviour, in
+`tests/test_handoff_scripts.py`. The two paragraphs below describe the same-block rule, which still
+governs the main-session skills unchanged.
 
 **Write sites are now gated too (`lode-uvjr`).** The original landing of this section left write
 sites unpinned deliberately, filed as its own follow-up: `tests/test_validate_sha40_call_sites.py`'s

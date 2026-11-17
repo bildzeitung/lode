@@ -4,12 +4,12 @@
 #
 # A dispatched agent cannot carry a value from one command into the next with
 # a shell variable or `$(...)` -- the harness worktree-isolation classifier
-# refuses both (lode-fvg0) -- so the agent files used to have the agent copy a
-# SHA from `git rev-parse HEAD`'s output into `validate-sha40.sh` and then
-# again into `bd update`. The validator then checked the first paste while the
-# second was what got written: the lode-0a4n incident class (a 39-character
+# refuses both (lode-fvg0) -- so as separate plain calls the SHA would be
+# copied by hand from `git rev-parse HEAD`'s output into `validate-sha40.sh`
+# and again into `bd update`, and the validator would check one paste while
+# the other got written: the lode-0a4n incident class (a 39-character
 # review_head). A script is a plain call, so deriving, validating and writing
-# inside one process restores the same-value guarantee with no copy.
+# inside one process guarantees the value validated is the value written.
 #
 # Usage: scripts/handoff-sha.sh <ticket-id> <review_head|land_head> [bd-update-args...]
 #   Runs: bd update <ticket-id> --set-metadata <field>=<HEAD> [bd-update-args...]
@@ -23,6 +23,8 @@
 #           written. Never a verdict about the content.
 # Exit 3 -> the value was fine but `bd update` itself failed (its output is on
 #           stderr); the field was not written.
+# Other  -> git's own failure status from `rev-parse HEAD` (no repo, unborn
+#           HEAD); nothing was written.
 
 set -euo pipefail
 

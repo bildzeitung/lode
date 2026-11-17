@@ -13,9 +13,11 @@
 # Exit 1 -> MALFORMED/MISSING: scripts/validate-sha40.sh rejected the value
 #           (its diagnostic is on stderr). Not drift.
 # Exit 2 -> the CALL is wrong (argument count); says nothing about the field.
-# Exit 3 -> UNREACHABLE: well-formed but not an ancestor of HEAD -- history
+# Exit 3 -> UNREACHABLE: well-formed but not an ancestor of HEAD (including a
+#           commit this clone does not have, which cannot be one) -- history
 #           was rewritten. This is drift.
-# Exit 4 -> `bd show` could not be read; says nothing about the field.
+# Exit 4 -> `bd show` failed or its output could not be parsed; says nothing
+#           about the field.
 
 set -euo pipefail
 
@@ -32,7 +34,13 @@ if ! JSON="$(bd show "$ID" --json)"; then
   echo "check-review-head.sh: bd show $ID failed -- cannot read review_head." >&2
   exit 4
 fi
-VALUE="$(printf '%s' "$JSON" | jq -r '.[0].metadata.review_head // empty')"
+# Guarded so jq's own status (2 on a parse error) cannot surface as this
+# script's exit 2, which means a broken call.
+if ! VALUE="$(printf '%s' "$JSON" | jq -r '.[0].metadata.review_head // empty')"; then
+  echo "check-review-head.sh: bd show $ID printed output jq could not parse" \
+    "-- cannot read review_head." >&2
+  exit 4
+fi
 
 rc=0
 "$HERE/validate-sha40.sh" review_head "$VALUE" || rc=$?
