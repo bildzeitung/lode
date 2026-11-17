@@ -144,7 +144,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > `nox -t everything-else` — since this cycle swaps straight to `ready-for-land` with no
    > further review, commit anything the gate loop produced,
    > then `git push origin HEAD:land/lode-ai1` (an ordinary push by explicit refspec — the merge only
-   > appends, it never rewrites what's already on `land/lode-ai1`), refresh `land_head`/`land_summary`,
+   > appends, it never rewrites what's already on `land/lode-ai1`), refresh `land_head` (leave `land_summary` as the reviewer wrote it),
    > and swap `needs-rebase` straight to `ready-for-land` yourself. Do not merge, close, or push trunk.
    > On a merge conflict: if both sides added independent, non-overlapping content (a **mechanical**
    > conflict), resolve it directly with `Edit` and continue, then finish the same way; if the two

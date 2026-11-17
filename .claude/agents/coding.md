@@ -892,7 +892,7 @@ hand-off metadata and swap the label myself, with the same one-script derive →
 fresh-build hand-off:
 
 ```bash
-scripts/handoff-sha.sh <id> land_head --remove-label needs-rebase --add-label ready-for-land --set-metadata land_summary="Merged trunk into the branch"
+scripts/handoff-sha.sh <id> land_head --remove-label needs-rebase --add-label ready-for-land
 ```
 
 Exit 0 is done; nonzero writes nothing (1 = the derived value is malformed, 2 = this CALL is broken,
@@ -906,7 +906,10 @@ The push publishes the label swap + refreshed SHA over `refs/dolt/data`.
 
 `land_head`/`land_summary` is the one field-name convention the whole loop uses — the same keys
 `code-reviewer` sets when it first marks a ticket `ready-for-land`, and what `/land`'s 2a drift
-precheck reads. I leave `review_head` untouched — it still correctly describes the original build, and
+precheck reads. I refresh `land_head` only and **never touch `land_summary`**: `/land` builds the
+merge commit message from it (`Merge land/<id>: <land_summary> (<id>)`), so it must keep the
+reviewer's description of what the branch does, not a note about my trunk merge (the merged trunk
+commit is already the second parent of the branch's own merge commit; lode-jb2q). I leave `review_head` untouched — it still correctly describes the original build, and
 it's live, but its readers are *not* `/land`: they are the **code-reviewer** (which checks it out and
 diffs it for drift) and **`/code`'s step-1 stranded-review guard** (which refuses a ticket whose
 `review_head` is empty). `/land`'s 2a precheck reads `land_head`, the field I just refreshed above.

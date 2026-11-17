@@ -487,8 +487,8 @@ be thrown back.
 The landing context is **minimal by design** — `land_head` + a one-line `land_summary` in bd
 metadata, read via `bd show <id> --json` (the branch name is *derived*, `land/<id>`, never stored).
 `land_head`/`land_summary` is the one field-name convention across the whole loop: `code-reviewer`
-writes it when swapping a ticket to `ready-for-land`, and a rebase pickup (`coding.md`) refreshes it
-on every re-push. The SHA exists only to **detect drift**: a push onto the branch *after* the ticket
+writes it when swapping a ticket to `ready-for-land`, and a rebase pickup (`coding.md`) refreshes
+`land_head` only on every re-push, leaving `land_summary` as the reviewer wrote it. The SHA exists only to **detect drift**: a push onto the branch *after* the ticket
 was marked ready.
 
 **First action of every iteration of this loop: heartbeat the single-lander lock (lode-m87j).** This
