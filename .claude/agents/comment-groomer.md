@@ -78,15 +78,12 @@ git fetch origin land/<id>
 ```
 
 ```bash
-pwd
+scripts/checkout-land-branch.sh <id>
 ```
 
-The last path segment `pwd` prints is my own launch worktree's directory name; I copy it into the
-worktree-unique suffix (lode-em6v):
-
-```bash
-git checkout -B land/<id>--<that directory name> FETCH_HEAD
-```
+The script derives the worktree-unique suffix (lode-em6v) from my own launch worktree's directory
+name (lode-qh1m) and checks out the `land/<id>` tip the fetch above recorded; a nonzero exit is a
+stop.
 
 ```bash
 git rev-parse --abbrev-ref HEAD

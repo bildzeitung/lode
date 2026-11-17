@@ -73,6 +73,9 @@ scripts/land-merge-one.sh
 scripts/land-state-load.sh
 scripts/merge-precheck.sh
 scripts/validate-sha40.sh
+scripts/handoff-sha.sh
+scripts/check-review-head.sh
+scripts/checkout-land-branch.sh
 scripts/worktree-gc-classify.sh
 scripts/worktree-lock-stale.sh
 scripts/blocks-dependents.sh
