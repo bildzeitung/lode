@@ -502,7 +502,7 @@ _CONTEXT_WINDOW_EXCEEDED_HINT = (
 )
 
 
-def _budget_hint(stop_reason: str | None, response: Any) -> str:
+def _stop_reason_hint(stop_reason: str | None, response: Any) -> str:
     """Pick the right "why is the block missing" hint for ``stop_reason``.
 
     ``model_context_window_exceeded`` gets its own diagnostic --
@@ -824,7 +824,7 @@ class AnthropicProvider:
                 f"into {output_schema.__name__} (model={model}, "
                 f"max_tokens={max_tokens}, "
                 f"stop_reason={stop_reason!r}) "
-                f"{_budget_hint(stop_reason, response)}",
+                f"{_stop_reason_hint(stop_reason, response)}",
                 provider="anthropic",
             )
         return output_schema.model_validate(tool_block.input)
@@ -916,7 +916,7 @@ class AnthropicProvider:
                 f"{output_schema.__name__}{where} (model={model}, "
                 f"max_tokens={max_tokens}, "
                 f"stop_reason={stop_reason!r}) "
-                f"{_budget_hint(stop_reason, response)}",
+                f"{_stop_reason_hint(stop_reason, response)}",
                 provider="anthropic",
             )
         return parsed, _output_tokens(response)
@@ -1268,7 +1268,7 @@ class AnthropicProvider:
                                 f"no tool_use block in batch result "
                                 f"(model={getattr(message, 'model', None)!r}, "
                                 f"stop_reason={batch_stop_reason!r}) "
-                                f"{_budget_hint(batch_stop_reason, message)}",
+                                f"{_stop_reason_hint(batch_stop_reason, message)}",
                                 provider="anthropic",
                             ),
                         )
