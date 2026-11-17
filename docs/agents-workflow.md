@@ -2862,7 +2862,7 @@ flowchart TD
 **Resolving `land-escalated`.** The label is not terminal — a human resolves it, outside a `/land`
 pass, and every resolution **removes `land-escalated`** so a surfacer's queue can actually drain
 instead of growing monotonically. Exactly four exits, lettered (a)–(d) (full mechanics in
-[`land/SKILL.md`](../.claude/skills/land/SKILL.md#resolving-a-land-escalated-branch)):
+[`land-escalation-runbook.md`](land-escalation-runbook.md)):
 
 - **(a) Land as-is** — the **branch is unchanged** (this exit is exactly the "it's fine as-is" case); the
   human **writes the decision into the ticket** (edits the acceptance criteria / description to remove
@@ -2904,7 +2904,7 @@ escalation and a `coding` build-time clarification (the arguable case, decided: 
 *ambiguity* is resolved, not that the branch is finished — the `code-reviewer` can still escalate a
 half-built branch), and `needs-rebase` for a `coding` rebase-pickup conflict; full mechanics and
 per-source table in
-[`land/SKILL.md`](../.claude/skills/land/SKILL.md#re-entry-per-escalating-source--re-enter-at-the-gate-that-escalated)
+[`land-escalation-runbook.md`](land-escalation-runbook.md#re-entry-per-escalating-source--re-enter-at-the-gate-that-escalated)
 (`lode-08g`, extended by `lode-wp2r`, further extended by `lode-2m93`).
 
 **Making the `ready-for-code-review` re-entry executable (lode-08g's decision had two gaps, both
@@ -2930,7 +2930,7 @@ carries the hand-off and something else consumes the label —
    `review_head` to be (re)written — so a resolution that omitted it still tripped the sweep's guard
    and stranded the ticket permanently (OBSERVED: `lode-1fzq`). **Fixed on both sides (lode-uomo):**
    the resolution procedure in
-   [`land/SKILL.md`](../.claude/skills/land/SKILL.md#resolving-a-land-escalated-branch) now *requires*
+   [`land-escalation-runbook.md`](land-escalation-runbook.md) now *requires*
    writing `review_head` from the live `origin/land/<id>` tip (validated with
    `scripts/validate-sha40.sh`) as part of the same resolution, and `/code`'s step-1 sweep derives the
    same value itself as a backstop when the field is missing — dispatching only if the ref actually

@@ -58,8 +58,9 @@ pattern.
 
 `ADD_LABEL_RE` matches `--add-label` (or `--add-label=`) followed by one or more `-`/alphanumeric
 label tokens, optionally wrapped in `<...>` and separated by `|` or `,` — the `<ready-for-code-review
-|needs-rebase>` placeholder shape `.claude/skills/land/SKILL.md:2097` uses for "pick one of these two"
-prose parses to both underlying names, not the literal placeholder text. `LABEL_ADD_CMD_RE` matches
+|needs-rebase>` placeholder shape `docs/land-escalation-runbook.md` uses for "pick one of these two"
+prose (no scanned file uses it today) parses to both underlying names, not the literal placeholder
+text. `LABEL_ADD_CMD_RE` matches
 the `bd label add <target> <label>` form (`.claude/skills/epic-audit/SKILL.md`,
 `.claude/skills/land/SKILL.md`'s epic-completion loop) — a different bd subcommand than
 `bd update --add-label`, used for a single ID instead of a variable ticket in a shared loop.
@@ -179,7 +180,7 @@ def test_bare_add_label_matches() -> None:
 
 
 def test_multi_label_placeholder_yields_both_names() -> None:
-    # The `<a|b>` placeholder shape .claude/skills/land/SKILL.md uses for "pick one of these two".
+    # The `<a|b>` placeholder shape docs/land-escalation-runbook.md uses for "pick one of these two".
     text = (
         "bd update <id> --remove-label land-escalated "
         "--add-label <ready-for-code-review|needs-rebase>"

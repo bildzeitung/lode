@@ -61,6 +61,7 @@ BASE = build_docs_site.GITHUB_BASE
 EXCLUDED = {
     "decisions.md",
     "agents-workflow.md",
+    "land-escalation-runbook.md",
     "stack.md",
     "conventions.md",
     "docs-index.md",
