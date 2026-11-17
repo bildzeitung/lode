@@ -415,14 +415,15 @@ def test_legal_reasoning_effort_constructs(
 def test_reasoning_effort_unset_is_always_fine_regardless_of_provider(
     provider: str,
 ) -> None:
-    # Unset is the default for every tier and what a bare-string
+    # Unset is the default for enrichment_llm/qa_llm and what a bare-string
     # `enrichment_llm = "..."` coerces to, so it must stay legal under either
     # provider -- the seam treats None as "send no effort kwarg" rather than
-    # as a value needing a legal set.
+    # as a value needing a legal set. qa_think_harder_llm's pinned "high"
+    # default (lode-9ytb) must be legal under both too.
     s = Settings(llm_provider=provider)
     assert [
         t.reasoning_effort for t in (s.enrichment_llm, s.qa_llm, s.qa_think_harder_llm)
-    ] == [None, None, None]
+    ] == [None, None, "high"]
 
 
 def test_effort_levels_mapping_covers_every_llm_provider_value() -> None:
@@ -469,7 +470,8 @@ def test_model_ids_are_pinned() -> None:
     # (lode-568v.2 back-compat -- no migration required for existing configs).
     assert s.enrichment_llm.reasoning_effort is None
     assert s.qa_llm.reasoning_effort is None
-    assert s.qa_think_harder_llm.reasoning_effort is None
+    # Pinned: Opus 5.5's own default is medium, a step below qa_llm's (lode-9ytb).
+    assert s.qa_think_harder_llm.reasoning_effort == "high"
 
 
 def test_local_model_ids_and_dim_are_pinned() -> None:
@@ -659,10 +661,11 @@ def test_knob_rows_renders_model_tier_knobs_as_bare_model_id() -> None:
     # on a ModelTier is the pydantic repr ("model='...' reasoning_effort=None"),
     # which would leak into `lode config` + the TUI ConfigScreen (both feed
     # knob_rows straight to display). Default (no effort) shows the bare id.
+    # qa_think_harder_llm's default pins effort=high (lode-9ytb), so it shows it.
     rows = _knob_values(Settings())
     assert rows["enrichment_llm"] == "claude-haiku-5-5"
     assert rows["qa_llm"] == "claude-sonnet-5-5"
-    assert rows["qa_think_harder_llm"] == "claude-opus-5-5"
+    assert rows["qa_think_harder_llm"] == "claude-opus-5-5 (effort=high)"
 
 
 def test_knob_rows_appends_reasoning_effort_when_set() -> None:

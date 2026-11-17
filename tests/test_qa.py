@@ -116,6 +116,35 @@ def test_opus_when_think_harder(conn) -> None:
     assert client.messages.calls[0]["model"] == OPUS_MODEL
 
 
+@pytest.mark.parametrize(
+    ("think_harder", "settings", "expected"),
+    [
+        # The default tier stays unset: no effort kwarg, Sonnet 5.5's API default.
+        (False, None, None),
+        # Opus 5.5's API default is medium, so the default tier pins high.
+        (True, None, {"effort": "high"}),
+        # An override replaces the whole tier -- the pin is not inherited, so a
+        # model that rejects `effort` is never sent one it did not ask for.
+        (True, Settings(qa_think_harder_llm="claude-opus-5-5"), None),
+    ],
+)
+def test_effort_sent_on_the_qa_call(
+    conn, think_harder: bool, settings: Settings | None, expected: dict | None
+) -> None:
+    # lode-9ytb: test_config.py pins the default's *value*; this pins that it
+    # reaches the wire.
+    client = _FakeClient(_envelope([]))
+    answer_question(
+        conn,
+        "q",
+        [QaPassage("v1", "text")],
+        think_harder=think_harder,
+        provider=AnthropicProvider(client),
+        settings=settings,
+    )
+    assert client.messages.calls[0].get("output_config") == expected
+
+
 def test_thinking_not_disabled_for_think_harder_call(conn) -> None:
     # lode-3dlt (supersedes lode-d1sr's disabled pin): end-to-end companion to
     # test_llm_provider.py's provider-level assertion -- confirms the

@@ -885,9 +885,10 @@ class Settings(BaseModel):
         "qa.MAX_TOKENS).",
     )
     qa_think_harder_llm: ModelTier = _knob(
-        ModelTier(model="claude-opus-5-5"),
+        ModelTier(model="claude-opus-5-5", reasoning_effort="high"),
         Kind.RUNTIME,
-        "Higher-quality 'think harder' Q&A LLM on demand (Claude Opus 5.5). A "
+        "Higher-quality 'think harder' Q&A LLM on demand (Claude Opus 5.5, "
+        "reasoning_effort pinned to high -- Opus 5.5's API default is medium). A "
         "(model, reasoning_effort, max_tokens) tier (lode-568v.2; max_tokens "
         "lode-d70n) -- a bare TOML string still coerces to a ModelTier with "
         "reasoning_effort=None and max_tokens=None (falls back to "
