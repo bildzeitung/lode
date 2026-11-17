@@ -1242,7 +1242,7 @@ entries below from being rewritten to chase the current tree.)
 
   **Update (lode-t76f, 2026-11-17): `coding.md` takes no explicit lock any more.** With the harness
   lock already present, that lock call exited 128 and took nothing, and the matching unlock removed
-  the harness's lock. See the `lode-t76f` entry at the end of this file.
+  the harness's lock. See the `lode-t76f` entry below.
 
   So the widened arm can only reach an **exited** agent's worktree, which at zero divergence holds
   nothing but uncommitted, ungated scratch from a run that never finished — while the authoritative
@@ -1282,7 +1282,7 @@ entries below from being rewritten to chase the current tree.)
 
   **Update (lode-t76f, 2026-11-17): one lock source now, the harness.** `coding.md` no longer locks
   or unlocks its build worktree, and "releases it on exit" was already found unreliable
-  (`lode-7ndi`). See the `lode-t76f` entry at the end of this file.
+  (`lode-7ndi`). See the `lode-t76f` entry below.
 
   **Considered:** (a) add a dirty-tree guard testing the actual invariant directly; (b) narrow the
   path guard to a harness-owned directory convention (e.g. `.claude/worktrees/agent-*`) — rejected,
@@ -1557,7 +1557,7 @@ entries below from being rewritten to chase the current tree.)
   **Update (lode-t76f, 2026-11-17): reachable now.** The builder no longer unlocks, so a landed
   builder's worktree is locked at GC time whenever the harness left its launch lock behind
   (`lode-7ndi`) and the orchestrating session is still alive. The sweep keeps it until that session
-  ends. See the `lode-t76f` entry at the end of this file.
+  ends. See the `lode-t76f` entry below.
 
   **Why the per-ticket loop and the generalized backstop deliberately used different predicates before
   this change — so a future reader does not "unify" them back into a silent leak by re-adding a
@@ -3193,7 +3193,7 @@ entries below from being rewritten to chase the current tree.)
     **Update (lode-t76f, 2026-11-17): the builder no longer unlocks, so a live build does not run
     unlocked.** The age floor stays, for a different reason: every candidate that reaches the
     dir-only arm is unlocked by then (released when its agent exited, or its stale lock cleared), so
-    there is still no token to compare. See the `lode-t76f` entry at the end of this file.
+    there is still no token to compare. See the `lode-t76f` entry below.
   - **Criterion 6 answered: the lock IS per-session, not per-agent, and the resulting leak class is
     fixed here, folded in per the human note (not split into a separate ticket).** Confirmed live:
     raw `.git/worktrees/<name>/locked` reasons showed 3 of 4 (and, in the original 2026-07-28

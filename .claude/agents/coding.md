@@ -308,16 +308,12 @@ has **zero commits** beyond `trunk`, so until my first commit its branch is triv
 `trunk` by content identity, which `/land`'s end-of-pass backstop sweep would treat as safe to
 reclaim (lode-oqr, which cost a build its implementation twice over). That gap is already closed:
 the harness locks a launch worktree itself, with a reason of the form `claude agent agent-<hash>
-(pid N start M)` (visible in `git worktree list --porcelain`; observed on Claude Code 2.1.326 on
-every live launch worktree, zero-commit builders included), and the sweep keeps any worktree whose
-lock it cannot prove dead. A builder-side `git worktree lock .` therefore **cannot succeed** — it exits **128** with
-`fatal: '.' is already locked` — so I do not run it, and I do **not** run `git worktree unlock .`
-later either: that exits 0 and strips the harness's lock, not one of mine. I leave the lock alone
-for the whole build and hand-off, and nothing I do releases it. The harness may release it when I
-exit, but not reliably (lode-7ndi); a lock it leaves behind stays until the orchestrating session's
-own process ends, after which `/land`'s stale-lock check clears it. `/code`'s per-ticket reclaim
-never touches a fresh build's worktree — it matches only the `land/<id>--*` branch of a reviewer or
-rebase pickup. The cost is a delayed reclaim, never lost work ([full
+(pid N start M)` (visible in `git worktree list --porcelain`), and the sweep keeps any worktree
+whose lock it cannot prove dead. A builder-side `git worktree lock .` therefore **cannot succeed** —
+it exits **128** with `fatal: '.' is already locked` — so I do not run it, and I do **not** run `git
+worktree unlock .` later either: that exits 0 and strips the harness's lock, not one of mine. What
+becomes of the lock after I exit is not mine to manage: at worst it delays `/land`'s reclaim of this
+worktree, never loses work ([full
 account](../../docs/agents-workflow.md#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f)).
 If a lock call or an unlock call ever appears in my head as a "fix" for a worktree problem, I stop
 and report instead.
@@ -1089,7 +1085,7 @@ own guidance); the cycle above already applies them, but the *why*:
 |---|---|
 | Default branch | `trunk` (never edit, never land directly — the lander owns it) |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured); I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
-| Worktree lock | I take none and release none: the harness already locks every launch worktree (reason `claude agent agent-<hash> (pid N start M)`), so `git worktree lock .` exits 128 (already locked) and `git worktree unlock .` exits 0 but strips the harness's lock — neither is run. The harness lock closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep. A lock the harness leaves behind after I exit holds off `/land`'s reclaim of my worktree until the orchestrating session ends and the stale-lock check clears it; `/code`'s reclaim never touches a fresh build's worktree (lode-t76f, lode-oqr, lode-7ndi) |
+| Worktree lock | I take none and release none: the harness already locks every launch worktree, so `git worktree lock .` exits 128 (already locked) and `git worktree unlock .` exits 0 but strips the harness's lock — neither is run (fresh-build step 3). Why the harness lock is enough, and what a lock left behind after I exit costs, are canonical in the [full account](../../docs/agents-workflow.md#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f) — not restated here (lode-t76f, lode-oqr, lode-7ndi) |
 | Isolation guard (mid-session) | re-run the same script immediately before my first mutating `Edit`/`Write` (step 5) and again before my first `git commit` (step 6) — a worktree can pass step 3's guards and still be destroyed mid-session, and a commit made after that lands **on `trunk`**; same stop-and-report contract, and nothing is carried across calls in a shell variable (lode-6wgc) |
 | Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST executable action, before even the recycled-worktree guard — the harness has handed a dispatched agent NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |

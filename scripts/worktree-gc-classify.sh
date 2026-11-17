@@ -200,12 +200,12 @@ case "$br" in
   worktree-agent-*)
     # AGE GUARD, deliberately NOT the lock start-token check used for the
     # LOCKED bucket: that token only exists while the worktree is actually
-    # locked, and a candidate reaching this arm is unlocked -- released when
-    # its agent exited, or its stale lock cleared by the caller. Unlocked does
-    # not mean abandoned, so age of the last commit is the only signal left,
-    # and it fails SAFE (a build still cycling has a recent HEAD commit almost
-    # by construction; the branch ref is kept either way, so no commit is ever
-    # lost).
+    # locked, and this arm runs only with <locked> = 0 (keep-locked returned
+    # above), so there is no token to compare. Unlocked does not mean
+    # abandoned -- a finished build can wait unlocked for review and land --
+    # so age of the last commit is the only signal left, and it fails SAFE (a
+    # build still cycling has a recent HEAD commit almost by construction; the
+    # branch ref is kept either way, so no commit is ever lost).
     last_commit_ts=$(git -C "$wt" log -1 --format=%ct 2>/dev/null) || last_commit_ts=""
     now=$(date +%s)
     if [ -z "$last_commit_ts" ]; then
