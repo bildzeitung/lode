@@ -13,9 +13,29 @@ phrasings would have left the very hole the ticket was filed about. Ordinary
 lowercase narrative use of "superseded"/"falsified" mid-sentence, of which
 this file has plenty describing a ticket's own history, is untouched by
 design. A marker that predates its pattern, and cannot be normalized without
-rewriting a committed line, is excused by name in ``_ALLOWLIST`` -- so it
-stays invisible to the documented grep: an enumerated miss, not an overlooked
-one.
+rewriting a committed line, is excused by name in ``_ALLOWLIST``. The excused
+line itself stays invisible to the documented grep, so its entry carries an
+appended ``Update (`` pointer that the grep does find (lode-4eyp).
+
+*Correction lead-ins are matched more narrowly than the other keywords.*
+"Correction" also opens prose in which an entry narrates its OWN history,
+which the preamble exempts, so the bare keyword is not enough. It is flagged
+in two positions: opening a bold span, blockquote or parenthetical AND
+followed -- through ``(``, ``:``/``,``, a dash or ``by`` -- by an id, a date
+or ``maintainer decision``; or straight after the em dash of a date-first
+entry head, the shape of a new entry that corrects earlier ones.
+
+KNOWN MISSES in that narrower match, accepted (lode-4eyp):
+
+- Prose between the keyword and its id (``**Correction (see lode-x)``,
+  ``**Correction to the lode-x entry above``). By shape alone this is
+  indistinguishable from own-history narration.
+- A correcting entry whose head is not date-first with an em dash, or whose
+  keyword wraps onto the next line.
+
+Accepted over-match, the reverse error: a TitleCase Correction keyword after
+a dated head's em dash, or a date straight after the keyword, goes red even
+where the entry is narrating its own history. The way out is to reword.
 
 *No wrapped marker.* A marker whose id wraps onto the next markdown line is
 still invisible to the single-line grep the preamble documents: correct shape,
@@ -70,7 +90,7 @@ _MARKER_KEYWORDS = (
 )
 # A tuple of their own because their pattern's suffix is narrower than the
 # group above -- see the Correction entry in _OFF_PATTERNS.
-_CORRECTION_KEYWORDS = ("Correction", "Corrected")
+_CORRECTION_KEYWORDS = ("Correction", "Corrections", "Corrected")
 
 
 def _both_cases(keywords: tuple[str, ...]) -> str:
@@ -80,13 +100,17 @@ def _both_cases(keywords: tuple[str, ...]) -> str:
 
 
 # What follows a Correction keyword in a backwards-pointing lead-in: an id,
-# a date or "maintainer decision", reached through "(", ":"/",", a dash, or "by".
+# a date or "maintainer decision" (the three things the preamble allows in a
+# marker's id slot), reached through "(", ":"/",", a dash, or "by". The
+# leading asterisks cover a bold span that closes straight after the keyword.
 _REF = r"(?:`?lode-|\d{4}-\d{2}-\d{2}|maintainer decision)"
 _CORRECTION_TAIL = (
-    rf"\*{{0,2}}\s*\(\s*{_REF}"
-    rf"|\*{{0,2}}[:,]\s*\*{{0,2}}\s*{_REF}"
+    r"\*{0,2}(?:"
+    rf"\s*\(\s*{_REF}"
+    rf"|[:,]\s*\*{{0,2}}\s*{_REF}"
     rf"|\s*(?:—|--?)\s*{_REF}"
-    rf"|\s+by\s+{_REF}"
+    rf"|\s+(?:by|BY)\s+{_REF}"
+    r")"
 )
 
 # Where a marker lead-in can open: a bold span, a parenthetical, or a blockquote.
@@ -105,17 +129,15 @@ _OFF_PATTERNS: dict[str, re.Pattern[str]] = {
     # Narrower than the bare keyword on purpose: "**Correction the original
     # proposal did not anticipate..." and "**Correction, verified empirically
     # on bash 5.2:**" are an entry narrating its OWN history, which the
-    # preamble exempts. What marks a backwards-pointing correction is an id or
-    # date straight after the keyword (lode-zkki, lode-4eyp). Accepted miss: a
-    # correction whose id slot holds free prose other than "maintainer
-    # decision".
+    # preamble exempts. The module docstring lists what this narrowing misses
+    # (lode-zkki, lode-4eyp).
     "Correction-style lead-in opening a bold span, blockquote, or parenthetical": re.compile(
-        rf"{_OPENER}(?:{_both_cases(_CORRECTION_KEYWORDS)})s?(?:{_CORRECTION_TAIL})"
+        rf"{_OPENER}(?:{_both_cases(_CORRECTION_KEYWORDS)}){_CORRECTION_TAIL}"
     ),
     # The keyword after a date and id rather than opening the span, as in a new
     # entry that corrects earlier ones (lode-4eyp).
     "date-first CORRECTION entry lead-in": re.compile(
-        rf"\*\*\d{{4}}-\d{{2}}-\d{{2}}[^*\n]*?\s—\s*(?:{_both_cases(_CORRECTION_KEYWORDS)})\b"
+        rf"\*\*\d{{4}}-\d{{2}}-\d{{2}}[^*]*?\s—\s*(?:{_both_cases(_CORRECTION_KEYWORDS)})\b"
     ),
 }
 
@@ -246,6 +268,10 @@ def test_off_pattern_scan_catches_a_reintroduced_marker() -> None:
         "**Corrected by lode-zzzz** in the entry below.",
         "**Corrections (lode-zzzz)** to the two entries above.",
         "**Correction, maintainer decision:** the id slot filled with prose.",
+        "**CORRECTIONS (lode-zzzz)** all-caps plural.",
+        "**CORRECTED BY lode-zzzz** all-caps connector.",
+        "- **2026-01-01 (`lode-zzzz`) — Corrections to the two entries above.**",
+        "**Correction** — `lode-zzzz`: closed bold, then a dash.",
     ]
     # Scanned one line at a time on purpose: a whole-list count can be met by
     # one line matching two patterns while another matches none, which would
