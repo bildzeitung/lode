@@ -49,24 +49,28 @@ def test_no_hardcoded_key_in_source() -> None:
     assert "api_key=" not in src
 
 
-@pytest.mark.parametrize("module", ["lode.auth", "lode.enrich"])
+@pytest.mark.parametrize("module", ["lode.auth", "lode.enrich", "lode.tui.screens.ask"])
 def test_importing_module_does_not_import_the_sdk(module: str) -> None:
-    """Importing ``lode.auth`` / ``lode.enrich`` must NOT import ``anthropic``
-    (lode-4q97).
+    """Importing ``lode.auth`` / ``lode.enrich`` / the TUI's ask screen must NOT
+    import ``anthropic`` (lode-4q97).
 
     This is the **boundary** guard, and it is deliberately stated about the modules
-    rather than about any one caller. Both are imported on paths that never touch
+    rather than about any one caller. Each is imported on paths that never touch
     Anthropic and may have no credentials at all:
 
     * ``lode.auth`` -- :func:`lode.worker.drain` imports ``AuthError`` from it
-      unconditionally on every drain (its ``except`` header needs the class); and
+      unconditionally on every drain (its ``except`` header needs the class);
     * ``lode.enrich`` -- :mod:`lode.reconcile` imports ``ENRICH_PROMPT_VER`` from it
-      at module level, and ``lode work`` runs a reconcile pass on every invocation.
+      at module level, and ``lode work`` runs a reconcile pass on every invocation;
+      and
+    * ``lode.tui.screens.ask`` -- :mod:`lode.tui.app` imports it to register the
+      screen, so every TUI start loads it, and its worker's ``except`` header needs
+      ``AuthError`` and ``LLMProviderError`` at module scope (lode-7wlq).
 
     So a credential-free, embed-only drain (embeds come from the LOCAL fastembed
     model) would otherwise pay the ~0.32s SDK import on every single run to do
-    nothing with it. In both modules the SDK is used only in annotations, and the
-    ``import anthropic`` is ``TYPE_CHECKING``-guarded.
+    nothing with it. In ``lode.auth`` and ``lode.enrich`` the SDK is used only in
+    annotations, and the ``import anthropic`` is ``TYPE_CHECKING``-guarded.
 
     Asserting this at the module boundary -- rather than once per known call site --
     is what makes it hold for *future* callers too: a new eager

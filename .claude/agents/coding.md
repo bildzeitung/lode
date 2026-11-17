@@ -193,8 +193,10 @@ with literal arguments, scripts called by their repo-relative path (my cwd *is* 
 and no value carried from one command into the next (the gate lists, the `builds_on` fetch + merge
 and the rebase-pickup escalation are several such commands; every other block is a single one) — and
 the **exit status** the `Bash` tool reports replaces the old `|| …` tail: a nonzero status from a guard or
-validator is a stop, read as the surrounding prose says. Where a value must cross from one call to the
-next (a SHA, my worktree's directory name), I **copy it verbatim from the earlier call's output** — I
+validator is a stop, read as the surrounding prose says. The two values that matter most — the head
+SHA and my worktree's directory name — never cross by copy: `scripts/handoff-sha.sh` and
+`scripts/checkout-land-branch.sh` derive them in-process (lode-qh1m). Any other
+value that must cross from one call to the next I **copy verbatim from the earlier call's output** — I
 never type one from memory or from a prefix, which is what [Derive identifiers, never
 retype them](../../docs/conventions.md#derive-identifiers-never-retype-them) forbids; the
 fabricated-SHA hook and `scripts/validate-sha40.sh` backstop a mis-copy but cannot tell a real SHA
@@ -303,22 +305,20 @@ script's own header comment and
 (`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`) — one place, not duplicated
 across every call site, which is the whole point of the extraction.
 
-**Lock the worktree before touching a single file.** A freshly created worktree has **zero commits**
-beyond `trunk` — until my first commit, its branch is trivially "merged" into `trunk` by content
-identity, which is exactly what `/land`'s end-of-pass backstop sweep treats as safe to reclaim
-(`land/SKILL.md`'s `!locked` filter is the only thing standing between that sweep and my in-progress,
-uncommitted work — lode-oqr, which cost a build its implementation twice over before the gap was
-understood). So, right here, before step 4:
-
-```bash
-git worktree lock . --reason "producer build in progress (lode-<id>)"
-```
-
-I unlock it again the moment I have my **first commit** (end of step 6, once `git status --short` is
-clean) — from then on the branch has diverged from `trunk`, so the backstop's own (unmodified)
-`branch --merged trunk` check already excludes it for the rest of the build, hand-off, and
-review-pending window; no need to hold the lock any longer than the narrow pre-commit gap it exists
-to close.
+**The worktree is already locked — I take no lock of my own (lode-t76f).** A freshly created worktree
+has **zero commits** beyond `trunk`, so until my first commit its branch is trivially "merged" into
+`trunk` by content identity, which `/land`'s end-of-pass backstop sweep would treat as safe to
+reclaim (lode-oqr, which cost a build its implementation twice over). That gap is already closed:
+the harness locks a launch worktree itself, with a reason of the form `claude agent agent-<hash>
+(pid N start M)` (visible in `git worktree list --porcelain`), and the sweep keeps any worktree
+whose lock it cannot prove dead. A builder-side `git worktree lock .` therefore **cannot succeed** —
+it exits **128** with `fatal: '.' is already locked` — so I do not run it, and I do **not** run `git
+worktree unlock .` later either: that exits 0 and strips the harness's lock, not one of mine. What
+becomes of the lock after I exit is not mine to manage: at worst it delays `/land`'s reclaim of this
+worktree, never loses work ([full
+account](../../docs/agents-workflow.md#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f)).
+If a lock call or an unlock call ever appears in my head as a "fix" for a worktree problem, I stop
+and report instead.
 
 ### 4. Read before writing; record approach for bugs
 
@@ -521,14 +521,6 @@ git status --short          # must print nothing
 about what's about to be committed and pushed (lode-tpt). If this isn't empty, commit the remainder
 now (it's my own uncommitted work from step 5 — no ambiguity) and re-check before step 7.
 
-**Once that first commit exists and the tree is clean, unlock the worktree** — the lock from step 3
-has done its job (the branch has now diverged from `trunk`, so `/land`'s backstop sweep already
-excludes it via its own `branch --merged trunk` check, unlocked or not):
-
-```bash
-git worktree unlock .
-```
-
 ### 7. Quality gates (must be green)
 
 **Run these in the FOREGROUND, in the same turn, and read the output before doing anything else.**
@@ -640,21 +632,16 @@ So I go back to **step 6** (commit, re-gate, re-push) rather than push them stra
 the SHA fresh afterwards. Recording `review_head` against a dirty tree, or against a stale
 SHA captured before a late commit, is the failure mode this ticket exists to close.
 
-```bash
-git rev-parse HEAD
-```
+One script derives `HEAD`, shape-checks it and writes the field in a single process, so the value
+validated is the value written and nothing is hand-copied (lode-qh1m, lode-0a4n):
 
 ```bash
-scripts/validate-sha40.sh review_head <the SHA printed above, pasted verbatim>
+scripts/handoff-sha.sh <id> review_head --add-label ready-for-code-review
 ```
 
-Only on exit 0 — the validator prints its own diagnostic, and its exit 1 means the VALUE is bad
-(re-derive and retry) while exit 2 means this CALL is broken (fix the invocation; write nothing to
-the field) — write the hand-off, then publish it:
-
-```bash
-bd update <id> --add-label ready-for-code-review --set-metadata review_head=<the same SHA>
-```
+Exit 0 is the write done. Exit 1 = the derived value is malformed (nothing was written), 2 = this
+CALL is broken (fix the invocation), 3 = `bd update` itself failed — fix and re-run; a nonzero exit
+writes nothing. Then publish it:
 
 ```bash
 scripts/bd-dolt-push.sh
@@ -693,19 +680,10 @@ settle), I:
   it unset here strands that re-entry the moment a human resolves the decision (lode-t83). Same field
   as the green hand-off, captured now while the reverted-to-green tree and its push are still current:
 
-  The green hand-off's derive → validate → write sequence (same copy-from-output rule and
-  exit-1-vs-2 reading), minus the label:
+  The green hand-off's script, minus the label:
 
   ```bash
-  git rev-parse HEAD
-  ```
-
-  ```bash
-  scripts/validate-sha40.sh review_head <the SHA printed above, pasted verbatim>
-  ```
-
-  ```bash
-  bd update <id> --set-metadata review_head=<the same SHA>
+  scripts/handoff-sha.sh <id> review_head
   ```
 
 - **do not** set `ready-for-code-review`; instead `bd update <id> --add-label land-escalated
@@ -759,8 +737,8 @@ handing a dispatched agent a **recycled** worktree still checked out on a *previ
 branch, carrying that ticket's commits, instead of a fresh branch off `origin/trunk` HEAD — confirmed in
 production for both a fresh-build producer and a `code-reviewer` (lode-eshl's technical review; full
 account in
-[`docs/agents-workflow.md`](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)). The `git checkout -B …
-FETCH_HEAD` below *will* land me on the correct `land/<id>` regardless, so this guard is **not** what
+[`docs/agents-workflow.md`](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)). The `git checkout -B` that
+`scripts/checkout-land-branch.sh` runs below *will* land me on the correct `land/<id>` regardless, so this guard is **not** what
 makes the checkout correct. What it buys is a clean tree to work in: `checkout -B` carries **untracked**
 leftovers from a recycled worktree straight through, and those go on to pollute my `git status` and the
 `nox` run I gate on. So, before the fetch, I assert this launch worktree actually started clean — via
@@ -813,15 +791,13 @@ git fetch origin land/<id> trunk
 ```
 
 ```bash
-pwd
+scripts/checkout-land-branch.sh <id>
 ```
 
-The last path segment `pwd` prints is my own launch worktree's directory name (e.g.
-`agent-ac95302…`); I copy it from that output into the suffix below:
-
-```bash
-git checkout -B land/<id>--<that directory name> FETCH_HEAD
-```
+The script derives the suffix from this launch worktree's own directory name (lode-qh1m) and takes
+the tip from `FETCH_HEAD`'s own `land/<id>` line, not from whichever ref the fetch listed first; a
+nonzero exit is a stop (1 = cwd is not a `.claude/worktrees/` launch worktree, 2 = a broken call, 3 =
+`FETCH_HEAD` has no `land/<id>` entry — the fetch above did not run here, or named another ticket).
 
 ```bash
 git rev-parse --abbrev-ref HEAD
@@ -912,26 +888,15 @@ git push origin HEAD:land/<id>
 ```
 
 An ordinary push — `HEAD` works regardless of what my local branch is named. Then refresh the
-hand-off metadata and swap the label myself, with the same derive → validate → write sequence (plain
-calls, copy-from-output) as the fresh-build hand-off:
+hand-off metadata and swap the label myself, with the same one-script derive → validate → write as the
+fresh-build hand-off:
 
 ```bash
-git rev-parse HEAD
+scripts/handoff-sha.sh <id> land_head --remove-label needs-rebase --add-label ready-for-land --set-metadata land_summary="Merged trunk into the branch"
 ```
 
-```bash
-git rev-parse --short origin/trunk
-```
-
-```bash
-scripts/validate-sha40.sh land_head <the full SHA printed by the first call>
-```
-
-Only on exit 0 (1 = the VALUE is bad, re-derive; 2 = this CALL is broken):
-
-```bash
-bd update <id> --remove-label needs-rebase --add-label ready-for-land --set-metadata land_head=<the same SHA> --set-metadata land_summary="Merged trunk @ <the short SHA printed by the second call> into the branch"
-```
+Exit 0 is done; nonzero writes nothing (1 = the derived value is malformed, 2 = this CALL is broken,
+3 = `bd update` failed).
 
 ```bash
 scripts/bd-dolt-push.sh
@@ -1095,13 +1060,13 @@ own guidance); the cycle above already applies them, but the *why*:
 |---|---|
 | Default branch | `trunk` (never edit, never land directly — the lander owns it) |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured); I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
-| Worktree lock | `git worktree lock` it before step 4 (first action inside the worktree), `git worktree unlock` right after my first commit (end of step 6) — closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep (lode-oqr) |
+| Worktree lock | I take none and release none: the harness already locks every launch worktree, so `git worktree lock .` exits 128 (already locked) and `git worktree unlock .` exits 0 but strips the harness's lock — neither is run (fresh-build step 3). Why the harness lock is enough, and what a lock left behind after I exit costs, are canonical in the [full account](../../docs/agents-workflow.md#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f) — not restated here (lode-t76f, lode-oqr, lode-7ndi) |
 | Isolation guard (mid-session) | re-run the same script immediately before my first mutating `Edit`/`Write` (step 5) and again before my first `git commit` (step 6) — a worktree can pass step 3's guards and still be destroyed mid-session, and a commit made after that lands **on `trunk`**; same stop-and-report contract, and nothing is carried across calls in a shell variable (lode-6wgc) |
 | Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST executable action, before even the recycled-worktree guard — the harness has handed a dispatched agent NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
 | Review context | head SHA (`review_head`) is the only metadata field the hand-off writes — `review_worktree`/`review_branch` are retired (lode-2m89: nobody read them) (bd metadata, read via `bd show --json`) |
-| SHA metadata writes | every `review_head`/`land_head` write derives the value (a plain `git rev-parse HEAD` call), validates it (`scripts/validate-sha40.sh <field> <sha>`, a plain call) and only on exit 0 runs the `bd update`, pasting the SHA verbatim from the derive call's output (lode-0a4n, lode-fvg0) — never write a SHA I retyped, and never collapse the validator's exit 2 (broken call) into exit 1 (malformed value) |
+| SHA metadata writes | every `review_head`/`land_head` write is one call to `scripts/handoff-sha.sh <id> <field> [bd-update-args…]`, which derives `HEAD`, validates it and runs the `bd update` in a single process (lode-qh1m, lode-0a4n) — no SHA is ever copied between calls; exit 1 = malformed value, 2 = broken call, 3 = `bd update` failed |
 | I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
 | External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal (lode-o29m) |
 | Technical review | **not mine** — the separate `code-reviewer` agent (Fable) fetches `land/<id>` into its own worktree and runs `/code-review` medium, then its own correctness reasoning verifying that skill's findings (lode-1fyb), + `/simplify` there |
