@@ -79,6 +79,16 @@ def _both_cases(keywords: tuple[str, ...]) -> str:
     )
 
 
+# What follows a Correction keyword in a backwards-pointing lead-in: an id,
+# a date or "maintainer decision", reached through "(", ":"/",", a dash, or "by".
+_REF = r"(?:`?lode-|\d{4}-\d{2}-\d{2}|maintainer decision)"
+_CORRECTION_TAIL = (
+    rf"\*{{0,2}}\s*\(\s*{_REF}"
+    rf"|\*{{0,2}}[:,]\s*\*{{0,2}}\s*{_REF}"
+    rf"|\s*(?:—|--?)\s*{_REF}"
+    rf"|\s+by\s+{_REF}"
+)
+
 # Where a marker lead-in can open: a bold span, a parenthetical, or a blockquote.
 _OPENER = r"(?:\*\*|\(|^\s*>\s*\**)"
 
@@ -93,13 +103,19 @@ _OFF_PATTERNS: dict[str, re.Pattern[str]] = {
     "ALL-CAPS 'SUPERSEDED' marker keyword": re.compile(r"\bSUPERSEDED\b"),
     "'<claim> is falsified by <id>' sentence": re.compile(r"is falsified by lode-"),
     # Narrower than the bare keyword on purpose: "**Correction the original
-    # proposal did not anticipate..." and "**Correction to this entry's first
-    # draft:**" are an entry narrating its OWN history, which the preamble
-    # exempts. "Correction (" / "Correction, " is the shape an id or date
-    # follows, i.e. a backwards-pointing marker; what comes after the
-    # punctuation is not inspected (lode-zkki).
+    # proposal did not anticipate..." and "**Correction, verified empirically
+    # on bash 5.2:**" are an entry narrating its OWN history, which the
+    # preamble exempts. What marks a backwards-pointing correction is an id or
+    # date straight after the keyword (lode-zkki, lode-4eyp). Accepted miss: a
+    # correction whose id slot holds free prose other than "maintainer
+    # decision".
     "Correction-style lead-in opening a bold span, blockquote, or parenthetical": re.compile(
-        rf"{_OPENER}(?:{_both_cases(_CORRECTION_KEYWORDS)})(?:\s*\(|,\s)"
+        rf"{_OPENER}(?:{_both_cases(_CORRECTION_KEYWORDS)})s?(?:{_CORRECTION_TAIL})"
+    ),
+    # The keyword after a date and id rather than opening the span, as in a new
+    # entry that corrects earlier ones (lode-4eyp).
+    "date-first CORRECTION entry lead-in": re.compile(
+        rf"\*\*\d{{4}}-\d{{2}}-\d{{2}}[^*\n]*?\s—\s*(?:{_both_cases(_CORRECTION_KEYWORDS)})\b"
     ),
 }
 
@@ -110,6 +126,14 @@ _OFF_PATTERNS: dict[str, re.Pattern[str]] = {
 _ALLOWLIST: dict[str, str] = {
     "**Correction (`lode-rtcx`) to the `lode-moq7` entry above": (
         "committed before the Correction pattern existed (lode-zkki)"
+    ),
+    "CORRECTION to the two entries above: the tightened classifier": (
+        "date-first correction committed before the shape was gated; an "
+        "appended Update pointer makes it greppable (lode-4eyp)"
+    ),
+    "(`lode-wtk2`) \u2014 CORRECTION: `_classify` now judges": (
+        "date-first correction committed before the shape was gated; an "
+        "appended Update pointer makes it greppable (lode-4eyp)"
     ),
 }
 
@@ -215,6 +239,13 @@ def test_off_pattern_scan_catches_a_reintroduced_marker() -> None:
         "- **Correction (`lode-zzzz`) to the lode-yyyy entry above's sentence.**",
         "  > **CORRECTION (lode-zzzz, 2026-01-01) - the blockquote.**",
         "- **(Corrected, lode-zzzz: the parenthetical.)**",
+        "- **2026-01-01 (`lode-zzzz`) \u2014 CORRECTION to the entry above: x.**",
+        "- **Correction** (`lode-zzzz`): the closed-bold near miss.",
+        "**Correction:** lode-zzzz changes the sentence above.",
+        "**Correction \u2014 lode-zzzz, 2026-01-01** to the entry above.",
+        "**Corrected by lode-zzzz** in the entry below.",
+        "**Corrections (lode-zzzz)** to the two entries above.",
+        "**Correction, maintainer decision:** the id slot filled with prose.",
     ]
     # Scanned one line at a time on purpose: a whole-list count can be met by
     # one line matching two patterns while another matches none, which would
@@ -238,6 +269,9 @@ def test_off_pattern_scan_ignores_lowercase_narrative_prose() -> None:
         "  behind by a *previous*, already-superseded dispatch (the guard runs)",
         "  - **Correction the original proposal did not anticipate, verified on bash:** x",
         "  **Correction to this entry's first draft:** it asserted the guard would be",
+        "  **Correction, verified empirically on bash 5.2:** the guard did fire.",
+        "  (Corrected, then re-verified.) The first run was misread.",
+        "- **2026-01-01 (`lode-zzzz`) \u2014 the correction landed, then was re-decided.**",
         "  the correction (see below) was applied; corrected in place by the author",
     ]
 
