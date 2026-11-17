@@ -523,7 +523,7 @@ reproduction: a rebase pickup wrote a 39-character `land_head`, one digit short 
 `scripts/validate-sha40.sh` is the shared predicate, also used by `code-reviewer.md`'s own
 `review_head` check, so both read sites can't drift on what "well-formed" means. It is called in the
 same fenced block that reads the value because shell state does not survive between blocks
-(lode-sfnb); `tests/test_validate_sha40_call_sites.py` pins that both read sites keep calling it.
+(lode-sfnb); `tests/test_validate_sha40_call_sites.py` pins that this read site keeps calling it and that `code-reviewer.md` calls `scripts/check-review-head.sh`, whose own validator call `tests/test_handoff_scripts.py` pins by behaviour (lode-qh1m).
 
 **Deliberate asymmetry — do not "harmonize" it.** This check is **exact-match**, not the
 ancestor-check `code-reviewer.md` uses for `review_head` (lode-9b5n / lode-xdg3 composition). The two
