@@ -50,13 +50,8 @@ esac
 HERE="$(dirname "${BASH_SOURCE[0]}")"
 SHA="$(git rev-parse HEAD)"
 
-# `|| rc=$?` keeps set -e from aborting before we can pass the validator's own
-# 1-vs-2 distinction through.
-rc=0
-"$HERE/validate-sha40.sh" "$FIELD" "$SHA" || rc=$?
-if [ "$rc" -ne 0 ]; then
-  exit "$rc"
-fi
+# `exit $?`, never `exit 1`: the validator's own 1-vs-2 distinction passes through.
+"$HERE/validate-sha40.sh" "$FIELD" "$SHA" || exit $?
 
 if ! bd update "$ID" --set-metadata "$FIELD=$SHA" "$@"; then
   echo "handoff-sha.sh: bd update failed for $ID; $FIELD was NOT written." >&2

@@ -287,10 +287,10 @@ reads `review_head` fresh, shape-checks it (lode-xdg3) and tests it against `HEA
 scripts/check-review-head.sh <id>
 ```
 
-Its exit status is the taxonomy below: **0** FORWARD-ONLY, **1** MALFORMED/MISSING (the validator's
-own diagnostic is on stderr), **3** UNREACHABLE (drift). **2** (a broken call) and **4** (`bd show`
-failed or printed something unparseable) are outside the taxonomy: both say nothing about the field,
-so I fix the invocation or report the `bd` fault, and report nothing about `review_head`.
+Exits **0**, **1** and **3** are the taxonomy below; the script's stderr carries the diagnostic.
+**2** (a broken call) and **4** (`bd show` failed or printed something unparseable) are outside it:
+both say nothing about the field, so I fix the invocation or report the `bd` fault, and report
+nothing about `review_head`.
 
 **Why the shape check runs first (lode-xdg3).** A hand-retyped or truncated value writes to bd
 metadata with no schema to catch it. Worse than merely failing to compare cleanly: `git

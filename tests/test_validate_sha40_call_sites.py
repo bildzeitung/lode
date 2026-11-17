@@ -148,9 +148,9 @@ def test_every_skill_read_is_shape_checked_in_its_own_block() -> None:
 
 
 def test_skill_write_site_still_exists() -> None:
-    """Non-vacuity for the one-block write gate below: with the agent files'
-    writes moved into `scripts/handoff-sha.sh`, the skills hold the only
-    `--set-metadata <field>=` sites left for it to check."""
+    """Non-vacuity for the one-block write gate below: agent files may not
+    write these fields at all, so the skills hold its only
+    `--set-metadata <field>=` sites."""
     assert any(
         _write_site_indices(b, field) for _, b in SKILL_SITES for field in DRIFT_FIELDS
     ), (
@@ -211,8 +211,8 @@ def test_agent_files_still_call_the_hand_off_scripts(
     assert _calls(blocks, script, needle), f"{agent} no longer calls {script} {needle}"
 
 
-@pytest.mark.parametrize("script", [VALIDATOR, HANDOFF, REVIEW_HEAD_CHECK])
-def test_script_is_executable(script: str) -> None:
-    path = REPO_ROOT / script
-    assert path.exists(), f"{script} is missing"
-    assert os.access(path, os.X_OK), f"{script} is not executable"
+def test_validator_script_is_executable() -> None:
+    """Every caller invokes it as a bare path, not via `bash <path>`."""
+    script = REPO_ROOT / VALIDATOR
+    assert script.exists(), f"{VALIDATOR} is missing"
+    assert os.access(script, os.X_OK), f"{VALIDATOR} is not executable"

@@ -42,11 +42,8 @@ if ! VALUE="$(printf '%s' "$JSON" | jq -r '.[0].metadata.review_head // empty')"
   exit 4
 fi
 
-rc=0
-"$HERE/validate-sha40.sh" review_head "$VALUE" || rc=$?
-if [ "$rc" -ne 0 ]; then
-  exit "$rc"
-fi
+# `exit $?`, never `exit 1`: the validator's own 1-vs-2 distinction passes through.
+"$HERE/validate-sha40.sh" review_head "$VALUE" || exit $?
 
 if git merge-base --is-ancestor "$VALUE" HEAD; then
   exit 0
