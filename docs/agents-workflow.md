@@ -437,7 +437,9 @@ below with `.` in place of the word.
 
 **Scope: observations, not a contract.** Everything below was observed from worktree-isolated
 dispatched agents only — recorded by the builder on Claude Code 2.1.325 and re-run by the technical
-review on 2.1.326. The main session is unaffected, as observed once on 2.1.326 (a `/land` pass, 2026-11-16): `echo eval` ran, and so did multi-line blocks using `VAR="$(git rev-parse ...)"` with `|| { ...; exit 1; }` tails.
+review on 2.1.326. The main session is unaffected, as observed once on 2.1.326 (a `/land` pass,
+2026-11-16): `echo eval` ran, and so did multi-line blocks using `VAR="$(git rev-parse ...)"` with
+`|| { ...; exit 1; }` tails.
 Two rules, three message texts:
 
 - **`eval`** — "… but this command runs a string through eval, which can't be verified to stay inside
@@ -469,7 +471,8 @@ Two rules, three message texts:
   arguments per `Bash` call.
   Consequence: every multi-line block of `code-reviewer.md` the review reached — each carries a
   derived value into a later command, or ends in a `|| { … }` tail — was refused as written, and
-  `coding.md` / `comment-*.md` / `land-review.md` carry the same shapes. lode-fvg0 itemizes and rewrites them.
+  `coding.md` / `comment-*.md` / `land-review.md` carry the same shapes. lode-fvg0 itemizes and
+  rewrites them.
 
 **Sanctioned workaround — split, never disguise.** Run the underlying command in separate plain calls
 and carry the value by hand between them. For a "too complex" refusal that means one call for `git

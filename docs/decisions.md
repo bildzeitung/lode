@@ -5984,6 +5984,7 @@ entries below from being rewritten to chase the current tree.)
     short list of incident-derived behaviours, and a miss reverts the cut.
   - **Accepted limit:** 5 dispatches do not exercise rare paths.
 
-- **Update (lode-5x01, 2026-11-16) — a filename typo in the `uv` migration entry above.** That entry's
-  bullet "`scripts/python-init.sh`, `venv-install` and `compile-lock.sh` are deleted outright" names the
-  script `venv-install`; the deleted file is `venv-install.sh`. Wording only, no change to the decision.
+- **Update (lode-5x01, 2026-11-16) — a filename typo in `lode-s09w`'s `uv` migration entry above.**
+  That entry's bullet "`scripts/python-init.sh`, `venv-install` and `compile-lock.sh` are deleted
+  outright" names the script `venv-install`; the file is `scripts/venv-install.sh`. Wording only, no
+  change to the decision.

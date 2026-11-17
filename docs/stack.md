@@ -652,7 +652,8 @@ a different deployment, a different effort on one deployment, or both?") with **
 beyond upgrading each existing knob's type** — since `qa_llm` and `qa_think_harder_llm` are already
 two independent `ModelTier` values, a config can set `model` the same on both and vary only
 `reasoning_effort` (effort bump on one deployment), vary only `model` (deployment swap, today's
-existing Sonnet→Opus behavior — the historical case, preserved as-is), or vary both. (Since lode-9ytb the shipped default varies both: Sonnet→Opus plus `reasoning_effort = high`.)
+existing Sonnet→Opus behavior — the historical case, preserved as-is), or vary both. (Since
+lode-9ytb the shipped default varies both: Sonnet→Opus plus `reasoning_effort = high`.)
 
 **`anthropic_call_timeout_s` renamed vendor-neutral: `llm_call_timeout_s`, with a back-compat
 alias** — the second item this ticket's acceptance criteria names explicitly (the Anthropic-named
