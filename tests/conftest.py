@@ -181,6 +181,7 @@ import asyncio
 import functools
 import importlib.util
 import ipaddress
+import json
 import logging
 import os
 import re
@@ -1376,13 +1377,9 @@ def _make_batch_result(
     r.result.type = result_type
 
     if result_type == "succeeded":
-        # lode.llm_provider.collect_batch reads only .type/.input off this
-        # block, so .name/.id get dummy values rather than becoming optional
-        # params on _tool_use_block (lode-j5o1).
-        tool_block = _tool_use_block(
-            name="", tool_input=enrichment.model_dump(), block_id=""
-        )
-        r.result.message.content = [tool_block]
+        # lode.llm_provider.collect_batch reads only .type/.text off this
+        # block: structured output arrives as JSON text (lode-ni7p).
+        r.result.message.content = [_text_block(json.dumps(enrichment.model_dump()))]
 
     return r
 
@@ -1457,10 +1454,11 @@ def _tool_use_block(name: str, tool_input: dict, block_id: str) -> mock.MagicMoc
     return block
 
 
-def _text_block() -> mock.MagicMock:
+def _text_block(text: str = "") -> mock.MagicMock:
     """Build a duck-typed ``text`` content block. See ``_tool_use_block``."""
     block = mock.MagicMock()
     block.type = "text"
+    block.text = text
     return block
 
 

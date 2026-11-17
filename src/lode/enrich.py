@@ -1,7 +1,7 @@
 """Haiku structured-output enrichment + provenance (lode-npx.1 / lode-npx.2).
 
 Extracts tags, entities, and inferred concept edges from a note version OR an
-external snapshot (lode-7qi) via Claude Haiku structured outputs (tool-use) +
+external snapshot (lode-7qi) via Claude Haiku structured outputs (``output_config.format``) +
 Pydantic validation. Records full provenance on every result. Inferred edges
 are AI suggestions with confidence scores, stored as ``source='ai'`` -- never
 asserted facts.
@@ -103,30 +103,22 @@ log = logging.getLogger(__name__)
 #: carries the note's point (lode-juz8.5).
 ENRICH_PROMPT_VER = "npx1-v3"
 
-#: Tool name used to force Haiku into structured output via tool-use calling.
+#: Schema name passed to the provider -- read by OpenAIProvider only; Anthropic
+#: sends ``output_config.format`` and ignores it (lode-ni7p).
 _TOOL_NAME = "extract_enrichment"
 
-#: Output cap for the forced tool-use extraction call -- shared by both routes
+#: Output cap for the structured-output extraction call -- shared by both routes
 #: (:func:`_call_haiku` and :func:`_build_batch_request`, which must send the
 #: byte-for-byte identical value, ``lode-568v.2``'s wire-equivalence bar).
 #: Raised 2048 -> 3072 (lode-ugj5) for the ~30% more tokens Haiku 5.5's
 #: tokenizer produces for the same text as Haiku 4.5. Previously raised
 #: 1024 -> 2048 (lode-jgus) for the same reason
-#: :data:`lode.qa.MAX_TOKENS` was raised 4096 -> 8192 (lode-3dlt): the forced
-#: tool-use branch of :meth:`~lode.llm_provider.AnthropicProvider.structured_call`
-#: never sends ``thinking`` at all -- a property it already had before
-#: lode-d1sr/lode-3dlt ever touched the ``messages.parse`` branch, so it never
-#: hit the Fable-class 400 that fix exists to dodge. But ``enrichment_llm`` is
-#: ``Kind.RUNTIME``, and omitting ``thinking`` does not disable it -- each
-#: model still runs its own default. A user override to a thinking-capable
-#: model that accepts a forced ``tool_choice`` (Opus 5, Sonnet 5, Fable 5)
-#: therefore runs adaptive thinking on this call too, sharing ``max_tokens``
-#: with the forced tool-call JSON payload -- the identical truncation hazard
-#: lode-3dlt's Q&A fix exists to avoid, on a path lode-3dlt named as a real
-#: but then-unreachable follow-up (this ticket). A model that rejects a forced
-#: ``tool_choice`` (Sonnet 5.5, Opus 5.5, Fable 5.1 and later) 400s instead,
-#: and the known ones are refused at config load
-#: (:data:`~lode.llm_provider.FORCED_TOOL_CHOICE_REJECTING_MODELS`, lode-eidi).
+#: :data:`lode.qa.MAX_TOKENS` was raised 4096 -> 8192 (lode-3dlt): ``thinking``
+#: is never sent, so each model runs its own default, and ``enrichment_llm`` is
+#: ``Kind.RUNTIME``. A thinking-capable tier therefore shares ``max_tokens``
+#: with the JSON payload. Since lode-ni7p both routes use structured output
+#: (``output_config.format``) rather than a forced ``tool_choice``, so any
+#: model works here -- including those that 400 on a forced ``tool_choice``.
 #:
 #: **The two routes are bounded differently** -- neither by the Anthropic SDK's
 #: non-streaming timeout guard, which never applies here for the reason
@@ -242,7 +234,7 @@ class EnrichmentResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-#: Tool description sent to the provider's forced tool-use call -- pinned here
+#: Schema description passed to the provider (OpenAI only, see ``_TOOL_NAME``) -- pinned here
 #: (rather than inline) so :func:`_call_haiku` and :func:`_build_batch_request`
 #: send the byte-for-byte identical string (lode-568v.2).
 _TOOL_DESCRIPTION = "Extract structured enrichment from a note body."
@@ -253,13 +245,12 @@ def _call_haiku(
     settings: Settings,
     provider: LLMProvider,
 ) -> EnrichmentResult:
-    """Call Haiku with structured output via forced tool-use; return a validated result.
+    """Call Haiku with structured output; return a validated result.
 
     Routed through the :class:`~lode.llm_provider.LLMProvider` seam
-    (lode-568v.2) -- ``provider.structured_call`` forces a single tool call
-    (``tool_name`` given) so the response is always a structured extraction
-    parseable by Pydantic, byte-for-byte identical to the direct SDK call this
-    replaced. Raises on any API error -- the worker's retry/backoff layer
+    (lode-568v.2) -- ``provider.structured_call`` constrains the response to
+    :class:`EnrichmentResult`'s schema (``output_config.format``) so it is
+    always parseable by Pydantic. Raises on any API error -- the worker's retry/backoff layer
     handles transient failures.
     """
     prompt = _PROMPT_TMPL.format(body=body)
@@ -767,7 +758,7 @@ def collect_enrich_batch(
     for :class:`~lode.llm_provider.AnthropicProvider`). Once ended, iterates
     results:
 
-    - **succeeded**: validates the tool-use block, writes enrichment to DB
+    - **succeeded**: validates the structured-output JSON, writes enrichment to DB
       via :func:`_write_enrichment`, marks the job ``done`` and stamps its
       ``prompt_ver`` to the current :data:`ENRICH_PROMPT_VER` (lode-q47) — the
       Batches API is the primary production route for enrich jobs, so this

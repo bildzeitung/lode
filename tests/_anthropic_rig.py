@@ -95,7 +95,7 @@ def _ended_batch_body(batch_id: str) -> dict:
 
 
 def _succeeded_payload(
-    custom_id: str = "ver-shape", tool_input: dict | None = None
+    custom_id: str = "ver-shape", output: dict | None = None
 ) -> dict:
     """The success payload as a plain dict, pre-JSON-encoding (lode-i821).
 
@@ -117,17 +117,13 @@ def _succeeded_payload(
                 "model": "claude-haiku-4-5",
                 "content": [
                     {
-                        "type": "tool_use",
-                        "id": "tu_1",
-                        "name": "emit",
-                        "input": (
-                            {"name": "w", "count": 1}
-                            if tool_input is None
-                            else tool_input
+                        "type": "text",
+                        "text": json.dumps(
+                            {"name": "w", "count": 1} if output is None else output
                         ),
                     }
                 ],
-                "stop_reason": "tool_use",
+                "stop_reason": "end_turn",
                 "stop_sequence": None,
                 "usage": {"input_tokens": 1, "output_tokens": 1},
             },

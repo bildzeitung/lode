@@ -450,6 +450,12 @@ def build_provider(settings: Settings) -> LLMProvider:
 
 ### 2 & 3. The two immediate structured-output calls — one seam method
 
+> **Update (lode-ni7p):** enrichment no longer uses forced tool-use. `AnthropicProvider`
+> sends `output_config.format` for every immediate call (`messages.parse`) and for the
+> batch route (`submit_batch`/`collect_batch` decode the first `text` block as JSON);
+> `tool_name`/`tool_description` are now read only by `OpenAIProvider`. The text below
+> records the original forced-tool-use design.
+
 `enrich._call_haiku()` (forced tool-use: `tools=[…]`, `tool_choice={"type": "tool", "name": …}`,
 reads `content` block `type == "tool_use"`) and `qa._request_claims()` (`messages.parse(...,
 output_format=...)`, reads `response.parsed_output`) take **identical inputs** once named generically
