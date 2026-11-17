@@ -234,15 +234,15 @@ class AskScreen(Screen[None]):
                 on_stage=_on_stage,
                 pinned_note_id=self._note_id,
             )
+            rendered = render_ask_result(
+                result, context_chars=app.settings.ask_context_chars
+            )
         except Exception as err:
             log.exception("ask failed")
             self.app.call_from_thread(
                 self._fail, generation, str(err) or type(err).__name__
             )
             return
-        rendered = render_ask_result(
-            result, context_chars=app.settings.ask_context_chars
-        )
         self.app.call_from_thread(self._finish, generation, rendered, result)
 
     def _start_spinner(self) -> None:

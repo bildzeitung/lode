@@ -115,8 +115,9 @@ def run_ask(
     (:func:`lode.cited_answer.ask`) -> resolve as-of provenance for each
     surviving citation. Raises :class:`lode.auth.AuthError` on unresolved
     Anthropic credentials and :class:`lode.llm_provider.LLMProviderError` on
-    a provider failure the seam reports, same as the CLI -- the screen catches
-    both and notifies rather than crashing.
+    a provider failure the seam reports, same as the CLI; a raw SDK timeout or
+    connection error passes through unwrapped. The screen catches every
+    exception and notifies rather than crashing.
 
     ``on_stage``, when given, is called synchronously (on this function's own
     calling thread -- this module does no threading of its own) once per
