@@ -90,11 +90,9 @@ def test_handoff_writes_the_derived_head_and_passes_extra_args(
     )
 
 
-def test_handoff_broken_call_is_exit_2_and_writes_nothing(
-    pushed: Path, bd: Path
-) -> None:
-    assert _run("handoff-sha.sh", pushed, "lode-x", bindir=bd).returncode == 2
-    assert _run("handoff-sha.sh", pushed, "lode-x", "nope", bindir=bd).returncode == 2
+def test_handoff_broken_call_is_exit_2_and_writes_nothing(repo: Path, bd: Path) -> None:
+    assert _run("handoff-sha.sh", repo, "lode-x", bindir=bd).returncode == 2
+    assert _run("handoff-sha.sh", repo, "lode-x", "nope", bindir=bd).returncode == 2
     assert not _bd_log(bd).exists()
 
 
@@ -106,14 +104,14 @@ def test_handoff_bd_failure_is_exit_3(pushed: Path, bd: Path) -> None:
 
 
 def test_handoff_validates_the_derived_value_before_writing(
-    pushed: Path, bd: Path
+    repo: Path, bd: Path
 ) -> None:
     """The validator call is what stands between a malformed derive and the
     write: a `git` that prints a 39-character SHA must reach no `bd update`."""
     fake_git = bd / "git"
     fake_git.write_text(f"#!/usr/bin/env bash\necho {'a' * 39}\n")
     fake_git.chmod(0o755)
-    r = _run("handoff-sha.sh", pushed, "lode-x", "land_head", bindir=bd)
+    r = _run("handoff-sha.sh", repo, "lode-x", "land_head", bindir=bd)
     assert r.returncode == 1
     assert "MALFORMED" in r.stderr
     assert not _bd_log(bd).exists()
