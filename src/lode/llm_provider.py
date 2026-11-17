@@ -26,8 +26,8 @@ against exactly; read that first for the *why*. This module owns the *what*:
 - ``structured_call`` gains a ``tool_description`` keyword beyond the pinned
   signature, with the same addition on :class:`BatchRequest`. Only
   :class:`OpenAIProvider` reads ``tool_name``/``tool_description`` (as the
-  schema's name/description); :class:`AnthropicProvider` ignores both since
-  enrichment moved to ``output_config.format`` (lode-ni7p).
+  schema's name/description); :class:`AnthropicProvider` ignores both --
+  ``output_config.format`` carries no schema name (lode-ni7p).
 - ``reasoning_effort`` is wired through by :class:`AnthropicProvider` to
   Anthropic's ``output_config.effort`` (GA since the 4.6 generation; ``xhigh``
   added on Opus 4.7) on :meth:`structured_call` and on the
@@ -53,9 +53,9 @@ against exactly; read that first for the *why*. This module owns the *what*:
   the **raw** decoded wire payload (via ``pydantic.RootModel[dict]``, which
   literally satisfies the pinned ``BaseModel | None`` type) rather than a
   domain-specific validated model. The caller (:mod:`lode.enrich`) does its
-  own ``EnrichmentResult.model_validate(result.parsed.root)`` -- exactly what
-  it does today, just fed from the provider's raw payload instead of
-  ``tool_block.input`` directly. This is what keeps :class:`AnthropicProvider`
+  own ``EnrichmentResult.model_validate(result.parsed.root)`` on that payload
+  (the JSON object decoded from the result's text block). This is what keeps
+  :class:`AnthropicProvider`
   generic (it never needs to know about :class:`lode.enrich.EnrichmentResult`)
   while preserving the resume-on-restart durability
   :func:`lode.enrich.collect_enrich_batch` depends on (``lode-i05.5`` -- a
@@ -488,7 +488,7 @@ def _anthropic_effort_kwargs(
 #: sourced here because they are far apart and a reword would otherwise drift.
 _BUDGET_EXHAUSTED_HINT = "-- typically the whole output budget was consumed by thinking"
 
-#: Same three call sites, but for ``stop_reason="model_context_window_exceeded"``
+#: Same call sites, but for ``stop_reason="model_context_window_exceeded"``
 #: (anthropic SDK 0.119.0+, lode-cai6) -- a distinct cause from the output-budget
 #: exhaustion above: the *input* (system + user_prompt + tool results so far)
 #: no longer fits the model's context window, so growing ``max_tokens`` cannot
@@ -643,6 +643,36 @@ def _wrong_shape_result(result: Any, detail: str) -> BatchResult:
     )
 
 
+#: ``stop_reason`` values that mean generation was cut off before the JSON ended.
+_TRUNCATED_STOP_REASONS = frozenset({"max_tokens", "model_context_window_exceeded"})
+
+
+def _incomplete_result(result: Any, what: str) -> BatchResult:
+    """Degrade one *succeeded* batch line whose message carries no complete JSON.
+
+    Not a wrong-shape line (:func:`_wrong_shape_result`): the line is
+    well-formed, but the message stopped before any text block, or partway
+    through one -- thinking shares ``max_tokens`` with the JSON, see
+    :class:`AnthropicProvider` -- or was declined. Names the same
+    model/``stop_reason``/hint :meth:`AnthropicProvider._parsed_turn` does, or
+    the failure is undiagnosable. ``what`` names which of those was observed.
+    """
+    message = result.result.message
+    stop_reason = getattr(message, "stop_reason", None)
+    return BatchResult(
+        custom_id=_result_custom_id(result),
+        outcome="errored",
+        parsed=None,
+        error=LLMProviderError(
+            f"{what} in batch result "
+            f"(model={getattr(message, 'model', None)!r}, "
+            f"stop_reason={stop_reason!r}) "
+            f"{_budget_hint(stop_reason, message)}",
+            provider="anthropic",
+        ),
+    )
+
+
 class AnthropicProvider:
     """Wraps today's ``anthropic.Anthropic`` client; the sole provider (T2).
 
@@ -693,14 +723,16 @@ class AnthropicProvider:
     :class:`OpenAIProvider` already honors for its equivalent shapes -- so the
     failure is diagnosable at the seam instead of surfacing far from its cause.
 
-    *Enrichment shares that rule since lode-ni7p* (it used to force a tool,
-    which sent no ``thinking`` either). Haiku 5.5 (the ``enrichment_llm``
-    default) thinks adaptively, so on every enrichment call -- immediate and
-    batch -- ``thinking`` shares ``max_tokens`` with the JSON payload:
-    :data:`lode.enrich.MAX_TOKENS` carries the headroom (lode-jgus) and a
-    response that spent its whole budget thinking carries no text block, which
-    :meth:`_parsed_turn` converts to :class:`LLMProviderError`.
-    :meth:`collect_batch` reaches the identical symptom *more* easily (see
+    *Enrichment follows the same rule* (lode-ni7p). Haiku 5.5 (the
+    ``enrichment_llm`` default) thinks adaptively unless a forced
+    ``tool_choice`` suppresses it, and none is sent, so on every enrichment
+    call -- immediate and batch -- ``thinking`` shares ``max_tokens`` with the
+    JSON payload: :data:`lode.enrich.MAX_TOKENS` carries the headroom
+    (lode-jgus). A response that spent its whole budget thinking carries no
+    text block, which :meth:`_parsed_turn` converts to
+    :class:`LLMProviderError`; one cut off partway through the JSON fails the
+    SDK's own validation there instead (the ``ValidationError`` arm).
+    :meth:`collect_batch` reaches both symptoms *more* easily (see
     :data:`lode.enrich.MAX_TOKENS` for why the batch route is bounded
     differently) and degrades the one item to an ``errored``
     :class:`BatchResult` rather than failing the whole collection, with the
@@ -1000,6 +1032,9 @@ class AnthropicProvider:
     def submit_batch(
         self, requests: Sequence[BatchRequest], *, timeout_s: float
     ) -> str:
+        # Deferred -- lode-4q97; needed by `transform_schema` and the `except` below.
+        import anthropic
+
         # lode-a31q: pydantic v2 doesn't memoize model_json_schema() -- it
         # rebuilds a fresh dict per call (~0.5ms measured) -- and every
         # enrichment item in a batch carries the identical EnrichmentResult
@@ -1008,9 +1043,6 @@ class AnthropicProvider:
         # knob. Cache per distinct schema, keyed on the class object; scoped
         # to this submission, never process-global. The cached dict is shared
         # by reference across the requests using it -- treat it as read-only.
-        # `anthropic` deferred -- lode-4q97; also needed by the `except` below.
-        import anthropic
-
         schema_cache: dict[type[BaseModel], dict[str, Any]] = {}
         api_requests: list[dict[str, Any]] = []
         for req in requests:
@@ -1155,25 +1187,8 @@ class AnthropicProvider:
                     # Degrading the one item (rather than failing the whole
                     # collection) is deliberate -- see the module docstring.
                     # A response whose whole budget went to thinking (or a
-                    # refusal) carries no text block; name the same
-                    # model/stop_reason the immediate branch does, or the
-                    # failure is undiagnosable.
-                    message = result.result.message
-                    batch_stop_reason = getattr(message, "stop_reason", None)
-                    results.append(
-                        BatchResult(
-                            custom_id=custom_id,
-                            outcome="errored",
-                            parsed=None,
-                            error=LLMProviderError(
-                                f"no text block in batch result "
-                                f"(model={getattr(message, 'model', None)!r}, "
-                                f"stop_reason={batch_stop_reason!r}) "
-                                f"{_budget_hint(batch_stop_reason, message)}",
-                                provider="anthropic",
-                            ),
-                        )
-                    )
+                    # refusal) carries no text block.
+                    results.append(_incomplete_result(result, "no text block"))
                     continue
                 except (AttributeError, TypeError) as exc:
                     # `result.result.message.content` missing/`None` raises
@@ -1192,25 +1207,40 @@ class AnthropicProvider:
                         )
                     )
                     continue
+                stop_reason = getattr(result.result.message, "stop_reason", None)
+                if stop_reason == "refusal":
+                    # A declined message's content is partial by contract and
+                    # is discarded unread, never returned as a success.
+                    results.append(
+                        _incomplete_result(result, "refused message's text discarded")
+                    )
+                    continue
                 try:
-                    # Structured output arrives as JSON text, so a text block
-                    # truncated mid-JSON (stop_reason=max_tokens) fails here --
-                    # `messages.parse` has the same indistinguishability on the
-                    # immediate route. `text` absent leaves it `None` under
-                    # `construct_type_unchecked`, which `json.loads` rejects
-                    # with `TypeError`.
+                    # Structured output arrives as JSON text. `text` absent
+                    # leaves it `None` under `construct_type_unchecked`, which
+                    # `json.loads` rejects with `TypeError`.
                     parsed = RootModel[dict[str, Any]](json.loads(text_block.text))
                 except (ValueError, TypeError, AttributeError) as exc:
                     # `json.JSONDecodeError` and pydantic's `ValidationError`
-                    # are both `ValueError`s.
-                    results.append(
-                        _wrong_shape_result(
-                            result,
-                            f"text block is not a JSON object (stop_reason="
-                            f"{getattr(result.result.message, 'stop_reason', None)!r}"
-                            f"): {exc}",
+                    # are both `ValueError`s. A text block cut off mid-JSON
+                    # lands here too: a strict prefix of a JSON object never
+                    # parses, so truncation can only fail, never pass as a
+                    # shorter valid payload. Tell it from a genuinely
+                    # malformed line by `stop_reason`.
+                    if stop_reason in _TRUNCATED_STOP_REASONS:
+                        results.append(
+                            _incomplete_result(
+                                result, f"text block cut off mid-JSON ({exc})"
+                            )
                         )
-                    )
+                    else:
+                        results.append(
+                            _wrong_shape_result(
+                                result,
+                                f"text block is not a JSON object "
+                                f"(stop_reason={stop_reason!r}): {exc}",
+                            )
+                        )
                     continue
                 results.append(
                     BatchResult(

@@ -116,9 +116,10 @@ _TOOL_NAME = "extract_enrichment"
 #: :data:`lode.qa.MAX_TOKENS` was raised 4096 -> 8192 (lode-3dlt): ``thinking``
 #: is never sent, so each model runs its own default, and ``enrichment_llm`` is
 #: ``Kind.RUNTIME``. A thinking-capable tier therefore shares ``max_tokens``
-#: with the JSON payload. Since lode-ni7p both routes use structured output
-#: (``output_config.format``) rather than a forced ``tool_choice``, so any
-#: model works here -- including those that 400 on a forced ``tool_choice``.
+#: with the JSON payload -- the default tier included: Haiku 5.5 skips
+#: thinking only under a forced ``tool_choice``, and both routes send
+#: structured output (``output_config.format``) instead, which is also what
+#: lets the models that 400 on a forced ``tool_choice`` work here (lode-ni7p).
 #:
 #: **The two routes are bounded differently** -- neither by the Anthropic SDK's
 #: non-streaming timeout guard, which never applies here for the reason
@@ -135,11 +136,10 @@ _TOOL_NAME = "extract_enrichment"
 #:
 #: Either way this value is headroom, not a hard truncation guarantee.
 #: Exhausting it raises :class:`~lode.llm_provider.LLMProviderError` from the
-#: provider: on the immediate route in place of a raw ``StopIteration``
-#: escaping the seam (the guard lode-jgus added), on the batch route as one
-#: ``errored`` :class:`~lode.llm_provider.BatchResult` rather than failing the
-#: whole collection. See :class:`~lode.llm_provider.AnthropicProvider`'s
-#: docstring for both.
+#: provider on the immediate route, and on the batch route degrades the one
+#: item to an ``errored`` :class:`~lode.llm_provider.BatchResult` rather than
+#: failing the whole collection. See
+#: :class:`~lode.llm_provider.AnthropicProvider`'s docstring for both.
 #:
 #: **This is the fallback, not the last word (lode-d70n) -- closes the gap
 #: named above**, most reachably on the BATCH route, which has no
@@ -249,9 +249,9 @@ def _call_haiku(
 
     Routed through the :class:`~lode.llm_provider.LLMProvider` seam
     (lode-568v.2) -- ``provider.structured_call`` constrains the response to
-    :class:`EnrichmentResult`'s schema (``output_config.format``) so it is
-    always parseable by Pydantic. Raises on any API error -- the worker's retry/backoff layer
-    handles transient failures.
+    :class:`EnrichmentResult`'s schema (``output_config.format``). Raises on
+    any API error, and on a response cut off before the JSON is complete --
+    the worker's retry/backoff layer handles transient failures.
     """
     prompt = _PROMPT_TMPL.format(body=body)
     tier = settings.enrichment_llm
@@ -596,9 +596,10 @@ def _build_batch_request(
 
     The ``custom_id`` is set to ``version_id`` so results can be mapped back to
     the originating job row without a secondary lookup. Mirrors what
-    :func:`_call_haiku` passes to ``provider.structured_call`` — same tool,
-    same prompt template, same extraction schema — so the provider's batch
-    submission is byte-for-byte identical to the immediate call's wire shape.
+    :func:`_call_haiku` passes to ``provider.structured_call`` — same schema
+    name, same prompt template, same extraction schema — so the provider's
+    batch submission is byte-for-byte identical to the immediate call's wire
+    shape.
     """
     prompt = _PROMPT_TMPL.format(body=body)
     tier = settings.enrichment_llm

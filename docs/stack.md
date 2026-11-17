@@ -738,14 +738,23 @@ surfaces from the loop **body**, on attribute access, not from `_stream`'s itera
 swept up by the three types above, since catching it there would also swallow a real bug in the loop
 body. Every attribute chain the loop body reads off the unvalidated model is guarded — narrow
 `except`, degrading the *one* item to an `errored` `BatchResult` rather than failing the whole
-collection, the same treatment the pre-existing "no `tool_use` block" arm already gets:
+collection, the same treatment the "no `text` block" arm gets:
 
 | Chain | Failure mode | Guard |
 |---|---|---|
 | `result.result.type` | missing `result` field → `AttributeError` | `except AttributeError` |
 | `result.result.message.content` (iterated) | missing/`None` `content` → `TypeError` | `except (AttributeError, TypeError)` |
 | `b.type` (each content block, inside the same iteration) | a content item that isn't object-shaped at all (e.g. `null`) → `AttributeError` | same `except (AttributeError, TypeError)` above — one combined arm, since either failure means the line can't be trusted |
-| `tool_block.input` | missing `input` → `None`, and `RootModel[dict[str, Any]](None)` → pydantic `ValidationError` | `except ValidationError` |
+| `json.loads(text_block.text)` | missing `text` → `None` → `TypeError`; text that is not JSON → `json.JSONDecodeError`; JSON that is not an object → pydantic `ValidationError` from `RootModel[dict[str, Any]]` (both `ValueError`s) | `except (ValueError, TypeError, AttributeError)` |
+
+That last guard also catches a line that is *not* wrong-shape at all (`lode-ni7p`): structured output
+arrives as JSON text, and thinking shares `max_tokens` with it, so a message cut off partway through
+its JSON fails the same `json.loads`. A strict prefix of a JSON object never parses, so truncation
+can only fail — it cannot pass as a shorter valid payload. The arm tells the two apart by the
+message's `stop_reason`: `max_tokens` / `model_context_window_exceeded` report a cut-off message with
+the same model/`stop_reason`/hint diagnosis as the "no `text` block" arm, anything else reports a
+wrong-shape line. A `stop_reason` of `refusal` never reaches the decode: a declined message's content
+is partial by contract, so it is discarded unread and reported with the refusal hint.
 
 Two fields round the enumeration out — both unvalidated like the rest, neither able to *raise*
 in the loop body, so both would break their declared type silently rather than loudly:
@@ -754,7 +763,7 @@ in the loop body, so both would break their declared type silently rather than l
   substitutes `"<unknown>"` for anything that isn't a non-empty `str`. This is deliberately a
   property of the *field*, not of the wrong-shape lines above: a line whose `result` block is
   well-formed and whose `custom_id` alone is missing passes every guard in the table and takes the
-  ordinary `succeeded`/`errored`/no-`tool_use` branch, so *every* `BatchResult` built here takes its
+  ordinary `succeeded`/`errored`/no-`text`-block branch, so *every* `BatchResult` built here takes its
   `custom_id` from that one reader. The result is an invariant consumers can rely on — a
   `BatchResult`'s `custom_id` is always a non-empty `str` — bought without widening the
   vendor-neutral type to `str | None` and obliging every consumer to branch on it. A placeholder is
@@ -863,8 +872,9 @@ definitions while the history carries `tool_use` blocks) and `tool_choice` `none
 user turn. The final turn used a forced `tool_choice` until `lode-ugj5`; Sonnet 5.5 and Opus 5.5 400 on
 that, so it was replaced (decision record: [configuration.md](configuration.md#default-llm-tiers-moved-to-the-55-generation-decided-lode-ugj5)).
 `run_tool_turns` takes no `tool_name`/`tool_description` (`lode-66ve`): the final turn never forces a
-tool, and on an empty `tools` a `tool_name` would select `AnthropicProvider.structured_call`'s
-forced-tool branch — the same 400 on the Q&A default models.
+tool, and on an empty `tools` a `tool_name` would then have selected
+`AnthropicProvider.structured_call`'s forced-tool branch — the same 400 on the Q&A default models
+(that branch no longer exists, `lode-ni7p`).
 `strict: true` stays off ([`lode-568v.3`](#llm-provider-seam-decided-lode-568v1)).
 
 **`timeout_s` is a budget for the whole run; `max_tokens` deliberately is not.** No new config knob

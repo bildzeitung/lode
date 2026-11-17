@@ -1292,8 +1292,8 @@ def test_submit_enrich_batch_passes_anthropic_call_timeout_to_create(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
     )
 
-    parse_kwargs = client.beta.messages.batches.create.call_args.kwargs
-    assert parse_kwargs["timeout"] == 42.0
+    create_kwargs = client.beta.messages.batches.create.call_args.kwargs
+    assert create_kwargs["timeout"] == 42.0
 
 
 def test_submit_enrich_batch_uses_the_raised_max_tokens(
@@ -1311,8 +1311,8 @@ def test_submit_enrich_batch_uses_the_raised_max_tokens(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
     )
 
-    parse_kwargs = client.beta.messages.batches.create.call_args.kwargs
-    (request,) = parse_kwargs["requests"]
+    create_kwargs = client.beta.messages.batches.create.call_args.kwargs
+    (request,) = create_kwargs["requests"]
     assert request["params"]["max_tokens"] == MAX_TOKENS
 
 
@@ -1334,8 +1334,8 @@ def test_submit_enrich_batch_max_tokens_override_reaches_the_call(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
     )
 
-    parse_kwargs = client.beta.messages.batches.create.call_args.kwargs
-    (request,) = parse_kwargs["requests"]
+    create_kwargs = client.beta.messages.batches.create.call_args.kwargs
+    (request,) = create_kwargs["requests"]
     assert request["params"]["max_tokens"] == 555
 
 

@@ -1359,7 +1359,7 @@ def fake_batch_client(
 # needs no payload, and its three callers in test_enrich.py pass a throwaway
 # ``EnrichmentResult()``. Left required rather than defaulted to None so the
 # succeeded path -- the overwhelmingly common one -- cannot silently build a
-# result with no tool_use input.
+# result with no JSON payload.
 #
 # Placement matches fake_batch_client's for the same reason: a small
 # MagicMock builder with no SDK-shaped fixture data, so it meets none of

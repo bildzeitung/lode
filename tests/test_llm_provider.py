@@ -20,6 +20,7 @@ import httpx
 import httpx2
 import pytest
 from _anthropic_rig import (
+    _ended_batch_body,
     _jsonl,
     _payload_without,
     _real_anthropic_client,
@@ -36,6 +37,7 @@ from lode.llm_provider import (
     _OPENAI_EFFORT_LEVELS,
     AnthropicProvider,
     BatchRequest,
+    BatchResult,
     LLMAuthError,
     LLMProvider,
     LLMProviderError,
@@ -318,7 +320,10 @@ def test_structured_call_names_context_window_exceeded_when_no_text_block() -> N
 
 
 def test_structured_call_wraps_a_bad_request_from_the_messages_parse_branch() -> None:
-    # Same failure mode as the forced-tool-use test above, on the Q&A branch.
+    # lode-90o7: reasoning_effort set to a legal *value* on a tier whose
+    # *model* doesn't support it reaches the API and comes back as
+    # anthropic.BadRequestError. Must not escape raw -- callers of this seam
+    # only expect LLMProviderError.
     client = mock.MagicMock()
     bad_request = _anthropic_bad_request()
     client.messages.parse.side_effect = bad_request
@@ -875,6 +880,46 @@ def test_submit_batch_builds_structured_output_requests() -> None:
     assert "tool_choice" not in req["params"]
 
 
+@pytest.mark.network
+def test_batch_and_immediate_routes_put_the_same_request_on_the_wire() -> None:
+    """Pins the wire equivalence `submit_batch`'s comment claims (lode-568v.2).
+
+    The immediate route lets `messages.parse` derive `output_config.format`
+    inside the SDK; the batch route builds it by hand. Driven through the real
+    SDK so an upgrade that changes what `parse` sends fails here instead of
+    silently diverging the two routes.
+    """
+    bodies: dict[str, dict] = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        if request.url.path.endswith("/batches"):
+            bodies["batch"] = body
+            return httpx2.Response(200, json=_ended_batch_body("batch-1"))
+        bodies["immediate"] = body
+        return httpx2.Response(200, json=_succeeded_payload()["result"]["message"])
+
+    provider = AnthropicProvider(_real_anthropic_client(handler))
+    request = _batch_request(model="claude-opus-5", reasoning_effort="low")
+
+    provider.structured_call(
+        model=request.model,
+        reasoning_effort=request.reasoning_effort,
+        system=request.system,
+        user_prompt=request.user_prompt,
+        output_schema=request.output_schema,
+        max_tokens=request.max_tokens,
+        timeout_s=5.0,
+        tool_name=request.tool_name,
+        tool_description=request.tool_description,
+    )
+    provider.submit_batch([request], timeout_s=5.0)
+
+    (batch_item,) = bodies["batch"]["requests"]
+    assert batch_item["params"] == bodies["immediate"]
+    assert set(batch_item["params"]["output_config"]) == {"effort", "format"}
+
+
 def test_submit_batch_builds_schema_once_per_distinct_output_schema() -> None:
     # lode-a31q: every batch item sharing the same output_schema must reuse
     # one model_json_schema() call, not rebuild it per item -- and the cache
@@ -1250,7 +1295,7 @@ def test_collect_batch_degrades_a_wrong_shape_line_with_a_non_object_content_blo
     """lode-i821: `b.type` inside `next(b for b in ... if b.type == "text")`.
 
     A content block missing just its `type` *key* still decodes to a
-    `BetaTextBlock` with `type=None` -- `b.type == "tool_use"` is simply
+    `BetaTextBlock` with `type=None` -- `b.type == "text"` is simply
     `False`, no exception, already handled by the "no text block"
     `StopIteration` arm. The chain actually breaks when a content
     *item* is not object-shaped at all (e.g. `null`): construct_type_unchecked
@@ -1484,6 +1529,34 @@ def test_collect_batch_handles_a_succeeded_result_missing_a_text_block() -> None
     assert "stop_reason='max_tokens'" in message
 
 
+def _collect_one(content: list, stop_reason: str) -> BatchResult:
+    """Collect one message built from ``content``/``stop_reason`` and return its result.
+
+    A good result follows it in the same batch: whatever happens to the first
+    item must never take the second down with it.
+    """
+    client = mock.MagicMock()
+    client.beta.messages.batches.retrieve.return_value = SimpleNamespace(
+        processing_status="ended"
+    )
+    first = mock.MagicMock()
+    first.custom_id = "ver-4"
+    first.result.type = "succeeded"
+    first.result.message.content = content
+    first.result.message.model = "claude-haiku-5-5"
+    first.result.message.stop_reason = stop_reason
+    first.result.message.stop_details = None
+    good = _succeeded_result("ver-5", {"name": "w", "count": 2})
+    client.beta.messages.batches.results.return_value = iter([first, good])
+
+    _, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    first_result, good_result = results
+    assert first_result.custom_id == "ver-4"
+    assert good_result.outcome == "succeeded"
+    return first_result
+
+
 @pytest.mark.parametrize(
     "text",
     ['{"name": "w", "cou', "not json at all", "[1, 2]", ""],
@@ -1492,30 +1565,64 @@ def test_collect_batch_handles_a_succeeded_result_missing_a_text_block() -> None
 def test_collect_batch_degrades_a_text_block_that_is_not_a_json_object(
     text: str,
 ) -> None:
-    # lode-ni7p: structured output decodes from JSON text, so a block
-    # truncated mid-JSON (max_tokens) fails per item, not per collection.
-    client = mock.MagicMock()
-    client.beta.messages.batches.retrieve.return_value = SimpleNamespace(
-        processing_status="ended"
-    )
-    bad = mock.MagicMock()
-    bad.custom_id = "ver-4"
-    bad.result.type = "succeeded"
-    bad.result.message.content = [_text_block(text)]
-    bad.result.message.stop_reason = "max_tokens"
-    good = _succeeded_result("ver-5", {"name": "w", "count": 2})
-    client.beta.messages.batches.results.return_value = iter([bad, good])
+    # lode-ni7p: structured output decodes from JSON text. A message that
+    # ended normally with undecodable text is a wrong-shape line, failed per
+    # item, not per collection.
+    bad_result = _collect_one([_text_block(text)], "end_turn")
 
-    _, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
-
-    bad_result, good_result = results
-    assert bad_result.custom_id == "ver-4"
     assert bad_result.outcome == "errored"
     assert bad_result.parsed is None
     assert isinstance(bad_result.error, LLMProviderError)
+    assert "wrong-shape batch result line" in str(bad_result.error)
     assert "not a JSON object" in str(bad_result.error)
-    assert "stop_reason='max_tokens'" in str(bad_result.error)
-    assert good_result.outcome == "succeeded"
+    assert "stop_reason='end_turn'" in str(bad_result.error)
+
+
+def test_collect_batch_names_the_budget_when_the_json_is_cut_off_at_max_tokens() -> (
+    None
+):
+    # lode-ni7p: thinking shares max_tokens with the JSON, so truncation
+    # mid-JSON is the realistic batch failure -- it must carry the budget
+    # diagnosis, not read as a malformed line.
+    bad_result = _collect_one([_text_block('{"name": "w", "cou')], "max_tokens")
+
+    assert bad_result.outcome == "errored"
+    assert bad_result.parsed is None
+    message = str(bad_result.error)
+    assert "cut off mid-JSON" in message
+    assert "wrong-shape" not in message
+    assert "claude-haiku-5-5" in message
+    assert "stop_reason='max_tokens'" in message
+    assert _BUDGET_EXHAUSTED_HINT in message
+
+
+@pytest.mark.parametrize(
+    "text",
+    ['{"name": "w", "cou', '{"name": "w", "count": 1}'],
+    ids=["partial-json", "complete-json"],
+)
+def test_collect_batch_never_decodes_a_refused_message(text: str) -> None:
+    # A declined message's content is partial by contract: even text that
+    # happens to parse must not come back as a success.
+    refused = _collect_one([_text_block(text)], "refusal")
+
+    assert refused.outcome == "errored"
+    assert refused.parsed is None
+    _assert_refusal_hint(str(refused.error), category=None)
+
+
+def test_collect_batch_reads_the_text_block_after_a_thinking_block() -> None:
+    # The default enrichment tier thinks, so the JSON text block is normally
+    # preceded by a thinking block -- read by type, never by position.
+    thinking_block = mock.MagicMock()
+    thinking_block.type = "thinking"
+    result = _collect_one(
+        [thinking_block, _text_block('{"name": "w", "count": 1}')], "end_turn"
+    )
+
+    assert result.outcome == "succeeded"
+    assert result.parsed is not None
+    assert result.parsed.root == {"name": "w", "count": 1}
 
 
 def _assert_refusal_hint(message: str, *, category: str | None = "cyber") -> None:

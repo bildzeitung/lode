@@ -102,7 +102,7 @@ def _succeeded_payload(
     Dict-returning (rather than pre-encoded) so :func:`_payload_without` can
     delete a field from it before :func:`_jsonl` encodes it.
 
-    ``tool_input`` overrides the generic ``_Widget``-shaped tool payload, so a
+    ``output`` overrides the generic ``_Widget``-shaped JSON payload, so a
     caller needing a domain-shaped one (enrichment) asks for it rather than
     reaching into ``result.message.content[0]`` to swap it (lode-a9x3).
     """

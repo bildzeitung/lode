@@ -674,10 +674,18 @@ rendering `reasoning_effort` already used — extended, not duplicated.
 > `lode-3dlt`'s "no model→capability prediction" rule that this section recorded
 > is gone with them: the hand-kept list that lagged releases no longer exists.
 >
-> Two consequences. The batch decode path now reads the first `text` content
+> Consequences. The batch decode path now reads the first `text` content
 > block as JSON (`json.loads`) instead of a `tool_use` block's `input`; a block
 > truncated mid-JSON degrades that one item to an `errored` `BatchResult`, like
-> the no-text-block case. And Haiku 5.5, which skipped thinking under a forced
+> the no-text-block case, and a `stop_reason` of `refusal` is reported without
+> reading the text at all ([stack.md](stack.md#error-contract--diagnosability-over-genericness)
+> owns the inventory). A batch submitted by the previous, forced-tool code and
+> collected after an upgrade carries `tool_use` blocks only, so its items report
+> "no text block" and are retried once under the new shape. The constraint on
+> `enrichment_llm` is now the reverse one: the model must support structured
+> outputs (every current model does, per Anthropic's supported-model list —
+> not live-probed here); one that does not fails at the seam as an
+> `LLMProviderError`. And Haiku 5.5, which skipped thinking under a forced
 > `tool_choice`, now thinks adaptively on enrichment like every other tier, so
 > `enrich.MAX_TOKENS` (3072) is shared between thinking and the JSON payload on
 > the default tier too — see
