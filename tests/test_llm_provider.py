@@ -31,6 +31,7 @@ from pydantic import BaseModel, ValidationError
 from lode.config import Settings
 from lode.llm_provider import (
     _ANTHROPIC_EFFORT_LEVELS,
+    _BUDGET_EXHAUSTED_HINT,
     _OPENAI_EFFORT_LEVELS,
     AnthropicProvider,
     BatchRequest,
@@ -40,6 +41,7 @@ from lode.llm_provider import (
     ModelTier,
     OpenAIProvider,
     ToolSpec,
+    _budget_hint,
     build_provider,
     provider_identity,
 )
@@ -1619,6 +1621,145 @@ def test_collect_batch_handles_a_succeeded_result_missing_a_tool_use_block() -> 
     assert "no tool_use block" in message
     assert "claude-opus-5" in message
     assert "stop_reason='max_tokens'" in message
+
+
+def _assert_refusal_hint(message: str, *, category: str | None = "cyber") -> None:
+    assert "stop_reason='refusal'" in message
+    assert "policy refusal" in message
+    assert "raising max_tokens will not help" in message
+    assert _BUDGET_EXHAUSTED_HINT not in message
+    if category is None:
+        assert "category" not in message
+    else:
+        assert f"category={category!r}" in message
+
+
+def _refused_parse_response() -> SimpleNamespace:
+    response = _parsed_response(None, stop_reason="refusal")
+    response.stop_details = SimpleNamespace(category="cyber")
+    return response
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        SimpleNamespace(),
+        SimpleNamespace(stop_details=None),
+        SimpleNamespace(stop_details=SimpleNamespace(category=None)),
+    ],
+    ids=["stop-details-absent", "stop-details-null", "category-null"],
+)
+def test_refusal_hint_omits_category_when_absent(response: SimpleNamespace) -> None:
+    # The API documents both `stop_details` and its `category` as nullable
+    # even on a refusal.
+    hint = _budget_hint("refusal", response)
+    assert "policy refusal" in hint
+    assert "category" not in hint
+
+
+def test_structured_call_names_a_refusal_on_the_tool_use_branch() -> None:
+    # lode-fc39: a safety decline is HTTP 200 with no content; the remedy is
+    # not "raise max_tokens".
+    response = mock.MagicMock()
+    response.content = []
+    response.stop_reason = "refusal"
+    response.stop_details = SimpleNamespace(category="cyber")
+    client = mock.MagicMock()
+    client.messages.create.return_value = response
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).structured_call(
+            model="claude-opus-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=2048,
+            timeout_s=1.0,
+            tool_name="extract_widget",
+            tool_description="Extract a widget.",
+        )
+
+    assert "no tool_use block" in str(excinfo.value)
+    _assert_refusal_hint(str(excinfo.value))
+
+
+def test_structured_call_names_a_refusal_on_the_parse_branch() -> None:
+    client = mock.MagicMock()
+    client.messages.parse.return_value = _refused_parse_response()
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).structured_call(
+            model="claude-opus-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=8192,
+            timeout_s=1.0,
+        )
+
+    assert "no text block" in str(excinfo.value)
+    _assert_refusal_hint(str(excinfo.value))
+
+
+def test_run_tool_turns_final_turn_names_a_refusal() -> None:
+    tool = ToolSpec(
+        name="lookup_widget", description="Look up a widget.", input_schema={}
+    )
+    client = mock.MagicMock()
+    client.messages.create.side_effect = [_tool_use_response("lookup_widget", {})]
+    client.messages.parse.return_value = _refused_parse_response()
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).run_tool_turns(
+            model="claude-sonnet-4-6",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: "r",
+            output_schema=_Widget,
+            max_tokens=100,
+            timeout_s=30.0,
+            max_tool_turns=1,
+        )
+
+    assert "no text block" in str(excinfo.value)
+    _assert_refusal_hint(str(excinfo.value))
+
+
+@pytest.mark.network
+@pytest.mark.parametrize(
+    ("stop_details", "category"),
+    [
+        ({"type": "refusal", "category": "cyber", "explanation": None}, "cyber"),
+        (None, None),
+    ],
+    ids=["with-category", "stop-details-null"],
+)
+def test_collect_batch_names_a_refusal_on_a_succeeded_result(
+    stop_details: dict | None, category: str | None
+) -> None:
+    # Driven through the real SDK decoder rather than a MagicMock: a batch
+    # line is built unvalidated (see the wrong-shape tests above), so only the
+    # real decoder shows what `message.stop_details` actually is on this route.
+    payload = _succeeded_payload("ver-3")
+    payload["result"]["message"].update(
+        content=[], stop_reason="refusal", stop_details=stop_details
+    )
+    client = _real_anthropic_client(
+        _results_handler(
+            "batch-1", lambda: httpx2.Response(200, content=_jsonl(payload))
+        )
+    )
+
+    _, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    (result,) = results
+    assert result.outcome == "errored"
+    assert "no tool_use block" in str(result.error)
+    _assert_refusal_hint(str(result.error), category=category)
 
 
 # ---------------------------------------------------------------------------
