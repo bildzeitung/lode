@@ -533,6 +533,20 @@ def _budget_hint(stop_reason: str | None, response: Any) -> str:
     return _BUDGET_EXHAUSTED_HINT
 
 
+def _refusal_message(response: Any, *, what: str) -> str:
+    """Diagnosis for a ``stop_reason="refusal"`` response whose content is discarded.
+
+    A mid-generation refusal is HTTP 200 with PARTIAL content (a truncated text
+    block, or a ``tool_use`` cut off mid-input); the API says to discard it, so
+    callers check ``stop_reason`` before reading ``content`` and never act on
+    the partial blocks (lode-mzuk). ``what`` names the call site.
+    """
+    return (
+        f"{what}: stop_reason='refusal', partial content discarded "
+        f"{_budget_hint('refusal', response)}"
+    )
+
+
 def _output_tokens(response: Any) -> int:
     """``response.usage.output_tokens`` as an int, 0 when absent or not an int.
 
@@ -827,6 +841,19 @@ class AnthropicProvider:
                 f"{_budget_hint(stop_reason, response)}",
                 provider="anthropic",
             )
+        # Empty-content refusals were reported above; a refusal that carries a
+        # (partial) tool_use is reported here, never decoded (lode-mzuk).
+        if getattr(response, "stop_reason", None) == "refusal":
+            raise LLMProviderError(
+                _refusal_message(
+                    response,
+                    what=(
+                        f"Anthropic declined the forced-tool request for "
+                        f"{output_schema.__name__} (model={model})"
+                    ),
+                ),
+                provider="anthropic",
+            )
         return output_schema.model_validate(tool_block.input)
 
     def _parsed_turn(
@@ -896,8 +923,9 @@ class AnthropicProvider:
             raise LLMProviderError(
                 f"Anthropic response did not match {output_schema.__name__}"
                 f"{where} (model={model}, max_tokens={max_tokens}) -- a response "
-                f"truncated mid-JSON is indistinguishable from a genuine "
-                f"schema violation here: {exc}",
+                f"truncated mid-JSON (output budget, or a mid-generation "
+                f"stop_reason='refusal' -- not visible from here) is "
+                f"indistinguishable from a genuine schema violation: {exc}",
                 provider="anthropic",
             ) from exc
 
@@ -1053,6 +1081,16 @@ class AnthropicProvider:
             # lode-9594 -- feeds the per-run total logged below, compared
             # against lode-csl2's (max_tool_turns + 1) x max_tokens bound.
             total_output_tokens += _output_tokens(response)
+            if getattr(response, "stop_reason", None) == "refusal":
+                # Never execute a refused turn's tools: a refusal can cut a
+                # tool_use off mid-input (lode-mzuk).
+                raise LLMProviderError(
+                    _refusal_message(
+                        response,
+                        what=f"Anthropic declined a free tool turn (model={model})",
+                    ),
+                    provider="anthropic",
+                )
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
             if not tool_use_blocks:
                 break
@@ -1295,6 +1333,28 @@ class AnthropicProvider:
                             result,
                             "missing 'message.content' field or a content "
                             f"block missing 'type': {exc}",
+                        )
+                    )
+                    continue
+                refused_message = result.result.message
+                if getattr(refused_message, "stop_reason", None) == "refusal":
+                    # A refused message's partial tool_use is discarded, never
+                    # returned as a success (lode-mzuk).
+                    results.append(
+                        BatchResult(
+                            custom_id=custom_id,
+                            outcome="errored",
+                            parsed=None,
+                            error=LLMProviderError(
+                                _refusal_message(
+                                    refused_message,
+                                    what=(
+                                        "batch result declined "
+                                        f"(model={getattr(refused_message, 'model', None)!r})"
+                                    ),
+                                ),
+                                provider="anthropic",
+                            ),
                         )
                     )
                     continue

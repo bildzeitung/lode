@@ -1762,6 +1762,91 @@ def test_collect_batch_names_a_refusal_on_a_succeeded_result(
     _assert_refusal_hint(str(result.error), category=category)
 
 
+def test_forced_tool_refusal_with_partial_tool_use_is_not_decoded() -> None:
+    # lode-mzuk: a mid-generation refusal can carry a tool_use whose truncated
+    # input still validates; it must be reported, not accepted.
+    response = mock.MagicMock()
+    response.content = [
+        _tool_use_block(
+            name="extract_widget", tool_input={"name": "w"}, block_id="toolu_1"
+        )
+    ]
+    response.stop_reason = "refusal"
+    response.stop_details = SimpleNamespace(category="cyber")
+    client = mock.MagicMock()
+    client.messages.create.return_value = response
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).structured_call(
+            model="claude-opus-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=2048,
+            timeout_s=1.0,
+            tool_name="extract_widget",
+            tool_description="Extract a widget.",
+        )
+
+    assert "partial content discarded" in str(excinfo.value)
+    _assert_refusal_hint(str(excinfo.value))
+
+
+@pytest.mark.parametrize("partial_tool_use", [True, False], ids=["tool-use", "empty"])
+def test_run_tool_turns_refused_free_turn_raises_without_running_tools(
+    partial_tool_use: bool,
+) -> None:
+    tool = ToolSpec(
+        name="lookup_widget", description="Look up a widget.", input_schema={}
+    )
+    refused = _tool_use_response("lookup_widget", {})
+    refused.stop_reason = "refusal"
+    refused.stop_details = SimpleNamespace(category="cyber")
+    if not partial_tool_use:
+        refused.content = []
+    client = mock.MagicMock()
+    client.messages.create.side_effect = [refused]
+    ran: list[str] = []
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).run_tool_turns(
+            model="claude-sonnet-4-6",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: ran.append(name) or "r",
+            output_schema=_Widget,
+            max_tokens=100,
+            timeout_s=30.0,
+            max_tool_turns=2,
+        )
+
+    assert ran == []
+    client.messages.parse.assert_not_called()
+    _assert_refusal_hint(str(excinfo.value))
+
+
+@pytest.mark.network
+def test_collect_batch_refusal_with_partial_tool_use_is_errored() -> None:
+    payload = _succeeded_payload("ver-4")
+    payload["result"]["message"].update(stop_reason="refusal", stop_details=None)
+    client = _real_anthropic_client(
+        _results_handler(
+            "batch-1", lambda: httpx2.Response(200, content=_jsonl(payload))
+        )
+    )
+
+    _, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    (result,) = results
+    assert result.outcome == "errored"
+    assert result.parsed is None
+    assert "partial content discarded" in str(result.error)
+    _assert_refusal_hint(str(result.error), category=None)
+
+
 # ---------------------------------------------------------------------------
 # OpenAIProvider.structured_call (lode-568v.3)
 # ---------------------------------------------------------------------------
