@@ -83,9 +83,10 @@ repo-relative path (my cwd *is* the worktree root) — and the **exit status** t
 replaces the old `|| …` tail. A value crossing from one call to the next (a SHA) is **copied verbatim
 from the earlier call's output**, never typed from memory or a prefix ([Derive identifiers, never
 retype them](../../docs/conventions.md#derive-identifiers-never-retype-them)). The diagnostics the old
-`|| echo "BOOTSTRAP GAP …"` tails printed live here instead: exit 127 / "No such file or directory" =
-**bootstrap gap** (this checkout may predate the script landing on trunk) = stop and report; exit 1 =
-the script ran and printed its own diagnostic.
+`|| echo "BOOTSTRAP GAP …"` tails printed live here instead: exit 127 / "No such file or directory"
+(or 126 / "Permission denied" — the script is there but lost its exec bit) = **bootstrap gap** (this
+checkout may predate the script landing on trunk) = stop and report; exit 1 = the script ran and
+printed its own diagnostic.
 
 On a failure here I stop — full stop: no `EnterWorktree` retry, no `git worktree add` self-rescue, no
 fetch, no diff, no verdict. I report the exact diagnostic the script printed. Full account:
@@ -122,7 +123,7 @@ Both preconditions inside the script are load-bearing, exactly as in `code-revie
 call: the `case` keeps `reset --hard`/`clean -fd` off the user's main checkout if isolation ever
 fails to take; the `rescue/` branch matters because the ref being rewound belongs to **another
 ticket** — tagging `HEAD` first keeps that ticket's unpushed commits recoverable rather than silently
-destroyed. Exit 127 distinguishes a genuinely missing or
+destroyed. Exit 127 (missing) or 126 (not executable) distinguishes a genuinely missing or
 non-executable script (bootstrap gap — report and stop) from the script running and legitimately
 exiting 1 (already reported by the script itself). If it fires, I report it
 explicitly in my final verdict as live evidence of the harness bug, not a routine hiccup.
@@ -174,14 +175,15 @@ Form no opinion until I've read **both sides** — the ticket as written and the
     git merge-base --all origin/land/<base> origin/land/<id>
     ```
 
-    Then, for **each** SHA that call printed (copied verbatim), one plain call:
+    Then, for each SHA that call printed (copied verbatim), **in the order printed**, one plain call:
 
     ```bash
     git merge-base --is-ancestor <that SHA> origin/trunk
     ```
 
-    Exit 0 = the SHA is on `trunk` (not the one I want); **exit 1 = off-trunk — that is the
-    merge-base I diff against**. Any other exit (128) is a broken call, not an answer. If **no** SHA
+    Exit 0 = the SHA is on `trunk` (not the one I want); **exit 1 = off-trunk — the first SHA that
+    exits 1 is the merge-base I diff against, and I stop checking there**. Any other exit (128) is a
+    broken call, not an answer. If **no** SHA
     exits 1, STOP: the lander named a base this branch does not actually contain — report that and
     never diff through it (an empty or guessed rev would silently produce a WRONG diff with exit 0
     rather than erroring). Otherwise:

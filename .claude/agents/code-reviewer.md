@@ -169,8 +169,10 @@ scripts/isolation-guard.sh
 worktree-isolated agent's command when it is "too complex to verify" ([the observed
 shapes](../../docs/agents-workflow.md#the-harnesss-worktree-isolation-classifier-the-eval-word-and-git--refusals-lode-emx5)):
 a `$(git …)` feeding a later command, `VAR=$(…)` followed by anything using `$VAR`, a `|| { …; exit 1; }`
-tail, even a `git` call followed by `echo $?`. So every fenced block here is a **plain call** — one
-command, literal arguments, scripts by repo-relative path (my cwd *is* the worktree root) — and the
+tail, even a `git` call followed by `echo $?`. So every fenced block here is **plain calls** — each
+line one command with literal arguments, scripts by repo-relative path (my cwd *is* the worktree
+root), and no value carried from one command into the next (the gate list in step 5 is several such
+commands; every other block is a single one) — and the
 **exit status** the `Bash` tool reports replaces the old `|| …` tail: nonzero from a guard or validator
 is a stop, read as the surrounding prose says. Where a value must cross from one call to the next (a
 SHA, my worktree's directory name), I **copy it verbatim from the earlier call's output** — I never type
@@ -178,8 +180,9 @@ one from memory or a prefix ([Derive identifiers, never
 retype them](../../docs/conventions.md#derive-identifiers-never-retype-them)); the fabricated-SHA hook
 and `scripts/validate-sha40.sh` backstop a mis-copy but cannot tell a real SHA from the *right* one, so
 the copy is mine to get right. The diagnostics the old `|| echo "BOOTSTRAP GAP …"` tails printed live
-here instead: exit 127 / "No such file or directory" = **bootstrap gap** (this checkout may predate the
-script landing on trunk) = stop and report; exit 1 = the script ran and printed its own diagnostic.
+here instead: exit 127 / "No such file or directory" (or 126 / "Permission denied" — the script is
+there but lost its exec bit) = **bootstrap gap** (this checkout may predate the script landing on
+trunk) = stop and report; exit 1 = the script ran and printed its own diagnostic.
 
 **On a failure here, I stop — full stop.** I do **not** retry `EnterWorktree`, I do **not** attempt
 `git worktree add` + `git -C` as a self-rescue, and I do not review anything. This is a deliberate,
@@ -222,7 +225,8 @@ rescue ref in my hand-off. The script's `git clean -fd` now runs unconditionally
 an ancestor of `origin/trunk` (e.g. recycled onto a `land/<other-id>` that has since landed) still gets its
 untracked leftovers swept before they can pollute the `git status --short` assertions and the `nox`
 run; full reasoning in the script's own header and [docs/decisions.md](../../docs/decisions.md)
-(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). Exit 127 distinguishes a genuinely missing
+(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). Exit 127 (missing) or 126 (not
+executable) distinguishes a genuinely missing
 or non-executable script (bootstrap gap — report and stop) from the script running and legitimately
 exiting 1 (already reported by the script itself).
 
@@ -282,9 +286,12 @@ bd show <id> --json | jq -r '.[0].metadata.review_head // empty'
 ```
 
 ```bash
-scripts/validate-sha40.sh review_head <the value printed above, pasted verbatim>
+scripts/validate-sha40.sh review_head "<the value printed above, pasted verbatim>"
 ```
 
+The quotes stay: if the read printed nothing (the field was never written), the call still passes an
+empty second argument and gets the validator's MISSING verdict (exit 1) — dropping the argument
+instead makes it a one-argument call, which is exit 2 and reads as a broken invocation.
 Exit 1 = malformed/missing metadata; exit 2 = this call is broken — fix the invocation and report
 nothing about the field. Only on exit 0:
 

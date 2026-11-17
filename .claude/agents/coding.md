@@ -188,17 +188,20 @@ repository root"). Neither is needed: the harness already put me here.
 worktree-isolation classifier refuses a worktree-isolated agent's command when it is "too complex to
 verify" ([the observed shapes](../../docs/agents-workflow.md#the-harnesss-worktree-isolation-classifier-the-eval-word-and-git--refusals-lode-emx5)):
 a `$(git …)` whose value feeds a later command, `VAR=$(git …)` followed by anything that uses `$VAR`,
-and a `|| { …; exit 1; }` tail. So every fenced block here is a **plain call** — one command, literal
-arguments, scripts called by their repo-relative path (my cwd *is* the worktree root) — and the
-**exit status** the `Bash` tool reports replaces the old `|| …` tail: a nonzero status from a guard or
+and a `|| { …; exit 1; }` tail. So every fenced block here is **plain calls** — each line one command
+with literal arguments, scripts called by their repo-relative path (my cwd *is* the worktree root),
+and no value carried from one command into the next (the gate lists, the `builds_on` fetch + merge
+and the rebase-pickup escalation are several such commands; every other block is a single one) — and
+the **exit status** the `Bash` tool reports replaces the old `|| …` tail: a nonzero status from a guard or
 validator is a stop, read as the surrounding prose says. Where a value must cross from one call to the
 next (a SHA, my worktree's directory name), I **copy it verbatim from the earlier call's output** — I
 never type one from memory or from a prefix, which is what [Derive identifiers, never
 retype them](../../docs/conventions.md#derive-identifiers-never-retype-them) forbids; the
 fabricated-SHA hook and `scripts/validate-sha40.sh` backstop a mis-copy but cannot tell a real SHA
 from the *right* one, so the copy is mine to get right. The diagnostics the old `|| echo "BOOTSTRAP
-GAP …"` tails printed now live in the prose after each block (exit 127 / "No such file or directory"
-= bootstrap gap = stop and report).
+GAP …"` tails printed now live in the prose after each block (exit 127 / "No such file or directory",
+or 126 / "Permission denied" when the script is there but lost its exec bit = bootstrap gap = stop
+and report).
 
 **Isolation guard (lode-ska2 / lode-jk44) — assert I actually landed inside a worktree at all,
 before touching anything, including checking my own branch name.** `isolation: "worktree"` has been
@@ -259,7 +262,8 @@ scripts/recycled-worktree-guard.sh "before doing any work"
 script itself is read FROM this worktree — a worktree recycled from a branch cut before the script
 landed on trunk would not have it on disk at all, and silently proceeding as if nothing were wrong is
 exactly the failure mode this whole guard exists to prevent. Exit 127 / "No such file or directory"
-means exactly that (script missing or not executable — report and stop); exit 1 means the script
+(script missing) or 126 / "Permission denied" (not executable) means exactly that — report and stop;
+exit 1 means the script
 *ran* and refused (not inside an isolated worktree — it has already printed that diagnostic itself).
 Either way I stop.
 
@@ -355,7 +359,7 @@ scripts/isolation-guard.sh
 A nonzero exit means: **STOP (lode-6wgc)** — my launch worktree is gone or my cwd has moved off it
 since step 3. Do NOT edit, write, or run nox; report to the operator.
 
-The toplevel is substituted inline, never carried in a variable from step 3 — each fenced block is a
+Nothing is carried in a variable from step 3 — each fenced block is a
 separate `Bash` invocation and shell state does not survive between them (lode-lv04, gated by
 `tests/test_skill_bash_state.py`). On failure the response is identical to step 3's: hard stop, no
 `EnterWorktree` retry, no self-provisioned `git worktree add` — report the exact diagnostic and let
@@ -776,7 +780,8 @@ the `case`/ancestor check, not just on a failed one (lode-3v1p) — so a recycle
 *is* an ancestor of `origin/trunk` (e.g. recycled onto a `land/<other-id>` that has since landed) still gets
 its untracked leftovers swept before they can pollute my `git status --short` assertions and the `nox`
 run; full reasoning in the script's own header and [docs/decisions.md](../../docs/decisions.md)
-(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). Exit 127 distinguishes a genuinely
+(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). Exit 127 (missing) or 126 (not
+executable) distinguishes a genuinely
 missing/non-executable script (bootstrap gap — report and stop) from the script running and
 legitimately exiting 1 (already reported by the script itself).
 
@@ -1091,7 +1096,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Default branch | `trunk` (never edit, never land directly — the lander owns it) |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured); I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
 | Worktree lock | `git worktree lock` it before step 4 (first action inside the worktree), `git worktree unlock` right after my first commit (end of step 6) — closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep (lode-oqr) |
-| Isolation guard (mid-session) | re-run the same script immediately before my first mutating `Edit`/`Write` (step 5) and again before my first `git commit` (step 6) — a worktree can pass step 3's guards and still be destroyed mid-session, and a commit made after that lands **on `trunk`**; same stop-and-report contract, and the toplevel is substituted inline, never carried across fenced blocks (lode-6wgc) |
+| Isolation guard (mid-session) | re-run the same script immediately before my first mutating `Edit`/`Write` (step 5) and again before my first `git commit` (step 6) — a worktree can pass step 3's guards and still be destroyed mid-session, and a commit made after that lands **on `trunk`**; same stop-and-report contract, and nothing is carried across calls in a shell variable (lode-6wgc) |
 | Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST executable action, before even the recycled-worktree guard — the harness has handed a dispatched agent NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |

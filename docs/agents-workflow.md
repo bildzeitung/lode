@@ -472,29 +472,35 @@ Two rules, three message texts:
   derived value into a later command, or ends in a `|| { … }` tail — was refused as written, and
   `coding.md` / `land-review.md` / `comment-*.md` carry the same shapes.
 
-  **Resolution (lode-fvg0).** Every fenced bash block in those five agent files is now a **plain
-  call** — one command, literal arguments, guard scripts by repo-relative path (`scripts/isolation-guard.sh`;
+  **Resolution (lode-fvg0).** Every fenced bash block in those five agent files is now **plain
+  calls** — each line one command with literal arguments, no value carried from one command into the
+  next, guard scripts by repo-relative path (`scripts/isolation-guard.sh`;
   a dispatched agent's cwd *is* its worktree root, and from any other cwd the guard fails, which is
   the point). Two design questions, settled:
 
-  - **Carrying a value across calls: copy from output, stated outright.** No mechanical carry was
-    found — every candidate (a variable, `$(…)`, a file) is exactly a refused shape or a new
+  - **Carrying a value across calls: copy from output, stated outright.** No *in-shell* carry is
+    accepted — a variable or `$(…)` is exactly a refused shape, and a scratch file is a new
     side channel. The agent files say so: a SHA or a worktree directory name goes from one call's
     printed output, verbatim, into the next call (`git rev-parse HEAD` → `scripts/validate-sha40.sh
-    <field> <sha>` → `bd update … <sha>`; `pwd` → `git checkout -B land/<id>--<dir> FETCH_HEAD`).
-    The copy rule is the reading of [Derive identifiers, never
-    retype them](conventions.md#derive-identifiers-never-retype-them) under this classifier; the
-    [fabricated-SHA hook](#guard-against-fabricated-shas-lode-fpmi) and `validate-sha40.sh` backstop a
-    mis-copy but cannot tell a real SHA from the *right* one.
+    <field> <sha>` → `bd update … <sha>`; `pwd` → `git checkout -B land/<id>--<dir> FETCH_HEAD`) —
+    the sanctioned workaround below, applied to every block rather than improvised per run.
+    **What that costs:** the SHA is pasted twice, so the write-side validator checks the first paste
+    while the second is what gets written. That is weaker than the same-variable guarantee
+    [lode-0a4n](#validate-land_headreview_head-shape-before-trusting-them-as-drift-signals-lode-xdg3) added, and it
+    leaves the read-side checks as the only backstop for a slip between the two. A script that
+    derives, validates and writes inside one process *is* a plain call and would carry the value
+    mechanically; it is not built here — lode-qh1m.
   - **The `|| { echo STOP …; exit 1; }` tails are gone, and their diagnostics moved to prose.** The
     `Bash` tool reports the exit status of the bare call, so the stop condition is "nonzero". The
-    bootstrap-gap message (script missing → bash exits 127, "No such file or directory") now sits
+    bootstrap-gap message (script missing → bash exits 127, "No such file or directory"; exec bit
+    lost → 126, "Permission denied") now sits
     in the sentence after each block instead of an `echo` inside it; the scripts' own stderr
     already carries every other diagnostic, so none had to move into a script.
 
   `tests/test_validate_sha40_call_sites.py` used to demand the validator in the *same* fenced block
-  as a drift-field read/write; with one command per block it now accepts the validator in the
-  read's own or next two blocks (before the comparison), or a write's own or previous two blocks.
+  as a drift-field read/write. A one-block site keeps that rule; a plain-call sequence must have the
+  validator in the block **adjacent** to the site — right after the read (and before the comparison),
+  right before the write.
   The stacked-diff merge-base loop in `land-review.md` is likewise unrolled into plain calls.
 
 **Sanctioned workaround — split, never disguise.** Run the underlying command in separate plain calls
@@ -1025,8 +1031,8 @@ the in-place reformat `nox -t fix` performs immediately afterwards (one guard ah
 covers both). For the **reviewer**, whose cycle has no commit-to-`trunk` exposure of the same shape,
 they are the first mutating write and the gate loop.
 
-Each checkpoint substitutes the toplevel **inline** —
-`"$(git rev-parse --show-toplevel)/scripts/isolation-guard.sh"` — rather than carrying a `$TOP`
+Each checkpoint is a bare `scripts/isolation-guard.sh` call from the worktree root (lode-fvg0) —
+never a path built from a `$TOP`
 assigned by an earlier step's block. Fenced blocks run as separate `Bash` invocations and shell state
 does not survive between them (lode-lv04): a carried-over `$TOP` expands to empty, the guard path
 resolves to `/scripts/isolation-guard.sh`, and the checkpoint then hard-stops **every** task
@@ -1108,9 +1114,11 @@ so a broken precondition is caught before it can do anything else.
   where the agent is or what state its worktree is in.
 
 **The STOP-AND-REPORT rule is uniform: no caller distinguishes exit 1 from exit 2.** The rule, not a
-list — every call site collapses *any* non-zero exit to the same hard stop (`|| exit 1`, or a `|| { … ;
-exit 1; }` whose only extra test is `[ -x ]`, a filesystem check for the bootstrap gap rather than a
-branch on the code). Callers therefore see a **binary**: proceed, or stop. The 1-vs-2 distinction
+list — every call site collapses *any* non-zero exit to the same hard stop (`|| exit 1` where a
+shell block or script makes the call; in the dispatched-agent files a bare call whose reported exit
+status the agent reads as a stop, since the harness refuses a `|| { … ; exit 1; }` tail there —
+lode-fvg0). Callers
+therefore see a **binary**: proceed, or stop. The 1-vs-2 distinction
 exists for the **operator** reading a transcript or a diagnostic after the fact, never for the calling
 script's control flow — which is exactly why it was safe to resolve the inconsistency below without
 touching a single call site. A new call site must preserve that: collapse non-zero to a stop, and do
@@ -2234,6 +2242,17 @@ the fenced block substitutes it into the validator line too. So: the read-side c
 described above (they remain the backstop that catches a hand edit or an unguarded future write
 site), and every write site now *also* validates. Both use `|| exit $?`, never `exit 1`, so the 0/1/2
 contract below is preserved end to end.
+
+**NARROWED by lode-fvg0 (2026-11-16) — in the dispatched-agent files the write-side guard no longer
+covers the value actually written.** The harness's worktree-isolation classifier refuses a block that
+carries a derived value from one command into the next, so `coding.md` and `code-reviewer.md` now run
+derive, validate and write as three plain calls and paste the SHA into each
+([Resolution](#the-harnesss-worktree-isolation-classifier-the-eval-word-and-git--refusals-lode-emx5)).
+The "substitutes it into the validator line too" argument above held because one `"$VAR"` fed both
+lines; with two pastes it does not, and neither does `|| exit $?` (the agent reads the validator's
+exit status from the call). The gate described below is adjusted to match: same block for a one-block
+site, the adjacent block for a plain-call sequence. Main-session skills are unchanged. Restoring the
+guarantee needs the derive-validate-write in one process — lode-qh1m.
 
 **Write sites are now gated too (`lode-uvjr`).** The original landing of this section left write
 sites unpinned deliberately, filed as its own follow-up: `tests/test_validate_sha40_call_sites.py`'s
