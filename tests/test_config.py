@@ -358,40 +358,17 @@ def test_illegal_reasoning_effort_rejected_at_load(
 @pytest.mark.parametrize(
     "model",
     [
+        "claude-haiku-5-5",
         "claude-sonnet-5-5",
         "claude-opus-5-5",
         "claude-fable-5-1",
-        "claude-fable-5-2",
-        "claude-mythos-5-1",
         "claude-mythos-5-2",
     ],
 )
-def test_enrichment_llm_rejecting_forced_tool_choice_refused_at_load(
-    model: str,
-) -> None:
-    with pytest.raises(ValidationError, match=f"enrichment_llm.*{model}.*tool_choice"):
-        Settings(enrichment_llm={"model": model})
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "claude-haiku-5-5",
-        "claude-opus-5",
-        "claude-sonnet-5",
-        "claude-fable-5",
-        # Not a real id: a suffixed claude-fable-5 that a prefix match on the
-        # refused claude-fable-5-2 would wrongly catch -- the match is exact.
-        "claude-fable-5-20260101",
-    ],
-)
-def test_enrichment_llm_accepting_forced_tool_choice_loads(model: str) -> None:
+def test_enrichment_llm_accepts_any_model(model: str) -> None:
+    # lode-ni7p: enrichment sends structured output, not a forced tool_choice,
+    # so config load must not refuse the models that 400 on one.
     assert Settings(enrichment_llm={"model": model}).enrichment_llm.model == model
-
-
-def test_forced_tool_choice_guard_scoped_to_enrichment_and_anthropic() -> None:
-    Settings(qa_llm={"model": "claude-sonnet-5-5"})
-    Settings(llm_provider="openai", enrichment_llm={"model": "claude-sonnet-5-5"})
 
 
 @pytest.mark.parametrize(

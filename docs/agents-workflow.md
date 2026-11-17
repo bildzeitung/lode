@@ -470,7 +470,38 @@ Two rules, three message texts:
   arguments per `Bash` call.
   Consequence: every multi-line block of `code-reviewer.md` the review reached — each carries a
   derived value into a later command, or ends in a `|| { … }` tail — was refused as written, and
-  `coding.md` / `comment-*.md` carry the same shapes. lode-fvg0 itemizes and rewrites them.
+  `coding.md` / `land-review.md` / `comment-*.md` carry the same shapes.
+
+  **Resolution (lode-fvg0).** Every fenced bash block in those five agent files is now **plain
+  calls** — each line one command with literal arguments, no value carried from one command into the
+  next, guard scripts by repo-relative path (`scripts/isolation-guard.sh`;
+  a dispatched agent's cwd *is* its worktree root, and from any other cwd the guard fails, which is
+  the point). Two design questions, settled:
+
+  - **Carrying a value across calls: copy from output, stated outright.** No *in-shell* carry is
+    accepted — a variable or `$(…)` is exactly a refused shape, and a scratch file is a new
+    side channel. The agent files say so: a SHA or a worktree directory name goes from one call's
+    printed output, verbatim, into the next call (`git rev-parse HEAD` → `scripts/validate-sha40.sh
+    <field> <sha>` → `bd update … <sha>`; `pwd` → `git checkout -B land/<id>--<dir> FETCH_HEAD`) —
+    the sanctioned workaround below, applied to every block rather than improvised per run.
+    **What that costs:** the SHA is pasted twice, so the write-side validator checks the first paste
+    while the second is what gets written. That is weaker than the same-variable guarantee
+    [lode-0a4n](#validate-land_headreview_head-shape-before-trusting-them-as-drift-signals-lode-xdg3) added, and it
+    leaves the read-side checks as the only backstop for a slip between the two. A script that
+    derives, validates and writes inside one process *is* a plain call and would carry the value
+    mechanically; it is not built here — lode-qh1m.
+  - **The `|| { echo STOP …; exit 1; }` tails are gone, and their diagnostics moved to prose.** The
+    `Bash` tool reports the exit status of the bare call, so the stop condition is "nonzero". The
+    bootstrap-gap message (script missing → bash exits 127, "No such file or directory"; exec bit
+    lost → 126, "Permission denied") now sits
+    in the sentence after each block instead of an `echo` inside it; the scripts' own stderr
+    already carries every other diagnostic, so none had to move into a script.
+
+  `tests/test_validate_sha40_call_sites.py` used to demand the validator in the *same* fenced block
+  as a drift-field read/write. A one-block site keeps that rule; a plain-call sequence must have the
+  validator in the block **adjacent** to the site — right after the read (and before the comparison),
+  right before the write.
+  The stacked-diff merge-base loop in `land-review.md` is likewise unrolled into plain calls.
 
 **Sanctioned workaround — split, never disguise.** Run the underlying command in separate plain calls
 and carry the value by hand between them. For a "too complex" refusal that means one call for `git
@@ -1000,8 +1031,8 @@ the in-place reformat `nox -t fix` performs immediately afterwards (one guard ah
 covers both). For the **reviewer**, whose cycle has no commit-to-`trunk` exposure of the same shape,
 they are the first mutating write and the gate loop.
 
-Each checkpoint substitutes the toplevel **inline** —
-`"$(git rev-parse --show-toplevel)/scripts/isolation-guard.sh"` — rather than carrying a `$TOP`
+Each checkpoint is a bare `scripts/isolation-guard.sh` call from the worktree root (lode-fvg0) —
+never a path built from a `$TOP`
 assigned by an earlier step's block. Fenced blocks run as separate `Bash` invocations and shell state
 does not survive between them (lode-lv04): a carried-over `$TOP` expands to empty, the guard path
 resolves to `/scripts/isolation-guard.sh`, and the checkpoint then hard-stops **every** task
@@ -1083,9 +1114,11 @@ so a broken precondition is caught before it can do anything else.
   where the agent is or what state its worktree is in.
 
 **The STOP-AND-REPORT rule is uniform: no caller distinguishes exit 1 from exit 2.** The rule, not a
-list — every call site collapses *any* non-zero exit to the same hard stop (`|| exit 1`, or a `|| { … ;
-exit 1; }` whose only extra test is `[ -x ]`, a filesystem check for the bootstrap gap rather than a
-branch on the code). Callers therefore see a **binary**: proceed, or stop. The 1-vs-2 distinction
+list — every call site collapses *any* non-zero exit to the same hard stop (`|| exit 1` where a
+shell block or script makes the call; in the dispatched-agent files a bare call whose reported exit
+status the agent reads as a stop, since the harness refuses a `|| { … ; exit 1; }` tail there —
+lode-fvg0). Callers
+therefore see a **binary**: proceed, or stop. The 1-vs-2 distinction
 exists for the **operator** reading a transcript or a diagnostic after the fact, never for the calling
 script's control flow — which is exactly why it was safe to resolve the inconsistency below without
 touching a single call site. A new call site must preserve that: collapse non-zero to a stop, and do
@@ -2210,6 +2243,17 @@ described above (they remain the backstop that catches a hand edit or an unguard
 site), and every write site now *also* validates. Both use `|| exit $?`, never `exit 1`, so the 0/1/2
 contract below is preserved end to end.
 
+**NARROWED by lode-fvg0 (2026-11-16) — in the dispatched-agent files the write-side guard no longer
+covers the value actually written.** The harness's worktree-isolation classifier refuses a block that
+carries a derived value from one command into the next, so `coding.md` and `code-reviewer.md` now run
+derive, validate and write as three plain calls and paste the SHA into each
+([Resolution](#the-harnesss-worktree-isolation-classifier-the-eval-word-and-git--refusals-lode-emx5)).
+The "substitutes it into the validator line too" argument above held because one `"$VAR"` fed both
+lines; with two pastes it does not, and neither does `|| exit $?` (the agent reads the validator's
+exit status from the call). The gate described below is adjusted to match: same block for a one-block
+site, the adjacent block for a plain-call sequence. Main-session skills are unchanged. Restoring the
+guarantee needs the derive-validate-write in one process — lode-qh1m.
+
 **Write sites are now gated too (`lode-uvjr`).** The original landing of this section left write
 sites unpinned deliberately, filed as its own follow-up: `tests/test_validate_sha40_call_sites.py`'s
 read-side matcher is keyed on `metadata.<field>` + `jq` + a tip comparison, none of which a write
@@ -2450,7 +2494,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured), pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
 | Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr); a reviewer/pickup launch worktree's harness lock is not reliably cleared on agent exit, so `/code`'s per-ticket reclaim (`scripts/code-reclaim-launch-worktree.sh`) unlocks it itself when the lock reason names that worktree's own directory, on the orchestrator's own completion evidence (lode-7ndi) |
 | Isolation guard | builder, reviewer, and `land-review` all run `scripts/isolation-guard.sh` (lode-ska2) as their FIRST action, before even the recycled-worktree guard — the harness has been observed handing a dispatched agent NO worktree at all (cwd on the main checkout, on `trunk`); a failure is a hard stop, never a self-provisioned `git worktree add` — [full account above](#isolation-guard-lode-ska2--lode-jk44) (lode-ska2, lode-jk44) |
-| Isolation guard (mid-session) | builder and reviewer also re-run `scripts/isolation-guard.sh` immediately before their first mutating `Edit`/`Write`, and again before the builder's first `git commit` / the reviewer's gate loop — a worktree can pass both start-of-cycle guards and still be destroyed mid-session (observed under a resumed `SendMessage` turn), after which a `git commit` silently lands **on `trunk`**. The toplevel is substituted inline, never carried across fenced blocks (lode-lv04). A markdown checkpoint is a mitigation, not the structurally correct altitude — a `PreToolUse` hook is that altitude, and it now ships as `scripts/trunk-write-guard.sh` (lode-p8zl, [below](#isolation-guard-mid-session-re-assertion-lode-6wgc)) — [full account above](#isolation-guard-mid-session-re-assertion-lode-6wgc) (lode-6wgc) |
+| Isolation guard (mid-session) | builder and reviewer also re-run `scripts/isolation-guard.sh` immediately before their first mutating `Edit`/`Write`, and again before the builder's first `git commit` / the reviewer's gate loop — a worktree can pass both start-of-cycle guards and still be destroyed mid-session (observed under a resumed `SendMessage` turn), after which a `git commit` silently lands **on `trunk`**. Nothing is carried across calls in a shell variable (lode-lv04, lode-fvg0). A markdown checkpoint is a mitigation, not the structurally correct altitude — a `PreToolUse` hook is that altitude, and it now ships as `scripts/trunk-write-guard.sh` (lode-p8zl, [below](#isolation-guard-mid-session-re-assertion-lode-6wgc)) — [full account above](#isolation-guard-mid-session-re-assertion-lode-6wgc) (lode-6wgc) |
 | Recycled-worktree guard | **Canonical row (lode-zt62) — `coding.md`'s and `code-reviewer.md`'s quick cards link here rather than restate it.** Builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>` — the ref belongs to another ticket), resets onto `origin/trunk` HEAD (never bare local `trunk`, which `/land` can leave carrying un-pushed, un-gated merges for its whole merge window — lode-isl3) — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. `git clean -fd` then runs **unconditionally**, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef` was investigated (lode-r7ow) and its reuse semantics found to be a documented, mechanism-level match for the recycling; the human decision to switch it has since been made and applied — it is now the explicit `"fresh"` (lode-jzbz), not the harness default by omission — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow, lode-jzbz, lode-3v1p, lode-isl3, lode-ivth) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Fable** (review quality); neither reviews work it authored |
 | Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |

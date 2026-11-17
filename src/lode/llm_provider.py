@@ -11,7 +11,8 @@ against exactly; read that first for the *why*. This module owns the *what*:
   repo's existing :class:`lode.embedding.Embedder` precedent) covering all
   three cloud-LLM call surfaces: one generic immediate structured-output
   method (:meth:`LLMProvider.structured_call`, serving both the enrichment
-  forced-tool-use call and the Q&A ``messages.parse`` call) plus the two-phase
+  call and the Q&A call, each a ``messages.parse`` structured-output call on
+  Anthropic) plus the two-phase
   batch contract (:meth:`LLMProvider.submit_batch` / :meth:`LLMProvider.collect_batch`).
 - :class:`AnthropicProvider` -- the sole implementation for now (T2,
   lode-568v.2), mapping onto today's exact Anthropic calls with **zero
@@ -23,15 +24,13 @@ against exactly; read that first for the *why*. This module owns the *what*:
 **Implementation details left open by the pinned design, resolved here (T2):**
 
 - ``structured_call`` gains a ``tool_description`` keyword beyond the pinned
-  signature -- required for :func:`AnthropicProvider.structured_call`'s forced
-  tool-use branch to send the *exact* tool description text
-  :func:`lode.enrich._call_haiku` sends today (byte-for-byte wire equivalence
-  is this ticket's own acceptance bar; the pinned signature had no way to
-  carry it). Same addition on :class:`BatchRequest` for the batch path.
+  signature, with the same addition on :class:`BatchRequest`. Only
+  :class:`OpenAIProvider` reads ``tool_name``/``tool_description`` (as the
+  schema's name/description); :class:`AnthropicProvider` ignores both --
+  ``output_config.format`` carries no schema name (lode-ni7p).
 - ``reasoning_effort`` is wired through by :class:`AnthropicProvider` to
   Anthropic's ``output_config.effort`` (GA since the 4.6 generation; ``xhigh``
-  added on Opus 4.7) on both the ``messages.parse`` branch and the
-  forced-tool-use branch of :meth:`structured_call`, and on the
+  added on Opus 4.7) on :meth:`structured_call` and on the
   :meth:`submit_batch` path (``lode-wnz1``, closing the gap left open by
   ``lode-568v.2``). A value outside the legal set (``low``/``medium``/``high``/
   ``xhigh``/``max``) raises :class:`LLMProviderError` before any request is
@@ -54,9 +53,9 @@ against exactly; read that first for the *why*. This module owns the *what*:
   the **raw** decoded wire payload (via ``pydantic.RootModel[dict]``, which
   literally satisfies the pinned ``BaseModel | None`` type) rather than a
   domain-specific validated model. The caller (:mod:`lode.enrich`) does its
-  own ``EnrichmentResult.model_validate(result.parsed.root)`` -- exactly what
-  it does today, just fed from the provider's raw payload instead of
-  ``tool_block.input`` directly. This is what keeps :class:`AnthropicProvider`
+  own ``EnrichmentResult.model_validate(result.parsed.root)`` on that payload
+  (the JSON object decoded from the result's text block). This is what keeps
+  :class:`AnthropicProvider`
   generic (it never needs to know about :class:`lode.enrich.EnrichmentResult`)
   while preserving the resume-on-restart durability
   :func:`lode.enrich.collect_enrich_batch` depends on (``lode-i05.5`` -- a
@@ -284,10 +283,9 @@ class BatchRequest:
     """One request in a submitted batch -- mirrors :class:`lode.enrich.EnrichmentResult`'s
     per-version-id request shape, generalized across providers.
 
-    ``tool_description`` is an addition beyond the pinned shape (see module
-    docstring) -- carries the exact tool description text so
-    :class:`AnthropicProvider` can force tool-use byte-for-byte identical to
-    today's hand-built request dict.
+    ``tool_name``/``tool_description`` are read by :class:`OpenAIProvider`
+    only (see module docstring); :class:`AnthropicProvider` always sends
+    ``output_config.format``.
     """
 
     custom_id: str
@@ -361,8 +359,9 @@ class LLMProvider(Protocol):
     ) -> BaseModelT:
         """One immediate structured-output call; returns a validated ``output_schema``.
 
-        Serves both the enrichment (forced tool-use, ``tool_name`` given) and
-        Q&A (``messages.parse``, ``tool_name=None``) surfaces.
+        Serves both the enrichment and Q&A surfaces. ``tool_name`` and
+        ``tool_description`` name the schema for providers that need one
+        (OpenAI); Anthropic ignores them.
         """
         ...
 
@@ -389,7 +388,7 @@ class LLMProvider(Protocol):
         back as the tool result, until the model stops calling tools or the
         turn budget is exhausted), followed by exactly one final call whose
         response is constrained to ``output_schema`` and may not call tools --
-        identical in spirit to :meth:`structured_call`'s no-tool branch, but
+        identical in spirit to :meth:`structured_call`, but
         continuing the accumulated conversation instead of a single user turn.
 
         ``timeout_s`` is a budget for the **whole run**, not one call each
@@ -414,8 +413,7 @@ class LLMProvider(Protocol):
 
         There is deliberately no ``tool_name``/``tool_description`` here: the
         final turn is structured output, never a forced tool call, and an
-        empty ``tools`` delegates to the no-``tool_name`` branch of
-        :meth:`structured_call` (lode-66ve).
+        empty ``tools`` delegates to :meth:`structured_call` (lode-66ve).
         """
         ...
 
@@ -482,15 +480,15 @@ def _anthropic_effort_kwargs(
     return {"output_config": {"effort": reasoning_effort}}
 
 
-#: Shared tail for the three "the block I need isn't in ``content``" errors
-#: (:meth:`AnthropicProvider.structured_call`'s two branches and
-#: :meth:`AnthropicProvider.collect_batch`). All three have the same cause --
-#: thinking shares ``max_tokens`` with the payload, see
+#: Shared tail for the two "no usable block in ``content``" errors
+#: (:meth:`AnthropicProvider._parsed_turn` and, via
+#: :func:`_incomplete_result`, :meth:`AnthropicProvider.collect_batch`). Both
+#: have the same cause -- thinking shares ``max_tokens`` with the payload, see
 #: :class:`AnthropicProvider` -- so they read identically in a log; single-
 #: sourced here because they are far apart and a reword would otherwise drift.
 _BUDGET_EXHAUSTED_HINT = "-- typically the whole output budget was consumed by thinking"
 
-#: Same three call sites, but for ``stop_reason="model_context_window_exceeded"``
+#: Same call sites, but for ``stop_reason="model_context_window_exceeded"``
 #: (anthropic SDK 0.119.0+, lode-cai6) -- a distinct cause from the output-budget
 #: exhaustion above: the *input* (system + user_prompt + tool results so far)
 #: no longer fits the model's context window, so growing ``max_tokens`` cannot
@@ -610,7 +608,7 @@ def _result_custom_id(result: Any) -> str:
 
     Every branch goes through here, not just the wrong-shape ones -- a line
     whose ``result`` block is well-formed and whose ``custom_id`` alone is
-    missing takes the ordinary *succeeded* (or ``errored``/no-``tool_use``)
+    missing takes the ordinary *succeeded* (or ``errored``/no-text-block)
     branch and never touches :func:`_wrong_shape_result`. ``docs/stack.md``
     "Error contract" owns the reasoning and the routing consequence.
     """
@@ -628,7 +626,7 @@ def _wrong_shape_result(result: Any, detail: str) -> BatchResult:
     caught SDK exception -- ``docs/stack.md`` "Error contract" owns the
     inventory. Every call site here degrades the *one* item to an
     ``errored`` :class:`BatchResult` rather than failing the whole
-    collection, matching the pre-existing "no tool_use block" treatment.
+    collection, matching the "no text block" treatment.
 
     ``result.custom_id`` may itself be the field that's missing/malformed --
     it comes from the same unvalidated line -- so it is read via
@@ -645,13 +643,46 @@ def _wrong_shape_result(result: Any, detail: str) -> BatchResult:
     )
 
 
+#: ``stop_reason`` values under which a message's content is not guaranteed
+#: complete: generation was cut off, or the request was declined mid-output.
+_INCOMPLETE_STOP_REASONS = frozenset(
+    {"max_tokens", "model_context_window_exceeded", "refusal"}
+)
+
+
+def _incomplete_result(result: Any, what: str) -> BatchResult:
+    """Degrade one *succeeded* batch line whose message carries no complete JSON.
+
+    Not a wrong-shape line (:func:`_wrong_shape_result`): the line is
+    well-formed, but the message carries no text block at all, or its
+    ``stop_reason`` is one of :data:`_INCOMPLETE_STOP_REASONS` -- thinking
+    shares ``max_tokens`` with the JSON, see :class:`AnthropicProvider`. Names
+    the same model/``stop_reason``/hint :meth:`AnthropicProvider._parsed_turn`
+    does, or the failure is undiagnosable. ``what`` names which was observed.
+    """
+    message = result.result.message
+    stop_reason = getattr(message, "stop_reason", None)
+    return BatchResult(
+        custom_id=_result_custom_id(result),
+        outcome="errored",
+        parsed=None,
+        error=LLMProviderError(
+            f"{what} in batch result "
+            f"(model={getattr(message, 'model', None)!r}, "
+            f"stop_reason={stop_reason!r}) "
+            f"{_stop_reason_hint(stop_reason, message)}",
+            provider="anthropic",
+        ),
+    )
+
+
 class AnthropicProvider:
     """Wraps today's ``anthropic.Anthropic`` client; the sole provider (T2).
 
-    Every method reproduces today's exact wire mechanism -- forced tool-use
-    for enrichment, ``messages.parse`` for Q&A, ``beta.messages.batches.*``
-    for the batch path -- so routing through this seam is byte-for-byte
-    equivalent to calling the SDK directly, as it was before this ticket.
+    Structured output (``output_config.format``) is the one wire mechanism
+    for every surface -- ``messages.parse`` for the immediate calls,
+    ``beta.messages.batches.*`` with the same ``output_config.format`` for
+    the batch path. No surface forces a ``tool_choice`` (lode-ni7p).
 
     **Thinking is never explicitly disabled on the ``messages.parse`` branch
     (lode-3dlt, superseding lode-d1sr's ``thinking={"type": "disabled"}``
@@ -695,48 +726,31 @@ class AnthropicProvider:
     :class:`OpenAIProvider` already honors for its equivalent shapes -- so the
     failure is diagnosable at the seam instead of surfacing far from its cause.
 
-    *The forced tool-use branch never needed the Fable-class-400 fix* -- it
-    has never sent ``thinking`` at all (lode-d1sr never touched it), so it
-    already followed the "never explicitly disable" rule before this class
-    existed; no Fable-class 400 is reachable there. Haiku 5.5 (the
-    ``enrichment_llm`` default) thinks adaptively by default, but on that
-    model a forced ``tool_choice`` skips thinking, so the default tier spends
-    its whole budget on the tool-call JSON. That is a property of Haiku 5.5,
-    not of forced tool use: a ``Kind.RUNTIME`` override to another
-    thinking-capable model that accepts a forced ``tool_choice`` (Opus 5,
-    Sonnet 5) may still think, sharing ``max_tokens`` with the tool-call JSON
-    -- lode-3dlt tracked this as a real but then-unreachable risk rather than
-    fixing it. (A model that rejects a forced ``tool_choice`` 400s here
-    instead, surfaced as :class:`LLMProviderError` by the ``APIStatusError``
-    wrap; ``Settings`` refuses the known ones for ``enrichment_llm`` at config
-    load -- :data:`FORCED_TOOL_CHOICE_REJECTING_MODELS`, lode-eidi.)
-    **lode-jgus closes the thinking risk:** :data:`lode.enrich.MAX_TOKENS` was
-    raised (1024 -> 2048, later 3072) for the same headroom reason
-    :data:`lode.qa.MAX_TOKENS` was, and the branch below now guards the
-    symptom of running out of that budget -- a response whose whole
-    ``max_tokens`` was spent on thinking carries no ``tool_use`` block at
-    all, which used to escape as a raw ``StopIteration`` from an unguarded
-    ``next(...)``. It is now converted to :class:`LLMProviderError`, the same
-    treatment :meth:`structured_call`'s other branch gives its own
-    "budget spent on thinking" symptom (no text block, below).
-    :meth:`collect_batch` reaches the identical symptom by the identical route
-    -- ``enrich`` sends the same raised cap through both -- and in fact reaches
-    it *more* easily; see :data:`lode.enrich.MAX_TOKENS` for why the batch
-    route is bounded differently. It already degraded the one item to an
-    ``errored`` :class:`BatchResult` rather than failing the whole collection,
-    so no raw ``StopIteration`` ever escaped there; lode-jgus only gave its
-    message the same model/``stop_reason`` diagnosis this branch reports.
+    *Enrichment follows the same rule* (lode-ni7p). Haiku 5.5 (the
+    ``enrichment_llm`` default) thinks adaptively unless a forced
+    ``tool_choice`` suppresses it, and none is sent, so on every enrichment
+    call -- immediate and batch -- ``thinking`` shares ``max_tokens`` with the
+    JSON payload: :data:`lode.enrich.MAX_TOKENS` carries the headroom
+    (lode-jgus). A response that spent its whole budget thinking carries no
+    text block, which :meth:`_parsed_turn` converts to
+    :class:`LLMProviderError`; one cut off partway through the JSON fails the
+    SDK's own validation there instead (the ``ValidationError`` arm).
+    :meth:`collect_batch` reaches both symptoms *more* easily (see
+    :data:`lode.enrich.MAX_TOKENS` for why the batch route is bounded
+    differently) and degrades the one item to an ``errored``
+    :class:`BatchResult` rather than failing the whole collection, with the
+    same model/``stop_reason`` diagnosis.
 
     **``reasoning_effort`` -> ``output_config.effort`` (lode-wnz1)** on every
-    branch below; see :func:`_anthropic_effort_kwargs` for the wiring and
+    call below; see :func:`_anthropic_effort_kwargs` for the wiring and
     ``docs/configuration.md`` for the decision. Two standing constraints live
     here because they bind the *call sites*:
 
     **1. Do not reintroduce an explicit ``thinking={"type": "disabled"}`` on
-    either branch.** Opus 5 rejects ``disabled`` paired with effort
+    any branch.** Opus 5 rejects ``disabled`` paired with effort
     ``xhigh``/``max`` outright (400) -- the same family of incompatibility the
     ``thinking``-omission rule above exists to dodge. Unreachable today only
-    because neither branch sends ``thinking`` at all; sending ``effort``
+    because no call sends ``thinking`` at all; sending ``effort``
     alongside an omitted ``thinking`` is fine on every tier.
 
     **2. Effort validation is value-only -- the value/model pairing is NOT
@@ -762,73 +776,6 @@ class AnthropicProvider:
     def __init__(self, client: anthropic.Anthropic) -> None:
         self._client = client
 
-    def _forced_schema_turn(
-        self,
-        *,
-        model: str,
-        system: str,
-        messages: Sequence[Mapping[str, Any]],
-        output_schema: type[BaseModelT],
-        tool_name: str,
-        tool_description: str | None,
-        max_tokens: int,
-        timeout: float,
-        effort_kwargs: Mapping[str, Any],
-    ) -> BaseModelT:
-        """One forced-tool-use ``messages.create`` decoded into ``output_schema``.
-
-        Anthropic's forced-schema wire shape, used for the enrichment tier
-        (Haiku 5.5 accepts a forced ``tool_choice``; Sonnet 5.5 and Opus 5.5
-        400 on it, which is why the Q&A path -- :meth:`run_tool_turns`' final
-        turn -- uses :meth:`_parsed_turn` instead, lode-ugj5).
-
-        No ``thinking`` is ever sent here (lode-d1sr) -- see the class
-        docstring.
-
-        """
-        import anthropic  # deferred -- lode-4q97; needed by the `except` below
-
-        try:
-            response = self._client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                tools=[
-                    {
-                        "name": tool_name,
-                        "description": tool_description or "",
-                        "input_schema": output_schema.model_json_schema(),
-                    }
-                ],
-                tool_choice={"type": "tool", "name": tool_name},
-                messages=messages,
-                timeout=timeout,
-                **effort_kwargs,
-            )
-        except anthropic.APIStatusError as exc:
-            # lode-90o7 -- see `_anthropic_error_from_exception` and the class
-            # docstring.
-            raise _anthropic_error_from_exception(
-                exc, context=f"model={model}"
-            ) from exc
-        tool_block = next((b for b in response.content if b.type == "tool_use"), None)
-        if tool_block is None:
-            # A response that spent its whole budget inside thinking carries no
-            # tool_use block at all; unguarded, `next()` with no default raised
-            # a raw StopIteration here instead of the LLMProviderError every
-            # caller of this seam expects (lode-jgus). Why that is now
-            # reachable: the class docstring.
-            stop_reason = getattr(response, "stop_reason", None)
-            raise LLMProviderError(
-                f"Anthropic response contained no tool_use block to decode "
-                f"into {output_schema.__name__} (model={model}, "
-                f"max_tokens={max_tokens}, "
-                f"stop_reason={stop_reason!r}) "
-                f"{_stop_reason_hint(stop_reason, response)}",
-                provider="anthropic",
-            )
-        return output_schema.model_validate(tool_block.input)
-
     def _parsed_turn(
         self,
         *,
@@ -846,8 +793,8 @@ class AnthropicProvider:
 
         Returns the decoded model and this turn's ``usage.output_tokens``.
         The single implementation of the structured-output
-        (``output_config.format``) wire shape, shared by :meth:`structured_call`'s
-        no-tool branch (one user turn) and :meth:`run_tool_turns`' final turn
+        (``output_config.format``) wire shape, shared by :meth:`structured_call`
+        (one user turn) and :meth:`run_tool_turns`' final turn
         (the whole accumulated history, ``tools`` set).
 
         ``tools`` is passed only by the final turn: the API requires the tool
@@ -938,19 +885,6 @@ class AnthropicProvider:
         # front, then splatted -- empty when unset, so the kwarg is absent
         # rather than `None`. See `_anthropic_effort_kwargs`.
         effort_kwargs = _anthropic_effort_kwargs(reasoning_effort, model=model)
-        if tool_name is not None:
-            return self._forced_schema_turn(
-                model=model,
-                system=system,
-                messages=[{"role": "user", "content": user_prompt}],
-                output_schema=output_schema,
-                tool_name=tool_name,
-                tool_description=tool_description,
-                max_tokens=max_tokens,
-                timeout=timeout_s,
-                effort_kwargs=effort_kwargs,
-            )
-
         # Single-call path: no multi-turn bound to compare a spend total
         # against, so the token count is discarded here (lode-9594).
         parsed, _output_tokens_spent = self._parsed_turn(
@@ -1101,12 +1035,16 @@ class AnthropicProvider:
     def submit_batch(
         self, requests: Sequence[BatchRequest], *, timeout_s: float
     ) -> str:
-        # lode-a31q: pydantic v2 doesn't memoize model_json_schema() -- it
-        # rebuilds a fresh dict per call (~0.5ms measured) -- and every
-        # enrichment item in a batch carries the identical EnrichmentResult
-        # schema, so building it per item wastes tens of ms per submission at
-        # the default enrichment_batch_flush_size of 50, scaling with that
-        # knob. Cache per distinct schema, keyed on the class object; scoped
+        # Deferred -- lode-4q97; needed by `transform_schema` and the `except` below.
+        import anthropic
+
+        # lode-a31q: neither pydantic's model_json_schema() nor the SDK's
+        # transform_schema() over it is memoized -- each call rebuilds a fresh
+        # dict (~0.5ms measured for the former alone) -- and every enrichment
+        # item in a batch carries the identical EnrichmentResult schema, so
+        # building it per item wastes tens of ms per submission at the default
+        # enrichment_batch_flush_size of 50, scaling with that knob. Cache the
+        # built format per distinct schema, keyed on the class object; scoped
         # to this submission, never process-global. The cached dict is shared
         # by reference across the requests using it -- treat it as read-only.
         schema_cache: dict[type[BaseModel], dict[str, Any]] = {}
@@ -1118,29 +1056,28 @@ class AnthropicProvider:
                 "system": req.system,
                 "messages": [{"role": "user", "content": req.user_prompt}],
             }
-            if req.tool_name is not None:
-                input_schema = schema_cache.get(req.output_schema)
-                if input_schema is None:
-                    input_schema = req.output_schema.model_json_schema()
-                    schema_cache[req.output_schema] = input_schema
-                params["tools"] = [
-                    {
-                        "name": req.tool_name,
-                        "description": req.tool_description or "",
-                        "input_schema": input_schema,
-                    }
-                ]
-                params["tool_choice"] = {"type": "tool", "name": req.tool_name}
+            # Structured output, never a forced tool_choice (lode-ni7p): the
+            # same `output_config.format` shape `messages.parse` builds for the
+            # immediate route, via the SDK's own `transform_schema`.
+            output_format = schema_cache.get(req.output_schema)
+            if output_format is None:
+                output_format = {
+                    "type": "json_schema",
+                    "schema": anthropic.transform_schema(req.output_schema),
+                }
+                schema_cache[req.output_schema] = output_format
             # reasoning_effort -> output_config.effort (lode-wnz1), same
             # validation and shape as the immediate structured_call path above.
             # `output_config` belongs inside each request's `params` (the batch
             # envelope is `{custom_id, params: MessageCreateParamsNonStreaming}`).
-            params.update(
-                _anthropic_effort_kwargs(req.reasoning_effort, model=req.model)
+            effort_kwargs = _anthropic_effort_kwargs(
+                req.reasoning_effort, model=req.model
             )
+            params["output_config"] = {
+                **effort_kwargs.get("output_config", {}),
+                "format": output_format,
+            }
             api_requests.append({"custom_id": req.custom_id, "params": params})
-
-        import anthropic  # deferred -- lode-4q97; needed by the `except` below
 
         try:
             batch = self._client.beta.messages.batches.create(
@@ -1229,7 +1166,7 @@ class AnthropicProvider:
             # line (e.g. missing `result`) leaves the *attribute* absent
             # rather than raising a pydantic `ValidationError`, so
             # `result.result.type` itself can raise a raw `AttributeError`.
-            # Same treatment as the `StopIteration`/no-tool_use arm below:
+            # Same treatment as the `StopIteration`/no-text-block arm below:
             # degrade the one item to an `errored` `BatchResult` rather than
             # failing the whole collection -- narrow to `AttributeError`
             # only, so a genuine bug elsewhere in the loop body still
@@ -1247,49 +1184,25 @@ class AnthropicProvider:
             custom_id = _result_custom_id(result)
             if result_type == "succeeded":
                 try:
-                    tool_block = next(
-                        b for b in result.result.message.content if b.type == "tool_use"
+                    text_block = next(
+                        b for b in result.result.message.content if b.type == "text"
                     )
                 except StopIteration:
                     # Degrading the one item (rather than failing the whole
                     # collection) is deliberate -- see the module docstring.
-                    # lode-jgus made this reachable, and reaches it more
-                    # easily here than on the immediate branch (class
-                    # docstring); name the same model/stop_reason that branch
-                    # does, or the failure is undiagnosable.
-                    message = result.result.message
-                    batch_stop_reason = getattr(message, "stop_reason", None)
-                    results.append(
-                        BatchResult(
-                            custom_id=custom_id,
-                            outcome="errored",
-                            parsed=None,
-                            error=LLMProviderError(
-                                f"no tool_use block in batch result "
-                                f"(model={getattr(message, 'model', None)!r}, "
-                                f"stop_reason={batch_stop_reason!r}) "
-                                f"{_stop_reason_hint(batch_stop_reason, message)}",
-                                provider="anthropic",
-                            ),
-                        )
-                    )
+                    # A response whose whole budget went to thinking (or a
+                    # refusal) carries no text block.
+                    results.append(_incomplete_result(result, "no text block"))
                     continue
                 except (AttributeError, TypeError) as exc:
-                    # Same mechanism, two more unvalidated chains read by
-                    # this one expression: `result.result.message.content`
-                    # missing/`None` raises `TypeError` on iteration. A
-                    # content block that's merely missing its `type` *key*
-                    # decodes fine (the union falls back to a member with
-                    # `type=None`, so `b.type == "tool_use"` is just `False`
-                    # -- already handled by the `StopIteration` arm above);
-                    # `b.type` only raises `AttributeError` when a content
-                    # *item* isn't object-shaped at all (e.g. `null`), so
-                    # `construct_type_unchecked` can't build any union member
-                    # for it -- confirmed against the real SDK. Both failures
-                    # here are the identical "wrong shape, not a stream
-                    # failure" class as the `result.result.type` guard above
-                    # -- one combined except arm, since either means this
-                    # result line cannot be trusted at all.
+                    # `result.result.message.content` missing/`None` raises
+                    # `TypeError` on iteration; `b.type` raises
+                    # `AttributeError` only when a content *item* isn't
+                    # object-shaped at all (e.g. `null`) -- a block merely
+                    # missing its `type` key decodes fine and is skipped by
+                    # the `StopIteration` arm above (lode-i821). Both are the
+                    # same "wrong shape, not a stream failure" class as the
+                    # `result.result.type` guard above.
                     results.append(
                         _wrong_shape_result(
                             result,
@@ -1298,17 +1211,29 @@ class AnthropicProvider:
                         )
                     )
                     continue
-                try:
-                    parsed = RootModel[dict[str, Any]](tool_block.input)
-                except ValidationError as exc:
-                    # `tool_block.input` absent leaves it `None` rather than
-                    # raising `AttributeError` (the SDK's `input` field
-                    # itself tolerates `None` under `construct_type_unchecked`),
-                    # so this chain fails one step later than the other two,
-                    # inside `RootModel`'s own validation -- still the same
-                    # wrong-shape class.
+                stop_reason = getattr(result.result.message, "stop_reason", None)
+                if stop_reason in _INCOMPLETE_STOP_REASONS:
+                    # The text is not guaranteed complete -- cut off by the
+                    # budget thinking shares with it, or declined -- so it is
+                    # discarded unread, never returned as a success.
                     results.append(
-                        _wrong_shape_result(result, f"missing 'input' field: {exc}")
+                        _incomplete_result(result, "incomplete text block discarded")
+                    )
+                    continue
+                try:
+                    # Structured output arrives as JSON text. `text` absent
+                    # leaves it `None` under `construct_type_unchecked`, which
+                    # `json.loads` rejects with `TypeError`.
+                    parsed = RootModel[dict[str, Any]](json.loads(text_block.text))
+                except (ValueError, TypeError, AttributeError) as exc:
+                    # `json.JSONDecodeError` and pydantic's `ValidationError`
+                    # are both `ValueError`s.
+                    results.append(
+                        _wrong_shape_result(
+                            result,
+                            f"text block is not a JSON object "
+                            f"(stop_reason={stop_reason!r}): {exc}",
+                        )
                     )
                     continue
                 results.append(
@@ -1405,25 +1330,6 @@ EFFORT_LEVELS_BY_PROVIDER: Mapping[Literal["anthropic", "openai"], tuple[str, ..
     "anthropic": _ANTHROPIC_EFFORT_LEVELS,
     "openai": _OPENAI_EFFORT_LEVELS,
 }
-
-#: Anthropic model ids that 400 on a forced ``tool_choice`` (``any``/``tool``).
-#: Enrichment is the only caller still on the forced-tool-use wire shape, so
-#: ``Settings`` refuses these for ``enrichment_llm`` at load (lode-eidi).
-#: Matched exactly, never by prefix: these ids have no dated-snapshot form, and
-#: ``claude-fable-5-2`` as a prefix would also catch a suffixed
-#: ``claude-fable-5`` id -- a model that accepts a forced ``tool_choice``.
-#: Hand-kept, so it lags new releases: an unlisted rejecting model still fails
-#: at the seam as :class:`LLMProviderError`.
-FORCED_TOOL_CHOICE_REJECTING_MODELS: frozenset[str] = frozenset(
-    {
-        "claude-sonnet-5-5",
-        "claude-opus-5-5",
-        "claude-fable-5-1",
-        "claude-fable-5-2",
-        "claude-mythos-5-1",
-        "claude-mythos-5-2",
-    }
-)
 
 
 def _openai_effort_kwargs(

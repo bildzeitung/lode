@@ -15,17 +15,19 @@ from types import SimpleNamespace
 from typing import ClassVar
 from unittest import mock
 
+import anthropic
 import httpx
 import httpx2
 import pytest
 from _anthropic_rig import (
+    _ended_batch_body,
     _jsonl,
     _payload_without,
     _real_anthropic_client,
     _results_handler,
     _succeeded_payload,
 )
-from conftest import _text_block, _tool_use_block
+from conftest import _text_block, _tool_use_block, fake_batch_client
 from pydantic import BaseModel, ValidationError
 
 from lode.config import Settings
@@ -35,6 +37,7 @@ from lode.llm_provider import (
     _OPENAI_EFFORT_LEVELS,
     AnthropicProvider,
     BatchRequest,
+    BatchResult,
     LLMAuthError,
     LLMProvider,
     LLMProviderError,
@@ -111,15 +114,6 @@ def test_model_tier_is_frozen() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _fake_tool_use_client(payload: dict) -> mock.MagicMock:
-    tool_block = _tool_use_block(name="", tool_input=payload, block_id="")
-    response = mock.MagicMock()
-    response.content = [tool_block]
-    client = mock.MagicMock()
-    client.messages.create.return_value = response
-    return client
-
-
 def _anthropic_bad_request() -> object:
     """A real ``anthropic.BadRequestError`` (lode-90o7) -- the shape the SDK
     actually raises for a legal ``reasoning_effort`` *value* on a model that
@@ -141,69 +135,42 @@ def _anthropic_bad_request() -> object:
     return anthropic.BadRequestError(message, response=response, body=response.json())
 
 
-def test_structured_call_forces_tool_use_when_tool_name_given() -> None:
-    client = _fake_tool_use_client({"name": "widget", "count": 3})
-    provider = AnthropicProvider(client)
-
-    result = provider.structured_call(
-        model="claude-haiku-4-5",
-        reasoning_effort=None,
-        system="sys",
-        user_prompt="prompt",
-        output_schema=_Widget,
-        max_tokens=100,
-        timeout_s=42.0,
-        tool_name="extract_widget",
-        tool_description="Extract a widget.",
-    )
-
-    assert isinstance(result, _Widget)
-    assert result == _Widget(name="widget", count=3)
-
-    kwargs = client.messages.create.call_args.kwargs
-    assert kwargs["model"] == "claude-haiku-4-5"
-    assert kwargs["max_tokens"] == 100
-    assert kwargs["system"] == "sys"
-    assert kwargs["timeout"] == 42.0
-    assert kwargs["tool_choice"] == {"type": "tool", "name": "extract_widget"}
-    assert kwargs["tools"] == [
-        {
-            "name": "extract_widget",
-            "description": "Extract a widget.",
-            "input_schema": _Widget.model_json_schema(),
-        }
-    ]
-    assert kwargs["messages"] == [{"role": "user", "content": "prompt"}]
-    # lode-d1sr: no thinking default to disable on this branch -- see the
-    # AnthropicProvider docstring.
-    assert "thinking" not in kwargs
-
-
-def test_structured_call_uses_messages_parse_when_no_tool_name() -> None:
+@pytest.mark.parametrize(
+    "tool_kwargs",
+    [{}, {"tool_name": "extract_widget", "tool_description": "Extract a widget."}],
+    ids=["no-tool-name", "tool-name-ignored"],
+)
+def test_structured_call_sends_structured_output_and_never_forces_a_tool(
+    tool_kwargs: dict,
+) -> None:
+    # lode-ni7p: enrichment passes tool_name/tool_description (OpenAI reads
+    # them as the schema name); Anthropic sends the same structured-output
+    # request either way, never a forced tool_choice, so a model that 400s on
+    # one still works.
     client = mock.MagicMock()
-    client.messages.parse.return_value = SimpleNamespace(
-        parsed_output=_Widget(name="w", count=1)
-    )
+    client.messages.parse.return_value = _parsed_response(_Widget(name="w", count=1))
     provider = AnthropicProvider(client)
 
     result = provider.structured_call(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5-5",
         reasoning_effort=None,
         system="sys",
         user_prompt="prompt",
         output_schema=_Widget,
         max_tokens=50,
         timeout_s=7.0,
+        **tool_kwargs,
     )
 
     assert result == _Widget(name="w", count=1)
     kwargs = client.messages.parse.call_args.kwargs
-    assert kwargs["model"] == "claude-sonnet-4-6"
+    assert kwargs["model"] == "claude-sonnet-5-5"
     assert kwargs["output_format"] is _Widget
+    assert kwargs["messages"] == [{"role": "user", "content": "prompt"}]
     assert kwargs["timeout"] == 7.0
-    # lode-3dlt: `thinking` is never sent on this branch -- an explicit
-    # `disabled` (lode-d1sr) 400s on Fable-class models at any effort and on
-    # Opus 5 at effort xhigh/max. See the AnthropicProvider docstring.
+    # lode-3dlt: `thinking` is never sent -- an explicit `disabled`
+    # (lode-d1sr) 400s on Fable-class models at any effort and on Opus 5 at
+    # effort xhigh/max. See the AnthropicProvider docstring.
     assert "thinking" not in kwargs
     # Tool definitions belong only to run_tool_turns' final turn; the
     # single-shot wire shape carries none.
@@ -300,51 +267,15 @@ def test_structured_call_wraps_a_schema_validation_failure() -> None:
     assert isinstance(excinfo.value.__cause__, ValidationError)
 
 
-def test_structured_call_wraps_a_bad_request_from_the_forced_tool_use_branch() -> None:
-    # lode-90o7: the reachable gap lode-wnz1 left open -- reasoning_effort set
-    # to a legal *value* on a tier whose *model* doesn't support it (e.g. any
-    # effort on Haiku 4.5, once the enrichment default) reaches the API and comes
-    # back as anthropic.BadRequestError. Must not escape raw -- callers of
-    # this seam only expect LLMProviderError.
+def test_structured_call_names_context_window_exceeded_when_no_text_block() -> None:
+    # lode-cai6: stop_reason="model_context_window_exceeded" is a distinct
+    # cause from "max_tokens" -- the *input* no longer fits, so shrinking
+    # max_tokens can't help. The message must name the overflow and its remedy
+    # instead of the generic thinking-budget hint.
     client = mock.MagicMock()
-    bad_request = _anthropic_bad_request()
-    client.messages.create.side_effect = bad_request
-    provider = AnthropicProvider(client)
-
-    with pytest.raises(LLMProviderError) as excinfo:
-        provider.structured_call(
-            model="claude-haiku-4-5",
-            reasoning_effort="low",
-            system="sys",
-            user_prompt="p",
-            output_schema=_Widget,
-            max_tokens=10,
-            timeout_s=1.0,
-            tool_name="extract_widget",
-            tool_description="Extract a widget.",
-        )
-
-    err = excinfo.value
-    assert err.provider == "anthropic"
-    assert err.status_code == 400
-    assert err.request_id == "req-test-1"
-    assert err.__cause__ is bad_request
-
-
-def test_structured_call_raises_when_the_forced_tool_use_response_has_no_tool_use_block() -> (
-    None
-):
-    # Mirrors test_structured_call_raises_when_the_response_has_no_text_block
-    # above, on the forced-tool-use branch: unguarded, `next()` with no
-    # default would raise a raw StopIteration instead of LLMProviderError
-    # (lode-jgus).
-    thinking_block = mock.MagicMock()
-    thinking_block.type = "thinking"
-    response = mock.MagicMock()
-    response.content = [thinking_block]
-    response.stop_reason = "max_tokens"
-    client = mock.MagicMock()
-    client.messages.create.return_value = response
+    client.messages.parse.return_value = _parsed_response(
+        None, stop_reason="model_context_window_exceeded"
+    )
     provider = AnthropicProvider(client)
 
     with pytest.raises(LLMProviderError) as excinfo:
@@ -356,53 +287,11 @@ def test_structured_call_raises_when_the_forced_tool_use_response_has_no_tool_us
             output_schema=_Widget,
             max_tokens=2048,
             timeout_s=1.0,
-            tool_name="extract_widget",
-            tool_description="Extract a widget.",
         )
 
     message = str(excinfo.value)
-    assert "no tool_use block" in message
-    # The diagnosis has to survive to the log, not just the exception type.
-    assert "max_tokens" in message
-    assert "claude-opus-5" in message
-    assert excinfo.value.provider == "anthropic"
-
-
-def test_structured_call_names_context_window_exceeded_on_the_forced_tool_use_branch() -> (
-    None
-):
-    # lode-cai6: anthropic SDK 0.119.0 added stop_reason="model_context_window_
-    # exceeded", a distinct cause from "max_tokens" -- the *input* no longer
-    # fits the context window, so shrinking max_tokens can't help. Mirrors
-    # test_structured_call_raises_when_the_forced_tool_use_response_has_no_
-    # tool_use_block above, but asserts the message names the overflow (and
-    # its remedy) instead of the generic thinking-budget hint.
-    thinking_block = mock.MagicMock()
-    thinking_block.type = "thinking"
-    response = mock.MagicMock()
-    response.content = [thinking_block]
-    response.stop_reason = "model_context_window_exceeded"
-    client = mock.MagicMock()
-    client.messages.create.return_value = response
-    provider = AnthropicProvider(client)
-
-    with pytest.raises(LLMProviderError) as excinfo:
-        provider.structured_call(
-            model="claude-opus-5",
-            reasoning_effort=None,
-            system="sys",
-            user_prompt="p",
-            output_schema=_Widget,
-            max_tokens=2048,
-            timeout_s=1.0,
-            tool_name="extract_widget",
-            tool_description="Extract a widget.",
-        )
-
-    message = str(excinfo.value)
-    assert "no tool_use block" in message
+    assert "no text block" in message
     assert "stop_reason='model_context_window_exceeded'" in message
-    # Names the cause and the actionable remedy -- not the max_tokens hint.
     assert "context window" in message
     assert "shrink the retrieved context or user_prompt" in message
     assert "typically the whole output budget was consumed by thinking" not in message
@@ -410,7 +299,10 @@ def test_structured_call_names_context_window_exceeded_on_the_forced_tool_use_br
 
 
 def test_structured_call_wraps_a_bad_request_from_the_messages_parse_branch() -> None:
-    # Same failure mode as the forced-tool-use test above, on the Q&A branch.
+    # lode-90o7: reasoning_effort set to a legal *value* on a tier whose
+    # *model* doesn't support it reaches the API and comes back as
+    # anthropic.BadRequestError. Must not escape raw -- callers of this seam
+    # only expect LLMProviderError.
     client = mock.MagicMock()
     bad_request = _anthropic_bad_request()
     client.messages.parse.side_effect = bad_request
@@ -481,49 +373,6 @@ def test_structured_call_omits_output_config_when_reasoning_effort_is_none() -> 
     )
 
     assert "output_config" not in client.messages.parse.call_args.kwargs
-
-
-def test_structured_call_sends_effort_on_the_forced_tool_use_branch() -> None:
-    # NOT claude-haiku-4-5 (once the enrichment default): effort errors outright
-    # on Haiku 4.5, and xhigh does not exist below Opus 4.7. lode validates the
-    # value, not the value/model pairing (lode-90o7), so a mock would happily
-    # accept that combination -- don't enshrine an illegal one as the example.
-    client = _fake_tool_use_client({"name": "widget", "count": 3})
-    provider = AnthropicProvider(client)
-
-    provider.structured_call(
-        model="claude-opus-5",
-        reasoning_effort="xhigh",
-        system="sys",
-        user_prompt="prompt",
-        output_schema=_Widget,
-        max_tokens=100,
-        timeout_s=42.0,
-        tool_name="extract_widget",
-        tool_description="Extract a widget.",
-    )
-
-    kwargs = client.messages.create.call_args.kwargs
-    assert kwargs["output_config"] == {"effort": "xhigh"}
-
-
-def test_structured_call_omits_output_config_on_forced_tool_use_when_unset() -> None:
-    client = _fake_tool_use_client({"name": "widget", "count": 3})
-    provider = AnthropicProvider(client)
-
-    provider.structured_call(
-        model="claude-haiku-4-5",
-        reasoning_effort=None,
-        system="sys",
-        user_prompt="prompt",
-        output_schema=_Widget,
-        max_tokens=100,
-        timeout_s=42.0,
-        tool_name="extract_widget",
-        tool_description="Extract a widget.",
-    )
-
-    assert "output_config" not in client.messages.create.call_args.kwargs
 
 
 @pytest.mark.parametrize("bad_effort", ["LOW", "extreme", "", "medium ", "effort"])
@@ -636,10 +485,10 @@ def test_run_tool_turns_with_empty_tools_delegates_to_structured_call() -> None:
 
 @pytest.mark.parametrize("owner", [LLMProvider, AnthropicProvider, OpenAIProvider])
 def test_run_tool_turns_takes_no_forced_tool_parameters(owner: type) -> None:
-    # lode-66ve: `tool_name` selects structured_call's forced `tool_choice`
-    # branch, which 400s on the Q&A default models (Sonnet 5.5 / Opus 5.5).
-    # Nothing type-checks the implementations against the Protocol, hence
-    # all three.
+    # lode-66ve: the final turn is structured output, never a forced
+    # `tool_choice` (which 400s on the Q&A default models, Sonnet 5.5 / Opus
+    # 5.5), so there is no tool to name. Nothing type-checks the
+    # implementations against the Protocol, hence all three.
     params = inspect.signature(owner.run_tool_turns).parameters
     assert "tool_name" not in params
     assert "tool_description" not in params
@@ -987,7 +836,10 @@ def _batch_request(**overrides: object) -> BatchRequest:
     return BatchRequest(**defaults)
 
 
-def test_submit_batch_builds_forced_tool_use_requests() -> None:
+def test_submit_batch_builds_structured_output_requests() -> None:
+    # lode-ni7p: the batch route sends `output_config.format`, never a forced
+    # tool_choice (which 400s on Sonnet 5.5 / Opus 5.5 -- and only at collect
+    # time, after the handle is persisted).
     client = mock.MagicMock()
     client.beta.messages.batches.create.return_value = SimpleNamespace(id="batch-1")
     provider = AnthropicProvider(client)
@@ -1000,16 +852,56 @@ def test_submit_batch_builds_forced_tool_use_requests() -> None:
     (req,) = kwargs["requests"]
     assert req["custom_id"] == "ver-1"
     assert req["params"]["model"] == "claude-haiku-4-5"
-    assert req["params"]["tool_choice"] == {
-        "type": "tool",
-        "name": "extract_widget",
+    assert req["params"]["output_config"] == {
+        "format": {"type": "json_schema", "schema": anthropic.transform_schema(_Widget)}
     }
-    assert req["params"]["tools"][0]["description"] == "Extract a widget."
+    assert "tools" not in req["params"]
+    assert "tool_choice" not in req["params"]
+
+
+@pytest.mark.network
+def test_batch_and_immediate_routes_put_the_same_request_on_the_wire() -> None:
+    """Pins the wire equivalence `submit_batch`'s comment claims (lode-568v.2).
+
+    The immediate route lets `messages.parse` derive `output_config.format`
+    inside the SDK; the batch route builds it by hand. Driven through the real
+    SDK so an upgrade that changes what `parse` sends fails here instead of
+    silently diverging the two routes.
+    """
+    bodies: dict[str, dict] = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        if request.url.path.endswith("/batches"):
+            bodies["batch"] = body
+            return httpx2.Response(200, json=_ended_batch_body("batch-1"))
+        bodies["immediate"] = body
+        return httpx2.Response(200, json=_succeeded_payload()["result"]["message"])
+
+    provider = AnthropicProvider(_real_anthropic_client(handler))
+    request = _batch_request(model="claude-opus-5", reasoning_effort="low")
+
+    provider.structured_call(
+        model=request.model,
+        reasoning_effort=request.reasoning_effort,
+        system=request.system,
+        user_prompt=request.user_prompt,
+        output_schema=request.output_schema,
+        max_tokens=request.max_tokens,
+        timeout_s=5.0,
+        tool_name=request.tool_name,
+        tool_description=request.tool_description,
+    )
+    provider.submit_batch([request], timeout_s=5.0)
+
+    (batch_item,) = bodies["batch"]["requests"]
+    assert batch_item["params"] == bodies["immediate"]
+    assert set(batch_item["params"]["output_config"]) == {"effort", "format"}
 
 
 def test_submit_batch_builds_schema_once_per_distinct_output_schema() -> None:
     # lode-a31q: every batch item sharing the same output_schema must reuse
-    # one model_json_schema() call, not rebuild it per item -- and the cache
+    # one transform_schema() build, not rebuild it per item -- and the cache
     # must be scoped to ONE submission. A process-global cache keyed on the
     # class object would satisfy the first assertion while pinning every
     # schema class for the life of the process, so the second submission below
@@ -1024,18 +916,18 @@ def test_submit_batch_builds_schema_once_per_distinct_output_schema() -> None:
     ]
 
     with mock.patch.object(
-        _Widget, "model_json_schema", wraps=_Widget.model_json_schema
+        anthropic, "transform_schema", wraps=anthropic.transform_schema
     ) as spy:
         provider.submit_batch(batch, timeout_s=30.0)
         assert spy.call_count == 1
         provider.submit_batch(batch, timeout_s=30.0)
         assert spy.call_count == 2
 
-    expected = _Widget.model_json_schema()
+    expected = anthropic.transform_schema(_Widget)
     reqs = client.beta.messages.batches.create.call_args.kwargs["requests"]
     assert len(reqs) == 3
     for req in reqs:
-        assert req["params"]["tools"][0]["input_schema"] == expected
+        assert req["params"]["output_config"]["format"]["schema"] == expected
 
 
 def test_submit_batch_builds_correct_schema_per_output_schema_in_a_heterogeneous_batch() -> (
@@ -1059,27 +951,19 @@ def test_submit_batch_builds_correct_schema_per_output_schema_in_a_heterogeneous
         timeout_s=30.0,
     )
 
-    widget_schema = _Widget.model_json_schema()
-    gadget_schema = _Gadget.model_json_schema()
+    widget_schema = anthropic.transform_schema(_Widget)
+    gadget_schema = anthropic.transform_schema(_Gadget)
     reqs = client.beta.messages.batches.create.call_args.kwargs["requests"]
     by_id = {req["custom_id"]: req for req in reqs}
-    assert by_id["ver-1"]["params"]["tools"][0]["input_schema"] == widget_schema
-    assert by_id["ver-2"]["params"]["tools"][0]["input_schema"] == gadget_schema
-    assert by_id["ver-3"]["params"]["tools"][0]["input_schema"] == widget_schema
-
-
-def test_submit_batch_omits_tools_when_no_tool_name() -> None:
-    client = mock.MagicMock()
-    client.beta.messages.batches.create.return_value = SimpleNamespace(id="batch-2")
-    provider = AnthropicProvider(client)
-
-    provider.submit_batch(
-        [_batch_request(tool_name=None, tool_description=None)], timeout_s=30.0
+    assert (
+        by_id["ver-1"]["params"]["output_config"]["format"]["schema"] == widget_schema
     )
-
-    (req,) = client.beta.messages.batches.create.call_args.kwargs["requests"]
-    assert "tools" not in req["params"]
-    assert "tool_choice" not in req["params"]
+    assert (
+        by_id["ver-2"]["params"]["output_config"]["format"]["schema"] == gadget_schema
+    )
+    assert (
+        by_id["ver-3"]["params"]["output_config"]["format"]["schema"] == widget_schema
+    )
 
 
 def test_submit_batch_sends_effort_when_reasoning_effort_is_set() -> None:
@@ -1090,17 +974,18 @@ def test_submit_batch_sends_effort_when_reasoning_effort_is_set() -> None:
     provider = AnthropicProvider(client)
 
     # Override `_batch_request`'s Haiku 4.5 model too -- effort errors on
-    # Haiku 4.5; see the forced-tool-use test above and lode-90o7.
+    # Haiku 4.5; see lode-90o7.
     provider.submit_batch(
         [_batch_request(model="claude-opus-5", reasoning_effort="medium")],
         timeout_s=30.0,
     )
 
     (req,) = client.beta.messages.batches.create.call_args.kwargs["requests"]
-    assert req["params"]["output_config"] == {"effort": "medium"}
+    assert req["params"]["output_config"]["effort"] == "medium"
+    assert req["params"]["output_config"]["format"]["type"] == "json_schema"
 
 
-def test_submit_batch_omits_output_config_when_reasoning_effort_is_none() -> None:
+def test_submit_batch_omits_effort_when_reasoning_effort_is_none() -> None:
     client = mock.MagicMock()
     client.beta.messages.batches.create.return_value = SimpleNamespace(id="batch-4")
     provider = AnthropicProvider(client)
@@ -1108,7 +993,7 @@ def test_submit_batch_omits_output_config_when_reasoning_effort_is_none() -> Non
     provider.submit_batch([_batch_request(reasoning_effort=None)], timeout_s=30.0)
 
     (req,) = client.beta.messages.batches.create.call_args.kwargs["requests"]
-    assert "output_config" not in req["params"]
+    assert set(req["params"]["output_config"]) == {"format"}
 
 
 def test_submit_batch_rejects_an_invalid_effort_value() -> None:
@@ -1340,12 +1225,12 @@ def test_collect_batch_discards_partial_results_on_a_mid_stream_transport_failur
     [
         (("result",), "missing 'result' field"),
         (("result", "message", "content"), "message.content"),
-        (("result", "message", "content", 0, "input"), "missing 'input' field"),
+        (("result", "message", "content", 0, "text"), "not a JSON object"),
     ],
     ids=[
         "missing-result-field",
         "missing-message-content-field",
-        "content-block-missing-input-field",
+        "content-block-missing-text-field",
     ],
 )
 def test_collect_batch_degrades_a_wrong_shape_line_missing_a_field(
@@ -1386,12 +1271,12 @@ def test_collect_batch_degrades_a_wrong_shape_line_missing_a_field(
 def test_collect_batch_degrades_a_wrong_shape_line_with_a_non_object_content_block() -> (
     None
 ):
-    """lode-i821: `b.type` inside `next(b for b in ... if b.type == "tool_use")`.
+    """lode-i821: `b.type` inside `next(b for b in ... if b.type == "text")`.
 
     A content block missing just its `type` *key* still decodes to a
-    `BetaTextBlock` with `type=None` -- `b.type == "tool_use"` is simply
-    `False`, no exception, already handled by the pre-existing "no tool_use
-    block" `StopIteration` arm. The chain actually breaks when a content
+    `BetaTextBlock` with `type=None` -- `b.type == "text"` is simply
+    `False`, no exception, already handled by the "no text block"
+    `StopIteration` arm. The chain actually breaks when a content
     *item* is not object-shaped at all (e.g. `null`): construct_type_unchecked
     then can't build any union member, so `b.type` raises a raw
     `AttributeError` -- confirmed against the real SDK before writing this
@@ -1465,9 +1350,9 @@ def _expired_without_custom_id(payload: dict) -> dict:
     return mutated
 
 
-def _no_tool_use_without_custom_id(payload: dict) -> dict:
+def _no_text_without_custom_id(payload: dict) -> dict:
     mutated = _drop_custom_id(payload)
-    mutated["result"]["message"]["content"] = [{"type": "text", "text": "hi"}]
+    mutated["result"]["message"]["content"] = [{"type": "thinking", "thinking": "hi"}]
     return mutated
 
 
@@ -1478,7 +1363,7 @@ def _no_tool_use_without_custom_id(payload: dict) -> dict:
         (_drop_custom_id, "succeeded", None),
         (_null_custom_id, "succeeded", None),
         (_expired_without_custom_id, "expired", None),
-        (_no_tool_use_without_custom_id, "errored", "no tool_use block"),
+        (_no_text_without_custom_id, "errored", "no text block"),
     ],
     ids=[
         "custom-id-missing",
@@ -1533,11 +1418,11 @@ def test_collect_batch_substitutes_a_placeholder_when_only_custom_id_is_unusable
 
 
 def _succeeded_result(custom_id: str, payload: dict) -> mock.MagicMock:
-    tool_block = _tool_use_block(name="", tool_input=payload, block_id="")
+    text_block = _text_block(json.dumps(payload))
     result_obj = mock.MagicMock()
     result_obj.custom_id = custom_id
     result_obj.result.type = "succeeded"
-    result_obj.result.message.content = [tool_block]
+    result_obj.result.message.content = [text_block]
     return result_obj
 
 
@@ -1587,26 +1472,36 @@ def test_collect_batch_maps_errored_result_to_llm_provider_error() -> None:
     assert "rate_limited" in str(result.error)
 
 
-def test_collect_batch_handles_a_succeeded_result_missing_a_tool_use_block() -> None:
-    # No tool_use content block at all -- the provider must not blow up the
-    # whole collect_batch call over one malformed result (see module docstring).
-    client = mock.MagicMock()
-    client.beta.messages.batches.retrieve.return_value = SimpleNamespace(
-        processing_status="ended"
-    )
-    bad = mock.MagicMock()
-    bad.custom_id = "ver-3"
-    bad.result.type = "succeeded"
-    bad.result.message.content = []
-    bad.result.message.model = "claude-opus-5"
-    bad.result.message.stop_reason = "max_tokens"
-    client.beta.messages.batches.results.return_value = iter([bad])
-    provider = AnthropicProvider(client)
+def _collect_one(content: list, stop_reason: str) -> BatchResult:
+    """Collect one message built from ``content``/``stop_reason`` and return its result.
 
-    status, results = provider.collect_batch("batch-1", timeout_s=10.0)
+    A good result follows it in the same batch: whatever happens to the first
+    item must never take the second down with it.
+    """
+    first = mock.MagicMock()
+    first.custom_id = "ver-4"
+    first.result.type = "succeeded"
+    first.result.message.content = content
+    first.result.message.model = "claude-haiku-5-5"
+    first.result.message.stop_reason = stop_reason
+    first.result.message.stop_details = None
+    good = _succeeded_result("ver-5", {"name": "w", "count": 2})
+    client = fake_batch_client("batch-1", results=[first, good])
+
+    status, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
 
     assert status == "ended"
-    (result,) = results
+    first_result, good_result = results
+    assert first_result.custom_id == "ver-4"
+    assert good_result.outcome == "succeeded"
+    return first_result
+
+
+def test_collect_batch_handles_a_succeeded_result_missing_a_text_block() -> None:
+    # No text content block at all -- the provider must not blow up the
+    # whole collect_batch call over one malformed result (see module docstring).
+    result = _collect_one([], "max_tokens")
+
     assert result.outcome == "errored"
     assert result.parsed is None
     assert isinstance(result.error, LLMProviderError)
@@ -1618,9 +1513,73 @@ def test_collect_batch_handles_a_succeeded_result_missing_a_tool_use_block() -> 
     # no max_tokens FIELD, so a bare substring would pass on the stop_reason
     # VALUE alone and keep passing if the diagnosis were dropped.
     message = str(result.error)
-    assert "no tool_use block" in message
-    assert "claude-opus-5" in message
+    assert "no text block" in message
+    assert "claude-haiku-5-5" in message
     assert "stop_reason='max_tokens'" in message
+
+
+@pytest.mark.parametrize(
+    "text",
+    ['{"name": "w", "cou', "not json at all", "[1, 2]", ""],
+    ids=["truncated-mid-json", "not-json", "json-array", "empty-text"],
+)
+def test_collect_batch_degrades_a_text_block_that_is_not_a_json_object(
+    text: str,
+) -> None:
+    # lode-ni7p: structured output decodes from JSON text. A message that
+    # ended normally with undecodable text is a wrong-shape line, failed per
+    # item, not per collection.
+    bad_result = _collect_one([_text_block(text)], "end_turn")
+
+    assert bad_result.outcome == "errored"
+    assert bad_result.parsed is None
+    assert isinstance(bad_result.error, LLMProviderError)
+    assert "wrong-shape batch result line" in str(bad_result.error)
+    assert "not a JSON object" in str(bad_result.error)
+    assert "stop_reason='end_turn'" in str(bad_result.error)
+
+
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "refusal"])
+@pytest.mark.parametrize(
+    "text",
+    ['{"name": "w", "cou', '{"name": "w", "count": 1}'],
+    ids=["partial-json", "complete-json"],
+)
+def test_collect_batch_never_decodes_an_incomplete_message(
+    text: str, stop_reason: str
+) -> None:
+    # lode-ni7p: thinking shares max_tokens with the JSON, so a cut-off message
+    # is the realistic batch failure, and a declined one is partial by
+    # contract. Neither is read -- even text that happens to parse must not
+    # come back as a success -- and each carries its own diagnosis rather than
+    # reading as a malformed line.
+    result = _collect_one([_text_block(text)], stop_reason)
+
+    assert result.outcome == "errored"
+    assert result.parsed is None
+    message = str(result.error)
+    assert "incomplete text block discarded" in message
+    assert "wrong-shape" not in message
+    assert "claude-haiku-5-5" in message
+    if stop_reason == "refusal":
+        _assert_refusal_hint(message, category=None)
+    else:
+        assert "stop_reason='max_tokens'" in message
+        assert _BUDGET_EXHAUSTED_HINT in message
+
+
+def test_collect_batch_reads_the_text_block_after_a_thinking_block() -> None:
+    # The default enrichment tier thinks, so the JSON text block is normally
+    # preceded by a thinking block -- read by type, never by position.
+    thinking_block = mock.MagicMock()
+    thinking_block.type = "thinking"
+    result = _collect_one(
+        [thinking_block, _text_block('{"name": "w", "count": 1}')], "end_turn"
+    )
+
+    assert result.outcome == "succeeded"
+    assert result.parsed is not None
+    assert result.parsed.root == {"name": "w", "count": 1}
 
 
 def _assert_refusal_hint(message: str, *, category: str | None = "cyber") -> None:
@@ -1655,33 +1614,6 @@ def test_refusal_hint_omits_category_when_absent(response: SimpleNamespace) -> N
     hint = _stop_reason_hint("refusal", response)
     assert "policy refusal" in hint
     assert "category" not in hint
-
-
-def test_structured_call_names_a_refusal_on_the_tool_use_branch() -> None:
-    # lode-fc39: a safety decline is HTTP 200 with no content; the remedy is
-    # not "raise max_tokens".
-    response = mock.MagicMock()
-    response.content = []
-    response.stop_reason = "refusal"
-    response.stop_details = SimpleNamespace(category="cyber")
-    client = mock.MagicMock()
-    client.messages.create.return_value = response
-
-    with pytest.raises(LLMProviderError) as excinfo:
-        AnthropicProvider(client).structured_call(
-            model="claude-opus-5",
-            reasoning_effort=None,
-            system="sys",
-            user_prompt="p",
-            output_schema=_Widget,
-            max_tokens=2048,
-            timeout_s=1.0,
-            tool_name="extract_widget",
-            tool_description="Extract a widget.",
-        )
-
-    assert "no tool_use block" in str(excinfo.value)
-    _assert_refusal_hint(str(excinfo.value))
 
 
 def test_structured_call_names_a_refusal_on_the_parse_branch() -> None:
@@ -1758,7 +1690,7 @@ def test_collect_batch_names_a_refusal_on_a_succeeded_result(
 
     (result,) = results
     assert result.outcome == "errored"
-    assert "no tool_use block" in str(result.error)
+    assert "no text block" in str(result.error)
     _assert_refusal_hint(str(result.error), category=category)
 
 
