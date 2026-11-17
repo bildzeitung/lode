@@ -21,6 +21,8 @@ import threading
 from collections.abc import Iterable
 from pathlib import Path
 
+import anthropic
+import httpx
 import pytest
 from textual.binding import Binding
 from textual.containers import VerticalScroll
@@ -1199,3 +1201,70 @@ def test_a_provider_error_leaves_the_app_running_with_placeholder_and_notificati
     assert running
     assert rendered == _PLACEHOLDER
     assert toasts == [(_PROVIDER_MESSAGE, True)]
+
+
+def _raw_sdk_errors() -> list[Exception]:
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return [
+        anthropic.APIConnectionError(request=request),
+        anthropic.APITimeoutError(request=request),
+    ]
+
+
+@pytest.mark.parametrize(
+    "error", _raw_sdk_errors(), ids=["APIConnectionError", "APITimeoutError"]
+)
+def test_a_raw_sdk_error_leaves_the_app_running_with_a_toast_and_a_logged_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+) -> None:
+    app = LodeApp(db_path=tmp_path / "lode.db")
+
+    def _raise(db_path: Path, question: str, **kwargs: object) -> AskResult:
+        raise error
+
+    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _raise)
+
+    async def _drive() -> tuple[bool, str, list[tuple[str, bool]]]:
+        async with app.run_test(notifications=True) as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            screen = app.screen
+            screen.query_one(f"#{QUESTION_ID}").value = "anything at all?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            toasts = [
+                (str(toast.render()), toast.has_class("-error"))
+                for toast in screen.query(Toast)
+            ]
+            rendered = str(screen.query_one(f"#{RESULTS_ID}").content)
+            return app.is_running, rendered, toasts
+
+    with caplog.at_level("ERROR", logger="lode.tui.screens.ask"):
+        running, rendered, toasts = asyncio.run(_drive())
+
+    assert running
+    assert rendered == _PLACEHOLDER
+    assert toasts == [(str(error), True)]
+    assert [r.exc_info[1] for r in caplog.records if r.exc_info] == [error]
+
+
+def test_a_superseded_questions_failure_raises_no_toast(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = LodeApp(db_path=tmp_path / "lode.db")
+
+    async def _drive() -> list[str]:
+        async with app.run_test(notifications=True) as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            screen = app.screen
+            screen._ask_generation += 1  # a newer question has since been submitted
+            screen._fail(screen._ask_generation - 1, "stale failure")
+            await pilot.pause()
+            return [str(toast.render()) for toast in screen.query(Toast)]
+
+    assert asyncio.run(_drive()) == []

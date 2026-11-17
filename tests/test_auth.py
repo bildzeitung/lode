@@ -64,8 +64,7 @@ def test_importing_module_does_not_import_the_sdk(module: str) -> None:
       at module level, and ``lode work`` runs a reconcile pass on every invocation;
       and
     * ``lode.tui.screens.ask`` -- :mod:`lode.tui.app` imports it to register the
-      screen, so every TUI start loads it, and its worker's ``except`` header needs
-      ``AuthError`` and ``LLMProviderError`` at module scope (lode-7wlq).
+      screen, so every TUI start loads it.
 
     So a credential-free, embed-only drain (embeds come from the LOCAL fastembed
     model) would otherwise pay the ~0.32s SDK import on every single run to do

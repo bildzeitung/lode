@@ -477,3 +477,22 @@ the provider reads/calls through that protocol rather than branching on the scre
 The palette re-instantiates the provider fresh every time it opens, so the command's displayed text
 ("Mark no-egress" / "Clear no-egress") is always read live off the active screen, never stale from
 a previous open.
+
+## Ask worker: any failure is a toast, never an app exit (`lode-bwbo`)
+
+`AskScreen._ask` runs in a Textual thread worker, and an uncaught worker exception takes the whole
+TUI down (`exit_on_error`). The worker therefore catches `Exception`, resets the results pane to its
+placeholder, shows the message as an error toast (`markup=False`: provider messages embed bracket
+groups that Textual's markup parser rejects at toast render), and logs the traceback.
+
+**Decided: catch in the TUI (option A), not at the provider seam (option B).** The seam
+deliberately leaves the non-status SDK errors raw (`anthropic.APIConnectionError` when offline,
+`anthropic.APITimeoutError` past `qa_call_timeout_s`), because `docs/storage.md` "Transient vs.
+permanent job failures" classifies job retries by which errors are `LLMProviderError`; wrapping
+them there would change that classification. A TUI-side catch also covers causes that are not
+provider errors at all (sqlite, the vector store, the local embedder), and a crash could lose
+unsaved data. The CLI is unchanged and still prints a traceback for a raw SDK error.
+
+The toast is guarded by the same submission generation as the pane reset, so a superseded
+question that fails slowly cannot toast over a newer question's spinner. The log carries the
+exception's traceback, which includes the SDK cause the toast text omits.
