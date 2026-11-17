@@ -1765,12 +1765,7 @@ def test_collect_batch_names_a_refusal_on_a_succeeded_result(
 def test_forced_tool_refusal_with_partial_tool_use_is_not_decoded() -> None:
     # lode-mzuk: a mid-generation refusal can carry a tool_use whose truncated
     # input still validates; it must be reported, not accepted.
-    response = mock.MagicMock()
-    response.content = [
-        _tool_use_block(
-            name="extract_widget", tool_input={"name": "w"}, block_id="toolu_1"
-        )
-    ]
+    response = _tool_use_response("extract_widget", {"name": "w"})
     response.stop_reason = "refusal"
     response.stop_details = SimpleNamespace(category="cyber")
     client = mock.MagicMock()
@@ -1787,6 +1782,29 @@ def test_forced_tool_refusal_with_partial_tool_use_is_not_decoded() -> None:
             timeout_s=1.0,
             tool_name="extract_widget",
             tool_description="Extract a widget.",
+        )
+
+    assert "partial content discarded" in str(excinfo.value)
+    _assert_refusal_hint(str(excinfo.value))
+
+
+def test_parse_branch_refusal_whose_text_validates_is_not_returned() -> None:
+    # lode-mzuk: `messages.parse` hands back a populated `parsed_output` for a
+    # refused message whenever its text happens to validate.
+    response = _parsed_response(_Widget(name="w"), stop_reason="refusal")
+    response.stop_details = SimpleNamespace(category="cyber")
+    client = mock.MagicMock()
+    client.messages.parse.return_value = response
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).structured_call(
+            model="claude-opus-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=8192,
+            timeout_s=1.0,
         )
 
     assert "partial content discarded" in str(excinfo.value)

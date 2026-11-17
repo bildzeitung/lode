@@ -533,17 +533,18 @@ def _budget_hint(stop_reason: str | None, response: Any) -> str:
     return _BUDGET_EXHAUSTED_HINT
 
 
-def _refusal_message(response: Any, *, what: str) -> str:
-    """Diagnosis for a ``stop_reason="refusal"`` response whose content is discarded.
+def _refusal_error(response: Any, *, what: str) -> LLMProviderError:
+    """The error for a ``stop_reason="refusal"`` response whose content must not be used.
 
     A mid-generation refusal is HTTP 200 with PARTIAL content (a truncated text
-    block, or a ``tool_use`` cut off mid-input); the API says to discard it, so
-    callers check ``stop_reason`` before reading ``content`` and never act on
-    the partial blocks (lode-mzuk). ``what`` names the call site.
+    block, or a ``tool_use`` cut off mid-input) that the API says to discard,
+    so no caller decodes, returns or executes a refused response's blocks
+    (lode-mzuk). ``what`` names the call site.
     """
-    return (
-        f"{what}: stop_reason='refusal', partial content discarded "
-        f"{_budget_hint('refusal', response)}"
+    return LLMProviderError(
+        f"{what}: stop_reason='refusal', any partial content discarded "
+        f"{_budget_hint('refusal', response)}",
+        provider="anthropic",
     )
 
 
@@ -841,18 +842,15 @@ class AnthropicProvider:
                 f"{_budget_hint(stop_reason, response)}",
                 provider="anthropic",
             )
-        # Empty-content refusals were reported above; a refusal that carries a
-        # (partial) tool_use is reported here, never decoded (lode-mzuk).
+        # A refusal with no tool_use block was reported above; one that carries
+        # a (partial) tool_use is reported here, never decoded (lode-mzuk).
         if getattr(response, "stop_reason", None) == "refusal":
-            raise LLMProviderError(
-                _refusal_message(
-                    response,
-                    what=(
-                        f"Anthropic declined the forced-tool request for "
-                        f"{output_schema.__name__} (model={model})"
-                    ),
+            raise _refusal_error(
+                response,
+                what=(
+                    f"Anthropic declined the forced-tool request for "
+                    f"{output_schema.__name__} (model={model})"
                 ),
-                provider="anthropic",
             )
         return output_schema.model_validate(tool_block.input)
 
@@ -946,6 +944,18 @@ class AnthropicProvider:
                 f"stop_reason={stop_reason!r}) "
                 f"{_budget_hint(stop_reason, response)}",
                 provider="anthropic",
+            )
+        # A refusal with no text block was reported above; one whose text
+        # still validated is reported here, never returned (lode-mzuk). A
+        # refusal whose text does NOT validate never gets this far -- it is the
+        # ``ValidationError`` arm above, which cannot see ``stop_reason``.
+        if getattr(response, "stop_reason", None) == "refusal":
+            raise _refusal_error(
+                response,
+                what=(
+                    f"Anthropic declined the structured-output request for "
+                    f"{output_schema.__name__}{where} (model={model})"
+                ),
             )
         return parsed, _output_tokens(response)
 
@@ -1084,12 +1094,9 @@ class AnthropicProvider:
             if getattr(response, "stop_reason", None) == "refusal":
                 # Never execute a refused turn's tools: a refusal can cut a
                 # tool_use off mid-input (lode-mzuk).
-                raise LLMProviderError(
-                    _refusal_message(
-                        response,
-                        what=f"Anthropic declined a free tool turn (model={model})",
-                    ),
-                    provider="anthropic",
+                raise _refusal_error(
+                    response,
+                    what=f"Anthropic declined a free tool turn (model={model})",
                 )
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
             if not tool_use_blocks:
@@ -1336,8 +1343,8 @@ class AnthropicProvider:
                         )
                     )
                     continue
-                refused_message = result.result.message
-                if getattr(refused_message, "stop_reason", None) == "refusal":
+                message = result.result.message
+                if getattr(message, "stop_reason", None) == "refusal":
                     # A refused message's partial tool_use is discarded, never
                     # returned as a success (lode-mzuk).
                     results.append(
@@ -1345,15 +1352,12 @@ class AnthropicProvider:
                             custom_id=custom_id,
                             outcome="errored",
                             parsed=None,
-                            error=LLMProviderError(
-                                _refusal_message(
-                                    refused_message,
-                                    what=(
-                                        "batch result declined "
-                                        f"(model={getattr(refused_message, 'model', None)!r})"
-                                    ),
+                            error=_refusal_error(
+                                message,
+                                what=(
+                                    "batch result declined "
+                                    f"(model={getattr(message, 'model', None)!r})"
                                 ),
-                                provider="anthropic",
                             ),
                         )
                     )
