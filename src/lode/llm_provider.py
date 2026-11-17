@@ -541,7 +541,7 @@ def _refusal_error(response: Any, *, what: str) -> LLMProviderError:
     """
     return LLMProviderError(
         f"{what}: stop_reason='refusal', any partial content discarded "
-        f"{_budget_hint('refusal', response)}",
+        f"{_stop_reason_hint('refusal', response)}",
         provider="anthropic",
     )
 
