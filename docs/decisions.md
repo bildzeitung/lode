@@ -6074,3 +6074,35 @@ entries below from being rewritten to chase the current tree.)
   own history ("**Correction, verified empirically on bash 5.2:**") stays green. Accepted miss: a
   backwards correction with prose between the keyword and its id. That miss and the gate's other
   limits are listed in the test module's docstring.
+
+- **Refusal on an enrich job is terminal for that note version (`lode-ahme`, 2026-11-16,
+  maintainer; split out of `lode-fc39`'s review).** Decided: option (b) plus surfacing.
+  - **Today.** A `stop_reason='refusal'` surfaces as an `LLMProviderError` that is not an
+    `LLMAuthError`, so `worker.run_one` falls into `except Exception` ->
+    `jobs.record_job_failure` (backoff, `dead` at `retry_max_attempts`, default 5); the batch
+    route reaches the same state machine through `enrich.collect_enrich_batch`'s errored arm.
+    Enrich is a DERIVE job type with no dead-letter hook, so `worker.dead_letter_recovery`
+    classifies it `self_healing` and `reconcile._enrich_gap_step` re-enqueues a fresh job
+    (attempts back to 0) on the next scan, so a deterministically declined note cycles
+    5 attempts -> dead -> re-enqueued indefinitely while it stays a live head version. A refusal
+    is an HTTP 200 and is billed at normal rates (input plus any partial output).
+  - **Decision.** (1) A refusal on an enrich job is terminal for that note version: the job goes
+    `dead` on the first refusal, no retry attempts. (2) `reconcile._enrich_gap_step` must not
+    re-enqueue a refusal-dead enrich job until the note's head version or `ENRICH_PROMPT_VER`
+    changes; dead -> re-enqueue stays as-is for every other dead enrich job (it exists for real
+    outages). (3) This is a third failure class in `docs/storage.md`'s "Transient vs. permanent
+    job failures" taxonomy (added there): not retryable, not operator-actionable in the
+    `AuthError` sense. (4) Refusal-dead enrich jobs are listed in `lode status`'s dead-letter
+    output with the refusal category, since a silently un-enriched note is a retrieval-quality
+    gap.
+  - **Rejected.** (a) status quo: unbounded spend re-sending a prompt that will be declined
+    again. (c) permanent in the `AuthError` sense (reset to pending, re-raise, `lode work` exits
+    non-zero): one declined note would fail the whole drain and never reach a terminal state.
+    (d) bound only the reconcile re-enqueue: still pays 5 pointless attempts per declined
+    version.
+  - **Needs a structured signal.** `LLMProviderError` carries only provider/status_code/
+    request_id, no stop_reason or category, so the implementation needs a field or subclass on
+    the error, not string matching on the hint.
+  - **Not established.** Refusal frequency on real notes was never measured, and the
+    dead -> re-enqueue loop was confirmed by reading `reconcile._enrich_gap_step`, not
+    reproduced end to end. Implementation: `lode-g9q3`.
