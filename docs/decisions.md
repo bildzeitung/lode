@@ -2574,6 +2574,17 @@ entries below from being rewritten to chase the current tree.)
   mechanism on (a future model swap could remove the option again).
   **Revisit if:** enrichment silent-drift is ever observed in practice (mirrors the embedder entry's
   own revisit trigger), or when `enrichment_llm`'s default model next changes.
+  **Update (lode-tmyq, 2026-11-16) — the revisit trigger fired and the question is moot for the
+  default tier.** `lode-ugj5` moved the `enrichment_llm` default to `claude-haiku-5-5`, which has
+  **no dated-snapshot form**: `GET /v1/models/claude-haiku-5-5` returns the id `claude-haiku-5-5`
+  itself (display name "Claude Haiku 5.5"), with no date suffix and no separate alias (confirmed
+  2026-11-16). So the premise above — a pinnable `claude-haiku-4-5-20251001` exists for the model
+  whose output persists — no longer holds for the default; the "unowned" PIN-vs-DETECT question
+  has nothing to adopt there, and record + detect (`annotations.model`, `lode status`'s
+  stale-vs-current-config hint) stays the whole mechanism. The question still applies to a user who
+  sets `enrichment_llm` to `claude-haiku-4-5` (or to any model with a dated form); no work is owed
+  for that case until the entry's other revisit trigger (observed silent drift) fires. The text
+  above is left as written at decision time.
 
 - **2026-07-23 (lode-568v.1) — LLMProvider vendor-neutral seam pinned; design-first ahead of any
   provider code.** Full write-up: [stack.md — LLM provider seam](stack.md#llm-provider-seam-decided-lode-568v1).

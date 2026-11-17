@@ -384,6 +384,15 @@ This unblocks `lode-g274.4` (embedder manifest + `lode status` check) and `lode-
 
 ### Model provenance: the enrichment LLM (decided, lode-g274.5)
 
+> **Update (lode-tmyq):** `enrichment_llm`'s default is now `claude-haiku-5-5`
+> (`lode-ugj5`), a fixed ID with no dated-snapshot form, so the "a pin target
+> *does* exist" observation below, and the `claude-haiku-4-5` default named in
+> the "No attempt to pin" bullet, describe the *former* default. No pin target
+> exists for the current default, so the open PIN-vs-DETECT question in
+> [decisions.md](decisions.md) is moot for it (it still applies to a user who
+> sets `enrichment_llm` back to the old model). The write-up below is left as
+> written at decision time.
+
 `lode-crh8`'s DB-invalidation scoping also covers the **enrichment LLM** (`enrichment_llm`, [Models](#models) above) — its output (tags, entities, summaries, inferred edges) persists into `annotations`/`edges` the same way the embedder's output persists into `embeddings`, so a silent model change is the same class of problem for enrichment as for embedding. Whether a given Anthropic model ID has a **dated-snapshot form** to pin against varies per model and shifts as the lineup changes — check the authoritative catalog (Anthropic's `GET /v1/models/{id}`, or the `claude-api` skill's model table) rather than inferring it from a sibling model or an earlier generation. `enrichment_llm`'s own default has one: `claude-haiku-4-5-20251001`, a distinct pinnable identifier alongside the bare `claude-haiku-4-5`. So a pin target *does* exist for the one model whose output persists into the DB, and whether to use it is an open question, deliberately not settled here — see [decisions.md](decisions.md) (`./venv/bin/python scripts/docs_index_query.py "lode-sdjb"`) for the tracking entry. lode pins nothing today regardless — the mechanism is record + detect:
 
 - **Recorded per-row, already.** `annotations.model` (alongside `prompt_ver`) is populated from `settings.enrichment_llm.model` (the `ModelTier`'s bare model/deployment string, `lode-568v.2`) at every enrichment write (`src/lode/enrich.py::_write_enrichment`) — this predates this decision; it is the same per-row provenance shape [storage.md](storage.md#model-provenance-the-embedder-revision-manifest-decided-lode-crh81) records on `annotations` rows. The inferred **edges** a run also writes carry no `model` column of their own (`src/lode/schema.sql`), but a run writes its annotations and its edges from one `EnrichmentResult` under one model, so the `annotations` scan below captures which model produced a given run's edges too. No schema change and no new write path were needed here.
@@ -789,7 +798,7 @@ carry the sources). The older decision sections above are left as written at dec
 - **Enrichment provenance.** `claude-haiku-5-5` is a fixed ID with no dated-snapshot form, so
   the "a pin target *does* exist" observation in
   [Model provenance](#model-provenance-the-enrichment-llm-decided-lode-g2745) describes the
-  former default (`lode-tmyq` tracks correcting it). Record + detect is unchanged, and it
+  former default (corrected there by an Update note, `lode-tmyq`). Record + detect is unchanged, and it
   fires on upgrade: a corpus enriched under `claude-haiku-4-5` now disagrees with the
   configured default, so `lode status` reports stale enrichment annotations until
   `lode reenrich` is run or `enrichment_llm` is set back.
