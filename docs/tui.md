@@ -493,7 +493,7 @@ choice and reach past the TUI, because the `lode ask`, `lode work` and `lode add
 name that class (`docs/storage.md` "Transient vs. permanent job failures"). The job retry taxonomy
 there is keyed on the two credential errors only, and stays as it is. A TUI-side catch also covers
 causes that are not provider errors at all (sqlite, the vector store, the local embedder, a
-rendering fault), and a crash could lose unsaved data. The CLI is unchanged and still prints a
+rendering fault), and a crash could lose unsaved data. The CLI still prints a
 traceback for a raw SDK error.
 
 The toast is guarded by the same submission generation as the pane reset, so a superseded

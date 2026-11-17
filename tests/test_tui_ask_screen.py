@@ -1183,8 +1183,8 @@ def _ask_one_question(app: LodeApp) -> tuple[bool, str, list[tuple[str, bool]]]:
     return asyncio.run(_drive())
 
 
-def _run_ask_raising(error: Exception) -> Callable[..., AskResult]:
-    def _raise(db_path: Path, question: str, **kwargs: object) -> AskResult:
+def _raising(error: Exception) -> Callable[..., object]:
+    def _raise(*args: object, **kwargs: object) -> object:
         raise error
 
     return _raise
@@ -1203,7 +1203,7 @@ def test_a_provider_error_leaves_the_app_running_with_placeholder_and_notificati
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
 ) -> None:
     app = LodeApp(db_path=tmp_path / "lode.db")
-    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _run_ask_raising(error))
+    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _raising(error))
 
     running, rendered, toasts = _ask_one_question(app)
 
@@ -1225,7 +1225,7 @@ def test_a_raw_sdk_error_leaves_the_app_running_with_a_toast_and_a_logged_traceb
         request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
     )
     app = LodeApp(db_path=tmp_path / "lode.db")
-    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _run_ask_raising(error))
+    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _raising(error))
 
     with caplog.at_level("ERROR", logger="lode.tui.screens.ask"):
         running, rendered, toasts = _ask_one_question(app)
@@ -1244,11 +1244,9 @@ def test_a_render_failure_with_no_message_toasts_the_exception_class(
         "lode.tui.screens.ask.run_ask",
         lambda db_path, question, **kwargs: _canned_answer(),
     )
-
-    def _raise(result: AskResult, **kwargs: object) -> str:
-        raise ValueError
-
-    monkeypatch.setattr("lode.tui.screens.ask.render_ask_result", _raise)
+    monkeypatch.setattr(
+        "lode.tui.screens.ask.render_ask_result", _raising(ValueError())
+    )
 
     running, rendered, toasts = _ask_one_question(app)
 

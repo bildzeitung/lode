@@ -116,8 +116,7 @@ def run_ask(
     surviving citation. Raises :class:`lode.auth.AuthError` on unresolved
     Anthropic credentials and :class:`lode.llm_provider.LLMProviderError` on
     a provider failure the seam reports, same as the CLI; a raw SDK timeout or
-    connection error passes through unwrapped. The screen catches every
-    exception and notifies rather than crashing.
+    connection error passes through unwrapped.
 
     ``on_stage``, when given, is called synchronously (on this function's own
     calling thread -- this module does no threading of its own) once per
