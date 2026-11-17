@@ -74,15 +74,11 @@ The checkout follows `code-reviewer.md`'s step 2 — same mechanism, same ration
 worktree-unique local name (`lode-em6v`) that keeps two launch worktrees from colliding:
 
 ```bash
-git fetch origin land/<id>
-```
-
-```bash
 scripts/checkout-land-branch.sh <id>
 ```
 
 The script derives the worktree-unique suffix (lode-em6v) from my own launch worktree's directory
-name (lode-qh1m) and checks out the `land/<id>` tip the fetch above recorded; a nonzero exit is a
+name (lode-qh1m) fetches `land/<id>` itself (lode-n7g4) and checks out the tip it fetched; a nonzero exit is a
 stop.
 
 ```bash

@@ -134,8 +134,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    pickup**, not a fresh build, e.g.:
 
    > lode-ai1 carries `needs-rebase` (kicked back by `/land`'s conflict precheck) — fetch it and
-   > **merge current `trunk` in** (do not rebase): `git fetch origin land/lode-ai1 trunk`, then
-   > `scripts/checkout-land-branch.sh lode-ai1` (it checks the fetched `land/lode-ai1` tip out as
+   > **merge current `trunk` in** (do not rebase):
+   > `scripts/checkout-land-branch.sh lode-ai1` (it fetches `land/lode-ai1` and `trunk` itself, then checks the `land/lode-ai1` tip out as
    > `land/lode-ai1--<your own launch worktree's directory name>` — unique by
    > construction, so it never collides with a leftover checkout and the old `--detach` fallback is
    > never needed), `git merge
@@ -532,9 +532,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 
    Pass the ticket id, e.g.:
 
-   > Technically review lode-ai1 (it is `ready-for-code-review`): read `review_head` from bd, `git
-   > fetch origin land/lode-ai1 trunk`, then `scripts/checkout-land-branch.sh
-   > lode-ai1` (it checks the fetched `land/lode-ai1` tip out as `land/lode-ai1--<your own launch
+   > Technically review lode-ai1 (it is `ready-for-code-review`): read `review_head` from bd, 
+   > `scripts/checkout-land-branch.sh lode-ai1` (it fetches `land/lode-ai1` and `trunk` itself, then checks the `land/lode-ai1` tip out as `land/lode-ai1--<your own launch
    > worktree's directory name>` — unique by construction, so no `--detach` fallback is ever needed) into your
    > own launch worktree. Run `/code-review` at effort medium against `trunk...HEAD` first (always;
    > never `--fix`/`--comment`), then your own reasoned correctness pass over the same diff, verifying

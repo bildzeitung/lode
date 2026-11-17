@@ -787,17 +787,14 @@ makes it structurally impossible, so there is nothing left to guard for and the 
 removed outright:
 
 ```bash
-git fetch origin land/<id> trunk
-```
-
-```bash
 scripts/checkout-land-branch.sh <id>
 ```
 
-The script derives the suffix from this launch worktree's own directory name (lode-qh1m) and takes
+The script derives the suffix from this launch worktree's own directory name (lode-qh1m) and runs
+`git fetch origin land/<id> trunk` itself (lode-n7g4, so no stale `FETCH_HEAD` can be checked out) and takes
 the tip from `FETCH_HEAD`'s own `land/<id>` line, not from whichever ref the fetch listed first; a
 nonzero exit is a stop (1 = cwd is not a `.claude/worktrees/` launch worktree, 2 = a broken call, 3 =
-`FETCH_HEAD` has no `land/<id>` entry — the fetch above did not run here, or named another ticket).
+`FETCH_HEAD` has no `land/<id>` entry after the fetch, 4 = the fetch failed).
 
 ```bash
 git rev-parse --abbrev-ref HEAD

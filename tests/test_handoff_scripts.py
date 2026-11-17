@@ -190,6 +190,8 @@ def launch_worktree(tmp_path: Path, repo: Path) -> tuple[Path, str, str]:
     _git(repo, "commit", "-q", "--allow-empty", "-m", "built")
     land_tip = _out(repo, "rev-parse", "HEAD")
     _git(repo, "checkout", "-q", "main")
+    _git(repo, "branch", "trunk")
+    _git(repo, "remote", "add", "origin", str(repo))
     wt = _add_worktree(repo, tmp_path / ".claude" / "worktrees" / "agent-abc123")
     return wt, main_tip, land_tip
 
@@ -198,7 +200,6 @@ def test_checkout_derives_suffix_from_worktree_dir(
     repo: Path, launch_worktree: tuple[Path, str, str]
 ) -> None:
     wt, _, land_tip = launch_worktree
-    _git(wt, "fetch", "-q", str(repo), "land/lode-x")
     r = _run("checkout-land-branch.sh", wt, "lode-x")
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "land/lode-x--agent-abc123"
@@ -206,29 +207,28 @@ def test_checkout_derives_suffix_from_worktree_dir(
     assert _out(wt, "rev-parse", "HEAD") == land_tip
 
 
-def test_checkout_takes_the_land_tip_when_the_fetch_listed_another_ref_first(
+def test_checkout_fetches_trunk_alongside_the_land_branch(
     repo: Path, launch_worktree: tuple[Path, str, str]
 ) -> None:
-    """`FETCH_HEAD` as a rev is the FIRST fetched ref -- here `main`."""
+    """`trunk` is fetched first-listed-or-not; the land tip is still taken
+    from its own FETCH_HEAD line."""
     wt, main_tip, land_tip = launch_worktree
-    _git(wt, "fetch", "-q", str(repo), "main", "land/lode-x")
-    assert _out(wt, "rev-parse", "FETCH_HEAD") == main_tip
     r = _run("checkout-land-branch.sh", wt, "lode-x")
     assert r.returncode == 0, r.stderr
     assert _out(wt, "rev-parse", "HEAD") == land_tip
+    assert _out(wt, "rev-parse", "origin/trunk") == main_tip
 
 
-@pytest.mark.parametrize("fetched", [None, "main"])
-def test_checkout_refuses_when_fetch_head_lacks_the_land_branch(
-    repo: Path, launch_worktree: tuple[Path, str, str], fetched: str | None
+def test_checkout_cannot_check_out_a_stale_same_ticket_fetch_head(
+    repo: Path, launch_worktree: tuple[Path, str, str]
 ) -> None:
-    """No fetch at all, or a fetch of some other ref: exit 3, HEAD untouched."""
+    """A FETCH_HEAD `land/lode-x` entry left by an earlier fetch must not be
+    checked out when this call's own fetch fails: exit 4, HEAD untouched."""
     wt, main_tip, _ = launch_worktree
-    if fetched:
-        _git(wt, "fetch", "-q", str(repo), fetched)
+    _git(wt, "fetch", "-q", "origin", "land/lode-x")
+    _git(repo, "branch", "-q", "-D", "land/lode-x")
     r = _run("checkout-land-branch.sh", wt, "lode-x")
-    assert r.returncode == 3
-    assert "land/lode-x" in r.stderr
+    assert r.returncode == 4
     assert _out(wt, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
     assert _out(wt, "rev-parse", "HEAD") == main_tip
 
