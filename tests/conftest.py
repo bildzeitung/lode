@@ -181,6 +181,7 @@ import asyncio
 import functools
 import importlib.util
 import ipaddress
+import json
 import logging
 import os
 import re
@@ -1358,7 +1359,7 @@ def fake_batch_client(
 # needs no payload, and its three callers in test_enrich.py pass a throwaway
 # ``EnrichmentResult()``. Left required rather than defaulted to None so the
 # succeeded path -- the overwhelmingly common one -- cannot silently build a
-# result with no tool_use input.
+# result with no JSON payload.
 #
 # Placement matches fake_batch_client's for the same reason: a small
 # MagicMock builder with no SDK-shaped fixture data, so it meets none of
@@ -1376,13 +1377,9 @@ def _make_batch_result(
     r.result.type = result_type
 
     if result_type == "succeeded":
-        # lode.llm_provider.collect_batch reads only .type/.input off this
-        # block, so .name/.id get dummy values rather than becoming optional
-        # params on _tool_use_block (lode-j5o1).
-        tool_block = _tool_use_block(
-            name="", tool_input=enrichment.model_dump(), block_id=""
-        )
-        r.result.message.content = [tool_block]
+        # lode.llm_provider.collect_batch reads only .type/.text off this
+        # block: structured output arrives as JSON text (lode-ni7p).
+        r.result.message.content = [_text_block(json.dumps(enrichment.model_dump()))]
 
     return r
 
@@ -1438,10 +1435,9 @@ def _tool_use_block(name: str, tool_input: dict, block_id: str) -> mock.MagicMoc
     """Build a duck-typed ``tool_use`` content block (the shape
     lode.llm_provider's reader expects: .type/.name/.input/.id).
 
-    Shared by ``fake_tool_turn_client`` below, by tests/test_qa.py's two
-    non-fetch tool-turn tests, by ``_make_batch_result`` above, and by
-    tests/test_llm_provider.py / tests/test_enrich.py, so a block-shape change
-    (an SDK or run_tool_turns contract change) edits every caller in one place
+    Shared by ``fake_tool_turn_client`` below and by
+    tests/test_llm_provider.py, so a block-shape change (an SDK or
+    run_tool_turns contract change) edits every caller in one place
     (lode-gyq3, swept the rest of the way by lode-j5o1).
 
     tests/test_llm_provider.py's ``_tool_use_response`` wraps this in a
@@ -1457,10 +1453,11 @@ def _tool_use_block(name: str, tool_input: dict, block_id: str) -> mock.MagicMoc
     return block
 
 
-def _text_block() -> mock.MagicMock:
+def _text_block(text: str = "") -> mock.MagicMock:
     """Build a duck-typed ``text`` content block. See ``_tool_use_block``."""
     block = mock.MagicMock()
     block.type = "text"
+    block.text = text
     return block
 
 

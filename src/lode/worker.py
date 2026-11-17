@@ -1493,7 +1493,7 @@ def _enrich_handler(
     Dispatches to :func:`lode.enrich.enrich_version` which:
     - gates on ``no_egress`` / tombstone / purged (returns without error),
     - redacts secrets before egress,
-    - calls Claude Haiku with structured outputs (tool-use + Pydantic),
+    - calls Claude Haiku with structured outputs (``output_config.format`` + Pydantic),
     - writes tags/entities to ``annotations`` and inferred edges to ``edges``
       (all ``source='ai'``), and
     - audits the egress in ``egress_log``.
