@@ -36,7 +36,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from lode.llm_provider import (
     EFFORT_LEVELS_BY_PROVIDER,
-    FORCED_TOOL_CHOICE_REJECTING_MODELS,
     ModelTier,
 )
 from lode.lock import lock_path
@@ -577,19 +576,22 @@ class Settings(BaseModel):
     qa_call_timeout_s: float = _knob(
         300.0,
         Kind.RUNTIME,
-        "Per-call client-side timeout (seconds) for the Q&A synthesis call "
-        "ONLY (qa.py's structured_call) -- split off enrich_call_timeout_s "
-        "(lode-wfyx), which still governs every enrich.py call site "
-        "unchanged. Needed because lode-3dlt let the think-harder tier "
+        "Per-run client-side timeout (seconds) for the Q&A synthesis call "
+        "ONLY (qa.py, via run_tool_turns: one call with the Ask tools off, "
+        "the whole tool-turns-then-answer run with them on) -- split off "
+        "enrich_call_timeout_s (lode-wfyx), which still governs every "
+        "enrich.py call site unchanged. "
+        "Needed because lode-3dlt let the think-harder tier "
         "(qa_think_harder_llm, Opus 5.5 by default) run adaptive thinking it "
         "previously never did, while enrich_call_timeout_s stayed at 120s -- "
         "plausibly too short once thinking shares qa.MAX_TOKENS with the "
-        "claims response. The default is DERIVED, NOT a measured p95 (a live "
-        "p95 benchmark was deliberately declined on cost/value, not for lack "
-        "of capability). The derivation, the SDK-retry interaction it was "
-        "chosen alongside, and the ModelTier.max_tokens override that "
-        "invalidates it all live in ONE place -- docs/configuration.md 'Q&A "
-        "call timeout split from llm_call_timeout_s' -- deliberately not "
+        "claims response. The default was DERIVED from the SDK's estimate at "
+        "decision time and is now backed by a live measurement instead "
+        "(lode-9i6y). The derivation, the measurement, the SDK-retry "
+        "interaction it was chosen alongside, and the ModelTier.max_tokens "
+        "override this knob is coupled to all live in ONE place -- "
+        "docs/configuration.md 'Q&A call timeout split from "
+        "llm_call_timeout_s' -- deliberately not "
         "restated here, because the numbers have already drifted once across "
         "the copies.",
         gt=0.0,
@@ -1052,32 +1054,6 @@ class Settings(BaseModel):
                     f"llm_provider={self.llm_provider!r} -- must be one of "
                     f"{list(legal_levels)}"
                 )
-        return self
-
-    @model_validator(mode="after")
-    def _enrichment_model_accepts_forced_tool_choice(self) -> Settings:
-        """Fail loudly at load if enrichment_llm names a model that 400s on forced tool_choice.
-
-        Enrichment (immediate and batch) still forces its tool; a model that
-        rejects that 400s on every call, and a batch only fails at collect time
-        after its handle is persisted (lode-eidi). Unlike the effort check
-        above, this one *does* predict a model capability at load -- a narrow,
-        recorded exception to lode-3dlt option 1; see ``docs/configuration.md``
-        for why, and for what an unlisted model still does. Applies to the
-        anthropic provider only -- under ``openai`` the model is a deployment
-        name.
-        """
-        model = self.enrichment_llm.model
-        if (
-            self.llm_provider == "anthropic"
-            and model in FORCED_TOOL_CHOICE_REJECTING_MODELS
-        ):
-            default = type(self).model_fields["enrichment_llm"].default.model
-            raise ValueError(
-                f"enrichment_llm.model={model!r} rejects a forced tool_choice, "
-                f"which enrichment requires -- use a model that accepts it "
-                f"(e.g. the default {default})"
-            )
         return self
 
 

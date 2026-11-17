@@ -30,8 +30,8 @@
 #   * Only worktrees on a `land/<id>--*` branch are ever considered -- the
 #     lode-em6v/lode-vs7g derivation every reviewer/rebase-pickup already
 #     uses. A builder's own `worktree-agent-*` branch never matches this
-#     glob, so the lode-oqr pre-first-commit lock is untouched by
-#     construction, not by a separate check.
+#     glob, so a builder's worktree -- and the harness lock on it -- is
+#     untouched by construction, not by a separate check.
 #   * A locked worktree is unlocked ONLY when its lock reason contains that
 #     worktree's own `agent-<dirname>` token -- the harness's own launch
 #     lock, naming the very directory it locked. A lock recorded under any

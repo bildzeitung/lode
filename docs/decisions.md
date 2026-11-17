@@ -1240,6 +1240,10 @@ entries below from being rewritten to chase the current tree.)
   technical review: `git worktree list --porcelain` reported the reviewer's worktree `locked`, with the
   harness's pid-keyed reason, though the reviewer never locked anything itself.
 
+  **Update (lode-t76f, 2026-11-17): `coding.md` takes no explicit lock any more.** With the harness
+  lock already present, that lock call exited 128 and took nothing, and the matching unlock removed
+  the harness's lock. See the `lode-t76f` entry below.
+
   So the widened arm can only reach an **exited** agent's worktree, which at zero divergence holds
   nothing but uncommitted, ungated scratch from a run that never finished — while the authoritative
   content sits on `origin/land/<id>` and the ticket is re-reviewed from there. That is *precisely* the
@@ -1275,6 +1279,10 @@ entries below from being rewritten to chase the current tree.)
   all work), and an **exited** agent's leftover scratch are all unlocked. Each of those, sitting at
   trunk HEAD with uncommitted edits, was a live candidate for the lode-oqr failure mode (which
   destroyed two builds' uncommitted work) every time `/land` ticked (it self-paces on a 5-minute loop).
+
+  **Update (lode-t76f, 2026-11-17): one lock source now, the harness.** `coding.md` no longer locks
+  or unlocks its build worktree, and "releases it on exit" was already found unreliable
+  (`lode-7ndi`). See the `lode-t76f` entry below.
 
   **Considered:** (a) add a dirty-tree guard testing the actual invariant directly; (b) narrow the
   path guard to a harness-owned directory convention (e.g. `.claude/worktrees/agent-*`) — rejected,
@@ -1545,6 +1553,11 @@ entries below from being rewritten to chase the current tree.)
   practice, the correct behavior is the one this change produces anyway: leave a locked, in-use worktree
   alone rather than force-remove it out from under whoever holds the lock — per the ticket's own
   framing, "arguably the correct behavior."
+
+  **Update (lode-t76f, 2026-11-17): reachable now.** The builder no longer unlocks, so a landed
+  builder's worktree is locked at GC time whenever the harness left its launch lock behind
+  (`lode-7ndi`) and the orchestrating session is still alive. The sweep keeps it until that session
+  ends. See the `lode-t76f` entry below.
 
   **Why the per-ticket loop and the generalized backstop deliberately used different predicates before
   this change — so a future reader does not "unify" them back into a silent leak by re-adding a
@@ -3177,6 +3190,10 @@ entries below from being rewritten to chase the current tree.)
     long as a session still holds it would let the sweep separate "idle 6h because abandoned" from
     "idle 6h because between commits" exactly, instead of guessing from commit age. Not built here —
     it touches the producer/harness session lifecycle, well outside `/land`.
+    **Update (lode-t76f, 2026-11-17): the builder no longer unlocks, so a live build does not run
+    unlocked.** The age floor stays, for a different reason: every candidate that reaches the
+    dir-only arm is unlocked by then (released when its agent exited, or its stale lock cleared), so
+    there is still no token to compare. See the `lode-t76f` entry below.
   - **Criterion 6 answered: the lock IS per-session, not per-agent, and the resulting leak class is
     fixed here, folded in per the human note (not split into a separate ticket).** Confirmed live:
     raw `.git/worktrees/<name>/locked` reasons showed 3 of 4 (and, in the original 2026-07-28
@@ -5582,6 +5599,10 @@ entries below from being rewritten to chase the current tree.)
   (`test_subcommand_without_help_still_fails_loudly_on_bad_config`) is unaffected. `lode status`'s
   `lode-l38d.6` survival contract is unaffected -- it never depended on `_help_requested()` at all.
 
+  **Update (`lode-4eyp`, 2026-11-17):** this entry is itself a backwards-pointing correction of the
+  `lode-moq7` entry above it, but its Correction lead-in is not the Update lead-in shape, so the
+  preamble's grep missed it. This line makes it findable; the lead-in itself stays as committed.
+
 - **`lode theme` added to the `main()` config-optional exemption set (`lode-jjol`, 2026-08-19,
   supersedes the `lode-mk9j` entry above's "`status` remains the ONLY command carrying that
   exemption" sentence).** `lode theme export` is the escape hatch `[cli.theme]`/`[tui.theme]`
@@ -5784,6 +5805,11 @@ entries below from being rewritten to chase the current tree.)
   bucket that exists precisely to keep unconfirmable rows OUT of the headline ratio was invisible in
   every breakdown. It is now a third column (0 across the board on this machine).
 
+  **Update (`lode-4eyp`, 2026-11-17):** this entry is itself a backwards-pointing correction (its
+  lead-in reads "CORRECTION to the two entries above"), but its date-first lead-in is not the
+  Update lead-in shape, so the preamble's grep missed it. This line makes it findable; the lead-in
+  itself stays as committed.
+
 - **2026-09-14 (`lode-wtk2`) — CORRECTION: `_classify` now judges Bash SEGMENTS, not
   whole lines, and the baseline figure above is re-measured.** Appended, not rewritten in place, per
   this file's preamble. `_classify` used to run its write/version-control exclusion and its
@@ -5864,6 +5890,11 @@ entries below from being rewritten to chase the current tree.)
     corpus is live and has grown by every session since, including the one that made this change, so
     part of the movement is traffic and part is reclassification. The headline share is unmoved at
     34%, which is the substantive result -- the narrowing decided rows, not the ratio.
+
+  **Update (`lode-4eyp`, 2026-11-17):** this entry is itself a backwards-pointing correction (its
+  lead-in reads "CORRECTION: `_classify` now judges ..."), but its date-first lead-in is not the
+  Update lead-in shape, so the preamble's grep missed it. This line makes it findable; the lead-in
+  itself stays as committed.
 
 - **`scripts/` sibling loading keeps three short UNCACHED bootstraps, not one shared one
   (`lode-7l68`, 2026-09-14).** `lode-wtk2` consolidated the sibling-loader *body* into
@@ -5983,3 +6014,63 @@ entries below from being rewritten to chase the current tree.)
     per ticket; (3) a watch period: the next 5 dispatches of the trimmed agent are checked against a
     short list of incident-derived behaviours, and a miss reverts the cut.
   - **Accepted limit:** 5 dispatches do not exercise rare paths.
+- **`qa_call_timeout_s` stays 300s, now justified by measurement (`lode-9i6y`, 2026-11-16 and
+  2026-11-17, maintainer decision; docs rewrite `lode-188q`).** `lode-ugj5` raised `qa.MAX_TOKENS`
+  8192 -> 10752, and the `lode-wfyx` SDK-estimate formula (35.6 tok/s) put a full-cap response at
+  ~302s, so the default had no headroom on paper.
+  - **2026-11-16: measure first.** Chosen over re-deriving a higher value from the same SDK
+    estimate (~400s) and over keeping 300s without data, because model speeds have changed.
+  - **Result (anthropic SDK 1.4.0, 33 golden questions x 1 rep per cell):** real tiers run at
+    roughly 100-150 tok/s (p5 to p50, on calls with >= 500 output tokens); a full 10752-token
+    call projects to ~82-106s at p5 speed; max observed call 11.5s; 0 of 281 calls within 20% of
+    300s.
+  - **2026-11-17: keep 300s.** It has roughly 3x headroom over one full-cap call; the derivation
+    text in `docs/configuration.md` now cites the measurement (Update note under the `lode-wfyx`
+    section).
+  - **Not taken: lowering the bound.** The bound is per-run, and near-cap multi-turn tool runs
+    were not exercised.
+  - **Accepted limit:** no call exceeded ~12% of the cap (largest 1333 of 10752 output tokens), so
+    the full-cap figure is extrapolated; n=33 per cell, single rep, one time of day.
+- **The builder takes no worktree lock of its own, and its unlock is dropped (`lode-t76f`,
+  2026-11-17).** `coding.md`'s fresh-build cycle told the builder to `git worktree lock .` before its
+  first write and `git worktree unlock .` after its first commit (`lode-oqr`). On Claude Code 2.1.326
+  the harness already holds a lock on every launch worktree, so the lock call exited 128 and took
+  nothing, and the unlock exited 0 and removed the harness's lock. Both steps are deleted. The live
+  account is [agents-workflow.md](agents-workflow.md#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f);
+  this entry is the dated record.
+  - **The other shape the ticket offered, not taken:** keep the lock call and tolerate exit 128.
+    It leaves the unlock undecidable (an unlock is right only when the builder's own lock was the
+    one taken), and a builder-held lock records no pid, so `scripts/worktree-lock-stale.sh` could
+    never clear it for a builder that died holding it.
+  - **Earlier entries that reasoned from "the builder unlocks after its first commit"** each carry
+    an `Update (lode-t76f, 2026-11-17)` marker: the `lode-amif` entry's note on `coding.md`'s explicit lock, the
+    `lode-9hgu` entry's "exactly two lock sources", the `lode-ux1n` answer that a locked landed
+    builder worktree is "believed unreachable", and the `lode-yrtu` age-floor rationale.
+  - **Cost taken on, in the safe direction.** A finished builder's worktree whose harness lock was
+    not released at agent exit (`lode-7ndi`: one of two for reviewers, unmeasured for builders) is
+    `keep-locked` to `/land`'s sweep, landed or abandoned, until the orchestrating session's process
+    ends. `/code`'s per-ticket reclaim does not cover it: it matches only `land/<id>--*`. A directory
+    held for the rest of a session, never lost work. Measuring it and deciding who releases such a
+    lock: `lode-lo0q`.
+  - **Not established.** The Claude Code version at which the harness began locking: the builds
+    `lode-oqr` lost (2026-07-10) were recorded as unlocked, and a harness lock is first on record a
+    few days later (`lode-amif`). Nothing asserts the lock is present when a build starts; whether
+    to: `lode-gro8`.
+
+- **A new entry that corrects earlier entries IS a marker under the preamble (`lode-4eyp`,
+  2026-11-17, builder call, not a maintainer ruling).** The ticket left this question to its
+  builder; whether the maintainer confirms it, and whether the preamble itself should then say so,
+  is `lode-llxw`. The preamble binds markers that point *backwards* at another entry, and says a
+  correction may be "a new entry, or a marker appended to the existing one". The first form was left
+  ungated: `lode-dozi` and `lode-wtk2` each open a new entry with a date-first "— CORRECTION"
+  lead-in that the preamble's grep never finds, while `lode-8n4k` (also a new entry) uses the Update
+  lead-in. Decided: both forms are markers, so a new correcting entry needs the Update lead-in too.
+  The two existing entries, and the `lode-rtcx` marker, cannot be rewritten, so each got an appended
+  Update pointer and is allowlisted in the gate by name. The gate
+  (`tests/test_decisions_supersession_markers.py`) now also flags the date-first shape and the
+  near-miss lead-ins (`**Correction** (id)`, `**Correction:** id`, `**Correction -- id`,
+  `**Corrected by id`, `**Corrections (id)`). The `Correction (` / `Correction, ` branch now
+  requires an id, a date or "maintainer decision" after the punctuation, so an entry narrating its
+  own history ("**Correction, verified empirically on bash 5.2:**") stays green. Accepted miss: a
+  backwards correction with prose between the keyword and its id. That miss and the gate's other
+  limits are listed in the test module's docstring.

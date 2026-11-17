@@ -2,8 +2,7 @@
 
 /land's Section 4 worktree-GC backstop skips every `locked` worktree
 unconditionally, before any other predicate runs. The lock the Claude Code
-harness records (every `isolation: "worktree"` launch worktree, plus
-`.claude/agents/coding.md`'s own explicit pre-first-commit lock) is
+harness records (on every `isolation: "worktree"` launch worktree) is
 PER-SESSION, not per-agent -- measured live: several worktrees can share ONE
 lock-owner pid. A dead session therefore leaves every worktree it ever locked
 stuck behind the `locked` check forever, since nothing downstream ever runs.

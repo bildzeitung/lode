@@ -350,7 +350,7 @@ citation target.
 | Enrichment LLM (`enrichment_llm`) | runtime | Claude Haiku 5.5 (default provider) | High-volume background extraction. A `(model, reasoning_effort, max_tokens)` `ModelTier` (`lode-568v.2`; `max_tokens` `lode-d70n`) — a bare TOML string still coerces to a `ModelTier` with `reasoning_effort=None` and `max_tokens=None`. `model` is interpreted **against the active `llm_provider`**: an Anthropic model id under the default provider, or an Azure/OpenAI deployment name under `llm_provider = "openai"`. `max_tokens`, when set, overrides [`enrich.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (3072) for both the immediate and batch enrichment calls. Persists into the DB (`annotations`/`edges`) — DB-affecting; the model (and, once non-Anthropic, the provider) is recorded per-row on `annotations.model`/`annotations.provider` and drift is detected from it, never pinned. ([below](#model-provenance-the-enrichment-llm-decided-lode-g2745)) |
 | Q&A LLM (`qa_llm`) | runtime | Claude Sonnet 5.5 (default provider) | Default interactive synthesis model. A `ModelTier`, same shape as Enrichment LLM — `model` is likewise interpreted against the active `llm_provider` (an Azure/OpenAI deployment name under `llm_provider = "openai"`). `max_tokens`, when set, overrides [`qa.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (10752). Answer-time only, persists nothing — recorded default, no provenance machinery. |
 | Q&A "think harder" (`qa_think_harder_llm`) | runtime | Opus 5.5, `reasoning_effort = high` (toggle, default provider) | Higher-quality, higher-cost synthesis on demand. A `ModelTier`, same provider-relative interpretation as the two knobs above — "think harder" can be a deployment swap (today's Anthropic Sonnet→Opus default), a `reasoning_effort` bump, a `max_tokens` override, or any combination, on the same deployment. Answer-time only, persists nothing — recorded default, no provenance machinery. |
-| Q&A call timeout (`qa_call_timeout_s`) | runtime | `300s` | Budget for the Q&A synthesis call (`qa.py`, routed through `LLMProvider.run_tool_turns` — `lode-35nu.11.6`), split off `enrich_call_timeout_s` (`lode-wfyx`) — [below](#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx). **Per-RUN, not per-call** (`lode-35nu.11.6`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)): with `tools_enabled=False` (or `ask_tools_enabled=false`, above) a "run" is exactly one call and this is unchanged from before lode-35nu.11.6; with the [Ask tools](#tool-augmented-ask-lode-8hsk--lode-35nu112--lode-8vvp) enabled, this same value bounds the whole free-tool-turns-then-final-answer run, not each turn individually. **Derived, not a measured p95.** Does not reach `enrich.py`'s three call sites — those stay on `enrich_call_timeout_s` (120s) unchanged, and are unaffected by this ticket (still calling `structured_call` directly). The derivation, the retained SDK retry-on-timeout it was chosen alongside, and the `ModelTier.max_tokens` override that invalidates it are all in the write-up linked above, deliberately not restated here. |
+| Q&A call timeout (`qa_call_timeout_s`) | runtime | `300s` | Budget for the Q&A synthesis call (`qa.py`, routed through `LLMProvider.run_tool_turns` — `lode-35nu.11.6`), split off `enrich_call_timeout_s` (`lode-wfyx`) — [below](#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx). **Per-RUN, not per-call** (`lode-35nu.11.6`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)): with `tools_enabled=False` (or `ask_tools_enabled=false`, above) a "run" is exactly one call and this is unchanged from before lode-35nu.11.6; with the [Ask tools](#tool-augmented-ask-lode-8hsk--lode-35nu112--lode-8vvp) enabled, this same value bounds the whole free-tool-turns-then-final-answer run, not each turn individually. **Derived from the SDK estimate at decision time; 300s is now backed by a live measurement instead.** Does not reach `enrich.py`'s three call sites — those stay on `enrich_call_timeout_s` (120s) unchanged, and are unaffected by this ticket (still calling `structured_call` directly). The derivation, the measurement, the retained SDK retry-on-timeout it was chosen alongside, and the `ModelTier.max_tokens` override this knob is coupled to are all in the write-up linked above, deliberately not restated here. |
 | Max free tool turns (`_DEFAULT_MAX_TOOL_TURNS`) | build | `8` | Not a `Settings` knob — an internal constant (`src/lode/llm_provider.py`) bounding `LLMProvider.run_tool_turns`'s free-tool-choice phase. This is the mechanism that bounds a run's **total** output-token spend: `max_tokens` is per-**turn**, not per-run — a deliberate asymmetry with `qa_call_timeout_s` above, decided rather than left open (`lode-3dh1`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)) — so the worst case for one `run_tool_turns` call is `(max_tool_turns + 1) × max_tokens` output tokens — **9×** today's per-tier `max_tokens` default, not 8×, because this constant bounds only the *free* tool turns and the final structured-output turn is spent on top. Lower this (or override the `max_tool_turns` parameter at a call site) to tighten that bound; a separate per-run token ceiling was considered and deferred, not built (`lode-csl2`). Why per-turn was chosen over decrementing, and the rejected alternative, are in the write-up linked above — deliberately not restated here. |
 | HF probe timeout (`hf_probe_timeout_s`) | runtime | `5s` | Per-call timeout passed to `huggingface_hub.model_info()` by the indexing-side revision probe (`resolve_model_revision`, below). Bounds a black-holed network to this instead of the OS TCP connect timeout, which the probe used to block for before falling back to `model_revision = NULL` anyway (`lode-w5nr`). Matches `httpx`'s own default rather than the Fetch timeout below (`10s`, web content fetches) — this is a small metadata GET, not a page fetch. Bounds the probe only, **not** `fastembed`'s weights download (next section). What a float timeout actually bounds in `httpx`, with the measurement: `docs/decisions.md`, the `lode-w5nr` entry. |
 
@@ -449,6 +449,52 @@ was then unreachable and tracked as a follow-up; it is now closed, see
 > `lode ask` silently does nothing). The write-up below is left as written
 > at decision time; read `llm_call_timeout_s` throughout it as
 > `enrich_call_timeout_s`.
+
+> **Update (lode-188q, decided lode-9i6y, 2026-11-17):** `qa_call_timeout_s`
+> **stays 300s**, but it is no longer justified by the SDK-estimate derivation
+> below; it is justified by a live measurement. Read decision (1)'s "derived,
+> not measured" and every figure below that comes from the SDK's ~35.6 tok/s
+> model (the ~230s expectation, the ~562s override example) as decision-time
+> history. Why it was reopened: `lode-ugj5` raised `qa.MAX_TOKENS` 8192 →
+> 10752, and that same model puts a full-cap response at ~302s, i.e. no
+> headroom under 300s. The maintainer chose to measure first (2026-11-16),
+> then to keep 300s (2026-11-17).
+>
+> **Measurement** (anthropic SDK **1.4.0** — the derivation below is pinned to
+> 0.117.1, and `_calculate_nonstreaming_timeout`'s 3600s-per-128000-tokens
+> model is unchanged in 1.4.0; golden set of 33 questions x 1 rep per cell,
+> four cells run concurrently; timeout raised to 590s for the run so slow
+> calls were seen uncensored; real Q&A path through `cited_answer.ask`, SDK
+> client instrumented):
+>
+> - Sonnet 5.5, default effort, no tools: call wall p50 3.0s / p95 4.8s / max
+>   6.9s; output tokens p50 258 / p95 648 / max 1075.
+> - Sonnet 5.5, tools on (fetch only; 145 calls, 79 `tool_use`): call p50 2.1s
+>   / p95 4.9s / max 7.6s; LLM time per run p50 10.1s / p95 18.9s / max 22.8s;
+>   calls per run p50 4 / max 9; max output tokens 1123.
+> - Opus 5.5, effort=high, no tools: call p50 4.2s / p95 6.7s / max 9.3s;
+>   output tokens p50 421 / p95 822 / max 1163.
+> - Opus 5.5, high, tools on (70 calls, 4 `tool_use`): call p50 4.3s / p95 9.4s
+>   / max 11.5s; LLM time per run p50 8.7s / p95 16.2s / max 21.4s; max output
+>   tokens 1333.
+> - Observed speed on calls with >= 500 output tokens: Sonnet p5 113-132 tok/s
+>   (p50 125-149), Opus p5 101-107 tok/s (p50 114-117); the SDK model assumes
+>   35.6. Projected full 10752-token call at p5 speed: Sonnet 82-95s, Opus
+>   101-106s, so 300s has roughly 3x headroom over **one** full-cap call.
+> - 0 of 281 calls came within 20% of 300s; 0 retries, 0 errors; stop_reason
+>   was only `end_turn` or `tool_use`, never `max_tokens`.
+>
+> **Limits of the measurement:** no call exceeded ~12% of the cap (the largest
+> was 1333 of 10752 output tokens), so the full-cap figure is an extrapolation
+> from short outputs, not an observation; n=33 per cell, single rep, one time
+> of day. The ~3x figure is for one call, while `qa_call_timeout_s` is a
+> per-run budget ([Models](#models) above): a tools-on run of several near-cap
+> turns could still exhaust it, and no such run was exercised, which is why
+> lowering the bound was considered and not taken. The
+> "raise `qa_call_timeout_s` alongside any `max_tokens` override" coupling
+> warning below is kept: it still holds for large overrides. At the measured
+> Opus p5 speed its 20000-token example projects to roughly 190-200s for one
+> call rather than ~562s, but two such turns in one tools-on run exceed 300s.
 
 `lode-3dlt` (see [above](#thinking-on-the-qa-synthesis-call-decided-lode-3dlt)) raised
 `qa.MAX_TOKENS` 4096 → 8192 and stopped disabling thinking on the Q&A
@@ -553,6 +599,16 @@ a known, accepted trade-off, not a follow-up ticket.
 
 ### enrichment_llm max_tokens headroom for a thinking-capable override (decided, lode-jgus)
 
+> **Update (lode-ni7p):** enrichment no longer forces a tool, so the "forced-tool-use
+> branch" below is now the `messages.parse` / batch `output_config.format` route, and
+> Haiku 5.5 (the default) shares `enrich.MAX_TOKENS` with adaptive thinking too — the
+> forced `tool_choice` that made it skip thinking is gone. The constant is unchanged
+> (3072); a default-tier response that spends it all on thinking surfaces as the same
+> `LLMProviderError` / per-item `errored` `BatchResult` described here. Whether 3072 —
+> derived for a thinking-capable *override*, never measured against the default tier
+> thinking — and an unset `reasoning_effort` are still the right defaults is an open
+> decision, `lode-ychx`.
+
 `lode-3dlt` named a real but then-unreachable risk on the enrichment
 forced-tool-use branch of `AnthropicProvider.structured_call` (`enrichment_llm`,
 [Models](#models) above): that branch never sends `thinking` at all — a
@@ -653,48 +709,51 @@ render it alongside `reasoning_effort` when set (e.g. `claude-opus-5
 (effort=high, max_tokens=4096)`), via the same `knob_rows` `ModelTier`
 rendering `reasoning_effort` already used — extended, not duplicated.
 
-### enrichment_llm refuses models that reject a forced `tool_choice` (decided, lode-eidi)
+### enrichment_llm refuses models that reject a forced `tool_choice` (decided, lode-eidi; removed by lode-ni7p)
 
-Enrichment (immediate and batch) still forces its tool with
-`tool_choice={"type": "tool", ...}`, and `enrichment_llm` is `Kind.RUNTIME`.
-Six current models reject a forced `tool_choice` with a 400: Sonnet 5.5 and
-Opus 5.5 (live-probed under `lode-ugj5`), and Fable 5.1 / 5.2 and Mythos 5.1 /
-5.2 (per Anthropic's migration notes, not live-probed here). Haiku 5.5, Opus 5,
-Sonnet 5 and Fable 5 accept it. An override to a rejecting model failed on
-every call — and a batch failed only at collect time, after it was submitted
-and its handle persisted. Q&A is unaffected: its final turn uses
-`output_config.format`
-([`lode-ugj5`](#default-llm-tiers-moved-to-the-55-generation-decided-lode-ugj5)).
+> **Update (lode-ni7p): removed.** Enrichment — the immediate route
+> (`structured_call`) and the batch route (`submit_batch`/`collect_batch`) —
+> now sends `output_config.format` structured output, as Q&A's final turn has
+> since [`lode-ugj5`](#default-llm-tiers-moved-to-the-55-generation-decided-lode-ugj5),
+> and makes **no forced `tool_choice` request at all**. So an `enrichment_llm`
+> override to any model — including the six that 400 on a forced `tool_choice`
+> (Sonnet 5.5, Opus 5.5, Fable 5.1 / 5.2, Mythos 5.1 / 5.2) — works.
+> `llm_provider.FORCED_TOOL_CHOICE_REJECTING_MODELS` and the `Settings`
+> config-load validator that read it are deleted. The narrow exception to
+> `lode-3dlt`'s "no model→capability prediction" rule that this section recorded
+> is gone with them: the hand-kept list that lagged releases no longer exists.
+>
+> Consequences. The batch decode path now reads the first `text` content
+> block as JSON (`json.loads`) instead of a `tool_use` block's `input`; a message
+> cut off at `max_tokens` or declined (`refusal`) degrades that one item to an
+> `errored` `BatchResult` without its text being read, like the no-text-block
+> case ([stack.md](stack.md#error-contract--diagnosability-over-genericness)
+> owns the inventory). A batch submitted by the previous, forced-tool code and
+> collected after an upgrade carries `tool_use` blocks only, so its items report
+> "no text block" and are retried once under the new shape. The constraint on
+> `enrichment_llm` is now the reverse one: the model must support structured
+> outputs (every current model does, per Anthropic's supported-model list —
+> not live-probed here); one that does not fails at the seam as an
+> `LLMProviderError`. And Haiku 5.5, which skipped thinking under a forced
+> `tool_choice`, now thinks adaptively on enrichment like every other tier, so
+> `enrich.MAX_TOKENS` (3072) is shared between thinking and the JSON payload on
+> the default tier too — see
+> [the headroom section](#enrichment_llm-max_tokens-headroom-for-a-thinking-capable-override-decided-lode-jgus).
 
-**Decided: refuse at config load.** `Settings` raises a `ValueError` naming the
-model and the cause when `llm_provider = "anthropic"` and `enrichment_llm.model`
-is one of `llm_provider.FORCED_TOOL_CHOICE_REJECTING_MODELS`. The match is
-exact, not a prefix: these ids have no dated-snapshot form, and
-`claude-fable-5-2` as a prefix would also catch a suffixed `claude-fable-5` id —
-a model that accepts a forced `tool_choice`. `qa_llm`/`qa_think_harder_llm` and
-the `openai` provider (where `model` is a deployment name) are not checked.
-Routing enrichment through `output_config.format` instead — the fix that needs
-no model list — was passed over as out of scope: it changes the batch decode
-path and the default tier's wire shape.
-
-**This is a model→capability check at config load — the shape `lode-3dlt`
-passed over (its options 1 and 4), and that `lode-90o7` / `lode-tvps`
-[reaffirmed against](#reasoning_effort-wired-to-output_configeffort-decided-lode-wnz1)
-for the effort/model pairing.** It is a narrow exception, not a reversal: in
-those cases a fix that works on every model, or a clean failure at the seam,
-was enough; here the seam-level failure arrives too late on the batch route.
-The cost `lode-3dlt` named is real — the list is hand-kept and lags releases
-(as first built it named two of the six) — so a rejecting model not yet listed
-still surfaces as an `LLMProviderError` at the seam, per call or at batch
-collect, exactly as before this change.
+The original decision, kept for the record: `Settings` refused, at config load,
+an `enrichment_llm` whose model was in the hand-kept
+`FORCED_TOOL_CHOICE_REJECTING_MODELS` (exact match, anthropic provider only),
+because a forced-`tool_choice` 400 failed every call and a batch only failed at
+collect time after its handle was persisted. Routing enrichment through
+`output_config.format` was passed over then as out of scope; `lode-ni7p` did it.
 
 ### `reasoning_effort` wired to `output_config.effort` (decided, lode-wnz1)
 
 A `ModelTier`'s `reasoning_effort` reaches Anthropic as `output_config.effort`
 (`low`/`medium`/`high`/`xhigh`/`max` — GA since the 4.6 generation, `xhigh`
-added on Opus 4.7) on every wire mechanism `AnthropicProvider` has: both
-`structured_call` branches (the `messages.parse` Q&A path and the
-forced-tool-use enrichment path) and `submit_batch`. Left unset — which is
+added on Opus 4.7) on every wire mechanism `AnthropicProvider` has: `structured_call`
+(`messages.parse`; enrichment used a forced-tool-use branch until `lode-ni7p`) and
+`submit_batch`. Left unset — which is
 every tier's default, and what a bare-string `enrichment_llm = "…"` coerces to
 — the parameter is **omitted** from the request rather than sent as `null`. A
 value outside the legal five raises `LLMProviderError` before any request is
@@ -761,8 +820,8 @@ carry the sources). The older decision sections above are left as written at dec
 
 - **Forced `tool_choice` (`any`/`tool`) 400s on Sonnet 5.5 and Opus 5.5; Haiku 5.5 accepts it.**
   The enrichment path (forced tool-use in `structured_call`, and the batch path's
-  `tool_choice` in `submit_batch`) is reachable only from `enrich.py`, i.e. the Haiku tier, and
-  is unchanged. The Q&A final turn of `run_tool_turns` used to reuse the forced helper; it now
+  `tool_choice` in `submit_batch`) was reachable only from `enrich.py`, i.e. the Haiku tier, and
+  was left unchanged here; `lode-ni7p` later moved it to `output_config.format` too. The Q&A final turn of `run_tool_turns` used to reuse the forced helper; it now
   uses `output_config.format` structured output via `messages.parse` — the same mechanism as
   the single-shot Q&A branch — with the tool definitions kept and `tool_choice` `none` (the
   history carries `tool_use`/`tool_result` blocks). Verified live that `output_config.format`
@@ -795,6 +854,10 @@ carry the sources). The older decision sections above are left as written at dec
   gone — the coupling that write-up warns about for a `max_tokens` override, now true of the
   default. The bound is a human-decided value traded against the retry worst case, so it is
   not re-derived here; whether to raise it is open (`lode-9i6y`).
+  **Update (lode-188q, 2026-11-17):** decided on `lode-9i6y` — 300s is kept, and the headroom
+  is gone only on paper: a live measurement found the real tiers several times faster than the
+  SDK model, leaving roughly 3x headroom over one full-cap call. 300s now rests on that
+  measurement, not on the SDK estimate; figures and limits are in that write-up's Update note.
 - **Enrichment provenance.** `claude-haiku-5-5` is a fixed ID with no dated-snapshot form, so
   the "a pin target *does* exist" observation in
   [Model provenance](#model-provenance-the-enrichment-llm-decided-lode-g2745) describes the
