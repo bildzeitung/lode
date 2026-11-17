@@ -134,8 +134,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    pickup**, not a fresh build, e.g.:
 
    > lode-ai1 carries `needs-rebase` (kicked back by `/land`'s conflict precheck) — fetch it and
-   > **merge current `trunk` in** (do not rebase): `git fetch origin land/lode-ai1 trunk`, then
-   > `scripts/checkout-land-branch.sh lode-ai1` (it checks the fetched `land/lode-ai1` tip out as
+   > **merge current `trunk` in** (do not rebase): `scripts/checkout-land-branch.sh lode-ai1` (it
+   > fetches `land/lode-ai1` and `trunk` itself, then checks the `land/lode-ai1` tip out as
    > `land/lode-ai1--<your own launch worktree's directory name>` — unique by
    > construction, so it never collides with a leftover checkout and the old `--detach` fallback is
    > never needed), `git merge
@@ -532,19 +532,19 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 
    Pass the ticket id, e.g.:
 
-   > Technically review lode-ai1 (it is `ready-for-code-review`): read `review_head` from bd, `git
-   > fetch origin land/lode-ai1 trunk`, then `scripts/checkout-land-branch.sh
-   > lode-ai1` (it checks the fetched `land/lode-ai1` tip out as `land/lode-ai1--<your own launch
-   > worktree's directory name>` — unique by construction, so no `--detach` fallback is ever needed) into your
-   > own launch worktree. Run `/code-review` at effort medium against `trunk...HEAD` first (always;
-   > never `--fix`/`--comment`), then your own reasoned correctness pass over the same diff, verifying
-   > each of the skill's findings against the code before acting on it; if the skill is missing or
-   > fails, retry once, carry on with the hand pass, and record it in your hand-off (lode-1fyb; see
-   > code-reviewer.md step 4). There is no `correctness-review` Workflow and no pre-computed findings
-   > (lode-rlyx). Then `/simplify`, re-gate, commit, `git push origin HEAD:land/lode-ai1`, and swap
-   > the ticket to `ready-for-land`. Do **not** merge, close, or push trunk. Escalate (revert to
-   > green, swap to `land-escalated`, don't mark ready) only on a clarifying decision or "making it
-   > worse."
+   > Technically review lode-ai1 (it is `ready-for-code-review`): read `review_head` from bd, then
+   > run `scripts/checkout-land-branch.sh lode-ai1` in your own launch worktree (it fetches
+   > `land/lode-ai1` and `trunk` itself, then checks the `land/lode-ai1` tip out as
+   > `land/lode-ai1--<your own launch worktree's directory name>` — unique by construction, so no
+   > `--detach` fallback is ever needed). Run `/code-review` at effort medium against
+   > `trunk...HEAD` first (always; never `--fix`/`--comment`), then your own reasoned correctness
+   > pass over the same diff, verifying each of the skill's findings against the code before acting
+   > on it; if the skill is missing or fails, retry once, carry on with the hand pass, and record it
+   > in your hand-off (lode-1fyb; see code-reviewer.md step 4). There is no `correctness-review`
+   > Workflow and no pre-computed findings (lode-rlyx). Then `/simplify`, re-gate, commit,
+   > `git push origin HEAD:land/lode-ai1`, and swap the ticket to `ready-for-land`. Do **not** merge,
+   > close, or push trunk. Escalate (revert to green, swap to `land-escalated`, don't mark ready)
+   > only on a clarifying decision or "making it worse."
 
    Give the reviewer whatever *context* is genuinely useful — which sibling branches in this fan-out
    touch the same files, what the ticket's own hand-off notes warn about, any specific claim worth
