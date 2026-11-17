@@ -7,6 +7,7 @@ the OpenAIProvider (lode-568v.3) Responses API mapping + serialize-batch, and
 build_provider's provider resolution for both providers.
 """
 
+import inspect
 import json
 import logging
 from collections.abc import Callable, Iterator
@@ -34,6 +35,7 @@ from lode.llm_provider import (
     AnthropicProvider,
     BatchRequest,
     LLMAuthError,
+    LLMProvider,
     LLMProviderError,
     ModelTier,
     OpenAIProvider,
@@ -628,6 +630,17 @@ def test_run_tool_turns_with_empty_tools_delegates_to_structured_call() -> None:
     kwargs = client.messages.parse.call_args.kwargs
     assert kwargs["output_format"] is _Widget
     assert kwargs["timeout"] == 7.0
+
+
+@pytest.mark.parametrize("owner", [LLMProvider, AnthropicProvider, OpenAIProvider])
+def test_run_tool_turns_takes_no_forced_tool_parameters(owner: type) -> None:
+    # lode-66ve: `tool_name` selects structured_call's forced `tool_choice`
+    # branch, which 400s on the Q&A default models (Sonnet 5.5 / Opus 5.5).
+    # Nothing type-checks the implementations against the Protocol, hence
+    # all three.
+    params = inspect.signature(owner.run_tool_turns).parameters
+    assert "tool_name" not in params
+    assert "tool_description" not in params
 
 
 def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> None:

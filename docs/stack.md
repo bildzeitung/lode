@@ -846,8 +846,8 @@ ticket adds the seam **mechanism** only; it defines no tool schemas (`lode-35nu.
 call site passes real tools yet.
 
 **Shape**: `LLMProvider.run_tool_turns(*, …, tools: Sequence[ToolSpec], tool_result: Callable[[str,
-dict], str], output_schema, max_tokens, timeout_s, tool_name=None, tool_description=None,
-max_tool_turns=8) -> BaseModelT`. Free tool choice and a constrained structured-output schema are mutually
+dict], str], output_schema, max_tokens, timeout_s, max_tool_turns=8) -> BaseModelT`. Free tool
+choice and a constrained structured-output schema are mutually
 exclusive within one call, so a run is: up to `max_tool_turns` free turns (the model may call any
 tool in `tools`; each call is resolved via `tool_result(name, input)` and fed back as a tool result,
 until the model stops calling tools or the turn budget runs out), then **exactly one** final
@@ -856,6 +856,9 @@ definitions while the history carries `tool_use` blocks) and `tool_choice` `none
 `structured_call`'s no-tool branch uses, now continuing the accumulated conversation instead of a single
 user turn. The final turn used a forced `tool_choice` until `lode-ugj5`; Sonnet 5.5 and Opus 5.5 400 on
 that, so it was replaced (decision record: [configuration.md](configuration.md#default-llm-tiers-moved-to-the-55-generation-decided-lode-ugj5)).
+`run_tool_turns` takes no `tool_name`/`tool_description` (`lode-66ve`): the final turn never forces a
+tool, and on an empty `tools` a `tool_name` would select `AnthropicProvider.structured_call`'s
+forced-tool branch — the same 400 on the Q&A default models.
 `strict: true` stays off ([`lode-568v.3`](#llm-provider-seam-decided-lode-568v1)).
 
 **`timeout_s` is a budget for the whole run; `max_tokens` deliberately is not.** No new config knob
