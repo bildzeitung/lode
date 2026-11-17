@@ -388,7 +388,7 @@ class LLMProvider(Protocol):
         back as the tool result, until the model stops calling tools or the
         turn budget is exhausted), followed by exactly one final call whose
         response is constrained to ``output_schema`` and may not call tools --
-        identical in spirit to :meth:`structured_call`'s no-tool branch, but
+        identical in spirit to :meth:`structured_call`, but
         continuing the accumulated conversation instead of a single user turn.
 
         ``timeout_s`` is a budget for the **whole run**, not one call each
@@ -480,10 +480,10 @@ def _anthropic_effort_kwargs(
     return {"output_config": {"effort": reasoning_effort}}
 
 
-#: Shared tail for the two "the block I need isn't in ``content``" errors
-#: (:meth:`AnthropicProvider._parsed_turn` and
-#: :meth:`AnthropicProvider.collect_batch`). Both have the same cause --
-#: thinking shares ``max_tokens`` with the payload, see
+#: Shared tail for the two "no usable block in ``content``" errors
+#: (:meth:`AnthropicProvider._parsed_turn` and, via
+#: :func:`_incomplete_result`, :meth:`AnthropicProvider.collect_batch`). Both
+#: have the same cause -- thinking shares ``max_tokens`` with the payload, see
 #: :class:`AnthropicProvider` -- so they read identically in a log; single-
 #: sourced here because they are far apart and a reword would otherwise drift.
 _BUDGET_EXHAUSTED_HINT = "-- typically the whole output budget was consumed by thinking"
@@ -643,19 +643,22 @@ def _wrong_shape_result(result: Any, detail: str) -> BatchResult:
     )
 
 
-#: ``stop_reason`` values that mean generation was cut off before the JSON ended.
-_TRUNCATED_STOP_REASONS = frozenset({"max_tokens", "model_context_window_exceeded"})
+#: ``stop_reason`` values under which a message's content is not guaranteed
+#: complete: generation was cut off, or the request was declined mid-output.
+_INCOMPLETE_STOP_REASONS = frozenset(
+    {"max_tokens", "model_context_window_exceeded", "refusal"}
+)
 
 
 def _incomplete_result(result: Any, what: str) -> BatchResult:
     """Degrade one *succeeded* batch line whose message carries no complete JSON.
 
     Not a wrong-shape line (:func:`_wrong_shape_result`): the line is
-    well-formed, but the message stopped before any text block, or partway
-    through one -- thinking shares ``max_tokens`` with the JSON, see
-    :class:`AnthropicProvider` -- or was declined. Names the same
-    model/``stop_reason``/hint :meth:`AnthropicProvider._parsed_turn` does, or
-    the failure is undiagnosable. ``what`` names which of those was observed.
+    well-formed, but the message carries no text block at all, or its
+    ``stop_reason`` is one of :data:`_INCOMPLETE_STOP_REASONS` -- thinking
+    shares ``max_tokens`` with the JSON, see :class:`AnthropicProvider`. Names
+    the same model/``stop_reason``/hint :meth:`AnthropicProvider._parsed_turn`
+    does, or the failure is undiagnosable. ``what`` names which was observed.
     """
     message = result.result.message
     stop_reason = getattr(message, "stop_reason", None)
@@ -790,8 +793,8 @@ class AnthropicProvider:
 
         Returns the decoded model and this turn's ``usage.output_tokens``.
         The single implementation of the structured-output
-        (``output_config.format``) wire shape, shared by :meth:`structured_call`'s
-        no-tool branch (one user turn) and :meth:`run_tool_turns`' final turn
+        (``output_config.format``) wire shape, shared by :meth:`structured_call`
+        (one user turn) and :meth:`run_tool_turns`' final turn
         (the whole accumulated history, ``tools`` set).
 
         ``tools`` is passed only by the final turn: the API requires the tool
@@ -1035,12 +1038,13 @@ class AnthropicProvider:
         # Deferred -- lode-4q97; needed by `transform_schema` and the `except` below.
         import anthropic
 
-        # lode-a31q: pydantic v2 doesn't memoize model_json_schema() -- it
-        # rebuilds a fresh dict per call (~0.5ms measured) -- and every
-        # enrichment item in a batch carries the identical EnrichmentResult
-        # schema, so building it per item wastes tens of ms per submission at
-        # the default enrichment_batch_flush_size of 50, scaling with that
-        # knob. Cache per distinct schema, keyed on the class object; scoped
+        # lode-a31q: neither pydantic's model_json_schema() nor the SDK's
+        # transform_schema() over it is memoized -- each call rebuilds a fresh
+        # dict (~0.5ms measured for the former alone) -- and every enrichment
+        # item in a batch carries the identical EnrichmentResult schema, so
+        # building it per item wastes tens of ms per submission at the default
+        # enrichment_batch_flush_size of 50, scaling with that knob. Cache the
+        # built format per distinct schema, keyed on the class object; scoped
         # to this submission, never process-global. The cached dict is shared
         # by reference across the requests using it -- treat it as read-only.
         schema_cache: dict[type[BaseModel], dict[str, Any]] = {}
@@ -1208,11 +1212,12 @@ class AnthropicProvider:
                     )
                     continue
                 stop_reason = getattr(result.result.message, "stop_reason", None)
-                if stop_reason == "refusal":
-                    # A declined message's content is partial by contract and
-                    # is discarded unread, never returned as a success.
+                if stop_reason in _INCOMPLETE_STOP_REASONS:
+                    # The text is not guaranteed complete -- cut off by the
+                    # budget thinking shares with it, or declined -- so it is
+                    # discarded unread, never returned as a success.
                     results.append(
-                        _incomplete_result(result, "refused message's text discarded")
+                        _incomplete_result(result, "incomplete text block discarded")
                     )
                     continue
                 try:
@@ -1222,25 +1227,14 @@ class AnthropicProvider:
                     parsed = RootModel[dict[str, Any]](json.loads(text_block.text))
                 except (ValueError, TypeError, AttributeError) as exc:
                     # `json.JSONDecodeError` and pydantic's `ValidationError`
-                    # are both `ValueError`s. A text block cut off mid-JSON
-                    # lands here too: a strict prefix of a JSON object never
-                    # parses, so truncation can only fail, never pass as a
-                    # shorter valid payload. Tell it from a genuinely
-                    # malformed line by `stop_reason`.
-                    if stop_reason in _TRUNCATED_STOP_REASONS:
-                        results.append(
-                            _incomplete_result(
-                                result, f"text block cut off mid-JSON ({exc})"
-                            )
+                    # are both `ValueError`s.
+                    results.append(
+                        _wrong_shape_result(
+                            result,
+                            f"text block is not a JSON object "
+                            f"(stop_reason={stop_reason!r}): {exc}",
                         )
-                    else:
-                        results.append(
-                            _wrong_shape_result(
-                                result,
-                                f"text block is not a JSON object "
-                                f"(stop_reason={stop_reason!r}): {exc}",
-                            )
-                        )
+                    )
                     continue
                 results.append(
                     BatchResult(

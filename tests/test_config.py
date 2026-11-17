@@ -367,8 +367,7 @@ def test_illegal_reasoning_effort_rejected_at_load(
 )
 def test_enrichment_llm_accepts_any_model(model: str) -> None:
     # lode-ni7p: enrichment sends structured output, not a forced tool_choice,
-    # so the models that 400 on one (lode-eidi's load-time refusal list) are
-    # ordinary overrides again.
+    # so config load must not refuse the models that 400 on one.
     assert Settings(enrichment_llm={"model": model}).enrichment_llm.model == model
 
 

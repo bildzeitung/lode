@@ -747,14 +747,14 @@ collection, the same treatment the "no `text` block" arm gets:
 | `b.type` (each content block, inside the same iteration) | a content item that isn't object-shaped at all (e.g. `null`) → `AttributeError` | same `except (AttributeError, TypeError)` above — one combined arm, since either failure means the line can't be trusted |
 | `json.loads(text_block.text)` | missing `text` → `None` → `TypeError`; text that is not JSON → `json.JSONDecodeError`; JSON that is not an object → pydantic `ValidationError` from `RootModel[dict[str, Any]]` (both `ValueError`s) | `except (ValueError, TypeError, AttributeError)` |
 
-That last guard also catches a line that is *not* wrong-shape at all (`lode-ni7p`): structured output
-arrives as JSON text, and thinking shares `max_tokens` with it, so a message cut off partway through
-its JSON fails the same `json.loads`. A strict prefix of a JSON object never parses, so truncation
-can only fail — it cannot pass as a shorter valid payload. The arm tells the two apart by the
-message's `stop_reason`: `max_tokens` / `model_context_window_exceeded` report a cut-off message with
-the same model/`stop_reason`/hint diagnosis as the "no `text` block" arm, anything else reports a
-wrong-shape line. A `stop_reason` of `refusal` never reaches the decode: a declined message's content
-is partial by contract, so it is discarded unread and reported with the refusal hint.
+That last guard is reached only by a message that claims to be complete (`lode-ni7p`). Structured
+output arrives as JSON text, and thinking shares `max_tokens` with it, so a message can stop partway
+through its JSON; a declined one (`stop_reason` `refusal`) carries partial content by contract. Both
+are a different class from a wrong-shape line, so one gate ahead of the decode handles them: a
+`stop_reason` of `max_tokens`, `model_context_window_exceeded` or `refusal` discards the text unread
+and reports the item with the same model/`stop_reason`/hint diagnosis as the "no `text` block" arm.
+The cost accepted: a `max_tokens` message whose JSON happened to finish on the last token is retried
+rather than accepted.
 
 Two fields round the enumeration out — both unvalidated like the rest, neither able to *raise*
 in the loop body, so both would break their declared type silently rather than loudly:

@@ -1435,10 +1435,9 @@ def _tool_use_block(name: str, tool_input: dict, block_id: str) -> mock.MagicMoc
     """Build a duck-typed ``tool_use`` content block (the shape
     lode.llm_provider's reader expects: .type/.name/.input/.id).
 
-    Shared by ``fake_tool_turn_client`` below, by tests/test_qa.py's two
-    non-fetch tool-turn tests, by ``_make_batch_result`` above, and by
-    tests/test_llm_provider.py / tests/test_enrich.py, so a block-shape change
-    (an SDK or run_tool_turns contract change) edits every caller in one place
+    Shared by ``fake_tool_turn_client`` below and by
+    tests/test_llm_provider.py, so a block-shape change (an SDK or
+    run_tool_turns contract change) edits every caller in one place
     (lode-gyq3, swept the rest of the way by lode-j5o1).
 
     tests/test_llm_provider.py's ``_tool_use_response`` wraps this in a

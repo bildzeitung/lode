@@ -27,7 +27,7 @@ from _anthropic_rig import (
     _results_handler,
     _succeeded_payload,
 )
-from conftest import _text_block, _tool_use_block
+from conftest import _text_block, _tool_use_block, fake_batch_client
 from pydantic import BaseModel, ValidationError
 
 from lode.config import Settings
@@ -135,14 +135,20 @@ def _anthropic_bad_request() -> object:
     return anthropic.BadRequestError(message, response=response, body=response.json())
 
 
-def test_structured_call_ignores_tool_name_and_never_forces_a_tool() -> None:
+@pytest.mark.parametrize(
+    "tool_kwargs",
+    [{}, {"tool_name": "extract_widget", "tool_description": "Extract a widget."}],
+    ids=["no-tool-name", "tool-name-ignored"],
+)
+def test_structured_call_sends_structured_output_and_never_forces_a_tool(
+    tool_kwargs: dict,
+) -> None:
     # lode-ni7p: enrichment passes tool_name/tool_description (OpenAI reads
-    # them as the schema name); Anthropic must still send structured output,
-    # never a forced tool_choice, so a model that 400s on one still works.
+    # them as the schema name); Anthropic sends the same structured-output
+    # request either way, never a forced tool_choice, so a model that 400s on
+    # one still works.
     client = mock.MagicMock()
-    client.messages.parse.return_value = SimpleNamespace(
-        parsed_output=_Widget(name="widget", count=3)
-    )
+    client.messages.parse.return_value = _parsed_response(_Widget(name="w", count=1))
     provider = AnthropicProvider(client)
 
     result = provider.structured_call(
@@ -151,47 +157,20 @@ def test_structured_call_ignores_tool_name_and_never_forces_a_tool() -> None:
         system="sys",
         user_prompt="prompt",
         output_schema=_Widget,
-        max_tokens=100,
-        timeout_s=42.0,
-        tool_name="extract_widget",
-        tool_description="Extract a widget.",
-    )
-
-    assert result == _Widget(name="widget", count=3)
-    kwargs = client.messages.parse.call_args.kwargs
-    assert kwargs["output_format"] is _Widget
-    assert kwargs["messages"] == [{"role": "user", "content": "prompt"}]
-    assert "tools" not in kwargs
-    assert "tool_choice" not in kwargs
-    assert "thinking" not in kwargs
-    client.messages.create.assert_not_called()
-
-
-def test_structured_call_uses_messages_parse_when_no_tool_name() -> None:
-    client = mock.MagicMock()
-    client.messages.parse.return_value = SimpleNamespace(
-        parsed_output=_Widget(name="w", count=1)
-    )
-    provider = AnthropicProvider(client)
-
-    result = provider.structured_call(
-        model="claude-sonnet-4-6",
-        reasoning_effort=None,
-        system="sys",
-        user_prompt="prompt",
-        output_schema=_Widget,
         max_tokens=50,
         timeout_s=7.0,
+        **tool_kwargs,
     )
 
     assert result == _Widget(name="w", count=1)
     kwargs = client.messages.parse.call_args.kwargs
-    assert kwargs["model"] == "claude-sonnet-4-6"
+    assert kwargs["model"] == "claude-sonnet-5-5"
     assert kwargs["output_format"] is _Widget
+    assert kwargs["messages"] == [{"role": "user", "content": "prompt"}]
     assert kwargs["timeout"] == 7.0
-    # lode-3dlt: `thinking` is never sent on this branch -- an explicit
-    # `disabled` (lode-d1sr) 400s on Fable-class models at any effort and on
-    # Opus 5 at effort xhigh/max. See the AnthropicProvider docstring.
+    # lode-3dlt: `thinking` is never sent -- an explicit `disabled`
+    # (lode-d1sr) 400s on Fable-class models at any effort and on Opus 5 at
+    # effort xhigh/max. See the AnthropicProvider docstring.
     assert "thinking" not in kwargs
     # Tool definitions belong only to run_tool_turns' final turn; the
     # single-shot wire shape carries none.
@@ -294,8 +273,8 @@ def test_structured_call_names_context_window_exceeded_when_no_text_block() -> N
     # max_tokens can't help. The message must name the overflow and its remedy
     # instead of the generic thinking-budget hint.
     client = mock.MagicMock()
-    client.messages.parse.return_value = SimpleNamespace(
-        parsed_output=None, stop_reason="model_context_window_exceeded"
+    client.messages.parse.return_value = _parsed_response(
+        None, stop_reason="model_context_window_exceeded"
     )
     provider = AnthropicProvider(client)
 
@@ -506,10 +485,10 @@ def test_run_tool_turns_with_empty_tools_delegates_to_structured_call() -> None:
 
 @pytest.mark.parametrize("owner", [LLMProvider, AnthropicProvider, OpenAIProvider])
 def test_run_tool_turns_takes_no_forced_tool_parameters(owner: type) -> None:
-    # lode-66ve: `tool_name` selects structured_call's forced `tool_choice`
-    # branch, which 400s on the Q&A default models (Sonnet 5.5 / Opus 5.5).
-    # Nothing type-checks the implementations against the Protocol, hence
-    # all three.
+    # lode-66ve: the final turn is structured output, never a forced
+    # `tool_choice` (which 400s on the Q&A default models, Sonnet 5.5 / Opus
+    # 5.5), so there is no tool to name. Nothing type-checks the
+    # implementations against the Protocol, hence all three.
     params = inspect.signature(owner.run_tool_turns).parameters
     assert "tool_name" not in params
     assert "tool_description" not in params
@@ -922,7 +901,7 @@ def test_batch_and_immediate_routes_put_the_same_request_on_the_wire() -> None:
 
 def test_submit_batch_builds_schema_once_per_distinct_output_schema() -> None:
     # lode-a31q: every batch item sharing the same output_schema must reuse
-    # one model_json_schema() call, not rebuild it per item -- and the cache
+    # one transform_schema() build, not rebuild it per item -- and the cache
     # must be scoped to ONE submission. A process-global cache keyed on the
     # class object would satisfy the first assertion while pinning every
     # schema class for the life of the process, so the second submission below
@@ -937,7 +916,7 @@ def test_submit_batch_builds_schema_once_per_distinct_output_schema() -> None:
     ]
 
     with mock.patch.object(
-        _Widget, "model_json_schema", wraps=_Widget.model_json_schema
+        anthropic, "transform_schema", wraps=anthropic.transform_schema
     ) as spy:
         provider.submit_batch(batch, timeout_s=30.0)
         assert spy.call_count == 1
@@ -1493,26 +1472,36 @@ def test_collect_batch_maps_errored_result_to_llm_provider_error() -> None:
     assert "rate_limited" in str(result.error)
 
 
+def _collect_one(content: list, stop_reason: str) -> BatchResult:
+    """Collect one message built from ``content``/``stop_reason`` and return its result.
+
+    A good result follows it in the same batch: whatever happens to the first
+    item must never take the second down with it.
+    """
+    first = mock.MagicMock()
+    first.custom_id = "ver-4"
+    first.result.type = "succeeded"
+    first.result.message.content = content
+    first.result.message.model = "claude-haiku-5-5"
+    first.result.message.stop_reason = stop_reason
+    first.result.message.stop_details = None
+    good = _succeeded_result("ver-5", {"name": "w", "count": 2})
+    client = fake_batch_client("batch-1", results=[first, good])
+
+    status, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    assert status == "ended"
+    first_result, good_result = results
+    assert first_result.custom_id == "ver-4"
+    assert good_result.outcome == "succeeded"
+    return first_result
+
+
 def test_collect_batch_handles_a_succeeded_result_missing_a_text_block() -> None:
     # No text content block at all -- the provider must not blow up the
     # whole collect_batch call over one malformed result (see module docstring).
-    client = mock.MagicMock()
-    client.beta.messages.batches.retrieve.return_value = SimpleNamespace(
-        processing_status="ended"
-    )
-    bad = mock.MagicMock()
-    bad.custom_id = "ver-3"
-    bad.result.type = "succeeded"
-    bad.result.message.content = []
-    bad.result.message.model = "claude-opus-5"
-    bad.result.message.stop_reason = "max_tokens"
-    client.beta.messages.batches.results.return_value = iter([bad])
-    provider = AnthropicProvider(client)
+    result = _collect_one([], "max_tokens")
 
-    status, results = provider.collect_batch("batch-1", timeout_s=10.0)
-
-    assert status == "ended"
-    (result,) = results
     assert result.outcome == "errored"
     assert result.parsed is None
     assert isinstance(result.error, LLMProviderError)
@@ -1525,36 +1514,8 @@ def test_collect_batch_handles_a_succeeded_result_missing_a_text_block() -> None
     # VALUE alone and keep passing if the diagnosis were dropped.
     message = str(result.error)
     assert "no text block" in message
-    assert "claude-opus-5" in message
+    assert "claude-haiku-5-5" in message
     assert "stop_reason='max_tokens'" in message
-
-
-def _collect_one(content: list, stop_reason: str) -> BatchResult:
-    """Collect one message built from ``content``/``stop_reason`` and return its result.
-
-    A good result follows it in the same batch: whatever happens to the first
-    item must never take the second down with it.
-    """
-    client = mock.MagicMock()
-    client.beta.messages.batches.retrieve.return_value = SimpleNamespace(
-        processing_status="ended"
-    )
-    first = mock.MagicMock()
-    first.custom_id = "ver-4"
-    first.result.type = "succeeded"
-    first.result.message.content = content
-    first.result.message.model = "claude-haiku-5-5"
-    first.result.message.stop_reason = stop_reason
-    first.result.message.stop_details = None
-    good = _succeeded_result("ver-5", {"name": "w", "count": 2})
-    client.beta.messages.batches.results.return_value = iter([first, good])
-
-    _, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
-
-    first_result, good_result = results
-    assert first_result.custom_id == "ver-4"
-    assert good_result.outcome == "succeeded"
-    return first_result
 
 
 @pytest.mark.parametrize(
@@ -1578,37 +1539,33 @@ def test_collect_batch_degrades_a_text_block_that_is_not_a_json_object(
     assert "stop_reason='end_turn'" in str(bad_result.error)
 
 
-def test_collect_batch_names_the_budget_when_the_json_is_cut_off_at_max_tokens() -> (
-    None
-):
-    # lode-ni7p: thinking shares max_tokens with the JSON, so truncation
-    # mid-JSON is the realistic batch failure -- it must carry the budget
-    # diagnosis, not read as a malformed line.
-    bad_result = _collect_one([_text_block('{"name": "w", "cou')], "max_tokens")
-
-    assert bad_result.outcome == "errored"
-    assert bad_result.parsed is None
-    message = str(bad_result.error)
-    assert "cut off mid-JSON" in message
-    assert "wrong-shape" not in message
-    assert "claude-haiku-5-5" in message
-    assert "stop_reason='max_tokens'" in message
-    assert _BUDGET_EXHAUSTED_HINT in message
-
-
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "refusal"])
 @pytest.mark.parametrize(
     "text",
     ['{"name": "w", "cou', '{"name": "w", "count": 1}'],
     ids=["partial-json", "complete-json"],
 )
-def test_collect_batch_never_decodes_a_refused_message(text: str) -> None:
-    # A declined message's content is partial by contract: even text that
-    # happens to parse must not come back as a success.
-    refused = _collect_one([_text_block(text)], "refusal")
+def test_collect_batch_never_decodes_an_incomplete_message(
+    text: str, stop_reason: str
+) -> None:
+    # lode-ni7p: thinking shares max_tokens with the JSON, so a cut-off message
+    # is the realistic batch failure, and a declined one is partial by
+    # contract. Neither is read -- even text that happens to parse must not
+    # come back as a success -- and each carries its own diagnosis rather than
+    # reading as a malformed line.
+    result = _collect_one([_text_block(text)], stop_reason)
 
-    assert refused.outcome == "errored"
-    assert refused.parsed is None
-    _assert_refusal_hint(str(refused.error), category=None)
+    assert result.outcome == "errored"
+    assert result.parsed is None
+    message = str(result.error)
+    assert "incomplete text block discarded" in message
+    assert "wrong-shape" not in message
+    assert "claude-haiku-5-5" in message
+    if stop_reason == "refusal":
+        _assert_refusal_hint(message, category=None)
+    else:
+        assert "stop_reason='max_tokens'" in message
+        assert _BUDGET_EXHAUSTED_HINT in message
 
 
 def test_collect_batch_reads_the_text_block_after_a_thinking_block() -> None:

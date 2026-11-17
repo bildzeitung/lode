@@ -558,7 +558,10 @@ a known, accepted trade-off, not a follow-up ticket.
 > Haiku 5.5 (the default) shares `enrich.MAX_TOKENS` with adaptive thinking too — the
 > forced `tool_choice` that made it skip thinking is gone. The constant is unchanged
 > (3072); a default-tier response that spends it all on thinking surfaces as the same
-> `LLMProviderError` / per-item `errored` `BatchResult` described here.
+> `LLMProviderError` / per-item `errored` `BatchResult` described here. Whether 3072 —
+> derived for a thinking-capable *override*, never measured against the default tier
+> thinking — and an unset `reasoning_effort` are still the right defaults is an open
+> decision, `lode-ychx`.
 
 `lode-3dlt` named a real but then-unreachable risk on the enrichment
 forced-tool-use branch of `AnthropicProvider.structured_call` (`enrichment_llm`,
@@ -675,10 +678,10 @@ rendering `reasoning_effort` already used — extended, not duplicated.
 > is gone with them: the hand-kept list that lagged releases no longer exists.
 >
 > Consequences. The batch decode path now reads the first `text` content
-> block as JSON (`json.loads`) instead of a `tool_use` block's `input`; a block
-> truncated mid-JSON degrades that one item to an `errored` `BatchResult`, like
-> the no-text-block case, and a `stop_reason` of `refusal` is reported without
-> reading the text at all ([stack.md](stack.md#error-contract--diagnosability-over-genericness)
+> block as JSON (`json.loads`) instead of a `tool_use` block's `input`; a message
+> cut off at `max_tokens` or declined (`refusal`) degrades that one item to an
+> `errored` `BatchResult` without its text being read, like the no-text-block
+> case ([stack.md](stack.md#error-contract--diagnosability-over-genericness)
 > owns the inventory). A batch submitted by the previous, forced-tool code and
 > collected after an upgrade carries `tool_use` blocks only, so its items report
 > "no text block" and are retried once under the new shape. The constraint on
