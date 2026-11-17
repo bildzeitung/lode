@@ -54,6 +54,8 @@ from textual.screen import Screen
 from textual.timer import Timer
 from textual.widgets import Header, Input
 
+from lode.auth import AuthError
+from lode.llm_provider import LLMProviderError
 from lode.tui.screens.save_as_note_confirm import SaveAsNoteConfirmScreen
 from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
 from lode.tui.screens.version_view import VersionViewScreen
@@ -207,13 +209,10 @@ class AskScreen(Screen[None]):
     def _ask(self, question: str, generation: int) -> None:
         """Run the ask pipeline off the UI thread -- it does DB + network I/O.
 
-        Deferred import -- :class:`~lode.auth.AuthError` and
-        :class:`~lode.llm_provider.LLMProviderError` live in modules that pull
-        in the Anthropic SDK, which nothing in this screen's own module scope
-        may load (mirrors ``lode.cli.ask``'s own deferred import of the same
-        names, for the same reason). ``LLMProviderError`` is caught alongside
-        ``AuthError`` because an uncaught worker exception takes the whole app
-        down (``exit_on_error``); ``LLMAuthError`` is *not* an ``AuthError``.
+        ``LLMProviderError`` is caught alongside ``AuthError`` because an
+        uncaught worker exception takes the whole app down (``exit_on_error``)
+        and neither class is an ancestor of the other: ``LLMAuthError``
+        subclasses ``LLMProviderError``, not ``AuthError``.
 
         ``generation`` is the counter's value at the moment *this* question
         was submitted, passed in by :meth:`on_input_submitted`; every write it
@@ -221,9 +220,6 @@ class AskScreen(Screen[None]):
         See ``_ask_generation``'s comment in :meth:`__init__` for the hazard
         that guard exists for.
         """
-        from lode.auth import AuthError
-        from lode.llm_provider import LLMProviderError
-
         app = self.app
 
         def _on_stage(stage: str) -> None:
@@ -239,7 +235,13 @@ class AskScreen(Screen[None]):
             )
         except (AuthError, LLMProviderError) as err:
             self.app.call_from_thread(self._finish, generation, _PLACEHOLDER, None)
-            self.app.call_from_thread(self.notify, str(err), severity="error")
+            # markup=False: a provider message embeds SDK and pydantic text
+            # verbatim ("Field required [type=missing, input_value={}, ...]"),
+            # and Textual's default markup parse raises on those bracket
+            # groups when the toast renders -- which exits the app.
+            self.app.call_from_thread(
+                self.notify, str(err), severity="error", markup=False
+            )
             return
         rendered = render_ask_result(
             result, context_chars=app.settings.ask_context_chars
@@ -282,10 +284,9 @@ class AskScreen(Screen[None]):
         Dropped (spinner left running for whichever worker *is* current) if
         a newer question has since superseded this one -- the late-write
         guard. ``result`` is ``None`` on the ``AuthError``/``LLMProviderError``
-        path (nothing to
-        navigate) and on an abstained answer's own citation set is simply
-        empty -- either way :meth:`_update_citation_status` clears the status
-        line rather than special-casing them here.
+        path (nothing to navigate) and on an abstained answer's own citation
+        set is simply empty -- either way :meth:`_update_citation_status`
+        clears the status line rather than special-casing them here.
         """
         if generation != self._ask_generation:
             return

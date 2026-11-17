@@ -17,6 +17,8 @@ escape-pop tests below drive it the real way instead: pressing ``ctrl+l``.
 """
 
 import asyncio
+import subprocess
+import sys
 import threading
 from collections.abc import Iterable
 from pathlib import Path
@@ -26,13 +28,22 @@ from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.widgets import Footer, Input, Static, TextArea
 from textual.widgets._footer import FooterKey
+from textual.widgets._toast import Toast
 
 from lode.answer import Claim, Support
+from lode.auth import AuthError
 from lode.cited_answer import CitedAnswer
 from lode.egress import WithheldCitation
+from lode.llm_provider import LLMAuthError, LLMProviderError
 from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.screens.ask import CITATION_STATUS_ID, QUESTION_ID, RESULTS_ID, AskScreen
+from lode.tui.screens.ask import (
+    _PLACEHOLDER,
+    CITATION_STATUS_ID,
+    QUESTION_ID,
+    RESULTS_ID,
+    AskScreen,
+)
 from lode.tui.screens.capture import CaptureScreen
 from lode.tui.screens.edit import EditScreen
 from lode.tui.screens.save_as_note_confirm import (
@@ -1140,59 +1151,60 @@ def test_declining_save_as_note_writes_nothing(
     assert edge_count == 0, "no edge on decline"
 
 
-@pytest.mark.parametrize("error_cls_name", ["LLMProviderError", "LLMAuthError"])
-def test_a_provider_error_leaves_the_app_running_with_placeholder_and_notification(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_cls_name: str
-) -> None:
-    from lode import llm_provider
+#: A provider message as the seam really builds one: pydantic's bracket group
+#: is not valid Textual markup, so rendering it with the stock ``markup=True``
+#: raises ``MarkupError`` inside the toast and exits the app.
+_PROVIDER_MESSAGE = (
+    "Anthropic response did not match Answer: 1 validation error for Answer\n"
+    "claims\n  Field required [type=missing, input_value={}, input_type=dict]"
+)
 
-    error_cls = getattr(llm_provider, error_cls_name)
-    db_path = tmp_path / "lode.db"
-    app = LodeApp(db_path=db_path)
-    notices: list[tuple[str, str]] = []
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        LLMProviderError(_PROVIDER_MESSAGE, provider="anthropic"),
+        LLMAuthError(_PROVIDER_MESSAGE, provider="openai"),
+        AuthError(_PROVIDER_MESSAGE),
+    ],
+    ids=["LLMProviderError", "LLMAuthError", "AuthError"],
+)
+def test_a_provider_error_leaves_the_app_running_with_placeholder_and_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    app = LodeApp(db_path=tmp_path / "lode.db")
 
     def _raise(db_path: Path, question: str, **kwargs: object) -> AskResult:
-        raise error_cls("model declined to answer", provider="anthropic")
+        raise error
 
     monkeypatch.setattr("lode.tui.screens.ask.run_ask", _raise)
 
-    async def _drive() -> tuple[bool, str]:
-        async with app.run_test() as pilot:
+    async def _drive() -> tuple[bool, str, list[tuple[str, bool]]]:
+        # notifications=True: the pilot disables toasts by default, and the
+        # toast's own render is where a markup-parsed message blows up.
+        async with app.run_test(notifications=True) as pilot:
             app.push_screen("ask")
             await pilot.pause()
             screen = app.screen
-            monkeypatch.setattr(
-                screen,
-                "notify",
-                lambda message, *, severity="information", **_kw: notices.append(
-                    (str(message), severity)
-                ),
-            )
             screen.query_one(f"#{QUESTION_ID}").value = "anything at all?"
             await pilot.press("enter")
             await app.workers.wait_for_complete()
             await pilot.pause()
-            return app.is_running, str(screen.query_one(f"#{RESULTS_ID}").content)
+            toasts = [
+                (str(toast.render()), toast.has_class("-error"))
+                for toast in screen.query(Toast)
+            ]
+            rendered = str(screen.query_one(f"#{RESULTS_ID}").content)
+            return app.is_running, rendered, toasts
 
-    running, rendered = asyncio.run(_drive())
+    running, rendered, toasts = asyncio.run(_drive())
 
     assert running
-    assert rendered == _placeholder()
-    assert any(
-        "model declined to answer" in msg and sev == "error" for msg, sev in notices
-    )
-
-
-def _placeholder() -> str:
-    from lode.tui.screens import ask
-
-    return ask._PLACEHOLDER
+    assert rendered == _PLACEHOLDER
+    assert toasts == [(_PROVIDER_MESSAGE, True)]
 
 
 def test_importing_the_ask_screen_module_does_not_load_the_anthropic_sdk() -> None:
-    import subprocess
-    import sys
-
     code = (
         "import sys, lode.tui.screens.ask; "
         "sys.exit(1 if 'anthropic' in sys.modules else 0)"
