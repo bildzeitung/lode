@@ -1753,7 +1753,7 @@ def test_run_tool_turns_refused_free_turn_raises_without_running_tools(
 
 
 @pytest.mark.network
-def test_collect_batch_refusal_with_partial_tool_use_is_errored() -> None:
+def test_collect_batch_refusal_with_valid_text_is_errored_real_sdk() -> None:
     payload = _succeeded_payload("ver-4")
     payload["result"]["message"].update(stop_reason="refusal", stop_details=None)
     client = _real_anthropic_client(
