@@ -488,8 +488,10 @@ The landing context is **minimal by design** — `land_head` + a one-line `land_
 metadata, read via `bd show <id> --json` (the branch name is *derived*, `land/<id>`, never stored).
 `land_head`/`land_summary` is the one field-name convention across the whole loop: `code-reviewer`
 writes it when swapping a ticket to `ready-for-land`, and a rebase pickup (`coding.md`) refreshes
-`land_head` only on every re-push, leaving `land_summary` as the reviewer wrote it. The SHA exists only to **detect drift**: a push onto the branch *after* the ticket
-was marked ready.
+`land_head` on every re-push. `land_summary` describes what the branch does and stays the
+reviewer's across a pickup (`coding.md`'s rebase-pickup step 5 has the rule and its one exception,
+lode-jb2q). The SHA exists only to **detect drift**: a push onto the branch *after* the ticket was
+marked ready.
 
 **First action of every iteration of this loop: heartbeat the single-lander lock (lode-m87j).** This
 is the one call site (not per-section) that keeps the lock's staleness token measuring idle time

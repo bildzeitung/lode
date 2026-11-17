@@ -3294,7 +3294,10 @@ Concretely, the whole cycle stays inside the one dispatched `coding` producer, s
 - `git push origin HEAD:land/<id>` — an ordinary, non-force push by explicit refspec (regardless of
   what the local branch is named) to a ref that already exists on origin, because the merge commit
   descends from what's already there,
-- refresh `land_head` (never `land_summary`, which `/land` uses for the merge commit message) and swap `needs-rebase` straight to `ready-for-land` itself.
+- refresh `land_head`, record the merge as a `REBASE PICKUP` note on the ticket, and swap
+  `needs-rebase` straight to `ready-for-land` itself. `land_summary` stays the reviewer's
+  (lode-jb2q: the rule and its one exception are in `coding.md`'s rebase-pickup step 5, the dated
+  record in `docs/decisions.md`).
 
 **Expect the merge to conflict — that is the normal case, not the exception.** `/land` only applies
 `needs-rebase` when its precheck (`scripts/merge-precheck.sh origin/trunk origin/land/<id>`, lode-mh9g)
