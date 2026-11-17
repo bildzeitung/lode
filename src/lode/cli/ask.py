@@ -12,10 +12,6 @@ from lode.config import default_db_path, lance_dir
 from lode.llm_provider import LLMProviderError
 
 if TYPE_CHECKING:
-    # Type-only; the runtime imports live inside ``ask`` so the capture-path
-    # commands (``add`` is "instant by design") never pay the cost of loading
-    # the Q&A SDK (anthropic) or the vector stack (pyarrow), which the cited
-    # Q&A loop pulls in but the rest of the CLI never touches.
     from lode.answer import Support
     from lode.cited_answer import CitedAnswer
 
@@ -54,9 +50,10 @@ def ask(
     no_egress material that matched is surfaced as "present, withheld from
     cloud synthesis" rather than silently dropped.
     """
-    # Imported here, not at module scope: cited_answer and lode.retrieval pull in
-    # the vector stack (pyarrow via lode.vectorstore), which the instant capture
-    # path (``add``) must never load.
+    # Imported here, not at module scope: lode.retrieval (which cited_answer
+    # imports in turn) loads networkx, and lode.cli imports this module to
+    # register the command -- so at module scope every command, the instant
+    # capture path (``add``) included, would pay for it at startup.
     from lode import cited_answer
     from lode.retrieval import _retrieve
 
