@@ -12,7 +12,10 @@ not only a verbatim revert of one of the six -- a denylist of removed
 phrasings would have left the very hole the ticket was filed about. Ordinary
 lowercase narrative use of "superseded"/"falsified" mid-sentence, of which
 this file has plenty describing a ticket's own history, is untouched by
-design.
+design. A marker that predates its pattern, and cannot be normalized without
+rewriting a committed line, is excused by name in ``_ALLOWLIST`` -- so it
+stays invisible to the documented grep: an enumerated miss, not an overlooked
+one.
 
 *No wrapped marker.* A marker whose id wraps onto the next markdown line is
 still invisible to the single-line grep the preamble documents: correct shape,
@@ -44,6 +47,7 @@ not a restatement here.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -53,7 +57,7 @@ DECISIONS = REPO_ROOT / "docs" / "decisions.md"
 # lowercase: a case-insensitive group false-positives on ordinary parenthesised
 # narrative such as "(superseded -- see below)", which
 # test_off_pattern_scan_ignores_lowercase_narrative_prose pins. Both spellings
-# are DERIVED from this one tuple rather than typed out twice, so the rule is
+# are DERIVED from a keyword tuple rather than typed out twice, so the rule is
 # stated once and a keyword cannot land half-applied -- which is exactly how
 # lode-125q and lode-bv9o each arrived, one case variant at a time.
 _MARKER_KEYWORDS = (
@@ -64,13 +68,23 @@ _MARKER_KEYWORDS = (
     "Outdated",
     "Amendment",
 )
-_MARKER_ALTERNATION = "|".join(
-    spelling for keyword in _MARKER_KEYWORDS for spelling in (keyword, keyword.upper())
-)
+# A tuple of their own because their pattern's suffix is narrower than the
+# group above -- see the Correction entry in _OFF_PATTERNS.
+_CORRECTION_KEYWORDS = ("Correction", "Corrected")
+
+
+def _both_cases(keywords: tuple[str, ...]) -> str:
+    return "|".join(
+        spelling for keyword in keywords for spelling in (keyword, keyword.upper())
+    )
+
+
+# Where a marker lead-in can open: a bold span, a parenthetical, or a blockquote.
+_OPENER = r"(?:\*\*|\(|^\s*>\s*\**)"
 
 _OFF_PATTERNS: dict[str, re.Pattern[str]] = {
     "stale-flag keyword opening a bold span, blockquote, or parenthetical": re.compile(
-        rf"(?:\*\*|\(|^\s*>\s*\**)(?:{_MARKER_ALTERNATION})\b"
+        rf"{_OPENER}(?:{_both_cases(_MARKER_KEYWORDS)})\b"
     ),
     # Deliberately NOT anchored to a bold span/parenthetical: this one keyword
     # is banned outright, anywhere on a line. It therefore overlaps the group
@@ -81,29 +95,33 @@ _OFF_PATTERNS: dict[str, re.Pattern[str]] = {
     # Narrower than the bare keyword on purpose: "**Correction the original
     # proposal did not anticipate..." and "**Correction to this entry's first
     # draft:**" are an entry narrating its OWN history, which the preamble
-    # exempts. Only "Correction (" / "Correction, " -- an id or date follows --
-    # is a backwards-pointing marker (lode-zkki).
+    # exempts. "Correction (" / "Correction, " is the shape an id or date
+    # follows, i.e. a backwards-pointing marker; what comes after the
+    # punctuation is not inspected (lode-zkki).
     "Correction-style lead-in opening a bold span, blockquote, or parenthetical": re.compile(
-        r"(?:\*\*|\(|^\s*>\s*\**)(?:Correction|Corrected|CORRECTION|CORRECTED)(?:\s*\(|,\s)"
+        rf"{_OPENER}(?:{_both_cases(_CORRECTION_KEYWORDS)})(?:\s*\(|,\s)"
     ),
 }
 
-# Pre-existing off-pattern lead-ins that stay as written, each with its reason.
-# A lead-in rewrite would delete a committed line, which
-# scripts/check-decisions-no-silent-rewrite.sh forbids and the preamble bars.
+# Pre-existing off-pattern lead-ins that stay as written, keyed by a substring
+# of the line and carrying the reason. Normalizing one in place deletes a
+# committed line, which scripts/check-decisions-no-silent-rewrite.sh fails and
+# the preamble's append-only rule bars -- so it is excused here instead.
 _ALLOWLIST: dict[str, str] = {
     "**Correction (`lode-rtcx`) to the `lode-moq7` entry above": (
-        "committed before the Correction pattern existed; rewriting its lead-in "
-        "would delete a committed line (lode-zkki)"
+        "committed before the Correction pattern existed (lode-zkki)"
     ),
 }
 
 
-def _off_pattern_markers(lines: list[str]) -> list[str]:
+def _off_pattern_markers(
+    lines: list[str], allowlist: Iterable[str] = _ALLOWLIST
+) -> list[str]:
     """Lines carrying a stale-flag marker in a shape the documented grep misses.
 
     A line that already contains ``Update (`` is exempt whatever else it says:
-    the property under guard is greppability, not phrasing purity.
+    the property under guard is greppability, not phrasing purity. A line
+    containing an ``allowlist`` key is excused whichever pattern it matches.
     """
     return [
         f"  L{lineno} ({description}): {line.strip()}"
@@ -111,7 +129,7 @@ def _off_pattern_markers(lines: list[str]) -> list[str]:
         for description, pattern in _OFF_PATTERNS.items()
         if pattern.search(line)
         and "Update (" not in line
-        and not any(allowed in line for allowed in _ALLOWLIST)
+        and not any(allowed in line for allowed in allowlist)
     ]
 
 
@@ -159,6 +177,23 @@ def test_no_off_pattern_supersession_markers() -> None:
         "(<id>...)' lead-in, so they are invisible to the grep everyone uses "
         "to find stale claims (lode-ur6o):\n" + "\n".join(offenders)
     )
+
+
+def test_every_allowlist_entry_excuses_exactly_one_live_marker() -> None:
+    """An allowlist entry excuses ONE vetted line. A key matching nothing is a
+    dead excuse; a key matching a second line excuses a marker nobody vetted."""
+    lines = _decisions_lines()
+    for allowed, reason in _ALLOWLIST.items():
+        assert reason.strip(), f"allowlist entry {allowed!r} carries no reason"
+        excused = [line for line in lines if allowed in line]
+        assert len(excused) == 1, (
+            f"allowlist entry {allowed!r} must match exactly one line of "
+            f"docs/decisions.md, but matches {len(excused)}"
+        )
+        assert _off_pattern_markers(excused, allowlist=()), (
+            f"allowlist entry {allowed!r} excuses a line the scan would not "
+            "flag anyway -- drop the entry"
+        )
 
 
 def test_off_pattern_scan_catches_a_reintroduced_marker() -> None:
