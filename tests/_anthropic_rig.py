@@ -95,14 +95,14 @@ def _ended_batch_body(batch_id: str) -> dict:
 
 
 def _succeeded_payload(
-    custom_id: str = "ver-shape", tool_input: dict | None = None
+    custom_id: str = "ver-shape", output: dict | None = None
 ) -> dict:
     """The success payload as a plain dict, pre-JSON-encoding (lode-i821).
 
     Dict-returning (rather than pre-encoded) so :func:`_payload_without` can
     delete a field from it before :func:`_jsonl` encodes it.
 
-    ``tool_input`` overrides the generic ``_Widget``-shaped tool payload, so a
+    ``output`` overrides the generic ``_Widget``-shaped JSON payload, so a
     caller needing a domain-shaped one (enrichment) asks for it rather than
     reaching into ``result.message.content[0]`` to swap it (lode-a9x3).
     """
@@ -117,17 +117,13 @@ def _succeeded_payload(
                 "model": "claude-haiku-4-5",
                 "content": [
                     {
-                        "type": "tool_use",
-                        "id": "tu_1",
-                        "name": "emit",
-                        "input": (
-                            {"name": "w", "count": 1}
-                            if tool_input is None
-                            else tool_input
+                        "type": "text",
+                        "text": json.dumps(
+                            {"name": "w", "count": 1} if output is None else output
                         ),
                     }
                 ],
-                "stop_reason": "tool_use",
+                "stop_reason": "end_turn",
                 "stop_sequence": None,
                 "usage": {"input_tokens": 1, "output_tokens": 1},
             },
