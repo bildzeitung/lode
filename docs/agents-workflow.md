@@ -435,8 +435,9 @@ below with `.` in place of the word.
 
 **Scope: observations, not a contract.** Everything below was observed from worktree-isolated
 dispatched agents only — recorded by the builder on Claude Code 2.1.325 and re-run by the technical
-review on 2.1.326. The main session was not tested (no dispatched agent can reach it); the message is
-worded for an isolated agent, which suggests but does not show that the main session is unaffected.
+review on 2.1.326. The main session is unaffected, as observed once on 2.1.326 (a `/land` pass,
+2026-11-16): `echo eval` ran, and so did multi-line blocks using `VAR="$(git rev-parse ...)"` with
+`|| { ...; exit 1; }` tails.
 Two rules, three message texts:
 
 - **`eval`** — "… but this command runs a string through eval, which can't be verified to stay inside

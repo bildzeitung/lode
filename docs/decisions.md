@@ -6014,6 +6014,11 @@ entries below from being rewritten to chase the current tree.)
     per ticket; (3) a watch period: the next 5 dispatches of the trimmed agent are checked against a
     short list of incident-derived behaviours, and a miss reverts the cut.
   - **Accepted limit:** 5 dispatches do not exercise rare paths.
+
+- **Update (lode-5x01, 2026-11-16) — a filename typo in `lode-s09w`'s `uv` migration entry above.**
+  That entry's bullet "`scripts/python-init.sh`, `venv-install` and `compile-lock.sh` are deleted
+  outright" names the script `venv-install`; the file is `scripts/venv-install.sh`. Wording only, no
+  change to the decision.
 - **`qa_call_timeout_s` stays 300s, now justified by measurement (`lode-9i6y`, 2026-11-16 and
   2026-11-17, maintainer decision; docs rewrite `lode-188q`).** `lode-ugj5` raised `qa.MAX_TOKENS`
   8192 -> 10752, and the `lode-wfyx` SDK-estimate formula (35.6 tok/s) put a full-cap response at
