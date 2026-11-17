@@ -5599,6 +5599,10 @@ entries below from being rewritten to chase the current tree.)
   (`test_subcommand_without_help_still_fails_loudly_on_bad_config`) is unaffected. `lode status`'s
   `lode-l38d.6` survival contract is unaffected -- it never depended on `_help_requested()` at all.
 
+  **Update (`lode-4eyp`, 2026-11-17):** this entry is itself a backwards-pointing correction of the
+  `lode-moq7` entry above it, but its Correction lead-in is not the Update lead-in shape, so the
+  preamble's grep missed it. This line makes it findable; the lead-in itself stays as committed.
+
 - **`lode theme` added to the `main()` config-optional exemption set (`lode-jjol`, 2026-08-19,
   supersedes the `lode-mk9j` entry above's "`status` remains the ONLY command carrying that
   exemption" sentence).** `lode theme export` is the escape hatch `[cli.theme]`/`[tui.theme]`
@@ -5801,6 +5805,11 @@ entries below from being rewritten to chase the current tree.)
   bucket that exists precisely to keep unconfirmable rows OUT of the headline ratio was invisible in
   every breakdown. It is now a third column (0 across the board on this machine).
 
+  **Update (`lode-4eyp`, 2026-11-17):** this entry is itself a backwards-pointing correction (its
+  lead-in reads "CORRECTION to the two entries above"), but its date-first lead-in is not the
+  Update lead-in shape, so the preamble's grep missed it. This line makes it findable; the lead-in
+  itself stays as committed.
+
 - **2026-09-14 (`lode-wtk2`) — CORRECTION: `_classify` now judges Bash SEGMENTS, not
   whole lines, and the baseline figure above is re-measured.** Appended, not rewritten in place, per
   this file's preamble. `_classify` used to run its write/version-control exclusion and its
@@ -5881,6 +5890,11 @@ entries below from being rewritten to chase the current tree.)
     corpus is live and has grown by every session since, including the one that made this change, so
     part of the movement is traffic and part is reclassification. The headline share is unmoved at
     34%, which is the substantive result -- the narrowing decided rows, not the ratio.
+
+  **Update (`lode-4eyp`, 2026-11-17):** this entry is itself a backwards-pointing correction (its
+  lead-in reads "CORRECTION: `_classify` now judges ..."), but its date-first lead-in is not the
+  Update lead-in shape, so the preamble's grep missed it. This line makes it findable; the lead-in
+  itself stays as committed.
 
 - **`scripts/` sibling loading keeps three short UNCACHED bootstraps, not one shared one
   (`lode-7l68`, 2026-09-14).** `lode-wtk2` consolidated the sibling-loader *body* into
@@ -6042,3 +6056,21 @@ entries below from being rewritten to chase the current tree.)
     `lode-oqr` lost (2026-07-10) were recorded as unlocked, and a harness lock is first on record a
     few days later (`lode-amif`). Nothing asserts the lock is present when a build starts; whether
     to: `lode-gro8`.
+
+- **A new entry that corrects earlier entries IS a marker under the preamble (`lode-4eyp`,
+  2026-11-17, builder call, not a maintainer ruling).** The ticket left this question to its
+  builder; whether the maintainer confirms it, and whether the preamble itself should then say so,
+  is `lode-llxw`. The preamble binds markers that point *backwards* at another entry, and says a
+  correction may be "a new entry, or a marker appended to the existing one". The first form was left
+  ungated: `lode-dozi` and `lode-wtk2` each open a new entry with a date-first "— CORRECTION"
+  lead-in that the preamble's grep never finds, while `lode-8n4k` (also a new entry) uses the Update
+  lead-in. Decided: both forms are markers, so a new correcting entry needs the Update lead-in too.
+  The two existing entries, and the `lode-rtcx` marker, cannot be rewritten, so each got an appended
+  Update pointer and is allowlisted in the gate by name. The gate
+  (`tests/test_decisions_supersession_markers.py`) now also flags the date-first shape and the
+  near-miss lead-ins (`**Correction** (id)`, `**Correction:** id`, `**Correction -- id`,
+  `**Corrected by id`, `**Corrections (id)`). The `Correction (` / `Correction, ` branch now
+  requires an id, a date or "maintainer decision" after the punctuation, so an entry narrating its
+  own history ("**Correction, verified empirically on bash 5.2:**") stays green. Accepted miss: a
+  backwards correction with prose between the keyword and its id. That miss and the gate's other
+  limits are listed in the test module's docstring.
