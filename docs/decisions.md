@@ -6056,6 +6056,8 @@ entries below from being rewritten to chase the current tree.)
     `lode-oqr` lost (2026-07-10) were recorded as unlocked, and a harness lock is first on record a
     few days later (`lode-amif`). Nothing asserts the lock is present when a build starts; whether
     to: `lode-gro8`.
+    **Update (lode-gro8, 2026-11-17): decided, no assertion; the residual is accepted.** See the
+    `lode-gro8` entry below.
 
 - **A new entry that corrects earlier entries IS a marker under the preamble (`lode-4eyp`,
   2026-11-17, builder call, not a maintainer ruling).** The ticket left this question to its
@@ -6074,3 +6076,21 @@ entries below from being rewritten to chase the current tree.)
   own history ("**Correction, verified empirically on bash 5.2:**") stays green. Accepted miss: a
   backwards correction with prose between the keyword and its id. That miss and the gate's other
   limits are listed in the test module's docstring.
+
+- **The builder does not assert the harness lock is present; the residual is accepted (`lode-gro8`,
+  2026-11-17).** After `lode-t76f` the only cover for the pre-first-commit window (`lode-oqr`) is the
+  harness's lock on the launch worktree. On Claude Code 2.1.326 every live launch worktree carried
+  it, builders at zero commits included. The live account, with what stays unestablished, is
+  [agents-workflow.md](agents-workflow.md#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f).
+  - **Not taken: a read-only `locked` check before the first write.** The window needs a harness
+    that did not lock plus a `/land` sweep before the builder's first write outside ignored paths.
+    The outcome is a stopped build that a human re-dispatches, with nothing committed to lose: the
+    mid-session isolation guard (`lode-6wgc`) checkpoint stops the builder ahead of its first write,
+    and `trunk-write-guard.sh` stops an `Edit`/`Write` on `trunk` if the checkpoint is skipped (a
+    write made through `Bash` has the checkpoints only). The builder cannot repair a miss (taking
+    the lock itself reopens the lock/unlock pairing `lode-t76f` removed), so the check could only
+    stop builds, on a harness behavior last recorded before the lock first appears on record
+    (`lode-oqr`'s builds).
+  - **Revisit trigger:** a live launch worktree seen without a `locked` line, or a fresh build that
+    stops with its worktree gone while a `/land` sweep reported a full reclaim. Nothing watches for
+    either.
