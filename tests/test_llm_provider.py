@@ -44,7 +44,7 @@ from lode.llm_provider import (
     ModelTier,
     OpenAIProvider,
     ToolSpec,
-    _budget_hint,
+    _stop_reason_hint,
     build_provider,
     provider_identity,
 )
@@ -1611,7 +1611,7 @@ def _refused_parse_response() -> SimpleNamespace:
 def test_refusal_hint_omits_category_when_absent(response: SimpleNamespace) -> None:
     # The API documents both `stop_details` and its `category` as nullable
     # even on a refusal.
-    hint = _budget_hint("refusal", response)
+    hint = _stop_reason_hint("refusal", response)
     assert "policy refusal" in hint
     assert "category" not in hint
 
