@@ -97,17 +97,76 @@ TIP_COMPARISON_MARKERS = (
 )
 
 
-def _read_sites(blocks: list[str], field: str) -> list[str]:
-    """Blocks in ``blocks`` that pull ``metadata.<field>`` out of
-    `bd show --json` AND compare that value against a branch tip in the same
-    block -- see :data:`TIP_COMPARISON_MARKERS`."""
+#: How many fenced blocks after (reads) or before (writes) a site the shape
+#: check may sit. The dispatched-agent files run each command as its own plain
+#: Bash call (lode-fvg0: the harness classifier refuses a block that carries a
+#: derived value across commands), so a derive -> validate -> compare/write
+#: sequence is several adjacent blocks, not one. Main-session skills still do
+#: it in one block; a same-block check satisfies the gate too.
+SEQUENCE_WINDOW = 3
+
+
+#: The subset of :data:`TIP_COMPARISON_MARKERS` that counts when it sits in a
+#: LATER block of the plain-call sequence. `git rev-parse` is excluded: in a
+#: neighbouring block it is as likely to be an unrelated derive (a hand-off's
+#: `git rev-parse HEAD`) as a comparison, which would turn a non-emptiness read
+#: into a false read site.
+WINDOW_COMPARISON_MARKERS = ("git ls-remote", "git merge-base", "origin/land")
+
+
+def _read_site_indices(blocks: list[str], field: str) -> list[int]:
+    """Indices of blocks that pull ``metadata.<field>`` out of
+    `bd show --json` AND, in that block or one of the next
+    :data:`SEQUENCE_WINDOW` - 1, compare the value against a branch tip --
+    see :data:`TIP_COMPARISON_MARKERS`."""
     return [
-        b
-        for b in blocks
+        i
+        for i, b in enumerate(blocks)
         if f"metadata.{field}" in b
         and "jq" in b
-        and any(marker in b for marker in TIP_COMPARISON_MARKERS)
+        and (
+            any(marker in b for marker in TIP_COMPARISON_MARKERS)
+            or any(
+                marker in nb
+                for nb in blocks[i + 1 : i + SEQUENCE_WINDOW]
+                for marker in WINDOW_COMPARISON_MARKERS
+            )
+        )
     ]
+
+
+def _read_sites(blocks: list[str], field: str) -> list[str]:
+    return [blocks[i] for i in _read_site_indices(blocks, field)]
+
+
+def _validator_block_indices(blocks: list[str], field: str) -> list[int]:
+    """Indices of blocks with a validator call naming ``field``."""
+    return [
+        i
+        for i, b in enumerate(blocks)
+        if any(VALIDATOR in ln and field in ln for ln in b.splitlines())
+    ]
+
+
+def _read_is_guarded(blocks: list[str], i: int, field: str) -> bool:
+    """The validator runs in the read's own block or in one of the next
+    :data:`SEQUENCE_WINDOW` - 1, and no later than the first block that
+    compares the value to a tip."""
+    window = range(i, min(i + SEQUENCE_WINDOW, len(blocks)))
+    validators = [j for j in _validator_block_indices(blocks, field) if j in window]
+    markers = [
+        j
+        for j in window
+        if any(marker in blocks[j] for marker in WINDOW_COMPARISON_MARKERS)
+    ]
+    return bool(validators) and (not markers or validators[0] <= markers[0])
+
+
+def _write_is_guarded(blocks: list[str], i: int, field: str) -> bool:
+    """The validator runs in the write's own block or in one of the previous
+    :data:`SEQUENCE_WINDOW` - 1."""
+    window = range(max(0, i - SEQUENCE_WINDOW + 1), i + 1)
+    return any(j in window for j in _validator_block_indices(blocks, field))
 
 
 #: Per-field `--set-metadata <field>=` matcher, compiled once at import rather
@@ -125,6 +184,13 @@ WRITE_VAR_PATTERNS = {
     field: re.compile(
         rf'--set-metadata\s+{re.escape(field)}="\$([A-Za-z_][A-Za-z0-9_]*)"'
     )
+    for field in DRIFT_FIELDS
+}
+
+
+#: The raw value token of every `--set-metadata <field>=<value>` write.
+WRITE_VALUE_PATTERNS = {
+    field: re.compile(rf"--set-metadata\s+{re.escape(field)}=(\S+)")
     for field in DRIFT_FIELDS
 }
 
@@ -180,35 +246,49 @@ def test_every_drift_field_read_is_shape_checked_in_the_same_block() -> None:
     unguarded: list[str] = []
     for path, blocks in CALL_SITES:
         for field in DRIFT_FIELDS:
-            for block in _read_sites(blocks, field):
-                if VALIDATOR not in block:
+            for i in _read_site_indices(blocks, field):
+                if not _read_is_guarded(blocks, i, field):
                     unguarded.append(f"{path}: block reading metadata.{field}")
     assert not unguarded, (
         "these fenced bash blocks read a drift-detection SHA out of bd "
         f"metadata and compare it to a branch tip without calling {VALIDATOR} "
-        f"on it in the same block (lode-xdg3): {unguarded}. A malformed value "
+        f"on it first (lode-xdg3): {unguarded}. A malformed value "
         "never equals a real branch tip, so it reads as drift and bounces a "
-        "correct branch. Shell state does not survive between blocks "
-        "(lode-sfnb), so the check must be in the SAME block as the read."
+        "correct branch. The check must be in the same block as the read or "
+        f"in one of the next {SEQUENCE_WINDOW - 1} blocks, and before the "
+        "comparison (lode-sfnb, lode-fvg0)."
     )
 
 
 def test_validator_is_called_on_the_value_that_was_read() -> None:
-    """A call passing the wrong variable would satisfy the gate above while
-    validating nothing. Pins that the field name and the shell variable the
-    read assigned both appear on the validator's own line."""
+    """A call naming the field but passing nothing would satisfy the gate
+    above while validating nothing. Pins that the validator's own line carries
+    the field name AND a value argument after it: `"$FIELD_UPPER"` in a
+    one-block site, any non-empty value (a pasted-from-output placeholder) in
+    the plain-call sequence the agent files use (lode-fvg0)."""
     for path, blocks in CALL_SITES:
         for field in DRIFT_FIELDS:
-            for block in _read_sites(blocks, field):
-                var = field.upper()
-                lines = [ln for ln in block.splitlines() if VALIDATOR in ln]
-                assert len(lines) == 1, f"{path}: expected one {VALIDATOR} call"
-                assert field in lines[0], f"{path}: {VALIDATOR} call omits {field}"
-                assert f'"${var}"' in lines[0], (
-                    f"{path}: {VALIDATOR} is called on something other than "
-                    f'"${var}", the variable the same block assigned from '
-                    f"metadata.{field}"
+            for i in _read_site_indices(blocks, field):
+                window = (
+                    [blocks[i]]
+                    if VALIDATOR in blocks[i]
+                    else blocks[i : i + SEQUENCE_WINDOW]
                 )
+                lines = [
+                    ln
+                    for b in window
+                    for ln in b.splitlines()
+                    if VALIDATOR in ln and field in ln
+                ]
+                assert len(lines) == 1, f"{path}: expected one {VALIDATOR} call"
+                value = lines[0].split(field, 1)[1].split("||")[0].strip()
+                assert value, f"{path}: {VALIDATOR} call passes no value for {field}"
+                if VALIDATOR in blocks[i]:
+                    assert f'"${field.upper()}"' in value, (
+                        f"{path}: {VALIDATOR} is called on something other than "
+                        f'"${field.upper()}", the variable the same block '
+                        f"assigned from metadata.{field}"
+                    )
 
 
 def test_validator_script_is_executable() -> None:
@@ -240,16 +320,18 @@ def test_every_drift_field_write_is_shape_checked_in_the_same_block() -> None:
     unguarded: list[str] = []
     for path, blocks in CALL_SITES:
         for field in DRIFT_FIELDS:
-            for block in _write_sites(blocks, field):
-                if VALIDATOR not in block:
+            for i, block in enumerate(blocks):
+                if WRITE_PATTERNS[field].search(block) and not _write_is_guarded(
+                    blocks, i, field
+                ):
                     unguarded.append(f"{path}: block writing metadata.{field}")
     assert not unguarded, (
         "these fenced bash blocks write a drift-detection SHA to bd metadata "
         f"via --set-metadata without calling {VALIDATOR} on it in the same "
         f"block (lode-uvjr): {unguarded}. An unvalidated write can persist a "
         "malformed SHA that later reads as drift and bounces a correct "
-        "branch. Shell state does not survive between blocks (lode-sfnb), so "
-        "the check must be in the SAME block as the write."
+        "branch. The check must be in the same block as the write or in one "
+        f"of the previous {SEQUENCE_WINDOW - 1} blocks (lode-sfnb, lode-fvg0)."
     )
 
 
@@ -275,14 +357,16 @@ def test_validator_is_called_on_the_value_that_was_written() -> None:
     for path, blocks in CALL_SITES:
         for field in DRIFT_FIELDS:
             for block in _write_sites(blocks, field):
+                for raw in WRITE_VALUE_PATTERNS[field].findall(block):
+                    assert not raw.strip('"').startswith("$("), (
+                        f"{path}: --set-metadata {field}={raw} derives the value "
+                        "inline -- a value that is never bound to a variable or "
+                        "a validated, pasted literal cannot be validated before "
+                        "it is written"
+                    )
                 written = [
                     m.group(1) for m in WRITE_VAR_PATTERNS[field].finditer(block)
                 ]
-                assert written, (
-                    f"{path}: --set-metadata {field}=... does not assign from a "
-                    'plain "$VAR" -- write the SHA into a variable first so it can '
-                    "be validated before the write"
-                )
                 lines = [ln for ln in block.splitlines() if VALIDATOR in ln]
                 for var in written:
                     assert any(field in ln and f'"${var}"' in ln for ln in lines), (

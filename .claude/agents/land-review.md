@@ -71,14 +71,21 @@ misread as a conflict). My own verdict stays correct either way, since I never c
 what is at risk is `/land`'s merge, so this is the first thing I run:
 
 ```bash
-TOP=$(git rev-parse --show-toplevel)
-ISOGUARD="$TOP/scripts/isolation-guard.sh"
-"$ISOGUARD" || {
-  [ -x "$ISOGUARD" ] || echo "BOOTSTRAP GAP: $ISOGUARD is missing or not executable -- this" \
-    "checkout may predate the script landing on trunk. STOP and report; do not proceed."
-  exit 1
-}
+scripts/isolation-guard.sh
 ```
+
+**Bash call shapes in this file (lode-fvg0).** The harness's worktree-isolation classifier refuses a
+worktree-isolated agent's command when it is "too complex to verify" ([the observed
+shapes](../../docs/agents-workflow.md#the-harnesss-worktree-isolation-classifier-the-eval-word-and-git--refusals-lode-emx5)):
+`TOP=$(git …)` followed by a command using `$TOP`, a `|| { …; exit 1; }` tail, a `for` loop over
+`$(git …)`. So every fenced block here is a **plain call** — one command, literal arguments, scripts by
+repo-relative path (my cwd *is* the worktree root) — and the **exit status** the `Bash` tool reports
+replaces the old `|| …` tail. A value crossing from one call to the next (a SHA) is **copied verbatim
+from the earlier call's output**, never typed from memory or a prefix ([Derive identifiers, never
+retype them](../../docs/conventions.md#derive-identifiers-never-retype-them)). The diagnostics the old
+`|| echo "BOOTSTRAP GAP …"` tails printed live here instead: exit 127 / "No such file or directory" =
+**bootstrap gap** (this checkout may predate the script landing on trunk) = stop and report; exit 1 =
+the script ran and printed its own diagnostic.
 
 On a failure here I stop — full stop: no `EnterWorktree` retry, no `git worktree add` self-rescue, no
 fetch, no diff, no verdict. I report the exact diagnostic the script printed. Full account:
@@ -108,22 +115,16 @@ lode-qv5t discovered here, ported to a shared, shellcheck'd and unit-tested scri
 fourth inline copy):
 
 ```bash
-TOP=$(git rev-parse --show-toplevel)
-GUARD="$TOP/scripts/recycled-worktree-guard.sh"
-"$GUARD" "before any fetch/diff work" || {
-  [ -x "$GUARD" ] || echo "BOOTSTRAP GAP (lode-ivth): $GUARD is missing or not executable -- this" \
-    "worktree may predate the script landing on trunk. STOP and report; do not proceed."
-  exit 1
-}
+scripts/recycled-worktree-guard.sh "before any fetch/diff work"
 ```
 
 Both preconditions inside the script are load-bearing, exactly as in `code-reviewer.md`'s identical
 call: the `case` keeps `reset --hard`/`clean -fd` off the user's main checkout if isolation ever
 fails to take; the `rescue/` branch matters because the ref being rewound belongs to **another
 ticket** — tagging `HEAD` first keeps that ticket's unpushed commits recoverable rather than silently
-destroyed. The `[ -x "$GUARD" ]` check on the `||` path distinguishes a genuinely missing or
+destroyed. Exit 127 distinguishes a genuinely missing or
 non-executable script (bootstrap gap — report and stop) from the script running and legitimately
-exiting 1 (already reported by the script itself; this just propagates it). If it fires, I report it
+exiting 1 (already reported by the script itself). If it fires, I report it
 explicitly in my final verdict as live evidence of the harness bug, not a routine hiccup.
 Once this guard has run (whether or not it fired), my worktree's `HEAD` **is** an ancestor of
 `trunk` — either because it started that way or because I just reset it there — so my worktree needs
@@ -170,15 +171,23 @@ Form no opinion until I've read **both sides** — the ticket as written and the
   - **Stacked** (the lander names a live `land/<base>`) — diff against the **base**, not `trunk`, using
     the **off-trunk** merge-base with it, never a bare single-result `git merge-base`:
     ```bash
-    OFF_TRUNK_MB=""
-    for mb in $(git merge-base --all origin/land/<base> origin/land/<id>); do
-      git merge-base --is-ancestor "$mb" origin/trunk || { OFF_TRUNK_MB="$mb"; break; }
-    done
-    # STOP if empty: git resolves an empty rev to HEAD, so `git diff ""..<id>` would silently
-    # produce a WRONG diff with exit 0 rather than erroring. An empty result here means the lander
-    # named a base this branch does not actually contain — surface that, never diff through it.
-    [ -n "$OFF_TRUNK_MB" ] || { echo "NO off-trunk merge-base with land/<base> — do not diff; report this"; exit 1; }
-    git diff "$OFF_TRUNK_MB"..origin/land/<id>
+    git merge-base --all origin/land/<base> origin/land/<id>
+    ```
+
+    Then, for **each** SHA that call printed (copied verbatim), one plain call:
+
+    ```bash
+    git merge-base --is-ancestor <that SHA> origin/trunk
+    ```
+
+    Exit 0 = the SHA is on `trunk` (not the one I want); **exit 1 = off-trunk — that is the
+    merge-base I diff against**. Any other exit (128) is a broken call, not an answer. If **no** SHA
+    exits 1, STOP: the lander named a base this branch does not actually contain — report that and
+    never diff through it (an empty or guessed rev would silently produce a WRONG diff with exit 0
+    rather than erroring). Otherwise:
+
+    ```bash
+    git diff <the off-trunk merge-base SHA>..origin/land/<id>
     ```
     A pair can have more than one merge-base — e.g. after `land/<base>` takes a needs-rebase
     trunk-merge pickup (lode-cln) *after* this branch already merged it, the pair acquires a second,

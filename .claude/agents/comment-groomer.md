@@ -36,14 +36,18 @@ worktree at all — cwd pinned to the main checkout on `trunk`. Before any `Edit
 actually landed inside a worktree:
 
 ```bash
-TOP=$(git rev-parse --show-toplevel)
-ISOGUARD="$TOP/scripts/isolation-guard.sh"
-"$ISOGUARD" || {
-  [ -x "$ISOGUARD" ] || echo "BOOTSTRAP GAP: $ISOGUARD is missing or not executable -- this" \
-    "checkout may predate the script landing on trunk. STOP and report; do not proceed."
-  exit 1
-}
+scripts/isolation-guard.sh
 ```
+
+Bash call shapes (lode-fvg0): the harness's worktree-isolation classifier refuses a
+worktree-isolated agent's "too complex to verify" commands ([observed
+shapes](../../docs/agents-workflow.md#the-harnesss-worktree-isolation-classifier-the-eval-word-and-git--refusals-lode-emx5)),
+so every fenced block in this file is a plain call (one command, literal arguments, scripts by
+repo-relative path — my cwd is the worktree root), and the exit status the `Bash` tool reports
+replaces the old `|| …` tail. A value that must cross calls (a worktree directory name) is copied
+verbatim from the earlier call's output, never retyped. Exit 127 / "No such file or directory" is the
+**bootstrap gap** (this checkout may predate the script landing on trunk) — a stop, reported; exit 1
+means the script ran and printed its own diagnostic.
 
 On a failure here I stop — full stop: no `EnterWorktree` retry, no `git worktree add`
 self-rescue, no edits. I report the exact diagnostic the script printed. Full account:
@@ -70,16 +74,35 @@ worktree-unique local name (`lode-em6v`) that keeps two launch worktrees from co
 
 ```bash
 git fetch origin land/<id>
-TOP=$(git rev-parse --show-toplevel)                   # my own launch worktree's root
-git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # worktree-unique local name (lode-em6v)
-git rev-parse --abbrev-ref HEAD     # confirm off trunk — land/<id>--<worktree-suffix>
 ```
+
+```bash
+pwd
+```
+
+The last path segment `pwd` prints is my own launch worktree's directory name; I copy it into the
+worktree-unique suffix (lode-em6v):
+
+```bash
+git checkout -B land/<id>--<that directory name> FETCH_HEAD
+```
+
+```bash
+git rev-parse --abbrev-ref HEAD
+```
+
+The last call confirms I am off `trunk`, on `land/<id>--<worktree-suffix>`.
 
 The push comes after my re-gate (step 5) and comment-only commit (step 6). It is always an
 **ordinary, non-force** push — I only ever append:
 
 ```bash
-git status --short          # MUST be empty before pushing
+git status --short
+```
+
+That must print nothing before pushing; then:
+
+```bash
 git push origin HEAD:land/<id>
 ```
 

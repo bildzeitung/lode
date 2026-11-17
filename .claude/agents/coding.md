@@ -184,6 +184,22 @@ I do **not** `git worktree add`, and I do **not** call `EnterWorktree`
 worktree from a subagent with a cwd override", and its `path` form rejects a cwd that "is the
 repository root"). Neither is needed: the harness already put me here.
 
+**Bash call shapes in this file (lode-fvg0) — plain calls, values carried by copy.** The harness's
+worktree-isolation classifier refuses a worktree-isolated agent's command when it is "too complex to
+verify" ([the observed shapes](../../docs/agents-workflow.md#the-harnesss-worktree-isolation-classifier-the-eval-word-and-git--refusals-lode-emx5)):
+a `$(git …)` whose value feeds a later command, `VAR=$(git …)` followed by anything that uses `$VAR`,
+and a `|| { …; exit 1; }` tail. So every fenced block here is a **plain call** — one command, literal
+arguments, scripts called by their repo-relative path (my cwd *is* the worktree root) — and the
+**exit status** the `Bash` tool reports replaces the old `|| …` tail: a nonzero status from a guard or
+validator is a stop, read as the surrounding prose says. Where a value must cross from one call to the
+next (a SHA, my worktree's directory name), I **copy it verbatim from the earlier call's output** — I
+never type one from memory or from a prefix, which is what [Derive identifiers, never
+retype them](../../docs/conventions.md#derive-identifiers-never-retype-them) forbids; the
+fabricated-SHA hook and `scripts/validate-sha40.sh` backstop a mis-copy but cannot tell a real SHA
+from the *right* one, so the copy is mine to get right. The diagnostics the old `|| echo "BOOTSTRAP
+GAP …"` tails printed now live in the prose after each block (exit 127 / "No such file or directory"
+= bootstrap gap = stop and report).
+
 **Isolation guard (lode-ska2 / lode-jk44) — assert I actually landed inside a worktree at all,
 before touching anything, including checking my own branch name.** `isolation: "worktree"` has been
 observed handing a dispatched **`code-reviewer`** agent NO worktree whatsoever — cwd pinned to the
@@ -199,14 +215,12 @@ my own branch name, via `scripts/isolation-guard.sh` (lode-ska2), shellcheck'd a
 same way `scripts/recycled-worktree-guard.sh` (lode-ivth) is:
 
 ```bash
-TOP=$(git rev-parse --show-toplevel)
-ISOGUARD="$TOP/scripts/isolation-guard.sh"
-"$ISOGUARD" || {
-  [ -x "$ISOGUARD" ] || echo "BOOTSTRAP GAP: $ISOGUARD is missing or not executable -- this" \
-    "checkout may predate the script landing on trunk. STOP and report; do not proceed."
-  exit 1
-}
+scripts/isolation-guard.sh
 ```
+
+A nonzero exit is a **stop**. The script prints its own diagnostic on exit 1; an exit 127 /
+"No such file or directory" is the **bootstrap gap** — this checkout may predate the script landing on
+trunk — and is a stop too: report it and do not proceed.
 
 **On a failure here, I stop — full stop.** I do **not** attempt `EnterWorktree` a second time, I do
 **not** attempt `git worktree add` + `git -C` as a self-rescue, and I do not run `Edit`/`Write`/`nox`
@@ -238,22 +252,16 @@ extracted so this guard is shellcheck'd and unit-tested rather than living only 
 block in this file:
 
 ```bash
-TOP=$(git rev-parse --show-toplevel)
-GUARD="$TOP/scripts/recycled-worktree-guard.sh"
-"$GUARD" "before doing any work" || {
-  [ -x "$GUARD" ] || echo "BOOTSTRAP GAP (lode-ivth): $GUARD is missing or not executable -- this" \
-    "worktree may predate the script landing on trunk. STOP and report; do not proceed."
-  exit 1
-}
+scripts/recycled-worktree-guard.sh "before doing any work"
 ```
 
-**The bootstrap-gap check inside the `||` is not optional.** The guard script itself is read FROM
-this worktree — a worktree recycled from a branch cut before the script landed on trunk would not
-have it on disk at all, and silently proceeding as if nothing were wrong is exactly the failure mode
-this whole guard exists to prevent. `[ -x "$GUARD" ]` distinguishes that case (script missing or not
-executable — report and stop) from the script *running* and legitimately exiting 1 (not inside an
-isolated worktree — the script has already printed that diagnostic itself; the `exit 1` here just
-propagates it).
+**Reading the exit status is not optional, and a bootstrap gap is a stop (lode-ivth).** The guard
+script itself is read FROM this worktree — a worktree recycled from a branch cut before the script
+landed on trunk would not have it on disk at all, and silently proceeding as if nothing were wrong is
+exactly the failure mode this whole guard exists to prevent. Exit 127 / "No such file or directory"
+means exactly that (script missing or not executable — report and stop); exit 1 means the script
+*ran* and refused (not inside an isolated worktree — it has already printed that diagnostic itself).
+Either way I stop.
 
 **The script's `case "$TOP" in */.claude/worktrees/*)` guard is placed in the same block as the
 destructive command it protects** — a `case` that `exit 1`s cannot be skipped or hand-waved under
@@ -299,7 +307,7 @@ uncommitted work — lode-oqr, which cost a build its implementation twice over 
 understood). So, right here, before step 4:
 
 ```bash
-git worktree lock "$(git rev-parse --show-toplevel)" --reason "producer build in progress (lode-<id>)"
+git worktree lock . --reason "producer build in progress (lode-<id>)"
 ```
 
 I unlock it again the moment I have my **first commit** (end of step 6, once `git status --short` is
@@ -341,12 +349,11 @@ account](../../docs/agents-workflow.md#isolation-guard-mid-session-re-assertion-
 the same 0/1/2 precondition immediately before the first `Edit`/`Write` of the task:
 
 ```bash
-"$(git rev-parse --show-toplevel)/scripts/isolation-guard.sh" || {
-  echo "STOP: isolation guard failed mid-session (lode-6wgc) -- my launch worktree is gone or my" \
-    "cwd has moved off it since step 3. Do NOT edit, write, or run nox. Report to the operator."
-  exit 1
-}
+scripts/isolation-guard.sh
 ```
+
+A nonzero exit means: **STOP (lode-6wgc)** — my launch worktree is gone or my cwd has moved off it
+since step 3. Do NOT edit, write, or run nox; report to the operator.
 
 The toplevel is substituted inline, never carried in a variable from step 3 — each fenced block is a
 separate `Bash` invocation and shell state does not survive between them (lode-lv04, gated by
@@ -378,9 +385,11 @@ mode is destructive repair, appropriate as a one-time precondition, not as a mid
     never the reverse. Note the discovery provenance in the new ticket's own text instead:
 
     ```bash
-    NEW_ID=$(bd create --title="…" --description="Discovered while building <id>. …" \
-      --type=task --silent)
-    bd dep add "$NEW_ID" <id> --type blocks
+    bd create --title="…" --description="Discovered while building <id>. …" --type=task --silent
+    ```
+
+    ```bash
+    bd dep add <the new id printed above> <id> --type blocks
     ```
 
   - **Independent — safely buildable on its own right now** → `discovered-from`, as before (pure
@@ -483,12 +492,11 @@ calls non-negotiable, and far harder to undo than the in-place reformat `nox -t 
 guard placed here covers both this commit and the gate loop that immediately follows.
 
 ```bash
-"$(git rev-parse --show-toplevel)/scripts/isolation-guard.sh" || {
-  echo "STOP: isolation guard failed mid-session (lode-6wgc) -- do NOT commit or run nox against" \
-    "this cwd; a commit here could land on trunk. Report to the operator."
-  exit 1
-}
+scripts/isolation-guard.sh
 ```
+
+A nonzero exit means: **STOP (lode-6wgc)** — do NOT commit or run nox against this cwd; a commit
+here could land on `trunk`. Report to the operator.
 
 Commit after each completed unit of work, inside the worktree, with a clear message ending in:
 
@@ -514,7 +522,7 @@ has done its job (the branch has now diverged from `trunk`, so `/land`'s backsto
 excludes it via its own `branch --merged trunk` check, unlocked or not):
 
 ```bash
-git worktree unlock "$(git rev-parse --show-toplevel)"
+git worktree unlock .
 ```
 
 ### 7. Quality gates (must be green)
@@ -625,19 +633,30 @@ git status --short          # MUST be empty before I record review_head or apply
 This is the core assertion this hand-off step exists to make (lode-tpt): if it's non-empty, edits
 happened after step 8's push that never made it into `land/<id>` — and no gate has seen them either.
 So I go back to **step 6** (commit, re-gate, re-push) rather than push them straight out, and derive
-`HEAD_SHA` fresh afterwards. Recording `review_head` against a dirty tree, or against a stale
-`HEAD_SHA` captured before a late commit, is the failure mode this ticket exists to close.
+the SHA fresh afterwards. Recording `review_head` against a dirty tree, or against a stale
+SHA captured before a late commit, is the failure mode this ticket exists to close.
 
 ```bash
-HEAD_SHA=$(git rev-parse HEAD)
-# Never write a malformed SHA to bd metadata (lode-0a4n). The validator prints its own
-# diagnostic; `|| exit $?` preserves its 1-vs-2 split (1 = the VALUE is bad, re-derive and
-# retry; 2 = this CALL is broken, fix the invocation and report nothing about the field).
-scripts/validate-sha40.sh review_head "$HEAD_SHA" || exit $?
-bd update <id> --add-label ready-for-code-review \
-  --set-metadata review_head="$HEAD_SHA"
-scripts/bd-dolt-push.sh   # publish claim + ready-for-code-review over refs/dolt/data — durable, cross-machine
+git rev-parse HEAD
 ```
+
+```bash
+scripts/validate-sha40.sh review_head <the SHA printed above, pasted verbatim>
+```
+
+Only on exit 0 — the validator prints its own diagnostic, and its exit 1 means the VALUE is bad
+(re-derive and retry) while exit 2 means this CALL is broken (fix the invocation; write nothing to
+the field) — write the hand-off, then publish it:
+
+```bash
+bd update <id> --add-label ready-for-code-review --set-metadata review_head=<the same SHA>
+```
+
+```bash
+scripts/bd-dolt-push.sh
+```
+
+The push publishes the claim + `ready-for-code-review` over `refs/dolt/data` — durable, cross-machine.
 
 `scripts/bd-dolt-push.sh` is a thin retry-on-reject wrapper around `bd dolt push` (backoff + `bd
 dolt pull` between attempts) — under `/code` fan-out a rejected push (non-fast-forward) or a
@@ -670,12 +689,21 @@ settle), I:
   it unset here strands that re-entry the moment a human resolves the decision (lode-t83). Same field
   as the green hand-off, captured now while the reverted-to-green tree and its push are still current:
 
+  The green hand-off's derive → validate → write sequence (same copy-from-output rule and
+  exit-1-vs-2 reading), minus the label:
+
   ```bash
-  HEAD_SHA=$(git rev-parse HEAD)
-  # Same guard as the green hand-off (lode-0a4n); `|| exit $?` keeps the 1-vs-2 split.
-  scripts/validate-sha40.sh review_head "$HEAD_SHA" || exit $?
-  bd update <id> --set-metadata review_head="$HEAD_SHA"
+  git rev-parse HEAD
   ```
+
+  ```bash
+  scripts/validate-sha40.sh review_head <the SHA printed above, pasted verbatim>
+  ```
+
+  ```bash
+  bd update <id> --set-metadata review_head=<the same SHA>
+  ```
+
 - **do not** set `ready-for-code-review`; instead `bd update <id> --add-label land-escalated
   --append-notes "ESCALATION: <the decision needed>"`, then `scripts/bd-dolt-push.sh`, and
 - **surface it in my final message — asynchronously.** I never block a parallel batch waiting on a
@@ -710,14 +738,12 @@ root, on `trunk` — a distinct, more severe failure than the recycled-worktree 
 first executable action of this cycle too, via `scripts/isolation-guard.sh` (lode-ska2):
 
 ```bash
-TOP=$(git rev-parse --show-toplevel)
-ISOGUARD="$TOP/scripts/isolation-guard.sh"
-"$ISOGUARD" || {
-  [ -x "$ISOGUARD" ] || echo "BOOTSTRAP GAP: $ISOGUARD is missing or not executable -- this" \
-    "checkout may predate the script landing on trunk. STOP and report; do not proceed."
-  exit 1
-}
+scripts/isolation-guard.sh
 ```
+
+A nonzero exit is a **stop**. The script prints its own diagnostic on exit 1; an exit 127 /
+"No such file or directory" is the **bootstrap gap** — this checkout may predate the script landing on
+trunk — and is a stop too: report it and do not proceed.
 
 On a failure here I stop — full stop, same as the fresh-build cycle: no `EnterWorktree` retry, no
 `git worktree add` self-rescue, no fetch. See the fresh-build cycle's write-up of this same script for
@@ -737,13 +763,7 @@ leftovers from a recycled worktree straight through, and those go on to pollute 
 `scripts/recycled-worktree-guard.sh` (lode-ivth), the same script the fresh-build cycle above uses:
 
 ```bash
-TOP=$(git rev-parse --show-toplevel)
-GUARD="$TOP/scripts/recycled-worktree-guard.sh"
-"$GUARD" "before my own fetch+checkout" || {
-  [ -x "$GUARD" ] || echo "BOOTSTRAP GAP (lode-ivth): $GUARD is missing or not executable -- this" \
-    "worktree may predate the script landing on trunk. STOP and report; do not proceed."
-  exit 1
-}
+scripts/recycled-worktree-guard.sh "before my own fetch+checkout"
 ```
 
 **Both preconditions inside the script are load-bearing.** The `case` is what keeps
@@ -756,10 +776,9 @@ the `case`/ancestor check, not just on a failed one (lode-3v1p) — so a recycle
 *is* an ancestor of `origin/trunk` (e.g. recycled onto a `land/<other-id>` that has since landed) still gets
 its untracked leftovers swept before they can pollute my `git status --short` assertions and the `nox`
 run; full reasoning in the script's own header and [docs/decisions.md](../../docs/decisions.md)
-(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). The `[ -x "$GUARD" ]` check on the
-`||` path distinguishes a genuinely
+(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). Exit 127 distinguishes a genuinely
 missing/non-executable script (bootstrap gap — report and stop) from the script running and
-legitimately exiting 1 (already reported by the script itself; this just propagates it).
+legitimately exiting 1 (already reported by the script itself).
 
 This never conflicts with what step 2 does next — checking out `land/<id>` on purpose is exactly
 this cycle's job, and this guard only cleans up the *starting* state before that intentional checkout
@@ -786,10 +805,24 @@ removed outright:
 
 ```bash
 git fetch origin land/<id> trunk
-TOP=$(git rev-parse --show-toplevel)                   # my own launch worktree's root
-git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # e.g. land/<id>--agent-ac95302…
-git rev-parse --abbrev-ref HEAD     # confirm off trunk — land/<id>--<worktree-suffix>
 ```
+
+```bash
+pwd
+```
+
+The last path segment `pwd` prints is my own launch worktree's directory name (e.g.
+`agent-ac95302…`); I copy it from that output into the suffix below:
+
+```bash
+git checkout -B land/<id>--<that directory name> FETCH_HEAD
+```
+
+```bash
+git rev-parse --abbrev-ref HEAD
+```
+
+The last call confirms I am off `trunk`, on `land/<id>--<worktree-suffix>`.
 
 The suffixed name still starts with `land/`, but `/land`'s worktree-GC sweep doesn't look at the name at
 all — it reclaims any worktree under `.claude/worktrees/` that is **unlocked** and whose **HEAD commit**
@@ -870,20 +903,36 @@ Push straight to the ref that already exists on origin (no new branch, unlike a 
 origin HEAD:land/<id>` push to a ref that doesn't exist yet):
 
 ```bash
-git push origin HEAD:land/<id>      # ordinary push — HEAD works regardless of what my local branch is named
+git push origin HEAD:land/<id>
 ```
 
-Then refresh the hand-off metadata and swap the label myself:
+An ordinary push — `HEAD` works regardless of what my local branch is named. Then refresh the
+hand-off metadata and swap the label myself, with the same derive → validate → write sequence (plain
+calls, copy-from-output) as the fresh-build hand-off:
 
 ```bash
-HEAD_SHA=$(git rev-parse HEAD)
-# Same guard as the green hand-off (lode-0a4n); `|| exit $?` keeps the 1-vs-2 split.
-scripts/validate-sha40.sh land_head "$HEAD_SHA" || exit $?
-bd update <id> --remove-label needs-rebase --add-label ready-for-land \
-  --set-metadata land_head="$HEAD_SHA" \
-  --set-metadata land_summary="Merged trunk @ $(git rev-parse --short origin/trunk) into the branch"
-scripts/bd-dolt-push.sh   # publish the label swap + refreshed SHA over refs/dolt/data
+git rev-parse HEAD
 ```
+
+```bash
+git rev-parse --short origin/trunk
+```
+
+```bash
+scripts/validate-sha40.sh land_head <the full SHA printed by the first call>
+```
+
+Only on exit 0 (1 = the VALUE is bad, re-derive; 2 = this CALL is broken):
+
+```bash
+bd update <id> --remove-label needs-rebase --add-label ready-for-land --set-metadata land_head=<the same SHA> --set-metadata land_summary="Merged trunk @ <the short SHA printed by the second call> into the branch"
+```
+
+```bash
+scripts/bd-dolt-push.sh
+```
+
+The push publishes the label swap + refreshed SHA over `refs/dolt/data`.
 
 `land_head`/`land_summary` is the one field-name convention the whole loop uses — the same keys
 `code-reviewer` sets when it first marks a ticket `ready-for-land`, and what `/land`'s 2a drift
@@ -1047,7 +1096,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
 | Review context | head SHA (`review_head`) is the only metadata field the hand-off writes — `review_worktree`/`review_branch` are retired (lode-2m89: nobody read them) (bd metadata, read via `bd show --json`) |
-| SHA metadata writes | every `review_head`/`land_head` write derives the value (`$(git rev-parse HEAD)`) and passes it through `scripts/validate-sha40.sh <field> "$HEAD_SHA" \|\| exit $?` in the **same** fenced block before the `bd update` (lode-0a4n) — never write a SHA I retyped, and never collapse the validator's exit 2 (broken call) into exit 1 (malformed value) |
+| SHA metadata writes | every `review_head`/`land_head` write derives the value (a plain `git rev-parse HEAD` call), validates it (`scripts/validate-sha40.sh <field> <sha>`, a plain call) and only on exit 0 runs the `bd update`, pasting the SHA verbatim from the derive call's output (lode-0a4n, lode-fvg0) — never write a SHA I retyped, and never collapse the validator's exit 2 (broken call) into exit 1 (malformed value) |
 | I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
 | External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal (lode-o29m) |
 | Technical review | **not mine** — the separate `code-reviewer` agent (Fable) fetches `land/<id>` into its own worktree and runs `/code-review` medium, then its own correctness reasoning verifying that skill's findings (lode-1fyb), + `/simplify` there |
