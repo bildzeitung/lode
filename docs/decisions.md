@@ -5983,3 +5983,7 @@ entries below from being rewritten to chase the current tree.)
     per ticket; (3) a watch period: the next 5 dispatches of the trimmed agent are checked against a
     short list of incident-derived behaviours, and a miss reverts the cut.
   - **Accepted limit:** 5 dispatches do not exercise rare paths.
+
+- **Update (lode-5x01, 2026-11-16) — a filename typo in the `uv` migration entry above.** That entry's
+  bullet "`scripts/python-init.sh`, `venv-install` and `compile-lock.sh` are deleted outright" names the
+  script `venv-install`; the deleted file is `venv-install.sh`. Wording only, no change to the decision.
