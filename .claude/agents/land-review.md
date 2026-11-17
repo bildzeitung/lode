@@ -168,7 +168,15 @@ Form no opinion until I've read **both sides** — the ticket as written and the
 - **The branch:** `git fetch origin land/<id>` (and `land/<base>` too if the lander told me this is a
   stacked branch), then diff against the right base:
   - **Unstacked (the common case):**
-    `git diff $(git merge-base origin/trunk origin/land/<id>)..origin/land/<id>`
+    two plain calls — the merge-base, then the diff from the SHA it printed (copied verbatim):
+
+    ```bash
+    git merge-base origin/trunk origin/land/<id>
+    ```
+
+    ```bash
+    git diff <the merge-base SHA printed above>..origin/land/<id>
+    ```
   - **Stacked** (the lander names a live `land/<base>`) — diff against the **base**, not `trunk`, using
     the **off-trunk** merge-base with it, never a bare single-result `git merge-base`:
     ```bash
