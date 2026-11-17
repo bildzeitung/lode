@@ -5983,3 +5983,17 @@ entries below from being rewritten to chase the current tree.)
     per ticket; (3) a watch period: the next 5 dispatches of the trimmed agent are checked against a
     short list of incident-derived behaviours, and a miss reverts the cut.
   - **Accepted limit:** 5 dispatches do not exercise rare paths.
+- **`qa_call_timeout_s` stays 300s, now justified by measurement (`lode-9i6y`, 2026-11-16 and
+  2026-11-17, maintainer decision; docs rewrite `lode-188q`).** `lode-ugj5` raised `qa.MAX_TOKENS`
+  8192 -> 10752, and the `lode-wfyx` SDK-estimate formula (35.6 tok/s) put a full-cap response at
+  ~302s, so the default had no headroom on paper.
+  - **2026-11-16: measure first.** Chosen over raising the knob or extending the SDK estimate,
+    because model speeds have changed.
+  - **Result (anthropic SDK 1.4.0, 33 golden questions x 1 rep per cell):** real tiers run at
+    100-150 tok/s; a full 10752-token call projects to ~82-106s at p5 speed; max observed call
+    11.5s; 0 of 281 calls within 20% of 300s.
+  - **2026-11-17: keep 300s.** It has roughly 3x headroom; the derivation text in
+    `docs/configuration.md` now cites the measurement (Update note under the `lode-wfyx` section).
+  - **Not taken: lowering the bound.** Near-cap multi-turn tool runs were not exercised.
+  - **Accepted limit:** no call exceeded 12% of the cap, so the full-cap figure is extrapolated;
+    n=33 per cell, single rep, one time of day.
