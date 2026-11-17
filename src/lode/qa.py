@@ -105,12 +105,13 @@ OPUS_MODEL = "claude-opus-5-5"
 #:
 #: Raising this cap while also allowing adaptive thinking pushes wall-clock up
 #: on the think-harder path twice over, and a large ``max_tokens`` override
-#: can outrun ``qa_call_timeout_s``'s 300s default (kept, and backed by a live
-#: measurement rather than the SDK estimate -- lode-9i6y).
+#: can outrun ``qa_call_timeout_s``'s default.
 #: ``qa_call_timeout_s`` is the call's own timeout knob, split off the shared
 #: :attr:`~lode.config.Settings.enrich_call_timeout_s`. Full rationale for its
-#: default, derivation and the measurement update: ``docs/configuration.md``
-#: "Q&A call timeout split from llm_call_timeout_s" (lode-wfyx, lode-188q).
+#: default (the SDK-estimate derivation, and the lode-9i6y measurement the
+#: value rests on):
+#: ``docs/configuration.md`` "Q&A call timeout split from llm_call_timeout_s"
+#: (lode-wfyx, lode-188q).
 #:
 #: Exhausting ``qa_call_timeout_s`` raises a **raw**
 #: ``anthropic.APITimeoutError``, not an
