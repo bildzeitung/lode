@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Fetch `land/<id>` (and `trunk`) from origin, then check the fetched branch out under this launch worktree's unique
-# local name (lode-qh1m, lode-em6v).
+# Fetch `land/<id>` (and `trunk`) from origin, then check the fetched branch
+# out under this launch worktree's unique local name (lode-qh1m, lode-em6v).
 #
 # The local name is `land/<id>--<worktree directory name>` so two launch
 # worktrees can never collide on a bare `land/<id>`, and `/code`'s reclaim
@@ -10,14 +10,16 @@
 # agent's plain-call sequence cannot carry it from `pwd` except by hand copy
 # (lode-fvg0).
 #
-# The fetch runs here, in the same process as the checkout (lode-n7g4), so the
-# FETCH_HEAD it reads is always the one this call just wrote: a stale
-# same-ticket entry left by an earlier cycle in a recycled worktree can never
-# be checked out, because a fetch that fails exits 4 before any checkout.
-# `trunk` rides along so the agents' guards see a fresh origin/trunk. The tip
-# is taken from FETCH_HEAD's own `land/<id>` line, never from `FETCH_HEAD` as
-# a rev: that names only the FIRST ref of the fetch. Run it from the worktree
-# root.
+# The fetch runs in this process (lode-n7g4), so the FETCH_HEAD read below is
+# always the one this call wrote: a successful fetch replaces the file and a
+# failed one exits 4 before any checkout, so a stale same-ticket entry left by
+# an earlier cycle in a recycled worktree can never be checked out.
+# `trunk` rides along so origin/trunk is current for what runs AFTER the
+# checkout (the rebase pickup's `git merge origin/trunk`); the guards that run
+# before this script read origin/trunk unfetched on purpose. The tip is taken
+# from FETCH_HEAD's own `land/<id>` line, never from `FETCH_HEAD` as a rev, so
+# the pick does not depend on the order the fetch lists its refs. Run it from
+# the worktree root.
 #
 # Usage: scripts/checkout-land-branch.sh <ticket-id>
 #

@@ -238,8 +238,7 @@ guard only cleans up the *starting* state before that intentional checkout happe
 report it explicitly in my final hand-off as live evidence of the harness bug, not a routine hiccup.
 
 Instead of driving the builder's worktree via `git -C`, I bring the branch to *my own* worktree, where
-every tool works natively. The script below fetches `land/<id>` and `trunk` itself (lode-n7g4) — I run
-no separate `git fetch` before it.
+every tool works natively.
 
 **Local branch name is always unique to this launch worktree — never the bare `land/<id>`**
 (lode-em6v). The bare name collided with an already-checked-out `land/<id>` from a stale earlier run
@@ -257,11 +256,14 @@ scripts/checkout-land-branch.sh <id>
 ```
 
 The script derives the worktree-unique suffix from this launch worktree's own directory name, so
-nothing is hand-copied from `pwd` (lode-qh1m), runs `git fetch origin land/<id> trunk` itself so a stale
-`FETCH_HEAD` can never be checked out (lode-n7g4), and takes the tip from `FETCH_HEAD`'s own `land/<id>`
-line — the fetch lists two refs, and `FETCH_HEAD` as a rev names only the first. Nonzero is a
-stop: exit 1 means my cwd is not a `.claude/worktrees/` launch worktree, exit 2 a broken call, exit 3
-that `FETCH_HEAD` has no `land/<id>` entry (the fetch did not run here, or named another ticket).
+nothing is hand-copied from `pwd` (lode-qh1m). It runs `git fetch origin land/<id> trunk` itself, so
+a stale `FETCH_HEAD` can never be checked out and I run no separate `git fetch` before it
+(lode-n7g4), and it takes the tip from `FETCH_HEAD`'s own `land/<id>` line — the fetch lists two
+refs, and `FETCH_HEAD` as a rev names only the first. Nonzero is a stop: exit 1 means my cwd is not
+a `.claude/worktrees/` launch worktree, exit 2 a broken call, exit 3 that `FETCH_HEAD` has no
+`land/<id>` entry even though the fetch succeeded, exit 4 that the fetch itself failed. On exit 4
+git's own error is printed above the script's and nothing was checked out, so when that error is
+transient (e.g. a network failure) I re-run the script once before treating it as a stop.
 
 The suffixed name still starts with `land/`, but `/land`'s worktree-GC sweep doesn't look at the name at
 all — it reclaims any worktree under `.claude/worktrees/` that is **unlocked** and whose **HEAD commit**

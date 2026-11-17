@@ -78,8 +78,9 @@ scripts/checkout-land-branch.sh <id>
 ```
 
 The script derives the worktree-unique suffix (lode-em6v) from my own launch worktree's directory
-name (lode-qh1m) fetches `land/<id>` itself (lode-n7g4) and checks out the tip it fetched; a nonzero exit is a
-stop.
+name (lode-qh1m), fetches `land/<id>` and `trunk` itself (lode-n7g4 — I run no separate fetch), and
+checks out the `land/<id>` tip that fetch returned; a nonzero exit is a stop (4 = the fetch failed,
+nothing was checked out).
 
 ```bash
 git rev-parse --abbrev-ref HEAD
