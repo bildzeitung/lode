@@ -6083,9 +6083,12 @@ entries below from being rewritten to chase the current tree.)
     route reaches the same state machine through `enrich.collect_enrich_batch`'s errored arm.
     Enrich is a DERIVE job type with no dead-letter hook, so `worker.dead_letter_recovery`
     classifies it `self_healing` and `reconcile._enrich_gap_step` re-enqueues a fresh job
-    (attempts back to 0) on the next scan, so a deterministically declined note cycles
+    (attempts back to 0) on the next scan. A deterministically declined note therefore cycles
     5 attempts -> dead -> re-enqueued indefinitely while it stays a live head version. A refusal
-    is an HTTP 200 and is billed at normal rates (input plus any partial output).
+    is an HTTP 200: a decline before any output returns empty content, and a mid-generation
+    decline bills input plus the partial output at normal rates. Haiku 5.5 (the enrichment
+    default) has no server-side fallback model, so re-sending the identical prompt is expected
+    to be declined again.
   - **Decision.** (1) A refusal on an enrich job is terminal for that note version: the job goes
     `dead` on the first refusal, no retry attempts. (2) `reconcile._enrich_gap_step` must not
     re-enqueue a refusal-dead enrich job until the note's head version or `ENRICH_PROMPT_VER`
