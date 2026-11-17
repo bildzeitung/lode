@@ -139,10 +139,10 @@ def run_ask(
     is unaffected.
 
     Imports the retrieval/Q&A stack here, not at module scope:
-    ``retrieval._retrieve`` pulls in the vector stack (pyarrow) and
-    ``cited_answer`` pulls in the Anthropic SDK, neither of which the capture
-    path -- or merely importing this module to register the ask screen in
-    ``LodeApp.SCREENS`` -- may load.
+    ``lode.retrieval`` (which ``cited_answer`` imports in turn) loads
+    networkx, a cost that merely importing this module to register the ask
+    screen in ``LodeApp.SCREENS`` -- as every TUI start does -- should not
+    carry.
     """
     from lode import cited_answer
     from lode.retrieval import _retrieve, pinned_note_context

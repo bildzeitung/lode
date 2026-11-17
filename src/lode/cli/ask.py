@@ -5,16 +5,13 @@ from typing import TYPE_CHECKING, Annotated
 import typer
 
 from lode import cli
+from lode.auth import AuthError
 from lode.citations_read import resolve_citations
 from lode.cli import _abort_on_provider_error, _DbOption, _open_db, app
 from lode.config import default_db_path, lance_dir
 from lode.llm_provider import LLMProviderError
 
 if TYPE_CHECKING:
-    # Type-only; the runtime imports live inside ``ask`` so the capture-path
-    # commands (``add`` is "instant by design") never pay the cost of loading
-    # the Q&A SDK (anthropic) or the vector stack (pyarrow), which the cited
-    # Q&A loop pulls in but the rest of the CLI never touches.
     from lode.answer import Support
     from lode.cited_answer import CitedAnswer
 
@@ -53,12 +50,11 @@ def ask(
     no_egress material that matched is surfaced as "present, withheld from
     cloud synthesis" rather than silently dropped.
     """
-    # Imported here, not at module scope: cited_answer / auth pull in the Anthropic
-    # SDK, and lode.retrieval pulls in the vector stack (pyarrow via
-    # lode.vectorstore), neither of which the instant capture path (``add``)
-    # must ever load.
+    # Imported here, not at module scope: lode.retrieval (which cited_answer
+    # imports in turn) loads networkx, and lode.cli imports this module to
+    # register the command -- so at module scope every command, the instant
+    # capture path (``add``) included, would pay for it at startup.
     from lode import cited_answer
-    from lode.auth import AuthError
     from lode.retrieval import _retrieve
 
     db_path = db or default_db_path()
