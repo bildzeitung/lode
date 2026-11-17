@@ -4,6 +4,25 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-11-17 — A docs-nits batch dropped a nit as "anchor-gone" when its anchor had never reached trunk
+
+- **What happened:** the builder draining collector `lode-rrpg` dropped nit 1
+  (`docs/configuration.md:352`, a misplaced trailing "on the same deployment") as anchor-gone and
+  recorded it as already fixed. The nit's anchor was the text `lode-5x01`'s branch produced, and a
+  needs-rebase pickup had discarded that edit (the pickup entry of the same date, below), so the
+  anchor never landed. The clause the nit corrects is still in trunk's sentence. The successor
+  collector `lode-0z02` already held a carry-over nit on the same line whose replacement is that
+  anchor, with a note to reconcile the two. The `code-reviewer` caught it.
+- **Root cause:** the anchor-gone exception reads "the verbatim anchor is absent" as "the nit is
+  fixed". An anchor is also absent when the text it was written against never reached trunk.
+- **Consequence:** none landed. Unreviewed, a reviewed wording fix would have closed with the batch
+  under a false "already fixed" record, and the successor's note would have pointed at a nit that
+  no longer existed. The reviewer carried the nit over to `lode-0z02` by hand.
+- **Rule that prevents a repeat:** before dropping a nit as anchor-gone, read the current sentence
+  for the defect the nit names and check the open collector for a nit whose replacement is this
+  anchor. Drop only when the defect is gone; otherwise carry the nit over. `lode-vlyj` tracks
+  putting this into the instruction files.
+
 ## 2026-11-17 — `/land` rebuilt its accepted set from the live queue and picked up a ticket it had never vetted
 
 - **What happened:** a `/land` pass vetted and semantically reviewed three branches (`lode-gro8`,
