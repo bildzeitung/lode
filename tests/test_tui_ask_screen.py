@@ -1269,3 +1269,53 @@ def test_a_superseded_questions_failure_raises_no_toast(tmp_path: Path) -> None:
             return [str(toast.render()) for toast in screen.query(Toast)]
 
     assert asyncio.run(_drive()) == []
+
+
+def test_escaping_a_note_scoped_ask_mid_flight_logs_no_ask_failed_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = LodeApp(db_path=tmp_path / "lode.db")
+    blocked = threading.Event()
+    release = threading.Event()
+    thread_errors: list[BaseException] = []
+
+    def _stub_run_ask(db_path, question, *, on_stage=None, **kwargs):
+        blocked.set()
+        release.wait(timeout=5)
+        try:
+            on_stage("synthesizing")
+        except Exception as err:
+            thread_errors.append(err)
+            raise
+        return _canned_answer()
+
+    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _stub_run_ask)
+
+    async def _drive() -> None:
+        async with app.run_test(notifications=True) as pilot:
+            await app.push_screen(AskScreen(note_id="note-a"))
+            await pilot.pause()
+            app.screen.query_one(f"#{QUESTION_ID}", Input).value = "why?"
+            await pilot.press("enter")
+            for _ in range(100):
+                if blocked.is_set():
+                    break
+                await asyncio.sleep(0.02)
+            assert blocked.is_set()
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, AskScreen)
+            release.set()
+            for _ in range(20):
+                await pilot.pause()
+                await asyncio.sleep(0.02)
+            assert app.is_running
+            assert not list(app.screen.query(Toast))
+
+    with caplog.at_level("ERROR", logger="lode.tui.screens.ask"):
+        asyncio.run(_drive())
+
+    assert thread_errors == []
+    assert [r for r in caplog.records if r.name == "lode.tui.screens.ask"] == []

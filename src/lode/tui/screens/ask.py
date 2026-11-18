@@ -144,6 +144,10 @@ class AskScreen(Screen[None]):
         # inverted order would hand the older question the higher generation
         # and let its answer win, which is the very bug being guarded.
         self._ask_generation = 0
+        # Set when the screen is removed from the app (an instance pushed for a
+        # note-scoped ask is removed by Escape, while the installed "ask" screen
+        # is not). The worker's thread cannot be preempted and keeps running.
+        self._removed = False
         self._spinner_timer: Timer | None = None
         self._spinner_frame = 0
         self._stage = ""
@@ -188,6 +192,12 @@ class AskScreen(Screen[None]):
             self.sub_title = f"about this note ({self._note_id})"
         self.query_one(f"#{QUESTION_ID}", Input).focus()
 
+    def on_unmount(self) -> None:
+        # Bumping the generation makes every late write from a still-running
+        # worker thread drop at its own guard, against a detached screen.
+        self._removed = True
+        self._ask_generation += 1
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         question = event.value.strip()
         if not question:
@@ -224,7 +234,8 @@ class AskScreen(Screen[None]):
         app = self.app
 
         def _on_stage(stage: str) -> None:
-            self.app.call_from_thread(self._set_stage, generation, stage)
+            # ``app``, not ``self.app``: a detached screen has no app to resolve.
+            app.call_from_thread(self._set_stage, generation, stage)
 
         try:
             result = run_ask(
@@ -238,12 +249,12 @@ class AskScreen(Screen[None]):
                 result, context_chars=app.settings.ask_context_chars
             )
         except Exception as err:
+            if self._removed:
+                return
             log.exception("ask failed")
-            self.app.call_from_thread(
-                self._fail, generation, str(err) or type(err).__name__
-            )
+            app.call_from_thread(self._fail, generation, str(err) or type(err).__name__)
             return
-        self.app.call_from_thread(self._finish, generation, rendered, result)
+        app.call_from_thread(self._finish, generation, rendered, result)
 
     def _start_spinner(self) -> None:
         """Begin the animated in-flight indicator. Main thread only.
