@@ -497,7 +497,8 @@ Two rules, three message texts:
     `git fetch origin land/<id> trunk` itself (lode-n7g4) so a stale `FETCH_HEAD` is never read, and
     takes the tip from `FETCH_HEAD`'s own `land/<id>` line rather than from `FETCH_HEAD` as a rev,
     which names only the first ref of a multi-ref fetch; 1 not a launch worktree, 2 broken call, 3 no
-    `land/<id>` entry in `FETCH_HEAD` after a successful fetch, 4 the fetch failed, 5 `git checkout -B` refused).
+    `land/<id>` entry in `FETCH_HEAD` after a successful fetch, 4 the fetch failed, 5
+    `git checkout -B` refused).
     Copy-from-output remains only for values with no script, e.g. the stacked off-trunk merge-base
     SHA in `land-review.md`.
   - **The `|| { echo STOP …; exit 1; }` tails are gone, and their diagnostics moved to prose.** The

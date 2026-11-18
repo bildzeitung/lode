@@ -32,7 +32,10 @@
 # Exit 4 -> `git fetch origin land/<id> trunk` failed (e.g. no such remote
 #           branch, network); nothing was checked out.
 # Exit 5 -> the fetch succeeded but `git checkout -B` refused (e.g. local
-#           changes it would overwrite); git's error is printed above.
+#           changes it would overwrite); git's error is printed above, and
+#           HEAD and the local branch are left as they were.
+# Other  -> git's own failure status from `rev-parse --show-toplevel` (128:
+#           cwd is not in a git work tree); nothing was fetched or checked out.
 
 set -euo pipefail
 
@@ -61,11 +64,13 @@ if ! git fetch -q origin "land/$ID" trunk; then
 fi
 
 # A FETCH_HEAD line is `<sha>\t<not-for-merge flag>\tbranch '<name>' of <url>`.
+# `|| SHA=""` so awk's own status (2 on a read error) cannot surface as this
+# script's exit 2, which means a broken call.
 FETCH_HEAD_FILE="$(git rev-parse --git-path FETCH_HEAD)"
 SHA=""
 if [ -r "$FETCH_HEAD_FILE" ]; then
   SHA="$(awk -F'\t' -v want="branch 'land/$ID' of " \
-    'index($3, want) == 1 { print $1; exit }' "$FETCH_HEAD_FILE")"
+    'index($3, want) == 1 { print $1; exit }' "$FETCH_HEAD_FILE")" || SHA=""
 fi
 if [ -z "$SHA" ]; then
   echo "checkout-land-branch.sh: FETCH_HEAD has no entry for land/$ID after" \
