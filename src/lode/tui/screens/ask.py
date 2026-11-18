@@ -144,10 +144,6 @@ class AskScreen(Screen[None]):
         # inverted order would hand the older question the higher generation
         # and let its answer win, which is the very bug being guarded.
         self._ask_generation = 0
-        # Set when the screen is removed from the app (an instance pushed for a
-        # note-scoped ask is removed by Escape, while the installed "ask" screen
-        # is not). The worker's thread cannot be preempted and keeps running.
-        self._removed = False
         self._spinner_timer: Timer | None = None
         self._spinner_frame = 0
         self._stage = ""
@@ -191,12 +187,6 @@ class AskScreen(Screen[None]):
             # here the way Browse's abbreviated Id column has.
             self.sub_title = f"about this note ({self._note_id})"
         self.query_one(f"#{QUESTION_ID}", Input).focus()
-
-    def on_unmount(self) -> None:
-        # Bumping the generation makes every late write from a still-running
-        # worker thread drop at its own guard, against a detached screen.
-        self._removed = True
-        self._ask_generation += 1
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         question = event.value.strip()
@@ -249,12 +239,22 @@ class AskScreen(Screen[None]):
                 result, context_chars=app.settings.ask_context_chars
             )
         except Exception as err:
-            if self._removed:
-                return
             log.exception("ask failed")
             app.call_from_thread(self._fail, generation, str(err) or type(err).__name__)
             return
         app.call_from_thread(self._finish, generation, rendered, result)
+
+    def _is_stale(self, generation: int) -> bool:
+        """Whether a worker's write for ``generation`` must be dropped. Main thread only.
+
+        Stale once a newer question has bumped the counter, or once this
+        screen has stopped running. An instance pushed for a note-scoped ask
+        is removed by Escape (the installed ``"ask"`` screen is not), and its
+        worker's thread cannot be preempted, so it still makes every hop.
+        ``is_running`` turns False before the children are pruned, so no write
+        reaches a screen that is part-way through teardown.
+        """
+        return generation != self._ask_generation or not self.is_running
 
     def _start_spinner(self) -> None:
         """Begin the animated in-flight indicator. Main thread only.
@@ -271,7 +271,7 @@ class AskScreen(Screen[None]):
 
     def _set_stage(self, generation: int, stage: str) -> None:
         """Update the in-flight stage text for ``generation``. Main thread only."""
-        if generation != self._ask_generation:
+        if self._is_stale(generation):
             return
         self._stage = stage
         self._render_spinner()
@@ -295,7 +295,7 @@ class AskScreen(Screen[None]):
         Textual's default markup parse raises on those bracket groups when
         the toast renders -- which exits the app.
         """
-        if generation != self._ask_generation:
+        if self._is_stale(generation):
             return
         self._finish(generation, _PLACEHOLDER, None)
         self.notify(message, severity="error", markup=False)
@@ -310,7 +310,7 @@ class AskScreen(Screen[None]):
         either way :meth:`_update_citation_status` clears the status line
         rather than special-casing them here.
         """
-        if generation != self._ask_generation:
+        if self._is_stale(generation):
             return
         if self._spinner_timer is not None:
             self._spinner_timer.stop()

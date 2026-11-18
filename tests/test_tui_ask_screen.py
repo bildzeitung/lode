@@ -24,6 +24,7 @@ from pathlib import Path
 import anthropic
 import httpx2
 import pytest
+from conftest import _wait_until
 from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.widgets import Footer, Input, Static, TextArea
@@ -1271,51 +1272,96 @@ def test_a_superseded_questions_failure_raises_no_toast(tmp_path: Path) -> None:
     assert asyncio.run(_drive()) == []
 
 
+def _escape_a_note_scoped_ask_mid_flight(
+    app: LodeApp,
+    monkeypatch: pytest.MonkeyPatch,
+    rest_of_run_ask: Callable[[Callable[[str], None]], AskResult],
+) -> tuple[bool, list[str]]:
+    """Escape a note-scoped ask while ``run_ask`` is blocked, then let it run on.
+
+    ``rest_of_run_ask`` is what ``run_ask`` does once released; it is handed
+    ``on_stage``. Reports (app still running, toasts on the screen underneath).
+    """
+    blocked = threading.Event()
+    release = threading.Event()
+    # The removed screen's worker is cancelled, so ``app.workers`` no longer
+    # holds it and cannot be waited on. ``_finish`` or ``_fail`` is the last
+    # thing ``_ask`` does on either path, so its call is the completion signal.
+    last_hop = threading.Event()
+
+    def _stub_run_ask(db_path, question, *, on_stage=None, **kwargs):
+        blocked.set()
+        release.wait(timeout=5)
+        return rest_of_run_ask(on_stage)
+
+    def _signalling(original: Callable[..., None]) -> Callable[..., None]:
+        def _call(*args: object) -> None:
+            try:
+                original(*args)
+            finally:
+                last_hop.set()
+
+        return _call
+
+    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _stub_run_ask)
+    monkeypatch.setattr(AskScreen, "_finish", _signalling(AskScreen._finish))
+    monkeypatch.setattr(AskScreen, "_fail", _signalling(AskScreen._fail))
+
+    async def _drive() -> tuple[bool, list[str]]:
+        async with app.run_test(notifications=True) as pilot:
+            screen = AskScreen(note_id="note-a")
+            await app.push_screen(screen)
+            await pilot.pause()
+            screen.query_one(f"#{QUESTION_ID}", Input).value = "why?"
+            await pilot.press("enter")
+            await _wait_until(blocked.is_set, "run_ask is blocked")
+            await pilot.press("escape")
+            await _wait_until(
+                lambda: not screen.is_attached, "the escaped ask screen was removed"
+            )
+            release.set()
+            await _wait_until(last_hop.is_set, "the worker made its last hop")
+            await pilot.pause()
+            toasts = [str(toast.render()) for toast in app.screen.query(Toast)]
+            return app.is_running, toasts
+
+    return asyncio.run(_drive())
+
+
 def test_escaping_a_note_scoped_ask_mid_flight_logs_no_ask_failed_record(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     app = LodeApp(db_path=tmp_path / "lode.db")
-    blocked = threading.Event()
-    release = threading.Event()
-    thread_errors: list[BaseException] = []
 
-    def _stub_run_ask(db_path, question, *, on_stage=None, **kwargs):
-        blocked.set()
-        release.wait(timeout=5)
-        try:
-            on_stage("synthesizing")
-        except Exception as err:
-            thread_errors.append(err)
-            raise
+    def _stage_then_answer(on_stage: Callable[[str], None]) -> AskResult:
+        on_stage("synthesizing")
         return _canned_answer()
 
-    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _stub_run_ask)
+    with caplog.at_level("ERROR", logger="lode.tui.screens.ask"):
+        running, toasts = _escape_a_note_scoped_ask_mid_flight(
+            app, monkeypatch, _stage_then_answer
+        )
 
-    async def _drive() -> None:
-        async with app.run_test(notifications=True) as pilot:
-            await app.push_screen(AskScreen(note_id="note-a"))
-            await pilot.pause()
-            app.screen.query_one(f"#{QUESTION_ID}", Input).value = "why?"
-            await pilot.press("enter")
-            for _ in range(100):
-                if blocked.is_set():
-                    break
-                await asyncio.sleep(0.02)
-            assert blocked.is_set()
-            await pilot.press("escape")
-            await pilot.pause()
-            assert not isinstance(app.screen, AskScreen)
-            release.set()
-            for _ in range(20):
-                await pilot.pause()
-                await asyncio.sleep(0.02)
-            assert app.is_running
-            assert not list(app.screen.query(Toast))
+    assert [r for r in caplog.records if r.name == "lode.tui.screens.ask"] == []
+    assert running
+    assert toasts == []
+
+
+def test_a_real_failure_after_escaping_a_note_scoped_ask_is_logged_not_toasted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = LodeApp(db_path=tmp_path / "lode.db")
+    error = TimeoutError("the provider call timed out")
 
     with caplog.at_level("ERROR", logger="lode.tui.screens.ask"):
-        asyncio.run(_drive())
+        running, toasts = _escape_a_note_scoped_ask_mid_flight(
+            app, monkeypatch, _raising(error)
+        )
 
-    assert thread_errors == []
-    assert [r for r in caplog.records if r.name == "lode.tui.screens.ask"] == []
+    assert [r.exc_info[1] for r in caplog.records if r.exc_info] == [error]
+    assert running
+    assert toasts == []

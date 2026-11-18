@@ -499,3 +499,10 @@ traceback for a raw SDK error.
 The toast is guarded by the same submission generation as the pane reset, so a superseded
 question that fails slowly cannot toast over a newer question's spinner. The log carries the
 exception's traceback, which includes the SDK cause the toast text omits.
+
+The same guard drops every write once the screen has stopped running (`lode-non1`). Escape removes
+a note-scoped ask screen, but its worker thread cannot be preempted and runs the pipeline to the
+end, so its stage updates and its answer arrive for a screen that is gone and are dropped. A
+pipeline failure that arrives after the escape is still logged with its traceback; it raises no
+toast. The installed corpus-wide screen is not removed by Escape, so an answer that arrives while
+it is popped is kept and shown when the screen is reopened.
