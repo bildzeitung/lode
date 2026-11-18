@@ -489,15 +489,20 @@ Two rules, three message texts:
     [lode-0a4n](#validate-land_headreview_head-shape-before-trusting-them-as-drift-signals-lode-xdg3) added.
     A script that derives, validates and writes inside one process *is* a plain call, so the agent
     files now use three: `scripts/handoff-sha.sh <id> <review_head|land_head> [bd-update-args…]`
-    (derive `HEAD`, validate, `bd update`; exit 0 done, 1 malformed value, 2 broken call, 3 `bd
-    update` failed), `scripts/check-review-head.sh <id>` (the code-reviewer's read + validate +
-    ancestor check; 0 forward-only, 1 malformed/missing, 2 broken call, 3 unreachable = drift, 4
+    (derive `HEAD`, validate, check origin's tip, `bd update`; exit 0 done, 1 malformed value, 2
+    broken call, 3 `bd update` failed, 4 origin's `land/<id>` is absent or not at `HEAD`, 5
+    `ls-remote` itself failed), `scripts/check-review-head.sh <id>` (the code-reviewer's read +
+    validate + ancestor check; 0 forward-only, 1 malformed/missing, 2 broken call, 3 unreachable = drift, 4
     `bd show` unreadable) and `scripts/checkout-land-branch.sh <id>` (the worktree-suffixed
     `checkout -B`: suffix taken from the worktree's own directory; the script runs
     `git fetch origin land/<id> trunk` itself (lode-n7g4) so a stale `FETCH_HEAD` is never read, and
     takes the tip from `FETCH_HEAD`'s own `land/<id>` line rather than from `FETCH_HEAD` as a rev,
     which names only the first ref of a multi-ref fetch; 1 not a launch worktree, 2 broken call, 3 no
     `land/<id>` entry in `FETCH_HEAD` after a successful fetch, 4 the fetch failed).
+    `handoff-sha.sh`'s origin check (lode-tx33) makes order load-bearing: the push to `land/<id>`
+    precedes the call at every call site, because a recorded SHA origin does not carry reads as
+    drift to `/land`'s 2a precheck. It costs one `git ls-remote` per hand-off, accepted; a dirty
+    tree is not refused there — the call sites assert `git status --short` themselves.
     Copy-from-output remains only for values with no script, e.g. the stacked off-trunk merge-base
     SHA in `land-review.md`.
   - **The `|| { echo STOP …; exit 1; }` tails are gone, and their diagnostics moved to prose.** The
