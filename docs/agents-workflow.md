@@ -3250,13 +3250,13 @@ What is observed, and what is not:
 - **Not established:** the Claude Code version at which the harness began locking. The builds
   lode-oqr lost (2026-07-10) were recorded as unlocked; a harness lock is first on record a few days
   later, on a reviewer's worktree (lode-amif).
-- **Measured once (lode-lo0q, 2026-11-17, Claude Code 2.1.326):** how often the harness leaves a
-  *builder's* lock behind when the agent exits. In one `/code` fan-out, ten builders finished and
-  none was seen keeping the lock after completion. A reviewer saw all five then-finished builder
-  worktrees unlocked mid-session, and `/land` reclaimed eight builder worktrees while the
-  orchestrating session was still alive, which a locked worktree would have blocked. It is one
-  session on one harness version, not a rate over many fan-outs. For reviewers the figure was one of
-  two ([lode-7ndi, below](#the-step-0-pickup-merges-it-never-rebases-lode-cln)).
+- **Measured once (lode-lo0q, 2026-11-17, Claude Code 2.1.326):** whether the harness leaves a
+  *builder's* lock behind when the agent exits. For reviewers it was one of two
+  ([lode-7ndi, below](#the-step-0-pickup-merges-it-never-rebases-lode-cln)). For builders, in one
+  `/code` fan-out, ten finished and none was seen keeping the lock after completion. A reviewer saw
+  all five then-finished builder worktrees unlocked mid-session, and `/land` reclaimed eight builder
+  worktrees while the orchestrating session was still alive, which a locked worktree would have
+  blocked. It is one session on one harness version, not a rate over many fan-outs.
 
 What each consumer of the lock sees:
 

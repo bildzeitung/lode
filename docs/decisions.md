@@ -6166,8 +6166,8 @@ entries below from being rewritten to chase the current tree.)
 
 - **A finished builder's leftover harness lock is accepted until the session ends; no release
   mechanism is built (`lode-lo0q`, 2026-11-18, maintainer ruling).** After `lode-t76f` the builder
-  no longer unlocks, so a finished builder's worktree stays `keep-locked` to `/land`'s sweep if the
-  harness does not release the lock at agent exit, until the orchestrating session's process ends.
+  no longer unlocks. If the harness does not release the lock at agent exit, a finished builder's
+  worktree stays `keep-locked` to `/land`'s sweep until the orchestrating session's process ends.
   The live account is
   [agents-workflow.md](agents-workflow.md#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f).
   - **Measurement.** `/code` fan-out of 2026-11-17 on Claude Code 2.1.326: ten finished builders,
