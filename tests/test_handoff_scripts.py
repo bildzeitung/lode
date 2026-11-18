@@ -272,9 +272,7 @@ def test_checkout_exits_3_when_a_successful_fetch_records_no_land_entry(
     assert _out(wt, "rev-parse", "HEAD") == main_tip
 
 
-def test_checkout_exits_5_when_git_checkout_refuses(
-    repo: Path, tmp_path: Path
-) -> None:
+def test_checkout_exits_5_when_git_checkout_refuses(repo: Path, tmp_path: Path) -> None:
     """An untracked file the land tip would overwrite makes `git checkout -B`
     fail with git's own status 1, which must not read as `not a launch worktree`."""
     _git(repo, "checkout", "-q", "-b", "land/lode-x")
