@@ -1306,9 +1306,7 @@ def load_noxfile() -> ModuleType:
     A second execution re-registers every session and nox warns it will become an
     error, so every test that needs the module shares this one cached load.
     """
-    return load_module_from_path(
-        "noxfile", Path(__file__).resolve().parent.parent / "noxfile.py"
-    )
+    return load_module_from_path("noxfile", _CHECKOUT_ROOT / "noxfile.py")
 
 
 def project_venv_bin() -> Path:
@@ -1610,7 +1608,7 @@ def fake_tool_turn_client(
 # @nox.session functions exist?" and neither can answer it by importing
 # noxfile.py a second time -- load_module_from_path asserts the name is not
 # already resident, and executing the module twice re-registers every session
-# in nox's global registry (see test_noxfile_venv_tool.py's _load_noxfile).
+# in nox's global registry (see load_noxfile above).
 # Parsing is the way in, so the parser lives here once rather than as a copy
 # per caller -- the same drift lode-7ed9 removed from the loader above.
 #

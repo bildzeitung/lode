@@ -16,8 +16,8 @@ deliberate exception: it is invoked by session name, ``nox -s tests`` or
 Parsed rather than imported, via the shared ``nox_session_nodes``/
 ``nox_session_tags`` helpers in ``tests/conftest.py`` -- see that module's own
 comment for why importing ``noxfile.py`` a second time is unavailable here
-(nox's global session registry, ``test_noxfile_venv_tool.py``'s
-``_load_noxfile``).
+(nox's global session registry, ``tests/conftest.py``'s
+``load_noxfile``).
 
 **Scope (deliberately not exhaustive over every ``@nox.session``).** Four
 opt-in, CI-only/packaging sessions -- ``eval``, ``coverage``, ``build``,

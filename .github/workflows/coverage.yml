@@ -81,9 +81,12 @@ jobs:
           fetch-depth: 0 # full history + tags — setuptools-scm needs git describe to resolve the version
 
       - name: Install uv
-        # Same action and pin as tests.yml; no setup-python (uv installs the
-        # .python-version interpreter itself during the sync below).
+        # Same action, pin and `enable-cache: false` as tests.yml (see its comment);
+        # no setup-python (uv installs the .python-version interpreter itself during
+        # the sync below).
         uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: false
 
       - name: Install dependencies (from uv.lock)
         # Must build the project venv (./.venv), NOT the runner's ambient
@@ -93,7 +96,7 @@ jobs:
         # `--locked` installs the committed uv.lock, exactly as tests.yml does, so the
         # coverage number describes the same dependency set the tests badge backs
         # (lode-7byn; docs/stack.md#dependency-locking-lode-g2741). `--extra dev` is
-        # transitional until lode-s09w.3. The old GITHUB_PATH line is dropped: every
+        # transitional until lode-s09w.3. No GITHUB_PATH entry for ./.venv/bin: every
         # later step runs through `uv run`.
         run: uv sync --locked --extra dev
 

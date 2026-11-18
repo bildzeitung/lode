@@ -36,6 +36,7 @@ on:
       - "src/lode/fence_parsing.py"
       - ".github/workflows/docs.yml"
       - "pyproject.toml"
+      - "uv.lock"
       - ".python-version"
   pull_request:
     paths: *docs-paths
@@ -73,19 +74,20 @@ jobs:
         # the repo's heaviest CI leg would be paid for a version nobody reads.
 
       - name: Install uv
-        # Same action and pin as tests.yml; no setup-python (uv installs the
-        # .python-version interpreter itself during the sync below).
+        # Same action, pin and `enable-cache: false` as tests.yml (see its comment);
+        # no setup-python (uv installs the .python-version interpreter itself during
+        # the sync below).
         uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: false
 
       - name: Install site-build toolchain (from uv.lock)
         # The toolchain is the committed uv.lock's, via the project's own `dev` extra --
-        # so mkdocs-material and typer are pinned by the lock, not by hand-copied
-        # versions in this file (decided 2026-11-18, lode-s09w.2). The earlier
-        # `pip install --no-deps -e .` + hand-pinned mkdocs-material / typer split
-        # (lode-fhql.23, lode-xx46) is gone, and with it
-        # tests/test_build_docs_site.py's docs.yml pin-sync checks for those two packages
-        # (the test now asserts uv.lock carries pyproject's mkdocs-material pin).
-        # Cost accepted: this leg now installs lode's full runtime tree too, on the
+        # so mkdocs-material and typer are pinned by the lock, never by hand-copied
+        # versions in this file (decided 2026-11-18, lode-s09w.2;
+        # tests/test_build_docs_site.py asserts uv.lock carries pyproject's
+        # mkdocs-material pin and that this file carries none).
+        # Cost accepted: this leg installs lode's full runtime tree too, on the
         # repo's heaviest CI leg, in exchange for one source of truth.
         # `--extra dev` is transitional until lode-s09w.3. `lode.docs_slug`
         # (mkdocs.yml's slugify hook) is importable because uv sync installs lode

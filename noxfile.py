@@ -83,7 +83,8 @@ still runs as a second layer once opted in, so ``nox -s eval`` keeps
 skipping cleanly without a key.
 
 Sessions run inside the already-built project venv (``./venv`` from
-``scripts/python-init.sh``) rather than nox-managed isolated venvs: the
+``scripts/python-init.sh``, or ``./.venv`` from ``uv sync --locked --extra dev``
+-- see ``_venv_tool``) rather than nox-managed isolated venvs: the
 runtime stack is heavy (lancedb, fastembed, textual, ...) and is installed
 once via ``-e .[dev]``, so re-provisioning it per session would be slow with
 no benefit. Activate the venv first, then run nox.
@@ -231,9 +232,10 @@ def _venv_tool(session: nox.Session, name: str) -> str:
     """
     bin_dir = _venv_bin()
     if bin_dir is None:
+        accepted = " or ".join(str(_PROJECT_ROOT / d) for d in _ACCEPTED_VENV_DIRS)
         session.error(
             f"nox is running from {sys.prefix}, which is not the project venv -- "
-            f"expected {_PROJECT_ROOT / 'venv'} or {_PROJECT_ROOT / '.venv'} "
+            f"expected {accepted} "
             "(run `uv sync --locked --extra dev` then `uv run --frozen --extra dev "
             "nox ...`, or ./scripts/python-init.sh then ./venv/bin/nox ...)"
         )

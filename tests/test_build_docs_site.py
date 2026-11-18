@@ -286,7 +286,7 @@ def test_validate_mermaid_and_update_images_pin_match_build_docs_site() -> None:
 
 def test_mkdocs_material_pin_is_carried_by_uv_lock_not_docs_yml() -> None:
     """CI and a local `nox -s docs`/`mkdocs build` must render with the SAME
-    mkdocs-material (lode-fhql.9 HUMAN DECISION 2026-08-14). docs.yml now builds
+    mkdocs-material (lode-fhql.9 HUMAN DECISION 2026-08-14). docs.yml builds
     from `uv sync --locked`, so the one source of truth is pyproject.toml's `dev`
     extra pin and uv.lock must carry exactly that version; docs.yml must not
     hand-copy a pin of its own (lode-s09w.2).

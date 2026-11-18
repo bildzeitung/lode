@@ -150,6 +150,20 @@ Two files, two jobs — **never pin the same thing in both**:
   nor to `lock_currency`, which resolves `uv` itself (a separate, system-wide tool never installed
   into `./venv`, already checked explicitly and failed closed if absent, `lode-sys4`).
 
+  **Since `lode-s09w.2` the accepted env is `./venv` or `./.venv`, and the launcher decides
+  which.** `_venv_tool` no longer derives one fixed `./venv/bin` path. It resolves tools beside the
+  interpreter running nox, and only when that interpreter's `sys.prefix` is the checkout's own
+  `./venv` or `./.venv`. A nox started from any other env — pipx, the system interpreter, another
+  checkout's venv — fails the session and names both accepted paths; before, it would have run
+  `./venv`'s tools. This lets `./venv/bin/nox …` (the instruction files, until `lode-s09w.3`) and
+  `uv run --frozen --extra dev nox …` (CI) gate through the same noxfile. CI is the first consumer:
+  `tests.yml`, `coverage.yml` and `docs.yml` build `./.venv` from the committed `uv.lock` with
+  `uv sync --locked --extra dev` and run every later step through `uv run --frozen --extra dev`, so
+  on those legs the `dev` extra's tools come from `uv.lock` too. Where the rest of this section says
+  a CI leg calls `scripts/python-init.sh`, installs from `requirements.lock`, or resolves the `dev`
+  extra fresh, that now describes the developer install only; `lode-s09w.3` and `lode-s09w.4`
+  rewrite those passages, and `lode-s09w.4` narrows the accepted set to `./.venv`.
+
 `./scripts/python-init.sh` installs from the lock by default, with `--require-hashes` so a hash
 mismatch **fails** the install rather than warning. `-e .` (the local package, editable) and
 `--require-hashes` are mutually exclusive in one pip/uv invocation, so the dependency install splits

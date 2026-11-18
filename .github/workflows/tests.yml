@@ -10,10 +10,12 @@ name: tests
 # lode-qxdn.5's badge URL will hard-code workflows/tests.yml/badge.svg.
 #
 # Also hosts the `lock-currency` job (lode-g274.6): the `tests` job below
-# installs from the committed, hash-verified `requirements.lock` rather than
-# resolving fresh, so this workflow tests the same bytes a developer runs;
-# `lock-currency` separately verifies that lock is still what `pyproject.toml`
-# would produce today. See each job's own comments for the mechanism.
+# installs from the committed `uv.lock` rather than resolving fresh, so this
+# workflow tests a dependency set reproducible from committed bytes;
+# `lock-currency` separately verifies that both committed locks (`uv.lock` and
+# `requirements.lock`, which a developer's `./venv` is still built from) are
+# what `pyproject.toml` would produce today. See each job's own comments for
+# the mechanism.
 #
 # push trigger convention (lode-bmvy, mirrored from build.yml) -- narrowed to
 # trunk + land/** so this workflow (heavier than build.yml: a full dependency
@@ -143,17 +145,22 @@ jobs:
         # astral-sh/setup-uv (not `pip install uv`), pinned to an exact release --
         # the action has no floating major tag. It needs no setup-python step: uv
         # installs the interpreter named by .python-version itself on the sync below.
-        # No `enable-cache`: reopen it only on numbers (lode-3vrq).
+        # `enable-cache: false` is load-bearing: the input defaults to `auto`, which
+        # is ON for GitHub-hosted runners (the first run without it saved a 222 MB
+        # entry). Caching
+        # stays off until a cold-vs-cached comparison says otherwise (lode-3vrq;
+        # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h).
         uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: false
 
       - name: Install dependencies (from uv.lock)
         # `--locked` fails if uv.lock is stale against pyproject.toml (never re-locks),
-        # so CI installs exactly the committed, hash-verified set a developer gets
-        # from `uv sync --locked --extra dev` (lode-s09w). `--extra dev` is
-        # transitional: dev is still an optional extra until lode-s09w.3 turns it into
-        # a dependency group. Every later step runs through `uv run`, so the old
-        # `$(pwd)/venv/bin >> $GITHUB_PATH` line is dropped, not replaced -- nothing
-        # relies on ambient PATH any more.
+        # so CI installs exactly the committed set `uv sync --locked --extra dev`
+        # gives anyone (lode-s09w). `--extra dev` is transitional: dev is still an
+        # optional extra until lode-s09w.3 turns it into a dependency group. No
+        # GITHUB_PATH entry for ./.venv/bin: every later step runs through `uv run`,
+        # so nothing relies on ambient PATH.
         run: uv sync --locked --extra dev
 
       - name: Resolve model cache key
