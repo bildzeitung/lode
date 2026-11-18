@@ -6162,19 +6162,15 @@ entries below from being rewritten to chase the current tree.)
     dead -> re-enqueue loop was confirmed by reading `reconcile._enrich_gap_step`, not
     reproduced end to end. Implementation: `lode-g9q3`.
 - **Agents make no LLM-provider call without maintainer approval, and approved spend runs against
-  a scratch `LODE_HOME` (`lode-3xzy`, 2026-11-18, maintainer). How an agent asks for approval
-  mid-run is OPEN: a builder's proposal, not a maintainer ruling; confirmation is `lode-v3xd`.**
-  The rule is `CLAUDE.md` General Directive 10; the reasons, the approval flow and the mechanical
-  backstop weighed are in
+  a scratch `LODE_HOME` (`lode-3xzy`, 2026-11-18, maintainer).** The rule is `CLAUDE.md` General
+  Directive 10; the reasons, the approval flow and the backstop weighed are in
   [agents-workflow.md](agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy).
-  - **Ruled.** Spend needs approval; approved spend runs against scratch; the `lode-g2ko` incident
-    gets no `MISTAKES.md` entry.
-  - **Proposed, unconfirmed.** Without approval the agent does not make the call: it uses a free
-    probe where one answers the question, and otherwise escalates and stops. Ask-and-continue was
-    not taken, because a headless sub-agent has no channel to the maintainer.
-  - **Corrected against the ticket's list, in technical review.** The ticket named tests marked
-    `network` as provider spend. They are not: the marker lifts a test guard, the marked tests
-    send nothing to a provider, and the offline gates run them. The directive lists the live eval
-    (`LODE_RUN_LIVE_EVAL=1`) in their place.
-  - **Backstop.** No new mechanism built; unsetting credentials and a fail-closed provider were
-    both rejected.
+  - **Also ruled.** The `lode-g2ko` incident gets no `MISTAKES.md` entry.
+  - **Open (`lode-v3xd`).** What an agent does mid-run without approval (a free probe where one
+    answers the question, otherwise escalate and stop) is a builder's proposal refined in
+    technical review, not a maintainer ruling. Ask-and-continue was not taken: a headless
+    sub-agent has no channel to the maintainer.
+  - **Departs from the ticket.** The ticket named tests marked `network` as provider spend. They
+    send nothing to a provider and the offline gates run them; the directive lists the live eval
+    (`LODE_RUN_LIVE_EVAL=1`) instead.
+  - **Rejected.** Unsetting credentials and a fail-closed provider; no new mechanism built.

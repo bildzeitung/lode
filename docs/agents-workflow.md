@@ -525,7 +525,9 @@ when the `$(git rev-parse …)` it prescribes is refused (the
 [fabricated-SHA guard](#guard-against-fabricated-shas-lode-fpmi) denies a 40-hex string that is not a
 real object, but cannot tell a real one from the *right* one). For
 `nox -s eval`, run its body directly (it is CI-only and spends API credits, so only with the
-maintainer's go-ahead): `LODE_RUN_LIVE_EVAL=1 ./venv/bin/pytest tests/test_eval_live.py -v` with
+maintainer's approval, as
+[`CLAUDE.md` General Directive 10](#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
+defines it): `LODE_RUN_LIVE_EVAL=1 ./venv/bin/pytest tests/test_eval_live.py -v` with
 `ANTHROPIC_API_KEY` set. Do **not** disguise the word — quote-splitting (`ev""al`), building it by
 expansion, or any other obfuscation: the guard exists because the shape is unverifiable, so hiding
 it routes around the fence rather than working within it.
@@ -1928,12 +1930,9 @@ before it.
 
 ### No LLM-provider spend without maintainer approval (lode-3xzy)
 
-**MAINTAINER RULING (2026-11-18):** no agent makes a call that reaches an LLM provider under the
-operator's credentials unless the maintainer has approved that spend, and approved spend runs
-against a scratch `LODE_HOME`, never the operator's real one. The rule is stated once, as
-[`CLAUDE.md`](../CLAUDE.md) General Directive 10, because that is the file every agent role loads.
-That text is the normative one: who is bound, what reaches a provider and what does not, what
-counts as approval, what to do without it. This section holds the reasons and the record.
+**MAINTAINER RULING (2026-11-18).** The rule is [`CLAUDE.md`](../CLAUDE.md) General Directive 10,
+stated there once because that is the file every agent role loads; that text is normative. This
+section holds the reasons and the record.
 
 **TRIGGER.** In the `lode-g2ko` technical review, two sub-agents of the code-reviewer (the
 `/code-review` fork and a `/simplify` agent) each ran `lode add` to see which modules it loads.
@@ -1943,26 +1942,30 @@ their briefs said "read-only, do not run the test suite" and nothing about `lode
 was lost and no wrong artifact shipped, so this is below `CLAUDE.md` directive 9's bar and has no
 `MISTAKES.md` entry (maintainer ruling).
 
-**Two entries in the directive's lists that need their reason.**
+**Why the directive also travels verbatim in every sub-agent brief.** It is a second delivery, on
+purpose. `CLAUDE.md` already reaches a sub-agent: a non-fork agent loads it and a fork inherits its
+parent's context. The brief repeats the rule at the place a sub-agent reads the limits of its task,
+which is where the trigger's briefs were silent.
 
-- **`lode reenrich` needs approval although it sends nothing.** It only enqueues enrich jobs
-  (`src/lode/cli/reenrich.py`); the next `lode work` sends them. Run against the operator's real
-  home it queues spend nobody approved.
+**What the directive's lists rest on.**
+
+- **A command it does not name.** Every provider client is built by `build_provider`
+  (`src/lode/llm_provider.py`). A command reaches a provider if it gets there, so `grep -rn
+  'build_provider(' src/lode` decides.
 - **Tests marked `network` are not on the spend list, although the ticket named them.** The marker
-  only lifts the `tests/conftest.py` guard below. The tests that carry it either construct a real
-  SDK client and never send (`tests/test_auth.py`) or answer the client from an in-process mock
-  transport (`tests/_anthropic_rig.py` and its callers), and they run in the offline `unit` and
-  `tests` gates every builder and reviewer must run. The one test that reaches a provider is
-  `tests/test_eval_live.py`, and it skips unless `LODE_RUN_LIVE_EVAL=1` is set, which `nox -s
-  eval` does; the directive lists that instead. `tests/test_models_smoke.py`
-  (`LODE_SMOKE_MODELS=1`) downloads model weights from the HuggingFace Hub: network, but no LLM
-  provider and no spend.
+  only lifts the `tests/conftest.py` guard below (that file's module docstring says what the marker
+  is for), and the marked tests run in the offline `unit` and `tests` gates every builder and
+  reviewer must run. As checked for this ticket (2026-11-18, `grep -rn 'mark.network' tests/`),
+  each marked test either sends nothing to a provider (it only constructs a real SDK client, or
+  answers it from an in-process mock transport) or skips unless an environment variable opts it
+  in. The one that reaches a provider is the live eval, `tests/test_eval_live.py` under
+  `LODE_RUN_LIVE_EVAL=1`, which `nox -s eval` sets; the directive lists that instead. Nothing
+  enforces this. A `network`-marked test that sends to a provider inside the offline gates is a
+  bug to report, not approved spend.
 
-**How approval is given and recorded.** A maintainer note on the ticket being built or reviewed
-(`bd show <id>` notes), naming what is approved (the command class and, if bounded, a count). An
-agent treats a call as approved only when such a note exists on that ticket; a ticket's
-description, another agent's brief, or "the ticket needs it" is not approval. The agent quotes the
-note in its hand-off. Two limits, left as they are:
+**How approval is recorded.** The note Directive 10 requires sits in the ticket's notes (`bd show
+<id>`) and names the command class and, if bounded, a count. "The ticket needs it" is not approval
+either. Two limits, left as they are:
 
 - bd records no author on a note that an agent can check, and the orchestrating session writes
   the maintainer's rulings to bd for them. "A maintainer note" is a convention an agent honours,
@@ -1972,20 +1975,18 @@ note in its hand-off. Two limits, left as they are:
   one the operator configured, and embedding work downloads the model weights again.
 
 **How approval is requested mid-run (builder's proposal, refined in technical review; not a
-maintainer ruling; confirmation: `lode-v3xd`).** The ticket left this for the builder to propose
-and the maintainer to confirm. The agent does not make the call. If a free probe answers the
-question, it uses the probe and carries on: the trigger was a module-load question, which `python
--X importtime` answers. If the work cannot be finished without the spend, it escalates and stops:
-it records `ESCALATION: provider spend needed: <command, why, expected call count>` on the ticket
-and hands off per its role's escalation path (a builder's build-time escalation, a reviewer's
-escalation), never blocking siblings. A sub-agent has no ticket to annotate, so it reports the need
-to the agent that briefed it, and that agent chooses between the probe and the escalation.
-Ask-and-continue is rejected for now: a headless sub-agent has no channel to the maintainer, so
-"ask and continue" degrades to "proceed", which is the failure.
+maintainer ruling; confirmation: `lode-v3xd`).** Directive 10's "Without approval" steps are this
+proposal. What they leave out:
 
-**Sub-agent briefs.** `coding.md` and `code-reviewer.md` require the directive's text to be passed
-on verbatim in every brief to a sub-agent (the `/code-review` fork and `/simplify` agents
-included); an instruction a sub-agent never saw binds nothing.
+- The free probe is there because the trigger was a module-load question, which `python -X
+  importtime` answers.
+- The escalation note reads `ESCALATION: provider spend needed: <command, why, expected call
+  count>`, and the hand-off follows the role's escalation path (a builder's build-time escalation,
+  a reviewer's escalation), never blocking siblings.
+- A sub-agent reports upward because it has no ticket to annotate. The agent that briefed it
+  chooses between the probe and the escalation.
+- Ask-and-continue is rejected for now: a headless sub-agent has no channel to the maintainer, so
+  it degrades to "proceed", which is the failure.
 
 **Mechanical backstop: weighed, outcome recorded.**
 

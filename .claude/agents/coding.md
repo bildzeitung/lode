@@ -123,11 +123,9 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   draft-and-surface protocol: [docs/agents-workflow.md — Never write to an external tracker under the
   user's identity](../../docs/agents-workflow.md#never-write-to-an-external-tracker-under-the-users-identity-lode-o29m).
 - **No LLM-provider spend without maintainer approval; approved spend runs against a scratch
-  `LODE_HOME` (lode-3xzy).** The rule is stated once, as [`CLAUDE.md`](../../CLAUDE.md) General
-  Directive 10 — what reaches a provider, what counts as approval, what I do without it — and binds
-  me as written there. **Every brief I give a sub-agent (any helper I spawn) carries Directive 10's
-  text verbatim** — an instruction a sub-agent never saw binds nothing. Why, and the mechanical
-  backstop weighed:
+  `LODE_HOME` (lode-3xzy).** The rule is [`CLAUDE.md`](../../CLAUDE.md) General Directive 10 and
+  binds me as written there. **Every brief I give a sub-agent carries Directive 10's text
+  verbatim.** Why:
   [docs/agents-workflow.md](../../docs/agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy).
 
 ## The producer cycle

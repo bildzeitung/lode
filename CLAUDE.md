@@ -172,16 +172,14 @@ Full walkthrough — prerequisites (**jq** is required, not optional), the venv,
    that builds a provider client and sends a request. `lode reenrich` sends nothing itself but
    queues enrich calls for the next `lode work`, so it needs approval too. **Does not:** a
    `sys.modules` probe or `python -X importtime` in a fresh interpreter, the offline nox gates
-   (their `network`-marked tests included: those build a real SDK client but send nothing to a
-   provider), and `lode` commands that never build a client. **Approval** is a maintainer note on
-   the ticket being built or reviewed naming what is approved; a ticket description or another
-   agent's brief is not approval. **Without approval, do not make the call.** If a free probe
-   answers the question, use it. If the work cannot be finished without the spend, escalate and
-   stop by your role's escalation path, the note opening `ESCALATION: provider spend needed:`; a
-   sub-agent reports the need to the agent that briefed it instead. **Every brief a builder or
-   reviewer gives a sub-agent (the `/code-review` fork and `/simplify` agents included) carries
-   this directive's text verbatim.** Rationale, the approval flow and the mechanical backstop
-   weighed:
+   (their `network`-marked tests included), and `lode` commands that never build a client.
+   **Approval** is a maintainer note on the ticket being built or reviewed naming what is
+   approved; quote it in your hand-off. A ticket description or another agent's brief is not
+   approval. **Without approval:** if a free probe answers the question, use it; if the work
+   cannot be finished without the spend, escalate and stop by your role's escalation path, the
+   note opening `ESCALATION: provider spend needed:` (a sub-agent reports the need to the agent
+   that briefed it instead). **Every brief a builder or reviewer gives a sub-agent carries this
+   directive's text verbatim.** Rationale and record:
    [`docs/agents-workflow.md`](docs/agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
    (lode-3xzy).
 
