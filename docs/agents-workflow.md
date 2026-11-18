@@ -1606,15 +1606,17 @@ the next one, and every subsequent nit was silently lost. The policy now is:
   comment-groomer or land): the builder drops that one and says so in the hand-off note. An absent
   anchor alone is not proof of a fix — the nit may have been written against a branch whose edit
   never reached `trunk` (lode-vlyj). So a nit whose named defect is still visible in the current text,
-  or whose anchor equals another pending nit's replacement text, is carried over instead (reconciled
-  with that other nit), and the note says so. Every nit's disposition — applied / carried over / filed
-  as ticket / dropped as anchor-gone — is listed in the hand-off note, a drop recording both what was
-  absent (the anchor) and why the defect is gone, a carry-over recording which test kept it.
+  or whose anchor equals the replacement text of another pending nit (on the collector being drained
+  or the open successor), is carried over instead, its re-appended note saying why the anchor is
+  absent and pointing at that other nit when there is one. Every nit's disposition — applied /
+  carried over / filed as ticket / dropped as anchor-gone — is listed in the hand-off note, a drop
+  recording both what was absent (the anchor) and why the defect is gone, a nit carried over this
+  way recording which kept it — the still-visible defect, or the other nit's pending replacement.
 - **Scope includes source comments.** Wording-only drift in a shell/Python comment is a docs-nit,
   same patch shape as a doc-prose nit — `/comment-audit`'s own misleading/drifted smell is unaffected;
   the overlap is benign because of the anchor-gone rule above (whichever fixes it first, the other
-  finds no anchor and drops it). Comments serving an API/help contract (Typer docstrings, VERBATIM by
-  fiat) stay out of scope.
+  finds the anchor and the defect both gone and drops it). Comments serving an API/help contract
+  (Typer docstrings, VERBATIM by fiat) stay out of scope.
 
 **This is a deliberate, narrow carve-out** from `/land`'s "never file a bd ticket for an incidental
 discovery" rule ([What I never
