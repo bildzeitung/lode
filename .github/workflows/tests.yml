@@ -139,31 +139,22 @@ jobs:
         with:
           fetch-depth: 0 # full history + tags — setuptools-scm needs git describe to resolve the version
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-          # No `cache: pip` here. The dependency install below runs through
-          # `uv` (via scripts/python-init.sh), which uses its own cache
-          # directory (~/.cache/uv), never pip's -- but the `pip install -U
-          # uv` bootstrap that precedes it IS a real pip download (a 22 MB
-          # wheel, measured). Caching is deliberately left off anyway: a
-          # restored cache entry that size isn't obviously cheaper than
-          # fetching it fresh. Reopen it only on numbers (lode-3vrq). Rationale:
-          # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
+      - name: Install uv
+        # astral-sh/setup-uv (not `pip install uv`), pinned to an exact release --
+        # the action has no floating major tag. It needs no setup-python step: uv
+        # installs the interpreter named by .python-version itself on the sync below.
+        # No `enable-cache`: reopen it only on numbers (lode-3vrq).
+        uses: astral-sh/setup-uv@v10.3.3
 
-      - name: Install dependencies (from requirements.lock)
-        # Installs the same bytes a developer runs: the exact, hash-verified
-        # runtime set from requirements.lock, via the canonical locked
-        # install (scripts/python-init.sh -> scripts/venv-install.sh's
-        # install_locked_venv, lode-g274.1) rather than a hand-copied
-        # duplicate of its steps in this YAML -- see that script for the
-        # step-by-step breakdown. Currency of the lock itself is the
-        # separate `lock-currency` job above, not this step -- this step
-        # trusts whatever lock was checked out.
-        run: |
-          ./scripts/python-init.sh
-          echo "$(pwd)/venv/bin" >> "$GITHUB_PATH"
+      - name: Install dependencies (from uv.lock)
+        # `--locked` fails if uv.lock is stale against pyproject.toml (never re-locks),
+        # so CI installs exactly the committed, hash-verified set a developer gets
+        # from `uv sync --locked --extra dev` (lode-s09w). `--extra dev` is
+        # transitional: dev is still an optional extra until lode-s09w.3 turns it into
+        # a dependency group. Every later step runs through `uv run`, so the old
+        # `$(pwd)/venv/bin >> $GITHUB_PATH` line is dropped, not replaced -- nothing
+        # relies on ambient PATH any more.
+        run: uv sync --locked --extra dev
 
       - name: Resolve model cache key
         # SINGLE implementation shared with coverage.yml -- see
@@ -174,7 +165,7 @@ jobs:
         # NB this step must stay AFTER the install (the script imports lode)
         # and BEFORE the cache restore below.
         id: model_cache
-        run: python scripts/model-cache-key.py >> "$GITHUB_OUTPUT"
+        run: uv run --frozen --extra dev python scripts/model-cache-key.py >> "$GITHUB_OUTPUT"
 
       - name: Restore model weights cache
         # $LODE_HOME/models (config.py's model_cache_dir()) -- ~1.6GB of ONNX
@@ -214,7 +205,7 @@ jobs:
         # (tests/test_eval_live.py) self-excludes unless LODE_RUN_LIVE_EVAL=1,
         # which only `nox -s eval` sets, so this leg stays offline and
         # keyless by design.
-        run: nox -s tests
+        run: uv run --frozen --extra dev nox -s tests
 
       - name: Save model weights cache
         # Runs on a FAILED `nox -s tests` (the point of the split -- see the

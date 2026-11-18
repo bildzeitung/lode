@@ -63,7 +63,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         # Deliberately NO `fetch-depth: 0`, even though the install step below
-        # runs `pip install -e .` and build.yml/tests.yml/coverage.yml/release.yml
+        # installs the editable project and build.yml/tests.yml/coverage.yml/release.yml
         # all pair that with full history for setuptools-scm (lode-fhql.23).
         # Those legs SHIP the version (a wheel/sdist filename, a release tag);
         # this one only needs `import lode.docs_slug` to work. On a shallow,
@@ -72,46 +72,26 @@ jobs:
         # and nothing in the built site reads `lode.__version__`. Full history on
         # the repo's heaviest CI leg would be paid for a version nobody reads.
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
+      - name: Install uv
+        # Same action and pin as tests.yml; no setup-python (uv installs the
+        # .python-version interpreter itself during the sync below).
+        uses: astral-sh/setup-uv@v10.3.3
 
-      - name: Install site-build toolchain
-        # Pinned exact versions -- lode-fhql.9's acceptance requires the toolchain
-        # pinned, not floating. mkdocs-material's pin here MUST match pyproject.toml's
-        # `dev` extra pin (a single-tool carve-out from the otherwise-unlocked `dev`
-        # extra, same pattern as ruff there, HUMAN DECISION 2026-08-14) -- one source
-        # of truth for the renderer CI and a local `nox -s docs`/`mkdocs build` build
-        # with, kept in sync by tests/test_build_docs_site.py; bump both together.
-        # typer is here because scripts/build_docs_site.py is a Typer CLI like
-        # every other Python CLI in the repo (docs/conventions.md); the pin
-        # matches requirements.lock so the two can't drift silently.
-        # `--no-deps -e .` (lode-fhql.23) installs the lode package itself --
-        # mkdocs.yml's `!!python/name:lode.docs_slug.github_slugify` slugify hook
-        # (lode-fhql.21) needs `lode.docs_slug` importable, which this step never
-        # provided before; locally the build passed only because ./venv already
-        # has lode installed via the normal dev setup.
-        # `--no-deps` is load-bearing, not an optimisation -- do not drop it. The
-        # only lode modules this job imports are `lode.docs_slug` and the
-        # `lode.fence_parsing` it pulls in, both pure-stdlib; without the flag pip
-        # would drag lode's ENTIRE unpinned runtime tree (textual, anthropic,
-        # openai, fastembed/onnxruntime, lancedb, pyarrow, ...) into the repo's
-        # heaviest CI leg, floating, in a step whose whole point is a pinned
-        # toolchain (lode-fhql.9's acceptance). A future docs build needing a
-        # dependency-carrying lode module fails loudly here with
-        # ModuleNotFoundError -- add that dependency explicitly and pinned.
-        #
-        # THE TWO-COMMAND SPLIT BELOW IS LOAD-BEARING (lode-xx46) -- do not
-        # collapse it back into one `pip install` line. `--no-deps` applies to
-        # EVERY requirement on the line, not just `-e .`, so a collapsed line
-        # also starves the pinned toolchain of ITS dependencies (typer 0.27.1
-        # imports `annotated_doc` at module load and dies with
-        # ModuleNotFoundError). Two lines keep lode dep-free while letting
-        # mkdocs-material and typer resolve normally.
-        run: |
-          pip install --no-deps -e .
-          pip install "mkdocs-material==9.5.44" "typer==0.27.2"
+      - name: Install site-build toolchain (from uv.lock)
+        # The toolchain is the committed uv.lock's, via the project's own `dev` extra --
+        # so mkdocs-material and typer are pinned by the lock, not by hand-copied
+        # versions in this file (decided 2026-11-18, lode-s09w.2). The earlier
+        # `pip install --no-deps -e .` + hand-pinned mkdocs-material / typer split
+        # (lode-fhql.23, lode-xx46) is gone, and with it
+        # tests/test_build_docs_site.py's docs.yml pin-sync checks for those two packages
+        # (the test now asserts uv.lock carries pyproject's mkdocs-material pin).
+        # Cost accepted: this leg now installs lode's full runtime tree too, on the
+        # repo's heaviest CI leg, in exchange for one source of truth.
+        # `--extra dev` is transitional until lode-s09w.3. `lode.docs_slug`
+        # (mkdocs.yml's slugify hook) is importable because uv sync installs lode
+        # editable. Shallow checkout: setuptools-scm falls back to a dev version, which
+        # nothing in the built site reads (see the checkout step's note).
+        run: uv sync --locked --extra dev
 
       # mermaid-cli's image is pulled once here rather than left to the
       # first `docker run` inside build_docs_site.py, so a pull failure
@@ -128,12 +108,12 @@ jobs:
         # Fails the whole job loudly on any render error (see
         # scripts/build_docs_site.py's own docstring) -- never a silently-
         # empty diagram on the published site.
-        run: python3 scripts/build_docs_site.py .docs-site-src
+        run: uv run --frozen --extra dev python scripts/build_docs_site.py .docs-site-src
 
       - name: Build site (strict -- fail on broken links/nav, not just exceptions)
         # Output dir comes from mkdocs.yml's `site_dir`, not a flag -- one
         # place to change, and the upload step's `path:` below tracks it.
-        run: mkdocs build --strict
+        run: uv run --frozen --extra dev mkdocs build --strict
 
       # Condition is byte-identical to the `deploy` job's `if:` and must stay
       # so (tests/test_build_docs_site.py pins that). Without it, every PR

@@ -71,6 +71,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from conftest import project_venv_bin
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -320,9 +321,9 @@ def test_ruff_format_really_does_strip_an_unmarked_site(tmp_path: Path) -> None:
     # there. An ambient-PATH fallback would let this test validate a ruff
     # that is not the pinned one -- exactly the resolution bug lode-0yfn
     # closed in noxfile.py's `_venv_tool`.
-    venv_ruff = REPO_ROOT / "venv" / "bin" / "ruff"
+    venv_ruff = project_venv_bin() / "ruff"
     assert venv_ruff.exists(), (
-        f"{venv_ruff} is missing -- run ./scripts/python-init.sh. This test "
+        f"{venv_ruff} is missing -- run `uv sync --locked --extra dev`. This test "
         "asserts version-specific ruff formatting behavior, so it must run "
         "the pinned ruff and never whatever copy happens to be on PATH."
     )

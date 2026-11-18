@@ -1299,6 +1299,30 @@ def load_module_from_path(name: str, path: Path) -> ModuleType:
     return module
 
 
+@functools.cache
+def load_noxfile() -> ModuleType:
+    """Import the real ``noxfile.py`` once per session (it registers nox sessions globally).
+
+    A second execution re-registers every session and nox warns it will become an
+    error, so every test that needs the module shares this one cached load.
+    """
+    return load_module_from_path(
+        "noxfile", Path(__file__).resolve().parent.parent / "noxfile.py"
+    )
+
+
+def project_venv_bin() -> Path:
+    """The project venv's ``bin`` dir, found by the same accepted-venv rule as
+    ``noxfile._venv_tool`` (``./venv`` or ``./.venv``); fails if the running
+    interpreter is in neither."""
+    bin_dir = load_noxfile()._venv_bin()
+    assert bin_dir is not None, (
+        f"sys.prefix {sys.prefix} is neither ./venv nor ./.venv of this checkout -- "
+        "run the suite from the project venv (uv run --frozen --extra dev nox ...)"
+    )
+    return bin_dir
+
+
 # --- MagicMock Anthropic batch client (lode-ylh2) --------------------------
 #
 # The shared builder for tests/test_enrich.py's and tests/test_worker.py's

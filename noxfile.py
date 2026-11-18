@@ -177,13 +177,31 @@ nox.options.sessions = [
     "docs",
 ]
 
-# The project's own venv, always at this fixed location relative to this file
-# (CLAUDE.md: "The venv lives at ./venv (repo root)").
-_VENV_BIN = Path(__file__).parent.resolve() / "venv" / "bin"
+_PROJECT_ROOT = Path(__file__).parent.resolve()
+
+# The two env directories the gates accept: ``./venv`` (scripts/python-init.sh, today's
+# instruction files) and ``./.venv`` (uv's default, ``uv run --frozen --extra dev nox``).
+# Both are accepted while the uv port is mid-flight (lode-s09w); the retire child narrows
+# this to ``./.venv`` only.
+_ACCEPTED_VENV_DIRS = ("venv", ".venv")
+
+
+def _venv_bin() -> Path | None:
+    """``bin`` dir of the running interpreter's env iff it is a project venv, else ``None``.
+
+    Compares ``sys.prefix`` (resolved) against ``./venv`` and ``./.venv`` under this
+    file's directory. Any other env -- pipx's nox, a foreign venv, the system
+    interpreter -- yields ``None`` so ``_venv_tool`` fails closed.
+    """
+    prefix = Path(sys.prefix).resolve()
+    for name in _ACCEPTED_VENV_DIRS:
+        if prefix == (_PROJECT_ROOT / name).resolve():
+            return Path(sys.prefix) / "bin"
+    return None
 
 
 def _venv_tool(session: nox.Session, name: str) -> str:
-    """Resolve ``name`` to its path inside the project's own ``./venv/bin`` (lode-0yfn).
+    """Resolve ``name`` to its path inside the project's own venv ``bin`` (lode-0yfn).
 
     ``venv_backend = "none"`` (above) means every session inherits whatever
     PATH the invoking shell happens to have, so a bare ``"ruff"`` resolves
@@ -193,31 +211,38 @@ def _venv_tool(session: nox.Session, name: str) -> str:
     narrative, including the reproduction and why the ``dev`` extra pins ruff
     at all: ``docs/stack.md``'s dependency-locking section.
 
-    Deriving the path from this file's own location rather than searching
-    PATH makes that ambient ordering irrelevant. Fails the session loudly if
-    the tool isn't there: these tools only ever come from the project venv, so
-    a missing venv means the session cannot do its job regardless -- surfacing
-    that beats silently falling through to whatever ambient copy exists.
-    **A consequence worth knowing before you edit CI: any workflow running one
-    of these sessions must build ``./venv`` first** (``scripts/python-init.sh``);
-    installing the dev extra into the runner's ambient interpreter is not
-    enough. ``tests.yml`` and ``coverage.yml`` both do.
+    Tools resolve beside ``sys.executable`` only when ``sys.prefix`` is the
+    project's ``./venv`` or ``./.venv`` (``_venv_bin``); an ambient nox from any
+    other env fails the session closed, naming both accepted paths, so a pipx
+    nox can never resolve pipx's tools (lode-0yfn preserved, lode-s09w.2).
+    Fails the session loudly too if the tool isn't there. **A consequence worth
+    knowing before you edit CI: any workflow running one of these sessions must
+    build the project venv first** (``uv sync --locked --extra dev``);
+    installing the dev extra into the runner's ambient interpreter is not enough.
 
     Deliberately NOT applied to two sessions, both of which mean to reach a
-    tool outside ``./venv``: ``build`` (ambient ``python -m build``, which
-    ``build.yml``/``release.yml`` run with no ``./venv`` at all, and which
+    tool outside the venv: ``build`` (ambient ``python -m build``, which
+    ``build.yml``/``release.yml`` run with no venv at all, and which
     resolves its own isolated PEP 517 env) and ``lock_currency`` (``uv``, a
-    system-wide tool never installed into ``./venv``, already checked via
+    system-wide tool never installed into the venv, already checked via
     ``shutil.which`` and failed closed if absent). That exemption is enforced,
     not just documented -- ``tests/test_noxfile_venv_tool.py`` fails if any
     *other* session shells out to a dev-extra tool by bare name.
     """
-    tool = _VENV_BIN / name
+    bin_dir = _venv_bin()
+    if bin_dir is None:
+        session.error(
+            f"nox is running from {sys.prefix}, which is not the project venv -- "
+            f"expected {_PROJECT_ROOT / 'venv'} or {_PROJECT_ROOT / '.venv'} "
+            "(run `uv sync --locked --extra dev` then `uv run --frozen --extra dev "
+            "nox ...`, or ./scripts/python-init.sh then ./venv/bin/nox ...)"
+        )
+    tool = bin_dir / name
     if not tool.is_file():
         session.error(
             f"expected the project venv's {name!r} at {tool}, not found -- "
-            "run ./scripts/python-init.sh first (see CLAUDE.md) before "
-            "running this session"
+            "run `uv sync --locked --extra dev` (or ./scripts/python-init.sh) "
+            "first (see CLAUDE.md) before running this session"
         )
     return str(tool)
 
