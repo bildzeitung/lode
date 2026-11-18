@@ -451,7 +451,7 @@ def build_provider(settings: Settings) -> LLMProvider:
 ### 2 & 3. The two immediate structured-output calls — one seam method
 
 > **Update (lode-ni7p):** enrichment no longer uses forced tool-use. `AnthropicProvider`
-> sends `output_config.format` for every immediate call (`messages.parse`) and for the
+> sends `output_config.format` for every immediate call (`messages.create`; was `messages.parse` until `lode-pdss`, which hid a refusal behind the SDK's ValidationError) and for the
 > batch route (`submit_batch`/`collect_batch` decode the first `text` block as JSON);
 > `tool_name`/`tool_description` are now read only by `OpenAIProvider`. The text below
 > records the original forced-tool-use design.
