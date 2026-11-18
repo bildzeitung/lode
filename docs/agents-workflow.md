@@ -530,7 +530,9 @@ when the `$(git rev-parse …)` it prescribes is refused (the
 [fabricated-SHA guard](#guard-against-fabricated-shas-lode-fpmi) denies a 40-hex string that is not a
 real object, but cannot tell a real one from the *right* one). For
 `nox -s eval`, run its body directly (it is CI-only and spends API credits, so only with the
-maintainer's go-ahead): `LODE_RUN_LIVE_EVAL=1 ./venv/bin/pytest tests/test_eval_live.py -v` with
+maintainer's approval, as
+[`CLAUDE.md` General Directive 10](#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
+defines it): `LODE_RUN_LIVE_EVAL=1 ./venv/bin/pytest tests/test_eval_live.py -v` with
 `ANTHROPIC_API_KEY` set. Do **not** disguise the word — quote-splitting (`ev""al`), building it by
 expansion, or any other obfuscation: the guard exists because the shape is unverifiable, so hiding
 it routes around the fence rather than working within it.
@@ -1937,6 +1939,87 @@ bd follow-up with the exact command that triggered it** (the regression-pin tabl
 guard's entire memory of what "known safe" looks like). **Never** work around the guard, and never
 relax it as a side effect of unrelated work — both remain true after this fix exactly as they were
 before it.
+
+### No LLM-provider spend without maintainer approval (lode-3xzy)
+
+**MAINTAINER RULING (2026-11-18).** The rule is [`CLAUDE.md`](../CLAUDE.md) General Directive 10,
+stated there once because that is the file every agent role loads; that text is normative. This
+section holds the reasons and the record.
+
+**TRIGGER.** In the `lode-g2ko` technical review, two sub-agents of the code-reviewer (the
+`/code-review` fork and a `/simplify` agent) each ran `lode add` to see which modules it loads.
+`lode add` enriches inline, so each run made one real enrich call under the operator's credentials.
+Both used a scratch `LODE_HOME` and a throwaway note body, but that was the sub-agents' own caution;
+their briefs said "read-only, do not run the test suite" and nothing about `lode` commands. No work
+was lost and no wrong artifact shipped, so this is below `CLAUDE.md` directive 9's bar and has no
+`MISTAKES.md` entry (maintainer ruling).
+
+**Why the directive also travels verbatim in every sub-agent brief.** It is a second delivery, on
+purpose. `CLAUDE.md` already reaches a sub-agent: a non-fork agent loads it and a fork inherits its
+parent's context. The brief repeats the rule at the place a sub-agent reads the limits of its task,
+which is where the trigger's briefs were silent.
+
+**What the directive's lists rest on.**
+
+- **A command it does not name.** Every provider client is built by `build_provider`
+  (`src/lode/llm_provider.py`). A command reaches a provider if it gets there, so `grep -rn
+  'build_provider(' src/lode` decides.
+- **Tests marked `network` are not on the spend list, although the ticket named them.** The marker
+  only lifts the `tests/conftest.py` guard below (that file's module docstring says what the marker
+  is for), and the marked tests run in the offline `unit` and `tests` gates every builder and
+  reviewer must run. As checked for this ticket (2026-11-18, `grep -rn 'mark.network' tests/`),
+  each marked test either sends nothing to a provider (it only constructs a real SDK client, or
+  answers it from an in-process mock transport) or skips unless an environment variable opts it
+  in. The one that reaches a provider is the live eval, `tests/test_eval_live.py` under
+  `LODE_RUN_LIVE_EVAL=1`, which `nox -s eval` sets; the directive lists that instead. Nothing
+  enforces this. A `network`-marked test that sends to a provider inside the offline gates is a
+  bug to report, not approved spend.
+
+**How approval is recorded.** The note Directive 10 requires sits in the ticket's notes (`bd show
+<id>`) and names the command class and, if bounded, a count. "The ticket needs it" is not approval
+either. Two limits, left as they are:
+
+- bd records no author on a note that an agent can check, and the orchestrating session writes
+  the maintainer's rulings to bd for them. "A maintainer note" is a convention an agent honours,
+  not a fact it can verify.
+- A scratch `LODE_HOME` has no `config.toml` and no `models/` cache (`src/lode/config.py`). An
+  approved call there runs on default settings, so the default provider and not necessarily the
+  one the operator configured, and embedding work downloads the model weights again.
+
+**How approval is requested mid-run (builder's proposal, refined in technical review; not a
+maintainer ruling; confirmation: `lode-v3xd`).** Directive 10's "Without approval" steps are this
+proposal. What they leave out:
+
+- The free probe is there because the trigger was a module-load question, which `python -X
+  importtime` answers.
+- The escalation note reads `ESCALATION: provider spend needed: <command, why, expected call
+  count>`, and the hand-off follows the role's escalation path (a builder's build-time escalation,
+  a reviewer's escalation), never blocking siblings.
+- A sub-agent reports upward because it has no ticket to annotate. The agent that briefed it
+  chooses between the probe and the escalation.
+- Ask-and-continue is rejected for now: a headless sub-agent has no channel to the maintainer, so
+  it degrades to "proceed", which is the failure.
+
+**Mechanical backstop: weighed, outcome recorded.**
+
+- **Tests: already built.** `tests/conftest.py`'s autouse guard (`lode-85q`) fails any test that
+  constructs a real Anthropic or OpenAI client without `@pytest.mark.network`. An unmarked test in
+  the `unit`/`tests` gates cannot spend by accident.
+- **Unset credentials in agent worktrees: rejected.** For the default provider, credentials
+  resolve through the Anthropic SDK chain (`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`, then an `ant
+  auth login` profile on disk, then workload identity; `src/lode/auth.py`), so unsetting
+  environment variables leaves the on-disk profile working. Only `llm_provider = "openai"` reads
+  its key from the environment alone (`src/lode/llm_provider.py`). The `Agent` tool also takes no
+  environment for the agent it dispatches. A scrub that covers part of the chain would read as a
+  guarantee it is not.
+- **Fail-closed provider: rejected for now.** There is no `llm_provider` value that refuses every
+  call, and a scratch `LODE_HOME` config pointing at one would protect only agents that already
+  chose a scratch home, the case that was never the risk. A new provider value is a product
+  surface added to police agent behaviour; not justified by one incident that cost two calls.
+- **Outcome:** the instruction plus recorded approval is the control; no new mechanism built.
+  Revisit if an unapproved call recurs after this rule is in place. The ticket filed then weighs a
+  refusal switch in lode keyed on an environment variable, and has to establish first whether
+  the harness can set one for every agent session.
 
 ### Guard against fabricated SHAs (lode-fpmi)
 

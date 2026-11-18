@@ -6204,3 +6204,16 @@ entries below from being rewritten to chase the current tree.)
     187-228 ms after. The ticket's own figure for trunk, from a different session, was about
     520 ms. Absolute figures moved by 100 ms or more with machine load, so compare within a
     session, not across.
+- **Agents make no LLM-provider call without maintainer approval, and approved spend runs against
+  a scratch `LODE_HOME` (`lode-3xzy`, 2026-11-18, maintainer).** The rule is `CLAUDE.md` General
+  Directive 10; the reasons, the approval flow and the backstop weighed are in
+  [agents-workflow.md](agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy).
+  - **Also ruled.** The `lode-g2ko` incident gets no `MISTAKES.md` entry.
+  - **Open (`lode-v3xd`).** What an agent does mid-run without approval (a free probe where one
+    answers the question, otherwise escalate and stop) is a builder's proposal refined in
+    technical review, not a maintainer ruling. Ask-and-continue was not taken: a headless
+    sub-agent has no channel to the maintainer.
+  - **Departs from the ticket.** The ticket named tests marked `network` as provider spend. They
+    send nothing to a provider and the offline gates run them; the directive lists the live eval
+    (`LODE_RUN_LIVE_EVAL=1`) instead.
+  - **Rejected.** Unsetting credentials and a fail-closed provider; no new mechanism built.

@@ -118,6 +118,11 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   a backstop, not a substitute for knowing the rule. Full rationale:
   [docs/agents-workflow.md — Never write to an external tracker under the user's
   identity](../../docs/agents-workflow.md#never-write-to-an-external-tracker-under-the-users-identity-lode-o29m).
+- **No LLM-provider spend without maintainer approval; approved spend runs against a scratch
+  `LODE_HOME` (lode-3xzy).** The rule is [`CLAUDE.md`](../../CLAUDE.md) General Directive 10 and
+  binds me as written there. **Every brief I give a sub-agent (the `/code-review` fork and the
+  `/simplify` agents included) carries Directive 10's text verbatim.** Why:
+  [docs/agents-workflow.md](../../docs/agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy).
 
 ## The review cycle
 
