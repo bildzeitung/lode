@@ -100,8 +100,8 @@ Newest first.
   pushing. The `code-reviewer` that follows a pickup owes the same grep: the pickup's `land_summary`
   names the conflicting file, so the search terms are already on the ticket.
   - **Update (lode-jb2q, 2026-11-17):** the pickup no longer writes `land_summary` except to correct
-    one its conflict resolution made false. The conflicting files are named in
-    its `REBASE PICKUP` note on the ticket instead.
+    one its conflict resolution made false. The conflicting files are named in its `REBASE PICKUP`
+    note on the ticket instead.
 
 ## 2026-09-08 — A promotion gate certified the artifact it was about to replace, not the one it would ship
 
