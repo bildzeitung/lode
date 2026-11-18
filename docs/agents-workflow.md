@@ -1602,9 +1602,14 @@ the next one, and every subsequent nit was silently lost. The policy now is:
   apply is, before hand-off, either re-appended to the successor collector (still wording-only, just
   not applicable this pass) or filed as its own ticket (a judgment call). It never closes silently
   with the batch — **except** a nit whose verbatim anchor line is no longer present anywhere in the
-  file: that nit is already fixed (e.g. by an intervening comment-groomer or land), so the builder
-  drops it and says so in the hand-off note. Every nit's disposition — applied / carried over / filed
-  as ticket / dropped as anchor-gone — is listed in the hand-off note.
+  file **and** whose named defect is gone from the current text too (e.g. fixed by an intervening
+  comment-groomer or land): the builder drops that one and says so in the hand-off note. An absent
+  anchor alone is not proof of a fix — the nit may have been written against a branch whose edit
+  never reached `trunk` (lode-vlyj). So a nit whose named defect is still visible in the current text,
+  or whose anchor equals another pending nit's replacement text, is carried over instead (reconciled
+  with that other nit), and the note says so. Every nit's disposition — applied / carried over / filed
+  as ticket / dropped as anchor-gone — is listed in the hand-off note, a drop recording both what was
+  absent (the anchor) and why the defect is gone, a carry-over recording which test kept it.
 - **Scope includes source comments.** Wording-only drift in a shell/Python comment is a docs-nit,
   same patch shape as a doc-prose nit — `/comment-audit`'s own misleading/drifted smell is unaffected;
   the overlap is benign because of the anchor-gone rule above (whichever fixes it first, the other
