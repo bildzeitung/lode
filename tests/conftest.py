@@ -231,13 +231,12 @@ from lode.fence_parsing import closes_fence, match_fence_marker
 
 #: NOT imported at runtime, deliberately (lode-pw9o): ``lode.tool_dispatch`` and
 #: ``lode.webfetch`` are needed only by ``fake_tool_turn_client`` below, and importing them
-#: at module scope costs ~0.8s and ~440 modules (``trafilatura`` -> ``lxml``/``justext``/
-#: ``htmldate``/``dateparser``, plus ``numpy``/``pyarrow``) at COLLECTION, in the one conftest
-#: every test module loads -- and again in each xdist worker. Measured, not assumed. They are
-#: imported inside the builder instead. The TYPE_CHECKING import below is free at runtime:
-#: on this repo's Python (>=3.14, PEP 649) annotations are evaluated lazily, so
-#: ``StubWebFetcher``'s ``RawResponse`` annotations never resolve the name unless something
-#: actually asks for them.
+#: at module scope costs ~55 modules and tens of ms (``httpx2`` and lode's own fetch/tool
+#: modules) at COLLECTION, in the one conftest every test module loads -- and again in each
+#: xdist worker. Measured, not assumed. They are imported inside the builder instead. The
+#: TYPE_CHECKING import below is free at runtime: on this repo's Python (>=3.14, PEP 649)
+#: annotations are evaluated lazily, so ``StubWebFetcher``'s ``RawResponse`` annotations
+#: never resolve the name unless something actually asks for them.
 if TYPE_CHECKING:
     from lode.webfetch import RawResponse
 
