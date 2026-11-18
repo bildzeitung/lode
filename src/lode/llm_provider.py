@@ -1026,11 +1026,12 @@ class AnthropicProvider:
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
             if not tool_use_blocks:
                 break
-            if stop_reason in _INCOMPLETE_STOP_REASONS:
-                # A cut-off tool_use usually still parses as a valid partial
-                # input; running the tool on it would act on arguments the
-                # model never finished (lode-4rxs). Refusal was raised above,
-                # so this is the output cap or the context window.
+            if stop_reason == "max_tokens":
+                # A tool_use cut off at max_tokens usually still parses as a
+                # valid partial input; running the tool on it would act on
+                # arguments the model never finished (lode-4rxs). Whether
+                # model_context_window_exceeded needs the same check is open
+                # (lode-hfzw).
                 raise LLMProviderError(
                     f"Anthropic free tool turn (model={model}, "
                     f"max_tokens={max_tokens}, stop_reason={stop_reason!r}) was "
