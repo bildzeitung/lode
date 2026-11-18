@@ -45,9 +45,9 @@ is trustworthy. Everything else is supporting.
 The UI is a TUI precisely so capture stays instant: get in, dump what you learned, get out.
 **No AI in the capture path.** Intelligence is async (background enrichment) or on-demand
 (you ask). Capture stays dumb and fast forever.
-That includes process startup: importing the CLI or TUI does not load the web-fetch
-(trafilatura), vector (pyarrow) or retrieval-graph (networkx) stacks, and a test pins it
-(`tests/test_import_boundary.py`, `lode-g2ko`).
+That includes process startup: importing the CLI or TUI does not load trafilatura (web-fetch
+extraction), pyarrow (the vector store schema) or networkx (the retrieval graph), and a test
+pins those three (`tests/test_import_boundary.py`, `lode-g2ko`).
 
 ### The save path has three tiers
 

@@ -2,8 +2,10 @@
 
 ``lode add`` is instant by design (``docs/design.md``), so importing ``lode.cli`` or
 ``lode.tui.app`` must not pull in trafilatura (web-fetch extraction), pyarrow (the vector
-store schema) or networkx (the retrieval graph). Each is imported inside the function
-that uses it (lode-g2ko; ``docs/decisions.md``).
+store schema) or networkx (the retrieval graph). trafilatura and pyarrow are imported
+inside the function that uses them; networkx is a module-scope import of
+``lode.retrieval``, so it is ``lode.retrieval`` that callers import inside a function
+(lode-g2ko; ``docs/decisions.md``).
 
 Runs in a **subprocess**: a fresh interpreter is the real-world condition, and in-process
 these modules are already resident from other tests, which would make the assertion
@@ -26,6 +28,7 @@ def test_startup_import_leaves_heavy_stacks_unloaded(module: str) -> None:
     )
 
     assert proc.stdout.strip() == "[]", (
-        f"importing {module} loaded {proc.stdout.strip()} -- keep those imports inside "
-        "the function that uses them (lode-g2ko)"
+        f"importing {module} loaded {proc.stdout.strip()} -- keep those imports (for "
+        "networkx, the `lode.retrieval` import) inside the function that uses them "
+        "(lode-g2ko)"
     )

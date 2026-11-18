@@ -93,7 +93,7 @@ class VectorStore:
         needs it fixed at table creation (``docs/configuration.md``), and re-keying
         it implies a full re-embed (lode-txh.6).
         """
-        import pyarrow as pa  # deferred: ~50 ms, off the CLI/TUI startup path (lode-g2ko)
+        import pyarrow as pa  # deferred: kept off CLI/TUI startup (tests/test_import_boundary.py)
 
         return pa.schema(
             [

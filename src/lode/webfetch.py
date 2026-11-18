@@ -627,7 +627,7 @@ class GuardedHttpxFetcher(HttpxFetcher):
 
 def _extract(html: str) -> str | None:
     """Readability-extract ``html``; ``None`` on failed/empty extraction."""
-    import trafilatura  # deferred: ~275 ms, off the CLI/TUI startup path (lode-g2ko)
+    import trafilatura  # deferred: kept off CLI/TUI startup (tests/test_import_boundary.py)
 
     return trafilatura.extract(html, include_comments=False, include_tables=True)
 
