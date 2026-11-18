@@ -35,6 +35,19 @@ def dead_letter_jobs(
     ).fetchall()
 
 
+def refusal_dead_jobs(conn: sqlite3.Connection) -> dict[int, str | None]:
+    """``{job_id: refusal_category}`` for every dead job the model refused (lode-g9q3).
+
+    The category is None when the provider supplied none.
+    """
+    return dict(
+        conn.execute(
+            "SELECT id, refusal_category FROM jobs "
+            "WHERE status = 'dead' AND refusal = 1"
+        ).fetchall()
+    )
+
+
 def egress_purpose_counts(conn: sqlite3.Connection) -> list[tuple[str, int]]:
     """``(purpose, count)`` rows over ``egress_log``, ordered by purpose."""
     return conn.execute(

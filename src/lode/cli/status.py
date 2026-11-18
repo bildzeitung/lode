@@ -20,7 +20,12 @@ from lode.config import Settings, default_db_path, lance_dir
 from lode.drawdown import bare_jira_misconfigured
 from lode.enrichment_view import stale_enrichment_heads
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
-from lode.jobs_read import dead_letter_jobs, egress_purpose_counts, job_status_counts
+from lode.jobs_read import (
+    dead_letter_jobs,
+    egress_purpose_counts,
+    job_status_counts,
+    refusal_dead_jobs,
+)
 from lode.reconcile import lexical_gap_count
 from lode.worker import dead_letter_recovery, dead_letter_remediation
 
@@ -426,6 +431,7 @@ def status(db: _DbOption = None) -> None:
     try:
         job_counts = job_status_counts(conn)
         dead_letters = dead_letter_jobs(conn)
+        refused = refusal_dead_jobs(conn)
         egress_counts = egress_purpose_counts(conn)
     finally:
         conn.close()
@@ -455,7 +461,12 @@ def status(db: _DbOption = None) -> None:
     # rather than declared here; "unclassified" and unregistered (None) both
     # fall to the same conservative "unknown" hint arm below -- neither is a
     # confirmed self-heal.
-    dead_types = {job_type for _, job_type, _, _ in dead_letters}
+    # A refusal-dead enrich job (lode-g9q3) is classified by neither arm below:
+    # reconcile does not re-enqueue it, so the self-healing hint would be false
+    # for it. It gets its own line and hint instead.
+    dead_types = {
+        job_type for job_id, job_type, _, _ in dead_letters if job_id not in refused
+    }
     dead_recoveries = {t: dead_letter_recovery(t) for t in dead_types}
     dead_self_healing = "self_healing" in dead_recoveries.values()
     # Terminal types are kept as a SET, not just a bool: the hint below prints
@@ -471,7 +482,7 @@ def status(db: _DbOption = None) -> None:
         "danger"
         if dead_tombstoned or dead_unknown_type
         else "warn"
-        if dead_self_healing
+        if dead_self_healing or refused
         else None
     )
 
@@ -536,6 +547,16 @@ def status(db: _DbOption = None) -> None:
         # Per-row severity, so a mixed dead set (one dead refresh, one dead
         # embed) doesn't paint the self-healing row as ominously as the
         # terminal one.
+        if job_id in refused:
+            category = refused[job_id] or "none given"
+            console.print(
+                f"  job {job_id} ({job_type}) target={_short(target_version)}: "
+                f"refused by the model (category: {category}); not retried",
+                style="warn",
+                markup=False,
+                highlight=False,
+            )
+            continue
         job_style = "warn" if dead_recoveries[job_type] == "self_healing" else "danger"
         console.print(
             f"  job {job_id} ({job_type}) target={_short(target_version)}: "
@@ -642,6 +663,14 @@ def status(db: _DbOption = None) -> None:
             "have no lexical (FTS5) index rows -- run 'lode reindex-lexical' to "
             "make them keyword-findable now, or wait for 'lode work' to heal "
             "them automatically on its next reconcile pass.",
+            highlight=False,
+        )
+    if refused:
+        console.print(
+            "[warn]Action needed:[/warn] the model refused to enrich some notes "
+            "(listed above). A refusal is final for that note version: it is "
+            "not retried until the note is edited, the enrichment prompt "
+            "version changes, or enrichment_llm is changed.",
             highlight=False,
         )
     if dead_self_healing:

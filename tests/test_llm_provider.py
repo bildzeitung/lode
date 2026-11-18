@@ -2012,7 +2012,7 @@ def test_openai_structured_call_raises_on_refusal() -> None:
     client = _fake_responses_client(output_text="", output=[refusal_item])
     provider = OpenAIProvider(client)
 
-    with pytest.raises(LLMProviderError, match="refused"):
+    with pytest.raises(LLMProviderError, match="refused") as excinfo:
         provider.structured_call(
             model="m",
             reasoning_effort=None,
@@ -2022,6 +2022,55 @@ def test_openai_structured_call_raises_on_refusal() -> None:
             max_tokens=10,
             timeout_s=1.0,
         )
+    # lode-g9q3: the provider-neutral structured signal, category absent.
+    assert excinfo.value.refusal is True
+    assert excinfo.value.refusal_category is None
+
+
+def test_openai_batch_refusal_survives_the_serialize_roundtrip() -> None:
+    refusal_item = SimpleNamespace(
+        type="message",
+        content=[SimpleNamespace(type="refusal", refusal="cannot help with that")],
+    )
+    provider = OpenAIProvider(
+        _fake_responses_client(output_text="", output=[refusal_item])
+    )
+
+    handle = provider.submit_batch([_batch_request()], timeout_s=1.0)
+    _, results = provider.collect_batch(handle, timeout_s=1.0)
+
+    (result,) = results
+    assert result.outcome == "errored"
+    assert result.error.refusal is True
+
+
+def test_openai_non_refusal_failure_is_not_marked_refusal() -> None:
+    provider = OpenAIProvider(_fake_responses_client(output_text=""))
+
+    handle = provider.submit_batch([_batch_request()], timeout_s=1.0)
+    _, results = provider.collect_batch(handle, timeout_s=1.0)
+
+    assert results[0].error.refusal is False
+
+
+def test_anthropic_refusal_error_carries_structured_signal() -> None:
+    client = mock.MagicMock()
+    response = _refused_parse_response()
+    response.stop_details = SimpleNamespace(category="cyber")
+    client.messages.parse.return_value = response
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).structured_call(
+            model="claude-haiku-4-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=100,
+            timeout_s=1.0,
+        )
+    assert excinfo.value.refusal is True
+    assert excinfo.value.refusal_category == "cyber"
 
 
 def test_openai_structured_call_raises_on_no_text_output() -> None:

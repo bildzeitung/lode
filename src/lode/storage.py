@@ -94,6 +94,10 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
         # unnecessary here (unlike next_attempt_at above) -- 0 is a valid,
         # constant default SQLite accepts on ADD COLUMN.
         "ALTER TABLE jobs ADD COLUMN batch_collect_failures INTEGER NOT NULL DEFAULT 0",
+        # lode-g9q3: refusal-dead marker + provenance (see schema.sql's comment).
+        "ALTER TABLE jobs ADD COLUMN refusal INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE jobs ADD COLUMN refusal_category TEXT",
+        "ALTER TABLE jobs ADD COLUMN refusal_model TEXT",
     ]
     for ddl in _migrations:
         try:

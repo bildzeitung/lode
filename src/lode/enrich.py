@@ -904,7 +904,14 @@ def collect_enrich_batch(
                 if result.error is not None
                 else (f"batch result={result.outcome}")
             )
-            _mark_job_failed(conn, job_id, error_msg, settings)
+            if result.error is not None and result.error.refusal:
+                # Terminal for this note version (lode-g9q3): dead on the
+                # first refusal, no attempt charged.
+                _mark_job_refused(
+                    conn, job_id, error_msg, result.error.refusal_category, settings
+                )
+            else:
+                _mark_job_failed(conn, job_id, error_msg, settings)
             log.warning(
                 "collect_enrich_batch: batch=%s version=%s %s",
                 batch_id,
@@ -918,6 +925,31 @@ def collect_enrich_batch(
         len(job_map),
     )
     return True
+
+
+def _mark_job_refused(
+    conn: sqlite3.Connection,
+    job_id: int,
+    error_msg: str,
+    category: str | None,
+    settings: Settings,
+) -> None:
+    """Dead-letter a batch-result enrich job the model refused (lode-g9q3).
+
+    The batch counterpart of :func:`lode.worker.run_one`'s refusal arm; both go
+    through :func:`lode.jobs.record_refusal_dead`. ``claim_lost`` is ignored
+    for the reason :func:`_mark_job_failed` documents.
+    """
+    row = conn.execute("SELECT claimed_at FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    jobs.record_refusal_dead(
+        conn,
+        job_id,
+        row[0] if row else None,
+        error_msg,
+        category=category,
+        model=settings.enrichment_llm.model,
+        prompt_ver=ENRICH_PROMPT_VER,
+    )
 
 
 def _mark_job_failed(

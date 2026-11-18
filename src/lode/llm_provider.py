@@ -247,6 +247,12 @@ class LLMProviderError(RuntimeError):
 
     Chain the underlying SDK exception via ``raise ... from exc`` so
     ``__cause__`` still exposes it for debugging.
+
+    ``refusal`` is the provider-neutral structured signal that the model
+    declined the request (lode-g9q3): every provider maps its own refusal shape
+    onto it, so callers never string-match the message. ``refusal_category`` is
+    the provider's refusal category when it supplied one (Anthropic's
+    ``stop_details.category``), else None.
     """
 
     def __init__(
@@ -256,11 +262,15 @@ class LLMProviderError(RuntimeError):
         provider: str,
         status_code: int | None = None,
         request_id: str | None = None,
+        refusal: bool = False,
+        refusal_category: str | None = None,
     ) -> None:
         super().__init__(message)
         self.provider = provider
         self.status_code = status_code
         self.request_id = request_id
+        self.refusal = refusal
+        self.refusal_category = refusal_category
 
 
 class LLMAuthError(LLMProviderError):
@@ -500,6 +510,16 @@ _CONTEXT_WINDOW_EXCEEDED_HINT = (
 )
 
 
+def _refusal_category(response: Any) -> str | None:
+    """``response.stop_details.category``, or None when the API supplied none.
+
+    Read defensively: the API documents both the object and its ``category`` as
+    nullable even on a refusal, and a batch line is decoded unvalidated.
+    """
+    category = getattr(getattr(response, "stop_details", None), "category", None)
+    return category if isinstance(category, str) and category else None
+
+
 def _stop_reason_hint(stop_reason: str | None, response: Any) -> str:
     """Pick the right "why is the block missing" hint for ``stop_reason``.
 
@@ -521,8 +541,7 @@ def _stop_reason_hint(stop_reason: str | None, response: Any) -> str:
     if stop_reason == "model_context_window_exceeded":
         return _CONTEXT_WINDOW_EXCEEDED_HINT
     if stop_reason == "refusal":
-        stop_details = getattr(response, "stop_details", None)
-        category = getattr(stop_details, "category", None)
+        category = _refusal_category(response)
         suffix = f" (category={category!r})" if category else ""
         return (
             f"-- the model declined the request as a policy refusal{suffix}; "
@@ -543,6 +562,8 @@ def _refusal_error(response: Any, *, what: str) -> LLMProviderError:
         f"{what}: stop_reason='refusal', any partial content discarded "
         f"{_stop_reason_hint('refusal', response)}",
         provider="anthropic",
+        refusal=True,
+        refusal_category=_refusal_category(response),
     )
 
 
@@ -687,6 +708,10 @@ def _incomplete_result(result: Any, what: str) -> BatchResult:
             f"stop_reason={stop_reason!r}) "
             f"{_stop_reason_hint(stop_reason, message)}",
             provider="anthropic",
+            refusal=stop_reason == "refusal",
+            refusal_category=(
+                _refusal_category(message) if stop_reason == "refusal" else None
+            ),
         ),
     )
 
@@ -881,6 +906,10 @@ class AnthropicProvider:
                 f"stop_reason={stop_reason!r}) "
                 f"{_stop_reason_hint(stop_reason, response)}",
                 provider="anthropic",
+                refusal=stop_reason == "refusal",
+                refusal_category=(
+                    _refusal_category(response) if stop_reason == "refusal" else None
+                ),
             )
         # A refusal with no text block was reported above; one whose text
         # still validated is reported here, never returned (lode-mzuk). A
@@ -1542,6 +1571,8 @@ class OpenAIProvider:
                             "provider": exc.provider,
                             "status_code": exc.status_code,
                             "request_id": exc.request_id,
+                            "refusal": exc.refusal,
+                            "refusal_category": exc.refusal_category,
                         },
                     }
                 )
@@ -1587,6 +1618,8 @@ class OpenAIProvider:
                             provider=err["provider"],
                             status_code=err.get("status_code"),
                             request_id=err.get("request_id"),
+                            refusal=bool(err.get("refusal", False)),
+                            refusal_category=err.get("refusal_category"),
                         ),
                     )
                 )
@@ -1662,6 +1695,7 @@ class OpenAIProvider:
             raise LLMProviderError(
                 f"OpenAI/Azure model refused the request: {refusal}",
                 provider=self._provider_id,
+                refusal=True,
             )
 
         text = getattr(response, "output_text", "") or ""

@@ -287,6 +287,15 @@ CREATE INDEX IF NOT EXISTS idx_edges_to ON edges (to_id);
 -- is no separate batches table. Why it exists and when it bites is owned by
 -- docs/storage.md "Transient vs. permanent job failures"; the increment and
 -- reset events are in lode.worker._batch_collect_enrich.
+--
+-- refusal / refusal_category / refusal_model (lode-g9q3): set only on an enrich
+-- job that went 'dead' because the model REFUSED it (lode-ahme: terminal for
+-- that note version). refusal=1 is the marker that tells a refusal-dead row
+-- from a max-retries-dead one; refusal_category is the provider's category
+-- (NULL when it supplied none, e.g. OpenAI/Azure); refusal_model is
+-- settings.enrichment_llm.model at refusal time, and prompt_ver is stamped
+-- with ENRICH_PROMPT_VER on the same row, so reconcile can re-open the item
+-- when either differs (docs/storage.md failure taxonomy).
 CREATE TABLE IF NOT EXISTS jobs (
     id                     INTEGER PRIMARY KEY,
     type                   TEXT NOT NULL CHECK (type IN ('embed', 'enrich', 'refresh')),
@@ -298,6 +307,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     last_error             TEXT,
     batch_handle           TEXT,
     batch_collect_failures INTEGER NOT NULL DEFAULT 0,
+    refusal                INTEGER NOT NULL DEFAULT 0,
+    refusal_category       TEXT,
+    refusal_model          TEXT,
     claimed_at             TEXT,
     next_attempt_at        TEXT NOT NULL,
     created                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))

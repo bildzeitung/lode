@@ -6161,3 +6161,23 @@ entries below from being rewritten to chase the current tree.)
   - **Not established.** Refusal frequency on real notes was never measured, and the
     dead -> re-enqueue loop was confirmed by reading `reconcile._enrich_gap_step`, not
     reproduced end to end. Implementation: `lode-g9q3`.
+  - **Update (lode-g9q3, 2026-11-18, maintainer rulings on the technical review):** the entry
+    above left two gaps, settled in the entry "Enrichment refusal: provider scope and recovery
+    after a model change" at the end of this file. Decision (2)'s re-open condition is widened
+    to include `enrichment_llm`, and OpenAI/Azure refusals are in the terminal class.
+
+- **Enrichment refusal: provider scope and recovery after a model change (`lode-g9q3`,
+  2026-11-18, maintainer; rulings on the `lode-ahme` technical review's notes 1 and 4).**
+  - **Provider scope.** "Model refuses to enrich" is one error class with model- and
+    provider-distinct ways of exposing it. The structured refusal signal on `LLMProviderError`
+    (`refusal`, `refusal_category`) is provider-neutral and every provider maps its own refusal
+    shape onto it: Anthropic `stop_reason='refusal'` with its category, and OpenAI/Azure's
+    refusal raised in `OpenAIProvider._extract_json_payload` with the category absent.
+    OpenAI/Azure refusals are therefore in the terminal class: dead on first refusal, no
+    reconcile re-enqueue.
+  - **Recovery after a model change.** A change of `enrichment_llm` re-opens refused items.
+    The enrichment model is stored alongside the prompt version at refusal time
+    (`jobs.refusal_model`, `jobs.prompt_ver`), and a refusal-dead enrich job is a gap again when
+    the head version, `ENRICH_PROMPT_VER`, or the configured enrichment model differs from what
+    was stored. No manual-override command.
+  - **Built in** `lode-g9q3`; reflected in `docs/storage.md`'s failure taxonomy.

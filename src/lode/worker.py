@@ -78,6 +78,10 @@ belt-and-suspenders behind the single-owner advisory lock.
   broke for a legitimately empty summary). ``embed`` jobs are unaffected —
   their ``prompt_ver`` stays NULL per the schema's job-identity design
   (``docs/storage.md`` §"Schema decisions").
+- enrich job the model refused (``LLMProviderError.refusal``) →
+  ``status='dead'`` on the first occurrence, no attempt charged
+  (:func:`lode.jobs.record_refusal_dead`, lode-g9q3; ``docs/storage.md``
+  failure taxonomy, third class)
 - transient error → ``attempts += 1``, ``last_error`` set,
   ``status='failed'`` with
   ``next_attempt_at = now + exponential backoff`` (base/cap from
@@ -674,6 +678,30 @@ def run_one(
 
     except Exception as exc:
         err = str(exc)
+        if job_type == "enrich" and getattr(exc, "refusal", False):
+            # The model refused: terminal for this note version (lode-g9q3,
+            # docs/storage.md failure taxonomy) -- dead on the first
+            # occurrence, no attempt charged.
+            from lode.enrich import ENRICH_PROMPT_VER
+
+            if jobs.record_refusal_dead(
+                conn,
+                job_id,
+                claimed_at,
+                err,
+                category=getattr(exc, "refusal_category", None),
+                model=settings.enrichment_llm.model,
+                prompt_ver=ENRICH_PROMPT_VER,
+            ):
+                log.error(
+                    "job %d (%s target=%s) refused by the model; dead-lettered "
+                    "without retry: %s",
+                    job_id,
+                    job_type,
+                    short,
+                    err,
+                )
+            return False
         log.warning(
             "job %d (%s target=%s) failed (attempt %d/%d): %s",
             job_id,
