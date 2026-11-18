@@ -21,10 +21,9 @@ gated by [`tests/test_decisions_supersession_markers.py`](../tests/test_decision
 what that gate cannot catch is recorded in its module docstring (lode-nlk6).
 
 **A new entry that corrects an earlier entry is a marker too (`lode-llxw`, 2026-11-18, maintainer).**
-The "new entry" form of a correction opens with the same `**Update (<id>[, <date>])` lead-in as an
-appended marker, so the grep above finds it. A date-first "CORRECTION" lead-in, or any other shape,
-does not count. The rule binds an entry whose purpose is to correct an earlier one; an entry that
-only mentions an earlier entry in passing is not a marker.
+The "new entry" form of a correction opens with the same lead-in as an appended marker, so the grep
+above finds it. A date-first "CORRECTION" lead-in, or any other shape, does not satisfy the rule. An
+entry that only mentions an earlier entry in passing is not a marker.
 
 **This file is out of scope for pointer sweeps, by construction (`lode-1dmu`, 2026-08-08).** A
 mechanical sweep that repoints every reference to a file/symbol that moved or was renamed (e.g. the
