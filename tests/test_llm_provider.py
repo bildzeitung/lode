@@ -1752,12 +1752,24 @@ def test_run_tool_turns_refused_free_turn_raises_without_running_tools(
     _assert_refusal_hint(str(excinfo.value))
 
 
-def test_run_tool_turns_max_tokens_free_turn_raises_without_running_tools() -> None:
+@pytest.mark.parametrize(
+    ("stop_reason", "hint"),
+    [
+        ("max_tokens", _BUDGET_EXHAUSTED_HINT),
+        (
+            "model_context_window_exceeded",
+            "shrink the retrieved context or user_prompt",
+        ),
+    ],
+)
+def test_run_tool_turns_cut_off_free_turn_raises_without_running_tools(
+    stop_reason: str, hint: str
+) -> None:
     tool = ToolSpec(
         name="lookup_widget", description="Look up a widget.", input_schema={}
     )
     truncated = _tool_use_response("lookup_widget", {})
-    truncated.stop_reason = "max_tokens"
+    truncated.stop_reason = stop_reason
     client = mock.MagicMock()
     client.messages.create.side_effect = [truncated]
     ran: list[str] = []
@@ -1777,9 +1789,11 @@ def test_run_tool_turns_max_tokens_free_turn_raises_without_running_tools() -> N
         )
 
     assert ran == []
+    # The one free turn only: no final structured-output turn was attempted.
+    assert client.messages.create.call_count == 1
     client.messages.parse.assert_not_called()
-    assert "stop_reason='max_tokens'" in str(excinfo.value)
-    assert _BUDGET_EXHAUSTED_HINT in str(excinfo.value)
+    assert f"stop_reason={stop_reason!r}" in str(excinfo.value)
+    assert hint in str(excinfo.value)
 
 
 @pytest.mark.network

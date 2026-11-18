@@ -1015,7 +1015,8 @@ class AnthropicProvider:
             # lode-9594 -- feeds the per-run total logged below, compared
             # against lode-csl2's (max_tool_turns + 1) x max_tokens bound.
             total_output_tokens += _output_tokens(response)
-            if getattr(response, "stop_reason", None) == "refusal":
+            stop_reason = getattr(response, "stop_reason", None)
+            if stop_reason == "refusal":
                 # Never execute a refused turn's tools: a refusal can cut a
                 # tool_use off mid-input (lode-mzuk).
                 raise _refusal_error(
@@ -1025,15 +1026,16 @@ class AnthropicProvider:
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
             if not tool_use_blocks:
                 break
-            if getattr(response, "stop_reason", None) == "max_tokens":
-                # A tool_use cut off at max_tokens usually still parses as a
-                # valid partial input; running the tool on it would act on
-                # arguments the model never finished (lode-4rxs).
+            if stop_reason in _INCOMPLETE_STOP_REASONS:
+                # A cut-off tool_use usually still parses as a valid partial
+                # input; running the tool on it would act on arguments the
+                # model never finished (lode-4rxs). Refusal was raised above,
+                # so this is the output cap or the context window.
                 raise LLMProviderError(
                     f"Anthropic free tool turn (model={model}, "
-                    f"max_tokens={max_tokens}, stop_reason='max_tokens') was "
-                    "cut off mid tool_use; the tool was not run "
-                    f"{_stop_reason_hint('max_tokens', response)}",
+                    f"max_tokens={max_tokens}, stop_reason={stop_reason!r}) was "
+                    "cut off mid tool_use; no tool was run "
+                    f"{_stop_reason_hint(stop_reason, response)}",
                     provider="anthropic",
                 )
             messages.append({"role": "assistant", "content": response.content})
