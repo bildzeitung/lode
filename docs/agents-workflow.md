@@ -489,15 +489,20 @@ Two rules, three message texts:
     [lode-0a4n](#validate-land_headreview_head-shape-before-trusting-them-as-drift-signals-lode-xdg3) added.
     A script that derives, validates and writes inside one process *is* a plain call, so the agent
     files now use three: `scripts/handoff-sha.sh <id> <review_head|land_head> [bd-update-args…]`
-    (derive `HEAD`, validate, `bd update`; exit 0 done, 1 malformed value, 2 broken call, 3 `bd
-    update` failed), `scripts/check-review-head.sh <id>` (the code-reviewer's read + validate +
-    ancestor check; 0 forward-only, 1 malformed/missing, 2 broken call, 3 unreachable = drift, 4
+    (derive `HEAD`, validate, check origin's tip, `bd update`; exit 0 done, 1 malformed value, 2
+    broken call, 3 `bd update` failed, 4 origin's `land/<id>` is absent or not at `HEAD`, 5
+    `ls-remote` itself failed), `scripts/check-review-head.sh <id>` (the code-reviewer's read +
+    validate + ancestor check; 0 forward-only, 1 malformed/missing, 2 broken call, 3 unreachable = drift, 4
     `bd show` unreadable) and `scripts/checkout-land-branch.sh <id>` (the worktree-suffixed
     `checkout -B`: suffix taken from the worktree's own directory; the script runs
     `git fetch origin land/<id> trunk` itself (lode-n7g4) so a stale `FETCH_HEAD` is never read, and
     takes the tip from `FETCH_HEAD`'s own `land/<id>` line rather than from `FETCH_HEAD` as a rev,
     which names only the first ref of a multi-ref fetch; 1 not a launch worktree, 2 broken call, 3 no
     `land/<id>` entry in `FETCH_HEAD` after a successful fetch, 4 the fetch failed).
+    `handoff-sha.sh`'s origin check (lode-tx33) makes order load-bearing: the push to `land/<id>`
+    precedes the call at every call site, because a recorded SHA origin does not carry reads as
+    drift to `/land`'s 2a precheck. It costs one `git ls-remote` per hand-off, accepted; a dirty
+    tree is not refused there — the call sites assert `git status --short` themselves.
     Copy-from-output remains only for values with no script, e.g. the stacked off-trunk merge-base
     SHA in `land-review.md`.
   - **The `|| { echo STOP …; exit 1; }` tails are gone, and their diagnostics moved to prose.** The
@@ -1602,14 +1607,21 @@ the next one, and every subsequent nit was silently lost. The policy now is:
   apply is, before hand-off, either re-appended to the successor collector (still wording-only, just
   not applicable this pass) or filed as its own ticket (a judgment call). It never closes silently
   with the batch — **except** a nit whose verbatim anchor line is no longer present anywhere in the
-  file: that nit is already fixed (e.g. by an intervening comment-groomer or land), so the builder
-  drops it and says so in the hand-off note. Every nit's disposition — applied / carried over / filed
-  as ticket / dropped as anchor-gone — is listed in the hand-off note.
+  file **and** whose named defect is gone from the current text too (e.g. fixed by an intervening
+  comment-groomer or land): the builder drops that one and says so in the hand-off note. An absent
+  anchor alone is not proof of a fix — the nit may have been written against a branch whose edit
+  never reached `trunk` (lode-vlyj). So a nit whose named defect is still visible in the current text,
+  or whose anchor equals the replacement text of another pending nit (on the collector being drained
+  or the open successor), is carried over instead, its re-appended note saying why the anchor is
+  absent and pointing at that other nit when there is one. Every nit's disposition — applied /
+  carried over / filed as ticket / dropped as anchor-gone — is listed in the hand-off note, a drop
+  recording both what was absent (the anchor) and why the defect is gone, a nit carried over this
+  way recording which kept it — the still-visible defect, or the other nit's pending replacement.
 - **Scope includes source comments.** Wording-only drift in a shell/Python comment is a docs-nit,
   same patch shape as a doc-prose nit — `/comment-audit`'s own misleading/drifted smell is unaffected;
   the overlap is benign because of the anchor-gone rule above (whichever fixes it first, the other
-  finds no anchor and drops it). Comments serving an API/help contract (Typer docstrings, VERBATIM by
-  fiat) stay out of scope.
+  finds the anchor and the defect both gone and drops it). Comments serving an API/help contract
+  (Typer docstrings, VERBATIM by fiat) stay out of scope.
 
 **This is a deliberate, narrow carve-out** from `/land`'s "never file a bd ticket for an incidental
 discovery" rule ([What I never
@@ -3250,9 +3262,13 @@ What is observed, and what is not:
 - **Not established:** the Claude Code version at which the harness began locking. The builds
   lode-oqr lost (2026-07-10) were recorded as unlocked; a harness lock is first on record a few days
   later, on a reviewer's worktree (lode-amif).
-- **Not measured:** how often the harness leaves a *builder's* lock behind when the agent exits. For
-  reviewers it was one of two ([lode-7ndi, below](#the-step-0-pickup-merges-it-never-rebases-lode-cln)).
-  Every builder before this change removed the lock itself, so there is no builder figure.
+- **Measured once (lode-lo0q, 2026-11-17, Claude Code 2.1.326):** whether the harness leaves a
+  *builder's* lock behind when the agent exits. For reviewers it was one of two
+  ([lode-7ndi, below](#the-step-0-pickup-merges-it-never-rebases-lode-cln)). For builders, in one
+  `/code` fan-out, ten finished and none was seen keeping the lock after completion. A reviewer saw
+  all five then-finished builder worktrees unlocked mid-session, and `/land` reclaimed eight builder
+  worktrees while the orchestrating session was still alive, which a locked worktree would have
+  blocked. It is one session on one harness version, not a rate over many fan-outs.
 
 What each consumer of the lock sees:
 
@@ -3263,12 +3279,18 @@ What each consumer of the lock sees:
   the worktree stays `keep-locked` — landed or abandoned — until the orchestrating session's process
   ends; `scripts/worktree-lock-stale.sh` can then prove the pid dead, and the sweep reclaims it on
   the same two paths. (While the builder still ran its own unlock, this case could not arise.) The
-  cost is a directory held for the rest of a session, never lost work. Measuring it, and deciding
-  who should release such a lock, is lode-lo0q.
+  cost is a directory held for the rest of a session, never lost work. No builder was seen in that
+  state (measurement above), and the case is accepted (lode-lo0q decision, below).
 - **`/code`'s per-ticket reclaim** (`scripts/code-reclaim-launch-worktree.sh`). Handles only a
   reviewer's or rebase pickup's `land/<id>--*` worktree. It never matches a fresh build's
   `worktree-agent-*` branch, so it does **not** clear a lock the harness leaves on a builder's
   worktree.
+
+**Decision (lode-lo0q): a finished builder's leftover harness lock is accepted until the session
+ends; no release mechanism is built.** Not added: `/code` unlocking the builder's worktree on its
+completion notification, or a `/land` sweep rule that treats a lock naming the worktree's own
+directory as released once its HEAD is captured and its ticket is closed. Revisit if a finished
+builder's worktree is ever seen still locked.
 
 **If the harness ever hands out an unlocked launch worktree, nothing in the builder's cycle
 notices.** `/land`'s sweep could then reclaim a fresh build's worktree while it is still clean and at

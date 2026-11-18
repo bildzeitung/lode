@@ -23,6 +23,13 @@
 #           written. Never a verdict about the content.
 # Exit 3 -> the value was fine but `bd update` itself failed (its output is on
 #           stderr); the field was not written.
+# Exit 4 -> origin does not carry HEAD as the tip of land/<ticket-id> (never
+#           pushed, push rejected, or a commit made after the push); nothing
+#           was written. Push first, then re-run. Recording such a SHA reads
+#           as drift to /land's 2a precheck, which bounces a correct branch
+#           (lode-tx33). One `git ls-remote` read per call is accepted.
+# Exit 5 -> `git ls-remote origin` itself failed (no origin, network); nothing
+#           was written.
 # Other  -> git's own failure status from `rev-parse HEAD` (no repo, unborn
 #           HEAD); nothing was written.
 
@@ -52,6 +59,17 @@ SHA="$(git rev-parse HEAD)"
 
 # `exit $?`, never `exit 1`: the validator's own 1-vs-2 distinction passes through.
 "$HERE/validate-sha40.sh" "$FIELD" "$SHA" || exit $?
+
+if ! TIP="$(git ls-remote origin "refs/heads/land/$ID")"; then
+  echo "handoff-sha.sh: git ls-remote origin failed; $FIELD was NOT written." >&2
+  exit 5
+fi
+TIP="${TIP%%[[:space:]]*}"
+if [ "$TIP" != "$SHA" ]; then
+  echo "handoff-sha.sh: origin/land/$ID is '${TIP:-absent}', not HEAD $SHA" \
+    "-- push HEAD first; $FIELD was NOT written." >&2
+  exit 4
+fi
 
 if ! bd update "$ID" --set-metadata "$FIELD=$SHA" "$@"; then
   echo "handoff-sha.sh: bd update failed for $ID; $FIELD was NOT written." >&2

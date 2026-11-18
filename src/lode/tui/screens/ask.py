@@ -224,7 +224,8 @@ class AskScreen(Screen[None]):
         app = self.app
 
         def _on_stage(stage: str) -> None:
-            self.app.call_from_thread(self._set_stage, generation, stage)
+            # ``app``, not ``self.app``: a detached screen has no app to resolve.
+            app.call_from_thread(self._set_stage, generation, stage)
 
         try:
             result = run_ask(
@@ -239,11 +240,21 @@ class AskScreen(Screen[None]):
             )
         except Exception as err:
             log.exception("ask failed")
-            self.app.call_from_thread(
-                self._fail, generation, str(err) or type(err).__name__
-            )
+            app.call_from_thread(self._fail, generation, str(err) or type(err).__name__)
             return
-        self.app.call_from_thread(self._finish, generation, rendered, result)
+        app.call_from_thread(self._finish, generation, rendered, result)
+
+    def _is_stale(self, generation: int) -> bool:
+        """Whether a worker's write for ``generation`` must be dropped. Main thread only.
+
+        Stale once a newer question has bumped the counter, or once this
+        screen has stopped running. An instance pushed for a note-scoped ask
+        is removed by Escape (the installed ``"ask"`` screen is not), and its
+        worker's thread cannot be preempted, so it still makes every hop.
+        ``is_running`` turns False before the children are pruned, so no write
+        reaches a screen that is part-way through teardown.
+        """
+        return generation != self._ask_generation or not self.is_running
 
     def _start_spinner(self) -> None:
         """Begin the animated in-flight indicator. Main thread only.
@@ -260,7 +271,7 @@ class AskScreen(Screen[None]):
 
     def _set_stage(self, generation: int, stage: str) -> None:
         """Update the in-flight stage text for ``generation``. Main thread only."""
-        if generation != self._ask_generation:
+        if self._is_stale(generation):
             return
         self._stage = stage
         self._render_spinner()
@@ -284,7 +295,7 @@ class AskScreen(Screen[None]):
         Textual's default markup parse raises on those bracket groups when
         the toast renders -- which exits the app.
         """
-        if generation != self._ask_generation:
+        if self._is_stale(generation):
             return
         self._finish(generation, _PLACEHOLDER, None)
         self.notify(message, severity="error", markup=False)
@@ -299,7 +310,7 @@ class AskScreen(Screen[None]):
         either way :meth:`_update_citation_status` clears the status line
         rather than special-casing them here.
         """
-        if generation != self._ask_generation:
+        if self._is_stale(generation):
             return
         if self._spinner_timer is not None:
             self._spinner_timer.stop()

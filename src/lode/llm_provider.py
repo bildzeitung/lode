@@ -11,7 +11,7 @@ against exactly; read that first for the *why*. This module owns the *what*:
   repo's existing :class:`lode.embedding.Embedder` precedent) covering all
   three cloud-LLM call surfaces: one generic immediate structured-output
   method (:meth:`LLMProvider.structured_call`, serving both the enrichment
-  call and the Q&A call, each a ``messages.parse`` structured-output call on
+  call and the Q&A call, each a ``messages.create`` structured-output call on
   Anthropic) plus the two-phase
   batch contract (:meth:`LLMProvider.submit_batch` / :meth:`LLMProvider.collect_batch`).
 - :class:`AnthropicProvider` -- the sole implementation for now (T2,
@@ -124,7 +124,7 @@ against exactly; read that first for the *why*. This module owns the *what*:
 - **Provider parity, settled here: Anthropic-only.**
   :class:`AnthropicProvider.run_tool_turns` implements the real loop
   (``messages.create`` with ``tool_choice={"type": "auto"}``, tool results fed
-  back as ``tool_result`` content blocks, then a ``messages.parse`` final
+  back as ``tool_result`` content blocks, then a ``messages.create`` final
   turn -- not a forced ``tool_choice``, which Sonnet 5.5/Opus 5.5 reject,
   lode-ugj5).
   :class:`OpenAIProvider.run_tool_turns` implements only the degenerate
@@ -563,8 +563,10 @@ def _anthropic_error_from_exception(
     """Wrap an Anthropic SDK 4xx/5xx into :class:`LLMProviderError` (lode-90o7, lode-i7yr).
 
     Used at all five ``AnthropicProvider`` SDK call sites: the three that
-    *submit* a request -- ``messages.create``, ``messages.parse``,
-    ``batches.create`` -- and the two that *poll* an existing batch in
+    *submit* a request -- the two ``messages.create`` sites (a free tool
+    turn, and the structured-output turn in
+    :meth:`AnthropicProvider._parsed_turn`) and ``batches.create`` -- and
+    the two that *poll* an existing batch in
     :meth:`AnthropicProvider.collect_batch` -- ``batches.retrieve``,
     ``batches.results``. Same "log + wrap, preserve status_code/request_id"
     shape :meth:`OpenAIProvider._error_from_exception` already uses for the
@@ -695,11 +697,11 @@ class AnthropicProvider:
     """Wraps today's ``anthropic.Anthropic`` client; the sole provider (T2).
 
     Structured output (``output_config.format``) is the one wire mechanism
-    for every surface -- ``messages.parse`` for the immediate calls,
+    for every surface -- ``messages.create`` for the immediate calls,
     ``beta.messages.batches.*`` with the same ``output_config.format`` for
     the batch path. No surface forces a ``tool_choice`` (lode-ni7p).
 
-    **Thinking is never explicitly disabled on the ``messages.parse`` branch
+    **Thinking is never explicitly disabled on the ``messages.create`` branch
     (lode-3dlt, superseding lode-d1sr's ``thinking={"type": "disabled"}``
     pin).** This is the single source of truth for that decision; the call
     sites below and :data:`lode.qa.MAX_TOKENS` point here rather than restate
@@ -723,7 +725,8 @@ class AnthropicProvider:
     for Opus 5 prefers thinking on at low/medium effort over disabled (two
     failure modes of disabled thinking -- tool calls emitted as plain text, and
     ``<thinking>`` tag leakage -- neither applies badly here: this branch sends
-    no tools, and the schema-constrained ``output_format`` contains leakage).
+    no tools, and the schema-constrained ``output_config.format`` contains
+    leakage).
     :data:`lode.qa.MAX_TOKENS` was raised accordingly to give the now-possible
     adaptive thinking headroom to share with the claims response. Net effect:
     Sonnet 5.5 (``qa_llm`` default) and Opus 5.5 (``qa_think_harder_llm``
@@ -733,10 +736,8 @@ class AnthropicProvider:
     The raised cap is headroom, not a guarantee, so this branch now also
     *handles* running out of it. Thinking shares ``max_tokens`` with the answer
     text, and exhausting the budget shows up two ways: a response whose
-    ``content`` holds only a thinking block (the SDK's ``parsed_output`` is then
-    ``None``, which would otherwise escape under this method's ``-> BaseModelT``
-    annotation and fail as an ``AttributeError`` in the caller), or a text block
-    truncated mid-JSON (a raw ``pydantic.ValidationError`` from inside the SDK).
+    ``content`` holds only a thinking block (no text block to decode), or a
+    text block truncated mid-JSON (which fails validation against the schema).
     Both are converted to :class:`LLMProviderError` -- the same contract
     :class:`OpenAIProvider` already honors for its equivalent shapes -- so the
     failure is diagnosable at the seam instead of surfacing far from its cause.
@@ -748,8 +749,9 @@ class AnthropicProvider:
     JSON payload: :data:`lode.enrich.MAX_TOKENS` carries the headroom
     (lode-jgus). A response that spent its whole budget thinking carries no
     text block, which :meth:`_parsed_turn` converts to
-    :class:`LLMProviderError`; one cut off partway through the JSON fails the
-    SDK's own validation there instead (the ``ValidationError`` arm).
+    :class:`LLMProviderError`; one cut off partway through the JSON fails
+    validation there instead (the ``ValidationError`` arm, which names the
+    ``stop_reason``).
     :meth:`collect_batch` reaches both symptoms *more* easily (see
     :data:`lode.enrich.MAX_TOKENS` for why the batch route is bounded
     differently) and degrades the one item to an ``errored``
@@ -804,7 +806,7 @@ class AnthropicProvider:
         where: str = "",
         tools: Sequence[Mapping[str, Any]] | None = None,
     ) -> tuple[BaseModelT, int]:
-        """One ``messages.parse`` turn decoded into ``output_schema``.
+        """One ``messages.create`` structured-output turn decoded into ``output_schema``.
 
         Returns the decoded model and this turn's ``usage.output_tokens``.
         The single implementation of the structured-output
@@ -827,20 +829,29 @@ class AnthropicProvider:
         tool_kwargs: dict[str, Any] = (
             {"tools": tools, "tool_choice": {"type": "none"}} if tools else {}
         )
+        # `messages.create` + an explicit `output_config.format`, not
+        # `messages.parse`: parse validates the text inside the SDK, so a
+        # refusal whose text is truncated mid-JSON raises a ValidationError
+        # with the response -- and its `stop_reason` -- unreachable. Here the
+        # response is in hand and `stop_reason` is read BEFORE the text is
+        # validated (lode-pdss). The format is the same one `submit_batch`
+        # builds, via the SDK's own `transform_schema`.
+        output_config: dict[str, Any] = {
+            **effort_kwargs.get("output_config", {}),
+            "format": {
+                "type": "json_schema",
+                "schema": anthropic.transform_schema(output_schema),
+            },
+        }
         try:
-            # `.parse()` merges an `output_config` we pass with the
-            # `output_format`-derived `{"format": ...}` it builds internally, so
-            # sending `effort` here does not clobber the schema wiring (the test
-            # suite asserts both kwargs reach the SDK).
-            response = self._client.messages.parse(
+            response = self._client.messages.create(
                 model=model,
                 max_tokens=max_tokens,
                 system=system,
                 messages=messages,
-                output_format=output_schema,
+                output_config=output_config,
                 timeout=timeout,
                 **tool_kwargs,
-                **effort_kwargs,
             )
         except anthropic.APIStatusError as exc:
             # lode-90o7 -- see `_anthropic_error_from_exception` and the class
@@ -848,32 +859,27 @@ class AnthropicProvider:
             raise _anthropic_error_from_exception(
                 exc, context=f"model={model}{where}"
             ) from exc
-        except ValidationError as exc:
-            # ``messages.parse`` validates the response text against
-            # ``output_schema`` inside the SDK, so a schema violation -- or a
-            # text block truncated mid-JSON because thinking ate the budget --
-            # surfaces as a raw pydantic error from the SDK's own
-            # post-processing. Wrap it: callers of this seam see
-            # LLMProviderError, exactly as OpenAIProvider already guarantees.
-            raise LLMProviderError(
-                f"Anthropic response did not match {output_schema.__name__}"
-                f"{where} (model={model}, max_tokens={max_tokens}) -- a response "
-                f"truncated mid-JSON (output budget, or a mid-generation "
-                f"stop_reason='refusal' -- not visible from here) is "
-                f"indistinguishable from a genuine schema violation: {exc}",
-                provider="anthropic",
-            ) from exc
 
-        parsed = response.parsed_output
-        if parsed is None:
-            # ``parsed_output`` scans ``content`` for a TEXT block and returns
-            # None when there is none. A response that spent its whole budget
-            # inside thinking carries only a thinking block and
-            # ``stop_reason="max_tokens"`` -- reachable precisely because
-            # lode-3dlt stopped pinning thinking off. Unguarded, that None
-            # escapes under this method's return annotation and fails as an
-            # AttributeError inside :func:`lode.qa.answer_question`.
-            stop_reason = getattr(response, "stop_reason", None)
+        stop_reason = getattr(response, "stop_reason", None)
+        # A refused response's content is partial and must be discarded,
+        # whether or not it would validate (lode-mzuk, lode-pdss).
+        if stop_reason == "refusal":
+            raise _refusal_error(
+                response,
+                what=(
+                    f"Anthropic declined the structured-output request for "
+                    f"{output_schema.__name__}{where} (model={model})"
+                ),
+            )
+        text_block = next(
+            (b for b in response.content if getattr(b, "type", None) == "text"),
+            None,
+        )
+        if text_block is None:
+            # A response that spent its whole budget inside thinking carries
+            # only a thinking block and ``stop_reason="max_tokens"`` --
+            # reachable precisely because lode-3dlt stopped pinning thinking
+            # off.
             raise LLMProviderError(
                 f"Anthropic response contained no text block to decode into "
                 f"{output_schema.__name__}{where} (model={model}, "
@@ -882,18 +888,24 @@ class AnthropicProvider:
                 f"{_stop_reason_hint(stop_reason, response)}",
                 provider="anthropic",
             )
-        # A refusal with no text block was reported above; one whose text
-        # still validated is reported here, never returned (lode-mzuk). A
-        # refusal whose text does NOT validate never gets this far -- it is the
-        # ``ValidationError`` arm above, which cannot see ``stop_reason``.
-        if getattr(response, "stop_reason", None) == "refusal":
-            raise _refusal_error(
-                response,
-                what=(
-                    f"Anthropic declined the structured-output request for "
-                    f"{output_schema.__name__}{where} (model={model})"
-                ),
-            )
+        try:
+            parsed = output_schema.model_validate_json(text_block.text)
+        except ValidationError as exc:
+            # Refusal was handled above, so this is a genuine schema
+            # violation or a truncation; `stop_reason` tells them apart.
+            if stop_reason in _INCOMPLETE_STOP_REASONS:
+                diagnosis = (
+                    f"the text was cut off before it was complete JSON "
+                    f"{_stop_reason_hint(stop_reason, response)}"
+                )
+            else:
+                diagnosis = "the text is complete but violates the schema"
+            raise LLMProviderError(
+                f"Anthropic response did not match {output_schema.__name__}"
+                f"{where} (model={model}, max_tokens={max_tokens}, "
+                f"stop_reason={stop_reason!r}): {diagnosis}: {exc}",
+                provider="anthropic",
+            ) from exc
         return parsed, _output_tokens(response)
 
     def structured_call(
@@ -910,8 +922,9 @@ class AnthropicProvider:
         tool_description: str | None = None,
     ) -> BaseModelT:
         # reasoning_effort -> output_config.effort (lode-wnz1): validated up
-        # front, then splatted -- empty when unset, so the kwarg is absent
-        # rather than `None`. See `_anthropic_effort_kwargs`.
+        # front, then merged into the `output_config` `_parsed_turn` sends --
+        # empty when unset, so `effort` is absent rather than `None`. See
+        # `_anthropic_effort_kwargs`.
         effort_kwargs = _anthropic_effort_kwargs(reasoning_effort, model=model)
         # Single-call path: no multi-turn bound to compare a spend total
         # against, so the token count is discarded here (lode-9594).
@@ -948,7 +961,7 @@ class AnthropicProvider:
         (``tool_choice={"type": "auto"}``) ``messages.create`` turns --
         feeding each tool_use block through ``tool_result`` and appending the
         result as a ``tool_result`` content block -- then one final
-        ``messages.parse`` (``output_config.format`` structured output, tools
+        ``messages.create`` (``output_config.format`` structured output, tools
         kept with ``tool_choice`` ``none``), continuing the same message
         history. Forced ``tool_choice`` is not used: Sonnet 5.5 and Opus 5.5
         reject it (lode-ugj5).
@@ -1015,7 +1028,8 @@ class AnthropicProvider:
             # lode-9594 -- feeds the per-run total logged below, compared
             # against lode-csl2's (max_tool_turns + 1) x max_tokens bound.
             total_output_tokens += _output_tokens(response)
-            if getattr(response, "stop_reason", None) == "refusal":
+            stop_reason = getattr(response, "stop_reason", None)
+            if stop_reason == "refusal":
                 # Never execute a refused turn's tools: a refusal can cut a
                 # tool_use off mid-input (lode-mzuk).
                 raise _refusal_error(
@@ -1025,6 +1039,19 @@ class AnthropicProvider:
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
             if not tool_use_blocks:
                 break
+            if stop_reason == "max_tokens":
+                # A tool_use cut off at max_tokens usually still parses as a
+                # valid partial input; running the tool on it would act on
+                # arguments the model never finished (lode-4rxs). Whether
+                # model_context_window_exceeded needs the same check is open
+                # (lode-hfzw).
+                raise LLMProviderError(
+                    f"Anthropic free tool turn (model={model}, "
+                    f"max_tokens={max_tokens}, stop_reason={stop_reason!r}) was "
+                    "cut off mid tool_use; no tool was run "
+                    f"{_stop_reason_hint(stop_reason, response)}",
+                    provider="anthropic",
+                )
             messages.append({"role": "assistant", "content": response.content})
             result_blocks = [
                 {
@@ -1092,7 +1119,7 @@ class AnthropicProvider:
                 "messages": [{"role": "user", "content": req.user_prompt}],
             }
             # Structured output, never a forced tool_choice (lode-ni7p): the
-            # same `output_config.format` shape `messages.parse` builds for the
+            # same `output_config.format` shape `_parsed_turn` builds for the
             # immediate route, via the SDK's own `transform_schema`.
             output_format = schema_cache.get(req.output_schema)
             if output_format is None:

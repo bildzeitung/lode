@@ -600,7 +600,8 @@ a known, accepted trade-off, not a follow-up ticket.
 ### enrichment_llm max_tokens headroom for a thinking-capable override (decided, lode-jgus)
 
 > **Update (lode-ni7p):** enrichment no longer forces a tool, so the "forced-tool-use
-> branch" below is now the `messages.parse` / batch `output_config.format` route, and
+> branch" below is now the immediate (`messages.create` since `lode-pdss`, `messages.parse`
+> before it) / batch `output_config.format` route, and
 > Haiku 5.5 (the default) shares `enrich.MAX_TOKENS` with adaptive thinking too — the
 > forced `tool_choice` that made it skip thinking is gone. The constant is unchanged
 > (3072); a default-tier response that spends it all on thinking surfaces as the same
@@ -752,7 +753,8 @@ collect time after its handle was persisted. Routing enrichment through
 A `ModelTier`'s `reasoning_effort` reaches Anthropic as `output_config.effort`
 (`low`/`medium`/`high`/`xhigh`/`max` — GA since the 4.6 generation, `xhigh`
 added on Opus 4.7) on every wire mechanism `AnthropicProvider` has: `structured_call`
-(`messages.parse`; enrichment used a forced-tool-use branch until `lode-ni7p`) and
+(`messages.create` with `output_config.format`, `messages.parse` until `lode-pdss`;
+enrichment used a forced-tool-use branch until `lode-ni7p`) and
 `submit_batch`. Left unset — which is
 every tier's default, and what a bare-string `enrichment_llm = "…"` coerces to
 — the parameter is **omitted** from the request rather than sent as `null`. A
@@ -822,7 +824,8 @@ carry the sources). The older decision sections above are left as written at dec
   The enrichment path (forced tool-use in `structured_call`, and the batch path's
   `tool_choice` in `submit_batch`) was reachable only from `enrich.py`, i.e. the Haiku tier, and
   was left unchanged here; `lode-ni7p` later moved it to `output_config.format` too. The Q&A final turn of `run_tool_turns` used to reuse the forced helper; it now
-  uses `output_config.format` structured output via `messages.parse` — the same mechanism as
+  uses `output_config.format` structured output via `messages.parse` (`messages.create` since
+  `lode-pdss`) — the same mechanism as
   the single-shot Q&A branch — with the tool definitions kept and `tool_choice` `none` (the
   history carries `tool_use`/`tool_result` blocks). Verified live that `output_config.format`
   works over tool-result history on both Q&A models. `strict: true` stays off (`lode-568v.3`).

@@ -45,6 +45,7 @@ from types import SimpleNamespace
 import click
 import pytest
 import typer.main
+from conftest import claims_response
 from rich.console import Console
 from rich.table import Table
 from typer.testing import CliRunner
@@ -5181,15 +5182,15 @@ def test_recover_full_id_of_a_live_note_errors_not_deleted(tmp_path: Path) -> No
 
 
 class _FakeMessages:
-    """Records every parse() call and returns a fixed parsed claims envelope."""
+    """Records every create() call and returns a fixed parsed claims envelope."""
 
     def __init__(self, claims: list[Claim]) -> None:
         self._claims = claims
         self.calls: list[dict] = []
 
-    def parse(self, **kwargs: object) -> SimpleNamespace:
+    def create(self, **kwargs: object) -> SimpleNamespace:
         self.calls.append(kwargs)
-        return SimpleNamespace(parsed_output=SimpleNamespace(claims=self._claims))
+        return claims_response(self._claims)
 
 
 class _FakeClient:

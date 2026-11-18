@@ -368,7 +368,7 @@ def _request_claims(
     (lode-568v.2) via :meth:`~lode.llm_provider.LLMProvider.run_tool_turns`
     (lode-35nu.11.6). An empty ``tools`` -- every provider's empty-``tools``
     case is required to delegate straight to ``structured_call``
-    (``messages.parse`` with an ``output_format`` Pydantic model for
+    (``messages.create`` with an ``output_config.format`` schema for
     :class:`~lode.llm_provider.AnthropicProvider`) -- is byte-for-byte
     identical to calling ``structured_call`` directly, as it did before
     lode-35nu.11.6. A non-empty ``tools`` (lode-8hsk) runs the free-tool-turn

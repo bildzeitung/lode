@@ -17,7 +17,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from conftest import fake_tool_turn_client
+from conftest import claims_response, fake_tool_turn_client
 
 from lode.answer import Answer, Claim, Support
 from lode.cited_answer import CitedAnswer, ask, gate_cited_answer
@@ -30,15 +30,15 @@ from lode.storage import init_db
 
 
 class _FakeMessages:
-    """Records every parse() call and returns a fixed parsed claims envelope."""
+    """Records every create() call and returns a fixed parsed claims envelope."""
 
     def __init__(self, claims: list[Claim]) -> None:
         self._claims = claims
         self.calls: list[dict] = []
 
-    def parse(self, **kwargs: object) -> SimpleNamespace:
+    def create(self, **kwargs: object) -> SimpleNamespace:
         self.calls.append(kwargs)
-        return SimpleNamespace(parsed_output=SimpleNamespace(claims=self._claims))
+        return claims_response(self._claims)
 
 
 class _FakeClient:
@@ -63,7 +63,7 @@ class _StubScorer:
 
 
 def _user_prompt(client: _FakeClient) -> str:
-    """The user-message text of the single recorded parse() call."""
+    """The user-message text of the single recorded create() call."""
     (call,) = client.messages.calls
     (message,) = call["messages"]
     return message["content"]
@@ -880,8 +880,9 @@ def test_ask_tools_enabled_false_reproduces_notes_only_prompt_byte_for_byte(
 
     This pins the ASK layer's half: the wire's system prompt is qa._SYSTEM_PROMPT
     and the call went through the empty-tools structured_call path at all (a
-    non-empty tool set routes through messages.create, so _FakeMessages.parse
-    would never be called and the single-call unpack below would fail). That
+    non-empty tool set adds free messages.create turns before the final one, so
+    _FakeMessages would record more than one call and the single-call unpack
+    below would fail). That
     _SYSTEM_PROMPT is itself byte-for-byte the pre-lode-8hsk notes-only prompt is
     pinned separately, against a frozen literal, by test_qa.py."""
     from lode.qa import _SYSTEM_PROMPT

@@ -6062,6 +6062,8 @@ entries below from being rewritten to chase the current tree.)
     ends. `/code`'s per-ticket reclaim does not cover it: it matches only `land/<id>--*`. A directory
     held for the rest of a session, never lost work. Measuring it and deciding who releases such a
     lock: `lode-lo0q`.
+    **Update (lode-lo0q, 2026-11-18): decided, accepted; no release mechanism.** See the
+    `lode-lo0q` entry below.
   - **Not established.** The Claude Code version at which the harness began locking: the builds
     `lode-oqr` lost (2026-07-10) were recorded as unlocked, and a harness lock is first on record a
     few days later (`lode-amif`). Nothing asserts the lock is present when a build starts; whether
@@ -6169,3 +6171,44 @@ entries below from being rewritten to chase the current tree.)
   - **Not established.** Refusal frequency on real notes was never measured, and the
     dead -> re-enqueue loop was confirmed by reading `reconcile._enrich_gap_step`, not
     reproduced end to end. Implementation: `lode-g9q3`.
+
+- **A finished builder's leftover harness lock is accepted until the session ends; no release
+  mechanism is built (`lode-lo0q`, 2026-11-18, maintainer ruling).** After `lode-t76f` the builder
+  no longer unlocks. If the harness does not release the lock at agent exit, a finished builder's
+  worktree stays `keep-locked` to `/land`'s sweep until the orchestrating session's process ends.
+  The live account is
+  [agents-workflow.md](agents-workflow.md#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f).
+  - **Measurement.** `/code` fan-out of 2026-11-17 on Claude Code 2.1.326: ten finished builders,
+    none observed keeping the lock after completion. A reviewer saw all five then-finished builder
+    worktrees unlocked mid-session, and `/land` reclaimed eight builder worktrees while the
+    orchestrating session was still alive, impossible for a locked one.
+  - **Decision.** Accept the leak-until-session-end and build no release mechanism. Not taken:
+    (A) `/code` unlocks the builder worktree on its completion notification; (B) `/land`'s sweep
+    treats a lock naming the worktree's own directory as released once HEAD is captured and the
+    ticket is closed.
+  - **Not established.** A rate over many fan-outs: this is one session on one harness version.
+  - **Revisit trigger:** a finished builder's worktree ever seen still locked.
+- **CLI and TUI startup must not import trafilatura, pyarrow or networkx (`lode-g2ko`,
+  2026-11-18, maintainer ruling).**
+  - **Context.** `lode.cli` imports `lode.repository` at module scope, which imports
+    `lode.drawdown`; that chain loaded trafilatura (via `lode.webfetch`) and pyarrow (via
+    `lode.externals` -> `lode.vectorstore`) before any command ran, `lode add` and
+    `lode --help` included. The ticket's 2026-11-17 measurement put them at about 275 ms and
+    about 51 ms. `lode.tui.app` reaches the same chain through `lode.tui.services.capture`.
+    This contradicted `docs/design.md`'s "capture stays instant".
+  - **Decision.** Bound it. `trafilatura` is imported inside `lode.webfetch._extract`, and
+    `pyarrow` inside `VectorStore._schema` (the only user; the annotation is
+    `TYPE_CHECKING`-guarded). `tests/test_import_boundary.py` pins, in a fresh subprocess, that
+    importing `lode.cli` or `lode.tui.app` loads none of trafilatura, pyarrow or networkx
+    (networkx is what keeps the deferred `lode.retrieval` import in the ask path worthwhile).
+    `lode add` enqueues drawdown and embed jobs unchanged; only when the work runs is the
+    import paid. No test runs `lode add` in a fresh interpreter; the enqueue path calls neither
+    `_extract` nor `_schema`, and one manual run confirmed it (after `import lode.cli`,
+    `Repository.save` on a body with a URL queued `embed`, `enrich` and `refresh` jobs with
+    none of the three loaded).
+  - **Measured** with `python -X importtime -c "import lode.cli"` (cumulative), on one WSL2
+    machine with a warm bytecode cache. In one session, with trunk's `webfetch.py` and
+    `vectorstore.py` swapped in and out for two rounds of six runs each: 522-691 ms before,
+    187-228 ms after. The ticket's own figure for trunk, from a different session, was about
+    520 ms. Absolute figures moved by 100 ms or more with machine load, so compare within a
+    session, not across.

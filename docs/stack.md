@@ -451,10 +451,18 @@ def build_provider(settings: Settings) -> LLMProvider:
 ### 2 & 3. The two immediate structured-output calls — one seam method
 
 > **Update (lode-ni7p):** enrichment no longer uses forced tool-use. `AnthropicProvider`
-> sends `output_config.format` for every immediate call (`messages.parse`) and for the
+> sends `output_config.format` for every immediate call and for the
 > batch route (`submit_batch`/`collect_batch` decode the first `text` block as JSON);
 > `tool_name`/`tool_description` are now read only by `OpenAIProvider`. The text below
 > records the original forced-tool-use design.
+>
+> **Update (lode-pdss):** the immediate calls go through `messages.create` with a hand-built
+> `output_config.format` (the SDK's own `transform_schema`), not `messages.parse`. `parse`
+> validates the response text inside the SDK, so a refusal cut off mid-JSON surfaced as a
+> `ValidationError` with `stop_reason` out of reach; the provider now reads `stop_reason`
+> first and validates the text itself. The request body is unchanged — only the SDK's
+> `x-stainless-helper: messages.parse` telemetry header is no longer sent. Every
+> `messages.parse` in the text below is the call as it was before `lode-pdss`.
 
 `enrich._call_haiku()` (forced tool-use: `tools=[…]`, `tool_choice={"type": "tool", "name": …}`,
 reads `content` block `type == "tool_use"`) and `qa._request_claims()` (`messages.parse(...,
@@ -867,7 +875,7 @@ choice and a constrained structured-output schema are mutually
 exclusive within one call, so a run is: up to `max_tool_turns` free turns (the model may call any
 tool in `tools`; each call is resolved via `tool_result(name, input)` and fed back as a tool result,
 until the model stops calling tools or the turn budget runs out), then **exactly one** final
-`messages.parse` call — `output_config.format` structured output, with `tools` kept (the API needs the
+`messages.create` call (`messages.parse` until `lode-pdss`) — `output_config.format` structured output, with `tools` kept (the API needs the
 definitions while the history carries `tool_use` blocks) and `tool_choice` `none` — the same mechanism
 `structured_call`'s no-tool branch uses, now continuing the accumulated conversation instead of a single
 user turn. The final turn used a forced `tool_choice` until `lode-ugj5`; Sonnet 5.5 and Opus 5.5 400 on
@@ -877,6 +885,17 @@ tool, and on an empty `tools` a `tool_name` would then have selected
 `AnthropicProvider.structured_call`'s forced-tool branch — the same 400 on the Q&A default models
 (that branch no longer exists, `lode-ni7p`).
 `strict: true` stays off ([`lode-568v.3`](#llm-provider-seam-decided-lode-568v1)).
+
+**Two `stop_reason`s stop a free turn's tools from running: `refusal` and `max_tokens`.** A refused
+free turn (`stop_reason` `refusal`) raises `LLMProviderError` whether or not it carries a `tool_use`
+block (`lode-mzuk`). A free turn with `stop_reason` `max_tokens` that carries a `tool_use` block
+raises too, before any tool runs (`lode-4rxs`): a tool input truncated at the output cap usually
+still parses as a valid partial object, so `stop_reason` is the only thing that catches it. The cost
+accepted: a tool call that happened to finish on the last token fails the whole run, which nothing
+retries, instead of being executed. A `max_tokens` free turn with *no* `tool_use` block still ends
+the loop and goes to the final turn; whether that should stay is open (`lode-c99p`).
+`model_context_window_exceeded` is not checked: such a free turn's `tool_use` blocks are run;
+whether it should be is open (`lode-hfzw`).
 
 **`timeout_s` is a budget for the whole run; `max_tokens` deliberately is not.** No new config knob
 was added — these are the same two knobs `structured_call` already took, and a call site's existing
@@ -911,7 +930,7 @@ was added — these are the same two knobs `structured_call` already took, and a
 `tools` is empty, **every** `LLMProvider` implementation is required to delegate straight to
 `structured_call` with the same arguments — no loop machinery engages at all. `lode.qa._request_claims`
 is reshaped onto `run_tool_turns` by this ticket, called with `tools=()`, so its wire behavior is
-unchanged (still `messages.parse` for Anthropic); `lode.enrich` is untouched, still calling
+unchanged (still `messages.parse` for Anthropic at the time; `messages.create` since `lode-pdss`); `lode.enrich` is untouched, still calling
 `structured_call` directly. This is what lets `lode-35nu.11.2` wire real tools into `qa.py` later
 without another reshape of this call site.
 
