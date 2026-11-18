@@ -644,7 +644,29 @@ config-shape error belongs here too, same treatment) — never retried, never
 charged against `attempts`, must reach the operator directly. Everything else is
 **transient** — the existing `except Exception` accounting, unchanged.
 
-Two call sites *inside the queue machinery* read that roster wider: `drain`'s two
+**A third class, decided but not built: terminal for the note version (decided 2026-11-16,
+`lode-ahme`; implementation `lode-g9q3`).** Today (trunk) a `stop_reason='refusal'` on an
+*enrich* job is transient like any other non-auth `LLMProviderError` (above), and because
+`reconcile._enrich_gap_step` treats a head whose only enrich job is `dead` as a gap, each
+time the job goes `dead` the next reconciliation scan re-enqueues it with a fresh attempt
+budget, for as long as that note version stays a live head. The decision gives a refusal a
+class of its own. It is not transient: a retry re-sends the same prompt to the same model
+and is expected to be declined again, so the retry budget only spends money. It is not
+permanent in the sense above either: no credential fixes it, and resetting to `pending` and
+re-raising, as the permanent class does (below), would let one declined note fail the drain.
+The decided rules, none of which the code follows until `lode-g9q3` lands:
+
+- The job goes `dead` on the **first** refusal, with no retry attempts.
+- `reconcile._enrich_gap_step` does **not** re-enqueue a refusal-dead enrich job until the
+  note's head version or `ENRICH_PROMPT_VER` changes. The existing dead -> re-enqueue
+  self-healing stays for every other dead enrich job, since it exists for real outages.
+- Refusal-dead enrich jobs are listed in `lode status`'s dead-letter output with the refusal
+  category, because a silently un-enriched note is a retrieval-quality gap. (Today a dead row
+  shows only its free-text `last_error`, and every dead enrich job gets the self-healing hint.)
+
+See `docs/decisions.md`, `lode-ahme`.
+
+Two call sites *inside the queue machinery* read the permanent roster wider: `drain`'s two
 *batch pre-step* `try`s (`_batch_collect_enrich`'s, `lode-knnt`, and
 `_batch_submit_enrich`'s, `lode-2mnj`) both catch bare `Exception`, not just the
 named taxonomy — see "must not starve the credential-free work" below. (`cli/work.py`'s

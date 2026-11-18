@@ -487,9 +487,11 @@ be thrown back.
 The landing context is **minimal by design** — `land_head` + a one-line `land_summary` in bd
 metadata, read via `bd show <id> --json` (the branch name is *derived*, `land/<id>`, never stored).
 `land_head`/`land_summary` is the one field-name convention across the whole loop: `code-reviewer`
-writes it when swapping a ticket to `ready-for-land`, and a rebase pickup (`coding.md`) refreshes it
-on every re-push. The SHA exists only to **detect drift**: a push onto the branch *after* the ticket
-was marked ready.
+writes it when swapping a ticket to `ready-for-land`, and a rebase pickup (`coding.md`) refreshes
+`land_head` on every re-push. `land_summary` describes what the branch does and stays the
+reviewer's across a pickup (`coding.md`'s rebase-pickup step 5 has the rule and its one exception,
+lode-jb2q). The SHA exists only to **detect drift**: a push onto the branch *after* the ticket was
+marked ready.
 
 **First action of every iteration of this loop: heartbeat the single-lander lock (lode-m87j).** This
 is the one call site (not per-section) that keeps the lock's staleness token measuring idle time
@@ -523,7 +525,9 @@ reproduction: a rebase pickup wrote a 39-character `land_head`, one digit short 
 `scripts/validate-sha40.sh` is the shared predicate, also used by `code-reviewer.md`'s own
 `review_head` check, so both read sites can't drift on what "well-formed" means. It is called in the
 same fenced block that reads the value because shell state does not survive between blocks
-(lode-sfnb); `tests/test_validate_sha40_call_sites.py` pins that both read sites keep calling it.
+(lode-sfnb); `tests/test_validate_sha40_call_sites.py` pins that this read site keeps calling it and
+that `code-reviewer.md` calls `scripts/check-review-head.sh`, whose own validator call
+`tests/test_handoff_scripts.py` pins by behaviour (lode-qh1m).
 
 **Deliberate asymmetry — do not "harmonize" it.** This check is **exact-match**, not the
 ancestor-check `code-reviewer.md` uses for `review_head` (lode-9b5n / lode-xdg3 composition). The two

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -216,21 +217,25 @@ def _add_worktree(repo: Path, path: Path) -> Path:
 @pytest.fixture
 def launch_worktree(tmp_path: Path, repo: Path) -> tuple[Path, str, str]:
     """A `.claude/worktrees/` worktree of ``repo``, plus the tips of ``main``
-    and of a ``land/lode-x`` branch one commit ahead of it."""
+    and of a ``land/lode-x`` branch one commit ahead of it. ``repo`` is its
+    own ``origin`` and carries a ``trunk`` branch at ``main``'s tip, so the
+    script's ``git fetch origin land/lode-x trunk`` resolves; nothing is
+    fetched here."""
     main_tip = _out(repo, "rev-parse", "HEAD")
     _git(repo, "checkout", "-q", "-b", "land/lode-x")
     _git(repo, "commit", "-q", "--allow-empty", "-m", "built")
     land_tip = _out(repo, "rev-parse", "HEAD")
     _git(repo, "checkout", "-q", "main")
+    _git(repo, "branch", "trunk")
+    _git(repo, "remote", "add", "origin", str(repo))
     wt = _add_worktree(repo, tmp_path / ".claude" / "worktrees" / "agent-abc123")
     return wt, main_tip, land_tip
 
 
 def test_checkout_derives_suffix_from_worktree_dir(
-    repo: Path, launch_worktree: tuple[Path, str, str]
+    launch_worktree: tuple[Path, str, str],
 ) -> None:
     wt, _, land_tip = launch_worktree
-    _git(wt, "fetch", "-q", str(repo), "land/lode-x")
     r = _run("checkout-land-branch.sh", wt, "lode-x")
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "land/lode-x--agent-abc123"
@@ -238,29 +243,63 @@ def test_checkout_derives_suffix_from_worktree_dir(
     assert _out(wt, "rev-parse", "HEAD") == land_tip
 
 
-def test_checkout_takes_the_land_tip_when_the_fetch_listed_another_ref_first(
-    repo: Path, launch_worktree: tuple[Path, str, str]
+def test_checkout_fetches_trunk_alongside_the_land_branch(
+    launch_worktree: tuple[Path, str, str],
 ) -> None:
-    """`FETCH_HEAD` as a rev is the FIRST fetched ref -- here `main`."""
-    wt, main_tip, land_tip = launch_worktree
-    _git(wt, "fetch", "-q", str(repo), "main", "land/lode-x")
-    assert _out(wt, "rev-parse", "FETCH_HEAD") == main_tip
+    """The fixture never fetches, so `origin/trunk` exists only if the script
+    fetched `trunk`."""
+    wt, main_tip, _ = launch_worktree
     r = _run("checkout-land-branch.sh", wt, "lode-x")
     assert r.returncode == 0, r.stderr
-    assert _out(wt, "rev-parse", "HEAD") == land_tip
+    assert _out(wt, "rev-parse", "origin/trunk") == main_tip
 
 
-@pytest.mark.parametrize("fetched", [None, "main"])
-def test_checkout_refuses_when_fetch_head_lacks_the_land_branch(
-    repo: Path, launch_worktree: tuple[Path, str, str], fetched: str | None
+def test_checkout_takes_the_fresh_tip_over_a_stale_same_ticket_fetch_head(
+    repo: Path, launch_worktree: tuple[Path, str, str]
 ) -> None:
-    """No fetch at all, or a fetch of some other ref: exit 3, HEAD untouched."""
-    wt, main_tip, _ = launch_worktree
-    if fetched:
-        _git(wt, "fetch", "-q", str(repo), fetched)
+    """A FETCH_HEAD `land/lode-x` entry left by an earlier fetch names a tip
+    the branch has since moved past: the script's own fetch replaces it."""
+    wt, _, _ = launch_worktree
+    _git(wt, "fetch", "-q", "origin", "land/lode-x")
+    _git(repo, "checkout", "-q", "land/lode-x")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "pushed later")
+    fresh_tip = _out(repo, "rev-parse", "HEAD")
     r = _run("checkout-land-branch.sh", wt, "lode-x")
+    assert r.returncode == 0, r.stderr
+    assert _out(wt, "rev-parse", "HEAD") == fresh_tip
+
+
+def test_checkout_cannot_check_out_a_stale_same_ticket_fetch_head(
+    repo: Path, launch_worktree: tuple[Path, str, str]
+) -> None:
+    """A FETCH_HEAD `land/lode-x` entry left by an earlier fetch must not be
+    checked out when this call's own fetch fails: exit 4, HEAD untouched."""
+    wt, main_tip, _ = launch_worktree
+    _git(wt, "fetch", "-q", "origin", "land/lode-x")
+    _git(repo, "branch", "-q", "-D", "land/lode-x")
+    r = _run("checkout-land-branch.sh", wt, "lode-x")
+    assert r.returncode == 4
+    assert _out(wt, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
+    assert _out(wt, "rev-parse", "HEAD") == main_tip
+
+
+def test_checkout_exits_3_when_a_successful_fetch_records_no_land_entry(
+    tmp_path: Path, launch_worktree: tuple[Path, str, str]
+) -> None:
+    """A real `git fetch` that succeeds always writes the entry, so this pins
+    the branch with a `git` whose `fetch` exits 0 and writes nothing."""
+    wt, main_tip, _ = launch_worktree
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    shim = bindir / "git"
+    shim.write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "$1" = fetch ] && exit 0\n'
+        f'exec {shutil.which("git")} "$@"\n'
+    )
+    shim.chmod(0o755)
+    r = _run("checkout-land-branch.sh", wt, "lode-x", bindir=bindir)
     assert r.returncode == 3
-    assert "land/lode-x" in r.stderr
     assert _out(wt, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
     assert _out(wt, "rev-parse", "HEAD") == main_tip
 

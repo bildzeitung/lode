@@ -45,8 +45,7 @@ worktree-isolated agent's "too complex to verify" commands ([observed
 shapes](../../docs/agents-workflow.md#the-harnesss-worktree-isolation-classifier-the-eval-word-and-git--refusals-lode-emx5)),
 so every fenced block in this file is a plain call (one command, literal arguments, scripts by
 repo-relative path — my cwd is the worktree root), and the exit status the `Bash` tool reports
-replaces the old `|| …` tail. A value that must cross calls (a worktree directory name) is copied
-verbatim from the earlier call's output, never retyped. Exit 127 / "No such file or directory" (or
+replaces the old `|| …` tail. Exit 127 / "No such file or directory" (or
 126 / "Permission denied" — the script lost its exec bit) is the
 **bootstrap gap** (this checkout may predate the script landing on trunk) — a stop, reported; exit 1
 means the script ran and printed its own diagnostic.

@@ -44,6 +44,7 @@ already-exhausted ``ctrl+<letter>`` pool that doc's own ledger tracks.
 
 from __future__ import annotations
 
+import logging
 from typing import ClassVar
 
 from textual import work
@@ -54,8 +55,6 @@ from textual.screen import Screen
 from textual.timer import Timer
 from textual.widgets import Header, Input
 
-from lode.auth import AuthError
-from lode.llm_provider import LLMProviderError
 from lode.tui.screens.save_as_note_confirm import SaveAsNoteConfirmScreen
 from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
 from lode.tui.screens.version_view import VersionViewScreen
@@ -76,6 +75,8 @@ QUESTION_ID = "ask-question"
 RESULTS_ID = "ask-results"
 #: The focused-citation status line's widget id (lode-35nu.4) -- read back in tests.
 CITATION_STATUS_ID = "ask-citation-status"
+
+log = logging.getLogger(__name__)
 
 _PLACEHOLDER = "Ask a question about your notes, then press Enter."
 
@@ -209,10 +210,10 @@ class AskScreen(Screen[None]):
     def _ask(self, question: str, generation: int) -> None:
         """Run the ask pipeline off the UI thread -- it does DB + network I/O.
 
-        ``LLMProviderError`` is caught alongside ``AuthError`` because an
-        uncaught worker exception takes the whole app down (``exit_on_error``)
-        and neither class is an ancestor of the other: ``LLMAuthError``
-        subclasses ``LLMProviderError``, not ``AuthError``.
+        Every ``Exception`` is caught because an uncaught worker exception
+        takes the whole app down (``exit_on_error``), and the provider seam
+        leaves raw SDK timeout/connection errors unwrapped (lode-bwbo,
+        ``docs/tui.md``).
 
         ``generation`` is the counter's value at the moment *this* question
         was submitted, passed in by :meth:`on_input_submitted`; every write it
@@ -233,19 +234,15 @@ class AskScreen(Screen[None]):
                 on_stage=_on_stage,
                 pinned_note_id=self._note_id,
             )
-        except (AuthError, LLMProviderError) as err:
-            self.app.call_from_thread(self._finish, generation, _PLACEHOLDER, None)
-            # markup=False: a provider message embeds SDK and pydantic text
-            # verbatim ("Field required [type=missing, input_value={}, ...]"),
-            # and Textual's default markup parse raises on those bracket
-            # groups when the toast renders -- which exits the app.
+            rendered = render_ask_result(
+                result, context_chars=app.settings.ask_context_chars
+            )
+        except Exception as err:
+            log.exception("ask failed")
             self.app.call_from_thread(
-                self.notify, str(err), severity="error", markup=False
+                self._fail, generation, str(err) or type(err).__name__
             )
             return
-        rendered = render_ask_result(
-            result, context_chars=app.settings.ask_context_chars
-        )
         self.app.call_from_thread(self._finish, generation, rendered, result)
 
     def _start_spinner(self) -> None:
@@ -277,6 +274,20 @@ class AskScreen(Screen[None]):
         frame = _SPINNER_FRAMES[self._spinner_frame]
         results = self.query_one(f"#{RESULTS_ID}", LodeStatic)
         results.update(f"{frame} {self._stage}" if self._stage else frame)
+
+    def _fail(self, generation: int, message: str) -> None:
+        """Reset the pane and toast ``message`` for ``generation``. Main thread only.
+
+        Guarded like :meth:`_finish`, so a superseded question's failure is
+        dropped whole. ``markup=False``: a provider message embeds SDK and
+        pydantic text verbatim ("Field required [type=missing, ...]"), and
+        Textual's default markup parse raises on those bracket groups when
+        the toast renders -- which exits the app.
+        """
+        if generation != self._ask_generation:
+            return
+        self._finish(generation, _PLACEHOLDER, None)
+        self.notify(message, severity="error", markup=False)
 
     def _finish(self, generation: int, text: str, result: AskResult | None) -> None:
         """Stop the spinner and show the final result for ``generation``. Main thread only.

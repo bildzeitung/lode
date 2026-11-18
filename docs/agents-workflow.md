@@ -435,8 +435,9 @@ below with `.` in place of the word.
 
 **Scope: observations, not a contract.** Everything below was observed from worktree-isolated
 dispatched agents only — recorded by the builder on Claude Code 2.1.325 and re-run by the technical
-review on 2.1.326. The main session was not tested (no dispatched agent can reach it); the message is
-worded for an isolated agent, which suggests but does not show that the main session is unaffected.
+review on 2.1.326. The main session is unaffected, as observed once on 2.1.326 (a `/land` pass,
+2026-11-16): `echo eval` ran, and so did multi-line blocks using `VAR="$(git rev-parse ...)"` with
+`|| { ...; exit 1; }` tails.
 Two rules, three message texts:
 
 - **`eval`** — "… but this command runs a string through eval, which can't be verified to stay inside
@@ -493,9 +494,11 @@ Two rules, three message texts:
     `ls-remote` itself failed), `scripts/check-review-head.sh <id>` (the code-reviewer's read +
     validate + ancestor check; 0 forward-only, 1 malformed/missing, 2 broken call, 3 unreachable = drift, 4
     `bd show` unreadable) and `scripts/checkout-land-branch.sh <id>` (the worktree-suffixed
-    `checkout -B`: suffix taken from the worktree's own directory, tip taken from `FETCH_HEAD`'s own
-    `land/<id>` line rather than from `FETCH_HEAD` as a rev, which names only the first ref of a
-    multi-ref fetch; 1 not a launch worktree, 2 broken call, 3 no `land/<id>` entry in `FETCH_HEAD`).
+    `checkout -B`: suffix taken from the worktree's own directory; the script runs
+    `git fetch origin land/<id> trunk` itself (lode-n7g4) so a stale `FETCH_HEAD` is never read, and
+    takes the tip from `FETCH_HEAD`'s own `land/<id>` line rather than from `FETCH_HEAD` as a rev,
+    which names only the first ref of a multi-ref fetch; 1 not a launch worktree, 2 broken call, 3 no
+    `land/<id>` entry in `FETCH_HEAD` after a successful fetch, 4 the fetch failed).
     `handoff-sha.sh`'s origin check (lode-tx33) makes order load-bearing: the push to `land/<id>`
     precedes the call at every call site, because a recorded SHA origin does not carry reads as
     drift to `/land`'s 2a precheck. It costs one `git ls-remote` per hand-off, accepted; a dirty
@@ -3243,9 +3246,12 @@ What is observed, and what is not:
 - **Observed (Claude Code 2.1.326):** every live launch worktree in `git worktree list --porcelain`
   carried the harness lock, all naming the orchestrating session's pid — fresh-build builders still
   at zero commits, and a reviewer's `land/<id>--*` worktree. `git worktree lock .` from inside one
-  exits 128.
+  exits 128. The unlocked `worktree-agent-*` entries in the same listings belonged to finished
+  builds, not live launches.
 - **Not observed separately:** a rebase pickup's worktree. It is the same `coding` agent type,
-  dispatched the same way.
+  dispatched the same way. Nor a turn resumed by `SendMessage`: the one launch worktree lost
+  mid-session went during a resumed turn, cause unknown
+  ([lode-6wgc](#isolation-guard-mid-session-re-assertion-lode-6wgc)).
 - **Not established:** the Claude Code version at which the harness began locking. The builds
   lode-oqr lost (2026-07-10) were recorded as unlocked; a harness lock is first on record a few days
   later, on a reviewer's worktree (lode-amif).
@@ -3270,10 +3276,32 @@ What each consumer of the lock sees:
   worktree.
 
 **If the harness ever hands out an unlocked launch worktree, nothing in the builder's cycle
-notices.** The dirty-tree guard (lode-9hgu) still keeps uncommitted work, but a clean, zero-commit
-worktree could be reclaimed under a live builder; the [mid-session isolation
-guard](#isolation-guard-mid-session-re-assertion-lode-6wgc) then stops the builder rather than
-letting it write on `trunk`. Whether to assert the lock mechanically is lode-gro8.
+notices.** `/land`'s sweep could then reclaim a fresh build's worktree while it is still clean and at
+zero commits.
+
+**Decision (lode-gro8): that residual is accepted; no assertion is added.** Why no check:
+
+- **For a fresh build the window is short.** It needs a harness that did not lock **and** a `/land`
+  backstop sweep landing before the builder's first write outside ignored paths. From that write on
+  the dirty-tree guard (lode-9hgu) keeps the worktree, and from the first commit the branch has
+  diverged from `trunk`. (A reviewer's or rebase pickup's `land/<id>--*` worktree relies on the same
+  lock for longer, whenever its HEAD is on `origin/land/<id>`; the lode-amif entry in
+  [decisions.md](decisions.md) already records and accepts that.)
+- **The cost is a stopped build, not lost work.** Nothing is committed or pushed yet. With its
+  worktree gone the builder's cwd falls back to the main checkout on `trunk`, as lode-6wgc observed.
+  The [mid-session isolation guard](#isolation-guard-mid-session-re-assertion-lode-6wgc) checkpoint
+  ahead of its first write stops it there, and `scripts/trunk-write-guard.sh` stops an `Edit`/`Write`
+  if the checkpoint is skipped; a write made through `Bash` has the checkpoints only. The ticket
+  stays claimed, with no pipeline label, until a human re-dispatches it.
+- **A check has no good response.** The builder cannot take the lock itself without reopening the
+  lock/unlock pairing lode-t76f removed, so a failed check could only stop the build: a certain stop
+  in place of a possible one, on a harness behavior last recorded before the lock first appears on
+  record (the lode-oqr builds, above).
+
+Revisit if a live launch worktree is ever seen without a `locked` line, or a fresh build stops with
+its worktree gone while a `/land` sweep reported a full reclaim. Nothing watches for either. The
+check would then be a read-only `locked` line test on the worktree's own
+`git worktree list --porcelain` entry, before the first write, with stop-and-report on a miss.
 
 ### The step-0 pickup merges, it never rebases (lode-cln)
 
@@ -3299,7 +3327,10 @@ Concretely, the whole cycle stays inside the one dispatched `coding` producer, s
 - `git push origin HEAD:land/<id>` — an ordinary, non-force push by explicit refspec (regardless of
   what the local branch is named) to a ref that already exists on origin, because the merge commit
   descends from what's already there,
-- refresh `land_head`/`land_summary` and swap `needs-rebase` straight to `ready-for-land` itself.
+- refresh `land_head`, record the merge as a `REBASE PICKUP` note on the ticket, and swap
+  `needs-rebase` straight to `ready-for-land` itself. `land_summary` stays the reviewer's
+  (lode-jb2q: the rule and its one exception are in `coding.md`'s rebase-pickup step 5, the dated
+  record in `docs/decisions.md`).
 
 **Expect the merge to conflict — that is the normal case, not the exception.** `/land` only applies
 `needs-rebase` when its precheck (`scripts/merge-precheck.sh origin/trunk origin/land/<id>`, lode-mh9g)

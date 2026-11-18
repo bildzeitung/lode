@@ -6014,6 +6014,11 @@ entries below from being rewritten to chase the current tree.)
     per ticket; (3) a watch period: the next 5 dispatches of the trimmed agent are checked against a
     short list of incident-derived behaviours, and a miss reverts the cut.
   - **Accepted limit:** 5 dispatches do not exercise rare paths.
+
+- **Update (lode-5x01, 2026-11-16) — a filename typo in `lode-s09w`'s `uv` migration entry above.**
+  That entry's bullet "`scripts/python-init.sh`, `venv-install` and `compile-lock.sh` are deleted
+  outright" names the script `venv-install`; the file is `scripts/venv-install.sh`. Wording only, no
+  change to the decision.
 - **`qa_call_timeout_s` stays 300s, now justified by measurement (`lode-9i6y`, 2026-11-16 and
   2026-11-17, maintainer decision; docs rewrite `lode-188q`).** `lode-ugj5` raised `qa.MAX_TOKENS`
   8192 -> 10752, and the `lode-wfyx` SDK-estimate formula (35.6 tok/s) put a full-cap response at
@@ -6056,6 +6061,8 @@ entries below from being rewritten to chase the current tree.)
     `lode-oqr` lost (2026-07-10) were recorded as unlocked, and a harness lock is first on record a
     few days later (`lode-amif`). Nothing asserts the lock is present when a build starts; whether
     to: `lode-gro8`.
+    **Update (lode-gro8, 2026-11-17): decided, no assertion; the residual is accepted.** See the
+    `lode-gro8` entry below.
 
 - **A new entry that corrects earlier entries IS a marker under the preamble (`lode-4eyp`,
   2026-11-17, builder call, not a maintainer ruling).** The ticket left this question to its
@@ -6074,3 +6081,83 @@ entries below from being rewritten to chase the current tree.)
   own history ("**Correction, verified empirically on bash 5.2:**") stays green. Accepted miss: a
   backwards correction with prose between the keyword and its id. That miss and the gate's other
   limits are listed in the test module's docstring.
+
+- **The builder does not assert the harness lock is present; the residual is accepted (`lode-gro8`,
+  2026-11-17).** After `lode-t76f` the only cover for the pre-first-commit window (`lode-oqr`) is the
+  harness's lock on the launch worktree. On Claude Code 2.1.326 every live launch worktree carried
+  it, builders at zero commits included. The live account, with what stays unestablished, is
+  [agents-workflow.md](agents-workflow.md#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f).
+  - **Not taken: a read-only `locked` check before the first write.** The window needs a harness
+    that did not lock plus a `/land` sweep before the builder's first write outside ignored paths.
+    The outcome is a stopped build that a human re-dispatches, with nothing committed to lose: the
+    mid-session isolation guard (`lode-6wgc`) checkpoint stops the builder ahead of its first write,
+    and `trunk-write-guard.sh` stops an `Edit`/`Write` on `trunk` if the checkpoint is skipped (a
+    write made through `Bash` has the checkpoints only). The builder cannot repair a miss (taking
+    the lock itself reopens the lock/unlock pairing `lode-t76f` removed), so the check could only
+    stop builds, on a harness behavior last recorded before the lock first appears on record
+    (`lode-oqr`'s builds).
+  - **Revisit trigger:** a live launch worktree seen without a `locked` line, or a fresh build that
+    stops with its worktree gone while a `/land` sweep reported a full reclaim. Nothing watches for
+    either.
+- **A rebase pickup refreshes `land_head` and leaves `land_summary` to the reviewer; its account of
+  the merge is a ticket note (`lode-jb2q`, 2026-11-17, builder call refined in technical review, not
+  a maintainer ruling).** The ticket asked whether the pickup should leave `land_summary` untouched
+  and said to settle that, then build. No maintainer settled it; confirming or reversing this entry
+  is `lode-gcbg`.
+  - **Why.** `/land` builds each merge commit as `Merge land/<id>: <land_summary> (<id>)`. The
+    pickup overwrote `land_summary` with a merge note, so a branch that took a pickup landed as
+    "Merged trunk @ ... into the branch" and the reviewer's description of the branch never reached
+    `trunk` (`c16e1f0`, `ef74569`, `7b8d5a4`). The trunk commit a pickup merged is already the
+    second parent of the branch's own merge commit.
+  - **Decided (builder).** The pickup's hand-off call refreshes `land_head` and passes no
+    `land_summary`.
+  - **Added in review: the merge note moves, it is not dropped.** Pickups had been writing which
+    files conflicted and how they resolved them into `land_summary`. That was the only prose record
+    of a resolution no technical reviewer sees. It now goes on the ticket through the same call,
+    as `--append-notes "REBASE PICKUP: ..."`; `land-review` reads ticket notes.
+  - **Added in review: one exception.** When a resolution removes or changes something
+    `land_summary` states, the pickup passes a corrected summary in the same call. The pickups on
+    `lode-9tj4`, `lode-ge7w` and `lode-mzuk` each kept trunk's deletion of code their branch had
+    changed; a summary left alone in that case puts a description of work the branch no longer
+    carries into `trunk` history. The corrected text describes the branch, not the merge.
+  - **Not taken.** Appending the merge note to the reviewer's summary: a read-modify-write of a bd
+    value across two calls. Writing the resolution into the pickup's own merge commit message:
+    `land-review` reads the ticket, and the `lode-dozi` rule in `MISTAKES.md` expects the
+    conflicting file's name there.
+  - **Accepted limits.** Nothing checks the pickup's judgment that a summary went false. A ticket
+    whose `land_summary` an earlier pickup already replaced keeps the merge note. A ticket that
+    reaches `needs-rebase` with no `land_summary` lands under its title, `/land`'s fallback.
+- **Refusal on an enrich job is terminal for that note version (`lode-ahme`, 2026-11-16,
+  maintainer; split out of `lode-fc39`'s review).** Decided: option (b) plus surfacing.
+  - **Today.** A `stop_reason='refusal'` surfaces as an `LLMProviderError` that is not an
+    `LLMAuthError`, so `worker.run_one` falls into `except Exception` ->
+    `jobs.record_job_failure` (backoff, `dead` at `retry_max_attempts`, default 5); the batch
+    route reaches the same state machine through `enrich.collect_enrich_batch`'s errored arm.
+    Enrich is a DERIVE job type with no dead-letter hook, so `worker.dead_letter_recovery`
+    classifies it `self_healing` and `reconcile._enrich_gap_step` re-enqueues a fresh job
+    (attempts back to 0) on the next scan. A deterministically declined note therefore cycles
+    5 attempts -> dead -> re-enqueued indefinitely while it stays a live head version. A refusal
+    is an HTTP 200: a decline before any output returns empty content, and a mid-generation
+    decline bills input plus the partial output at normal rates. Haiku 5.5 (the enrichment
+    default) has no server-side fallback model, so re-sending the identical prompt is expected
+    to be declined again.
+  - **Decision.** (1) A refusal on an enrich job is terminal for that note version: the job goes
+    `dead` on the first refusal, no retry attempts. (2) `reconcile._enrich_gap_step` must not
+    re-enqueue a refusal-dead enrich job until the note's head version or `ENRICH_PROMPT_VER`
+    changes; dead -> re-enqueue stays as-is for every other dead enrich job (it exists for real
+    outages). (3) This is a third failure class in `docs/storage.md`'s "Transient vs. permanent
+    job failures" taxonomy (added there): not retryable, not operator-actionable in the
+    `AuthError` sense. (4) Refusal-dead enrich jobs are listed in `lode status`'s dead-letter
+    output with the refusal category, since a silently un-enriched note is a retrieval-quality
+    gap.
+  - **Rejected.** (a) status quo: unbounded spend re-sending a prompt that will be declined
+    again. (c) permanent in the `AuthError` sense (reset to pending, re-raise, `lode work` exits
+    non-zero): one declined note would fail the whole drain and never reach a terminal state.
+    (d) bound only the reconcile re-enqueue: still pays 5 pointless attempts per declined
+    version.
+  - **Needs a structured signal.** `LLMProviderError` carries only provider/status_code/
+    request_id, no stop_reason or category, so the implementation needs a field or subclass on
+    the error, not string matching on the hint.
+  - **Not established.** Refusal frequency on real notes was never measured, and the
+    dead -> re-enqueue loop was confirmed by reading `reconcile._enrich_gap_step`, not
+    reproduced end to end. Implementation: `lode-g9q3`.

@@ -18,9 +18,11 @@ escape-pop tests below drive it the real way instead: pressing ``ctrl+l``.
 
 import asyncio
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
+import anthropic
+import httpx2
 import pytest
 from textual.binding import Binding
 from textual.containers import VerticalScroll
@@ -1157,24 +1159,8 @@ _PROVIDER_MESSAGE = (
 )
 
 
-@pytest.mark.parametrize(
-    "error",
-    [
-        LLMProviderError(_PROVIDER_MESSAGE, provider="anthropic"),
-        LLMAuthError(_PROVIDER_MESSAGE, provider="openai"),
-        AuthError(_PROVIDER_MESSAGE),
-    ],
-    ids=["LLMProviderError", "LLMAuthError", "AuthError"],
-)
-def test_a_provider_error_leaves_the_app_running_with_placeholder_and_notification(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
-) -> None:
-    app = LodeApp(db_path=tmp_path / "lode.db")
-
-    def _raise(db_path: Path, question: str, **kwargs: object) -> AskResult:
-        raise error
-
-    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _raise)
+def _ask_one_question(app: LodeApp) -> tuple[bool, str, list[tuple[str, bool]]]:
+    """Ask one question; report (app still running, pane text, [(toast, is error)])."""
 
     async def _drive() -> tuple[bool, str, list[tuple[str, bool]]]:
         # notifications=True: the pilot disables toasts by default, and the
@@ -1194,8 +1180,92 @@ def test_a_provider_error_leaves_the_app_running_with_placeholder_and_notificati
             rendered = str(screen.query_one(f"#{RESULTS_ID}").content)
             return app.is_running, rendered, toasts
 
-    running, rendered, toasts = asyncio.run(_drive())
+    return asyncio.run(_drive())
+
+
+def _raising(error: Exception) -> Callable[..., object]:
+    def _raise(*args: object, **kwargs: object) -> object:
+        raise error
+
+    return _raise
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        LLMProviderError(_PROVIDER_MESSAGE, provider="anthropic"),
+        LLMAuthError(_PROVIDER_MESSAGE, provider="openai"),
+        AuthError(_PROVIDER_MESSAGE),
+    ],
+    ids=["LLMProviderError", "LLMAuthError", "AuthError"],
+)
+def test_a_provider_error_leaves_the_app_running_with_placeholder_and_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    app = LodeApp(db_path=tmp_path / "lode.db")
+    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _raising(error))
+
+    running, rendered, toasts = _ask_one_question(app)
 
     assert running
     assert rendered == _PLACEHOLDER
     assert toasts == [(_PROVIDER_MESSAGE, True)]
+
+
+@pytest.mark.parametrize(
+    "error_class", [anthropic.APIConnectionError, anthropic.APITimeoutError]
+)
+def test_a_raw_sdk_error_leaves_the_app_running_with_a_toast_and_a_logged_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error_class: type[anthropic.APIConnectionError],
+) -> None:
+    error = error_class(
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    )
+    app = LodeApp(db_path=tmp_path / "lode.db")
+    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _raising(error))
+
+    with caplog.at_level("ERROR", logger="lode.tui.screens.ask"):
+        running, rendered, toasts = _ask_one_question(app)
+
+    assert running
+    assert rendered == _PLACEHOLDER
+    assert toasts == [(str(error), True)]
+    assert [r.exc_info[1] for r in caplog.records if r.exc_info] == [error]
+
+
+def test_a_render_failure_with_no_message_toasts_the_exception_class(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = LodeApp(db_path=tmp_path / "lode.db")
+    monkeypatch.setattr(
+        "lode.tui.screens.ask.run_ask",
+        lambda db_path, question, **kwargs: _canned_answer(),
+    )
+    monkeypatch.setattr(
+        "lode.tui.screens.ask.render_ask_result", _raising(ValueError())
+    )
+
+    running, rendered, toasts = _ask_one_question(app)
+
+    assert running
+    assert rendered == _PLACEHOLDER
+    assert toasts == [("ValueError", True)]
+
+
+def test_a_superseded_questions_failure_raises_no_toast(tmp_path: Path) -> None:
+    app = LodeApp(db_path=tmp_path / "lode.db")
+
+    async def _drive() -> list[str]:
+        async with app.run_test(notifications=True) as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            screen = app.screen
+            screen._ask_generation += 1  # a newer question has since been submitted
+            screen._fail(screen._ask_generation - 1, "stale failure")
+            await pilot.pause()
+            return [str(toast.render()) for toast in screen.query(Toast)]
+
+    assert asyncio.run(_drive()) == []

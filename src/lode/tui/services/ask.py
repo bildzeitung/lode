@@ -115,8 +115,8 @@ def run_ask(
     (:func:`lode.cited_answer.ask`) -> resolve as-of provenance for each
     surviving citation. Raises :class:`lode.auth.AuthError` on unresolved
     Anthropic credentials and :class:`lode.llm_provider.LLMProviderError` on
-    a provider failure the seam reports, same as the CLI -- the screen catches
-    both and notifies rather than crashing.
+    a provider failure the seam reports, same as the CLI; a raw SDK timeout or
+    connection error passes through unwrapped.
 
     ``on_stage``, when given, is called synchronously (on this function's own
     calling thread -- this module does no threading of its own) once per
@@ -139,10 +139,10 @@ def run_ask(
     is unaffected.
 
     Imports the retrieval/Q&A stack here, not at module scope:
-    ``retrieval._retrieve`` pulls in the vector stack (pyarrow) and
-    ``cited_answer`` pulls in the Anthropic SDK, neither of which the capture
-    path -- or merely importing this module to register the ask screen in
-    ``LodeApp.SCREENS`` -- may load.
+    ``lode.retrieval`` (which ``cited_answer`` imports in turn) loads
+    networkx, a cost that merely importing this module to register the ask
+    screen in ``LodeApp.SCREENS`` -- as every TUI start does -- should not
+    carry.
     """
     from lode import cited_answer
     from lode.retrieval import _retrieve, pinned_note_context

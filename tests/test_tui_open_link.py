@@ -23,6 +23,7 @@ import webbrowser
 from pathlib import Path
 
 import pytest
+from textual.widgets._toast import Toast
 
 from lode.config import Settings
 from lode.storage import init_db
@@ -218,6 +219,50 @@ def test_edit_screen_ctrl_n_with_generic_browser_controller_does_not_open_but_no
 
     assert opened == []  # never handed to a terminal browser -- would corrupt the TUI
     assert any("https://example.com/path" in message for message in messages)
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://example.com/[bold]x", "https://example.com/[/oops]x"],
+    ids=["valid-markup-group", "invalid-markup-group"],
+)
+def test_edit_screen_ctrl_n_toast_shows_a_bracketed_url_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", f"see [my link]({url}) please")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+    monkeypatch.setattr("lode.tui.screens._link_open.webbrowser.open", lambda u: None)
+    monkeypatch.setattr(
+        "lode.tui.screens._link_open.webbrowser.get",
+        lambda *a, **kw: _FakeGuiBrowser(),
+    )
+    _stub_embedder(monkeypatch)
+
+    async def _drive() -> tuple[bool, list[str]]:
+        # notifications=True: the pilot disables toasts by default, and the
+        # toast's own render is where a markup-parsed message is eaten or blows up.
+        async with app.run_test(notifications=True) as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("enter")
+            await pilot.pause()
+            text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
+            text_area.move_cursor((0, 8))
+            await pilot.press("ctrl+n")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            toasts = [str(toast.render()) for toast in app.screen.query(Toast)]
+            return app.is_running, toasts
+
+    running, toasts = asyncio.run(_drive())
+
+    assert running
+    assert toasts == [f"opened in browser -- link: {url}"]
 
 
 def test_edit_screen_ctrl_n_headless_notifies_without_opening(

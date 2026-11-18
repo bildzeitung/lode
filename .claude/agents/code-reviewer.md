@@ -238,11 +238,7 @@ guard only cleans up the *starting* state before that intentional checkout happe
 report it explicitly in my final hand-off as live evidence of the harness bug, not a routine hiccup.
 
 Instead of driving the builder's worktree via `git -C`, I bring the branch to *my own* worktree, where
-every tool works natively:
-
-```bash
-git fetch origin land/<id> trunk
-```
+every tool works natively.
 
 **Local branch name is always unique to this launch worktree — never the bare `land/<id>`**
 (lode-em6v). The bare name collided with an already-checked-out `land/<id>` from a stale earlier run
@@ -260,10 +256,14 @@ scripts/checkout-land-branch.sh <id>
 ```
 
 The script derives the worktree-unique suffix from this launch worktree's own directory name, so
-nothing is hand-copied from `pwd` (lode-qh1m), and takes the tip from `FETCH_HEAD`'s own `land/<id>`
-line — the fetch above lists two refs, and `FETCH_HEAD` as a rev names only the first. Nonzero is a
-stop: exit 1 means my cwd is not a `.claude/worktrees/` launch worktree, exit 2 a broken call, exit 3
-that `FETCH_HEAD` has no `land/<id>` entry (the fetch did not run here, or named another ticket).
+nothing is hand-copied from `pwd` (lode-qh1m). It runs `git fetch origin land/<id> trunk` itself, so
+a stale `FETCH_HEAD` can never be checked out and I run no separate `git fetch` before it
+(lode-n7g4), and it takes the tip from `FETCH_HEAD`'s own `land/<id>` line — the fetch lists two
+refs, and `FETCH_HEAD` as a rev names only the first. Nonzero is a stop: exit 1 means my cwd is not
+a `.claude/worktrees/` launch worktree, exit 2 a broken call, exit 3 that `FETCH_HEAD` has no
+`land/<id>` entry even though the fetch succeeded, exit 4 that the fetch itself failed. On exit 4
+git's own error is printed above the script's and nothing was checked out, so when that error is
+transient (e.g. a network failure) I re-run the script once before treating it as a stop.
 
 The suffixed name still starts with `land/`, but `/land`'s worktree-GC sweep doesn't look at the name at
 all — it reclaims any worktree under `.claude/worktrees/` that is **unlocked** and whose **HEAD commit**
@@ -723,7 +723,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST thing I run in step 2, before even the recycled-worktree guard — the harness has handed a dispatched `code-reviewer` NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
 | Isolation guard (mid-session) | re-run the same script immediately before my first mutating `Edit`/`Write` (step 4) and again before the `nox` gate run (step 5) — a worktree can pass step 2's guards and still be destroyed mid-session; same stop-and-report contract, and nothing is carried across calls in a shell variable (lode-6wgc) |
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before the fetch (step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
-| Reaching the branch | `git fetch origin land/<id> trunk`, then `scripts/checkout-land-branch.sh <id>` (checks the fetched `land/<id>` tip out as `land/<id>--<this worktree's directory name>`) — unique local name, no detaching fallback (lode-em6v) |
+| Reaching the branch | `scripts/checkout-land-branch.sh <id>` (fetches `land/<id>` and `trunk` itself, then checks the fetched `land/<id>` tip out as `land/<id>--<this worktree's directory name>`) — unique local name, no detaching fallback (lode-em6v) |
 | Input | a ticket carrying **`ready-for-code-review`** + `metadata.review_head` |
 | My output | the **same `land/<id>`** branch re-pushed + ticket swapped to **`ready-for-land`** |
 | I never | merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |

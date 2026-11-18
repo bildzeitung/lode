@@ -4,6 +4,58 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-11-17 — A docs-nits batch dropped a nit as "anchor-gone" when its anchor had never reached trunk
+
+- **What happened:** the builder draining collector `lode-rrpg` dropped nit 1
+  (`docs/configuration.md:352`, a misplaced trailing "on the same deployment") as anchor-gone and
+  recorded it as already fixed. The nit's anchor was the text `lode-5x01`'s branch produced, and a
+  needs-rebase pickup had discarded that edit (the pickup entry of the same date, below), so the
+  anchor never landed. The clause the nit corrects is still in trunk's sentence. The successor
+  collector `lode-0z02` already held a carry-over nit on the same line whose replacement is that
+  anchor, with a note to reconcile the two. The `code-reviewer` caught it.
+- **Root cause:** the anchor-gone exception reads "the verbatim anchor is absent" as "the nit is
+  fixed". An anchor is also absent when the text it was written against never reached trunk.
+- **Consequence:** none landed. Unreviewed, a reviewed wording fix would have closed with the batch
+  under a false "already fixed" record, and the successor's note would have pointed at a nit that
+  no longer existed. The reviewer carried the nit over to `lode-0z02` by hand.
+- **Rule that prevents a repeat:** before dropping a nit as anchor-gone, read the current sentence
+  for the defect the nit names and check the open collector for a nit whose replacement is this
+  anchor. Drop only when the defect is gone; otherwise carry the nit over. `lode-vlyj` tracks
+  putting this into the instruction files.
+
+## 2026-11-17 — `/land` rebuilt its accepted set from the live queue and picked up a ticket it had never vetted
+
+- **What happened:** a `/land` pass vetted and semantically reviewed three branches (`lode-gro8`,
+  `lode-mzuk`, `lode-5x01`). At Section 3a the lander filled `$ACCEPTED` by re-running
+  `bd list --label ready-for-land` instead of listing the three ids it held accept verdicts for.
+  `lode-1wwi` had reached `ready-for-land` mid-pass, so it entered `.git/land-state/accepted` and
+  got a merge message with no drift check, no conflict precheck and no `land-review`. The lander
+  saw the fourth id in its own output and removed it before `scripts/land-merge-batch.sh` ran.
+- **Root cause:** the queue was treated as equal to the reviewed set. It is only equal at the
+  instant Section 1 reads it; producers add to it for the whole length of the pass.
+- **Consequence:** none landed. One command further and an unreviewed branch would have merged to
+  `trunk` under a green re-gate, with nothing downstream to catch it.
+- **Rule that prevents a repeat:** the accepted set is written only from the ids that received a
+  `land-review` accept this pass. Never re-read the `ready-for-land` queue after Section 1; a
+  ticket that arrives mid-pass waits for the next pass. Before the merge, compare the accepted
+  file's ids against the verdicts in hand.
+
+## 2026-11-17 — A needs-rebase pickup took trunk's side of a conflict and dropped a reviewed edit whose target text survived
+
+- **What happened:** the second needs-rebase pickup on `land/lode-5x01` (merge `e59b630`) hit
+  conflicts in `docs/configuration.md` and `docs/settings.md` against `lode-188q`. It took trunk's
+  text and dropped the branch's applied, reviewed nit2 edit. Trunk's rewrite still contained the
+  exact sentence that nit corrected. The ticket's bd note kept saying "nit2 APPLIED".
+  `land-review` caught it.
+- **Root cause:** "take trunk's side" was treated as finishing the resolution. The pickup did not
+  check whether the edit it discarded still applied to trunk's version of the text.
+- **Consequence:** a reviewed docs fix was lost from the landed branch and the ticket's disposition
+  record was false. `/land` carried the nit over to the docs-nits collector by hand.
+- **Rule that prevents a repeat:** when a pickup takes trunk's side of a conflicting hunk, grep the
+  merged text for the anchor of each branch edit it discards. If the anchor survives, re-apply the
+  edit on trunk's text. If it is gone, record the edit as superseded in `land_summary`, never as
+  "dropped".
+
 ## 2026-11-15 — The last gate before trunk ran in a more lenient environment than the gate before it
 
 - **What happened:** `lode-6874` moved the `code-reviewer` (and the rebase pickup) to gating
@@ -47,6 +99,8 @@ Newest first.
   "concurrently", and the sibling's bd id — and re-read each hit against the merged result before
   pushing. The `code-reviewer` that follows a pickup owes the same grep: the pickup's `land_summary`
   names the conflicting file, so the search terms are already on the ticket.
+  - **Update (lode-jb2q, 2026-11-17):** the pickup no longer writes `land_summary`. The conflicting
+    files are named in its `REBASE PICKUP` note on the ticket instead.
 
 ## 2026-09-08 — A promotion gate certified the artifact it was about to replace, not the one it would ship
 
