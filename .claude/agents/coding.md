@@ -732,7 +732,7 @@ On a failure here I stop — full stop, same as the fresh-build cycle: no `Enter
 `git worktree add` self-rescue, no fetch. See the fresh-build cycle's write-up of this same script for
 the full rationale (lode-ska2); it doesn't repeat here.
 
-**Recycled-worktree guard (lode-nt98) — next, before the fetch below.** The same harness
+**Recycled-worktree guard (lode-nt98) — next, before the fetch+checkout script below.** The same harness
 `isolation: "worktree"` hand-off this cycle's own launch worktree came through has been observed
 handing a dispatched agent a **recycled** worktree still checked out on a *previous* ticket's build
 branch, carrying that ticket's commits, instead of a fresh branch off `origin/trunk` HEAD — confirmed in
@@ -742,7 +742,7 @@ account in
 `scripts/checkout-land-branch.sh` runs below *will* land me on the correct `land/<id>` regardless, so this guard is **not** what
 makes the checkout correct. What it buys is a clean tree to work in: `checkout -B` carries **untracked**
 leftovers from a recycled worktree straight through, and those go on to pollute my `git status` and the
-`nox` run I gate on. So, before the fetch, I assert this launch worktree actually started clean — via
+`nox` run I gate on. So, before the fetch+checkout script, I assert this launch worktree actually started clean — via
 `scripts/recycled-worktree-guard.sh` (lode-ivth), the same script the fresh-build cycle above uses:
 
 ```bash
