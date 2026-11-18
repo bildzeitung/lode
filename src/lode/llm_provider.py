@@ -1025,6 +1025,17 @@ class AnthropicProvider:
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
             if not tool_use_blocks:
                 break
+            if getattr(response, "stop_reason", None) == "max_tokens":
+                # A tool_use cut off at max_tokens usually still parses as a
+                # valid partial input; running the tool on it would act on
+                # arguments the model never finished (lode-4rxs).
+                raise LLMProviderError(
+                    f"Anthropic free tool turn (model={model}, "
+                    f"max_tokens={max_tokens}, stop_reason='max_tokens') was "
+                    "cut off mid tool_use; the tool was not run "
+                    f"{_stop_reason_hint('max_tokens', response)}",
+                    provider="anthropic",
+                )
             messages.append({"role": "assistant", "content": response.content})
             result_blocks = [
                 {
