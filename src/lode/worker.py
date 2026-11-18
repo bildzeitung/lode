@@ -614,7 +614,7 @@ def run_one(
     # second provider's credential failures had no existing exception type to
     # preserve (docs/decisions.md).
     from lode.auth import AuthError
-    from lode.llm_provider import LLMAuthError
+    from lode.llm_provider import LLMAuthError, LLMProviderError
 
     try:
         outcome = handler(conn, target_version, db_path, settings)
@@ -678,7 +678,7 @@ def run_one(
 
     except Exception as exc:
         err = str(exc)
-        if job_type == "enrich" and getattr(exc, "refusal", False):
+        if job_type == "enrich" and isinstance(exc, LLMProviderError) and exc.refusal:
             # The model refused: terminal for this note version (lode-g9q3,
             # docs/storage.md failure taxonomy) -- dead on the first
             # occurrence, no attempt charged.
@@ -689,7 +689,7 @@ def run_one(
                 job_id,
                 claimed_at,
                 err,
-                category=getattr(exc, "refusal_category", None),
+                category=exc.refusal_category,
                 model=settings.enrichment_llm.model,
                 prompt_ver=ENRICH_PROMPT_VER,
             ):

@@ -94,10 +94,6 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
         # unnecessary here (unlike next_attempt_at above) -- 0 is a valid,
         # constant default SQLite accepts on ADD COLUMN.
         "ALTER TABLE jobs ADD COLUMN batch_collect_failures INTEGER NOT NULL DEFAULT 0",
-        # lode-g9q3: refusal-dead marker + provenance (see schema.sql's comment).
-        "ALTER TABLE jobs ADD COLUMN refusal INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE jobs ADD COLUMN refusal_category TEXT",
-        "ALTER TABLE jobs ADD COLUMN refusal_model TEXT",
     ]
     for ddl in _migrations:
         try:
@@ -241,13 +237,36 @@ def _migrate_v2_jobs_live_includes_failed(conn: sqlite3.Connection) -> None:
     )
 
 
-_SCHEMA_VERSION = 2
+def _migrate_v3_jobs_refusal_columns(conn: sqlite3.Connection) -> None:
+    """lode-g9q3: add the refusal-dead marker and its provenance columns to ``jobs``.
+
+    Three plain column adds; ``schema.sql``'s comment on the columns says what
+    they hold. ``refusal`` is ``NOT NULL DEFAULT 0`` so every pre-existing row
+    reads back 0: none of them is a refusal-dead row.
+
+    A column ``jobs`` already carries is skipped rather than re-added:
+    :func:`init_db` runs ``schema.sql`` before the migrations, so a database
+    that had ``notes`` but no ``jobs`` table reaches this step with ``jobs``
+    freshly created in the target shape.
+    """
+    present = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    for column, declaration in (
+        ("refusal", "INTEGER NOT NULL DEFAULT 0"),
+        ("refusal_category", "TEXT"),
+        ("refusal_model", "TEXT"),
+    ):
+        if column not in present:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {declaration}")
+
+
+_SCHEMA_VERSION = 3
 """Target ``PRAGMA user_version`` — bump alongside a new entry in
 :data:`_VERSIONED_MIGRATIONS`."""
 
 _VERSIONED_MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _migrate_v1_egress_log_tool_purpose),
     (2, _migrate_v2_jobs_live_includes_failed),
+    (3, _migrate_v3_jobs_refusal_columns),
 ]
 """Rebuild-shaped migrations, gated by ``PRAGMA user_version`` (see module
 docstring). Ordered ascending; each entry runs once, the first time

@@ -720,7 +720,7 @@ def status(db: _DbOption = None) -> None:
         # Every dead-letter still trips one of the hints above (terminal
         # splits into a refresh-specific and a generic arm, but the union is
         # unchanged), so a non-empty dead set is exactly
-        # `dead_self_healing or dead_tombstoned or dead_unknown_type`.
+        # `refused or dead_self_healing or dead_tombstoned or dead_unknown_type`.
         and not dead_letters
     ):
         console.print("[ok]No action needed.[/ok]", highlight=False)

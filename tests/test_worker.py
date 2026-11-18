@@ -4146,16 +4146,14 @@ def test_dead_letter_remediation_comes_from_the_registration_site() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _refusing_registry(
-    calls: list[str], *, refusal_category: str | None = "cyber"
-) -> dict[str, HandlerFn]:
+def _refusing_registry(calls: list[str]) -> dict[str, HandlerFn]:
     def _refuse(conn, tv, db, s):
         calls.append(tv)
         raise LLMProviderError(
             "model refused",
             provider="anthropic",
             refusal=True,
-            refusal_category=refusal_category,
+            refusal_category="cyber",
         )
 
     return {"enrich": _refuse}
@@ -4342,3 +4340,49 @@ def test_collect_enrich_batch_refusal_is_dead_without_charging_attempts(
         settings.enrichment_llm.model,
         ENRICH_PROMPT_VER,
     )
+
+
+def test_collect_enrich_batch_openai_refusal_is_dead_with_no_category(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    # The maintainer ruling on lode-g9q3: an OpenAI/Azure refusal is in the
+    # terminal class too, and that provider supplies no category.
+    from lode.enrich import EnrichmentResult, collect_enrich_batch
+    from lode.llm_provider import BatchRequest, OpenAIProvider
+
+    refusal_item = SimpleNamespace(
+        type="message",
+        content=[SimpleNamespace(type="refusal", refusal="cannot help with that")],
+    )
+    client = mock.MagicMock()
+    client.responses.create.return_value = SimpleNamespace(
+        status="completed", output=[refusal_item], output_text=""
+    )
+    provider = OpenAIProvider(client)
+    handle = provider.submit_batch(
+        [
+            BatchRequest(
+                custom_id="ver-1",
+                model=settings.enrichment_llm.model,
+                reasoning_effort=None,
+                system="sys",
+                user_prompt="prompt",
+                output_schema=EnrichmentResult,
+                max_tokens=100,
+            )
+        ],
+        timeout_s=1.0,
+    )
+    job_id = _insert_job(conn, "enrich", "ver-1", status="running", batch_handle=handle)
+
+    collect_enrich_batch(conn, handle, settings, provider=provider)
+
+    assert _refusal_row(conn, job_id) == (
+        "dead",
+        0,
+        1,
+        None,
+        settings.enrichment_llm.model,
+        ENRICH_PROMPT_VER,
+    )
+    client.responses.create.assert_called_once()
