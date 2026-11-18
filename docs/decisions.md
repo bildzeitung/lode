@@ -6058,7 +6058,7 @@ entries below from being rewritten to chase the current tree.)
     held for the rest of a session, never lost work. Measuring it and deciding who releases such a
     lock: `lode-lo0q`.
     **Update (lode-lo0q, 2026-11-18): decided, accepted; no release mechanism.** See the
-    `lode-lo0q` entry at the end of this file.
+    `lode-lo0q` entry below.
   - **Not established.** The Claude Code version at which the harness began locking: the builds
     `lode-oqr` lost (2026-07-10) were recorded as unlocked, and a harness lock is first on record a
     few days later (`lode-amif`). Nothing asserts the lock is present when a build starts; whether
@@ -6165,19 +6165,18 @@ entries below from being rewritten to chase the current tree.)
     reproduced end to end. Implementation: `lode-g9q3`.
 
 - **A finished builder's leftover harness lock is accepted until the session ends; no release
-  mechanism is built (`lode-lo0q`, 2026-11-18, maintainer ruling).** After `lode-t76f` the builder no
-  longer unlocks, so a finished builder's worktree stays `keep-locked` to `/land`'s sweep if the
-  harness does not release the lock at agent exit, until the orchestrating session's process ends. The
-  live account is
+  mechanism is built (`lode-lo0q`, 2026-11-18, maintainer ruling).** After `lode-t76f` the builder
+  no longer unlocks, so a finished builder's worktree stays `keep-locked` to `/land`'s sweep if the
+  harness does not release the lock at agent exit, until the orchestrating session's process ends.
+  The live account is
   [agents-workflow.md](agents-workflow.md#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f).
   - **Measurement.** `/code` fan-out of 2026-11-17 on Claude Code 2.1.326: ten finished builders,
     none observed keeping the lock after completion. A reviewer saw all five then-finished builder
     worktrees unlocked mid-session, and `/land` reclaimed eight builder worktrees while the
     orchestrating session was still alive, impossible for a locked one.
-  - **Decision.** Accept the leak-until-session-end and build no release mechanism. Not taken: (A)
-    `/code` unlocks the builder worktree on its completion notification; (B) `/land`'s sweep treats a
-    lock naming the worktree's own directory as released once HEAD is captured and the ticket is
-    closed.
-  - **Not established.** One session on one harness version, not a rate over many fan-outs.
-  - **Revisit trigger:** a finished builder's worktree ever seen still locked after its completion
-    notification.
+  - **Decision.** Accept the leak-until-session-end and build no release mechanism. Not taken:
+    (A) `/code` unlocks the builder worktree on its completion notification; (B) `/land`'s sweep
+    treats a lock naming the worktree's own directory as released once HEAD is captured and the
+    ticket is closed.
+  - **Not established.** A rate over many fan-outs: this is one session on one harness version.
+  - **Revisit trigger:** a finished builder's worktree ever seen still locked.

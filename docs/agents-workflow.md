@@ -3268,11 +3268,17 @@ What each consumer of the lock sees:
   ends; `scripts/worktree-lock-stale.sh` can then prove the pid dead, and the sweep reclaims it on
   the same two paths. (While the builder still ran its own unlock, this case could not arise.) The
   cost is a directory held for the rest of a session, never lost work. No builder was seen in that
-  state (measurement above); lode-lo0q decided to accept the case and build no release mechanism.
+  state (measurement above), and the case is accepted (lode-lo0q decision, below).
 - **`/code`'s per-ticket reclaim** (`scripts/code-reclaim-launch-worktree.sh`). Handles only a
   reviewer's or rebase pickup's `land/<id>--*` worktree. It never matches a fresh build's
   `worktree-agent-*` branch, so it does **not** clear a lock the harness leaves on a builder's
   worktree.
+
+**Decision (lode-lo0q): a finished builder's leftover harness lock is accepted until the session
+ends; no release mechanism is built.** Not added: `/code` unlocking the builder's worktree on its
+completion notification, or a `/land` sweep rule that treats a lock naming the worktree's own
+directory as released once its HEAD is captured and its ticket is closed. Revisit if a finished
+builder's worktree is ever seen still locked.
 
 **If the harness ever hands out an unlocked launch worktree, nothing in the builder's cycle
 notices.** `/land`'s sweep could then reclaim a fresh build's worktree while it is still clean and at
@@ -3296,11 +3302,6 @@ zero commits.
   lock/unlock pairing lode-t76f removed, so a failed check could only stop the build: a certain stop
   in place of a possible one, on a harness behavior last recorded before the lock first appears on
   record (the lode-oqr builds, above).
-
-**Decision (lode-lo0q): a finished builder's leftover harness lock is accepted until the session
-ends; no release mechanism is built.** Neither `/code` unlocking on the completion notification nor
-a `/land` sweep rule that treats a lock naming the worktree's own directory as released is added.
-Revisit if a finished builder's worktree is ever seen still locked.
 
 Revisit if a live launch worktree is ever seen without a `locked` line, or a fresh build stops with
 its worktree gone while a `/land` sweep reported a full reclaim. Nothing watches for either. The
