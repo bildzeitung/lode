@@ -1299,6 +1299,28 @@ def load_module_from_path(name: str, path: Path) -> ModuleType:
     return module
 
 
+@functools.cache
+def load_noxfile() -> ModuleType:
+    """Import the real ``noxfile.py`` once per session (it registers nox sessions globally).
+
+    A second execution re-registers every session and nox warns it will become an
+    error, so every test that needs the module shares this one cached load.
+    """
+    return load_module_from_path("noxfile", _CHECKOUT_ROOT / "noxfile.py")
+
+
+def project_venv_bin() -> Path:
+    """The project venv's ``bin`` dir, found by the same accepted-venv rule as
+    ``noxfile._venv_tool`` (``./venv`` or ``./.venv``); fails if the running
+    interpreter is in neither."""
+    bin_dir = load_noxfile()._venv_bin()
+    assert bin_dir is not None, (
+        f"sys.prefix {sys.prefix} is neither ./venv nor ./.venv of this checkout -- "
+        "run the suite from the project venv (uv run --frozen --extra dev nox ...)"
+    )
+    return bin_dir
+
+
 # --- MagicMock Anthropic batch client (lode-ylh2) --------------------------
 #
 # The shared builder for tests/test_enrich.py's and tests/test_worker.py's
@@ -1625,7 +1647,7 @@ def fake_tool_turn_client(
 # @nox.session functions exist?" and neither can answer it by importing
 # noxfile.py a second time -- load_module_from_path asserts the name is not
 # already resident, and executing the module twice re-registers every session
-# in nox's global registry (see test_noxfile_venv_tool.py's _load_noxfile).
+# in nox's global registry (see load_noxfile above).
 # Parsing is the way in, so the parser lives here once rather than as a copy
 # per caller -- the same drift lode-7ed9 removed from the loader above.
 #

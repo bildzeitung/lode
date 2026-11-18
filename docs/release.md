@@ -152,8 +152,9 @@ on:
 push/pull_request triggers — `build.yml`, `tests.yml`, and `coverage.yml` deliberately carry none.
 This is a scoped exception, not a change of house style:
 
-- **Why docs.yml and nothing else.** Every `docs.yml` run installs `mkdocs-material`'s dependency
-  tree and pulls the 1.6GB `minlag/mermaid-cli` Docker image to pre-render diagrams — by a wide
+- **Why docs.yml and nothing else.** Every `docs.yml` run installs the locked dependency tree
+  (`uv sync --locked --extra dev`, `lode-s09w.2`) and pulls the 1.6GB `minlag/mermaid-cli` Docker
+  image to pre-render diagrams — by a wide
   margin the heaviest recurring cost any workflow in this repo adds, on a repo where `/code` and
   `/land` push constantly. `build.yml`/`tests.yml`/`coverage.yml` are comparatively cheap (or, per
   the trigger-scope section above, already narrowed to `trunk`/`land/**` — the remaining cost there
@@ -163,10 +164,12 @@ This is a scoped exception, not a change of house style:
   `toc.slugify` callable `mkdocs.yml` resolves by `!!python/name:` — a change there changes every
   rendered heading anchor), `src/lode/fence_parsing.py` (`docs_slug.py`'s only import, and
   `build_docs_site.py`'s — a change there changes which lines count as headings, so it moves the
-  same anchors one level down; added `lode-fhql.23`), `.github/workflows/docs.yml` itself, `pyproject.toml` (which does not
-  feed the build directly — the workflow's install step carries its own exact pins — but whose
-  `mkdocs-material`/`typer` pins are required to stay in sync with them, so a bump on either side
-  should rebuild), and `.python-version` (the `actions/setup-python` version file). `push.paths` and
+  same anchors one level down; added `lode-fhql.23`), `.github/workflows/docs.yml` itself, `pyproject.toml` and
+  `uv.lock` (the workflow installs its toolchain with `uv sync --locked --extra dev`, so the
+  `mkdocs-material` pin in `pyproject.toml`'s `dev` extra and every version `uv.lock` resolves
+  under it feed the build directly; `uv.lock` joined the filter with `lode-s09w.2`, when the
+  workflow stopped carrying its own pins), and `.python-version` (the interpreter `uv sync`
+  installs). `push.paths` and
   `pull_request.paths` are kept identical via a YAML anchor (`&docs-paths` / `*docs-paths`) so they
   can't silently diverge.
 - **YAML anchors are supported here.** GitHub Actions gained anchor/alias support in September 2025
@@ -240,18 +243,27 @@ byte-identical across the three, deliberately; and every job in the repo carries
   OS/arch/python-version/dependency-file-hash, not the workflow name, so enabling it on `release.yml`
   would restore a cache `build.yml` populated on `trunk` rather than build a fresh one — taking the
   publishing leg's dependencies from a non-publishing workflow's cache is exactly what the clean-room
-  framing exists to avoid. Distinct again from `tests.yml`/`coverage.yml`, which skip `cache: pip`
-  for a third reason — and **not** because the cache would sit empty (lode-81w0). Their dependency
-  install runs through `uv` (its own `~/.cache/uv`), but the `pip install -U uv` bootstrap ahead of
-  it *is* a real pip download — a 22 MB wheel from PyPI (measured: uv 0.12.0, linux x86_64) — so a
+  framing exists to avoid. Distinct again from the `pip install -U uv` bootstrap — `tests.yml`'s
+  `lock-currency` job still runs it; the `tests` job and `coverage.yml` did until `lode-s09w.2` —
+  which skips `cache: pip` for a third reason — and **not** because the cache would sit empty
+  (lode-81w0). The work after it runs through `uv` (its own `~/.cache/uv`), but the bootstrap itself
+  *is* a real pip download — a 22 MB wheel from PyPI (measured: uv 0.12.0, linux x86_64) — so a
   pip cache there would have something to hold. **Caching is deliberately left off anyway**: a
   restored GitHub Actions cache entry that size is not obviously cheaper than fetching the wheel
   fresh each run, and nothing has measured otherwise. Reopen it only on a cold-vs-cached CI
   comparison; the question and the wheel measurement are recorded at lode-3vrq. Enabling it would
-  also need an explicit `cache-dependency-path`, since neither leg has a `requirements.txt` for
+  also need an explicit `cache-dependency-path`, since the job has no `requirements.txt` for
   `setup-python`'s default glob to match (`build.yml` points its cache at `pyproject.toml` for the
   same reason). As with the timeout ladder, this is not a runtime call: release runs measure 14-30s
   of job time regardless (lode-le9e).
+- **The uv-built legs take the same no-cache stance, and have to spell it out (`lode-s09w.2`).**
+  `tests.yml`'s `tests` job, `coverage.yml` and `docs.yml` have no `setup-python` step: they install
+  uv with `astral-sh/setup-uv` and build `./.venv` with `uv sync --locked --extra dev`. That
+  action's `enable-cache` input defaults to `auto`, which is **on** for GitHub-hosted runners — the
+  first push of these workflows without the input saved a 222 MB `setup-uv-*` cache entry — so each
+  of the three steps sets `enable-cache: false`. No run has compared restoring an entry that size
+  with downloading the wheels fresh, which is the same open question as lode-3vrq; reopen it on the
+  same comparison.
 
 ## Packaging assertion is a single implementation, shared by both workflows (lode-zuqp)
 

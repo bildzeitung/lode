@@ -80,30 +80,25 @@ jobs:
         with:
           fetch-depth: 0 # full history + tags — setuptools-scm needs git describe to resolve the version
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Install uv
+        # Same action, pin and `enable-cache: false` as tests.yml (see its comment);
+        # no setup-python (uv installs the .python-version interpreter itself during
+        # the sync below).
+        uses: astral-sh/setup-uv@v10.3.3
         with:
-          python-version-file: .python-version
+          enable-cache: false
 
-      - name: Install dependencies (from requirements.lock)
-        # Must install into ./venv, NOT the runner's ambient interpreter:
-        # noxfile.py's `coverage` session resolves `pytest` to an explicit
-        # path under ./venv/bin (_venv_tool, lode-0yfn) and fails closed if
-        # it isn't there, so a bare `pip install -e '.[dev]'` would leave
-        # `nox -s coverage` below aborting on every run.
+      - name: Install dependencies (from uv.lock)
+        # Must build the project venv (./.venv), NOT the runner's ambient
+        # interpreter: noxfile.py's `coverage` session resolves `pytest` under the
+        # project venv (_venv_tool, lode-0yfn) and fails closed otherwise.
         #
-        # No `--unlocked`: this leg installs the committed, hash-verified
-        # requirements.lock, exactly as tests.yml does, so the coverage number
-        # describes the same dependency set the tests badge backs and is
-        # reproducible from committed bytes. That parity is a decision
-        # (lode-7byn), not an accident -- for why this leg resolved fresh
-        # until then, and what the lock does and does not cover here, see
-        # docs/stack.md#dependency-locking-lode-g2741. The GITHUB_PATH line
-        # then puts the venv ahead of the ambient interpreter for the
-        # `python`/`nox` steps below, exactly as tests.yml does.
-        run: |
-          ./scripts/python-init.sh
-          echo "$(pwd)/venv/bin" >> "$GITHUB_PATH"
+        # `--locked` installs the committed uv.lock, exactly as tests.yml does, so the
+        # coverage number describes the same dependency set the tests badge backs
+        # (lode-7byn; docs/stack.md#dependency-locking-lode-g2741). `--extra dev` is
+        # transitional until lode-s09w.3. No GITHUB_PATH entry for ./.venv/bin: every
+        # later step runs through `uv run`.
+        run: uv sync --locked --extra dev
 
       - name: Resolve model cache key
         # SINGLE implementation shared with tests.yml -- see
@@ -114,7 +109,7 @@ jobs:
         # NB this step must stay AFTER the install (the script imports lode)
         # and BEFORE the cache restore below.
         id: model_cache
-        run: python scripts/model-cache-key.py >> "$GITHUB_OUTPUT"
+        run: uv run --frozen --extra dev python scripts/model-cache-key.py >> "$GITHUB_OUTPUT"
 
       - name: Cache model weights
         # Same cache as tests.yml, keyed identically -- a warm cache here
@@ -137,7 +132,7 @@ jobs:
         # self-excludes unless LODE_RUN_LIVE_EVAL=1, which only `nox -s eval`
         # sets, so this leg stays offline and keyless by design, same as
         # tests.yml.
-        run: nox -s coverage
+        run: uv run --frozen --extra dev nox -s coverage
 
       - name: Upload coverage to Codecov
         # Report-only: fail_ci_if_error is explicitly false, so neither a
