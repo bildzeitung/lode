@@ -249,6 +249,8 @@ entries below from being rewritten to chase the current tree.)
   or a retrieval/answerer knob change. The set intentionally stays small (~20–50 items, current: 25
   answerable + 8 abstain) so it remains fully hand-auditable; it is a regression harness for the
   tuning knobs (rerank, entailment threshold, chunk size), not a statistically powered benchmark.
+  **Update (`lode-887o`, 2026-08-14):** "`nox -s tests` applies no marker filter by design" above is
+  stale. It applies two, which between them still run every test. See the `lode-887o` entry below.
 - **Rerank model + threshold tuning.** The rerank *stage* ships in v1 ([retrieval.md](retrieval.md))
   with a default local cross-encoder behind a toggle; choosing/tuning the model and cutoffs — and
   A/B'ing rerank vs none — waits until there's a real corpus to evaluate against. Don't tune
@@ -1610,8 +1612,9 @@ entries below from being rewritten to chase the current tree.)
   descriptions of what the old, deleted loop did). The worktree-must-not-be-removed-by-its-builder
   invariant, and `/land`'s backstop-sweep-reclaims-it-on-a-clean-land invariant, are both **unchanged**
   — this ticket only removes a write nobody was reading, not any part of the reclaim mechanism itself.
-  **Update (`lode-8n4k`, 2026-08-08):** "it's what it actually checks out" overclaims. `code-reviewer`
-  checks out `origin/land/<id>`, never `review_head`. See the `lode-8n4k` entry below.
+  **Update (`lode-8n4k`, 2026-08-08):** this entry says twice that the code-reviewer checks out
+  `review_head`. It checks out `origin/land/<id>` and only compares `review_head` for drift. See the
+  `lode-8n4k` entry below.
 
 - **`jq` is a hard prerequisite, and both `PreToolUse(Bash)` jq-shelling guards now FAIL CLOSED
   when it is missing, rather than silently falling through (lode-oii9).** `jq` was never documented
@@ -6101,10 +6104,14 @@ entries below from being rewritten to chase the current tree.)
   limits are listed in the test module's docstring.
   **Update (`lode-llxw`, 2026-11-18, maintainer):** REVERSED. The maintainer first confirmed this
   call and then reversed it the same day. A new correcting entry is NOT a marker and its head is
-  free; what is mandatory is an Update marker appended to each entry being corrected. The decision
-  above that "a new correcting entry needs the Update lead-in too" is withdrawn, and so is the
-  gate's date-first-head pattern; the three Update pointers appended here stay. The preamble states
-  the rule.
+  free; what is mandatory is an Update marker appended to each entry being corrected (the preamble
+  states the rule). The decision above that "a new correcting entry needs the Update lead-in too"
+  is withdrawn, and with it the gate's date-first-head pattern and its `lode-dozi` and `lode-wtk2`
+  allowlist entries. The three Update pointers `lode-4eyp` appended, to the `lode-rtcx` entry and
+  the two CORRECTION entries, stay. `lode-llxw` also appended, on 2026-11-18, an Update pointer to
+  each entry corrected by an Update-headed entry: the `lode-g387`, `lode-p8zl`, `lode-2m89` and
+  `lode-s09w` entries, and the eval-harness entry (for `lode-887o`). Each carries the correcting
+  ticket's id and date, not this one's.
 
 - **The builder does not assert the harness lock is present; the residual is accepted (`lode-gro8`,
   2026-11-17).** After `lode-t76f` the only cover for the pre-first-commit window (`lode-oqr`) is the

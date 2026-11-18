@@ -20,22 +20,30 @@ appended ``Update (`` pointer that the grep does find (lode-4eyp).
 *Correction lead-ins are matched more narrowly than the other keywords.*
 "Correction" also opens prose in which an entry narrates its OWN history,
 which the preamble exempts, so the bare keyword is not enough. It is flagged
-in two positions: opening a bold span, blockquote or parenthetical AND
-followed -- through punctuation or ``by`` -- by an id, a date or
-``maintainer decision``. A new entry that corrects earlier ones is NOT a
-marker and its head is free: the mandatory marker is the one appended to the
-entry being corrected (lode-llxw), so no head shape is gated here.
+only where it opens a bold span, blockquote or parenthetical AND is followed
+-- through punctuation or ``by`` -- by an id, a date or
+``maintainer decision``.
 
 KNOWN MISSES in that narrower match, accepted (lode-4eyp):
 
 - Prose between the keyword and its id (``**Correction (see lode-x)``,
   ``**Correction to the lode-x entry above``). By shape alone this is
   indistinguishable from own-history narration.
-- A keyword that wraps onto the next line.
+- A keyword whose id wraps onto the next line.
 
 Accepted over-match, the reverse error: a date straight after the keyword goes
 red even where the entry is narrating its own history. The way out is to
 reword.
+
+*A correcting entry's head is not a marker* (the preamble's lode-llxw
+paragraph), so no pattern here targets one. Two limits follow:
+
+- Nothing checks that a corrected entry actually received its appended
+  marker. A missing marker leaves nothing for a scan to key on.
+- The scan reads one line at a time and cannot tell an entry head from a
+  marker, so a head that itself opens with a keyword in a gated shape
+  (``- **Correction (lode-x) to the entry above``) still goes red. The way out
+  is to reword the head. Whether heads should be exempt is lode-hp12.
 
 *No wrapped marker.* A marker whose id wraps onto the next markdown line is
 still invisible to the single-line grep the preamble documents: correct shape,
@@ -272,7 +280,6 @@ def test_off_pattern_scan_ignores_lowercase_narrative_prose() -> None:
         "  **Correction to this entry's first draft:** it asserted the guard would be",
         "  **Correction, verified empirically on bash 5.2:** the guard did fire.",
         "  (Corrected, then re-verified.) The first run was misread.",
-        "- **2026-01-01 (`lode-zzzz`) \u2014 the correction landed, then was re-decided.**",
         "  the correction (see below) was applied; corrected in place by the author",
     ]
 
