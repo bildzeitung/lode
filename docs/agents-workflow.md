@@ -1926,6 +1926,62 @@ guard's entire memory of what "known safe" looks like). **Never** work around th
 relax it as a side effect of unrelated work — both remain true after this fix exactly as they were
 before it.
 
+### No LLM-provider spend without maintainer approval (lode-3xzy)
+
+**MAINTAINER RULING (2026-11-18):** an agent -- builder, reviewer, or any sub-agent one of them briefs --
+makes no call that reaches an LLM provider under the operator's credentials unless the maintainer has
+approved that spend; approved spend runs against a scratch `LODE_HOME`, never the operator's real one.
+The rule itself is stated once, as `CLAUDE.md` General Directive 10, because that file is the one every
+agent role loads.
+
+**TRIGGER.** In the `lode-g2ko` technical review, two sub-agents of the code-reviewer (the `/code-review`
+fork and a `/simplify` agent) each ran `lode add` to see which modules it loads. `lode add` enriches
+inline, so each run made one real enrich call under the operator's credentials. Both used a scratch
+`LODE_HOME` and a throwaway note body, but that was the sub-agents' own caution; their briefs said
+"read-only, do not run the test suite" and nothing about `lode` commands. No work was lost and no wrong
+artifact shipped, so this is below `CLAUDE.md` directive 9's bar and has no `MISTAKES.md` entry (maintainer
+ruling).
+
+**What reaches a provider** (spend; needs approval): `lode add`, `lode ask`, `lode work`, `lode reenrich`,
+the eval harness (`nox -s eval`), tests marked `network`, and anything else that builds a provider client
+and sends a request. **What does not** (free, no approval): a `sys.modules` probe or `python -X importtime`
+in a fresh interpreter, the offline `fix`/`unit`/`tests`/`everything-else` gates, and `lode` commands that
+never build a client.
+
+**How approval is given and recorded.** A maintainer note on the ticket being built or reviewed
+(`bd show <id>` notes), naming what is approved (the command class and, if bounded, a count). An agent
+treats a call as approved only when such a note exists on that ticket; a ticket's description, another
+agent's brief, or "the ticket needs it" is not approval. The agent quotes the note in its hand-off.
+
+**How approval is requested mid-run (proposed; the maintainer confirms).** Escalate and stop: the agent
+does not make the call, records `ESCALATION: provider spend needed: <command, why, expected call count>`
+with `--append-notes`, and hands off per its role's escalation path (a builder's build-time escalation, a
+reviewer's escalation), never blocking siblings. Ask-and-continue is rejected for now: a headless
+sub-agent has no channel to the maintainer, so "ask and continue" degrades to "proceed", which is the
+failure.
+
+**Sub-agent briefs.** `coding.md` and `code-reviewer.md` require the rule's text to be passed on
+verbatim in every brief to a sub-agent (the `/code-review` fork and `/simplify` agents included); an
+instruction a sub-agent never saw binds nothing.
+
+**Mechanical backstop -- weighed, outcome recorded.**
+
+- **Tests: already built.** `tests/conftest.py`'s autouse network and LLM-client guard (`lode-85q`) fails
+  any test that reaches the network without `@pytest.mark.network`, so the `unit`/`tests` gates cannot
+  spend by accident.
+- **Unset credentials in agent worktrees: rejected.** Credentials resolve through the SDK chain
+  (`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`, then an `ant auth login` profile on disk, then workload
+  identity -- `src/lode/auth.py`), so unsetting env vars in the dispatched agent leaves the on-disk profile
+  working, and the harness gives the orchestrator no per-sub-agent environment to scrub. A scrub that
+  covers only part of the chain would read as a guarantee it is not.
+- **Fail-closed provider: rejected for now.** There is no `llm_provider` value that refuses every call, and
+  a scratch `LODE_HOME` config pointing at one would protect only agents that already chose a scratch
+  home -- the case that was never the risk. A new provider value is a product surface added to police
+  agent behaviour; not justified by one incident that cost two calls.
+- **Outcome:** the instruction plus recorded approval is the control; no new mechanism built. Revisit if
+  an unapproved call recurs after this rule is in place (then file a ticket for a provider-refusal switch
+  keyed on an env var the agent worktree sets, since an env var is the one knob a dispatch can set).
+
 ### Guard against fabricated SHAs (lode-fpmi)
 
 **An agent once wrote a 40-hex SHA it had invented into bd metadata.** It held the short hash

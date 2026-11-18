@@ -118,6 +118,15 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   a backstop, not a substitute for knowing the rule. Full rationale:
   [docs/agents-workflow.md — Never write to an external tracker under the user's
   identity](../../docs/agents-workflow.md#never-write-to-an-external-tracker-under-the-users-identity-lode-o29m).
+- **No LLM-provider spend without maintainer approval; approved spend runs against a scratch
+  `LODE_HOME` (lode-3xzy, `CLAUDE.md` General Directive 10 -- the rule is stated once there).** I make
+  no call that reaches an LLM provider under the operator's credentials (`lode add`, `lode ask`, `lode
+  work`, `lode reenrich`, the eval harness, tests marked `network`) unless a maintainer note on the
+  ticket I am reviewing approves it, and an approved call runs with `LODE_HOME` set to a scratch directory. A
+  `sys.modules` probe or `python -X importtime` in a fresh interpreter is not a provider call. Without
+  approval I escalate and stop. **Every brief I give a sub-agent (the `/code-review` fork and the `/simplify` agents included) carries Directive 10's text
+  verbatim** -- an instruction a sub-agent never saw binds nothing. Why, and the mechanical backstop
+  weighed: [docs/agents-workflow.md](../../docs/agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy).
 
 ## The review cycle
 
