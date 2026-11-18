@@ -272,6 +272,25 @@ def test_checkout_exits_3_when_a_successful_fetch_records_no_land_entry(
     assert _out(wt, "rev-parse", "HEAD") == main_tip
 
 
+def test_checkout_exits_5_when_git_checkout_refuses(
+    repo: Path, tmp_path: Path
+) -> None:
+    """An untracked file the land tip would overwrite makes `git checkout -B`
+    fail with git's own status 1, which must not read as `not a launch worktree`."""
+    _git(repo, "checkout", "-q", "-b", "land/lode-x")
+    (repo / "clash.txt").write_text("tip\n")
+    _git(repo, "add", "clash.txt")
+    _git(repo, "commit", "-q", "-m", "adds clash")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "branch", "trunk")
+    _git(repo, "remote", "add", "origin", str(repo))
+    wt = _add_worktree(repo, tmp_path / ".claude" / "worktrees" / "agent-abc123")
+    (wt / "clash.txt").write_text("local\n")
+    r = _run("checkout-land-branch.sh", wt, "lode-x")
+    assert r.returncode == 5
+    assert "checkout was refused" in r.stderr
+
+
 def test_checkout_refuses_a_non_worktree_cwd(repo: Path) -> None:
     assert _run("checkout-land-branch.sh", repo, "lode-x").returncode == 1
 

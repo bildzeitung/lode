@@ -25,13 +25,14 @@
 #
 # Exit 0 -> checked out; prints the local branch name.
 # Exit 1 -> cwd is not inside a `.claude/worktrees/` launch worktree; nothing
-#           was touched.
+#           was fetched or checked out.
 # Exit 2 -> the CALL is wrong (argument count).
 # Exit 3 -> FETCH_HEAD carries no `land/<id>` entry after a successful fetch;
 #           nothing was checked out.
 # Exit 4 -> `git fetch origin land/<id> trunk` failed (e.g. no such remote
 #           branch, network); nothing was checked out.
-# Other  -> git's own failure status.
+# Exit 5 -> the fetch succeeded but `git checkout -B` refused (e.g. local
+#           changes it would overwrite); git's error is printed above.
 
 set -euo pipefail
 
@@ -73,5 +74,9 @@ if [ -z "$SHA" ]; then
 fi
 
 BRANCH="land/${ID}--$(basename "$TOP")"
-git checkout -B "$BRANCH" "$SHA"
+if ! git checkout -q -B "$BRANCH" "$SHA"; then
+  echo "checkout-land-branch.sh: \`git checkout -B $BRANCH\` failed" \
+    "-- the fetch succeeded; the checkout was refused." >&2
+  exit 5
+fi
 echo "$BRANCH"

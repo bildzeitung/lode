@@ -261,9 +261,11 @@ a stale `FETCH_HEAD` can never be checked out and I run no separate `git fetch` 
 (lode-n7g4), and it takes the tip from `FETCH_HEAD`'s own `land/<id>` line — the fetch lists two
 refs, and `FETCH_HEAD` as a rev names only the first. Nonzero is a stop: exit 1 means my cwd is not
 a `.claude/worktrees/` launch worktree, exit 2 a broken call, exit 3 that `FETCH_HEAD` has no
-`land/<id>` entry even though the fetch succeeded, exit 4 that the fetch itself failed. On exit 4
+`land/<id>` entry even though the fetch succeeded, exit 4 that the fetch itself failed, exit 5 that the fetch
+succeeded but `git checkout -B` refused (e.g. local changes it would overwrite). On exit 4
 git's own error is printed above the script's and nothing was checked out, so when that error is
-transient (e.g. a network failure) I re-run the script once before treating it as a stop.
+transient (e.g. a network failure) I re-run the script once before treating it as a stop. Exit 5 is
+not an isolation failure: git's error above it names the cause.
 
 The suffixed name still starts with `land/`, but `/land`'s worktree-GC sweep doesn't look at the name at
 all — it reclaims any worktree under `.claude/worktrees/` that is **unlocked** and whose **HEAD commit**
