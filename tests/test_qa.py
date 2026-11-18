@@ -54,9 +54,9 @@ class _FakeClient:
         self.messages = _FakeMessages(parsed)
 
 
-def _envelope(claims: list[Claim]) -> SimpleNamespace:
-    """A minimal _ClaimsEnvelope stand-in (only .claims is read)."""
-    return SimpleNamespace(claims=claims)
+def _envelope(claims: list[Claim]) -> _ClaimsEnvelope:
+    """The claims envelope the fake client serialises into its response."""
+    return _ClaimsEnvelope(claims=claims)
 
 
 @pytest.fixture

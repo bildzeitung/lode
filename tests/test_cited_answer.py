@@ -17,7 +17,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from conftest import fake_tool_turn_client, structured_response
+from conftest import claims_response, fake_tool_turn_client
 
 from lode.answer import Answer, Claim, Support
 from lode.cited_answer import CitedAnswer, ask, gate_cited_answer
@@ -38,7 +38,7 @@ class _FakeMessages:
 
     def create(self, **kwargs: object) -> SimpleNamespace:
         self.calls.append(kwargs)
-        return structured_response(SimpleNamespace(claims=self._claims))
+        return claims_response(self._claims)
 
 
 class _FakeClient:

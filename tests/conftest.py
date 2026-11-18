@@ -1463,7 +1463,7 @@ def _text_block(text: str = "") -> mock.MagicMock:
 
 
 def structured_response(
-    parsed: object,
+    parsed: BaseModel | None,
     *,
     output_tokens: int = 0,
     stop_reason: str = "end_turn",
@@ -1474,14 +1474,9 @@ def structured_response(
     ``parsed`` is a pydantic model serialised into the single ``text`` block
     (``None`` -> no content blocks at all, e.g. a thinking-only response);
     pass ``text`` to override the block's text verbatim, e.g. a truncated
-    mid-JSON string (lode-pdss). A non-pydantic ``parsed`` with a ``claims``
-    attribute is wrapped in the Q&A claims envelope.
+    mid-JSON string (lode-pdss).
     """
-    from lode.qa import _ClaimsEnvelope
-
     if text is None and parsed is not None:
-        if not isinstance(parsed, BaseModel):
-            parsed = _ClaimsEnvelope(claims=parsed.claims)  # type: ignore[attr-defined]
         text = parsed.model_dump_json()
     return SimpleNamespace(
         content=[] if text is None else [_text_block(text)],
@@ -1489,6 +1484,15 @@ def structured_response(
         stop_details=None,
         usage=SimpleNamespace(output_tokens=output_tokens),
     )
+
+
+def claims_response(claims: list) -> SimpleNamespace:
+    """A :func:`structured_response` carrying the Q&A claims envelope."""
+    # Deferred: `lode.qa` pulls in the web-fetch import graph, which tests
+    # that never touch Q&A should not pay for.
+    from lode.qa import _ClaimsEnvelope
+
+    return structured_response(_ClaimsEnvelope(claims=claims))
 
 
 @pytest.fixture(autouse=True)

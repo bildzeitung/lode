@@ -45,7 +45,7 @@ from types import SimpleNamespace
 import click
 import pytest
 import typer.main
-from conftest import structured_response
+from conftest import claims_response
 from rich.console import Console
 from rich.table import Table
 from typer.testing import CliRunner
@@ -5190,7 +5190,7 @@ class _FakeMessages:
 
     def create(self, **kwargs: object) -> SimpleNamespace:
         self.calls.append(kwargs)
-        return structured_response(SimpleNamespace(claims=self._claims))
+        return claims_response(self._claims)
 
 
 class _FakeClient:

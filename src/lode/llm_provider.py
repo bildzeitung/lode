@@ -563,8 +563,10 @@ def _anthropic_error_from_exception(
     """Wrap an Anthropic SDK 4xx/5xx into :class:`LLMProviderError` (lode-90o7, lode-i7yr).
 
     Used at all five ``AnthropicProvider`` SDK call sites: the three that
-    *submit* a request -- ``messages.create``, ``messages.parse``,
-    ``batches.create`` -- and the two that *poll* an existing batch in
+    *submit* a request -- the two ``messages.create`` sites (a free tool
+    turn, and the structured-output turn in
+    :meth:`AnthropicProvider._parsed_turn`) and ``batches.create`` -- and
+    the two that *poll* an existing batch in
     :meth:`AnthropicProvider.collect_batch` -- ``batches.retrieve``,
     ``batches.results``. Same "log + wrap, preserve status_code/request_id"
     shape :meth:`OpenAIProvider._error_from_exception` already uses for the
@@ -723,7 +725,8 @@ class AnthropicProvider:
     for Opus 5 prefers thinking on at low/medium effort over disabled (two
     failure modes of disabled thinking -- tool calls emitted as plain text, and
     ``<thinking>`` tag leakage -- neither applies badly here: this branch sends
-    no tools, and the schema-constrained ``output_format`` contains leakage).
+    no tools, and the schema-constrained ``output_config.format`` contains
+    leakage).
     :data:`lode.qa.MAX_TOKENS` was raised accordingly to give the now-possible
     adaptive thinking headroom to share with the claims response. Net effect:
     Sonnet 5.5 (``qa_llm`` default) and Opus 5.5 (``qa_think_harder_llm``
@@ -733,10 +736,8 @@ class AnthropicProvider:
     The raised cap is headroom, not a guarantee, so this branch now also
     *handles* running out of it. Thinking shares ``max_tokens`` with the answer
     text, and exhausting the budget shows up two ways: a response whose
-    ``content`` holds only a thinking block (the SDK's ``parsed_output`` is then
-    ``None``, which would otherwise escape under this method's ``-> BaseModelT``
-    annotation and fail as an ``AttributeError`` in the caller), or a text block
-    truncated mid-JSON (a raw ``pydantic.ValidationError`` from inside the SDK).
+    ``content`` holds only a thinking block (no text block to decode), or a
+    text block truncated mid-JSON (which fails validation against the schema).
     Both are converted to :class:`LLMProviderError` -- the same contract
     :class:`OpenAIProvider` already honors for its equivalent shapes -- so the
     failure is diagnosable at the seam instead of surfacing far from its cause.
@@ -748,8 +749,9 @@ class AnthropicProvider:
     JSON payload: :data:`lode.enrich.MAX_TOKENS` carries the headroom
     (lode-jgus). A response that spent its whole budget thinking carries no
     text block, which :meth:`_parsed_turn` converts to
-    :class:`LLMProviderError`; one cut off partway through the JSON fails the
-    SDK's own validation there instead (the ``ValidationError`` arm).
+    :class:`LLMProviderError`; one cut off partway through the JSON fails
+    validation there instead (the ``ValidationError`` arm, which names the
+    ``stop_reason``).
     :meth:`collect_batch` reaches both symptoms *more* easily (see
     :data:`lode.enrich.MAX_TOKENS` for why the batch route is bounded
     differently) and degrades the one item to an ``errored``
@@ -829,7 +831,7 @@ class AnthropicProvider:
         )
         # `messages.create` + an explicit `output_config.format`, not
         # `messages.parse`: parse validates the text inside the SDK, so a
-        # refusal whose text is truncated mid-JSON raised a ValidationError
+        # refusal whose text is truncated mid-JSON raises a ValidationError
         # with the response -- and its `stop_reason` -- unreachable. Here the
         # response is in hand and `stop_reason` is read BEFORE the text is
         # validated (lode-pdss). The format is the same one `submit_batch`
@@ -891,7 +893,7 @@ class AnthropicProvider:
         except ValidationError as exc:
             # Refusal was handled above, so this is a genuine schema
             # violation or a truncation; `stop_reason` tells them apart.
-            if stop_reason in ("max_tokens", "model_context_window_exceeded"):
+            if stop_reason in _INCOMPLETE_STOP_REASONS:
                 diagnosis = (
                     f"the text was cut off before it was complete JSON "
                     f"{_stop_reason_hint(stop_reason, response)}"
@@ -920,8 +922,9 @@ class AnthropicProvider:
         tool_description: str | None = None,
     ) -> BaseModelT:
         # reasoning_effort -> output_config.effort (lode-wnz1): validated up
-        # front, then splatted -- empty when unset, so the kwarg is absent
-        # rather than `None`. See `_anthropic_effort_kwargs`.
+        # front, then merged into the `output_config` `_parsed_turn` sends --
+        # empty when unset, so `effort` is absent rather than `None`. See
+        # `_anthropic_effort_kwargs`.
         effort_kwargs = _anthropic_effort_kwargs(reasoning_effort, model=model)
         # Single-call path: no multi-turn bound to compare a spend total
         # against, so the token count is discarded here (lode-9594).

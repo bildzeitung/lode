@@ -51,7 +51,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import structured_response
+from conftest import claims_response
 from typer.testing import CliRunner
 
 from lode import cli
@@ -143,7 +143,7 @@ class _FakeMessages:
 
     def create(self, **kwargs: object) -> SimpleNamespace:
         self.calls.append(kwargs)
-        return structured_response(SimpleNamespace(claims=self._claimed))
+        return claims_response(self._claimed)
 
 
 class _FakeClient:

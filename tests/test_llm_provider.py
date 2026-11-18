@@ -382,7 +382,7 @@ def test_structured_call_sends_effort_on_the_structured_output_branch() -> None:
     }
 
 
-def test_structured_call_omits_output_config_when_reasoning_effort_is_none() -> None:
+def test_structured_call_omits_effort_when_reasoning_effort_is_none() -> None:
     client = mock.MagicMock()
     client.messages.create.return_value = _parsed_response(_Widget(name="w"))
     provider = AnthropicProvider(client)
@@ -570,8 +570,8 @@ def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> 
     # asserted via `final_kwargs["messages"]` below instead.
     assert free_kwargs["messages"][0] == {"role": "user", "content": "find widget w-1"}
 
-    # lode-ugj5: the final turn is structured output (`output_format` ->
-    # `output_config.format`), never a forced tool_choice (400s on Sonnet 5.5 /
+    # lode-ugj5: the final turn is structured output (`output_config.format`),
+    # never a forced tool_choice (400s on Sonnet 5.5 /
     # Opus 5.5). The tool definitions stay because the history carries
     # tool_use blocks; `none` makes a further call impossible.
     final_kwargs = client.messages.create.call_args.kwargs
@@ -770,7 +770,7 @@ def test_run_tool_turns_wraps_a_bad_request_from_the_final_structured_turn() -> 
 def test_run_tool_turns_raises_when_the_final_turn_has_no_text_block() -> None:
     tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
     free_turn = _tool_use_response("lookup_widget", {"id": "w"})
-    # Budget spent on thinking: the SDK's parsed_output is None.
+    # Budget spent on thinking: the response carries no text block.
     no_text = _parsed_response(None, stop_reason="max_tokens")
     client = mock.MagicMock()
     client.messages.create.side_effect = [free_turn, no_text]
@@ -1641,41 +1641,17 @@ def test_structured_call_names_a_refusal_whose_text_is_truncated() -> None:
     # lode-pdss: the text block is cut off mid-JSON, so it cannot validate;
     # stop_reason is read first, so this is a policy refusal, not a schema
     # mismatch.
-    client = mock.MagicMock()
-    client.messages.create.return_value = _refused_response()
+    message = str(_structured_call_with(_refused_response()))
 
-    with pytest.raises(LLMProviderError) as excinfo:
-        AnthropicProvider(client).structured_call(
-            model="claude-opus-5",
-            reasoning_effort=None,
-            system="sys",
-            user_prompt="p",
-            output_schema=_Widget,
-            max_tokens=8192,
-            timeout_s=1.0,
-        )
-
-    assert "did not match" not in str(excinfo.value)
-    assert "not visible from here" not in str(excinfo.value)
-    _assert_refusal_hint(str(excinfo.value))
+    assert "did not match" not in message
+    assert "not visible from here" not in message
+    _assert_refusal_hint(message)
 
 
 def test_structured_call_names_a_refusal_with_no_text_block() -> None:
-    client = mock.MagicMock()
-    client.messages.create.return_value = _refused_response(text=None)
+    message = str(_structured_call_with(_refused_response(text=None)))
 
-    with pytest.raises(LLMProviderError) as excinfo:
-        AnthropicProvider(client).structured_call(
-            model="claude-opus-5",
-            reasoning_effort=None,
-            system="sys",
-            user_prompt="p",
-            output_schema=_Widget,
-            max_tokens=8192,
-            timeout_s=1.0,
-        )
-
-    _assert_refusal_hint(str(excinfo.value))
+    _assert_refusal_hint(message)
 
 
 def test_run_tool_turns_final_turn_names_a_refusal() -> None:
@@ -1742,24 +1718,12 @@ def test_collect_batch_names_a_refusal_on_a_succeeded_result(
 def test_structured_refusal_whose_text_validates_is_not_returned() -> None:
     # lode-mzuk: a refused message whose text happens to validate is still
     # discarded.
-    response = _parsed_response(_Widget(name="w"), stop_reason="refusal")
-    response.stop_details = SimpleNamespace(category="cyber")
-    client = mock.MagicMock()
-    client.messages.create.return_value = response
+    response = _refused_response(text=_Widget(name="w").model_dump_json())
 
-    with pytest.raises(LLMProviderError) as excinfo:
-        AnthropicProvider(client).structured_call(
-            model="claude-opus-5",
-            reasoning_effort=None,
-            system="sys",
-            user_prompt="p",
-            output_schema=_Widget,
-            max_tokens=8192,
-            timeout_s=1.0,
-        )
+    message = str(_structured_call_with(response))
 
-    assert "partial content discarded" in str(excinfo.value)
-    _assert_refusal_hint(str(excinfo.value))
+    assert "partial content discarded" in message
+    _assert_refusal_hint(message)
 
 
 @pytest.mark.parametrize("partial_tool_use", [True, False], ids=["tool-use", "empty"])
