@@ -20,10 +20,13 @@ while erasing it here would lose the record of what was believed, and when. The 
 gated by [`tests/test_decisions_supersession_markers.py`](../tests/test_decisions_supersession_markers.py);
 what that gate cannot catch is recorded in its module docstring (lode-nlk6).
 
-**A new entry that corrects an earlier entry is a marker too (`lode-llxw`, 2026-11-18, maintainer).**
-The "new entry" form of a correction opens with the same lead-in as an appended marker, so the grep
-above finds it. A date-first "CORRECTION" lead-in, or any other shape, does not satisfy the rule. An
-entry that only mentions an earlier entry in passing is not a marker.
+**A correction always APPENDS a marker to the entry it corrects (`lode-llxw`, 2026-11-18, maintainer).**
+The first paragraph's "a new entry, or a marker appended to the existing one" does not make the new
+entry enough on its own: an agent reads this file one top-level entry at a time, so a correction that
+lives only in a new entry leaves the stale entry retrievable with no warning. Whichever form carries
+the correction, the corrected entry gets an appended `**Update (<id>[, <date>])` marker. The new
+entry that does the correcting is not itself a marker, and its head is free: it need not open with
+the Update lead-in.
 
 **This file is out of scope for pointer sweeps, by construction (`lode-1dmu`, 2026-08-08).** A
 mechanical sweep that repoints every reference to a file/symbol that moved or was renamed (e.g. the
@@ -1607,6 +1610,8 @@ entries below from being rewritten to chase the current tree.)
   descriptions of what the old, deleted loop did). The worktree-must-not-be-removed-by-its-builder
   invariant, and `/land`'s backstop-sweep-reclaims-it-on-a-clean-land invariant, are both **unchanged**
   — this ticket only removes a write nobody was reading, not any part of the reclaim mechanism itself.
+  **Update (`lode-8n4k`, 2026-08-08):** "it's what it actually checks out" overclaims. `code-reviewer`
+  checks out `origin/land/<id>`, never `review_head`. See the `lode-8n4k` entry below.
 
 - **`jq` is a hard prerequisite, and both `PreToolUse(Bash)` jq-shelling guards now FAIL CLOSED
   when it is missing, rather than silently falling through (lode-oii9).** `jq` was never documented
@@ -2243,6 +2248,8 @@ entries below from being rewritten to chase the current tree.)
   Documented in [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate),
   [`land-review.md`](../.claude/agents/land-review.md#how-to-use-me), and
   [agents-workflow.md — Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
+  **Update (`lode-nt98`, `lode-qv5t`, 2026-07-20):** the "HEAD never diverges" / "no dedicated code" claim
+  above is falsified for the worktree-GC path. See the `lode-nt98`/`lode-qv5t` entry below.
 - **`land-review` moves from a skill to a dedicated agent definition, carrying `isolation: worktree`
   in its own frontmatter (lode-kt6g / lode-c6ir, 2026-07-20).** lode-kt6g asked a narrow question left
   open by lode-g387 (above): every agent dispatch in the repo that needs `isolation: "worktree"` has
@@ -4289,6 +4296,8 @@ entries below from being rewritten to chase the current tree.)
     [agents-workflow.md](agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc),
     [`scripts/trunk-write-guard.sh`](../scripts/trunk-write-guard.sh),
     `tests/test_trunk_write_guard.py`.
+  **Update (`lode-5ido`, 2026-08-08):** RULING 1's premise is stale (the `PreToolUse` payload now carries
+  `agent_id`/`agent_type`) but its conclusion stands. See the `lode-5ido` entry below.
 
 - **2026-08-08 — DECIDED (maintainer, `lode-3dh1`): `run_tool_turns`' `max_tokens` stays per-TURN,
   not per-run; total spend is bounded by `max_tool_turns` instead.** `lode-35nu.11.6`'s acceptance
@@ -5978,6 +5987,8 @@ entries below from being rewritten to chase the current tree.)
     compatibility wrappers.**
   - **`lode-sys4`'s derive-the-target-interpreter-from-`.python-version` machinery is superseded:** uv
     reads `.python-version` natively, so nothing needs to pass `--python-version` by hand.
+  **Update (`lode-5x01`, 2026-11-16):** the "`venv-install`" in this entry's `python-init.sh` bullet is
+  `scripts/venv-install.sh`. Wording only; see the `lode-5x01` entry below.
 
 - **Code-reviewer runs `/code-review` medium as well as its hand pass (`lode-1fyb`, decided
   2026-11-16, maintainer decision; implemented by `lode-bldq`).** Resolves the open decision carried by
@@ -6088,9 +6099,12 @@ entries below from being rewritten to chase the current tree.)
   own history ("**Correction, verified empirically on bash 5.2:**") stays green. Accepted miss: a
   backwards correction with prose between the keyword and its id. That miss and the gate's other
   limits are listed in the test module's docstring.
-  **Update (`lode-llxw`, 2026-11-18, maintainer):** confirmed. The maintainer ruled that a new entry
-  correcting an earlier entry IS a marker and opens with the Update lead-in, which replaces this
-  entry's "builder call, not a maintainer ruling" status. The preamble now states the rule.
+  **Update (`lode-llxw`, 2026-11-18, maintainer):** REVERSED. The maintainer first confirmed this
+  call and then reversed it the same day. A new correcting entry is NOT a marker and its head is
+  free; what is mandatory is an Update marker appended to each entry being corrected. The decision
+  above that "a new correcting entry needs the Update lead-in too" is withdrawn, and so is the
+  gate's date-first-head pattern; the three Update pointers appended here stay. The preamble states
+  the rule.
 
 - **The builder does not assert the harness lock is present; the residual is accepted (`lode-gro8`,
   2026-11-17).** After `lode-t76f` the only cover for the pre-first-commit window (`lode-oqr`) is the
