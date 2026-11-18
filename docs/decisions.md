@@ -6161,3 +6161,21 @@ entries below from being rewritten to chase the current tree.)
   - **Not established.** Refusal frequency on real notes was never measured, and the
     dead -> re-enqueue loop was confirmed by reading `reconcile._enrich_gap_step`, not
     reproduced end to end. Implementation: `lode-g9q3`.
+
+- **CLI and TUI startup must not import trafilatura, pyarrow or networkx (`lode-g2ko`,
+  2026-11-18, maintainer ruling).**
+  - **Context.** `lode.cli` imports `lode.repository` at module scope, which imports
+    `lode.drawdown`; that chain loaded trafilatura (via `lode.webfetch`, about 275 ms) and
+    pyarrow (via `lode.externals` -> `lode.vectorstore`, about 51 ms) before any command ran,
+    `lode add` and `lode --help` included. `lode.tui.app` reaches the same chain through
+    `lode.tui.services.capture`. This contradicted `docs/design.md`'s "capture stays instant".
+  - **Decision.** Bound it. `trafilatura` is imported inside `lode.webfetch._extract`, and
+    `pyarrow` inside `VectorStore._schema` (the only user; the annotation is
+    `TYPE_CHECKING`-guarded). `tests/test_import_boundary.py` pins, in a fresh subprocess, that
+    importing `lode.cli` or `lode.tui.app` loads none of trafilatura, pyarrow or networkx
+    (networkx is what keeps the deferred `lode.retrieval` import in the ask path worthwhile).
+    `lode add` enqueues drawdown and embed jobs unchanged; only when the work runs is the
+    import paid.
+  - **Measured** (`python -X importtime -c "import lode.cli"`, one WSL2 machine, warm cache):
+    about 520 ms cumulative before (ticket measurement), about 300 ms after (three runs, 292-308
+    ms).

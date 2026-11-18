@@ -125,7 +125,6 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 import httpx2
-import trafilatura
 
 from lode.config import Settings
 from lode.fetch_outcome import HttpOutcome, classify_http_status
@@ -628,6 +627,8 @@ class GuardedHttpxFetcher(HttpxFetcher):
 
 def _extract(html: str) -> str | None:
     """Readability-extract ``html``; ``None`` on failed/empty extraction."""
+    import trafilatura  # deferred: ~275 ms, off the CLI/TUI startup path (lode-g2ko)
+
     return trafilatura.extract(html, include_comments=False, include_tables=True)
 
 
