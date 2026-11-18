@@ -3250,9 +3250,13 @@ What is observed, and what is not:
 - **Not established:** the Claude Code version at which the harness began locking. The builds
   lode-oqr lost (2026-07-10) were recorded as unlocked; a harness lock is first on record a few days
   later, on a reviewer's worktree (lode-amif).
-- **Not measured:** how often the harness leaves a *builder's* lock behind when the agent exits. For
-  reviewers it was one of two ([lode-7ndi, below](#the-step-0-pickup-merges-it-never-rebases-lode-cln)).
-  Every builder before this change removed the lock itself, so there is no builder figure.
+- **Measured once (lode-lo0q, 2026-11-17, Claude Code 2.1.326):** how often the harness leaves a
+  *builder's* lock behind when the agent exits. In one `/code` fan-out, ten builders finished and
+  none was seen keeping the lock after completion. A reviewer saw all five then-finished builder
+  worktrees unlocked mid-session, and `/land` reclaimed eight builder worktrees while the
+  orchestrating session was still alive, which a locked worktree would have blocked. It is one
+  session on one harness version, not a rate over many fan-outs. For reviewers the figure was one of
+  two ([lode-7ndi, below](#the-step-0-pickup-merges-it-never-rebases-lode-cln)).
 
 What each consumer of the lock sees:
 
@@ -3263,8 +3267,8 @@ What each consumer of the lock sees:
   the worktree stays `keep-locked` — landed or abandoned — until the orchestrating session's process
   ends; `scripts/worktree-lock-stale.sh` can then prove the pid dead, and the sweep reclaims it on
   the same two paths. (While the builder still ran its own unlock, this case could not arise.) The
-  cost is a directory held for the rest of a session, never lost work. Measuring it, and deciding
-  who should release such a lock, is lode-lo0q.
+  cost is a directory held for the rest of a session, never lost work. No builder was seen in that
+  state (measurement above); lode-lo0q decided to accept the case and build no release mechanism.
 - **`/code`'s per-ticket reclaim** (`scripts/code-reclaim-launch-worktree.sh`). Handles only a
   reviewer's or rebase pickup's `land/<id>--*` worktree. It never matches a fresh build's
   `worktree-agent-*` branch, so it does **not** clear a lock the harness leaves on a builder's
@@ -3292,6 +3296,11 @@ zero commits.
   lock/unlock pairing lode-t76f removed, so a failed check could only stop the build: a certain stop
   in place of a possible one, on a harness behavior last recorded before the lock first appears on
   record (the lode-oqr builds, above).
+
+**Decision (lode-lo0q): a finished builder's leftover harness lock is accepted until the session
+ends; no release mechanism is built.** Neither `/code` unlocking on the completion notification nor
+a `/land` sweep rule that treats a lock naming the worktree's own directory as released is added.
+Revisit if a finished builder's worktree is ever seen still locked.
 
 Revisit if a live launch worktree is ever seen without a `locked` line, or a fresh build stops with
 its worktree gone while a `/land` sweep reported a full reclaim. Nothing watches for either. The
