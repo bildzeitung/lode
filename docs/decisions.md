@@ -6106,6 +6106,9 @@ entries below from being rewritten to chase the current tree.)
   a maintainer ruling).** The ticket asked whether the pickup should leave `land_summary` untouched
   and said to settle that, then build. No maintainer settled it; confirming or reversing this entry
   is `lode-gcbg`.
+  **Update (lode-gcbg, 2026-11-18): the maintainer confirmed this entry's three rules as built
+  (the builder's decision and both review additions), so it is now a maintainer ruling.** See the
+  `lode-gcbg` entry at the end of this file.
   - **Why.** `/land` builds each merge commit as `Merge land/<id>: <land_summary> (<id>)`. The
     pickup overwrote `land_summary` with a merge note, so a branch that took a pickup landed as
     "Merged trunk @ ... into the branch" and the reviewer's description of the branch never reached
@@ -6217,3 +6220,25 @@ entries below from being rewritten to chase the current tree.)
     send nothing to a provider and the offline gates run them; the directive lists the live eval
     (`LODE_RUN_LIVE_EVAL=1`) instead.
   - **Rejected.** Unsetting credentials and a fail-closed provider; no new mechanism built.
+- **Update (lode-gcbg, 2026-11-18): the maintainer confirmed the `lode-jb2q` rebase-pickup rules,
+  points 1-3 as built.** The `lode-jb2q` entry above said confirming or reversing it was this
+  ticket's to settle.
+  - **Decided (maintainer).** (1) A rebase pickup refreshes `land_head` and leaves `land_summary` as
+    the reviewer wrote it. (2) The pickup's account of its merge goes on the ticket as a
+    `REBASE PICKUP` note. (3) The one exception stands: when resolving a conflict made
+    `land_summary` false, the pickup passes a corrected one in the same call, and it still
+    describes what the branch does, not the merge. No instruction file changes: `coding.md`'s
+    rebase-pickup step 5 and the docs that point to it already say this.
+  - **Not taken.** Alternatives (a)-(d) from the ticket description (no exception; the resolution
+    in the pickup's merge commit message; appending to the reviewer's summary; escalating any
+    resolution that drops branch content).
+  - **Ruling history.** The ticket carried two contradictory notes dated 2026-11-18. One confirmed
+    points 1-3. The other reversed point 3: a pickup whose resolution changed the branch's content
+    would swap `needs-rebase` to `ready-for-code-review` for a `code-reviewer` to correct
+    `land_summary`. The maintainer broke the tie in a `/code` session: the confirming note stands
+    and the reversing one is withdrawn, so the `ready-for-code-review` route was never built.
+  - **Not ruled on.** Two alternatives from the `lode-jb2q` review's note on the ticket: (e)
+    `land-review` checking `land_summary` against the diff, and (f) building the merge message
+    from the ticket title. Neither is built. The confirming note names only (a)-(d); the
+    withdrawn one was alone in listing (e) and (f) as not taken.
+  - **Still accepted.** The limits listed in the `lode-jb2q` entry stand.
