@@ -51,6 +51,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from conftest import claims_response
 from typer.testing import CliRunner
 
 from lode import cli
@@ -134,15 +135,15 @@ class _HashEmbedder:
 
 
 class _FakeMessages:
-    """Records every parse() call and returns ``claimed`` claims."""
+    """Records every create() call and returns ``claimed`` claims."""
 
     def __init__(self, claimed: list[Claim]) -> None:
         self._claimed = claimed
         self.calls: list[dict] = []
 
-    def parse(self, **kwargs: object) -> SimpleNamespace:
+    def create(self, **kwargs: object) -> SimpleNamespace:
         self.calls.append(kwargs)
-        return SimpleNamespace(parsed_output=SimpleNamespace(claims=self._claimed))
+        return claims_response(self._claimed)
 
 
 class _FakeClient:

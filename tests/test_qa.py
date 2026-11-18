@@ -3,7 +3,7 @@
 Asserts the acceptance criteria offline (the Anthropic client is mocked, so no
 network call is ever made and the gates run without credentials):
 
-- structured claims are parsed via the anthropic ``messages.parse`` + Pydantic path;
+- structured claims are parsed via the anthropic ``messages.create`` + Pydantic path;
 - Claude Sonnet 5.5 is the default model, Opus 5.5 the "think harder" toggle;
 - ``no_egress`` passages are EXCLUDED from the cloud context (and surfaced as
   present-but-withheld);
@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from conftest import _text_block, fake_tool_turn_client
+from conftest import _text_block, fake_tool_turn_client, structured_response
 
 from lode.answer import Answer, Claim, Support
 from lode.config import Settings
@@ -36,15 +36,15 @@ from lode.tool_dispatch import FETCH
 
 
 class _FakeMessages:
-    """Records every parse() call and returns a fixed parsed envelope."""
+    """Records every create() call and returns a fixed parsed envelope."""
 
     def __init__(self, parsed: object) -> None:
         self._parsed = parsed
         self.calls: list[dict] = []
 
-    def parse(self, **kwargs: object) -> SimpleNamespace:
+    def create(self, **kwargs: object) -> SimpleNamespace:
         self.calls.append(kwargs)
-        return SimpleNamespace(parsed_output=self._parsed)
+        return structured_response(self._parsed)
 
 
 class _FakeClient:
@@ -54,9 +54,9 @@ class _FakeClient:
         self.messages = _FakeMessages(parsed)
 
 
-def _envelope(claims: list[Claim]) -> SimpleNamespace:
-    """A minimal _ClaimsEnvelope stand-in (only .claims is read)."""
-    return SimpleNamespace(claims=claims)
+def _envelope(claims: list[Claim]) -> _ClaimsEnvelope:
+    """The claims envelope the fake client serialises into its response."""
+    return _ClaimsEnvelope(claims=claims)
 
 
 @pytest.fixture
@@ -68,7 +68,7 @@ def conn():
 
 
 def _user_prompt(client: _FakeClient) -> str:
-    """The user-message text of the single recorded parse() call."""
+    """The user-message text of the single recorded create() call."""
     (call,) = client.messages.calls
     (message,) = call["messages"]
     return message["content"]
@@ -142,7 +142,11 @@ def test_effort_sent_on_the_qa_call(
         provider=AnthropicProvider(client),
         settings=settings,
     )
-    assert client.messages.calls[0].get("output_config") == expected
+    # `format` is the structured-output wiring (asserted in test_llm_provider);
+    # what this test pins is the `effort` part alone.
+    sent = dict(client.messages.calls[0]["output_config"])
+    sent.pop("format")
+    assert (sent or None) == expected
 
 
 def test_thinking_not_disabled_for_think_harder_call(conn) -> None:
@@ -510,10 +514,11 @@ def test_tools_enabled_with_no_connector_active_still_sends_tool_aware_prompt(
     free_turn_response = mock.MagicMock()
     free_turn_response.content = [_text_block()]
     free_turn_response.stop_reason = "end_turn"
-    client.messages.create.side_effect = [free_turn_response]
-    # Final structured-output turn (`.parse`, tools kept): an empty claims
-    # envelope.
-    client.messages.parse.return_value = SimpleNamespace(parsed_output=_envelope([]))
+    # Final structured-output turn (tools kept): an empty claims envelope.
+    client.messages.create.side_effect = [
+        free_turn_response,
+        structured_response(_envelope([])),
+    ]
 
     answer_question(
         conn,
@@ -561,8 +566,8 @@ def test_end_to_end_tool_turn_cites_a_fetched_snapshot_the_unmodified_gate_verif
         web_fetcher=web_fetcher,
     )
 
-    assert client.messages.create.call_count == 2
-    client.messages.parse.assert_called_once()
+    # Two free turns, then the final structured-output turn.
+    assert client.messages.create.call_count == 3
     (claim,) = result.answer.claims
     (support,) = claim.support
     assert support.snapshot_id
@@ -594,8 +599,10 @@ def test_deleting_the_tools_pass_through_would_break_the_end_to_end_test(
     free_turn_response.stop_reason = "end_turn"
 
     client = mock.MagicMock()
-    client.messages.parse.return_value = SimpleNamespace(parsed_output=_envelope([]))
-    client.messages.create.side_effect = [free_turn_response]
+    client.messages.create.side_effect = [
+        free_turn_response,
+        structured_response(_envelope([])),
+    ]
 
     answer_question(
         conn,
@@ -608,8 +615,8 @@ def test_deleting_the_tools_pass_through_would_break_the_end_to_end_test(
 
     # If build_ask_tools()/make_tool_result() stopped reaching run_tool_turns
     # (i.e. answer_question silently fell back to an empty tools tuple), the
-    # provider would take the empty-tools .parse() path (no free .create()
-    # turn, no `tools` on the .parse() call) -- these assertions are exactly
-    # what would then fail.
-    client.messages.create.assert_called()
-    assert client.messages.parse.call_args.kwargs["tools"]
+    # provider would take the empty-tools path (a single structured-output
+    # call with no `tools`) -- these assertions are exactly what would then
+    # fail.
+    assert client.messages.create.call_count == 2
+    assert client.messages.create.call_args.kwargs["tools"]
