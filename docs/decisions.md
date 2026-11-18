@@ -20,6 +20,12 @@ while erasing it here would lose the record of what was believed, and when. The 
 gated by [`tests/test_decisions_supersession_markers.py`](../tests/test_decisions_supersession_markers.py);
 what that gate cannot catch is recorded in its module docstring (lode-nlk6).
 
+**A new entry that corrects an earlier entry is a marker too (`lode-llxw`, 2026-11-18, maintainer).**
+The "new entry" form of a correction opens with the same `**Update (<id>[, <date>])` lead-in as an
+appended marker, so the grep above finds it. A date-first "CORRECTION" lead-in, or any other shape,
+does not count. The rule binds an entry whose purpose is to correct an earlier one; an entry that
+only mentions an earlier entry in passing is not a marker.
+
 **This file is out of scope for pointer sweeps, by construction (`lode-1dmu`, 2026-08-08).** A
 mechanical sweep that repoints every reference to a file/symbol that moved or was renamed (e.g. the
 pre-split monolithic CLI module's later break-up into a package) must skip this file. Every entry
@@ -6081,6 +6087,9 @@ entries below from being rewritten to chase the current tree.)
   own history ("**Correction, verified empirically on bash 5.2:**") stays green. Accepted miss: a
   backwards correction with prose between the keyword and its id. That miss and the gate's other
   limits are listed in the test module's docstring.
+  **Update (`lode-llxw`, 2026-11-18, maintainer):** confirmed. The maintainer ruled that a new entry
+  correcting an earlier entry IS a marker and opens with the Update lead-in, which replaces this
+  entry's "builder call, not a maintainer ruling" status. The preamble now states the rule.
 
 - **The builder does not assert the harness lock is present; the residual is accepted (`lode-gro8`,
   2026-11-17).** After `lode-t76f` the only cover for the pre-first-commit window (`lode-oqr`) is the
