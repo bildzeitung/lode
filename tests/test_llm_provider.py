@@ -1762,6 +1762,38 @@ def test_run_tool_turns_refused_free_turn_raises_without_running_tools(
     _assert_refusal_hint(str(excinfo.value))
 
 
+def test_run_tool_turns_max_tokens_free_turn_raises_without_running_tools() -> None:
+    tool = ToolSpec(
+        name="lookup_widget", description="Look up a widget.", input_schema={}
+    )
+    truncated = _tool_use_response("lookup_widget", {})
+    truncated.stop_reason = "max_tokens"
+    client = mock.MagicMock()
+    client.messages.create.side_effect = [truncated]
+    ran: list[str] = []
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).run_tool_turns(
+            model="claude-sonnet-4-6",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: ran.append(name) or "r",
+            output_schema=_Widget,
+            max_tokens=100,
+            timeout_s=30.0,
+            max_tool_turns=2,
+        )
+
+    assert ran == []
+    # The one free turn only: no final structured-output turn was attempted.
+    assert client.messages.create.call_count == 1
+    client.messages.parse.assert_not_called()
+    assert "stop_reason='max_tokens'" in str(excinfo.value)
+    assert _BUDGET_EXHAUSTED_HINT in str(excinfo.value)
+
+
 @pytest.mark.network
 def test_collect_batch_refusal_with_valid_text_is_errored_real_sdk() -> None:
     payload = _succeeded_payload("ver-4")
