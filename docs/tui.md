@@ -488,7 +488,8 @@ groups that Textual's markup parser rejects at toast render), and logs the trace
 **Decided: catch in the TUI (option A), not at the provider seam (option B).** The seam
 deliberately leaves the non-status SDK errors raw (`anthropic.APIConnectionError` when offline,
 `anthropic.APITimeoutError` past `qa_call_timeout_s`): "a timeout is not a rejected request"
-(`docs/stack.md` "Error contract"). Wrapping them into `LLMProviderError` there would reverse that
+(`docs/configuration.md`, the `reasoning_effort` note; `docs/stack.md` "Error contract" pins that
+only status errors are wrapped). Wrapping them into `LLMProviderError` there would reverse that
 choice and reach past the TUI, because the `lode ask`, `lode work` and `lode add` handlers
 name that class (`docs/storage.md` "Transient vs. permanent job failures"). The job retry taxonomy
 there is keyed on the two credential errors only, and stays as it is. A TUI-side catch also covers
