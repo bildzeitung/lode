@@ -4209,22 +4209,6 @@ def test_run_enrich_non_refusal_failure_is_not_marked_refusal(
     assert row[2] == 0
 
 
-def _seed_head(conn: sqlite3.Connection, version_id: str = "ver-1") -> None:
-    with conn:
-        conn.execute(
-            "INSERT INTO notes (note_id, head_version_id) VALUES ('note-1', NULL)"
-        )
-        conn.execute(
-            "INSERT INTO versions (version_id, note_id, parent_version_id, body, op) "
-            "VALUES (?, 'note-1', NULL, 'body', 'create')",
-            (version_id,),
-        )
-        conn.execute(
-            "UPDATE notes SET head_version_id = ? WHERE note_id = 'note-1'",
-            (version_id,),
-        )
-
-
 def _enrich_statuses(conn: sqlite3.Connection) -> list[tuple]:
     return conn.execute(
         "SELECT status FROM jobs WHERE type = 'enrich' ORDER BY id"
@@ -4244,7 +4228,7 @@ def test_reconcile_does_not_reenqueue_a_refusal_dead_enrich_job(
 ) -> None:
     from lode.reconcile import _enrich_gap_step
 
-    _seed_head(conn)
+    _insert_note_worker(conn)
     _refuse_one(conn, db_path, settings, "ver-1")
 
     assert _enrich_gap_step(conn, settings) == 0
@@ -4256,7 +4240,7 @@ def test_reconcile_reenqueues_refusal_dead_job_when_prompt_ver_changes(
 ) -> None:
     from lode.reconcile import _enrich_gap_step
 
-    _seed_head(conn)
+    _insert_note_worker(conn)
     _refuse_one(conn, db_path, settings, "ver-1")
     with conn:
         conn.execute("UPDATE jobs SET prompt_ver = 'older-prompt'")
@@ -4271,7 +4255,7 @@ def test_reconcile_reenqueues_refusal_dead_job_when_enrichment_model_changes(
     from lode.config import ModelTier
     from lode.reconcile import _enrich_gap_step
 
-    _seed_head(conn)
+    _insert_note_worker(conn)
     _refuse_one(conn, db_path, settings, "ver-1")
     other = Settings(enrichment_llm=ModelTier(model="some-other-model"))
 
@@ -4284,7 +4268,7 @@ def test_reconcile_reenqueues_refusal_dead_job_for_a_new_head_version(
 ) -> None:
     from lode.reconcile import _enrich_gap_step
 
-    _seed_head(conn)
+    _insert_note_worker(conn)
     _refuse_one(conn, db_path, settings, "ver-1")
     with conn:
         conn.execute(
@@ -4301,22 +4285,20 @@ def test_reconcile_still_reenqueues_a_non_refusal_dead_enrich_job(
 ) -> None:
     from lode.reconcile import _enrich_gap_step
 
-    _seed_head(conn)
+    _insert_note_worker(conn)
     _insert_job(conn, "enrich", "ver-1", status="dead", attempts=3)
 
     assert _enrich_gap_step(conn, settings) == 1
     assert _enrich_statuses(conn) == [("dead",), ("pending",)]
 
 
-def _refused_batch_result(version_id: str, category: str | None) -> mock.MagicMock:
+def _refused_batch_result(version_id: str) -> mock.MagicMock:
     from lode.enrich import EnrichmentResult
 
     r = _make_batch_result(version_id, EnrichmentResult())
     r.result.message.content = []
     r.result.message.stop_reason = "refusal"
-    r.result.message.stop_details = (
-        SimpleNamespace(category=category) if category else None
-    )
+    r.result.message.stop_details = SimpleNamespace(category="cyber")
     return r
 
 
@@ -4326,9 +4308,7 @@ def test_collect_enrich_batch_refusal_is_dead_without_charging_attempts(
     from lode.enrich import collect_enrich_batch
 
     job_id = _insert_job(conn, "enrich", "ver-1", status="running", batch_handle="b-1")
-    client = fake_batch_client(
-        batch_id="b-1", results=[_refused_batch_result("ver-1", "cyber")]
-    )
+    client = fake_batch_client(batch_id="b-1", results=[_refused_batch_result("ver-1")])
 
     collect_enrich_batch(conn, "b-1", settings, provider=AnthropicProvider(client))
 

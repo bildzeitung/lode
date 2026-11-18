@@ -520,6 +520,19 @@ def _refusal_category(response: Any) -> str | None:
     return category if isinstance(category, str) and category else None
 
 
+def _refusal_fields(stop_reason: str | None, response: Any) -> dict[str, Any]:
+    """The ``refusal``/``refusal_category`` kwargs for an error raised on ``response``.
+
+    One definition of what makes an Anthropic failure a refusal, so every raise
+    site that reports a ``stop_reason`` sets the structured signal the same way.
+    """
+    refused = stop_reason == "refusal"
+    return {
+        "refusal": refused,
+        "refusal_category": _refusal_category(response) if refused else None,
+    }
+
+
 def _stop_reason_hint(stop_reason: str | None, response: Any) -> str:
     """Pick the right "why is the block missing" hint for ``stop_reason``.
 
@@ -562,8 +575,7 @@ def _refusal_error(response: Any, *, what: str) -> LLMProviderError:
         f"{what}: stop_reason='refusal', any partial content discarded "
         f"{_stop_reason_hint('refusal', response)}",
         provider="anthropic",
-        refusal=True,
-        refusal_category=_refusal_category(response),
+        **_refusal_fields("refusal", response),
     )
 
 
@@ -708,10 +720,7 @@ def _incomplete_result(result: Any, what: str) -> BatchResult:
             f"stop_reason={stop_reason!r}) "
             f"{_stop_reason_hint(stop_reason, message)}",
             provider="anthropic",
-            refusal=stop_reason == "refusal",
-            refusal_category=(
-                _refusal_category(message) if stop_reason == "refusal" else None
-            ),
+            **_refusal_fields(stop_reason, message),
         ),
     )
 
@@ -906,10 +915,7 @@ class AnthropicProvider:
                 f"stop_reason={stop_reason!r}) "
                 f"{_stop_reason_hint(stop_reason, response)}",
                 provider="anthropic",
-                refusal=stop_reason == "refusal",
-                refusal_category=(
-                    _refusal_category(response) if stop_reason == "refusal" else None
-                ),
+                **_refusal_fields(stop_reason, response),
             )
         # A refusal with no text block was reported above; one whose text
         # still validated is reported here, never returned (lode-mzuk). A

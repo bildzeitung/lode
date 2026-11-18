@@ -1633,6 +1633,9 @@ def test_structured_call_names_a_refusal_on_the_parse_branch() -> None:
 
     assert "no text block" in str(excinfo.value)
     _assert_refusal_hint(str(excinfo.value))
+    # lode-g9q3: the structured signal callers branch on, never the message.
+    assert excinfo.value.refusal is True
+    assert excinfo.value.refusal_category == "cyber"
 
 
 def test_run_tool_turns_final_turn_names_a_refusal() -> None:
@@ -1692,6 +1695,8 @@ def test_collect_batch_names_a_refusal_on_a_succeeded_result(
     assert result.outcome == "errored"
     assert "no text block" in str(result.error)
     _assert_refusal_hint(str(result.error), category=category)
+    assert result.error.refusal is True
+    assert result.error.refusal_category == category
 
 
 def test_parse_branch_refusal_whose_text_validates_is_not_returned() -> None:
@@ -1715,6 +1720,8 @@ def test_parse_branch_refusal_whose_text_validates_is_not_returned() -> None:
 
     assert "partial content discarded" in str(excinfo.value)
     _assert_refusal_hint(str(excinfo.value))
+    assert excinfo.value.refusal is True
+    assert excinfo.value.refusal_category == "cyber"
 
 
 @pytest.mark.parametrize("partial_tool_use", [True, False], ids=["tool-use", "empty"])
@@ -2051,26 +2058,6 @@ def test_openai_non_refusal_failure_is_not_marked_refusal() -> None:
     _, results = provider.collect_batch(handle, timeout_s=1.0)
 
     assert results[0].error.refusal is False
-
-
-def test_anthropic_refusal_error_carries_structured_signal() -> None:
-    client = mock.MagicMock()
-    response = _refused_parse_response()
-    response.stop_details = SimpleNamespace(category="cyber")
-    client.messages.parse.return_value = response
-
-    with pytest.raises(LLMProviderError) as excinfo:
-        AnthropicProvider(client).structured_call(
-            model="claude-haiku-4-5",
-            reasoning_effort=None,
-            system="sys",
-            user_prompt="p",
-            output_schema=_Widget,
-            max_tokens=100,
-            timeout_s=1.0,
-        )
-    assert excinfo.value.refusal is True
-    assert excinfo.value.refusal_category == "cyber"
 
 
 def test_openai_structured_call_raises_on_no_text_output() -> None:

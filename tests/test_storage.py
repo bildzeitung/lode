@@ -766,31 +766,31 @@ def test_refusal_columns_migrated_onto_pre_existing_jobs_table(tmp_path: Path) -
     ``refusal = 1`` exemption and ``lode status``'s refusal listing would both
     have to reason about a third value.
     """
+
+    def _refusal_columns(conn: sqlite3.Connection) -> dict[str, tuple]:
+        # name -> (type, notnull, default)
+        return {
+            r[1]: (r[2], r[3], r[4])
+            for r in conn.execute("PRAGMA table_info(jobs)")
+            if r[1].startswith("refusal")
+        }
+
     db = tmp_path / "lode.db"
     _seed_pre_lode_uri7_db(db)
 
     conn = init_db(db)
     try:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == _SCHEMA_VERSION
-        migrated = {
-            r[1]: (r[2], r[3], r[4])
-            for r in conn.execute("PRAGMA table_info(jobs)")
-            if r[1].startswith("refusal")
-        }
+        migrated = _refusal_columns(conn)
         assert conn.execute(
             "SELECT DISTINCT refusal, refusal_category, refusal_model FROM jobs"
         ).fetchall() == [(0, None, None)]
     finally:
         conn.close()
 
-    # Type, NOT NULL and default match what schema.sql gives a fresh database.
     fresh_conn = init_db(tmp_path / "fresh.db")
     try:
-        fresh = {
-            r[1]: (r[2], r[3], r[4])
-            for r in fresh_conn.execute("PRAGMA table_info(jobs)")
-            if r[1].startswith("refusal")
-        }
+        fresh = _refusal_columns(fresh_conn)
     finally:
         fresh_conn.close()
     assert set(fresh) == {"refusal", "refusal_category", "refusal_model"}
