@@ -5177,10 +5177,12 @@ entries below from being rewritten to chase the current tree.)
   accessibility need. At that point the honest first question is whether the answer is a lode
   config at all, or adopting Textual's own theme system across all three surfaces.
 
-  **Update (lode-rapj, 2026-11-19):** the "open" status and the leaning "not yet" are stale. The
-  `lode-5zxt` entry below ("User-configurable colour, revisited") records the maintainer reopening it
-  and settling TUI theming as base-theme-plus-overrides, with the revisit trigger not met; the CLI half
-  followed as `lode-mk9j`. The three reasons above are what that entry answers.
+  **Update (lode-rapj, 2026-11-19):** the "open" status, the leaning "not yet", and "status
+  `deferred`" are stale. The `lode-5zxt` entry below ("User-configurable colour, revisited") records
+  the maintainer reopening and closing `lode-5zxt`, settling TUI theming as
+  base-theme-plus-overrides; the CLI half followed as `lode-mk9j`. That entry answers reasons 1 and
+  2 above and overrides reason 3: the revisit trigger was not met, and the maintainer reopened it
+  as a preference call.
 - **lode keeps `AGENTS.md` — does NOT drop it the way harness-export did (`lode-s9xe.9`,
   2026-08-13).** harness-export's commit `8b444b9` deleted its `template/AGENTS.md` (54 lines) and
   folded the content into `CLAUDE.md`, on the grounds that `CLAUDE.md` is imported into every
@@ -5586,10 +5588,12 @@ entries below from being rewritten to chase the current tree.)
   from lazy/per-command to eager/global in `main()`, and takes the same command down on failure a
   direct `_resolve_settings()` call always did."
 
-  **Update (lode-rapj, 2026-11-19):** the closing sentence, "`status` remains the ONLY command
-  carrying that exemption", is stale. The `lode-jjol` entry below ("`lode theme` added to the `main()`
-  config-optional exemption set") added `theme` to the exemption set, so `status` and `theme` both
-  carry it. The rest of this entry stands.
+  **Update (lode-rapj, 2026-11-19):** the exemption list is stale, in two sentences: the closing
+  "`status` remains the ONLY command carrying that exemption" and the "Accepted side effect" claim
+  that "every subcommand other than `status` now fails loudly on ANY config error". The `lode-jjol`
+  entry below ("`lode theme` added to the `main()` config-optional exemption set") added `theme` to
+  the exemption set, so `status` and `theme` both carry it, and the `lode-moq7` entry below also
+  skips resolution for any subcommand's `--help`. The rest of this entry stands.
 
 - **`--help` exempted from `[cli.theme]`'s global settings resolution (`lode-moq7`, follow-on to
   `lode-mk9j`).** The `lode-mk9j` entry above's eager-in-`main()` placement has a corollary it did
@@ -5780,10 +5784,13 @@ entries below from being rewritten to chase the current tree.)
   silently absorb unconfirmable hits.
 
   **Update (lode-rapj, 2026-11-19):** the measured figures in this entry are stale: the pinned
-  baseline of 56 index invocations / 118 direct greps (and its "~50% miss"), and the review addendum's
-  25 / 158 re-measure. The 2026-09-14 `lode-dozi` entry below ("CORRECTION to the two entries above")
-  drops the 56 / 118 pin, reassigns the miss rate to `docs_index_log.py stats`, and supersedes 25 / 158.
-  Its "two entries above" are this entry's body and its own "Technical-review addendum", which share
+  baseline of 56 index invocations / 118 direct greps (and its "~50% miss"), the review addendum's
+  25 / 158 re-measure, and its per-role split (`main: index=25 direct=148`,
+  `subagent: index=0 direct=10`). The 2026-09-14 `lode-dozi` entry below ("CORRECTION to the two
+  entries above") drops the 56 / 118 pin, reassigns the miss rate to `docs_index_log.py stats`, and
+  supersedes 25 / 158. Its "Transcript depth" paragraph shows the split was not real: the scan saw
+  only main-session transcripts, so the `subagent:` row came from rows inside main transcripts. Its
+  "two entries above" are this entry's body and its own "Technical-review addendum", which share
   this one bullet. The `lode-61w6` marker above covers a different claim.
 
 - **2026-09-14 (`lode-dozi`) — CORRECTION to the two entries above: the tightened classifier, and
@@ -5858,8 +5865,11 @@ entries below from being rewritten to chase the current tree.)
   **Update (lode-rapj, 2026-11-19):** the baseline figure here is stale: "142 index / 431 direct"
   (and the `main: index=26 direct=59` split) was measured with the pre-segment classifier. The
   `lode-wtk2` entry below ("CORRECTION: `_classify` now judges Bash SEGMENTS") re-measures it as
-  224 / 438. The `lode-4eyp` marker above says only that this entry is a correction, not that it was
-  itself corrected.
+  224 / 438, and that entry's own nested Update re-measures it again as 237 / 451. Narrowings 1 and
+  2 are stale too: the same entry replaces `_bash_command_names` with per-segment `shlex` parsing
+  and renames `_is_write_or_git_form`, and its nested Update deletes the `tee` clause and the
+  version-control exclusion. The `lode-4eyp` marker above says only that this entry is a
+  correction, not that it was itself corrected.
 
 - **2026-09-14 (`lode-wtk2`) — CORRECTION: `_classify` now judges Bash SEGMENTS, not
   whole lines, and the baseline figure above is re-measured.** Appended, not rewritten in place, per
