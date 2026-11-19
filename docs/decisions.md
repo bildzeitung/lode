@@ -6342,3 +6342,15 @@ entries below from being rewritten to chase the current tree.)
   - **Not taken.** (a) copying markers into sub-units breaks the tiling invariant; (c) an authoring
     rule would not cover the existing markers and rests on the author knowing the entry is
     oversized; (d) cannot know which paragraph a marker corrects.
+
+- **The marker gate does not exempt top-level entry heads; the over-match is accepted (`lode-hp12`,
+  2026-11-19, maintainer).** `lode-llxw` ruled that a new correcting entry is not a marker and its
+  head is free, and removed the one pattern in `tests/test_decisions_supersession_markers.py` that
+  targeted an entry head. The remaining patterns scan every line and cannot tell a head from an
+  appended marker, so a new head that itself opens with a gated keyword shape (a bold
+  `Correction (id)` lead-in, say) still goes red. Decided, option (a): leave it. That red is an
+  accepted over-match and the way out is to reword the head. Option (b), skipping lines that start
+  `- **` at column zero, was not taken. As posed, (b) would also have let a head carry the
+  all-capitals stale-flag keyword, which is banned on any line today. The ticket asked whether that
+  one pattern would keep applying to heads; the ruling for (a) does not answer it. The `lode-rtcx`
+  allowlist entry stays, and the module docstring records the over-match as accepted.

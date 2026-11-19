@@ -43,7 +43,8 @@ paragraph), so no pattern here targets one. Two limits follow:
 - The scan reads one line at a time and cannot tell an entry head from a
   marker, so a head that itself opens with a keyword in a gated shape
   (``- **Correction (lode-x) to the entry above``) still goes red. The way out
-  is to reword the head. Whether heads should be exempt is lode-hp12.
+  is to reword the head. Accepted over-match: heads are deliberately not
+  exempt (docs/decisions.md, "does not exempt top-level entry heads").
 
 *No wrapped marker.* A marker whose id wraps onto the next markdown line is
 still invisible to the single-line grep the preamble documents: correct shape,
