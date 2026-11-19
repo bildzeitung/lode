@@ -182,7 +182,7 @@ def test_venv_tool_fails_closed_from_a_foreign_env(
     assert str(project / ".venv") in message
 
 
-# Tools the ``dev`` extra installs into ``./venv/bin``, i.e. the ones a
+# Tools the ``dev`` group installs into the project env's ``bin``, i.e. the ones a
 # stale system-wide copy can shadow. Naming any of these as the first
 # argument to ``session.run`` is the exact regression _venv_tool exists to
 # prevent.
@@ -237,7 +237,7 @@ def test_no_session_shells_out_to_a_dev_extra_tool_by_bare_name() -> None:
         if name not in _EXEMPT_SESSIONS and (bare := _bare_tool_names(node))
     }
     assert not offenders, (
-        f"these nox sessions shell out to a dev-extra tool by bare name: "
+        f"these nox sessions shell out to a dev-group tool by bare name: "
         f"{offenders}. A stale system-wide copy earlier on PATH would shadow "
         "the pinned one and produce a falsely-green gate (lode-0yfn) -- pass "
         "_venv_tool(session, <name>) instead, or add the session to "

@@ -82,12 +82,12 @@ credentials happen to be sitting in the environment; the credential check
 still runs as a second layer once opted in, so ``nox -s eval`` keeps
 skipping cleanly without a key.
 
-Sessions run inside the already-built project venv (``./venv`` from
-``scripts/python-init.sh``, or ``./.venv`` from ``uv sync --locked --extra dev``
--- see ``_venv_tool``) rather than nox-managed isolated venvs: the
+Sessions run inside the already-built project venv (``./.venv`` from
+``uv sync``, which ``uv run --frozen nox ...`` runs for you on first use -- see
+``_venv_tool``) rather than nox-managed isolated venvs: the
 runtime stack is heavy (lancedb, fastembed, textual, ...) and is installed
-once via ``-e .[dev]``, so re-provisioning it per session would be slow with
-no benefit. Activate the venv first, then run nox.
+once as an editable install, so re-provisioning it per session would be slow with
+no benefit. Run nox as ``uv run --frozen nox ...``.
 
 That reuse has one footgun, and it is guarded rather than designed away
 (lode-jh80): because the install is editable, an active venv's ``lode``
@@ -180,10 +180,10 @@ nox.options.sessions = [
 
 _PROJECT_ROOT = Path(__file__).parent.resolve()
 
-# The two env directories the gates accept: ``./venv`` (scripts/python-init.sh, today's
-# instruction files) and ``./.venv`` (uv's default, ``uv run --frozen --extra dev nox``).
-# Both are accepted while the uv port is mid-flight (lode-s09w); the retire child narrows
-# this to ``./.venv`` only.
+# The two env directories the gates accept: ``./.venv`` (uv's default, built by
+# ``uv run --frozen nox``) and the legacy ``./venv``, still accepted while the uv port is
+# mid-flight (lode-s09w) so a pre-cutover checkout's env keeps gating; the retire child
+# narrows this to ``./.venv`` only.
 _ACCEPTED_VENV_DIRS = ("venv", ".venv")
 
 
@@ -209,7 +209,7 @@ def _venv_tool(session: nox.Session, name: str) -> str:
     whichever copy is *earliest* on it -- which, on a box with a stale
     system-wide install (pip ``--user``, pipx, ...) ahead of the venv, is
     silently NOT the pinned one, and the gate reports success anyway. Full
-    narrative, including the reproduction and why the ``dev`` extra pins ruff
+    narrative, including the reproduction and why the ``dev`` group pins ruff
     at all: ``docs/stack.md``'s dependency-locking section.
 
     Tools resolve beside ``sys.executable`` only when ``sys.prefix`` is the
@@ -218,8 +218,8 @@ def _venv_tool(session: nox.Session, name: str) -> str:
     nox can never resolve pipx's tools (lode-0yfn preserved, lode-s09w.2).
     Fails the session loudly too if the tool isn't there. **A consequence worth
     knowing before you edit CI: any workflow running one of these sessions must
-    build the project venv first** (``uv sync --locked --extra dev``);
-    installing the dev extra into the runner's ambient interpreter is not enough.
+    build the project venv first** (``uv sync --locked``);
+    installing the dev tools into the runner's ambient interpreter is not enough.
 
     Deliberately NOT applied to two sessions, both of which mean to reach a
     tool outside the venv: ``build`` (ambient ``python -m build``, which
@@ -228,7 +228,7 @@ def _venv_tool(session: nox.Session, name: str) -> str:
     system-wide tool never installed into the venv, already checked via
     ``shutil.which`` and failed closed if absent). That exemption is enforced,
     not just documented -- ``tests/test_noxfile_venv_tool.py`` fails if any
-    *other* session shells out to a dev-extra tool by bare name.
+    *other* session shells out to a dev-group tool by bare name.
     """
     bin_dir = _venv_bin()
     if bin_dir is None:
@@ -236,15 +236,14 @@ def _venv_tool(session: nox.Session, name: str) -> str:
         session.error(
             f"nox is running from {sys.prefix}, which is not the project venv -- "
             f"expected {accepted} "
-            "(run `uv sync --locked --extra dev` then `uv run --frozen --extra dev "
-            "nox ...`, or ./scripts/python-init.sh then ./venv/bin/nox ...)"
+            "(run it as `uv run --frozen nox ...`)"
         )
     tool = bin_dir / name
     if not tool.is_file():
         session.error(
             f"expected the project venv's {name!r} at {tool}, not found -- "
-            "run `uv sync --locked --extra dev` (or ./scripts/python-init.sh) "
-            "first (see CLAUDE.md) before running this session"
+            "run `uv sync --locked` first (see CLAUDE.md) before running this "
+            "session"
         )
     return str(tool)
 
@@ -366,7 +365,7 @@ def docstringcheck(session: nox.Session) -> None:
     at all. ``scripts/check_links.py``/``linkcheck`` is markdown-only and
     does not reach these. Hard gate, in the default offline set alongside
     ``linkcheck`` -- pure Python, no Docker, no network; imports the real
-    ``lode`` package to resolve refs, which the shared ``./venv`` already
+    ``lode`` package to resolve refs, which the project ``./.venv`` already
     has installed editable (same as ``tests``).
 
     Resolves ``python`` through ``_venv_tool`` (lode-0yfn) — an ambient

@@ -753,7 +753,7 @@ dependencies = [
     { name = "xxhash" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "build" },
     { name = "mkdocs-material" },
@@ -773,35 +773,38 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic" },
-    { name = "build", marker = "extra == 'dev'" },
     { name = "fastembed" },
     { name = "httpx" },
     { name = "httpx2" },
     { name = "huggingface-hub" },
     { name = "lancedb" },
-    { name = "mkdocs-material", marker = "extra == 'dev'", specifier = "==9.5.44" },
     { name = "networkx" },
-    { name = "nox", marker = "extra == 'dev'" },
-    { name = "numpy", marker = "extra == 'dev'" },
     { name = "openai", specifier = "<3" },
-    { name = "packaging", marker = "extra == 'dev'" },
     { name = "pyarrow" },
     { name = "pydantic" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
-    { name = "pytest-timeout", marker = "extra == 'dev'" },
-    { name = "pytest-xdist", marker = "extra == 'dev'" },
-    { name = "pyyaml", marker = "extra == 'dev'" },
     { name = "rich" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.16.3" },
-    { name = "shellcheck-py", marker = "extra == 'dev'" },
     { name = "textual", extras = ["syntax"] },
     { name = "trafilatura", specifier = ">=2.1,<2.2" },
-    { name = "tree-sitter-markdown", marker = "extra == 'dev'" },
     { name = "typer" },
     { name = "xxhash" },
 ]
-provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "build" },
+    { name = "mkdocs-material", specifier = "==9.5.44" },
+    { name = "nox" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+    { name = "pyyaml" },
+    { name = "ruff", specifier = "==0.16.3" },
+    { name = "shellcheck-py" },
+    { name = "tree-sitter-markdown" },
+]
 
 [[package]]
 name = "loguru"

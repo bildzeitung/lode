@@ -1,7 +1,7 @@
 """Tests for scripts/update-deps.sh's promote-BEFORE-gating order (lode-2zi9).
 
 update-deps.sh used to run its gates (``nox -t fix``, ``nox -s tests``) with the
-CANDIDATE lock installed into ``./venv`` but the OLD ``requirements.lock`` still on
+CANDIDATE lock installed into ``./.venv`` but the OLD ``requirements.lock`` still on
 disk, promoting the candidate over the committed lock only after the gates passed.
 Any test that reads the committed lock from disk (e.g.
 ``tests/test_build_docs_site.py::test_workflow_pins_match_their_sources``) therefore
@@ -46,7 +46,7 @@ def _build_fake_repo(tmp_path: Path) -> tuple[Path, Path]:
     ordering rather than reimplementing it.
 
     Returns ``(repo_dir, bin_dir)`` -- ``bin_dir`` must lead PATH so the stub
-    ``python`` and ``nox`` executables shadow the real ones.
+    ``uv`` and ``nox`` executables shadow the real ones.
     """
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
@@ -75,36 +75,28 @@ cat > "$out" <<'LOCK_EOF'
 """,
     )
 
-    # Stub venv-install.sh: no real installs. $INSTALL_EXIT drives it so the
-    # "failed candidate install" arm of the rollback is reachable as well as the
-    # red-gate arm -- both restore the lock, but through distinct branches.
-    _write_executable(
-        scripts / "venv-install.sh",
-        """#!/bin/bash
-install_locked_venv() {
-  return "${INSTALL_EXIT:-0}"
-}
-""",
-    )
-
-    # A pre-existing "venv" satisfying update-deps.sh's own precondition check.
-    venv_bin = repo / "venv" / "bin"
-    venv_bin.mkdir(parents=True)
-    (venv_bin / "activate").write_text("deactivate() { :; }\n", encoding="utf-8")
-
-    # PATH stubs: `python -m venv DIR` becomes a plain mkdir (never a real venv,
-    # never a real install), and `nox` snapshots requirements.lock mid-gate before
-    # either exiting per $NOX_TESTS_EXIT (the stubbed gate result) or, under
+    # PATH stubs: `uv venv DIR` becomes a plain mkdir, `uv pip install ...`
+    # exits $INSTALL_EXIT (never a real venv, never a real install; $INSTALL_EXIT
+    # makes the "failed candidate install" arm of the rollback reachable as well
+    # as the red-gate arm -- both restore the lock, through distinct branches),
+    # `uv run --frozen --no-sync nox ...` hands off to the `nox` stub, and `nox`
+    # snapshots requirements.lock mid-gate before either exiting per $NOX_TESTS_EXIT (the stubbed gate result) or, under
     # $NOX_TESTS_SIGNAL_PARENT, killing the script where a Ctrl-C would.
     bindir = tmp_path / "bin"
     bindir.mkdir()
     _write_executable(
-        bindir / "python",
+        bindir / "uv",
         """#!/bin/bash
-if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then
-  mkdir -p "$3/bin"
-  printf 'deactivate() { :; }\\n' > "$3/bin/activate"
+if [ "$1" = "venv" ]; then
+  mkdir -p "$2/bin"
   exit 0
+fi
+if [ "$1" = "pip" ]; then
+  exit "${INSTALL_EXIT:-0}"
+fi
+if [ "$1 $2 $3 $4" = "run --frozen --no-sync nox" ]; then
+  shift 4
+  exec "$(dirname "$0")/nox" "$@"
 fi
 exit 1
 """,

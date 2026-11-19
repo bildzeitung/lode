@@ -3,7 +3,7 @@
 # Sourceable helpers for scripts/update-deps.sh's VERSION DIFF and the filing
 # decision for its churn-evaluation stub ticket (lode-i642). Extracted so the
 # parsing, the rendering and the noise gate are covered by `nox -s shellcheck`
-# and tests/test_dep_churn_lib.py -- the same shape scripts/venv-install.sh,
+# and tests/test_dep_churn_lib.py -- the same shape
 # scripts/gate-lib.sh and scripts/shell-quote-split.sh already use.
 #
 # CONTRACT: every function here returns its data on STDOUT and holds no

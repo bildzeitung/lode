@@ -21,7 +21,7 @@
 #     PreToolUse(Bash) guards it adds nothing to the lode-oii9 jq-missing surface.
 #
 # Full rulings and rationale: docs/decisions.md
-# (./venv/bin/python scripts/docs_index_query.py "lode-p8zl"),
+# (uv run --frozen python scripts/docs_index_query.py "lode-p8zl"),
 # docs/agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc.
 #
 # Usage: scripts/trunk-write-guard.sh

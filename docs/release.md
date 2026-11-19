@@ -17,8 +17,8 @@ GitHub release. This is the design record for epic `lode-0ru`.
   CLI command, and brand all stay `lode`), falling
   back to `"0.0.0+unknown"` (wrapped in `try/except PackageNotFoundError`) for a raw source tree
   that was never installed — not even editable.
-- Because `scripts/python-init.sh` always installs the local package editable (`-e .`, whether via
-  the locked default path or `--unlocked` — `lode-g274.1`), every dev checkout already has package
+- Because `uv sync`/`uv run` always install the local package editable (uv's default for the
+  project itself), every dev checkout already has package
   metadata, so `lode version` always reports a real scm-derived version — something like
   `0.1.dev4+g<sha>` between releases, and the exact tag (e.g. `0.1.0`) on a release commit.
 
@@ -153,7 +153,7 @@ push/pull_request triggers — `build.yml`, `tests.yml`, and `coverage.yml` deli
 This is a scoped exception, not a change of house style:
 
 - **Why docs.yml and nothing else.** Every `docs.yml` run installs the locked dependency tree
-  (`uv sync --locked --extra dev`, `lode-s09w.2`) and pulls the 1.6GB `minlag/mermaid-cli` Docker
+  (`uv sync --locked`, `lode-s09w.2`) and pulls the 1.6GB `minlag/mermaid-cli` Docker
   image to pre-render diagrams — by a wide
   margin the heaviest recurring cost any workflow in this repo adds, on a repo where `/code` and
   `/land` push constantly. `build.yml`/`tests.yml`/`coverage.yml` are comparatively cheap (or, per
@@ -165,8 +165,8 @@ This is a scoped exception, not a change of house style:
   rendered heading anchor), `src/lode/fence_parsing.py` (`docs_slug.py`'s only import, and
   `build_docs_site.py`'s — a change there changes which lines count as headings, so it moves the
   same anchors one level down; added `lode-fhql.23`), `.github/workflows/docs.yml` itself, `pyproject.toml` and
-  `uv.lock` (the workflow installs its toolchain with `uv sync --locked --extra dev`, so the
-  `mkdocs-material` pin in `pyproject.toml`'s `dev` extra and every version `uv.lock` resolves
+  `uv.lock` (the workflow installs its toolchain with `uv sync --locked`, so the
+  `mkdocs-material` pin in `pyproject.toml`'s `dev` dependency group and every version `uv.lock` resolves
   under it feed the build directly; `uv.lock` joined the filter with `lode-s09w.2`, when the
   workflow stopped carrying its own pins), and `.python-version` (the interpreter `uv sync`
   installs). `push.paths` and
@@ -258,7 +258,7 @@ byte-identical across the three, deliberately; and every job in the repo carries
   of job time regardless (lode-le9e).
 - **The uv-built legs take the same no-cache stance, and have to spell it out (`lode-s09w.2`).**
   `tests.yml`'s `tests` job, `coverage.yml` and `docs.yml` have no `setup-python` step: they install
-  uv with `astral-sh/setup-uv` and build `./.venv` with `uv sync --locked --extra dev`. That
+  uv with `astral-sh/setup-uv` and build `./.venv` with `uv sync --locked`. That
   action's `enable-cache` input defaults to `auto`, which is **on** for GitHub-hosted runners — the
   first push of these workflows without the input saved a 222 MB `setup-uv-*` cache entry — so each
   of the three steps sets `enable-cache: false`. No run has compared restoring an entry that size

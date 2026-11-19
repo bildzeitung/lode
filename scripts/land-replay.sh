@@ -115,7 +115,7 @@
 # happened to merge first. `nox -t fix` baselines on BOTH its exit code
 # (red) and its effect on the tree (a reformat, possible even on exit 0) --
 # see the baseline block below and docs/decisions.md
-# (./venv/bin/python scripts/docs_index_query.py "lode-mps0") for why a
+# (uv run --frozen python scripts/docs_index_query.py "lode-mps0") for why a
 # dirty baseline reformat is gate-could-not-run, never committed invisibly
 # or discarded. `nox -t everything-else` needs neither check -- every
 # session in that bucket (shellcheck/linkcheck/docstringcheck/docs) is a
@@ -178,28 +178,41 @@ if ! "$SCRIPT_DIR/assert-main-checkout.sh"; then
     "machine/dispatch fault, never a branch conflict."
 fi
 
-# The venv's own nox, by explicit path, is a precondition of every gate this
-# script runs, baseline and per-branch alike -- never `nox` resolved from PATH
-# (lode-xx90: /land gates unactivated, in parity with the code-reviewer, so a
-# test that spawns a tool by bare name fails here exactly as it does at review
-# instead of being masked by an activated PATH). Checked once, up front --
-# BEFORE any gate runs -- so a missing venv is reported as exactly that, never
+# `uv` is a precondition of every gate this script runs, baseline and per-branch
+# alike. Every gate goes through `uv run --frozen nox ...` (lode-s09w.3) -- the
+# identical form the code-reviewer and /land's combined re-gate use, so the three
+# cannot disagree about one tree. `uv run` puts the project env's bin first on
+# PATH, so these gates run effectively activated (maintainer decision,
+# docs/decisions.md). Checked once, up front --
+# BEFORE any gate runs -- so a missing `uv` is reported as exactly that, never
 # misread as a content verdict. OBSERVED (lode-04zb): the baseline
 # `nox -t fix`/`nox -s tests`/`nox -t everything-else` checks below treat every
 # nonzero exit alike (there is deliberately no `escalate_unless_content` split
 # on the baseline arms -- see that block's own comment), so a "command not
 # found" 127 fell straight into the "'nox -t fix' is red on bare '$BASE_REF'
 # ... needs a human's fix" message, which is false when nox never ran at all.
-# Resolved from the git toplevel, since this script is cwd-resolved in the
-# main checkout.
-NOX="$(git rev-parse --show-toplevel)/venv/bin/nox"
-[ -x "$NOX" ] || gate_could_not_run \
-  "the venv's nox ('$NOX') is missing or not executable -- this script" \
+command -v uv >/dev/null 2>&1 || gate_could_not_run \
+  "'uv' is not on PATH -- this script" \
   "cannot run any gate (baseline or per-branch)." \
-  "Most likely the venv was never built in this checkout (run" \
-  "./scripts/python-init.sh, lode-xx90/lode-04zb)." \
+  "Install uv (https://docs.astral.sh/uv/); lode-s09w.3/lode-04zb." \
   "This is a machine/dispatch fault, never a baseline or branch verdict --" \
   "nothing below has run yet."
+NOX=(uv run --frozen nox)
+
+# sync_env <where>: bring ./.venv to the checked-out tree's uv.lock, or stop
+# the pass. `uv run` does this same sync before nox starts, and uv exits 1
+# when it fails (measured: a wheel it cannot download) -- the code a per-branch
+# arm reads as that branch's content verdict, and the baseline arms report as
+# a red gate on the base. Syncing on its own after every tree change (the
+# reset, each merge) turns that into the machine fault it is; each gate's own
+# sync then finds nothing to do. `--inexact` is what `uv run` itself does (it
+# never removes a package the lock does not name).
+sync_env() {
+  uv sync --frozen --inexact || gate_could_not_run \
+    "'uv sync --frozen' failed $1: ./.venv could not be brought to that tree's uv.lock." \
+    "A failed env sync is a machine fault, never a baseline or branch verdict" \
+    "(see uv's own error above). Do NOT bounce anything on the strength of this."
+}
 
 ACCEPTED=""
 MSG_DIR=""
@@ -307,7 +320,8 @@ git reset --hard -q "$BASE_REF" \
 # "lode-mps0"). No `escalate_unless_content` partition here -- like the
 # `nox -s tests` baseline arm below, every nonzero stops the pass, so there
 # is no mid-loop rc to split into content-vs-machine.
-if ! "$NOX" -t fix; then
+sync_env "on bare '$BASE_REF'"
+if ! "${NOX[@]}" -t fix; then
   gate_could_not_run "'nox -t fix' is red on bare '$BASE_REF', before any branch merged." \
     "Not attributable to anything in --accepted. '$BASE_REF' itself needs a human's fix" \
     "(see lode-mps0's decision in docs/decisions.md)."
@@ -325,19 +339,19 @@ if [ -n "$fix_reformat_paths" ]; then
     "directly to '$BASE_REF' (see lode-mps0's decision in docs/decisions.md)."
 fi
 
-if ! "$NOX" -s tests; then
+if ! "${NOX[@]}" -s tests; then
   gate_could_not_run "'nox -s tests' is red on bare '$BASE_REF', before any branch merged." \
     "Not attributable to anything in --accepted. Check the calling shell's own" \
     "environment (FORCE_COLOR / NO_COLOR / TTY_COMPATIBLE / TTY_INTERACTIVE, lode-kq4v)" \
     "before assuming this is a genuine regression on '$BASE_REF' itself."
 fi
-if ! "$NOX" -t everything-else; then
+if ! "${NOX[@]}" -t everything-else; then
   gate_could_not_run "'nox -t everything-else' is red on bare '$BASE_REF', before any branch merged." \
     "Not attributable to anything in --accepted -- '$BASE_REF' itself needs a human's fix" \
     "(shellcheck/linkcheck/docstringcheck/docs bucket, lode-6ldh)."
 fi
 lc_rc=0
-"$NOX" -s lock_currency || lc_rc=$?
+"${NOX[@]}" -s lock_currency || lc_rc=$?
 case "$lc_rc" in
   0) : ;;
   2) gate_could_not_run "'nox -s lock_currency' machine-faulted (exit 2) on bare '$BASE_REF'." \
@@ -441,7 +455,8 @@ for id in $ACCEPTED_IDS; do
   # `fi` could never read anything but "bounce" (dead state). `rc=$?` must
   # still be the FIRST command in the else arm, and the condition must stay
   # un-negated: `if ! CMD; then rc=$?` captures the NEGATION's status.
-  if "$NOX" -t fix; then
+  sync_env "after merging '$id'"
+  if "${NOX[@]}" -t fix; then
     :
   else
     fix_rc=$?
@@ -453,7 +468,7 @@ for id in $ACCEPTED_IDS; do
     continue
   fi
 
-  if "$NOX" -s tests; then
+  if "${NOX[@]}" -s tests; then
     :
   else
     tests_rc=$?
@@ -471,7 +486,7 @@ for id in $ACCEPTED_IDS; do
   # branch introduces is attributed to it here, not silently missed. Same
   # `escalate_unless_content` partition, and the same arm shape, as the two
   # gates above -- see their comment for why both are written this way.
-  if "$NOX" -t everything-else; then
+  if "${NOX[@]}" -t everything-else; then
     :
   else
     everything_else_rc=$?
@@ -507,7 +522,7 @@ for id in $ACCEPTED_IDS; do
   fi
 
   lc_rc=0
-  "$NOX" -s lock_currency || lc_rc=$?
+  "${NOX[@]}" -s lock_currency || lc_rc=$?
   case "$lc_rc" in
     0)
       printf 'LANDED\t%s\n' "$id"

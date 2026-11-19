@@ -14,9 +14,9 @@ license-files = ["LICENSE"]
 # Runtime dependencies are seeded from the decided stack (docs/stack.md).
 # This file stays the INTENT layer -- ranges/floors, with a real lower bound
 # only where a version demonstrably matters (trafilatura below is the first
-# such case). requirements.lock is the ONLY place exact versions live --
-# regenerated via `uv pip compile` (scripts/python-init.sh), never hand-edited
-# here. See docs/stack.md#dependency-locking-lode-g2741 for the split.
+# such case). Exact versions live in uv.lock (and, until lode-s09w.4 retires
+# it, requirements.lock) -- never hand-edited here. See
+# docs/stack.md#dependency-locking-lode-g2741 for the split.
 dependencies = [
     "textual[syntax]", # TUI, plus the tree-sitter grammar bundle (~15
                        # languages, no markdown-only extra) -- HARD dep for
@@ -68,7 +68,7 @@ dependencies = [
                              # ceiling and re-baseline lode-g274.3 first.
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest",        # tests (run via nox)
     "pytest-xdist",  # parallel test execution (`-n auto`, lode-b4w.6)
@@ -78,10 +78,9 @@ dev = [
                       # indefinite stall on the landing gate; see the
                       # `[tool.pytest.ini_options]` `timeout` setting below.
     "nox",           # task runner (`nox -t fix` before merging)
-    "ruff==0.16.3",   # lint / format -- pinned to prevent unwanted churn
-                      # Single-tool carve-out from the otherwise-unlocked `dev`
-		      # extra (lode-g274.1) -- not a reversal of that policy
-		      # for any other dev tool.
+    "ruff==0.16.3",   # lint / format -- pinned exact so a ruff upgrade is a
+                      # deliberate edit here (lode-umh2 / lode-ju25); uv.lock
+                      # locks the rest of the group (docs/stack.md).
     "shellcheck-py", # bundles the shellcheck binary — the `nox -s shellcheck` gate
     "build",         # `python -m build` — canonical wheel/sdist packaging front-end
     "pyyaml",        # tests/test_workflow_concurrency.py's direct `import yaml`
@@ -107,8 +106,7 @@ dev = [
                                 # a local `mkdocs build` surfaced broken
                                 # intra-doc anchors nobody had seen, so it
                                 # belongs on every dev's PATH like any other
-                                # gate tool. Pinned exact (single-tool carve-out
-                                # from the otherwise-unlocked `dev` extra, same
+                                # gate tool. Pinned exact (same
                                 # pattern as ruff above, lode-fhql.9 HUMAN
                                 # DECISION 2026-08-14): CI's docs.yml installs
                                 # this exact pin too (kept in sync by

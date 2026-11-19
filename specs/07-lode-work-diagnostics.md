@@ -23,7 +23,7 @@ to see which job type loops and where one-shot blocks. That is what this gathers
 
 ## What to run
 
-Run these from the repo root with the venv active (`. ./venv/bin/activate`), against
+Run these from the repo root through `uv run --frozen` (e.g. `uv run --frozen lode ...`), against
 the DB that reproduces the problem.
 
 1. **The `--wait` transcript** — let it run through several poll cycles (10–20s is

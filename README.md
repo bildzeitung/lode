@@ -44,8 +44,8 @@ quality gates); the short version:
 ```bash
 git clone https://github.com/bildzeitung/lode.git
 cd lode
-./scripts/python-init.sh
-. ./venv/bin/activate
+uv sync
+uv run --frozen lode --help   # nothing to activate: run lode through uv
 ```
 
 ## The idea in one breath

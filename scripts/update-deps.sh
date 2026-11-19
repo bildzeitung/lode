@@ -33,7 +33,7 @@
 #      what the update is about to change, not the pins it is about to
 #      replace; gating with the old lock still on disk is exactly the wrong
 #      signal (see the ticket for the incident this fixes). Then trash
-#      ./venv and rebuild it FRESH from that now-promoted lock (see NO -x /
+#      ./.venv and rebuild it FRESH from that now-promoted lock (see NO -x /
 #      TRASH-NOT-REPAIR below -- never patched in place).
 #   4. Run the gates: nox -t fix, nox -s tests -- against the promoted lock.
 #   5. GREEN (candidate installs AND both gates pass) -> nothing further to
@@ -48,7 +48,7 @@
 #      restore or that rollback rebuild succeeding (see FAILURE HANDLING
 #      below), and if the rollback rebuild itself also fails, a loud
 #      warning after the report says so and points at
-#      scripts/python-init.sh as the manual recovery.
+#      `uv sync --locked` as the manual recovery.
 #   6. On a green run (step 5's GREEN path only -- never on --dry-run,
 #      never on a failed/rolled-back run), file ONE bd stub ticket carrying the
 #      VERSION DIFF as a durable work order for a human/producer to read
@@ -70,7 +70,7 @@
 #      `--dry-run` never reaches this step at all. Filing writes Dolt, so a
 #      missing/failing `bd` (or the `bd dolt push` after it) only WARNS --
 #      it never changes this script's exit status or the lock promotion
-#      (this script still never commits anything outside ./venv and
+#      (this script still never commits anything outside ./.venv and
 #      requirements.lock).
 #
 # NO -x / TRASH-NOT-REPAIR -- deviates from the scripts/*.sh house style of
@@ -90,19 +90,19 @@
 #
 # FAILURE HANDLING -- rollback is never "reverse a partial install"
 # (2026-07-19 user decision, lode-g274 notes): it is always restore the
-# saved committed lock byte-for-byte, then `rm -rf ./venv` + a clean rebuild
+# saved committed lock byte-for-byte, then `rm -rf ./.venv` + a clean rebuild
 # from that restored lock, so there is no half-migrated state to reason
 # about *if the restore and rebuild succeed*. The failure report is built
 # and printed BEFORE the lock is restored or that rollback rebuild is
 # attempted (not after), so a hiccup during either step (e.g. a transient
-# network failure on `pip install -U uv`) can never swallow the report --
+# network failure on `uv pip install`) can never swallow the report --
 # the two are independent by construction, not by ordering luck. The restore
 # is ALSO armed on an EXIT trap (RESTORE_LOCK_ON_EXIT) for the window between
 # the step-3 promotion and step 5 deciding an outcome, so a Ctrl-C, a SIGTERM
 # or an errexit abort mid-gate cannot leave an UNGATED candidate on disk that a
 # human would then read as a gated one -- the very failure this ordering exists
 # to prevent. The one residual no trap can cover is a SIGKILL (or a power cut):
-# there, note that $LOCK is git-tracked where ./venv is not, so `git checkout --
+# there, note that $LOCK is git-tracked where ./.venv is not, so `git checkout --
 # requirements.lock` is the last-resort restore. $SAVED_LOCK rather than git is
 # what the script itself uses, because the lock may legitimately be dirty when
 # a run starts.
@@ -143,14 +143,10 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ ! -f ./venv/bin/activate ]; then
-  echo "update-deps.sh: ./venv not found -- run scripts/python-init.sh first" >&2
+if ! command -v uv >/dev/null 2>&1; then
+  echo "update-deps.sh: uv not found on PATH -- install uv (https://docs.astral.sh/uv/)" >&2
   exit 1
 fi
-# shellcheck source=/dev/null
-. ./venv/bin/activate   # just to put `uv` on PATH for the compile step below --
-                        # the venv itself gets trashed and rebuilt from
-                        # scratch before anything is gated (see rebuild_venv).
 
 CANDIDATE="$(mktemp)"
 SAVED_LOCK="$(mktemp)"
@@ -245,10 +241,7 @@ BODY_EOF
   return 0
 }
 
-# shellcheck source=venv-install.sh
-. "$REPO/scripts/venv-install.sh"
-
-# Trash ./venv and rebuild it FRESH from $1 (a lock file path) -- never
+# Trash ./.venv and rebuild it FRESH from $1 (a lock file path) -- never
 # patched in place, so there is never a half-migrated venv to reason about
 # ONCE THIS FUNCTION RETURNS SUCCESSFULLY. Every caller below checks its
 # return value explicitly (never invoked as a bare statement) -- but that
@@ -263,19 +256,17 @@ BODY_EOF
 # the "gates green" branch even with a deliberately-failing install step).
 # Chaining with `&&` makes the function's own return code reflect the
 # FIRST failing step regardless of the caller's -e state, independent of
-# how the function happens to be invoked. install_locked_venv() (lode-02xy,
-# scripts/venv-install.sh) carries the same guarantee for the actual install
-# steps it performs -- this function chains that same way around it so the
-# combined venv-creation-plus-install sequence stays one failure-transparent
-# chain end to end.
+# how the function happens to be invoked. The whole venv-creation-plus-install
+# sequence is one failure-transparent chain end to end. Two installs, because
+# `-e` and `--require-hashes` are mutually exclusive in one invocation: the
+# hash-verified runtime lock first, then the local package editable together
+# with the `dev` group, resolved fresh.
 rebuild_venv() {
   local lockfile="$1"
-  deactivate 2>/dev/null || true
-  # shellcheck source=/dev/null
-  rm -rf ./venv &&
-    python -m venv venv &&
-    . ./venv/bin/activate &&
-    install_locked_venv "$lockfile"
+  rm -rf ./.venv &&
+    uv venv .venv &&
+    uv pip install --python .venv/bin/python --require-hashes -r "$lockfile" &&
+    uv pip install --python .venv/bin/python -e . --group dev
 }
 
 # Promote BEFORE gating (lode-2zi9) -- see step 3 and FAILURE HANDLING above.
@@ -283,15 +274,17 @@ rebuild_venv() {
 cp -f "$CANDIDATE" "$LOCK"
 RESTORE_LOCK_ON_EXIT=1
 
-echo "update-deps.sh: installing the candidate lock into a freshly rebuilt ./venv..."
+echo "update-deps.sh: installing the candidate lock into a freshly rebuilt ./.venv..."
 FAILED_AT=""
 if ! rebuild_venv "$LOCK"; then
   FAILED_AT="candidate install (rebuild_venv failed partway -- see output above)"
 else
   echo "update-deps.sh: running gates (nox -t fix, nox -s tests)..."
-  if ! nox -t fix; then
+  # --no-sync: the rebuilt ./.venv holds the CANDIDATE lock, which a syncing
+  # `uv run` would overwrite with uv.lock's pins.
+  if ! uv run --frozen --no-sync nox -t fix; then
     FAILED_AT="nox -t fix"
-  elif ! nox -s tests; then
+  elif ! uv run --frozen --no-sync nox -s tests; then
     FAILED_AT="nox -s tests"
   fi
 fi
@@ -326,12 +319,12 @@ echo "$REPORT"
 # restore has to land before it or the rollback would reinstall the rejection.
 cp -f "$SAVED_LOCK" "$LOCK"
 RESTORE_LOCK_ON_EXIT=0
-echo "update-deps.sh: trashing ./venv and rebuilding clean from the restored $LOCK..." >&2
+echo "update-deps.sh: trashing ./.venv and rebuilding clean from the restored $LOCK..." >&2
 if ! rebuild_venv "$LOCK"; then
   echo "update-deps.sh: WARNING -- the clean rollback rebuild from $LOCK ALSO failed." >&2
-  echo "update-deps.sh: ./venv may now be missing or broken. The report above is still" >&2
+  echo "update-deps.sh: ./.venv may now be missing or broken. The report above is still" >&2
   echo "update-deps.sh: accurate ($LOCK was restored to its pre-update pins); re-run" >&2
-  echo "update-deps.sh: scripts/python-init.sh by hand to restore ./venv." >&2
+  echo "update-deps.sh: uv sync --locked by hand to restore ./.venv." >&2
 fi
 
 exit 1

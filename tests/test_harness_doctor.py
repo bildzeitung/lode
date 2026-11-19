@@ -113,7 +113,7 @@ def _build_healthy_repo(tmp_path: Path) -> Path:
     tests_dir.mkdir(parents=True, exist_ok=True)
     (tests_dir / "test_stub.py").write_text("def test_x():\n    assert True\n")
 
-    (repo / ".gitignore").write_text("venv/\n.nox/\n")
+    (repo / ".gitignore").write_text(".venv/\n.nox/\n")
     return repo
 
 
@@ -320,4 +320,4 @@ def test_gitignore_missing_venv_warns_not_fails(tmp_path: Path) -> None:
     (repo / ".gitignore").write_text("*.log\n")
     result = _run(repo)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "may not ignore venv" in result.stdout
+    assert "may not ignore .venv" in result.stdout

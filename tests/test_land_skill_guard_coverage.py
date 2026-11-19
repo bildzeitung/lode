@@ -125,7 +125,7 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 # set. Whether these hand-written pins should share one mechanism was decided
 # (rejected extraction, in favor of shared discipline instead) in
 # docs/decisions.md
-# (./venv/bin/python scripts/docs_index_query.py "lode-7zap"). Do not re-litigate here.
+# (uv run --frozen python scripts/docs_index_query.py "lode-7zap"). Do not re-litigate here.
 #
 # DECISION (lode-eu04): `_dead_allowlist_entries`' live set also ignored
 # `_unguarded_mutations`' BLOCK-level guard state (a key reachable only inside
@@ -630,16 +630,28 @@ def test_sweep_allowlist_match_is_exact_text_not_shape() -> None:
     )
 
 
-def test_land_skill_never_activates_the_venv() -> None:
-    """lode-xx90: /land gates unactivated, venv tools by explicit path, in
-    parity with the code-reviewer. Activation puts `./venv/bin` first on PATH
-    and hides tests that spawn a tool by bare name (lode-p3ks). No fenced
-    block may source the activate script. That `land-replay.sh` itself never
-    depends on PATH for `nox` is pinned by running it, in
-    tests/test_land_replay.py -- every gate call site against a repo whose only
-    nox is `venv/bin/nox`, and a missing venv nox with a green one on PATH."""
+def test_land_skill_gates_run_through_uv_run_frozen() -> None:
+    """lode-s09w.3: /land's re-gate invokes every nox session as
+    `uv run --frozen nox ...`, the same form the code-reviewer and
+    scripts/land-replay.sh use. `uv run` puts the env's bin first on PATH, so
+    these gates run effectively activated: that supersedes lode-xx90's
+    unactivated-gate pin, by maintainer decision (docs/decisions.md). No fenced
+    block may source an activate script or call a bare `nox` off PATH. That
+    `land-replay.sh` itself uses the same form is pinned by running it, in
+    tests/test_land_replay.py."""
+    saw_gate = False
     for block in LAND_SKILL_BLOCKS:
         for line in block.splitlines():
-            assert "venv/bin/activate" not in _strip_comment(line), (
-                f"a land/SKILL.md fence activates the venv: {line!r}"
-            )
+            code = _strip_comment(line)
+            assert not any(
+                token.rsplit("/", 1)[-1] == "activate" for token in code.split()
+            ), f"a land/SKILL.md fence sources an activate script: {line!r}"
+            # nox named inside a quoted message (a commit subject) is not a gate.
+            unquoted = re.sub(r"\"[^\"]*\"|'[^']*'", "", code)
+            for match in re.finditer(r"\bnox\s+-[ts]\b", unquoted):
+                saw_gate = True
+                assert unquoted[: match.start()].endswith("uv run --frozen "), (
+                    f"a land/SKILL.md fence calls nox other than via "
+                    f"`uv run --frozen nox`: {line!r}"
+                )
+    assert saw_gate, "no nox gate invocation found in any land/SKILL.md fence"

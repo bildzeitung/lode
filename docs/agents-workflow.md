@@ -270,30 +270,25 @@ shown to the user, so `/code` relays what came back across **both** phases — w
 build gates and the technical review passed, the pushed branch and head SHA, or exactly where it
 stopped (a build- or review-time escalation) and why.
 
-> **Adding a brand-new `src/lode/*.py` module?** Build a worktree-local venv before `nox` — run
-> `./scripts/python-init.sh` from *inside* the worktree. The shared `./venv` editable install
-> resolves `lode` to the **main checkout's** `src`, so a new module that exists only in the worktree
-> is invisible to it and `nox -s tests` fails with `ModuleNotFoundError`. **Editing an existing
-> module needs no fresh venv** — that file already resolves under the main-checkout package.
+> **A worktree builds its own `./.venv`, with no init step (lode-s09w.3).** `uv run --frozen <cmd>`
+> creates or refreshes the `./.venv` beside the `pyproject.toml` it runs from, installing the local
+> package editable from `uv.lock` out of uv's cache. Every worktree therefore resolves `lode` to
+> **its own** `src`, so a brand-new `src/lode/*.py` module is importable the first time a gate runs
+> and there is no per-worktree init step to forget.
 >
-> **The same wrong-venv mistake has a quieter failure mode too (lode-jh80).** Editing an *existing*
-> module while the main checkout's venv is active doesn't raise `ModuleNotFoundError` — the import
-> resolves fine, just to the **wrong checkout's** `src`. `nox -s tests`/`nox -s unit` then collect
-> this worktree's `tests/` but exercise the main checkout's source: a false FAIL when the branch's
-> fix isn't exercised, or a false PASS when the branch's regression is masked by the other
-> checkout's already-correct code — either way, nothing warns and the run just reports a result for
-> the wrong tree. `tests/conftest.py`'s `pytest_configure` guard 0 now catches this mechanically: it
-> resolves `lode.__file__` and, if it isn't under the checkout that owns the tests being collected,
-> fails the run loudly with a `UsageError` naming the wrong path and the fix, before a single test
-> runs. It lives in `conftest.py` rather than as a `nox` preflight so it covers **every** pytest
-> invocation — `nox -s tests`/`unit`/`eval` and a bare `pytest -k foo` alike — with nothing to
-> remember to wire up per session. The underlying rule doesn't change — build the
-> worktree's own venv (`./scripts/python-init.sh` from inside it) rather than reusing the main
-> checkout's — the preflight is a backstop for the times that rule gets forgotten, not a
-> replacement for following it.
+> **The wrong-checkout import is the quieter failure mode this closes (lode-jh80).** Before uv, a
+> worktree that reused the main checkout's venv resolved `lode` to the **main checkout's** `src`:
+> `nox -s tests`/`nox -s unit` then collected this worktree's `tests/` but exercised the other
+> checkout's source: a false FAIL when the branch's fix isn't exercised, or a false PASS when the
+> branch's regression is masked by the other checkout's already-correct code. Nothing warned; the
+> run just reported a result for the wrong tree. `tests/conftest.py`'s `pytest_configure` guard 0
+> still catches it mechanically: it resolves `lode.__file__` and, if it isn't under the checkout that
+> owns the tests being collected, fails the run loudly with a `UsageError` naming the wrong path and
+> the fix, before a single test runs. It lives in `conftest.py` rather than as a `nox` preflight so
+> it covers **every** pytest invocation (`nox -s tests`/`unit`/`eval` and a bare `pytest -k foo`
+> alike) with nothing to wire up per session. It is a backstop; the per-worktree `./.venv` is the rule.
 >
-> **Activating that venv is a separate problem again** — the isolation guard refuses the sourced
-> `. ./venv/bin/activate` outright, so agents gate by explicit path instead. See
+> **Activation is a separate question** — see
 > [Gating from an isolated worktree](#gating-from-an-isolated-worktree-lode-6874) below.
 
 ```mermaid
@@ -316,7 +311,7 @@ flowchart TD
     RESET --> CLAIM
     RGUARD -->|"yes — clean"| CLAIM["claim (bd update --claim) —<br>idempotent backstop;<br>primary only on free-text path"]
 
-    CLAIM --> IMPL["Read issue + acceptance + design,<br>then implement (Typer · ./venv ·<br>simplest thing that works)"]
+    CLAIM --> IMPL["Read issue + acceptance + design,<br>then implement (Typer · ./.venv ·<br>simplest thing that works)"]
     IMPL --> COMMIT["Commit in worktree<br>(Co-Authored-By trailer)"]
     COMMIT --> CLEAN1{"git status --short<br>empty?"}
     CLEAN1 -->|"no"| COMMIT
@@ -350,75 +345,61 @@ flowchart TD
 
 **Agents gate by blessed nox bucket tag — `fix`, `tests`, `everything-else` (lode-6ldh,
 superseding lode-vvt1's earlier bare-`nox`-everywhere rule; full fiat: `docs/conventions.md`) —
-never by enumerating an `everything-else` session individually, and never by activating the venv
-at all.** Coding builders run `fix` + the `tests` bucket's fast `unit` view; `code-reviewer` and
+never by enumerating an `everything-else` session individually, and always through
+`uv run --frozen`** (`uv run --frozen nox -t fix`, `uv run --frozen nox -s unit`; lode-s09w.3).
+Coding builders run `fix` + the `tests` bucket's fast `unit` view; `code-reviewer` and
 `/land`'s post-merge re-gate run all three buckets (full `tests`, not `unit`, plus every
 `everything-else` session), since those are the last gates before `trunk`. A corpus-scan pytest
 gate (`tests/test_nox_bucket_gate.py`) fails the suite if a covered session carries zero or 2+
 of the three blessed tags, so the gate list cannot silently lag `noxfile.py` the way it did before
 lode-vvt1 (a `shellcheck` session missing from a hand-typed prose list).
-The isolation guard refuses any command that sources a file (`. ./venv/bin/activate` — "runs a
-string through `.`, which can't be verified to stay inside the worktree"), so the once-documented
-`./scripts/python-init.sh && . ./venv/bin/activate` was unrunnable by the very agents the docs
-address; hand-rolling `VIRTUAL_ENV=...`/`PATH=...` trips the same guard. The explicit-path form has
-none of those shapes — no sourcing, no substitution, no `$PATH` expansion — so there is nothing to
-refuse. The `./venv/bin/` prefix is load-bearing: `nox` is not on the ambient `PATH` unactivated.
+The isolation guard refuses any command that sources a file (sourcing the venv's `activate`
+script was the once-documented form — "runs a string through `.`, which can't be verified to stay
+inside the worktree"), and hand-rolling `VIRTUAL_ENV=...`/`PATH=...` trips the same guard. `uv run --frozen
+nox …` has none of those shapes — no sourcing, no substitution, no `$PATH` expansion — so there is
+nothing to refuse (verified from a worktree-isolated dispatch on lode-s09w.3: the guard accepts it).
 The refusal is on **shape alone, before any condition is evaluated** — `if [ -x /nonexistent ]; then
-. ./venv/bin/activate; fi` draws the identical message, so burying a `source` in a branch that can
-never run does not get it past the guard. It is the `.` that is refused, not the `if/then/fi`: the
-same compound wrapping a plain `git` command is accepted. So a conditional gate step is available to
-an isolated agent, but never one that sources. (Both verified from a worktree-isolated dispatch,
-lode-828x — the case lode-6874's review raised but could not test, having come up in the main
-checkout rather than a worktree, the fault lode-jk44 later closed.)
+. file; fi` draws the identical message, so burying a `source` in a branch that can never run does
+not get it past the guard. It is the `.` that is refused, not the `if/then/fi`: the same compound
+wrapping a plain `git` command is accepted. So a conditional gate step is available to an isolated
+agent, but never one that sources. (Both verified from a worktree-isolated dispatch, lode-828x.)
 
-**Activation is unnecessary, not merely inconvenient — `_venv_tool()` (lode-0yfn) removed the reason
-for it.** `default_venv_backend = "none"` means sessions inherit the invoking shell's `PATH`, and
-activation used to be what pointed ruff/pytest at this checkout rather than another's (the lode-jh80
-hazard above). `_venv_tool()` now resolves ruff/pytest/shellcheck/python under the `./venv/bin`
-beside `noxfile.py` itself, so pytest imports *this* checkout's `src` whatever `PATH` holds —
-enforced by `tests/test_noxfile_venv_tool.py`, not left to convention.
+**Gates run effectively activated now — a reversal of lode-6874 / lode-xx90 (lode-s09w.3).** `uv run`
+puts the env's `bin` first on `PATH` and sets `VIRTUAL_ENV`, which is what activation did. Until
+lode-s09w.3 the reviewer gated *unactivated* (the venv's `nox` by explicit path) on purpose, so a test that launched a
+bare `python` or tool by name failed instead of silently resolving from ambient `PATH` (lode-p3ks was
+caught that way), while `/land`'s re-gate was activated and could pass the same tree. That
+asymmetry was lode-xx90's problem; the maintainer resolved it by accepting activation everywhere
+rather than keeping the unactivated stance on top of uv. The maintainer's ruling is recorded in
+`docs/decisions.md`. The reviewer, `/land`'s re-gate and `scripts/land-replay.sh` all invoke the
+gates with the **identical** `uv run --frozen` form, and `tests/test_land_skill_guard_coverage.py`
+pins that parity. No guard against bare-name launches in tests was added in its place.
+`noxfile.py`'s `_venv_tool()` (lode-0yfn) still resolves ruff/pytest/shellcheck/python under the env
+beside `noxfile.py` itself whatever `PATH` holds, enforced by `tests/test_noxfile_venv_tool.py`.
 
-**Verified empirically from a worktree-isolated dispatch, not inferred** — the question had already
-survived two review attempts on inference alone. The guard *accepts* `./venv/bin/nox …` and
-*refuses* `. ./venv/bin/activate`; un-activated `-s tests` runs 2096 tests green with
-`tests/conftest.py`'s lode-jh80 guard 0 satisfied; `-t fix` resolves the venv's ruff over a stale
-ambient `~/.local/bin/ruff` that sat ahead of it on `PATH`.
+**A missing or half-built env needs no machinery here.** `uv run --frozen` creates or completes the
+`./.venv` itself from `uv.lock`, from uv's cache (no per-worktree init step; contrast the retired
+init script). `--frozen` never re-locks and never checks the lock against `pyproject.toml`; that
+check is `nox -s lock_currency`. A `uv` that is not installed exits **127** naming the missing
+command, a code no content failure produces, so it cannot be mistaken for a verdict on a branch; once
+`nox` runs, `noxfile.py`'s `GATE_MACHINE_FAULT = 2` carries the lode-9i2p contract. The remedy for
+either is for a human to install `uv`. **One uv fault does share a content code:** when the sync
+inside `uv run` cannot download a locked package, uv exits **1** before `nox` starts
+(measured on uv 0.11.7 with the network off and an empty cache). An agent reading the output sees
+uv's own `Failed to download` error and no `nox >` line, and treats it as a machine
+fault. `scripts/land-replay.sh` reads exit codes only, so it runs `uv sync --frozen --inexact` on its
+own on the bare base and after each merge, and stops the replay if that fails instead of reporting a
+red baseline or bouncing the branch.
 
-**A missing or half-built venv already fails unmistakably, so the lode-9i2p exit contract needs no
-extra machinery here.** A `./venv/bin/nox` that does not exist exits **127** naming the missing path
-— a code no content failure produces, so it cannot be mistaken for a verdict on a branch — and
-naming the *binary* rather than `venv/bin/activate` is what makes the half-built case fail too
-(`scripts/python-init.sh` writes `activate` first and installs nox, the unlocked `dev` extra, several
-steps later). Once `nox` runs, `noxfile.py`'s `GATE_MACHINE_FAULT = 2` carries the contract. Either
-way the remedy is one command the agent can run itself: `./scripts/python-init.sh`.
+**Why no `scripts/nox.sh` wrapper.** One was built and reviewed for lode-6874 and dropped: a
+committed wrapper adds a base-skew problem with a long tail, since every branch already in flight
+predates the new file and the documented gate command would exit 127 on all of them. `uv run
+--frozen` is the wrapper now, and it is not a repo file.
 
-**One residual skew, verified and deliberately not papered over.** A branch whose base predates
-lode-0yfn has a `noxfile.py` without `_venv_tool()`, so the `tests` session on it dies with
-`Program pytest not found` — measured, not inferred, on this ticket's own branch. It fails *loudly*
-and cannot produce a false PASS, which is the property that matters; the set is also shrinking, since
-every new worktree branches from `origin/trunk` and so always carries `_venv_tool()`. The
-guard-friendly fallback for such a branch is `./venv/bin/pytest` directly — a plain command, and
-`tests/conftest.py`'s guard 0 still protects it against a wrong-checkout import. Note that this is
-base skew *transferred*, not eliminated: dropping the wrapper removes the file-missing form of it,
-not the general problem; lode-828x took that residue up and closed it as needing no further mechanism.
-
-**Why no `scripts/nox.sh` wrapper.** One was built and reviewed for this ticket, justified on three
-grounds — locating `nox`, a guard-friendly single-command shape, and the exit-2 contract — and each
-falls to the explicit-path form above. The "cd to the checkout root" value that looked like a residue
-is nil too: the wrapper would have been invoked as `scripts/nox.sh`, a relative path presupposing
-exactly the cwd it was meant to establish. What a committed wrapper *does* add is a base-skew problem
-with a long tail — every branch already in flight predates the new file, so the documented gate
-command exits 127 on all of them, which then needs a restore/undo dance in both agent files whose
-undo rests on a `HEAD` oracle a red-gate commit loop can poison. Paying that to improve an error
-message on a condition that already exits 127 is a bad trade, so the wrapper was dropped.
-
-**`CLAUDE.md` keeps the activation form on purpose, and the agent files say so.** Its
-Python-environment section addresses a human at a terminal and the main session — neither is
-worktree-isolated — so `. ./venv/bin/activate` plus a bare `nox` is correct there and stays. But
-`CLAUDE.md` is loaded into every dispatched subagent's context too, so an isolated agent holds both
-forms at once; rather than hoist an agent-only rule into the project-wide file, `coding.md` and
-`code-reviewer.md` each state outright that their explicit-path rule **overrides** that section. The
-audience split is the reason the two texts differ, not an oversight in either.
+**`CLAUDE.md` and the agent files show the same form.** Before lode-s09w.3 `CLAUDE.md` kept the
+activation form for a human at a terminal while `coding.md` and `code-reviewer.md` stated an
+explicit-path override. `uv run --frozen` works for every audience, so there is no override left to
+state and the two texts no longer differ.
 
 ### The harness's worktree-isolation classifier: the `eval` word and `$(git ...)` refusals (lode-emx5)
 
@@ -430,7 +411,7 @@ and that text appears nowhere in `scripts/`, `.claude/`, `tests/` or `lode/`: th
 and `sha-fabrication-guard.sh`, the one `PreToolUse(Edit|Write)` hook runs `trunk-write-guard.sh`, and
 none of them emits it. The message template sits in the Claude Code executable itself (`grep -a -F "is
 isolated in the worktree"` matches the installed 2.1.325 and 2.1.326 binaries). It is the same
-classifier that refuses `. ./venv/bin/activate` (lode-6874, above), whose message is the `eval` one
+classifier that refuses a sourced `activate` script (lode-6874, above), whose message is the `eval` one
 below with `.` in place of the word.
 
 **Scope: observations, not a contract.** Everything below was observed from worktree-isolated
@@ -533,7 +514,7 @@ real object, but cannot tell a real one from the *right* one). For
 `nox -s eval`, run its body directly (it is CI-only and spends API credits, so only with the
 maintainer's approval, as
 [`CLAUDE.md` General Directive 10](#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
-defines it): `LODE_RUN_LIVE_EVAL=1 ./venv/bin/pytest tests/test_eval_live.py -v` with
+defines it): `LODE_RUN_LIVE_EVAL=1 uv run --frozen pytest tests/test_eval_live.py -v` with
 `ANTHROPIC_API_KEY` set. Do **not** disguise the word — quote-splitting (`ev""al`), building it by
 expansion, or any other obfuscation: the guard exists because the shape is unverifiable, so hiding
 it routes around the fence rather than working within it.
@@ -742,7 +723,7 @@ rescue branch matters, why `origin/trunk` and never bare `trunk`, why the `case`
 fails to reach the agent that needs it, right when it needs it, outweighs the drift cost of three
 copies. `docs/decisions.md`'s three re-narrations of the same material carried no such argument —
 nothing reads `decisions.md` immediately before a destructive command — so those were trimmed to
-decision-timeline pointers instead (`./venv/bin/python scripts/docs_index_query.py "lode-zt62"`).
+decision-timeline pointers instead (`uv run --frozen python scripts/docs_index_query.py "lode-zt62"`).
 
 **Scope: only the fresh-build start state (`coding.md` step 3) and each cycle's own pre-checkout start
 state (`coding.md`'s rebase-pickup step 2, `code-reviewer.md` step 2) — never a reason to avoid the
@@ -786,13 +767,13 @@ the ancestor check stays narrow and commit-graph-only (it is not, and does not n
 general clean-tree assertion), but `git clean -fd` now runs **unconditionally** right after the check,
 pass or fail — still gated by each site's own `.claude/worktrees/`-only `case`, so it never reaches
 outside an isolated launch worktree. It's a no-op on a genuinely fresh worktree (nothing untracked to
-remove, and it never touches `.gitignore`d build state like `venv/`), and it clears exactly the
+remove, and it never touches `.gitignore`d build state like `.venv/`), and it clears exactly the
 leftover dirt on an undetected recycle. **The two axes stay documented as distinct even though one
 fix now closes both:** `land-review`'s correctness exposure to a recycled worktree remains nil
 regardless (unchanged from above — it never checks anything out), and this was, and remains, purely a
 worktree-**leak** fix on that role. Full reasoning, including the two runner-up options considered and
 why the unconditional-clean shape won: [docs/decisions.md](decisions.md)
-(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). Full account of the guard sites:
+(`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`). Full account of the guard sites:
 [land-review.md](../.claude/agents/land-review.md),
 [coding.md](../.claude/agents/coding.md), [code-reviewer.md](../.claude/agents/code-reviewer.md), and
 [Isolating `land-review` dispatches](#isolating-land-review-dispatches-lode-g387), below.
@@ -917,7 +898,7 @@ roles. As a result, `code/SKILL.md`'s call-site `isolation: "worktree"` option f
 Full probe detail, both runs' results, and the two explicit limits on what this licenses — the
 contrast is between *whole* agent definitions rather than a single-variable ablation of the key, and
 the load was light — are in [`docs/decisions.md`](decisions.md)
-(`./venv/bin/python scripts/docs_index_query.py "lode-09td"`).
+(`uv run --frozen python scripts/docs_index_query.py "lode-09td"`).
 
 **Root cause: still not fully determinable from this repo — the sufficiency question is closed, the
 fan-out question is not.** `isolation: "worktree"` is a harness feature implemented outside this codebase;
@@ -1090,7 +1071,7 @@ as `lode-p8zl` — which escalated both questions for a maintainer ruling and th
 attempt to disambiguate subagent from main session — the payload cannot support that), returning
 `permissionDecision: "ask"` rather than `"deny"` when `HEAD` is `trunk`, and needing no `jq`. Full
 rulings and rationale: [`docs/decisions.md`](decisions.md)
-(`./venv/bin/python scripts/docs_index_query.py "lode-p8zl"`).
+(`uv run --frozen python scripts/docs_index_query.py "lode-p8zl"`).
 
 ### Precondition guards (the 0/1/2 family) (lode-t6ni)
 
@@ -1165,7 +1146,7 @@ blocks in the skill markdown under `.claude/skills/` print the identical "GATE C
 on a machine/checkout fault and then exit 1 rather than 2 — this is correct, not an inconsistency with
 the convention above, and the call sites are not to be changed. The canonical statement of why lives in
 `scripts/gate-lib.sh`'s own header
-(`./venv/bin/python scripts/docs_index_query.py "lode-vmnx"`): the exit-2 convention exists for a
+(`uv run --frozen python scripts/docs_index_query.py "lode-vmnx"`): the exit-2 convention exists for a
 **calling script** to classify a subprocess's exit code programmatically; an agent-executed skill
 fence has no calling script, only the agent itself reading the stderr banner directly, so the
 distinction `gate-lib.sh` enforces doesn't apply there.
@@ -2628,7 +2609,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Design decisions | doc edits under `docs/`, never a bd note or memory (that forks the record) |
 | Gates | blessed nox bucket tags, staged by role (lode-6ldh): builders `nox -t fix` + `nox -s unit`; reviewer/`/land` `nox -t fix` + `nox -s tests` (full) + `nox -t everything-else` — never an enumerated `everything-else` session by name (lode-vvt1); `scripts/validate-mermaid.sh` for diagram changes — never hand off / mark ready on a failing gate |
 | Clean tree | `git status --short` empty before gating and before hand-off — `nox` gates the working tree, not `HEAD`, so the tree that gated green must be the tree committed and pushed; a dirty tree at either point silently drops uncommitted work (lode-tpt) |
-| CLI framework | **Typer** (never argparse); venv at `./venv` |
+| CLI framework | **Typer** (never argparse); venv at `./.venv` |
 | External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record it PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal ([full rationale above](#never-write-to-an-external-tracker-under-the-users-identity-lode-o29m); lode-o29m) |
 | Done (coding loop) | builder hands off at `ready-for-code-review` (worktree kept); code-reviewer reviews, re-gates, swaps to `ready-for-land` (`bd dolt push`); `/land` does the merge/close |
 
@@ -2709,7 +2690,7 @@ suppressed for such a row (a human has already seen it, by construction — defe
 hidden from `bd ready`, so nothing can re-escalate one without a human touching it first), but the
 report still lists it, annotated `(deferred)`, alongside its unconditional appearance in the
 deferred-ticket section. Full rationale, including the accepted un-defer residual, in
-[decisions.md](decisions.md) (`./venv/bin/python scripts/docs_index_query.py "lode-o7ai"`).
+[decisions.md](decisions.md) (`uv run --frozen python scripts/docs_index_query.py "lode-o7ai"`).
 
 ---
 
@@ -3257,7 +3238,7 @@ no-op on a genuinely fresh worktree and clears exactly the leftover dirt on an u
 nothing dirty behind either way. Full reasoning for why unconditional-clean was chosen over the other
 two options on the table (having the sweep judge recycling-dirt separately, or asserting a clean tree
 after the guard as a distinct step): [docs/decisions.md](decisions.md)
-(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`).
+(`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`).
 
 This is purely a worktree-leak fix: `land-review`'s **correctness** exposure to a recycled worktree
 was, and remains, nil, since it never reads anything from the checked-out state regardless of what
@@ -3280,11 +3261,11 @@ The backstop sweep described above (`lode-h1vn`/`lode-amif`/`lode-9hgu`) only ev
 worktree whose `HEAD` had merged into `trunk` or was captured on `origin/land/<id>`. A builder's
 own `worktree-agent-*` branch is **never** pushed to origin, so once its ticket is abandoned,
 bounced, or its build simply dies before handing off, neither arm is ever satisfied again —
-nothing in the system ever revisits it, and its ~100MB worktree (dominated by a `venv/` that is
+nothing in the system ever revisits it, and its ~100MB worktree (dominated by a `.venv/` that is
 mostly hardlinked, so `du -sh` on one worktree wildly overstates what removing it actually frees)
 leaks forever. Measured on the landing machine: 8 of 14–18 worktree directories in this bucket.
 Human decision, and the full measurement/verification trail: [docs/decisions.md](decisions.md)
-(`./venv/bin/python scripts/docs_index_query.py "lode-yrtu"`). In short:
+(`uv run --frozen python scripts/docs_index_query.py "lode-yrtu"`). In short:
 
 - **Chosen: widen `/land`'s existing Section 4 sweep** (not a new `/gc` entry point, not `/sweep`
   with a charter amendment — both considered and rejected, reasons in decisions.md).

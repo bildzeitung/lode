@@ -82,18 +82,17 @@ jobs:
           enable-cache: false
 
       - name: Install site-build toolchain (from uv.lock)
-        # The toolchain is the committed uv.lock's, via the project's own `dev` extra --
+        # The toolchain is the committed uv.lock's, via the project's own `dev` dependency group --
         # so mkdocs-material and typer are pinned by the lock, never by hand-copied
         # versions in this file (decided 2026-11-18, lode-s09w.2;
         # tests/test_build_docs_site.py asserts uv.lock carries pyproject's
         # mkdocs-material pin and that this file carries none).
         # Cost accepted: this leg installs lode's full runtime tree too, on the
         # repo's heaviest CI leg, in exchange for one source of truth.
-        # `--extra dev` is transitional until lode-s09w.3. `lode.docs_slug`
-        # (mkdocs.yml's slugify hook) is importable because uv sync installs lode
+        # `lode.docs_slug` (mkdocs.yml's slugify hook) is importable because uv sync installs lode
         # editable. Shallow checkout: setuptools-scm falls back to a dev version, which
         # nothing in the built site reads (see the checkout step's note).
-        run: uv sync --locked --extra dev
+        run: uv sync --locked
 
       # mermaid-cli's image is pulled once here rather than left to the
       # first `docker run` inside build_docs_site.py, so a pull failure
@@ -110,12 +109,12 @@ jobs:
         # Fails the whole job loudly on any render error (see
         # scripts/build_docs_site.py's own docstring) -- never a silently-
         # empty diagram on the published site.
-        run: uv run --frozen --extra dev python scripts/build_docs_site.py .docs-site-src
+        run: uv run --frozen python scripts/build_docs_site.py .docs-site-src
 
       - name: Build site (strict -- fail on broken links/nav, not just exceptions)
         # Output dir comes from mkdocs.yml's `site_dir`, not a flag -- one
         # place to change, and the upload step's `path:` below tracks it.
-        run: uv run --frozen --extra dev mkdocs build --strict
+        run: uv run --frozen mkdocs build --strict
 
       # Condition is byte-identical to the `deploy` job's `if:` and must stay
       # so (tests/test_build_docs_site.py pins that). Without it, every PR

@@ -189,6 +189,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import textwrap
 import threading
 import time
@@ -398,9 +399,8 @@ def _wrong_source_tree_message(lode_file: str, checkout_root: Path) -> str | Non
     The hazard (lode-jh80, discovered reviewing lode-7abi): ``noxfile.py`` sets
     ``default_venv_backend = "none"``, so gates run in whatever venv is already
     active rather than provisioning one — deliberate, for speed. But
-    ``scripts/python-init.sh`` always installs the local package editable
-    (``-e .``, whether via the locked default path or ``--unlocked`` --
-    lode-g274.1), so a venv's ``lode`` resolves to the ``src`` of *whichever
+    ``uv sync``/``uv run`` always install the local package editable
+    (uv's default for the project itself), so a venv's ``lode`` resolves to the ``src`` of *whichever
     checkout it was built in*. Activate the main checkout's venv while sitting
     in a worktree and
     pytest collects **this** checkout's ``tests/`` while importing **that**
@@ -420,9 +420,8 @@ def _wrong_source_tree_message(lode_file: str, checkout_root: Path) -> str | Non
     imported is the one whose source this checkout owns") as one rule instead
     of two special cases, and it also rejects a stale non-editable copy
     installed into a ``site-packages`` inside this same checkout. The repo only
-    ever installs editable (``scripts/python-init.sh`` always passes ``-e``,
-    locked or ``--unlocked`` -- lode-g274.1), so the ``src`` layout is the
-    only shape that legitimately occurs.
+    ever installs editable (uv's default for the project itself), so the ``src``
+    layout is the only shape that legitimately occurs.
     """
     expected_src = checkout_root / "src"
     resolved = Path(lode_file).resolve()
@@ -437,8 +436,8 @@ def _wrong_source_tree_message(lode_file: str, checkout_root: Path) -> str | Non
         "checkout's src -- a false FAIL if this branch's fix is never run, or "
         "a false PASS if its regression is masked by the other checkout's "
         "already-correct code (lode-jh80).\n"
-        "Fix: build and activate THIS checkout's own venv --\n"
-        "    ./scripts/python-init.sh && . ./venv/bin/activate"
+        "Fix: run through THIS checkout's own env --\n"
+        "    uv run --frozen <command>"
     )
 
 
@@ -1316,7 +1315,7 @@ def project_venv_bin() -> Path:
     bin_dir = load_noxfile()._venv_bin()
     assert bin_dir is not None, (
         f"sys.prefix {sys.prefix} is neither ./venv nor ./.venv of this checkout -- "
-        "run the suite from the project venv (uv run --frozen --extra dev nox ...)"
+        "run the suite from the project venv (uv run --frozen nox ...)"
     )
     return bin_dir
 
@@ -2025,6 +2024,47 @@ def fake_bin_env(bin_dir: Path) -> dict[str, str]:
     existing = os.environ.get("PATH", "")
     path = f"{bin_dir}{os.pathsep}{existing}" if existing else str(bin_dir)
     return dict(os.environ, PATH=path)
+
+
+def path_without_tool(tmp_path: Path, tool: str) -> str:
+    """A PATH string that resolves every ordinary tool (git, bash, coreutils,
+    ...) but never ``tool``.
+
+    Built by symlink-farming each ``$PATH`` directory that carries ``tool``
+    into a scratch tree with that one entry left out, rather than dropping the
+    directory: ``tool`` may sit beside ``bash`` and ``git`` (a distro package
+    in ``/usr/bin``), and more than one directory may carry a copy. Used to
+    exercise a script's missing-tool arm without a machine that lacks it.
+
+    Only the directories that ACTUALLY carry ``tool`` are farmed; every other
+    ``$PATH`` entry is passed through unchanged, which on a typical box is a
+    few thousand symlinks instead of ~9000 (measured for ``flock``).
+    ``os.scandir`` does the isdir/listdir work in one pass. Each call farms
+    into its own directory, so a test may call it more than once.
+    """
+    shim_root = Path(tempfile.mkdtemp(prefix=f"path-without-{tool}-", dir=tmp_path))
+    shim_dirs: list[str] = []
+    for i, d in enumerate(os.environ.get("PATH", "").split(os.pathsep)):
+        if not d or not os.path.isdir(d):
+            continue
+        try:
+            entries = [e.name for e in os.scandir(d)]
+        except OSError:
+            continue
+        if tool not in entries:
+            shim_dirs.append(d)
+            continue
+        shim_dir = shim_root / str(i)
+        shim_dir.mkdir()
+        for name in entries:
+            if name == tool:
+                continue
+            try:
+                (shim_dir / name).symlink_to(os.path.join(d, name))
+            except OSError:
+                continue
+        shim_dirs.append(str(shim_dir))
+    return os.pathsep.join(shim_dirs)
 
 
 def run_block(

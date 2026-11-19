@@ -415,15 +415,14 @@ already be correctly isolated (opt-in via `LODE_SMOKE_MODELS=1`, skipped by defa
 ## Appendix A: reproducing this data
 
 ```bash
-. ./venv/bin/activate
 unset ANTHROPIC_API_KEY
 
 # Baseline timings
-pytest -q --durations=0 tests/          # full gate (matches nox -s tests)
-pytest -q -m "not slow" tests/          # fast tier (matches nox -s unit)
+uv run --frozen pytest -q --durations=0 tests/          # full gate (matches nox -s tests)
+uv run --frozen pytest -q -m "not slow" tests/          # fast tier (matches nox -s unit)
 
 # Collection inventory
-pytest --collect-only -q
+uv run --frozen pytest --collect-only -q
 ```
 
 Per-test raw signal extraction (assert/mock counts, LOC span, `proxy_score`) used an ad hoc `ast`-based

@@ -22,7 +22,7 @@ work on lode faster, for humans and agents alike:
 
 | Tool | Why | Notes |
 |---|---|---|
-| **fd** | Fast, gitignore-aware file finding — the `find` counterpart to ripgrep for "list files matching X, excluding `venv/` and `.claude/worktrees/`" sweeps. | Debian/Ubuntu package `fd-find` installs the binary as **`fdfind`**; symlink or alias to `fd` if you want the short name. `apt-get install fd-find` / `brew install fd`. |
+| **fd** | Fast, gitignore-aware file finding — the `find` counterpart to ripgrep for "list files matching X, excluding `.venv/` and `.claude/worktrees/`" sweeps. | Debian/Ubuntu package `fd-find` installs the binary as **`fdfind`**; symlink or alias to `fd` if you want the short name. `apt-get install fd-find` / `brew install fd`. |
 | **sqlite3** (CLI) | Interactive inspection of lode's SQLite stores and the on-demand docs FTS5 index — poke a database directly instead of writing a throwaway Python script. | `apt-get install sqlite3` / bundled with macOS. |
 | **hyperfine** | Statistical benchmarking (warm/cold runs, comparisons) for perf claims — capture latency, retrieval, docs-index rebuild — instead of eyeballing `time`. | `apt-get install hyperfine` / `brew install hyperfine`. |
 
@@ -38,20 +38,21 @@ cd lode
 pyenv install --skip-existing   # optional: match .python-version
 ```
 
-### 2. Build the virtualenv
+### 2. Build the environment
 
-`scripts/python-init.sh` creates `./venv` at the repo root and installs from the
-committed, hash-verified `requirements.lock` by default — the exact, fully-resolved
-runtime dependency set (`pyproject.toml` stays the *intent* layer: ranges/floors, never
-exact versions). See [`docs/stack.md`](stack.md#dependency-locking-lode-g2741) for the
-full split.
+Install [uv](https://docs.astral.sh/uv/). `uv sync` creates `./.venv` at the repo root from
+the committed `uv.lock` — the exact, fully-resolved dependency set, runtime and the `dev`
+dependency group (`pyproject.toml` stays the *intent* layer: ranges/floors, never exact
+versions). See [`docs/stack.md`](stack.md#dependency-locking-lode-g2741) for the full split.
 
 ```bash
-./scripts/python-init.sh
-. ./venv/bin/activate
+uv sync
 ```
 
-Re-activate in every new shell; re-run the script only when dependencies change.
+There is nothing to activate: prefix commands with `uv run --frozen` (`uv run --frozen nox -t
+fix`), which builds or refreshes `./.venv` from the lock on first use and never re-locks. A fresh
+worktree needs no setup step for the same reason. Re-run `uv sync` only to refresh an interactive
+`./.venv` after the lock changes.
 
 #### Updating dependencies
 
@@ -59,7 +60,7 @@ Re-activate in every new shell; re-run the script only when dependencies change.
 never hand-edit it or run a bare `uv pip compile`. It recompiles a candidate lock from
 `pyproject.toml`, prints a readable version diff against the committed lock (names and
 versions only, no hash noise — the diff is the point), then promotes that candidate over
-`requirements.lock` **before** installing it into a freshly rebuilt `./venv` and running
+`requirements.lock` **before** installing it into a freshly rebuilt `./.venv` and running
 the quality gates (`nox -t fix`, `nox -s tests`). Promoting first is deliberate: a test
 that reads the committed lock from disk has to gate against the pins the update is
 introducing, not the ones it is about to replace (`lode-2zi9`). On green the candidate
@@ -69,14 +70,14 @@ On ANY other failure — the candidate install itself (an uninstallable or
 hash-mismatched pin, a yanked release, a network blip) just as much as a red gate — it
 prints a failure report meant to be pasted straight into a bd ticket, then restores
 `requirements.lock` byte-for-byte from the copy it saved before promoting, trashes
-whatever venv state exists and rebuilds `./venv` clean from that restored lock. A failed
+whatever venv state exists and rebuilds `./.venv` clean from that restored lock. A failed
 update always leaves the committed lock back on its pre-update pins — including when the
 script is killed outright mid-gate (a Ctrl-C during the long `nox -s tests`), which an
 EXIT trap covers, so an ungated candidate is never left sitting on disk looking like a
 gated one. The venv rebuild itself is best-effort: it's expected to succeed, but if that rollback rebuild
 also hits a failure (e.g. its own network blip), the script prints a loud warning after
-the report — rather than silently losing the report — and tells you to re-run
-`scripts/python-init.sh` by hand to restore `./venv`.
+the report — rather than silently losing the report — and tells you to run
+`uv sync --locked` by hand to restore `./.venv`.
 
 ```bash
 scripts/update-deps.sh --dry-run          # see what would change; touches nothing
@@ -136,11 +137,13 @@ Dolt is authoritative. Breaking these has silently reverted closed issues here b
 
 ### 4. Confirm the `lode` console script
 
-The editable install puts the `lode` entry point (`lode.cli:app`) on your `PATH`:
+The editable install puts the `lode` entry point (`lode.cli:app`) in `./.venv/bin`, so it runs
+through `uv run --frozen` like everything else (the bare `lode` commands in the rest of these docs
+assume that prefix, or a shell where you have activated `./.venv` yourself):
 
 ```bash
-lode --help        # every listed subcommand is real
-lode version
+uv run --frozen lode --help        # every listed subcommand is real
+uv run --frozen lode version
 ```
 
 The eval harness (`lode.eval.harness.score_golden_set`) is deliberately *not* a
@@ -155,7 +158,7 @@ from HuggingFace, right in the middle of your first `lode work` or `lode ask`.
 Pull them deliberately instead, once:
 
 ```bash
-lode models pull
+uv run --frozen lode models pull
 ```
 
 This warms `$LODE_HOME/models/` (the [model cache directory](configuration.md#paths--locations),
@@ -173,16 +176,16 @@ cache"](storage.md#rebuild-the-vector-cache-after-a-schema-mismatch-crash-lode-2
 
 ### 6. Run the dev loop (nox)
 
-[`noxfile.py`](../noxfile.py) runs **inside the already-built `./venv`**, not an isolated
-env, so activate first. `nox -t fix` and `nox -s tests` are the two entry points REQUIRED
-before any merge (CLAUDE.md) — a narrower claim than "runs by default": a bare `nox`
+[`noxfile.py`](../noxfile.py) runs **inside the already-built `./.venv`**, not an isolated
+env, so run it as `uv run --frozen nox ...`. `nox -t fix` and `nox -s tests` are the two entry
+points REQUIRED before any merge (CLAUDE.md) — a narrower claim than "runs by default": a bare `nox`
 invocation also runs `nox -s shellcheck`, `nox -s linkcheck`, `nox -s docstringcheck`, and
 `nox -s docs` (six sessions total; see [`noxfile.py`](../noxfile.py)'s module docstring for
 what those four check):
 
 ```bash
-nox -t fix         # ruff format + ruff check --fix
-nox -s tests       # FULL suite, no marker filter — must be green before any merge
+uv run --frozen nox -t fix    # ruff format + ruff check --fix
+uv run --frozen nox -s tests  # FULL suite, no marker filter — must be green before any merge
 ```
 
 `nox -s tests` is what `/land` re-runs before trunk; nothing is ever skipped from it. A
@@ -263,7 +266,7 @@ the committed [`.claude/settings.json`](../.claude/settings.json) and arrive wit
 
 ## You're set up when
 
-- `lode --help` prints the subcommand list (venv activated), **and**
+- `lode --help` prints the subcommand list (run as `uv run --frozen lode --help`), **and**
 - `nox -s tests` passes, **and**
 - `bd ready` lists issues, with `git status` clean — no stray `bd init` commit.
 

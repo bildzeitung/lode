@@ -87,7 +87,7 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
 - **bd is the only task tracker.** No TodoWrite, no markdown checklists, no `MEMORY.md`.
 - **Design decisions are doc edits, not notes** — settled facts to `docs/`, open questions to
   `docs/decisions.md`, tunables to `docs/configuration.md`. Look up what a doc says with the lookup
-  index before grepping — `./venv/bin/python scripts/docs_index_query.py "<terms>"` (`lode-t6o1`; see
+  index before grepping — `uv run --frozen python scripts/docs_index_query.py "<terms>"` (`lode-t6o1`; see
   [docs/agents-workflow.md](../../docs/agents-workflow.md#docs-lookup-index-lode-t6o1)).
 - **File a qualifying mistake to MISTAKES.md autonomously — I don't wait to be told.** If the
   technical review turns up a mistake meeting CLAUDE.md directive 9's bar, I append an entry myself,
@@ -233,7 +233,7 @@ rescue ref in my hand-off. The script's `git clean -fd` now runs unconditionally
 an ancestor of `origin/trunk` (e.g. recycled onto a `land/<other-id>` that has since landed) still gets its
 untracked leftovers swept before they can pollute the `git status --short` assertions and the `nox`
 run; full reasoning in the script's own header and [docs/decisions.md](../../docs/decisions.md)
-(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). Exit 127 (missing) or 126 (not
+(`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`). Exit 127 (missing) or 126 (not
 executable) distinguishes a genuinely missing
 or non-executable script (bootstrap gap — report and stop) from the script running and legitimately
 exiting 1 (already reported by the script itself).
@@ -339,18 +339,12 @@ forward push is harmless to catch as drift — hence FORWARD-ONLY is deliberatel
 call site. The two read sites answer different questions with the same predicate; that is intentional
 and not something a future harmonization pass should collapse.
 
-### 3. Build the venv — every review needs its own (no shared build state)
+### 3. The env builds itself — every review has its own (no shared build state)
 
 Unlike the earlier `git -C $WT` architecture, this worktree is **mine**, not the builder's — it never
-has a `venv` left over from the build. Rebuilding it every review is an accepted, known cost of this
-design (`docs/decisions.md`):
-
-```bash
-./scripts/python-init.sh
-```
-
-This builds `./venv` only — it does **not** activate it, and nothing later needs it to: step 5 calls
-the venv's `nox` by explicit path (lode-6874). For a docs-only branch there is no Python gate.
+has an env left over from the build. There is no build step to run: step 5's first `uv run --frozen`
+builds this worktree's own `./.venv` from `uv.lock`, out of uv's cache (lode-s09w.3). For a
+docs-only branch there is no Python gate.
 
 ### 4. Technical review (the whole point)
 
@@ -534,25 +528,26 @@ policy — full fiat: [docs/conventions.md](../../docs/conventions.md)).** As th
 to this file's own rebase-pickup counterpart in `.claude/agents/coding.md`:
 
 ```bash
-./venv/bin/nox -t fix                 # ruff format + lint (fixes in place)
-./venv/bin/nox -s tests               # the tests bucket's FULL view -- not `unit`, the builder's
+uv run --frozen nox -t fix            # ruff format + lint (fixes in place)
+uv run --frozen nox -s tests          # the tests bucket's FULL view -- not `unit`, the builder's
                                        # fast subset; this is the last gate before trunk
-./venv/bin/nox -t everything-else     # shellcheck + linkcheck + docstringcheck + docs
+uv run --frozen nox -t everything-else   # shellcheck + linkcheck + docstringcheck + docs
 ./scripts/validate-mermaid.sh         # only if a docs/ diagram changed
 ```
 
-**Call the venv's `nox` by explicit path — never `. ./venv/bin/activate`, and never a bare `nox`
-command on `$PATH`** (lode-6874). The isolation guard refuses any sourced
-command; `nox` isn't on `PATH` unactivated; and
-`noxfile.py`'s `_venv_tool()` (lode-0yfn) already resolves the tools under `./venv/bin` regardless of
-activation, so lode-jh80 is satisfied without it. A missing venv fails loudly on its own —
-`./venv/bin/nox` exits 127 naming the path; re-run `./scripts/python-init.sh` (step 3) and re-gate.
-On a branch whose base predates lode-0yfn, `-s tests` instead dies with `Program pytest not
-found` (no `_venv_tool()` yet) — run `./venv/bin/pytest` directly for that one, then still run each
-of the other buckets by their own session names — read the current list out of `noxfile.py`'s
-`nox.options.sessions` rather than trusting one written down here.
-**This overrides CLAUDE.md's Python-environment section**, which shows the activation form for a
-human at a terminal — correct there, refused here. Full mechanism:
+**Gate through `uv run --frozen` — never a sourced `activate` script, never a bare `nox` command on
+`$PATH`** (lode-s09w.3, superseding lode-6874's explicit-path rule). `uv run --frozen` builds or
+refreshes this worktree's `./.venv` from `uv.lock` on first use and never re-locks. `uv run` puts
+`./.venv/bin` first on `PATH` and sets `VIRTUAL_ENV`, so my gates run effectively **activated**, the
+same as `/land`'s re-gate and `scripts/land-replay.sh`: that reverses the old unactivated stance
+(lode-xx90), by maintainer decision recorded in `docs/decisions.md`. The isolation guard still
+refuses any sourced command (and any hand-rolled `VIRTUAL_ENV=...`/`PATH=...`), and `uv run --frozen
+nox …` has neither shape. `noxfile.py`'s `_venv_tool()` (lode-0yfn) resolves the tools under the env
+regardless, so lode-jh80 is satisfied. A missing `uv` exits 127 naming the command: a machine
+fault, report it and stop. On a branch whose base predates lode-0yfn, `-s tests` instead dies with
+`Program pytest not found` (no `_venv_tool()` yet) — run `uv run --frozen pytest` directly for that
+one, then still run each of the other buckets by their own session names — read the current list out
+of `noxfile.py`'s `nox.options.sessions` rather than trusting one written down here. Full mechanism:
 [docs/agents-workflow.md](../../docs/agents-workflow.md#gating-from-an-isolated-worktree-lode-6874).
 
 **Run every gate in the FOREGROUND, in the same turn, and read its output before doing
@@ -738,7 +733,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Technical review | correctness = **`/code-review` medium first, then my own reasoning** verifying its findings (lode-1fyb) — no `correctness-review` Workflow runs for me or before me (lode-rlyx removed it from the `/code` path); cleanup = **`/simplify`** (genuinely tool-backed); re-gate, keep last green; escalate only on a clarifying decision or "making it worse" |
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; flag violations |
 | Applying fixes | via **`Edit`/`Write`**, directly — my own worktree, no guard to work around |
-| Gates | blessed bucket tags, ALL THREE (lode-6ldh): `nox -t fix`, `nox -s tests` (full, not the builder's `unit` view), `nox -t everything-else` — never an enumerated `everything-else` session by name, so the gate list can't silently lag `noxfile.py` (lode-vvt1) — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn) — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree needs its own venv every time |
+| Gates | blessed bucket tags, ALL THREE (lode-6ldh): `nox -t fix`, `nox -s tests` (full, not the builder's `unit` view), `nox -t everything-else` — never an enumerated `everything-else` session by name, so the gate list can't silently lag `noxfile.py` (lode-vvt1) — always `uv run --frozen nox …`, effectively activated (lode-s09w.3, superseding lode-6874's explicit-path rule); never a sourced `activate` script (the isolation guard refuses it) or a bare `nox` on `$PATH` — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree builds its own `./.venv` on the first `uv run --frozen` |
 | Clean-tree assertions | `git status --short` empty before re-gating (step 5) and at exit (step 8) (lode-tpt) |
 | My own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
 | Commit trailer | `Co-Authored-By: Claude <model name> <noreply@anthropic.com>` — the model I announced on line 1 |

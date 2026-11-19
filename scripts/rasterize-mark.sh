@@ -6,7 +6,7 @@
 # sign-off, per lode-fhql.12 -- this script only asserts the artifact and
 # the command exist).
 #
-# Uses cairosvg (via a throwaway venv, never the project's own ./venv) so
+# Uses cairosvg (via a throwaway venv, never the project's own ./.venv) so
 # this stays outside pyproject.toml/requirements.lock -- it is a one-off
 # asset-generation tool, not a runtime or dev dependency of lode itself.
 #
@@ -41,12 +41,12 @@ OUT="$REPO/docs/assets/$OUT_STEM-$SIZE.png"
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
 
-python3 -m venv "$WORKDIR/venv"
-"$WORKDIR/venv/bin/pip" install --quiet cairosvg==2.9.0
+python3 -m venv "$WORKDIR/cairo-env"
+"$WORKDIR/cairo-env/bin/pip" install --quiet cairosvg==2.9.0
 
 # Paths go in as argv, not interpolated into the Python source: a repo path
 # containing a quote would otherwise break the string literal.
-"$WORKDIR/venv/bin/python3" -c "
+"$WORKDIR/cairo-env/bin/python3" -c "
 import sys
 import cairosvg
 cairosvg.svg2png(

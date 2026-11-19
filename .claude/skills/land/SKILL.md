@@ -698,7 +698,7 @@ fired there, and the recycled worktree's untracked leftovers survived to trip th
 same `case` precondition. Nothing in Section 4 needed to change for this either; the fix lives
 entirely at the dispatch-time guard, same layer as the rest of this fix. Full reasoning:
 [docs/decisions.md](../../../docs/decisions.md)
-(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`).
+(`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`).
 
 Normally that is the end of this very pass: Section 4 is
 reached even when the accepted set is **empty** (nothing between 2c and 4 exits early on that
@@ -1042,18 +1042,22 @@ special-casing: Section 4's reformat commit is already behind its own `git statu
 check, which a skipped `nox -t fix` leaves clean.
 
 ```bash
-./venv/bin/nox -t fix && ./venv/bin/nox -s tests && ./venv/bin/nox -t everything-else && ./venv/bin/nox -s lock_currency     # if nox -t fix reformats merged code, commit that as part of the merge result
+uv run --frozen nox -t fix && uv run --frozen nox -s tests && uv run --frozen nox -t everything-else && uv run --frozen nox -s lock_currency     # if nox -t fix reformats merged code, commit that as part of the merge result
 ```
 
-**This re-gate runs UNACTIVATED, venv tools by explicit path — the same way the `code-reviewer`
-gates (lode-xx90, parity with lode-6874).** Activation puts `./venv/bin` first on `PATH` and so
-hides any test that spawns a tool by bare name (`python`, `typer`, …): such a test is red under the
-reviewer's unactivated gate but green under an activated one, which let a trunk red slip past the
-last gate before `trunk` (lode-p3ks). Never `. ./venv/bin/activate` in a fence here;
-[`scripts/land-replay.sh`](../../../scripts/land-replay.sh) resolves the venv's `nox` itself.
-Unactivated, `lock_currency`'s `uv` resolves from the ambient `PATH`, never `./venv/bin/uv`
-(deliberate — `noxfile.py`'s `_venv_tool` docstring), so the landing machine needs a `uv` installed
-outside the venv; without one the session exits 2, a machine fault (below).
+**This re-gate runs through `uv run --frozen`, the identical form the `code-reviewer` and
+[`scripts/land-replay.sh`](../../../scripts/land-replay.sh) use (lode-s09w.3).** `uv run` puts
+`./.venv/bin` first on `PATH` and sets `VIRTUAL_ENV`, so every gate runs effectively **activated**.
+That reverses the earlier unactivated stance (lode-xx90, parity with lode-6874), which kept a test
+that spawns a tool by bare name (`python`, `typer`, …) red instead of silently resolving from
+ambient `PATH` (lode-p3ks): the maintainer accepted the reversal, recorded in `docs/decisions.md`,
+and no guard against bare-name launches was added in its place. What matters here is that the
+reviewer's gate, this re-gate and the replay now all invoke the gates the same way, so they cannot
+disagree on one tree. Never source an `activate` script in a fence here. `uv run --frozen` builds
+or refreshes `./.venv` from `uv.lock` on first use. `lock_currency` resolves `uv` itself from the
+ambient `PATH` (deliberate — `noxfile.py`'s `_venv_tool` docstring), and the landing machine
+already needs `uv` to run the gates at all; without one the session exits 127 or 2, a machine
+fault (below).
 
 **`nox -t everything-else` (lode-6ldh, resolving lode-87v7) runs the everything-else bucket
 (`shellcheck`/`linkcheck`/`docstringcheck`/`docs`) against the MERGED batch, not just against each
@@ -1366,7 +1370,7 @@ done
 # classifier hardcodes `trunk`, and lode has exactly one default branch.
 #
 # ONE UNENFORCED COUPLING keeps this sweep reclaiming anything at all: `.gitignore`. A finished
-# worktree is full of untracked build junk (`venv/`, `.nox/`, `__pycache__/`) and reads clean ONLY
+# worktree is full of untracked build junk (`.venv/`, `.nox/`, `__pycache__/`) and reads clean ONLY
 # because those are ignored. Un-ignore one and every worktree reads dirty and the sweep silently
 # reclaims NOTHING. Re-check this whenever `.gitignore` changes.
 scripts/worktree-gc-sweep.sh
