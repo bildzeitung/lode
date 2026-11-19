@@ -58,8 +58,8 @@ def test_importing_module_does_not_import_the_sdk(module: str) -> None:
     rather than about any one caller. Each is imported on paths that never touch
     Anthropic and may have no credentials at all:
 
-    * ``lode.auth`` -- :func:`lode.worker.drain` imports ``AuthError`` from it
-      unconditionally on every drain (its ``except`` header needs the class);
+    * ``lode.auth`` -- :mod:`lode.worker` imports ``AuthError`` from it at module
+      scope (its ``except`` headers need the class), so every drain loads it;
     * ``lode.enrich`` -- :mod:`lode.reconcile` imports ``ENRICH_PROMPT_VER`` from it
       at module level, and ``lode work`` runs a reconcile pass on every invocation;
       and
@@ -68,8 +68,9 @@ def test_importing_module_does_not_import_the_sdk(module: str) -> None:
 
     So a credential-free, embed-only drain (embeds come from the LOCAL fastembed
     model) would otherwise pay the ~0.32s SDK import on every single run to do
-    nothing with it. In ``lode.auth`` and ``lode.enrich`` the SDK is used only in
-    annotations, and the ``import anthropic`` is ``TYPE_CHECKING``-guarded.
+    nothing with it. ``lode.auth`` has no module-level ``import anthropic`` (it is
+    deferred inside ``build_client``), and neither does ``lode.enrich`` (its
+    provider import is deferred inside ``lode.llm_provider``).
 
     Asserting this at the module boundary -- rather than once per known call site --
     is what makes it hold for *future* callers too: a new eager

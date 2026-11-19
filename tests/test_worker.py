@@ -2060,8 +2060,8 @@ def test_drain_embed_only_does_not_import_the_sdk(
     The end-to-end assertion for the whole ticket: embeds come from the LOCAL
     fastembed model, so an unkeyed user draining nothing but embeds must not pay
     the ~0.32s SDK import. ``drain`` reaches Anthropic-adjacent modules two ways --
-    the batch pre-steps' ``lode.enrich`` imports, and its own unconditional
-    ``from lode.auth import AuthError`` -- and this asserts on the SDK itself, so
+    the batch pre-steps' ``lode.enrich`` imports, and the module-scope
+    ``from lode.auth import AuthError`` in ``lode.worker`` -- and this asserts on the SDK itself, so
     it holds no matter which path a regression comes back through. (Asserting only
     ``"lode.enrich" not in sys.modules`` would pass while the SDK was still fully
     imported via ``lode.auth``, which is exactly the gap that shipped once.)
