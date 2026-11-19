@@ -849,16 +849,16 @@ carry the sources). The older decision sections above are left as written at dec
   (the response starts with the tool call), so the enrichment default spends its budget on the
   tool JSON only.
 - **Default effort differs by model:** Opus 5.5 and Haiku 5.5 default to `medium`, Sonnet 5.5 to
-  `high`. `qa_llm` stays unset (`None`) and `enrichment_llm` defaults to `low` (`lode-9xsp`); set `reasoning_effort` to pin a
-  level. `qa_think_harder_llm` is **pinned to `high`** (decided, `lode-9ytb`) to preserve what
-  Opus 5 ran at and to keep it a step up from the default tier; `xhigh` was not chosen (no
-  evidence `high` falls short). A user's `config.toml` override replaces the whole tier as
-  before, so the pin does not carry over: an override naming only `model` (a bare string
-  included, even one restating `claude-opus-5-5`) runs at that model's own API default —
-  restate `reasoning_effort` in the table to keep it. Inheriting it instead would send `effort`
-  to an override model that rejects it. `effort` is valid on Haiku 5.5, so the "effort errors
-  on the enrichment tier" caveats above describe only the old Haiku 4.5 override, not the
-  default.
+  `high`. `qa_llm` stays unset (`None`) and `enrichment_llm` defaults to `low` (`lode-9xsp`); set
+  `reasoning_effort` to pin a level. `qa_think_harder_llm` is **pinned to `high`** (decided,
+  `lode-9ytb`) to preserve what Opus 5 ran at and to keep it a step up from the default tier;
+  `xhigh` was not chosen (no evidence `high` falls short). A user's `config.toml` override
+  replaces the whole tier as before, so the pin does not carry over: an override naming only
+  `model` (a bare string included, even one restating `claude-opus-5-5`) runs at that model's own
+  API default — restate `reasoning_effort` in the table to keep it. Inheriting it instead would
+  send `effort` to an override model that rejects it. `effort` is valid on Haiku 5.5, so the
+  "effort errors on the enrichment tier" caveats above describe only the old Haiku 4.5 override,
+  not the default.
 - **Tokenizer:** Haiku 5.5 and Sonnet 5.5 produce ~30% more tokens than Haiku 4.5 / Sonnet 4.6
   for the same text (Opus 5.5 shares Opus 5's tokenizer). `enrich.MAX_TOKENS` 2048 → 3072 and
   `qa.MAX_TOKENS` 8192 → 10752 (~×1.3). The per-tier `max_tokens` override is unchanged.

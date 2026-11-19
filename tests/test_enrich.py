@@ -1341,7 +1341,7 @@ def test_submit_enrich_batch_max_tokens_override_reaches_the_call(
 def test_enrich_defaults_pin_max_tokens_and_low_effort_on_both_routes(
     conn: sqlite3.Connection, settings: Settings
 ) -> None:
-    """lode-9xsp: the default tier sends 6144 tokens and effort=low on the
+    """lode-9xsp: the cap is 6144 and the default tier sends effort=low on the
     immediate and batch routes, and never a `thinking` kwarg (lode-3dlt).
     """
     assert MAX_TOKENS == 6144
@@ -1352,7 +1352,7 @@ def test_enrich_defaults_pin_max_tokens_and_low_effort_on_both_routes(
     enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
     kwargs = client.messages.create.call_args.kwargs
     assert kwargs["output_config"]["effort"] == "low"
-    assert kwargs["max_tokens"] == 6144
+    assert kwargs["max_tokens"] == MAX_TOKENS
     assert "thinking" not in kwargs
 
     bclient = fake_batch_client(batch_id="batch-low")
@@ -1361,7 +1361,7 @@ def test_enrich_defaults_pin_max_tokens_and_low_effort_on_both_routes(
     )
     (request,) = bclient.beta.messages.batches.create.call_args.kwargs["requests"]
     assert request["params"]["output_config"]["effort"] == "low"
-    assert request["params"]["max_tokens"] == 6144
+    assert request["params"]["max_tokens"] == MAX_TOKENS
     assert "thinking" not in request["params"]
 
 
