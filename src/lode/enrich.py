@@ -121,6 +121,12 @@ _TOOL_NAME = "extract_enrichment"
 #: structured output (``output_config.format``) instead, which is also what
 #: lets the models that 400 on a forced ``tool_choice`` work here (lode-ni7p).
 #:
+#: 6144 (lode-9xsp, lode-ychx ruling) is sized for the default tier's thinking
+#: plus the JSON payload, not for the payload alone: a retry resends the
+#: identical request under the identical cap, so a note that overflows it
+#: retries to dead-letter instead of recovering. The value is a ruling, not a
+#: measurement (lode-qcth).
+#:
 #: **The two routes are bounded differently** -- neither by the Anthropic SDK's
 #: non-streaming timeout guard, which never applies here for the reason
 #: :data:`lode.qa.MAX_TOKENS` documents (it owns that claim; do not restate
@@ -148,7 +154,7 @@ _TOOL_NAME = "extract_enrichment"
 #: :meth:`~lode.llm_provider.ModelTier.resolve_max_tokens`, so the
 #: byte-for-byte equivalence above survives the override. See
 #: ``docs/configuration.md`` "Models" for the decision.
-MAX_TOKENS = 3072
+MAX_TOKENS = 6144
 
 _SYSTEM = (
     "You are a knowledge-extraction assistant. Extract structured information from "

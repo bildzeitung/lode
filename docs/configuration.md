@@ -347,7 +347,7 @@ citation target.
 | Azure OpenAI endpoint (`azure_openai_endpoint`) | runtime | `""` | The resource **root**, e.g. `https://{resource}.openai.azure.com` (`lode-568v.3`) — do **not** append `/openai`; the openai SDK's `AzureOpenAI` client adds that segment itself, so `.../openai` doubles the path and every request 404s. Empty means direct OpenAI (or a non-`"openai"` `llm_provider`). Requires `azure_openai_api_version` to also be set (validated at `Settings` construction). |
 | Azure OpenAI api-version (`azure_openai_api_version`) | runtime | `""` | e.g. `2025-04-01-preview` — sent as a query param on every request, not a header (`lode-568v.3`). Required when `azure_openai_endpoint` is set. |
 | LLM provider credentials | runtime | env/SDK-only | **No key ever lives in `config.toml`** — unlike the Jira/Confluence credentials above, there is no config-file fallback for these. `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` (unchanged) resolve via the Anthropic SDK's own credential chain under the default `llm_provider`; `OPENAI_API_KEY` (direct OpenAI) or `AZURE_OPENAI_API_KEY` (when `azure_openai_endpoint` is set) resolve under `llm_provider = "openai"`. A missing credential raises `AuthError` (Anthropic) or `LLMAuthError` (OpenAI/Azure) with a provider-appropriate message naming the exact env var to set — never a traceback ([stack.md](stack.md#llm-provider-seam-decided-lode-568v1)). |
-| Enrichment LLM (`enrichment_llm`) | runtime | Claude Haiku 5.5 (default provider) | High-volume background extraction. A `(model, reasoning_effort, max_tokens)` `ModelTier` (`lode-568v.2`; `max_tokens` `lode-d70n`) — a bare TOML string still coerces to a `ModelTier` with `reasoning_effort=None` and `max_tokens=None`. `model` is interpreted **against the active `llm_provider`**: an Anthropic model id under the default provider, or an Azure/OpenAI deployment name under `llm_provider = "openai"`. `max_tokens`, when set, overrides [`enrich.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (3072) for both the immediate and batch enrichment calls. Persists into the DB (`annotations`/`edges`) — DB-affecting; the model (and, once non-Anthropic, the provider) is recorded per-row on `annotations.model`/`annotations.provider` and drift is detected from it, never pinned. ([below](#model-provenance-the-enrichment-llm-decided-lode-g2745)) |
+| Enrichment LLM (`enrichment_llm`) | runtime | Claude Haiku 5.5 (default provider) | High-volume background extraction. A `(model, reasoning_effort, max_tokens)` `ModelTier` (`lode-568v.2`; `max_tokens` `lode-d70n`) — the default is `reasoning_effort="low"` (`lode-9xsp`, `lode-ychx` ruling); a bare TOML string, or any tier you set, replaces it wholesale and so sends no effort unless you name one, and `max_tokens` stays `None`. `model` is interpreted **against the active `llm_provider`**: an Anthropic model id under the default provider, or an Azure/OpenAI deployment name under `llm_provider = "openai"`. `max_tokens`, when set, overrides [`enrich.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (6144) for both the immediate and batch enrichment calls. Persists into the DB (`annotations`/`edges`) — DB-affecting; the model (and, once non-Anthropic, the provider) is recorded per-row on `annotations.model`/`annotations.provider` and drift is detected from it, never pinned. ([below](#model-provenance-the-enrichment-llm-decided-lode-g2745)) |
 | Q&A LLM (`qa_llm`) | runtime | Claude Sonnet 5.5 (default provider) | Default interactive synthesis model. A `ModelTier`, same shape as Enrichment LLM — `model` is likewise interpreted against the active `llm_provider` (an Azure/OpenAI deployment name under `llm_provider = "openai"`). `max_tokens`, when set, overrides [`qa.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (10752). Answer-time only, persists nothing — recorded default, no provenance machinery. |
 | Q&A "think harder" (`qa_think_harder_llm`) | runtime | Opus 5.5, `reasoning_effort = high` (toggle, default provider) | Higher-quality, higher-cost synthesis on demand. A `ModelTier`, same provider-relative interpretation as the two knobs above — "think harder" can be a deployment swap, a `reasoning_effort` bump or `max_tokens` override on the same deployment, or any combination (today's Anthropic default is a combination: Sonnet→Opus plus `reasoning_effort = high`). Answer-time only, persists nothing — recorded default, no provenance machinery. |
 | Q&A call timeout (`qa_call_timeout_s`) | runtime | `300s` | Budget for the Q&A synthesis call (`qa.py`, routed through `LLMProvider.run_tool_turns` — `lode-35nu.11.6`), split off `enrich_call_timeout_s` (`lode-wfyx`) — [below](#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx). **Per-RUN, not per-call** (`lode-35nu.11.6`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)): with `tools_enabled=False` (or `ask_tools_enabled=false`, above) a "run" is exactly one call and this is unchanged from before lode-35nu.11.6; with the [Ask tools](#tool-augmented-ask-lode-8hsk--lode-35nu112--lode-8vvp) enabled, this same value bounds the whole free-tool-turns-then-final-answer run, not each turn individually. **Derived from the SDK estimate at decision time; 300s is now backed by a live measurement instead.** Does not reach `enrich.py`'s three call sites — those stay on `enrich_call_timeout_s` (120s) unchanged, and are unaffected by this ticket (still calling `structured_call` directly). The derivation, the measurement, the retained SDK retry-on-timeout it was chosen alongside, and the `ModelTier.max_tokens` override this knob is coupled to are all in the write-up linked above, deliberately not restated here. |
@@ -610,6 +610,18 @@ a known, accepted trade-off, not a follow-up ticket.
 > thinking — and an unset `reasoning_effort` are still the right defaults is an open
 > decision, `lode-ychx`.
 
+> **Update (lode-9xsp, lode-ychx maintainer ruling 2026-11-18) -- supersedes the
+> "constant unchanged" note above by appending:** `enrich.MAX_TOKENS` is now **6144**
+> (3072 was sized for payload headroom, never for default-tier thinking; a heavy
+> note overflowing it retries identically to dead-letter), **and**
+> `enrichment_llm` defaults to `reasoning_effort="low"` (Anthropic's recommended lever
+> for short-output Haiku routes) on both the immediate and batch routes. Both stay
+> runtime-overridable (`enrichment_llm.max_tokens`, `enrichment_llm.reasoning_effort`);
+> a user-set tier replaces the default whole, so it never inherits `low`, and `thinking`
+> is still never sent (`lode-3dlt`). **Measurement was deliberately skipped** for now;
+> the thinking+output token, truncation, latency and empty-`{}` rates on real notes
+> are a deferred follow-up needing maintainer credentials.
+
 `lode-3dlt` named a real but then-unreachable risk on the enrichment
 forced-tool-use branch of `AnthropicProvider.structured_call` (`enrichment_llm`,
 [Models](#models) above): that branch never sends `thinking` at all — a
@@ -837,16 +849,16 @@ carry the sources). The older decision sections above are left as written at dec
   (the response starts with the tool call), so the enrichment default spends its budget on the
   tool JSON only.
 - **Default effort differs by model:** Opus 5.5 and Haiku 5.5 default to `medium`, Sonnet 5.5 to
-  `high`. `enrichment_llm` and `qa_llm` stay unset (`None`); set `reasoning_effort` to pin a
-  level. `qa_think_harder_llm` is **pinned to `high`** (decided, `lode-9ytb`) to preserve what
-  Opus 5 ran at and to keep it a step up from the default tier; `xhigh` was not chosen (no
-  evidence `high` falls short). A user's `config.toml` override replaces the whole tier as
-  before, so the pin does not carry over: an override naming only `model` (a bare string
-  included, even one restating `claude-opus-5-5`) runs at that model's own API default —
-  restate `reasoning_effort` in the table to keep it. Inheriting it instead would send `effort`
-  to an override model that rejects it. `effort` is valid on Haiku 5.5, so the "effort errors
-  on the enrichment tier" caveats above describe only the old Haiku 4.5 override, not the
-  default.
+  `high`. `qa_llm` stays unset (`None`) and `enrichment_llm` defaults to `low` (`lode-9xsp`); set
+  `reasoning_effort` to pin a level. `qa_think_harder_llm` is **pinned to `high`** (decided,
+  `lode-9ytb`) to preserve what Opus 5 ran at and to keep it a step up from the default tier;
+  `xhigh` was not chosen (no evidence `high` falls short). A user's `config.toml` override
+  replaces the whole tier as before, so the pin does not carry over: an override naming only
+  `model` (a bare string included, even one restating `claude-opus-5-5`) runs at that model's own
+  API default — restate `reasoning_effort` in the table to keep it. Inheriting it instead would
+  send `effort` to an override model that rejects it. `effort` is valid on Haiku 5.5, so the
+  "effort errors on the enrichment tier" caveats above describe only the old Haiku 4.5 override,
+  not the default.
 - **Tokenizer:** Haiku 5.5 and Sonnet 5.5 produce ~30% more tokens than Haiku 4.5 / Sonnet 4.6
   for the same text (Opus 5.5 shares Opus 5's tokenizer). `enrich.MAX_TOKENS` 2048 → 3072 and
   `qa.MAX_TOKENS` 8192 → 10752 (~×1.3). The per-tier `max_tokens` override is unchanged.
