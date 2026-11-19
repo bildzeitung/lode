@@ -202,7 +202,7 @@ def test_venv_tool_fails_closed_from_a_foreign_env(
 # prevent.
 _DEV_EXTRA_TOOLS = frozenset({"ruff", "pytest", "shellcheck", "python", "python3"})
 
-# Sessions that shell out to a tool OUTSIDE ./venv on purpose, so the guard
+# Sessions that shell out to a tool OUTSIDE ./.venv on purpose, so the guard
 # below must not apply to them. Keeping this as an explicit set is the
 # mechanism: a future session added to noxfile.py is guarded by default, and
 # exempting it is a deliberate edit here rather than an omission nobody sees.

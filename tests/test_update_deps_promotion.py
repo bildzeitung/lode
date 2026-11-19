@@ -1,7 +1,7 @@
 """Tests for scripts/update-deps.sh's promote-BEFORE-gating order (lode-2zi9).
 
 update-deps.sh used to run its gates (``nox -t fix``, ``nox -s tests``) with the
-CANDIDATE lock installed into ``./.venv`` but the OLD ``uv.lock`` still on
+CANDIDATE lock installed into ``./.venv`` but the OLD committed lock still on
 disk, promoting the candidate over the committed lock only after the gates passed.
 Any test that reads the committed lock from disk (e.g.
 ``tests/test_build_docs_site.py::test_workflow_pins_match_their_sources``) therefore
@@ -130,6 +130,8 @@ def _run_update_deps(
     nox_tests_exit: int = 0,
     install_exit: int = 0,
     signal_parent: bool = False,
+    uv_lock_exit: int = 0,
+    via_bash: bool = False,
     extra_args: tuple[str, ...] = ("--no-file",),
 ) -> subprocess.CompletedProcess[str]:
     env = dict(
@@ -137,9 +139,12 @@ def _run_update_deps(
         NOX_TESTS_EXIT=str(nox_tests_exit),
         INSTALL_EXIT=str(install_exit),
         NOX_TESTS_SIGNAL_PARENT="1" if signal_parent else "0",
+        UV_LOCK_EXIT=str(uv_lock_exit),
     )
+    # via_bash: `bash script` ignores the shebang's -e.
+    prefix = ["bash"] if via_bash else []
     return subprocess.run(
-        [str(repo / "scripts" / "update-deps.sh"), *extra_args],
+        [*prefix, str(repo / "scripts" / "update-deps.sh"), *extra_args],
         cwd=repo,
         env=env,
         capture_output=True,
@@ -269,14 +274,7 @@ def test_failed_uv_lock_exits_nonzero_and_restores_the_lock(tmp_path: Path) -> N
     -- and a lock it half-wrote is restored."""
     repo, bindir = _build_fake_repo(tmp_path)
 
-    result = subprocess.run(
-        ["bash", str(repo / "scripts" / "update-deps.sh"), "--no-file"],
-        cwd=repo,
-        env=dict(fake_bin_env(bindir), UV_LOCK_EXIT="2"),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run_update_deps(repo, bindir, uv_lock_exit=2, via_bash=True)
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert "uv lock failed" in result.stderr

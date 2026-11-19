@@ -216,7 +216,7 @@ if ! rebuild_venv; then
   FAILED_AT="candidate install (rebuild_venv failed partway -- see output above)"
 else
   echo "update-deps.sh: running gates (nox -t fix, nox -s tests)..."
-  # --no-sync: the rebuilt ./.venv already holds the candidate lock.
+  # --no-sync: rebuild_venv just synced ./.venv from this uv.lock; skip a redundant re-sync.
   if ! uv run --frozen --no-sync nox -t fix; then
     FAILED_AT="nox -t fix"
   elif ! uv run --frozen --no-sync nox -s tests; then

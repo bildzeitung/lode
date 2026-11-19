@@ -66,8 +66,8 @@ dep_version_diff_text() {
 # removal ("(none)" on either side), for a multi-version package (a comma in
 # either value: the regex below would compare only its first version), and
 # for any version whose leading major.minor does not parse (an epoch like
-# `1!2.3.4`, a bare `2024` date version) -- everything unrecognized is conservatively NOT patch-only, so it
-# still triggers filing. Regex-over-strings rather than real version ordering
+# `1!2.3.4`, a bare `2024` date version) -- everything unrecognized is
+# conservatively NOT patch-only, so it still triggers filing. Regex-over-strings rather than real version ordering
 # is a deliberate floor: every shape it cannot read falls into the catch-all
 # and files a ticket, so being wrong here can only ever cost noise, never a
 # missed evaluation.
@@ -78,9 +78,9 @@ dep_all_patch_level_only() {
   while IFS=$'\t' read -r name old new; do
     [ -n "$name" ] || continue
     # Bash-native, so this stays fork-free on a lock with a hundred moves.
+    [[ $old == *,* || $new == *,* ]] && return 1
     # A non-match also covers "(none)": additions and removals are never
     # patch-only.
-    [[ $old == *,* || $new == *,* ]] && return 1
     [[ $old =~ ^([0-9]+\.[0-9]+) ]] || return 1
     old_mm="${BASH_REMATCH[1]}"
     [[ $new =~ ^([0-9]+\.[0-9]+) ]] || return 1

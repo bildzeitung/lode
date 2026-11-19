@@ -111,8 +111,7 @@ uv run --frozen python scripts/docs_index_query.py "<terms>"
 - Dev tools are the `dev` dependency group in `pyproject.toml` (a uv default group, so no flag selects it).
 - `pyproject.toml` is the INTENT layer (ranges/floors); `uv.lock` is where exact versions live
   for every `uv sync` / `uv run --frozen`, which never re-locks, and it is the only place they
-  live (the older pip-compile lock is retired, `lode-s09w.4`). `scripts/update-deps.sh` is the sanctioned
-  way to move it; `nox -s lock_currency` (which `/land` runs) is `uv lock --check`.
+  live. `scripts/update-deps.sh` is the sanctioned way to move it; `nox -s lock_currency` (which `/land` runs) is `uv lock --check`.
   Full split: [`docs/stack.md`](docs/stack.md#dependency-locking-lode-g2741) (`lode-g274.1`).
 
 ## Coding conventions

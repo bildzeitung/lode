@@ -183,10 +183,10 @@ _PROJECT_ROOT = Path(__file__).parent.resolve()
 def _venv_bin() -> Path | None:
     """``bin`` dir of the running interpreter's env iff it is the project venv, else ``None``.
 
-    Compares ``sys.prefix`` (resolved) against ``./.venv`` under this
-    file's directory. Any other env -- pipx's nox, a foreign venv (including a
-    legacy ``./venv``), the system
-    interpreter -- yields ``None`` so ``_venv_tool`` fails closed.
+    Compares ``sys.prefix`` (resolved) against ``./.venv`` under this file's
+    directory. Any other env -- pipx's nox, a foreign venv (including a legacy
+    ``./venv``), the system interpreter -- yields ``None`` so ``_venv_tool``
+    fails closed.
     """
     if Path(sys.prefix).resolve() == (_PROJECT_ROOT / ".venv").resolve():
         return Path(sys.prefix) / "bin"
@@ -224,10 +224,9 @@ def _venv_tool(session: nox.Session, name: str) -> str:
     """
     bin_dir = _venv_bin()
     if bin_dir is None:
-        accepted = str(_PROJECT_ROOT / ".venv")
         session.error(
             f"nox is running from {sys.prefix}, which is not the project venv -- "
-            f"expected {accepted} "
+            f"expected {_PROJECT_ROOT / '.venv'} "
             "(run it as `uv run --frozen nox ...`)"
         )
     tool = bin_dir / name
