@@ -1090,6 +1090,12 @@ entries below from being rewritten to chase the current tree.)
   itself. Either requires updating `coding.md`, `code-reviewer.md`, and `land/SKILL.md`'s GC section
   together so the hand-off contract and the GC contract don't drift apart.
 
+  **Update (lode-rapj, 2026-11-19):** the "Revisit trigger" fired, so "No proven problem" and "no
+  observed leak" are stale. The `lode-r78` entry below ("The revisit trigger above fired") records
+  `/land`'s GC missing `land/<id>`-branched worktrees and dangling `land/<id>` refs. Its fix extends
+  the backstop sweep, not the builder's reclaim point, so the "Decision: no change" on the reclaim
+  point stands.
+
 - **The revisit trigger above fired: `/land`'s GC backstop was blind to `land/<id>`-branched
   worktrees, and to dangling local `land/<id>` refs (lode-r78, decided 2026-07-10).** The
   lode-k5e/lode-8k3 architecture change (above) means the reviewer and a rebase pickup each check
@@ -5170,6 +5176,11 @@ entries below from being rewritten to chase the current tree.)
   likely light-background legibility (the current values are chosen for a dark terminal) or an
   accessibility need. At that point the honest first question is whether the answer is a lode
   config at all, or adopting Textual's own theme system across all three surfaces.
+
+  **Update (lode-rapj, 2026-11-19):** the "open" status and the leaning "not yet" are stale. The
+  `lode-5zxt` entry below ("User-configurable colour, revisited") records the maintainer reopening it
+  and settling TUI theming as base-theme-plus-overrides, with the revisit trigger not met; the CLI half
+  followed as `lode-mk9j`. The three reasons above are what that entry answers.
 - **lode keeps `AGENTS.md` — does NOT drop it the way harness-export did (`lode-s9xe.9`,
   2026-08-13).** harness-export's commit `8b444b9` deleted its `template/AGENTS.md` (54 lines) and
   folded the content into `CLAUDE.md`, on the grounds that `CLAUDE.md` is imported into every
@@ -5575,6 +5586,11 @@ entries below from being rewritten to chase the current tree.)
   from lazy/per-command to eager/global in `main()`, and takes the same command down on failure a
   direct `_resolve_settings()` call always did."
 
+  **Update (lode-rapj, 2026-11-19):** the closing sentence, "`status` remains the ONLY command
+  carrying that exemption", is stale. The `lode-jjol` entry below ("`lode theme` added to the `main()`
+  config-optional exemption set") added `theme` to the exemption set, so `status` and `theme` both
+  carry it. The rest of this entry stands.
+
 - **`--help` exempted from `[cli.theme]`'s global settings resolution (`lode-moq7`, follow-on to
   `lode-mk9j`).** The `lode-mk9j` entry above's eager-in-`main()` placement has a corollary it did
   not spell out: Typer's group callback (`main()`) runs *before* Click parses a subcommand's own
@@ -5591,6 +5607,11 @@ entries below from being rewritten to chase the current tree.)
   it. Covered by `tests/test_cli.py::test_subcommand_help_survives_a_malformed_config_file` /
   `_an_unreadable_config_file`, with a control asserting a non-`--help` invocation still fails
   loudly (`test_subcommand_without_help_still_fails_loudly_on_bad_config`).
+
+  **Update (lode-rapj, 2026-11-19):** the sentence "raw argv is the only place left to look" is
+  stale. The `lode-rtcx` entry directly below ("Correction (`lode-rtcx`) to the `lode-moq7` entry
+  above") shows Click's `resolve_command()` receives the subcommand's residual args before `main()`
+  runs, so `_help_requested()` no longer reads `sys.argv`. The rest of this entry stands.
 
 - **Correction (`lode-rtcx`) to the `lode-moq7` entry above's "raw argv is the only place left to
   look" sentence.** That was true of `ctx` alone at the point `main()` runs, but not of Click's
@@ -5758,6 +5779,13 @@ entries below from being rewritten to chase the current tree.)
   so the 158 above does not depend on the change — but the headline number is no longer able to
   silently absorb unconfirmable hits.
 
+  **Update (lode-rapj, 2026-11-19):** the measured figures in this entry are stale: the pinned
+  baseline of 56 index invocations / 118 direct greps (and its "~50% miss"), and the review addendum's
+  25 / 158 re-measure. The 2026-09-14 `lode-dozi` entry below ("CORRECTION to the two entries above")
+  drops the 56 / 118 pin, reassigns the miss rate to `docs_index_log.py stats`, and supersedes 25 / 158.
+  Its "two entries above" are this entry's body and its own "Technical-review addendum", which share
+  this one bullet. The `lode-61w6` marker above covers a different claim.
+
 - **2026-09-14 (`lode-dozi`) — CORRECTION to the two entries above: the tightened classifier, and
   the transcript depth those earlier numbers were measured at.** Appended, not rewritten in place,
   per this file's preamble. The `/land` escalation the entry above records was resolved by a human
@@ -5826,6 +5854,12 @@ entries below from being rewritten to chase the current tree.)
   lead-in reads "CORRECTION to the two entries above"), but its date-first lead-in is not the
   Update lead-in shape, so the preamble's grep missed it. This line makes it findable; the lead-in
   itself stays as committed.
+
+  **Update (lode-rapj, 2026-11-19):** the baseline figure here is stale: "142 index / 431 direct"
+  (and the `main: index=26 direct=59` split) was measured with the pre-segment classifier. The
+  `lode-wtk2` entry below ("CORRECTION: `_classify` now judges Bash SEGMENTS") re-measures it as
+  224 / 438. The `lode-4eyp` marker above says only that this entry is a correction, not that it was
+  itself corrected.
 
 - **2026-09-14 (`lode-wtk2`) — CORRECTION: `_classify` now judges Bash SEGMENTS, not
   whole lines, and the baseline figure above is re-measured.** Appended, not rewritten in place, per
