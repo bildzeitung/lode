@@ -1338,6 +1338,52 @@ def test_submit_enrich_batch_max_tokens_override_reaches_the_call(
     assert request["params"]["max_tokens"] == 555
 
 
+def test_enrich_defaults_pin_max_tokens_and_low_effort_on_both_routes(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """lode-9xsp: the cap is 6144 and the default tier sends effort=low on the
+    immediate and batch routes, and never a `thinking` kwarg (lode-3dlt).
+    """
+    assert MAX_TOKENS == 6144
+    _insert_note(conn)
+    job_id = _insert_enrich_job(conn)
+
+    client = _fake_client(EnrichmentResult())
+    enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
+    kwargs = client.messages.create.call_args.kwargs
+    assert kwargs["output_config"]["effort"] == "low"
+    assert kwargs["max_tokens"] == MAX_TOKENS
+    assert "thinking" not in kwargs
+
+    bclient = fake_batch_client(batch_id="batch-low")
+    submit_enrich_batch(
+        conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(bclient)
+    )
+    (request,) = bclient.beta.messages.batches.create.call_args.kwargs["requests"]
+    assert request["params"]["output_config"]["effort"] == "low"
+    assert request["params"]["max_tokens"] == MAX_TOKENS
+    assert "thinking" not in request["params"]
+
+
+def test_enrich_explicit_tier_replaces_the_low_default(
+    conn: sqlite3.Connection,
+) -> None:
+    """lode-9xsp: a user-set tier wins wholesale -- no inherited low effort."""
+    _insert_note(conn)
+    settings = Settings(enrichment_llm=ModelTier(model="claude-haiku-4-5"))
+    client = _fake_client(EnrichmentResult())
+    enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
+    kwargs = client.messages.create.call_args.kwargs
+    assert "effort" not in kwargs.get("output_config", {})
+
+    settings = Settings(
+        enrichment_llm=ModelTier(model="claude-haiku-5-5", reasoning_effort="high")
+    )
+    client = _fake_client(EnrichmentResult())
+    enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
+    assert client.messages.create.call_args.kwargs["output_config"]["effort"] == "high"
+
+
 def test_submit_enrich_batch_stores_batch_handle(
     conn: sqlite3.Connection, settings: Settings
 ) -> None:
