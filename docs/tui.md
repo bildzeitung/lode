@@ -507,3 +507,15 @@ end, so its stage updates and its answer arrive for a screen that is gone and ar
 pipeline failure that arrives after the escape is still logged with its traceback; it raises no
 toast. The installed corpus-wide screen is not removed by Escape, so an answer that arrives while
 it is popped is kept and shown when the screen is reopened.
+
+Quitting the app mid-ask is handled the same way (`lode-dgmf`). Textual cannot preempt the worker
+thread, so `run_ask` keeps going after the app has shut down, and its next stage hop raises
+`RuntimeError("App is not running")` from `call_from_thread`. That raise is deliberately left to
+propagate: it is what ends `run_ask` early after a quit. The worker's catch returns without
+logging when the app is no longer running (the ticket's option (a)). The final `_finish`/`_fail`
+hop raises the same error after a quit and is left unguarded: Textual cancels every worker at
+shutdown, before `call_from_thread` can raise, and a cancelled worker's exception is discarded, so
+it writes no record. The cost is that a real pipeline failure arriving after the quit is not
+logged; the process is exiting. A failure while the app is running is unchanged: logged with its
+traceback, and toasted. The test drives a real `run_async`, because the pilot's `run_test` still
+delivers the hop after its context exits and does not reproduce this.

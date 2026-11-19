@@ -239,9 +239,17 @@ class AskScreen(Screen[None]):
                 result, context_chars=app.settings.ask_context_chars
             )
         except Exception as err:
+            if not app.is_running:
+                # Quit mid-flight: ``_on_stage``'s hop raising "App is not
+                # running" is what ends ``run_ask``, and it is not a failure.
+                # A real failure caught after the quit cannot be told apart
+                # by app state and goes unlogged with it (``docs/tui.md``).
+                return
             log.exception("ask failed")
             app.call_from_thread(self._fail, generation, str(err) or type(err).__name__)
             return
+        # After a quit this hop raises too. Textual cancelled the worker at
+        # shutdown, so the raise is discarded: no log record, no app error.
         app.call_from_thread(self._finish, generation, rendered, result)
 
     def _is_stale(self, generation: int) -> bool:

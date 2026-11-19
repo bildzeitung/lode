@@ -1365,3 +1365,58 @@ def test_a_real_failure_after_escaping_a_note_scoped_ask_is_logged_not_toasted(
     assert [r.exc_info[1] for r in caplog.records if r.exc_info] == [error]
     assert running
     assert toasts == []
+
+
+@pytest.mark.parametrize("note_id", ["note-a", None])
+def test_quitting_the_app_mid_ask_logs_no_ask_failed_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    note_id: str | None,
+) -> None:
+    """Quit while ``run_ask`` is blocked, then let it make a stage hop.
+
+    Drives a real ``run_async``: the pilot's ``run_test`` still delivers the
+    hop after its context exits, so nothing is raised there. No settle is
+    needed before the assertion: the worker runs on the loop's default
+    executor, and ``asyncio.run`` joins that executor's threads before it
+    returns, so ``_ask`` has finished by then.
+    """
+    app = LodeApp(db_path=tmp_path / "lode.db")
+    blocked = threading.Event()
+    release = threading.Event()
+    hop_errors: list[RuntimeError] = []
+
+    def _stub_run_ask(db_path, question, *, on_stage=None, **kwargs):
+        blocked.set()
+        release.wait(timeout=5)
+        try:
+            on_stage("synthesizing")
+        except RuntimeError as err:
+            hop_errors.append(err)
+            raise
+        return _canned_answer()
+
+    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _stub_run_ask)
+
+    async def _auto(pilot) -> None:
+        if note_id is None:
+            app.push_screen("ask")
+        else:
+            await app.push_screen(AskScreen(note_id=note_id))
+        await pilot.pause()
+        app.screen.query_one(f"#{QUESTION_ID}", Input).value = "why?"
+        await pilot.press("enter")
+        await _wait_until(blocked.is_set, "run_ask is blocked")
+        app.exit()
+
+    async def _drive() -> None:
+        await app.run_async(headless=True, auto_pilot=_auto)
+        release.set()
+
+    with caplog.at_level("ERROR", logger="lode.tui.screens.ask"):
+        asyncio.run(_drive())
+
+    # The quit is what the worker hit, not a vacuous pass on a hop that landed.
+    assert [str(err) for err in hop_errors] == ["App is not running"]
+    assert [r for r in caplog.records if r.name == "lode.tui.screens.ask"] == []
