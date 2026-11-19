@@ -810,7 +810,8 @@ The script derives the suffix from this launch worktree's own directory name (lo
 I run no separate `git fetch` before it), and takes the tip from `FETCH_HEAD`'s own `land/<id>` line,
 not from whichever ref the fetch listed first; a nonzero exit is a stop (1 = cwd is not a
 `.claude/worktrees/` launch worktree, 2 = a broken call, 3 = `FETCH_HEAD` has no `land/<id>` entry
-after a successful fetch, 4 = the fetch failed). On exit 4 git's own error is printed above the
+after a successful fetch, 4 = the fetch failed, 5 = `git checkout -B` refused, which is not an
+isolation failure). On exit 4 git's own error is printed above the
 script's and nothing was checked out, so when that error is transient (e.g. a network failure) I
 re-run the script once before treating it as a stop.
 

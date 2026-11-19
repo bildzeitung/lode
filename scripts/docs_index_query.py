@@ -40,6 +40,8 @@ from typing import Annotated
 
 import typer
 
+from lode.fence_parsing import fence_flags
+
 app = typer.Typer(add_completion=False)
 
 #: Chunker doc-class tags, in the order they're documented (docs/decisions.md,
@@ -176,6 +178,47 @@ def _snippet(body: str) -> str:
     return flat[:_SNIPPET_CHARS].rstrip() + "..."
 
 
+#: The fixed lead-in docs/decisions.md's preamble gives every correction marker.
+_UPDATE_MARKER = "**Update ("
+
+
+def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
+    """Line numbers of the ``**Update (`` markers in the entry a hit belongs to,
+    when that hit is only one chunk of a hard-split entry; otherwise ``[]``.
+
+    The chunker hard-splits a top-level ``- `` entry over ``MAX_UNIT_BYTES``
+    into several units, so a marker appended at the entry's end can sit in a
+    different unit from the stale claim a query matched (``lode-funp``). The
+    chunker's tiling invariant forbids copying the marker into each sub-unit,
+    so the pointers are derived here at output time instead.
+
+    The entry is the block between the structural lines (any heading, any
+    top-level bullet) on either side of the hit. Only a paragraph-split piece
+    lies strictly inside such a block: every other unit starts on a structural
+    line (or on line 1) and runs at least as far as the next. That holds
+    whichever rule produced the unit, so it needs no assumption about the file
+    -- ``decisions.md`` itself opens with an H1 title and reaches its bullets
+    through the heading unit's hard-split.
+    """
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    flags = fence_flags(lines)
+    is_structural_line = _build._chunker.is_structural_line
+    boundaries = [
+        i + 1
+        for i, line in enumerate(lines)
+        if not flags[i] and is_structural_line(line)
+    ]
+    entry_lo = max((b for b in boundaries if b <= line_lo), default=1)
+    entry_hi = next((b - 1 for b in boundaries if b > line_lo), len(lines))
+    if line_hi > entry_hi or (entry_lo, entry_hi) == (line_lo, line_hi):
+        return []
+    return [
+        n
+        for n in range(entry_lo, entry_hi + 1)
+        if not flags[n - 1] and _UPDATE_MARKER in lines[n - 1]
+    ]
+
+
 def query(
     raw_query: str,
     doc_class: str | None = None,
@@ -221,8 +264,9 @@ def query(
         "of docs/.\n\nRun this when you need the passage that settles a "
         "question -- a decision id, a term, a phrase. It prints ranked "
         "pointers (path:line_lo-line_hi), each with the unit's first line and "
-        "a short snippet, and nothing else: read the cited range yourself. It "
-        "never prints a whole unit and never writes prose of its own.\n\nThe "
+        "a short snippet; read the cited range yourself. A hit in an entry "
+        "split across chunks also gets a NOTE naming the lines of that "
+        "entry's Update markers; read those too.\n\nThe "
         "index is rebuilt from docs/ on every run, so results are never "
         "stale.\n\nWhen nothing matches every term at once, it retries "
         "matching ANY term and marks those rows as an OR-match fallback."
@@ -273,6 +317,14 @@ def main(
             marker = " [fallback: OR match]" if used_fallback else ""
             print(f"{path}:{line_lo}-{line_hi}{marker}  {first_line}")
             print(f"    {snippet}")
+            markers = split_entry_markers(path, line_lo, line_hi)
+            if markers:
+                where = ", ".join(str(n) for n in markers)
+                print(
+                    f"    NOTE: this chunk is part of a split entry that carries "
+                    f"Update markers at line {where} -- they may correct "
+                    f"claims shown here; read them."
+                )
     else:
         print("No results.")
 

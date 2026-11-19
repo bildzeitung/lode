@@ -869,13 +869,15 @@ class Settings(BaseModel):
         gt=0.0,
     )
     enrichment_llm: ModelTier = _knob(
-        ModelTier(model="claude-haiku-5-5"),
+        ModelTier(model="claude-haiku-5-5", reasoning_effort="low"),
         Kind.RUNTIME,
-        "High-volume background extraction LLM (Claude Haiku 5.5). A "
+        "High-volume background extraction LLM (Claude Haiku 5.5, "
+        "reasoning_effort defaulted to low -- lode-ychx). A "
         "(model, reasoning_effort, max_tokens) tier (lode-568v.2; max_tokens "
-        "lode-d70n) -- a bare TOML string still coerces to a ModelTier with "
-        "reasoning_effort=None and max_tokens=None (falls back to "
-        "enrich.MAX_TOKENS).",
+        "lode-d70n) -- any tier you set replaces the default whole, a bare "
+        "TOML string included: it coerces to a ModelTier with "
+        "reasoning_effort=None (no effort is sent unless you name one) and "
+        "max_tokens=None (falls back to enrich.MAX_TOKENS).",
     )
     qa_llm: ModelTier = _knob(
         ModelTier(model="claude-sonnet-5-5"),

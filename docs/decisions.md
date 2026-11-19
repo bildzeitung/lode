@@ -20,6 +20,14 @@ while erasing it here would lose the record of what was believed, and when. The 
 gated by [`tests/test_decisions_supersession_markers.py`](../tests/test_decisions_supersession_markers.py);
 what that gate cannot catch is recorded in its module docstring (lode-nlk6).
 
+**A correction always APPENDS a marker to the entry it corrects (`lode-llxw`, 2026-11-18, maintainer).**
+The first paragraph's "a new entry, or a marker appended to the existing one" does not make the new
+entry enough on its own: an agent reads this file one top-level entry at a time, so a correction that
+lives only in a new entry leaves the stale entry retrievable with no warning. Whichever form carries
+the correction, the corrected entry gets an appended `**Update (<id>[, <date>])` marker. The new
+entry that does the correcting is not itself a marker, and its head is free: it need not open with
+the Update lead-in.
+
 **This file is out of scope for pointer sweeps, by construction (`lode-1dmu`, 2026-08-08).** A
 mechanical sweep that repoints every reference to a file/symbol that moved or was renamed (e.g. the
 pre-split monolithic CLI module's later break-up into a package) must skip this file. Every entry
@@ -241,6 +249,8 @@ entries below from being rewritten to chase the current tree.)
   or a retrieval/answerer knob change. The set intentionally stays small (~20–50 items, current: 25
   answerable + 8 abstain) so it remains fully hand-auditable; it is a regression harness for the
   tuning knobs (rerank, entailment threshold, chunk size), not a statistically powered benchmark.
+  **Update (`lode-887o`, 2026-08-14):** "`nox -s tests` applies no marker filter by design" above is
+  stale. It applies two, which between them still run every test. See the `lode-887o` entry below.
 - **Rerank model + threshold tuning.** The rerank *stage* ships in v1 ([retrieval.md](retrieval.md))
   with a default local cross-encoder behind a toggle; choosing/tuning the model and cutoffs — and
   A/B'ing rerank vs none — waits until there's a real corpus to evaluate against. Don't tune
@@ -1602,6 +1612,9 @@ entries below from being rewritten to chase the current tree.)
   descriptions of what the old, deleted loop did). The worktree-must-not-be-removed-by-its-builder
   invariant, and `/land`'s backstop-sweep-reclaims-it-on-a-clean-land invariant, are both **unchanged**
   — this ticket only removes a write nobody was reading, not any part of the reclaim mechanism itself.
+  **Update (`lode-8n4k`, 2026-08-08):** this entry says twice that the code-reviewer checks out
+  `review_head`. It checks out `origin/land/<id>` and only compares `review_head` for drift. See the
+  `lode-8n4k` entry below.
 
 - **`jq` is a hard prerequisite, and both `PreToolUse(Bash)` jq-shelling guards now FAIL CLOSED
   when it is missing, rather than silently falling through (lode-oii9).** `jq` was never documented
@@ -2238,6 +2251,8 @@ entries below from being rewritten to chase the current tree.)
   Documented in [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate),
   [`land-review.md`](../.claude/agents/land-review.md#how-to-use-me), and
   [agents-workflow.md — Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
+  **Update (`lode-nt98`, `lode-qv5t`, 2026-07-20):** the "HEAD never diverges" / "no dedicated code" claim
+  above is falsified for the worktree-GC path. See the `lode-nt98`/`lode-qv5t` entry below.
 - **`land-review` moves from a skill to a dedicated agent definition, carrying `isolation: worktree`
   in its own frontmatter (lode-kt6g / lode-c6ir, 2026-07-20).** lode-kt6g asked a narrow question left
   open by lode-g387 (above): every agent dispatch in the repo that needs `isolation: "worktree"` has
@@ -4284,6 +4299,8 @@ entries below from being rewritten to chase the current tree.)
     [agents-workflow.md](agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc),
     [`scripts/trunk-write-guard.sh`](../scripts/trunk-write-guard.sh),
     `tests/test_trunk_write_guard.py`.
+  **Update (`lode-5ido`, 2026-08-08):** RULING 1's premise is stale (the `PreToolUse` payload now carries
+  `agent_id`/`agent_type`) but its conclusion stands. See the `lode-5ido` entry below.
 
 - **2026-08-08 — DECIDED (maintainer, `lode-3dh1`): `run_tool_turns`' `max_tokens` stays per-TURN,
   not per-run; total spend is bounded by `max_tool_turns` instead.** `lode-35nu.11.6`'s acceptance
@@ -5973,6 +5990,8 @@ entries below from being rewritten to chase the current tree.)
     compatibility wrappers.**
   - **`lode-sys4`'s derive-the-target-interpreter-from-`.python-version` machinery is superseded:** uv
     reads `.python-version` natively, so nothing needs to pass `--python-version` by hand.
+  **Update (`lode-5x01`, 2026-11-16):** the "`venv-install`" in this entry's `python-init.sh` bullet is
+  `scripts/venv-install.sh`. Wording only; see the `lode-5x01` entry below.
 
 - **Code-reviewer runs `/code-review` medium as well as its hand pass (`lode-1fyb`, decided
   2026-11-16, maintainer decision; implemented by `lode-bldq`).** Resolves the open decision carried by
@@ -6083,6 +6102,16 @@ entries below from being rewritten to chase the current tree.)
   own history ("**Correction, verified empirically on bash 5.2:**") stays green. Accepted miss: a
   backwards correction with prose between the keyword and its id. That miss and the gate's other
   limits are listed in the test module's docstring.
+  **Update (`lode-llxw`, 2026-11-18, maintainer):** REVERSED. The maintainer first confirmed this
+  call and then reversed it the same day. A new correcting entry is NOT a marker and its head is
+  free; what is mandatory is an Update marker appended to each entry being corrected (the preamble
+  states the rule). The decision above that "a new correcting entry needs the Update lead-in too"
+  is withdrawn, and with it the gate's date-first-head pattern and its `lode-dozi` and `lode-wtk2`
+  allowlist entries. The three Update pointers `lode-4eyp` appended, to the `lode-rtcx` entry and
+  the two CORRECTION entries, stay. `lode-llxw` also appended, on 2026-11-18, an Update pointer to
+  each entry corrected by an Update-headed entry: the `lode-g387`, `lode-p8zl`, `lode-2m89` and
+  `lode-s09w` entries, and the eval-harness entry (for `lode-887o`). Each carries the correcting
+  ticket's id and date, not this one's.
 
 - **The builder does not assert the harness lock is present; the residual is accepted (`lode-gro8`,
   2026-11-17).** After `lode-t76f` the only cover for the pre-first-commit window (`lode-oqr`) is the
@@ -6166,6 +6195,26 @@ entries below from being rewritten to chase the current tree.)
   - **Not established.** Refusal frequency on real notes was never measured, and the
     dead -> re-enqueue loop was confirmed by reading `reconcile._enrich_gap_step`, not
     reproduced end to end. Implementation: `lode-g9q3`.
+  - **Update (lode-g9q3, 2026-11-18, maintainer rulings on the technical review):** the entry
+    above left two gaps, settled in the entry "Enrichment refusal: provider scope and recovery
+    after a model change" at the end of this file. Decision (2)'s re-open condition is widened
+    to include `enrichment_llm`, and OpenAI/Azure refusals are in the terminal class.
+
+- **Enrichment refusal: provider scope and recovery after a model change (`lode-g9q3`,
+  2026-11-18, maintainer; rulings on the `lode-ahme` technical review's notes 1 and 4).**
+  - **Provider scope.** "Model refuses to enrich" is one error class with model- and
+    provider-distinct ways of exposing it. The structured refusal signal on `LLMProviderError`
+    (`refusal`, `refusal_category`) is provider-neutral and every provider maps its own refusal
+    shape onto it: Anthropic `stop_reason='refusal'` with its category, and OpenAI/Azure's
+    refusal raised in `OpenAIProvider._extract_json_payload` with the category absent.
+    OpenAI/Azure refusals are therefore in the terminal class: dead on first refusal, no
+    reconcile re-enqueue.
+  - **Recovery after a model change.** A change of `enrichment_llm` re-opens refused items.
+    The enrichment model is stored alongside the prompt version at refusal time
+    (`jobs.refusal_model`, `jobs.prompt_ver`), and a refusal-dead enrich job is a gap again when
+    the head version, `ENRICH_PROMPT_VER`, or the configured enrichment model differs from what
+    was stored. No manual-override command.
+  - **Built in** `lode-g9q3`; reflected in `docs/storage.md`'s failure taxonomy.
 
 - **A finished builder's leftover harness lock is accepted until the session ends; no release
   mechanism is built (`lode-lo0q`, 2026-11-18, maintainer ruling).** After `lode-t76f` the builder
@@ -6268,3 +6317,28 @@ entries below from being rewritten to chase the current tree.)
     `uv sync` once to create `./.venv`; the old `./venv` may be removed only after every session
     started before the cutover is closed, since those sessions still hold the old `./venv/bin/...`
     text.
+- **A docs-index hit in a hard-split `decisions.md` entry now names the entry's Update markers
+  (`lode-funp`).** The chunker hard-splits a top-level entry over `MAX_UNIT_BYTES` (16384 bytes) at
+  blank-line paragraph boundaries, so an Update marker appended at the end of such an entry can sit
+  in a different unit from the stale claim a query matched, and the reader who reads only that range
+  sees the claim with no correction.
+  - **Measured (2026-11-18).** Of 145 entries in `docs/decisions.md`, 2 exceed the limit: the
+    review-architecture entry from line 389 (57,686 bytes, 21 markers) and the `/land` worktree GC
+    entry from line 1351 (19,992 bytes, 1 marker). The problem was real, not a guard-only case.
+  - **Decided (builder's pick, option (b) of the ticket; the measurement made it plain).**
+    `scripts/docs_index_query.py` prints, under any hit that is one chunk of a split entry, a `NOTE`
+    line listing every marker line number in the entry. The note is derived at output time from the
+    file, so the chunker's tiling invariant (units gapless and non-overlapping, body equal to the
+    line range) is untouched. The entry is found as the block between the structural lines (any
+    heading, any top-level bullet) either side of the hit, and a hit is a split piece when it lies
+    strictly inside that block; the test makes no assumption about how the file is chunked.
+  - **Corrected at technical review, before landing.** As built, the lookup returned nothing for any
+    file with an ATX heading, on the premise that `decisions.md` has none and is chunked at bullets
+    directly. It has one — the H1 title on line 1 — and reaches its bullets through the heading
+    unit's hard-split, so the note never printed for the one file it was written for; the fixtures
+    had no title line and passed. The same premise stood in the chunker's module docstring, now
+    corrected. The built version also listed only the first eight markers, which on the line-389
+    entry left the thirteen newest unlocatable. A test now runs the lookup over the real file.
+  - **Not taken.** (a) copying markers into sub-units breaks the tiling invariant; (c) an authoring
+    rule would not cover the existing markers and rests on the author knowing the entry is
+    oversized; (d) cannot know which paragraph a marker corrects.

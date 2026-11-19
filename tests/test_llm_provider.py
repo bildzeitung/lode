@@ -39,6 +39,7 @@ from lode.config import Settings
 from lode.llm_provider import (
     _ANTHROPIC_EFFORT_LEVELS,
     _BUDGET_EXHAUSTED_HINT,
+    _CONTEXT_WINDOW_EXCEEDED_HINT,
     _OPENAI_EFFORT_LEVELS,
     AnthropicProvider,
     BatchRequest,
@@ -1649,9 +1650,12 @@ def test_structured_call_names_a_refusal_whose_text_is_truncated() -> None:
 
 
 def test_structured_call_names_a_refusal_with_no_text_block() -> None:
-    message = str(_structured_call_with(_refused_response(text=None)))
+    error = _structured_call_with(_refused_response(text=None))
 
-    _assert_refusal_hint(message)
+    _assert_refusal_hint(str(error))
+    # lode-g9q3: the structured signal callers branch on, never the message.
+    assert error.refusal is True
+    assert error.refusal_category == "cyber"
 
 
 def test_run_tool_turns_final_turn_names_a_refusal() -> None:
@@ -1713,6 +1717,8 @@ def test_collect_batch_names_a_refusal_on_a_succeeded_result(
     assert result.outcome == "errored"
     assert "no text block" in str(result.error)
     _assert_refusal_hint(str(result.error), category=category)
+    assert result.error.refusal is True
+    assert result.error.refusal_category == category
 
 
 def test_structured_refusal_whose_text_validates_is_not_returned() -> None:
@@ -1720,10 +1726,13 @@ def test_structured_refusal_whose_text_validates_is_not_returned() -> None:
     # discarded.
     response = _refused_response(text=_Widget(name="w").model_dump_json())
 
-    message = str(_structured_call_with(response))
+    error = _structured_call_with(response)
+    message = str(error)
 
     assert "partial content discarded" in message
     _assert_refusal_hint(message)
+    assert error.refusal is True
+    assert error.refusal_category == "cyber"
 
 
 @pytest.mark.parametrize("partial_tool_use", [True, False], ids=["tool-use", "empty"])
@@ -1762,12 +1771,21 @@ def test_run_tool_turns_refused_free_turn_raises_without_running_tools(
     _assert_refusal_hint(str(excinfo.value))
 
 
-def test_run_tool_turns_max_tokens_free_turn_raises_without_running_tools() -> None:
+@pytest.mark.parametrize(
+    ("stop_reason", "hint"),
+    [
+        ("max_tokens", _BUDGET_EXHAUSTED_HINT),
+        ("model_context_window_exceeded", _CONTEXT_WINDOW_EXCEEDED_HINT),
+    ],
+)
+def test_run_tool_turns_cut_off_free_turn_raises_without_running_tools(
+    stop_reason: str, hint: str
+) -> None:
     tool = ToolSpec(
         name="lookup_widget", description="Look up a widget.", input_schema={}
     )
     truncated = _tool_use_response("lookup_widget", {})
-    truncated.stop_reason = "max_tokens"
+    truncated.stop_reason = stop_reason
     client = mock.MagicMock()
     client.messages.create.side_effect = [truncated]
     ran: list[str] = []
@@ -1789,9 +1807,8 @@ def test_run_tool_turns_max_tokens_free_turn_raises_without_running_tools() -> N
     assert ran == []
     # The one free turn only: no final structured-output turn was attempted.
     assert client.messages.create.call_count == 1
-    client.messages.parse.assert_not_called()
-    assert "stop_reason='max_tokens'" in str(excinfo.value)
-    assert _BUDGET_EXHAUSTED_HINT in str(excinfo.value)
+    assert f"stop_reason={stop_reason!r}" in str(excinfo.value)
+    assert hint in str(excinfo.value)
 
 
 @pytest.mark.network
@@ -2054,7 +2071,7 @@ def test_openai_structured_call_raises_on_refusal() -> None:
     client = _fake_responses_client(output_text="", output=[refusal_item])
     provider = OpenAIProvider(client)
 
-    with pytest.raises(LLMProviderError, match="refused"):
+    with pytest.raises(LLMProviderError, match="refused") as excinfo:
         provider.structured_call(
             model="m",
             reasoning_effort=None,
@@ -2064,6 +2081,35 @@ def test_openai_structured_call_raises_on_refusal() -> None:
             max_tokens=10,
             timeout_s=1.0,
         )
+    # lode-g9q3: the provider-neutral structured signal, category absent.
+    assert excinfo.value.refusal is True
+    assert excinfo.value.refusal_category is None
+
+
+def test_openai_batch_refusal_survives_the_serialize_roundtrip() -> None:
+    refusal_item = SimpleNamespace(
+        type="message",
+        content=[SimpleNamespace(type="refusal", refusal="cannot help with that")],
+    )
+    provider = OpenAIProvider(
+        _fake_responses_client(output_text="", output=[refusal_item])
+    )
+
+    handle = provider.submit_batch([_batch_request()], timeout_s=1.0)
+    _, results = provider.collect_batch(handle, timeout_s=1.0)
+
+    (result,) = results
+    assert result.outcome == "errored"
+    assert result.error.refusal is True
+
+
+def test_openai_non_refusal_failure_is_not_marked_refusal() -> None:
+    provider = OpenAIProvider(_fake_responses_client(output_text=""))
+
+    handle = provider.submit_batch([_batch_request()], timeout_s=1.0)
+    _, results = provider.collect_batch(handle, timeout_s=1.0)
+
+    assert results[0].error.refusal is False
 
 
 def test_openai_structured_call_raises_on_no_text_output() -> None:

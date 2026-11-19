@@ -247,6 +247,12 @@ class LLMProviderError(RuntimeError):
 
     Chain the underlying SDK exception via ``raise ... from exc`` so
     ``__cause__`` still exposes it for debugging.
+
+    ``refusal`` is the provider-neutral structured signal that the model
+    declined the request (lode-g9q3): every provider maps its own refusal shape
+    onto it, so callers never string-match the message. ``refusal_category`` is
+    the provider's refusal category when it supplied one (Anthropic's
+    ``stop_details.category``), else None.
     """
 
     def __init__(
@@ -256,11 +262,15 @@ class LLMProviderError(RuntimeError):
         provider: str,
         status_code: int | None = None,
         request_id: str | None = None,
+        refusal: bool = False,
+        refusal_category: str | None = None,
     ) -> None:
         super().__init__(message)
         self.provider = provider
         self.status_code = status_code
         self.request_id = request_id
+        self.refusal = refusal
+        self.refusal_category = refusal_category
 
 
 class LLMAuthError(LLMProviderError):
@@ -500,6 +510,29 @@ _CONTEXT_WINDOW_EXCEEDED_HINT = (
 )
 
 
+def _refusal_category(response: Any) -> str | None:
+    """``response.stop_details.category``, or None when the API supplied none.
+
+    Read defensively: the API documents both the object and its ``category`` as
+    nullable even on a refusal, and a batch line is decoded unvalidated.
+    """
+    category = getattr(getattr(response, "stop_details", None), "category", None)
+    return category if isinstance(category, str) and category else None
+
+
+def _refusal_fields(stop_reason: str | None, response: Any) -> dict[str, Any]:
+    """The ``refusal``/``refusal_category`` kwargs for an error raised on ``response``.
+
+    One definition of what makes an Anthropic failure a refusal, so every raise
+    site that reports a ``stop_reason`` sets the structured signal the same way.
+    """
+    refused = stop_reason == "refusal"
+    return {
+        "refusal": refused,
+        "refusal_category": _refusal_category(response) if refused else None,
+    }
+
+
 def _stop_reason_hint(stop_reason: str | None, response: Any) -> str:
     """Pick the right "why is the block missing" hint for ``stop_reason``.
 
@@ -521,8 +554,7 @@ def _stop_reason_hint(stop_reason: str | None, response: Any) -> str:
     if stop_reason == "model_context_window_exceeded":
         return _CONTEXT_WINDOW_EXCEEDED_HINT
     if stop_reason == "refusal":
-        stop_details = getattr(response, "stop_details", None)
-        category = getattr(stop_details, "category", None)
+        category = _refusal_category(response)
         suffix = f" (category={category!r})" if category else ""
         return (
             f"-- the model declined the request as a policy refusal{suffix}; "
@@ -543,6 +575,7 @@ def _refusal_error(response: Any, *, what: str) -> LLMProviderError:
         f"{what}: stop_reason='refusal', any partial content discarded "
         f"{_stop_reason_hint('refusal', response)}",
         provider="anthropic",
+        **_refusal_fields("refusal", response),
     )
 
 
@@ -689,6 +722,7 @@ def _incomplete_result(result: Any, what: str) -> BatchResult:
             f"stop_reason={stop_reason!r}) "
             f"{_stop_reason_hint(stop_reason, message)}",
             provider="anthropic",
+            **_refusal_fields(stop_reason, message),
         ),
     )
 
@@ -887,6 +921,7 @@ class AnthropicProvider:
                 f"stop_reason={stop_reason!r}) "
                 f"{_stop_reason_hint(stop_reason, response)}",
                 provider="anthropic",
+                **_refusal_fields(stop_reason, response),
             )
         try:
             parsed = output_schema.model_validate_json(text_block.text)
@@ -1039,16 +1074,19 @@ class AnthropicProvider:
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
             if not tool_use_blocks:
                 break
-            if stop_reason == "max_tokens":
+            if stop_reason in ("max_tokens", "model_context_window_exceeded"):
                 # A tool_use cut off at max_tokens usually still parses as a
                 # valid partial input; running the tool on it would act on
-                # arguments the model never finished (lode-4rxs). Whether
-                # model_context_window_exceeded needs the same check is open
+                # arguments the model never finished (lode-4rxs). For
+                # model_context_window_exceeded Anthropic's stop-reasons page
+                # says "Treat the response as truncated" and nothing about
+                # whether its tool_use is complete, so it gets the same guard
                 # (lode-hfzw).
                 raise LLMProviderError(
                     f"Anthropic free tool turn (model={model}, "
                     f"max_tokens={max_tokens}, stop_reason={stop_reason!r}) was "
-                    "cut off mid tool_use; no tool was run "
+                    "cut off with a tool_use block that may be incomplete; no "
+                    "tool was run "
                     f"{_stop_reason_hint(stop_reason, response)}",
                     provider="anthropic",
                 )
@@ -1569,6 +1607,8 @@ class OpenAIProvider:
                             "provider": exc.provider,
                             "status_code": exc.status_code,
                             "request_id": exc.request_id,
+                            "refusal": exc.refusal,
+                            "refusal_category": exc.refusal_category,
                         },
                     }
                 )
@@ -1614,6 +1654,8 @@ class OpenAIProvider:
                             provider=err["provider"],
                             status_code=err.get("status_code"),
                             request_id=err.get("request_id"),
+                            refusal=bool(err.get("refusal", False)),
+                            refusal_category=err.get("refusal_category"),
                         ),
                     )
                 )
@@ -1689,6 +1731,7 @@ class OpenAIProvider:
             raise LLMProviderError(
                 f"OpenAI/Azure model refused the request: {refusal}",
                 provider=self._provider_id,
+                refusal=True,
             )
 
         text = getattr(response, "output_text", "") or ""

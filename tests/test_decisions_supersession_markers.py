@@ -20,22 +20,30 @@ appended ``Update (`` pointer that the grep does find (lode-4eyp).
 *Correction lead-ins are matched more narrowly than the other keywords.*
 "Correction" also opens prose in which an entry narrates its OWN history,
 which the preamble exempts, so the bare keyword is not enough. It is flagged
-in two positions: opening a bold span, blockquote or parenthetical AND
-followed -- through punctuation or ``by`` -- by an id, a date or
-``maintainer decision``; or straight after the em dash of a date-first entry
-head, the shape of a new entry that corrects earlier ones.
+only where it opens a bold span, blockquote or parenthetical AND is followed
+-- through punctuation or ``by`` -- by an id, a date or
+``maintainer decision``.
 
 KNOWN MISSES in that narrower match, accepted (lode-4eyp):
 
 - Prose between the keyword and its id (``**Correction (see lode-x)``,
   ``**Correction to the lode-x entry above``). By shape alone this is
   indistinguishable from own-history narration.
-- A correcting entry whose head is not date-first with an em dash, or whose
-  keyword wraps onto the next line.
+- A keyword whose id wraps onto the next line.
 
-Accepted over-match, the reverse error: a TitleCase Correction keyword after
-a dated head's em dash, or a date straight after the keyword, goes red even
-where the entry is narrating its own history. The way out is to reword.
+Accepted over-match, the reverse error: a date straight after the keyword goes
+red even where the entry is narrating its own history. The way out is to
+reword.
+
+*A correcting entry's head is not a marker* (the preamble's lode-llxw
+paragraph), so no pattern here targets one. Two limits follow:
+
+- Nothing checks that a corrected entry actually received its appended
+  marker. A missing marker leaves nothing for a scan to key on.
+- The scan reads one line at a time and cannot tell an entry head from a
+  marker, so a head that itself opens with a keyword in a gated shape
+  (``- **Correction (lode-x) to the entry above``) still goes red. The way out
+  is to reword the head. Whether heads should be exempt is lode-hp12.
 
 *No wrapped marker.* A marker whose id wraps onto the next markdown line is
 still invisible to the single-line grep the preamble documents: correct shape,
@@ -124,9 +132,6 @@ _OFF_PATTERNS: dict[str, re.Pattern[str]] = {
     "Correction-style lead-in opening a bold span, blockquote, or parenthetical": re.compile(
         rf"{_OPENER}(?:{_both_cases(_CORRECTION_KEYWORDS)}){_CORRECTION_TAIL}"
     ),
-    "date-first CORRECTION entry lead-in": re.compile(
-        rf"\*\*{_DATE}[^*]*?\s\u2014\s*(?:{_both_cases(_CORRECTION_KEYWORDS)})\b"
-    ),
 }
 
 # Pre-existing off-pattern lead-ins that stay as written, keyed by a substring
@@ -136,12 +141,6 @@ _OFF_PATTERNS: dict[str, re.Pattern[str]] = {
 _ALLOWLIST: dict[str, str] = {
     "**Correction (`lode-rtcx`) to the `lode-moq7` entry above": (
         "committed before the Correction pattern existed (lode-zkki)"
-    ),
-    "(`lode-dozi`) \u2014 CORRECTION": (
-        "date-first correction committed before the shape was gated (lode-4eyp)"
-    ),
-    "(`lode-wtk2`) \u2014 CORRECTION": (
-        "date-first correction committed before the shape was gated (lode-4eyp)"
     ),
 }
 
@@ -247,7 +246,6 @@ def test_off_pattern_scan_catches_a_reintroduced_marker() -> None:
         "- **Correction (`lode-zzzz`) to the lode-yyyy entry above's sentence.**",
         "  > **CORRECTION (lode-zzzz, 2026-01-01) - the blockquote.**",
         "- **(Corrected, lode-zzzz: the parenthetical.)**",
-        "- **2026-01-01 (`lode-zzzz`) \u2014 CORRECTION to the entry above: x.**",
         "- **Correction** (`lode-zzzz`): the closed-bold near miss.",
         "**Correction:** lode-zzzz changes the sentence above.",
         "**Correction \u2014 lode-zzzz, 2026-01-01** to the entry above.",
@@ -256,7 +254,6 @@ def test_off_pattern_scan_catches_a_reintroduced_marker() -> None:
         "**Correction, maintainer decision:** the id slot filled with prose.",
         "**CORRECTIONS (lode-zzzz)** all-caps plural.",
         "**CORRECTED BY lode-zzzz** all-caps connector.",
-        "- **2026-01-01 (`lode-zzzz`) \u2014 Corrections to the two entries above.**",
         "**Correction** \u2014 `lode-zzzz`: closed bold, then a dash.",
     ]
     # Scanned one line at a time on purpose: a whole-list count can be met by
@@ -283,7 +280,6 @@ def test_off_pattern_scan_ignores_lowercase_narrative_prose() -> None:
         "  **Correction to this entry's first draft:** it asserted the guard would be",
         "  **Correction, verified empirically on bash 5.2:** the guard did fire.",
         "  (Corrected, then re-verified.) The first run was misread.",
-        "- **2026-01-01 (`lode-zzzz`) \u2014 the correction landed, then was re-decided.**",
         "  the correction (see below) was applied; corrected in place by the author",
     ]
 

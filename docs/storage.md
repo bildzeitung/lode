@@ -464,7 +464,9 @@ annotation, which the head-pointer comparison flags for re-derivation. So:
   mirrors the worker handler-registry shape; the Phase-A ``embed_gap`` step is registered at module
   load; E7 appends the enrich-gap step; `lode-w0h.6` appends the `refresh_stale` step — the web
   connector's refresh policy, re-enqueueing a `refresh` job for any external past its TTL
-  (`docs/externals.md` "Refresh policy"). `embed_gap`, `enrich_gap`, and `refresh_stale` each use
+  (`docs/externals.md` "Refresh policy"). `enrich_gap` skips a refusal-dead enrich job
+  while its head version, `ENRICH_PROMPT_VER` and `enrichment_llm.model` are unchanged
+  (the failure taxonomy's third class). `embed_gap`, `enrich_gap`, and `refresh_stale` each use
   `enqueue_derive_jobs` with `ON CONFLICT DO NOTHING` (the ``idx_jobs_live`` live-job index), so
   running any of them repeatedly enqueues no duplicates. Runs at the start of each `lode work` drain
   pass (startup + every ``--loop`` tick).
@@ -614,8 +616,11 @@ The status lifecycle is:
 pending -> running -> done                    (success)
            running -> failed -> pending       (transient error; worker resets for retry)
                       failed -> dead          (terminal: max-attempts gate)
+           running -> dead                (enrich only: the model refused it, first occurrence)
 ```
-`dead` is the poison terminal reached at the max-attempts gate. `failed` is the
+`dead` is the poison terminal reached at the max-attempts gate, or, for an *enrich* job
+the model refused, on the first refusal with no attempt charged (third class, below).
+`failed` is the
 *transient* last-error state that retries reset from. They are distinct so the
 worker can distinguish "retry me" from "give up", and the UI surfaces `dead` rows
 as dead-letters (not `failed` rows).
@@ -624,7 +629,7 @@ as dead-letters (not `failed` rows).
 
 `run_one`'s handler-failure catch is deliberately broad (`except Exception`) because
 the whole `pending -> failed -> dead` lifecycle above assumes a failure is
-*transient* — safe to retry with backoff, and eventually dead-letter as a last
+*transient* (bar the model refusal of an enrich job, a third class below) — safe to retry with backoff, and eventually dead-letter as a last
 resort. That is the right default for a flaky network call, a rate limit, or a
 Batches API hiccup. It is **wrong** for a failure that retrying can never fix: most
 concretely `lode.auth.AuthError`, raised by `lode.auth.build_client` (the Anthropic
@@ -641,28 +646,36 @@ The taxonomy: **permanent** = `lode.auth.AuthError` and `lode.llm_provider.LLMAu
 (the latter added when the OpenAI/Azure provider landed, `lode-568v.3` — a missing
 OpenAI/Azure credential is exactly as permanent as a missing Anthropic one; a future
 config-shape error belongs here too, same treatment) — never retried, never
-charged against `attempts`, must reach the operator directly. Everything else is
-**transient** — the existing `except Exception` accounting, unchanged.
+charged against `attempts`, must reach the operator directly. A model refusal of an
+*enrich* job is a **third class** (below). Everything else is **transient** — the existing
+`except Exception` accounting, unchanged.
 
-**A third class, decided but not built: terminal for the note version (decided 2026-11-16,
-`lode-ahme`; implementation `lode-g9q3`).** Today (trunk) a `stop_reason='refusal'` on an
-*enrich* job is transient like any other non-auth `LLMProviderError` (above), and because
-`reconcile._enrich_gap_step` treats a head whose only enrich job is `dead` as a gap, each
-time the job goes `dead` the next reconciliation scan re-enqueues it with a fresh attempt
-budget, for as long as that note version stays a live head. The decision gives a refusal a
-class of its own. It is not transient: a retry re-sends the same prompt to the same model
-and is expected to be declined again, so the retry budget only spends money. It is not
-permanent in the sense above either: no credential fixes it, and resetting to `pending` and
-re-raising, as the permanent class does (below), would let one declined note fail the drain.
-The decided rules, none of which the code follows until `lode-g9q3` lands:
+**A third class: terminal for the note version (decided 2026-11-16, `lode-ahme`; built in
+`lode-g9q3`).** A refusal on an *enrich* job is not transient: a retry re-sends the same
+prompt to the same model and is expected to be declined again, so a retry budget only spends
+money. It is not permanent in the sense above either: no credential fixes it, and resetting
+to `pending` and re-raising, as the permanent class does (below), would let one declined note
+fail the drain. "Model refuses to enrich" is one error class with provider-specific
+exposures: `LLMProviderError` carries a provider-neutral `refusal` flag and an optional
+`refusal_category`, and each provider maps its own shape onto it (Anthropic
+`stop_reason='refusal'` with `stop_details.category`; OpenAI/Azure's Structured Outputs
+refusal, which carries no category). Both routes honour it: `worker.run_one` for the
+immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped rules:
 
-- The job goes `dead` on the **first** refusal, with no retry attempts.
-- `reconcile._enrich_gap_step` does **not** re-enqueue a refusal-dead enrich job until the
-  note's head version or `ENRICH_PROMPT_VER` changes. The existing dead -> re-enqueue
-  self-healing stays for every other dead enrich job, since it exists for real outages.
-- Refusal-dead enrich jobs are listed in `lode status`'s dead-letter output with the refusal
-  category, because a silently un-enriched note is a retrieval-quality gap. (Today a dead row
-  shows only its free-text `last_error`, and every dead enrich job gets the self-healing hint.)
+- The job goes `dead` on the **first** refusal, with no retry attempts charged
+  (`jobs.record_refusal_dead`). The row is marked `jobs.refusal = 1` and records
+  `refusal_category`, `refusal_model` (`enrichment_llm.model` at refusal time) and
+  `prompt_ver` (`ENRICH_PROMPT_VER`), so a refusal-dead row is distinguishable from a
+  max-retries-dead one.
+- `reconcile._enrich_gap_step` does **not** re-enqueue a refusal-dead enrich job while the
+  note's head version, `ENRICH_PROMPT_VER` and the configured `enrichment_llm.model` all
+  equal what the dead row stored. A change in any of the three re-opens it (a new head
+  version is a different `target_version`). There is no manual-override command. The
+  existing dead -> re-enqueue self-healing stays for every other dead enrich job, since it
+  exists for real outages.
+- `lode status` lists refusal-dead enrich jobs in its dead-letter output with the refusal
+  category and a hint of their own; they do not get the self-healing hint, which would be
+  false for them.
 
 See `docs/decisions.md`, `lode-ahme`.
 
@@ -701,7 +714,8 @@ decides how loud "surface it" should be:
   `LLMProviderError` `drain` re-raises from a stuck batch pre-step (`lode-5zqa`,
   below) renders the same way. A non-auth `LLMProviderError` raised by a **job
   handler** never reaches it — `run_one`'s generic `except Exception` retries and
-  dead-letters that one, per the taxonomy above.
+  dead-letters that one, per the taxonomy above (a model refusal of an enrich job is
+  dead-lettered at once instead, the third class there).
 - `lode add`'s opportunistic immediate-enrich fast path
   (`lode.cli._enrich_immediately`) catches and discards it instead: capture must
   stay instant (`design.md` §1) regardless of whether the active provider's
