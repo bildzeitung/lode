@@ -163,7 +163,7 @@ Full walkthrough — prerequisites (**jq** is required, not optional), the venv,
    exact wording) — entries are append-only, so two stages observing the same incident must not
    double-file. Each entry: what happened / root cause / consequence / the rule that prevents a
    repeat. Newest first. An entry is corrected only by appending an Update bullet, never by editing
-   it in place; a wrong Update bullet is likewise corrected by appending another below it.
+   it in place; a wrong Update bullet is corrected by appending another below it.
    Each workflow-stage instruction file states its own write path (a stage
    working in a worktree appends and commits normally; a stage that cannot write repo files —
    `land-review`, run in a disposable worktree that never commits, and the `bd`-only/dispatch-only
