@@ -473,8 +473,8 @@ Two rules, three message texts:
     (derive `HEAD`, validate, check origin's tip, `bd update`; exit 0 done, 1 malformed value, 2
     broken call, 3 `bd update` failed, 4 origin's `land/<id>` is absent or not at `HEAD`, 5
     `ls-remote` itself failed), `scripts/check-review-head.sh <id>` (the code-reviewer's read +
-    validate + ancestor check; 0 forward-only, 1 malformed/missing, 2 broken call, 3 unreachable = drift, 4
-    `bd show` unreadable) and `scripts/checkout-land-branch.sh <id>` (the worktree-suffixed
+    validate + ancestor check; 0 forward-only, 1 malformed/missing, 2 broken call, 3 unreachable =
+    drift, 4 `bd show` unreadable) and `scripts/checkout-land-branch.sh <id>` (the worktree-suffixed
     `checkout -B`: suffix taken from the worktree's own directory; the script runs
     `git fetch origin land/<id> trunk` itself (lode-n7g4) so a stale `FETCH_HEAD` is never read, and
     takes the tip from `FETCH_HEAD`'s own `land/<id>` line rather than from `FETCH_HEAD` as a rev,
@@ -513,7 +513,7 @@ when the `$(git rev-parse …)` it prescribes is refused (the
 real object, but cannot tell a real one from the *right* one). For
 `nox -s eval`, run its body directly (it is CI-only and spends API credits, so only with the
 maintainer's approval, as
-[`CLAUDE.md` General Directive 10](#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
+`CLAUDE.md` General Directive 10 ([reasons](#no-llm-provider-spend-without-maintainer-approval-lode-3xzy))
 defines it): `LODE_RUN_LIVE_EVAL=1 uv run --frozen pytest tests/test_eval_live.py -v` with
 `ANTHROPIC_API_KEY` set. Do **not** disguise the word — quote-splitting (`ev""al`), building it by
 expansion, or any other obfuscation: the guard exists because the shape is unverifiable, so hiding
