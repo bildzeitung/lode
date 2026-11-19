@@ -4,7 +4,7 @@ The hazard: ``noxfile.py`` sets ``default_venv_backend = "none"``, so every
 nox session inherits whatever PATH the invoking shell has. A session that
 shells out to a tool by bare name (``"ruff"``, ``"pytest"``, ...) then
 resolves whichever copy is *earliest* on that PATH. On a box with a stale
-system-wide install sitting ahead of the project's own ``./venv/bin``
+system-wide install sitting ahead of the project's own ``./.venv/bin``
 (observed: an ambient ``~/.local/bin/ruff`` 0.15.11 shadowing the venv's
 then-pinned ``ruff==0.15.22``, lode-umh2), this silently runs a DIFFERENT
 tool than the one ``pyproject.toml``/``uv.lock`` pins, while the
@@ -82,7 +82,7 @@ def test_venv_tool_ignores_a_shadowing_earlier_path_entry(
 
     A decoy ``widget`` executable sits on PATH ahead of a (faked) venv bin
     dir containing the real one -- exactly the shape of an ambient
-    ``~/.local/bin/ruff`` preceding ``./venv/bin`` on a real box. A bare-name
+    ``~/.local/bin/ruff`` preceding ``./.venv/bin`` on a real box. A bare-name
     PATH search (``shutil.which``) finds the decoy first, proving the
     shadowing setup is real; ``_venv_tool`` must resolve the venv's copy
     regardless, and running the path it returns must produce the REAL

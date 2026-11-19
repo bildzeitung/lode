@@ -156,7 +156,6 @@ from pathlib import Path
 from typing import NoReturn
 
 import nox
-import nox.command
 
 nox.options.default_venv_backend = "none"
 

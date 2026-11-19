@@ -63,9 +63,10 @@ dep_version_diff_text() {
 # The churn-stub noise gate: true iff EVERY moved package in the raw change
 # lines in $1 kept its major.minor pair, i.e. only the patch component (or a
 # suffix below it) moved. False for no changes at all, for an addition or a
-# removal ("(none)" on either side), and for any version whose leading
-# major.minor does not parse (an epoch like `1!2.3.4`, a bare `2024` date
-# version) -- everything unrecognized is conservatively NOT patch-only, so it
+# removal ("(none)" on either side), for a multi-version package (a comma in
+# either value: the regex below would compare only its first version), and
+# for any version whose leading major.minor does not parse (an epoch like
+# `1!2.3.4`, a bare `2024` date version) -- everything unrecognized is conservatively NOT patch-only, so it
 # still triggers filing. Regex-over-strings rather than real version ordering
 # is a deliberate floor: every shape it cannot read falls into the catch-all
 # and files a ticket, so being wrong here can only ever cost noise, never a
@@ -79,6 +80,7 @@ dep_all_patch_level_only() {
     # Bash-native, so this stays fork-free on a lock with a hundred moves.
     # A non-match also covers "(none)": additions and removals are never
     # patch-only.
+    [[ $old == *,* || $new == *,* ]] && return 1
     [[ $old =~ ^([0-9]+\.[0-9]+) ]] || return 1
     old_mm="${BASH_REMATCH[1]}"
     [[ $new =~ ^([0-9]+\.[0-9]+) ]] || return 1

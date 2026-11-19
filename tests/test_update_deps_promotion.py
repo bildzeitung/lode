@@ -85,7 +85,7 @@ def _build_fake_repo(tmp_path: Path) -> tuple[Path, Path]:
 if [ "$1" = "lock" ]; then
   echo "$*" >> "{tmp_path / "uv_lock_args"}"
   cp -f "{tmp_path / "candidate.lock"}" uv.lock
-  exit 0
+  exit "${{UV_LOCK_EXIT:-0}}"
 fi
 if [ "$1 $2" = "sync --frozen" ]; then
   mkdir -p .venv/bin
@@ -259,5 +259,26 @@ def test_dry_run_prints_the_diff_and_leaves_the_lock_untouched(tmp_path: Path) -
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1.0.0 -> 2.0.0" in result.stdout
+    assert (repo / "uv.lock").read_text(encoding="utf-8") == ORIGINAL_LOCK
+    assert not (tmp_path / "lock_during_gate").exists()  # no gate ran
+
+
+def test_failed_uv_lock_exits_nonzero_and_restores_the_lock(tmp_path: Path) -> None:
+    """Run as ``bash update-deps.sh``, which drops the shebang's ``-e``: a failed
+    ``uv lock`` must still stop the run red, not fall through to a green "update"
+    -- and a lock it half-wrote is restored."""
+    repo, bindir = _build_fake_repo(tmp_path)
+
+    result = subprocess.run(
+        ["bash", str(repo / "scripts" / "update-deps.sh"), "--no-file"],
+        cwd=repo,
+        env=dict(fake_bin_env(bindir), UV_LOCK_EXIT="2"),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "uv lock failed" in result.stderr
     assert (repo / "uv.lock").read_text(encoding="utf-8") == ORIGINAL_LOCK
     assert not (tmp_path / "lock_during_gate").exists()  # no gate ran

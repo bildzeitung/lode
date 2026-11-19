@@ -159,6 +159,10 @@ def test_version_diff_text_says_no_change_on_empty_input() -> None:
         ("alpha\t1!2.3.4\t1!2.3.5", False),
         ("alpha\t2024\t2025", False),
         ("alpha\tunknown\t1.2.3", False),
+        # A multi-version package (comma-joined by _dep_pins) is never
+        # patch-only: a minor move in its second version, or a version added.
+        ("multi\t1.0,2.0\t1.0,2.1", False),
+        ("multi\t1.0\t1.0,2.0", False),
     ],
 )
 def test_noise_gate(raw: str, patch_only: bool) -> None:

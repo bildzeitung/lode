@@ -131,16 +131,19 @@ Two files, two jobs — **never pin the same thing in both**:
   2. **uv verifies an install against those hashes and refuses a mismatch.** Measured on uv 0.11.7:
      a scratch project locked to `six==1.16.0`, with the wheel's recorded hash edited to all zeros,
      fails a plain `uv sync --frozen` with `Hash mismatch for six==1.16.0`, printing the `Expected`
-     (the lock's) and `Computed` (the downloaded file's) digests; nothing is installed. No flag
-     opts in — unlike pip, where hash-checking is all-or-nothing and opt-in
-     (`--require-hashes`), uv's `verify-hashes` setting defaults to `true`
-     ([uv settings reference](https://docs.astral.sh/uv/reference/settings/#pip_verify-hashes)) and
-     a lock always carries its hashes. The measurement is the checked source: uv's *project* docs
+     (the lock's) and `Computed` (the downloaded file's) digests; nothing is installed. The
+     same refusal holds with the wheel already in uv's cache (re-measured at code review, same
+     uv). No flag opts in, unlike pip's opt-in `--require-hashes`. The nearest documented
+     setting, `verify-hashes` (default `true`,
+     [uv settings reference](https://docs.astral.sh/uv/reference/settings/#pip_verify-hashes)),
+     is documented for the `uv pip` interface, not `uv sync`. So the measurement is the checked
+     source: uv's *project* docs
      ([layout](https://docs.astral.sh/uv/concepts/projects/layout/),
      [CLI](https://docs.astral.sh/uv/reference/cli/)) do not state this for `uv sync` in so many
-     words, so the behavior is pinned to the measured version, not to a quotable sentence. A uv
-     release that stopped verifying would not be caught by the suite — re-run the probe (edit one
-     hash in a scratch lock, `uv sync --frozen`) when moving the pinned uv floor.
+     words, so the behavior is pinned to the measured version, not to a quotable sentence. uv
+     itself is not pinned (CI's `setup-uv` installs the latest release; locally it is whatever is
+     on `PATH`), so a uv release that stopped verifying would not be caught by the suite —
+     re-run the probe (edit one hash in a scratch lock, `uv sync --frozen`) when in doubt.
 
   The one gap against `--require-hashes` is *strictness*, not verification: `--require-hashes`
   also rejects a requirement that carries no hash at all, whereas a hand-edited `uv.lock` entry with

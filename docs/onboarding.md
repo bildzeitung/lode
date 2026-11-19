@@ -59,9 +59,9 @@ worktree needs no setup step for the same reason. Re-run `uv sync` only to refre
 `scripts/update-deps.sh` is the **only** sanctioned way to move `uv.lock` —
 never hand-edit it. It runs `uv lock --upgrade` (or `uv lock --upgrade-package NAME` with
 `--package NAME`), prints a readable version diff against the committed lock (one
-`name  old -> new` line per changed package, no hash noise — the diff is the point), and
-leaves the moved `uv.lock` in place **before** installing it into a freshly rebuilt `./.venv` and running
-the quality gates (`nox -t fix`, `nox -s tests`). Promoting first is deliberate: a test
+`name  old -> new` line per changed package, no hash noise — the diff is the point), then
+keeps the moved `uv.lock` on disk — promoted **before** gating — while it installs it into a
+freshly rebuilt `./.venv` and runs the quality gates (`nox -t fix`, `nox -s tests`). Promoting first is deliberate: a test
 that reads the committed lock from disk has to gate against the pins the update is
 introducing, not the ones it is about to replace (`lode-2zi9`). On green the candidate
 simply stays where it is, for you to review and commit.
@@ -80,8 +80,8 @@ the report — rather than silently losing the report — and tells you to run
 `uv sync --frozen` by hand to restore `./.venv`.
 
 ```bash
-scripts/update-deps.sh --dry-run          # see what would change; touches nothing
-scripts/update-deps.sh                    # recompile + gate + promote/rollback the WHOLE lock
+scripts/update-deps.sh --dry-run          # see what would change; uv.lock is moved, then restored
+scripts/update-deps.sh                    # re-resolve + gate + keep/rollback the WHOLE lock
 scripts/update-deps.sh --package trafilatura   # bump just one package
 ```
 

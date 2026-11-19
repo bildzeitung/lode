@@ -6,7 +6,7 @@
 #
 # Run from the repo root:
 #   scripts/update-deps.sh                    # re-resolve the WHOLE lock, gate, keep/rollback
-#   scripts/update-deps.sh --dry-run          # print the version diff only, change nothing
+#   scripts/update-deps.sh --dry-run          # print the version diff only; uv.lock restored
 #   scripts/update-deps.sh --package NAME     # bump just NAME (+ whatever it drags with it)
 #   scripts/update-deps.sh --package NAME --dry-run
 #   scripts/update-deps.sh --no-file          # promote as usual but never file the churn stub
@@ -129,10 +129,16 @@ cp -f "$LOCK" "$SAVED_LOCK"
 
 # From here until the outcome is decided an UNGATED lock sits on disk.
 RESTORE_LOCK_ON_EXIT=1
+# Checked explicitly: `bash scripts/update-deps.sh` drops the shebang's -e, and a
+# failed resolve must not carry on to a "no change" diff and a green exit.
 if [ -n "$PACKAGE" ]; then
-  uv lock -q --upgrade-package "$PACKAGE"
+  UPGRADE=(--upgrade-package "$PACKAGE")
 else
-  uv lock -q --upgrade
+  UPGRADE=(--upgrade)
+fi
+if ! uv lock -q "${UPGRADE[@]}"; then
+  echo "update-deps.sh: uv lock failed (see output above) -- nothing was gated." >&2
+  exit 1
 fi
 
 # Readable name/version diff. The parsing, the rendering and the stub's skip
