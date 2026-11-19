@@ -7532,7 +7532,7 @@ def test_status_lists_refusal_dead_enrich_job_with_category(
 def _seed_head_with_refusal_dead_job(
     db_path: Path, *, prompt_ver: str, refusal_model: str
 ) -> None:
-    """A live head annotated under an OLD model whose latest enrich job is refusal-dead."""
+    """A live head annotated under an OLD model that has a refusal-dead enrich job."""
     conn = init_db(db_path)
     try:
         conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
@@ -7568,13 +7568,13 @@ def test_reenrich_and_status_skip_a_head_with_a_standing_refusal(
         refusal_model=Settings().enrichment_llm.model,
     )
 
+    status = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert status.exit_code == 0, status.output
+    assert "disagree with the currently" not in status.stdout
+
     result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
     assert result.exit_code == 0, result.output
     assert "nothing to re-enrich" in result.stdout
-
-    status = runner.invoke(app, ["status", "--db", str(db_path)])
-    assert status.exit_code == 0, status.output
-    assert "lode reenrich" not in status.stdout
 
     reader = sqlite3.connect(db_path)
     try:
@@ -7613,3 +7613,37 @@ def test_a_changed_prompt_version_or_model_brings_a_refused_head_back(
     result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
     assert result.exit_code == 0, result.output
     assert "enqueued 1 enrich job(s)" in result.stdout
+
+
+def test_reenrich_skips_an_external_head_with_a_standing_refusal(
+    tmp_path: Path,
+) -> None:
+    from lode.enrich import ENRICH_PROMPT_VER
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO externals (external_id, source_type) VALUES ('ext-1', 'web')"
+            )
+            conn.execute(
+                "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
+                "VALUES ('snap-1', 'ext-1', 'body text', 'ok')"
+            )
+            conn.execute(
+                "UPDATE externals SET head_snapshot_id = 'snap-1' WHERE external_id = 'ext-1'"
+            )
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status, next_attempt_at, "
+                "refusal, prompt_ver, refusal_model) "
+                "VALUES ('enrich', 'snap-1', 'dead', ?, 1, ?, ?)",
+                (now_iso(), ENRICH_PROMPT_VER, Settings().enrichment_llm.model),
+            )
+        _write_ai_annotation(conn, "ext-1", "snap-1", "some-old-model")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "nothing to re-enrich" in result.stdout

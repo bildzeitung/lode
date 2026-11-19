@@ -485,8 +485,10 @@ def raw_snapshot_payload(conn: sqlite3.Connection, snapshot_id: str) -> str | No
 #: The live-head (notes UNION externals) scan `lode reenrich` force-enqueues
 #: from -- shared with `stale_enrichment_heads` below so "status says clean"
 #: and "reenrich has work" read the identical query, never a
-#: separately-maintained approximation. Four positional `?` placeholders, two
-#: per UNION branch: (model, provider) each -- see `stale_enrichment_heads`.
+#: separately-maintained approximation. Eight positional `?` placeholders, four
+#: per UNION branch: (model, provider, prompt_ver, refusal_model) each -- the
+#: last two bound by :func:`lode.jobs.standing_enrich_refusal_exists_sql`; see
+#: `stale_enrichment_heads`.
 #: The provider comparison uses `IS NOT` rather than `!=` because it must stay
 #: NULL-safe both ways: a stored `NULL` means "anthropic" by convention
 #: (lode-568v.4's `provider_identity`), and the current provider is itself
@@ -496,7 +498,7 @@ def raw_snapshot_payload(conn: sqlite3.Connection, snapshot_id: str) -> str | No
 #: equal, and non-equal, correctly (lode-568v.6).
 #:
 #: Relocated from ``lode.cli`` (lode-35nu.9, "no bare SQL in the cli
-#: package") -- unchanged, still shared by ``lode status``'s hint
+#: package"), still shared by ``lode status``'s hint
 #: (:func:`lode.cli.status._enrichment_model_stale`) and ``lode reenrich``.
 STALE_ENRICHMENT_LIVE_HEADS_SQL = f"""
     SELECT DISTINCT n.head_version_id
@@ -538,7 +540,7 @@ def stale_enrichment_heads(
     """Live head ids (notes UNION externals) whose recorded AI annotations disagree with `enrichment_llm` or `current_provider`.
 
     Relocated from ``lode.cli`` (lode-35nu.9, "no bare SQL in the cli
-    package") -- unchanged. The exact scan ``lode reenrich`` force-enqueues
+    package"). The exact scan ``lode reenrich`` force-enqueues
     from (docs/storage.md#re-enriching-the-corpus-deliberately-targeted-lode-14jr):
     a live head -- not soft-deleted/tombstoned, not purged, ``no_egress = 0``
     -- carrying at least one ``'ai'`` annotation whose ``model`` differs from
@@ -555,11 +557,10 @@ def stale_enrichment_heads(
     different vendor -- is legible as stale even though ``model`` alone
     wouldn't catch it.
 
-    **A head with a standing refusal is excluded** (lode-5try): a ``dead`` enrich
-    job with ``refusal = 1`` under the current ``ENRICH_PROMPT_VER`` and
-    `enrichment_llm` means the model refused that content and the refusal is
-    final for this note version (lode-g9q3), so re-enriching it would only
-    re-send refused content. Changing the model or prompt version brings the
+    **A head with a standing refusal is excluded** (lode-5try,
+    :func:`lode.jobs.standing_enrich_refusal_exists_sql`): the refusal is final
+    for that version (lode-g9q3), so re-enriching would only re-send refused
+    content. A change of ``enrichment_llm`` or ``ENRICH_PROMPT_VER`` brings the
     head back.
 
     Shared by ``lode status``'s hint
