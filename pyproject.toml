@@ -109,9 +109,10 @@ dev = [
                                 # gate tool. Pinned exact (same
                                 # pattern as ruff above, lode-fhql.9 HUMAN
                                 # DECISION 2026-08-14): CI's docs.yml installs
-                                # this exact pin too (kept in sync by
-                                # tests/test_build_docs_site.py) so the renderer
-                                # that builds the published site is the same one
+                                # it from uv.lock, never a pin of its own
+                                # (tests/test_build_docs_site.py checks uv.lock
+                                # locks this version), so the renderer that
+                                # builds the published site is the same one
                                 # every developer gates against locally.
 ]
 

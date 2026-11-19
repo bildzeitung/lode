@@ -5992,14 +5992,13 @@ entries below from being rewritten to chase the current tree.)
     reads `.python-version` natively, so nothing needs to pass `--python-version` by hand.
   **Update (`lode-5x01`, 2026-11-16):** the "`venv-install`" in this entry's `python-init.sh` bullet is
   `scripts/venv-install.sh`. Wording only; see the `lode-5x01` entry below.
-  **Update (`lode-s09w.5`, 2026-11-19):** the "single-tool carve-out" bullet above names only
-  `ruff==0.16.3`, but the dev group carried a second exact pin from the same unlocked-dev policy,
-  `mkdocs-material==9.5.44` (`lode-fhql.9`). Locking the group makes it an ordinary lock pin too.
-  The pin now lives in `pyproject.toml`'s `[dependency-groups]` `dev` group, and `uv.lock` carries
-  that exact version. `tests/test_build_docs_site.py` no longer keeps `docs.yml` in sync with a
-  hand-copied pin: `docs.yml` installs from `uv sync --locked` and must carry no
-  `mkdocs-material==` pin of its own, and the test checks that `uv.lock` locks the version
-  `pyproject.toml` pins.
+  **Update (`lode-s09w.5`, 2026-11-19):** the "`dev` group is locked" bullet above names only
+  `ruff==0.16.3` as a carve-out, but the `dev` extra carried a second exact pin from the same
+  unlocked-dev policy, `mkdocs-material==9.5.44` (`lode-fhql.9`). Locking the group makes it an
+  ordinary lock pin too; since `lode-s09w.3` it lives in `pyproject.toml`'s `[dependency-groups]`
+  `dev` group. Since `lode-s09w.2`, `docs.yml` installs from `uv.lock` (`uv sync --locked`) and must
+  carry no `mkdocs-material==` pin of its own, so `tests/test_build_docs_site.py` no longer keeps a
+  hand-copied pin in sync: it checks that `uv.lock` locks the version `pyproject.toml` pins.
 
 - **Code-reviewer runs `/code-review` medium as well as its hand pass (`lode-1fyb`, decided
   2026-11-16, maintainer decision; implemented by `lode-bldq`).** Resolves the open decision carried by
