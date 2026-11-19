@@ -1558,6 +1558,9 @@ substitute for the four mandated fields.
 suffix (`NIT 3`, `NIT 3 addendum`) — §2d counts `^NIT` line starts, so an addendum line counts as its
 own row; the count is a rough batch-size signal, not an exact nit tally.
 
+**A nit aimed at `MISTAKES.md` is applied under that file's append-only rule** — stated once, in
+[`CLAUDE.md`](../CLAUDE.md) General Directive 9.
+
 ### The `--file` value is repo-relative, not worktree-specific (lode-4xj1)
 
 `append` normalizes `--file` before recording it (`lode-v4ks`): a **repo-relative** path (e.g.
