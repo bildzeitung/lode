@@ -520,6 +520,33 @@ logged; the process is exiting. A failure while the app is running is unchanged:
 traceback, and toasted. The test drives a real `run_async`, because the pilot's `run_test` still
 delivers the hop after its context exits and does not reproduce this.
 
-**Decided: quitting mid-ask waits for the in-flight call; the delay is accepted (`lode-zuzj`, option (c)).** Textual runs a thread worker on the event loop's default executor, and `asyncio.run`'s close step joins that executor (`shutdown_default_executor`, 300 s timeout) after the terminal is restored. So after ctrl+q the shell returns only when the ask worker's thread ends: at `run_ask`'s next stage hop (which raises, per `lode-dgmf` above) or, when the quit lands inside a provider call, when that call returns or times out. The call is still paid for. Raising from `_on_stage` when the worker is cancelled (option (a)) was rejected: Textual cancels the worker only at shutdown, and by then the hop already raises "App is not running", so it ends `run_ask` no earlier than today and cannot interrupt a call in flight. Making the call cancellable (option (b)) means a cancel event through `run_ask` and the provider seam, which is more machinery than a quit-time wait of this size warrants.
+**Decided: quitting mid-ask waits for the in-flight call; the delay is accepted (`lode-zuzj`,
+option (c)).** Textual runs a thread worker on the event loop's default executor, and
+`asyncio.run`'s close step joins that executor (`shutdown_default_executor`) after the terminal is
+restored. So after ctrl+q the shell returns only when the ask worker's thread ends, at `run_ask`'s
+next stage hop (which raises, per `lode-dgmf` above). When the quit lands inside a provider call,
+that hop comes only after the call returns or times out, and the call is still paid for. Raising
+from `_on_stage` when the worker is cancelled (option (a)) was rejected for the quit: Textual
+cancels the worker at shutdown, just before the hop starts raising "App is not running", so the
+check would end `run_ask` at the same hop as today and cannot interrupt a call in flight. The same
+check would also stop an escaped or superseded ask at its next stage hop, because Textual cancels
+those workers too. That is not taken here: it spares the provider call only when the cancel lands
+during retrieval. Making the call cancellable (option (b)) means a cancel event through `run_ask`
+and the provider seam, which is more machinery than this wait warrants.
 
-**Bound:** the wait is at most the rest of one Q&A run's budget, `qa_call_timeout_s` (300 s default, per run, `docs/configuration.md`), plus the cheap local stages around it, and asyncio stops joining the executor after its own 300 s cap. A user who needs the shell back sooner can lower `qa_call_timeout_s`.
+**Bound:** the wait is the rest of the stage the quit landed in; nothing caps it at quit time.
+asyncio stops joining the executor after 300 s, but that only prints a `RuntimeWarning`: the
+worker thread is not a daemon thread, so the interpreter still waits for it at exit.
+
+- **During the Q&A run** (the usual case): the rest of that run, normally seconds. A wedged run
+  can take about 900 s at the defaults. Each call is sent what is left of `qa_call_timeout_s`
+  (300 s, a per-run budget) as its timeout, and the SDK retries a timed-out call twice with that
+  same timeout. This is the worst case already accepted for the ask itself
+  ([configuration.md](configuration.md#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx),
+  the flagged risk).
+- **During retrieval:** the local embed and rerank, normally short. The first run's model weights
+  download is not bounded by any timeout (`docs/configuration.md`, the `HF_HUB_OFFLINE` note);
+  `lode models pull` moves it out of the ask.
+
+Lowering `qa_call_timeout_s` shortens the Q&A-run case only. It is the budget for every ask, so a
+long legitimate ask then times out.
