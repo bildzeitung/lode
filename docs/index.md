@@ -57,8 +57,7 @@ pip install lode_kb-*.whl   # the wheel attached to the release you downloaded
 ```bash
 git clone https://github.com/bildzeitung/lode.git
 cd lode
-./scripts/python-init.sh
-. ./venv/bin/activate
+uv sync
 ```
 
 ## The idea in one breath

@@ -13,7 +13,7 @@ name: tests
 # installs from the committed `uv.lock` rather than resolving fresh, so this
 # workflow tests a dependency set reproducible from committed bytes;
 # `lock-currency` separately verifies that both committed locks (`uv.lock` and
-# `requirements.lock`, which a developer's `./venv` is still built from) are
+# `requirements.lock`, which only `scripts/update-deps.sh` still consumes) are
 # what `pyproject.toml` would produce today. See each job's own comments for
 # the mechanism.
 #
@@ -156,12 +156,11 @@ jobs:
 
       - name: Install dependencies (from uv.lock)
         # `--locked` fails if uv.lock is stale against pyproject.toml (never re-locks),
-        # so CI installs exactly the committed set `uv sync --locked --extra dev`
-        # gives anyone (lode-s09w). `--extra dev` is transitional: dev is still an
-        # optional extra until lode-s09w.3 turns it into a dependency group. No
+        # so CI installs exactly the committed set `uv sync --locked` gives anyone
+        # (lode-s09w); `dev` is a dependency group uv syncs by default. No
         # GITHUB_PATH entry for ./.venv/bin: every later step runs through `uv run`,
         # so nothing relies on ambient PATH.
-        run: uv sync --locked --extra dev
+        run: uv sync --locked
 
       - name: Resolve model cache key
         # SINGLE implementation shared with coverage.yml -- see
@@ -172,7 +171,7 @@ jobs:
         # NB this step must stay AFTER the install (the script imports lode)
         # and BEFORE the cache restore below.
         id: model_cache
-        run: uv run --frozen --extra dev python scripts/model-cache-key.py >> "$GITHUB_OUTPUT"
+        run: uv run --frozen python scripts/model-cache-key.py >> "$GITHUB_OUTPUT"
 
       - name: Restore model weights cache
         # $LODE_HOME/models (config.py's model_cache_dir()) -- ~1.6GB of ONNX
@@ -212,7 +211,7 @@ jobs:
         # (tests/test_eval_live.py) self-excludes unless LODE_RUN_LIVE_EVAL=1,
         # which only `nox -s eval` sets, so this leg stays offline and
         # keyless by design.
-        run: uv run --frozen --extra dev nox -s tests
+        run: uv run --frozen nox -s tests
 
       - name: Save model weights cache
         # Runs on a FAILED `nox -s tests` (the point of the split -- see the

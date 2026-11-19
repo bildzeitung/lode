@@ -237,7 +237,7 @@ def test_no_session_shells_out_to_a_dev_extra_tool_by_bare_name() -> None:
         if name not in _EXEMPT_SESSIONS and (bare := _bare_tool_names(node))
     }
     assert not offenders, (
-        f"these nox sessions shell out to a dev-extra tool by bare name: "
+        f"these nox sessions shell out to a dev-group tool by bare name: "
         f"{offenders}. A stale system-wide copy earlier on PATH would shadow "
         "the pinned one and produce a falsely-green gate (lode-0yfn) -- pass "
         "_venv_tool(session, <name>) instead, or add the session to "

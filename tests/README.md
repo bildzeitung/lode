@@ -6,8 +6,8 @@ normal Python codebase — why a chunk of it is scanners that parse **Markdown**
 Run it via `nox`, never a hand-rolled venv invocation (see [`CLAUDE.md`](../CLAUDE.md)):
 
 ```bash
-./venv/bin/nox -s tests    # full suite -- the landing gate
-./venv/bin/nox -s unit     # fast tier: excludes @pytest.mark.slow
+uv run --frozen nox -s tests    # full suite -- the landing gate
+uv run --frozen nox -s unit     # fast tier: excludes @pytest.mark.slow
 ```
 
 ## Why scanners read the skills' Markdown

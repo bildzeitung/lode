@@ -293,7 +293,7 @@ def test_mkdocs_material_pin_is_carried_by_uv_lock_not_docs_yml() -> None:
     """
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     match = re.search(r'"mkdocs-material==([^"]+)"', pyproject)
-    assert match, "pyproject.toml's dev extra must pin mkdocs-material exactly (==)."
+    assert match, "pyproject.toml's dev group must pin mkdocs-material exactly (==)."
     pin = match.group(1)
     uv_lock = (REPO_ROOT / "uv.lock").read_text(encoding="utf-8")
     assert re.search(

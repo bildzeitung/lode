@@ -95,10 +95,10 @@ jobs:
         #
         # `--locked` installs the committed uv.lock, exactly as tests.yml does, so the
         # coverage number describes the same dependency set the tests badge backs
-        # (lode-7byn; docs/stack.md#dependency-locking-lode-g2741). `--extra dev` is
-        # transitional until lode-s09w.3. No GITHUB_PATH entry for ./.venv/bin: every
-        # later step runs through `uv run`.
-        run: uv sync --locked --extra dev
+        # (lode-7byn; docs/stack.md#dependency-locking-lode-g2741). The `dev` dependency
+        # group is a uv default group, so no flag selects it. No GITHUB_PATH entry for
+        # ./.venv/bin: every later step runs through `uv run`.
+        run: uv sync --locked
 
       - name: Resolve model cache key
         # SINGLE implementation shared with tests.yml -- see
@@ -109,7 +109,7 @@ jobs:
         # NB this step must stay AFTER the install (the script imports lode)
         # and BEFORE the cache restore below.
         id: model_cache
-        run: uv run --frozen --extra dev python scripts/model-cache-key.py >> "$GITHUB_OUTPUT"
+        run: uv run --frozen python scripts/model-cache-key.py >> "$GITHUB_OUTPUT"
 
       - name: Cache model weights
         # Same cache as tests.yml, keyed identically -- a warm cache here
@@ -132,7 +132,7 @@ jobs:
         # self-excludes unless LODE_RUN_LIVE_EVAL=1, which only `nox -s eval`
         # sets, so this leg stays offline and keyless by design, same as
         # tests.yml.
-        run: uv run --frozen --extra dev nox -s coverage
+        run: uv run --frozen nox -s coverage
 
       - name: Upload coverage to Codecov
         # Report-only: fail_ci_if_error is explicitly false, so neither a

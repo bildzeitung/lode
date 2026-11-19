@@ -2,9 +2,8 @@
 
 The hazard, discovered while reviewing lode-7abi: ``noxfile.py`` sets
 ``default_venv_backend = "none"``, so gates run in whatever venv is already
-active. ``scripts/python-init.sh`` always installs the local package editable
-(``-e .``, whether via the locked default path or ``--unlocked`` --
-lode-g274.1), so that venv's ``lode`` resolves to the ``src`` of whichever
+active. ``uv sync``/``uv run`` always install the local package editable (uv's
+default for the project itself), so that venv's ``lode`` resolves to the ``src`` of whichever
 checkout it was built in. Activate the main checkout's venv while sitting in a
 worktree and pytest collects **this** checkout's ``tests/`` while importing
 **that** one's ``src`` -- silently, in either the false-FAIL or the
@@ -40,7 +39,7 @@ def test_lode_from_another_checkout_is_rejected() -> None:
     # can see *which* tree got imported, not merely that something is wrong.
     assert "/repo/src/lode/__init__.py" in message
     assert str(root) in message
-    assert "./scripts/python-init.sh" in message
+    assert "uv run --frozen" in message
 
 
 def test_a_worktree_under_the_main_checkout_is_not_confused_for_it() -> None:

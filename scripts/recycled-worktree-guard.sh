@@ -125,7 +125,7 @@
 # worktree (nothing untracked to remove, and it never touches `.gitignore`d
 # build state like `venv/`), and it clears exactly the leftover dirt on an
 # undetected recycle. Full reasoning: docs/decisions.md
-# (./venv/bin/python scripts/docs_index_query.py "lode-3v1p").
+# (uv run --frozen python scripts/docs_index_query.py "lode-3v1p").
 #
 # BOOTSTRAP GAP, unavoidable, mitigate at the call site (lode-ivth): the
 # guard must run FIRST, in a possibly-contaminated worktree, so this very

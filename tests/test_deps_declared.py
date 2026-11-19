@@ -16,10 +16,11 @@ or nox -s tests. This test is the gate: an AST sweep over every top-level
 import in ``src/``, mapped to its installed distribution via
 ``importlib.metadata.packages_distributions()``, compared against
 pyproject.toml's ``[project].dependencies`` + every ``optional-dependencies``
-extra (the dev extra included, so ``pytest``/``nox``/etc. count as declared).
+extra and every ``dependency-groups`` group (the dev group included, so
+``pytest``/``nox``/etc. count as declared).
 
 SCOPE (deliberate, per the ticket): ``src/`` only, not ``tests/`` -- test
-imports are dev-extra-only and noisier, and ``src/`` is where the shipped
+imports are dev-group-only and noisier, and ``src/`` is where the shipped
 defect actually lives.
 
 DESIGN NOTES / TRAPS (see the ticket description for the full derivation):
@@ -94,13 +95,16 @@ def _third_party_tops(src_dir: Path) -> set[str]:
 
 def _declared_distributions(pyproject_path: Path) -> set[str]:
     """Every distribution pyproject.toml declares: dependencies + every
-    optional-dependencies extra (the dev extra included -- a test-only
-    import like pytest/nox must count as declared, not undeclared)."""
+    optional-dependencies extra and every dependency-groups entry (the dev
+    group included -- a test-only import like pytest/nox must count as
+    declared, not undeclared)."""
     data = tomllib.loads(pyproject_path.read_text())
     project = data["project"]
     requirements = list(project.get("dependencies", []))
     for extra_requirements in project.get("optional-dependencies", {}).values():
         requirements.extend(extra_requirements)
+    for group_requirements in data.get("dependency-groups", {}).values():
+        requirements.extend(r for r in group_requirements if isinstance(r, str))
     return {canonicalize_name(Requirement(r).name) for r in requirements}
 
 
@@ -144,7 +148,7 @@ def test_all_src_imports_are_declared():
 
     assert not undeclared, (
         f"src/ imports a distribution not declared in pyproject.toml's "
-        f"[project].dependencies (or an optional-dependencies extra): "
+        f"[project].dependencies (or an optional-dependencies extra or dependency group): "
         f"{undeclared}. Declare it (see docs/stack.md for precedent)."
     )
     assert not unresolved, (
@@ -237,8 +241,8 @@ def test_stdlib_imports_are_excluded():
     assert not (third_party & {"os", "sys", "pathlib", "json", "re", "typing"})
 
 
-def test_dev_extra_is_included_in_declared():
-    """The dev extra must be included in `declared`, else a test-only import
+def test_dev_group_is_included_in_declared():
+    """The dev group must be included in `declared`, else a test-only import
     (pytest, nox) would read as undeclared."""
     declared = _declared_distributions(PYPROJECT)
     assert "pytest" in declared

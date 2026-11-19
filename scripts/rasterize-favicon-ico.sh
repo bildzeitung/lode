@@ -11,7 +11,7 @@
 # ICO, fallback.
 #
 # Uses only cairosvg (via a throwaway venv, never the project's own
-# ./venv) plus the Python standard library -- the same rasterizer as
+# ./.venv) plus the Python standard library -- the same rasterizer as
 # scripts/rasterize-mark.sh, kept out of pyproject.toml/requirements.lock
 # since this is a one-off asset-generation tool, not a runtime or dev
 # dependency of lode itself. Deliberately does NOT depend on Pillow: this
@@ -39,8 +39,8 @@ OUT="$REPO/docs/assets/favicon.ico"
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
 
-python3 -m venv "$WORKDIR/venv"
-"$WORKDIR/venv/bin/pip" install --quiet cairosvg==2.9.0
+python3 -m venv "$WORKDIR/cairo-env"
+"$WORKDIR/cairo-env/bin/pip" install --quiet cairosvg==2.9.0
 
 # Paths go in as argv, not interpolated into the Python source: a repo path
 # containing a quote would otherwise break the string literal. The SVG is
@@ -52,7 +52,7 @@ python3 -m venv "$WORKDIR/venv"
 # gate over every docs/assets/*.svg
 # (tests/test_brand_assets.py::test_svg_is_strict_xml) so it cannot come
 # back unnoticed, in any file under that glob including this one.
-"$WORKDIR/venv/bin/python3" -c "
+"$WORKDIR/cairo-env/bin/python3" -c "
 import struct
 import sys
 

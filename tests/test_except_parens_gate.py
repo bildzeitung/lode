@@ -323,7 +323,7 @@ def test_ruff_format_really_does_strip_an_unmarked_site(tmp_path: Path) -> None:
     # closed in noxfile.py's `_venv_tool`.
     venv_ruff = project_venv_bin() / "ruff"
     assert venv_ruff.exists(), (
-        f"{venv_ruff} is missing -- run `uv sync --locked --extra dev`. This test "
+        f"{venv_ruff} is missing -- run `uv sync --locked`. This test "
         "asserts version-specific ruff formatting behavior, so it must run "
         "the pinned ruff and never whatever copy happens to be on PATH."
     )

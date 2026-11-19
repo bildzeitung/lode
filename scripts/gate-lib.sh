@@ -5,8 +5,8 @@
 # it escalate_unless_content() (lode-1mea, at the foot of this file).
 # Sourced by every scripts/*.sh gate that draws this distinction -- discover
 # the current set rather than naming it here, since a named list goes stale on
-# every migration -- the same way scripts/python-init.sh already sources
-# scripts/venv-install.sh. Ask for the SOURCE LINE, not the library's name:
+# every migration -- the same way scripts/update-deps.sh already sources
+# scripts/dep-churn-lib.sh. Ask for the SOURCE LINE, not the library's name:
 # `grep -l gate-lib.sh scripts/*.sh` also returns this file plus any script
 # that merely explains why it does NOT source the library (lode-pcee), so use
 #   grep -lE '^[^#]*\. "\$\(dirname "\$0"\)/gate-lib\.sh"' scripts/*.sh
@@ -96,7 +96,7 @@
 #
 # GATE_ADVISORY (lode-ysr6): this section is the OPERATIVE record of the
 # contract -- correct it in place. docs/decisions.md
-# (./venv/bin/python scripts/docs_index_query.py "lode-ysr6") also carries
+# (uv run --frozen python scripts/docs_index_query.py "lode-ysr6") also carries
 # a dated snapshot of the decision and the alternative that was weighed;
 # changing anything below means marking that entry superseded rather than
 # editing it, per that file's own preamble.
@@ -169,7 +169,7 @@
 # newline-joined string reconstituted with mapfile is more machinery, not
 # less). Not a demonstrated improvement over the sentinel below; full
 # reasoning in docs/decisions.md
-# (./venv/bin/python scripts/docs_index_query.py "lode-nwqb") -- and it is
+# (uv run --frozen python scripts/docs_index_query.py "lode-nwqb") -- and it is
 # THAT entry, not lode-ysr6's, that this paragraph's own scope note refers
 # to: revisiting the rejection means marking the lode-nwqb entry superseded.
 if [ "$#" -eq 1 ] && [ "$1" = "--no-advisory" ]; then

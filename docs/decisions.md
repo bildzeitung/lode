@@ -6242,3 +6242,29 @@ entries below from being rewritten to chase the current tree.)
     from the ticket title. Neither is built. The confirming note names only (a)-(d); the
     withdrawn one was alone in listing (e) and (f) as not taken.
   - **Still accepted.** The limits listed in the `lode-jb2q` entry stand.
+
+- **Gates run effectively activated under `uv run --frozen`; this reverses the unactivated-gate
+  stance (`lode-s09w.3`, 2026-11-18, maintainer decision, via `/challenge` on the ticket).**
+  `uv run` prepends the env's `bin` to `PATH` and sets `VIRTUAL_ENV`, so every gate the cutover
+  moves to `uv run --frozen nox ...` runs activated. That supersedes `lode-6874` (gates by explicit
+  path, never activated) and `lode-xx90` (the reviewer, `/land`'s re-gate and `scripts/land-replay.sh`
+  all unactivated, so a test that spawns a tool by bare name stays red, as `lode-p3ks` found).
+  - **Accepted, not engineered around.** The maintainer took the activated gates as they come
+    with `uv run` rather than keeping the unactivated stance by calling the env's `nox` by explicit
+    path. The `/challenge` criticism that surfaced the reversal is on the ticket.
+  - **What is lost.** A bare-name `python`/tool launch inside a test now resolves from the env's
+    `bin` instead of failing, so the class of bug `lode-p3ks` caught stops being visible anywhere.
+    No new guard against bare-name launches in tests was added.
+  - **What is kept.** The reviewer, `/land`'s re-gate and `scripts/land-replay.sh` invoke the gates
+    with the identical `uv run --frozen` form, so they cannot disagree on one tree (`lode-xx90`'s
+    parity goal). `noxfile.py`'s `_venv_tool()` still resolves tools under the env whatever `PATH`
+    holds, and the isolation guard still refuses a sourced `activate`, which `uv run` never needs.
+  - **Rewritten to match:** the `/land` skill's re-gate prose, `coding.md` and `code-reviewer.md`'s
+    gate prose, `docs/agents-workflow.md`'s "Gating from an isolated worktree", and the
+    unactivated-gate pin in `tests/test_land_skill_guard_coverage.py`.
+  - **Landing precondition and hand-off.** The cutover rewrites most instruction files, so it is
+    built and landed only on a drained queue (no ticket `in_progress`, `ready-for-code-review`,
+    `ready-for-land` or `needs-rebase`, `/code` paused). After it lands the main checkout needs
+    `uv sync` once to create `./.venv`; the old `./venv` may be removed only after every session
+    started before the cutover is closed, since those sessions still hold the old `./venv/bin/...`
+    text.

@@ -95,20 +95,23 @@ In Mermaid labels use `<br>` for line breaks (never `\n`), and avoid `<b>`/`<i>`
 
 ## Python environment
 
-Build the venv with the lightweight init script (creates `./venv` and installs from the lock):
+The project uses **uv**. There is no setup step: `uv run --frozen <cmd>` builds or refreshes the
+repo-root `./.venv` from the committed `uv.lock` on first use (from uv's cache, so a fresh worktree
+pays no per-worktree init) and runs `<cmd>` inside it. For an interactive shell, `uv sync` builds
+`./.venv` once.
 
 ```bash
-./scripts/python-init.sh
-. ./venv/bin/activate
+uv run --frozen nox -t fix
+uv run --frozen nox -s tests
+uv run --frozen python scripts/docs_index_query.py "<terms>"
 ```
 
-- The venv lives at **`./venv`** (repo root), not in module subdirs.
+- The env lives at **`./.venv`** (repo root), not in module subdirs.
 - Run **`nox -t fix`** (and `nox -s tests`) before merging any Python change; run tests via nox, not a hand-rolled venv.
-- `pyproject.toml` is the INTENT layer (ranges/floors); `requirements.lock` is the ONLY place exact
-  runtime versions live (hash-verified, `dev` extra deliberately unlocked) — `scripts/python-init.sh`
-  installs from it by default, with `--unlocked` as the escape hatch to resolve fresh from
-  `pyproject.toml`. Full split: [`docs/stack.md`](docs/stack.md#dependency-locking-lode-g2741)
-  (`lode-g274.1`).
+- Dev tools are the `dev` dependency group in `pyproject.toml` (a uv default group, so no flag selects it).
+- `pyproject.toml` is the INTENT layer (ranges/floors); `uv.lock` is the ONLY place exact
+  versions live. `uv run --frozen` never re-locks; change a dependency with `uv lock`. Full split:
+  [`docs/stack.md`](docs/stack.md#dependency-locking-lode-g2741) (`lode-g274.1`).
 
 ## Coding conventions
 

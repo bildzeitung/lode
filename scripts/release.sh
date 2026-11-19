@@ -89,13 +89,12 @@ else
   exit 1
 fi
 
-if [ ! -f ./venv/bin/activate ]; then
-  echo "release.sh: ./venv not found — run scripts/python-init.sh first" >&2
+if ! command -v uv >/dev/null 2>&1; then
+  echo "release.sh: uv not found on PATH — install uv (https://docs.astral.sh/uv/)" >&2
   exit 1
 fi
-. ./venv/bin/activate
-nox -s tests
-nox -s build
+uv run --frozen nox -s tests
+uv run --frozen nox -s build
 
 if [ -n "$NOTES_FILE" ]; then
   # --cleanup=whitespace: the default 'strip' deletes '#'-prefixed lines,

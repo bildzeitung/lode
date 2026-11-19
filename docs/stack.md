@@ -112,15 +112,18 @@ Two files, two jobs — **never pin the same thing in both**:
   characterization fixtures assert extraction behavior against. Moving off 2.1.0 is a deliberate
   act: bump the ceiling and re-baseline `lode-g274.3` first, not an incidental side effect of an
   unrelated dependency bump.
-- **`requirements.lock` is the ONLY place exact versions live.** A committed, fully-transitive,
-  hash-verified (`uv pip compile --generate-hashes`) lock of the **runtime** dependency set only —
-  the `dev` extra is deliberately *not* locked (epic `lode-g274` OQ#1: dev-tool drift is not this
-  lock's job; the gates themselves, run at HEAD, are the backstop for that). Regenerated only via
-  `scripts/compile-lock.sh` (`scripts/update-deps.sh`, `lode-g274.2`) — never hand-edited; the
-  hashes make hand-editing impractical anyway.
+- **`uv.lock` is the place exact versions live for every `uv sync` / `uv run --frozen`
+  (`lode-s09w`).** A committed, fully-transitive lock of the runtime dependencies **and** the `dev`
+  dependency group — `lode-s09w` reversed epic `lode-g274`'s OQ#1, which had left the dev tools
+  unlocked. Regenerated only via `uv lock` — never hand-edited. The older hash-verified
+  `requirements.lock` (runtime only, via `scripts/compile-lock.sh` and `scripts/update-deps.sh`,
+  `lode-g274.2`) still exists until `lode-s09w.4` retires it; nothing builds the developer env from
+  it any more.
 
-  **Single-tool exception: `ruff==0.16.0` is pinned in the `dev` extra.** This is a deliberate,
-  maintainer-approved *partial rescission* of the unlocked-`dev` policy above, scoped to ruff alone.
+  **Single-tool exception: `ruff==0.16.3` is pinned in the `dev` group.** This was a deliberate,
+  maintainer-approved *partial rescission* of the old unlocked-`dev` policy, scoped to ruff alone;
+  with `dev` locked by `uv.lock` it is now an ordinary pin, and the exact pin in `pyproject.toml`
+  stays so a ruff upgrade is a deliberate edit.
   `lode-umh2` established the carve-out at `ruff==0.15.22` as a stopgap; `lode-ju25` then re-pinned
   it to `0.16.0`, and at that point it stopped being a stopgap awaiting a follow-up decision and
   became permanent policy. Ruff 0.16 (released 2026-07-23) enforced a much larger default rule set
@@ -132,93 +135,56 @@ Two files, two jobs — **never pin the same thing in both**:
   **The pin only constrains what `uv` installs, not what the gate runs (`lode-0yfn`).**
   `noxfile.py` sets `default_venv_backend = "none"`, so a session inherits whatever PATH the
   invoking shell has. A stale system-wide tool sitting earlier on PATH than the project's own
-  `./venv/bin` (e.g. a pip `--user` / pipx `ruff`) then silently shadows the pinned copy — the gate
+  `./.venv/bin` (e.g. a pip `--user` / pipx `ruff`) then silently shadows the pinned copy — the gate
   runs a *different* ruff than the one pinned above and still reports success, with no signal that
   anything was skipped (reproduced directly: an ambient `~/.local/bin/ruff` 0.15.11 masking the
   then-pinned `0.15.22`, which silently skipped ruff-format's markdown Python-fence reformatting
-  while `nox -t fix` still exited 0). Fixed by resolving every dev-extra tool a session shells out
-  to — `ruff`, `pytest`, `shellcheck`, `python` — to its explicit on-disk path under `./venv/bin`,
+  while `nox -t fix` still exited 0). Fixed by resolving every dev-group tool a session shells out
+  to — `ruff`, `pytest`, `shellcheck`, `python` — to its explicit on-disk path under `./.venv/bin`,
   derived from `noxfile.py`'s own location rather than searched for on PATH (`noxfile.py`'s
   `_venv_tool` helper), so ambient PATH order cannot substitute a different binary; the session
   fails loudly instead if the project venv (or the tool inside it) is missing. Because it fails
-  closed, **any CI workflow running one of those sessions must build `./venv` first** — installing
-  the dev extra into the runner's ambient interpreter is no longer enough, which is why
-  `coverage.yml` calls `scripts/python-init.sh` instead of `pip install -e '.[dev]'`. Deliberately
+  closed, **any CI workflow running one of those sessions must build `./.venv` first** — installing
+  the dev tools into the runner's ambient interpreter is no longer enough, which is why
+  `coverage.yml` runs `uv sync --locked` instead of `pip install -e '.[dev]'`. Deliberately
   **not** applied to the `build` session, which shells out to ambient `python -m build` on purpose —
-  `build.yml`/`release.yml` run it with no `./venv` at all, since packaging resolves its own
-  isolated PEP 517 env and never touches the dev-extra/lock tools this guarantee exists to pin —
+  `build.yml`/`release.yml` run it with no `./.venv` at all, since packaging resolves its own
+  isolated PEP 517 env and never touches the dev-group/lock tools this guarantee exists to pin —
   nor to `lock_currency`, which resolves `uv` itself (a separate, system-wide tool never installed
-  into `./venv`, already checked explicitly and failed closed if absent, `lode-sys4`).
+  into `./.venv`, already checked explicitly and failed closed if absent, `lode-sys4`).
 
   **Since `lode-s09w.2` the accepted env is `./venv` or `./.venv`, and the launcher decides
-  which.** `_venv_tool` no longer derives one fixed `./venv/bin` path. It resolves tools beside the
-  interpreter running nox, and only when that interpreter's `sys.prefix` is the checkout's own
-  `./venv` or `./.venv`. A nox started from any other env — pipx, the system interpreter, another
-  checkout's venv — fails the session and names both accepted paths; before, it would have run
-  `./venv`'s tools. This lets `./venv/bin/nox …` (the instruction files, until `lode-s09w.3`) and
-  `uv run --frozen --extra dev nox …` (CI) gate through the same noxfile. CI is the first consumer:
-  `tests.yml`, `coverage.yml` and `docs.yml` build `./.venv` from the committed `uv.lock` with
-  `uv sync --locked --extra dev` and run every later step through `uv run --frozen --extra dev`, so
-  on those legs the `dev` extra's tools come from `uv.lock` too. Where the rest of this section says
-  a CI leg calls `scripts/python-init.sh`, installs from `requirements.lock`, or resolves the `dev`
-  extra fresh, that now describes the developer install only; `lode-s09w.3` and `lode-s09w.4`
-  rewrite those passages, and `lode-s09w.4` narrows the accepted set to `./.venv`.
+  which; since `lode-s09w.3` every launcher is `uv run --frozen`.** `_venv_tool` no longer derives
+  one fixed path. It resolves tools beside the interpreter running nox, and only when that
+  interpreter's `sys.prefix` is the checkout's own `./venv` or `./.venv`. A nox started from any
+  other env — pipx, the system interpreter, another checkout's venv — fails the session and names
+  both accepted paths. `lode-s09w.3` moved every instruction file, `scripts/land-replay.sh` and CI
+  to `uv run --frozen nox …`, so `./.venv` is the only env anything builds now; `lode-s09w.4`
+  narrows the accepted set to `./.venv`. `tests.yml`, `coverage.yml` and `docs.yml` build it from
+  the committed `uv.lock` with `uv sync --locked` and run every later step through `uv run
+  --frozen`. `dev` is a `[dependency-groups]` group, which uv installs by default, so no flag
+  selects it.
 
-`./scripts/python-init.sh` installs from the lock by default, with `--require-hashes` so a hash
-mismatch **fails** the install rather than warning. `-e .` (the local package, editable) and
-`--require-hashes` are mutually exclusive in one pip/uv invocation, so the dependency install splits
-in two: a **lock step** (hash-verified runtime deps from `requirements.lock`), then a **dev-extra
-step** (the local package editable together with the `dev` extra, `-e '.[dev]'`, resolved fresh from
-`pyproject.toml`). The dev-extra step does re-resolve the whole graph, but the lock step's pins
-already satisfy `pyproject.toml`'s ranges and uv keeps an already-installed satisfying version — so
-it adds the dev-only packages on top without moving anything the lock step hash-verified. That was
-reproduced rather than argued (`lode-xo99`): a locked venv built with and without an extra
-`-e . --no-deps` step in between came out with the same package set, the same runtime pins, and the
-same resolved `lode` source path either way, so that step was deleted as dead work. `--unlocked`
-skips the lock and resolves everything fresh from `pyproject.toml` instead — the deliberate "what
-would we get today" escape hatch for regenerating the lock or probing an upstream bump before
-committing to it.
+**There is no install script (`lode-s09w.3`).** `uv run --frozen <cmd>` builds or refreshes
+`./.venv` from `uv.lock` on first use, from uv's cache, installing the local package editable and
+the `dev` group; `uv sync` does the same for an interactive shell. The old install script and its
+sourced helper are deleted with no wrapper, and with them the old two-step install (hash-verified
+runtime lock, then `-e '.[dev]'` resolved fresh) and its `--unlocked` escape hatch;
+the lock step's `--require-hashes` check is replaced by uv's own lock verification (`uv sync
+--locked` fails on a stale lock, `--frozen` skips the check). The pip-refresh and `-e . --no-deps`
+measurements (`lode-hfaz`, `lode-xo99`) concerned steps that no longer exist.
+`scripts/update-deps.sh`, which still moves `requirements.lock` until `lode-s09w.4`, rebuilds
+`./.venv` itself with `uv venv` and `uv pip install`.
 
-**The pip-refresh half of that same install (`uv pip install -U pip`) is different — cosmetic, but
-not dead (`lode-hfaz`).** Unlike the deleted `-e . --no-deps` step above, it measurably changes the
-installed package set: it bumps the venv's own pip (26.1.1 → 26.1.2 from ensurepip's bundle in the
-reproduction run), the one difference in an otherwise byte-identical `uv pip list --format=freeze`
-with vs. without it. That holds only while ensurepip's bundle trails the current pip release — the
-usual state, not a guaranteed one, so a re-run finding *no* difference means the window closed, not
-that the method was wrong. Nothing ever installs *through* the upgraded pip: the venv's pip is
-invoked in exactly one place, the `pip install -U uv` that opens this same sequence (and its
-`--unlocked` twin in `python-init.sh`, kept for the same reason), so the upgrade's only effect is
-suppressing pip's own "a new release is available" notice the next time that opening command runs.
-Everything that builds `./venv` builds it from scratch — a first-time `python-init.sh`, both CI legs
-that call it (`tests.yml` and `coverage.yml`; neither caches `./venv`), and `update-deps.sh`'s
-`rebuild_venv` (`rm -rf ./venv` first, every time) — and so starts from ensurepip's bundle regardless
-of history, buying nothing there. It only pays off re-running `python-init.sh` a second time against
-a `./venv` that survived from a prior run: verified directly, `python -m venv` on an *existing* venv
-directory does not reset an already-upgraded pip. Narrow, but real — kept.
-
-**Both CI legs that install lode's deps install from the lock (`lode-7byn`).** `tests.yml`'s
-`tests` job has since `lode-g274.6`; `coverage.yml` was the holdout, for historical reasons only.
-It landed a day *before* `requirements.lock` existed (`lode-qxdn.3`), so its fresh
-`pip install -e '.[dev]'` was the only option there was, never a decision to measure a different
-dependency set — that commit's stated goal was parity with `nox -s tests` on *which tests run*
-("no marker filter, slow tests included … the suite the tests badge backs, not a narrower one"),
-and it said nothing either way about dependencies. `lode-g274.6` then left the leg alone on scope
-grounds ("report-only … neither is in this ticket's scope"), and `lode-0yfn`'s review preserved the
-fresh resolve deliberately rather than decide it. With no affirmative reason anywhere on record for
-the coverage number to describe a *different* dependency set than the tests badge, `lode-7byn`
-dropped `--unlocked`: both legs now run the identical install, so a coverage percentage is
-reproducible from committed bytes instead of from whatever resolved on the day it ran.
-
-**What that parity does not cover.** The lock is the runtime set only, so both legs still resolve
-`pytest`/`pytest-cov`/`coverage` fresh from the `dev` extra (the dev-extra step above) — `lode-7byn`
-pinned the code under measurement, not the tools doing the measuring. The counter-case for resolving
-fresh here (an upstream runtime bump moving the coverage number before the lock is bumped) is real but
-toothless on this leg: `coverage.yml` enforces no threshold, so such a drift fails nothing and
-attributes nothing — and no CI signal fires on an upstream runtime release either way.
+**Both CI legs that install lode's deps install from `uv.lock` (`lode-7byn`, `lode-s09w.2`).**
+`tests.yml`'s `tests` job and `coverage.yml` run the identical `uv sync --locked`, so a coverage
+percentage is reproducible from committed bytes instead of from whatever resolved on the day it
+ran, and, since `dev` is locked, the tools doing the measuring (`pytest`, `pytest-cov`) are
+pinned too. `coverage.yml` enforces no threshold, so a drift there would fail nothing either way;
+moving the lock forward is always a deliberate run, never something CI notices on its own.
 [`lock-currency`](#the-lock-gen-command-is-derived-from-python-version-not-hard-coded-lode-sys4)
 only catches a lock that has fallen *behind* a `pyproject.toml` constraint change, never one that has
-fallen behind PyPI — uv's preference seeding, described in that same section. Moving the runtime set
-forward is always a deliberate `scripts/update-deps.sh` run, never something CI notices on its own.
+fallen behind PyPI.
 
 **A green run files a churn-evaluation bd stub, not a finding (`lode-i642`).** Reading upstream
 changelogs for the packages that moved, and judging required-work-vs-judgment-call in the context of
@@ -234,12 +200,12 @@ component (mechanically decidable from the diff already on hand) — a ticket pe
 noise gets ignored. `--no-file` suppresses filing outright; `--dry-run` never reaches this step.
 Because filing writes Dolt, a missing or failing `bd` (or the `bd dolt push` after it) only warns —
 it never changes the script's exit status or the lock promotion, preserving the script's existing
-contract that it never mutates anything outside `./venv` and `requirements.lock`.
+contract that it never mutates anything outside `./.venv` and `requirements.lock`.
 
 The diff parsing, the rendering, and the stub's skip policy live in the sourceable
 `scripts/dep-churn-lib.sh`, not inline in `update-deps.sh` — so they get `nox -s shellcheck` and
-`tests/test_dep_churn_lib.py`, the same shape `scripts/venv-install.sh` and `scripts/gate-lib.sh`
-already use. **A sourceable shell library in this repo returns its data on stdout and holds no
+`tests/test_dep_churn_lib.py`, the same shape `scripts/gate-lib.sh`
+already uses. **A sourceable shell library in this repo returns its data on stdout and holds no
 cross-call state** — the standing rule the split exists to enforce, not a stylistic preference: a
 caller consumes such a helper through command substitution, which runs in a *subshell*, so a
 function that "returns" a value by setting a global has that value silently discarded. lode-i642's
@@ -263,7 +229,7 @@ Consequences of this model, stated honestly:
 - **This model does not give back `lode-ju25`'s churn-proofing.** A future ruff default-set
   expansion can turn `nox -t fix` red repo-wide again, exactly as 0.16 did. The `ruff==0.16.0` pin
   above is the only mitigation, and it works only because an expansion can now arrive solely via a
-  deliberate version bump, never a `dev`-extra resolve.
+  deliberate version bump, never a `dev`-group resolve.
 
 **Markdown Python-fence formatting is accepted (`lode-ju25` decision 3).** `ruff format` also
 formats the Python code fences embedded in `docs/*.md`; the resulting churn to those fences is
@@ -315,8 +281,7 @@ own copy of the `uv pip compile` command string:
   [onboarding.md](onboarding.md#updating-dependencies)); the corresponding `--upgrade` /
   `--upgrade-package NAME` go *down* to `compile-lock.sh` — not flags `update-deps.sh` accepts.
 - **CI enforcement (`lode-g274.6` / `lode-sys4`):** `tests.yml`'s `tests` job installs from
-  `requirements.lock` itself (via `scripts/python-init.sh`, the same install path a developer runs),
-  and a separate, independent `lock-currency` job in the same workflow verifies the lock is current —
+  `uv.lock` (`uv sync --locked`, the same install a developer runs), and a separate, independent `lock-currency` job in the same workflow verifies the lock is current —
   it runs `scripts/compile-lock.sh -o requirements.lock`, **in place** against the just-checked-out
   committed lock. uv feeds an existing output file's own pins back to the resolver as its *preference*
   set by default (only `--upgrade`/`-U` ignores them), so the resolution only moves when a
@@ -1010,7 +975,7 @@ deciding factors were:
   Node/Chromium toolchain, per [`CLAUDE.md`](../CLAUDE.md)) and Hugo/Zola (not Python, and a second
   static-site toolchain the venv/lock already cover for nothing).
 
-**Dependency**: `mkdocs-material>=9.5,<10` in the `dev` extra in `pyproject.toml` (`lode-fhql.20`,
+**Dependency**: `mkdocs-material>=9.5,<10` in the `dev` dependency group in `pyproject.toml` (`lode-fhql.20`,
 2026-08-14 — **reverses** the original decision below to put it in its own CI-only `docs` extra).
 The original premise was that the docs build had no local value (`lode-fhql.9`'s Pages workflow
 builds the site; no local `dev` install needs it) — that premise broke the same day a local `mkdocs

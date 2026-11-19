@@ -70,7 +70,7 @@ def test_index_carries_the_required_content() -> None:
     assert "assets/lockup.svg" in text
     # The install command that actually works (lode-fhql.2 / README parity).
     assert "pip install lode_kb-*.whl" in text
-    assert "./scripts/python-init.sh" in text
+    assert "uv sync" in text
     # The two-line demo.
     assert "$ lode add" in text
     assert '$ lode ask "what did we decide about auth?"' in text

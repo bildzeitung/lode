@@ -58,7 +58,7 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   file under `docs/` (in the worktree); open questions to `docs/decisions.md`; tunables to
   `docs/configuration.md`. A design fact recorded only in a bd note or memory **forks the record**.
   Before grepping a doc for what it says on something, try the lookup index first —
-  `./venv/bin/python scripts/docs_index_query.py "<terms>"` — it returns ranked
+  `uv run --frozen python scripts/docs_index_query.py "<terms>"` — it returns ranked
   `path:line_lo-line_hi` pointers into `docs/*.md` without loading a whole file (`lode-t6o1`; see
   [docs/agents-workflow.md](../../docs/agents-workflow.md#docs-lookup-index-lode-t6o1)).
 - **File a qualifying mistake to MISTAKES.md autonomously — I don't wait to be told.** If, while
@@ -307,7 +307,7 @@ a `land/<other-id>` that has *since landed* — whose `HEAD` is already an ances
 passing the check trivially — still gets its untracked leftovers swept. Full reasoning lives in the
 script's own header comment and
 [docs/decisions.md](../../docs/decisions.md)
-(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`) — one place, not duplicated
+(`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`) — one place, not duplicated
 across every call site, which is the whole point of the extraction.
 
 **The worktree is already locked — I take no lock of my own (lode-t76f).** A freshly created worktree
@@ -375,7 +375,7 @@ mode is destructive repair, appropriate as a one-time precondition, not as a mid
   arg — comments, section headers — trips a security prompt; Write avoids it).
 - Match the surrounding code's idiom, naming, and comment density, and honor the coding-style fiats
   in [`docs/conventions.md`](../../docs/conventions.md) (e.g. Typer never argparse — `@import`'d into
-  my context via CLAUDE.md). The venv lives at **`./venv`** (repo root).
+  my context via CLAUDE.md). The env lives at **`./.venv`** (repo root).
 - Track work you **discover** mid-task as its own issue, linked to the parent — don't silently
   expand scope or bury it in this commit. **Pick the dependency type deliberately — bd allows only
   one type per pair, so this is a choice, not a default** (lode-c0t3; full rationale:
@@ -551,22 +551,24 @@ post-merge re-gate run **all three buckets** (the full `tests` session, not `uni
 honor, not mine to widen:
 
 ```bash
-./scripts/python-init.sh              # first time / if no venv (builds ./venv itself)
-./venv/bin/nox -t fix                 # ruff format + lint (fixes in place)
-./venv/bin/nox -s unit                # the tests bucket's FAST view -- builders only; the
+uv run --frozen nox -t fix            # ruff format + lint (fixes in place)
+uv run --frozen nox -s unit           # the tests bucket's FAST view -- builders only; the
                                        # reviewer/land re-gate runs `nox -s tests` (full) instead
 ```
 
-**Call the venv's `nox` by explicit path — never `. ./venv/bin/activate`, and never a bare `nox`
-command on `$PATH`** (lode-6874). The isolation guard refuses any sourced command (and any
-hand-rolled `VIRTUAL_ENV=...`/`PATH=...` too); `nox` isn't on `PATH` unactivated; and
-`noxfile.py`'s `_venv_tool()` (lode-0yfn) already resolves the tools under `./venv/bin` regardless
-of activation, so lode-jh80 is satisfied without it. A missing venv fails loudly on its own —
-`./venv/bin/nox` exits 127 naming the path; re-run `./scripts/python-init.sh` and re-gate. On a
-branch whose base predates lode-0yfn, `-s unit` instead dies with `Program pytest not found` (no
-`_venv_tool()` yet) — run `./venv/bin/pytest -m "not slow"` directly, which is equally
-guard-friendly. **This overrides CLAUDE.md's Python-environment section**, which shows the
-activation form for a human at a terminal — correct there, refused here. Full mechanism:
+**Gate through `uv run --frozen` — never a sourced `activate` script, never a bare `nox` command on
+`$PATH`** (lode-s09w.3, superseding lode-6874's explicit-path rule). There is no setup step:
+`uv run --frozen` builds or refreshes this worktree's own `./.venv` from `uv.lock` on first use,
+from uv's cache, so a fresh worktree needs no per-worktree init (the old init-script step is gone).
+`--frozen` never re-locks. `uv run` puts `./.venv/bin` first on `PATH` and sets `VIRTUAL_ENV`, so my
+gates run effectively **activated**, the same as the reviewer's and `/land`'s: that reverses the
+old unactivated stance (lode-xx90), by maintainer decision recorded in `docs/decisions.md`. The
+isolation guard still refuses any sourced command (and any hand-rolled `VIRTUAL_ENV=...`/`PATH=...`),
+and `uv run --frozen nox …` has neither shape. `noxfile.py`'s `_venv_tool()` (lode-0yfn) resolves the
+tools under the env regardless, so lode-jh80 is satisfied. A missing `uv` exits 127 naming the
+command: a machine fault, report it and stop. On a branch whose base predates lode-0yfn, `-s unit`
+instead dies with `Program pytest not found` (no `_venv_tool()` yet) — run `uv run --frozen pytest
+-m "not slow"` directly. Full mechanism:
 [docs/agents-workflow.md](../../docs/agents-workflow.md#gating-from-an-isolated-worktree-lode-6874).
 
 A gate that fails after step 6's commit leaves my fix uncommitted — that's expected, not a problem, so
@@ -771,7 +773,7 @@ the `case`/ancestor check, not just on a failed one (lode-3v1p) — so a recycle
 *is* an ancestor of `origin/trunk` (e.g. recycled onto a `land/<other-id>` that has since landed) still gets
 its untracked leftovers swept before they can pollute my `git status --short` assertions and the `nox`
 run; full reasoning in the script's own header and [docs/decisions.md](../../docs/decisions.md)
-(`./venv/bin/python scripts/docs_index_query.py "lode-3v1p"`). Exit 127 (missing) or 126 (not
+(`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`). Exit 127 (missing) or 126 (not
 executable) distinguishes a genuinely
 missing/non-executable script (bootstrap gap — report and stop) from the script running and
 legitimately exiting 1 (already reported by the script itself).
@@ -859,16 +861,15 @@ rule from the non-negotiables applies here too: no `run_in_background`, no `Moni
 output in this turn.
 
 ```bash
-./scripts/python-init.sh              # a fresh worktree — always needs its own venv
-./venv/bin/nox -t fix                 # ruff format + lint (fixes in place)
-./venv/bin/nox -s tests               # the tests bucket's FULL view (not `unit` -- this cycle
+uv run --frozen nox -t fix            # ruff format + lint (fixes in place)
+uv run --frozen nox -s tests          # the tests bucket's FULL view (not `unit` -- this cycle
                                        # is the last gate before trunk, same bar as the reviewer)
-./venv/bin/nox -t everything-else     # shellcheck + linkcheck + docstringcheck + docs
+uv run --frozen nox -t everything-else   # shellcheck + linkcheck + docstringcheck + docs
 scripts/validate-mermaid.sh           # only if a docs/ diagram is in the branch
 ```
 
-Same explicit-path form as the fresh-build cycle above — guard-friendly, and no activation needed
-(lode-6874); never hand-roll the activation.
+Same `uv run --frozen` form as the fresh-build cycle above — guard-friendly, with nothing to set up
+first (a fresh worktree builds its own `./.venv` on first use) and nothing to activate by hand.
 
 If the `fix` session reformats anything, commit it — step 3 already completed the merge commit, so this is
 an ordinary commit on top of it, not something folded into the merge. **Gates must be green before I
@@ -1093,8 +1094,8 @@ own guidance); the cycle above already applies them, but the *why*:
 | Technical review | **not mine** — the separate `code-reviewer` agent (Fable) fetches `land/<id>` into its own worktree and runs `/code-review` medium, then its own correctness reasoning verifying that skill's findings (lode-1fyb), + `/simplify` there |
 | Rebase pickup | `needs-rebase` ticket → fetch + check out `land/<id>` into my own launch worktree, `git merge origin/trunk` (resolve a *mechanical* conflict directly with `Edit`; escalate a *genuine* one), re-gate, commit, **push it myself** (ordinary, non-force — a merge never rewrites origin), swap to `ready-for-land` myself (no review) (lode-cln) |
 | Rebase pickup's own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
-| Venv | `./venv` via `./scripts/python-init.sh` |
-| Gates | blessed bucket tags (lode-6ldh): builders run `nox -t fix` + `nox -s unit` (the `tests` bucket's fast view); `code-reviewer`/`/land`'s re-gate (and this file's rebase-pickup cycle) run `nox -t fix` + `nox -s tests` (full) + `nox -t everything-else` — never an enumerated `everything-else` session by name, so the gate list can't silently lag `noxfile.py` (lode-vvt1) — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` command on `$PATH` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn); `scripts/validate-mermaid.sh` for diagrams |
+| Env | `./.venv`, built on first use by `uv run --frozen` from `uv.lock` (no init step, lode-s09w.3) |
+| Gates | blessed bucket tags (lode-6ldh): builders run `nox -t fix` + `nox -s unit` (the `tests` bucket's fast view); `code-reviewer`/`/land`'s re-gate (and this file's rebase-pickup cycle) run `nox -t fix` + `nox -s tests` (full) + `nox -t everything-else` — never an enumerated `everything-else` session by name, so the gate list can't silently lag `noxfile.py` (lode-vvt1) — always `uv run --frozen nox …`, effectively activated (lode-s09w.3, superseding lode-6874's explicit-path rule); never a sourced `activate` script (the isolation guard refuses it) or a bare `nox` on `$PATH`; `scripts/validate-mermaid.sh` for diagrams |
 | Clean-tree assertion | `git status --short` empty before gating, before hand-off, and before a rebase-pickup push — `nox` gates the working tree, not `HEAD`, so **the tree that gated green must be the tree committed and pushed** (lode-tpt) |
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; follow them |
 | Design source of truth | `docs/` (settled), `docs/decisions.md` (open), `docs/configuration.md` (tunables) |

@@ -88,7 +88,6 @@ scripts/bd-docs-nit-create.sh
 scripts/docs-nits-threshold-gate.sh
 scripts/code-concurrency-cap.sh
 scripts/bd-dolt-push.sh
-scripts/python-init.sh
 scripts/validate-mermaid.sh
 scripts/check-decisions-no-silent-rewrite.sh
 scripts/gh-write-guard.sh
@@ -200,7 +199,7 @@ echo
 echo "gate tests"
 set -- tests/test_*.py
 if [ -e "$1" ]; then
-  ok "tests/ present ($# gate test modules) -- run: ./venv/bin/pytest tests -q"
+  ok "tests/ present ($# gate test modules) -- run: uv run --frozen pytest tests -q"
 else
   # Not a hard failure: a project may deliberately drop them. But say so loudly,
   # because without them every mechanism below is prose-enforced only.

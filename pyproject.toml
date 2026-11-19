@@ -15,7 +15,7 @@ license-files = ["LICENSE"]
 # This file stays the INTENT layer -- ranges/floors, with a real lower bound
 # only where a version demonstrably matters (trafilatura below is the first
 # such case). requirements.lock is the ONLY place exact versions live --
-# regenerated via `uv pip compile` (scripts/python-init.sh), never hand-edited
+# regenerated via `uv pip compile` (scripts/update-deps.sh), never hand-edited
 # here. See docs/stack.md#dependency-locking-lode-g2741 for the split.
 dependencies = [
     "textual[syntax]", # TUI, plus the tree-sitter grammar bundle (~15
@@ -68,7 +68,7 @@ dependencies = [
                              # ceiling and re-baseline lode-g274.3 first.
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest",        # tests (run via nox)
     "pytest-xdist",  # parallel test execution (`-n auto`, lode-b4w.6)
@@ -80,7 +80,7 @@ dev = [
     "nox",           # task runner (`nox -t fix` before merging)
     "ruff==0.16.3",   # lint / format -- pinned to prevent unwanted churn
                       # Single-tool carve-out from the otherwise-unlocked `dev`
-		      # extra (lode-g274.1) -- not a reversal of that policy
+		      # group (lode-g274.1) -- not a reversal of that policy
 		      # for any other dev tool.
     "shellcheck-py", # bundles the shellcheck binary — the `nox -s shellcheck` gate
     "build",         # `python -m build` — canonical wheel/sdist packaging front-end
@@ -108,7 +108,7 @@ dev = [
                                 # intra-doc anchors nobody had seen, so it
                                 # belongs on every dev's PATH like any other
                                 # gate tool. Pinned exact (single-tool carve-out
-                                # from the otherwise-unlocked `dev` extra, same
+                                # from the otherwise-unlocked `dev` group, same
                                 # pattern as ruff above, lode-fhql.9 HUMAN
                                 # DECISION 2026-08-14): CI's docs.yml installs
                                 # this exact pin too (kept in sync by

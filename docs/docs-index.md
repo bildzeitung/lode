@@ -11,7 +11,7 @@ applies across every design doc under `docs/`. Run the on-demand FTS5 lookup CLI
 a never-tracked index over all of `docs/*.md` on every invocation:
 
 ```bash
-./venv/bin/python scripts/docs_index_query.py "<search terms — a bd id, a phrase, anything>"
+uv run --frozen python scripts/docs_index_query.py "<search terms — a bd id, a phrase, anything>"
 ```
 
 **Output contract:** ranked `path:line_lo-line_hi` pointers with a short snippet — never a whole doc,

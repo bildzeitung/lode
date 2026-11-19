@@ -44,8 +44,7 @@ quality gates); the short version:
 ```bash
 git clone https://github.com/bildzeitung/lode.git
 cd lode
-./scripts/python-init.sh
-. ./venv/bin/activate
+uv sync
 ```
 
 ## The idea in one breath
