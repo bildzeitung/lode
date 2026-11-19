@@ -139,8 +139,8 @@ def run_ask(
     is unaffected.
 
     Imports the retrieval/Q&A stack here, not at module scope:
-    ``lode.retrieval`` (which ``cited_answer`` imports in turn) loads
-    networkx, a cost that merely importing this module to register the ask
+    ``cited_answer`` (and the ``lode.retrieval`` it imports in turn) costs about
+    40 ms of import, which merely importing this module to register the ask
     screen in ``LodeApp.SCREENS`` -- as every TUI start does -- should not
     carry.
     """

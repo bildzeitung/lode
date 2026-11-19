@@ -50,9 +50,9 @@ def ask(
     no_egress material that matched is surfaced as "present, withheld from
     cloud synthesis" rather than silently dropped.
     """
-    # Imported here, not at module scope: lode.retrieval (which cited_answer
-    # imports in turn) loads networkx, and lode.cli imports this module to
-    # register the command -- so at module scope every command, the instant
+    # Imported here, not at module scope: cited_answer (and the lode.retrieval it
+    # imports in turn) costs about 40 ms of import, and lode.cli imports this module
+    # to register the command -- so at module scope every command, the instant
     # capture path (``add``) included, would pay for it at startup.
     from lode import cited_answer
     from lode.retrieval import _retrieve

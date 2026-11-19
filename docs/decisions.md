@@ -6354,3 +6354,17 @@ entries below from being rewritten to chase the current tree.)
   all-capitals stale-flag keyword, which is banned on any line today. The ticket asked whether that
   one pattern would keep applying to heads; the ruling for (a) does not answer it. The `lode-rtcx`
   allowlist entry stays, and the module docstring records the over-match as accepted.
+
+- **networkx is imported inside the one function that builds the graph; the callers' deferral of
+  `cited_answer` and `lode.retrieval` stays, for a different reason (`lode-9voy`, 2026-11-19).**
+  `lode.retrieval` imports networkx inside `_graph_expand` (the one runtime use; the annotation is
+  a local variable annotation, never evaluated). Measured with `python -X importtime` after
+  `import lode.cli`, one session, warm cache: `lode.retrieval` about 1.0 s cumulative before
+  (networkx nearly all of it), about 7-13 ms after; `lode.cited_answer` about 39 ms after, with
+  `lode.retrieval` inside it. That is about 10% of `import lode.cli` (about 370-410 ms), not
+  negligible on the capture path, so the function-local imports in `lode.cli.ask` and
+  `lode.tui.services.ask` stay and their comments now cite the 40 ms, not networkx. The imports in
+  `cli/reembed.py` and `cli/models.py` carried no networkx comment and are untouched.
+  `tests/test_import_boundary.py` still pins networkx off startup, now at the leaf. This refines
+  the `lode-g2ko` entry's parenthetical that networkx is what keeps the `lode.retrieval` import
+  deferred.
