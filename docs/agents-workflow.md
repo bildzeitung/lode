@@ -1966,28 +1966,29 @@ either. One limit, left as it is: bd records no author on a note that an agent c
 orchestrating session writes the maintainer's rulings to bd for them. "A maintainer note" is a
 convention an agent honours, not a fact it can verify.
 
-**The interactive main session is bound too (maintainer ruling 2026-11-18, `lode-v3xd`).**
-Directive 10 binds it the way Directive 8 says so for its own rule. There the maintainer's
-in-conversation instruction is the approval; the scratch `LODE_HOME` requirement still applies.
+**The interactive main session is bound too (maintainer ruling 2026-11-18, `lode-v3xd`),** as
+Directive 8 binds it for its own rule; there the approval is the maintainer's in-conversation
+instruction.
 
-**The scratch `LODE_HOME` is not run on bare defaults and exposes no user data (maintainer ruling
-2026-11-18/19, `lode-v3xd`).** A bare scratch home has no `config.toml` and no `models/`
-cache, so an approved call would run on the default provider and re-download model weights.
-`model_cache_dir()` is `$LODE_HOME/models` (`src/lode/config.py`, verified for this ruling), so:
+**Why Directive 10's scratch-home scrub reads as it does (maintainer ruling 2026-11-18/19,
+`lode-v3xd`).**
 
-- `models/` may be a symlink to the real cache.
-- `config.toml` is copied only after a scrub that (i) drops every field `src/lode/config.py`
-  marks `secret=True`, derived from that marking and not a hand-kept list (the four Atlassian
-  email and token fields today), and (ii) drops the connector fields as a group: `jira_enabled`,
-  `confluence_enabled`, `jira_base_url`, `confluence_base_url`, `jira_projects`, and
-  `no_egress_scopes` (its rows name real hosts or projects). Group, not just secrets, because
-  Atlassian credentials are env-var primary (`LODE_JIRA_TOKEN` and the like are read before
-  `config.toml`) and `jira_active`/`confluence_active` are "enabled flag AND credentials
-  resolve": a secrets-scrubbed config still carrying `*_enabled = true` is a live connector to the
-  real site wherever those variables are set. Dropping a base URL alone is not enough, since an
-  empty `confluence_base_url` means "infer" while an absent `*_enabled` flag defaults to off.
-  The field list is checked against `src/lode/config.py` as of this ruling; a connector field
-  added later must join the group.
+- **Not bare defaults.** A bare scratch home has no `config.toml` and no `models/` cache, so an
+  approved call would run on the default provider and re-download model weights.
+  `model_cache_dir()` is `$LODE_HOME/models` (`src/lode/config.py`, verified for this ruling), so
+  a symlinked `models/` is the real cache.
+- **Secrets are derived, not listed.** The scrub reads the `secret=True` marking in
+  `src/lode/config.py`, so a credential field added later is covered without editing the rule.
+- **Connector fields go as a group, not just secrets.** Atlassian credentials are env-var
+  primary (`LODE_JIRA_TOKEN` and the like are read before `config.toml`) and
+  `jira_active`/`confluence_active` are "enabled flag AND credentials resolve": a
+  secrets-scrubbed config still carrying `jira_enabled = true` is a live connector to the real
+  site wherever those variables are set. Dropping a base URL alone is not enough, since an empty
+  `confluence_base_url` means "infer" while an absent enabled flag defaults to off.
+  `no_egress_scopes` goes too because its rows name real hosts or projects.
+- **The group is a hand-kept list.** It was checked against `src/lode/config.py` as of this
+  ruling; a connector field added later must be added to Directive 10's list.
+  `ask_tools_enabled` is not in it, since the ruling did not name it (open: `lode-t9h1`).
 
 **How approval is requested mid-run (builder's proposal, refined in technical review; confirmed by
 the maintainer 2026-11-18, `lode-v3xd`).** Directive 10's "Without approval" steps are this

@@ -6264,7 +6264,7 @@ entries below from being rewritten to chase the current tree.)
   - **Open (`lode-v3xd`).** What an agent does mid-run without approval (a free probe where one
     answers the question, otherwise escalate and stop) is a builder's proposal refined in
     technical review, not a maintainer ruling. Ask-and-continue was not taken: a headless
-    sub-agent has no channel to the maintainer. (Settled: see the Update below.)
+    sub-agent has no channel to the maintainer.
   - **Departs from the ticket.** The ticket named tests marked `network` as provider spend. They
     send nothing to a provider and the offline gates run them; the directive lists the live eval
     (`LODE_RUN_LIVE_EVAL=1`) instead.
@@ -6285,8 +6285,9 @@ entries below from being rewritten to chase the current tree.)
     user data: `models/` may be symlinked to the real cache (`model_cache_dir()` is
     `$LODE_HOME/models`, verified), and `config.toml` is copied only after a scrub.
   - **The scrub.** (i) Drop every field `src/lode/config.py` marks `secret=True`, derived from the
-    marking. (ii) Drop the connector fields as a group: the `*_enabled` flags, `*_base_url`,
-    `jira_projects` and `no_egress_scopes`. Widened beyond secrets because Atlassian credentials
+    marking. (ii) Drop the connector fields as a group: `jira_enabled`,
+    `confluence_enabled`, `jira_base_url`, `confluence_base_url`, `jira_projects` and
+    `no_egress_scopes`. Widened beyond secrets because Atlassian credentials
     are env-var primary and `jira_active`/`confluence_active` are "enabled flag AND credentials
     resolve", so an enabled flag left in a copied config is a live connector to the real site
     wherever the variables are set; a base URL dropped alone does not disable Confluence (empty
@@ -6296,7 +6297,6 @@ entries below from being rewritten to chase the current tree.)
   - **Changed.** `CLAUDE.md` Directive 10 and the `lode-3xzy` section of
     [agents-workflow.md](agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
     now carry 3a and 3b.
-
 - **Update (lode-gcbg, 2026-11-18): the maintainer confirmed the `lode-jb2q` rebase-pickup rules,
   points 1-3 as built.** The `lode-jb2q` entry above said confirming or reversing it was this
   ticket's to settle.
