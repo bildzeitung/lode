@@ -717,11 +717,18 @@ class LLMProviderError(RuntimeError):
     provider: str
     status_code: int | None
     request_id: str | None
+    refusal: bool  # the model declined the request (lode-g9q3)
+    refusal_category: str | None  # the provider's category, when it gave one
 
 
 class LLMAuthError(LLMProviderError):
     """No credentials resolved for the active provider — raised by build_provider()."""
 ```
+
+`refusal` is the provider-neutral signal that the model declined the request; each provider maps its
+own refusal shape onto it, so a caller never string-matches the message. The worker reads it to
+dead-letter a refused enrich job on the first occurrence
+([storage.md](storage.md#transient-vs-permanent-job-failures--pinned-lode-9yy)).
 
 Every `LLMProvider` implementation converts the SDK's **status** errors (4xx/5xx) into
 `LLMProviderError` (or a subclass) rather than letting them escape raw, so callers (`enrich.py`/

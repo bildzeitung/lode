@@ -304,12 +304,21 @@ register_step("embed_gap", _embed_gap_step)
 def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None) -> int:
     """Enrich gap: re-enqueue enrich jobs for head versions missing fresh enrichment.
 
-    ``settings`` is unused here (see :data:`StepFn`).
+    ``settings`` supplies the configured enrichment model for the refusal
+    exemption below; it defaults to a fresh ``Settings()`` when omitted.
 
     **Gap signal, part 1 (job existence):** a non-tombstone, non-purged,
     non-``no_egress`` head version with no in-flight/retryable enrich job
     (``pending``, ``running``, or ``failed``).  A ``dead`` job (max-retries
     exhausted) or the total absence of a job is treated the same as before.
+
+    **Refusal exemption (lode-g9q3, docs/decisions.md lode-ahme):** a head
+    whose enrich job is ``dead`` *because the model refused it*
+    (``jobs.refusal = 1``) is NOT a gap while that job's ``prompt_ver`` equals
+    the current :data:`lode.enrich.ENRICH_PROMPT_VER` and its ``refusal_model``
+    equals ``settings.enrichment_llm.model``. A new head version is a different
+    ``target_version`` and so never matches; changing the prompt version or the
+    enrichment model re-opens the item. Every other dead job keeps re-enqueueing.
 
     **Gap signal, part 2 (prompt/model change, lode-0wj.9 / lode-q47):** even
     when a ``done`` enrich job exists for the head, it is still a gap unless
@@ -341,6 +350,7 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
 
     Returns the count of gap versions found (each triggered one enqueue call).
     """
+    settings = settings or Settings()
     gap_versions = conn.execute(
         f"""
         SELECT n.head_version_id
@@ -363,8 +373,17 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
                 AND j.status = 'done'
                 AND j.prompt_ver = ?
           )
+          AND NOT EXISTS (
+              SELECT 1 FROM jobs j
+              WHERE j.type = 'enrich'
+                AND j.target_version = n.head_version_id
+                AND j.status = 'dead'
+                AND j.refusal = 1
+                AND j.prompt_ver = ?
+                AND j.refusal_model = ?
+          )
         """,
-        (ENRICH_PROMPT_VER,),
+        (ENRICH_PROMPT_VER, ENRICH_PROMPT_VER, settings.enrichment_llm.model),
     ).fetchall()
 
     if not gap_versions:

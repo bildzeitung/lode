@@ -296,6 +296,38 @@ def cas_update_running(
     return cur.rowcount == 1
 
 
+def record_refusal_dead(
+    conn: sqlite3.Connection,
+    job_id: int,
+    claimed_at: str | None,
+    error_msg: str,
+    *,
+    category: str | None,
+    model: str,
+    prompt_ver: str,
+) -> bool:
+    """Dead-letter an enrich job the model refused, on its first occurrence (lode-g9q3).
+
+    A refusal is terminal for the note version (docs/decisions.md, lode-ahme):
+    no retry is worth charging, so ``attempts`` is left untouched and no backoff
+    is scheduled. The row is marked ``refusal = 1`` and records the refusal
+    ``category`` (NULL when the provider gave none), the enrichment ``model``
+    and the ``prompt_ver`` in force, which reconcile compares to decide whether
+    the refusal still stands. CAS-guarded on the exact claim exactly like
+    :func:`record_job_failure`; returns True when the claim was held and the
+    row was updated, False when it was already lost.
+    """
+    with conn:
+        return cas_update_running(
+            conn,
+            job_id,
+            claimed_at,
+            "status = 'dead', last_error = ?, refusal = 1, refusal_category = ?, "
+            "refusal_model = ?, prompt_ver = ?",
+            (error_msg, category, model, prompt_ver),
+        )
+
+
 def record_job_failure(
     conn: sqlite3.Connection,
     job_id: int,

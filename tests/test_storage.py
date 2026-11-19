@@ -759,6 +759,47 @@ def test_jobs_live_index_migration_is_idempotent(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_refusal_columns_migrated_onto_pre_existing_jobs_table(tmp_path: Path) -> None:
+    """lode-g9q3: a ``jobs`` table predating the refusal columns gains all three.
+
+    A pre-existing row must read back ``refusal = 0`` (not NULL), or reconcile's
+    ``refusal = 1`` exemption and ``lode status``'s refusal listing would both
+    have to reason about a third value.
+    """
+
+    def _refusal_columns(conn: sqlite3.Connection) -> dict[str, tuple]:
+        # name -> (type, notnull, default)
+        return {
+            r[1]: (r[2], r[3], r[4])
+            for r in conn.execute("PRAGMA table_info(jobs)")
+            if r[1].startswith("refusal")
+        }
+
+    db = tmp_path / "lode.db"
+    _seed_pre_lode_uri7_db(db)
+
+    conn = init_db(db)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == _SCHEMA_VERSION
+        migrated = _refusal_columns(conn)
+        assert conn.execute(
+            "SELECT DISTINCT refusal, refusal_category, refusal_model FROM jobs"
+        ).fetchall() == [(0, None, None)]
+    finally:
+        conn.close()
+
+    fresh_conn = init_db(tmp_path / "fresh.db")
+    try:
+        fresh = _refusal_columns(fresh_conn)
+    finally:
+        fresh_conn.close()
+    assert set(fresh) == {"refusal", "refusal_category", "refusal_model"}
+    assert migrated == fresh
+
+    # Idempotent: re-running init_db on the migrated DB must not raise.
+    init_db(db).close()
+
+
 def test_schema_index_predicate_matches_live_job_statuses() -> None:
     """``idx_jobs_live``'s WHERE clause and ``jobs.LIVE_JOB_STATUSES`` are one set.
 

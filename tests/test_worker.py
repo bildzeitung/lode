@@ -4139,3 +4139,230 @@ def test_dead_letter_remediation_comes_from_the_registration_site() -> None:
     assert "[" not in advice  # plain prose -- no console markup in this layer
     assert dead_letter_remediation("embed") is None
     assert dead_letter_remediation("not_a_job_type_at_all") is None
+
+
+# ---------------------------------------------------------------------------
+# Refusal is terminal for an enrich job (lode-g9q3, decision lode-ahme)
+# ---------------------------------------------------------------------------
+
+
+def _refusing_registry(calls: list[str]) -> dict[str, HandlerFn]:
+    def _refuse(conn, tv, db, s):
+        calls.append(tv)
+        raise LLMProviderError(
+            "model refused",
+            provider="anthropic",
+            refusal=True,
+            refusal_category="cyber",
+        )
+
+    return {"enrich": _refuse}
+
+
+def _refusal_row(conn: sqlite3.Connection, job_id: int) -> tuple:
+    return conn.execute(
+        "SELECT status, attempts, refusal, refusal_category, refusal_model, "
+        "prompt_ver FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+
+
+def test_run_enrich_refusal_is_dead_on_first_call_without_charging_attempts(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    job_id = _insert_job(conn, "enrich", "ver-1")
+    _claim_one(conn, ("enrich",), _now_iso())
+    calls: list[str] = []
+    registry = _refusing_registry(calls)
+
+    assert run_one(conn, job_id, db_path, settings, registry) is False
+
+    assert _refusal_row(conn, job_id) == (
+        "dead",
+        0,
+        1,
+        "cyber",
+        settings.enrichment_llm.model,
+        ENRICH_PROMPT_VER,
+    )
+    # Exactly one LLM call: nothing claims a dead row again.
+    assert _claim_one(conn, ("enrich",), _now_iso()) is None
+    assert calls == ["ver-1"]
+
+
+def test_run_enrich_non_refusal_failure_is_not_marked_refusal(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    job_id = _insert_job(
+        conn, "enrich", "ver-1", attempts=settings.retry_max_attempts - 1
+    )
+    _claim_one(conn, ("enrich",), _now_iso())
+
+    def _boom(conn, tv, db, s):
+        raise LLMProviderError("rate limited", provider="anthropic")
+
+    run_one(conn, job_id, db_path, settings, {"enrich": _boom})
+
+    row = _refusal_row(conn, job_id)
+    assert row[0] == "dead"
+    assert row[1] == settings.retry_max_attempts
+    assert row[2] == 0
+
+
+def _enrich_statuses(conn: sqlite3.Connection) -> list[tuple]:
+    return conn.execute(
+        "SELECT status FROM jobs WHERE type = 'enrich' ORDER BY id"
+    ).fetchall()
+
+
+def _refuse_one(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings, version_id: str
+) -> None:
+    job_id = _insert_job(conn, "enrich", version_id)
+    _claim_one(conn, ("enrich",), _now_iso())
+    run_one(conn, job_id, db_path, settings, _refusing_registry([]))
+
+
+def test_reconcile_does_not_reenqueue_a_refusal_dead_enrich_job(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    from lode.reconcile import _enrich_gap_step
+
+    _insert_note_worker(conn)
+    _refuse_one(conn, db_path, settings, "ver-1")
+
+    assert _enrich_gap_step(conn, settings) == 0
+    assert _enrich_statuses(conn) == [("dead",)]
+
+
+def test_reconcile_reenqueues_refusal_dead_job_when_prompt_ver_changes(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    from lode.reconcile import _enrich_gap_step
+
+    _insert_note_worker(conn)
+    _refuse_one(conn, db_path, settings, "ver-1")
+    with conn:
+        conn.execute("UPDATE jobs SET prompt_ver = 'older-prompt'")
+
+    assert _enrich_gap_step(conn, settings) == 1
+    assert _enrich_statuses(conn) == [("dead",), ("pending",)]
+
+
+def test_reconcile_reenqueues_refusal_dead_job_when_enrichment_model_changes(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    from lode.config import ModelTier
+    from lode.reconcile import _enrich_gap_step
+
+    _insert_note_worker(conn)
+    _refuse_one(conn, db_path, settings, "ver-1")
+    other = Settings(enrichment_llm=ModelTier(model="some-other-model"))
+
+    assert _enrich_gap_step(conn, other) == 1
+    assert _enrich_statuses(conn) == [("dead",), ("pending",)]
+
+
+def test_reconcile_reenqueues_refusal_dead_job_for_a_new_head_version(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    from lode.reconcile import _enrich_gap_step
+
+    _insert_note_worker(conn)
+    _refuse_one(conn, db_path, settings, "ver-1")
+    with conn:
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, parent_version_id, body, op) "
+            "VALUES ('ver-2', 'note-1', 'ver-1', 'edited', 'update')"
+        )
+        conn.execute("UPDATE notes SET head_version_id = 'ver-2'")
+
+    assert _enrich_gap_step(conn, settings) == 1
+
+
+def test_reconcile_still_reenqueues_a_non_refusal_dead_enrich_job(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    from lode.reconcile import _enrich_gap_step
+
+    _insert_note_worker(conn)
+    _insert_job(conn, "enrich", "ver-1", status="dead", attempts=3)
+
+    assert _enrich_gap_step(conn, settings) == 1
+    assert _enrich_statuses(conn) == [("dead",), ("pending",)]
+
+
+def _refused_batch_result(version_id: str) -> mock.MagicMock:
+    from lode.enrich import EnrichmentResult
+
+    r = _make_batch_result(version_id, EnrichmentResult())
+    r.result.message.content = []
+    r.result.message.stop_reason = "refusal"
+    r.result.message.stop_details = SimpleNamespace(category="cyber")
+    return r
+
+
+def test_collect_enrich_batch_refusal_is_dead_without_charging_attempts(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    from lode.enrich import collect_enrich_batch
+
+    job_id = _insert_job(conn, "enrich", "ver-1", status="running", batch_handle="b-1")
+    client = fake_batch_client(batch_id="b-1", results=[_refused_batch_result("ver-1")])
+
+    collect_enrich_batch(conn, "b-1", settings, provider=AnthropicProvider(client))
+
+    assert _refusal_row(conn, job_id) == (
+        "dead",
+        0,
+        1,
+        "cyber",
+        settings.enrichment_llm.model,
+        ENRICH_PROMPT_VER,
+    )
+
+
+def test_collect_enrich_batch_openai_refusal_is_dead_with_no_category(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    # The maintainer ruling on lode-g9q3: an OpenAI/Azure refusal is in the
+    # terminal class too, and that provider supplies no category.
+    from lode.enrich import EnrichmentResult, collect_enrich_batch
+    from lode.llm_provider import BatchRequest, OpenAIProvider
+
+    refusal_item = SimpleNamespace(
+        type="message",
+        content=[SimpleNamespace(type="refusal", refusal="cannot help with that")],
+    )
+    client = mock.MagicMock()
+    client.responses.create.return_value = SimpleNamespace(
+        status="completed", output=[refusal_item], output_text=""
+    )
+    provider = OpenAIProvider(client)
+    handle = provider.submit_batch(
+        [
+            BatchRequest(
+                custom_id="ver-1",
+                model=settings.enrichment_llm.model,
+                reasoning_effort=None,
+                system="sys",
+                user_prompt="prompt",
+                output_schema=EnrichmentResult,
+                max_tokens=100,
+            )
+        ],
+        timeout_s=1.0,
+    )
+    job_id = _insert_job(conn, "enrich", "ver-1", status="running", batch_handle=handle)
+
+    collect_enrich_batch(conn, handle, settings, provider=provider)
+
+    assert _refusal_row(conn, job_id) == (
+        "dead",
+        0,
+        1,
+        None,
+        settings.enrichment_llm.model,
+        ENRICH_PROMPT_VER,
+    )
+    client.responses.create.assert_called_once()

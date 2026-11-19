@@ -7498,3 +7498,29 @@ def test_huggingface_hub_still_declares_httpx_as_its_transport() -> None:
         "exception in _warm() (src/lode/cli/models.py), and re-point this canary at "
         "the new dependency."
     )
+
+
+def test_status_lists_refusal_dead_enrich_job_with_category(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # lode-g9q3: a refusal-dead enrich job is not self-healing, so it must not
+    # get the "next reconciliation scan should re-enqueue" hint.
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status, last_error, "
+                "next_attempt_at, refusal, refusal_category) "
+                "VALUES ('enrich', 'ver-dddddddddddddddd', 'dead', 'refused', ?, 1, "
+                "'cyber')",
+                (now_iso(),),
+            )
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    out = " ".join(result.stdout.split())
+    assert "refused by the model (category: cyber)" in out
+    assert "self-healing" not in out
+    assert "No action needed." not in out
