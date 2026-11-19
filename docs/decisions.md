@@ -6264,11 +6264,39 @@ entries below from being rewritten to chase the current tree.)
   - **Open (`lode-v3xd`).** What an agent does mid-run without approval (a free probe where one
     answers the question, otherwise escalate and stop) is a builder's proposal refined in
     technical review, not a maintainer ruling. Ask-and-continue was not taken: a headless
-    sub-agent has no channel to the maintainer.
+    sub-agent has no channel to the maintainer. (Settled: see the Update below.)
   - **Departs from the ticket.** The ticket named tests marked `network` as provider spend. They
     send nothing to a provider and the offline gates run them; the directive lists the live eval
     (`LODE_RUN_LIVE_EVAL=1`) instead.
   - **Rejected.** Unsetting credentials and a fail-closed provider; no new mechanism built.
+- **Update (lode-v3xd, 2026-11-19): the maintainer ruled on every open point of the `lode-3xzy`
+  entry above.**
+  - **Confirmed as built (1-6).** (1) Without approval an agent makes no provider call; it
+    escalates and stops by its role's path, the note opening `ESCALATION: provider spend needed:`.
+    (2) If a free probe answers the question it uses it and carries on; it escalates only when
+    the work cannot be finished without the spend. (3) A sub-agent reports the need to the agent
+    that briefed it. Ask-and-continue is not taken. (4) Tests marked `network` are not provider
+    spend; the live eval (`LODE_RUN_LIVE_EVAL=1`, `nox -s eval`) is. (5) `lode reenrich` needs
+    approval because it queues enrich calls for the next `lode work`. (6) Asking in the TUI is on
+    the list.
+  - **Ruled on the known limits.** (3a) Directive 10 binds the interactive main session too; there
+    the maintainer's in-conversation instruction is the approval, and the scratch `LODE_HOME`
+    still applies. (3b) A scratch `LODE_HOME` does not run on bare defaults and does not expose
+    user data: `models/` may be symlinked to the real cache (`model_cache_dir()` is
+    `$LODE_HOME/models`, verified), and `config.toml` is copied only after a scrub.
+  - **The scrub.** (i) Drop every field `src/lode/config.py` marks `secret=True`, derived from the
+    marking. (ii) Drop the connector fields as a group: the `*_enabled` flags, `*_base_url`,
+    `jira_projects` and `no_egress_scopes`. Widened beyond secrets because Atlassian credentials
+    are env-var primary and `jira_active`/`confluence_active` are "enabled flag AND credentials
+    resolve", so an enabled flag left in a copied config is a live connector to the real site
+    wherever the variables are set; a base URL dropped alone does not disable Confluence (empty
+    means "infer").
+  - **Still accepted.** bd records no checkable author on an approval note; "a maintainer note"
+    stays a convention.
+  - **Changed.** `CLAUDE.md` Directive 10 and the `lode-3xzy` section of
+    [agents-workflow.md](agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
+    now carry 3a and 3b.
+
 - **Update (lode-gcbg, 2026-11-18): the maintainer confirmed the `lode-jb2q` rebase-pickup rules,
   points 1-3 as built.** The `lode-jb2q` entry above said confirming or reversing it was this
   ticket's to settle.

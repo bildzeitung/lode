@@ -174,7 +174,8 @@ Full walkthrough — prerequisites (**jq** is required, not optional), the venv,
    `LODE_HOME`.** No agent — builder, reviewer, any other dispatched role, or a sub-agent any of
    them briefs — makes a call that reaches an LLM provider under my credentials unless I have
    approved that spend, and an approved call runs with `LODE_HOME` pointed at a scratch directory,
-   never `~/.lode`. **Reaches a provider:** `lode add`, `lode ask`, `lode work`, asking in the TUI,
+   never `~/.lode`. This binds the interactive main session too; there my in-conversation
+   instruction is the approval, and the scratch `LODE_HOME` still applies. **Reaches a provider:** `lode add`, `lode ask`, `lode work`, asking in the TUI,
    the live eval (`nox -s eval`, or any pytest run with `LODE_RUN_LIVE_EVAL=1`), and anything else
    that builds a provider client and sends a request. `lode reenrich` sends nothing itself but
    queues enrich calls for the next `lode work`, so it needs approval too. **Does not:** a
@@ -186,7 +187,11 @@ Full walkthrough — prerequisites (**jq** is required, not optional), the venv,
    cannot be finished without the spend, escalate and stop by your role's escalation path, the
    note opening `ESCALATION: provider spend needed:` (a sub-agent reports the need to the agent
    that briefed it instead). **Every brief a builder or reviewer gives a sub-agent carries this
-   directive's text verbatim.** Rationale and record:
+   directive's text verbatim.** **Scratch `LODE_HOME`:** `models/` may be a symlink to the real
+   cache. `config.toml` is copied only after a scrub that drops every field `src/lode/config.py`
+   marks `secret=True` (derive the list from the marking) and the connector fields as a group:
+   the `*_enabled` flags, `*_base_url`, `jira_projects`, and `no_egress_scopes`. Never copy it
+   unscrubbed, and never run a scratch home on bare defaults. Rationale and record:
    [`docs/agents-workflow.md`](docs/agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
    (lode-3xzy).
 
