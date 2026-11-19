@@ -157,8 +157,9 @@ Full walkthrough — prerequisites (**jq** is required, not optional), the venv,
    for an existing entry describing the same root cause / incident (grep for the incident, not just
    exact wording) — entries are append-only, so two stages observing the same incident must not
    double-file. Each entry: what happened / root cause / consequence / the rule that prevents a
-   repeat. Newest first. Append-only holds for an entry's Update bullets too: a wrong Update bullet
-   is corrected by appending a further Update bullet below it, never by editing it. Each workflow-stage instruction file states its own write path (a stage
+   repeat. Newest first. An entry's Update bullets are append-only too: a wrong one is corrected by
+   appending another Update bullet below it, never by editing it.
+   Each workflow-stage instruction file states its own write path (a stage
    working in a worktree appends and commits normally; a stage that cannot write repo files —
    `land-review`, run in a disposable worktree that never commits, and the `bd`-only/dispatch-only
    stages `/sweep`, `/epic-audit`, `challenge` and `/code` — reports the finding to whoever
