@@ -670,7 +670,7 @@ def status(db: _DbOption = None) -> None:
             "[warn]Action needed:[/warn] the model refused to enrich some notes "
             "or external pages (listed above). A refusal is final for that "
             "note version or page snapshot: it is not retried until the note "
-            "is edited or the page's content changes, the enrichment prompt "
+            "is edited or the page changes materially, the enrichment prompt "
             "version changes, or enrichment_llm is changed.",
             highlight=False,
         )

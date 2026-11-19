@@ -1201,3 +1201,43 @@ def test_enrich_gap_external_excludes_tombstone_and_no_egress(
     _insert_embed_job(conn, "snap-n", "done")
 
     assert _enrich_gap(conn) == 0
+
+
+def test_enrich_gap_external_excludes_no_egress_scoped(
+    conn: sqlite3.Connection,
+) -> None:
+    """A scope-denied external is no_egress too, even with ``externals.no_egress = 0``.
+
+    The batch route marks a gated-out enrich job ``done`` without stamping
+    ``prompt_ver``, so without this exclusion the head would read as stale and be
+    re-enqueued (and re-skipped) on every reconcile pass.
+    """
+    from lode.no_egress_scope import NoEgressScopeRule
+
+    _insert_external_snapshot(conn, "https://internal.example.com/x", "snap-s")
+    _insert_enrich_job(conn, "snap-s", "done")  # batch-route skip: prompt_ver NULL
+    scoped = Settings(
+        no_egress_scopes=[
+            NoEgressScopeRule(source_type="web", match="internal.example.com")
+        ]
+    )
+
+    assert _enrich_gap(conn, scoped) == 0
+    assert _enrich_gap(conn) == 1  # rule removed: the external is eligible again
+
+
+def test_enrich_gap_external_refusal_with_null_prompt_ver_reopens(
+    conn: sqlite3.Connection,
+) -> None:
+    """Same NULL handling as the note arm: a refusal row missing its stamp is a gap."""
+    settings = Settings()
+    _insert_external_snapshot(conn)
+    _insert_enrich_job(
+        conn,
+        "snap-1",
+        "dead",
+        refusal=True,
+        refusal_model=settings.enrichment_llm.model,
+    )
+
+    assert _enrich_gap(conn, settings) == 1

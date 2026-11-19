@@ -107,6 +107,7 @@ from lode import jobs
 from lode.config import Settings
 from lode.enrich import ENRICH_PROMPT_VER
 from lode.lexical import LexicalCacheBackend
+from lode.no_egress_scope import is_no_egress_scoped
 from lode.progress import op_progress
 
 log = logging.getLogger(__name__)
@@ -306,6 +307,15 @@ register_step("embed_gap", _embed_gap_step)
 # ---------------------------------------------------------------------------
 
 
+#: A refusal-dead enrich job ``j`` that still stands (lode-g9q3): refused under
+#: the current prompt version and enrichment model. Binds two parameters,
+#: ``ENRICH_PROMPT_VER`` then ``settings.enrichment_llm.model``. Both arms of
+#: :func:`_enrich_gap_step` use it, so the re-open key cannot differ between
+#: notes and externals. ``IS`` rather than ``=`` keeps ``NOT (...)`` from going
+#: NULL on an unstamped row, which would silently read as "not a gap".
+_STANDING_REFUSAL_SQL = "j.refusal = 1 AND j.prompt_ver IS ? AND j.refusal_model IS ?"
+
+
 def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None) -> int:
     """Enrich gap: re-enqueue enrich jobs for head versions missing fresh enrichment.
 
@@ -374,11 +384,17 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
     bump (not an ``enrichment_llm`` change) re-opens a ``done`` enrichment; an
     ``enrichment_llm`` change re-opens a refusal-dead one. The enqueue targets
     the head snapshot, so the new annotations anchor to current content.
-    Tombstoned-head and ``no_egress`` externals are excluded.
+    Tombstoned-head and ``no_egress`` externals are excluded -- ``no_egress``
+    meaning the row flag *or* a ``settings.no_egress_scopes`` rule, the same
+    composition :func:`lode.enrich._resolve_enrich_target` gates egress on. A
+    scope-denied external must be filtered here: the batch route marks its
+    gated-out enrich job ``done`` without a ``prompt_ver``, which would
+    otherwise read as stale and re-enqueue on every pass.
 
     Returns the count of gap versions found (each triggered one enqueue call).
     """
     settings = settings or Settings()
+    refusal_params = (ENRICH_PROMPT_VER, settings.enrichment_llm.model)
     gap_versions = conn.execute(
         f"""
         SELECT n.head_version_id
@@ -406,14 +422,16 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
               WHERE j.type = 'enrich'
                 AND j.target_version = n.head_version_id
                 AND j.status = 'dead'
-                AND j.refusal = 1
-                AND j.prompt_ver = ?
-                AND j.refusal_model = ?
+                AND {_STANDING_REFUSAL_SQL}
           )
-        UNION
-        SELECT i.head
+        """,
+        (ENRICH_PROMPT_VER, *refusal_params),
+    ).fetchall()
+    external_rows = conn.execute(
+        f"""
+        SELECT i.head, i.external_id, i.source_type
         FROM (
-            SELECT e.head_snapshot_id AS head,
+            SELECT e.head_snapshot_id AS head, e.external_id, e.source_type,
                    (SELECT j.id FROM jobs j
                     JOIN snapshots s2 ON s2.snapshot_id = j.target_version
                     WHERE s2.external_id = e.external_id AND j.type = 'enrich'
@@ -432,23 +450,18 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
                   AND je.status = 'done'
             )
         )
-        OR (
-            j.status = 'dead'
-            AND NOT (
-                j.refusal = 1 AND j.prompt_ver = ? AND j.refusal_model = ?
-            )
-        )
+        OR (j.status = 'dead' AND NOT ({_STANDING_REFUSAL_SQL}))
         OR (j.status = 'done' AND j.prompt_ver IS NOT ?)
         """,
-        (
-            ENRICH_PROMPT_VER,
-            ENRICH_PROMPT_VER,
-            settings.enrichment_llm.model,
-            ENRICH_PROMPT_VER,
-            settings.enrichment_llm.model,
-            ENRICH_PROMPT_VER,
-        ),
+        (*refusal_params, ENRICH_PROMPT_VER),
     ).fetchall()
+    # A scope-denied external is no_egress just like a flagged one, but scope
+    # rules live in config, not on the row, so SQL cannot filter them.
+    gap_versions += [
+        (head,)
+        for head, external_id, source_type in external_rows
+        if not is_no_egress_scoped(external_id, source_type, settings.no_egress_scopes)
+    ]
 
     if not gap_versions:
         return 0

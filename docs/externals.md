@@ -252,7 +252,10 @@ newest `enrich` job across all of the external's snapshots (the one whose annota
 inherits). The head is a gap iff that job is dead (and not a current refusal) or `done` under a stale
 prompt version, or no enrich job exists yet and the head's `embed` job is `done` (the gate runs
 post-embed, so before then it may still decide). A live in-force job is left alone. The re-enqueue
-targets the head snapshot. Tombstoned-head and `no_egress` externals are excluded.
+targets the head snapshot. Tombstoned-head and `no_egress` externals are excluded, where `no_egress`
+means the row flag or a `no_egress_scopes` rule (the same composition the enrich egress gate uses).
+A refused page is therefore not retried by a sub-threshold change either: the refusal stays in
+force until a change passes the materiality gate, or the prompt version or model changes.
 
 ### Refresh policy: TTL-based revalidation (decided-for-web, `lode-w0h.6`)
 
