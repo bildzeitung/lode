@@ -498,7 +498,8 @@ Two rules, three message texts:
     `git fetch origin land/<id> trunk` itself (lode-n7g4) so a stale `FETCH_HEAD` is never read, and
     takes the tip from `FETCH_HEAD`'s own `land/<id>` line rather than from `FETCH_HEAD` as a rev,
     which names only the first ref of a multi-ref fetch; 1 not a launch worktree, 2 broken call, 3 no
-    `land/<id>` entry in `FETCH_HEAD` after a successful fetch, 4 the fetch failed).
+    `land/<id>` entry in `FETCH_HEAD` after a successful fetch, 4 the fetch failed, 5
+    `git checkout -B` refused).
     `handoff-sha.sh`'s origin check (lode-tx33) makes order load-bearing: the push to `land/<id>`
     precedes the call at every call site, because a recorded SHA origin does not carry reads as
     drift to `/land`'s 2a precheck. It costs one `git ls-remote` per hand-off, accepted; a dirty

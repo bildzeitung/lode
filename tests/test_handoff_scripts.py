@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from _gitrepo import _git
+from _gitrepo import _commit_file, _git
 from conftest import fake_bd, fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -302,6 +302,40 @@ def test_checkout_exits_3_when_a_successful_fetch_records_no_land_entry(
     assert r.returncode == 3
     assert _out(wt, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
     assert _out(wt, "rev-parse", "HEAD") == main_tip
+
+
+def test_checkout_awk_failure_is_exit_3_not_a_broken_call(
+    tmp_path: Path, launch_worktree: tuple[Path, str, str]
+) -> None:
+    """awk's own exit 2 must not surface as this script's exit 2, which means
+    a broken call."""
+    wt, main_tip, _ = launch_worktree
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    shim = bindir / "awk"
+    shim.write_text("#!/usr/bin/env bash\nexit 2\n")
+    shim.chmod(0o755)
+    r = _run("checkout-land-branch.sh", wt, "lode-x", bindir=bindir)
+    assert r.returncode == 3
+    assert _out(wt, "rev-parse", "HEAD") == main_tip
+
+
+def test_checkout_exits_5_when_git_checkout_refuses(
+    repo: Path, launch_worktree: tuple[Path, str, str]
+) -> None:
+    """An untracked file the land tip would overwrite makes `git checkout -B`
+    fail with git's own status 1, which must not read as `not a launch
+    worktree`: exit 5, HEAD untouched, no local branch created."""
+    wt, main_tip, _ = launch_worktree
+    _git(repo, "checkout", "-q", "land/lode-x")
+    _commit_file(repo, "clash.txt", "tip\n", "adds clash")
+    (wt / "clash.txt").write_text("local\n")
+    r = _run("checkout-land-branch.sh", wt, "lode-x")
+    assert r.returncode == 5
+    assert "checkout was refused" in r.stderr
+    assert _out(wt, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
+    assert _out(wt, "rev-parse", "HEAD") == main_tip
+    assert _out(wt, "branch", "--list", "land/lode-x--*") == ""
 
 
 def test_checkout_refuses_a_non_worktree_cwd(repo: Path) -> None:
