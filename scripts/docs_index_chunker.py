@@ -9,9 +9,12 @@ field). This module is *only* the chunker; building/querying the FTS5 index is
 **ONE boundary rule** (the decided shape; the rationale and the refuted two-rule
 alternative live in the decision record cited above -- do not re-derive them):
 split at the deepest ATX heading level present in the file, or at top-level
-``- `` bullets in a file with no headings at all (``docs/decisions.md``). A
-post-pass hard-splits any unit still over :data:`MAX_UNIT_BYTES` at the next
-rung down -- heading -> bullet -> blank-line-delimited paragraph.
+``- `` bullets in a file with no headings at all. A post-pass hard-splits any
+unit still over :data:`MAX_UNIT_BYTES` at the next rung down -- heading ->
+bullet -> blank-line-delimited paragraph. ``docs/decisions.md`` gets its
+per-entry units from that post-pass, not from the no-headings rule: its one
+heading is the H1 title on line 1, so the heading split yields the whole file
+as a single oversized unit, which is then split at its bullets.
 
 Boundary detection is **fence-aware**: a ``## `` or ``- `` inside a fenced code
 block is someone's example, not document structure. See :func:`_fence_flags`.
@@ -145,6 +148,17 @@ def _bullet_boundary(
     return is_bullet
 
 
+def is_structural_line(line: str) -> bool:
+    """Is ``line`` an ATX heading of any level, or a top-level ``- `` bullet?
+
+    These are the only lines a boundary rule above the paragraph rung can split
+    at; the caller vouches that the line is outside a fence. Public so that
+    ``scripts/docs_index_query.py`` can find the block a paragraph-split piece
+    was cut from without keeping a second copy of these patterns.
+    """
+    return bool(_HEADING_RE.match(line) or _BULLET_RE.match(line))
+
+
 def _unit_bytes(lines: list[str], line_lo: int, line_hi: int) -> int:
     return len("\n".join(lines[line_lo - 1 : line_hi]).encode("utf-8"))
 
@@ -160,7 +174,12 @@ def _hard_split(
     """Post-pass: recursively hard-split an oversized unit at the next boundary
     down. ``try_bullet`` is True only for a unit that came from the heading
     split (a bullet-split or paragraph-split unit is already at (or past) the
-    deepest rule, so it goes straight to paragraph splitting)."""
+    deepest rule, so it goes straight to paragraph splitting).
+
+    ``split_entry_markers`` in ``scripts/docs_index_query.py`` relies on the
+    paragraph rung being the only one that cuts a unit somewhere other than a
+    structural line (:func:`is_structural_line`); a rung added between bullet
+    and paragraph has to keep that true or be taught to it."""
     if _unit_bytes(lines, line_lo, line_hi) <= MAX_UNIT_BYTES:
         return [(line_lo, line_hi)]
 
