@@ -1077,14 +1077,16 @@ class AnthropicProvider:
             if stop_reason in ("max_tokens", "model_context_window_exceeded"):
                 # A tool_use cut off at max_tokens usually still parses as a
                 # valid partial input; running the tool on it would act on
-                # arguments the model never finished (lode-4rxs). Anthropic's
-                # docs say only "Treat the response as truncated" for
-                # model_context_window_exceeded and are silent on tool_use
-                # completeness, so it gets the same guard (lode-hfzw).
+                # arguments the model never finished (lode-4rxs). For
+                # model_context_window_exceeded Anthropic's stop-reasons page
+                # says "Treat the response as truncated" and nothing about
+                # whether its tool_use is complete, so it gets the same guard
+                # (lode-hfzw).
                 raise LLMProviderError(
                     f"Anthropic free tool turn (model={model}, "
                     f"max_tokens={max_tokens}, stop_reason={stop_reason!r}) was "
-                    "cut off mid tool_use; no tool was run "
+                    "cut off with a tool_use block that may be incomplete; no "
+                    "tool was run "
                     f"{_stop_reason_hint(stop_reason, response)}",
                     provider="anthropic",
                 )

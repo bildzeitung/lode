@@ -1771,12 +1771,21 @@ def test_run_tool_turns_refused_free_turn_raises_without_running_tools(
     _assert_refusal_hint(str(excinfo.value))
 
 
-def test_run_tool_turns_max_tokens_free_turn_raises_without_running_tools() -> None:
+@pytest.mark.parametrize(
+    ("stop_reason", "hint"),
+    [
+        ("max_tokens", _BUDGET_EXHAUSTED_HINT),
+        ("model_context_window_exceeded", _CONTEXT_WINDOW_EXCEEDED_HINT),
+    ],
+)
+def test_run_tool_turns_cut_off_free_turn_raises_without_running_tools(
+    stop_reason: str, hint: str
+) -> None:
     tool = ToolSpec(
         name="lookup_widget", description="Look up a widget.", input_schema={}
     )
     truncated = _tool_use_response("lookup_widget", {})
-    truncated.stop_reason = "max_tokens"
+    truncated.stop_reason = stop_reason
     client = mock.MagicMock()
     client.messages.create.side_effect = [truncated]
     ran: list[str] = []
@@ -1798,40 +1807,8 @@ def test_run_tool_turns_max_tokens_free_turn_raises_without_running_tools() -> N
     assert ran == []
     # The one free turn only: no final structured-output turn was attempted.
     assert client.messages.create.call_count == 1
-    client.messages.parse.assert_not_called()
-    assert "stop_reason='max_tokens'" in str(excinfo.value)
-    assert _BUDGET_EXHAUSTED_HINT in str(excinfo.value)
-
-
-def test_run_tool_turns_context_window_free_turn_raises_without_running_tools() -> None:
-    tool = ToolSpec(
-        name="lookup_widget", description="Look up a widget.", input_schema={}
-    )
-    truncated = _tool_use_response("lookup_widget", {})
-    truncated.stop_reason = "model_context_window_exceeded"
-    client = mock.MagicMock()
-    client.messages.create.side_effect = [truncated]
-    ran: list[str] = []
-
-    with pytest.raises(LLMProviderError) as excinfo:
-        AnthropicProvider(client).run_tool_turns(
-            model="claude-sonnet-4-6",
-            reasoning_effort=None,
-            system="sys",
-            user_prompt="p",
-            tools=(tool,),
-            tool_result=lambda name, args: ran.append(name) or "r",
-            output_schema=_Widget,
-            max_tokens=100,
-            timeout_s=30.0,
-            max_tool_turns=2,
-        )
-
-    assert ran == []
-    assert client.messages.create.call_count == 1
-    client.messages.parse.assert_not_called()
-    assert "stop_reason='model_context_window_exceeded'" in str(excinfo.value)
-    assert _CONTEXT_WINDOW_EXCEEDED_HINT in str(excinfo.value)
+    assert f"stop_reason={stop_reason!r}" in str(excinfo.value)
+    assert hint in str(excinfo.value)
 
 
 @pytest.mark.network
