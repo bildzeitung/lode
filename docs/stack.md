@@ -907,7 +907,7 @@ tool, and on an empty `tools` a `tool_name` would then have selected
 (that branch no longer exists, `lode-ni7p`).
 `strict: true` stays off ([`lode-568v.3`](#llm-provider-seam-decided-lode-568v1)).
 
-**Two `stop_reason`s stop a free turn's tools from running: `refusal` and `max_tokens`.** A refused
+**Three `stop_reason`s stop a free turn's tools from running: `refusal`, `max_tokens` and `model_context_window_exceeded`.** A refused
 free turn (`stop_reason` `refusal`) raises `LLMProviderError` whether or not it carries a `tool_use`
 block (`lode-mzuk`). A free turn with `stop_reason` `max_tokens` that carries a `tool_use` block
 raises too, before any tool runs (`lode-4rxs`): a tool input truncated at the output cap usually
@@ -915,8 +915,14 @@ still parses as a valid partial object, so `stop_reason` is the only thing that 
 accepted: a tool call that happened to finish on the last token fails the whole run, which nothing
 retries, instead of being executed. A `max_tokens` free turn with *no* `tool_use` block still ends
 the loop and goes to the final turn; whether that should stay is open (`lode-c99p`).
-`model_context_window_exceeded` is not checked: such a free turn's `tool_use` blocks are run;
-whether it should be is open (`lode-hfzw`).
+A free turn with `stop_reason` `model_context_window_exceeded` that carries a `tool_use` block
+raises the same way, before any tool runs, with the context-window hint (`lode-hfzw`, maintainer
+ruling 2026-11-19). The basis is Anthropic's published
+[handling-stop-reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons)
+page, which says of this stop reason "Treat the response as truncated."; the docs are otherwise
+silent on whether a `tool_use` block under it can be incomplete (the only statement about an
+incomplete `tool_use` is scoped to `max_tokens`), so the guard is the conservative choice. The cost
+accepted is the same as for `max_tokens`.
 
 **`timeout_s` is a budget for the whole run; `max_tokens` deliberately is not.** No new config knob
 was added — these are the same two knobs `structured_call` already took, and a call site's existing
