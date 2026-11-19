@@ -174,7 +174,12 @@ def _hard_split(
     """Post-pass: recursively hard-split an oversized unit at the next boundary
     down. ``try_bullet`` is True only for a unit that came from the heading
     split (a bullet-split or paragraph-split unit is already at (or past) the
-    deepest rule, so it goes straight to paragraph splitting)."""
+    deepest rule, so it goes straight to paragraph splitting).
+
+    ``split_entry_markers`` in ``scripts/docs_index_query.py`` relies on the
+    paragraph rung being the only one that cuts a unit somewhere other than a
+    structural line (:func:`is_structural_line`); a rung added between bullet
+    and paragraph has to keep that true or be taught to it."""
     if _unit_bytes(lines, line_lo, line_hi) <= MAX_UNIT_BYTES:
         return [(line_lo, line_hi)]
 
