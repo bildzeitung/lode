@@ -14,15 +14,27 @@
 #
 # No side effects, no top-level statements: safe to source from anywhere.
 
-# name<TAB>version for every pin in the lock file $1, on stdout. Deliberately
-# ignores the --hash lines; those are the whole reason this isn't `git diff`.
+# name<TAB>version for every package in the uv.lock-shaped file $1, on stdout,
+# sorted by name. Reads the `[[package]]` tables' own `name = "..."` /
+# `version = "..."` lines, so hashes and URLs never enter the diff -- they are
+# the whole reason this isn't `git diff`. A package resolved at several
+# versions (one per resolution marker) yields one line with the versions
+# comma-joined in file order; one with no version line (a dynamic-version
+# source) is skipped.
 _dep_pins() {
-  grep -oE '^[A-Za-z0-9_.+-]+==[A-Za-z0-9_.!+-]+' "$1" \
-    | sed -E 's/==/\t/' | sort -t $'\t' -k1,1 -u
+  awk -F'"' '
+    /^\[\[package\]\]/ { n = "" }
+    /^name = "/ { n = $2 }
+    /^version = "/ {
+      if (n != "") v[n] = (n in v) ? v[n] "," $2 : $2
+      n = ""
+    }
+    END { for (k in v) print k "\t" v[k] }
+  ' "$1" | sort -t $'\t' -k1,1
 }
 
 # Emit the raw, unformatted "name<TAB>old<TAB>new" change lines for the two
-# lock files $1 and $2 -- moved packages only ($old != $new). An addition
+# uv.lock files $1 and $2 -- moved packages only ($old != $new). An addition
 # carries "(none)" as $old, a removal carries "(none)" as $new.
 dep_changes_raw() {
   join -a1 -a2 -e '(none)' -o 0,1.2,2.2 -t $'\t' \

@@ -7,7 +7,7 @@
 #
 # Uses cairosvg (via a throwaway venv, never the project's own ./.venv),
 # the same tool and pattern as scripts/rasterize-mark.sh -- kept out of
-# pyproject.toml/requirements.lock since this is a one-off asset-generation
+# pyproject.toml/uv.lock since this is a one-off asset-generation
 # tool, not a runtime or dev dependency of lode itself.
 #
 # The og-card.svg source specifies its own text font stacks (Inter for the

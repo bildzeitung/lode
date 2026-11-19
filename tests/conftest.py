@@ -1310,11 +1310,11 @@ def load_noxfile() -> ModuleType:
 
 def project_venv_bin() -> Path:
     """The project venv's ``bin`` dir, found by the same accepted-venv rule as
-    ``noxfile._venv_tool`` (``./venv`` or ``./.venv``); fails if the running
-    interpreter is in neither."""
+    ``noxfile._venv_tool`` (``./.venv`` only); fails if the running
+    interpreter is not in it."""
     bin_dir = load_noxfile()._venv_bin()
     assert bin_dir is not None, (
-        f"sys.prefix {sys.prefix} is neither ./venv nor ./.venv of this checkout -- "
+        f"sys.prefix {sys.prefix} is not ./.venv of this checkout -- "
         "run the suite from the project venv (uv run --frozen nox ...)"
     )
     return bin_dir
