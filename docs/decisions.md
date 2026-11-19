@@ -6244,9 +6244,9 @@ entries below from being rewritten to chase the current tree.)
   - **Still accepted.** The limits listed in the `lode-jb2q` entry stand.
 - **A docs-index hit in a hard-split `decisions.md` entry now names the entry's Update markers
   (`lode-funp`).** The chunker hard-splits a top-level entry over `MAX_UNIT_BYTES` (16384 bytes) at
-  blank-line paragraph boundaries, so an `**Update (` marker appended at the end of such an entry can
-  sit in a different unit from the stale claim a query matched, and the reader who reads only that
-  range sees the claim with no correction.
+  blank-line paragraph boundaries, so an Update marker appended at the end of such an entry can sit
+  in a different unit from the stale claim a query matched, and the reader who reads only that range
+  sees the claim with no correction.
   - **Measured (2026-11-18).** Of 145 entries in `docs/decisions.md`, 2 exceed the limit: the
     review-architecture entry from line 389 (57,686 bytes, 10+ markers) and the `/land` worktree GC
     entry from line 1351 (19,992 bytes, 1 marker). The problem was real, not a guard-only case.
