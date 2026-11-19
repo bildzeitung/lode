@@ -373,15 +373,7 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
                 AND j.status = 'done'
                 AND j.prompt_ver = ?
           )
-          AND NOT EXISTS (
-              SELECT 1 FROM jobs j
-              WHERE j.type = 'enrich'
-                AND j.target_version = n.head_version_id
-                AND j.status = 'dead'
-                AND j.refusal = 1
-                AND j.prompt_ver = ?
-                AND j.refusal_model = ?
-          )
+          AND NOT {jobs.standing_enrich_refusal_exists_sql("n.head_version_id")}
         """,
         (ENRICH_PROMPT_VER, ENRICH_PROMPT_VER, settings.enrichment_llm.model),
     ).fetchall()

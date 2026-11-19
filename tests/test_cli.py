@@ -7524,3 +7524,92 @@ def test_status_lists_refusal_dead_enrich_job_with_category(
     assert "refused by the model (category: cyber)" in out
     assert "self-healing" not in out
     assert "No action needed." not in out
+
+
+# --- lode-5try: a standing refusal exempts a head from reenrich / the status hint ---
+
+
+def _seed_head_with_refusal_dead_job(
+    db_path: Path, *, prompt_ver: str, refusal_model: str
+) -> None:
+    """A live head annotated under an OLD model whose latest enrich job is refusal-dead."""
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+        _write_ai_annotation(conn, "note-1", "ver-1", "some-old-model")
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status, next_attempt_at, "
+                "refusal, prompt_ver, refusal_model) "
+                "VALUES ('enrich', 'ver-1', 'dead', ?, 1, ?, ?)",
+                (now_iso(), prompt_ver, refusal_model),
+            )
+    finally:
+        conn.close()
+
+
+def test_reenrich_and_status_skip_a_head_with_a_standing_refusal(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    from lode.enrich import ENRICH_PROMPT_VER
+
+    db_path = tmp_path / "lode.db"
+    _seed_head_with_refusal_dead_job(
+        db_path,
+        prompt_ver=ENRICH_PROMPT_VER,
+        refusal_model=Settings().enrichment_llm.model,
+    )
+
+    result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "nothing to re-enrich" in result.stdout
+
+    status = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert status.exit_code == 0, status.output
+    assert "lode reenrich" not in status.stdout
+
+    reader = sqlite3.connect(db_path)
+    try:
+        n = reader.execute("SELECT COUNT(*) FROM jobs WHERE type = 'enrich'").fetchone()
+    finally:
+        reader.close()
+    assert n == (1,)
+
+
+@pytest.mark.parametrize(
+    ("prompt_ver", "refusal_model"),
+    [
+        ("an-older-prompt-ver", None),  # prompt version changed
+        (None, "a-different-model"),  # enrichment model changed
+    ],
+)
+def test_a_changed_prompt_version_or_model_brings_a_refused_head_back(
+    tmp_path: Path, prompt_ver: str | None, refusal_model: str | None
+) -> None:
+    from lode.enrich import ENRICH_PROMPT_VER
+
+    model = Settings().enrichment_llm.model
+    db_path = tmp_path / "lode.db"
+    _seed_head_with_refusal_dead_job(
+        db_path,
+        prompt_ver=prompt_ver or ENRICH_PROMPT_VER,
+        refusal_model=refusal_model or model,
+    )
+    conn = sqlite3.connect(db_path)
+    try:
+        heads = cli._stale_enrichment_heads(conn, model, None)
+    finally:
+        conn.close()
+    assert heads == ["ver-1"]
+
+    result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "enqueued 1 enrich job(s)" in result.stdout

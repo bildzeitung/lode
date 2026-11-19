@@ -84,7 +84,7 @@ from pathlib import Path
 from typing import Literal
 
 from lode.display import display_annotations, display_edges
-from lode.jobs import LIVE_JOB_STATUSES
+from lode.jobs import LIVE_JOB_STATUSES, standing_enrich_refusal_exists_sql
 from lode.sql_ids import placeholders
 from lode.storage import init_db
 
@@ -498,7 +498,7 @@ def raw_snapshot_payload(conn: sqlite3.Connection, snapshot_id: str) -> str | No
 #: Relocated from ``lode.cli`` (lode-35nu.9, "no bare SQL in the cli
 #: package") -- unchanged, still shared by ``lode status``'s hint
 #: (:func:`lode.cli.status._enrichment_model_stale`) and ``lode reenrich``.
-STALE_ENRICHMENT_LIVE_HEADS_SQL = """
+STALE_ENRICHMENT_LIVE_HEADS_SQL = f"""
     SELECT DISTINCT n.head_version_id
     FROM notes n
     JOIN versions v ON v.version_id = n.head_version_id
@@ -513,6 +513,7 @@ STALE_ENRICHMENT_LIVE_HEADS_SQL = """
             AND a.model IS NOT NULL
             AND (a.model != ? OR a.provider IS NOT ?)
       )
+      AND NOT {standing_enrich_refusal_exists_sql("n.head_version_id")}
     UNION
     SELECT DISTINCT e.head_snapshot_id
     FROM externals e
@@ -527,6 +528,7 @@ STALE_ENRICHMENT_LIVE_HEADS_SQL = """
             AND a.model IS NOT NULL
             AND (a.model != ? OR a.provider IS NOT ?)
       )
+      AND NOT {standing_enrich_refusal_exists_sql("e.head_snapshot_id")}
 """
 
 
@@ -553,11 +555,20 @@ def stale_enrichment_heads(
     different vendor -- is legible as stale even though ``model`` alone
     wouldn't catch it.
 
+    **A head with a standing refusal is excluded** (lode-5try): a ``dead`` enrich
+    job with ``refusal = 1`` under the current ``ENRICH_PROMPT_VER`` and
+    `enrichment_llm` means the model refused that content and the refusal is
+    final for this note version (lode-g9q3), so re-enriching it would only
+    re-send refused content. Changing the model or prompt version brings the
+    head back.
+
     Shared by ``lode status``'s hint
     (:func:`lode.cli.status._enrichment_model_stale`) and ``lode reenrich``
     itself so "status says clean" and "reenrich has work" cannot disagree --
     they are, structurally, the same read.
     """
+    from lode.enrich import ENRICH_PROMPT_VER
+
     return [
         row[0]
         for row in conn.execute(
@@ -565,8 +576,12 @@ def stale_enrichment_heads(
             (
                 enrichment_llm,
                 current_provider,
+                ENRICH_PROMPT_VER,
+                enrichment_llm,
                 enrichment_llm,
                 current_provider,
+                ENRICH_PROMPT_VER,
+                enrichment_llm,
             ),
         ).fetchall()
     ]

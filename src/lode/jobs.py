@@ -70,6 +70,28 @@ LIVE_JOB_STATUSES = ("pending", "running", "failed")
 LIVE_JOB_STATUSES_SQL = ", ".join(f"'{status}'" for status in LIVE_JOB_STATUSES)
 
 
+def standing_enrich_refusal_exists_sql(target_col: str) -> str:
+    """SQL ``EXISTS (...)`` for a standing enrich refusal on ``target_col`` (lode-g9q3, lode-5try).
+
+    True when a ``dead`` enrich job with ``refusal = 1`` exists for the head
+    ``target_col`` names, stamped with the current prompt version and the
+    configured enrichment model. Binds two positional parameters, in order:
+    ``prompt_ver``, ``refusal_model``. ``target_col`` is a caller-written
+    column expression (never user input). The one predicate shared by
+    reconcile's enrich-gap exemption and the stale-enrichment scan, so the two
+    cannot disagree about which refusals are final.
+    """
+    return f"""EXISTS (
+              SELECT 1 FROM jobs j
+              WHERE j.type = 'enrich'
+                AND j.target_version = {target_col}
+                AND j.status = 'dead'
+                AND j.refusal = 1
+                AND j.prompt_ver = ?
+                AND j.refusal_model = ?
+          )"""
+
+
 def enqueue_derive_jobs(
     conn: sqlite3.Connection,
     target_version: str,
