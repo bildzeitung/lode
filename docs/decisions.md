@@ -6350,6 +6350,7 @@ entries below from being rewritten to chase the current tree.)
   appended marker, so a new head that itself opens with a gated keyword shape (a bold
   `Correction (id)` lead-in, say) still goes red. Decided, option (a): leave it. That red is an
   accepted over-match and the way out is to reword the head. Option (b), skipping lines that start
-  `- **` at column zero, was not taken; it would also have let a head carry the all-capitals
-  stale-flag keyword, which is banned on any line today. The `lode-rtcx` allowlist entry stays, and the module
-  docstring now records the over-match as accepted.
+  `- **` at column zero, was not taken. As posed, (b) would also have let a head carry the
+  all-capitals stale-flag keyword, which is banned on any line today. The ticket asked whether that
+  one pattern would keep applying to heads; the ruling for (a) does not answer it. The `lode-rtcx`
+  allowlist entry stays, and the module docstring records the over-match as accepted.
