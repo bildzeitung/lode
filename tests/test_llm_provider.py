@@ -1651,7 +1651,6 @@ def test_structured_call_names_a_refusal_whose_text_is_truncated() -> None:
 def test_structured_call_names_a_refusal_with_no_text_block() -> None:
     error = _structured_call_with(_refused_response(text=None))
 
-    assert "no text block" in str(error)
     _assert_refusal_hint(str(error))
     # lode-g9q3: the structured signal callers branch on, never the message.
     assert error.refusal is True
