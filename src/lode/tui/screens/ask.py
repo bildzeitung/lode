@@ -45,11 +45,10 @@ already-exhausted ``ctrl+<letter>`` pool that doc's own ledger tracks.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from typing import ClassVar
 
 from textual import work
-from textual.app import App, ComposeResult
+from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
@@ -241,22 +240,17 @@ class AskScreen(Screen[None]):
             )
         except Exception as err:
             if not app.is_running:
-                # The app was quit mid-flight; ``_on_stage``'s hop raising is
-                # what ended ``run_ask``, and there is nothing left to log to.
+                # Quit mid-flight: ``_on_stage``'s hop raising "App is not
+                # running" is what ends ``run_ask``, and it is not a failure.
+                # A real failure caught after the quit cannot be told apart
+                # by app state and goes unlogged with it (``docs/tui.md``).
                 return
             log.exception("ask failed")
-            self._final_hop(app, self._fail, generation, str(err) or type(err).__name__)
+            app.call_from_thread(self._fail, generation, str(err) or type(err).__name__)
             return
-        self._final_hop(app, self._finish, generation, rendered, result)
-
-    @staticmethod
-    def _final_hop(app: App[None], fn: Callable[..., None], *args: object) -> None:
-        """Hop ``fn`` to the main thread; a hop to a quit app is dropped quietly."""
-        try:
-            app.call_from_thread(fn, *args)
-        except RuntimeError:
-            if app.is_running:
-                raise
+        # After a quit this hop raises too. Textual cancelled the worker at
+        # shutdown, so the raise is discarded: no log record, no app error.
+        app.call_from_thread(self._finish, generation, rendered, result)
 
     def _is_stale(self, generation: int) -> bool:
         """Whether a worker's write for ``generation`` must be dropped. Main thread only.
