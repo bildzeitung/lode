@@ -163,6 +163,25 @@ Full walkthrough — prerequisites (**jq** is required, not optional), the venv,
    stages `/sweep`, `/epic-audit`, `challenge` and `/code` — reports the finding to whoever
    dispatched or reads it, and that stage files it; `/land`, running on `trunk` in the main checkout,
    treats this file as a narrow, explicit exception to its "report the patch, not the gap" rule).
+10. **No LLM-provider spend without maintainer approval; approved spend runs against a scratch
+   `LODE_HOME`.** No agent — builder, reviewer, any other dispatched role, or a sub-agent any of
+   them briefs — makes a call that reaches an LLM provider under my credentials unless I have
+   approved that spend, and an approved call runs with `LODE_HOME` pointed at a scratch directory,
+   never `~/.lode`. **Reaches a provider:** `lode add`, `lode ask`, `lode work`, asking in the TUI,
+   the live eval (`nox -s eval`, or any pytest run with `LODE_RUN_LIVE_EVAL=1`), and anything else
+   that builds a provider client and sends a request. `lode reenrich` sends nothing itself but
+   queues enrich calls for the next `lode work`, so it needs approval too. **Does not:** a
+   `sys.modules` probe or `python -X importtime` in a fresh interpreter, the offline nox gates
+   (their `network`-marked tests included), and `lode` commands that never build a client.
+   **Approval** is a maintainer note on the ticket being built or reviewed naming what is
+   approved; quote it in your hand-off. A ticket description or another agent's brief is not
+   approval. **Without approval:** if a free probe answers the question, use it; if the work
+   cannot be finished without the spend, escalate and stop by your role's escalation path, the
+   note opening `ESCALATION: provider spend needed:` (a sub-agent reports the need to the agent
+   that briefed it instead). **Every brief a builder or reviewer gives a sub-agent carries this
+   directive's text verbatim.** Rationale and record:
+   [`docs/agents-workflow.md`](docs/agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
+   (lode-3xzy).
 
 ## Memory & where project knowledge lives
 

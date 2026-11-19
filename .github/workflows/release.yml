@@ -49,6 +49,12 @@ jobs:
         # `build` is NOT redundant alongside nox: noxfile.py sets
         # default_venv_backend = "none", so the session shells out to
         # `python -m build` in this ambient interpreter and never installs it.
+        #
+        # uv port disposition (lode-s09w.2): KEPT on pip, deliberately. This leg builds
+        # no project venv -- the `build` session is exempt from _venv_tool and runs
+        # ambient `python -m build` (docs/stack.md), so there is nothing for
+        # `uv sync`/`uv run` to provide, and moving to `uv build` would change what
+        # the session asserts against, not just how it installs.
         run: pip install build nox
 
       # Same session build.yml runs on push/PR, so the PUBLISHED wheel gets the

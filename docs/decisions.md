@@ -6057,6 +6057,8 @@ entries below from being rewritten to chase the current tree.)
     ends. `/code`'s per-ticket reclaim does not cover it: it matches only `land/<id>--*`. A directory
     held for the rest of a session, never lost work. Measuring it and deciding who releases such a
     lock: `lode-lo0q`.
+    **Update (lode-lo0q, 2026-11-18): decided, accepted; no release mechanism.** See the
+    `lode-lo0q` entry below.
   - **Not established.** The Claude Code version at which the harness began locking: the builds
     `lode-oqr` lost (2026-07-10) were recorded as unlocked, and a harness lock is first on record a
     few days later (`lode-amif`). Nothing asserts the lock is present when a build starts; whether
@@ -6104,6 +6106,9 @@ entries below from being rewritten to chase the current tree.)
   a maintainer ruling).** The ticket asked whether the pickup should leave `land_summary` untouched
   and said to settle that, then build. No maintainer settled it; confirming or reversing this entry
   is `lode-gcbg`.
+  **Update (lode-gcbg, 2026-11-18): the maintainer confirmed this entry's three rules as built
+  (the builder's decision and both review additions), so it is now a maintainer ruling.** See the
+  `lode-gcbg` entry at the end of this file.
   - **Why.** `/land` builds each merge commit as `Merge land/<id>: <land_summary> (<id>)`. The
     pickup overwrote `land_summary` with a merge note, so a branch that took a pickup landed as
     "Merged trunk @ ... into the branch" and the reviewer's description of the branch never reached
@@ -6161,3 +6166,79 @@ entries below from being rewritten to chase the current tree.)
   - **Not established.** Refusal frequency on real notes was never measured, and the
     dead -> re-enqueue loop was confirmed by reading `reconcile._enrich_gap_step`, not
     reproduced end to end. Implementation: `lode-g9q3`.
+
+- **A finished builder's leftover harness lock is accepted until the session ends; no release
+  mechanism is built (`lode-lo0q`, 2026-11-18, maintainer ruling).** After `lode-t76f` the builder
+  no longer unlocks. If the harness does not release the lock at agent exit, a finished builder's
+  worktree stays `keep-locked` to `/land`'s sweep until the orchestrating session's process ends.
+  The live account is
+  [agents-workflow.md](agents-workflow.md#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f).
+  - **Measurement.** `/code` fan-out of 2026-11-17 on Claude Code 2.1.326: ten finished builders,
+    none observed keeping the lock after completion. A reviewer saw all five then-finished builder
+    worktrees unlocked mid-session, and `/land` reclaimed eight builder worktrees while the
+    orchestrating session was still alive, impossible for a locked one.
+  - **Decision.** Accept the leak-until-session-end and build no release mechanism. Not taken:
+    (A) `/code` unlocks the builder worktree on its completion notification; (B) `/land`'s sweep
+    treats a lock naming the worktree's own directory as released once HEAD is captured and the
+    ticket is closed.
+  - **Not established.** A rate over many fan-outs: this is one session on one harness version.
+  - **Revisit trigger:** a finished builder's worktree ever seen still locked.
+- **CLI and TUI startup must not import trafilatura, pyarrow or networkx (`lode-g2ko`,
+  2026-11-18, maintainer ruling).**
+  - **Context.** `lode.cli` imports `lode.repository` at module scope, which imports
+    `lode.drawdown`; that chain loaded trafilatura (via `lode.webfetch`) and pyarrow (via
+    `lode.externals` -> `lode.vectorstore`) before any command ran, `lode add` and
+    `lode --help` included. The ticket's 2026-11-17 measurement put them at about 275 ms and
+    about 51 ms. `lode.tui.app` reaches the same chain through `lode.tui.services.capture`.
+    This contradicted `docs/design.md`'s "capture stays instant".
+  - **Decision.** Bound it. `trafilatura` is imported inside `lode.webfetch._extract`, and
+    `pyarrow` inside `VectorStore._schema` (the only user; the annotation is
+    `TYPE_CHECKING`-guarded). `tests/test_import_boundary.py` pins, in a fresh subprocess, that
+    importing `lode.cli` or `lode.tui.app` loads none of trafilatura, pyarrow or networkx
+    (networkx is what keeps the deferred `lode.retrieval` import in the ask path worthwhile).
+    `lode add` enqueues drawdown and embed jobs unchanged; only when the work runs is the
+    import paid. No test runs `lode add` in a fresh interpreter; the enqueue path calls neither
+    `_extract` nor `_schema`, and one manual run confirmed it (after `import lode.cli`,
+    `Repository.save` on a body with a URL queued `embed`, `enrich` and `refresh` jobs with
+    none of the three loaded).
+  - **Measured** with `python -X importtime -c "import lode.cli"` (cumulative), on one WSL2
+    machine with a warm bytecode cache. In one session, with trunk's `webfetch.py` and
+    `vectorstore.py` swapped in and out for two rounds of six runs each: 522-691 ms before,
+    187-228 ms after. The ticket's own figure for trunk, from a different session, was about
+    520 ms. Absolute figures moved by 100 ms or more with machine load, so compare within a
+    session, not across.
+- **Agents make no LLM-provider call without maintainer approval, and approved spend runs against
+  a scratch `LODE_HOME` (`lode-3xzy`, 2026-11-18, maintainer).** The rule is `CLAUDE.md` General
+  Directive 10; the reasons, the approval flow and the backstop weighed are in
+  [agents-workflow.md](agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy).
+  - **Also ruled.** The `lode-g2ko` incident gets no `MISTAKES.md` entry.
+  - **Open (`lode-v3xd`).** What an agent does mid-run without approval (a free probe where one
+    answers the question, otherwise escalate and stop) is a builder's proposal refined in
+    technical review, not a maintainer ruling. Ask-and-continue was not taken: a headless
+    sub-agent has no channel to the maintainer.
+  - **Departs from the ticket.** The ticket named tests marked `network` as provider spend. They
+    send nothing to a provider and the offline gates run them; the directive lists the live eval
+    (`LODE_RUN_LIVE_EVAL=1`) instead.
+  - **Rejected.** Unsetting credentials and a fail-closed provider; no new mechanism built.
+- **Update (lode-gcbg, 2026-11-18): the maintainer confirmed the `lode-jb2q` rebase-pickup rules,
+  points 1-3 as built.** The `lode-jb2q` entry above said confirming or reversing it was this
+  ticket's to settle.
+  - **Decided (maintainer).** (1) A rebase pickup refreshes `land_head` and leaves `land_summary` as
+    the reviewer wrote it. (2) The pickup's account of its merge goes on the ticket as a
+    `REBASE PICKUP` note. (3) The one exception stands: when resolving a conflict made
+    `land_summary` false, the pickup passes a corrected one in the same call, and it still
+    describes what the branch does, not the merge. No instruction file changes: `coding.md`'s
+    rebase-pickup step 5 and the docs that point to it already say this.
+  - **Not taken.** Alternatives (a)-(d) from the ticket description (no exception; the resolution
+    in the pickup's merge commit message; appending to the reviewer's summary; escalating any
+    resolution that drops branch content).
+  - **Ruling history.** The ticket carried two contradictory notes dated 2026-11-18. One confirmed
+    points 1-3. The other reversed point 3: a pickup whose resolution changed the branch's content
+    would swap `needs-rebase` to `ready-for-code-review` for a `code-reviewer` to correct
+    `land_summary`. The maintainer broke the tie in a `/code` session: the confirming note stands
+    and the reversing one is withdrawn, so the `ready-for-code-review` route was never built.
+  - **Not ruled on.** Two alternatives from the `lode-jb2q` review's note on the ticket: (e)
+    `land-review` checking `land_summary` against the diff, and (f) building the merge message
+    from the ticket title. Neither is built. The confirming note names only (a)-(d); the
+    withdrawn one was alone in listing (e) and (f) as not taken.
+  - **Still accepted.** The limits listed in the `lode-jb2q` entry stand.

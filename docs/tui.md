@@ -488,7 +488,8 @@ groups that Textual's markup parser rejects at toast render), and logs the trace
 **Decided: catch in the TUI (option A), not at the provider seam (option B).** The seam
 deliberately leaves the non-status SDK errors raw (`anthropic.APIConnectionError` when offline,
 `anthropic.APITimeoutError` past `qa_call_timeout_s`): "a timeout is not a rejected request"
-(`docs/stack.md` "Error contract"). Wrapping them into `LLMProviderError` there would reverse that
+(`docs/configuration.md`, the `reasoning_effort` note; `docs/stack.md` "Error contract" pins that
+only status errors are wrapped). Wrapping them into `LLMProviderError` there would reverse that
 choice and reach past the TUI, because the `lode ask`, `lode work` and `lode add` handlers
 name that class (`docs/storage.md` "Transient vs. permanent job failures"). The job retry taxonomy
 there is keyed on the two credential errors only, and stays as it is. A TUI-side catch also covers
@@ -499,3 +500,10 @@ traceback for a raw SDK error.
 The toast is guarded by the same submission generation as the pane reset, so a superseded
 question that fails slowly cannot toast over a newer question's spinner. The log carries the
 exception's traceback, which includes the SDK cause the toast text omits.
+
+The same guard drops every write once the screen has stopped running (`lode-non1`). Escape removes
+a note-scoped ask screen, but its worker thread cannot be preempted and runs the pipeline to the
+end, so its stage updates and its answer arrive for a screen that is gone and are dropped. A
+pipeline failure that arrives after the escape is still logged with its traceback; it raises no
+toast. The installed corpus-wide screen is not removed by Escape, so an answer that arrives while
+it is popped is kept and shown when the screen is reopened.

@@ -101,6 +101,9 @@ Newest first.
   names the conflicting file, so the search terms are already on the ticket.
   - **Update (lode-jb2q, 2026-11-17):** the pickup no longer writes `land_summary`. The conflicting
     files are named in its `REBASE PICKUP` note on the ticket instead.
+  - **Update (lode-0z02, 2026-11-18):** the update above is too broad. The pickup still writes
+    `land_summary` in one case: to correct a summary its conflict resolution made false
+    (`.claude/agents/coding.md`, pickup step 5).
 
 ## 2026-09-08 — A promotion gate certified the artifact it was about to replace, not the one it would ship
 

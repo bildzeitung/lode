@@ -19,7 +19,6 @@ to exercise the actual schema constraints and CHECK clauses.
 import json
 import sqlite3
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 import httpx2
@@ -31,7 +30,7 @@ from _anthropic_rig import (
     _results_handler,
     _succeeded_payload,
 )
-from conftest import _make_batch_result, fake_batch_client
+from conftest import _make_batch_result, fake_batch_client, structured_response
 from pydantic import ValidationError
 
 from lode.config import Settings
@@ -178,9 +177,9 @@ def _update_note(
 
 
 def _fake_client(result: EnrichmentResult) -> mock.MagicMock:
-    """Mock Anthropic client whose ``messages.parse`` returns the given EnrichmentResult."""
+    """Mock Anthropic client whose ``messages.create`` returns the given EnrichmentResult."""
     client = mock.MagicMock()
-    client.messages.parse.return_value = SimpleNamespace(parsed_output=result)
+    client.messages.create.return_value = structured_response(result)
     return client
 
 
@@ -437,7 +436,7 @@ def test_enrich_version_passes_anthropic_call_timeout_to_create(
     client = _fake_client(result)
     enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
 
-    parse_kwargs = client.messages.parse.call_args.kwargs
+    parse_kwargs = client.messages.create.call_args.kwargs
     assert parse_kwargs["timeout"] == 42.0
 
 
@@ -453,7 +452,7 @@ def test_enrich_version_uses_the_raised_max_tokens(
     client = _fake_client(result)
     enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
 
-    parse_kwargs = client.messages.parse.call_args.kwargs
+    parse_kwargs = client.messages.create.call_args.kwargs
     assert parse_kwargs["max_tokens"] == MAX_TOKENS
     assert MAX_TOKENS > 1024  # the raise this ticket exists to make
 
@@ -472,7 +471,7 @@ def test_enrich_version_max_tokens_override_reaches_the_call(
     client = _fake_client(result)
     enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
 
-    parse_kwargs = client.messages.parse.call_args.kwargs
+    parse_kwargs = client.messages.create.call_args.kwargs
     assert parse_kwargs["max_tokens"] == 777
 
 
@@ -490,7 +489,7 @@ def test_enrich_version_with_thinking_capable_override_omits_thinking(
     client = _fake_client(result)
     enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
 
-    parse_kwargs = client.messages.parse.call_args.kwargs
+    parse_kwargs = client.messages.create.call_args.kwargs
     assert parse_kwargs["model"] == "claude-opus-5"
     assert "thinking" not in parse_kwargs
 
@@ -588,7 +587,7 @@ def test_enrich_version_skips_no_egress(
     result = enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
     assert result is None
     # The API must not have been called.
-    client.messages.parse.assert_not_called()
+    client.messages.create.assert_not_called()
     # No side effects: no annotations, no egress_log.
     assert conn.execute("SELECT COUNT(*) FROM annotations").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM egress_log").fetchone()[0] == 0
@@ -603,7 +602,7 @@ def test_enrich_version_skips_tombstone(
 
     result = enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
     assert result is None
-    client.messages.parse.assert_not_called()
+    client.messages.create.assert_not_called()
 
 
 def test_enrich_version_skips_purged(
@@ -615,7 +614,7 @@ def test_enrich_version_skips_purged(
 
     result = enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
     assert result is None
-    client.messages.parse.assert_not_called()
+    client.messages.create.assert_not_called()
 
 
 def test_enrich_version_skips_missing_version(
@@ -627,7 +626,7 @@ def test_enrich_version_skips_missing_version(
         conn, "nonexistent-ver", settings, provider=AnthropicProvider(client)
     )
     assert result is None
-    client.messages.parse.assert_not_called()
+    client.messages.create.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -664,7 +663,7 @@ def test_enrich_version_snapshot_runs_haiku_and_writes_against_external_id(
     )
 
     assert returned == result
-    client.messages.parse.assert_called_once()
+    client.messages.create.assert_called_once()
 
     ann_rows = _annotations(conn, version_id="snap-1")
     assert {r["kind"] for r in ann_rows} == {"tag", "entity", "summary"}
@@ -711,7 +710,7 @@ def test_enrich_version_skips_no_egress_external(
         conn, "snap-1", settings, provider=AnthropicProvider(client)
     )
     assert result is None
-    client.messages.parse.assert_not_called()
+    client.messages.create.assert_not_called()
     assert conn.execute("SELECT COUNT(*) FROM annotations").fetchone()[0] == 0
 
 
@@ -737,7 +736,7 @@ def test_enrich_version_skips_no_egress_scoped_jira_external(
     )
 
     assert result is None
-    client.messages.parse.assert_not_called()
+    client.messages.create.assert_not_called()
     # No write performed to the row by the scope rule -- still unset.
     row = conn.execute(
         "SELECT no_egress FROM externals WHERE external_id = 'SECRET-1'"
@@ -768,7 +767,7 @@ def test_enrich_version_scope_composes_with_per_row_flag(
     )
 
     assert result is None
-    client.messages.parse.assert_not_called()
+    client.messages.create.assert_not_called()
 
 
 def test_enrich_version_skips_tombstone_snapshot(
@@ -782,7 +781,7 @@ def test_enrich_version_skips_tombstone_snapshot(
         conn, "snap-1", settings, provider=AnthropicProvider(client)
     )
     assert result is None
-    client.messages.parse.assert_not_called()
+    client.messages.create.assert_not_called()
 
 
 def test_enrich_version_snapshot_idempotent_replace(

@@ -27,7 +27,12 @@ from _anthropic_rig import (
     _results_handler,
     _succeeded_payload,
 )
-from conftest import _text_block, _tool_use_block, fake_batch_client
+from conftest import (
+    _text_block,
+    _tool_use_block,
+    fake_batch_client,
+    structured_response,
+)
 from pydantic import BaseModel, ValidationError
 
 from lode.config import Settings
@@ -53,6 +58,11 @@ from lode.llm_provider import (
 class _Widget(BaseModel):
     name: str
     count: int = 0
+
+
+def _widget_schema() -> dict:
+    """The ``output_config.format.schema`` the SDK derives for ``_Widget``."""
+    return anthropic.transform_schema(_Widget)
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +158,7 @@ def test_structured_call_sends_structured_output_and_never_forces_a_tool(
     # request either way, never a forced tool_choice, so a model that 400s on
     # one still works.
     client = mock.MagicMock()
-    client.messages.parse.return_value = _parsed_response(_Widget(name="w", count=1))
+    client.messages.create.return_value = _parsed_response(_Widget(name="w", count=1))
     provider = AnthropicProvider(client)
 
     result = provider.structured_call(
@@ -163,9 +173,9 @@ def test_structured_call_sends_structured_output_and_never_forces_a_tool(
     )
 
     assert result == _Widget(name="w", count=1)
-    kwargs = client.messages.parse.call_args.kwargs
+    kwargs = client.messages.create.call_args.kwargs
     assert kwargs["model"] == "claude-sonnet-5-5"
-    assert kwargs["output_format"] is _Widget
+    assert kwargs["output_config"]["format"]["schema"] == _widget_schema()
     assert kwargs["messages"] == [{"role": "user", "content": "prompt"}]
     assert kwargs["timeout"] == 7.0
     # lode-3dlt: `thinking` is never sent -- an explicit `disabled`
@@ -176,7 +186,7 @@ def test_structured_call_sends_structured_output_and_never_forces_a_tool(
     # single-shot wire shape carries none.
     assert "tools" not in kwargs
     assert "tool_choice" not in kwargs
-    client.messages.create.assert_not_called()
+    client.messages.create.assert_called_once()
 
 
 def test_structured_call_omits_thinking_for_a_fable_class_model() -> None:
@@ -186,9 +196,7 @@ def test_structured_call_omits_thinking_for_a_fable_class_model() -> None:
     # the default-tier test above holds here too -- proving there is no
     # per-model code path that could reintroduce the illegal value.
     client = mock.MagicMock()
-    client.messages.parse.return_value = SimpleNamespace(
-        parsed_output=_Widget(name="w", count=1)
-    )
+    client.messages.create.return_value = _parsed_response(_Widget(name="w", count=1))
     provider = AnthropicProvider(client)
 
     result = provider.structured_call(
@@ -202,7 +210,7 @@ def test_structured_call_omits_thinking_for_a_fable_class_model() -> None:
     )
 
     assert result == _Widget(name="w", count=1)
-    kwargs = client.messages.parse.call_args.kwargs
+    kwargs = client.messages.create.call_args.kwargs
     assert kwargs["model"] == "claude-fable-5"
     assert "thinking" not in kwargs
 
@@ -210,13 +218,11 @@ def test_structured_call_omits_thinking_for_a_fable_class_model() -> None:
 def test_structured_call_raises_when_the_response_has_no_text_block() -> None:
     # lode-3dlt: with `thinking` no longer pinned off, a response can spend its
     # whole max_tokens budget inside thinking and come back with no text block
-    # at all -- the SDK's parsed_output is then None. Unguarded that None
-    # escapes under the `-> BaseModelT` annotation and fails as an
-    # AttributeError inside qa.answer_question; it must be an LLMProviderError
-    # naming the cause instead.
+    # at all. It must be an LLMProviderError naming the cause, not an
+    # AttributeError inside qa.answer_question.
     client = mock.MagicMock()
-    client.messages.parse.return_value = SimpleNamespace(
-        parsed_output=None, stop_reason="max_tokens"
+    client.messages.create.return_value = _parsed_response(
+        None, stop_reason="max_tokens"
     )
     provider = AnthropicProvider(client)
 
@@ -239,20 +245,11 @@ def test_structured_call_raises_when_the_response_has_no_text_block() -> None:
     assert excinfo.value.provider == "anthropic"
 
 
-def test_structured_call_wraps_a_schema_validation_failure() -> None:
-    # lode-3dlt: messages.parse validates the response text against
-    # output_schema inside the SDK, so a text block truncated mid-JSON (newly
-    # more reachable now that thinking shares the budget) raises a raw pydantic
-    # ValidationError out of the SDK's own post-processing. The seam must
-    # convert it, exactly as OpenAIProvider already does.
+def _structured_call_with(response: SimpleNamespace) -> LLMProviderError:
     client = mock.MagicMock()
-    with pytest.raises(ValidationError) as raised:
-        _Widget.model_validate_json('{"name": "w", "cou')
-    client.messages.parse.side_effect = raised.value
-    provider = AnthropicProvider(client)
-
+    client.messages.create.return_value = response
     with pytest.raises(LLMProviderError) as excinfo:
-        provider.structured_call(
+        AnthropicProvider(client).structured_call(
             model="claude-opus-5",
             reasoning_effort=None,
             system="sys",
@@ -261,10 +258,40 @@ def test_structured_call_wraps_a_schema_validation_failure() -> None:
             max_tokens=8192,
             timeout_s=1.0,
         )
+    return excinfo.value
 
-    assert "_Widget" in str(excinfo.value)
-    assert excinfo.value.provider == "anthropic"
-    assert isinstance(excinfo.value.__cause__, ValidationError)
+
+def test_structured_call_diagnoses_a_max_tokens_truncation() -> None:
+    # lode-3dlt / lode-pdss: text cut off mid-JSON because the output budget
+    # ran out names stop_reason and the budget remedy.
+    error = _structured_call_with(
+        structured_response(None, stop_reason="max_tokens", text=_TRUNCATED_JSON)
+    )
+
+    message = str(error)
+    assert "_Widget" in message
+    assert "stop_reason='max_tokens'" in message
+    assert "cut off" in message
+    assert _BUDGET_EXHAUSTED_HINT in message
+    assert "policy refusal" not in message
+    assert error.provider == "anthropic"
+    assert isinstance(error.__cause__, ValidationError)
+
+
+def test_structured_call_diagnoses_a_genuine_schema_violation() -> None:
+    # Complete JSON of the wrong shape, finished normally: neither a refusal
+    # nor a truncation, and it still names stop_reason.
+    error = _structured_call_with(
+        structured_response(None, text='{"name": 5, "count": "x"}')
+    )
+
+    message = str(error)
+    assert "_Widget" in message
+    assert "stop_reason='end_turn'" in message
+    assert "violates the schema" in message
+    assert "cut off" not in message
+    assert "policy refusal" not in message
+    assert isinstance(error.__cause__, ValidationError)
 
 
 def test_structured_call_names_context_window_exceeded_when_no_text_block() -> None:
@@ -273,7 +300,7 @@ def test_structured_call_names_context_window_exceeded_when_no_text_block() -> N
     # max_tokens can't help. The message must name the overflow and its remedy
     # instead of the generic thinking-budget hint.
     client = mock.MagicMock()
-    client.messages.parse.return_value = _parsed_response(
+    client.messages.create.return_value = _parsed_response(
         None, stop_reason="model_context_window_exceeded"
     )
     provider = AnthropicProvider(client)
@@ -298,14 +325,16 @@ def test_structured_call_names_context_window_exceeded_when_no_text_block() -> N
     assert excinfo.value.provider == "anthropic"
 
 
-def test_structured_call_wraps_a_bad_request_from_the_messages_parse_branch() -> None:
+def test_structured_call_wraps_a_bad_request_from_the_structured_output_branch() -> (
+    None
+):
     # lode-90o7: reasoning_effort set to a legal *value* on a tier whose
     # *model* doesn't support it reaches the API and comes back as
     # anthropic.BadRequestError. Must not escape raw -- callers of this seam
     # only expect LLMProviderError.
     client = mock.MagicMock()
     bad_request = _anthropic_bad_request()
-    client.messages.parse.side_effect = bad_request
+    client.messages.create.side_effect = bad_request
     provider = AnthropicProvider(client)
 
     with pytest.raises(LLMProviderError) as excinfo:
@@ -326,14 +355,12 @@ def test_structured_call_wraps_a_bad_request_from_the_messages_parse_branch() ->
     assert err.__cause__ is bad_request
 
 
-def test_structured_call_sends_effort_on_the_messages_parse_branch() -> None:
+def test_structured_call_sends_effort_on_the_structured_output_branch() -> None:
     # lode-wnz1: reasoning_effort now reaches Anthropic as
-    # output_config.effort on the messages.parse branch. Must never surface
+    # output_config.effort on the structured-output branch. Must never surface
     # as a raw `reasoning_effort` kwarg -- that's not a real SDK parameter.
     client = mock.MagicMock()
-    client.messages.parse.return_value = SimpleNamespace(
-        parsed_output=_Widget(name="w")
-    )
+    client.messages.create.return_value = _parsed_response(_Widget(name="w"))
     provider = AnthropicProvider(client)
 
     provider.structured_call(
@@ -346,20 +373,18 @@ def test_structured_call_sends_effort_on_the_messages_parse_branch() -> None:
         timeout_s=1.0,
     )
 
-    kwargs = client.messages.parse.call_args.kwargs
+    kwargs = client.messages.create.call_args.kwargs
     assert "reasoning_effort" not in kwargs
-    assert kwargs["output_config"] == {"effort": "high"}
-    # output_format must survive alongside output_config -- the SDK's own
-    # .parse() merges the two into {"format": ..., "effort": ...} internally;
-    # this asserts the wiring didn't drop or replace it.
-    assert kwargs["output_format"] is _Widget
+    # `format` must survive alongside `effort` in the one output_config.
+    assert kwargs["output_config"] == {
+        "effort": "high",
+        "format": {"type": "json_schema", "schema": _widget_schema()},
+    }
 
 
-def test_structured_call_omits_output_config_when_reasoning_effort_is_none() -> None:
+def test_structured_call_omits_effort_when_reasoning_effort_is_none() -> None:
     client = mock.MagicMock()
-    client.messages.parse.return_value = SimpleNamespace(
-        parsed_output=_Widget(name="w")
-    )
+    client.messages.create.return_value = _parsed_response(_Widget(name="w"))
     provider = AnthropicProvider(client)
 
     provider.structured_call(
@@ -372,7 +397,7 @@ def test_structured_call_omits_output_config_when_reasoning_effort_is_none() -> 
         timeout_s=1.0,
     )
 
-    assert "output_config" not in client.messages.parse.call_args.kwargs
+    assert "effort" not in client.messages.create.call_args.kwargs["output_config"]
 
 
 @pytest.mark.parametrize("bad_effort", ["LOW", "extreme", "", "medium ", "effort"])
@@ -396,7 +421,6 @@ def test_structured_call_rejects_an_invalid_effort_value(bad_effort: str) -> Non
 
     assert bad_effort in str(excinfo.value)
     assert excinfo.value.provider == "anthropic"
-    client.messages.parse.assert_not_called()
     client.messages.create.assert_not_called()
 
 
@@ -446,11 +470,9 @@ def _tool_use_response(
 def _parsed_response(
     parsed: object, *, output_tokens: int = 0, stop_reason: str = "end_turn"
 ) -> SimpleNamespace:
-    """A ``messages.parse`` response: what the final structured-output turn gets."""
-    return SimpleNamespace(
-        parsed_output=parsed,
-        stop_reason=stop_reason,
-        usage=SimpleNamespace(output_tokens=output_tokens),
+    """A ``messages.create`` response: what a structured-output turn gets."""
+    return structured_response(
+        parsed, output_tokens=output_tokens, stop_reason=stop_reason
     )
 
 
@@ -459,9 +481,7 @@ def test_run_tool_turns_with_empty_tools_delegates_to_structured_call() -> None:
     # identical to calling structured_call directly -- no messages.create loop
     # machinery engages at all.
     client = mock.MagicMock()
-    client.messages.parse.return_value = SimpleNamespace(
-        parsed_output=_Widget(name="w", count=1)
-    )
+    client.messages.create.return_value = _parsed_response(_Widget(name="w", count=1))
     provider = AnthropicProvider(client)
 
     result = provider.run_tool_turns(
@@ -477,10 +497,11 @@ def test_run_tool_turns_with_empty_tools_delegates_to_structured_call() -> None:
     )
 
     assert result == _Widget(name="w", count=1)
-    client.messages.create.assert_not_called()
-    kwargs = client.messages.parse.call_args.kwargs
-    assert kwargs["output_format"] is _Widget
+    client.messages.create.assert_called_once()
+    kwargs = client.messages.create.call_args.kwargs
+    assert kwargs["output_config"]["format"]["schema"] == _widget_schema()
     assert kwargs["timeout"] == 7.0
+    assert "tools" not in kwargs
 
 
 @pytest.mark.parametrize("owner", [LLMProvider, AnthropicProvider, OpenAIProvider])
@@ -504,8 +525,7 @@ def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> 
     free_turn = _tool_use_response("lookup_widget", {"id": "w-1"})
     final_turn = _parsed_response(_Widget(name="widget", count=3))
     client = mock.MagicMock()
-    client.messages.create.side_effect = [free_turn]
-    client.messages.parse.return_value = final_turn
+    client.messages.create.side_effect = [free_turn, final_turn]
     provider = AnthropicProvider(client)
 
     calls: list[tuple[str, dict]] = []
@@ -533,8 +553,7 @@ def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> 
 
     assert result == _Widget(name="widget", count=3)
     assert calls == [("lookup_widget", {"id": "w-1"})]
-    assert client.messages.create.call_count == 1
-    client.messages.parse.assert_called_once()
+    assert client.messages.create.call_count == 2  # one free turn + the final turn
 
     free_kwargs = client.messages.create.call_args_list[0].kwargs
     assert free_kwargs["tool_choice"] == {"type": "auto"}
@@ -551,12 +570,12 @@ def test_run_tool_turns_runs_a_free_tool_turn_then_forces_the_final_schema() -> 
     # asserted via `final_kwargs["messages"]` below instead.
     assert free_kwargs["messages"][0] == {"role": "user", "content": "find widget w-1"}
 
-    # lode-ugj5: the final turn is structured output (`output_format` ->
-    # `output_config.format`), never a forced tool_choice (400s on Sonnet 5.5 /
+    # lode-ugj5: the final turn is structured output (`output_config.format`),
+    # never a forced tool_choice (400s on Sonnet 5.5 /
     # Opus 5.5). The tool definitions stay because the history carries
     # tool_use blocks; `none` makes a further call impossible.
-    final_kwargs = client.messages.parse.call_args.kwargs
-    assert final_kwargs["output_format"] is _Widget
+    final_kwargs = client.messages.create.call_args.kwargs
+    assert final_kwargs["output_config"]["format"]["schema"] == _widget_schema()
     assert final_kwargs["tool_choice"] == {"type": "none"}
     assert final_kwargs["tools"] == free_kwargs["tools"]
     final_messages = final_kwargs["messages"]
@@ -585,8 +604,7 @@ def test_run_tool_turns_logs_total_output_tokens_against_the_worst_case_bound(
     free_turn = _tool_use_response("lookup_widget", {"id": "w"}, output_tokens=40)
     final_turn = _parsed_response(_Widget(name="w", count=1), output_tokens=25)
     client = mock.MagicMock()
-    client.messages.create.side_effect = [free_turn]
-    client.messages.parse.return_value = final_turn
+    client.messages.create.side_effect = [free_turn, final_turn]
     provider = AnthropicProvider(client)
 
     with caplog.at_level(logging.INFO, logger="lode.llm_provider"):
@@ -623,8 +641,7 @@ def test_run_tool_turns_forces_the_final_turn_when_the_model_never_calls_a_tool(
     text_only.content = [_text_block()]
     final_turn = _parsed_response(_Widget(name="w", count=0))
     client = mock.MagicMock()
-    client.messages.create.side_effect = [text_only]
-    client.messages.parse.return_value = final_turn
+    client.messages.create.side_effect = [text_only, final_turn]
     provider = AnthropicProvider(client)
 
     result = provider.run_tool_turns(
@@ -640,8 +657,8 @@ def test_run_tool_turns_forces_the_final_turn_when_the_model_never_calls_a_tool(
     )
 
     assert result == _Widget(name="w", count=0)
-    assert client.messages.create.call_count == 1
-    final_kwargs = client.messages.parse.call_args.kwargs
+    assert client.messages.create.call_count == 2  # one free turn + the final turn
+    final_kwargs = client.messages.create.call_args.kwargs
     assert final_kwargs["tool_choice"] == {"type": "none"}
 
 
@@ -654,8 +671,11 @@ def test_run_tool_turns_stops_after_max_tool_turns_and_still_forces_the_final_tu
     client = mock.MagicMock()
     # 2 free turns (max_tool_turns=2) always calling the tool, then the
     # structured-output final turn.
-    client.messages.create.side_effect = [always_calls_tool, always_calls_tool]
-    client.messages.parse.return_value = final_turn
+    client.messages.create.side_effect = [
+        always_calls_tool,
+        always_calls_tool,
+        final_turn,
+    ]
     provider = AnthropicProvider(client)
 
     result = provider.run_tool_turns(
@@ -672,8 +692,8 @@ def test_run_tool_turns_stops_after_max_tool_turns_and_still_forces_the_final_tu
     )
 
     assert result == _Widget(name="w", count=9)
-    assert client.messages.create.call_count == 2
-    client.messages.parse.assert_called_once()
+    # Two free turns, then the final structured-output turn.
+    assert client.messages.create.call_count == 3
 
 
 def test_run_tool_turns_raises_when_the_run_timeout_is_exhausted() -> None:
@@ -724,8 +744,7 @@ def test_run_tool_turns_wraps_a_bad_request_from_the_final_structured_turn() -> 
     free_turn = _tool_use_response("lookup_widget", {"id": "w"})
     bad_request = _anthropic_bad_request()
     client = mock.MagicMock()
-    client.messages.create.side_effect = [free_turn]
-    client.messages.parse.side_effect = bad_request
+    client.messages.create.side_effect = [free_turn, bad_request]
     provider = AnthropicProvider(client)
 
     with pytest.raises(LLMProviderError) as excinfo:
@@ -751,11 +770,10 @@ def test_run_tool_turns_wraps_a_bad_request_from_the_final_structured_turn() -> 
 def test_run_tool_turns_raises_when_the_final_turn_has_no_text_block() -> None:
     tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
     free_turn = _tool_use_response("lookup_widget", {"id": "w"})
-    # Budget spent on thinking: the SDK's parsed_output is None.
+    # Budget spent on thinking: the response carries no text block.
     no_text = _parsed_response(None, stop_reason="max_tokens")
     client = mock.MagicMock()
-    client.messages.create.side_effect = [free_turn]
-    client.messages.parse.return_value = no_text
+    client.messages.create.side_effect = [free_turn, no_text]
     provider = AnthropicProvider(client)
 
     with pytest.raises(LLMProviderError, match="no text block"):
@@ -863,10 +881,9 @@ def test_submit_batch_builds_structured_output_requests() -> None:
 def test_batch_and_immediate_routes_put_the_same_request_on_the_wire() -> None:
     """Pins the wire equivalence `submit_batch`'s comment claims (lode-568v.2).
 
-    The immediate route lets `messages.parse` derive `output_config.format`
-    inside the SDK; the batch route builds it by hand. Driven through the real
-    SDK so an upgrade that changes what `parse` sends fails here instead of
-    silently diverging the two routes.
+    Both routes build `output_config.format` by hand (the immediate route in
+    `_parsed_turn`, since lode-pdss). Driven through the real SDK so the two
+    cannot silently diverge.
     """
     bodies: dict[str, dict] = {}
 
@@ -1593,8 +1610,12 @@ def _assert_refusal_hint(message: str, *, category: str | None = "cyber") -> Non
         assert f"category={category!r}" in message
 
 
-def _refused_parse_response() -> SimpleNamespace:
-    response = _parsed_response(None, stop_reason="refusal")
+_TRUNCATED_JSON = '{"name": "w", "cou'
+
+
+def _refused_response(text: str | None = _TRUNCATED_JSON) -> SimpleNamespace:
+    """A mid-generation refusal: HTTP 200, partial (default: truncated) text."""
+    response = structured_response(None, stop_reason="refusal", text=text)
     response.stop_details = SimpleNamespace(category="cyber")
     return response
 
@@ -1616,23 +1637,21 @@ def test_refusal_hint_omits_category_when_absent(response: SimpleNamespace) -> N
     assert "category" not in hint
 
 
-def test_structured_call_names_a_refusal_on_the_parse_branch() -> None:
-    client = mock.MagicMock()
-    client.messages.parse.return_value = _refused_parse_response()
+def test_structured_call_names_a_refusal_whose_text_is_truncated() -> None:
+    # lode-pdss: the text block is cut off mid-JSON, so it cannot validate;
+    # stop_reason is read first, so this is a policy refusal, not a schema
+    # mismatch.
+    message = str(_structured_call_with(_refused_response()))
 
-    with pytest.raises(LLMProviderError) as excinfo:
-        AnthropicProvider(client).structured_call(
-            model="claude-opus-5",
-            reasoning_effort=None,
-            system="sys",
-            user_prompt="p",
-            output_schema=_Widget,
-            max_tokens=8192,
-            timeout_s=1.0,
-        )
+    assert "did not match" not in message
+    assert "not visible from here" not in message
+    _assert_refusal_hint(message)
 
-    assert "no text block" in str(excinfo.value)
-    _assert_refusal_hint(str(excinfo.value))
+
+def test_structured_call_names_a_refusal_with_no_text_block() -> None:
+    message = str(_structured_call_with(_refused_response(text=None)))
+
+    _assert_refusal_hint(message)
 
 
 def test_run_tool_turns_final_turn_names_a_refusal() -> None:
@@ -1640,8 +1659,10 @@ def test_run_tool_turns_final_turn_names_a_refusal() -> None:
         name="lookup_widget", description="Look up a widget.", input_schema={}
     )
     client = mock.MagicMock()
-    client.messages.create.side_effect = [_tool_use_response("lookup_widget", {})]
-    client.messages.parse.return_value = _refused_parse_response()
+    client.messages.create.side_effect = [
+        _tool_use_response("lookup_widget", {}),
+        _refused_response(),
+    ]
 
     with pytest.raises(LLMProviderError) as excinfo:
         AnthropicProvider(client).run_tool_turns(
@@ -1657,7 +1678,7 @@ def test_run_tool_turns_final_turn_names_a_refusal() -> None:
             max_tool_turns=1,
         )
 
-    assert "no text block" in str(excinfo.value)
+    assert "did not match" not in str(excinfo.value)
     _assert_refusal_hint(str(excinfo.value))
 
 
@@ -1694,27 +1715,15 @@ def test_collect_batch_names_a_refusal_on_a_succeeded_result(
     _assert_refusal_hint(str(result.error), category=category)
 
 
-def test_parse_branch_refusal_whose_text_validates_is_not_returned() -> None:
-    # lode-mzuk: `messages.parse` hands back a populated `parsed_output` for a
-    # refused message whenever its text happens to validate.
-    response = _parsed_response(_Widget(name="w"), stop_reason="refusal")
-    response.stop_details = SimpleNamespace(category="cyber")
-    client = mock.MagicMock()
-    client.messages.parse.return_value = response
+def test_structured_refusal_whose_text_validates_is_not_returned() -> None:
+    # lode-mzuk: a refused message whose text happens to validate is still
+    # discarded.
+    response = _refused_response(text=_Widget(name="w").model_dump_json())
 
-    with pytest.raises(LLMProviderError) as excinfo:
-        AnthropicProvider(client).structured_call(
-            model="claude-opus-5",
-            reasoning_effort=None,
-            system="sys",
-            user_prompt="p",
-            output_schema=_Widget,
-            max_tokens=8192,
-            timeout_s=1.0,
-        )
+    message = str(_structured_call_with(response))
 
-    assert "partial content discarded" in str(excinfo.value)
-    _assert_refusal_hint(str(excinfo.value))
+    assert "partial content discarded" in message
+    _assert_refusal_hint(message)
 
 
 @pytest.mark.parametrize("partial_tool_use", [True, False], ids=["tool-use", "empty"])
@@ -1748,8 +1757,41 @@ def test_run_tool_turns_refused_free_turn_raises_without_running_tools(
         )
 
     assert ran == []
-    client.messages.parse.assert_not_called()
+    # The one free turn only: no final structured-output turn was attempted.
+    assert client.messages.create.call_count == 1
     _assert_refusal_hint(str(excinfo.value))
+
+
+def test_run_tool_turns_max_tokens_free_turn_raises_without_running_tools() -> None:
+    tool = ToolSpec(
+        name="lookup_widget", description="Look up a widget.", input_schema={}
+    )
+    truncated = _tool_use_response("lookup_widget", {})
+    truncated.stop_reason = "max_tokens"
+    client = mock.MagicMock()
+    client.messages.create.side_effect = [truncated]
+    ran: list[str] = []
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).run_tool_turns(
+            model="claude-sonnet-4-6",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: ran.append(name) or "r",
+            output_schema=_Widget,
+            max_tokens=100,
+            timeout_s=30.0,
+            max_tool_turns=2,
+        )
+
+    assert ran == []
+    # The one free turn only: no final structured-output turn was attempted.
+    assert client.messages.create.call_count == 1
+    client.messages.parse.assert_not_called()
+    assert "stop_reason='max_tokens'" in str(excinfo.value)
+    assert _BUDGET_EXHAUSTED_HINT in str(excinfo.value)
 
 
 @pytest.mark.network

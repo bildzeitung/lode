@@ -41,8 +41,8 @@ readonly DESCRIPTION="Collector for wording-only doc/comment nits (docs/agents-w
 
 How a nit gets here: an agent finds a wording-only nit and runs \`scripts/bd-docs-nit.sh append\`, which appends a NIT-prefixed note here in the mandated patch shape (file, line, verbatim anchor, exact replacement).
 
-How this gets drained: a human runs /code on this ticket once the batch is worth it. The batch builder applies each accepted nit, re-appends or files as its own ticket any nit it declines, drops any nit whose anchor is no longer present (already fixed), and lists every nit's disposition in its hand-off note."
-readonly ACCEPTANCE="Every NIT note on this ticket is, before hand-off, either applied, carried over to the successor collector, filed as its own ticket, or dropped as anchor-gone -- and the hand-off note says which for each one."
+How this gets drained: a human runs /code on this ticket once the batch is worth it. The batch builder applies each accepted nit, re-appends or files as its own ticket any nit it declines, drops a nit only when its anchor is no longer present AND the defect it names is gone from the current text (a nit whose defect is still visible, or whose anchor is another pending nit's replacement, is carried over instead), and lists every nit's disposition in its hand-off note."
+readonly ACCEPTANCE="Every NIT note on this ticket is, before hand-off, either applied, carried over to the successor collector, filed as its own ticket, or dropped as anchor-gone (anchor absent and defect gone) -- and the hand-off note says which for each one."
 
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT

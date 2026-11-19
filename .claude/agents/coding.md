@@ -122,6 +122,11 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   `blocks:` guard — it is a backstop, not a substitute for knowing the rule. Full rationale and the
   draft-and-surface protocol: [docs/agents-workflow.md — Never write to an external tracker under the
   user's identity](../../docs/agents-workflow.md#never-write-to-an-external-tracker-under-the-users-identity-lode-o29m).
+- **No LLM-provider spend without maintainer approval; approved spend runs against a scratch
+  `LODE_HOME` (lode-3xzy).** The rule is [`CLAUDE.md`](../../CLAUDE.md) General Directive 10 and
+  binds me as written there. **Every brief I give a sub-agent carries Directive 10's text
+  verbatim.** Why:
+  [docs/agents-workflow.md](../../docs/agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy).
 
 ## The producer cycle
 
@@ -427,9 +432,15 @@ mode is destructive repair, appropriate as a one-time precondition, not as a mid
     successor collector via `scripts/bd-docs-nit.sh append` when I decline to apply it but it is
     still wording-only, just not applicable this pass; **filed as its own ticket** when declining it
     needs a judgment call a collector note can't carry; or **dropped as anchor-gone** — the one
-    exception to "never closes silently with the batch" — when the nit's verbatim anchor line is no
-    longer present anywhere in the file (already fixed by an intervening comment-groomer or land). My
-    hand-off note lists every nit's disposition, one line each.
+    exception to "never closes silently with the batch" — only when the nit's verbatim anchor line
+    is no longer present anywhere in the file **and** the defect it names is gone from the current
+    text (e.g. fixed by an intervening comment-groomer or land) — an absent anchor alone is not
+    enough (lode-vlyj). If the defect is still visible, or the anchor equals the replacement text of
+    another pending nit (on this collector or the open successor), I carry it over instead, and the
+    re-appended note's `--what` says why its anchor is absent, pointing at that other nit when
+    there is one. My hand-off note lists every nit's disposition, one line each: a drop says what
+    was absent and why the defect is gone, and a nit carried over this way says which kept it — the
+    still-visible defect, or the other nit's pending replacement.
 
 **Building on top of an unlanded `land/<id>` branch (rare — stacked branches, lode-02v).**
 Occasionally a ticket's fix only makes sense once *another* ticket's still-unlanded code exists — the
@@ -640,8 +651,9 @@ scripts/handoff-sha.sh <id> review_head --add-label ready-for-code-review
 ```
 
 Exit 0 is the write done. Exit 1 = the derived value is malformed (nothing was written), 2 = this
-CALL is broken (fix the invocation), 3 = `bd update` itself failed — fix and re-run; a nonzero exit
-writes nothing. Then publish it:
+CALL is broken (fix the invocation), 3 = `bd update` itself failed, 4 = origin's `land/<id>` is not
+at `HEAD` (push first), 5 = `git ls-remote origin` failed — fix and re-run; a nonzero exit writes
+nothing. Then publish it:
 
 ```bash
 scripts/bd-dolt-push.sh
@@ -732,7 +744,7 @@ On a failure here I stop — full stop, same as the fresh-build cycle: no `Enter
 `git worktree add` self-rescue, no fetch. See the fresh-build cycle's write-up of this same script for
 the full rationale (lode-ska2); it doesn't repeat here.
 
-**Recycled-worktree guard (lode-nt98) — next, before the fetch below.** The same harness
+**Recycled-worktree guard (lode-nt98) — next, before the fetch+checkout script below.** The same harness
 `isolation: "worktree"` hand-off this cycle's own launch worktree came through has been observed
 handing a dispatched agent a **recycled** worktree still checked out on a *previous* ticket's build
 branch, carrying that ticket's commits, instead of a fresh branch off `origin/trunk` HEAD — confirmed in
@@ -742,7 +754,7 @@ account in
 `scripts/checkout-land-branch.sh` runs below *will* land me on the correct `land/<id>` regardless, so this guard is **not** what
 makes the checkout correct. What it buys is a clean tree to work in: `checkout -B` carries **untracked**
 leftovers from a recycled worktree straight through, and those go on to pollute my `git status` and the
-`nox` run I gate on. So, before the fetch, I assert this launch worktree actually started clean — via
+`nox` run I gate on. So, before the fetch+checkout script, I assert this launch worktree actually started clean — via
 `scripts/recycled-worktree-guard.sh` (lode-ivth), the same script the fresh-build cycle above uses:
 
 ```bash
@@ -898,7 +910,8 @@ scripts/handoff-sha.sh <id> land_head --remove-label needs-rebase --add-label re
 ```
 
 Exit 0 is done; nonzero writes nothing (1 = the derived value is malformed, 2 = this CALL is broken,
-3 = `bd update` failed). The note is the only prose record of my merge, and `land-review` reads it.
+3 = `bd update` failed, 4 = origin's `land/<id>` is not `HEAD`, 5 = `ls-remote` failed). The note is
+the only prose record of my merge, and `land-review` reads it.
 
 ```bash
 scripts/bd-dolt-push.sh
@@ -1075,7 +1088,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
 | Review context | head SHA (`review_head`) is the only metadata field the hand-off writes — `review_worktree`/`review_branch` are retired (lode-2m89: nobody read them) (bd metadata, read via `bd show --json`) |
-| SHA metadata writes | every `review_head`/`land_head` write is one call to `scripts/handoff-sha.sh <id> <field> [bd-update-args…]`, which derives `HEAD`, validates it and runs the `bd update` in a single process (lode-qh1m, lode-0a4n) — no SHA is ever copied between calls; exit 1 = malformed value, 2 = broken call, 3 = `bd update` failed |
+| SHA metadata writes | every `review_head`/`land_head` write is one call to `scripts/handoff-sha.sh <id> <field> [bd-update-args…]`, which derives `HEAD`, validates it and runs the `bd update` in a single process (lode-qh1m, lode-0a4n) — no SHA is ever copied between calls; exit 1 = malformed value, 2 = broken call, 3 = `bd update` failed, 4 = origin's `land/<id>` is not `HEAD`, 5 = `ls-remote` failed |
 | I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
 | External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal (lode-o29m) |
 | Technical review | **not mine** — the separate `code-reviewer` agent (Fable) fetches `land/<id>` into its own worktree and runs `/code-review` medium, then its own correctness reasoning verifying that skill's findings (lode-1fyb), + `/simplify` there |

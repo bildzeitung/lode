@@ -196,12 +196,13 @@ import traceback
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest import mock
 
 import pytest
 import yaml
+from pydantic import BaseModel
 from textual.pilot import Pilot
 
 import lode
@@ -230,13 +231,12 @@ from lode.fence_parsing import closes_fence, match_fence_marker
 
 #: NOT imported at runtime, deliberately (lode-pw9o): ``lode.tool_dispatch`` and
 #: ``lode.webfetch`` are needed only by ``fake_tool_turn_client`` below, and importing them
-#: at module scope costs ~0.8s and ~440 modules (``trafilatura`` -> ``lxml``/``justext``/
-#: ``htmldate``/``dateparser``, plus ``numpy``/``pyarrow``) at COLLECTION, in the one conftest
-#: every test module loads -- and again in each xdist worker. Measured, not assumed. They are
-#: imported inside the builder instead. The TYPE_CHECKING import below is free at runtime:
-#: on this repo's Python (>=3.14, PEP 649) annotations are evaluated lazily, so
-#: ``StubWebFetcher``'s ``RawResponse`` annotations never resolve the name unless something
-#: actually asks for them.
+#: at module scope costs ~55 modules and tens of ms (``httpx2`` and lode's own fetch/tool
+#: modules) at COLLECTION, in the one conftest every test module loads -- and again in each
+#: xdist worker. Measured, not assumed. They are imported inside the builder instead. The
+#: TYPE_CHECKING import below is free at runtime: on this repo's Python (>=3.14, PEP 649)
+#: annotations are evaluated lazily, so ``StubWebFetcher``'s ``RawResponse`` annotations
+#: never resolve the name unless something actually asks for them.
 if TYPE_CHECKING:
     from lode.webfetch import RawResponse
 
@@ -1299,6 +1299,28 @@ def load_module_from_path(name: str, path: Path) -> ModuleType:
     return module
 
 
+@functools.cache
+def load_noxfile() -> ModuleType:
+    """Import the real ``noxfile.py`` once per session (it registers nox sessions globally).
+
+    A second execution re-registers every session and nox warns it will become an
+    error, so every test that needs the module shares this one cached load.
+    """
+    return load_module_from_path("noxfile", _CHECKOUT_ROOT / "noxfile.py")
+
+
+def project_venv_bin() -> Path:
+    """The project venv's ``bin`` dir, found by the same accepted-venv rule as
+    ``noxfile._venv_tool`` (``./venv`` or ``./.venv``); fails if the running
+    interpreter is in neither."""
+    bin_dir = load_noxfile()._venv_bin()
+    assert bin_dir is not None, (
+        f"sys.prefix {sys.prefix} is neither ./venv nor ./.venv of this checkout -- "
+        "run the suite from the project venv (uv run --frozen --extra dev nox ...)"
+    )
+    return bin_dir
+
+
 # --- MagicMock Anthropic batch client (lode-ylh2) --------------------------
 #
 # The shared builder for tests/test_enrich.py's and tests/test_worker.py's
@@ -1461,6 +1483,39 @@ def _text_block(text: str = "") -> mock.MagicMock:
     return block
 
 
+def structured_response(
+    parsed: BaseModel | None,
+    *,
+    output_tokens: int = 0,
+    stop_reason: str = "end_turn",
+    text: str | None = None,
+) -> SimpleNamespace:
+    """A ``messages.create`` response for a structured-output turn.
+
+    ``parsed`` is a pydantic model serialised into the single ``text`` block
+    (``None`` -> no content blocks at all, e.g. a thinking-only response);
+    pass ``text`` to override the block's text verbatim, e.g. a truncated
+    mid-JSON string (lode-pdss).
+    """
+    if text is None and parsed is not None:
+        text = parsed.model_dump_json()
+    return SimpleNamespace(
+        content=[] if text is None else [_text_block(text)],
+        stop_reason=stop_reason,
+        stop_details=None,
+        usage=SimpleNamespace(output_tokens=output_tokens),
+    )
+
+
+def claims_response(claims: list) -> SimpleNamespace:
+    """A :func:`structured_response` carrying the Q&A claims envelope."""
+    # Deferred: `lode.qa` pulls in the web-fetch import graph, which tests
+    # that never touch Q&A should not pay for.
+    from lode.qa import _ClaimsEnvelope
+
+    return structured_response(_ClaimsEnvelope(claims=claims))
+
+
 @pytest.fixture(autouse=True)
 def _stub_resolve_host_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub ``lode.tools._resolve_host_addresses`` suite-wide (lode-azkh).
@@ -1492,13 +1547,14 @@ def fake_tool_turn_client(
     """Build the (client, web_fetcher) pair for the shared fetch-then-cite
     tool-turn scenario.
 
-    ``client.messages.create`` is wired for the two free turns and
-    ``client.messages.parse`` for the final structured-output turn:
+    ``client.messages.create`` is wired for the two free turns and, told
+    apart by the ``output_config.format`` only the final turn sends, for the
+    final structured-output turn:
 
     1. a free tool turn that calls the fetch tool against ``url``;
     2. a second free turn with no further tool call, ending the loop early
        (rather than exhausting run_tool_turns' default max_tool_turns=8);
-    3. (``parse``) the final structured-output turn, which reads the snapshot the fetch tool
+    3. the final structured-output turn, which reads the snapshot the fetch tool
        just persisted back out of ``conn`` and echoes its snapshot_id into a
        claim citing ``quoted_span`` -- the same way a real model would from
        the tool_result content.
@@ -1527,7 +1583,7 @@ def fake_tool_turn_client(
     second_free_turn_response.content = [_text_block()]
     second_free_turn_response.stop_reason = "end_turn"
 
-    def _parse_side_effect(**_kwargs):
+    def _final_turn_side_effect(**_kwargs):
         # The final structured-output turn (lode-ugj5). Check the fetch
         # tool_result the first free turn produced BEFORE trusting a snapshot
         # was persisted (lode-azkh): a transient fetch failure (e.g. an
@@ -1568,14 +1624,19 @@ def fake_tool_turn_client(
                 ]
             }
         )
-        response = mock.MagicMock()
-        response.parsed_output = envelope
-        response.stop_reason = "end_turn"
-        return response
+        return structured_response(envelope)
+
+    # The two free turns, then the final structured-output turn -- all three
+    # are ``messages.create`` calls; only the last carries ``output_config``.
+    free_turns = iter([free_turn_response, second_free_turn_response])
+
+    def _create_side_effect(**kwargs):
+        if "format" in kwargs.get("output_config", {}):
+            return _final_turn_side_effect(**kwargs)
+        return next(free_turns)
 
     client = mock.MagicMock()
-    client.messages.create.side_effect = [free_turn_response, second_free_turn_response]
-    client.messages.parse.side_effect = _parse_side_effect
+    client.messages.create.side_effect = _create_side_effect
 
     return client, web_fetcher
 
@@ -1586,7 +1647,7 @@ def fake_tool_turn_client(
 # @nox.session functions exist?" and neither can answer it by importing
 # noxfile.py a second time -- load_module_from_path asserts the name is not
 # already resident, and executing the module twice re-registers every session
-# in nox's global registry (see test_noxfile_venv_tool.py's _load_noxfile).
+# in nox's global registry (see load_noxfile above).
 # Parsing is the way in, so the parser lives here once rather than as a copy
 # per caller -- the same drift lode-7ed9 removed from the loader above.
 #
