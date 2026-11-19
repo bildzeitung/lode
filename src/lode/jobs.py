@@ -304,6 +304,7 @@ def record_refusal_dead(
     *,
     category: str | None,
     model: str,
+    provider: str | None,
     prompt_ver: str,
 ) -> bool:
     """Dead-letter an enrich job the model refused, on its first occurrence (lode-g9q3).
@@ -311,7 +312,8 @@ def record_refusal_dead(
     A refusal is terminal for the note version (docs/decisions.md, lode-ahme):
     no retry is worth charging, so ``attempts`` is left untouched and no backoff
     is scheduled. The row is marked ``refusal = 1`` and records the refusal
-    ``category`` (NULL when the provider gave none), the enrichment ``model``
+    ``category`` (NULL when the provider gave none), the enrichment ``model``,
+    its ``provider`` (:func:`lode.llm_provider.provider_identity`, lode-7jcp)
     and the ``prompt_ver`` in force, which reconcile compares to decide whether
     the refusal still stands. CAS-guarded on the exact claim exactly like
     :func:`record_job_failure`; returns True when the claim was held and the
@@ -323,8 +325,8 @@ def record_refusal_dead(
             job_id,
             claimed_at,
             "status = 'dead', last_error = ?, refusal = 1, refusal_category = ?, "
-            "refusal_model = ?, prompt_ver = ?",
-            (error_msg, category, model, prompt_ver),
+            "refusal_model = ?, refusal_provider = ?, prompt_ver = ?",
+            (error_msg, category, model, provider, prompt_ver),
         )
 
 

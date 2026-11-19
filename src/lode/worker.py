@@ -683,6 +683,7 @@ def run_one(
             # docs/storage.md failure taxonomy) -- dead on the first
             # occurrence, no attempt charged.
             from lode.enrich import ENRICH_PROMPT_VER
+            from lode.llm_provider import provider_identity
 
             if jobs.record_refusal_dead(
                 conn,
@@ -691,6 +692,7 @@ def run_one(
                 err,
                 category=exc.refusal_category,
                 model=settings.enrichment_llm.model,
+                provider=provider_identity(settings),
                 prompt_ver=ENRICH_PROMPT_VER,
             ):
                 log.error(

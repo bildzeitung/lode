@@ -664,13 +664,16 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
 
 - The job goes `dead` on the **first** refusal, with no retry attempts charged
   (`jobs.record_refusal_dead`). The row is marked `jobs.refusal = 1` and records
-  `refusal_category`, `refusal_model` (`enrichment_llm.model` at refusal time) and
+  `refusal_category`, `refusal_model` (`enrichment_llm.model` at refusal time),
+  `refusal_provider` (`provider_identity`; NULL means anthropic) and
   `prompt_ver` (`ENRICH_PROMPT_VER`), so a refusal-dead row is distinguishable from a
   max-retries-dead one.
 - `reconcile._enrich_gap_step` does **not** re-enqueue a refusal-dead enrich job while the
-  note's head version, `ENRICH_PROMPT_VER` and the configured `enrichment_llm.model` all
-  equal what the dead row stored. A change in any of the three re-opens it (a new head
-  version is a different `target_version`). There is no manual-override command. The
+  note's head version, `ENRICH_PROMPT_VER`, the configured `enrichment_llm.model` and the
+  configured provider identity (`provider_identity`, the value `lode reenrich` /
+  `stale_enrichment_heads` use) all equal what the dead row stored. A change in any of the
+  four re-opens it (a new head version is a different `target_version`); a provider switch
+  with an unchanged model string therefore re-opens it too. There is no manual-override command. The
   existing dead -> re-enqueue self-healing stays for every other dead enrich job, since it
   exists for real outages.
 - `lode status` lists refusal-dead enrich jobs in its dead-letter output with the refusal

@@ -783,8 +783,9 @@ def test_refusal_columns_migrated_onto_pre_existing_jobs_table(tmp_path: Path) -
         assert conn.execute("PRAGMA user_version").fetchone()[0] == _SCHEMA_VERSION
         migrated = _refusal_columns(conn)
         assert conn.execute(
-            "SELECT DISTINCT refusal, refusal_category, refusal_model FROM jobs"
-        ).fetchall() == [(0, None, None)]
+            "SELECT DISTINCT refusal, refusal_category, refusal_model, "
+            "refusal_provider FROM jobs"
+        ).fetchall() == [(0, None, None, None)]
     finally:
         conn.close()
 
@@ -793,7 +794,12 @@ def test_refusal_columns_migrated_onto_pre_existing_jobs_table(tmp_path: Path) -
         fresh = _refusal_columns(fresh_conn)
     finally:
         fresh_conn.close()
-    assert set(fresh) == {"refusal", "refusal_category", "refusal_model"}
+    assert set(fresh) == {
+        "refusal",
+        "refusal_category",
+        "refusal_model",
+        "refusal_provider",
+    }
     assert migrated == fresh
 
     # Idempotent: re-running init_db on the migrated DB must not raise.

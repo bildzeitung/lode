@@ -4263,6 +4263,21 @@ def test_reconcile_reenqueues_refusal_dead_job_when_enrichment_model_changes(
     assert _enrich_statuses(conn) == [("dead",), ("pending",)]
 
 
+def test_reconcile_reenqueues_refusal_dead_job_when_provider_changes(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    from lode.reconcile import _enrich_gap_step
+
+    _insert_note_worker(conn)
+    _refuse_one(conn, db_path, settings, "ver-1")
+    # Same model string, different provider: the refusal no longer stands.
+    other = settings.model_copy(update={"llm_provider": "openai"})
+    assert other.enrichment_llm.model == settings.enrichment_llm.model
+
+    assert _enrich_gap_step(conn, other) == 1
+    assert _enrich_statuses(conn) == [("dead",), ("pending",)]
+
+
 def test_reconcile_reenqueues_refusal_dead_job_for_a_new_head_version(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
