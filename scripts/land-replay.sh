@@ -182,8 +182,8 @@ fi
 # alike. Every gate goes through `uv run --frozen nox ...` (lode-s09w.3) -- the
 # identical form the code-reviewer and /land's combined re-gate use, so the three
 # cannot disagree about one tree. `uv run` puts the project env's bin first on
-# PATH, so these gates run effectively activated; that deliberately supersedes
-# lode-xx90's unactivated parity (see docs/decisions.md). Checked once, up front --
+# PATH, so these gates run effectively activated (maintainer decision,
+# docs/decisions.md). Checked once, up front --
 # BEFORE any gate runs -- so a missing `uv` is reported as exactly that, never
 # misread as a content verdict. OBSERVED (lode-04zb): the baseline
 # `nox -t fix`/`nox -s tests`/`nox -t everything-else` checks below treat every
@@ -439,6 +439,17 @@ for id in $ACCEPTED_IDS; do
   # `fi` could never read anything but "bounce" (dead state). `rc=$?` must
   # still be the FIRST command in the else arm, and the condition must stay
   # un-negated: `if ! CMD; then rc=$?` captures the NEGATION's status.
+  #
+  # `uv run` first syncs ./.venv to the just-merged uv.lock, and uv exits 1
+  # when that sync fails (a wheel it cannot download or build) -- the code the
+  # gates below read as '$id''s content verdict. So sync on its own first: a
+  # failure stops the replay instead of bouncing '$id', and each gate's own
+  # sync then finds nothing to do. `--inexact` is what `uv run` itself does
+  # (it never removes a package the lock does not name).
+  uv sync --frozen --inexact || gate_could_not_run \
+    "'uv sync --frozen' failed after merging '$id': ./.venv could not be brought to the merged uv.lock." \
+    "A failed download or build is a machine fault, not '$id''s verdict -- do NOT bounce it on the" \
+    "strength of this (see uv's own error above)."
   if "${NOX[@]}" -t fix; then
     :
   else

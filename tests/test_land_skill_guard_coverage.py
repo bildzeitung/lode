@@ -643,16 +643,14 @@ def test_land_skill_gates_run_through_uv_run_frozen() -> None:
     for block in LAND_SKILL_BLOCKS:
         for line in block.splitlines():
             code = _strip_comment(line)
-            assert "activate" not in code.split(), (
-                f"a land/SKILL.md fence sources an activate script: {line!r}"
-            )
-            # A gate is a nox call in COMMAND position (line start or after
-            # `&&`/`;`/`|`), so nox named inside a quoted message is not one.
-            for match in re.finditer(
-                r"(?:^|&&|;|\|)\s*((?:uv run --frozen\s+)?\S*nox)\s+-[ts]\b", code
-            ):
+            assert not any(
+                token.rsplit("/", 1)[-1] == "activate" for token in code.split()
+            ), f"a land/SKILL.md fence sources an activate script: {line!r}"
+            # nox named inside a quoted message (a commit subject) is not a gate.
+            unquoted = re.sub(r"\"[^\"]*\"|'[^']*'", "", code)
+            for match in re.finditer(r"\bnox\s+-[ts]\b", unquoted):
                 saw_gate = True
-                assert match.group(1) == "uv run --frozen nox", (
+                assert unquoted[: match.start()].endswith("uv run --frozen "), (
                     f"a land/SKILL.md fence calls nox other than via "
                     f"`uv run --frozen nox`: {line!r}"
                 )

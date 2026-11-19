@@ -58,6 +58,7 @@ pip install lode_kb-*.whl   # the wheel attached to the release you downloaded
 git clone https://github.com/bildzeitung/lode.git
 cd lode
 uv sync
+uv run --frozen lode --help   # nothing to activate: run lode through uv
 ```
 
 ## The idea in one breath

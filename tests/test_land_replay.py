@@ -75,18 +75,34 @@ if [ "$1" = run ] && [ "$2" = --frozen ] && [ "$3" = nox ]; then
   shift 3
   exec "$(dirname "$0")/nox" "$@"
 fi
+if [ "$*" = "sync --frozen --inexact" ]; then
+  # Real uv exits 1, not 2, when it cannot download or build a locked package.
+  [ -f SYNC_FAIL ] && exit 1
+  exit 0
+fi
 echo "fake uv: unhandled args: $*" >&2
 exit 3
 """
 
 
-def _path_without_uv() -> str:
-    """The ambient PATH minus every directory that holds a real `uv`."""
-    kept = [
-        d
-        for d in os.environ.get("PATH", "").split(os.pathsep)
-        if d and not (Path(d) / "uv").exists()
-    ]
+def _path_without_uv(tmp_path: Path) -> str:
+    """The ambient PATH with no `uv` on it. A directory that holds a `uv` is
+    swapped for a directory of symlinks to everything else in it, so `bash` and
+    `git` stay reachable on a machine whose `uv` sits beside them (a distro
+    package in `/usr/bin`)."""
+    kept = []
+    for i, d in enumerate(os.environ.get("PATH", "").split(os.pathsep)):
+        if not d:
+            continue
+        if not (Path(d) / "uv").exists():
+            kept.append(d)
+            continue
+        mirror = tmp_path / f"path-without-uv-{i}"
+        mirror.mkdir()
+        for entry in Path(d).iterdir():
+            if entry.name != "uv":
+                (mirror / entry.name).symlink_to(entry)
+        kept.append(str(mirror))
     return os.pathsep.join(kept)
 
 
@@ -188,7 +204,7 @@ def _run(
     if fake_nox is not None:
         path = str(fake_nox) + os.pathsep + os.environ.get("PATH", "")
     else:
-        path = _path_without_uv()
+        path = _path_without_uv(repo.parent)
     return subprocess.run(
         args,
         cwd=repo,
@@ -581,18 +597,24 @@ def test_mid_loop_lock_currency_machine_fault_stops_the_pass(tmp_path: Path) -> 
         ("FIX_FAULT_127", "nox -t fix"),
         ("TESTS_FAULT_127", "nox -s tests"),
         ("EVERYTHING_ELSE_FAULT_127", "nox -t everything-else"),
+        ("SYNC_FAIL", "uv sync --frozen"),
     ],
 )
 def test_mid_loop_nonverdict_nox_exit_stops_the_pass_without_bouncing(
     tmp_path: Path, sentinel: str, gate: str
 ) -> None:
-    """A 127 (the venv's nox gone mid-run) from ANY per-branch nox gate after a
+    """A 127 (nox gone mid-run) from ANY per-branch nox gate after a
     clean merge is a machine fault, not that id's verdict -- it must stop the
     replay, never bounce the branch that happened to be merged when it hit
     (lode-lmu9, extended to `nox -t everything-else` by lode-b9qy). All three
     gates are parametrized here rather than written thrice: they are three
     arms of one contract, and a change to one that is not mirrored in the
-    others is exactly what this pins."""
+    others is exactly what this pins.
+
+    The `uv sync --frozen` arm is the same contract for the env itself: `uv
+    run` syncs ./.venv to the merged uv.lock before nox starts and exits 1 --
+    the content-verdict code -- when a download or build fails, so the script
+    syncs on its own first and stops there."""
     repo = _init_repo(tmp_path)
     fake_nox = _fake_nox_bin(tmp_path)
     _branch_from(repo, "trunk", "origin/land/lode-a")

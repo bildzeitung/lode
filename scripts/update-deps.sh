@@ -257,10 +257,10 @@ BODY_EOF
 # Chaining with `&&` makes the function's own return code reflect the
 # FIRST failing step regardless of the caller's -e state, independent of
 # how the function happens to be invoked. The whole venv-creation-plus-install
-# sequence is one failure-transparent chain end to end. The two installs mirror
-# the old locked install: the hash-verified runtime lock first, then the local
-# package editable together with the `dev` group, resolved fresh -- `-e` and
-# `--require-hashes` are mutually exclusive in one invocation.
+# sequence is one failure-transparent chain end to end. Two installs, because
+# `-e` and `--require-hashes` are mutually exclusive in one invocation: the
+# hash-verified runtime lock first, then the local package editable together
+# with the `dev` group, resolved fresh.
 rebuild_venv() {
   local lockfile="$1"
   rm -rf ./.venv &&

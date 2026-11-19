@@ -169,9 +169,12 @@ Two files, two jobs — **never pin the same thing in both**:
 `./.venv` from `uv.lock` on first use, from uv's cache, installing the local package editable and
 the `dev` group; `uv sync` does the same for an interactive shell. The old install script and its
 sourced helper are deleted with no wrapper, and with them the old two-step install (hash-verified
-runtime lock, then `-e '.[dev]'` resolved fresh) and its `--unlocked` escape hatch;
-the lock step's `--require-hashes` check is replaced by uv's own lock verification (`uv sync
---locked` fails on a stale lock, `--frozen` skips the check). The pip-refresh and `-e . --no-deps`
+runtime lock, then `-e '.[dev]'` resolved fresh) and its `--unlocked` escape hatch.
+`uv sync --locked` fails on a lock that is stale against `pyproject.toml`; `--frozen` skips that
+check and installs the lock as committed. That is a currency check, not the lock step's
+`--require-hashes` check: whether installing from `uv.lock` verifies hashes the way
+`--require-hashes` did is not established here, and epic `lode-s09w` requires it to be checked and
+written down before `lode-s09w.4` deletes `requirements.lock`. The pip-refresh and `-e . --no-deps`
 measurements (`lode-hfaz`, `lode-xo99`) concerned steps that no longer exist.
 `scripts/update-deps.sh`, which still moves `requirements.lock` until `lode-s09w.4`, rebuilds
 `./.venv` itself with `uv venv` and `uv pip install`.
@@ -227,7 +230,7 @@ Consequences of this model, stated honestly:
   epic that owns adopting it (`lode-cs5u`) fixes those sites. The terminal state is `ignore = []` —
   there are no permanent exclusions.
 - **This model does not give back `lode-ju25`'s churn-proofing.** A future ruff default-set
-  expansion can turn `nox -t fix` red repo-wide again, exactly as 0.16 did. The `ruff==0.16.0` pin
+  expansion can turn `nox -t fix` red repo-wide again, exactly as 0.16 did. The exact ruff pin
   above is the only mitigation, and it works only because an expansion can now arrive solely via a
   deliberate version bump, never a `dev`-group resolve.
 
@@ -997,11 +1000,12 @@ The original premise was that the docs build had no local value (`lode-fhql.9`'s
 builds the site; no local `dev` install needs it) — that premise broke the same day a local `mkdocs
 serve` (run ad hoc for `lode-fhql.13`'s favicon sign-off) immediately surfaced two broken intra-doc
 anchors nobody had seen (`lode-fhql.21`). mkdocs is a validator, not just a site generator, so it
-belongs in `dev` and behind its own gate — see `nox -s docs` in `noxfile.py` (`lode-fhql.20`). Per
-the [pyproject-intent / requirements.lock split](#dependency-locking-lode-g2741), optional extras
-stay unlocked (the `dev` extra's existing policy), and `scripts/compile-lock.sh` compiles the lock
-from `pyproject.toml` with no `--extra` flags — so this needed no `requirements.lock` regeneration,
-only the `pyproject.toml` declaration.
+belongs in `dev` and behind its own gate — see `nox -s docs` in `noxfile.py` (`lode-fhql.20`). At
+the time, per the [pyproject-intent / requirements.lock split](#dependency-locking-lode-g2741),
+optional extras stayed unlocked (`dev` was then an extra; it has been a dependency group locked by
+`uv.lock` since `lode-s09w`), and `scripts/compile-lock.sh` compiles the lock from `pyproject.toml`
+with no `--extra` flags — so this needed no `requirements.lock` regeneration, only the
+`pyproject.toml` declaration.
 
 ### Mermaid: build-time pre-render, not the validator (mandated, user call 2026-08-12)
 

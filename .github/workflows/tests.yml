@@ -66,7 +66,7 @@ jobs:
   # Cheap, independent check: verify requirements.lock is still what
   # scripts/compile-lock.sh (the single shared lock-gen command, lode-sys4)
   # would produce for the CURRENT pyproject.toml. No model download, no
-  # dev-extra install -- runs in parallel with (not gated by, or gating) the
+  # dev-group install -- runs in parallel with (not gated by, or gating) the
   # `tests` job below, so a stale lock fails in seconds rather than after
   # paying for the slow leg's model download (lode-g274.6).
   #

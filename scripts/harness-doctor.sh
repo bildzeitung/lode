@@ -217,10 +217,10 @@ else
 fi
 # The GC sweep reads clean ONLY because build junk is ignored. Un-ignore one and
 # every worktree reads dirty and nothing is ever reclaimed.
-if [ -f .gitignore ] && grep -qE '(^|/)venv/?$|(^|/)\.nox/?$' .gitignore; then
-  ok ".gitignore covers venv/.nox (worktree GC can read a finished tree as clean)"
+if [ -f .gitignore ] && grep -qE '(^|/)\.venv/?$|(^|/)\.nox/?$' .gitignore; then
+  ok ".gitignore covers .venv/.nox (worktree GC can read a finished tree as clean)"
 else
-  warn ".gitignore may not ignore venv/ and .nox/ -- worktree GC will read every worktree as dirty"
+  warn ".gitignore may not ignore .venv/ and .nox/ -- worktree GC will read every worktree as dirty"
 fi
 
 echo

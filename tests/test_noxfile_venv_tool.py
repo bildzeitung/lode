@@ -182,7 +182,7 @@ def test_venv_tool_fails_closed_from_a_foreign_env(
     assert str(project / ".venv") in message
 
 
-# Tools the ``dev`` extra installs into ``./venv/bin``, i.e. the ones a
+# Tools the ``dev`` group installs into the project env's ``bin``, i.e. the ones a
 # stale system-wide copy can shadow. Naming any of these as the first
 # argument to ``session.run`` is the exact regression _venv_tool exists to
 # prevent.

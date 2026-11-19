@@ -45,6 +45,7 @@ quality gates); the short version:
 git clone https://github.com/bildzeitung/lode.git
 cd lode
 uv sync
+uv run --frozen lode --help   # nothing to activate: run lode through uv
 ```
 
 ## The idea in one breath

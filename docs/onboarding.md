@@ -137,11 +137,13 @@ Dolt is authoritative. Breaking these has silently reverted closed issues here b
 
 ### 4. Confirm the `lode` console script
 
-The editable install puts the `lode` entry point (`lode.cli:app`) on your `PATH`:
+The editable install puts the `lode` entry point (`lode.cli:app`) in `./.venv/bin`, so it runs
+through `uv run --frozen` like everything else (the bare `lode` commands in the rest of these docs
+assume that prefix, or a shell where you have activated `./.venv` yourself):
 
 ```bash
-lode --help        # every listed subcommand is real
-lode version
+uv run --frozen lode --help        # every listed subcommand is real
+uv run --frozen lode version
 ```
 
 The eval harness (`lode.eval.harness.score_golden_set`) is deliberately *not* a
@@ -156,7 +158,7 @@ from HuggingFace, right in the middle of your first `lode work` or `lode ask`.
 Pull them deliberately instead, once:
 
 ```bash
-lode models pull
+uv run --frozen lode models pull
 ```
 
 This warms `$LODE_HOME/models/` (the [model cache directory](configuration.md#paths--locations),
