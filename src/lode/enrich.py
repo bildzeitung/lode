@@ -107,6 +107,14 @@ ENRICH_PROMPT_VER = "npx1-v3"
 #: sends ``output_config.format`` and ignores it (lode-ni7p).
 _TOOL_NAME = "extract_enrichment"
 
+#: Raised 3072 -> 6144 (lode-9xsp, lode-ychx ruling): 3072 was sized for payload
+#: headroom, never for the default tier's own thinking -- since lode-ni7p
+#: Haiku 5.5 thinks on every enrich call (no forced ``tool_choice``), thinking
+#: shares this cap with the JSON, and a retry resends the identical request, so
+#: a heavy note that overflows 3072 retries to dead-letter. The default tier
+#: also now sends ``reasoning_effort="low"`` (``Settings.enrichment_llm``) to
+#: shrink that thinking. The measurement behind the number was skipped.
+#:
 #: Output cap for the structured-output extraction call -- shared by both routes
 #: (:func:`_call_haiku` and :func:`_build_batch_request`, which must send the
 #: byte-for-byte identical value, ``lode-568v.2``'s wire-equivalence bar).
@@ -148,7 +156,7 @@ _TOOL_NAME = "extract_enrichment"
 #: :meth:`~lode.llm_provider.ModelTier.resolve_max_tokens`, so the
 #: byte-for-byte equivalence above survives the override. See
 #: ``docs/configuration.md`` "Models" for the decision.
-MAX_TOKENS = 3072
+MAX_TOKENS = 6144
 
 _SYSTEM = (
     "You are a knowledge-extraction assistant. Extract structured information from "
