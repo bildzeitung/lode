@@ -605,9 +605,11 @@ def run_one(
     handler = registry[job_type]
     short = short_version_id(target_version)
 
-    # Deferred import so the Anthropic/OpenAI SDKs stay off this module's
-    # import graph; bound before the `try` because an `except` clause header
-    # needs the classes. LLMAuthError (lode-568v.3) is caught alongside
+    # Bound before the `try` because an `except` clause header needs the classes.
+    # Not deferred for load cost: `lode.config` (imported at module scope above)
+    # already loads lode.auth and lode.llm_provider. TODO(lode-0lls): hoist.
+    #
+    # LLMAuthError (lode-568v.3) is caught alongside
     # AuthError -- a missing OpenAI/Azure credential is exactly as permanent,
     # user-actionable a failure as a missing Anthropic one (lode-9yy), and
     # lode-568v.2's tracked follow-up said this widening was needed once a
@@ -620,10 +622,8 @@ def run_one(
         outcome = handler(conn, target_version, db_path, settings)
         with conn:
             if job_type == "enrich":
-                # Deferred import: only paid when an enrich job actually runs
-                # (mirrors the deferred `from lode.enrich import ...` in
-                # _enrich_handler below), keeping the Anthropic SDK import off
-                # embed-only code paths.
+                # Deferred import, as in _enrich_handler below: lode.worker
+                # imports lode.enrich only when there is enrich work.
                 from lode.enrich import ENRICH_PROMPT_VER
 
                 conn.execute(
@@ -873,8 +873,8 @@ def _batch_collect_enrich(
 
     # Below the early-return guard: no reason to import lode.enrich on a drain with
     # no enrich work at all (lode-4q97). Hygiene, not the load-bearing fix -- what
-    # keeps an embed-only drain SDK-free is that lode.enrich and lode.auth are both
-    # cheap to import (their `import anthropic` is TYPE_CHECKING-guarded).
+    # keeps an embed-only drain SDK-free is that neither lode.enrich nor lode.auth
+    # imports an LLM SDK at module scope.
     from lode.auth import AuthError
     from lode.enrich import collect_enrich_batch
     from lode.llm_provider import LLMAuthError
@@ -1526,8 +1526,12 @@ def _enrich_handler(
       (all ``source='ai'``), and
     - audits the egress in ``egress_log``.
 
-    Deferred import keeps the Haiku / Anthropic SDK cost off code paths that
-    never enrich.  The ``db_path`` parameter is accepted but unused: enrichment
+    Deferred import: ``lode.worker`` imports ``lode.enrich`` only when there is
+    enrich work, and tests rely on ``enrich_version`` being looked up on
+    ``lode.enrich`` at call time. It saves no start-up time in the ``lode`` CLI,
+    which has already imported ``lode.enrich``.
+
+    The ``db_path`` parameter is accepted but unused: enrichment
     writes only to the SQLite DB, not to the LanceDB vector store.
 
     Returns a one-line human-readable outcome (lode-1gr.4) via
@@ -1568,8 +1572,9 @@ def _refresh_handler(
     default when none is given). ``target_version`` is the job's canonical
     ``external_id`` (a directly-fetchable URL, not a note version — the
     ``jobs.target_version`` column is a polymorphic string, not FK'd to ``versions``).
-    Deferred import mirrors :func:`_embed_handler`/:func:`_enrich_handler`: the
-    ``httpx``/ ``trafilatura`` cost stays off code paths that never draw down a URL.
+    Deferred import: ``lode.worker`` imports ``lode.drawdown`` only for a
+    ``refresh`` job. It saves no start-up time in the ``lode`` CLI, which has
+    already imported ``lode.drawdown``.
 
     The ``db_path`` parameter is accepted but unused, like the enrich handler's:
     draw-down writes only to the SQLite DB (``externals`` / ``snapshots``), never to the
@@ -1675,9 +1680,8 @@ def _refresh_dead_letter_hook(
     genuinely landed after the claim, and the tombstone would clobber it. See
     ``docs/storage.md`` for the closed-residual writeup.
 
-    Deferred import mirrors :func:`_refresh_handler`: keeps the
-    httpx/trafilatura-adjacent ``lode.drawdown``/``lode.externals`` import
-    cost off code paths where no ``refresh`` job has ever dead-lettered.
+    Deferred import mirrors :func:`_refresh_handler`; tests also rely on
+    ``ingest_snapshot`` being looked up on ``lode.externals`` at call time.
 
     **Generic over ``source_type`` (lode-gpzn.13).** This hook is shared by
     every connector that reuses the ``refresh`` job type (today: web; the

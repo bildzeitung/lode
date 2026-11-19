@@ -29,10 +29,12 @@ implies a full re-embed (lode-txh.6). sqlite-vec is the documented fallback-down
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-
-import pyarrow as pa
+from typing import TYPE_CHECKING
 
 from lode.config import Settings
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 #: LanceDB table holding one vector row per passage, keyed by ``passage_id`` and
 #: tagged with its ``target_version`` (the content-addressed head it belongs to)
@@ -91,6 +93,8 @@ class VectorStore:
         needs it fixed at table creation (``docs/configuration.md``), and re-keying
         it implies a full re-embed (lode-txh.6).
         """
+        import pyarrow as pa  # deferred: kept off CLI/TUI startup (tests/test_import_boundary.py)
+
         return pa.schema(
             [
                 pa.field("passage_id", pa.string()),

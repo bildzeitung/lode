@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from types import SimpleNamespace
 
 import pytest
+from conftest import claims_response
 
 from lode.answer import Claim, Support
 from lode.cited_answer import CitedAnswer, ask
@@ -257,11 +258,9 @@ class _FakeMessages:
     def __init__(self, claims_for):
         self._claims_for = claims_for
 
-    def parse(self, **kwargs) -> SimpleNamespace:
+    def create(self, **kwargs) -> SimpleNamespace:
         prompt = kwargs["messages"][0]["content"]
-        return SimpleNamespace(
-            parsed_output=SimpleNamespace(claims=self._claims_for(prompt))
-        )
+        return claims_response(self._claims_for(prompt))
 
 
 class _FakeClient:

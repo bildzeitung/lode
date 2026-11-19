@@ -11,8 +11,9 @@ tool than the one ``pyproject.toml``/``requirements.lock`` pins, while the
 gate still reports success.
 
 ``_venv_tool`` fixes this by resolving straight to the tool's known on-disk
-location under the project's own ``./venv/bin`` rather than searching PATH at
-all. These tests import the ACTUAL ``noxfile.py`` (never a reimplementation,
+location under the project's own venv (``./venv`` or ``./.venv``, lode-s09w.2)
+rather than searching PATH at all, failing closed from any other env. These
+tests import the ACTUAL ``noxfile.py`` (never a reimplementation,
 per the lode-verb sabotage-provable bar -- see ``tests/test_code_concurrency_cap.py``
 and ``tests/test_source_tree_guard.py`` for the same pattern applied to other
 repo tooling) and reconstruct the exact shadowing hazard: a decoy executable
@@ -28,41 +29,17 @@ quietly restoring the original bug.
 from __future__ import annotations
 
 import ast
-import functools
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
-from types import ModuleType
 
 import pytest
-from conftest import load_module_from_path, nox_session_nodes
+from conftest import load_noxfile, nox_session_nodes
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NOXFILE_PATH = REPO_ROOT / "noxfile.py"
-
-
-@functools.cache
-def _load_noxfile() -> ModuleType:
-    """Import the real ``noxfile.py`` by explicit path, once per test session.
-
-    It lives at the repo root, one level above ``tests/``, so it is not
-    reachable by name -- the shared helper (tests/conftest.py) loads it from
-    its file path instead.
-
-    The cache is load-bearing, not a micro-optimization: executing the module
-    runs its ``@nox.session`` decorators, which register into nox's *global*
-    session registry. Executing it a second time re-registers every session
-    and nox emits ``FutureWarning: The session '<name>' has already been
-    registered; this will be an error in a future version of nox`` -- i.e.
-    an uncached loader would turn this file red on a future nox upgrade.
-    Removing the cache now fails immediately rather than waiting for that
-    release, because the shared helper asserts the name is not already
-    resident in ``sys.modules`` and a second load trips that first.
-    Callers that mutate the module (``monkeypatch.setattr(noxfile, ...)``)
-    are unaffected by sharing one instance: monkeypatch reverts per test.
-    """
-    return load_module_from_path("noxfile", NOXFILE_PATH)
 
 
 class _FakeSession:
@@ -86,13 +63,18 @@ class _FakeSession:
 
 def test_venv_tool_resolves_the_real_projects_ruff() -> None:
     """Sanity check against the actual, currently-built project venv."""
-    noxfile = _load_noxfile()
+    noxfile = load_noxfile()
     session = _FakeSession()
 
-    resolved = noxfile._venv_tool(session, "ruff")
+    resolved = Path(noxfile._venv_tool(session, "ruff"))
 
-    assert resolved == str(REPO_ROOT / "venv" / "bin" / "ruff")
-    assert Path(resolved).is_file()
+    # Stated without ``_venv_bin``, so a rule that accepted the wrong env fails here.
+    assert resolved.name == "ruff"
+    assert resolved.parent.parent.resolve() in {
+        (REPO_ROOT / "venv").resolve(),
+        (REPO_ROOT / ".venv").resolve(),
+    }
+    assert resolved.is_file()
     assert not session.errors
 
 
@@ -109,14 +91,14 @@ def test_venv_tool_ignores_a_shadowing_earlier_path_entry(
     regardless, and running the path it returns must produce the REAL
     output, never the DECOY's.
     """
-    noxfile = _load_noxfile()
+    noxfile = load_noxfile()
 
     fake_venv_bin = tmp_path / "fake_venv" / "bin"
     fake_venv_bin.mkdir(parents=True)
     real_tool = fake_venv_bin / "widget"
     real_tool.write_text("#!/bin/sh\necho REAL\n")
     real_tool.chmod(0o755)
-    monkeypatch.setattr(noxfile, "_VENV_BIN", fake_venv_bin)
+    monkeypatch.setattr(noxfile, "_venv_bin", lambda: fake_venv_bin)
 
     decoy_dir = tmp_path / "decoy_bin"
     decoy_dir.mkdir()
@@ -145,8 +127,9 @@ def test_venv_tool_fails_loudly_when_the_tool_is_missing(
 ) -> None:
     """A missing project venv (or missing tool in it) errors, never silently
     falls through to whatever happens to be on ambient PATH."""
-    noxfile = _load_noxfile()
-    monkeypatch.setattr(noxfile, "_VENV_BIN", tmp_path)  # empty dir -- nothing here
+    noxfile = load_noxfile()
+    # tmp_path is an empty dir: the venv exists, the tool does not.
+    monkeypatch.setattr(noxfile, "_venv_bin", lambda: tmp_path)
 
     session = _FakeSession()
     with pytest.raises(RuntimeError) as exc_info:
@@ -155,7 +138,48 @@ def test_venv_tool_fails_loudly_when_the_tool_is_missing(
     assert session.errors  # session.error() was actually invoked, not skipped
     message = str(exc_info.value)
     assert "ruff" in message
-    assert "python-init.sh" in message
+    assert "uv sync" in message
+
+
+@pytest.mark.parametrize("venv_name", ["venv", ".venv"])
+def test_venv_bin_accepts_either_project_venv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, venv_name: str
+) -> None:
+    """Both ./venv and ./.venv resolve; the tool lives in that env's bin."""
+    noxfile = load_noxfile()
+    prefix = tmp_path / venv_name
+    (prefix / "bin").mkdir(parents=True)
+    tool = prefix / "bin" / "widget"
+    tool.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(noxfile, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(sys, "prefix", str(prefix))
+
+    assert noxfile._venv_bin() == prefix / "bin"
+    assert noxfile._venv_tool(_FakeSession(), "widget") == str(tool)
+
+
+def test_venv_tool_fails_closed_from_a_foreign_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-0yfn preserved: a nox from any other env (pipx, system) must not
+    resolve ITS tools -- the session errors, naming both accepted paths."""
+    noxfile = load_noxfile()
+    foreign = tmp_path / "pipx" / "venvs" / "nox"
+    (foreign / "bin").mkdir(parents=True)
+    (foreign / "bin" / "ruff").write_text("#!/bin/sh\n")
+    project = tmp_path / "project"
+    (project / "venv" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(noxfile, "_PROJECT_ROOT", project)
+    monkeypatch.setattr(sys, "prefix", str(foreign))
+
+    assert noxfile._venv_bin() is None
+    session = _FakeSession()
+    with pytest.raises(RuntimeError) as exc_info:
+        noxfile._venv_tool(session, "ruff")
+
+    message = str(exc_info.value)
+    assert str(project / "venv") in message
+    assert str(project / ".venv") in message
 
 
 # Tools the ``dev`` extra installs into ``./venv/bin``, i.e. the ones a

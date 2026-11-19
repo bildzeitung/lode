@@ -489,15 +489,20 @@ Two rules, three message texts:
     [lode-0a4n](#validate-land_headreview_head-shape-before-trusting-them-as-drift-signals-lode-xdg3) added.
     A script that derives, validates and writes inside one process *is* a plain call, so the agent
     files now use three: `scripts/handoff-sha.sh <id> <review_head|land_head> [bd-update-args…]`
-    (derive `HEAD`, validate, `bd update`; exit 0 done, 1 malformed value, 2 broken call, 3 `bd
-    update` failed), `scripts/check-review-head.sh <id>` (the code-reviewer's read + validate +
-    ancestor check; 0 forward-only, 1 malformed/missing, 2 broken call, 3 unreachable = drift, 4
+    (derive `HEAD`, validate, check origin's tip, `bd update`; exit 0 done, 1 malformed value, 2
+    broken call, 3 `bd update` failed, 4 origin's `land/<id>` is absent or not at `HEAD`, 5
+    `ls-remote` itself failed), `scripts/check-review-head.sh <id>` (the code-reviewer's read +
+    validate + ancestor check; 0 forward-only, 1 malformed/missing, 2 broken call, 3 unreachable = drift, 4
     `bd show` unreadable) and `scripts/checkout-land-branch.sh <id>` (the worktree-suffixed
     `checkout -B`: suffix taken from the worktree's own directory; the script runs
     `git fetch origin land/<id> trunk` itself (lode-n7g4) so a stale `FETCH_HEAD` is never read, and
     takes the tip from `FETCH_HEAD`'s own `land/<id>` line rather than from `FETCH_HEAD` as a rev,
     which names only the first ref of a multi-ref fetch; 1 not a launch worktree, 2 broken call, 3 no
     `land/<id>` entry in `FETCH_HEAD` after a successful fetch, 4 the fetch failed).
+    `handoff-sha.sh`'s origin check (lode-tx33) makes order load-bearing: the push to `land/<id>`
+    precedes the call at every call site, because a recorded SHA origin does not carry reads as
+    drift to `/land`'s 2a precheck. It costs one `git ls-remote` per hand-off, accepted; a dirty
+    tree is not refused there — the call sites assert `git status --short` themselves.
     Copy-from-output remains only for values with no script, e.g. the stacked off-trunk merge-base
     SHA in `land-review.md`.
   - **The `|| { echo STOP …; exit 1; }` tails are gone, and their diagnostics moved to prose.** The
@@ -525,7 +530,9 @@ when the `$(git rev-parse …)` it prescribes is refused (the
 [fabricated-SHA guard](#guard-against-fabricated-shas-lode-fpmi) denies a 40-hex string that is not a
 real object, but cannot tell a real one from the *right* one). For
 `nox -s eval`, run its body directly (it is CI-only and spends API credits, so only with the
-maintainer's go-ahead): `LODE_RUN_LIVE_EVAL=1 ./venv/bin/pytest tests/test_eval_live.py -v` with
+maintainer's approval, as
+[`CLAUDE.md` General Directive 10](#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
+defines it): `LODE_RUN_LIVE_EVAL=1 ./venv/bin/pytest tests/test_eval_live.py -v` with
 `ANTHROPIC_API_KEY` set. Do **not** disguise the word — quote-splitting (`ev""al`), building it by
 expansion, or any other obfuscation: the guard exists because the shape is unverifiable, so hiding
 it routes around the fence rather than working within it.
@@ -1602,14 +1609,21 @@ the next one, and every subsequent nit was silently lost. The policy now is:
   apply is, before hand-off, either re-appended to the successor collector (still wording-only, just
   not applicable this pass) or filed as its own ticket (a judgment call). It never closes silently
   with the batch — **except** a nit whose verbatim anchor line is no longer present anywhere in the
-  file: that nit is already fixed (e.g. by an intervening comment-groomer or land), so the builder
-  drops it and says so in the hand-off note. Every nit's disposition — applied / carried over / filed
-  as ticket / dropped as anchor-gone — is listed in the hand-off note.
+  file **and** whose named defect is gone from the current text too (e.g. fixed by an intervening
+  comment-groomer or land): the builder drops that one and says so in the hand-off note. An absent
+  anchor alone is not proof of a fix — the nit may have been written against a branch whose edit
+  never reached `trunk` (lode-vlyj). So a nit whose named defect is still visible in the current text,
+  or whose anchor equals the replacement text of another pending nit (on the collector being drained
+  or the open successor), is carried over instead, its re-appended note saying why the anchor is
+  absent and pointing at that other nit when there is one. Every nit's disposition — applied /
+  carried over / filed as ticket / dropped as anchor-gone — is listed in the hand-off note, a drop
+  recording both what was absent (the anchor) and why the defect is gone, a nit carried over this
+  way recording which kept it — the still-visible defect, or the other nit's pending replacement.
 - **Scope includes source comments.** Wording-only drift in a shell/Python comment is a docs-nit,
   same patch shape as a doc-prose nit — `/comment-audit`'s own misleading/drifted smell is unaffected;
   the overlap is benign because of the anchor-gone rule above (whichever fixes it first, the other
-  finds no anchor and drops it). Comments serving an API/help contract (Typer docstrings, VERBATIM by
-  fiat) stay out of scope.
+  finds the anchor and the defect both gone and drops it). Comments serving an API/help contract
+  (Typer docstrings, VERBATIM by fiat) stay out of scope.
 
 **This is a deliberate, narrow carve-out** from `/land`'s "never file a bd ticket for an incidental
 discovery" rule ([What I never
@@ -1925,6 +1939,87 @@ bd follow-up with the exact command that triggered it** (the regression-pin tabl
 guard's entire memory of what "known safe" looks like). **Never** work around the guard, and never
 relax it as a side effect of unrelated work — both remain true after this fix exactly as they were
 before it.
+
+### No LLM-provider spend without maintainer approval (lode-3xzy)
+
+**MAINTAINER RULING (2026-11-18).** The rule is [`CLAUDE.md`](../CLAUDE.md) General Directive 10,
+stated there once because that is the file every agent role loads; that text is normative. This
+section holds the reasons and the record.
+
+**TRIGGER.** In the `lode-g2ko` technical review, two sub-agents of the code-reviewer (the
+`/code-review` fork and a `/simplify` agent) each ran `lode add` to see which modules it loads.
+`lode add` enriches inline, so each run made one real enrich call under the operator's credentials.
+Both used a scratch `LODE_HOME` and a throwaway note body, but that was the sub-agents' own caution;
+their briefs said "read-only, do not run the test suite" and nothing about `lode` commands. No work
+was lost and no wrong artifact shipped, so this is below `CLAUDE.md` directive 9's bar and has no
+`MISTAKES.md` entry (maintainer ruling).
+
+**Why the directive also travels verbatim in every sub-agent brief.** It is a second delivery, on
+purpose. `CLAUDE.md` already reaches a sub-agent: a non-fork agent loads it and a fork inherits its
+parent's context. The brief repeats the rule at the place a sub-agent reads the limits of its task,
+which is where the trigger's briefs were silent.
+
+**What the directive's lists rest on.**
+
+- **A command it does not name.** Every provider client is built by `build_provider`
+  (`src/lode/llm_provider.py`). A command reaches a provider if it gets there, so `grep -rn
+  'build_provider(' src/lode` decides.
+- **Tests marked `network` are not on the spend list, although the ticket named them.** The marker
+  only lifts the `tests/conftest.py` guard below (that file's module docstring says what the marker
+  is for), and the marked tests run in the offline `unit` and `tests` gates every builder and
+  reviewer must run. As checked for this ticket (2026-11-18, `grep -rn 'mark.network' tests/`),
+  each marked test either sends nothing to a provider (it only constructs a real SDK client, or
+  answers it from an in-process mock transport) or skips unless an environment variable opts it
+  in. The one that reaches a provider is the live eval, `tests/test_eval_live.py` under
+  `LODE_RUN_LIVE_EVAL=1`, which `nox -s eval` sets; the directive lists that instead. Nothing
+  enforces this. A `network`-marked test that sends to a provider inside the offline gates is a
+  bug to report, not approved spend.
+
+**How approval is recorded.** The note Directive 10 requires sits in the ticket's notes (`bd show
+<id>`) and names the command class and, if bounded, a count. "The ticket needs it" is not approval
+either. Two limits, left as they are:
+
+- bd records no author on a note that an agent can check, and the orchestrating session writes
+  the maintainer's rulings to bd for them. "A maintainer note" is a convention an agent honours,
+  not a fact it can verify.
+- A scratch `LODE_HOME` has no `config.toml` and no `models/` cache (`src/lode/config.py`). An
+  approved call there runs on default settings, so the default provider and not necessarily the
+  one the operator configured, and embedding work downloads the model weights again.
+
+**How approval is requested mid-run (builder's proposal, refined in technical review; not a
+maintainer ruling; confirmation: `lode-v3xd`).** Directive 10's "Without approval" steps are this
+proposal. What they leave out:
+
+- The free probe is there because the trigger was a module-load question, which `python -X
+  importtime` answers.
+- The escalation note reads `ESCALATION: provider spend needed: <command, why, expected call
+  count>`, and the hand-off follows the role's escalation path (a builder's build-time escalation,
+  a reviewer's escalation), never blocking siblings.
+- A sub-agent reports upward because it has no ticket to annotate. The agent that briefed it
+  chooses between the probe and the escalation.
+- Ask-and-continue is rejected for now: a headless sub-agent has no channel to the maintainer, so
+  it degrades to "proceed", which is the failure.
+
+**Mechanical backstop: weighed, outcome recorded.**
+
+- **Tests: already built.** `tests/conftest.py`'s autouse guard (`lode-85q`) fails any test that
+  constructs a real Anthropic or OpenAI client without `@pytest.mark.network`. An unmarked test in
+  the `unit`/`tests` gates cannot spend by accident.
+- **Unset credentials in agent worktrees: rejected.** For the default provider, credentials
+  resolve through the Anthropic SDK chain (`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`, then an `ant
+  auth login` profile on disk, then workload identity; `src/lode/auth.py`), so unsetting
+  environment variables leaves the on-disk profile working. Only `llm_provider = "openai"` reads
+  its key from the environment alone (`src/lode/llm_provider.py`). The `Agent` tool also takes no
+  environment for the agent it dispatches. A scrub that covers part of the chain would read as a
+  guarantee it is not.
+- **Fail-closed provider: rejected for now.** There is no `llm_provider` value that refuses every
+  call, and a scratch `LODE_HOME` config pointing at one would protect only agents that already
+  chose a scratch home, the case that was never the risk. A new provider value is a product
+  surface added to police agent behaviour; not justified by one incident that cost two calls.
+- **Outcome:** the instruction plus recorded approval is the control; no new mechanism built.
+  Revisit if an unapproved call recurs after this rule is in place. The ticket filed then weighs a
+  refusal switch in lode keyed on an environment variable, and has to establish first whether
+  the harness can set one for every agent session.
 
 ### Guard against fabricated SHAs (lode-fpmi)
 
@@ -3250,9 +3345,13 @@ What is observed, and what is not:
 - **Not established:** the Claude Code version at which the harness began locking. The builds
   lode-oqr lost (2026-07-10) were recorded as unlocked; a harness lock is first on record a few days
   later, on a reviewer's worktree (lode-amif).
-- **Not measured:** how often the harness leaves a *builder's* lock behind when the agent exits. For
-  reviewers it was one of two ([lode-7ndi, below](#the-step-0-pickup-merges-it-never-rebases-lode-cln)).
-  Every builder before this change removed the lock itself, so there is no builder figure.
+- **Measured once (lode-lo0q, 2026-11-17, Claude Code 2.1.326):** whether the harness leaves a
+  *builder's* lock behind when the agent exits. For reviewers it was one of two
+  ([lode-7ndi, below](#the-step-0-pickup-merges-it-never-rebases-lode-cln)). For builders, in one
+  `/code` fan-out, ten finished and none was seen keeping the lock after completion. A reviewer saw
+  all five then-finished builder worktrees unlocked mid-session, and `/land` reclaimed eight builder
+  worktrees while the orchestrating session was still alive, which a locked worktree would have
+  blocked. It is one session on one harness version, not a rate over many fan-outs.
 
 What each consumer of the lock sees:
 
@@ -3263,12 +3362,18 @@ What each consumer of the lock sees:
   the worktree stays `keep-locked` — landed or abandoned — until the orchestrating session's process
   ends; `scripts/worktree-lock-stale.sh` can then prove the pid dead, and the sweep reclaims it on
   the same two paths. (While the builder still ran its own unlock, this case could not arise.) The
-  cost is a directory held for the rest of a session, never lost work. Measuring it, and deciding
-  who should release such a lock, is lode-lo0q.
+  cost is a directory held for the rest of a session, never lost work. No builder was seen in that
+  state (measurement above), and the case is accepted (lode-lo0q decision, below).
 - **`/code`'s per-ticket reclaim** (`scripts/code-reclaim-launch-worktree.sh`). Handles only a
   reviewer's or rebase pickup's `land/<id>--*` worktree. It never matches a fresh build's
   `worktree-agent-*` branch, so it does **not** clear a lock the harness leaves on a builder's
   worktree.
+
+**Decision (lode-lo0q): a finished builder's leftover harness lock is accepted until the session
+ends; no release mechanism is built.** Not added: `/code` unlocking the builder's worktree on its
+completion notification, or a `/land` sweep rule that treats a lock naming the worktree's own
+directory as released once its HEAD is captured and its ticket is closed. Revisit if a finished
+builder's worktree is ever seen still locked.
 
 **If the harness ever hands out an unlocked launch worktree, nothing in the builder's cycle
 notices.** `/land`'s sweep could then reclaim a fresh build's worktree while it is still clean and at

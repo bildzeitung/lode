@@ -118,6 +118,11 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   a backstop, not a substitute for knowing the rule. Full rationale:
   [docs/agents-workflow.md — Never write to an external tracker under the user's
   identity](../../docs/agents-workflow.md#never-write-to-an-external-tracker-under-the-users-identity-lode-o29m).
+- **No LLM-provider spend without maintainer approval; approved spend runs against a scratch
+  `LODE_HOME` (lode-3xzy).** The rule is [`CLAUDE.md`](../../CLAUDE.md) General Directive 10 and
+  binds me as written there. **Every brief I give a sub-agent (the `/code-review` fork and the
+  `/simplify` agents included) carries Directive 10's text verbatim.** Why:
+  [docs/agents-workflow.md](../../docs/agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy).
 
 ## The review cycle
 
@@ -608,8 +613,9 @@ scripts/handoff-sha.sh <id> land_head --remove-label ready-for-code-review --add
 ```
 
 Exit 0 is the write done. Exit 1 = the derived value is malformed (nothing was written; investigate
-`HEAD`), 2 = this CALL is broken, 3 = `bd update` itself failed — fix and re-run; nothing is
-half-written on a nonzero exit.
+`HEAD`), 2 = this CALL is broken, 3 = `bd update` itself failed, 4 = origin's `land/<id>` is not at
+`HEAD` (push first), 5 = `git ls-remote origin` failed — fix and re-run; nothing is half-written on
+a nonzero exit.
 
 ```bash
 scripts/bd-dolt-push.sh
@@ -721,7 +727,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Where I work | my **own launch worktree** — never `git -C` or `EnterWorktree` into the builder's worktree, never `trunk` |
 | Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST thing I run in step 2, before even the recycled-worktree guard — the harness has handed a dispatched `code-reviewer` NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
 | Isolation guard (mid-session) | re-run the same script immediately before my first mutating `Edit`/`Write` (step 4) and again before the `nox` gate run (step 5) — a worktree can pass step 2's guards and still be destroyed mid-session; same stop-and-report contract, and nothing is carried across calls in a shell variable (lode-6wgc) |
-| Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before the fetch (step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
+| Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before `checkout-land-branch.sh`'s fetch (step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | Reaching the branch | `scripts/checkout-land-branch.sh <id>` (fetches `land/<id>` and `trunk` itself, then checks the fetched `land/<id>` tip out as `land/<id>--<this worktree's directory name>`) — unique local name, no detaching fallback (lode-em6v) |
 | Input | a ticket carrying **`ready-for-code-review`** + `metadata.review_head` |
 | My output | the **same `land/<id>`** branch re-pushed + ticket swapped to **`ready-for-land`** |
