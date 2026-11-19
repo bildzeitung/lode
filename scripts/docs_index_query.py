@@ -31,7 +31,6 @@ flags those rows as fallback hits (``lode-qcp0``).
 from __future__ import annotations
 
 import importlib.util
-import re
 import sqlite3
 import sys
 import time
@@ -179,7 +178,8 @@ def _snippet(body: str) -> str:
     return flat[:_SNIPPET_CHARS].rstrip() + "..."
 
 
-_UPDATE_MARKER_RE = re.compile(r"\*\*Update \(")
+#: The fixed lead-in docs/decisions.md's preamble gives every correction marker.
+_UPDATE_MARKER = "**Update ("
 
 
 def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
@@ -190,31 +190,32 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     into several units, so a marker appended at the entry's end can sit in a
     different unit from the stale claim a query matched (``lode-funp``). The
     chunker's tiling invariant forbids copying the marker into each sub-unit,
-    so the pointers are derived here at output time instead. Only a file
-    chunked at bullets (no ATX headings at all, i.e. ``decisions.md``) has
-    such entries; a heading-chunked file returns ``[]``.
+    so the pointers are derived here at output time instead.
+
+    The entry is the block between the structural lines (any heading, any
+    top-level bullet) on either side of the hit. Only a paragraph-split piece
+    lies strictly inside such a block: every other unit starts on a structural
+    line (or on line 1) and runs at least as far as the next. That holds
+    whichever rule produced the unit, so it needs no assumption about the file
+    -- ``decisions.md`` itself opens with an H1 title and reaches its bullets
+    through the heading unit's hard-split.
     """
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     flags = fence_flags(lines)
-    if any(
-        re.match(r"^#{1,6}\s", line) and not in_fence
-        for line, in_fence in zip(lines, flags, strict=True)
-    ):
-        return []
-    bullets = [
-        i + 1 for i, line in enumerate(lines) if not flags[i] and line.startswith("- ")
+    is_structural_line = _build._chunker.is_structural_line
+    boundaries = [
+        i + 1
+        for i, line in enumerate(lines)
+        if not flags[i] and is_structural_line(line)
     ]
-    starts = [b for b in bullets if b <= line_lo]
-    if not starts:
-        return []
-    entry_lo = starts[-1]
-    entry_hi = next((b - 1 for b in bullets if b > line_lo), len(lines))
-    if (entry_lo, entry_hi) == (line_lo, line_hi):
+    entry_lo = max((b for b in boundaries if b <= line_lo), default=1)
+    entry_hi = next((b - 1 for b in boundaries if b > line_lo), len(lines))
+    if line_hi > entry_hi or (entry_lo, entry_hi) == (line_lo, line_hi):
         return []
     return [
         n
         for n in range(entry_lo, entry_hi + 1)
-        if not flags[n - 1] and _UPDATE_MARKER_RE.search(lines[n - 1])
+        if not flags[n - 1] and _UPDATE_MARKER in lines[n - 1]
     ]
 
 
@@ -263,8 +264,9 @@ def query(
         "of docs/.\n\nRun this when you need the passage that settles a "
         "question -- a decision id, a term, a phrase. It prints ranked "
         "pointers (path:line_lo-line_hi), each with the unit's first line and "
-        "a short snippet, and nothing else: read the cited range yourself. It "
-        "never prints a whole unit and never writes prose of its own.\n\nThe "
+        "a short snippet; read the cited range yourself. A hit in an entry "
+        "split across chunks also gets a NOTE naming the lines of that "
+        "entry's Update markers; read those too.\n\nThe "
         "index is rebuilt from docs/ on every run, so results are never "
         "stale.\n\nWhen nothing matches every term at once, it retries "
         "matching ANY term and marks those rows as an OR-match fallback."
@@ -317,11 +319,10 @@ def main(
             print(f"    {snippet}")
             markers = split_entry_markers(path, line_lo, line_hi)
             if markers:
-                where = ", ".join(str(n) for n in markers[:8])
-                more = f" (+{len(markers) - 8} more)" if len(markers) > 8 else ""
+                where = ", ".join(str(n) for n in markers)
                 print(
                     f"    NOTE: this chunk is part of a split entry that carries "
-                    f"Update markers at line {where}{more} -- they may correct "
+                    f"Update markers at line {where} -- they may correct "
                     f"claims shown here; read them."
                 )
     else:

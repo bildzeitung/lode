@@ -6248,14 +6248,22 @@ entries below from being rewritten to chase the current tree.)
   in a different unit from the stale claim a query matched, and the reader who reads only that range
   sees the claim with no correction.
   - **Measured (2026-11-18).** Of 145 entries in `docs/decisions.md`, 2 exceed the limit: the
-    review-architecture entry from line 389 (57,686 bytes, 10+ markers) and the `/land` worktree GC
+    review-architecture entry from line 389 (57,686 bytes, 21 markers) and the `/land` worktree GC
     entry from line 1351 (19,992 bytes, 1 marker). The problem was real, not a guard-only case.
   - **Decided (builder's pick, option (b) of the ticket; the measurement made it plain).**
     `scripts/docs_index_query.py` prints, under any hit that is one chunk of a split entry, a `NOTE`
-    line listing the entry's marker line numbers (first eight, then a count). The note is derived at
-    output time from the file, so the chunker's tiling invariant (units gapless and non-overlapping,
-    body equal to the line range) is untouched. Only a bullet-chunked file (no ATX headings, i.e.
-    `decisions.md`) has such entries.
+    line listing every marker line number in the entry. The note is derived at output time from the
+    file, so the chunker's tiling invariant (units gapless and non-overlapping, body equal to the
+    line range) is untouched. The entry is found as the block between the structural lines (any
+    heading, any top-level bullet) either side of the hit, and a hit is a split piece when it lies
+    strictly inside that block; the test makes no assumption about how the file is chunked.
+  - **Corrected at technical review, before landing.** As built, the lookup returned nothing for any
+    file with an ATX heading, on the premise that `decisions.md` has none and is chunked at bullets
+    directly. It has one — the H1 title on line 1 — and reaches its bullets through the heading
+    unit's hard-split, so the note never printed for the one file it was written for; the fixtures
+    had no title line and passed. The same premise stood in the chunker's module docstring, now
+    corrected. The built version also listed only the first eight markers, which on the line-389
+    entry left the thirteen newest unlocatable. A test now runs the lookup over the real file.
   - **Not taken.** (a) copying markers into sub-units breaks the tiling invariant; (c) an authoring
     rule would not cover the existing markers and rests on the author knowing the entry is
     oversized; (d) cannot know which paragraph a marker corrects.

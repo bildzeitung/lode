@@ -244,8 +244,11 @@ def test_cli_prints_pointer_first_line_and_snippet_never_full_unit() -> None:
     assert result.exit_code == 0
     assert "agents-workflow.md:" in result.stdout
     # A whole unit is well over the snippet cap; the printed output for any
-    # single result line must stay short.
+    # single result line must stay short. A NOTE line is exempt: it carries
+    # line numbers only, and its length follows the entry's marker count.
     for line in result.stdout.splitlines():
+        if line.startswith("    NOTE: "):
+            continue
         assert len(line) <= _query_module._SNIPPET_CHARS + 80
 
 
@@ -287,71 +290,108 @@ def test_cli_still_prints_results_when_the_invocation_log_cannot_be_written(
     assert "docs/" in result.output
 
 
-def test_split_entry_markers_reports_markers_from_a_different_chunk(
-    tmp_path: Path,
+def _write_split_entry_doc(directory: Path, *, title: bool) -> tuple[Path, int]:
+    """Write a decisions.md-shaped fixture and return it with its marker line.
+
+    One entry over MAX_UNIT_BYTES whose only Update marker is its last line,
+    then a small entry carrying a marker of its own. ``title`` adds the H1 line
+    the real ``docs/decisions.md`` opens with, which changes the rule the
+    chunker reaches the entries by.
+    """
+    pad = "\n\n".join(f"  filler paragraph {i} " + "x" * 2000 for i in range(10))
+    doc = directory / "decisions.md"
+    doc.write_text(
+        ("# Title\n\nPreamble.\n\n" if title else "")
+        + "- **Big entry.** stale claim zorblax\n\n"
+        + pad
+        + "\n\n  **Update (lode-test, 2026-01-01)** -- corrected.\n"
+        "- **Small entry.** quuxly\n"
+        "  **Update (lode-other)** -- not the big entry's.\n",
+        encoding="utf-8",
+    )
+    lines = doc.read_text(encoding="utf-8").splitlines()
+    return doc, next(i + 1 for i, line in enumerate(lines) if "lode-test" in line)
+
+
+@pytest.mark.parametrize("title", [True, False], ids=["h1-title", "no-heading"])
+def test_split_entry_markers_points_every_piece_of_a_split_entry_at_its_marker(
+    tmp_path: Path, title: bool
 ) -> None:
     """An Update marker at the end of an entry over MAX_UNIT_BYTES lands in a
     different unit from the stale claim (lode-funp); every chunk of that entry
-    must still point at it."""
-    pad = "\n\n".join(f"filler paragraph {i} " + "x" * 2000 for i in range(10))
-    doc = tmp_path / "decisions.md"
-    doc.write_text(
-        "- **Big entry.** stale claim zorblax\n\n"
-        + pad
-        + "\n\n  **Update (lode-test, 2026-01-01)** -- corrected.\n"
-        "- **Small entry.** unrelated\n"
-        "  **Update (lode-other)** -- not this entry's.\n",
-        encoding="utf-8",
-    )
-    chunker = _query_module._build._chunker
-    units = chunker.chunk_file(doc, doc.read_text(encoding="utf-8"))
-    big = [u for u in units if u.line_hi < len(doc.read_text().splitlines()) - 1]
-    assert len(big) > 1
-    marker_line = next(
-        i + 1 for i, ln in enumerate(doc.read_text().splitlines()) if "lode-test" in ln
-    )
-    for u in big:
-        assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == [
-            marker_line
-        ]
-    small = units[-1]
-    assert (
-        _query_module.split_entry_markers(str(doc), small.line_lo, small.line_hi) == []
-    )
-
-
-def test_cli_prints_note_for_a_hit_in_a_split_entry(tmp_path: Path) -> None:
-    """The CLI surfaces split_entry_markers' result under the hit it belongs to."""
-    pad = "\n\n".join(f"filler {i} " + "x" * 2000 for i in range(10))
-    doc = tmp_path / "decisions.md"
-    doc.write_text(
-        "- **Big entry.** stale claim zorblax\n\n"
-        + pad
-        + "\n\n  **Update (lode-test, 2026-01-01)** -- corrected.\n",
-        encoding="utf-8",
-    )
-    build = _query_module._build
-    units = build._chunker.chunk_file(doc, doc.read_text(encoding="utf-8"))
-
-    def fake_build_index() -> sqlite3.Connection:
-        conn = sqlite3.connect(":memory:")
-        conn.execute(
-            "CREATE VIRTUAL TABLE units USING fts5(path, line_lo, line_hi, "
-            "first_line, body, doc_class)"
+    must still point at it, and no unit outside it may."""
+    doc, marker_line = _write_split_entry_doc(tmp_path, title=title)
+    text = doc.read_text(encoding="utf-8")
+    units = _query_module._build._chunker.chunk_file(doc, text)
+    big_lo = next(u.line_lo for u in units if u.first_line.startswith("- **Big"))
+    small_lo = next(u.line_lo for u in units if u.first_line.startswith("- **Small"))
+    pieces = [u for u in units if big_lo <= u.line_lo < small_lo]
+    assert len(pieces) > 1
+    assert any(u.line_hi < marker_line for u in pieces)
+    for u in units:
+        assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
+            [marker_line] if u in pieces else []
         )
-        for u in units:
-            conn.execute(
-                "INSERT INTO units VALUES (?,?,?,?,?,?)",
-                (str(doc), u.line_lo, u.line_hi, u.first_line, u.body, u.doc_class),
-            )
-        return conn
 
-    original = build.build_index
-    build.build_index = fake_build_index
-    try:
-        result = runner.invoke(app, ["zorblax"])
-    finally:
-        build.build_index = original
-    assert result.exit_code == 0
-    assert "NOTE: this chunk is part of a split entry" in result.stdout
-    assert "at line 23" in result.stdout
+
+def test_split_entry_markers_agrees_with_the_chunker_on_the_real_decisions_md() -> None:
+    """The lookup has to fire on the file it exists for, whose shape a fixture
+    can get wrong: the first build returned nothing for any file with a
+    heading, the real file opens with an H1 title, and heading-less fixtures
+    passed (technical review, lode-funp).
+
+    The expectation is derived from the chunker's own units rather than from a
+    second line scan: a unit that does not open on a structural line continues
+    the entry of the unit before it.
+    """
+    path = REPO_ROOT / "docs" / "decisions.md"
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    chunker = _query_module._build._chunker
+    flags = chunker._fence_flags(lines)
+
+    entries: list[list] = []
+    for unit in chunker.chunk_file(path, text):
+        if not entries or chunker.is_structural_line(unit.first_line):
+            entries.append([unit])
+        else:
+            entries[-1].append(unit)
+
+    noted = 0
+    for entry in entries:
+        expected = [
+            n
+            for n in range(entry[0].line_lo, entry[-1].line_hi + 1)
+            if len(entry) > 1 and not flags[n - 1] and "**Update (" in lines[n - 1]
+        ]
+        noted += bool(expected)
+        for unit in entry:
+            assert (
+                _query_module.split_entry_markers(str(path), unit.line_lo, unit.line_hi)
+                == expected
+            )
+    assert noted, "no split entry of docs/decisions.md carries an Update marker"
+
+
+def test_cli_prints_note_for_a_hit_in_a_split_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI surfaces split_entry_markers' result under the hit it belongs
+    to, and prints nothing extra under a hit that is a whole entry."""
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    _doc, marker_line = _write_split_entry_doc(docs_dir, title=True)
+    monkeypatch.setattr(
+        _query_module._build,
+        "build_index",
+        functools.partial(_query_module._build.build_index, docs_dir=docs_dir),
+    )
+
+    result = runner.invoke(app, ["zorblax"])
+    assert result.exit_code == 0, result.output
+    assert f"Update markers at line {marker_line} --" in result.stdout
+
+    result = runner.invoke(app, ["quuxly"])
+    assert result.exit_code == 0, result.output
+    assert "decisions.md:" in result.stdout
+    assert "NOTE" not in result.stdout

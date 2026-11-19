@@ -9,9 +9,12 @@ field). This module is *only* the chunker; building/querying the FTS5 index is
 **ONE boundary rule** (the decided shape; the rationale and the refuted two-rule
 alternative live in the decision record cited above -- do not re-derive them):
 split at the deepest ATX heading level present in the file, or at top-level
-``- `` bullets in a file with no headings at all (``docs/decisions.md``). A
-post-pass hard-splits any unit still over :data:`MAX_UNIT_BYTES` at the next
-rung down -- heading -> bullet -> blank-line-delimited paragraph.
+``- `` bullets in a file with no headings at all. A post-pass hard-splits any
+unit still over :data:`MAX_UNIT_BYTES` at the next rung down -- heading ->
+bullet -> blank-line-delimited paragraph. ``docs/decisions.md`` gets its
+per-entry units from that post-pass, not from the no-headings rule: its one
+heading is the H1 title on line 1, so the heading split yields the whole file
+as a single oversized unit, which is then split at its bullets.
 
 Boundary detection is **fence-aware**: a ``## `` or ``- `` inside a fenced code
 block is someone's example, not document structure. See :func:`_fence_flags`.
@@ -143,6 +146,17 @@ def _bullet_boundary(
         return not fence_flags[i] and bool(_BULLET_RE.match(lines[i]))
 
     return is_bullet
+
+
+def is_structural_line(line: str) -> bool:
+    """Is ``line`` an ATX heading of any level, or a top-level ``- `` bullet?
+
+    These are the only lines a boundary rule above the paragraph rung can split
+    at; the caller vouches that the line is outside a fence. Public so that
+    ``scripts/docs_index_query.py`` can find the block a paragraph-split piece
+    was cut from without keeping a second copy of these patterns.
+    """
+    return bool(_HEADING_RE.match(line) or _BULLET_RE.match(line))
 
 
 def _unit_bytes(lines: list[str], line_lo: int, line_hi: int) -> int:
