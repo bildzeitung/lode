@@ -266,7 +266,9 @@ def _migrate_v4_jobs_refusal_provider(conn: sqlite3.Connection) -> None:
     database that had ``notes`` but no ``jobs`` reaches this step with ``jobs``
     freshly created in the target shape). NULL is the existing
     :func:`lode.llm_provider.provider_identity` convention for "anthropic", so
-    every pre-existing refusal row reads back as Anthropic-refused.
+    every pre-existing refusal row reads back as Anthropic-refused. A row an
+    ``openai`` config refused before this migration therefore re-opens once
+    under that config, and its re-run records the provider.
     """
     present = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
     if "refusal_provider" not in present:

@@ -319,9 +319,9 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
     the current :data:`lode.enrich.ENRICH_PROMPT_VER` and its ``refusal_model``
     equals ``settings.enrichment_llm.model`` and its ``refusal_provider`` equals
     :func:`lode.llm_provider.provider_identity` (NULL-safe ``IS``; lode-7jcp).
-    A new head version is a different
-    ``target_version`` and so never matches; changing the prompt version or the
-    enrichment model re-opens the item. Every other dead job keeps re-enqueueing.
+    A new head version is a different ``target_version`` and so never matches;
+    changing the prompt version, the enrichment model or the provider re-opens
+    the item. Every other dead job keeps re-enqueueing.
 
     **Gap signal, part 2 (prompt/model change, lode-0wj.9 / lode-q47):** even
     when a ``done`` enrich job exists for the head, it is still a gap unless

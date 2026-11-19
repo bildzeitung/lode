@@ -673,7 +673,10 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
   configured provider identity (`provider_identity`, the value `lode reenrich` /
   `stale_enrichment_heads` use) all equal what the dead row stored. A change in any of the
   four re-opens it (a new head version is a different `target_version`); a provider switch
-  with an unchanged model string therefore re-opens it too. There is no manual-override command. The
+  with an unchanged model string therefore re-opens it too. Only the `llm_provider` value is
+  compared, so moving between direct OpenAI and Azure (both `openai`) does not re-open it,
+  exactly as it does not make a head stale for `lode reenrich`. There is no manual-override
+  command. The
   existing dead -> re-enqueue self-healing stays for every other dead enrich job, since it
   exists for real outages.
 - `lode status` lists refusal-dead enrich jobs in its dead-letter output with the refusal
