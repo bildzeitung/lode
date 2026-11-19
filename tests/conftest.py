@@ -189,6 +189,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import textwrap
 import threading
 import time
@@ -2023,6 +2024,47 @@ def fake_bin_env(bin_dir: Path) -> dict[str, str]:
     existing = os.environ.get("PATH", "")
     path = f"{bin_dir}{os.pathsep}{existing}" if existing else str(bin_dir)
     return dict(os.environ, PATH=path)
+
+
+def path_without_tool(tmp_path: Path, tool: str) -> str:
+    """A PATH string that resolves every ordinary tool (git, bash, coreutils,
+    ...) but never ``tool``.
+
+    Built by symlink-farming each ``$PATH`` directory that carries ``tool``
+    into a scratch tree with that one entry left out, rather than dropping the
+    directory: ``tool`` may sit beside ``bash`` and ``git`` (a distro package
+    in ``/usr/bin``), and more than one directory may carry a copy. Used to
+    exercise a script's missing-tool arm without a machine that lacks it.
+
+    Only the directories that ACTUALLY carry ``tool`` are farmed; every other
+    ``$PATH`` entry is passed through unchanged, which on a typical box is a
+    few thousand symlinks instead of ~9000 (measured for ``flock``).
+    ``os.scandir`` does the isdir/listdir work in one pass. Each call farms
+    into its own directory, so a test may call it more than once.
+    """
+    shim_root = Path(tempfile.mkdtemp(prefix=f"path-without-{tool}-", dir=tmp_path))
+    shim_dirs: list[str] = []
+    for i, d in enumerate(os.environ.get("PATH", "").split(os.pathsep)):
+        if not d or not os.path.isdir(d):
+            continue
+        try:
+            entries = [e.name for e in os.scandir(d)]
+        except OSError:
+            continue
+        if tool not in entries:
+            shim_dirs.append(d)
+            continue
+        shim_dir = shim_root / str(i)
+        shim_dir.mkdir()
+        for name in entries:
+            if name == tool:
+                continue
+            try:
+                (shim_dir / name).symlink_to(os.path.join(d, name))
+            except OSError:
+                continue
+        shim_dirs.append(str(shim_dir))
+    return os.pathsep.join(shim_dirs)
 
 
 def run_block(

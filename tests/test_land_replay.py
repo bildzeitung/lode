@@ -25,12 +25,12 @@ from __future__ import annotations
 
 import os
 import shutil
-import stat
 import subprocess
 from pathlib import Path
 
 import pytest
 from _gitrepo import _git
+from conftest import fake_bin_env, path_without_tool
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-replay.sh"
@@ -76,7 +76,7 @@ if [ "$1" = run ] && [ "$2" = --frozen ] && [ "$3" = nox ]; then
   exec "$(dirname "$0")/nox" "$@"
 fi
 if [ "$*" = "sync --frozen --inexact" ]; then
-  # Real uv exits 1, not 2, when it cannot download or build a locked package.
+  # Real uv exits 1, not 2, when it cannot download a locked package.
   [ -f SYNC_FAIL ] && exit 1
   exit 0
 fi
@@ -85,36 +85,13 @@ exit 3
 """
 
 
-def _path_without_uv(tmp_path: Path) -> str:
-    """The ambient PATH with no `uv` on it. A directory that holds a `uv` is
-    swapped for a directory of symlinks to everything else in it, so `bash` and
-    `git` stay reachable on a machine whose `uv` sits beside them (a distro
-    package in `/usr/bin`)."""
-    kept = []
-    for i, d in enumerate(os.environ.get("PATH", "").split(os.pathsep)):
-        if not d:
-            continue
-        if not (Path(d) / "uv").exists():
-            kept.append(d)
-            continue
-        mirror = tmp_path / f"path-without-uv-{i}"
-        mirror.mkdir()
-        for entry in Path(d).iterdir():
-            if entry.name != "uv":
-                (mirror / entry.name).symlink_to(entry)
-        kept.append(str(mirror))
-    return os.pathsep.join(kept)
-
-
 def _fake_nox_bin(tmp_path: Path) -> Path:
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir(exist_ok=True)
-    nox = bin_dir / "nox"
-    nox.write_text(_FAKE_NOX)
-    nox.chmod(nox.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-    uv = bin_dir / "uv"
-    uv.write_text(_FAKE_UV)
-    uv.chmod(uv.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    for name, body in (("nox", _FAKE_NOX), ("uv", _FAKE_UV)):
+        stub = bin_dir / name
+        stub.write_text(body)
+        stub.chmod(0o755)
     return bin_dir
 
 
@@ -202,9 +179,9 @@ def _run(
     if base_ref is not None:
         args += ["--base-ref", base_ref]
     if fake_nox is not None:
-        path = str(fake_nox) + os.pathsep + os.environ.get("PATH", "")
+        env = fake_bin_env(fake_nox)
     else:
-        path = _path_without_uv(repo.parent)
+        env = dict(os.environ, PATH=path_without_tool(repo.parent, "uv"))
     return subprocess.run(
         args,
         cwd=repo,
@@ -212,7 +189,7 @@ def _run(
         text=True,
         timeout=30,
         check=False,
-        env={**os.environ, "PATH": path},
+        env=env,
     )
 
 
@@ -613,7 +590,7 @@ def test_mid_loop_nonverdict_nox_exit_stops_the_pass_without_bouncing(
 
     The `uv sync --frozen` arm is the same contract for the env itself: `uv
     run` syncs ./.venv to the merged uv.lock before nox starts and exits 1 --
-    the content-verdict code -- when a download or build fails, so the script
+    the content-verdict code -- when a download fails, so the script
     syncs on its own first and stops there."""
     repo = _init_repo(tmp_path)
     fake_nox = _fake_nox_bin(tmp_path)
@@ -945,6 +922,37 @@ def test_explicit_base_ref_is_honored(tmp_path: Path) -> None:
     assert result.stdout == "LANDED\tlode-a\n"
     assert (repo / "only-on-other-base.txt").exists()
     assert (repo / "a.txt").exists()
+
+
+def test_baseline_env_sync_failure_is_never_reported_as_a_red_gate(
+    tmp_path: Path,
+) -> None:
+    """The first env sync of a pass runs on the bare base. `uv run` would do it
+    inside the baseline `nox -t fix` and exit 1 on a failed download,
+    which the baseline arm reports as "'nox -t fix' is red on bare ..." -- a
+    false diagnostic that sends a human to fix the base for a network fault.
+    The script syncs on its own first and names the sync."""
+    repo = _init_repo(tmp_path)
+    fake_nox = _fake_nox_bin(tmp_path)
+    _commit_file(repo, "SYNC_FAIL", "", "trunk's env cannot be synced")
+    _git(repo, "branch", "-f", "origin/trunk", "trunk")
+    _branch_from(repo, "trunk", "origin/land/lode-a")
+    _commit_file(repo, "a.txt", "from A\n", "A adds a.txt")
+
+    msg_dir = tmp_path / "msgs"
+    _write_msg(msg_dir, "lode-a", "Merge land/lode-a: A (lode-a)")
+    conflicts_dir = tmp_path / "conflicts"
+    conflicts_dir.mkdir()
+    accepted = _accepted(tmp_path, "lode-a")
+    landed = tmp_path / "landed"
+
+    result = _run(repo, accepted, msg_dir, conflicts_dir, landed, fake_nox=fake_nox)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert "'uv sync --frozen' failed on bare" in result.stderr
+    assert "is red on bare" not in result.stderr
+    assert not (repo / "a.txt").exists()
 
 
 def test_missing_uv_is_reported_as_a_missing_uv_never_a_red_baseline(

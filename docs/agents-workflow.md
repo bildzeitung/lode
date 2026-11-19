@@ -384,11 +384,12 @@ check is `nox -s lock_currency`. A `uv` that is not installed exits **127** nami
 command, a code no content failure produces, so it cannot be mistaken for a verdict on a branch; once
 `nox` runs, `noxfile.py`'s `GATE_MACHINE_FAULT = 2` carries the lode-9i2p contract. The remedy for
 either is for a human to install `uv`. **One uv fault does share a content code:** when the sync
-inside `uv run` cannot download or build a locked package, uv exits **1** before `nox` starts
+inside `uv run` cannot download a locked package, uv exits **1** before `nox` starts
 (measured on uv 0.11.7 with the network off and an empty cache). An agent reading the output sees
-uv's own `Failed to download` / `Failed to build` and no `nox >` line, and treats it as a machine
+uv's own `Failed to download` error and no `nox >` line, and treats it as a machine
 fault. `scripts/land-replay.sh` reads exit codes only, so it runs `uv sync --frozen --inexact` on its
-own after each merge and stops the replay if that fails, instead of bouncing the branch.
+own on the bare base and after each merge, and stops the replay if that fails instead of reporting a
+red baseline or bouncing the branch.
 
 **Why no `scripts/nox.sh` wrapper.** One was built and reviewed for lode-6874 and dropped: a
 committed wrapper adds a base-skew problem with a long tail, since every branch already in flight

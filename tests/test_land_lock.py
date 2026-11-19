@@ -110,6 +110,7 @@ from conftest import (
     fake_bd,
     fake_bin_env,
     only_block_with,
+    path_without_tool,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -151,50 +152,6 @@ def _init_repo(tmp_path: Path) -> Path:
 
 def _lock_path(repo: Path) -> Path:
     return repo / ".git" / "land.lock"
-
-
-def _path_without_flock(tmp_path: Path) -> str:
-    """A PATH string that resolves every ordinary tool the script needs (git,
-    bash, coreutils, ...) but never `flock` -- built by symlink-farming every
-    directory currently on $PATH into a scratch tree with `flock` entries
-    excluded, rather than merely dropping the one directory `flock` happens
-    to live in (which would still leave it reachable if some other $PATH
-    entry also carries a copy). Used to exercise the lode-y3dw portability
-    fallback without needing an actual flock-less machine.
-
-    Only the directories that ACTUALLY carry a `flock` are farmed; every
-    other $PATH entry is passed through unchanged. The invariant is
-    identical either way ("no entry on this PATH resolves flock, every other
-    tool still resolves"), and it still holds if a third directory grows a
-    `flock` later -- but on a typical box that is 2 of ~26 directories, so
-    this builds a few thousand symlinks instead of ~9000 (measured here:
-    9011 before, and the teardown of those pays again). `os.scandir` does
-    the isdir/listdir work in one pass."""
-    shim_root = tmp_path / "path-without-flock"
-    shim_root.mkdir()
-    shim_dirs: list[str] = []
-    for i, d in enumerate(os.environ.get("PATH", "").split(os.pathsep)):
-        if not d or not os.path.isdir(d):
-            continue
-        try:
-            entries = [e.name for e in os.scandir(d)]
-        except OSError:
-            continue
-        if "flock" not in entries:
-            # Cannot resolve `flock` anyway -- no need to mirror it.
-            shim_dirs.append(d)
-            continue
-        shim_dir = shim_root / str(i)
-        shim_dir.mkdir()
-        for name in entries:
-            if name == "flock":
-                continue
-            try:
-                (shim_dir / name).symlink_to(os.path.join(d, name))
-            except OSError:
-                continue
-        shim_dirs.append(str(shim_dir))
-    return os.pathsep.join(shim_dirs)
 
 
 def _write_stale_lock(repo: Path, *, age: int = 100_000) -> int:
@@ -1131,7 +1088,7 @@ def test_flock_missing_from_path_is_a_reported_machine_fault(tmp_path: Path) -> 
     when `flock(1)` is not on PATH (macOS, stock git-bash) rather than
     silently falling back to the two-winner-capable pre-flock behaviour."""
     repo = _init_repo(tmp_path)
-    path_without_flock = _path_without_flock(tmp_path)
+    path_without_flock = path_without_tool(tmp_path, "flock")
 
     # Non-vacuous: confirm the shimmed PATH genuinely cannot resolve `flock`
     # before trusting the assertion below to mean anything.
@@ -1144,7 +1101,7 @@ def test_flock_missing_from_path_is_a_reported_machine_fault(tmp_path: Path) -> 
         check=False,
     )
     assert probe.returncode != 0, (
-        "the shimmed PATH still resolves flock -- _path_without_flock did not "
+        "the shimmed PATH still resolves flock -- path_without_tool did not "
         f"actually exclude it: {probe.stdout!r}"
     )
 
@@ -1309,7 +1266,7 @@ def _faulty_repo_and_env(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     $TMPDIR. The three-line preamble every test below would otherwise repeat."""
     return _init_repo(tmp_path), {
         **_fault_env(tmp_path),
-        "PATH": _path_without_flock(tmp_path),
+        "PATH": path_without_tool(tmp_path, "flock"),
     }
 
 

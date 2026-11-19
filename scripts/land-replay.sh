@@ -199,6 +199,21 @@ command -v uv >/dev/null 2>&1 || gate_could_not_run \
   "nothing below has run yet."
 NOX=(uv run --frozen nox)
 
+# sync_env <where>: bring ./.venv to the checked-out tree's uv.lock, or stop
+# the pass. `uv run` does this same sync before nox starts, and uv exits 1
+# when it fails (measured: a wheel it cannot download) -- the code a per-branch
+# arm reads as that branch's content verdict, and the baseline arms report as
+# a red gate on the base. Syncing on its own after every tree change (the
+# reset, each merge) turns that into the machine fault it is; each gate's own
+# sync then finds nothing to do. `--inexact` is what `uv run` itself does (it
+# never removes a package the lock does not name).
+sync_env() {
+  uv sync --frozen --inexact || gate_could_not_run \
+    "'uv sync --frozen' failed $1: ./.venv could not be brought to that tree's uv.lock." \
+    "A failed env sync is a machine fault, never a baseline or branch verdict" \
+    "(see uv's own error above). Do NOT bounce anything on the strength of this."
+}
+
 ACCEPTED=""
 MSG_DIR=""
 CONFLICTS_DIR=""
@@ -305,6 +320,7 @@ git reset --hard -q "$BASE_REF" \
 # "lode-mps0"). No `escalate_unless_content` partition here -- like the
 # `nox -s tests` baseline arm below, every nonzero stops the pass, so there
 # is no mid-loop rc to split into content-vs-machine.
+sync_env "on bare '$BASE_REF'"
 if ! "${NOX[@]}" -t fix; then
   gate_could_not_run "'nox -t fix' is red on bare '$BASE_REF', before any branch merged." \
     "Not attributable to anything in --accepted. '$BASE_REF' itself needs a human's fix" \
@@ -439,17 +455,7 @@ for id in $ACCEPTED_IDS; do
   # `fi` could never read anything but "bounce" (dead state). `rc=$?` must
   # still be the FIRST command in the else arm, and the condition must stay
   # un-negated: `if ! CMD; then rc=$?` captures the NEGATION's status.
-  #
-  # `uv run` first syncs ./.venv to the just-merged uv.lock, and uv exits 1
-  # when that sync fails (a wheel it cannot download or build) -- the code the
-  # gates below read as '$id''s content verdict. So sync on its own first: a
-  # failure stops the replay instead of bouncing '$id', and each gate's own
-  # sync then finds nothing to do. `--inexact` is what `uv run` itself does
-  # (it never removes a package the lock does not name).
-  uv sync --frozen --inexact || gate_could_not_run \
-    "'uv sync --frozen' failed after merging '$id': ./.venv could not be brought to the merged uv.lock." \
-    "A failed download or build is a machine fault, not '$id''s verdict -- do NOT bounce it on the" \
-    "strength of this (see uv's own error above)."
+  sync_env "after merging '$id'"
   if "${NOX[@]}" -t fix; then
     :
   else
