@@ -668,8 +668,9 @@ def status(db: _DbOption = None) -> None:
     if refused:
         console.print(
             "[warn]Action needed:[/warn] the model refused to enrich some notes "
-            "(listed above). A refusal is final for that note version: it is "
-            "not retried until the note is edited, the enrichment prompt "
+            "or external pages (listed above). A refusal is final for that "
+            "note version or page snapshot: it is not retried until the note "
+            "is edited or the page's content changes, the enrichment prompt "
             "version changes, or enrichment_llm is changed.",
             highlight=False,
         )
@@ -678,8 +679,8 @@ def status(db: _DbOption = None) -> None:
             "[warn]Action needed:[/warn] some dead-lettered jobs (embed/enrich) "
             "are usually self-healing -- the next reconciliation scan should "
             "re-enqueue them on its own, unless the job is already moot: its "
-            "target note has since been tombstoned, purged, superseded, or "
-            "(enrich only) marked no_egress, or the work already succeeded "
+            "target note or external page has since been tombstoned, purged, "
+            "superseded, or (enrich only) marked no_egress, or the work already succeeded "
             "under a later job (a dead row is a permanent record and is not "
             "cleared once it heals). Run 'lode work' to drain them now, or "
             "'lode reembed'/'lode reenrich' to force it.",

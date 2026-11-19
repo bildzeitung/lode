@@ -1010,3 +1010,194 @@ def test_lexical_gap_count_tracks_the_heads_query(conn: sqlite3.Connection) -> N
 
     _lexical_gap_step(conn, Settings())
     assert lexical_gap_count(conn) == len(lexical_gap_heads(conn)) == 0
+
+
+# ---------------------------------------------------------------------------
+# Enrich-gap externals arm (lode-4kg8)
+# ---------------------------------------------------------------------------
+
+
+def _add_snapshot(
+    conn: sqlite3.Connection, snapshot_id: str, external_id: str = "ext-1"
+) -> None:
+    """Add a further snapshot and make it the external's head."""
+    with conn:
+        conn.execute(
+            "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
+            "VALUES (?, ?, 'newer body', 'ok')",
+            (snapshot_id, external_id),
+        )
+        conn.execute(
+            "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
+            (snapshot_id, external_id),
+        )
+
+
+def _insert_enrich_job(
+    conn: sqlite3.Connection,
+    target: str,
+    status: str,
+    *,
+    prompt_ver: str | None = None,
+    refusal: bool = False,
+    refusal_model: str | None = None,
+) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status, prompt_ver, refusal, "
+            "refusal_model, next_attempt_at) VALUES ('enrich', ?, ?, ?, ?, ?, ?)",
+            (target, status, prompt_ver, int(refusal), refusal_model, now_iso()),
+        )
+
+
+def _enrich_gap(conn: sqlite3.Connection, settings: Settings | None = None) -> int:
+    from lode.reconcile import _enrich_gap_step
+
+    return _enrich_gap_step(conn, settings or Settings())
+
+
+def _enrich_job_statuses(conn: sqlite3.Connection, target: str) -> list[str]:
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT status FROM jobs WHERE type = 'enrich' AND target_version = ? "
+            "ORDER BY id",
+            (target,),
+        )
+    ]
+
+
+def test_enrich_gap_external_never_enriched_after_embed(
+    conn: sqlite3.Connection,
+) -> None:
+    _insert_external_snapshot(conn)
+    _insert_embed_job(conn, "snap-1", "done")
+
+    assert _enrich_gap(conn) == 1
+    assert _enrich_job_statuses(conn, "snap-1") == ["pending"]
+    assert _enrich_gap(conn) == 0  # idempotent: pending job is live
+
+
+def test_enrich_gap_external_leaves_gate_undecided_head_alone(
+    conn: sqlite3.Connection,
+) -> None:
+    """No enrich job and embed not done: the post-embed gate may still decide."""
+    _insert_external_snapshot(conn)
+    _insert_embed_job(conn, "snap-1", "pending")
+
+    assert _enrich_gap(conn) == 0
+
+
+def test_enrich_gap_external_max_retries_dead_job(conn: sqlite3.Connection) -> None:
+    _insert_external_snapshot(conn)
+    _insert_enrich_job(conn, "snap-1", "dead")
+
+    assert _enrich_gap(conn) == 1
+    assert _enrich_job_statuses(conn, "snap-1") == ["dead", "pending"]
+
+
+def test_enrich_gap_external_stale_prompt_ver(conn: sqlite3.Connection) -> None:
+    _insert_external_snapshot(conn)
+    _insert_enrich_job(conn, "snap-1", "done", prompt_ver="older-prompt")
+
+    assert _enrich_gap(conn) == 1
+
+
+def test_enrich_gap_external_current_done_is_not_a_gap(
+    conn: sqlite3.Connection,
+) -> None:
+    from lode.enrich import ENRICH_PROMPT_VER
+
+    _insert_external_snapshot(conn)
+    _insert_enrich_job(conn, "snap-1", "done", prompt_ver=ENRICH_PROMPT_VER)
+
+    assert _enrich_gap(conn) == 0
+
+
+def test_enrich_gap_external_carried_forward_head_is_not_a_gap(
+    conn: sqlite3.Connection,
+) -> None:
+    """Materiality gate intact: a head with no job of its own inherits the in-force one."""
+    from lode.enrich import ENRICH_PROMPT_VER
+
+    _insert_external_snapshot(conn)
+    _insert_enrich_job(conn, "snap-1", "done", prompt_ver=ENRICH_PROMPT_VER)
+    _add_snapshot(conn, "snap-2")
+    _insert_embed_job(conn, "snap-2", "done")
+
+    assert _enrich_gap(conn) == 0
+    assert _enrich_job_statuses(conn, "snap-2") == []
+
+
+def test_enrich_gap_external_carried_forward_head_reopens_on_stale_inforce(
+    conn: sqlite3.Connection,
+) -> None:
+    _insert_external_snapshot(conn)
+    _insert_enrich_job(conn, "snap-1", "done", prompt_ver="older-prompt")
+    _add_snapshot(conn, "snap-2")
+    _insert_embed_job(conn, "snap-2", "done")
+
+    assert _enrich_gap(conn) == 1
+    assert _enrich_job_statuses(conn, "snap-2") == ["pending"]
+
+
+def test_enrich_gap_external_carried_forward_head_reopens_on_dead_inforce(
+    conn: sqlite3.Connection,
+) -> None:
+    _insert_external_snapshot(conn)
+    _insert_enrich_job(conn, "snap-1", "dead")
+    _add_snapshot(conn, "snap-2")
+
+    assert _enrich_gap(conn) == 1
+    assert _enrich_job_statuses(conn, "snap-2") == ["pending"]
+
+
+def test_enrich_gap_external_live_inforce_job_is_left_alone(
+    conn: sqlite3.Connection,
+) -> None:
+    _insert_external_snapshot(conn)
+    _insert_enrich_job(conn, "snap-1", "failed")
+    _add_snapshot(conn, "snap-2")
+
+    assert _enrich_gap(conn) == 0
+
+
+def test_enrich_gap_external_refusal_follows_the_note_reopen_rule(
+    conn: sqlite3.Connection,
+) -> None:
+    from lode.config import ModelTier
+    from lode.enrich import ENRICH_PROMPT_VER
+
+    settings = Settings()
+    model = settings.enrichment_llm.model
+    _insert_external_snapshot(conn)
+    _insert_enrich_job(
+        conn,
+        "snap-1",
+        "dead",
+        prompt_ver=ENRICH_PROMPT_VER,
+        refusal=True,
+        refusal_model=model,
+    )
+
+    assert _enrich_gap(conn, settings) == 0
+
+    other = Settings(enrichment_llm=ModelTier(model="some-other-model"))
+    assert _enrich_gap(conn, other) == 1
+
+    with conn:
+        conn.execute("UPDATE jobs SET prompt_ver = 'older-prompt'")
+        conn.execute("DELETE FROM jobs WHERE status = 'pending'")
+    assert _enrich_gap(conn, settings) == 1
+
+
+def test_enrich_gap_external_excludes_tombstone_and_no_egress(
+    conn: sqlite3.Connection,
+) -> None:
+    _insert_external_snapshot(conn, "ext-t", "snap-t", status="tombstone")
+    _insert_external_snapshot(conn, "ext-n", "snap-n")
+    with conn:
+        conn.execute("UPDATE externals SET no_egress = 1 WHERE external_id = 'ext-n'")
+    _insert_embed_job(conn, "snap-n", "done")
+
+    assert _enrich_gap(conn) == 0

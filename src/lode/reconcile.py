@@ -48,6 +48,11 @@ the tiny window between a version write and its enqueue (see ``docs/storage.md``
   produced an empty summary (Haiku returned ``""`` for a content-free note, so
   no ``summary`` row was written) is therefore correctly seen as
   current-and-done instead of being re-flagged as a gap on every scan.
+  **Externals arm (lode-4kg8):** the same triggers apply to an external's head
+  snapshot, judged against the external's *in-force* enrich job (newest across
+  its snapshots) rather than the head's own, so a head the materiality gate
+  carried forward -- which owns no job by design -- is not a gap while that
+  in-force enrichment is current. See :func:`_enrich_gap_step`.
 - ``lexical_gap`` — registered (lode-cyly). Finds live NOTE heads with zero
   ``passages_fts`` rows and heals them **inline, synchronously** — unlike
   every other step here, it does not enqueue a job at all. Chunking and the
@@ -348,6 +353,29 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
     row.  Re-enqueue after ``done``/``dead`` IS allowed (the index is scoped to
     live statuses only).
 
+    **Externals arm (lode-4kg8, lode-xuoz ruling):** an external's head snapshot
+    is a gap on the same triggers as a note head, with one difference that
+    keeps the materiality gate intact. A head snapshot that
+    :func:`lode.externals.gate_reenrich` carried forward (sub-threshold change)
+    deliberately owns *no* enrich job, so "the head has no enrich job" must not
+    be the signal. The signal is the external's **in-force enrichment job**:
+    the newest ``enrich`` job (highest ``jobs.id``) across *all* of the
+    external's snapshots, i.e. the job whose annotations the carried-forward
+    head is inheriting. The head is a gap iff that job is
+
+    - absent (never enriched) **and** the head's ``embed`` job is ``done`` --
+      the gate runs post-embed, so before that the gate may still decide;
+    - ``dead`` and not a current refusal (the note arm's exact
+      ``refusal`` / ``prompt_ver`` / ``refusal_model`` re-open rule); or
+    - ``done`` under a ``prompt_ver`` other than the current one.
+
+    A live (``pending``/``running``/``failed``) in-force job is left alone.
+    Like the note arm, ``done`` jobs record no model, so only a prompt-version
+    bump (not an ``enrichment_llm`` change) re-opens a ``done`` enrichment; an
+    ``enrichment_llm`` change re-opens a refusal-dead one. The enqueue targets
+    the head snapshot, so the new annotations anchor to current content.
+    Tombstoned-head and ``no_egress`` externals are excluded.
+
     Returns the count of gap versions found (each triggered one enqueue call).
     """
     settings = settings or Settings()
@@ -382,8 +410,44 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
                 AND j.prompt_ver = ?
                 AND j.refusal_model = ?
           )
+        UNION
+        SELECT i.head
+        FROM (
+            SELECT e.head_snapshot_id AS head,
+                   (SELECT j.id FROM jobs j
+                    JOIN snapshots s2 ON s2.snapshot_id = j.target_version
+                    WHERE s2.external_id = e.external_id AND j.type = 'enrich'
+                    ORDER BY j.id DESC LIMIT 1) AS jid
+            FROM externals e
+            JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id
+            WHERE s.status != 'tombstone' AND e.no_egress = 0
+        ) i
+        LEFT JOIN jobs j ON j.id = i.jid
+        WHERE (
+            j.id IS NULL
+            AND EXISTS (
+                SELECT 1 FROM jobs je
+                WHERE je.type = 'embed'
+                  AND je.target_version = i.head
+                  AND je.status = 'done'
+            )
+        )
+        OR (
+            j.status = 'dead'
+            AND NOT (
+                j.refusal = 1 AND j.prompt_ver = ? AND j.refusal_model = ?
+            )
+        )
+        OR (j.status = 'done' AND j.prompt_ver IS NOT ?)
         """,
-        (ENRICH_PROMPT_VER, ENRICH_PROMPT_VER, settings.enrichment_llm.model),
+        (
+            ENRICH_PROMPT_VER,
+            ENRICH_PROMPT_VER,
+            settings.enrichment_llm.model,
+            ENRICH_PROMPT_VER,
+            settings.enrichment_llm.model,
+            ENRICH_PROMPT_VER,
+        ),
     ).fetchall()
 
     if not gap_versions:
