@@ -31,6 +31,7 @@ flags those rows as fallback hits (``lode-qcp0``).
 from __future__ import annotations
 
 import importlib.util
+import re
 import sqlite3
 import sys
 import time
@@ -39,6 +40,8 @@ from types import ModuleType
 from typing import Annotated
 
 import typer
+
+from lode.fence_parsing import fence_flags
 
 app = typer.Typer(add_completion=False)
 
@@ -176,6 +179,45 @@ def _snippet(body: str) -> str:
     return flat[:_SNIPPET_CHARS].rstrip() + "..."
 
 
+_UPDATE_MARKER_RE = re.compile(r"\*\*Update \(")
+
+
+def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
+    """Line numbers of the ``**Update (`` markers in the entry a hit belongs to,
+    when that hit is only one chunk of a hard-split entry; otherwise ``[]``.
+
+    The chunker hard-splits a top-level ``- `` entry over ``MAX_UNIT_BYTES``
+    into several units, so a marker appended at the entry's end can sit in a
+    different unit from the stale claim a query matched (``lode-funp``). The
+    chunker's tiling invariant forbids copying the marker into each sub-unit,
+    so the pointers are derived here at output time instead. Only a file
+    chunked at bullets (no ATX headings at all, i.e. ``decisions.md``) has
+    such entries; a heading-chunked file returns ``[]``.
+    """
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    flags = fence_flags(lines)
+    if any(
+        re.match(r"^#{1,6}\s", line) and not in_fence
+        for line, in_fence in zip(lines, flags, strict=True)
+    ):
+        return []
+    bullets = [
+        i + 1 for i, line in enumerate(lines) if not flags[i] and line.startswith("- ")
+    ]
+    starts = [b for b in bullets if b <= line_lo]
+    if not starts:
+        return []
+    entry_lo = starts[-1]
+    entry_hi = next((b - 1 for b in bullets if b > line_lo), len(lines))
+    if (entry_lo, entry_hi) == (line_lo, line_hi):
+        return []
+    return [
+        n
+        for n in range(entry_lo, entry_hi + 1)
+        if not flags[n - 1] and _UPDATE_MARKER_RE.search(lines[n - 1])
+    ]
+
+
 def query(
     raw_query: str,
     doc_class: str | None = None,
@@ -273,6 +315,15 @@ def main(
             marker = " [fallback: OR match]" if used_fallback else ""
             print(f"{path}:{line_lo}-{line_hi}{marker}  {first_line}")
             print(f"    {snippet}")
+            markers = split_entry_markers(path, line_lo, line_hi)
+            if markers:
+                where = ", ".join(str(n) for n in markers[:8])
+                more = f" (+{len(markers) - 8} more)" if len(markers) > 8 else ""
+                print(
+                    f"    NOTE: this chunk is part of a split entry that carries "
+                    f"Update markers at line {where}{more} -- they may correct "
+                    f"claims shown here; read them."
+                )
     else:
         print("No results.")
 

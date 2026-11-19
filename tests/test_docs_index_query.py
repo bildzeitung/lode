@@ -285,3 +285,73 @@ def test_cli_still_prints_results_when_the_invocation_log_cannot_be_written(
     result = runner.invoke(app, ["lode-nt98"])
     assert result.exit_code == 0, result.output
     assert "docs/" in result.output
+
+
+def test_split_entry_markers_reports_markers_from_a_different_chunk(
+    tmp_path: Path,
+) -> None:
+    """An Update marker at the end of an entry over MAX_UNIT_BYTES lands in a
+    different unit from the stale claim (lode-funp); every chunk of that entry
+    must still point at it."""
+    pad = "\n\n".join(f"filler paragraph {i} " + "x" * 2000 for i in range(10))
+    doc = tmp_path / "decisions.md"
+    doc.write_text(
+        "- **Big entry.** stale claim zorblax\n\n"
+        + pad
+        + "\n\n  **Update (lode-test, 2026-01-01)** -- corrected.\n"
+        "- **Small entry.** unrelated\n"
+        "  **Update (lode-other)** -- not this entry's.\n",
+        encoding="utf-8",
+    )
+    chunker = _query_module._build._chunker
+    units = chunker.chunk_file(doc, doc.read_text(encoding="utf-8"))
+    big = [u for u in units if u.line_hi < len(doc.read_text().splitlines()) - 1]
+    assert len(big) > 1
+    marker_line = next(
+        i + 1 for i, ln in enumerate(doc.read_text().splitlines()) if "lode-test" in ln
+    )
+    for u in big:
+        assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == [
+            marker_line
+        ]
+    small = units[-1]
+    assert (
+        _query_module.split_entry_markers(str(doc), small.line_lo, small.line_hi) == []
+    )
+
+
+def test_cli_prints_note_for_a_hit_in_a_split_entry(tmp_path: Path) -> None:
+    """The CLI surfaces split_entry_markers' result under the hit it belongs to."""
+    pad = "\n\n".join(f"filler {i} " + "x" * 2000 for i in range(10))
+    doc = tmp_path / "decisions.md"
+    doc.write_text(
+        "- **Big entry.** stale claim zorblax\n\n"
+        + pad
+        + "\n\n  **Update (lode-test, 2026-01-01)** -- corrected.\n",
+        encoding="utf-8",
+    )
+    build = _query_module._build
+    units = build._chunker.chunk_file(doc, doc.read_text(encoding="utf-8"))
+
+    def fake_build_index() -> sqlite3.Connection:
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            "CREATE VIRTUAL TABLE units USING fts5(path, line_lo, line_hi, "
+            "first_line, body, doc_class)"
+        )
+        for u in units:
+            conn.execute(
+                "INSERT INTO units VALUES (?,?,?,?,?,?)",
+                (str(doc), u.line_lo, u.line_hi, u.first_line, u.body, u.doc_class),
+            )
+        return conn
+
+    original = build.build_index
+    build.build_index = fake_build_index
+    try:
+        result = runner.invoke(app, ["zorblax"])
+    finally:
+        build.build_index = original
+    assert result.exit_code == 0
+    assert "NOTE: this chunk is part of a split entry" in result.stdout
+    assert "at line 23" in result.stdout

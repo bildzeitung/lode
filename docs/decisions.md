@@ -6242,3 +6242,20 @@ entries below from being rewritten to chase the current tree.)
     from the ticket title. Neither is built. The confirming note names only (a)-(d); the
     withdrawn one was alone in listing (e) and (f) as not taken.
   - **Still accepted.** The limits listed in the `lode-jb2q` entry stand.
+- **A docs-index hit in a hard-split `decisions.md` entry now names the entry's Update markers
+  (`lode-funp`).** The chunker hard-splits a top-level entry over `MAX_UNIT_BYTES` (16384 bytes) at
+  blank-line paragraph boundaries, so an `**Update (` marker appended at the end of such an entry can
+  sit in a different unit from the stale claim a query matched, and the reader who reads only that
+  range sees the claim with no correction.
+  - **Measured (2026-11-18).** Of 145 entries in `docs/decisions.md`, 2 exceed the limit: the
+    review-architecture entry from line 389 (57,686 bytes, 10+ markers) and the `/land` worktree GC
+    entry from line 1351 (19,992 bytes, 1 marker). The problem was real, not a guard-only case.
+  - **Decided (builder's pick, option (b) of the ticket; the measurement made it plain).**
+    `scripts/docs_index_query.py` prints, under any hit that is one chunk of a split entry, a `NOTE`
+    line listing the entry's marker line numbers (first eight, then a count). The note is derived at
+    output time from the file, so the chunker's tiling invariant (units gapless and non-overlapping,
+    body equal to the line range) is untouched. Only a bullet-chunked file (no ATX headings, i.e.
+    `decisions.md`) has such entries.
+  - **Not taken.** (a) copying markers into sub-units breaks the tiling invariant; (c) an authoring
+    rule would not cover the existing markers and rests on the author knowing the entry is
+    oversized; (d) cannot know which paragraph a marker corrects.
