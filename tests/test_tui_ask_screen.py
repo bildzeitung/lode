@@ -1365,3 +1365,78 @@ def test_a_real_failure_after_escaping_a_note_scoped_ask_is_logged_not_toasted(
     assert [r.exc_info[1] for r in caplog.records if r.exc_info] == [error]
     assert running
     assert toasts == []
+
+
+def _quit_mid_flight(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    screen_factory: Callable[[], AskScreen] | None,
+    rest_of_run_ask: Callable[[Callable[[str], None]], AskResult],
+) -> None:
+    """Quit the app while ``run_ask`` is blocked. Real ``run_async``.
+
+    The pilot's ``run_test`` does not reproduce the quit-time failure: its hop
+    still reaches the loop after the context exits.
+    """
+    app = LodeApp(db_path=tmp_path / "lode.db")
+    blocked = threading.Event()
+    release = threading.Event()
+    done = threading.Event()
+
+    def _stub_run_ask(db_path, question, *, on_stage=None, **kwargs):
+        blocked.set()
+        release.wait(timeout=5)
+        try:
+            return rest_of_run_ask(on_stage)
+        finally:
+            done.set()
+
+    monkeypatch.setattr("lode.tui.screens.ask.run_ask", _stub_run_ask)
+
+    async def _auto(pilot) -> None:
+        if screen_factory is None:
+            app.push_screen("ask")
+        else:
+            await app.push_screen(screen_factory())
+        await pilot.pause()
+        app.screen.query_one(f"#{QUESTION_ID}", Input).value = "why?"
+        await pilot.press("enter")
+        await _wait_until(blocked.is_set, "run_ask is blocked")
+        app.exit()
+
+    async def _drive() -> None:
+        await app.run_async(headless=True, auto_pilot=_auto)
+        release.set()
+        await _wait_until(done.is_set, "run_ask finished")
+        await asyncio.sleep(0.2)
+
+    asyncio.run(_drive())
+
+
+@pytest.mark.parametrize("note_scoped", [True, False])
+def test_quitting_the_app_mid_ask_logs_no_ask_failed_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    note_scoped: bool,
+) -> None:
+    def _stage_then_answer(on_stage: Callable[[str], None]) -> AskResult:
+        on_stage("synthesizing")
+        return _canned_answer()
+
+    factory = (lambda: AskScreen(note_id="note-a")) if note_scoped else None
+    with caplog.at_level("ERROR", logger="lode.tui.screens.ask"):
+        _quit_mid_flight(monkeypatch, tmp_path, factory, _stage_then_answer)
+
+    assert [r for r in caplog.records if r.name == "lode.tui.screens.ask"] == []
+
+
+def test_quitting_the_app_mid_ask_with_no_stage_hop_logs_no_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("ERROR", logger="lode.tui.screens.ask"):
+        _quit_mid_flight(monkeypatch, tmp_path, None, lambda on_stage: _canned_answer())
+
+    assert [r for r in caplog.records if r.name == "lode.tui.screens.ask"] == []

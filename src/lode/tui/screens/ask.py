@@ -45,10 +45,11 @@ already-exhausted ``ctrl+<letter>`` pool that doc's own ledger tracks.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import ClassVar
 
 from textual import work
-from textual.app import ComposeResult
+from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
@@ -239,10 +240,23 @@ class AskScreen(Screen[None]):
                 result, context_chars=app.settings.ask_context_chars
             )
         except Exception as err:
+            if not app.is_running:
+                # The app was quit mid-flight; ``_on_stage``'s hop raising is
+                # what ended ``run_ask``, and there is nothing left to log to.
+                return
             log.exception("ask failed")
-            app.call_from_thread(self._fail, generation, str(err) or type(err).__name__)
+            self._final_hop(app, self._fail, generation, str(err) or type(err).__name__)
             return
-        app.call_from_thread(self._finish, generation, rendered, result)
+        self._final_hop(app, self._finish, generation, rendered, result)
+
+    @staticmethod
+    def _final_hop(app: App[None], fn: Callable[..., None], *args: object) -> None:
+        """Hop ``fn`` to the main thread; a hop to a quit app is dropped quietly."""
+        try:
+            app.call_from_thread(fn, *args)
+        except RuntimeError:
+            if app.is_running:
+                raise
 
     def _is_stale(self, generation: int) -> bool:
         """Whether a worker's write for ``generation`` must be dropped. Main thread only.
