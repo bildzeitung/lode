@@ -519,3 +519,32 @@ it writes no record. The cost is that a real pipeline failure arriving after the
 logged; the process is exiting. A failure while the app is running is unchanged: logged with its
 traceback, and toasted. The test drives a real `run_async`, because the pilot's `run_test` still
 delivers the hop after its context exits and does not reproduce this.
+
+### Quitting mid-ask waits for the in-flight call (`lode-zuzj`)
+
+**Decided: the delay is accepted (option (c)).** Textual runs a thread worker on the event loop's
+default executor, and `asyncio.run`'s close step joins that executor (`shutdown_default_executor`,
+the join the `lode-du4p` section above describes) after the terminal is restored. So after ctrl+q
+the shell returns only when the ask worker's thread ends, at `run_ask`'s next stage hop (which
+raises, per `lode-dgmf` above). When the quit lands inside a provider call, the thread ends only
+after the call returns or times out, and the call is still paid for.
+
+Option (a), raising from `_on_stage` when the worker is cancelled, was rejected. For a quit it
+changes nothing: Textual cancels the worker at shutdown, just before the hop starts raising "App is
+not running", so `run_ask` would end at the same hop as today and a call in flight is not
+interrupted. For an escaped or superseded ask, which Textual also cancels, it would stop the run at
+its next stage hop, but that spares the provider call only when the cancel lands during retrieval.
+Option (b), making the call cancellable, means a cancel event through `run_ask` and the provider
+seam, which is more machinery than this wait warrants.
+
+**Bound:** the wait is the rest of the stage the quit landed in; nothing caps it at quit time.
+asyncio gives up on the join after 300 s, but that only prints a `RuntimeWarning`: the worker
+thread is not a daemon thread, so the interpreter still waits for it at exit.
+
+- **During the Q&A run** (the usual case): normally seconds. A wedged run can take about 900 s at
+  the defaults, the worst case already accepted for the ask itself
+  ([configuration.md](configuration.md#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx),
+  the flagged risk, which also lists the levers).
+- **During retrieval:** the local embed and rerank, normally short. The first run's model weights
+  download is not bounded by any timeout (`docs/configuration.md`, the `HF_HUB_OFFLINE` note);
+  `lode models pull` moves it out of the ask.
