@@ -698,10 +698,11 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   worktree still on a *previous* ticket's branch (lode-nt98), and separately has handed a dispatched
   reviewer NO worktree at all — cwd on the main checkout, on `trunk` (lode-ska2) — run
   `scripts/isolation-guard.sh` first, `scripts/recycled-worktree-guard.sh` second (step 2), before
-  `checkout-land-branch.sh`'s fetch, don't just trust the design. Also: treating a missing or non-executable guard script as
-  license to proceed unguarded (lode-ivth's bootstrap gap) instead of stopping and reporting it, and —
-  specific to `isolation-guard.sh` — treating its exit 1 as an invitation to retry `EnterWorktree` or
-  invent a `git worktree add` self-rescue instead of actually stopping (lode-ska2).
+  `checkout-land-branch.sh`'s fetch, don't just trust the design. Also: treating a missing or
+  non-executable guard script as license to proceed unguarded (lode-ivth's bootstrap gap) instead of
+  stopping and reporting it, and — specific to `isolation-guard.sh` — treating its exit 1 as an
+  invitation to retry `EnterWorktree` or invent a `git worktree add` self-rescue instead of actually
+  stopping (lode-ska2).
 - **Trying to `git worktree remove` my own launch worktree.** I cannot remove the worktree I am
   currently standing in. `/code` reclaims it after I return, deriving it from the ticket id (lode-vs7g)
   — I neither remove it nor need to report it.

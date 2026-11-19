@@ -512,8 +512,8 @@ when the `$(git rev-parse …)` it prescribes is refused (the
 [fabricated-SHA guard](#guard-against-fabricated-shas-lode-fpmi) denies a 40-hex string that is not a
 real object, but cannot tell a real one from the *right* one). For
 `nox -s eval`, run its body directly (it is CI-only and spends API credits, so only with the
-maintainer's approval, as
-`CLAUDE.md` General Directive 10 ([reasons](#no-llm-provider-spend-without-maintainer-approval-lode-3xzy))
+maintainer's approval, as `CLAUDE.md`
+General Directive 10 ([reasons](#no-llm-provider-spend-without-maintainer-approval-lode-3xzy))
 defines it): `LODE_RUN_LIVE_EVAL=1 uv run --frozen pytest tests/test_eval_live.py -v` with
 `ANTHROPIC_API_KEY` set. Do **not** disguise the word — quote-splitting (`ev""al`), building it by
 expansion, or any other obfuscation: the guard exists because the shape is unverifiable, so hiding

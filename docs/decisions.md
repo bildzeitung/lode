@@ -6199,9 +6199,9 @@ entries below from being rewritten to chase the current tree.)
     above left two gaps, settled in the entry "Enrichment refusal: provider scope and recovery
     after a model change" at the end of this file. Decision (2)'s re-open condition is widened
     to include `enrichment_llm`, and OpenAI/Azure refusals are in the terminal class.
-  - **Update (lode-jxzs, 2026-11-19):** the Update bullet above says the refusal-recovery entry is "at
-    the end of this file". It is not the last entry now; it sits immediately below, under the head
-    "Enrichment refusal: provider scope and recovery after a model change".
+  - **Update (lode-jxzs, 2026-11-19):** the Update bullet above says the refusal-recovery entry is
+    "at the end of this file". It is not the last entry now; it sits immediately below, under the
+    head "Enrichment refusal: provider scope and recovery after a model change".
 
 - **Enrichment refusal: provider scope and recovery after a model change (`lode-g9q3`,
   2026-11-18, maintainer; rulings on the `lode-ahme` technical review's notes 1 and 4).**
