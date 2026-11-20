@@ -59,6 +59,7 @@ from lode.cli import app
 from lode.config import Settings, load_settings
 from lode.egress import WithheldCitation
 from lode.embedding import embed
+from lode.enrich import ENRICH_PROMPT_VER
 from lode.externals import ingest_snapshot
 from lode.hashing import NO_PARENT, content_version_id
 from lode.ids import short_version_id
@@ -6879,9 +6880,9 @@ def _seed_external_snapshot_120s_old(db_path: Path) -> None:
                 (now_iso(),),
             )
             conn.execute(
-                "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
-                "VALUES ('enrich', 'snap-1', 'done', ?)",
-                (now_iso(),),
+                "INSERT INTO jobs (type, target_version, status, prompt_ver, "
+                "next_attempt_at) VALUES ('enrich', 'snap-1', 'done', ?, ?)",
+                (ENRICH_PROMPT_VER, now_iso()),
             )
     finally:
         conn.close()

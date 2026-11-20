@@ -5,6 +5,7 @@ from typing import Annotated
 import typer
 
 from lode import cli
+from lode.auth import AuthError
 from lode.cli import _abort_on_provider_error, _DbOption, app
 from lode.cli.status import _short
 from lode.config import default_db_path, lance_dir
@@ -93,7 +94,6 @@ def work(
         )
         raise typer.Exit(code=1)
 
-    from lode.auth import AuthError
     from lode.embedding import FastEmbedEmbedder
     from lode.reconcile import reconcile as _reconcile
     from lode.vectorstore import VectorStore

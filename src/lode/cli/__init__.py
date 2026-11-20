@@ -83,6 +83,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 
+from lode.auth import AuthError
 from lode.config import Settings, config_path, default_db_path, load_settings, log_dir
 from lode.config import model_cache_dir as model_cache_dir
 from lode.llm_provider import LLMProviderError, provider_identity  # noqa: F401
@@ -631,7 +632,6 @@ def _enrich_immediately(
     *which* errors reach here — and why a non-auth ``LLMProviderError`` raised
     by a job handler never does.
     """
-    from lode.auth import AuthError
     from lode.worker import claim_and_run_one
 
     try:

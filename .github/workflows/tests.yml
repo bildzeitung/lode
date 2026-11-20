@@ -12,9 +12,8 @@ name: tests
 # Also hosts the `lock-currency` job (lode-g274.6): the `tests` job below
 # installs from the committed `uv.lock` rather than resolving fresh, so this
 # workflow tests a dependency set reproducible from committed bytes;
-# `lock-currency` separately verifies that both committed locks (`uv.lock` and
-# `requirements.lock`, which only `scripts/update-deps.sh` still consumes) are
-# what `pyproject.toml` would produce today. See each job's own comments for
+# `lock-currency` separately verifies that the committed `uv.lock` is what
+# `pyproject.toml` would produce today. See each job's own comments for
 # the mechanism.
 #
 # push trigger convention (lode-bmvy, mirrored from build.yml) -- narrowed to
@@ -63,35 +62,11 @@ env:
   LODE_TEST_WORKERS: "2"
 
 jobs:
-  # Cheap, independent check: verify requirements.lock is still what
-  # scripts/compile-lock.sh (the single shared lock-gen command, lode-sys4)
-  # would produce for the CURRENT pyproject.toml. No model download, no
-  # dev-group install -- runs in parallel with (not gated by, or gating) the
-  # `tests` job below, so a stale lock fails in seconds rather than after
-  # paying for the slow leg's model download (lode-g274.6).
-  #
-  # Recompiling `-o requirements.lock` IN PLACE against the file this job
-  # just checked out is the whole mechanism: uv feeds an existing output
-  # file's own pins back to the resolver as its PREFERENCE set by default
-  # (only `--upgrade`/`-U` would ignore them -- `uv pip compile --help`), so
-  # the resolution only moves when a pyproject.toml constraint forces it. An
-  # upstream release alone (pyproject.toml and the committed lock both
-  # unchanged) reproduces the committed lock byte-for-byte and this job stays
-  # green; a `pyproject.toml` dependency change without a matching
-  # `requirements.lock` regeneration changes the resolution and this job
-  # fails the diff. Verified empirically (lode-g274.6 build notes): recompiling
-  # in place against an untouched pyproject.toml is byte-identical to the
-  # committed lock; a genuinely fresh compile (no prior content at the -o
-  # path) resolves a DIFFERENT graph -- concrete proof the preference-seeding
-  # is load-bearing, not cosmetic.
-  #
-  # scripts/compile-lock.sh derives --python-version from .python-version
-  # (lode-sys4 / lode-gyag root cause): without it, `uv pip compile` resolves
-  # against whichever interpreter it finds, which can differ from this job's
-  # own 3.14 and silently pick up/drop python-version-marker-gated transitives
-  # (lancedb's `overrides`, anyio's marker-gated `typing_extensions`),
-  # producing a lock that flaps against this diff for reasons unrelated to
-  # any real pyproject.toml change.
+  # Cheap, independent check: `uv lock --check` fails if uv.lock is stale
+  # against pyproject.toml. No model download, no dev-group install -- runs
+  # in parallel with (not gated by, or gating) the `tests` job below, so a
+  # stale lock fails in seconds rather than after paying for the slow leg's
+  # model download (lode-g274.6). uv.lock is the only lock (lode-s09w.4).
   lock-currency:
     runs-on: ubuntu-26.04
     # Caps a hung `uv` resolve; 5 is the cheapest rung (no model download).
@@ -101,30 +76,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        # fetch-depth: 0 not needed here -- this job never runs `pip install
-        # -e .`, so setuptools-scm's git-describe requirement (which is why
-        # the `tests` job below needs full history) doesn't apply.
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
-          # Reads the SAME file scripts/compile-lock.sh derives its
-          # --python-version target from (lode-sys4) -- this job's own
-          # interpreter and the lock-gen target are the same single source of
-          # truth, so they can never drift from each other. Since lode-u709
-          # EVERY setup-python step in this repo reads this file (no workflow
-          # carries a version literal any more), so that guarantee is
-          # repo-wide, not special to this job.
 
       - name: Install uv
         run: pip install -U uv
-
-      - name: Recompile requirements.lock, using the committed lock as the resolver's preference set
-        run: scripts/compile-lock.sh -o requirements.lock
-
-      - name: Fail if the recompiled lock differs from the committed one
-        run: git diff --exit-code requirements.lock
 
       - name: Fail if uv.lock is stale against pyproject.toml
         run: uv lock --check

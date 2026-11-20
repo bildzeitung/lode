@@ -473,8 +473,8 @@ Two rules, three message texts:
     (derive `HEAD`, validate, check origin's tip, `bd update`; exit 0 done, 1 malformed value, 2
     broken call, 3 `bd update` failed, 4 origin's `land/<id>` is absent or not at `HEAD`, 5
     `ls-remote` itself failed), `scripts/check-review-head.sh <id>` (the code-reviewer's read +
-    validate + ancestor check; 0 forward-only, 1 malformed/missing, 2 broken call, 3 unreachable = drift, 4
-    `bd show` unreadable) and `scripts/checkout-land-branch.sh <id>` (the worktree-suffixed
+    validate + ancestor check; 0 forward-only, 1 malformed/missing, 2 broken call, 3 unreachable =
+    drift, 4 `bd show` unreadable) and `scripts/checkout-land-branch.sh <id>` (the worktree-suffixed
     `checkout -B`: suffix taken from the worktree's own directory; the script runs
     `git fetch origin land/<id> trunk` itself (lode-n7g4) so a stale `FETCH_HEAD` is never read, and
     takes the tip from `FETCH_HEAD`'s own `land/<id>` line rather than from `FETCH_HEAD` as a rev,
@@ -512,8 +512,8 @@ when the `$(git rev-parse …)` it prescribes is refused (the
 [fabricated-SHA guard](#guard-against-fabricated-shas-lode-fpmi) denies a 40-hex string that is not a
 real object, but cannot tell a real one from the *right* one). For
 `nox -s eval`, run its body directly (it is CI-only and spends API credits, so only with the
-maintainer's approval, as
-[`CLAUDE.md` General Directive 10](#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
+maintainer's approval, as `CLAUDE.md`
+General Directive 10 ([reasons](#no-llm-provider-spend-without-maintainer-approval-lode-3xzy))
 defines it): `LODE_RUN_LIVE_EVAL=1 uv run --frozen pytest tests/test_eval_live.py -v` with
 `ANTHROPIC_API_KEY` set. Do **not** disguise the word — quote-splitting (`ev""al`), building it by
 expansion, or any other obfuscation: the guard exists because the shape is unverifiable, so hiding
@@ -1962,17 +1962,36 @@ which is where the trigger's briefs were silent.
 
 **How approval is recorded.** The note Directive 10 requires sits in the ticket's notes (`bd show
 <id>`) and names the command class and, if bounded, a count. "The ticket needs it" is not approval
-either. Two limits, left as they are:
+either. One limit, left as it is: bd records no author on a note that an agent can check, and the
+orchestrating session writes the maintainer's rulings to bd for them. "A maintainer note" is a
+convention an agent honours, not a fact it can verify.
 
-- bd records no author on a note that an agent can check, and the orchestrating session writes
-  the maintainer's rulings to bd for them. "A maintainer note" is a convention an agent honours,
-  not a fact it can verify.
-- A scratch `LODE_HOME` has no `config.toml` and no `models/` cache (`src/lode/config.py`). An
-  approved call there runs on default settings, so the default provider and not necessarily the
-  one the operator configured, and embedding work downloads the model weights again.
+**The interactive main session is bound too (maintainer ruling 2026-11-18, `lode-v3xd`),** as
+Directive 8 binds it for its own rule; there the approval is the maintainer's in-conversation
+instruction.
 
-**How approval is requested mid-run (builder's proposal, refined in technical review; not a
-maintainer ruling; confirmation: `lode-v3xd`).** Directive 10's "Without approval" steps are this
+**Why Directive 10's scratch-home scrub reads as it does (maintainer ruling 2026-11-18/19,
+`lode-v3xd`).**
+
+- **Not bare defaults.** A bare scratch home has no `config.toml` and no `models/` cache, so an
+  approved call would run on the default provider and re-download model weights.
+  `model_cache_dir()` is `$LODE_HOME/models` (`src/lode/config.py`, verified for this ruling), so
+  a symlinked `models/` is the real cache.
+- **Secrets are derived, not listed.** The scrub reads the `secret=True` marking in
+  `src/lode/config.py`, so a credential field added later is covered without editing the rule.
+- **Connector fields go as a group, not just secrets.** Atlassian credentials are env-var
+  primary (`LODE_JIRA_TOKEN` and the like are read before `config.toml`) and
+  `jira_active`/`confluence_active` are "enabled flag AND credentials resolve": a
+  secrets-scrubbed config still carrying `jira_enabled = true` is a live connector to the real
+  site wherever those variables are set. Dropping a base URL alone is not enough, since an empty
+  `confluence_base_url` means "infer" while an absent enabled flag defaults to off.
+  `no_egress_scopes` goes too because its rows name real hosts or projects.
+- **The group is a hand-kept list.** It was checked against `src/lode/config.py` as of this
+  ruling; a connector field added later must be added to Directive 10's list.
+  `ask_tools_enabled` is not in it, since the ruling did not name it (open: `lode-t9h1`).
+
+**How approval is requested mid-run (builder's proposal, refined in technical review; confirmed by
+the maintainer 2026-11-18, `lode-v3xd`).** Directive 10's "Without approval" steps are this
 proposal. What they leave out:
 
 - The free probe is there because the trigger was a module-load question, which `python -X
@@ -1982,7 +2001,7 @@ proposal. What they leave out:
   a reviewer's escalation), never blocking siblings.
 - A sub-agent reports upward because it has no ticket to annotate. The agent that briefed it
   chooses between the probe and the escalation.
-- Ask-and-continue is rejected for now: a headless sub-agent has no channel to the maintainer, so
+- Ask-and-continue is not taken: a headless sub-agent has no channel to the maintainer, so
   it degrades to "proceed", which is the failure.
 
 **Mechanical backstop: weighed, outcome recorded.**

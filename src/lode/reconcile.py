@@ -48,6 +48,11 @@ the tiny window between a version write and its enqueue (see ``docs/storage.md``
   produced an empty summary (Haiku returned ``""`` for a content-free note, so
   no ``summary`` row was written) is therefore correctly seen as
   current-and-done instead of being re-flagged as a gap on every scan.
+  **Externals arm (lode-4kg8):** the same triggers apply to an external's head
+  snapshot, judged against the external's *in-force* enrich job (newest across
+  its snapshots) rather than the head's own, so a head the materiality gate
+  carried forward -- which owns no job by design -- is not a gap while that
+  in-force enrichment is current. See :func:`_enrich_gap_step`.
 - ``lexical_gap`` — registered (lode-cyly). Finds live NOTE heads with zero
   ``passages_fts`` rows and heals them **inline, synchronously** — unlike
   every other step here, it does not enqueue a job at all. Chunking and the
@@ -103,6 +108,7 @@ from lode.config import Settings
 from lode.enrich import ENRICH_PROMPT_VER
 from lode.lexical import LexicalCacheBackend
 from lode.llm_provider import provider_identity
+from lode.no_egress_scope import is_no_egress_scoped
 from lode.progress import op_progress
 
 log = logging.getLogger(__name__)
@@ -302,6 +308,19 @@ register_step("embed_gap", _embed_gap_step)
 # ---------------------------------------------------------------------------
 
 
+#: A refusal-dead enrich job ``j`` that still stands (lode-g9q3): refused under
+#: the current prompt version, enrichment model and provider (lode-7jcp). Binds
+#: three parameters, ``ENRICH_PROMPT_VER``, ``settings.enrichment_llm.model``
+#: then :func:`lode.llm_provider.provider_identity`. Both arms of
+#: :func:`_enrich_gap_step` use it, so the re-open key cannot differ between
+#: notes and externals. ``IS`` rather than ``=`` keeps ``NOT (...)`` from going
+#: NULL on an unstamped row, which would silently read as "not a gap".
+_STANDING_REFUSAL_SQL = (
+    "j.refusal = 1 AND j.prompt_ver IS ? AND j.refusal_model IS ?"
+    " AND j.refusal_provider IS ?"
+)
+
+
 def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None) -> int:
     """Enrich gap: re-enqueue enrich jobs for head versions missing fresh enrichment.
 
@@ -351,9 +370,42 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
     row.  Re-enqueue after ``done``/``dead`` IS allowed (the index is scoped to
     live statuses only).
 
+    **Externals arm (lode-4kg8, lode-xuoz ruling):** an external's head snapshot
+    is a gap on the same triggers as a note head, with one difference that
+    keeps the materiality gate intact. A head snapshot that
+    :func:`lode.externals.gate_reenrich` carried forward (sub-threshold change)
+    deliberately owns *no* enrich job, so "the head has no enrich job" must not
+    be the signal. The signal is the external's **in-force enrichment job**:
+    the newest ``enrich`` job (highest ``jobs.id``) across *all* of the
+    external's snapshots, i.e. the job whose annotations the carried-forward
+    head is inheriting. The head is a gap iff that job is
+
+    - absent (never enriched) **and** the head's ``embed`` job is ``done`` --
+      the gate runs post-embed, so before that the gate may still decide;
+    - ``dead`` and not a current refusal (the note arm's exact
+      ``refusal`` / ``prompt_ver`` / ``refusal_model`` re-open rule); or
+    - ``done`` under a ``prompt_ver`` other than the current one.
+
+    A live (``pending``/``running``/``failed``) in-force job is left alone.
+    Like the note arm, ``done`` jobs record no model, so only a prompt-version
+    bump (not an ``enrichment_llm`` change) re-opens a ``done`` enrichment; an
+    ``enrichment_llm`` change re-opens a refusal-dead one. The enqueue targets
+    the head snapshot, so the new annotations anchor to current content.
+    Tombstoned-head and ``no_egress`` externals are excluded -- ``no_egress``
+    meaning the row flag *or* a ``settings.no_egress_scopes`` rule, the same
+    composition :func:`lode.enrich._resolve_enrich_target` gates egress on. A
+    scope-denied external must be filtered here: the batch route marks its
+    gated-out enrich job ``done`` without a ``prompt_ver``, which would
+    otherwise read as stale and re-enqueue on every pass.
+
     Returns the count of gap versions found (each triggered one enqueue call).
     """
     settings = settings or Settings()
+    refusal_params = (
+        ENRICH_PROMPT_VER,
+        settings.enrichment_llm.model,
+        provider_identity(settings),
+    )
     gap_versions = conn.execute(
         f"""
         SELECT n.head_version_id
@@ -381,19 +433,46 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
               WHERE j.type = 'enrich'
                 AND j.target_version = n.head_version_id
                 AND j.status = 'dead'
-                AND j.refusal = 1
-                AND j.prompt_ver = ?
-                AND j.refusal_model = ?
-                AND j.refusal_provider IS ?
+                AND {_STANDING_REFUSAL_SQL}
           )
         """,
-        (
-            ENRICH_PROMPT_VER,
-            ENRICH_PROMPT_VER,
-            settings.enrichment_llm.model,
-            provider_identity(settings),
-        ),
+        (ENRICH_PROMPT_VER, *refusal_params),
     ).fetchall()
+    external_rows = conn.execute(
+        f"""
+        SELECT i.head, i.external_id, i.source_type
+        FROM (
+            SELECT e.head_snapshot_id AS head, e.external_id, e.source_type,
+                   (SELECT j.id FROM jobs j
+                    JOIN snapshots s2 ON s2.snapshot_id = j.target_version
+                    WHERE s2.external_id = e.external_id AND j.type = 'enrich'
+                    ORDER BY j.id DESC LIMIT 1) AS jid
+            FROM externals e
+            JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id
+            WHERE s.status != 'tombstone' AND e.no_egress = 0
+        ) i
+        LEFT JOIN jobs j ON j.id = i.jid
+        WHERE (
+            j.id IS NULL
+            AND EXISTS (
+                SELECT 1 FROM jobs je
+                WHERE je.type = 'embed'
+                  AND je.target_version = i.head
+                  AND je.status = 'done'
+            )
+        )
+        OR (j.status = 'dead' AND NOT ({_STANDING_REFUSAL_SQL}))
+        OR (j.status = 'done' AND j.prompt_ver IS NOT ?)
+        """,
+        (*refusal_params, ENRICH_PROMPT_VER),
+    ).fetchall()
+    # A scope-denied external is no_egress just like a flagged one, but scope
+    # rules live in config, not on the row, so SQL cannot filter them.
+    gap_versions += [
+        (head,)
+        for head, external_id, source_type in external_rows
+        if not is_no_egress_scoped(external_id, source_type, settings.no_egress_scopes)
+    ]
 
     if not gap_versions:
         return 0

@@ -145,9 +145,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from lode import jobs
+from lode.auth import AuthError
 from lode.config import Settings
 from lode.config import lance_dir as _lance_dir
 from lode.ids import short_version_id
+from lode.llm_provider import LLMAuthError, LLMProviderError
 from lode.progress import op_progress
 from lode.sql_ids import placeholders
 
@@ -605,19 +607,6 @@ def run_one(
     handler = registry[job_type]
     short = short_version_id(target_version)
 
-    # Bound before the `try` because an `except` clause header needs the classes.
-    # Not deferred for load cost: `lode.config` (imported at module scope above)
-    # already loads lode.auth and lode.llm_provider. TODO(lode-0lls): hoist.
-    #
-    # LLMAuthError (lode-568v.3) is caught alongside
-    # AuthError -- a missing OpenAI/Azure credential is exactly as permanent,
-    # user-actionable a failure as a missing Anthropic one (lode-9yy), and
-    # lode-568v.2's tracked follow-up said this widening was needed once a
-    # second provider's credential failures had no existing exception type to
-    # preserve (docs/decisions.md).
-    from lode.auth import AuthError
-    from lode.llm_provider import LLMAuthError, LLMProviderError
-
     try:
         outcome = handler(conn, target_version, db_path, settings)
         with conn:
@@ -642,6 +631,10 @@ def run_one(
     # reach the transient accounting below: no attempts charged, no backoff,
     # never dead-lettered. Reset the claim to 'pending' (uncharged) and re-raise
     # so the caller sees build_client's actionable message.
+    #
+    # LLMAuthError (lode-568v.3) is caught alongside AuthError: a missing
+    # OpenAI/Azure credential is exactly as permanent, user-actionable a failure
+    # as a missing Anthropic one (lode-9yy; docs/decisions.md).
     #
     # Ordered ahead of `except Exception` — AuthError/LLMAuthError are both
     # RuntimeError subclasses, so the generic arm would otherwise swallow them.
@@ -877,9 +870,7 @@ def _batch_collect_enrich(
     # no enrich work at all (lode-4q97). Hygiene, not the load-bearing fix -- what
     # keeps an embed-only drain SDK-free is that neither lode.enrich nor lode.auth
     # imports an LLM SDK at module scope.
-    from lode.auth import AuthError
     from lode.enrich import collect_enrich_batch
-    from lode.llm_provider import LLMAuthError
 
     kwargs: dict = {}
     if _client is not None:
@@ -1052,12 +1043,7 @@ def _batch_submit_enrich(
         return 0
 
     # Below the early-return guard, same as _batch_collect_enrich (lode-4q97).
-    # AuthError/LLMAuthError are bound here rather than in the handler because
-    # an `except` clause header needs the classes (LLMAuthError widening,
-    # lode-568v.3 -- see run_one's identical comment).
-    from lode.auth import AuthError
     from lode.enrich import submit_enrich_batch
-    from lode.llm_provider import LLMAuthError
 
     # Pre-claim each job with an asserted CAS (rowcount == 1), exactly as
     # _claim_one does, and submit ONLY the jobs this step actually won. The
@@ -1441,8 +1427,12 @@ def _embed_handler(
 
     The sole path for async embedding after capture: capture enqueues the
     ``embed`` derive job via :func:`~lode.jobs.enqueue_derive_jobs`; this
-    handler drains it.  Deferred imports avoid paying the fastembed / LanceDB
-    cost on commands that never embed.
+    handler drains it.  Deferred imports: nothing at ``lode.worker``'s module
+    scope loads ``lode.embedding`` or ``lode.externals``, so a bare ``import
+    lode.worker`` skips their fetch stack (``httpx2`` and ``lode.vectorstore``).
+    It saves no start-up time in the ``lode`` CLI or the TUI, which have already
+    imported everything these pull in except ``lode.embedding`` itself. Neither
+    import loads fastembed or LanceDB.
 
     :func:`lode.embedding.embed` chunks the body, upserts the ``passages``
     rows, embeds each passage via the pinned local ONNX model, and replaces

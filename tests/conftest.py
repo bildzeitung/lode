@@ -232,10 +232,15 @@ from lode.fence_parsing import closes_fence, match_fence_marker
 
 #: NOT imported at runtime, deliberately (lode-pw9o): ``lode.tool_dispatch`` and
 #: ``lode.webfetch`` are needed only by ``fake_tool_turn_client`` below, and importing them
-#: at module scope costs ~55 modules and tens of ms (``httpx2`` and lode's own fetch/tool
-#: modules) at COLLECTION, in the one conftest every test module loads -- and again in each
-#: xdist worker. Measured, not assumed. They are imported inside the builder instead. The
-#: TYPE_CHECKING import below is free at runtime: on this repo's Python (>=3.14, PEP 649)
+#: at module scope would add ~55 modules (``httpx2`` and lode's own fetch/storage/tool
+#: modules) on top of this file's other imports. Deferring them pays off only on a TARGETED
+#: run of test files outside that graph, where it is a measurable share of a sub-second
+#: collection; a full-suite collection -- each xdist worker's included -- loads the graph
+#: anyway, because many test modules import it at module scope. Measured, not assumed
+#: (lode-zvzt). No test relies on these modules being absent (``_SDK_IMPORT_GRAPH`` names
+#: what ``forget_sdk_imports`` evicts). They are imported inside the builder instead.
+#:
+#: The TYPE_CHECKING import below is free at runtime: on this repo's Python (>=3.14, PEP 649)
 #: annotations are evaluated lazily, so ``StubWebFetcher``'s ``RawResponse`` annotations
 #: never resolve the name unless something actually asks for them.
 if TYPE_CHECKING:
@@ -875,7 +880,7 @@ def forget_sdk_imports(monkeypatch: pytest.MonkeyPatch) -> None:
 
     **Restoring `sys.modules` alone is not enough.** A test using this fixture may
     still legitimately re-import one of these modules (``worker.drain``, for one,
-    imports ``lode.auth`` unconditionally on every drain). Importing ``lode.X``
+    imports ``lode.enrich`` whenever it has enrich work). Importing ``lode.X``
     binds the new module object as an **attribute of the ``lode`` package** as well
     as into ``sys.modules`` -- and ``monkeypatch.delitem`` only restores the latter.
     Left unrestored, ``lode.enrich`` (the attribute) and ``sys.modules[...]`` end up
@@ -1310,11 +1315,11 @@ def load_noxfile() -> ModuleType:
 
 def project_venv_bin() -> Path:
     """The project venv's ``bin`` dir, found by the same accepted-venv rule as
-    ``noxfile._venv_tool`` (``./venv`` or ``./.venv``); fails if the running
-    interpreter is in neither."""
+    ``noxfile._venv_tool`` (``./.venv`` only); fails if the running
+    interpreter is not in it."""
     bin_dir = load_noxfile()._venv_bin()
     assert bin_dir is not None, (
-        f"sys.prefix {sys.prefix} is neither ./venv nor ./.venv of this checkout -- "
+        f"sys.prefix {sys.prefix} is not ./.venv of this checkout -- "
         "run the suite from the project venv (uv run --frozen nox ...)"
     )
     return bin_dir

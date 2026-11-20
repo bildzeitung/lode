@@ -110,9 +110,8 @@ uv run --frozen python scripts/docs_index_query.py "<terms>"
 - Run **`nox -t fix`** (and `nox -s tests`) before merging any Python change; run tests via nox, not a hand-rolled venv.
 - Dev tools are the `dev` dependency group in `pyproject.toml` (a uv default group, so no flag selects it).
 - `pyproject.toml` is the INTENT layer (ranges/floors); `uv.lock` is where exact versions live
-  for every `uv sync` / `uv run --frozen`, which never re-locks. Dependencies are frozen until
-  `lode-s09w.4` retires the older `requirements.lock`: `nox -s lock_currency` (which `/land` runs)
-  still checks both locks, and neither may move before then (`docs/decisions.md`, `lode-s09w`).
+  for every `uv sync` / `uv run --frozen`, which never re-locks, and it is the only place they
+  live. `scripts/update-deps.sh` is the sanctioned way to move it; `nox -s lock_currency` (which `/land` runs) is `uv lock --check`.
   Full split: [`docs/stack.md`](docs/stack.md#dependency-locking-lode-g2741) (`lode-g274.1`).
 
 ## Coding conventions
@@ -162,8 +161,8 @@ Full walkthrough — prerequisites (**jq** is required, not optional), the venv,
    for an existing entry describing the same root cause / incident (grep for the incident, not just
    exact wording) — entries are append-only, so two stages observing the same incident must not
    double-file. Each entry: what happened / root cause / consequence / the rule that prevents a
-   repeat. Newest first. An entry's Update bullets are append-only too: a wrong one is corrected by
-   appending another Update bullet below it, never by editing it.
+   repeat. Newest first. An entry is corrected only by appending an Update bullet, never by editing
+   it in place; a wrong Update bullet is corrected by appending another below it.
    Each workflow-stage instruction file states its own write path (a stage
    working in a worktree appends and commits normally; a stage that cannot write repo files —
    `land-review`, run in a disposable worktree that never commits, and the `bd`-only/dispatch-only
@@ -174,19 +173,26 @@ Full walkthrough — prerequisites (**jq** is required, not optional), the venv,
    `LODE_HOME`.** No agent — builder, reviewer, any other dispatched role, or a sub-agent any of
    them briefs — makes a call that reaches an LLM provider under my credentials unless I have
    approved that spend, and an approved call runs with `LODE_HOME` pointed at a scratch directory,
-   never `~/.lode`. **Reaches a provider:** `lode add`, `lode ask`, `lode work`, asking in the TUI,
-   the live eval (`nox -s eval`, or any pytest run with `LODE_RUN_LIVE_EVAL=1`), and anything else
-   that builds a provider client and sends a request. `lode reenrich` sends nothing itself but
-   queues enrich calls for the next `lode work`, so it needs approval too. **Does not:** a
-   `sys.modules` probe or `python -X importtime` in a fresh interpreter, the offline nox gates
-   (their `network`-marked tests included), and `lode` commands that never build a client.
+   never `~/.lode`. This binds the interactive main session too; there my in-conversation
+   instruction is the approval, and the scratch `LODE_HOME` still applies. **Reaches a
+   provider:** `lode add`, `lode ask`, `lode work`, asking in the TUI, the live eval (`nox -s
+   eval`, or any pytest run with `LODE_RUN_LIVE_EVAL=1`), and anything else that builds a
+   provider client and sends a request. `lode reenrich` sends nothing itself but queues enrich
+   calls for the next `lode work`, so it needs approval too. **Does not:** a `sys.modules` probe
+   or `python -X importtime` in a fresh interpreter, the offline nox gates (their
+   `network`-marked tests included), and `lode` commands that never build a client.
    **Approval** is a maintainer note on the ticket being built or reviewed naming what is
    approved; quote it in your hand-off. A ticket description or another agent's brief is not
    approval. **Without approval:** if a free probe answers the question, use it; if the work
    cannot be finished without the spend, escalate and stop by your role's escalation path, the
    note opening `ESCALATION: provider spend needed:` (a sub-agent reports the need to the agent
    that briefed it instead). **Every brief a builder or reviewer gives a sub-agent carries this
-   directive's text verbatim.** Rationale and record:
+   directive's text verbatim.** **Scratch `LODE_HOME`:** `models/` may be a symlink to the real
+   cache. `config.toml` is copied only after a scrub that drops every field `src/lode/config.py`
+   marks `secret=True` (derive the list from the marking) and the connector fields as a group:
+   `jira_enabled`, `confluence_enabled`, `jira_base_url`, `confluence_base_url`,
+   `jira_projects`, and `no_egress_scopes`. Never run a scratch home on bare defaults.
+   Rationale and record:
    [`docs/agents-workflow.md`](docs/agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
    (lode-3xzy).
 

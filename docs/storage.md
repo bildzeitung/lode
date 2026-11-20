@@ -466,7 +466,8 @@ annotation, which the head-pointer comparison flags for re-derivation. So:
   connector's refresh policy, re-enqueueing a `refresh` job for any external past its TTL
   (`docs/externals.md` "Refresh policy"). `enrich_gap` skips a refusal-dead enrich job
   while its head version, `ENRICH_PROMPT_VER` and `enrichment_llm.model` are unchanged
-  (the failure taxonomy's third class). `embed_gap`, `enrich_gap`, and `refresh_stale` each use
+  (the failure taxonomy's third class). `enrich_gap` also covers externals (lode-4kg8, see
+  `docs/externals.md` "Enrich gap for externals"). `embed_gap`, `enrich_gap`, and `refresh_stale` each use
   `enqueue_derive_jobs` with `ON CONFLICT DO NOTHING` (the ``idx_jobs_live`` live-job index), so
   running any of them repeatedly enqueues no duplicates. Runs at the start of each `lode work` drain
   pass (startup + every ``--loop`` tick).
@@ -679,6 +680,7 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
   command. The
   existing dead -> re-enqueue self-healing stays for every other dead enrich job, since it
   exists for real outages.
+  The same rule applies to an external's in-force enrich job (lode-4kg8).
 - `lode status` lists refusal-dead enrich jobs in its dead-letter output with the refusal
   category and a hint of their own; they do not get the self-healing hint, which would be
   false for them.
@@ -1825,8 +1827,8 @@ today — from ever comparing correctly either way. Both `_stale_enrichment_head
 parameter — callers pass `provider_identity(settings)`, never `settings.llm_provider` directly, so the
 convention stays consistent between the write side and this read side.
 
-**Covers notes and externals, unlike `enrich_gap`'s notes-only scope.** `enrich_gap` (above) checks
-notes only. `lode reenrich` covers both notes and externals — mirroring `lode reembed`'s and
+**Covers notes and externals, like `enrich_gap`.** `enrich_gap` (above) also covers externals
+(lode-4kg8). `lode reenrich` covers both notes and externals — mirroring `lode reembed`'s and
 `live_head_versions`'s notes-UNION-externals shape — because externals genuinely do get enriched
 (`lode.externals.py`'s material-change trigger enqueues `enrich` jobs same as notes) and
 `annotations.target` is polymorphic over both; excluding externals here would silently leave an

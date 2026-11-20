@@ -620,7 +620,7 @@ a known, accepted trade-off, not a follow-up ticket.
 > a user-set tier replaces the default whole, so it never inherits `low`, and `thinking`
 > is still never sent (`lode-3dlt`). **Measurement was deliberately skipped** for now;
 > the thinking+output token, truncation, latency and empty-`{}` rates on real notes
-> are a deferred follow-up needing maintainer credentials.
+> are a deferred follow-up needing maintainer credentials (`lode-qcth`).
 
 `lode-3dlt` named a real but then-unreachable risk on the enrichment
 forced-tool-use branch of `AnthropicProvider.structured_call` (`enrichment_llm`,

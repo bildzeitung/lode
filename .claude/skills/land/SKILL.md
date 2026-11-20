@@ -1066,7 +1066,7 @@ doc anchor, a cross-file markdown link, or a shell lint would otherwise land red
 stays a separate, explicit call: it needs network and is not part of the blessed-tag bucket scheme
 (full fiat: `docs/conventions.md`).
 
-**`nox -s lock_currency` (lode-sys4) catches a stale `requirements.lock` here — locally, before the
+**`nox -s lock_currency` (lode-sys4) catches a stale `uv.lock` here — locally, before the
 public CI badge does.** A branch that bumped a `pyproject.toml` dependency without regenerating the
 lock (or whose merge with another accepted branch this pass changed the resolved graph) fails this
 with **exit 1**, the same way a red `nox -s tests` would; treat *that* identically — **Red** below

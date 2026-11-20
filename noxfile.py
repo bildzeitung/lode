@@ -45,7 +45,7 @@ registration gate exempts them by name:
     nox -s unit            pytest -m "not slow"                     (fast inner loop, lode-pql)
     nox -s eval            pytest tests/test_eval_live.py           (the golden-set eval, CI-only)
     nox -s coverage        pytest --cov=lode --cov-report=xml ...   (coverage measurement, CI-only, lode-qxdn.3)
-    nox -s lock_currency   verify both committed locks are current  (local mirror of CI's lock-currency
+    nox -s lock_currency   verify uv.lock is current               (local mirror of CI's lock-currency
                                                                        job, lode-sys4 -- run by /land's
                                                                        re-gate so a stale lock never lands)
     nox -s build           build a wheel + sdist, assert package-data ships (packaging, not a code gate)
@@ -156,7 +156,6 @@ from pathlib import Path
 from typing import NoReturn
 
 import nox
-import nox.command
 
 nox.options.default_venv_backend = "none"
 
@@ -180,24 +179,17 @@ nox.options.sessions = [
 
 _PROJECT_ROOT = Path(__file__).parent.resolve()
 
-# The two env directories the gates accept: ``./.venv`` (uv's default, built by
-# ``uv run --frozen nox``) and the legacy ``./venv``, still accepted while the uv port is
-# mid-flight (lode-s09w) so a pre-cutover checkout's env keeps gating; the retire child
-# narrows this to ``./.venv`` only.
-_ACCEPTED_VENV_DIRS = ("venv", ".venv")
-
 
 def _venv_bin() -> Path | None:
-    """``bin`` dir of the running interpreter's env iff it is a project venv, else ``None``.
+    """``bin`` dir of the running interpreter's env iff it is the project venv, else ``None``.
 
-    Compares ``sys.prefix`` (resolved) against ``./venv`` and ``./.venv`` under this
-    file's directory. Any other env -- pipx's nox, a foreign venv, the system
-    interpreter -- yields ``None`` so ``_venv_tool`` fails closed.
+    Compares ``sys.prefix`` (resolved) against ``./.venv`` under this file's
+    directory. Any other env -- pipx's nox, a foreign venv (including a legacy
+    ``./venv``), the system interpreter -- yields ``None`` so ``_venv_tool``
+    fails closed.
     """
-    prefix = Path(sys.prefix).resolve()
-    for name in _ACCEPTED_VENV_DIRS:
-        if prefix == (_PROJECT_ROOT / name).resolve():
-            return Path(sys.prefix) / "bin"
+    if Path(sys.prefix).resolve() == (_PROJECT_ROOT / ".venv").resolve():
+        return Path(sys.prefix) / "bin"
     return None
 
 
@@ -213,9 +205,9 @@ def _venv_tool(session: nox.Session, name: str) -> str:
     at all: ``docs/stack.md``'s dependency-locking section.
 
     Tools resolve beside ``sys.executable`` only when ``sys.prefix`` is the
-    project's ``./venv`` or ``./.venv`` (``_venv_bin``); an ambient nox from any
-    other env fails the session closed, naming both accepted paths, so a pipx
-    nox can never resolve pipx's tools (lode-0yfn preserved, lode-s09w.2).
+    project's ``./.venv`` (``_venv_bin``); an ambient nox from any
+    other env fails the session closed, naming the accepted path, so a pipx
+    nox can never resolve pipx's tools (lode-0yfn preserved, lode-s09w.4).
     Fails the session loudly too if the tool isn't there. **A consequence worth
     knowing before you edit CI: any workflow running one of these sessions must
     build the project venv first** (``uv sync --locked``);
@@ -232,10 +224,9 @@ def _venv_tool(session: nox.Session, name: str) -> str:
     """
     bin_dir = _venv_bin()
     if bin_dir is None:
-        accepted = " or ".join(str(_PROJECT_ROOT / d) for d in _ACCEPTED_VENV_DIRS)
         session.error(
             f"nox is running from {sys.prefix}, which is not the project venv -- "
-            f"expected {accepted} "
+            f"expected {_PROJECT_ROOT / '.venv'} "
             "(run it as `uv run --frozen nox ...`)"
         )
     tool = bin_dir / name
@@ -457,113 +448,45 @@ def _machine_fault(session: nox.Session, why: str) -> NoReturn:
 
 @nox.session
 def lock_currency(session: nox.Session) -> None:
-    """Verify requirements.lock is still what pyproject.toml resolves to (lode-sys4).
+    """Verify uv.lock is still what pyproject.toml resolves to (lode-sys4, lode-s09w.4).
 
     Local mirror of CI's ``lock-currency`` job (``.github/workflows/tests.yml``)
     -- catches a stale lock before a GitHub Action does, and before ``/land``
     merges a branch carrying one into ``trunk`` (``.claude/skills/land/SKILL.md``
-    runs this alongside ``nox -t fix``/``nox -s tests`` in its combined re-gate).
-
-    Recompiles into a **scratch copy seeded with the current committed lock**
-    (mirrors CI's in-place recompile: uv feeds an existing output file's own
-    pins back to the resolver as its preference set by default, so an
-    unrelated upstream release alone reproduces the committed lock
-    byte-for-byte, and only a real ``pyproject.toml``-forced move changes it),
-    via the single shared ``scripts/compile-lock.sh`` -- never a second copy
-    of the ``uv pip compile`` invocation -- then diffs the scratch copy
-    against the real committed file.
-
-    Then runs ``uv lock --check`` against the committed ``uv.lock``, which
-    coexists with ``requirements.lock`` until lode-s09w's retire child lands.
+    runs this, last, in its combined re-gate). It is ``uv lock --check`` and
+    nothing else: ``uv.lock`` is the only place exact versions live.
 
     Kept OUT of the default ``nox`` session set (like ``eval``/``build``):
-    this needs network (PyPI) to resolve, so a bare ``nox`` / ``nox -s tests``
-    stays offline.
+    this needs ``uv`` and, to re-resolve, PyPI, so a bare ``nox`` /
+    ``nox -s tests`` stays offline.
 
-    **Fails closed** if ``uv`` is not on PATH, per this ticket's decided
-    offline/uv-absent behaviour (docs/stack.md, lode-g2741): a silently
-    skipped lock check is worse than a noisy one here, since the alternative
-    is a stale lock landing on ``trunk`` unnoticed until the public CI badge
-    catches it later.
+    **Fails closed** if ``uv`` is not on PATH (docs/stack.md, lode-g2741): a
+    silently skipped lock check is worse than a noisy one here.
 
     **Failing closed is not the same as failing indistinguishably** -- so the
     two failure kinds carry two different exit statuses, exactly as
     ``scripts/validate-mermaid.sh`` does (lode-9i2p):
 
-    - **exit 1 -- CONTENT.** A committed lock (either one) genuinely disagrees
-      with what ``pyproject.toml`` resolves to. Some branch's diff caused this;
+    - **exit 1 -- CONTENT.** ``uv.lock`` genuinely disagrees with what
+      ``pyproject.toml`` resolves to. Some branch's diff caused this;
       ``/land`` may isolate and bounce on it.
-    - **exit 2 -- MACHINE.** The gate could not run: ``uv`` is absent,
-      ``scripts/compile-lock.sh`` could not resolve at all (PyPI unreachable, a
-      5xx, DNS), or ``uv lock --check`` exited with anything but its own
-      "needs to be updated" status. This says *nothing* about the content
-      being gated, and ``/land`` must stop the pass rather than isolate -- otherwise a transient
-      network blip bounces (and deletes) every reviewed branch in the pass,
-      each with a fabricated "stale lock" finding. That distinction matters
-      more here than for any other gate this repo has: unlike ``nox -t
-      fix``/``nox -s tests`` (the offline, keyless default set), this one needs
-      ``uv`` present and PyPI reachable on *every* invocation, so its machine
-      fault is a live possibility on the one machine that writes ``trunk``.
+    - **exit 2 -- MACHINE.** The gate could not run: ``uv`` is absent, or
+      ``uv lock --check`` exited with anything but its own "needs to be
+      updated" status (unreachable index, no interpreter, ...). This says
+      *nothing* about the content being gated, and ``/land`` must stop the
+      pass rather than isolate -- otherwise a transient network blip bounces
+      (and deletes) every reviewed branch in the pass, each with a fabricated
+      "stale lock" finding.
     """
     if shutil.which("uv") is None:
         _machine_fault(
             session,
-            "'uv' not found on PATH -- cannot verify requirements.lock "
-            "currency locally (fails closed, lode-sys4). Install uv "
-            "(pip install -U uv) and re-run. CI's lock-currency job "
+            "'uv' not found on PATH -- cannot verify uv.lock currency locally "
+            "(fails closed, lode-sys4). Install uv "
+            "(https://docs.astral.sh/uv/) and re-run. CI's lock-currency job "
             "(tests.yml) still catches a stale lock on push, but only after "
             "this local gate was skipped.",
         )
-    with tempfile.TemporaryDirectory() as tmp:
-        candidate = Path(tmp) / "requirements.lock"
-        candidate.write_bytes(Path("requirements.lock").read_bytes())
-        try:
-            # -q: uv pip compile otherwise echoes the ENTIRE compiled lock
-            # (every package + every hash, ~2500 lines) to stdout on top of
-            # writing -o -- which would bury the surrounding gate output
-            # /land reads to decide which branch to bounce. uv strips -q from
-            # the header comment it autogenerates, so the byte-for-byte diff
-            # below is unaffected.
-            session.run(
-                "scripts/compile-lock.sh", "-q", "-o", str(candidate), external=True
-            )
-        except nox.command.CommandFailed:
-            _machine_fault(
-                session,
-                "scripts/compile-lock.sh could not resolve pyproject.toml -- "
-                "PyPI unreachable, a 5xx, or a DNS failure (its own output "
-                "above names the cause). The committed lock has NOT been shown "
-                "to be stale.",
-            )
-        # uv's autogenerated header comment records the literal `-o PATH` it
-        # was invoked with -- normalize the leaked scratch path back to the
-        # real committed filename before diffing, same as
-        # scripts/update-deps.sh's own candidate-promotion step does, or
-        # every run would show a spurious header-only diff regardless of
-        # whether the actual dependency set changed.
-        candidate.write_text(
-            candidate.read_text().replace(str(candidate), "requirements.lock")
-        )
-        diff = subprocess.run(
-            [
-                "git",
-                "diff",
-                "--no-index",
-                "--quiet",
-                "requirements.lock",
-                str(candidate),
-            ],
-            check=False,  # non-zero means "lock is stale" -- inspected below, not an error to raise
-        )
-        if diff.returncode != 0:
-            # session.error -> nox exit 1: a CONTENT failure, the one status
-            # /land is allowed to attribute to a branch and bounce on.
-            session.error(
-                "requirements.lock is STALE -- pyproject.toml resolves to "
-                "something different than the committed lock. Run "
-                "scripts/update-deps.sh (or scripts/compile-lock.sh -o "
-                "requirements.lock) and commit the regenerated lock."
-            )
     # uv's own exit status carries the content/machine split (measured on uv
     # 0.11.7): 1 is "the lockfile needs to be updated"; 2 is everything that
     # stopped it deciding -- no usable interpreter, an unreachable index, a
@@ -572,9 +495,7 @@ def lock_currency(session: nox.Session) -> None:
     if uv_check.returncode == 1:
         session.error(
             "uv.lock is STALE -- pyproject.toml no longer matches the committed "
-            "uv.lock. Run `uv lock` and commit it; until lode-s09w's retire "
-            "child lands, its runtime pins must still equal requirements.lock's "
-            "(tests/test_uv_lock_parity.py)."
+            "uv.lock. Run `uv lock` (or scripts/update-deps.sh) and commit it."
         )
     elif uv_check.returncode != 0:
         _machine_fault(
