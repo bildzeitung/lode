@@ -557,7 +557,9 @@ def run_one(
 
     - Handler succeeds → ``status='done'``. For ``type='enrich'`` the same
       UPDATE also stamps ``prompt_ver`` to the current
-      :data:`lode.enrich.ENRICH_PROMPT_VER` (lode-q47) — this is the "job
+      :data:`lode.enrich.ENRICH_PROMPT_VER` (lode-q47), unless the handler
+      returned ``None`` (a gated-out skip), which leaves it NULL
+      (lode-tkdy) — this is the "job
       identity" half of the ``(type, target_version, prompt_ver)`` key
       ``docs/storage.md`` documents; :mod:`lode.reconcile`'s enrich-gap step
       reads it back to decide whether a ``done`` job is current. ``embed``
@@ -610,7 +612,12 @@ def run_one(
     try:
         outcome = handler(conn, target_version, db_path, settings)
         with conn:
-            if job_type == "enrich":
+            if job_type == "enrich" and outcome is not None:
+                # A None outcome is enrich_version's skip signal (no_egress,
+                # tombstone/purged, target missing -- its only None returns);
+                # a gated-out job stays prompt_ver NULL, like
+                # lode.enrich.submit_enrich_batch's skip path, so reconcile
+                # reads it as stale once the gate lifts (lode-tkdy).
                 # Deferred import, as in _enrich_handler below: lode.worker
                 # imports lode.enrich only when there is enrich work.
                 from lode.enrich import ENRICH_PROMPT_VER

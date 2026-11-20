@@ -1275,6 +1275,25 @@ def test_submit_enrich_batch_returns_batch_id(
     assert result_id == "batch-xyz"
 
 
+def test_submit_enrich_batch_gated_out_job_leaves_prompt_ver_null(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """A no_egress job ends 'done' with prompt_ver NULL, like the immediate route (lode-tkdy)."""
+    _insert_note(conn, no_egress=1)
+    job_id = _insert_enrich_job(conn)
+
+    client = fake_batch_client(batch_id="batch-xyz")
+    assert (
+        submit_enrich_batch(
+            conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
+        )
+        is None
+    )
+    assert conn.execute(
+        "SELECT status, prompt_ver FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone() == ("done", None)
+
+
 def test_submit_enrich_batch_passes_anthropic_call_timeout_to_create(
     conn: sqlite3.Connection,
 ) -> None:

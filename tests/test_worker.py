@@ -312,13 +312,30 @@ def test_run_enrich_success_stamps_prompt_ver(
     job_id = _insert_job(conn, "enrich", "ver-1")
     _claim_one(conn, ("enrich",), _now_iso())
     noop_enrich_registry: dict[str, HandlerFn] = {
-        "enrich": lambda conn, tv, db, s: None
+        "enrich": lambda conn, tv, db, s: "enriched"
     }
     ok = run_one(conn, job_id, db_path, settings, noop_enrich_registry)
     assert ok is True
     row = _job(conn, job_id)
     assert row["status"] == "done"
     assert row["prompt_ver"] == ENRICH_PROMPT_VER
+
+
+def test_run_enrich_gated_out_job_leaves_prompt_ver_null(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A skipped (None-outcome) enrich job ends 'done' with prompt_ver NULL (lode-tkdy).
+
+    Same state as lode.enrich.submit_enrich_batch's skip path, so reconcile
+    reads it as stale and re-opens the target once the gate lifts.
+    """
+    job_id = _insert_job(conn, "enrich", "ver-1")
+    _claim_one(conn, ("enrich",), _now_iso())
+    skipping_registry: dict[str, HandlerFn] = {"enrich": lambda conn, tv, db, s: None}
+    assert run_one(conn, job_id, db_path, settings, skipping_registry) is True
+    row = _job(conn, job_id)
+    assert row["status"] == "done"
+    assert row["prompt_ver"] is None
 
 
 def test_run_appends_handler_outcome_to_outcomes_sink(
