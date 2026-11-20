@@ -6504,13 +6504,12 @@ entries below from being rewritten to chase the current tree.)
 
 Raised 2026-11-20 while bumping the pin to 9.8.1 (`lode-1pnt`). Upstream mkdocs-material is in
 maintenance mode and reaches end of life on 2027-05-05; its stated successor is Zensical. The 9.8.1
-bump buys security fixes until then and does not settle the question. **Open** (`lode-3vet`): stay
-on 9.8.x past the EOL date (accepting no further fixes), or migrate the docs site to Zensical (or
-another generator) before it. Nothing is decided. Whoever picks it up should first check what a
-successor has to carry. In `mkdocs.yml`: the `docs/overrides` theme `custom_dir`, the `toc` slugify
-callable (`lode.docs_slug.github_slugify`), the `validation:` block and the `search` plugin. Outside
-it: the strict build (`nox -s docs`, `docs.yml`) and the Mermaid pre-render in
-`scripts/build_docs_site.py`.
+bump buys security fixes until then. **Open** (`lode-3vet`): stay on 9.8.x past the EOL date
+(accepting no further fixes), or migrate the docs site to Zensical (or another generator) before
+it. Whoever picks it up should first check what a successor has to carry. In `mkdocs.yml`: the
+`docs/overrides` theme `custom_dir`, the `toc` slugify callable (`lode.docs_slug.github_slugify`),
+the `validation:` block and the `search` plugin. Outside it: the strict build (`nox -s docs`,
+`docs.yml`) and the Mermaid pre-render in `scripts/build_docs_site.py`.
 
 ## The anthropic SDK's native OpenTelemetry tracing: leave on or disable (open, lode-sflg)
 
@@ -6522,5 +6521,4 @@ non-recording and no trace header is added to a request. It would emit only if a
 were installed into lode's environment and a tracer provider registered; span content stays
 metadata-only unless `ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE=content` is also set. That path
 is outside the [egress log](externals.md#egress-log-auditability). **Open** (`lode-sflg`): leave
-the SDK default, or pass `open_telemetry=False` where lode constructs its Anthropic client. Nothing
-is decided.
+the SDK default, or pass `open_telemetry=False` where lode constructs its Anthropic client.

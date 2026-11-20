@@ -1405,9 +1405,9 @@ def hf_hub_offline() -> bool:
     Read directly rather than imported -- ``fastembed`` does not expose this
     as a reusable helper (``ModelManagement.download_model`` in
     ``fastembed/common/model_management.py`` inlines it) -- and must stay the
-    same truthy set ``fastembed`` itself
-    checks, or a caller's offline branch would misclassify a failure
-    ``fastembed`` would not actually have treated as offline.
+    same truthy set ``fastembed`` itself checks, or a caller's offline branch
+    would misclassify a failure ``fastembed`` would not actually have treated
+    as offline.
 
     Shared by :mod:`lode.cli` (:func:`_warm`'s offline/cold-cache branch,
     ``lode-96t``) and :mod:`lode.embedding` (:func:`resolve_model_revision`'s
