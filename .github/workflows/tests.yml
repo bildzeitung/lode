@@ -78,9 +78,13 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install uv
-        # Same exact-pinned setup-uv step as the `tests` job below, so the job gating
-        # uv.lock currency runs the same uv build as the job installing from it.
-        # `enable-cache: false` matches it (lode-3vrq).
+        # The `tests` job's setup-uv step (rationale there), so the job gating uv.lock
+        # currency gets uv the way the job installing from it does. That is the same
+        # action release, not a pinned uv: each job resolves the latest uv on its own
+        # (docs/stack.md#dependency-locking-lode-g2741). No setup-python step:
+        # `uv lock --check` needs an interpreter and fetches the one .python-version
+        # names itself (a 35 MiB managed CPython, under a second on this step's first
+        # CI run).
         uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: false

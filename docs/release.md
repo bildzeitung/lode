@@ -243,27 +243,26 @@ byte-identical across the three, deliberately; and every job in the repo carries
   OS/arch/python-version/dependency-file-hash, not the workflow name, so enabling it on `release.yml`
   would restore a cache `build.yml` populated on `trunk` rather than build a fresh one — taking the
   publishing leg's dependencies from a non-publishing workflow's cache is exactly what the clean-room
-  framing exists to avoid. Distinct again from the `pip install -U uv` bootstrap — the
-  `tests` job and `coverage.yml` ran it until `lode-s09w.2`, and `tests.yml`'s `lock-currency` job until `lode-1qmo` —
-  which skips `cache: pip` for a third reason — and **not** because the cache would sit empty
-  (lode-81w0). The work after it runs through `uv` (its own `~/.cache/uv`), but the bootstrap itself
-  *is* a real pip download — a 22 MB wheel from PyPI (measured: uv 0.12.0, linux x86_64) — so a
-  pip cache there would have something to hold. **Caching is deliberately left off anyway**: a
-  restored GitHub Actions cache entry that size is not obviously cheaper than fetching the wheel
-  fresh each run, and nothing has measured otherwise. Reopen it only on a cold-vs-cached CI
-  comparison; the question and the wheel measurement are recorded at lode-3vrq. Enabling it would
-  also need an explicit `cache-dependency-path`, since the job has no `requirements.txt` for
-  `setup-python`'s default glob to match (`build.yml` points its cache at `pyproject.toml` for the
-  same reason). As with the timeout ladder, this is not a runtime call: release runs measure 14-30s
-  of job time regardless (lode-le9e).
+  framing exists to avoid. Distinct again from the `pip install -U uv` bootstrap, which no workflow
+  runs any more: the `tests` job and `coverage.yml` dropped it in `lode-s09w.2`, `tests.yml`'s
+  `lock-currency` job in `lode-1qmo`. It skipped `cache: pip` for a third reason — and **not**
+  because the cache would have sat empty (lode-81w0). The bootstrap was a real pip download, a
+  22 MB wheel from PyPI (measured: uv 0.12.0, linux x86_64), so a pip cache there would have had
+  something to hold; caching stayed off because a restored GitHub Actions cache entry that size is
+  not obviously cheaper than fetching the wheel fresh each run, and nothing measured otherwise.
+  That question and the wheel measurement are recorded at lode-3vrq, and the question carries over
+  to the `setup-uv` steps in the next bullet. As with the timeout ladder, declining the cache on
+  `release.yml` is not a runtime call: release runs measure 14-30s of job time regardless
+  (lode-le9e).
 - **The uv-built legs take the same no-cache stance, and have to spell it out (`lode-s09w.2`).**
   `tests.yml`'s `tests` job, `coverage.yml` and `docs.yml` have no `setup-python` step: they install
   uv with `astral-sh/setup-uv` and build `./.venv` with `uv sync --locked`. That
   action's `enable-cache` input defaults to `auto`, which is **on** for GitHub-hosted runners — the
   first push of these workflows without the input saved a 222 MB `setup-uv-*` cache entry — so each
-  of the three steps sets `enable-cache: false`. No run has compared restoring an entry that size
-  with downloading the wheels fresh, which is the same open question as lode-3vrq; reopen it on the
-  same comparison.
+  of the three steps sets `enable-cache: false`, as does `tests.yml`'s `lock-currency` job, which
+  installs uv with the same step but builds no `./.venv` (`lode-1qmo`). No run has compared
+  restoring an entry that size with downloading the wheels fresh, which is the same open question
+  as lode-3vrq; reopen it only on a cold-vs-cached CI comparison.
 
 ## Packaging assertion is a single implementation, shared by both workflows (lode-zuqp)
 

@@ -343,8 +343,9 @@ Every caller below goes through `uv lock`:
   `origin/trunk` with no branch involved at all. `lock_currency` fails the same soundness test for a
   different reason: it asks whether the committed lock is a fixed point of the tree **plus the
   ambient `uv` plus today's PyPI** — an answer that can flip with no branch involved (a `uv` release
-  that changes the emitted format; `uv` is installed unpinned via `pip install -U uv`, so the
-  lander's resolver can differ from the one that produced the committed lock). So `/land` runs
+  that changes the emitted format; `uv` is unpinned — CI's `setup-uv` installs the latest release,
+  a dev machine runs whatever is on `PATH` — so the lander's resolver can differ from the one that
+  produced the committed lock). So `/land` runs
   **both** gates once on bare `origin/trunk` before entering the loop: red on either one there means
   the failure predates every branch in the set and is not attributable to any of them — stop the
   pass, don't isolate. (`tests/conftest.py` also scrubs the specific ambient colour/tty env vars
