@@ -1968,10 +1968,9 @@ convention an agent honours, not a fact it can verify.
 
 **The interactive main session is bound too (maintainer ruling 2026-11-18, `lode-v3xd`),** as
 Directive 8 binds it for its own rule; there the approval is the maintainer's in-conversation
-instruction. A sub-agent it briefs holds approval only by that quote: the main session may quote
-the maintainer's in-conversation approval verbatim in the brief, and the quote counts as approval
-for the spend it names (maintainer ruling 2026-11-20, `lode-t9h1`). This amends "another agent's
-brief is not approval" for this one case; the scratch `LODE_HOME` rule still binds the sub-agent.
+instruction. Directive 10's exception for an approval the main session quotes verbatim into a
+sub-agent's brief is a maintainer ruling of 2026-11-20 (`lode-t9h1`). It amends "another agent's
+brief is not approval" for that one case only.
 
 **Why Directive 10's scratch-home scrub reads as it does (maintainer ruling 2026-11-18/19,
 `lode-v3xd`).**
@@ -1980,6 +1979,10 @@ brief is not approval" for this one case; the scratch `LODE_HOME` rule still bin
   approved call would run on the default provider and re-download model weights.
   `model_cache_dir()` is `$LODE_HOME/models` (`src/lode/config.py`, verified for this ruling), so
   a symlinked `models/` is the real cache.
+- **No `~/.lode/config.toml` is the one exception (maintainer ruling 2026-11-20, `lode-t9h1`).**
+  `load_settings` treats a missing file as valid, so there is no config to scrub or copy and
+  default settings are what the operator runs on too. This concerns the config only: `models/`
+  can still be symlinked.
 - **Secrets are derived, not listed.** The scrub reads the `secret=True` marking in
   `src/lode/config.py`, so a credential field added later is covered without editing the rule.
 - **Connector fields go as a group, not just secrets.** Atlassian credentials are env-var
@@ -1990,14 +1993,14 @@ brief is not approval" for this one case; the scratch `LODE_HOME` rule still bin
   `confluence_base_url` means "infer" while an absent enabled flag defaults to off.
   `no_egress_scopes` goes too because its rows name real hosts or projects. Its `source_type='web'`
   rows are also the operator's egress denials (enrich, cited Q&A and the Ask fetch tool refuse a
-  host they name), so a scrubbed home has none of them; maintainer ruling 2026-11-20
-  (`lode-t9h1`): the scrub stays whole and a scratch run is never fed a real link.
-- **No `~/.lode/config.toml`.** `load_settings` treats a missing file as valid, so there is
-  nothing to scrub or copy and bare defaults are correct (`lode-t9h1`, 2026-11-20).
+  host they name), so a scrubbed home has none of them. The scrub stays whole all the same, which
+  is why Directive 10 forbids feeding a scratch run a real link (maintainer ruling 2026-11-20,
+  `lode-t9h1`).
 - **The group is a hand-kept list.** It was checked against `src/lode/config.py` as of this
   ruling; a connector field added later must be added to Directive 10's list.
-  `ask_tools_enabled` is not in it, by maintainer ruling 2026-11-20 (`lode-t9h1`): with the
-  connector flags dropped it offers no Atlassian tool and is copied through.
+  `ask_tools_enabled` is not in it (maintainer ruling 2026-11-20, `lode-t9h1`). With the
+  connector flags dropped it offers no JIRA or Confluence search tool; the public-web `fetch`
+  tool it still offers the Q&A call runs with none of the host denials above.
 
 **How approval is requested mid-run (builder's proposal, refined in technical review; confirmed by
 the maintainer 2026-11-18, `lode-v3xd`).** Directive 10's "Without approval" steps are this

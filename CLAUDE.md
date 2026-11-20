@@ -183,9 +183,10 @@ Full walkthrough — prerequisites (**jq** is required, not optional), the venv,
    `network`-marked tests included), and `lode` commands that never build a client.
    **Approval** is a maintainer note on the ticket being built or reviewed naming what is
    approved; quote it in your hand-off. A ticket description or another agent's brief is not
-   approval, with one exception: in the interactive main session the main session may quote my
-   in-conversation approval verbatim in a sub-agent's brief, and that quoted approval counts for
-   the spend it names (the scratch `LODE_HOME` rule still binds the sub-agent). **Without approval:** if a free probe answers the question, use it; if the work
+   approval, with one exception: the interactive main session may quote my in-conversation
+   approval verbatim in a sub-agent's brief, and that quoted approval counts as approval for the
+   spend it names (the scratch `LODE_HOME` rule still binds the sub-agent).
+   **Without approval:** if a free probe answers the question, use it; if the work
    cannot be finished without the spend, escalate and stop by your role's escalation path, the
    note opening `ESCALATION: provider spend needed:` (a sub-agent reports the need to the agent
    that briefed it instead). **Every brief a builder or reviewer gives a sub-agent carries this
