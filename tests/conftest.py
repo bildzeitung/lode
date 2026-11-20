@@ -875,7 +875,7 @@ def forget_sdk_imports(monkeypatch: pytest.MonkeyPatch) -> None:
 
     **Restoring `sys.modules` alone is not enough.** A test using this fixture may
     still legitimately re-import one of these modules (``worker.drain``, for one,
-    imports ``lode.auth`` unconditionally on every drain). Importing ``lode.X``
+    imports ``lode.enrich`` whenever it has enrich work). Importing ``lode.X``
     binds the new module object as an **attribute of the ``lode`` package** as well
     as into ``sys.modules`` -- and ``monkeypatch.delitem`` only restores the latter.
     Left unrestored, ``lode.enrich`` (the attribute) and ``sys.modules[...]`` end up

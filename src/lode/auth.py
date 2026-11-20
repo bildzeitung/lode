@@ -39,8 +39,8 @@ class AuthError(RuntimeError):
     Deliberately a plain :class:`RuntimeError` subclass with no SDK dependency, so
     that **importing this module costs nothing** (lode-4q97). Most callers import it
     only to *catch* the error, on paths that may never touch Anthropic at all --
-    :func:`lode.worker.drain` does so unconditionally on every drain, including a
-    credential-free, embed-only one whose embeds come from the local fastembed
+    :mod:`lode.worker` does so at module scope, so every drain loads it, including
+    a credential-free, embed-only one whose embeds come from the local fastembed
     model. So ``import anthropic`` (~0.32s) lives inside :func:`build_client`, never
     at module level.
     """

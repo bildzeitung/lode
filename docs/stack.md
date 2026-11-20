@@ -399,7 +399,7 @@ and untouched (epic scope, decided 2026-07-22).
 The seam lives in a **new module, `src/lode/llm_provider.py`** — not folded into `src/lode/auth.py`.
 `auth.py`'s own docstring already treats staying cheap to import as load-bearing (`lode-4q97`):
 `import anthropic` is deferred inside `build_client()` because most callers (e.g.
-`lode.worker.drain`, unconditionally) import the module only to *catch* `AuthError`, on paths that
+`lode.worker`, at module scope) import the module only to *catch* `AuthError`, on paths that
 may never touch Anthropic at all. A seam that can construct **either** vendor's SDK client behind
 one factory has strictly more reason to keep that import discipline, and a fresh module keeps it
 from being re-litigated every time a provider is added. `auth.py`'s exact fate (kept as an internal
