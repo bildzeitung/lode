@@ -671,7 +671,9 @@ def status(db: _DbOption = None) -> None:
             "or external pages (listed above). A refusal is final for that "
             "note version or page snapshot: it is not retried until the note "
             "is edited or the page changes materially, the enrichment prompt "
-            "version changes, or enrichment_llm is changed.",
+            "version changes, or the enrichment model (enrichment_llm.model) "
+            "changes -- changing only reasoning_effort or max_tokens does not "
+            "retry it.",
             highlight=False,
         )
     if dead_self_healing:

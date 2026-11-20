@@ -7525,3 +7525,8 @@ def test_status_lists_refusal_dead_enrich_job_with_category(
     assert "refused by the model (category: cyber)" in out
     assert "self-healing" not in out
     assert "No action needed." not in out
+    # lode-eq9t: the third re-open trigger is the model, not any enrichment_llm
+    # change (reasoning_effort/max_tokens do not re-open a refusal).
+    assert "the enrichment model (enrichment_llm.model) changes" in out
+    assert "enrichment_llm is changed" not in out
+    assert "reasoning_effort or max_tokens does not retry it" in out
