@@ -6500,11 +6500,27 @@ entries below from being rewritten to chase the current tree.)
     `ENRICH_PROMPT_VER` the batch was submitted with: the batch route reads both at collect time
     too, and item 3's ruling names only the model. Open in `lode-ucpu`, which blocks `lode-4wgq`.
 
-## mkdocs-material is in maintenance mode: stay or migrate (open, lode-1pnt)
+## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 
 Raised 2026-11-20 while bumping the pin to 9.8.1 (`lode-1pnt`). Upstream mkdocs-material is in
 maintenance mode and reaches end of life on 2027-05-05; its stated successor is Zensical. The 9.8.1
-bump buys security fixes until then and does not settle the question. **Open:** stay on 9.8.x past
-the EOL date (accepting no further fixes), or migrate the docs site to Zensical (or another
-generator) before it. Nothing is decided; whoever picks it up should check `mkdocs.yml`'s plugin and
-hook use (`lode.docs_slug`, the strict build, the mermaid pre-render) against the successor first.
+bump buys security fixes until then and does not settle the question. **Open** (`lode-3vet`): stay
+on 9.8.x past the EOL date (accepting no further fixes), or migrate the docs site to Zensical (or
+another generator) before it. Nothing is decided. Whoever picks it up should first check what a
+successor has to carry. In `mkdocs.yml`: the `docs/overrides` theme `custom_dir`, the `toc` slugify
+callable (`lode.docs_slug.github_slugify`), the `validation:` block and the `search` plugin. Outside
+it: the strict build (`nox -s docs`, `docs.yml`) and the Mermaid pre-render in
+`scripts/build_docs_site.py`.
+
+## The anthropic SDK's native OpenTelemetry tracing: leave on or disable (open, lode-sflg)
+
+Raised 2026-11-20 at `lode-1pnt`'s review. The lock refresh moved anthropic 1.4.0 to 1.17.0, which
+traces every API call through OpenTelemetry by default (`lode-4uyu`'s audit dates the feature to
+1.14.0), so `opentelemetry-api` is now a locked dependency that `import anthropic` loads. Measured
+against the locked environment, it is inert: no OpenTelemetry SDK is installed, so the spans are
+non-recording and no trace header is added to a request. It would emit only if an SDK and exporter
+were installed into lode's environment and a tracer provider registered; span content stays
+metadata-only unless `ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE=content` is also set. That path
+is outside the [egress log](externals.md#egress-log-auditability). **Open** (`lode-sflg`): leave
+the SDK default, or pass `open_telemetry=False` where lode constructs its Anthropic client. Nothing
+is decided.

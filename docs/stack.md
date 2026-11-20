@@ -1006,8 +1006,12 @@ deciding factors were:
   Node/Chromium toolchain, per [`CLAUDE.md`](../CLAUDE.md)) and Hugo/Zola (not Python, and a second
   static-site toolchain the venv/lock already cover for nothing).
 
-**Dependency**: `mkdocs-material>=9.5,<10` in the `dev` dependency group in `pyproject.toml` (`lode-fhql.20`,
-2026-08-14 — **reverses** the original decision below to put it in its own CI-only `docs` extra).
+**Dependency**: `mkdocs-material`, pinned exactly (`==`, `lode-fhql.9`), in the `dev` dependency
+group in `pyproject.toml` (`lode-fhql.20`, 2026-08-14 — **reverses** the original decision below to
+put it in its own CI-only `docs` extra). Upstream reaches end of life on 2027-05-05; whether to stay
+or migrate is
+[open](decisions.md#mkdocs-material-is-in-maintenance-mode-stay-or-migrate-open-lode-3vet)
+(`lode-3vet`).
 The original premise was that the docs build had no local value (`lode-fhql.9`'s Pages workflow
 builds the site; no local `dev` install needs it) — that premise broke the same day a local `mkdocs
 serve` (run ad hoc for `lode-fhql.13`'s favicon sign-off) immediately surfaced two broken intra-doc
