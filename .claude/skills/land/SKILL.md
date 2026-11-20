@@ -253,7 +253,7 @@ with git merges and pushes), so I follow the bd-sync discipline strictly (see
 **Refuse to start unless I am actually in the main checkout (lode-pcee) — asserted once, up front,
 as a precondition of the whole block rather than as a `-C` bolted onto individual commands.**
 `-C "$(git rev-parse --show-toplevel)"` is not a guard: in a worktree it resolves to that worktree
-(history: [docs/agents-workflow.md](../../../docs/agents-workflow.md#mechanics-decided)).
+(history: [docs/agents-workflow.md](../../../docs/agents-workflow.md#land-design-history-lode-w18a8)).
 `--git-common-dir` is the mechanism that actually distinguishes the main checkout from a linked
 worktree: every worktree of a repo (main checkout included) shares one common `.git` directory, and
 only the **main checkout's own toplevel** is that directory's parent — a linked worktree's toplevel

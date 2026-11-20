@@ -4287,22 +4287,20 @@ those entries point there rather than copy.
   already vanished. It is now `scripts/land-merge-one.sh`, which reads `MSG_DIR` files and returns
   conflict paths over stdout instead of a global `$CONFLICTS`. The skill keeps the script pointer and
   the 0/1/2 exit-code contract.
-- **Inline lock was inert (lode-aps3).** The lock used to be managed inline in Section 0: the release
-  fired the instant that block's own shell exited, before Section 1 ran, and the stale-lock reclaim
-  judged liveness from a PID that is always already dead by the time a later block reads it. Both
-  halves moved to `scripts/land-lock.sh` with a staleness token; see the single-lander-lock bullet in
+- **Inline lock was inert (lode-aps3).** Section 0 used to manage the lock inline, and it never held
+  past its own fenced block. The account, and the staleness-token replacement in
+  `scripts/land-lock.sh`, are in the single-lander-lock bullet of
   [Mechanics (decided)](#mechanics-decided). The skill keeps "Lock lives in `scripts/land-lock.sh`,
   as a staleness token; `tests/test_land_lock.py` pins the call sites".
 - **Empty-`accepted` guard conflated missing and empty (lode-0jan).** Section 3's guard used to abort
   identically for a missing `$STATE_DIR/accepted` (3a never ran) and an empty one (every branch left
   the set legitimately). The distinction is recorded under Mechanics (decided); the skill keeps the
   missing-vs-empty rule.
-- **`-C "$(git rev-parse --show-toplevel)"` was not a guard (lode-pcee).** Section 1 ran only `git
-  checkout -f trunk` through it. `--show-toplevel` resolves relative to cwd, so in the main checkout
-  it re-states the cwd and in a worktree it resolves to that worktree's own root; it never redirects.
-  The destructive `reset --hard` two lines later carried no `-C` at all. Full account under
-  [Mechanics (decided)](#mechanics-decided). The skill keeps "`-C "$(git rev-parse
-  --show-toplevel)"` is not a guard: in a worktree it resolves to that worktree".
+- **`-C "$(git rev-parse --show-toplevel)"` was not a guard (lode-pcee).** Section 1 used to run
+  `git checkout -f trunk` through it, and the `reset --hard` two lines later carried no `-C` at all.
+  The account is the lode-pcee bullet of [Mechanics (decided)](#mechanics-decided). The skill keeps
+  "`-C "$(git rev-parse --show-toplevel)"` is not a guard: in a worktree it resolves to that
+  worktree".
 - **Explicit fence guard removed from Section 3 (lode-1nty, reversing lode-pxyt).** `land-merge-one.sh`
   asserts the main checkout itself as its first real action, so the Green loop's fenced
   `assert-main-checkout.sh` call is no longer needed; both call sites are protected by construction.
@@ -4318,20 +4316,19 @@ those entries point there rather than copy.
   (lode-b8sr replaced the pipeline with a redirect so the script's exit status is not swallowed).
   The skill's comment is now just `# visibility`.
 - **`git clean -fd` ran only in the failure branch (lode-3v1p).** In the recycled-worktree guard's
-  blind-spot case the remediation's `git clean -fd` used to run only inside the failed-check branch,
-  so it never fired there, and the recycled worktree's untracked leftovers survived to trip Section
-  4's dirty-tree guard (lode-9hgu), leaking the worktree anyway. It now runs unconditionally right
-  after the ancestor check at all three guard sites (`coding.md`, `code-reviewer.md`,
-  `land-review.md`), still scoped to `.claude/worktrees/` by the same `case`. Nothing in Section 4
-  changed; the fix lives at the dispatch-time guard. See
-  [Recycled-worktree guard](#recycled-worktree-guard-lode-nt98) and the lode-3v1p entry in
-  [decisions.md](decisions.md).
+  blind-spot case the clean never fired, so untracked leftovers tripped Section 4's dirty-tree guard
+  (lode-9hgu) and leaked the worktree. It now runs unconditionally. Nothing in Section 4 changed;
+  the fix lives at the dispatch-time guard. The account is in
+  [Recycled-worktree guard](#recycled-worktree-guard-lode-nt98) and
+  [Isolating `land-review` dispatches](#isolating-land-review-dispatches-lode-g387), with the
+  reasoning in the lode-3v1p entry in [decisions.md](decisions.md). The skill keeps nothing.
 - **`drop-from-accepted.sh` replaced a `grep -vxF`/`mv` recipe (lode-s9xe.3).** The recipe was left as
   a comment for the agent to implement inline at the exact moment a conflict had just fired; the
   script is the executable version, with its own tests.
 - **Section 4 `$LANDED` load was a bare `cat ... || exit 1` (lode-dc4n).** It carried no diagnostic and
   was the one `$STATE_DIR` load in the skill that dropped lode-0jan's loud/silent distinction one
-  section later. It now goes through `scripts/land-state-load.sh`.
+  section later. It now goes through `scripts/land-state-load.sh`; see "The missing-vs-empty policy
+  is now a shared script" under [Mechanics (decided)](#mechanics-decided).
 - **Section 4 epic-completion derivation was dead code (lode-v4rk).** The derivation the inline snippet
   ran, `bd show <epic-id> --json | jq '.dependents[]'`, was dead: `bd show` only populates
   `.dependents` under the opt-in `--include-dependents` flag, so `$kids` was always `[]` and the
