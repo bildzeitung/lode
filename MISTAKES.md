@@ -4,6 +4,24 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-11-19 — A negative assertion on `lode status` output could never fail, because Rich wraps the line
+
+- **What happened:** `lode-5try`'s builder covered the acceptance criterion "lode status prints no
+  'run lode reenrich' hint" with `assert "lode reenrich" not in status.stdout`. Rich wraps that
+  hint at the test runner's terminal width, splitting the phrase across lines, so the assertion
+  held whether or not the fix was present. The `code-reviewer` caught it by running the test
+  against trunk's unfixed scan: the status assertion passed and only the later reenrich assertion
+  failed.
+- **Root cause:** a `not in` substring check on rendered console output proves nothing unless the
+  same substring is known to appear when the condition holds. The existing positive test for this
+  hint (`test_status_hints_enrichment_stale_uniform_disagreement`) already asserts on short
+  fragments for exactly this reason.
+- **Consequence:** none landed. Unreviewed, one of the ticket's three acceptance criteria would
+  have shipped with a test that could not detect a regression.
+- **Rule that prevents a repeat:** a negative assertion on rendered CLI or TUI output uses a
+  fragment that a positive test already proves is printed. Confirm the new test fails without the
+  fix before trusting it.
+
 ## 2026-11-17 — A docs-nits batch dropped a nit as "anchor-gone" when its anchor had never reached trunk
 
 - **What happened:** the builder draining collector `lode-rrpg` dropped nit 1

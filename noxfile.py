@@ -495,7 +495,7 @@ def lock_currency(session: nox.Session) -> None:
     if uv_check.returncode == 1:
         session.error(
             "uv.lock is STALE -- pyproject.toml no longer matches the committed "
-            "uv.lock. Run `uv lock` (or scripts/update-deps.sh) and commit it."
+            "uv.lock. Run scripts/update-deps.sh and commit it."
         )
     elif uv_check.returncode != 0:
         _machine_fault(

@@ -674,7 +674,11 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
   version is a different `target_version`). There is no manual-override command. The
   existing dead -> re-enqueue self-healing stays for every other dead enrich job, since it
   exists for real outages.
-  The same rule applies to an external's in-force enrich job (lode-4kg8).
+- `lode reenrich` and the `lode status` reenrich hint skip such a head too (`lode-5try`):
+  their shared stale scan applies the same standing-refusal predicate
+  (`jobs.standing_enrich_refusal_exists_sql`), so neither re-sends nor keeps asking for
+  refused content until the prompt version or model changes. The same rule applies to an
+  external's in-force enrich job (lode-4kg8).
 - `lode status` lists refusal-dead enrich jobs in its dead-letter output with the refusal
   category and a hint of their own; they do not get the self-healing hint, which would be
   false for them.
@@ -1804,7 +1808,9 @@ head's `version_id`/`snapshot_id`) whose `model` disagrees with the currently co
 (`lode-568v.6`, below). A head with **no** ai annotations at all is not stale by this definition — it is
 simply unenriched, which the passive reconciliation scan's `enrich_gap` step (above) already covers on
 its own schedule; re-enqueuing it here too would just duplicate work `lode work` was already going to
-do.
+do. A head with a standing refusal-dead enrich job under the current `ENRICH_PROMPT_VER` and
+`enrichment_llm` is not stale either (`lode-5try`): the refusal is final for that version, so
+re-enqueuing would only re-send refused content (see the refusal rules above).
 
 **Provider is part of the same identity, not a second check (lode-568v.6).** `annotations.provider`
 (written since `lode-568v.4`) can disagree with the active provider even while `model` matches — the
