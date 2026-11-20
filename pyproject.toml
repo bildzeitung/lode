@@ -14,8 +14,7 @@ license-files = ["LICENSE"]
 # Runtime dependencies are seeded from the decided stack (docs/stack.md).
 # This file stays the INTENT layer -- ranges/floors, with a real lower bound
 # only where a version demonstrably matters (trafilatura below is the first
-# such case). Exact versions live in uv.lock (and, until lode-s09w.4 retires
-# it, requirements.lock) -- never hand-edited here. See
+# such case). Exact versions live in uv.lock -- never hand-edited here. See
 # docs/stack.md#dependency-locking-lode-g2741 for the split.
 dependencies = [
     "textual[syntax]", # TUI, plus the tree-sitter grammar bundle (~15

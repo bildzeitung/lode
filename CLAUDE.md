@@ -110,9 +110,8 @@ uv run --frozen python scripts/docs_index_query.py "<terms>"
 - Run **`nox -t fix`** (and `nox -s tests`) before merging any Python change; run tests via nox, not a hand-rolled venv.
 - Dev tools are the `dev` dependency group in `pyproject.toml` (a uv default group, so no flag selects it).
 - `pyproject.toml` is the INTENT layer (ranges/floors); `uv.lock` is where exact versions live
-  for every `uv sync` / `uv run --frozen`, which never re-locks. Dependencies are frozen until
-  `lode-s09w.4` retires the older `requirements.lock`: `nox -s lock_currency` (which `/land` runs)
-  still checks both locks, and neither may move before then (`docs/decisions.md`, `lode-s09w`).
+  for every `uv sync` / `uv run --frozen`, which never re-locks, and it is the only place they
+  live. `scripts/update-deps.sh` is the sanctioned way to move it; `nox -s lock_currency` (which `/land` runs) is `uv lock --check`.
   Full split: [`docs/stack.md`](docs/stack.md#dependency-locking-lode-g2741) (`lode-g274.1`).
 
 ## Coding conventions

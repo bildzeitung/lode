@@ -4,14 +4,14 @@ The hazard: ``noxfile.py`` sets ``default_venv_backend = "none"``, so every
 nox session inherits whatever PATH the invoking shell has. A session that
 shells out to a tool by bare name (``"ruff"``, ``"pytest"``, ...) then
 resolves whichever copy is *earliest* on that PATH. On a box with a stale
-system-wide install sitting ahead of the project's own ``./venv/bin``
+system-wide install sitting ahead of the project's own ``./.venv/bin``
 (observed: an ambient ``~/.local/bin/ruff`` 0.15.11 shadowing the venv's
 then-pinned ``ruff==0.15.22``, lode-umh2), this silently runs a DIFFERENT
-tool than the one ``pyproject.toml``/``requirements.lock`` pins, while the
+tool than the one ``pyproject.toml``/``uv.lock`` pins, while the
 gate still reports success.
 
 ``_venv_tool`` fixes this by resolving straight to the tool's known on-disk
-location under the project's own venv (``./venv`` or ``./.venv``, lode-s09w.2)
+location under the project's own venv (``./.venv`` only, lode-s09w.4)
 rather than searching PATH at all, failing closed from any other env. These
 tests import the ACTUAL ``noxfile.py`` (never a reimplementation,
 per the lode-verb sabotage-provable bar -- see ``tests/test_code_concurrency_cap.py``
@@ -70,10 +70,7 @@ def test_venv_tool_resolves_the_real_projects_ruff() -> None:
 
     # Stated without ``_venv_bin``, so a rule that accepted the wrong env fails here.
     assert resolved.name == "ruff"
-    assert resolved.parent.parent.resolve() in {
-        (REPO_ROOT / "venv").resolve(),
-        (REPO_ROOT / ".venv").resolve(),
-    }
+    assert resolved.parent.parent.resolve() == (REPO_ROOT / ".venv").resolve()
     assert resolved.is_file()
     assert not session.errors
 
@@ -85,7 +82,7 @@ def test_venv_tool_ignores_a_shadowing_earlier_path_entry(
 
     A decoy ``widget`` executable sits on PATH ahead of a (faked) venv bin
     dir containing the real one -- exactly the shape of an ambient
-    ``~/.local/bin/ruff`` preceding ``./venv/bin`` on a real box. A bare-name
+    ``~/.local/bin/ruff`` preceding ``./.venv/bin`` on a real box. A bare-name
     PATH search (``shutil.which``) finds the decoy first, proving the
     shadowing setup is real; ``_venv_tool`` must resolve the venv's copy
     regardless, and running the path it returns must produce the REAL
@@ -141,13 +138,12 @@ def test_venv_tool_fails_loudly_when_the_tool_is_missing(
     assert "uv sync" in message
 
 
-@pytest.mark.parametrize("venv_name", ["venv", ".venv"])
-def test_venv_bin_accepts_either_project_venv(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, venv_name: str
+def test_venv_bin_accepts_the_project_dot_venv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Both ./venv and ./.venv resolve; the tool lives in that env's bin."""
+    """./.venv resolves; the tool lives in that env's bin."""
     noxfile = load_noxfile()
-    prefix = tmp_path / venv_name
+    prefix = tmp_path / ".venv"
     (prefix / "bin").mkdir(parents=True)
     tool = prefix / "bin" / "widget"
     tool.write_text("#!/bin/sh\n")
@@ -158,11 +154,29 @@ def test_venv_bin_accepts_either_project_venv(
     assert noxfile._venv_tool(_FakeSession(), "widget") == str(tool)
 
 
+def test_venv_tool_rejects_the_legacy_venv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-s09w.4: a legacy ./venv is no longer an accepted gate env."""
+    noxfile = load_noxfile()
+    legacy = tmp_path / "venv"
+    (legacy / "bin").mkdir(parents=True)
+    (legacy / "bin" / "ruff").write_text("#!/bin/sh\n")
+    monkeypatch.setattr(noxfile, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(sys, "prefix", str(legacy))
+
+    assert noxfile._venv_bin() is None
+    session = _FakeSession()
+    with pytest.raises(RuntimeError):
+        noxfile._venv_tool(session, "ruff")
+    assert session.errors
+
+
 def test_venv_tool_fails_closed_from_a_foreign_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """lode-0yfn preserved: a nox from any other env (pipx, system) must not
-    resolve ITS tools -- the session errors, naming both accepted paths."""
+    resolve ITS tools -- the session errors, naming the accepted path."""
     noxfile = load_noxfile()
     foreign = tmp_path / "pipx" / "venvs" / "nox"
     (foreign / "bin").mkdir(parents=True)
@@ -178,8 +192,8 @@ def test_venv_tool_fails_closed_from_a_foreign_env(
         noxfile._venv_tool(session, "ruff")
 
     message = str(exc_info.value)
-    assert str(project / "venv") in message
     assert str(project / ".venv") in message
+    assert str(project / "venv") not in message
 
 
 # Tools the ``dev`` group installs into the project env's ``bin``, i.e. the ones a
@@ -188,7 +202,7 @@ def test_venv_tool_fails_closed_from_a_foreign_env(
 # prevent.
 _DEV_EXTRA_TOOLS = frozenset({"ruff", "pytest", "shellcheck", "python", "python3"})
 
-# Sessions that shell out to a tool OUTSIDE ./venv on purpose, so the guard
+# Sessions that shell out to a tool OUTSIDE ./.venv on purpose, so the guard
 # below must not apply to them. Keeping this as an explicit set is the
 # mechanism: a future session added to noxfile.py is guarded by default, and
 # exempting it is a deliberate edit here rather than an omission nobody sees.

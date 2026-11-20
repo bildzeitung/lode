@@ -20,7 +20,7 @@ consistency claims above, but the same two files and the same owner.
 
 Deliberately NOT gated: re-deriving the grid from ``mark.svg``'s own geometry.
 That needs either ``cairosvg`` (which ``scripts/rasterize-mark.sh`` keeps out of
-``pyproject.toml``/``requirements.lock`` on purpose) or a hand-transcribed
+``pyproject.toml``/``uv.lock`` on purpose) or a hand-transcribed
 reimplementation of stroke-coverage maths — itself unverified — to gate a
 64-cell artifact that changes approximately never.
 """

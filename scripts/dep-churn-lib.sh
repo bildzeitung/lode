@@ -14,15 +14,27 @@
 #
 # No side effects, no top-level statements: safe to source from anywhere.
 
-# name<TAB>version for every pin in the lock file $1, on stdout. Deliberately
-# ignores the --hash lines; those are the whole reason this isn't `git diff`.
+# name<TAB>version for every package in the uv.lock-shaped file $1, on stdout,
+# sorted by name. Reads the `[[package]]` tables' own `name = "..."` /
+# `version = "..."` lines, so hashes and URLs never enter the diff -- they are
+# the whole reason this isn't `git diff`. A package resolved at several
+# versions (one per resolution marker) yields one line with the versions
+# comma-joined in file order; one with no version line (a dynamic-version
+# source) is skipped.
 _dep_pins() {
-  grep -oE '^[A-Za-z0-9_.+-]+==[A-Za-z0-9_.!+-]+' "$1" \
-    | sed -E 's/==/\t/' | sort -t $'\t' -k1,1 -u
+  awk -F'"' '
+    /^\[\[package\]\]/ { n = "" }
+    /^name = "/ { n = $2 }
+    /^version = "/ {
+      if (n != "") v[n] = (n in v) ? v[n] "," $2 : $2
+      n = ""
+    }
+    END { for (k in v) print k "\t" v[k] }
+  ' "$1" | sort -t $'\t' -k1,1
 }
 
 # Emit the raw, unformatted "name<TAB>old<TAB>new" change lines for the two
-# lock files $1 and $2 -- moved packages only ($old != $new). An addition
+# uv.lock files $1 and $2 -- moved packages only ($old != $new). An addition
 # carries "(none)" as $old, a removal carries "(none)" as $new.
 dep_changes_raw() {
   join -a1 -a2 -e '(none)' -o 0,1.2,2.2 -t $'\t' \
@@ -51,10 +63,11 @@ dep_version_diff_text() {
 # The churn-stub noise gate: true iff EVERY moved package in the raw change
 # lines in $1 kept its major.minor pair, i.e. only the patch component (or a
 # suffix below it) moved. False for no changes at all, for an addition or a
-# removal ("(none)" on either side), and for any version whose leading
-# major.minor does not parse (an epoch like `1!2.3.4`, a bare `2024` date
-# version) -- everything unrecognized is conservatively NOT patch-only, so it
-# still triggers filing. Regex-over-strings rather than real version ordering
+# removal ("(none)" on either side), for a multi-version package (a comma in
+# either value: the regex below would compare only its first version), and
+# for any version whose leading major.minor does not parse (an epoch like
+# `1!2.3.4`, a bare `2024` date version) -- everything unrecognized is
+# conservatively NOT patch-only, so it still triggers filing. Regex-over-strings rather than real version ordering
 # is a deliberate floor: every shape it cannot read falls into the catch-all
 # and files a ticket, so being wrong here can only ever cost noise, never a
 # missed evaluation.
@@ -65,6 +78,7 @@ dep_all_patch_level_only() {
   while IFS=$'\t' read -r name old new; do
     [ -n "$name" ] || continue
     # Bash-native, so this stays fork-free on a lock with a hundred moves.
+    [[ $old == *,* || $new == *,* ]] && return 1
     # A non-match also covers "(none)": additions and removals are never
     # patch-only.
     [[ $old =~ ^([0-9]+\.[0-9]+) ]] || return 1

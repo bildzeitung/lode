@@ -56,12 +56,12 @@ worktree needs no setup step for the same reason. Re-run `uv sync` only to refre
 
 #### Updating dependencies
 
-`scripts/update-deps.sh` is the **only** sanctioned way to move `requirements.lock` —
-never hand-edit it or run a bare `uv pip compile`. It recompiles a candidate lock from
-`pyproject.toml`, prints a readable version diff against the committed lock (names and
-versions only, no hash noise — the diff is the point), then promotes that candidate over
-`requirements.lock` **before** installing it into a freshly rebuilt `./.venv` and running
-the quality gates (`nox -t fix`, `nox -s tests`). Promoting first is deliberate: a test
+`scripts/update-deps.sh` is the **only** sanctioned way to move `uv.lock` —
+never hand-edit it. It runs `uv lock --upgrade` (or `uv lock --upgrade-package NAME` with
+`--package NAME`), prints a readable version diff against the committed lock (one
+`name  old -> new` line per changed package, no hash noise — the diff is the point), then
+keeps the moved `uv.lock` on disk — promoted **before** gating — while it installs it into a
+freshly rebuilt `./.venv` and runs the quality gates (`nox -t fix`, `nox -s tests`). Promoting first is deliberate: a test
 that reads the committed lock from disk has to gate against the pins the update is
 introducing, not the ones it is about to replace (`lode-2zi9`). On green the candidate
 simply stays where it is, for you to review and commit.
@@ -69,7 +69,7 @@ simply stays where it is, for you to review and commit.
 On ANY other failure — the candidate install itself (an uninstallable or
 hash-mismatched pin, a yanked release, a network blip) just as much as a red gate — it
 prints a failure report meant to be pasted straight into a bd ticket, then restores
-`requirements.lock` byte-for-byte from the copy it saved before promoting, trashes
+`uv.lock` byte-for-byte from the copy it saved before promoting, trashes
 whatever venv state exists and rebuilds `./.venv` clean from that restored lock. A failed
 update always leaves the committed lock back on its pre-update pins — including when the
 script is killed outright mid-gate (a Ctrl-C during the long `nox -s tests`), which an
@@ -77,11 +77,11 @@ EXIT trap covers, so an ungated candidate is never left sitting on disk looking 
 gated one. The venv rebuild itself is best-effort: it's expected to succeed, but if that rollback rebuild
 also hits a failure (e.g. its own network blip), the script prints a loud warning after
 the report — rather than silently losing the report — and tells you to run
-`uv sync --locked` by hand to restore `./.venv`.
+`uv sync --frozen` by hand to restore `./.venv`.
 
 ```bash
-scripts/update-deps.sh --dry-run          # see what would change; touches nothing
-scripts/update-deps.sh                    # recompile + gate + promote/rollback the WHOLE lock
+scripts/update-deps.sh --dry-run          # see what would change; uv.lock is moved, then restored
+scripts/update-deps.sh                    # re-resolve + gate + keep/rollback the WHOLE lock
 scripts/update-deps.sh --package trafilatura   # bump just one package
 ```
 
@@ -206,7 +206,7 @@ Five opt-in sessions sit outside the default set:
 | `nox -s build` | Builds a wheel + sdist and asserts the shipped package-data is present. |
 | `nox -s eval` | The live eval test (`tests/test_eval_live.py`). Needs `ANTHROPIC_API_KEY` **and** `LODE_RUN_LIVE_EVAL=1`, which only this session sets — so `tests` and `unit` stay offline even where a key is ambient. CI-only. |
 | `nox -s coverage` | The FULL test suite under `pytest-cov`, emitting a coverage report — CI-only (lode-qxdn.3). |
-| `nox -s lock_currency` | Verifies `requirements.lock` is still what `pyproject.toml` resolves to — a local mirror of CI's lock-currency job (lode-sys4); `/land`'s re-gate runs this so a stale lock never lands. |
+| `nox -s lock_currency` | Runs `uv lock --check`: `uv.lock` is still what `pyproject.toml` resolves to — a local mirror of CI's lock-currency job (lode-sys4); `/land`'s re-gate runs this so a stale lock never lands. |
 
 Four pytest markers are registered in `pyproject.toml` under `--strict-markers` (a typo'd marker
 is a collection error, not a silently-ignored no-op):
