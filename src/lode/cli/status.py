@@ -668,8 +668,9 @@ def status(db: _DbOption = None) -> None:
     if refused:
         console.print(
             "[warn]Action needed:[/warn] the model refused to enrich some notes "
-            "(listed above). A refusal is final for that note version: it is "
-            "not retried until the note is edited, the enrichment prompt "
+            "or external pages (listed above). A refusal is final for that "
+            "note version or page snapshot: it is not retried until the note "
+            "is edited or the page changes materially, the enrichment prompt "
             "version changes, or enrichment_llm is changed.",
             highlight=False,
         )

@@ -112,13 +112,43 @@ Two files, two jobs — **never pin the same thing in both**:
   characterization fixtures assert extraction behavior against. Moving off 2.1.0 is a deliberate
   act: bump the ceiling and re-baseline `lode-g274.3` first, not an incidental side effect of an
   unrelated dependency bump.
-- **`uv.lock` is the place exact versions live for every `uv sync` / `uv run --frozen`
-  (`lode-s09w`).** A committed, fully-transitive lock of the runtime dependencies **and** the `dev`
-  dependency group — `lode-s09w` reversed epic `lode-g274`'s OQ#1, which had left the dev tools
-  unlocked. Regenerated only via `uv lock` — never hand-edited. The older hash-verified
-  `requirements.lock` (runtime only, via `scripts/compile-lock.sh` and `scripts/update-deps.sh`,
-  `lode-g274.2`) still exists until `lode-s09w.4` retires it; nothing builds the developer env from
-  it any more.
+- **`uv.lock` is the only place exact versions live (`lode-s09w`, `lode-s09w.4`).** A committed,
+  fully-transitive lock of the runtime dependencies **and** the `dev` dependency group — `lode-s09w`
+  reversed epic `lode-g274`'s OQ#1, which had left the dev tools unlocked — consumed by every `uv
+  sync` / `uv run --frozen`. Regenerated only via `uv lock` (or `scripts/update-deps.sh`, which
+  wraps it) — never hand-edited. The older pip-compile lock and its
+  compile script are deleted (`lode-s09w.4`); `git log` and `docs/decisions.md` keep
+  their history.
+
+  **Installing from `uv.lock` verifies hashes, and that replaces `--require-hashes` (`lode-s09w.4`).**
+  The old lock step ran `uv pip install --require-hashes`; the question whether `uv sync` /
+  `uv run --frozen` from `uv.lock` gives the same protection was open until this ticket, and was
+  checked rather than assumed. Two facts, both checked:
+
+  1. **`uv.lock` records a sha256 for every registry artifact** — each `sdist` and every entry of
+     `wheels` carries `hash = "sha256:…"`. `tests/test_uv_lock_hashes.py` pins that offline: a
+     registry artifact without one fails the suite.
+  2. **uv verifies an install against those hashes and refuses a mismatch.** Measured on uv 0.11.7:
+     a scratch project locked to `six==1.16.0`, with the wheel's recorded hash edited to all zeros,
+     fails a plain `uv sync --frozen` with `Hash mismatch for six==1.16.0`, printing the `Expected`
+     (the lock's) and `Computed` (the downloaded file's) digests; nothing is installed. The
+     same refusal holds with the wheel already in uv's cache (re-measured at code review, same
+     uv). No flag opts in, unlike pip's opt-in `--require-hashes`. The nearest documented
+     setting, `verify-hashes` (default `true`,
+     [uv settings reference](https://docs.astral.sh/uv/reference/settings/#pip_verify-hashes)),
+     is documented for the `uv pip` interface, not `uv sync`. So the measurement is the checked
+     source: uv's *project* docs
+     ([layout](https://docs.astral.sh/uv/concepts/projects/layout/),
+     [CLI](https://docs.astral.sh/uv/reference/cli/)) do not state this for `uv sync` in so many
+     words, so the behavior is pinned to the measured version, not to a quotable sentence. uv
+     itself is not pinned (CI's `setup-uv` installs the latest release; locally it is whatever is
+     on `PATH`), so a uv release that stopped verifying would not be caught by the suite —
+     re-run the probe (edit one hash in a scratch lock, `uv sync --frozen`) when in doubt.
+
+  The one gap against `--require-hashes` is *strictness*, not verification: `--require-hashes`
+  also rejects a requirement that carries no hash at all, whereas a hand-edited `uv.lock` entry with
+  the `hash` field deleted would install unverified. Nothing hand-edits the lock, and
+  `test_every_registry_artifact_in_uv_lock_has_a_sha256` fails on exactly that edit.
 
   **Single-tool exception: `ruff==0.16.3` is pinned in the `dev` group.** This was a deliberate,
   maintainer-approved *partial rescission* of the old unlocked-`dev` policy, scoped to ruff alone;
@@ -153,14 +183,13 @@ Two files, two jobs — **never pin the same thing in both**:
   nor to `lock_currency`, which resolves `uv` itself (a separate, system-wide tool never installed
   into `./.venv`, already checked explicitly and failed closed if absent, `lode-sys4`).
 
-  **Since `lode-s09w.2` the accepted env is `./venv` or `./.venv`, and the launcher decides
-  which; since `lode-s09w.3` every launcher is `uv run --frozen`.** `_venv_tool` no longer derives
-  one fixed path. It resolves tools beside the interpreter running nox, and only when that
-  interpreter's `sys.prefix` is the checkout's own `./venv` or `./.venv`. A nox started from any
-  other env — pipx, the system interpreter, another checkout's venv — fails the session and names
-  both accepted paths. `lode-s09w.3` moved every instruction file, `scripts/land-replay.sh` and CI
-  to `uv run --frozen nox …`, so `./.venv` is the only env anything builds now; `lode-s09w.4`
-  narrows the accepted set to `./.venv`. `tests.yml`, `coverage.yml` and `docs.yml` build it from
+  **Since `lode-s09w.4` the only accepted env is `./.venv`, and every launcher is `uv run
+  --frozen` (`lode-s09w.3`).** `_venv_tool` no longer derives one fixed path. It resolves tools
+  beside the interpreter running nox, and only when that interpreter's `sys.prefix` is the
+  checkout's own `./.venv`. A nox started from any other env — pipx, the system interpreter, a
+  legacy `./venv`, another checkout's venv — fails the session and names the accepted path.
+  `lode-s09w.3` moved every instruction file, `scripts/land-replay.sh` and CI to `uv run --frozen
+  nox …`, so `./.venv` is the only env anything builds. `tests.yml`, `coverage.yml` and `docs.yml` build it from
   the committed `uv.lock` with `uv sync --locked` and run every later step through `uv run
   --frozen`. `dev` is a `[dependency-groups]` group, which uv installs by default, so no flag
   selects it.
@@ -171,13 +200,10 @@ the `dev` group; `uv sync` does the same for an interactive shell. The old insta
 sourced helper are deleted with no wrapper, and with them the old two-step install (hash-verified
 runtime lock, then `-e '.[dev]'` resolved fresh) and its `--unlocked` escape hatch.
 `uv sync --locked` fails on a lock that is stale against `pyproject.toml`; `--frozen` skips that
-check and installs the lock as committed. That is a currency check, not the lock step's
-`--require-hashes` check: whether installing from `uv.lock` verifies hashes the way
-`--require-hashes` did is not established here, and epic `lode-s09w` requires it to be checked and
-written down before `lode-s09w.4` deletes `requirements.lock`. The pip-refresh and `-e . --no-deps`
+check and installs the lock as committed. Hash verification is separate from that currency check
+and applies to both — see the hash paragraph above. The pip-refresh and `-e . --no-deps`
 measurements (`lode-hfaz`, `lode-xo99`) concerned steps that no longer exist.
-`scripts/update-deps.sh`, which still moves `requirements.lock` until `lode-s09w.4`, rebuilds
-`./.venv` itself with `uv venv` and `uv pip install`.
+`scripts/update-deps.sh` rebuilds `./.venv` itself with `uv sync --frozen`.
 
 **Both CI legs that install lode's deps install from `uv.lock` (`lode-7byn`, `lode-s09w.2`).**
 `tests.yml`'s `tests` job and `coverage.yml` run the identical `uv sync --locked`, so a coverage
@@ -185,7 +211,7 @@ percentage is reproducible from committed bytes instead of from whatever resolve
 ran, and, since `dev` is locked, the tools doing the measuring (`pytest`, `pytest-cov`) are
 pinned too. `coverage.yml` enforces no threshold, so a drift there would fail nothing either way;
 moving the lock forward is always a deliberate run, never something CI notices on its own.
-[`lock-currency`](#the-lock-gen-command-is-derived-from-python-version-not-hard-coded-lode-sys4)
+[`lock-currency`](#the-lock-currency-check-and-the-update-flow-lode-sys4-lode-s09w4)
 only catches a lock that has fallen *behind* a `pyproject.toml` constraint change, never one that has
 fallen behind PyPI.
 
@@ -203,7 +229,7 @@ component (mechanically decidable from the diff already on hand) — a ticket pe
 noise gets ignored. `--no-file` suppresses filing outright; `--dry-run` never reaches this step.
 Because filing writes Dolt, a missing or failing `bd` (or the `bd dolt push` after it) only warns —
 it never changes the script's exit status or the lock promotion, preserving the script's existing
-contract that it never mutates anything outside `./.venv` and `requirements.lock`.
+contract that it never mutates anything outside `./.venv` and `uv.lock`.
 
 The diff parsing, the rendering, and the stub's skip policy live in the sourceable
 `scripts/dep-churn-lib.sh`, not inline in `update-deps.sh` — so they get `nox -s shellcheck` and
@@ -261,55 +287,41 @@ reason, new idiom. The forward-binding half of this is a style fiat, so it also 
 [`conventions.md`](conventions.md), which is `@import`ed into every producer and reviewer's context;
 the reasoning stays here.
 
-### The lock-gen command is derived from `.python-version`, not hard-coded (lode-sys4)
+### The lock-currency check and the update flow (lode-sys4, lode-s09w.4)
 
-**Root cause of the original flap (`lode-gyag`):** `uv pip compile` does **not** read
-`.python-version` — it resolves against whichever interpreter it happens to discover on the
-invoking machine. Some transitive deps carry Python-version markers (`lancedb`'s
-`overrides>=0.7 ; python_full_version < "3.12"`; `anyio`'s marker-gated `typing_extensions ; python_version
-< "3.13"`), so the SAME `pyproject.toml` resolves a *different* lock depending on whether the
-generating machine's default Python was, say, 3.11 or 3.14. CI validates against 3.14 (this repo's
-`.python-version`), so a lock generated on an older interpreter diffed red against CI's recompile —
-not because a dependency actually changed, but because of *which Python resolved it*.
+`uv.lock` is resolved by uv for the `requires-python` in `pyproject.toml`, so — unlike the retired
+pip-compile lock, which resolved for whichever interpreter it discovered and had to be told the
+target via `.python-version` (`lode-gyag`) — no machine-dependent resolution target exists to pin.
+Every caller below goes through `uv lock`:
 
-**The fix:** every lock-gen invocation passes `--python-version "$(cat .python-version)"` explicitly,
-so the resolution target is always this repo's single source of truth for its interpreter, regardless
-of whatever Python happens to be default on the machine running the command. This lives in exactly
-**one** place — `scripts/compile-lock.sh` — which every caller below invokes rather than keeping its
-own copy of the `uv pip compile` command string:
-
-- `scripts/update-deps.sh` — the sanctioned way to move `requirements.lock`
-  (`lode-g274.2`/`lode-fdjr`). Its two flows are a bare invocation for the whole set and
-  `--package NAME` for one package (full usage:
-  [onboarding.md](onboarding.md#updating-dependencies)); the corresponding `--upgrade` /
-  `--upgrade-package NAME` go *down* to `compile-lock.sh` — not flags `update-deps.sh` accepts.
+- `scripts/update-deps.sh` — the sanctioned way to move `uv.lock` (`lode-g274.2`/`lode-fdjr`,
+  moved onto uv by `lode-s09w.4`). Its two flows are a bare invocation for the whole set (`uv lock
+  --upgrade`) and `--package NAME` for one package (`uv lock --upgrade-package NAME`); full usage:
+  [onboarding.md](onboarding.md#updating-dependencies). Its VERSION DIFF is one line per changed
+  package, `name  old -> new`, derived from the `[[package]]` name/version pairs of the saved and
+  the moved `uv.lock` (`scripts/dep-churn-lib.sh`), never from hash lines.
 - **CI enforcement (`lode-g274.6` / `lode-sys4`):** `tests.yml`'s `tests` job installs from
-  `uv.lock` (`uv sync --locked`, the same install a developer runs), and a separate, independent `lock-currency` job in the same workflow verifies the lock is current —
-  it runs `scripts/compile-lock.sh -o requirements.lock`, **in place** against the just-checked-out
-  committed lock. uv feeds an existing output file's own pins back to the resolver as its *preference*
-  set by default (only `--upgrade`/`-U` ignores them), so the resolution only moves when a
-  `pyproject.toml` constraint forces it — an upstream release alone reproduces the committed lock
-  byte-for-byte, and `git diff --exit-code requirements.lock` catches any real drift. `build.yml`
-  never installs lode's runtime deps at all (`python -m build` resolves in its own isolated env), so
-  the lock is irrelevant there. `coverage.yml` installs *from* the lock (`lode-7byn`) but does not
-  re-verify its currency: being report-only (`lode-qxdn.3`, no merge-gate status), it leaves that to
-  the single `lock-currency` job here — one commit, one currency check.
-- **Local pre-flight (`lode-sys4`):** `nox -s lock_currency` (`noxfile.py`) is the same check,
-  runnable on any dev machine — it seeds a scratch copy with the committed lock (mirroring CI's
-  in-place recompile so the preference-seeding behaves identically), recompiles it via
-  `scripts/compile-lock.sh`, and diffs the result against the committed file. Deliberately kept out
-  of the default `nox` session set (same reasoning as `eval`/`build`: it needs network to resolve
-  against PyPI, so a bare `nox` / `nox -s tests` stays offline). **`/land` runs it** as part of its
-  combined re-gate (`.claude/skills/land/SKILL.md`, alongside `nox -t fix`/`nox -s tests`) and in its
+  `uv.lock` (`uv sync --locked`, the same install a developer runs), and a separate, independent
+  `lock-currency` job in the same workflow runs `uv lock --check`, which fails when `uv.lock` is
+  stale against `pyproject.toml`. `build.yml` never installs lode's runtime deps at all (`python -m
+  build` resolves in its own isolated env), so the lock is irrelevant there. `coverage.yml`
+  installs *from* the lock (`lode-7byn`) but does not re-verify its currency: being report-only
+  (`lode-qxdn.3`, no merge-gate status), it leaves that to the single `lock-currency` job here — one
+  commit, one currency check.
+- **Local pre-flight (`lode-sys4`):** `nox -s lock_currency` (`noxfile.py`) is the same check —
+  `uv lock --check` and nothing else — runnable on any dev machine. Deliberately kept out of the
+  default `nox` session set (same reasoning as `eval`/`build`: re-resolving needs uv and PyPI, so a
+  bare `nox` / `nox -s tests` stays offline). **`/land` runs it**, last, as part of its combined
+  re-gate (`.claude/skills/land/SKILL.md`, alongside `nox -t fix`/`nox -s tests`) and in its
   per-branch isolation-replay loop — so a stale lock is caught locally, by the single trunk-writer,
   before the public CI badge is the only thing that catches it.
 - **Offline / `uv`-absent behaviour: fails closed, and fails *distinguishably*.**
-  `scripts/compile-lock.sh` exits non-zero with an explicit message if `uv` is not on `PATH`, rather
-  than silently skipping the check. A stale lock landing unnoticed because a local check was quietly
-  skipped is worse than a noisy failure that tells a developer to install `uv`. `nox -s lock_currency`
-  splits its own non-zero into content (exit 1: the committed lock genuinely disagrees with what
-  `pyproject.toml` resolves to) vs. machine (exit 2: `uv` absent, or `compile-lock.sh` unable to
-  resolve — PyPI unreachable, a 5xx, DNS) — the same [gate exit-code
+  `nox -s lock_currency` exits with an explicit message if `uv` is not on `PATH`, rather than
+  silently skipping the check. A stale lock landing unnoticed because a local check was quietly
+  skipped is worse than a noisy failure that tells a developer to install `uv`. It splits its own
+  non-zero into content (exit 1: `uv lock --check` says `uv.lock` needs updating) vs. machine
+  (exit 2: `uv` absent, or `uv lock --check` exited with anything but its own "needs updating"
+  status — PyPI unreachable, no interpreter) — the same [gate exit-code
   contract](agents-workflow.md#gate-exit-code-contract-012-lode-jhry) every other gate in this repo
   honours; see that section for the full 0/1/2 rule, each consumer's obligation, and the nox
   mechanic (`session.error`/a failed `session.run` both collapse to exit 1, so the machine-fault path
@@ -387,7 +399,7 @@ and untouched (epic scope, decided 2026-07-22).
 The seam lives in a **new module, `src/lode/llm_provider.py`** — not folded into `src/lode/auth.py`.
 `auth.py`'s own docstring already treats staying cheap to import as load-bearing (`lode-4q97`):
 `import anthropic` is deferred inside `build_client()` because most callers (e.g.
-`lode.worker.drain`, unconditionally) import the module only to *catch* `AuthError`, on paths that
+`lode.worker`, at module scope) import the module only to *catch* `AuthError`, on paths that
 may never touch Anthropic at all. A seam that can construct **either** vendor's SDK client behind
 one factory has strictly more reason to keep that import discipline, and a fresh module keeps it
 from being re-litigated every time a provider is added. `auth.py`'s exact fate (kept as an internal
@@ -1001,10 +1013,9 @@ builds the site; no local `dev` install needs it) — that premise broke the sam
 serve` (run ad hoc for `lode-fhql.13`'s favicon sign-off) immediately surfaced two broken intra-doc
 anchors nobody had seen (`lode-fhql.21`). mkdocs is a validator, not just a site generator, so it
 belongs in `dev` and behind its own gate — see `nox -s docs` in `noxfile.py` (`lode-fhql.20`). At
-the time, per the [pyproject-intent / requirements.lock split](#dependency-locking-lode-g2741),
+the time, per the pyproject-intent / lock split (see [Dependency locking](#dependency-locking-lode-g2741)),
 optional extras stayed unlocked (`dev` was then an extra; it has been a dependency group locked by
-`uv.lock` since `lode-s09w`), and `scripts/compile-lock.sh` compiles the lock from `pyproject.toml`
-with no `--extra` flags — so this needed no `requirements.lock` regeneration, only the
+`uv.lock` since `lode-s09w`), so this needed no lock regeneration, only the
 `pyproject.toml` declaration.
 
 ### Mermaid: build-time pre-render, not the validator (mandated, user call 2026-08-12)

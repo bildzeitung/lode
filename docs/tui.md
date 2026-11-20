@@ -485,17 +485,17 @@ TUI down (`exit_on_error`). The worker therefore catches `Exception`, resets the
 placeholder, shows the message as an error toast (`markup=False`: provider messages embed bracket
 groups that Textual's markup parser rejects at toast render), and logs the traceback.
 
-**Decided: catch in the TUI (option A), not at the provider seam (option B).** The seam
-deliberately leaves the non-status SDK errors raw (`anthropic.APIConnectionError` when offline,
+**Decided: catch in the TUI (option A), not at the provider seam (option B).** The seam deliberately
+leaves the non-status SDK errors raw (`anthropic.APIConnectionError` when offline,
 `anthropic.APITimeoutError` past `qa_call_timeout_s`): "a timeout is not a rejected request"
-(`docs/configuration.md`, the `reasoning_effort` note; `docs/stack.md` "Error contract" pins that
-only status errors are wrapped). Wrapping them into `LLMProviderError` there would reverse that
-choice and reach past the TUI, because the `lode ask`, `lode work` and `lode add` handlers
-name that class (`docs/storage.md` "Transient vs. permanent job failures"). The job retry taxonomy
-there is keyed on the two credential errors only, and stays as it is. A TUI-side catch also covers
-causes that are not provider errors at all (sqlite, the vector store, the local embedder, a
-rendering fault), and a crash could lose unsaved data. The CLI still prints a
-traceback for a raw SDK error.
+(`docs/configuration.md`, "`reasoning_effort` wired to `output_config.effort`"; `docs/stack.md`
+"Error contract" pins that the SDK status errors are the ones wrapped). Wrapping them into
+`LLMProviderError` there would reverse that choice and reach past the TUI, because the `lode ask`,
+`lode work` and `lode add` handlers name that class (`docs/storage.md` "Transient vs. permanent job
+failures"). The job retry taxonomy there is keyed on the two credential errors only, and stays as it
+is. A TUI-side catch also covers causes that are not provider errors at all (sqlite, the vector
+store, the local embedder, a rendering fault), and a crash could lose unsaved data. The CLI still
+prints a traceback for a raw SDK error.
 
 The toast is guarded by the same submission generation as the pane reset, so a superseded
 question that fails slowly cannot toast over a newer question's spinner. The log carries the
@@ -508,7 +508,7 @@ pipeline failure that arrives after the escape is still logged with its tracebac
 toast. The installed corpus-wide screen is not removed by Escape, so an answer that arrives while
 it is popped is kept and shown when the screen is reopened.
 
-Quitting the app mid-ask is handled the same way (`lode-dgmf`). Textual cannot preempt the worker
+Quitting the app mid-ask needs a separate guard (`lode-dgmf`). Textual cannot preempt the worker
 thread, so `run_ask` keeps going after the app has shut down, and its next stage hop raises
 `RuntimeError("App is not running")` from `call_from_thread`. That raise is deliberately left to
 propagate: it is what ends `run_ask` early after a quit. The worker's catch returns without
@@ -519,3 +519,32 @@ it writes no record. The cost is that a real pipeline failure arriving after the
 logged; the process is exiting. A failure while the app is running is unchanged: logged with its
 traceback, and toasted. The test drives a real `run_async`, because the pilot's `run_test` still
 delivers the hop after its context exits and does not reproduce this.
+
+### Quitting mid-ask waits for the in-flight call (`lode-zuzj`)
+
+**Decided: the delay is accepted (option (c)).** Textual runs a thread worker on the event loop's
+default executor, and `asyncio.run`'s close step joins that executor (`shutdown_default_executor`,
+the join the `lode-du4p` section above describes) after the terminal is restored. So after ctrl+q
+the shell returns only when the ask worker's thread ends, at `run_ask`'s next stage hop (which
+raises, per `lode-dgmf` above). When the quit lands inside a provider call, the thread ends only
+after the call returns or times out, and the call is still paid for.
+
+Option (a), raising from `_on_stage` when the worker is cancelled, was rejected. For a quit it
+changes nothing: Textual cancels the worker at shutdown, just before the hop starts raising "App is
+not running", so `run_ask` would end at the same hop as today and a call in flight is not
+interrupted. For an escaped or superseded ask, which Textual also cancels, it would stop the run at
+its next stage hop, but that spares the provider call only when the cancel lands during retrieval.
+Option (b), making the call cancellable, means a cancel event through `run_ask` and the provider
+seam, which is more machinery than this wait warrants.
+
+**Bound:** the wait is the rest of the stage the quit landed in; nothing caps it at quit time.
+asyncio gives up on the join after 300 s, but that only prints a `RuntimeWarning`: the worker
+thread is not a daemon thread, so the interpreter still waits for it at exit.
+
+- **During the Q&A run** (the usual case): normally seconds. A wedged run can take about 900 s at
+  the defaults, the worst case already accepted for the ask itself
+  ([configuration.md](configuration.md#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx),
+  the flagged risk, which also lists the levers).
+- **During retrieval:** the local embed and rerank, normally short. The first run's model weights
+  download is not bounded by any timeout (`docs/configuration.md`, the `HF_HUB_OFFLINE` note);
+  `lode models pull` moves it out of the ask.

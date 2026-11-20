@@ -1090,6 +1090,12 @@ entries below from being rewritten to chase the current tree.)
   itself. Either requires updating `coding.md`, `code-reviewer.md`, and `land/SKILL.md`'s GC section
   together so the hand-off contract and the GC contract don't drift apart.
 
+  **Update (lode-rapj, 2026-11-19):** the "Revisit trigger" fired, so "No proven problem" and "no
+  observed leak" are stale. The `lode-r78` entry below ("The revisit trigger above fired") records
+  `/land`'s GC missing `land/<id>`-branched worktrees and dangling `land/<id>` refs. Its fix extends
+  the backstop sweep, not the builder's reclaim point, so the "Decision: no change" on the reclaim
+  point stands.
+
 - **The revisit trigger above fired: `/land`'s GC backstop was blind to `land/<id>`-branched
   worktrees, and to dangling local `land/<id>` refs (lode-r78, decided 2026-07-10).** The
   lode-k5e/lode-8k3 architecture change (above) means the reviewer and a rebase pickup each check
@@ -5170,6 +5176,13 @@ entries below from being rewritten to chase the current tree.)
   likely light-background legibility (the current values are chosen for a dark terminal) or an
   accessibility need. At that point the honest first question is whether the answer is a lode
   config at all, or adopting Textual's own theme system across all three surfaces.
+
+  **Update (lode-rapj, 2026-11-19):** the "open" status, the leaning "not yet", and "status
+  `deferred`" are stale. The `lode-5zxt` entry below ("User-configurable colour, revisited") records
+  the maintainer reopening and closing `lode-5zxt`, settling TUI theming as
+  base-theme-plus-overrides; the CLI half followed as `lode-mk9j`. That entry answers reasons 1 and
+  2 above and overrides reason 3: the revisit trigger was not met, and the maintainer reopened it
+  as a preference call.
 - **lode keeps `AGENTS.md` — does NOT drop it the way harness-export did (`lode-s9xe.9`,
   2026-08-13).** harness-export's commit `8b444b9` deleted its `template/AGENTS.md` (54 lines) and
   folded the content into `CLAUDE.md`, on the grounds that `CLAUDE.md` is imported into every
@@ -5575,6 +5588,13 @@ entries below from being rewritten to chase the current tree.)
   from lazy/per-command to eager/global in `main()`, and takes the same command down on failure a
   direct `_resolve_settings()` call always did."
 
+  **Update (lode-rapj, 2026-11-19):** the exemption list is stale, in two sentences: the closing
+  "`status` remains the ONLY command carrying that exemption" and the "Accepted side effect" claim
+  that "every subcommand other than `status` now fails loudly on ANY config error". The `lode-jjol`
+  entry below ("`lode theme` added to the `main()` config-optional exemption set") added `theme` to
+  the exemption set, so `status` and `theme` both carry it, and the `lode-moq7` entry below also
+  skips resolution for any subcommand's `--help`. The rest of this entry stands.
+
 - **`--help` exempted from `[cli.theme]`'s global settings resolution (`lode-moq7`, follow-on to
   `lode-mk9j`).** The `lode-mk9j` entry above's eager-in-`main()` placement has a corollary it did
   not spell out: Typer's group callback (`main()`) runs *before* Click parses a subcommand's own
@@ -5591,6 +5611,11 @@ entries below from being rewritten to chase the current tree.)
   it. Covered by `tests/test_cli.py::test_subcommand_help_survives_a_malformed_config_file` /
   `_an_unreadable_config_file`, with a control asserting a non-`--help` invocation still fails
   loudly (`test_subcommand_without_help_still_fails_loudly_on_bad_config`).
+
+  **Update (lode-rapj, 2026-11-19):** the sentence "raw argv is the only place left to look" is
+  stale. The `lode-rtcx` entry directly below ("Correction (`lode-rtcx`) to the `lode-moq7` entry
+  above") shows Click's `resolve_command()` receives the subcommand's residual args before `main()`
+  runs, so `_help_requested()` no longer reads `sys.argv`. The rest of this entry stands.
 
 - **Correction (`lode-rtcx`) to the `lode-moq7` entry above's "raw argv is the only place left to
   look" sentence.** That was true of `ctx` alone at the point `main()` runs, but not of Click's
@@ -5758,6 +5783,16 @@ entries below from being rewritten to chase the current tree.)
   so the 158 above does not depend on the change — but the headline number is no longer able to
   silently absorb unconfirmable hits.
 
+  **Update (lode-rapj, 2026-11-19):** the measured figures in this entry are stale: the pinned
+  baseline of 56 index invocations / 118 direct greps (and its "~50% miss"), the review addendum's
+  25 / 158 re-measure, and its per-role split (`main: index=25 direct=148`,
+  `subagent: index=0 direct=10`). The 2026-09-14 `lode-dozi` entry below ("CORRECTION to the two
+  entries above") drops the 56 / 118 pin, reassigns the miss rate to `docs_index_log.py stats`, and
+  supersedes 25 / 158. Its "Transcript depth" paragraph shows the split was not real: the scan saw
+  only main-session transcripts, so the `subagent:` row came from rows inside main transcripts. Its
+  "two entries above" are this entry's body and its own "Technical-review addendum", which share
+  this one bullet. The `lode-61w6` marker above covers a different claim.
+
 - **2026-09-14 (`lode-dozi`) — CORRECTION to the two entries above: the tightened classifier, and
   the transcript depth those earlier numbers were measured at.** Appended, not rewritten in place,
   per this file's preamble. The `/land` escalation the entry above records was resolved by a human
@@ -5826,6 +5861,15 @@ entries below from being rewritten to chase the current tree.)
   lead-in reads "CORRECTION to the two entries above"), but its date-first lead-in is not the
   Update lead-in shape, so the preamble's grep missed it. This line makes it findable; the lead-in
   itself stays as committed.
+
+  **Update (lode-rapj, 2026-11-19):** the baseline figure here is stale: "142 index / 431 direct"
+  (and the `main: index=26 direct=59` split) was measured with the pre-segment classifier. The
+  `lode-wtk2` entry below ("CORRECTION: `_classify` now judges Bash SEGMENTS") re-measures it as
+  224 / 438, and that entry's own nested Update re-measures it again as 237 / 451. Narrowings 1 and
+  2 are stale too: the same entry replaces `_bash_command_names` with per-segment `shlex` parsing
+  and renames `_is_write_or_git_form`, and its nested Update deletes the `tee` clause and the
+  version-control exclusion. The `lode-4eyp` marker above says only that this entry is a
+  correction, not that it was itself corrected.
 
 - **2026-09-14 (`lode-wtk2`) — CORRECTION: `_classify` now judges Bash SEGMENTS, not
   whole lines, and the baseline figure above is re-measured.** Appended, not rewritten in place, per
@@ -5992,6 +6036,13 @@ entries below from being rewritten to chase the current tree.)
     reads `.python-version` natively, so nothing needs to pass `--python-version` by hand.
   **Update (`lode-5x01`, 2026-11-16):** the "`venv-install`" in this entry's `python-init.sh` bullet is
   `scripts/venv-install.sh`. Wording only; see the `lode-5x01` entry below.
+  **Update (`lode-s09w.5`, 2026-11-19):** the "`dev` group is locked" bullet above names only
+  `ruff==0.16.3` as a carve-out, but the `dev` extra carried a second exact pin from the same
+  unlocked-dev policy, `mkdocs-material==9.5.44` (`lode-fhql.9`). Locking the group makes it an
+  ordinary lock pin too; since `lode-s09w.3` it lives in `pyproject.toml`'s `[dependency-groups]`
+  `dev` group. Since `lode-s09w.2`, `docs.yml` installs from `uv.lock` (`uv sync --locked`) and must
+  carry no `mkdocs-material==` pin of its own, so `tests/test_build_docs_site.py` no longer keeps a
+  hand-copied pin in sync: it checks that `uv.lock` locks the version `pyproject.toml` pins.
 
 - **Code-reviewer runs `/code-review` medium as well as its hand pass (`lode-1fyb`, decided
   2026-11-16, maintainer decision; implemented by `lode-bldq`).** Resolves the open decision carried by
@@ -6199,6 +6250,13 @@ entries below from being rewritten to chase the current tree.)
     above left two gaps, settled in the entry "Enrichment refusal: provider scope and recovery
     after a model change" at the end of this file. Decision (2)'s re-open condition is widened
     to include `enrichment_llm`, and OpenAI/Azure refusals are in the terminal class.
+  - **Update (lode-jxzs, 2026-11-19):** the Update bullet above says the refusal-recovery entry is
+    "at the end of this file". It is not the last entry now; it sits immediately below, under the
+    head "Enrichment refusal: provider scope and recovery after a model change".
+  - **Update (lode-vlok, 2026-11-19):** the 2026-11-18 rulings in the entry "Refusal-dead enrich
+    jobs: provider in the re-open key, externals, and the batch model" below widen decision (2)
+    again: the provider identity joins the re-open key (`lode-7jcp`), and external snapshots get
+    an enrich gap step under the same refusal re-open rule (`lode-xuoz`, built in `lode-4kg8`).
 
 - **Enrichment refusal: provider scope and recovery after a model change (`lode-g9q3`,
   2026-11-18, maintainer; rulings on the `lode-ahme` technical review's notes 1 and 4).**
@@ -6215,6 +6273,11 @@ entries below from being rewritten to chase the current tree.)
     the head version, `ENRICH_PROMPT_VER`, or the configured enrichment model differs from what
     was stored. No manual-override command.
   - **Built in** `lode-g9q3`; reflected in `docs/storage.md`'s failure taxonomy.
+  - **Update (lode-vlok, 2026-11-19):** as built, only a change of `enrichment_llm.model`
+    re-opens a refused item, not any change of `enrichment_llm` (found by the `lode-g9q3`
+    land-review). The maintainer has since ruled that the provider identity joins the re-open key
+    (`lode-7jcp`). See the entry "Refusal-dead enrich jobs: provider in the re-open key,
+    externals, and the batch model" below.
 
 - **A finished builder's leftover harness lock is accepted until the session ends; no release
   mechanism is built (`lode-lo0q`, 2026-11-18, maintainer ruling).** After `lode-t76f` the builder
@@ -6256,6 +6319,10 @@ entries below from being rewritten to chase the current tree.)
     187-228 ms after. The ticket's own figure for trunk, from a different session, was about
     520 ms. Absolute figures moved by 100 ms or more with machine load, so compare within a
     session, not across.
+  - **Update (lode-9voy, 2026-11-19):** networkx no longer keeps the deferred `lode.retrieval`
+    import worthwhile. `lode.retrieval` now imports networkx inside `graph_expand`, so the
+    parenthetical in the Decision bullet above is stale. The callers' deferral stays for a smaller
+    cost (about 10 ms); see the `lode-9voy` entry at the end of this file.
 - **Agents make no LLM-provider call without maintainer approval, and approved spend runs against
   a scratch `LODE_HOME` (`lode-3xzy`, 2026-11-18, maintainer).** The rule is `CLAUDE.md` General
   Directive 10; the reasons, the approval flow and the backstop weighed are in
@@ -6269,6 +6336,34 @@ entries below from being rewritten to chase the current tree.)
     send nothing to a provider and the offline gates run them; the directive lists the live eval
     (`LODE_RUN_LIVE_EVAL=1`) instead.
   - **Rejected.** Unsetting credentials and a fail-closed provider; no new mechanism built.
+- **Update (lode-v3xd, 2026-11-19): the maintainer ruled on every open point of the `lode-3xzy`
+  entry above.**
+  - **Confirmed as built (1-6).** (1) Without approval an agent makes no provider call; it
+    escalates and stops by its role's path, the note opening `ESCALATION: provider spend needed:`.
+    (2) If a free probe answers the question it uses it and carries on; it escalates only when
+    the work cannot be finished without the spend. (3) A sub-agent reports the need to the agent
+    that briefed it. Ask-and-continue is not taken. (4) Tests marked `network` are not provider
+    spend; the live eval (`LODE_RUN_LIVE_EVAL=1`, `nox -s eval`) is. (5) `lode reenrich` needs
+    approval because it queues enrich calls for the next `lode work`. (6) Asking in the TUI is on
+    the list.
+  - **Ruled on the known limits.** (3a) Directive 10 binds the interactive main session too; there
+    the maintainer's in-conversation instruction is the approval, and the scratch `LODE_HOME`
+    still applies. (3b) A scratch `LODE_HOME` does not run on bare defaults and does not expose
+    user data: `models/` may be symlinked to the real cache (`model_cache_dir()` is
+    `$LODE_HOME/models`, verified), and `config.toml` is copied only after a scrub.
+  - **The scrub.** (i) Drop every field `src/lode/config.py` marks `secret=True`, derived from the
+    marking. (ii) Drop the connector fields as a group: `jira_enabled`,
+    `confluence_enabled`, `jira_base_url`, `confluence_base_url`, `jira_projects` and
+    `no_egress_scopes`. Widened beyond secrets because Atlassian credentials
+    are env-var primary and `jira_active`/`confluence_active` are "enabled flag AND credentials
+    resolve", so an enabled flag left in a copied config is a live connector to the real site
+    wherever the variables are set; a base URL dropped alone does not disable Confluence (empty
+    means "infer").
+  - **Still accepted.** bd records no checkable author on an approval note; "a maintainer note"
+    stays a convention.
+  - **Changed.** `CLAUDE.md` Directive 10 and the `lode-3xzy` section of
+    [agents-workflow.md](agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
+    now carry 3a and 3b.
 - **Update (lode-gcbg, 2026-11-18): the maintainer confirmed the `lode-jb2q` rebase-pickup rules,
   points 1-3 as built.** The `lode-jb2q` entry above said confirming or reversing it was this
   ticket's to settle.
@@ -6342,3 +6437,65 @@ entries below from being rewritten to chase the current tree.)
   - **Not taken.** (a) copying markers into sub-units breaks the tiling invariant; (c) an authoring
     rule would not cover the existing markers and rests on the author knowing the entry is
     oversized; (d) cannot know which paragraph a marker corrects.
+
+- **The marker gate does not exempt top-level entry heads; the over-match is accepted (`lode-hp12`,
+  2026-11-19, maintainer).** `lode-llxw` ruled that a new correcting entry is not a marker and its
+  head is free, and removed the one pattern in `tests/test_decisions_supersession_markers.py` that
+  targeted an entry head. The remaining patterns scan every line and cannot tell a head from an
+  appended marker, so a new head that itself opens with a gated keyword shape (a bold
+  `Correction (id)` lead-in, say) still goes red. Decided, option (a): leave it. That red is an
+  accepted over-match and the way out is to reword the head. Option (b), skipping lines that start
+  `- **` at column zero, was not taken. As posed, (b) would also have let a head carry the
+  all-capitals stale-flag keyword, which is banned on any line today. The ticket asked whether that
+  one pattern would keep applying to heads; the ruling for (a) does not answer it. The `lode-rtcx`
+  allowlist entry stays, and the module docstring records the over-match as accepted.
+
+- **networkx is imported inside the one function that builds the graph; the callers' deferral of
+  `cited_answer` and `lode.retrieval` stays, for a different reason (`lode-9voy`, 2026-11-19).**
+  `lode.retrieval` imports networkx inside `graph_expand`, the one runtime use; the local `nx`
+  annotation comes after that import.
+  - **Measured** with `python -X importtime -c "import lode.cli; import lode.retrieval; import
+    lode.cited_answer"` (cumulative), one WSL2 machine, warm bytecode cache, eight runs in the
+    technical review's session: `import lode.cli` 236-276 ms; `lode.retrieval` 3-5 ms after it;
+    `lode.cited_answer` 6-8 ms more, which adds only lode modules. In the same session networkx
+    alone cost about 100-115 ms warm and about 670 ms on a cold first import. The build session
+    saw higher figures (`lode.cited_answer` about 39 ms), not reproduced warm, probably cold-cache.
+  - **Decision.** The function-local imports in `lode.cli.ask` and `lode.tui.services.ask` stay,
+    for the ask stack's about 10 ms (about 4% of `import lode.cli`); their comments give the reason
+    without networkx and without a figure. Hoisting would also have to change how both modules
+    reach `_retrieve`: `tests/test_tui_ask.py` patches `lode.retrieval._retrieve`, and a
+    module-scope `from` import would bind the original. Nothing pins this deferral: a module-scope
+    import of either module would turn no test red. The imports in `cli/reembed.py` and
+    `cli/models.py` carried no networkx comment and are untouched.
+- **Refusal-dead enrich jobs: provider in the re-open key, externals, and the batch model
+  (`lode-vlok`, 2026-11-18 rulings, recorded 2026-11-19, maintainer).** Three gaps found while
+  reviewing `lode-g9q3` that the `lode-ahme` decision and the `lode-g9q3` provider-scope entry
+  above left open. None blocked `lode-g9q3`'s acceptance.
+  - **1. Provider is not part of the re-open key: act.** `reconcile._enrich_gap_step` compared
+    `jobs.refusal_model` to `settings.enrichment_llm.model` only, so a switch of `llm_provider`
+    (or the Azure endpoint) that keeps the same model string did not re-open a refused note,
+    although `stale_enrichment_heads` and `lode reenrich` already treat "same model string,
+    different vendor" as a change (`lode-568v.6`, `provider_identity`). Decided: store
+    `provider_identity` beside `refusal_model` and compare both. Filed as `lode-7jcp`.
+  - **2. External snapshots: reword the `lode status` hint only.** The refusal hint said the
+    note is "not retried until the note is edited, the enrichment prompt version changes, or
+    `enrichment_llm` is changed", which did not hold for an external snapshot on two of the
+    three. The `lode-g9q3` land-review also found the hint overbroad for notes: only an
+    `enrichment_llm.model` change re-opens, not any `enrichment_llm` change (until `lode-7jcp`
+    adds provider). Decided: this item rewords the hint and nothing more, covering both
+    findings. Filed as `lode-eq9t`. Giving externals a gap step was split out as `lode-xuoz`.
+    There the maintainer ruled (2026-11-18) to give external snapshots an enrich gap step with
+    parity to notes (dead or missing enrichment, an `ENRICH_PROMPT_VER` change, an
+    `enrichment_llm` change), because refresh does not reliably re-open a dead external enrich
+    job: an identical refetch mints no snapshot and a sub-threshold change carries the dead
+    enrichment forward. `lode-xuoz` was closed as superseded by `lode-4kg8`, which implements
+    that ruling, has landed, and also reworded the hint to cover external pages.
+  - **3. The batch route stamps the model at collect time: act.** `enrich._mark_job_refused`
+    records `settings.enrichment_llm.model` when the batch is collected, not the model the batch
+    was submitted with (the success path stamps `annotations.model` the same way), so a change of
+    `enrichment_llm.model` between submit and collect records a note refused by the old model as
+    refused by the new one, which is then never sent to it. Decided: record the model the batch
+    was submitted with, on both the refusal and success paths. Filed as `lode-4wgq`.
+  - **Not decided here.** Whether `lode-4wgq` also records the provider identity and
+    `ENRICH_PROMPT_VER` the batch was submitted with: the batch route reads both at collect time
+    too, and item 3's ruling names only the model. Open in `lode-ucpu`, which blocks `lode-4wgq`.

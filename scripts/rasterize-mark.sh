@@ -7,7 +7,7 @@
 # the command exist).
 #
 # Uses cairosvg (via a throwaway venv, never the project's own ./.venv) so
-# this stays outside pyproject.toml/requirements.lock -- it is a one-off
+# this stays outside pyproject.toml/uv.lock -- it is a one-off
 # asset-generation tool, not a runtime or dev dependency of lode itself.
 #
 # Deliberately does NOT source scripts/gate-lib.sh (lode-pcee expects the

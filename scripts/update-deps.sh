@@ -1,118 +1,85 @@
 #!/bin/bash -e
 #
-# Controlled dependency update for lode's locked Python runtime set
-# (lode-g274.2 / lode-fdjr) -- the ONLY sanctioned way to move
-# requirements.lock. A human sees what is changing before anything installs.
+# Controlled dependency update for lode's locked Python set (lode-g274.2 /
+# lode-fdjr, moved onto uv by lode-s09w.4) -- the ONLY sanctioned way to move
+# uv.lock. A human sees what is changing before anything installs.
 #
 # Run from the repo root:
-#   scripts/update-deps.sh                    # recompile the WHOLE lock, gate, promote/rollback
-#   scripts/update-deps.sh --dry-run          # print the version diff only, touch nothing
+#   scripts/update-deps.sh                    # re-resolve the WHOLE lock, gate, keep/rollback
+#   scripts/update-deps.sh --dry-run          # print the version diff only; uv.lock restored
 #   scripts/update-deps.sh --package NAME     # bump just NAME (+ whatever it drags with it)
 #   scripts/update-deps.sh --package NAME --dry-run
 #   scripts/update-deps.sh --no-file          # promote as usual but never file the churn stub
 #
 # What it does:
-#   1. Recompile the lock from pyproject.toml into a temp file, via
-#      scripts/compile-lock.sh (the SINGLE shared lock-gen command --
-#      lode-sys4 -- which derives --python-version from .python-version so
-#      this always resolves for the same interpreter CI targets, whatever
-#      this machine's own default Python is). A whole-set update re-resolves
-#      everything fresh (--upgrade). A --package update seeds the temp file
-#      from the CURRENT committed lock first and passes --upgrade-package,
-#      so uv only lets that one package (and anything it forces) move --
-#      everything else stays pinned to what's already committed.
-#   2. Print a readable VERSION DIFF against the committed lock -- names and
-#      versions only, no hash noise: "pkg  OLD -> NEW" for a bump, "+ pkg
-#      VERSION" for an addition, "- pkg  VERSION (removed)". This diff is
-#      the whole point of the script: it is the artifact, not the install.
-#   3. --dry-run stops here, having touched nothing. Otherwise: save a copy
-#      of the currently-committed lock, then PROMOTE the candidate over
-#      requirements.lock immediately -- BEFORE any gating (lode-2zi9). Any
-#      test that reads the committed lock from disk (a workflow-pin gate, a
-#      docs table, a future lock-vs-pyproject consistency check) must see
-#      what the update is about to change, not the pins it is about to
-#      replace; gating with the old lock still on disk is exactly the wrong
-#      signal (see the ticket for the incident this fixes). Then trash
-#      ./.venv and rebuild it FRESH from that now-promoted lock (see NO -x /
-#      TRASH-NOT-REPAIR below -- never patched in place).
+#   1. Save a copy of the committed uv.lock, then move it in place:
+#      `uv lock --upgrade` (whole set) or `uv lock --upgrade-package NAME`
+#      (only NAME and whatever it forces; every other pin stays put).
+#   2. Print a readable VERSION DIFF between the saved copy and the moved
+#      uv.lock -- one line per changed package, "pkg  OLD -> NEW" for a bump,
+#      "+ pkg VERSION" for an addition, "- pkg  VERSION (removed)" -- derived
+#      from the lock's own `[[package]]` name/version pairs, never from its
+#      hash lines. This diff is the whole point of the script: it is the
+#      artifact, not the install.
+#   3. --dry-run restores the saved lock and stops, having changed nothing.
+#      Otherwise the moved uv.lock STAYS on disk -- it is promoted BEFORE any
+#      gating (lode-2zi9). Any test that reads the committed lock from disk
+#      (a workflow-pin gate, a docs table) must see what the update is about
+#      to change, not the pins it is about to replace. Then trash ./.venv and
+#      rebuild it FRESH from that lock with `uv sync --frozen` (hash-verified
+#      against uv.lock's recorded hashes -- docs/stack.md), never patched in
+#      place.
 #   4. Run the gates: nox -t fix, nox -s tests -- against the promoted lock.
-#   5. GREEN (candidate installs AND both gates pass) -> nothing further to
-#      do to the lock; it already holds the candidate. This script never
-#      commits -- review (`git diff -- requirements.lock`) and commit it
-#      yourself. ANY OTHER FAILURE -- the candidate install itself
-#      (uninstallable / hash-mismatched pin, yanked release, network blip)
-#      just as much as a red nox gate -- prints the paste-into-bd failure
-#      report FIRST, then RESTORES the committed lock from the saved copy
-#      byte-for-byte, trashes whatever venv state exists, and rebuilds
-#      clean from that restored lock. The report does not depend on the
-#      restore or that rollback rebuild succeeding (see FAILURE HANDLING
-#      below), and if the rollback rebuild itself also fails, a loud
-#      warning after the report says so and points at
-#      `uv sync --locked` as the manual recovery.
-#   6. On a green run (step 5's GREEN path only -- never on --dry-run,
-#      never on a failed/rolled-back run), file ONE bd stub ticket carrying the
-#      VERSION DIFF as a durable work order for a human/producer to read
-#      upstream changelogs and judge required-work vs. judgment-call in the
-#      context of lode's actual call sites (lode-i642). This is a WORK
-#      ORDER, not a finding: the script cannot itself judge required-vs-
-#      decision, so the stub's own acceptance criteria delegate that
-#      judgment (required-only: file follow-ups only for churn that
-#      demonstrably breaks/degrades a lode call site; surface new
-#      capabilities and judgment calls in the executor's hand-off instead --
-#      lode-cai6 is the worked example of a judgment call that should NOT
-#      have been auto-filed). Noise gate: filing is skipped entirely when
-#      every moved package changed only its patch component (mechanically
-#      decidable from the diff already computed) -- a ticket per run that is
-#      usually noise gets ignored -- that gate, the diff parsing and the
-#      rendering all live in the sourceable scripts/dep-churn-lib.sh so they
-#      are unit-tested rather than trapped in this script's uninvokable
-#      middle. `--no-file` suppresses filing outright;
-#      `--dry-run` never reaches this step at all. Filing writes Dolt, so a
-#      missing/failing `bd` (or the `bd dolt push` after it) only WARNS --
-#      it never changes this script's exit status or the lock promotion
-#      (this script still never commits anything outside ./.venv and
-#      requirements.lock).
+#   5. GREEN -> nothing further to do to the lock; this script never commits
+#      -- review (`git diff -- uv.lock`) and commit it yourself. ANY OTHER
+#      FAILURE -- the install itself (hash-mismatched pin, yanked release,
+#      network blip) just as much as a red nox gate -- prints the
+#      paste-into-bd failure report FIRST, then RESTORES the committed lock
+#      from the saved copy byte-for-byte, trashes whatever venv state exists,
+#      and rebuilds clean from that restored lock. The report does not depend
+#      on the restore or that rollback rebuild succeeding, and if the
+#      rollback rebuild itself also fails, a loud warning after the report
+#      says so and points at `uv sync --frozen` as the manual recovery.
+#   6. On a green run only (never on --dry-run or a rolled-back run), file ONE
+#      bd stub ticket carrying the VERSION DIFF as a durable work order for a
+#      human/producer to read upstream changelogs and judge required-work vs.
+#      judgment-call in the context of lode's actual call sites (lode-i642).
+#      A WORK ORDER, not a finding: required-only filing policy, see the
+#      stub's own acceptance text. Noise gate: skipped entirely when every
+#      moved package changed only its patch component. The diff parsing, the
+#      rendering and that gate live in the sourceable scripts/dep-churn-lib.sh
+#      so they are unit-tested. `--no-file` suppresses filing outright. Filing
+#      writes Dolt, so a missing/failing `bd` (or the `bd dolt push` after it)
+#      only WARNS -- it never changes this script's exit status or the lock
+#      (this script never mutates anything outside ./.venv and uv.lock).
 #
 # NO -x / TRASH-NOT-REPAIR -- deviates from the scripts/*.sh house style of
-# `#!/bin/bash -ex`, per this ticket's own note that -ex may fight the
-# rollback path. `-e` alone still aborts on any unguarded failing command,
+# `#!/bin/bash -ex`: `-e` alone still aborts on any unguarded failing command,
 # but the genuinely risky steps -- installing the candidate and running the
-# gates -- are deliberately NOT run under bare `-e`: each is checked
-# explicitly (`if ! rebuild_venv ...`, `if ! nox ...`) so a failure at ANY
-# of those steps is caught and handled by THIS script, not left to `-e`
-# tearing the process down mid cleanup with a half-migrated venv and no
-# report (lode-fdjr -- this is exactly the defect that bounced the first
-# attempt: the candidate install step was invoked as a bare statement,
-# unguarded, so an install-time failure let errexit abort before rollback
-# or reporting ever ran). `-x` is dropped because uv's own compile/install
-# chatter and the gate output are already the useful signal -- xtrace would
-# just bury it in line noise.
+# gates -- are each checked explicitly (`if ! rebuild_venv ...`) so a failure
+# at ANY of them is caught and handled by THIS script, not left to `-e`
+# tearing the process down mid cleanup with no report (lode-fdjr). `-x` is
+# dropped because uv's own chatter and the gate output are already the useful
+# signal.
 #
-# FAILURE HANDLING -- rollback is never "reverse a partial install"
-# (2026-07-19 user decision, lode-g274 notes): it is always restore the
-# saved committed lock byte-for-byte, then `rm -rf ./.venv` + a clean rebuild
-# from that restored lock, so there is no half-migrated state to reason
-# about *if the restore and rebuild succeed*. The failure report is built
-# and printed BEFORE the lock is restored or that rollback rebuild is
-# attempted (not after), so a hiccup during either step (e.g. a transient
-# network failure on `uv pip install`) can never swallow the report --
-# the two are independent by construction, not by ordering luck. The restore
-# is ALSO armed on an EXIT trap (RESTORE_LOCK_ON_EXIT) for the window between
-# the step-3 promotion and step 5 deciding an outcome, so a Ctrl-C, a SIGTERM
-# or an errexit abort mid-gate cannot leave an UNGATED candidate on disk that a
-# human would then read as a gated one -- the very failure this ordering exists
-# to prevent. The one residual no trap can cover is a SIGKILL (or a power cut):
-# there, note that $LOCK is git-tracked where ./.venv is not, so `git checkout --
-# requirements.lock` is the last-resort restore. $SAVED_LOCK rather than git is
-# what the script itself uses, because the lock may legitimately be dirty when
-# a run starts.
+# FAILURE HANDLING -- rollback is never "reverse a partial install": it is
+# always restore the saved committed lock byte-for-byte, then `rm -rf ./.venv`
+# + a clean rebuild from it. The failure report is built and printed BEFORE
+# the lock is restored or the rollback rebuild is attempted, so a hiccup in
+# either can never swallow it. The restore is ALSO armed on an EXIT trap
+# (RESTORE_LOCK_ON_EXIT) for the whole window between moving the lock and
+# deciding an outcome, so a Ctrl-C, a SIGTERM or an errexit abort mid-gate
+# cannot leave an UNGATED candidate on disk that a human would read as a gated
+# one. The one residual no trap can cover is a SIGKILL (or a power cut): there,
+# `git checkout -- uv.lock` is the last-resort restore, since uv.lock is
+# git-tracked where ./.venv is not.
 
 set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 
-LOCK="requirements.lock"
+LOCK="uv.lock"
 
 DRY_RUN=0
 PACKAGE=""
@@ -148,44 +115,33 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-CANDIDATE="$(mktemp)"
 SAVED_LOCK="$(mktemp)"
-# The candidate is promoted over $LOCK BEFORE the gates run (lode-2zi9), so from
-# that promotion until this script decides an outcome there is a window in which
-# an UNGATED lock sits on disk looking exactly like a gated one. A death in that
-# window -- Ctrl-C during the long `nox -s tests`, SIGTERM, an errexit abort --
-# must not strand it, which is the very defect this ticket exists to kill. So the
-# restore hangs off process EXIT, not off the handled-failure path alone;
-# RESTORE_LOCK_ON_EXIT is cleared the moment the outcome IS decided (green: keep
-# the candidate; failed: the explicit restore below already ran).
 RESTORE_LOCK_ON_EXIT=0
 cleanup() {
   if [ "$RESTORE_LOCK_ON_EXIT" -eq 1 ]; then
     cp -f "$SAVED_LOCK" "$LOCK"
-    echo "update-deps.sh: died after promoting the candidate -- restored the committed $LOCK." >&2
+    echo "update-deps.sh: died after moving the lock -- restored the committed $LOCK." >&2
   fi
-  rm -f "$CANDIDATE" "$SAVED_LOCK"
+  rm -f "$SAVED_LOCK"
 }
 trap cleanup EXIT
 cp -f "$LOCK" "$SAVED_LOCK"
 
+# From here until the outcome is decided an UNGATED lock sits on disk.
+RESTORE_LOCK_ON_EXIT=1
+# Checked explicitly: `bash scripts/update-deps.sh` drops the shebang's -e, and a
+# failed resolve must not carry on to a "no change" diff and a green exit.
 if [ -n "$PACKAGE" ]; then
-  cp -f "$LOCK" "$CANDIDATE"   # seed with the committed lock so uv reuses every
-                               # other package's pinned version as a preference
-  "$REPO/scripts/compile-lock.sh" --upgrade-package "$PACKAGE" -q -o "$CANDIDATE"
+  UPGRADE=(--upgrade-package "$PACKAGE")
 else
-  # -q: uv pip compile otherwise echoes the ENTIRE compiled lock (every
-  # package + every hash) to stdout in addition to writing -o -- exactly
-  # the noise the VERSION DIFF below exists to replace.
-  "$REPO/scripts/compile-lock.sh" --upgrade -q -o "$CANDIDATE"
+  UPGRADE=(--upgrade)
 fi
-# uv's autogenerated header comment records the literal -o PATH it was
-# invoked with -- normalize the leaked tempfile path back to the real
-# committed filename so promoting the candidate never bakes a throwaway
-# /tmp path into requirements.lock's history.
-sed -i "s|$CANDIDATE|$LOCK|" "$CANDIDATE"
+if ! uv lock -q "${UPGRADE[@]}"; then
+  echo "update-deps.sh: uv lock failed (see output above) -- nothing was gated." >&2
+  exit 1
+fi
 
-# Readable name==version diff. The parsing, the rendering and the stub's skip
+# Readable name/version diff. The parsing, the rendering and the stub's skip
 # policy all live in the sourceable scripts/dep-churn-lib.sh so they are
 # unit-tested (tests/test_dep_churn_lib.py) rather than trapped in this
 # script's uninvokable middle. Both values below are assigned HERE, at top
@@ -194,18 +150,20 @@ sed -i "s|$CANDIDATE|$LOCK|" "$CANDIDATE"
 # shellcheck source=dep-churn-lib.sh
 . "$REPO/scripts/dep-churn-lib.sh"
 
-CHANGES_RAW="$(dep_changes_raw "$LOCK" "$CANDIDATE")"
+CHANGES_RAW="$(dep_changes_raw "$SAVED_LOCK" "$LOCK")"
 DIFF_TEXT="$(dep_version_diff_text "$LOCK" "$CHANGES_RAW")"
 echo "$DIFF_TEXT"
 
 if [ "$DRY_RUN" -eq 1 ]; then
+  cp -f "$SAVED_LOCK" "$LOCK"
+  RESTORE_LOCK_ON_EXIT=0
   exit 0
 fi
 
 # File ONE bd stub ticket carrying the VERSION DIFF as a durable work order
 # (lode-i642) -- only called from the GREEN run path (step 6). Every
 # failure mode here WARNS and returns 0: filing must never change this
-# script's exit status or the lock promotion outcome.
+# script's exit status or the lock outcome.
 file_churn_stub() {
   local skip
   if skip="$(dep_stub_skip_reason "$NO_FILE" "$CHANGES_RAW")"; then
@@ -241,47 +199,24 @@ BODY_EOF
   return 0
 }
 
-# Trash ./.venv and rebuild it FRESH from $1 (a lock file path) -- never
-# patched in place, so there is never a half-migrated venv to reason about
-# ONCE THIS FUNCTION RETURNS SUCCESSFULLY. Every caller below checks its
-# return value explicitly (never invoked as a bare statement) -- but that
-# alone is NOT enough: when a function is called inside `if ! func; then`,
-# bash suspends -e for the ENTIRE function body during that call (not just
-# the call site), so without the explicit `&&` chaining below, an install
-# step failing partway through (e.g. the hash-verified install) would be
-# silently skipped past -- later lines in the function would still run,
-# and the function would return the LAST command's (successful) exit
-# status, masking the real failure instead of reporting it. Verified
-# empirically while building this fix (a bare-statement chain here reached
-# the "gates green" branch even with a deliberately-failing install step).
-# Chaining with `&&` makes the function's own return code reflect the
-# FIRST failing step regardless of the caller's -e state, independent of
-# how the function happens to be invoked. The whole venv-creation-plus-install
-# sequence is one failure-transparent chain end to end. Two installs, because
-# `-e` and `--require-hashes` are mutually exclusive in one invocation: the
-# hash-verified runtime lock first, then the local package editable together
-# with the `dev` group, resolved fresh.
+# Trash ./.venv and rebuild it FRESH from the on-disk uv.lock -- never patched
+# in place. `uv sync --frozen` installs the lock as committed, verifying every
+# artifact against the hashes uv.lock records (docs/stack.md). Callers check
+# the return value explicitly (never as a bare statement); `&&` keeps the
+# function's own status the FIRST failing step even though bash suspends -e
+# inside a function called under `if !`.
 rebuild_venv() {
-  local lockfile="$1"
   rm -rf ./.venv &&
-    uv venv .venv &&
-    uv pip install --python .venv/bin/python --require-hashes -r "$lockfile" &&
-    uv pip install --python .venv/bin/python -e . --group dev
+    uv sync --frozen
 }
-
-# Promote BEFORE gating (lode-2zi9) -- see step 3 and FAILURE HANDLING above.
-# Everything from here to the verdict below runs with an UNGATED lock on disk.
-cp -f "$CANDIDATE" "$LOCK"
-RESTORE_LOCK_ON_EXIT=1
 
 echo "update-deps.sh: installing the candidate lock into a freshly rebuilt ./.venv..."
 FAILED_AT=""
-if ! rebuild_venv "$LOCK"; then
+if ! rebuild_venv; then
   FAILED_AT="candidate install (rebuild_venv failed partway -- see output above)"
 else
   echo "update-deps.sh: running gates (nox -t fix, nox -s tests)..."
-  # --no-sync: the rebuilt ./.venv holds the CANDIDATE lock, which a syncing
-  # `uv run` would overwrite with uv.lock's pins.
+  # --no-sync: rebuild_venv just synced ./.venv from this uv.lock; skip a redundant re-sync.
   if ! uv run --frozen --no-sync nox -t fix; then
     FAILED_AT="nox -t fix"
   elif ! uv run --frozen --no-sync nox -s tests; then
@@ -300,12 +235,10 @@ fi
 echo "update-deps.sh: FAILED ($FAILED_AT) -- restoring the committed $LOCK." >&2
 
 # Build and print the report BEFORE restoring the lock or attempting the
-# rollback rebuild, and regardless of whether either succeeds -- see FAILURE
-# HANDLING in the header. So the "restored" line below states what this script
-# is about to do, not a result already confirmed.
+# rollback rebuild, and regardless of whether either succeeds.
 REPORT="$(cat <<REPORT_EOF
 === update-deps.sh FAILURE REPORT (paste into a bd ticket) ===
-Attempted update: $( [ -n "$PACKAGE" ] && echo "single package '$PACKAGE'" || echo "full lock recompile" )
+Attempted update: $( [ -n "$PACKAGE" ] && echo "single package '$PACKAGE'" || echo "full lock upgrade" )
 Failed at:         $FAILED_AT (see output above for the actual error)
 Candidate diff that was attempted:
 $DIFF_TEXT
@@ -315,16 +248,16 @@ REPORT_EOF
 )"
 echo "$REPORT"
 
-# Eager, not left to the trap: rebuild_venv below installs from $LOCK, so the
+# Eager, not left to the trap: rebuild_venv installs from $LOCK, so the
 # restore has to land before it or the rollback would reinstall the rejection.
 cp -f "$SAVED_LOCK" "$LOCK"
 RESTORE_LOCK_ON_EXIT=0
 echo "update-deps.sh: trashing ./.venv and rebuilding clean from the restored $LOCK..." >&2
-if ! rebuild_venv "$LOCK"; then
+if ! rebuild_venv; then
   echo "update-deps.sh: WARNING -- the clean rollback rebuild from $LOCK ALSO failed." >&2
   echo "update-deps.sh: ./.venv may now be missing or broken. The report above is still" >&2
   echo "update-deps.sh: accurate ($LOCK was restored to its pre-update pins); re-run" >&2
-  echo "update-deps.sh: uv sync --locked by hand to restore ./.venv." >&2
+  echo "update-deps.sh: uv sync --frozen by hand to restore ./.venv." >&2
 fi
 
 exit 1

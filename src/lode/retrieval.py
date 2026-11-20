@@ -57,8 +57,6 @@ from enum import IntEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-import networkx as nx
-
 from lode.config import Settings, model_cache_dir
 from lode.lexical import LexicalHit, LexicalIndex
 from lode.sql_ids import fetch_by_ids
@@ -515,6 +513,8 @@ def graph_expand(
     ).fetchall()
     if not edge_rows:
         return hits  # no-op: no edges in the knowledge graph yet
+
+    import networkx as nx
 
     G: nx.DiGraph = nx.DiGraph()
     for from_id, to_id, source in edge_rows:

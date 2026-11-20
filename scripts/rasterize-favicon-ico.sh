@@ -12,7 +12,7 @@
 #
 # Uses only cairosvg (via a throwaway venv, never the project's own
 # ./.venv) plus the Python standard library -- the same rasterizer as
-# scripts/rasterize-mark.sh, kept out of pyproject.toml/requirements.lock
+# scripts/rasterize-mark.sh, kept out of pyproject.toml/uv.lock
 # since this is a one-off asset-generation tool, not a runtime or dev
 # dependency of lode itself. Deliberately does NOT depend on Pillow: this
 # host has no jpeg/zlib headers for Pillow's C extension to build against,

@@ -236,6 +236,27 @@ enqueues **no** `embed` job and writes **no** FTS row: a failed fetch must not b
 retrievable/citable hit on either leg (decision, `lode-w0h.2`, 2026-07-08, extended to the FTS leg by
 `lode-c5l`; mirrors the owned-note delete path, which likewise is never indexed).
 
+### Enrich gap for externals (`lode-4kg8`)
+
+A refresh does not reliably re-open enrichment: an identical refetch mints no new snapshot, and a
+sub-threshold change carries the prior enrichment forward with no enrich job of its own. So
+`reconcile._enrich_gap_step` has an externals arm with the same triggers as notes — no current
+enrichment (never enriched, or max-retries-dead), a `done` job under a stale `ENRICH_PROMPT_VER`,
+and a refusal-dead job re-opened only by the note rule (prompt version or `enrichment_llm`
+change; [storage.md](storage.md) failure taxonomy). Like notes, a `done` job records no model, so a
+model change alone does not re-open a `done` enrichment.
+
+**The materiality gate stays intact.** The signal is *not* "the head snapshot has no enrich job" —
+that would fire on every carried-forward head. It is the external's **in-force enrich job**: the
+newest `enrich` job across all of the external's snapshots (the one whose annotations the head
+inherits). The head is a gap iff that job is dead (and not a current refusal) or `done` under a stale
+prompt version, or no enrich job exists yet and the head's `embed` job is `done` (the gate runs
+post-embed, so before then it may still decide). A live in-force job is left alone. The re-enqueue
+targets the head snapshot. Tombstoned-head and `no_egress` externals are excluded, where `no_egress`
+means the row flag or a `no_egress_scopes` rule (the same composition the enrich egress gate uses).
+A refused page is therefore not retried by a sub-threshold change either: the refusal stays in
+force until a change passes the materiality gate, or the prompt version or model changes.
+
 ### Refresh policy: TTL-based revalidation (decided-for-web, `lode-w0h.6`)
 
 [decisions.md](decisions.md)'s "External refresh" entry leaves each connector to choose between
