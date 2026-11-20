@@ -6253,6 +6253,10 @@ entries below from being rewritten to chase the current tree.)
   - **Update (lode-jxzs, 2026-11-19):** the Update bullet above says the refusal-recovery entry is
     "at the end of this file". It is not the last entry now; it sits immediately below, under the
     head "Enrichment refusal: provider scope and recovery after a model change".
+  - **Update (lode-vlok, 2026-11-19):** the 2026-11-18 rulings in the entry "Refusal-dead enrich
+    jobs: provider in the re-open key, externals, and the batch model" below widen decision (2)
+    again: the provider identity joins the re-open key (`lode-7jcp`), and external snapshots get
+    an enrich gap step under the same refusal re-open rule (`lode-xuoz`, built in `lode-4kg8`).
 
 - **Enrichment refusal: provider scope and recovery after a model change (`lode-g9q3`,
   2026-11-18, maintainer; rulings on the `lode-ahme` technical review's notes 1 and 4).**
@@ -6269,6 +6273,11 @@ entries below from being rewritten to chase the current tree.)
     the head version, `ENRICH_PROMPT_VER`, or the configured enrichment model differs from what
     was stored. No manual-override command.
   - **Built in** `lode-g9q3`; reflected in `docs/storage.md`'s failure taxonomy.
+  - **Update (lode-vlok, 2026-11-19):** as built, only a change of `enrichment_llm.model`
+    re-opens a refused item, not any change of `enrichment_llm` (found by the `lode-g9q3`
+    land-review). The maintainer has since ruled that the provider identity joins the re-open key
+    (`lode-7jcp`). See the entry "Refusal-dead enrich jobs: provider in the re-open key,
+    externals, and the batch model" below.
 
 - **A finished builder's leftover harness lock is accepted until the session ends; no release
   mechanism is built (`lode-lo0q`, 2026-11-18, maintainer ruling).** After `lode-t76f` the builder
@@ -6458,3 +6467,35 @@ entries below from being rewritten to chase the current tree.)
     module-scope `from` import would bind the original. Nothing pins this deferral: a module-scope
     import of either module would turn no test red. The imports in `cli/reembed.py` and
     `cli/models.py` carried no networkx comment and are untouched.
+- **Refusal-dead enrich jobs: provider in the re-open key, externals, and the batch model
+  (`lode-vlok`, 2026-11-18 rulings, recorded 2026-11-19, maintainer).** Three gaps found while
+  reviewing `lode-g9q3` that the `lode-ahme` decision and the `lode-g9q3` provider-scope entry
+  above left open. None blocked `lode-g9q3`'s acceptance.
+  - **1. Provider is not part of the re-open key: act.** `reconcile._enrich_gap_step` compared
+    `jobs.refusal_model` to `settings.enrichment_llm.model` only, so a switch of `llm_provider`
+    (or the Azure endpoint) that keeps the same model string did not re-open a refused note,
+    although `stale_enrichment_heads` and `lode reenrich` already treat "same model string,
+    different vendor" as a change (`lode-568v.6`, `provider_identity`). Decided: store
+    `provider_identity` beside `refusal_model` and compare both. Filed as `lode-7jcp`.
+  - **2. External snapshots: reword the `lode status` hint only.** The refusal hint said the
+    note is "not retried until the note is edited, the enrichment prompt version changes, or
+    `enrichment_llm` is changed", which did not hold for an external snapshot on two of the
+    three. The `lode-g9q3` land-review also found the hint overbroad for notes: only an
+    `enrichment_llm.model` change re-opens, not any `enrichment_llm` change (until `lode-7jcp`
+    adds provider). Decided: this item rewords the hint and nothing more, covering both
+    findings. Filed as `lode-eq9t`. Giving externals a gap step was split out as `lode-xuoz`.
+    There the maintainer ruled (2026-11-18) to give external snapshots an enrich gap step with
+    parity to notes (dead or missing enrichment, an `ENRICH_PROMPT_VER` change, an
+    `enrichment_llm` change), because refresh does not reliably re-open a dead external enrich
+    job: an identical refetch mints no snapshot and a sub-threshold change carries the dead
+    enrichment forward. `lode-xuoz` was closed as superseded by `lode-4kg8`, which implements
+    that ruling, has landed, and also reworded the hint to cover external pages.
+  - **3. The batch route stamps the model at collect time: act.** `enrich._mark_job_refused`
+    records `settings.enrichment_llm.model` when the batch is collected, not the model the batch
+    was submitted with (the success path stamps `annotations.model` the same way), so a change of
+    `enrichment_llm.model` between submit and collect records a note refused by the old model as
+    refused by the new one, which is then never sent to it. Decided: record the model the batch
+    was submitted with, on both the refusal and success paths. Filed as `lode-4wgq`.
+  - **Not decided here.** Whether `lode-4wgq` also records the provider identity and
+    `ENRICH_PROMPT_VER` the batch was submitted with: the batch route reads both at collect time
+    too, and item 3's ruling names only the model. Open in `lode-ucpu`, which blocks `lode-4wgq`.
