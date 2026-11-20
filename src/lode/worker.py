@@ -607,12 +607,6 @@ def run_one(
     handler = registry[job_type]
     short = short_version_id(target_version)
 
-    # LLMAuthError (lode-568v.3) is caught alongside
-    # AuthError -- a missing OpenAI/Azure credential is exactly as permanent,
-    # user-actionable a failure as a missing Anthropic one (lode-9yy), and
-    # lode-568v.2's tracked follow-up said this widening was needed once a
-    # second provider's credential failures had no existing exception type to
-    # preserve (docs/decisions.md).
     try:
         outcome = handler(conn, target_version, db_path, settings)
         with conn:
@@ -637,6 +631,10 @@ def run_one(
     # reach the transient accounting below: no attempts charged, no backoff,
     # never dead-lettered. Reset the claim to 'pending' (uncharged) and re-raise
     # so the caller sees build_client's actionable message.
+    #
+    # LLMAuthError (lode-568v.3) is caught alongside AuthError: a missing
+    # OpenAI/Azure credential is exactly as permanent, user-actionable a failure
+    # as a missing Anthropic one (lode-9yy; docs/decisions.md).
     #
     # Ordered ahead of `except Exception` — AuthError/LLMAuthError are both
     # RuntimeError subclasses, so the generic arm would otherwise swallow them.
@@ -1427,10 +1425,12 @@ def _embed_handler(
 
     The sole path for async embedding after capture: capture enqueues the
     ``embed`` derive job via :func:`~lode.jobs.enqueue_derive_jobs`; this
-    handler drains it.  The imports are deferred so that a drain with no embed
-    job does not load lode.embedding, and so tests can patch the names on their
-    source modules (lode.embedding.FastEmbedEmbedder) and have them looked up at
-    call time; neither import loads fastembed or LanceDB.
+    handler drains it.  Deferred imports: nothing at ``lode.worker``'s module
+    scope loads ``lode.embedding`` or ``lode.externals``, so a bare ``import
+    lode.worker`` skips their fetch stack (``httpx2`` and ``lode.vectorstore``).
+    It saves no start-up time in the ``lode`` CLI or the TUI, which have already
+    imported everything these pull in except ``lode.embedding`` itself. Neither
+    import loads fastembed or LanceDB.
 
     :func:`lode.embedding.embed` chunks the body, upserts the ``passages``
     rows, embeds each passage via the pinned local ONNX model, and replaces
