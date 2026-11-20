@@ -84,7 +84,7 @@ from pathlib import Path
 from typing import Literal
 
 from lode.display import display_annotations, display_edges
-from lode.jobs import LIVE_JOB_STATUSES
+from lode.jobs import LIVE_JOB_STATUSES, standing_enrich_refusal_exists_sql
 from lode.sql_ids import placeholders
 from lode.storage import init_db
 
@@ -485,8 +485,10 @@ def raw_snapshot_payload(conn: sqlite3.Connection, snapshot_id: str) -> str | No
 #: The live-head (notes UNION externals) scan `lode reenrich` force-enqueues
 #: from -- shared with `stale_enrichment_heads` below so "status says clean"
 #: and "reenrich has work" read the identical query, never a
-#: separately-maintained approximation. Four positional `?` placeholders, two
-#: per UNION branch: (model, provider) each -- see `stale_enrichment_heads`.
+#: separately-maintained approximation. Eight positional `?` placeholders, four
+#: per UNION branch: (model, provider, prompt_ver, refusal_model) each -- the
+#: last two bound by :func:`lode.jobs.standing_enrich_refusal_exists_sql`; see
+#: `stale_enrichment_heads`.
 #: The provider comparison uses `IS NOT` rather than `!=` because it must stay
 #: NULL-safe both ways: a stored `NULL` means "anthropic" by convention
 #: (lode-568v.4's `provider_identity`), and the current provider is itself
@@ -496,9 +498,9 @@ def raw_snapshot_payload(conn: sqlite3.Connection, snapshot_id: str) -> str | No
 #: equal, and non-equal, correctly (lode-568v.6).
 #:
 #: Relocated from ``lode.cli`` (lode-35nu.9, "no bare SQL in the cli
-#: package") -- unchanged, still shared by ``lode status``'s hint
+#: package"), still shared by ``lode status``'s hint
 #: (:func:`lode.cli.status._enrichment_model_stale`) and ``lode reenrich``.
-STALE_ENRICHMENT_LIVE_HEADS_SQL = """
+STALE_ENRICHMENT_LIVE_HEADS_SQL = f"""
     SELECT DISTINCT n.head_version_id
     FROM notes n
     JOIN versions v ON v.version_id = n.head_version_id
@@ -513,6 +515,7 @@ STALE_ENRICHMENT_LIVE_HEADS_SQL = """
             AND a.model IS NOT NULL
             AND (a.model != ? OR a.provider IS NOT ?)
       )
+      AND NOT {standing_enrich_refusal_exists_sql("n.head_version_id")}
     UNION
     SELECT DISTINCT e.head_snapshot_id
     FROM externals e
@@ -527,6 +530,7 @@ STALE_ENRICHMENT_LIVE_HEADS_SQL = """
             AND a.model IS NOT NULL
             AND (a.model != ? OR a.provider IS NOT ?)
       )
+      AND NOT {standing_enrich_refusal_exists_sql("e.head_snapshot_id")}
 """
 
 
@@ -536,7 +540,7 @@ def stale_enrichment_heads(
     """Live head ids (notes UNION externals) whose recorded AI annotations disagree with `enrichment_llm` or `current_provider`.
 
     Relocated from ``lode.cli`` (lode-35nu.9, "no bare SQL in the cli
-    package") -- unchanged. The exact scan ``lode reenrich`` force-enqueues
+    package"). The exact scan ``lode reenrich`` force-enqueues
     from (docs/storage.md#re-enriching-the-corpus-deliberately-targeted-lode-14jr):
     a live head -- not soft-deleted/tombstoned, not purged, ``no_egress = 0``
     -- carrying at least one ``'ai'`` annotation whose ``model`` differs from
@@ -553,11 +557,19 @@ def stale_enrichment_heads(
     different vendor -- is legible as stale even though ``model`` alone
     wouldn't catch it.
 
+    **A head with a standing refusal is excluded** (lode-5try,
+    :func:`lode.jobs.standing_enrich_refusal_exists_sql`): the refusal is final
+    for that version (lode-g9q3), so re-enriching would only re-send refused
+    content. A change of ``enrichment_llm`` or ``ENRICH_PROMPT_VER`` brings the
+    head back.
+
     Shared by ``lode status``'s hint
     (:func:`lode.cli.status._enrichment_model_stale`) and ``lode reenrich``
     itself so "status says clean" and "reenrich has work" cannot disagree --
     they are, structurally, the same read.
     """
+    from lode.enrich import ENRICH_PROMPT_VER
+
     return [
         row[0]
         for row in conn.execute(
@@ -565,8 +577,12 @@ def stale_enrichment_heads(
             (
                 enrichment_llm,
                 current_provider,
+                ENRICH_PROMPT_VER,
+                enrichment_llm,
                 enrichment_llm,
                 current_provider,
+                ENRICH_PROMPT_VER,
+                enrichment_llm,
             ),
         ).fetchall()
     ]

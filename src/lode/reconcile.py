@@ -307,15 +307,6 @@ register_step("embed_gap", _embed_gap_step)
 # ---------------------------------------------------------------------------
 
 
-#: A refusal-dead enrich job ``j`` that still stands (lode-g9q3): refused under
-#: the current prompt version and enrichment model. Binds two parameters,
-#: ``ENRICH_PROMPT_VER`` then ``settings.enrichment_llm.model``. Both arms of
-#: :func:`_enrich_gap_step` use it, so the re-open key cannot differ between
-#: notes and externals. ``IS`` rather than ``=`` keeps ``NOT (...)`` from going
-#: NULL on an unstamped row, which would silently read as "not a gap".
-_STANDING_REFUSAL_SQL = "j.refusal = 1 AND j.prompt_ver IS ? AND j.refusal_model IS ?"
-
-
 def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None) -> int:
     """Enrich gap: re-enqueue enrich jobs for head versions missing fresh enrichment.
 
@@ -417,13 +408,7 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
                 AND j.status = 'done'
                 AND j.prompt_ver = ?
           )
-          AND NOT EXISTS (
-              SELECT 1 FROM jobs j
-              WHERE j.type = 'enrich'
-                AND j.target_version = n.head_version_id
-                AND j.status = 'dead'
-                AND {_STANDING_REFUSAL_SQL}
-          )
+          AND NOT {jobs.standing_enrich_refusal_exists_sql("n.head_version_id")}
         """,
         (ENRICH_PROMPT_VER, *refusal_params),
     ).fetchall()
@@ -450,7 +435,7 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
                   AND je.status = 'done'
             )
         )
-        OR (j.status = 'dead' AND NOT ({_STANDING_REFUSAL_SQL}))
+        OR (j.status = 'dead' AND NOT ({jobs.STANDING_REFUSAL_SQL}))
         OR (j.status = 'done' AND j.prompt_ver IS NOT ?)
         """,
         (*refusal_params, ENRICH_PROMPT_VER),
