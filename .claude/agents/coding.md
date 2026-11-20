@@ -435,12 +435,13 @@ mode is destructive repair, appropriate as a one-time precondition, not as a mid
     exception to "never closes silently with the batch" — only when the nit's verbatim anchor line
     is no longer present anywhere in the file **and** the defect it names is gone from the current
     text (e.g. fixed by an intervening comment-groomer or land) — an absent anchor alone is not
-    enough (lode-vlyj). If the defect is still visible, or the anchor equals the replacement text of
-    another pending nit (on this collector or the open successor), I carry it over instead, and the
-    re-appended note's `--what` says why its anchor is absent, pointing at that other nit when
-    there is one. My hand-off note lists every nit's disposition, one line each: a drop says what
-    was absent and why the defect is gone, and a nit carried over this way says which kept it — the
-    still-visible defect, or the other nit's pending replacement.
+    enough (lode-vlyj). If the defect is still visible I never carry the nit over (lode-edyl,
+    maintainer ruling 2026-11-20): I apply the fix to the current text in this same drain and record
+    it as **applied (re-anchored)**, or, when the fix does not apply mechanically to the current
+    text, file it as its own ticket. A nit whose anchor equals another pending nit's replacement on
+    this collector is applied after that nit. My hand-off note lists every nit's disposition, one
+    line each: a drop says what was absent and why the defect is gone, and a re-anchored apply says
+    which anchor was absent.
 
 **Building on top of an unlanded `land/<id>` branch (rare — stacked branches, lode-02v).**
 Occasionally a ticket's fix only makes sense once *another* ticket's still-unlanded code exists — the

@@ -1590,20 +1590,24 @@ the next one, and every subsequent nit was silently lost. The policy now is:
   survives the human/epic filter, on the auto-select paths only (bare `/code`, `--all-ready`,
   `--single`) — `--single` takes the next survivor, same as the human/epic filter. An explicitly-named
   id (`/code lode-59da`) is an operator override and is never gated.
-- **Declined nits carry over, with an anchor-gone exception.** A nit the batch builder declines to
+- **Declined nits carry over, with anchor-gone and re-anchor exceptions.** A nit the batch builder declines to
   apply is, before hand-off, either re-appended to the successor collector (still wording-only, just
   not applicable this pass) or filed as its own ticket (a judgment call). It never closes silently
   with the batch — **except** a nit whose verbatim anchor line is no longer present anywhere in the
   file **and** whose named defect is gone from the current text too (e.g. fixed by an intervening
   comment-groomer or land): the builder drops that one and says so in the hand-off note. An absent
   anchor alone is not proof of a fix — the nit may have been written against a branch whose edit
-  never reached `trunk` (lode-vlyj). So a nit whose named defect is still visible in the current text,
-  or whose anchor equals the replacement text of another pending nit (on the collector being drained
-  or the open successor), is carried over instead, its re-appended note saying why the anchor is
-  absent and pointing at that other nit when there is one. Every nit's disposition — applied /
+  never reached `trunk` (lode-vlyj). So a nit whose named defect is still visible in the current text
+  is never dropped, and **never carried over either** (lode-edyl, maintainer ruling 2026-11-20): a
+  carried-over nit would meet the same absent anchor on every later drain. The builder instead applies
+  the fix to the current text in that same drain and records it as **applied (re-anchored)**; if the
+  fix does not apply mechanically to the current text, it files the nit as its own ticket. A nit whose
+  anchor equals another pending nit's replacement on the collector being drained is applied after that
+  nit, in the same drain. Either way the nit reaches a terminal disposition in the drain that meets
+  it. No append-time anchor check exists. Every nit's disposition — applied / applied (re-anchored) /
   carried over / filed as ticket / dropped as anchor-gone — is listed in the hand-off note, a drop
-  recording both what was absent (the anchor) and why the defect is gone, a nit carried over this
-  way recording which kept it — the still-visible defect, or the other nit's pending replacement.
+  recording both what was absent (the anchor) and why the defect is gone, a re-anchored apply
+  recording the anchor that was absent.
 - **Scope includes source comments.** Wording-only drift in a shell/Python comment is a docs-nit,
   same patch shape as a doc-prose nit — `/comment-audit`'s own misleading/drifted smell is unaffected;
   the overlap is benign because of the anchor-gone rule above (whichever fixes it first, the other
