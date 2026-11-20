@@ -894,8 +894,12 @@ tool, and on an empty `tools` a `tool_name` would then have selected
 raises too, before any tool runs (`lode-4rxs`): a tool input truncated at the output cap usually
 still parses as a valid partial object, so `stop_reason` is the only thing that catches it. The cost
 accepted: a tool call that happened to finish on the last token fails the whole run, which nothing
-retries, instead of being executed. A `max_tokens` free turn with *no* `tool_use` block still ends
-the loop and goes to the final turn; whether that should stay is open (`lode-c99p`).
+retries, instead of being executed. A free turn with `stop_reason` `max_tokens` or
+`model_context_window_exceeded` and *no* `tool_use` block still ends the loop and goes to the final
+turn, but `run_tool_turns` logs a warning naming the stop reason and the turn index (`lode-c99p`,
+maintainer ruling 2026-11-20): the truncated turn is dropped, so the answer lacks whatever tool call
+it was about to make, and that is no longer silent. No `LLMProviderError`; a turn ending `end_turn`
+with no `tool_use` block logs nothing.
 A free turn with `stop_reason` `model_context_window_exceeded` that carries a `tool_use` block
 raises the same way, with the context-window hint (`lode-hfzw`, maintainer ruling 2026-11-19). The
 basis is Anthropic's published
@@ -905,7 +909,7 @@ page, which says of this stop reason "Treat the response as truncated." Neither 
 whether a `tool_use` block under it can be incomplete (the first page's one statement about an
 incomplete `tool_use` is scoped to `max_tokens`), so the guard is the conservative choice, at the
 same accepted cost. Without a `tool_use` block such a free turn goes to the final turn, as a
-`max_tokens` one does.
+`max_tokens` one does, with the warning above.
 
 **`timeout_s` is a budget for the whole run; `max_tokens` deliberately is not.** No new config knob
 was added — these are the same two knobs `structured_call` already took, and a call site's existing

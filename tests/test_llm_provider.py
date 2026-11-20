@@ -1811,6 +1811,52 @@ def test_run_tool_turns_cut_off_free_turn_raises_without_running_tools(
     assert hint in str(excinfo.value)
 
 
+@pytest.mark.parametrize(
+    ("stop_reason", "warns"),
+    [
+        ("max_tokens", True),
+        ("model_context_window_exceeded", True),
+        ("end_turn", False),
+    ],
+)
+def test_run_tool_turns_free_turn_without_tool_use_warns_only_when_cut_off(
+    stop_reason: str, warns: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
+    no_tool = mock.MagicMock()
+    no_tool.content = [_text_block()]
+    no_tool.stop_reason = stop_reason
+    no_tool.usage = mock.MagicMock(output_tokens=5)
+    client = mock.MagicMock()
+    client.messages.create.side_effect = [
+        no_tool,
+        _parsed_response(_Widget(name="w", count=0)),
+    ]
+
+    with caplog.at_level(logging.WARNING, logger="lode.llm_provider"):
+        result = AnthropicProvider(client).run_tool_turns(
+            model="claude-sonnet-4-6",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: pytest.fail("no tool should run"),
+            output_schema=_Widget,
+            max_tokens=100,
+            timeout_s=30.0,
+        )
+
+    assert result == _Widget(name="w", count=0)
+    assert client.messages.create.call_count == 2
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    if warns:
+        [message] = warnings
+        assert f"stop_reason={stop_reason!r}" in message
+        assert "free turn 0" in message
+    else:
+        assert warnings == []
+
+
 @pytest.mark.network
 def test_collect_batch_refusal_with_valid_text_is_errored_real_sdk() -> None:
     payload = _succeeded_payload("ver-4")

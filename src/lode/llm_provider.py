@@ -1043,7 +1043,7 @@ class AnthropicProvider:
 
         total_output_tokens = 0
 
-        for _ in range(max_tool_turns):
+        for turn_index in range(max_tool_turns):
             remaining = _remaining_or_raise("starting the next free tool turn")
             try:
                 response = self._client.messages.create(
@@ -1073,6 +1073,19 @@ class AnthropicProvider:
                 )
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
             if not tool_use_blocks:
+                if stop_reason in ("max_tokens", "model_context_window_exceeded"):
+                    # The truncated turn is dropped and the final turn answers
+                    # without whatever tool call it was about to make; say so
+                    # rather than degrade silently (lode-c99p).
+                    _log.warning(
+                        "run_tool_turns free turn %d (model=%s, max_tokens=%d) "
+                        "was cut off with stop_reason=%r before any tool_use "
+                        "block; proceeding to the final structured-output turn",
+                        turn_index,
+                        model,
+                        max_tokens,
+                        stop_reason,
+                    )
                 break
             if stop_reason in ("max_tokens", "model_context_window_exceeded"):
                 # A tool_use cut off at max_tokens usually still parses as a
