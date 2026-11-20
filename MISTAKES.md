@@ -22,6 +22,11 @@ Newest first.
   for the defect the nit names and check the open collector for a nit whose replacement is this
   anchor. Drop only when the defect is gone; otherwise carry the nit over. `lode-vlyj` tracks
   putting this into the instruction files.
+  - **Update (lode-edyl, 2026-11-20):** "otherwise carry the nit over" no longer holds when the
+    defect is visible in the current text. By maintainer ruling the builder applies the fix to the
+    current text in that drain (recorded as applied (re-anchored)) or, when it does not apply
+    mechanically, files it as its own ticket. Carry-over remains only for a nit whose defect exists
+    solely in another pending nit's replacement that is not applied in that drain.
 
 ## 2026-11-17 — `/land` rebuilt its accepted set from the live queue and picked up a ticket it had never vetted
 

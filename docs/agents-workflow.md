@@ -1597,17 +1597,22 @@ the next one, and every subsequent nit was silently lost. The policy now is:
   file **and** whose named defect is gone from the current text too (e.g. fixed by an intervening
   comment-groomer or land): the builder drops that one and says so in the hand-off note. An absent
   anchor alone is not proof of a fix — the nit may have been written against a branch whose edit
-  never reached `trunk` (lode-vlyj). So a nit whose named defect is still visible in the current text
-  is never dropped, and **never carried over either** (lode-edyl, maintainer ruling 2026-11-20): a
-  carried-over nit would meet the same absent anchor on every later drain. The builder instead applies
-  the fix to the current text in that same drain and records it as **applied (re-anchored)**; if the
-  fix does not apply mechanically to the current text, it files the nit as its own ticket. A nit whose
-  anchor equals another pending nit's replacement on the collector being drained is applied after that
-  nit, in the same drain. Either way the nit reaches a terminal disposition in the drain that meets
-  it. No append-time anchor check exists. Every nit's disposition — applied / applied (re-anchored) /
+  never reached `trunk` (lode-vlyj). So a nit whose anchor is absent but whose named defect is still
+  visible in the current text is never dropped, and **never carried over either** (lode-edyl,
+  maintainer ruling 2026-11-20): a carried-over nit would meet the same absent anchor on every later
+  drain. The builder instead applies the fix to the current text in that same drain and records it as
+  **applied (re-anchored)**; if the fix does not apply mechanically to the current text, it files the
+  nit as its own ticket. Either way the nit reaches a terminal disposition in the drain that meets
+  it. No append-time anchor check exists. A nit whose anchor equals another pending nit's
+  replacement is not anchor-gone either (lode-vlyj): when that other nit is applied in the same
+  drain, this one is applied after it. When it is not (it sits on the open successor, or the builder
+  declined it), a defect already visible in the current text falls under the re-anchor rule above; a
+  defect that exists only in that pending replacement keeps the nit carried over, its re-appended
+  note pointing at the other nit. Every nit's disposition — applied / applied (re-anchored) /
   carried over / filed as ticket / dropped as anchor-gone — is listed in the hand-off note, a drop
-  recording both what was absent (the anchor) and why the defect is gone, a re-anchored apply
-  recording the anchor that was absent.
+  recording both what was absent (the anchor) and why the defect is gone, a re-anchored apply (or the
+  ticket filed in its place) recording the anchor that was absent, a nit carried over behind another
+  nit naming that nit.
 - **Scope includes source comments.** Wording-only drift in a shell/Python comment is a docs-nit,
   same patch shape as a doc-prose nit — `/comment-audit`'s own misleading/drifted smell is unaffected;
   the overlap is benign because of the anchor-gone rule above (whichever fixes it first, the other
