@@ -321,7 +321,9 @@ def test_add_captures_note_and_enqueues_embed_and_enrich_jobs(
     import lode.enrich as enrich_mod
 
     def _fake_enrich(conn, version_id, settings, *, client=None):
-        pass
+        # A non-None result is "enrichment ran"; None is the skip signal and
+        # leaves prompt_ver NULL (lode-tkdy).
+        return enrich_mod.EnrichmentResult()
 
     monkeypatch.setattr(enrich_mod, "enrich_version", _fake_enrich)
 
