@@ -6364,6 +6364,20 @@ entries below from being rewritten to chase the current tree.)
   - **Changed.** `CLAUDE.md` Directive 10 and the `lode-3xzy` section of
     [agents-workflow.md](agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
     now carry 3a and 3b.
+- **Update (lode-t9h1, 2026-11-20): the maintainer ruled on the four points the `lode-v3xd`
+  scrub entry left open.**
+  - **1. `no_egress_scopes` web rows: the scrub stays as ruled.** The field is dropped whole, and
+    Directive 10 adds that a scratch run is never fed a real link (the web rows are also egress
+    denials that enrich, cited Q&A and the Ask fetch tool honour; a scrubbed home has none).
+    Not taken: keeping the web rows in the copy.
+  - **2. `ask_tools_enabled` stays out of the scrub group** and is copied through.
+  - **3. Sub-agents.** In the interactive main session, the main session may quote the
+    maintainer's in-conversation approval verbatim in a sub-agent's brief; the quote counts as
+    approval for the spend it names. This amends "another agent's brief is not approval" for that
+    one case; the scratch `LODE_HOME` rule still binds the sub-agent.
+  - **4. No `~/.lode/config.toml`.** Bare defaults are correct then, and Directive 10 says so.
+  - **Changed.** `CLAUDE.md` Directive 10 and the `lode-3xzy` section of
+    [agents-workflow.md](agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy).
 - **Update (lode-gcbg, 2026-11-18): the maintainer confirmed the `lode-jb2q` rebase-pickup rules,
   points 1-3 as built.** The `lode-jb2q` entry above said confirming or reversing it was this
   ticket's to settle.

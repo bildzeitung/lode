@@ -1968,7 +1968,10 @@ convention an agent honours, not a fact it can verify.
 
 **The interactive main session is bound too (maintainer ruling 2026-11-18, `lode-v3xd`),** as
 Directive 8 binds it for its own rule; there the approval is the maintainer's in-conversation
-instruction.
+instruction. A sub-agent it briefs holds approval only by that quote: the main session may quote
+the maintainer's in-conversation approval verbatim in the brief, and the quote counts as approval
+for the spend it names (maintainer ruling 2026-11-20, `lode-t9h1`). This amends "another agent's
+brief is not approval" for this one case; the scratch `LODE_HOME` rule still binds the sub-agent.
 
 **Why Directive 10's scratch-home scrub reads as it does (maintainer ruling 2026-11-18/19,
 `lode-v3xd`).**
@@ -1985,10 +1988,16 @@ instruction.
   secrets-scrubbed config still carrying `jira_enabled = true` is a live connector to the real
   site wherever those variables are set. Dropping a base URL alone is not enough, since an empty
   `confluence_base_url` means "infer" while an absent enabled flag defaults to off.
-  `no_egress_scopes` goes too because its rows name real hosts or projects.
+  `no_egress_scopes` goes too because its rows name real hosts or projects. Its `source_type='web'`
+  rows are also the operator's egress denials (enrich, cited Q&A and the Ask fetch tool refuse a
+  host they name), so a scrubbed home has none of them; maintainer ruling 2026-11-20
+  (`lode-t9h1`): the scrub stays whole and a scratch run is never fed a real link.
+- **No `~/.lode/config.toml`.** `load_settings` treats a missing file as valid, so there is
+  nothing to scrub or copy and bare defaults are correct (`lode-t9h1`, 2026-11-20).
 - **The group is a hand-kept list.** It was checked against `src/lode/config.py` as of this
   ruling; a connector field added later must be added to Directive 10's list.
-  `ask_tools_enabled` is not in it, since the ruling did not name it (open: `lode-t9h1`).
+  `ask_tools_enabled` is not in it, by maintainer ruling 2026-11-20 (`lode-t9h1`): with the
+  connector flags dropped it offers no Atlassian tool and is copied through.
 
 **How approval is requested mid-run (builder's proposal, refined in technical review; confirmed by
 the maintainer 2026-11-18, `lode-v3xd`).** Directive 10's "Without approval" steps are this
