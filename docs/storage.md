@@ -556,6 +556,16 @@ allows** a re-enqueue after the prior job reached `done`/`dead` (a `prompt_ver`
 bump or re-derive must be able to enqueue again — the reconciliation scan depends
 on this). Enqueue uses `INSERT ... ON CONFLICT DO NOTHING`.
 
+**A gated-out enrich job ends `done` with `prompt_ver` NULL, on both routes
+(lode-tkdy).** `prompt_ver` is a receipt that the enrichment ran, so a job that
+was skipped (`no_egress` including a `no_egress_scopes` rule, tombstone/purged,
+target not found) is never stamped: `lode.worker.run_one` leaves it NULL when
+the handler returns `None` (`enrich_version`'s only skip signal), and
+`lode.enrich.submit_enrich_batch`'s skip path does the same. Reconcile reads a
+NULL `prompt_ver` as stale, so clearing the flag or removing the scope rule
+re-opens the target on the next pass regardless of route; while the gate holds,
+the gap scan excludes the target, so nothing thrashes.
+
 **`'failed'` joined the live scope 2026-09-03 (lode-uri7, evaluating a proposal
 raised during lode-8a37's review).** Originally scoped to `pending`/`running`
 only — `'failed'` was left out under the theory that a failed job is not really
