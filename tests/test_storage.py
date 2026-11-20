@@ -819,3 +819,36 @@ def test_schema_index_predicate_matches_live_job_statuses() -> None:
 
     predicate = index_sql.split("WHERE", 1)[1]
     assert set(re.findall(r"'([a-z]+)'", predicate)) == set(LIVE_JOB_STATUSES)
+
+
+def test_jobs_type_target_index_migrated_and_used_by_gap_probes(tmp_path: Path) -> None:
+    """lode-spwf: ``idx_jobs_type_target`` exists after migration and serves the probes.
+
+    The done/dead ``NOT EXISTS`` probes in reconcile's enrich-gap scan filter on
+    ``(type, target_version)`` plus a non-live ``status``; the query plan must
+    search that index rather than walk ``idx_jobs_status``.
+    """
+    db = tmp_path / "lode.db"
+    _seed_pre_lode_uri7_db(db)
+
+    conn = init_db(db)
+    try:
+        # Drop the index and re-run the versioned step itself, so the test
+        # covers the migration function and not only schema.sql's own copy.
+        conn.execute("DROP INDEX idx_jobs_type_target")
+        storage._migrate_v4_jobs_type_target_index(conn)
+        storage._migrate_v4_jobs_type_target_index(conn)  # idempotent
+
+        cols = [r[2] for r in conn.execute("PRAGMA index_info(idx_jobs_type_target)")]
+        assert cols == ["type", "target_version"]
+
+        plan = " ".join(
+            row[3]
+            for row in conn.execute(
+                "EXPLAIN QUERY PLAN SELECT 1 FROM jobs j "
+                "WHERE j.type = 'enrich' AND j.target_version = 'v' AND j.status = 'done'"
+            )
+        )
+        assert "idx_jobs_type_target" in plan
+    finally:
+        conn.close()

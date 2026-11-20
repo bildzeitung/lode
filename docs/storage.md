@@ -556,6 +556,13 @@ allows** a re-enqueue after the prior job reached `done`/`dead` (a `prompt_ver`
 bump or re-derive must be able to enqueue again — the reconciliation scan depends
 on this). Enqueue uses `INSERT ... ON CONFLICT DO NOTHING`.
 
+**`idx_jobs_type_target` on `jobs(type, target_version)` (lode-spwf, versioned
+migration v4).** `idx_jobs_live` is partial and `idx_jobs_status` is status-only,
+so the reconcile gap scans' `done`/`dead` probes and the externals arm's
+newest-enrich-job subquery had no index keyed on `(type, target_version)`. A plain
+index serves them; `EXPLAIN QUERY PLAN` on a `(type, target_version, status)`
+probe searches it instead of walking every job in that status.
+
 **`'failed'` joined the live scope 2026-09-03 (lode-uri7, evaluating a proposal
 raised during lode-8a37's review).** Originally scoped to `pending`/`running`
 only — `'failed'` was left out under the theory that a failed job is not really

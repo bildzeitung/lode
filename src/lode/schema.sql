@@ -317,6 +317,11 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status);
 
+-- (type, target_version) lookup for reconcile's gap scans (lode-spwf), whose
+-- done/dead probes are not live-status and so miss idx_jobs_live. Existing
+-- databases get it through storage.py's versioned migration too.
+CREATE INDEX IF NOT EXISTS idx_jobs_type_target ON jobs (type, target_version);
+
 -- Partial unique index for live-job idempotency (see notes above). Scoped to
 -- status IN ('pending','running','failed') -- 'failed' is in-flight backoff,
 -- not a terminal outcome (DECIDED lode-uri7, widening this from the earlier

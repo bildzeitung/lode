@@ -259,7 +259,22 @@ def _migrate_v3_jobs_refusal_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {declaration}")
 
 
-_SCHEMA_VERSION = 3
+def _migrate_v4_jobs_type_target_index(conn: sqlite3.Connection) -> None:
+    """lode-spwf: add ``idx_jobs_type_target`` on ``jobs (type, target_version)``.
+
+    The reconcile gap scans probe ``jobs`` by ``(type, target_version)`` with a
+    ``status`` filter that is not live (``done``/``dead``), which the partial
+    ``idx_jobs_live`` cannot serve and ``idx_jobs_status`` can only serve by
+    walking every job in that status. Idempotent: ``schema.sql`` also carries
+    the ``IF NOT EXISTS`` statement, so a pre-existing database may already
+    have it by the time this step runs.
+    """
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_jobs_type_target ON jobs (type, target_version)"
+    )
+
+
+_SCHEMA_VERSION = 4
 """Target ``PRAGMA user_version`` — bump alongside a new entry in
 :data:`_VERSIONED_MIGRATIONS`."""
 
@@ -267,6 +282,7 @@ _VERSIONED_MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = 
     (1, _migrate_v1_egress_log_tool_purpose),
     (2, _migrate_v2_jobs_live_includes_failed),
     (3, _migrate_v3_jobs_refusal_columns),
+    (4, _migrate_v4_jobs_type_target_index),
 ]
 """Rebuild-shaped migrations, gated by ``PRAGMA user_version`` (see module
 docstring). Ordered ascending; each entry runs once, the first time
