@@ -1072,22 +1072,26 @@ class AnthropicProvider:
                     what=f"Anthropic declined a free tool turn (model={model})",
                 )
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+            cut_off = stop_reason in ("max_tokens", "model_context_window_exceeded")
             if not tool_use_blocks:
-                if stop_reason in ("max_tokens", "model_context_window_exceeded"):
-                    # The truncated turn is dropped and the final turn answers
-                    # without whatever tool call it was about to make; say so
-                    # rather than degrade silently (lode-c99p).
+                if cut_off:
+                    # The truncated turn is dropped, so the final turn answers
+                    # without any tool call it may have been about to make;
+                    # say so rather than degrade silently (lode-c99p).
                     _log.warning(
-                        "run_tool_turns free turn %d (model=%s, max_tokens=%d) "
-                        "was cut off with stop_reason=%r before any tool_use "
-                        "block; proceeding to the final structured-output turn",
-                        turn_index,
+                        "run_tool_turns free turn %d of %d (model=%s, "
+                        "max_tokens=%d, stop_reason=%r) was cut off before any "
+                        "tool_use block; proceeding to the final "
+                        "structured-output turn %s",
+                        turn_index + 1,
+                        max_tool_turns,
                         model,
                         max_tokens,
                         stop_reason,
+                        _stop_reason_hint(stop_reason, response),
                     )
                 break
-            if stop_reason in ("max_tokens", "model_context_window_exceeded"):
+            if cut_off:
                 # A tool_use cut off at max_tokens usually still parses as a
                 # valid partial input; running the tool on it would act on
                 # arguments the model never finished (lode-4rxs). For
