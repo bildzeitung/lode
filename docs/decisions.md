@@ -6310,6 +6310,10 @@ entries below from being rewritten to chase the current tree.)
     187-228 ms after. The ticket's own figure for trunk, from a different session, was about
     520 ms. Absolute figures moved by 100 ms or more with machine load, so compare within a
     session, not across.
+  - **Update (lode-9voy, 2026-11-19):** networkx no longer keeps the deferred `lode.retrieval`
+    import worthwhile. `lode.retrieval` now imports networkx inside `graph_expand`, so the
+    parenthetical in the Decision bullet above is stale. The callers' deferral stays for a smaller
+    cost (about 10 ms); see the `lode-9voy` entry at the end of this file.
 - **Agents make no LLM-provider call without maintainer approval, and approved spend runs against
   a scratch `LODE_HOME` (`lode-3xzy`, 2026-11-18, maintainer).** The rule is `CLAUDE.md` General
   Directive 10; the reasons, the approval flow and the backstop weighed are in
@@ -6436,3 +6440,21 @@ entries below from being rewritten to chase the current tree.)
   all-capitals stale-flag keyword, which is banned on any line today. The ticket asked whether that
   one pattern would keep applying to heads; the ruling for (a) does not answer it. The `lode-rtcx`
   allowlist entry stays, and the module docstring records the over-match as accepted.
+
+- **networkx is imported inside the one function that builds the graph; the callers' deferral of
+  `cited_answer` and `lode.retrieval` stays, for a different reason (`lode-9voy`, 2026-11-19).**
+  `lode.retrieval` imports networkx inside `graph_expand`, the one runtime use; the local `nx`
+  annotation comes after that import.
+  - **Measured** with `python -X importtime -c "import lode.cli; import lode.retrieval; import
+    lode.cited_answer"` (cumulative), one WSL2 machine, warm bytecode cache, eight runs in the
+    technical review's session: `import lode.cli` 236-276 ms; `lode.retrieval` 3-5 ms after it;
+    `lode.cited_answer` 6-8 ms more, which adds only lode modules. In the same session networkx
+    alone cost about 100-115 ms warm and about 670 ms on a cold first import. The build session
+    saw higher figures (`lode.cited_answer` about 39 ms), not reproduced warm, probably cold-cache.
+  - **Decision.** The function-local imports in `lode.cli.ask` and `lode.tui.services.ask` stay,
+    for the ask stack's about 10 ms (about 4% of `import lode.cli`); their comments give the reason
+    without networkx and without a figure. Hoisting would also have to change how both modules
+    reach `_retrieve`: `tests/test_tui_ask.py` patches `lode.retrieval._retrieve`, and a
+    module-scope `from` import would bind the original. Nothing pins this deferral: a module-scope
+    import of either module would turn no test red. The imports in `cli/reembed.py` and
+    `cli/models.py` carried no networkx comment and are untouched.
