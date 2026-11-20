@@ -115,10 +115,9 @@ Two files, two jobs — **never pin the same thing in both**:
 - **`uv.lock` is the only place exact versions live (`lode-s09w`, `lode-s09w.4`).** A committed,
   fully-transitive lock of the runtime dependencies **and** the `dev` dependency group — `lode-s09w`
   reversed epic `lode-g274`'s OQ#1, which had left the dev tools unlocked — consumed by every `uv
-  sync` / `uv run --frozen`. Regenerated only via `uv lock` (or `scripts/update-deps.sh`, which
-  wraps it) — never hand-edited. The older pip-compile lock and its
-  compile script are deleted (`lode-s09w.4`); `git log` and `docs/decisions.md` keep
-  their history.
+  sync` / `uv run --frozen`. Regenerated only via `scripts/update-deps.sh` (which wraps `uv lock`)
+  — never hand-edited. The older pip-compile lock and its compile script are deleted
+  (`lode-s09w.4`); `git log` and `docs/decisions.md` keep their history.
 
   **Installing from `uv.lock` verifies hashes, and that replaces `--require-hashes` (`lode-s09w.4`).**
   The old lock step ran `uv pip install --require-hashes`; the question whether `uv sync` /
@@ -343,8 +342,9 @@ Every caller below goes through `uv lock`:
   `origin/trunk` with no branch involved at all. `lock_currency` fails the same soundness test for a
   different reason: it asks whether the committed lock is a fixed point of the tree **plus the
   ambient `uv` plus today's PyPI** — an answer that can flip with no branch involved (a `uv` release
-  that changes the emitted format; `uv` is installed unpinned via `pip install -U uv`, so the
-  lander's resolver can differ from the one that produced the committed lock). So `/land` runs
+  that changes the emitted format; `uv` is unpinned — CI's `setup-uv` installs the latest release,
+  a dev machine runs whatever is on `PATH` — so the lander's resolver can differ from the one that
+  produced the committed lock). So `/land` runs
   **both** gates once on bare `origin/trunk` before entering the loop: red on either one there means
   the failure predates every branch in the set and is not attributable to any of them — stop the
   pass, don't isolate. (`tests/conftest.py` also scrubs the specific ambient colour/tty env vars

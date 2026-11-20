@@ -70,6 +70,41 @@ LIVE_JOB_STATUSES = ("pending", "running", "failed")
 LIVE_JOB_STATUSES_SQL = ", ".join(f"'{status}'" for status in LIVE_JOB_STATUSES)
 
 
+#: A refusal-dead enrich job ``j`` that still stands (lode-g9q3): refused under
+#: the current prompt version, enrichment model and provider (lode-7jcp). Binds
+#: three positional parameters, ``ENRICH_PROMPT_VER``,
+#: ``settings.enrichment_llm.model`` then
+#: :func:`lode.llm_provider.provider_identity`.
+#: The one re-open key shared by reconcile's enrich-gap arms and the
+#: stale-enrichment scan, so they cannot disagree. ``IS`` rather than ``=``
+#: keeps ``NOT (...)`` from going NULL on an unstamped row, which would
+#: silently read as "not a gap".
+STANDING_REFUSAL_SQL = (
+    "j.refusal = 1 AND j.prompt_ver IS ? AND j.refusal_model IS ?"
+    " AND j.refusal_provider IS ?"
+)
+
+
+def standing_enrich_refusal_exists_sql(target_col: str) -> str:
+    """SQL ``EXISTS (...)`` for a standing enrich refusal on ``target_col`` (lode-5try).
+
+    True when a ``dead`` enrich job with ``refusal = 1`` exists for the head
+    ``target_col`` names, stamped with the current prompt version and the
+    configured enrichment model and provider. Binds three positional parameters,
+    in order: ``prompt_ver``, ``refusal_model``, ``refusal_provider``. ``target_col`` is a caller-written
+    column expression (never user input). The one predicate shared by
+    reconcile's enrich-gap exemption and the stale-enrichment scan, so the two
+    cannot disagree about which refusals are final.
+    """
+    return f"""EXISTS (
+              SELECT 1 FROM jobs j
+              WHERE j.type = 'enrich'
+                AND j.target_version = {target_col}
+                AND j.status = 'dead'
+                AND {STANDING_REFUSAL_SQL}
+          )"""
+
+
 def enqueue_derive_jobs(
     conn: sqlite3.Connection,
     target_version: str,
