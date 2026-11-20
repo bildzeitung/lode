@@ -6500,11 +6500,24 @@ entries below from being rewritten to chase the current tree.)
     `ENRICH_PROMPT_VER` the batch was submitted with: the batch route reads both at collect time
     too, and item 3's ruling names only the model. Open in `lode-ucpu`, which blocks `lode-4wgq`.
   - **Update (lode-ucpu, 2026-11-20, maintainer):** the "Not decided here" question is settled:
-    widen `lode-4wgq` to carry both from submit time, on the refusal and success paths alongside
-    the submit-time model. That is `provider_identity(settings)` at submit and `ENRICH_PROMPT_VER`
-    at submit, so the `refusal_model`/provider stamp on a refusal-dead job and the
-    `annotations.model`/provider/`prompt_ver` stamps on a success all name what the batch was
-    submitted with. Neither collect-time window is accepted: a provider switch between submit and
-    collect (same model string) would otherwise record a refusal as the new provider's and never
-    send the note to it, and a mid-batch upgrade that bumps `ENRICH_PROMPT_VER` would record a
-    refusal of the old prompt as one of the new. Decision only; the code is `lode-4wgq`'s.
+    widen `lode-4wgq` to also record `provider_identity(settings)` and `ENRICH_PROMPT_VER` as read
+    at submit, on the refusal and success paths alongside the submit-time model. Neither
+    collect-time window is accepted. The stamps that must name what the batch was submitted with
+    are, on a refusal-dead job, `jobs.refusal_model`, `jobs.prompt_ver` and the provider stamp
+    `lode-7jcp` adds beside them (not yet landed), and on a success, `annotations.model`,
+    `annotations.provider`, `annotations.prompt_ver` and the done job's `jobs.prompt_ver`.
+    Decision only; the code is `lode-4wgq`'s.
+    - **Prompt version.** A mid-batch upgrade that bumps `ENRICH_PROMPT_VER` would otherwise
+      record the old prompt's refusal as the new prompt's, and the old prompt's enrichment as
+      current.
+    - **Provider: the window the ticket described is not reachable as the code stands**
+      (technical review, read against trunk `2f338dc7`). The ticket said a provider switch
+      between submit and collect records a refusal as the new provider's and never sends the
+      note to it. `collect_enrich_batch` builds its client from the collect-time settings and
+      nothing records which provider minted `jobs.batch_handle`, so after an `llm_provider`
+      switch the old provider's handle is polled with the new provider's client and the poll
+      raises before any stamp is written. At `batch_collect_failure_budget` consecutive failures
+      the jobs go dead as ordinary failures and reconcile re-enqueues them under the new
+      provider. The ruling was made before this was known. Whether its provider half stands,
+      and what a mid-batch provider switch should do, is open in `lode-smpk`; until that is
+      decided, `lode-4wgq`'s scope is as ruled.

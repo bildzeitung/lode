@@ -4,6 +4,29 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-11-20 — A decision ticket stated a failure that the code cannot reach, and the maintainer ruled on it
+
+- **What happened:** the `code-reviewer` on `lode-vlok` filed `lode-ucpu` asking whether
+  `lode-4wgq` should also carry the submit-time provider identity. Its description stated as fact
+  that a batch submitted under one provider and collected after a switch "records the refusal as
+  Azure's, so reconcile never sends the note to Azure". The maintainer ruled to widen `lode-4wgq`
+  on that description, and the builder copied the claim into `docs/decisions.md`. The
+  `lode-ucpu` technical review traced the path: `collect_enrich_batch` polls with the collect-time
+  provider's client, so the old provider's handle fails the poll and no refusal or success is
+  stamped at all.
+- **Root cause:** the ticket traced where the stamp is read (`provider_identity(settings)` at
+  collect) but not whether a result can arrive there with a mismatched provider. The builder
+  recorded the ticket's mechanism without tracing it either.
+- **Consequence:** a maintainer ruling spent on a failure that cannot happen, and a false claim
+  caught one review before it landed in the decision record. The record now states what the code
+  does, and `lode-smpk` asks the maintainer whether the provider half stands.
+- **Rule that prevents a repeat:** before filing a ticket that asks the maintainer to decide about
+  a failure, trace that failure in the code from the trigger to the wrong outcome. In the ticket,
+  mark any step that was not traced "not checked against the code", the way `lode-4wgq`'s
+  description does for its two mechanisms. A builder recording a ruling writes the ruling, and
+  writes a claimed mechanism only after tracing it or labelled as the ticket's claim. `lode-low0`
+  tracks putting both into the instruction files.
+
 ## 2026-11-17 — A docs-nits batch dropped a nit as "anchor-gone" when its anchor had never reached trunk
 
 - **What happened:** the builder draining collector `lode-rrpg` dropped nit 1
