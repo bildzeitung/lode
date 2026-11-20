@@ -915,8 +915,14 @@ was added — these are the same two knobs `structured_call` already took, and a
 - **`timeout_s` — per-RUN, implemented literally.** `AnthropicProvider` sets one deadline at the top
   of the run and sends each SDK call the *remaining* wall clock (`timeout_s` minus elapsed),
   raising `LLMProviderError` rather than starting a further call once it is exhausted, instead of
-  resetting the clock every turn. A run therefore cannot outlive `timeout_s` however many turns it
-  takes.
+  resetting the clock every turn. The budget therefore bounds *when a new turn may start* and what
+  each turn is sent, not the wall clock of a wedged call: nothing in `src/lode` sets `max_retries`,
+  so the SDK default of 2 applies, and the SDK retries a timed-out turn with the same timeout value
+  it was given. A wedged turn can thus run about 3x `timeout_s` (about 900 s at the 300 s Q&A
+  default) before `APITimeoutError` reaches lode. This is the same risk
+  [configuration.md](configuration.md#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx)
+  flags for the single-call case (decision (3), SDK retry left at the default); making the run budget
+  literal would mean reversing that decision and is not taken here (`lode-dx0h`).
 - **`max_tokens` — per-TURN, DECIDED to stay that way (maintainer, `lode-3dh1`).** The ticket's
   acceptance criteria asked for both budgets to be per-run; only `timeout_s` is, and that asymmetry is
   now a settled design decision, not a known gap awaiting a fix. `max_tokens` is not a spend meter —
