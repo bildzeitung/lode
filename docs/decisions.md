@@ -6499,3 +6499,12 @@ entries below from being rewritten to chase the current tree.)
   - **Not decided here.** Whether `lode-4wgq` also records the provider identity and
     `ENRICH_PROMPT_VER` the batch was submitted with: the batch route reads both at collect time
     too, and item 3's ruling names only the model. Open in `lode-ucpu`, which blocks `lode-4wgq`.
+  - **Update (lode-ucpu, 2026-11-20, maintainer):** the "Not decided here" question is settled:
+    widen `lode-4wgq` to carry both from submit time, on the refusal and success paths alongside
+    the submit-time model. That is `provider_identity(settings)` at submit and `ENRICH_PROMPT_VER`
+    at submit, so the `refusal_model`/provider stamp on a refusal-dead job and the
+    `annotations.model`/provider/`prompt_ver` stamps on a success all name what the batch was
+    submitted with. Neither collect-time window is accepted: a provider switch between submit and
+    collect (same model string) would otherwise record a refusal as the new provider's and never
+    send the note to it, and a mid-batch upgrade that bumps `ENRICH_PROMPT_VER` would record a
+    refusal of the old prompt as one of the new. Decision only; the code is `lode-4wgq`'s.
