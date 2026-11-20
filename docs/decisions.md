@@ -6499,3 +6499,12 @@ entries below from being rewritten to chase the current tree.)
   - **Not decided here.** Whether `lode-4wgq` also records the provider identity and
     `ENRICH_PROMPT_VER` the batch was submitted with: the batch route reads both at collect time
     too, and item 3's ruling names only the model. Open in `lode-ucpu`, which blocks `lode-4wgq`.
+
+## mkdocs-material is in maintenance mode: stay or migrate (open, lode-1pnt)
+
+Raised 2026-11-20 while bumping the pin to 9.8.1 (`lode-1pnt`). Upstream mkdocs-material is in
+maintenance mode and reaches end of life on 2027-05-05; its stated successor is Zensical. The 9.8.1
+bump buys security fixes until then and does not settle the question. **Open:** stay on 9.8.x past
+the EOL date (accepting no further fixes), or migrate the docs site to Zensical (or another
+generator) before it. Nothing is decided; whoever picks it up should check `mkdocs.yml`'s plugin and
+hook use (`lode.docs_slug`, the strict build, the mermaid pre-render) against the successor first.
