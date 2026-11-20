@@ -6501,19 +6501,19 @@ entries below from being rewritten to chase the current tree.)
     too, and item 3's ruling names only the model. Open in `lode-ucpu`, which blocks `lode-4wgq`.
 
 - **/land SKILL.md does not carry a "search bd before filing" step; the rejected reasoning lives here
-  (`lode-9t7u`, moved out of `.claude/skills/land/SKILL.md` by `lode-w18a.8`).** The skill keeps
-  the one-line warning "Do not add a search-then-file step (rejected, lode-9t7u)". The reasoning
-  that used to sit beside it:
+  (`lode-9t7u`, moved out of `.claude/skills/land/SKILL.md` by `lode-w18a.8`, 2026-11-20).** The
+  skill keeps the one-line warning "Do not add a search-then-file step (rejected, lode-9t7u)". The
+  reasoning that used to sit beside it:
   - *Rejected alternative: "search bd before filing".* The intuitive fix, and the weakest
     available. It codifies the improvised filing path instead of removing it, expanding /land's
     scope in the one direction its charter (surface, don't decide) says it should not go. It also
     aims at a step that never happened: all three filings (`lode-95yo`, `lode-3kdm`, and the
     finding that became `lode-v4rk`) created the ticket **first** and searched afterwards or not
     at all; `lode-3kdm`'s close note records a pass that "searched bd only AFTER creating". A
-    search-first caveat only binds an agent already consulting this file's filing guidance, and an
-    agent improvising a filing path this file does not sanction is, by construction, not that
+    search-first caveat only binds an agent already consulting the skill's filing guidance, and an
+    agent improvising a filing path the skill does not sanction is, by construction, not that
     agent, so the caveat would have prevented none of the three. And it is prose discipline layered
-    onto a file already saturated with prose, where the two dedup mechanisms this repo actually
-    relies on are structural instead: `/epic-audit`'s `epic-audited` label and `/sweep`'s durable
-    digest issue. Do not reintroduce a search-then-file step on the strength of this being
+    onto a skill file already saturated with prose, where the two dedup mechanisms this repo
+    actually relies on are structural instead: `/epic-audit`'s `epic-audited` label and `/sweep`'s
+    durable digest issue. Do not reintroduce a search-then-file step on the strength of this being
     re-derived as "the obvious fix"; it was considered and rejected.

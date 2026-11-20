@@ -50,12 +50,11 @@ file** under `$STATE_DIR` (`.git/land-state/`, which survives `git reset --hard`
 touches the index and working tree). Logic shared by two call sites lives in `scripts/`, never in a
 bash function defined in one block and called from another.
 
-This is not a style preference — it shipped once (lode-sfnb; see
-[docs/agents-workflow.md](../../../docs/agents-workflow.md#land-design-history-lode-w18a8)).
-**Every such failure is
-silent by default**, and this is the one skill that writes `trunk` — so any block that loads state
-must also *assert it loaded* and abort loudly if it did not. A loop that iterates zero times and
-exits 0 is indistinguishable from a clean pass that had nothing to do.
+This is not a style preference — it is the defect this skill has already shipped once (lode-sfnb; see
+[docs/agents-workflow.md](../../../docs/agents-workflow.md#land-design-history-lode-w18a8)). **Every
+such failure is silent by default**, and this is the one skill that writes `trunk` — so any block
+that loads state must also *assert it loaded* and abort loudly if it did not. A loop that iterates
+zero times and exits 0 is indistinguishable from a clean pass that had nothing to do.
 
 **This rule, and the mechanical gate that now backstops it repo-wide, are recorded once, in
 [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#guard-against-cross-block-shell-state-in-skill-markdown-lode-sfnb--lode-x495)
@@ -76,9 +75,9 @@ Being the **single** lander is what serializes landing. v1 guarantees that with 
 **one machine**. (The distributed `refs/locks/land` ref for true concurrent multi-machine landing is
 a deferred upgrade, recorded in `docs/decisions.md` — **not** v1.)
 
-**This lock is real state that must span the whole pass, across every fenced block below (lode-aps3).**
-Lock lives in `scripts/land-lock.sh`; `tests/test_land_lock.py` pins the call sites. The script's
-header has the full reasoning and the mechanism's two known limits;
+**This lock is real state that must span the whole pass, across every fenced block below
+(lode-aps3).** Lock lives in `scripts/land-lock.sh`, as a staleness token; `tests/test_land_lock.py`
+pins the call sites. The script's header has the full reasoning and the mechanism's two known limits;
 [docs/agents-workflow.md](../../../docs/agents-workflow.md#mechanics-decided)'s single-lander-lock
 bullet is the design home.
 
@@ -253,11 +252,12 @@ with git merges and pushes), so I follow the bd-sync discipline strictly (see
 
 **Refuse to start unless I am actually in the main checkout (lode-pcee) — asserted once, up front,
 as a precondition of the whole block rather than as a `-C` bolted onto individual commands.**
-`-C --show-toplevel` is not a guard: in a worktree it resolves to that worktree
+`-C "$(git rev-parse --show-toplevel)"` is not a guard: in a worktree it resolves to that worktree
 (history: [docs/agents-workflow.md](../../../docs/agents-workflow.md#mechanics-decided)).
-`--git-common-dir` is the mechanism that actually distinguishes the two: every worktree of a repo (main
-checkout included) shares one common `.git` directory, and only the **main checkout's own toplevel** is
-that directory's parent — a linked worktree's toplevel never is. The check is
+`--git-common-dir` is the mechanism that actually distinguishes the main checkout from a linked
+worktree: every worktree of a repo (main checkout included) shares one common `.git` directory, and
+only the **main checkout's own toplevel** is that directory's parent — a linked worktree's toplevel
+never is. The check is
 [`scripts/assert-main-checkout.sh`](../../../scripts/assert-main-checkout.sh) — extracted rather than
 inlined so it is shellcheck'd and unit-tested against real worktree fixtures the same way
 `scripts/isolation-guard.sh` and `scripts/recycled-worktree-guard.sh` are (see its own header for the
@@ -412,8 +412,8 @@ must not silently break this section.
 
 **This is [`scripts/stacked-graph.sh`](../../../scripts/stacked-graph.sh) (lode-s9xe.2), not something I
 derive by hand.** The detection rule (shared history off `trunk`, not tip-ancestry), the direction
-test, and the two known gaps (force-push; branched-from-base rather than merged-base — OBSERVED 2026-08-07 on
-`land/lode-35nu.9`/`land/lode-kuc7`) live in the script's own header and are pinned by
+test, and the two known gaps (force-push; branched-from-base rather than merged-base — OBSERVED
+2026-08-07 on `land/lode-35nu.9`/`land/lode-kuc7`) live in the script's own header and are pinned by
 `tests/test_stacked_graph.py`, which builds real repos for each case, including the moved-base-tip and
 two-merge-base shapes a plausible reimplementation gets wrong. **Do not re-derive this logic here.**
 
@@ -829,8 +829,8 @@ outright, so it never has to assume anything about what does or doesn't dirty it
 than restores because it only needs to **judge**, whereas this section must actually **clean** the
 index or the merge below refuses to run — the same invariant, two different jobs.)
 
-**The fix: write each message to a file under `.git/`, and do the actual merge from a script, not an
-inline bash function (see [Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)
+**The fix for cross-block shell state (lode-sfnb): write each message to a file under `.git/`, and do
+the actual merge from a script, not an inline bash function (see [Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)
 below).** A file on disk and a script under `scripts/` are both available identically to *every* Bash
 invocation — there is nothing to redeclare, so this can't be silently re-split by a future editor
 moving code around the way the bash array was. `git reset --hard` (Section 3's isolation-replay path)

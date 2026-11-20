@@ -4266,9 +4266,10 @@ assumption would not have closed it.
 
 ### /land design history (lode-w18a.8)
 
-Editor-facing history moved out of [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md)
-so the skill states only live rules. Each entry names what the skill still says. Several of these
-stories already had a home elsewhere in this file; those entries point there rather than copy.
+Editor-facing history moved out of [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md):
+the passages the maintainer approved on lode-w18a.3, not every history note in the skill. Each entry
+names what the skill still says. Several of these stories already had a home elsewhere in this file;
+those entries point there rather than copy.
 
 - **`declare -A MSG` (lode-sfnb).** Section 3a populated a `declare -A MSG` associative array that
   `merge_one()`, a function defined in Section 3's later fenced block, read back. Each fenced block is
@@ -4290,8 +4291,8 @@ stories already had a home elsewhere in this file; those entries point there rat
   fired the instant that block's own shell exited, before Section 1 ran, and the stale-lock reclaim
   judged liveness from a PID that is always already dead by the time a later block reads it. Both
   halves moved to `scripts/land-lock.sh` with a staleness token; see the single-lander-lock bullet in
-  [Mechanics (decided)](#mechanics-decided). The skill keeps "lock lives in `scripts/land-lock.sh`;
-  `tests/test_land_lock.py` pins the call sites".
+  [Mechanics (decided)](#mechanics-decided). The skill keeps "Lock lives in `scripts/land-lock.sh`,
+  as a staleness token; `tests/test_land_lock.py` pins the call sites".
 - **Empty-`accepted` guard conflated missing and empty (lode-0jan).** Section 3's guard used to abort
   identically for a missing `$STATE_DIR/accepted` (3a never ran) and an empty one (every branch left
   the set legitimately). The distinction is recorded under Mechanics (decided); the skill keeps the
@@ -4300,7 +4301,8 @@ stories already had a home elsewhere in this file; those entries point there rat
   checkout -f trunk` through it. `--show-toplevel` resolves relative to cwd, so in the main checkout
   it re-states the cwd and in a worktree it resolves to that worktree's own root; it never redirects.
   The destructive `reset --hard` two lines later carried no `-C` at all. Full account under
-  [Mechanics (decided)](#mechanics-decided). The skill keeps "`-C --show-toplevel` is not a guard".
+  [Mechanics (decided)](#mechanics-decided). The skill keeps "`-C "$(git rev-parse
+  --show-toplevel)"` is not a guard: in a worktree it resolves to that worktree".
 - **Explicit fence guard removed from Section 3 (lode-1nty, reversing lode-pxyt).** `land-merge-one.sh`
   asserts the main checkout itself as its first real action, so the Green loop's fenced
   `assert-main-checkout.sh` call is no longer needed; both call sites are protected by construction.
@@ -4340,8 +4342,9 @@ stories already had a home elsewhere in this file; those entries point there rat
   "lode-v4rk: see the script header".
 - **Kick-back conflicts load was a fourth hand-rolled spelling (lode-dc4n).** The kick-back
   conflicts load used to be its own `cat ... 2>/dev/null` plus a separate `[ -n ... ]` check, the
-  fourth copy of the "missing or empty, both fatal" policy; it now uses
-  `scripts/land-state-load.sh --require-nonempty`.
+  fourth hand-rolled spelling of a `$STATE_DIR` load; it now uses
+  `scripts/land-state-load.sh --require-nonempty`, the same "missing or empty, both fatal" policy
+  and script as the isolation-replay accepted load.
 - **Rejected "search bd before filing" (lode-9t7u).** Reasoning moved to [decisions.md](decisions.md)
   under lode-9t7u; the skill keeps "Do not add a search-then-file step".
 
