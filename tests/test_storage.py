@@ -11,7 +11,7 @@ from unittest import mock
 
 import pytest
 
-from lode import storage
+from lode import reconcile, storage
 from lode.jobs import LIVE_JOB_STATUSES, now_iso
 from lode.storage import (
     _SCHEMA_VERSION,
@@ -821,34 +821,57 @@ def test_schema_index_predicate_matches_live_job_statuses() -> None:
     assert set(re.findall(r"'([a-z]+)'", predicate)) == set(LIVE_JOB_STATUSES)
 
 
-def test_jobs_type_target_index_migrated_and_used_by_gap_probes(tmp_path: Path) -> None:
-    """lode-spwf: ``idx_jobs_type_target`` exists after migration and serves the probes.
-
-    The done/dead ``NOT EXISTS`` probes in reconcile's enrich-gap scan filter on
-    ``(type, target_version)`` plus a non-live ``status``; the query plan must
-    search that index rather than walk ``idx_jobs_status``.
-    """
+def test_jobs_target_type_index_reaches_a_pre_existing_db(tmp_path: Path) -> None:
+    """lode-spwf: a database that predates ``idx_jobs_target_type`` gains it on open."""
     db = tmp_path / "lode.db"
     _seed_pre_lode_uri7_db(db)
 
+    def index_columns(conn: sqlite3.Connection) -> list[str]:
+        return [r[2] for r in conn.execute("PRAGMA index_info(idx_jobs_target_type)")]
+
     conn = init_db(db)
     try:
-        # Drop the index and re-run the versioned step itself, so the test
-        # covers the migration function and not only schema.sql's own copy.
-        conn.execute("DROP INDEX idx_jobs_type_target")
-        storage._migrate_v4_jobs_type_target_index(conn)
-        storage._migrate_v4_jobs_type_target_index(conn)  # idempotent
+        assert index_columns(conn) == ["target_version", "type"]
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == _SCHEMA_VERSION
 
-        cols = [r[2] for r in conn.execute("PRAGMA index_info(idx_jobs_type_target)")]
-        assert cols == ["type", "target_version"]
+        # init_db's schema.sql pass built the index before the versioned step
+        # ran, so drop it to exercise the step itself (and its idempotency).
+        conn.execute("DROP INDEX idx_jobs_target_type")
+        storage._migrate_v4_jobs_target_type_index(conn)
+        storage._migrate_v4_jobs_target_type_index(conn)
+        assert index_columns(conn) == ["target_version", "type"]
+    finally:
+        conn.close()
 
-        plan = " ".join(
-            row[3]
-            for row in conn.execute(
-                "EXPLAIN QUERY PLAN SELECT 1 FROM jobs j "
-                "WHERE j.type = 'enrich' AND j.target_version = 'v' AND j.status = 'done'"
-            )
-        )
-        assert "idx_jobs_type_target" in plan
+
+def test_reconcile_gap_scans_seek_jobs_by_target(tmp_path: Path) -> None:
+    """lode-spwf: every ``jobs`` access in the embed/enrich gap scans is a per-target seek.
+
+    Plans the scans' own SQL, captured as the steps run it, so a plan that
+    regresses to walking a whole status (or the whole table) per head fails
+    here. The planner has no statistics to consult (nothing runs ``ANALYZE``),
+    so an empty database plans exactly like a populated one.
+    """
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        statements: list[str] = []
+        conn.set_trace_callback(statements.append)
+        reconcile._embed_gap_step(conn)
+        reconcile._enrich_gap_step(conn)
+        conn.set_trace_callback(None)
+        scans = [sql for sql in statements if "FROM jobs" in sql]
+        # embed gap, enrich-gap note arm, enrich-gap externals arm
+        assert len(scans) == 3
+
+        for sql in scans:
+            plan = [row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + sql)]
+            jobs_steps = [s for s in plan if re.match(r"(SCAN|SEARCH) je?\b", s)]
+            # The plan names aliases, not tables: a jobs reference under any
+            # other alias must fail here rather than go unchecked.
+            jobs_refs = re.findall(r"(?:FROM|JOIN) jobs\b", sql)
+            assert len(jobs_steps) == len(jobs_refs), plan
+            assert any("idx_jobs_target_type" in step for step in jobs_steps), plan
+            for step in jobs_steps:
+                assert "target_version=?" in step or "PRIMARY KEY" in step, plan
     finally:
         conn.close()
