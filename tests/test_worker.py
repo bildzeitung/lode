@@ -324,18 +324,28 @@ def test_run_enrich_success_stamps_prompt_ver(
 def test_run_enrich_gated_out_job_leaves_prompt_ver_null(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
-    """A skipped (None-outcome) enrich job ends 'done' with prompt_ver NULL (lode-tkdy).
+    """A gated-out enrich job ends 'done' with prompt_ver NULL on the immediate route (lode-tkdy).
 
-    Same state as lode.enrich.submit_enrich_batch's skip path, so reconcile
-    reads it as stale and re-opens the target once the gate lifts.
+    Runs the real enrich handler on a no_egress note, so the skip signal is
+    pinned end to end. Same state as lode.enrich.submit_enrich_batch's skip
+    path: not a gap while the flag holds, re-opened by reconcile once it clears.
     """
+    from lode.reconcile import _enrich_gap_step
+
+    _insert_note_worker(conn)
+    with conn:
+        conn.execute("UPDATE notes SET no_egress = 1")
     job_id = _insert_job(conn, "enrich", "ver-1")
     _claim_one(conn, ("enrich",), _now_iso())
-    skipping_registry: dict[str, HandlerFn] = {"enrich": lambda conn, tv, db, s: None}
-    assert run_one(conn, job_id, db_path, settings, skipping_registry) is True
+
+    assert run_one(conn, job_id, db_path, settings, _REGISTRY) is True
     row = _job(conn, job_id)
-    assert row["status"] == "done"
-    assert row["prompt_ver"] is None
+    assert (row["status"], row["prompt_ver"]) == ("done", None)
+
+    assert _enrich_gap_step(conn, settings) == 0
+    with conn:
+        conn.execute("UPDATE notes SET no_egress = 0")
+    assert _enrich_gap_step(conn, settings) == 1
 
 
 def test_run_appends_handler_outcome_to_outcomes_sink(

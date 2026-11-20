@@ -1200,14 +1200,14 @@ def test_enrich_gap_external_excludes_no_egress_scoped(
 ) -> None:
     """A scope-denied external is no_egress too, even with ``externals.no_egress = 0``.
 
-    The batch route marks a gated-out enrich job ``done`` without stamping
+    Both enrich routes mark a gated-out enrich job ``done`` without stamping
     ``prompt_ver``, so without this exclusion the head would read as stale and be
     re-enqueued (and re-skipped) on every reconcile pass.
     """
     from lode.no_egress_scope import NoEgressScopeRule
 
     _insert_external_snapshot(conn, "https://internal.example.com/x", "snap-s")
-    _insert_enrich_job(conn, "snap-s", "done")  # batch-route skip: prompt_ver NULL
+    _insert_enrich_job(conn, "snap-s", "done")  # gated-out skip: prompt_ver NULL
     scoped = Settings(
         no_egress_scopes=[
             NoEgressScopeRule(source_type="web", match="internal.example.com")
