@@ -243,8 +243,8 @@ byte-identical across the three, deliberately; and every job in the repo carries
   OS/arch/python-version/dependency-file-hash, not the workflow name, so enabling it on `release.yml`
   would restore a cache `build.yml` populated on `trunk` rather than build a fresh one — taking the
   publishing leg's dependencies from a non-publishing workflow's cache is exactly what the clean-room
-  framing exists to avoid. Distinct again from the `pip install -U uv` bootstrap — `tests.yml`'s
-  `lock-currency` job still runs it; the `tests` job and `coverage.yml` did until `lode-s09w.2` —
+  framing exists to avoid. Distinct again from the `pip install -U uv` bootstrap — the
+  `tests` job and `coverage.yml` ran it until `lode-s09w.2`, and `tests.yml`'s `lock-currency` job until `lode-1qmo` —
   which skips `cache: pip` for a third reason — and **not** because the cache would sit empty
   (lode-81w0). The work after it runs through `uv` (its own `~/.cache/uv`), but the bootstrap itself
   *is* a real pip download — a 22 MB wheel from PyPI (measured: uv 0.12.0, linux x86_64) — so a

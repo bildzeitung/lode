@@ -77,13 +77,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-
       - name: Install uv
-        run: pip install -U uv
+        # Same exact-pinned setup-uv step as the `tests` job below, so the job gating
+        # uv.lock currency runs the same uv build as the job installing from it.
+        # `enable-cache: false` matches it (lode-3vrq).
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: false
 
       - name: Fail if uv.lock is stale against pyproject.toml
         run: uv lock --check
