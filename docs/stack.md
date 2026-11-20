@@ -115,10 +115,9 @@ Two files, two jobs — **never pin the same thing in both**:
 - **`uv.lock` is the only place exact versions live (`lode-s09w`, `lode-s09w.4`).** A committed,
   fully-transitive lock of the runtime dependencies **and** the `dev` dependency group — `lode-s09w`
   reversed epic `lode-g274`'s OQ#1, which had left the dev tools unlocked — consumed by every `uv
-  sync` / `uv run --frozen`. Regenerated only via `uv lock` (or `scripts/update-deps.sh`, which
-  wraps it) — never hand-edited. The older pip-compile lock and its
-  compile script are deleted (`lode-s09w.4`); `git log` and `docs/decisions.md` keep
-  their history.
+  sync` / `uv run --frozen`. Regenerated only via `scripts/update-deps.sh` (which wraps `uv lock`)
+  — never hand-edited. The older pip-compile lock and its compile script are deleted
+  (`lode-s09w.4`); `git log` and `docs/decisions.md` keep their history.
 
   **Installing from `uv.lock` verifies hashes, and that replaces `--require-hashes` (`lode-s09w.4`).**
   The old lock step ran `uv pip install --require-hashes`; the question whether `uv sync` /
