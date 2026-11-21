@@ -10,11 +10,12 @@ so a real ``ant auth login`` profile on the dev machine can't leak in.
 Branch-level cases monkeypatch ``anthropic.Anthropic`` so each resolution outcome
 is exercised in isolation without a network call.
 
-Two cases below (``test_missing_credentials_raises_actionable_error``,
+Some cases below (``test_constructed_client_has_tracing_off``,
+``test_missing_credentials_raises_actionable_error``,
 ``test_env_api_key_resolves``) deliberately construct the *real*, un-mocked
 ``anthropic.Anthropic()`` — that's the whole point, exercising the SDK's own
-credential-chain behavior that :func:`lode.auth.build_client` wraps. Neither
-makes a network call (construction alone never does), so they carry
+behavior that :func:`lode.auth.build_client` wraps. None makes a network call
+(construction alone never does), so they carry
 ``@pytest.mark.network`` purely to lift ``tests/conftest.py``'s autouse
 LLM-client-construction guard (lode-85q), which otherwise can't distinguish
 "real construction on purpose" from "real construction because a mock broke".
@@ -47,6 +48,20 @@ def test_no_hardcoded_key_in_source() -> None:
     src = Path(auth.__file__).read_text()
     assert "sk-ant" not in src
     assert "api_key=" not in src
+
+
+@pytest.mark.network
+def test_constructed_client_has_tracing_off(monkeypatch, isolated_sdk) -> None:
+    """The client ``build_client`` constructs has the SDK's OpenTelemetry tracing off, even
+    when the environment asks for it (lode-sflg)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-env-key")
+    # The SDK traces unless this variable is "false", so "true" keeps an ambient "false" on
+    # the machine running the suite from passing this test without the argument.
+    monkeypatch.setenv("ANTHROPIC_OPEN_TELEMETRY", "true")
+
+    client = build_client()  # real SDK, no network call
+
+    assert client.open_telemetry["traces"]["enabled"] is False
 
 
 @pytest.mark.parametrize("module", ["lode.auth", "lode.enrich", "lode.tui.screens.ask"])
@@ -130,7 +145,7 @@ def test_profile_provider_not_falsely_rejected(monkeypatch) -> None:
         auth_token = None
         credentials = object()  # a resolved provider stands in for a profile
 
-    monkeypatch.setattr(anthropic, "Anthropic", lambda: _ProfileClient())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda **_kw: _ProfileClient())
 
     assert isinstance(build_client(), _ProfileClient)
 
@@ -140,7 +155,7 @@ def test_construction_error_maps_to_auth_error(monkeypatch, isolated_sdk) -> Non
     # missing), it is wrapped in the actionable AuthError, chained for debugging.
     original = anthropic.AnthropicError("Config file not found (profile 'default').")
 
-    def _raise() -> None:
+    def _raise(**_kw: object) -> None:
         raise original
 
     monkeypatch.setattr(anthropic, "Anthropic", _raise)
