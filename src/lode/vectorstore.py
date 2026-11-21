@@ -26,10 +26,11 @@ implies a full re-embed (lode-txh.6). sqlite-vec is the documented fallback-down
 (``docs/stack.md``); LanceDB is the live store, so it is the only one wired here.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from lode.config import Settings
 
@@ -53,8 +54,14 @@ _METRIC = "cosine"
 #: version younger than this keeps its files, so a read in another process that
 #: pinned it survives the prune. The age runs from when the version was
 #: written, not from when it was superseded: a read on a version older than
-#: this is not protected. See ``docs/decisions.md`` (lode-re5e).
+#: this loses its files, and :meth:`VectorStore._rows` retries it on the latest
+#: version. See ``docs/decisions.md`` (lode-re5e).
 _PRUNE_WINDOW = timedelta(seconds=60)
+
+#: What lancedb's ``RuntimeError`` says when a scan reaches a data file that a
+#: prune has deleted. The error has no type of its own, so the message is the
+#: only way to tell it from any other ``RuntimeError``.
+_PRUNED_FILE_ERROR = "Not found"
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,8 +203,9 @@ class VectorStore:
         Each call is a delete + add = 2 new LanceDB versions, and a Table held
         across many calls accumulates that history in memory. Every
         ``settings.vectorstore_optimize_interval`` calls this prunes every version
-        older than ``_PRUNE_WINDOW`` -- safe because this store's vectors are a
-        regenerable cache (module docstring), so nothing here needs history.
+        older than ``_PRUNE_WINDOW``. Nothing stored here needs history: the
+        vectors are a regenerable cache (module docstring). A read in another
+        process that still holds a pruned version is recovered by :meth:`_rows`.
 
         Deliberately does **not** pass ``delete_unverified=True``: it would
         lift LanceDB's protection for young files that may belong to *another
@@ -215,6 +223,28 @@ class VectorStore:
             table.checkout_latest()
             self._writes_since_optimize = 0
 
+    def _rows(self, query: Callable[[Any], Any]) -> list[dict[str, Any]]:
+        """Run ``query(table).to_list()``, retrying once if a prune removed its files.
+
+        ``query`` builds a LanceDB query from the opened Table, which is pinned
+        to the version that was latest when the read started. If another
+        process's :meth:`replace_vectors` prunes while the scan runs, and that
+        version was written longer ago than ``_PRUNE_WINDOW``, its data files
+        are deleted and the scan raises ``RuntimeError`` with "Not found". A
+        prune never removes the latest version's files, so one retry after
+        ``checkout_latest()`` reads them. A second failure, or any other
+        ``RuntimeError``, propagates. Measurements: ``docs/decisions.md``
+        (lode-2brb, Update lode-re5e).
+        """
+        table = self._open_or_create_table()
+        try:
+            return query(table).to_list()
+        except RuntimeError as exc:
+            if _PRUNED_FILE_ERROR not in str(exc):
+                raise
+            table.checkout_latest()
+            return query(table).to_list()
+
     def vectors_for(self, target_version: str) -> list[list[float]]:
         """Return every passage vector persisted for ``target_version``, unordered.
 
@@ -228,11 +258,8 @@ class VectorStore:
         handling, including on a never-written store (opens an empty table and
         finds none).
         """
-        rows = (
-            self._open_or_create_table()
-            .search()
-            .where(f"target_version = '{target_version}'")
-            .to_list()
+        rows = self._rows(
+            lambda table: table.search().where(f"target_version = '{target_version}'")
         )
         return [row["vector"] for row in rows]
 
@@ -259,12 +286,10 @@ class VectorStore:
         which needs the vectors themselves) so the scan never deserializes a
         single fixed-width ``vector`` blob just to read one string per row.
         """
-        rows = (
-            self._open_or_create_table()
-            .search()
-            .where(f"model = '{model}'")
-            .select(["model_revision"])
-            .to_list()
+        rows = self._rows(
+            lambda table: (
+                table.search().where(f"model = '{model}'").select(["model_revision"])
+            )
         )
         return {row["model_revision"] for row in rows}
 
@@ -282,14 +307,18 @@ class VectorStore:
         ``k`` :class:`VectorHit` results, empty if the store has no vectors yet (a
         query against a never-written store opens an empty table and finds none).
         """
-        query = self._open_or_create_table().search(query_vector).metric(_METRIC)
-        if where is not None:
-            query = query.where(where)
+
+        def query(table: Any) -> Any:
+            ann = table.search(query_vector).metric(_METRIC)
+            if where is not None:
+                ann = ann.where(where)
+            return ann.limit(k)
+
         return [
             VectorHit(
                 passage_id=row["passage_id"],
                 target_version=row["target_version"],
                 distance=row["_distance"],
             )
-            for row in query.limit(k).to_list()
+            for row in self._rows(query)
         ]
