@@ -6687,3 +6687,20 @@ the SDK default, or pass `open_telemetry=False` where lode constructs its Anthro
     `docs-nit-file-repo-relative` and `ap-never-review-own-build` are lengthened so each runs through
     the operative part of its rule. Every phrase matches exactly once in `code-reviewer.md`, outside
     any fenced block.
+  - **Update (lode-w18a.11, 2026-11-21, maintainer):** the amended inventory is approved with these
+    changes, built as an edit to `tests/instruction_rules.json` (`lode-w18a.10` and `lode-low0` had
+    both landed). The `Nonzero means STOP (lode-6wgc)` rule keeps both pins (two separately pinned
+    re-assert steps, worded differently). The stacked-branch merge-base keeps only
+    `stacked-branch-off-trunk-merge-base-code-review`; `stacked-branch-off-trunk-merge-base-hand-pass`
+    is dropped (one rule stated twice). The new `background-gate-means-listed` entry pins the list of
+    means in the background-gate bullet (no `run_in_background: true`, no `Monitor`, no `&`/`nohup`,
+    no closing message that defers the result), so the cut cannot drop it with the gate green. Both
+    technical-review additions (`blocked-followup-is-blocks-not-discovered-from`,
+    `ap-workflow-absence-no-caveat-no-lowered-scrutiny`) are accepted, and collapsing
+    `technical-review-by-non-author` onto `ap-never-review-own-build` is accepted (the line-21 intro
+    copy becomes cuttable). The two `lode-low0` rules get entries,
+    `ruling-record-mechanism-traced-or-labelled` and `decision-ticket-failure-traced-before-filing`,
+    each phrase matching once outside fenced blocks. The inventory is 114 entries. The two criteria
+    (one entry per repeated rule, on the surviving copy; a pin runs through the operative part of its
+    rule) apply to every inventory and are stated in `docs/agents-workflow.md`. No further
+    re-approval is needed: closing `lode-w18a.11` unblocks `lode-w18a.9`.
