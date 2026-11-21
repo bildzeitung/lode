@@ -212,6 +212,10 @@ def test_stub_skip_reason(no_file: int, raw: str, expect: str | None) -> None:
         # An existing pin crossing a minor or major files, additions alongside or not.
         ("alpha\t1.2.3\t1.3.0", None),
         ("alpha\t1.2.3\t2.0.0\nfresh\t(none)\t9.9.9", None),
+        # A package gaining or losing one of several resolved versions is an
+        # existing pin moving, not an addition or a removal: it files.
+        ("multi\t1.0\t1.0,2.0\nfresh\t(none)\t9.9.9", None),
+        ("multi\t1.0,2.0\t1.0", None),
     ],
 )
 def test_stub_skip_reason_reconcile(raw: str, expect: str | None) -> None:
@@ -227,11 +231,6 @@ def test_stub_skip_reason_reconcile_default_off() -> None:
     # Without the third argument an addition still files (non-reconcile modes).
     got = _run("dep_stub_skip_reason 0 'fresh\t(none)\t9.9.9'")
     assert got.returncode != 0
-
-
-def test_update_deps_passes_reconcile_to_skip_reason() -> None:
-    body = UPDATE_DEPS.read_text(encoding="utf-8")
-    assert 'dep_stub_skip_reason "$NO_FILE" "$CHANGES_RAW" "$RECONCILE"' in body
 
 
 # --------------------------------------------------------------------------

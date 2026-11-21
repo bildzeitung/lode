@@ -226,7 +226,10 @@ call site; new capabilities and judgment calls belong in the executor's hand-off
 auto-filed tickets — `lode-cai6` is the worked example of a judgment call that should *not* have been
 auto-filed. A **noise gate** skips filing entirely when every moved package changed only its patch
 component (mechanically decidable from the diff already on hand) — a ticket per run that is usually
-noise gets ignored. `--no-file` suppresses filing outright; `--dry-run` never reaches this step.
+noise gets ignored. With `--reconcile`, additions and removals are dropped before that gate, so a
+reconcile files only when an existing pin moved across a minor or major (`lode-7qo1`,
+[decisions.md](decisions.md#a-stale-uvlock-is-fixed-by-scriptsupdate-depssh---reconcile-a-no-upgrade-mode-decided-lode-trw1)).
+`--no-file` suppresses filing outright; `--dry-run` never reaches this step.
 Because filing writes Dolt, a missing or failing `bd` (or the `bd dolt push` after it) only warns —
 it never changes the script's exit status or the lock promotion, preserving the script's existing
 contract that it never mutates anything outside `./.venv` and `uv.lock`.

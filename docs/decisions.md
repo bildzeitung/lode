@@ -6564,7 +6564,11 @@ to evaluate. Open in `lode-7qo1`.
     ruled" sentence above no longer holds. `--reconcile` is to be run straight after the
     `pyproject.toml` edit, since a mid-branch unrelated red test rolls the lock back; the script
     header and `docs/onboarding.md` say so. The empty-diff no-op cost (a reconcile with nothing to
-    change still rebuilds `./.venv` and runs both gates) is not ruled and is left as is.
+    change still rebuilds `./.venv` and runs both gates) is not ruled and is left as is. As built
+    (not part of the ruling's text): the test reads the lock diff, not the edit that caused it, so
+    an added dependency that forces an existing pin across a minor or major files too, as does a
+    package that gains or loses one of several resolved versions; and a ticket that does file
+    still carries the whole version diff, additions and removals included.
 
 ## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 

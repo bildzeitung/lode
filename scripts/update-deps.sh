@@ -20,11 +20,8 @@
 #      pyproject.toml edit made stale -- an added or removed dependency, a range
 #      or requires-python change -- keeping every other pin. This is the remedy
 #      `nox -s lock_currency` names when it exits 1. Mutually exclusive with
-#      --package. Run it STRAIGHT AFTER the pyproject.toml edit (lode-7qo1):
-#      it gates on the full `nox -s tests` against the working tree, so an
-#      unrelated red test mid-branch rolls the reconciled lock back to the stale
-#      one and rebuilds ./.venv without the new dependency. The release-age
-#      cutoff ruled for the two upgrade modes (lode-3s4d) must never reach this one: a reconcile may not downgrade an
+#      --package. The release-age cutoff ruled for the two upgrade modes
+#      (lode-3s4d) must never reach this one: a reconcile may not downgrade an
 #      existing pin. Steps 2-6 below are the same for all three modes.
 #   2. Print a readable VERSION DIFF between the saved copy and the moved
 #      uv.lock -- one line per changed package, "pkg  OLD -> NEW" for a bump,
@@ -41,6 +38,10 @@
 #      against uv.lock's recorded hashes -- docs/stack.md), never patched in
 #      place.
 #   4. Run the gates: nox -t fix, nox -s tests -- against the promoted lock.
+#      They run against the WORKING TREE, so run --reconcile STRAIGHT AFTER
+#      the pyproject.toml edit (lode-7qo1): mid-branch, one unrelated red test
+#      rolls the reconciled lock back to the stale one (step 5) and rebuilds
+#      ./.venv without the new dependency.
 #   5. GREEN -> nothing further to do to the lock; this script never commits
 #      -- review (`git diff -- uv.lock`) and commit it yourself. ANY OTHER
 #      FAILURE -- the install itself (hash-mismatched pin, yanked release,
@@ -59,13 +60,14 @@
 #      stub's own acceptance text. Noise gate: skipped entirely when every
 #      moved package changed only its patch component. With --reconcile
 #      (lode-7qo1) additions and removals are ignored too: it files only when
-#      an EXISTING pin moved across a minor or major (a range or
-#      requires-python edit). The diff parsing, the
-#      rendering and that gate live in the sourceable scripts/dep-churn-lib.sh
-#      so they are unit-tested. `--no-file` suppresses filing outright. Filing
-#      writes Dolt, so a missing/failing `bd` (or the `bd dolt push` after it)
-#      only WARNS -- it never changes this script's exit status or the lock
-#      (this script never mutates anything outside ./.venv and uv.lock).
+#      an EXISTING pin moved across a minor or major (typically a range or
+#      requires-python edit; the test is on the diff, not on the cause). The
+#      diff parsing, the rendering and that gate live in the sourceable
+#      scripts/dep-churn-lib.sh so they are unit-tested. `--no-file`
+#      suppresses filing outright. Filing writes Dolt, so a missing/failing
+#      `bd` (or the `bd dolt push` after it) only WARNS -- it never changes
+#      this script's exit status or the lock (this script never mutates
+#      anything outside ./.venv and uv.lock).
 #
 # NO -x / TRASH-NOT-REPAIR -- deviates from the scripts/*.sh house style of
 # `#!/bin/bash -ex`: `-e` alone still aborts on any unguarded failing command,

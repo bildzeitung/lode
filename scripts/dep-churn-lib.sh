@@ -98,7 +98,10 @@ dep_all_patch_level_only() {
 #
 # In reconcile mode (lode-7qo1) only moves of an EXISTING pin count: additions
 # and removals have no crossed versions and no existing call sites to evaluate,
-# so they are dropped before the empty and patch-only checks below.
+# so they are dropped before the empty and patch-only checks below. A package
+# that gains or loses one of several resolved versions ("1.0" -> "1.0,2.0") is
+# an existing pin moving, not an addition: it stays, and the noise gate's
+# multi-version rule files it.
 dep_stub_skip_reason() {
   local no_file="$1" raw="$2" reconcile="${3:-0}"
   if [ "$reconcile" -eq 1 ]; then
