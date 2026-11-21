@@ -9,12 +9,20 @@
 #   scripts/update-deps.sh --dry-run          # print the version diff only; uv.lock restored
 #   scripts/update-deps.sh --package NAME     # bump just NAME (+ whatever it drags with it)
 #   scripts/update-deps.sh --package NAME --dry-run
+#   scripts/update-deps.sh --reconcile        # fix a STALE lock after a pyproject.toml edit, no upgrades
 #   scripts/update-deps.sh --no-file          # promote as usual but never file the churn stub
 #
 # What it does:
 #   1. Save a copy of the committed uv.lock, then move it in place:
-#      `uv lock --upgrade` (whole set) or `uv lock --upgrade-package NAME`
-#      (only NAME and whatever it forces; every other pin stays put).
+#      `uv lock --upgrade` (whole set), `uv lock --upgrade-package NAME`
+#      (only NAME and whatever it forces; every other pin stays put), or, with
+#      --reconcile, plain `uv lock` (lode-trw1): re-resolve ONLY what a
+#      pyproject.toml edit made stale -- an added or removed dependency, a range
+#      or requires-python change -- keeping every other pin. This is the remedy
+#      `nox -s lock_currency` names when it exits 1. Mutually exclusive with
+#      --package. The release-age cutoff ruled for the two upgrade modes
+#      (lode-3s4d) must never reach this one: a reconcile may not downgrade an
+#      existing pin. Steps 2-6 below are the same for all three modes.
 #   2. Print a readable VERSION DIFF between the saved copy and the moved
 #      uv.lock -- one line per changed package, "pkg  OLD -> NEW" for a bump,
 #      "+ pkg VERSION" for an addition, "- pkg  VERSION (removed)" -- derived
@@ -83,6 +91,7 @@ LOCK="uv.lock"
 
 DRY_RUN=0
 PACKAGE=""
+RECONCILE=0
 NO_FILE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -94,21 +103,30 @@ while [ "$#" -gt 0 ]; do
       PACKAGE="${2:?--package requires a package name}"
       shift 2
       ;;
+    --reconcile)
+      RECONCILE=1
+      shift
+      ;;
     --no-file)
       NO_FILE=1
       shift
       ;;
     -h|--help)
-      echo "usage: $0 [--dry-run] [--package NAME] [--no-file]" >&2
+      echo "usage: $0 [--dry-run] [--package NAME | --reconcile] [--no-file]" >&2
       exit 0
       ;;
     *)
       echo "update-deps.sh: unknown argument '$1'" >&2
-      echo "usage: $0 [--dry-run] [--package NAME] [--no-file]" >&2
+      echo "usage: $0 [--dry-run] [--package NAME | --reconcile] [--no-file]" >&2
       exit 1
       ;;
   esac
 done
+
+if [ "$RECONCILE" -eq 1 ] && [ -n "$PACKAGE" ]; then
+  echo "update-deps.sh: --reconcile and --package are mutually exclusive (--reconcile never upgrades)" >&2
+  exit 1
+fi
 
 if ! command -v uv >/dev/null 2>&1; then
   echo "update-deps.sh: uv not found on PATH -- install uv (https://docs.astral.sh/uv/)" >&2
@@ -129,14 +147,19 @@ cp -f "$LOCK" "$SAVED_LOCK"
 
 # From here until the outcome is decided an UNGATED lock sits on disk.
 RESTORE_LOCK_ON_EXIT=1
+UV_LOCK_CMD=(uv lock -q)
+if [ "$RECONCILE" -eq 1 ]; then
+  ATTEMPTED="no-upgrade reconcile"
+elif [ -n "$PACKAGE" ]; then
+  UV_LOCK_CMD+=(--upgrade-package "$PACKAGE")
+  ATTEMPTED="single package '$PACKAGE'"
+else
+  UV_LOCK_CMD+=(--upgrade)
+  ATTEMPTED="full lock upgrade"
+fi
 # Checked explicitly: `bash scripts/update-deps.sh` drops the shebang's -e, and a
 # failed resolve must not carry on to a "no change" diff and a green exit.
-if [ -n "$PACKAGE" ]; then
-  UPGRADE=(--upgrade-package "$PACKAGE")
-else
-  UPGRADE=(--upgrade)
-fi
-if ! uv lock -q "${UPGRADE[@]}"; then
+if ! "${UV_LOCK_CMD[@]}"; then
   echo "update-deps.sh: uv lock failed (see output above) -- nothing was gated." >&2
   exit 1
 fi
@@ -238,7 +261,7 @@ echo "update-deps.sh: FAILED ($FAILED_AT) -- restoring the committed $LOCK." >&2
 # rollback rebuild, and regardless of whether either succeeds.
 REPORT="$(cat <<REPORT_EOF
 === update-deps.sh FAILURE REPORT (paste into a bd ticket) ===
-Attempted update: $( [ -n "$PACKAGE" ] && echo "single package '$PACKAGE'" || echo "full lock upgrade" )
+Attempted update: $ATTEMPTED
 Failed at:         $FAILED_AT (see output above for the actual error)
 Candidate diff that was attempted:
 $DIFF_TEXT

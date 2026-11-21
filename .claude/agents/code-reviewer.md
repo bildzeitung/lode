@@ -425,6 +425,9 @@ recheck against a tree that may hold my own uncommitted review fixes.)
        sweep that introduced three such references, and a docstring citing an import the same commit
        removed, which reached `land-review` and bounced the branch. I am the last technical gate
        before `land-review`, so one the producer missed is mine to catch.
+     - **A maintainer ruling recorded in `docs/decisions.md`, by the diff or by a fix I make:** the
+       record keeps the failure mechanism the ticket claims only if I have traced it in the code, or
+       it is labelled "the ticket's claim" (lode-low0; [docs/agents-workflow.md](../../docs/agents-workflow.md#trace-a-claimed-failure-before-asking-a-human-to-decide-it-lode-low0)).
      - **If the diff touches `docs/decisions.md`, run the silent-rewrite guard (lode-d7pm):**
 
        ```bash
@@ -484,6 +487,10 @@ recheck against a tree that may hold my own uncommitted review fixes.)
    Provenance goes in the description, not the edge. Full verification and the `discovered-from` case:
    [`.claude/agents/coding.md`](coding.md#5-implement) and
    [docs/agents-workflow.md](../../docs/agents-workflow.md#filing-follow-up-work-blocks-vs-discovered-from-lode-c0t3).
+
+   **A ticket that asks the maintainer to decide about a failure:** before filing it I trace that
+   failure in the code from the trigger to the wrong outcome, and mark any step I did not trace "not
+   checked against the code" in the ticket (lode-low0; [docs/agents-workflow.md](../../docs/agents-workflow.md#trace-a-claimed-failure-before-asking-a-human-to-decide-it-lode-low0)).
 
    **A wording-only doc nit outside this branch's scope is not a new ticket** — the remedy is purely
    *how to say it*, never a judgment call about *what to say* (lode-t551; decision and discriminator:

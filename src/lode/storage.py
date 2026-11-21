@@ -275,7 +275,20 @@ def _migrate_v4_jobs_refusal_provider(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN refusal_provider TEXT")
 
 
-_SCHEMA_VERSION = 4
+def _migrate_v5_jobs_target_type_index(conn: sqlite3.Connection) -> None:
+    """lode-spwf: add ``idx_jobs_target_type`` on ``jobs (target_version, type)``.
+
+    ``schema.sql`` says what the index is for and why ``target_version`` leads.
+    Idempotent: ``schema.sql`` carries the same ``IF NOT EXISTS`` statement and
+    :func:`init_db` runs it first, so on that path the index already exists
+    and this step only records the version.
+    """
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_jobs_target_type ON jobs (target_version, type)"
+    )
+
+
+_SCHEMA_VERSION = 5
 """Target ``PRAGMA user_version`` — bump alongside a new entry in
 :data:`_VERSIONED_MIGRATIONS`."""
 
@@ -284,6 +297,7 @@ _VERSIONED_MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = 
     (2, _migrate_v2_jobs_live_includes_failed),
     (3, _migrate_v3_jobs_refusal_columns),
     (4, _migrate_v4_jobs_refusal_provider),
+    (5, _migrate_v5_jobs_target_type_index),
 ]
 """Rebuild-shaped migrations, gated by ``PRAGMA user_version`` (see module
 docstring). Ordered ascending; each entry runs once, the first time

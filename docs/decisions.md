@@ -6084,6 +6084,9 @@ entries below from being rewritten to chase the current tree.)
     per ticket; (3) a watch period: the next 5 dispatches of the trimmed agent are checked against a
     short list of incident-derived behaviours, and a miss reverts the cut.
   - **Accepted limit:** 5 dispatches do not exercise rare paths.
+  - **Update (lode-w18a.10, 2026-11-21):** the `code-reviewer.md` inventory approved under this
+    entry was amended by maintainer ruling before its cut; see the `lode-w18a.10` entry
+    "code-reviewer.md rule inventory amended before the `lode-w18a.9` cut".
 
 - **Update (lode-5x01, 2026-11-16) — a filename typo in `lode-s09w`'s `uv` migration entry above.**
   That entry's bullet "`scripts/python-init.sh`, `venv-install` and `compile-lock.sh` are deleted
@@ -6519,6 +6522,42 @@ entries below from being rewritten to chase the current tree.)
   - **Not decided here.** Whether `lode-4wgq` also records the provider identity and
     `ENRICH_PROMPT_VER` the batch was submitted with: the batch route reads both at collect time
     too, and item 3's ruling names only the model. Open in `lode-ucpu`, which blocks `lode-4wgq`.
+  - **Update (lode-smpk, 2026-11-21, maintainer):** the two questions the `lode-ucpu` Update left
+    open in `lode-smpk` are settled. That Update answers "Not decided here" above; find it by its
+    lead-in, `**Update (lode-ucpu` (`lode-tikr` tracks where it sits).
+    - **1. The provider half of the `lode-ucpu` ruling stands.** `lode-4wgq` still records the
+      submit-time provider identity. In production a provider change never reaches a stamp,
+      because the poll fails first. Option (c) below still needs the identity, recorded on
+      lode's side at submit and readable at collect before any provider call.
+    - **2. A mid-batch `llm_provider` switch: option (c).** At collect, compare the stored
+      submit-time provider identity with the collect-time `provider_identity(settings)`. On a
+      mismatch, dead-letter or re-enqueue the batch's jobs at once instead of polling the old
+      handle with the new provider's client and burning `batch_collect_failure_budget`;
+      `lode-6pjf` settles which of the two. Either way the old batch's results are discarded,
+      and for OpenAI and Azure that batch was already paid for at submit. Not taken: (a) leave
+      it: polls fail until `batch_collect_failure_budget` is spent, each a failed `lode work`
+      pass, then the jobs are dead-lettered and re-enqueued; (b) collect with the submit-time
+      provider (needs that provider's credentials still present). A move between direct OpenAI
+      and Azure is not a mismatch: both are `'openai'`.
+    - Decision only; the code is `lode-6pjf`'s, which depends on `lode-4wgq`. Until `lode-6pjf`
+      lands, the code behaves as in (a), and `lode-4wgq`'s provider-case test must inject the
+      collect-time provider.
+
+## A stale `uv.lock` is fixed by `scripts/update-deps.sh --reconcile`, a no-upgrade mode (decided, lode-trw1)
+
+Maintainer ruling 2026-11-21, option (a). `lode-z5ip` made `scripts/update-deps.sh` the only named
+way to regenerate `uv.lock`, but the script only upgraded, so the `nox -s lock_currency` exit-1
+message ("run the script") sent someone who had edited one dependency into a whole-lock upgrade.
+Decided: `--reconcile` runs plain `uv lock` through the same version-diff, promote, gate and
+rollback path, so only what the `pyproject.toml` edit made stale is re-resolved and every other pin
+stays. The release-age cutoff ruled for the upgrade modes (`lode-3s4d`, not built when this was
+written) does not apply to it, since a reconcile must not downgrade an existing pin, and it excludes
+`--package`. The `lock_currency` message, `docs/stack.md`, `docs/onboarding.md` and the script
+header all name it. Rejected: documenting `--package NAME` as the reconcile path (no natural NAME
+for a removed dependency or a `requires-python` change), and ruling that a whole-set upgrade on
+every edit is intended. Not ruled: a green reconcile files the churn-evaluation stub (`lode-i642`)
+like any other green run, which for a branch that only added a dependency is a ticket with nothing
+to evaluate. Open in `lode-7qo1`.
 
 ## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 
@@ -6530,6 +6569,10 @@ it. Whoever picks it up should first check what a successor has to carry. In `mk
 `docs/overrides` theme `custom_dir`, the `toc` slugify callable (`lode.docs_slug.github_slugify`),
 the `validation:` block and the `search` plugin. Outside it: the strict build (`nox -s docs`,
 `docs.yml`) and the Mermaid pre-render in `scripts/build_docs_site.py`.
+  - **Update (lode-3vet, 2026-11-21, maintainer):** decided, so the "open" in this entry's heading
+    and body no longer holds: migrate the docs site to Zensical before mkdocs-material's
+    2027-05-05 end of life. Decision only; the migration is `lode-0lb8`'s. The inventory above is
+    incomplete; `lode-0lb8` carries the full one.
 
 ## The anthropic SDK's native OpenTelemetry tracing: leave on or disable (open, lode-sflg)
 
@@ -6542,6 +6585,13 @@ were installed into lode's environment and a tracer provider registered; span co
 metadata-only unless `ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE=content` is also set. That path
 is outside the [egress log](externals.md#egress-log-auditability). **Open** (`lode-sflg`): leave
 the SDK default, or pass `open_telemetry=False` where lode constructs its Anthropic client.
+  - **Update (lode-sflg, 2026-11-21, maintainer):** disable. Pass `open_telemetry=False` at every
+    site lode constructs an Anthropic client, so the egress log stays the only record of what
+    leaves the box. `src/lode/auth.py`'s `build_client` is the only such site (the provider module
+    takes the client it is handed), and `tests/test_auth.py` pins that the constructed client has
+    tracing off even with `ANTHROPIC_OPEN_TELEMETRY=true` in the environment. The option exists
+    in the locked 1.17.0, so this does not wait on `lode-4uyu`'s 2.x bump, whose builder carries
+    the kwarg across the construction sites it touches.
   - **Update (lode-ucpu, 2026-11-20, maintainer):** the "Not decided here" question is settled:
     widen `lode-4wgq` to also record `provider_identity(settings)` and `ENRICH_PROMPT_VER` as read
     at submit, on the refusal and success paths alongside the submit-time model. Neither
@@ -6564,6 +6614,9 @@ the SDK default, or pass `open_telemetry=False` where lode constructs its Anthro
       provider. The ruling was made before this was known. Whether its provider half stands,
       and what a mid-batch provider switch should do, is open in `lode-smpk`; until that is
       decided, `lode-4wgq`'s scope is as ruled.
+  - **Update (lode-smpk, 2026-11-21):** both questions are settled. The ruling is the `lode-smpk`
+    Update on the `lode-vlok` entry, the entry the `lode-ucpu` Update above belongs to
+    (`lode-tikr`).
 - **/land SKILL.md does not carry a "search bd before filing" step; the rejected reasoning lives here
   (`lode-9t7u`, moved out of `.claude/skills/land/SKILL.md` by `lode-w18a.8`, 2026-11-20).** The
   skill keeps the one-line warning "Do not add a search-then-file step (rejected, lode-9t7u)". The
@@ -6581,3 +6634,56 @@ the SDK default, or pass `open_telemetry=False` where lode constructs its Anthro
     actually relies on are structural instead: `/epic-audit`'s `epic-audited` label and `/sweep`'s
     durable digest issue. Do not reintroduce a search-then-file step on the strength of this being
     re-derived as "the obvious fix"; it was considered and rejected.
+- **code-reviewer.md rule inventory amended before the `lode-w18a.9` cut: repeats collapsed to one
+  entry, 12 unpinned rules and 7 short pins fixed (`lode-w18a.10`, 2026-11-21, maintainer ruling).**
+  `lode-w18a.5` added the approved 111-entry inventory to `tests/instruction_rules.json`; its review
+  found that the list pinned retellings of one rule as separate entries (which `lode-w18a.9` may not
+  delete to make a cut fit) and left distinct rules unpinned (which a cut could remove with the gate
+  green). The amended list goes back to the maintainer for re-approval (`lode-9d9t`) before
+  `lode-w18a.9` cuts.
+  - **Decision 1: option (b), collapse each repeated rule to one entry**, pinned on the copy that
+    should survive the cut. Chosen over keeping the list as approved, which would have left the
+    repeats un-cuttable. Entries removed (16) and the entry that now carries each rule:
+    `never-land-no-merge-close-push-trunk`, `ap-never-commit-beads-jsonl` into `never-write-trunk`
+    (its phrase now runs on to the `.beads/*.jsonl` clause);
+    `ready-for-code-review-label-guard` into `only-ready-for-code-review-tickets` (phrase extended
+    through "I stop and report"); `ap-no-external-tracker-writes` into `no-external-tracker-write`;
+    `ap-no-worktree-remove-of-own` into `never-clean-up-own-launch-worktree`;
+    `gate-foreground-no-run-in-background-no-monitor`, `no-deferring-closing-message` and
+    `run-every-gate-foreground-read-output` into `never-background-gate-or-end-turn-pending`;
+    `technical-review-by-non-author` into `ap-never-review-own-build` (kept because the ruling also
+    asks for that pin to be lengthened); `ap-no-ready-for-land-on-red-or-escalation` into
+    `gates-green-before-ready-for-land` and `escalation-remove-label-add-land-escalated` (its
+    phrase now starts at "**do not** mark `ready-for-land`");
+    `ap-never-drive-builders-worktree` into `review-in-own-launch-worktree-not-builders`;
+    `ap-no-gold-plating` into `simplest-thing-review-removes-overdesign`;
+    `ap-no-skipping-code-review-or-unverified-findings` into the `code-review-*` entries and
+    `no-handrolled-substitute-for-code-review`;
+    `ap-no-invoking-correctness-review-workflow` into `no-correctness-review-workflow`;
+    `ap-discovered-from-for-blocked-followup` into the new
+    `blocked-followup-is-blocks-not-discovered-from`, pinned on step 4's copy of the rule (the
+    `out-of-scope-work-own-bd-issue-deliberate-dep-type` pin stops before it);
+    `ap-assuming-launch-worktree-clean` into `isolation-guard-first-action`,
+    `recycled-worktree-guard-before-fetch`, `isolation-failure-stop-no-self-rescue` and
+    `script-exit-127-126-bootstrap-gap-stop`. `ap-no-empty-diff-review` stays: no earlier entry pins
+    it.
+  - **One anti-pattern bullet is not a pure repeat, so part of it keeps a pin** (found in technical
+    review). The "do not invoke the Workflow" half of the `correctness-review` bullet repeats step 4,
+    but its last sentence (do not ask for pre-computed findings, do not caveat the review for the
+    Workflow's absence, do not lower scrutiny) is stated nowhere else in the file. The new entry
+    `ap-workflow-absence-no-caveat-no-lowered-scrutiny` pins that sentence. With it and the
+    `blocks` entry above, the list is 111 entries again.
+  - **Decision 2: an entry for each of the 12 unpinned distinct rules** (14 entries, since the
+    "Nonzero means STOP (lode-6wgc)" line and the off-trunk merge-base clause each occur at two
+    sites): the rescue ref named in the hand-off; the quick-card "flag violations" row; never
+    recording a `land_head` the remote lacks; amend-the-reformat and never gating a tree still being
+    edited; quoting the mermaid message instead of inventing a cause; the STOP lines; the stacked
+    branch merge-base; `check-review-head.sh` exits 2 and 4; a non-Fable announced ID; flagging
+    uncertainty; no separate `git fetch` before the checkout script; and the pre-`lode-0yfn` pytest
+    fallback.
+  - **Smaller points:** the pins of `escalation-annotate-and-dolt-push`,
+    `no-dangerously-disable-sandbox-retry`, `review-head-malformed-note-not-drift`,
+    `all-three-buckets-last-gate`, `env-builds-itself-no-shared-build-state`,
+    `docs-nit-file-repo-relative` and `ap-never-review-own-build` are lengthened so each runs through
+    the operative part of its rule. Every phrase matches exactly once in `code-reviewer.md`, outside
+    any fenced block.

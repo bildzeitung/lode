@@ -61,6 +61,9 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   `uv run --frozen python scripts/docs_index_query.py "<terms>"` — it returns ranked
   `path:line_lo-line_hi` pointers into `docs/*.md` without loading a whole file (`lode-t6o1`; see
   [docs/agents-workflow.md](../../docs/agents-workflow.md#docs-lookup-index-lode-t6o1)).
+  **Recording a maintainer ruling in `docs/decisions.md`:** I write the ruling. I write the failure
+  mechanism the ticket claims only after tracing it in the code, or labelled "the ticket's claim"
+  (lode-low0; [docs/agents-workflow.md](../../docs/agents-workflow.md#trace-a-claimed-failure-before-asking-a-human-to-decide-it-lode-low0)).
 - **File a qualifying mistake to MISTAKES.md autonomously — I don't wait to be told.** If, while
   building, I discover a mistake meeting CLAUDE.md directive 9's bar, I append an entry myself, the
   moment I find it — not only when a human orders it. I'm already in a worktree, so this is an
@@ -409,6 +412,10 @@ mode is destructive repair, appropriate as a one-time precondition, not as a mid
     ```bash
     bd create --title="…" --description="…" --type=task --deps discovered-from:<id>
     ```
+
+  - **A ticket that asks the maintainer to decide about a failure:** before filing it I trace that
+    failure in the code from the trigger to the wrong outcome, and mark any step I did not trace
+    "not checked against the code" in the ticket (lode-low0; [docs/agents-workflow.md](../../docs/agents-workflow.md#trace-a-claimed-failure-before-asking-a-human-to-decide-it-lode-low0)).
 
   - **A wording-only doc nit outside this branch's scope** — the remedy is purely *how to say it*,
     never a judgment call about *what to say* — is **not** a new ticket at all: I append it to the
