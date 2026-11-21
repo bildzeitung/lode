@@ -953,6 +953,12 @@ def test_default_staleness_threshold_is_still_about_1800s(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 
 
+# 40 rounds x 32 racers is ~1280 bash+git+flock spawns: measured 62s alone at
+# load ~10 and 85s at load ~27 (sys-time bound, not a hang), so the 120s
+# global default leaves no headroom when other gates share the machine
+# (lode-rhr3). Contention is load-bearing (docstring), so the budget grows
+# instead of the test shrinking.
+@pytest.mark.timeout(600)
 def test_concurrent_acquire_against_a_stale_lock_has_exactly_one_winner(
     tmp_path: Path,
 ) -> None:
