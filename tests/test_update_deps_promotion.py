@@ -67,11 +67,11 @@ def _build_fake_repo(tmp_path: Path) -> tuple[Path, Path]:
     shutil.copy2(UPDATE_DEPS_SRC, scripts / "update-deps.sh")
     shutil.copy2(DEP_CHURN_LIB_SRC, scripts / "dep-churn-lib.sh")
 
-    # PATH stubs: `uv lock ...` writes a fixed candidate lock over uv.lock
-    # (recording its arguments and the UV_EXCLUDE_NEWER it was handed) instead of
-    # resolving anything from PyPI, exiting $UV_LOCK_EXIT -- or $UV_PLAIN_LOCK_EXIT
-    # for the flagless `uv lock -q` alone, so the cutoff-normalising pass can fail
-    # after a successful upgrade pass,
+    # PATH stubs: `uv lock ...` writes a fixed candidate lock over uv.lock instead
+    # of resolving anything from PyPI, recording its arguments and the
+    # UV_EXCLUDE_NEWER it was handed. It exits $UV_LOCK_EXIT, except that the
+    # flagless `uv lock -q` exits $UV_PLAIN_LOCK_EXIT when set, so the
+    # cutoff-normalising pass can fail after a successful upgrade pass.
     # `uv sync --frozen` becomes a plain mkdir that exits $INSTALL_EXIT (never a
     # real venv, never a real install; $INSTALL_EXIT makes the "failed candidate
     # install" arm of the rollback reachable as well as the red-gate arm -- both
@@ -188,6 +188,7 @@ def test_candidate_on_disk_during_gate_and_original_restored_after_red_gate(
     assert lock_after == ORIGINAL_LOCK
 
     assert "restored" in result.stdout
+    assert "full lock upgrade, 7 days release-age cooldown" in result.stdout
 
 
 def test_lock_stays_promoted_after_a_green_gate(tmp_path: Path) -> None:

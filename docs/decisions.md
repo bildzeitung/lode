@@ -6597,10 +6597,9 @@ throwaway project and repeated at technical review on a copy of this repo's `pyp
   in a `uv.toml` beside `pyproject.toml` does the same and also makes `uv lock --check` exit 1.
   `[tool.uv] exclude-newer` in `pyproject.toml` was not probed.
 
-Mechanism chosen, keeping `lock_currency` green: the cutoff is a CLI flag on the two upgrade
-branches of the script's `UV_LOCK_CMD` chain (so `--reconcile` is outside it by construction),
-followed by one plain `uv lock -q` that strips the recorded option; `UV_EXCLUDE_NEWER` is unset at
-script start. Rejected: `[tool.uv] exclude-newer` in `pyproject.toml` (reaches `--reconcile` and
+Mechanism chosen, keeping `lock_currency` green: the cutoff is a CLI flag the script appends to
+its `uv lock` command after the mode chain, for every mode except `--reconcile`, followed by one
+plain `uv lock -q` that strips the recorded option; `UV_EXCLUDE_NEWER` is unset at script start. Rejected: `[tool.uv] exclude-newer` in `pyproject.toml` (reaches `--reconcile` and
 every `uv lock --check`, and its fixed date goes stale), and leaving the recorded cutoff in the
 lock (red `lock_currency`). Caveats: the cutoff is not recorded, so a later reader of `uv.lock`
 cannot tell it was taken under a cooldown; and a cutoff set in a `uv.toml` is not guarded against,

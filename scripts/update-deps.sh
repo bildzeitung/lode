@@ -17,28 +17,24 @@
 #   1. Save a copy of the committed uv.lock, then move it in place:
 #      `uv lock --upgrade` (whole set), `uv lock --upgrade-package NAME`
 #      (only NAME and whatever it forces; every other pin stays put, except
-#      under the cooldown below), or, with
-#      --reconcile, plain `uv lock` (lode-trw1): re-resolve ONLY what a
-#      pyproject.toml edit made stale -- an added or removed dependency, a range
-#      or requires-python change -- keeping every other pin. This is the remedy
-#      `nox -s lock_currency` names when it exits 1. Mutually exclusive with
-#      --package. Steps 2-6 below are the same for all three modes.
+#      under the cooldown below), or, with --reconcile, plain `uv lock`
+#      (lode-trw1): re-resolve ONLY what a pyproject.toml edit made stale -- an
+#      added or removed dependency, a range or requires-python change --
+#      keeping every other pin. This is the remedy `nox -s lock_currency` names
+#      when it exits 1. Mutually exclusive with --package. Steps 2-6 below are
+#      the same for all three modes.
 #
 #      RELEASE-AGE COOLDOWN (lode-3s4d): the two upgrade modes pass
-#      `--exclude-newer "$COOLDOWN"`, so no release younger than that is taken
-#      (value and rationale: docs/configuration.md). uv applies the cutoff to
-#      the WHOLE resolution, so a pin already in uv.lock that is younger than
-#      the cutoff moves BACK to the newest release older than it: under
-#      --package too, NAME included, and a pin taken with --no-cooldown
-#      included. The VERSION DIFF lists each one (open question: lode-hdob).
-#      `--no-cooldown` is the override for a security fix that must be taken
-#      at once. uv records the cutoff in uv.lock's [options], which makes a
-#      later plain `uv lock --check` (nox -s lock_currency) report the lock
-#      stale, so a second plain `uv lock` follows: it drops the recorded cutoff
-#      and keeps every pin (probed, docs/decisions.md). --reconcile never
-#      passes the cutoff, and any UV_EXCLUDE_NEWER in the caller's environment
-#      is unset so it cannot reach it either: a reconcile may not downgrade an
-#      existing pin. A cutoff set in a uv.toml is not guarded against.
+#      `--exclude-newer "$COOLDOWN"`; `--no-cooldown` omits it. The cutoff binds
+#      the WHOLE resolution, so it also moves a pin already in uv.lock that is
+#      younger than it BACK to an older release (open question: lode-hdob).
+#      What a run then shows, and when to override: docs/configuration.md,
+#      "Lock-refresh release-age cooldown". uv records the cutoff in uv.lock's
+#      [options], which `uv lock --check` (nox -s lock_currency) reads as a
+#      stale lock, so a second plain `uv lock` follows: it drops the recorded
+#      cutoff and keeps every pin (probed, docs/decisions.md). --reconcile
+#      never gets a cutoff, since a reconcile may not downgrade an existing
+#      pin: no flag, and UV_EXCLUDE_NEWER is unset.
 #   2. Print a readable VERSION DIFF between the saved copy and the moved
 #      uv.lock -- one line per changed package, "pkg  OLD -> NEW" for a bump,
 #      "+ pkg VERSION" for an addition, "- pkg  VERSION (removed)" -- derived
@@ -111,6 +107,7 @@ RECONCILE=0
 NO_FILE=0
 NO_COOLDOWN=0
 COOLDOWN="7 days"
+USAGE="usage: $0 [--dry-run] [--package NAME | --reconcile] [--no-cooldown] [--no-file]"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run)
@@ -134,12 +131,12 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     -h|--help)
-      echo "usage: $0 [--dry-run] [--package NAME | --reconcile] [--no-cooldown] [--no-file]" >&2
+      echo "$USAGE" >&2
       exit 0
       ;;
     *)
       echo "update-deps.sh: unknown argument '$1'" >&2
-      echo "usage: $0 [--dry-run] [--package NAME | --reconcile] [--no-cooldown] [--no-file]" >&2
+      echo "$USAGE" >&2
       exit 1
       ;;
   esac
@@ -178,7 +175,8 @@ cp -f "$LOCK" "$SAVED_LOCK"
 
 # From here until the outcome is decided an UNGATED lock sits on disk.
 RESTORE_LOCK_ON_EXIT=1
-UV_LOCK_CMD=(uv lock -q)
+UV_LOCK_PLAIN=(uv lock -q)
+UV_LOCK_CMD=("${UV_LOCK_PLAIN[@]}")
 if [ "$RECONCILE" -eq 1 ]; then
   ATTEMPTED="no-upgrade reconcile"
 elif [ -n "$PACKAGE" ]; then
@@ -192,6 +190,7 @@ APPLY_COOLDOWN=0
 if [ "$RECONCILE" -eq 0 ] && [ "$NO_COOLDOWN" -eq 0 ]; then
   APPLY_COOLDOWN=1
   UV_LOCK_CMD+=(--exclude-newer "$COOLDOWN")
+  ATTEMPTED+=", $COOLDOWN release-age cooldown"
 fi
 # Checked explicitly: `bash scripts/update-deps.sh` drops the shebang's -e, and a
 # failed resolve must not carry on to a "no change" diff and a green exit.
@@ -203,7 +202,7 @@ if ! "${UV_LOCK_CMD[@]}"; then
   exit 1
 fi
 # Drop the cutoff uv just recorded in [options] so nox -s lock_currency stays green.
-if [ "$APPLY_COOLDOWN" -eq 1 ] && ! uv lock -q; then
+if [ "$APPLY_COOLDOWN" -eq 1 ] && ! "${UV_LOCK_PLAIN[@]}"; then
   echo "update-deps.sh: uv lock (cutoff-normalising pass) failed -- nothing was gated." >&2
   exit 1
 fi
