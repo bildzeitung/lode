@@ -280,3 +280,43 @@ def test_failed_uv_lock_exits_nonzero_and_restores_the_lock(tmp_path: Path) -> N
     assert "uv lock failed" in result.stderr
     assert (repo / "uv.lock").read_text(encoding="utf-8") == ORIGINAL_LOCK
     assert not (tmp_path / "lock_during_gate").exists()  # no gate ran
+
+
+def test_reconcile_runs_plain_uv_lock_through_the_gate_path(tmp_path: Path) -> None:
+    """--reconcile re-locks WITHOUT any upgrade flag, and still promotes the
+    candidate before the gate and keeps it on green."""
+    repo, bindir = _build_fake_repo(tmp_path)
+
+    result = _run_update_deps(
+        repo, bindir, extra_args=("--reconcile", "--no-file")
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "uv_lock_args").read_text(encoding="utf-8").strip() == "lock -q"
+    assert (tmp_path / "lock_during_gate").read_text(encoding="utf-8") == CANDIDATE_LOCK
+    assert (repo / "uv.lock").read_text(encoding="utf-8") == CANDIDATE_LOCK
+
+
+def test_reconcile_restores_the_lock_after_a_red_gate(tmp_path: Path) -> None:
+    repo, bindir = _build_fake_repo(tmp_path)
+
+    result = _run_update_deps(
+        repo, bindir, nox_tests_exit=1, extra_args=("--reconcile", "--no-file")
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "no-upgrade reconcile" in result.stdout
+    assert (repo / "uv.lock").read_text(encoding="utf-8") == ORIGINAL_LOCK
+
+
+def test_reconcile_and_package_are_mutually_exclusive(tmp_path: Path) -> None:
+    repo, bindir = _build_fake_repo(tmp_path)
+
+    result = _run_update_deps(
+        repo, bindir, extra_args=("--reconcile", "--package", "x", "--no-file")
+    )
+
+    assert result.returncode == 1
+    assert "mutually exclusive" in result.stderr
+    assert not (tmp_path / "uv_lock_args").exists()
+    assert (repo / "uv.lock").read_text(encoding="utf-8") == ORIGINAL_LOCK

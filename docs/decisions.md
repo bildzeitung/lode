@@ -6520,6 +6520,19 @@ entries below from being rewritten to chase the current tree.)
     `ENRICH_PROMPT_VER` the batch was submitted with: the batch route reads both at collect time
     too, and item 3's ruling names only the model. Open in `lode-ucpu`, which blocks `lode-4wgq`.
 
+## A stale `uv.lock` is fixed by `scripts/update-deps.sh --reconcile`, a no-upgrade mode (decided, lode-trw1)
+
+Maintainer ruling 2026-11-21, option (a). `lode-z5ip` made `scripts/update-deps.sh` the only named
+way to regenerate `uv.lock`, but the script only upgraded, so the `nox -s lock_currency` exit-1
+message ("run the script") sent someone who had edited one dependency into a whole-lock upgrade.
+Decided: `--reconcile` runs plain `uv lock` through the same version-diff, promote, gate and
+rollback path, so only what the `pyproject.toml` edit made stale is re-resolved and every other pin
+stays. It applies no release-age cutoff (`lode-3s4d`), since a reconcile must not downgrade an
+existing pin, and it excludes `--package`. The `lock_currency` message, `docs/stack.md`,
+`docs/onboarding.md` and the script header all name it. Rejected: documenting `--package NAME` as
+the reconcile path (no natural NAME for a removed dependency or a `requires-python` change), and
+ruling that a whole-set upgrade on every edit is intended.
+
 ## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 
 Raised 2026-11-20 while bumping the pin to 9.8.1 (`lode-1pnt`). Upstream mkdocs-material is in
