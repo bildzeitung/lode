@@ -9,11 +9,16 @@ vectors are trivial to reason about; the production dim is the pinned build
 constant (``Settings.embedding_vector_dim``).
 """
 
+import time
+import warnings
+from datetime import timedelta
 from pathlib import Path
 
 import lancedb
 import pyarrow as pa
+import pytest
 
+from lode import vectorstore
 from lode.config import load_settings
 from lode.vectorstore import VectorStore
 
@@ -364,20 +369,23 @@ def test_a_second_connection_writing_is_still_visible_through_the_first(
 
 
 def test_periodic_optimize_prunes_history_without_losing_current_rows(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The every-N-writes `optimize()` prunes history and keeps the live rows.
 
     The interval defaults to 200 (`vectorstore_optimize_interval`), so nothing
     else in the suite reaches this branch -- it shipped entirely unexercised
     despite running a destructive prune against the live store (found on
-    technical review). Driven here with a small interval.
+    technical review). Driven here with a small interval and a millisecond
+    prune window, so the versions are old enough by the time it fires.
     """
+    monkeypatch.setattr(vectorstore, "_PRUNE_WINDOW", timedelta(milliseconds=1))
     settings = load_settings(embedding_vector_dim=DIM, vectorstore_optimize_interval=2)
     store = VectorStore(tmp_path / "vectors", settings)
 
     for i in range(2):
         store.replace_vectors("v1", [_row(f"a{i}", "v1", [1.0, 0.0, 0.0, 0.0])])
+        time.sleep(0.01)
 
     # The prune fired on the 2nd write and re-armed its counter.
     assert store._writes_since_optimize == 0
@@ -386,9 +394,9 @@ def test_periodic_optimize_prunes_history_without_losing_current_rows(
     versions = (
         lancedb.connect(tmp_path / "vectors").open_table("embeddings").list_versions()
     )
-    assert len(versions) == 1, (
-        f"expected history pruned to the latest version, got {versions}"
-    )
+    # The first write's versions are older than the window and gone; the second
+    # write's delete version is younger than it and may remain beside the latest.
+    assert len(versions) <= 2, f"expected history pruned, got {versions}"
 
     # The current rows survived the prune, through the held handle and a fresh one.
     assert store.vectors_for("v1") == [[1.0, 0.0, 0.0, 0.0]]
@@ -398,6 +406,22 @@ def test_periodic_optimize_prunes_history_without_losing_current_rows(
     store.replace_vectors("v1", [_row("b", "v1", [0.0, 1.0, 0.0, 0.0])])
     assert store._writes_since_optimize == 1
     assert store.vectors_for("v1") == [[0.0, 1.0, 0.0, 0.0]]
+
+
+def test_periodic_optimize_emits_no_lancedb_warning(tmp_path: Path) -> None:
+    """The prune path stays silent under default filters (lode-re5e).
+
+    lancedb >= 0.41 warns on `cleanup_older_than` of zero or less; the window
+    must be positive so `lode work` prints nothing to stderr.
+    """
+    settings = load_settings(embedding_vector_dim=DIM, vectorstore_optimize_interval=1)
+    store = VectorStore(tmp_path / "vectors", settings)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        store.replace_vectors("v1", [_row("a", "v1", [1.0, 0.0, 0.0, 0.0])])
+
+    assert store._writes_since_optimize == 0
 
 
 def test_model_revisions_scopes_to_the_requested_model(tmp_path: Path) -> None:

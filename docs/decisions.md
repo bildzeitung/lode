@@ -3793,6 +3793,22 @@ entries below from being rewritten to chase the current tree.)
   - `lance_dir(db_path)`'s `VectorStore` is now also held for the whole `lode work` process
     (`cli.py`'s `work` command), same as the pre-existing `FastEmbedEmbedder` hoist (lode-j5r2) --
     threaded into every `drain()` call across the polling loop.
+  - **Update (2026-11-21, lode-re5e) — the zero-second prune window was a real exposure; it is now a
+    60 s window.** lancedb 0.41 warns on `optimize(cleanup_older_than=timedelta(0))` that any reader
+    on an older version "will fail". Measured with two processes (reader scanning in a loop, writer
+    calling `replace_vectors` with `vectorstore_optimize_interval=1`): a reader that calls
+    `checkout_latest()` and then scans immediately saw 0 failures in 3192 scans, but one with a
+    0.2 s gap between the checkout and the scan (a query in flight while the prune ran) failed 28 of
+    118 times with `Not found: .../embeddings.lance/data/...`, and a reader that never refreshed failed
+    on nearly every scan. So `checkout_latest()` per use covers a reader between queries, not one
+    mid-query. Fix: `_PRUNE_WINDOW = timedelta(seconds=60)` in `lode.vectorstore`, a build constant
+    that only has to outlast one read (lode reads are millisecond-scale). With a 2 s window the same
+    0.2 s-gap reader saw 0 failures in 117 scans; a 0.05 s window reproduced the failures (22 of 119),
+    so the failure tracks window against read duration. Memory re-measured with the live `VmRSS` method
+    (3000 calls, interval 100, 15 calls/s): window 0 grew 199 to 258 MB and window 60 s 199 to 266 MB.
+    The 60 s window costs about 8 MB over the zero window and does not change the slope. Under
+    lancedb 0.41 both still grow about 7 MB per 300 calls, unlike the flat plateau recorded above for
+    0.38; that regression is not caused by the window and is filed separately.
 
 - **2026-08-05 (lode-2nw5) — the `git restore --staged .beads/issues.jsonl` cluster: ONE site
   canonicalized (fixing a real symmetry gap), THREE sites kept as WONTFIX literals.** Filed while
