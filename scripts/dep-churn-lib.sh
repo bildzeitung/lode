@@ -91,8 +91,8 @@ dep_all_patch_level_only() {
 }
 
 # Why filing the churn stub should be SKIPPED, on stdout (rc 0), given the
-# --no-file flag $1 (0/1), the raw change lines $2 and, optionally, the
-# --reconcile flag $3 (0/1, default 0). Empty output with rc 1 means "file it".
+# --no-file flag $1 (0/1), the raw change lines $2 and the --reconcile flag $3
+# (0/1). Empty output with rc 1 means "file it".
 # Holds the whole skip policy and its ORDER in one testable place;
 # update-deps.sh keeps only the `bd` invocation itself.
 #
@@ -103,7 +103,7 @@ dep_all_patch_level_only() {
 # an existing pin moving, not an addition: it stays, and the noise gate's
 # multi-version rule files it.
 dep_stub_skip_reason() {
-  local no_file="$1" raw="$2" reconcile="${3:-0}"
+  local no_file="$1" raw="$2" reconcile="$3"
   if [ "$reconcile" -eq 1 ]; then
     raw="$(printf '%s\n' "$raw" | awk -F'\t' 'NF >= 3 && $2 != "(none)" && $3 != "(none)"')"
   fi

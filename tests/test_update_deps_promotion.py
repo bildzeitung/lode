@@ -26,7 +26,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import fake_bin_env
+from conftest import fake_bd, fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 UPDATE_DEPS_SRC = REPO_ROOT / "scripts" / "update-deps.sh"
@@ -329,15 +329,13 @@ def test_reconcile_files_the_churn_stub_only_for_a_moved_existing_pin(
     repo, bindir = _build_fake_repo(tmp_path)
     (tmp_path / "candidate.lock").write_text(candidate, encoding="utf-8")
     bd_calls = tmp_path / "bd_calls"
-    _write_executable(
-        bindir / "bd", f'#!/bin/bash\necho "$1" >> "{bd_calls}"\necho lode-stub\n'
-    )
+    fake_bd(bindir, {"create": "echo lode-stub"}, call_log=bd_calls)
 
     result = _run_update_deps(repo, bindir, extra_args=args)
 
     assert result.returncode == 0, result.stdout + result.stderr
     if files:
-        assert bd_calls.read_text(encoding="utf-8").split() == ["create"]
+        assert bd_calls.read_text(encoding="utf-8").startswith("create --title=")
     else:
         assert not bd_calls.exists()
         assert "reconcile moved no existing pin" in result.stdout
