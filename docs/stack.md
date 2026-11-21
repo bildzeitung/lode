@@ -1161,7 +1161,11 @@ renamed `## Current keymap`, a renamed/reordered table column, a `Kind` column t
 `runtime`) **raises** rather than emitting a thinner page: `--check` would otherwise report only "stale, regenerate", and the
 truncated page would get committed. The generator also strips maintainer-only asides — a
 parenthetical citing a bd ticket id, `show=False` footer-visibility trivia, or a source-file path
-(`screens/browse.py`) — from cells *and* headings alike, so the two pages read as documentation for
+(`screens/browse.py`) — from cells *and* headings alike (a parenthetical is judged on its visible
+text only: a link whose URL anchor carries a bd id, as most deep links into this repo's `(decided,
+lode-xxxx)` headings do, is unwrapped to its label first, so the link goes but a prose
+parenthetical whose only bd-id match was inside that URL survives; derived user pages never link
+out to unpublished maintainer docs, lode-v4k1), so the two pages read as documentation for
 someone using lode, not a verbatim dump of `keybindings.md`'s development history or
 `configuration.md`'s implementation notes.
 

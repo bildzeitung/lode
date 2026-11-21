@@ -6687,3 +6687,22 @@ the SDK default, or pass `open_telemetry=False` where lode constructs its Anthro
     `docs-nit-file-repo-relative` and `ap-never-review-own-build` are lengthened so each runs through
     the operative part of its rule. Every phrase matches exactly once in `code-reviewer.md`, outside
     any fenced block.
+
+## A derived page strips a bd-id-anchored link but keeps the prose parenthetical around it (decided, lode-v4k1)
+
+Raised 2026-11-21 at `lode-cav3`'s review. `_strip_dev_asides` in `scripts/generate_derived_docs.py`
+matched its maintainer-aside marker (a bd id, `show=False`, a `.py` path) over a span's raw text,
+link URLs included. Most deep-link anchors into `configuration.md` and `stack.md` carry a bd id
+because the headings read `(decided, lode-xxxx)`, so a link's `(url)` half was dropped as an aside
+(leaving an orphaned `[label]`, unwrapped to plain text), and a prose parenthetical whose only bd
+id sat inside a link URL was dropped whole. Options were (a) leave it, (b) match visible text only
+and keep the link, rewriting same-page fragments, (c) keep stripping links but stop dropping the
+whole parenthetical.
+
+**Decided (maintainer, 2026-11-21): (c).** A link whose URL carries a marker is unwrapped to its
+label before the aside pass, so the marker inside a URL no longer drops the surrounding prose
+parenthetical (it survives with the link reduced to its label). Derived user pages do not link out
+to unpublished maintainer docs. A parenthetical whose visible text carries a marker is still
+dropped. `docs/stack.md`'s "Derived reference pages" states this; the old orphan-`[label]` unwrap
+is gone because no `(url)` half is dropped any more, which also stops it eating the brackets of
+backticked TOML table names such as `[cli.theme.styles]` in `docs/settings.md`.
