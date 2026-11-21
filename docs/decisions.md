@@ -4918,7 +4918,7 @@ entries below from being rewritten to chase the current tree.)
     checks shape, not position. Accepted, not gated; a post-merge gate test was rejected because it
     would catch one shape only (a marker under a `##` heading), and when the intervening append is
     another bullet entry the marker silently reads as that entry's. Mitigation is a by-hand step in
-    the merging stages (`lode-l8b7`): after any merge that brings a `**Update (` line into this
+    the merging stages (`lode-l8b7`): after any merge that brings an Update marker into this
     file, confirm it still follows the entry it names.
 
 - **Recording the rejected alternatives, the non-impact and the ours-side-only caveat for the union
