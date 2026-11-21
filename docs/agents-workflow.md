@@ -2031,9 +2031,8 @@ proposal. What they leave out:
   constructs a real Anthropic or OpenAI client without `@pytest.mark.network`. An unmarked test in
   the `unit`/`tests` gates cannot spend by accident.
 - **Unset credentials in agent worktrees: rejected.** For the default provider, credentials
-  resolve through the Anthropic SDK chain (`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`, then an `ant
-  auth login` profile on disk, then workload identity; `src/lode/auth.py`), so unsetting
-  environment variables leaves the on-disk profile working. Only `llm_provider = "openai"` reads
+  resolve through the Anthropic SDK chain, which includes an `ant auth login` profile on disk
+  (`src/lode/auth.py`), so unsetting environment variables leaves the on-disk profile working. Only `llm_provider = "openai"` reads
   its key from the environment alone (`src/lode/llm_provider.py`). The `Agent` tool also takes no
   environment for the agent it dispatches. A scrub that covers part of the chain would read as a
   guarantee it is not.

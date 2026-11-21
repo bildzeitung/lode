@@ -67,7 +67,7 @@ def test_importing_module_does_not_import_the_sdk(module: str) -> None:
       screen, so every TUI start loads it.
 
     So a credential-free, embed-only drain (embeds come from the LOCAL fastembed
-    model) would otherwise pay the ~0.32s SDK import on every single run to do
+    model) would otherwise pay the ~0.7s SDK import on every single run to do
     nothing with it. ``lode.auth`` has no module-level ``import anthropic`` (it is
     deferred inside ``build_client``), and neither does ``lode.enrich`` (its
     provider import is deferred inside ``lode.llm_provider``).

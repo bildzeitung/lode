@@ -1,9 +1,9 @@
 """Anthropic credential resolution for lode (lode-txh.4).
 
 lode never embeds an API key (``docs/stack.md``): credentials are resolved by the
-Anthropic SDK's own credential chain -- ``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN``,
-then an ``ANTHROPIC_PROFILE`` / ``ant auth login`` profile on disk, then workload-identity
-federation.
+Anthropic SDK's own credential chain, first match wins -- ``ANTHROPIC_API_KEY``, then
+``ANTHROPIC_AUTH_TOKEN``, then the profile ``ANTHROPIC_PROFILE`` names, then
+workload-identity federation, then the active ``ant auth login`` profile on disk.
 
 :func:`build_client` runs that chain and turns the "nothing resolved" outcome into
 one clear, actionable :class:`AuthError` -- so a missing credential fails loudly
@@ -41,7 +41,7 @@ class AuthError(RuntimeError):
     only to *catch* the error, on paths that may never touch Anthropic at all --
     :mod:`lode.worker` does so at module scope, so every drain loads it, including
     a credential-free, embed-only one whose embeds come from the local fastembed
-    model. So ``import anthropic`` (~0.32s) lives inside :func:`build_client`, never
+    model. So ``import anthropic`` (~0.7s) lives inside :func:`build_client`, never
     at module level.
     """
 
@@ -49,10 +49,9 @@ class AuthError(RuntimeError):
 def build_client() -> anthropic.Anthropic:
     """Return an Anthropic client with resolved credentials, or raise :class:`AuthError`.
 
-    Tries the SDK credential chain (env var, then ``ant auth login`` profile,
-    then workload-identity federation -- all the SDK's job, no key is passed
-    in). When that resolves nothing, raises :class:`AuthError` with an
-    actionable message.
+    Tries the SDK credential chain listed in the module docstring (all the SDK's
+    job, no key is passed in). When that resolves nothing, raises
+    :class:`AuthError` with an actionable message.
 
     The SDK signals "no credentials" two ways: it raises
     ``anthropic.AnthropicError`` at construction (e.g. a selected profile file is
