@@ -4334,7 +4334,7 @@ those entries point there rather than copy.
   `scripts/stacked-graph.sh` (lode-s9xe.2), pinned by `tests/test_stacked_graph.py`. The skill keeps
   the script pointer and "Do not re-derive this logic here".
 - **`cat "$STATE_DIR/graph"` comment.** The line exists for the visibility the old `| tee` gave
-  (lode-b8sr replaced the pipeline with a redirect so the script's exit status is not swallowed).
+  (lode-s9xe.6 replaced the pipeline with a redirect, under lode-b8sr's rule, so the script's exit status is not swallowed).
   The skill's comment is now just `# visibility`.
 - **`git clean -fd` ran only in the failure branch (lode-3v1p).** In the recycled-worktree guard's
   blind-spot case the clean never fired, so untracked leftovers tripped Section 4's dirty-tree guard

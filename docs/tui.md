@@ -546,5 +546,5 @@ thread is not a daemon thread, so the interpreter still waits for it at exit.
   ([configuration.md](configuration.md#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx),
   the flagged risk, which also lists the levers).
 - **During retrieval:** the local embed and rerank, normally short. The first run's model weights
-  download is not bounded by any timeout (`docs/configuration.md`, the `HF_HUB_OFFLINE` note);
-  `lode models pull` moves it out of the ask.
+  download is not bounded by any timeout (`docs/configuration.md`, "Air-gapped run against an
+  already-warm cache"); `lode models pull` moves it out of the ask.
