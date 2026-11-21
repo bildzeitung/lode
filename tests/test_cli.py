@@ -7526,8 +7526,8 @@ def test_status_lists_refusal_dead_enrich_job_with_category(
     out = " ".join(result.stdout.split())
     assert "refused by the model (category: cyber)" in out
     # One hint covers refused notes and refused external pages. Reconcile
-    # re-opens a refusal on enrichment_llm.model alone, not on the tier's
-    # other fields.
+    # re-opens a refusal on enrichment_llm.model or the provider, not on the
+    # tier's other fields.
     assert "the note is edited or the page changes materially" in out
     assert (
         "the enrichment model (enrichment_llm.model) or the LLM provider "

@@ -311,8 +311,8 @@ register_step("embed_gap", _embed_gap_step)
 def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None) -> int:
     """Enrich gap: re-enqueue enrich jobs for head versions missing fresh enrichment.
 
-    ``settings`` supplies the configured enrichment model for the refusal
-    exemption below; it defaults to a fresh ``Settings()`` when omitted.
+    ``settings`` supplies the configured enrichment model and provider for the
+    refusal exemption below; it defaults to a fresh ``Settings()`` when omitted.
 
     **Gap signal, part 1 (job existence):** a non-tombstone, non-purged,
     non-``no_egress`` head version with no in-flight/retryable enrich job
@@ -370,16 +370,17 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
 
     - absent (never enriched) **and** the head's ``embed`` job is ``done`` --
       the gate runs post-embed, so before that the gate may still decide;
-    - ``dead`` and not a current refusal (the note arm's exact
-      ``refusal`` / ``prompt_ver`` / ``refusal_model`` re-open rule); or
+    - ``dead`` and not a current refusal (the note arm's exact ``refusal`` /
+      ``prompt_ver`` / ``refusal_model`` / ``refusal_provider`` re-open rule);
+      or
     - ``done`` under a ``prompt_ver`` other than the current one.
 
     A live (``pending``/``running``/``failed``) in-force job is left alone.
     Like the note arm, ``done`` jobs record no model, so only a prompt-version
-    bump (not an ``enrichment_llm`` change) re-opens a ``done`` enrichment; an
-    a change of ``enrichment_llm.model`` or of the LLM provider re-opens a
-    refusal-dead one (``reasoning_effort``/``max_tokens`` alone re-open nothing). The enqueue targets
-    the head snapshot, so the new annotations anchor to current content.
+    bump (not an ``enrichment_llm`` change) re-opens a ``done`` enrichment; a
+    change of ``enrichment_llm.model`` or of the LLM provider re-opens a
+    refusal-dead one. The enqueue targets the head snapshot, so the new
+    annotations anchor to current content.
     Tombstoned-head and ``no_egress`` externals are excluded -- ``no_egress``
     meaning the row flag *or* a ``settings.no_egress_scopes`` rule, the same
     composition :func:`lode.enrich._resolve_enrich_target` gates egress on. A

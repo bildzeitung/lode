@@ -561,8 +561,8 @@ def stale_enrichment_heads(
     **A head with a standing refusal is excluded** (lode-5try,
     :func:`lode.jobs.standing_enrich_refusal_exists_sql`): the refusal is final
     for that version (lode-g9q3), so re-enriching would only re-send refused
-    content. A change of ``enrichment_llm``, the provider or ``ENRICH_PROMPT_VER``
-    brings the head back.
+    content. A change of ``enrichment_llm.model``, the provider or
+    ``ENRICH_PROMPT_VER`` brings the head back.
 
     Shared by ``lode status``'s hint
     (:func:`lode.cli.status._enrichment_model_stale`) and ``lode reenrich``
