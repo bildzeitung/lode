@@ -663,9 +663,9 @@ def test_run_tool_turns_forces_the_final_turn_when_the_model_never_calls_a_tool(
     assert final_kwargs["tool_choice"] == {"type": "none"}
 
 
-def test_run_tool_turns_stops_after_max_tool_turns_and_still_forces_the_final_turn() -> (
-    None
-):
+def test_run_tool_turns_stops_after_max_tool_turns_warns_and_still_forces_the_final_turn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
     always_calls_tool = _tool_use_response("lookup_widget", {"id": "w"})
     final_turn = _parsed_response(_Widget(name="w", count=9))
@@ -678,23 +678,33 @@ def test_run_tool_turns_stops_after_max_tool_turns_and_still_forces_the_final_tu
         final_turn,
     ]
     provider = AnthropicProvider(client)
+    ran: list[str] = []
 
-    result = provider.run_tool_turns(
-        model="claude-sonnet-4-6",
-        reasoning_effort=None,
-        system="sys",
-        user_prompt="p",
-        tools=(tool,),
-        tool_result=lambda name, args: "ok",
-        output_schema=_Widget,
-        max_tokens=100,
-        timeout_s=30.0,
-        max_tool_turns=2,
-    )
+    with caplog.at_level(logging.WARNING, logger="lode.llm_provider"):
+        result = provider.run_tool_turns(
+            model="claude-sonnet-4-6",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: ran.append(name) or "ok",
+            output_schema=_Widget,
+            max_tokens=100,
+            timeout_s=30.0,
+            max_tool_turns=2,
+        )
 
     assert result == _Widget(name="w", count=9)
     # Two free turns, then the final structured-output turn.
     assert client.messages.create.call_count == 3
+    # The last free turn's tools still run before the final turn.
+    assert ran == ["lookup_widget", "lookup_widget"]
+    [message] = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "lode.llm_provider" and r.levelno == logging.WARNING
+    ]
+    assert "max_tool_turns=2" in message
 
 
 def test_run_tool_turns_raises_when_the_run_timeout_is_exhausted() -> None:
@@ -1865,6 +1875,45 @@ def test_run_tool_turns_free_turn_without_tool_use_warns_only_when_cut_off(
         assert "free turn 2 of 3" in message
         assert f"stop_reason={stop_reason!r}" in message
         assert hint in message
+
+
+def test_run_tool_turns_model_stopping_on_the_last_free_turn_logs_no_budget_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
+    no_tool = mock.MagicMock()
+    no_tool.content = [_text_block()]
+    no_tool.stop_reason = "end_turn"
+    client = mock.MagicMock()
+    # The model stops on the last free turn the budget allows (2 of 2), so the
+    # loop ends by its own break and the budget cut nothing short.
+    client.messages.create.side_effect = [
+        _tool_use_response("lookup_widget", {}),
+        no_tool,
+        _parsed_response(_Widget(name="w", count=0)),
+    ]
+
+    with caplog.at_level(logging.WARNING, logger="lode.llm_provider"):
+        result = AnthropicProvider(client).run_tool_turns(
+            model="claude-sonnet-4-6",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: "r",
+            output_schema=_Widget,
+            max_tokens=100,
+            timeout_s=30.0,
+            max_tool_turns=2,
+        )
+
+    assert result == _Widget(name="w", count=0)
+    assert client.messages.create.call_count == 3
+    assert [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "lode.llm_provider" and r.levelno == logging.WARNING
+    ] == []
 
 
 @pytest.mark.network
