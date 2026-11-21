@@ -6519,6 +6519,28 @@ entries below from being rewritten to chase the current tree.)
   - **Not decided here.** Whether `lode-4wgq` also records the provider identity and
     `ENRICH_PROMPT_VER` the batch was submitted with: the batch route reads both at collect time
     too, and item 3's ruling names only the model. Open in `lode-ucpu`, which blocks `lode-4wgq`.
+  - **Update (lode-smpk, 2026-11-21, maintainer):** the two questions the `lode-ucpu` Update left
+    open in `lode-smpk` are settled. That Update answers "Not decided here" above; it sits further
+    down the file, under the `lode-sflg` section, where `/land`'s union merge left it
+    (`lode-tikr`).
+    - **1. The provider half of the `lode-ucpu` ruling stands.** `lode-4wgq` keeps storing the
+      submit-time provider identity, unchanged in scope. It is not reachable as a stamp
+      difference in production (the poll fails first), but option (c) below needs it. For (c)
+      it has to be recorded on lode's side at submit and be readable at collect before any
+      provider call.
+    - **2. A mid-batch `llm_provider` switch: option (c).** At collect, compare the stored
+      submit-time provider identity with the collect-time `provider_identity(settings)`. On a
+      mismatch, dead-letter or re-enqueue the batch's jobs at once instead of polling the old
+      handle with the new provider's client and burning `batch_collect_failure_budget`. Which
+      of the two is `lode-6pjf`'s to settle. The old batch's results are discarded, as they are
+      under (a); for OpenAI and Azure that spend was made at submit. Not taken: (a) leave it
+      (`batch_collect_failure_budget` failing polls, 5 by default, then dead-letter and
+      re-enqueue, each failing poll a failed `lode work` pass); (b) collect with the submit-time
+      provider (needs that provider's credentials still present). A move between direct OpenAI
+      and Azure is not a mismatch: both are `'openai'`.
+    - Decision only; the code is `lode-6pjf`'s, which depends on `lode-4wgq`. Until it lands,
+      the code behaves as in (a), and `lode-4wgq`'s provider-case test must inject the
+      collect-time provider.
 
 ## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 
@@ -6564,22 +6586,6 @@ the SDK default, or pass `open_telemetry=False` where lode constructs its Anthro
       provider. The ruling was made before this was known. Whether its provider half stands,
       and what a mid-batch provider switch should do, is open in `lode-smpk`; until that is
       decided, `lode-4wgq`'s scope is as ruled.
-  - **Update (lode-smpk, 2026-11-21, maintainer):** the two questions the Update above left open
-    in `lode-smpk` are settled.
-    - **1. The provider half of the `lode-ucpu` ruling stands.** `lode-4wgq` keeps storing the
-      submit-time provider identity, unchanged in scope. It is not reachable as a stamp
-      difference in production (the poll fails first), but option (c) below needs it.
-    - **2. A mid-batch `llm_provider` switch: option (c).** At collect, compare the stored
-      submit-time provider identity with the collect-time `provider_identity(settings)`. On a
-      mismatch, dead-letter or re-enqueue the batch's jobs at once instead of polling the old
-      handle with the new provider's client and burning `batch_collect_failure_budget`. Not
-      taken: (a) leave it (five failing polls, then dead-letter and re-enqueue, each failing
-      poll a failed `lode work` pass); (b) collect with the submit-time provider (needs that
-      provider's credentials still present). A move between direct OpenAI and Azure is not a
-      mismatch: both are `'openai'`.
-    - Decision only; the code is `lode-6pjf`'s, which depends on `lode-4wgq`. Until it lands,
-      the accepted-as-built behaviour is option (a), and `lode-4wgq`'s provider-case test must
-      inject the collect-time provider.
 - **/land SKILL.md does not carry a "search bd before filing" step; the rejected reasoning lives here
   (`lode-9t7u`, moved out of `.claude/skills/land/SKILL.md` by `lode-w18a.8`, 2026-11-20).** The
   skill keeps the one-line warning "Do not add a search-then-file step (rejected, lode-9t7u)". The

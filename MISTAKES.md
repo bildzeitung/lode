@@ -4,6 +4,29 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-11-21 — `/land`'s union merge detached a correction marker from the entry it corrects
+
+- **What happened:** `land/lode-ucpu` appended its `**Update (lode-ucpu` marker directly after
+  the `lode-vlok` entry, then the last entry in `docs/decisions.md`. `lode-1pnt` landed first and
+  appended two `##` sections at the same place. `/land`'s merge of `land/lode-ucpu` (`67bacb9d`)
+  put the marker after those sections, under the unrelated `lode-sflg` heading. The `lode-smpk`
+  build and its technical review found it a day later.
+- **Root cause:** both sides added lines at the same position, and the `merge=union` driver
+  (`lode-4jtc.1`) keeps both with no conflict, trunk's lines first. That is right for two new
+  entries and wrong for a marker that must stay attached to the entry above it. The branch was
+  correct in isolation at both reviews, `check-decisions-no-silent-rewrite.sh` fires only on a
+  removed line, and the marker test checks a marker's shape, not where it sits.
+- **Consequence:** trunk carried the `lode-vlok` entry with no marker on it, so its "Open in
+  `lode-ucpu`" claim read as current, and the docs index returns the ruling under the `lode-sflg`
+  section. `lode-smpk`'s ruling said to record its Update "below the `lode-ucpu` Update", and the
+  builder followed that into the wrong section; the review moved it onto the entry.
+- **Rule that prevents a repeat:** a marker appended to the last entry of `docs/decisions.md`
+  can be detached by any merge. Whoever merges, in either direction, a branch that adds a
+  `**Update (` line to that file reads the merged file around the line and confirms it still
+  follows the entry it names. A builder placing a new marker "below" an existing one first
+  checks that the existing one is on the entry. `lode-tikr` asks the maintainer whether to move
+  the detached marker back and whether to gate this.
+
 ## 2026-11-20 — A decision ticket stated a failure that the code cannot reach, and the maintainer ruled on it
 
 - **What happened:** the `code-reviewer` on `lode-vlok` filed `lode-ucpu` asking whether
