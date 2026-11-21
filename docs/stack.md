@@ -908,11 +908,11 @@ reaches the final turn, cut off or not. No `LLMProviderError`; a turn ending `en
 When the model issues a `tool_use` block on every one of the `max_tool_turns` free turns, the loop
 ends by exhausting the budget and `run_tool_turns` logs a warning naming `max_tool_turns`
 (`lode-jrlk`, maintainer ruling 2026-11-21); the last turn's tools still run, and the final turn
-follows with `tool_choice` none. A run that ends because the model stopped calling tools logs
-nothing new.
+follows with `tool_choice` none. A run that ends because the model stopped calling tools does not
+log this warning.
 A free turn with `stop_reason` `model_context_window_exceeded` that carries a `tool_use` block
-raises the same way, with the context-window hint (`lode-hfzw`, maintainer ruling 2026-11-19). The
-basis is Anthropic's published
+raises the same way as one cut off by `max_tokens`, with the context-window hint (`lode-hfzw`,
+maintainer ruling 2026-11-19). The basis is Anthropic's published
 [handling-stop-reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons)
 page, which says of this stop reason "Treat the response as truncated." Neither that page nor the
 [context-windows](https://platform.claude.com/docs/en/build-with-claude/context-windows) page says

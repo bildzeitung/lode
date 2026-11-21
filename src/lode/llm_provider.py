@@ -1120,8 +1120,8 @@ class AnthropicProvider:
             ]
             messages.append({"role": "user", "content": result_blocks})
         else:
-            # Every free turn called a tool, so the budget ended the loop, not
-            # the model; the final turn runs with tool_choice none (lode-jrlk).
+            # No break: every free turn called a tool, so the budget ended the
+            # loop, not the model (lode-jrlk).
             _log.warning(
                 "run_tool_turns exhausted max_tool_turns=%d (model=%s) with the "
                 "model still calling tools; proceeding to the final "
