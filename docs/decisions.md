@@ -6849,6 +6849,35 @@ the SDK default, or pass `open_telemetry=False` where lode constructs its Anthro
     part of its rule) apply to every inventory and are stated in `docs/agents-workflow.md`. No
     further re-approval is needed: closing `lode-w18a.11` unblocks `lode-w18a.9`.
 
+## A derived page strips a bd-id-anchored link but keeps the prose parenthetical around it (decided, lode-v4k1)
+
+Raised 2026-11-21 at `lode-cav3`'s review. `_strip_dev_asides` in `scripts/generate_derived_docs.py`
+matched its maintainer-aside marker (a bd id, `show=False`, a `.py` path) over a span's raw text,
+link URLs included. Most deep-link anchors into `configuration.md` and `stack.md` carry a bd id
+because the headings read `(decided, lode-xxxx)`, so a link's `(url)` half was dropped as an aside
+(leaving an orphaned `[label]`, unwrapped to plain text), and a prose parenthetical whose only bd
+id sat inside a link URL was dropped whole. Options were (a) leave it, (b) match visible text only
+and keep the link, rewriting same-page fragments, (c) keep stripping links but stop dropping the
+whole parenthetical.
+
+**Decided (maintainer, 2026-11-21): (c).** A link whose URL carries a marker is unwrapped to its
+label before the aside pass, so the marker inside a URL no longer drops the surrounding prose
+parenthetical. Derived user pages do not link out to unpublished maintainer docs. A parenthetical
+whose visible text carries a marker is still dropped. `docs/stack.md`'s "Derived reference pages"
+states this; the old orphan-`[label]` unwrap is gone because no `(url)` half is dropped any more,
+which also stops it eating the brackets of backticked TOML table names such as
+`[cli.theme.styles]` in `docs/settings.md`.
+
+The generator is narrower than the ruling's sentence on maintainer docs: a link with no marker in
+its URL is emitted as written, as it was before, whether or not its target is published (the theme
+rows in `docs/settings.md` still link `decisions.md`).
+
+**Not in the ruling; settled at the technical review of `lode-v4k1`.** A parenthetical that holds
+nothing but a marker-URL link, such as `([storage.md](storage.md#...-lode-aor))`, is dropped whole,
+as it was before this change. The ruling speaks of a prose parenthetical, and this one has no
+prose. As first built it was unwrapped like any other, which ended five `docs/settings.md` rows
+with `(storage.md)`, `(externals.md)`, `(stack.md)` twice, and, on the `enrichment_llm` row,
+`(below)`, pointing at a "Model provenance" section the page does not carry.
 ## A detached `lode-ucpu` Update stays where the union merge put it (decided, lode-tikr)
 
 Maintainer ruling 2026-11-21. `lode-ucpu`'s Update sits under the `lode-sflg` `##` section, the

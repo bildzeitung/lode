@@ -1217,7 +1217,10 @@ truncated page would get committed. The generator also strips maintainer-only as
 parenthetical citing a bd ticket id, `show=False` footer-visibility trivia, or a source-file path
 (`screens/browse.py`) — from cells *and* headings alike, so the two pages read as documentation for
 someone using lode, not a verbatim dump of `keybindings.md`'s development history or
-`configuration.md`'s implementation notes.
+`configuration.md`'s implementation notes. A link whose URL carries one of those markers (as most
+deep links into this repo's `(decided, lode-xxxx)` headings do) is unwrapped to its label first, so
+a parenthetical is judged on its visible text; one holding nothing but such a link is dropped
+whole, and a link with no marker in its URL is emitted as written (lode-v4k1).
 
 `docs/keymap.md` links back to `keybindings.md`'s GitHub URL for whoever actually needs to add or
 rebind a key, and points out that the in-app `Ctrl+_`/`?` help overlay (not the page) is the
