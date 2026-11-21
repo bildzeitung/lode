@@ -2647,6 +2647,12 @@ The standing rule for any ticket that cuts an agent or skill file to save per-di
   next 5 dispatches of the trimmed agent are checked against incident-derived behaviours, a miss
   reverting the cut. Five dispatches do not exercise rare paths; that limit is accepted.
 
+Two criteria govern every file's inventory (set for `code-reviewer.md` by maintainer ruling
+`lode-w18a.10`, extended to every inventory by `lode-w18a.11`, 2026-11-21): a rule stated more than
+once gets **one** entry, pinned on the copy that survives the cut; and a pin runs through the
+**operative part** of its rule, not just its lead words. The `lode-w18a.11` Update in
+[decisions.md](decisions.md) records one case where two pins were kept, and why.
+
 ### Invariants the coding loop never breaks
 
 A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents/coding.md) and
