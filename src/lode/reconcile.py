@@ -377,7 +377,8 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
     A live (``pending``/``running``/``failed``) in-force job is left alone.
     Like the note arm, ``done`` jobs record no model, so only a prompt-version
     bump (not an ``enrichment_llm`` change) re-opens a ``done`` enrichment; an
-    ``enrichment_llm`` change re-opens a refusal-dead one. The enqueue targets
+    a change of ``enrichment_llm.model`` or of the LLM provider re-opens a
+    refusal-dead one (``reasoning_effort``/``max_tokens`` alone re-open nothing). The enqueue targets
     the head snapshot, so the new annotations anchor to current content.
     Tombstoned-head and ``no_egress`` externals are excluded -- ``no_egress``
     meaning the row flag *or* a ``settings.no_egress_scopes`` rule, the same

@@ -242,8 +242,8 @@ A refresh does not reliably re-open enrichment: an identical refetch mints no ne
 sub-threshold change carries the prior enrichment forward with no enrich job of its own. So
 `reconcile._enrich_gap_step` has an externals arm with the same triggers as notes — no current
 enrichment (never enriched, or max-retries-dead), a `done` job under a stale `ENRICH_PROMPT_VER`,
-and a refusal-dead job re-opened only by the note rule (prompt version or `enrichment_llm`
-change; [storage.md](storage.md) failure taxonomy). Like notes, a `done` job records no model, so a
+and a refusal-dead job re-opened only by the note rule (prompt version, `enrichment_llm.model`
+or the LLM provider; [storage.md](storage.md) failure taxonomy). Like notes, a `done` job records no model, so a
 model change alone does not re-open a `done` enrichment.
 
 **The materiality gate stays intact.** The signal is *not* "the head snapshot has no enrich job" —

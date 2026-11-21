@@ -7529,7 +7529,10 @@ def test_status_lists_refusal_dead_enrich_job_with_category(
     # re-opens a refusal on enrichment_llm.model alone, not on the tier's
     # other fields.
     assert "the note is edited or the page changes materially" in out
-    assert "the enrichment model (enrichment_llm.model) changes" in out
+    assert (
+        "the enrichment model (enrichment_llm.model) or the LLM provider "
+        "(llm_provider) changes"
+    ) in out
     assert "reasoning_effort or max_tokens does not retry it" in out
     assert "self-healing" not in out
     assert "No action needed." not in out
