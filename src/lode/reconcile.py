@@ -107,6 +107,7 @@ from lode import jobs
 from lode.config import Settings
 from lode.enrich import ENRICH_PROMPT_VER
 from lode.lexical import LexicalCacheBackend
+from lode.llm_provider import provider_identity
 from lode.no_egress_scope import is_no_egress_scoped
 from lode.progress import op_progress
 
@@ -322,9 +323,11 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
     whose enrich job is ``dead`` *because the model refused it*
     (``jobs.refusal = 1``) is NOT a gap while that job's ``prompt_ver`` equals
     the current :data:`lode.enrich.ENRICH_PROMPT_VER` and its ``refusal_model``
-    equals ``settings.enrichment_llm.model``. A new head version is a different
-    ``target_version`` and so never matches; changing the prompt version or the
-    enrichment model re-opens the item. Every other dead job keeps re-enqueueing.
+    equals ``settings.enrichment_llm.model`` and its ``refusal_provider`` equals
+    :func:`lode.llm_provider.provider_identity` (NULL-safe ``IS``; lode-7jcp).
+    A new head version is a different ``target_version`` and so never matches;
+    changing the prompt version, the enrichment model or the provider re-opens
+    the item. Every other dead job keeps re-enqueueing.
 
     **Gap signal, part 2 (prompt/model change, lode-0wj.9 / lode-q47):** even
     when a ``done`` enrich job exists for the head, it is still a gap unless
@@ -386,7 +389,11 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
     Returns the count of gap versions found (each triggered one enqueue call).
     """
     settings = settings or Settings()
-    refusal_params = (ENRICH_PROMPT_VER, settings.enrichment_llm.model)
+    refusal_params = (
+        ENRICH_PROMPT_VER,
+        settings.enrichment_llm.model,
+        provider_identity(settings),
+    )
     gap_versions = conn.execute(
         f"""
         SELECT n.head_version_id

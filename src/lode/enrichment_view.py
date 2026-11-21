@@ -485,9 +485,10 @@ def raw_snapshot_payload(conn: sqlite3.Connection, snapshot_id: str) -> str | No
 #: The live-head (notes UNION externals) scan `lode reenrich` force-enqueues
 #: from -- shared with `stale_enrichment_heads` below so "status says clean"
 #: and "reenrich has work" read the identical query, never a
-#: separately-maintained approximation. Eight positional `?` placeholders, four
-#: per UNION branch: (model, provider, prompt_ver, refusal_model) each -- the
-#: last two bound by :func:`lode.jobs.standing_enrich_refusal_exists_sql`; see
+#: separately-maintained approximation. Ten positional `?` placeholders, five
+#: per UNION branch: (model, provider, prompt_ver, refusal_model,
+#: refusal_provider) each -- the last three bound by
+#: :func:`lode.jobs.standing_enrich_refusal_exists_sql`; see
 #: `stale_enrichment_heads`.
 #: The provider comparison uses `IS NOT` rather than `!=` because it must stay
 #: NULL-safe both ways: a stored `NULL` means "anthropic" by convention
@@ -560,8 +561,8 @@ def stale_enrichment_heads(
     **A head with a standing refusal is excluded** (lode-5try,
     :func:`lode.jobs.standing_enrich_refusal_exists_sql`): the refusal is final
     for that version (lode-g9q3), so re-enriching would only re-send refused
-    content. A change of ``enrichment_llm`` or ``ENRICH_PROMPT_VER`` brings the
-    head back.
+    content. A change of ``enrichment_llm``, the provider or ``ENRICH_PROMPT_VER``
+    brings the head back.
 
     Shared by ``lode status``'s hint
     (:func:`lode.cli.status._enrichment_model_stale`) and ``lode reenrich``
@@ -579,10 +580,12 @@ def stale_enrichment_heads(
                 current_provider,
                 ENRICH_PROMPT_VER,
                 enrichment_llm,
+                current_provider,
                 enrichment_llm,
                 current_provider,
                 ENRICH_PROMPT_VER,
                 enrichment_llm,
+                current_provider,
             ),
         ).fetchall()
     ]

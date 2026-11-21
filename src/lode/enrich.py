@@ -954,6 +954,7 @@ def _mark_job_refused(
         error_msg,
         category=category,
         model=settings.enrichment_llm.model,
+        provider=provider_identity(settings),
         prompt_ver=ENRICH_PROMPT_VER,
     )
 
