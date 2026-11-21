@@ -4937,7 +4937,10 @@ entries below from being rewritten to chase the current tree.)
     file is named, not detected by shape: as first built, the test was "the text before the first
     deepest-level heading is over `MAX_UNIT_BYTES` and holds top-level bullets", which
     `stack.md`, `configuration.md` and `agents-workflow.md` also meet, and their sections were cut
-    at their bullets (measured at review: `stack.md` went from 28 units to 84).
+    at their bullets (measured at review: `stack.md` went from 28 units to 84). Not fixed here, and
+    the same before this change: the split level is the deepest heading in the file, so one `###`
+    anywhere in this file puts every `##` section in the unit of the entry before it (run at
+    review on this file with a `###` appended; open in `lode-kys3`).
 
 - **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
   decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent

@@ -61,10 +61,8 @@ _REFERENCE_PROCESS_STEMS = frozenset(
 #: The entry log: the one file where a top-level bullet after a heading is a
 #: new entry, not that section's content. Named, not inferred from shape: the
 #: append-at-EOF convention is a fact about this file (``.gitattributes`` gives
-#: it ``merge=union`` by name for the same reason), and an oversized bulleted
-#: stretch before the first deepest-level heading also describes ``stack.md``,
-#: ``configuration.md`` and ``agents-workflow.md``, whose bullets belong to
-#: their sections.
+#: it ``merge=union`` by name for the same reason), and in every other doc a
+#: bullet under a heading belongs to that heading's section.
 _ENTRY_LOG_STEM = "decisions"
 
 
@@ -154,9 +152,7 @@ def _bullet_boundary(
 ) -> Callable[[int], bool]:
     """Predicate: is line ``i`` an unfenced top-level ``- `` bullet?
 
-    One definition for every caller -- the primary rule for a file with no
-    headings at all, the next rung down when a heading unit is oversized, and
-    the entry log's trailing entries.
+    One definition for every caller.
     """
 
     def is_bullet(i: int) -> bool:
@@ -244,20 +240,11 @@ def _split_trailing_entries(
     """
     is_bullet = _bullet_boundary(lines, fence_flags)
     own_end = max(
-        (
-            i
-            for i in range(line_lo - 1, line_hi)
-            if not fence_flags[i] and lines[i][:1].strip() and not is_bullet(i)
-        ),
-        default=line_lo - 1,
+        i
+        for i in range(line_lo - 1, line_hi)
+        if not fence_flags[i] and lines[i][:1].strip() and not is_bullet(i)
     )
-    first_entry = next((i for i in range(own_end + 1, line_hi) if is_bullet(i)), None)
-    if first_entry is None:
-        return [(line_lo, line_hi)]
-    return [
-        (line_lo, first_entry),
-        *_split_range(lines, first_entry + 1, line_hi, is_bullet),
-    ]
+    return _split_range(lines, line_lo, line_hi, lambda i: i > own_end and is_bullet(i))
 
 
 def chunk_file(path: Path | str, text: str) -> list[Unit]:
@@ -282,17 +269,15 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
     ranges = _split_range(lines, 1, n, primary_boundary)
 
     if deepest and Path(path).stem == _ENTRY_LOG_STEM:
-        # Heading units only: the text before the first heading is left to the
-        # post-pass, which already splits it at its bullets.
-        ranges = [
-            piece
-            for lo, hi in ranges
-            for piece in (
-                _split_trailing_entries(lines, fence_flags, lo, hi)
-                if primary_boundary(lo - 1)
-                else [(lo, hi)]
-            )
-        ]
+        # Heading units only: the text before the first deepest-level heading
+        # is left to the post-pass, which splits it at its bullets.
+        cut: list[tuple[int, int]] = []
+        for lo, hi in ranges:
+            if primary_boundary(lo - 1):
+                cut.extend(_split_trailing_entries(lines, fence_flags, lo, hi))
+            else:
+                cut.append((lo, hi))
+        ranges = cut
 
     final_ranges: list[tuple[int, int]] = []
     for lo, hi in ranges:
