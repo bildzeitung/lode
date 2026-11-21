@@ -1765,7 +1765,10 @@ def nox_session_tags(node: ast.FunctionDef) -> list[str]:
 # tests/test_bd_list_limit_gate.py's inline-span scan (`inline_violations`) is
 # a further consumer -- of `fence_scan` directly, since lode-kjei collapsed its
 # own open/close loop onto the same generator `bash_fence_blocks` is now built
-# on (see `fence_scan` below). A change to the rules stated in `fence_scan`'s
+# on (see `fence_scan` below).
+# tests/test_instruction_rule_inventory_gate.py's `_outside_fences` reads
+# `fence_scan` directly too, keeping only the lines outside every fence
+# (lode-4615). A change to the rules stated in `fence_scan`'s
 # docstring changes what every gate above considers "executed"/"fenced", so the
 # rules are stated ONCE there and nowhere else -- on the TEST side.
 # `scripts/check_links.py`'s `_content_lines` makes the same "single home of
