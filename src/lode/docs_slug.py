@@ -15,7 +15,7 @@ WHY THIS MODULE IS HERE, AND WHY IT IS A COPY. ``mkdocs.yml``'s
 ``toc.slugify`` (via ``github_slugify`` below) must generate the same anchor
 ``id``\\ s locally that GitHub generates when these docs render there -- the
 ``toc`` extension's default slugify does not (it collapses that em-dash run to
-a SINGLE hyphen), which is the bug this module exists to close. mkdocs reaches
+a SINGLE hyphen), which is the bug this module exists to close. Zensical reaches
 a slugifier only by DOTTED MODULE PATH, through its YAML loader
 (``!!python/name:lode.docs_slug.github_slugify``), and it does not put the repo
 root on ``sys.path`` -- so ``scripts/`` is unreachable from there and the

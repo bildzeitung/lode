@@ -2048,12 +2048,11 @@ proposal. What they leave out:
   constructs a real Anthropic or OpenAI client without `@pytest.mark.network`. An unmarked test in
   the `unit`/`tests` gates cannot spend by accident.
 - **Unset credentials in agent worktrees: rejected.** For the default provider, credentials
-  resolve through the Anthropic SDK chain (`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`, then an `ant
-  auth login` profile on disk, then workload identity; `src/lode/auth.py`), so unsetting
-  environment variables leaves the on-disk profile working. Only `llm_provider = "openai"` reads
-  its key from the environment alone (`src/lode/llm_provider.py`). The `Agent` tool also takes no
-  environment for the agent it dispatches. A scrub that covers part of the chain would read as a
-  guarantee it is not.
+  resolve through the Anthropic SDK chain, which includes an `ant auth login` profile on disk
+  (`src/lode/auth.py`), so unsetting environment variables leaves the on-disk profile working.
+  Only `llm_provider = "openai"` reads its key from the environment alone
+  (`src/lode/llm_provider.py`). The `Agent` tool also takes no environment for the agent it
+  dispatches. A scrub that covers part of the chain would read as a guarantee it is not.
 - **Fail-closed provider: rejected for now.** There is no `llm_provider` value that refuses every
   call, and a scratch `LODE_HOME` config pointing at one would protect only agents that already
   chose a scratch home, the case that was never the risk. A new provider value is a product
@@ -2646,6 +2645,12 @@ The standing rule for any ticket that cuts an agent or skill file to save per-di
   gate fails when a pinned phrase is missing); one file per ticket; and a watch period in which the
   next 5 dispatches of the trimmed agent are checked against incident-derived behaviours, a miss
   reverting the cut. Five dispatches do not exercise rare paths; that limit is accepted.
+
+Two criteria govern every file's inventory (set for `code-reviewer.md` by maintainer ruling
+`lode-w18a.10`, extended to every inventory by `lode-w18a.11`, 2026-11-21): a rule stated more than
+once gets **one** entry, pinned on the copy that survives the cut; and a pin runs through the
+**operative part** of its rule, not just its lead words. The `lode-w18a.11` Update in
+[decisions.md](decisions.md) records one case where two pins were kept, and why.
 
 ### Invariants the coding loop never breaks
 

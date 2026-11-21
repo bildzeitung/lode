@@ -91,13 +91,26 @@ dep_all_patch_level_only() {
 }
 
 # Why filing the churn stub should be SKIPPED, on stdout (rc 0), given the
-# --no-file flag $1 (0/1) and the raw change lines $2. Empty output with rc 1
-# means "file it". Holds the whole skip policy and its ORDER in one testable
-# place; update-deps.sh keeps only the `bd` invocation itself.
+# --no-file flag $1 (0/1), the raw change lines $2 and the --reconcile flag $3
+# (0/1). Empty output with rc 1 means "file it".
+# Holds the whole skip policy and its ORDER in one testable place;
+# update-deps.sh keeps only the `bd` invocation itself.
+#
+# In reconcile mode (lode-7qo1) only moves of an EXISTING pin count: additions
+# and removals have no crossed versions and no existing call sites to evaluate,
+# so they are dropped before the empty and patch-only checks below. A package
+# that gains or loses one of several resolved versions ("1.0" -> "1.0,2.0") is
+# an existing pin moving, not an addition: it stays, and the noise gate's
+# multi-version rule files it.
 dep_stub_skip_reason() {
-  local no_file="$1" raw="$2"
+  local no_file="$1" raw="$2" reconcile="$3"
+  if [ "$reconcile" -eq 1 ]; then
+    raw="$(printf '%s\n' "$raw" | awk -F'\t' 'NF >= 3 && $2 != "(none)" && $3 != "(none)"')"
+  fi
   if [ "$no_file" -eq 1 ]; then
     echo "--no-file set -- skipping churn-evaluation stub ticket."
+  elif [ -z "$raw" ] && [ "$reconcile" -eq 1 ]; then
+    echo "reconcile moved no existing pin -- skipping churn-evaluation stub ticket."
   elif [ -z "$raw" ]; then
     echo "no version changes -- skipping churn-evaluation stub ticket."
   elif dep_all_patch_level_only "$raw"; then

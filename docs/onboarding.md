@@ -87,11 +87,21 @@ scripts/update-deps.sh --package trafilatura   # bump just one package
 scripts/update-deps.sh --reconcile        # stale lock after a pyproject.toml edit: no upgrades
 ```
 
+**Release-age cooldown (`lode-3s4d`).** The two upgrade modes skip any release younger than 7 days.
+A pin already in the lock that is younger than that moves back to an older release, under
+`--package` too; the version diff shows each one. For a security fix that must be taken at once,
+add `--no-cooldown`. Value and rationale:
+[`configuration.md`](configuration.md#lock-refresh-release-age-cooldown-cooldown-in-scriptsupdate-depssh-lode-3s4d).
+
 **Fixing a stale lock (`lode-trw1`).** When `nox -s lock_currency` exits 1 because `pyproject.toml`
 was edited without re-locking, run `scripts/update-deps.sh --reconcile`. It re-resolves only what
 the edit changed (an added or removed dependency, a range or `requires-python` change) and keeps
 every other pin; a bare invocation is a whole-lock upgrade, not a re-lock. `--reconcile` and
-`--package` are mutually exclusive.
+`--package` are mutually exclusive. Run it straight after the `pyproject.toml` edit
+(`lode-7qo1`): it gates on the full test suite against your working tree, so an unrelated red
+test mid-branch rolls the reconciled lock back to the stale one. On a green run it files the
+churn-evaluation ticket only when an existing pin moved across a minor or major; a pure
+addition or removal files nothing.
 
 ### 3. Restore the issue database (beads)
 

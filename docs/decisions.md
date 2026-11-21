@@ -3793,6 +3793,56 @@ entries below from being rewritten to chase the current tree.)
   - `lance_dir(db_path)`'s `VectorStore` is now also held for the whole `lode work` process
     (`cli.py`'s `work` command), same as the pre-existing `FastEmbedEmbedder` hoist (lode-j5r2) --
     threaded into every `drain()` call across the polling loop.
+  - **Update (2026-11-21, lode-re5e) — the zero-second prune window was a real exposure; it is now a
+    60 s window, which narrows the exposure, and a read that still loses its version retries once on
+    the latest.** lancedb 0.41 warns on
+    `optimize(cleanup_older_than=timedelta(0))` that any reader on an older version "will fail".
+    Measured with two processes (reader scanning in a loop, writer calling `replace_vectors` with
+    `vectorstore_optimize_interval=1`): a reader that calls `checkout_latest()` and then scans
+    immediately saw 0 failures in 3192 scans, but one with a 0.2 s gap between the checkout and the
+    scan (a query in flight while the prune ran) failed 28 of 118 times with
+    `Not found: .../embeddings.lance/data/...`, and a reader that never refreshed failed on nearly
+    every scan. So `checkout_latest()` per use covers a reader between queries, not one mid-query.
+    Change: `_PRUNE_WINDOW = timedelta(seconds=60)` in `lode.vectorstore`, a build constant. With a
+    2 s window the same 0.2 s-gap reader saw 0 failures in 117 scans; a 0.05 s window reproduced the
+    failures (22 of 119). So while the writer writes continuously, the failure tracks the window
+    against the read duration; 60 s is a margin over that, not a tuned value.
+    **What the window does not cover (found on technical review).** `cleanup_older_than` counts a
+    version's age from when it was written, not from when it was superseded. A version that was the
+    latest until the pruning write, but was written longer ago than the window, is deleted by that
+    same prune. Reproduced with the 60 s constant: two writes, 65 s idle, a second handle opened on
+    the table (the read in flight), a third write on which the prune fires, then a scan through the
+    second handle fails with the same `Not found`. With no idle gap the same sequence succeeds. The
+    versions the pruning write itself creates are younger than the window, so the exposed read is
+    one that starts before that write, is still running when its prune finishes, and finds the
+    writer's previous write more than 60 s old, which is how `lode work --loop` sits between notes.
+    No finite window closes that case.
+    **Maintainer ruling (2026-11-21): close it with a read-side retry, and keep the 60 s window.**
+    `VectorStore.search`, `vectors_for` and `model_revisions` run their scan through one helper
+    (`_rows`). When the scan raises lancedb's `RuntimeError` whose message contains `Not found`, the
+    helper calls `checkout_latest()` and runs the scan once more; a second failure, or any other
+    `RuntimeError`, propagates. A prune keeps the latest version's files, so the retry reads them.
+    Re-run with the retry in place, same 60 s constant and 65 s idle: the never-refreshed handle
+    still fails with `Not found`, and `vectors_for` through a `VectorStore` whose version was pinned
+    before the pruning write returns the rows of the latest version. The retried read therefore
+    answers from a newer version than the one it started on, which is what a read started a moment
+    later would have seen. lancedb gives the error no type of its own, so the match is on the
+    message text; `tests/test_vectorstore.py` reproduces the failure for all three reads and goes
+    red if a lancedb upgrade rewords it. With the retry the window decides how often a read is
+    retried. A read now fails only when a second prune also removes the version it retried on,
+    which takes a further `vectorstore_optimize_interval` writes while that one scan runs (read
+    from the write counter in `replace_vectors`, not reproduced). The write path
+    (`replace_vectors`) has no retry and the ruling did not ask for one. Measured at review: a
+    second writing process whose handle was pinned before the first one's prune fails in its
+    `delete` with the same `Not found`. No shipped command reaches that: the only caller of
+    `replace_vectors` outside the eval harness is the embed job, which runs in `lode work` under
+    `WorkerLock`, so there is one writing process.
+    Memory re-measured with the live `VmRSS` method (3000 calls, interval 100, 15 calls/s): window 0
+    grew 199 to 258 MB and window 60 s 199 to 266 MB. The 60 s window costs about 8 MB over the zero
+    window at that write rate and does not change the slope. The window keeps the versions of the
+    last 60 s, so that cost should scale with the write rate; no other rate was measured. Under
+    lancedb 0.41 both still grow about 7 MB per 300 calls, unlike the flat plateau recorded above
+    for 0.38; that regression is not caused by the window and is filed as lode-ju9d.
 
 - **2026-08-05 (lode-2nw5) — the `git restore --staged .beads/issues.jsonl` cluster: ONE site
   canonicalized (fixing a real symmetry gap), THREE sites kept as WONTFIX literals.** Filed while
@@ -4909,6 +4959,24 @@ entries below from being rewritten to chase the current tree.)
   license — the merged result silently carries both variants of that region, duplicated. Nothing
   catches it: `check-decisions-no-silent-rewrite.sh` fires only on a line *disappearing*, and
   duplication removes nothing. The mitigation is the append-only rule itself, not a gate.
+  - **Update (lode-tikr, 2026-11-21, maintainer):** the union driver has a third failure mode. A
+    marker appended to the file's LAST entry is detached from it when another branch lands an EOF
+    append first: both sides add lines at the same position, union keeps both, and the marker ends
+    up after the other branch's lines. It has happened once: `lode-1pnt`'s two `##` sections landed
+    between the `lode-vlok` entry and `lode-ucpu`'s Update. Nothing catches it: the branch is
+    correct in isolation, and the two checks named above test removal and shape, not position.
+    Accepted without a gate. A post-merge test was rejected because it would catch one shape only,
+    a marker stranded under a `##` heading; when the other branch's append is another bullet entry,
+    the marker silently reads as that entry's. The mitigation is a by-hand step in the merging
+    stages (`/land`'s batch merge and the `coding` rebase pickup): after any merge that brings an
+    Update marker into this file, confirm it still follows the entry it names. Decision only: the
+    step is `lode-l8b7`'s, and until it lands neither stage's instruction file carries it.
+    - **Which marker moves** (technical review, `git merge-tree` run in both directions on
+      `land/lode-tikr` and `land/lode-w18a.11`): union writes the receiving side's lines first, then
+      the incoming side's. So a marker is detached only when it is on the incoming side and the EOF
+      append is on the receiving side: at `/land`, a branch's marker merged into a trunk that
+      already has the append; in a rebase pickup, trunk's marker merged into a branch that holds
+      the append. With the sides swapped the marker stays on its entry.
 
 - **Recording the rejected alternatives, the non-impact and the ours-side-only caveat for the union
   merge driver (`lode-fp9l`, 2026-08-09).** Follow-up to the entry directly above (`lode-4jtc.1`),
@@ -6558,6 +6626,68 @@ for a removed dependency or a `requires-python` change), and ruling that a whole
 every edit is intended. Not ruled: a green reconcile files the churn-evaluation stub (`lode-i642`)
 like any other green run, which for a branch that only added a dependency is a ticket with nothing
 to evaluate. Open in `lode-7qo1`.
+  - **Update (lode-7qo1, 2026-11-21, maintainer):** option (c). On a green `--reconcile`, the
+    churn-evaluation stub files only when an existing pin moved across a minor or major (a range or
+    `requires-python` edit); pure additions and removals never file in that mode, so the "Not
+    ruled" sentence above no longer holds. `--reconcile` is to be run straight after the
+    `pyproject.toml` edit, since a mid-branch unrelated red test rolls the lock back. The
+    empty-diff no-op cost (a reconcile with nothing to change still rebuilds `./.venv` and runs
+    both gates) is not ruled and is left as is. As built (not part of the ruling's text): the test
+    reads the lock diff, not the edit that caused it, so an added dependency that forces an
+    existing pin across a minor or major files too, as does a package that gains or loses one of
+    several resolved versions; and a ticket that does file still carries the whole version diff,
+    additions and removals included.
+
+## A release-age cooldown for lock refreshes (decided, lode-3s4d)
+
+Raised at `lode-1pnt`'s review: `scripts/update-deps.sh` took whatever was newest on PyPI, and the
+2026-11-20 refresh pinned releases only hours old (backrefs 8.3.1, platformdirs 4.14.8). Nothing
+was wrong with that lock, but a release pulled or found malicious days after publication would
+already be hash-pinned.
+
+Maintainer ruling 2026-11-21: a 7-day release-age cutoff, applied to the two upgrade modes
+(whole-set and `--package`) only, never to `--reconcile` (`lode-trw1`), with an explicit override
+for a security fix that must be taken at once. Built here: the script passes
+`--exclude-newer "7 days"`; the override is `--no-cooldown`; the value lives in
+[`configuration.md`](configuration.md#lock-refresh-release-age-cooldown-cooldown-in-scriptsupdate-depssh-lode-3s4d).
+
+Probes (uv 0.11.7, real PyPI). The first two are the probe the ruling required, run at build on a
+throwaway project and repeated at technical review on a copy of this repo's `pyproject.toml` and
+`uv.lock` (trunk `6d0205df`, 2026-11-21). The rest were run at review only, on that copy.
+
+- `uv lock --exclude-newer <date>` **is recorded** in `uv.lock` (`[options] exclude-newer = ...`;
+  a relative `"7 days"` also records `exclude-newer-span = "P7D"`). A later plain
+  `uv lock --check` then **exits 1** ("Resolving despite existing lockfile due to removal of global
+  exclude newer"), so `nox -s lock_currency` and CI's lock-currency job would go red on every
+  upgrade written this way.
+- A later plain `uv lock` (which is exactly what `--reconcile` runs) **drops** the recorded option
+  and **keeps every pin**: on the repo copy the lock before and after it differed only by the
+  `[options]` table, for both upgrade modes. After it, `uv lock --check` exits 0.
+- **The cutoff binds the whole resolution, so an existing pin younger than it moves back.**
+  `uv lock --upgrade-package typer --exclude-newer "7 days"` moved 16 pins to an older release
+  (typer itself 0.29.2 -> 0.29.1, pydantic 2.14.4 -> 2.14.3, backrefs 8.3.1 -> 8.3, platformdirs
+  4.14.8 -> 4.14.5 and twelve more) and added `tld`, which courlan 1.4.0 (back from 1.5.0)
+  depends on. `--upgrade` gave the identical lock. Every one was a pin taken with no cutoff inside
+  the last 7 days.
+- With `typer>=0.29.2` in `pyproject.toml` the cooled-down run fails: uv reports that the release
+  "was published after the exclude newer time" and the requirements are unsatisfiable.
+- `UV_EXCLUDE_NEWER="7 days"` reaches a plain `uv lock`, which is what `--reconcile` runs: it
+  moved the same pins back and recorded the cutoff, which the ruling forbids. An `exclude-newer`
+  in a `uv.toml` beside `pyproject.toml` does the same and also makes `uv lock --check` exit 1.
+  `[tool.uv] exclude-newer` in `pyproject.toml` was not probed.
+
+Mechanism chosen, keeping `lock_currency` green: the cutoff is a CLI flag the script appends to
+its `uv lock` command after the mode chain, for every mode except `--reconcile`, followed by one
+plain `uv lock -q` that strips the recorded option; `UV_EXCLUDE_NEWER` is unset at script start. Rejected: `[tool.uv] exclude-newer` in `pyproject.toml` (reaches `--reconcile` and
+every `uv lock --check`, and its fixed date goes stale), and leaving the recorded cutoff in the
+lock (red `lock_currency`). Caveats: the cutoff is not recorded, so a later reader of `uv.lock`
+cannot tell it was taken under a cooldown; and a cutoff set in a `uv.toml` is not guarded against,
+since the script unsets only the environment variable.
+
+Not covered by the ruling, open in `lode-hdob`: a pin taken with `--no-cooldown` is younger than
+the cutoff, so the next cooled-down run inside 7 days moves it back to the release it replaced.
+The version diff lists the line; nothing else flags it. Traced with the pins above, which were
+taken with no cutoff; not run with an actual `--no-cooldown` pin.
 
 ## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 
@@ -6573,6 +6703,19 @@ the `validation:` block and the `search` plugin. Outside it: the strict build (`
     and body no longer holds: migrate the docs site to Zensical before mkdocs-material's
     2027-05-05 end of life. Decision only; the migration is `lode-0lb8`'s. The inventory above is
     incomplete; `lode-0lb8` carries the full one.
+  - **Update (lode-0lb8, 2026-11-21):** the migration is built. `zensical` 0.1.3 replaces
+    mkdocs-material in the `dev` group and `uv.lock`; `mkdocs.yml` keeps its name (Zensical reads
+    it); `nox -s docs` and `docs.yml` run `zensical build --strict`. Checked against Zensical's own
+    docs and a real build: link and link-anchor validation exist and `--strict` fails on a broken
+    link to a page or a broken anchor, so strict anchor validation has an equivalent and no
+    maintainer decision was needed. The `toc.slugify` callable and the `docs/overrides`
+    `extrahead` override work unchanged, and every heading id matches the old build. Two things
+    the old strict build did that Zensical 0.1.3 does not, both measured at review and both given
+    a replacement on this branch: it failed on an image whose file is missing (now checked when
+    `scripts/build_docs_site.py` stages the site), and it rejected a misspelled `validation:` key
+    (now a test runs a strict build against planted breakage). What was dropped: the old `nav.*`
+    validation checks (all `ignore`). Still open: Zensical is `0.1.x`, so a version bump is a
+    behavior change; `docs/stack.md` records the details.
 
 ## The anthropic SDK's native OpenTelemetry tracing: leave on or disable (open, lode-sflg)
 
@@ -6687,6 +6830,24 @@ the SDK default, or pass `open_telemetry=False` where lode constructs its Anthro
     `docs-nit-file-repo-relative` and `ap-never-review-own-build` are lengthened so each runs through
     the operative part of its rule. Every phrase matches exactly once in `code-reviewer.md`, outside
     any fenced block.
+  - **Update (lode-w18a.11, 2026-11-21, maintainer):** the amended inventory is approved with these
+    changes, built as an edit to `tests/instruction_rules.json` (`lode-w18a.10` and `lode-low0` had
+    both landed). Both `Nonzero means STOP (lode-6wgc)` pins are kept (two separately pinned
+    re-assert steps, worded differently). The stacked-branch merge-base keeps only
+    `stacked-branch-off-trunk-merge-base-code-review`; `stacked-branch-off-trunk-merge-base-hand-pass`
+    is dropped (one rule stated twice). The new `background-gate-means-listed` entry pins the list of
+    means in the background-gate bullet (no `run_in_background: true`, no `Monitor`, no `&`/`nohup`,
+    no closing message that defers the result), so the cut cannot drop it with the gate green. Both
+    technical-review additions (`blocked-followup-is-blocks-not-discovered-from`,
+    `ap-workflow-absence-no-caveat-no-lowered-scrutiny`) are accepted, and collapsing
+    `technical-review-by-non-author` onto `ap-never-review-own-build` is accepted (the intro copy,
+    "The split is the point: ...", then line 21 of `code-reviewer.md`, becomes cuttable). The two
+    `lode-low0` rules get entries, `ruling-record-mechanism-traced-or-labelled` and
+    `decision-ticket-failure-traced-before-filing`, each phrase matching once outside fenced blocks.
+    The `code-reviewer.md` inventory is 113 entries (the 111 above, minus one, plus three). The two
+    criteria (one entry per repeated rule, on the surviving copy; a pin runs through the operative
+    part of its rule) apply to every inventory and are stated in `docs/agents-workflow.md`. No
+    further re-approval is needed: closing `lode-w18a.11` unblocks `lode-w18a.9`.
 
 ## A derived page strips a bd-id-anchored link but keeps the prose parenthetical around it (decided, lode-v4k1)
 
@@ -6717,3 +6878,33 @@ as it was before this change. The ruling speaks of a prose parenthetical, and th
 prose. As first built it was unwrapped like any other, which ended five `docs/settings.md` rows
 with `(storage.md)`, `(externals.md)`, `(stack.md)` twice, and, on the `enrichment_llm` row,
 `(below)`, pointing at a "Model provenance" section the page does not carry.
+## A detached `lode-ucpu` Update stays where the union merge put it (decided, lode-tikr)
+
+Maintainer ruling 2026-11-21. `lode-ucpu`'s Update sits under the `lode-sflg` `##` section, the
+second of two that `lode-1pnt` appended at EOF, instead of on the `lode-vlok` entry it answers:
+`/land`'s union merge placed it after them (incident: `MISTAKES.md`, 2026-11-21). Three rulings.
+**The detached Update:** leave it; `lode-smpk`'s pointer Update on the `lode-vlok` entry is the
+repair. No verbatim move past `check-decisions-no-silent-rewrite.sh`, which exits 1 on a move.
+**A repeat:** the detachment is recorded as a third union-driver failure mode in an Update on the
+`lode-4jtc.1` entry, and the merging stages get a by-hand check (`lode-l8b7`); no post-merge gate.
+**The `##` headings:** fix the attribution in the docs index's chunker, so that entries after a
+`##` heading in this file are not all attributed to that heading (`lode-skv8`); the log stays
+append-only. The ruling names `scripts/docs_index_query.py`; the chunker it loads is
+`scripts/docs_index_chunker.py`. Decision only; the builds are `lode-l8b7` and `lode-skv8`.
+
+## The trace-before-filing and trace-before-recording rules stay scoped as built (decided, lode-51cz)
+
+Raised 2026-11-21 at `lode-low0`'s technical review. `lode-low0` put two rules in
+`.claude/agents/coding.md` and `.claude/agents/code-reviewer.md`: trace a failure in the code before
+filing a ticket that asks the maintainer to decide about it, and record a claimed mechanism in this
+file only once traced or labelled as the ticket's claim. The question was whether to widen them on
+three points, none with an observed incident: (1) the other doors to the maintainer, `ESCALATION:`
+notes on an existing ticket and the decision tickets `/epic-audit` and `/land` file; (2) records
+other than this file (design docs, docstrings, commit messages); (3) claims about bd, git, the
+harness or a provider API, which have no lode code path to trace.
+
+**Decided (`lode-51cz`, 2026-11-21, maintainer):** option (a) on all three points. The `lode-low0`
+rules stay scoped as built, with no widening to `ESCALATION:` notes, `/epic-audit` or `/land`
+decision filings, records beyond this file, or claims with no lode code path. Reason: no incident has
+been observed through any of them, and epic `lode-w18a` is cutting these same instruction files.
+Revisit only on an observed incident. No build ticket.

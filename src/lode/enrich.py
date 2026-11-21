@@ -124,8 +124,9 @@ _TOOL_NAME = "extract_enrichment"
 #: 6144 (lode-9xsp, lode-ychx ruling) is sized for the default tier's thinking
 #: plus the JSON payload, not for the payload alone: a retry resends the
 #: identical request under the identical cap, so a note that overflows it
-#: retries to dead-letter instead of recovering. The value is a ruling, not a
-#: measurement (lode-qcth).
+#: retries to dead-letter instead of recovering. The value is a ruling, not
+#: derived from a measurement; the small sample lode-qcth measured against it
+#: is recorded in ``docs/configuration.md``, beside the ruling.
 #:
 #: **The two routes are bounded differently** -- neither by the Anthropic SDK's
 #: non-streaming timeout guard, which never applies here for the reason

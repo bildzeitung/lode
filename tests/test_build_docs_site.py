@@ -165,6 +165,48 @@ def test_real_links_survive_the_code_skip() -> None:
     )
 
 
+def test_missing_image_targets_are_found(tmp_path: Path) -> None:
+    """Only a real, relative image whose file is absent is reported.
+
+    The site generator's own link validation does not look at image targets,
+    so this helper is the only thing between a renamed asset and a broken
+    image on the published site.
+    """
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "here.png").write_bytes(b"")
+    (tmp_path / "how-to").mkdir()
+    text = (
+        "![ok](../assets/here.png)\n"
+        '![titled](../assets/here.png "a title")\n'
+        "![gone](../assets/gone.png)\n"
+        "![wrong dir](assets/here.png)\n"
+        "![external](https://example.com/x.png)\n"
+        "Inline: `![example](nope.png)` is documentation\n"
+        "```markdown\n"
+        "![example](nope.png)\n"
+        "```\n"
+    )
+    assert build_docs_site._missing_image_targets(
+        text, tmp_path / "how-to" / "page.md"
+    ) == ["../assets/gone.png", "assets/here.png"]
+
+
+def test_build_refuses_a_page_with_a_missing_image(tmp_path: Path) -> None:
+    """The check is wired into ``build()``: staging fails, naming page and target."""
+    docs = tmp_path / "docs"
+    (docs / "assets").mkdir(parents=True)
+    (docs / "assets" / "here.png").write_bytes(b"")
+    for rel in build_docs_site.PUBLISHED_TOP_LEVEL:
+        (docs / rel).write_text("# page\n\n![ok](assets/here.png)\n", encoding="utf-8")
+    build_docs_site.build(tmp_path, tmp_path / "staged", render_mermaid=False)
+
+    (docs / "brand.md").write_text(
+        "# page\n\n![gone](assets/gone.png)\n", encoding="utf-8"
+    )
+    with pytest.raises(SystemExit, match=r"brand\.md: assets/gone\.png"):
+        build_docs_site.build(tmp_path, tmp_path / "staged", render_mermaid=False)
+
+
 def test_published_and_excluded_partition_the_top_level_docs() -> None:
     """Every top-level docs page is an explicit publish-or-exclude call.
 
@@ -284,26 +326,26 @@ def test_validate_mermaid_and_update_images_pin_match_build_docs_site() -> None:
         )
 
 
-def test_mkdocs_material_pin_is_carried_by_uv_lock_not_docs_yml() -> None:
-    """CI and a local `nox -s docs`/`mkdocs build` must render with the SAME
-    mkdocs-material (lode-fhql.9 HUMAN DECISION 2026-08-14). docs.yml builds
+def test_zensical_pin_is_carried_by_uv_lock_not_docs_yml() -> None:
+    """CI and a local `nox -s docs`/`zensical build` must render with the SAME
+    zensical (lode-fhql.9 HUMAN DECISION 2026-08-14; lode-0lb8). docs.yml builds
     from `uv sync --locked`, so the one source of truth is pyproject.toml's `dev`
     group pin and uv.lock must carry exactly that version; docs.yml must not
     hand-copy a pin of its own (lode-s09w.2).
     """
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    match = re.search(r'"mkdocs-material==([^"]+)"', pyproject)
-    assert match, "pyproject.toml's dev group must pin mkdocs-material exactly (==)."
+    match = re.search(r'"zensical==([^"]+)"', pyproject)
+    assert match, "pyproject.toml's dev group must pin zensical exactly (==)."
     pin = match.group(1)
     uv_lock = (REPO_ROOT / "uv.lock").read_text(encoding="utf-8")
-    assert re.search(
-        rf'name = "mkdocs-material"\nversion = "{re.escape(pin)}"', uv_lock
-    ), f"uv.lock must lock mkdocs-material {pin} to match pyproject.toml's dev pin."
+    assert re.search(rf'name = "zensical"\nversion = "{re.escape(pin)}"', uv_lock), (
+        f"uv.lock must lock zensical {pin} to match pyproject.toml's dev pin."
+    )
     workflow = (REPO_ROOT / ".github" / "workflows" / "docs.yml").read_text(
         encoding="utf-8"
     )
-    assert "mkdocs-material==" not in workflow, (
-        "docs.yml must not hand-pin mkdocs-material -- it installs from uv.lock."
+    assert "zensical==" not in workflow, (
+        "docs.yml must not hand-pin zensical -- it installs from uv.lock."
     )
     assert "uv sync --locked" in workflow
 

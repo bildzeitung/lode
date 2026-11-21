@@ -1,7 +1,7 @@
 """Gate: no PUBLISHED doc may contain two headings that slug to the same
 GitHub anchor (lode-rmsf).
 
-mkdocs' ``toc`` extension dedups a repeated heading slug as ``<slug>_1``,
+The site's ``toc`` extension dedups a repeated heading slug as ``<slug>_1``,
 GitHub (and this repo's own link gate) as ``<slug>-1``; ``toc`` slugifies
 BEFORE dedup, so the custom slugify installed in ``mkdocs.yml``
 (``src/lode/docs_slug.py``, lode-fhql.21) cannot influence the suffix at all.
@@ -100,7 +100,7 @@ def test_no_published_doc_has_a_duplicate_heading_slug() -> None:
             offenders[str(path.relative_to(REPO_ROOT))] = dupes
 
     assert not offenders, (
-        "Published doc(s) with a repeated heading slug -- mkdocs' toc "
+        "Published doc(s) with a repeated heading slug -- the site's toc "
         "extension will dedup these as '<slug>_1' while GitHub (and this "
         "repo's own link gate) dedups as '<slug>-1', a mismatch no slugify "
         "override can fix (docs/stack.md, 'Heading-anchor slugs', lode-rmsf). "

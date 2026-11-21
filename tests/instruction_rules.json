@@ -36,6 +36,11 @@
   },
   {
     "file": ".claude/agents/code-reviewer.md",
+    "rule": "background-gate-means-listed",
+    "phrase": "no `run_in_background: true` on a gate, no `Monitor` armed on one, no backgrounding it by any other means (`&`, `nohup`, a detached script), and no closing message that defers the result"
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
     "rule": "trust-builder-clean-tree-assert-own",
     "phrase": "Trust the builder's clean-tree hand-off contract; assert my own before re-gating and at exit."
   },
@@ -531,11 +536,6 @@
   },
   {
     "file": ".claude/agents/code-reviewer.md",
-    "rule": "stacked-branch-off-trunk-merge-base-hand-pass",
-    "phrase": "`trunk...HEAD`, or the off-trunk merge-base for a stacked branch"
-  },
-  {
-    "file": ".claude/agents/code-reviewer.md",
     "rule": "check-review-head-exit-2-4-report-nothing-about-field",
     "phrase": "I fix the invocation or report the `bd` fault, and report nothing about `review_head`"
   },
@@ -558,5 +558,15 @@
     "file": ".claude/agents/code-reviewer.md",
     "rule": "pre-lode-0yfn-run-pytest-directly",
     "phrase": "run `uv run --frozen pytest` directly for that one"
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
+    "rule": "ruling-record-mechanism-traced-or-labelled",
+    "phrase": "**A maintainer ruling recorded in `docs/decisions.md`, by the diff or by a fix I make:** the record keeps the failure mechanism the ticket claims only if I have traced it in the code, or it is labelled \"the ticket's claim\""
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
+    "rule": "decision-ticket-failure-traced-before-filing",
+    "phrase": "**A ticket that asks the maintainer to decide about a failure:** before filing it I trace that failure in the code from the trigger to the wrong outcome, and mark any step I did not trace \"not checked against the code\" in the ticket"
   }
 ]

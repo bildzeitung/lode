@@ -367,23 +367,21 @@ def docstringcheck(session: nox.Session) -> None:
 
 @nox.session(tags=["everything-else"])
 def docs(session: nox.Session) -> None:
-    """Build the mkdocs site and fail on a broken intra-doc anchor (lode-fhql.20).
+    """Build the docs site and fail on a broken intra-doc link or anchor (lode-fhql.20).
 
     ``scripts/check_links.py``/``linkcheck`` resolves ``#anchor`` fragments with the same
-    slug algorithm GitHub uses -- but mkdocs-material's own renderer slugs heading text
-    differently (punctuation in particular), so a link that resolves cleanly on GitHub can
-    still 404 on the built site. A local ``mkdocs serve`` surfaced exactly this (two
-    anchors, filed as ``lode-fhql.21``) with nothing in the existing gate set able to catch
-    it -- this session is that missing validator.
+    slug algorithm GitHub uses; the site generator slugs heading text through
+    ``mkdocs.yml``'s ``toc.slugify`` hook (``lode.docs_slug``), which matches it, but the
+    built site can still disagree with the source tree (a staged page, a rewritten link),
+    so this session is the validator for the built site itself.
 
-    All of the gate's own logic lives in ``mkdocs.yml``'s ``validation:`` block, NOT here:
-    it sets ``links.anchors: warn`` (mkdocs 1.6 logs anchor breakage at INFO by default, so
-    ``--strict`` alone would not catch it) and every other link/nav check to ``ignore``, so
-    ``--strict`` reddens on a broken anchor and on nothing else. See that block for why each
-    ``ignore`` is deliberate. Keeping the predicate in mkdocs' own config rather than
-    grepping its log matters both ways round: a renamed validation key is itself a
-    ``--strict`` config error (loud), whereas a grep goes silently green the day mkdocs
-    rewords a message.
+    The gate is ``zensical build --strict`` (lode-0lb8): Zensical validates every link to
+    another page and every link anchor at build time (``invalid_links`` and
+    ``invalid_link_anchors``, both on by default and pinned in ``mkdocs.yml``'s
+    ``validation:`` block) and ``--strict`` aborts the build on any warning. The predicate
+    lives in Zensical's own config rather than a grep of its log, so a reworded message
+    cannot turn it silently green. Zensical does not check image targets; the staging
+    step below does, and fails this session on a missing one.
 
     **Coverage boundary:** ``mkdocs.yml``'s ``docs_dir`` points at the STAGED output of
     ``scripts/build_docs_site.py`` (lode-fhql.9's HUMAN DECISION 2026-08-14 superseded the
@@ -400,16 +398,15 @@ def docs(session: nox.Session) -> None:
     exclusive to ``.github/workflows/docs.yml``. A raw mermaid code fence that ships
     unrendered here is fine: this session gates anchors/links, not diagram rendering.
 
-    Resolves ``mkdocs``/``python`` through ``_venv_tool`` (lode-0yfn) -- an ambient
-    interpreter would not have ``mkdocs-material`` (or ``lode``'s other deps) installed.
+    Resolves ``zensical``/``python`` through ``_venv_tool`` (lode-0yfn) -- an ambient
+    interpreter would not have ``zensical`` (or ``lode``, which ``toc.slugify`` imports)
+    installed. The site is written to ``mkdocs.yml``'s ``site_dir`` (gitignored), replacing
+    whatever an earlier build left there: Zensical has no output-directory flag.
     """
     python = _venv_tool(session, "python")
-    mkdocs = _venv_tool(session, "mkdocs")
-    with tempfile.TemporaryDirectory() as site_dir:
-        session.run(
-            python, "scripts/build_docs_site.py", "--no-mermaid", ".docs-site-src"
-        )
-        session.run(mkdocs, "build", "--strict", "-d", site_dir)
+    zensical = _venv_tool(session, "zensical")
+    session.run(python, "scripts/build_docs_site.py", "--no-mermaid", ".docs-site-src")
+    session.run(zensical, "build", "--strict")
 
 
 @nox.session(tags=["tests"])

@@ -29,6 +29,10 @@ Newest first.
   this rule is interim: the stages that merge do not read this file, so `lode-tikr` asks the
   maintainer whether to gate it or put the step in their instruction files, and whether to move
   the detached marker back.
+  - **Update (lode-tikr, 2026-11-21):** ruled. No gate; the step goes into the merging stages'
+    instruction files (`lode-l8b7`), and the merge half of the rule above stays interim until
+    that lands. The detached marker is not moved back. Record: `docs/decisions.md`, search
+    `lode-tikr`.
 
 ## 2026-11-20 — A decision ticket stated a failure that the code cannot reach, and the maintainer ruled on it
 

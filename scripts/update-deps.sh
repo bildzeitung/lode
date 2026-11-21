@@ -10,19 +10,31 @@
 #   scripts/update-deps.sh --package NAME     # bump just NAME (+ whatever it drags with it)
 #   scripts/update-deps.sh --package NAME --dry-run
 #   scripts/update-deps.sh --reconcile        # fix a STALE lock after a pyproject.toml edit, no upgrades
+#   scripts/update-deps.sh --no-cooldown      # upgrade modes only: skip the release-age cutoff
 #   scripts/update-deps.sh --no-file          # promote as usual but never file the churn stub
 #
 # What it does:
 #   1. Save a copy of the committed uv.lock, then move it in place:
 #      `uv lock --upgrade` (whole set), `uv lock --upgrade-package NAME`
-#      (only NAME and whatever it forces; every other pin stays put), or, with
-#      --reconcile, plain `uv lock` (lode-trw1): re-resolve ONLY what a
-#      pyproject.toml edit made stale -- an added or removed dependency, a range
-#      or requires-python change -- keeping every other pin. This is the remedy
-#      `nox -s lock_currency` names when it exits 1. Mutually exclusive with
-#      --package. The release-age cutoff ruled for the two upgrade modes
-#      (lode-3s4d) must never reach this one: a reconcile may not downgrade an
-#      existing pin. Steps 2-6 below are the same for all three modes.
+#      (only NAME and whatever it forces; every other pin stays put, except
+#      under the cooldown below), or, with --reconcile, plain `uv lock`
+#      (lode-trw1): re-resolve ONLY what a pyproject.toml edit made stale -- an
+#      added or removed dependency, a range or requires-python change --
+#      keeping every other pin. This is the remedy `nox -s lock_currency` names
+#      when it exits 1. Mutually exclusive with --package. Steps 2-6 below are
+#      the same for all three modes.
+#
+#      RELEASE-AGE COOLDOWN (lode-3s4d): the two upgrade modes pass
+#      `--exclude-newer "$COOLDOWN"`; `--no-cooldown` omits it. The cutoff binds
+#      the WHOLE resolution, so it also moves a pin already in uv.lock that is
+#      younger than it BACK to an older release (open question: lode-hdob).
+#      What a run then shows, and when to override: docs/configuration.md,
+#      "Lock-refresh release-age cooldown". uv records the cutoff in uv.lock's
+#      [options], which `uv lock --check` (nox -s lock_currency) reads as a
+#      stale lock, so a second plain `uv lock` follows: it drops the recorded
+#      cutoff and keeps every pin (probed, docs/decisions.md). --reconcile
+#      never gets a cutoff, since a reconcile may not downgrade an existing
+#      pin: no flag, and UV_EXCLUDE_NEWER is unset.
 #   2. Print a readable VERSION DIFF between the saved copy and the moved
 #      uv.lock -- one line per changed package, "pkg  OLD -> NEW" for a bump,
 #      "+ pkg VERSION" for an addition, "- pkg  VERSION (removed)" -- derived
@@ -38,6 +50,10 @@
 #      against uv.lock's recorded hashes -- docs/stack.md), never patched in
 #      place.
 #   4. Run the gates: nox -t fix, nox -s tests -- against the promoted lock.
+#      They run against the WORKING TREE, so run --reconcile STRAIGHT AFTER
+#      the pyproject.toml edit (lode-7qo1): mid-branch, one unrelated red test
+#      rolls the reconciled lock back to the stale one (step 5) and rebuilds
+#      ./.venv without the new dependency.
 #   5. GREEN -> nothing further to do to the lock; this script never commits
 #      -- review (`git diff -- uv.lock`) and commit it yourself. ANY OTHER
 #      FAILURE -- the install itself (hash-mismatched pin, yanked release,
@@ -54,12 +70,16 @@
 #      judgment-call in the context of lode's actual call sites (lode-i642).
 #      A WORK ORDER, not a finding: required-only filing policy, see the
 #      stub's own acceptance text. Noise gate: skipped entirely when every
-#      moved package changed only its patch component. The diff parsing, the
-#      rendering and that gate live in the sourceable scripts/dep-churn-lib.sh
-#      so they are unit-tested. `--no-file` suppresses filing outright. Filing
-#      writes Dolt, so a missing/failing `bd` (or the `bd dolt push` after it)
-#      only WARNS -- it never changes this script's exit status or the lock
-#      (this script never mutates anything outside ./.venv and uv.lock).
+#      moved package changed only its patch component. With --reconcile
+#      (lode-7qo1) additions and removals are ignored too: it files only when
+#      an EXISTING pin moved across a minor or major (typically a range or
+#      requires-python edit; the test is on the diff, not on the cause). The
+#      diff parsing, the rendering and that gate live in the sourceable
+#      scripts/dep-churn-lib.sh so they are unit-tested. `--no-file`
+#      suppresses filing outright. Filing writes Dolt, so a missing/failing
+#      `bd` (or the `bd dolt push` after it) only WARNS -- it never changes
+#      this script's exit status or the lock (this script never mutates
+#      anything outside ./.venv and uv.lock).
 #
 # NO -x / TRASH-NOT-REPAIR -- deviates from the scripts/*.sh house style of
 # `#!/bin/bash -ex`: `-e` alone still aborts on any unguarded failing command,
@@ -93,6 +113,9 @@ DRY_RUN=0
 PACKAGE=""
 RECONCILE=0
 NO_FILE=0
+NO_COOLDOWN=0
+COOLDOWN="7 days"
+USAGE="usage: $0 [--dry-run] [--package NAME | --reconcile] [--no-cooldown] [--no-file]"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run)
@@ -111,13 +134,17 @@ while [ "$#" -gt 0 ]; do
       NO_FILE=1
       shift
       ;;
+    --no-cooldown)
+      NO_COOLDOWN=1
+      shift
+      ;;
     -h|--help)
-      echo "usage: $0 [--dry-run] [--package NAME | --reconcile] [--no-file]" >&2
+      echo "$USAGE" >&2
       exit 0
       ;;
     *)
       echo "update-deps.sh: unknown argument '$1'" >&2
-      echo "usage: $0 [--dry-run] [--package NAME | --reconcile] [--no-file]" >&2
+      echo "$USAGE" >&2
       exit 1
       ;;
   esac
@@ -127,6 +154,15 @@ if [ "$RECONCILE" -eq 1 ] && [ -n "$PACKAGE" ]; then
   echo "update-deps.sh: --reconcile and --package are mutually exclusive (--reconcile never upgrades)" >&2
   exit 1
 fi
+
+if [ "$RECONCILE" -eq 1 ] && [ "$NO_COOLDOWN" -eq 1 ]; then
+  echo "update-deps.sh: --no-cooldown has no meaning with --reconcile (it never applies a cutoff)" >&2
+  exit 1
+fi
+
+# A cutoff left in the caller's environment would be read by every uv lock below,
+# --reconcile's included; the cooldown is applied by flag, in the upgrade modes only.
+unset UV_EXCLUDE_NEWER
 
 if ! command -v uv >/dev/null 2>&1; then
   echo "update-deps.sh: uv not found on PATH -- install uv (https://docs.astral.sh/uv/)" >&2
@@ -147,7 +183,8 @@ cp -f "$LOCK" "$SAVED_LOCK"
 
 # From here until the outcome is decided an UNGATED lock sits on disk.
 RESTORE_LOCK_ON_EXIT=1
-UV_LOCK_CMD=(uv lock -q)
+UV_LOCK_PLAIN=(uv lock -q)
+UV_LOCK_CMD=("${UV_LOCK_PLAIN[@]}")
 if [ "$RECONCILE" -eq 1 ]; then
   ATTEMPTED="no-upgrade reconcile"
 elif [ -n "$PACKAGE" ]; then
@@ -157,10 +194,24 @@ else
   UV_LOCK_CMD+=(--upgrade)
   ATTEMPTED="full lock upgrade"
 fi
+APPLY_COOLDOWN=0
+if [ "$RECONCILE" -eq 0 ] && [ "$NO_COOLDOWN" -eq 0 ]; then
+  APPLY_COOLDOWN=1
+  UV_LOCK_CMD+=(--exclude-newer "$COOLDOWN")
+  ATTEMPTED+=", $COOLDOWN release-age cooldown"
+fi
 # Checked explicitly: `bash scripts/update-deps.sh` drops the shebang's -e, and a
 # failed resolve must not carry on to a "no change" diff and a green exit.
 if ! "${UV_LOCK_CMD[@]}"; then
   echo "update-deps.sh: uv lock failed (see output above) -- nothing was gated." >&2
+  if [ "$APPLY_COOLDOWN" -eq 1 ]; then
+    echo "update-deps.sh: this run passed --exclude-newer \"$COOLDOWN\" (the release-age cooldown); --no-cooldown runs without it." >&2
+  fi
+  exit 1
+fi
+# Drop the cutoff uv just recorded in [options] so nox -s lock_currency stays green.
+if [ "$APPLY_COOLDOWN" -eq 1 ] && ! "${UV_LOCK_PLAIN[@]}"; then
+  echo "update-deps.sh: uv lock (cutoff-normalising pass) failed -- nothing was gated." >&2
   exit 1
 fi
 
@@ -189,7 +240,7 @@ fi
 # script's exit status or the lock outcome.
 file_churn_stub() {
   local skip
-  if skip="$(dep_stub_skip_reason "$NO_FILE" "$CHANGES_RAW")"; then
+  if skip="$(dep_stub_skip_reason "$NO_FILE" "$CHANGES_RAW" "$RECONCILE")"; then
     echo "update-deps.sh: $skip"
     return 0
   fi

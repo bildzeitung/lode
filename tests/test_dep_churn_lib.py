@@ -176,21 +176,38 @@ def test_noise_gate(raw: str, patch_only: bool) -> None:
 
 
 @pytest.mark.parametrize(
-    ("no_file", "raw", "expect"),
+    ("no_file", "raw", "reconcile", "expect"),
     [
         # A real, non-patch move is the ONLY combination that files.
-        (0, "alpha\t1.2.3\t1.3.0", None),
-        (0, "fresh\t(none)\t9.9.9", None),
+        (0, "alpha\t1.2.3\t1.3.0", 0, None),
+        (0, "fresh\t(none)\t9.9.9", 0, None),
         # Each skip reason, and the order they win in.
-        (0, "", "no version changes"),
-        (0, "alpha\t1.2.3\t1.2.4", "patch-level only"),
-        (1, "alpha\t1.2.3\t1.3.0", "--no-file set"),
-        (1, "", "--no-file set"),  # --no-file outranks every later reason
-        (1, "alpha\t1.2.3\t1.2.4", "--no-file set"),
+        (0, "", 0, "no version changes"),
+        (0, "alpha\t1.2.3\t1.2.4", 0, "patch-level only"),
+        (1, "alpha\t1.2.3\t1.3.0", 0, "--no-file set"),
+        (1, "", 0, "--no-file set"),  # --no-file outranks every later reason
+        (1, "alpha\t1.2.3\t1.2.4", 0, "--no-file set"),
+        (1, "fresh\t(none)\t9.9.9", 1, "--no-file set"),
+        # Reconcile mode (lode-7qo1): pure additions and removals never file.
+        (0, "fresh\t(none)\t9.9.9", 1, "no existing pin"),
+        (0, "gone\t1.0.0\t(none)", 1, "no existing pin"),
+        (0, "fresh\t(none)\t9.9.9\ngone\t1.0.0\t(none)", 1, "no existing pin"),
+        (0, "", 1, "no existing pin"),
+        # An existing pin moved within its patch component does not file.
+        (0, "alpha\t1.2.3\t1.2.4\nfresh\t(none)\t9.9.9", 1, "patch-level only"),
+        # An existing pin crossing a minor or major files, additions alongside or not.
+        (0, "alpha\t1.2.3\t1.3.0", 1, None),
+        (0, "alpha\t1.2.3\t2.0.0\nfresh\t(none)\t9.9.9", 1, None),
+        # A package gaining or losing one of several resolved versions is an
+        # existing pin moving, not an addition or a removal: it files.
+        (0, "multi\t1.0\t1.0,2.0\nfresh\t(none)\t9.9.9", 1, None),
+        (0, "multi\t1.0,2.0\t1.0", 1, None),
     ],
 )
-def test_stub_skip_reason(no_file: int, raw: str, expect: str | None) -> None:
-    got = _run(f"dep_stub_skip_reason {no_file} {shlex.quote(raw)}")
+def test_stub_skip_reason(
+    no_file: int, raw: str, reconcile: int, expect: str | None
+) -> None:
+    got = _run(f"dep_stub_skip_reason {no_file} {shlex.quote(raw)} {reconcile}")
     if expect is None:
         assert got.returncode != 0, f"expected FILE, got skip: {got.stdout!r}"
         assert got.stdout.strip() == ""

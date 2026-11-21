@@ -27,8 +27,7 @@ dependencies = [
                        # dep; see tests/test_tui_markdown_syntax.py.
     "typer",       # CLI (repo convention — never argparse)
     "rich",        # CLI colour/width rendering (lode-l38d.1 — see docs/stack.md)
-    "anthropic<2", # Claude API (enrichment Haiku, Q&A Sonnet/Opus). TEMPORARY ceiling:
-                   # the 2.x major is deliberately deferred to lode-4uyu; drop it there.
+    "anthropic",   # Claude API (enrichment Haiku, Q&A Sonnet/Opus)
     "openai<3",    # OpenAI-via-Azure LLMProvider (lode-568v.3) -- Responses API.
                    # Ceiling: 3.0 swaps the default HTTP client to HTTPX2 and
                    # stops auto-installing httpx; moving is a deliberate act --
@@ -99,21 +98,15 @@ dev = [
                             # textual[syntax] (lode-sjbo). Hyphenated: a
                             # requirement names the distribution, not the
                             # import.
-    "mkdocs-material==9.8.1",  # docs-site generator (lode-fhql.8; rationale
-                                # in docs/stack.md). Moved here from its own
-                                # CI-only `docs` extra (lode-fhql.20) -- mkdocs
-                                # is also a VALIDATOR (`nox -s docs`, below):
-                                # a local `mkdocs build` surfaced broken
-                                # intra-doc anchors nobody had seen, so it
-                                # belongs on every dev's PATH like any other
-                                # gate tool. Pinned exact (same
-                                # pattern as ruff above, lode-fhql.9 HUMAN
-                                # DECISION 2026-08-14): CI's docs.yml installs
-                                # it from uv.lock, never a pin of its own
-                                # (tests/test_build_docs_site.py checks uv.lock
-                                # locks this version), so the renderer that
-                                # builds the published site is the same one
-                                # every developer gates against locally.
+    "zensical==0.1.3",  # docs-site generator (lode-0lb8; rationale in
+                        # docs/stack.md). It is also a VALIDATOR
+                        # (`nox -s docs`): a strict build fails on a broken
+                        # intra-doc link or anchor, so it sits on every dev's
+                        # PATH like any other gate tool. Pinned exact (same
+                        # pattern as ruff above); CI's docs.yml installs it
+                        # from uv.lock, never a pin of its own
+                        # (tests/test_build_docs_site.py checks uv.lock
+                        # locks this version).
 ]
 
 [project.scripts]

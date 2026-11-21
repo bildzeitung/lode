@@ -164,7 +164,7 @@ Runs the same read pipeline as `lode ask` ([retrieval.md](retrieval.md)) minus t
 | Re-enrichment materiality threshold | tune | embedding-similarity delta (1 - cosine) | Gates the paid re-enrichment of a changed external snapshot; below it, carry prior enrichment forward. Caps cloud spend on chatty sources. ([externals.md](externals.md#snapshot-churn-decouple-new-snapshot-from-re-enrich)) |
 | Draw-down hop limit | build | 1 | Follow explicit links one hop, then stop. ([externals.md](externals.md#draw-down-rules)) |
 | Fetch timeout | runtime | `10s` | Per-fetch HTTP timeout (`lode-w0h.1`); a timeout is a TRANSIENT failure (retried by the async queue), not a tombstone — as is a server-reported `408 Request Timeout`. |
-| Fetch max redirects | runtime | 5 | 3xx redirects a single web-fetch follows before tombstoning as unresolvable (`lode-w0h.1`). **Distinct from Draw-down hop limit above** — this caps redirects *within one fetch*; the hop limit caps crawling a fetched page's *own outbound links*. |
+| Fetch max redirects | runtime | 5 | 3xx redirects a single web-fetch follows before tombstoning as unresolvable (`lode-w0h.1`). **Distinct from the draw-down hop limit** — this caps redirects *within one fetch*; the hop limit caps crawling a fetched page's *own outbound links*. |
 | Fetch min-extract-chars floor | tune | 200 | Readability-extracted text shorter than this is treated as a JS-scaffold/paywall/empty page and tombstoned, even when the extractor returned non-`None` text — the length-floor half of the fetch-outcome signal ([externals.md](externals.md#draw-down-rules)). |
 | URL tracking-param blocklist | runtime | `utm_*`, `fbclid`, `gclid` | Query params stripped during URL canonicalization (`lode-w0h.3`) before the `external_id` dedup key is computed. A trailing `*` matches a prefix (case-insensitive); everything else matches exactly. This same canonical form is the `lode-w0h.6` refresh policy's join key for "the same source" across refetches — and, since `lode-0as`, also strips userinfo (`user[:pass]@`) so credentials in a pasted URL never enter it. ([externals.md](externals.md#url-canonicalization-decided-lode-w0h3-userinfo-stripped-lode-0as)) |
 
@@ -300,7 +300,7 @@ since `lode.tools.fetch_for_ask` already refuses to persist a `no_egress` destin
 | Knob | Kind | Default | Notes |
 |---|---|---|---|
 | `ask_tools_enabled` | runtime | `false` | Feature flag: offer the read-only `search_jira`/`search_confluence`/`fetch` tools to the Q&A synthesis call. Off by default — `lode.tool_dispatch.build_ask_tools` returns `()` regardless of what a caller passes as `answer_question`'s own `tools_enabled` argument, so notes-only behaviour is unchanged either way. **Reachable from a real `lode ask`** (`lode-8vvp`) — `cited_answer.ask` (the single path both the CLI and the TUI take) always passes `tools_enabled=True`, so this flag alone decides whether a real ask can call the tools. |
-| `ask_tool_budget` | runtime | `6` | Per-ask tool-call budget — search and fetch share **one** counter (`lode.tool_dispatch.ToolBudget`), enforced before each dispatch; a call past the budget is refused (the model is told so, via the tool result text) rather than dispatched. Distinct from `_DEFAULT_MAX_TOOL_TURNS` above (a provider-level free-turn cap — one turn is not assumed to be one tool call). |
+| `ask_tool_budget` | runtime | `6` | Per-ask tool-call budget — search and fetch share **one** counter (`lode.tool_dispatch.ToolBudget`), enforced before each dispatch; a call past the budget is refused (the model is told so, via the tool result text) rather than dispatched. Distinct from `_DEFAULT_MAX_TOOL_TURNS`, the provider-level cap on free tool turns (one turn is not assumed to be one tool call). |
 
 **Tool set.** `search_jira`/`search_confluence` return **identifiers and titles only** —
 `lode.jira_fetch.JiraSearchHit`/`lode.confluence.ConfluenceSearchHit` each carry exactly
@@ -350,9 +350,9 @@ citation target.
 | Enrichment LLM (`enrichment_llm`) | runtime | Claude Haiku 5.5 (default provider) | High-volume background extraction. A `(model, reasoning_effort, max_tokens)` `ModelTier` (`lode-568v.2`; `max_tokens` `lode-d70n`) — the default is `reasoning_effort="low"` (`lode-9xsp`, `lode-ychx` ruling); a bare TOML string, or any tier you set, replaces it wholesale and so sends no effort unless you name one, and `max_tokens` stays `None`. `model` is interpreted **against the active `llm_provider`**: an Anthropic model id under the default provider, or an Azure/OpenAI deployment name under `llm_provider = "openai"`. `max_tokens`, when set, overrides [`enrich.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (6144) for both the immediate and batch enrichment calls. A model **refusal** of an enrichment job is terminal for that note version and is re-opened by changing this knob's `model` or the `llm_provider` (or `ENRICH_PROMPT_VER`, or editing the note); changing `reasoning_effort` or `max_tokens` alone re-opens nothing: the refusal-dead job records the model and provider it was refused under, and reconcile re-enqueues it once either differs (`lode-g9q3`, `lode-7jcp`, [storage.md](storage.md#transient-vs-permanent-job-failures--pinned-lode-9yy)). Direct OpenAI and Azure are both `llm_provider = "openai"`, so moving between them does not re-open it (the same limit as `lode reenrich` staleness). Persists into the DB (`annotations`/`edges`) — DB-affecting; the model (and, once non-Anthropic, the provider) is recorded per-row on `annotations.model`/`annotations.provider` and drift is detected from it, never pinned. ([below](#model-provenance-the-enrichment-llm-decided-lode-g2745)) |
 | Q&A LLM (`qa_llm`) | runtime | Claude Sonnet 5.5 (default provider) | Default interactive synthesis model. A `ModelTier`, same shape as Enrichment LLM — `model` is likewise interpreted against the active `llm_provider` (an Azure/OpenAI deployment name under `llm_provider = "openai"`). `max_tokens`, when set, overrides [`qa.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (10752). Answer-time only, persists nothing — recorded default, no provenance machinery. |
 | Q&A "think harder" (`qa_think_harder_llm`) | runtime | Opus 5.5, `reasoning_effort = high` (toggle, default provider) | Higher-quality, higher-cost synthesis on demand. A `ModelTier`, same provider-relative interpretation as the two knobs above — "think harder" can be a deployment swap, a `reasoning_effort` bump or `max_tokens` override on the same deployment, or any combination (today's Anthropic default is a combination: Sonnet→Opus plus `reasoning_effort = high`). Answer-time only, persists nothing — recorded default, no provenance machinery. |
-| Q&A call timeout (`qa_call_timeout_s`) | runtime | `300s` | Budget for the Q&A synthesis call (`qa.py`, routed through `LLMProvider.run_tool_turns` — `lode-35nu.11.6`), split off `enrich_call_timeout_s` (`lode-wfyx`). **Per-RUN, not per-call** (`lode-35nu.11.6`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)): with `tools_enabled=False` (or `ask_tools_enabled=false`, above) a "run" is exactly one call and this is unchanged from before lode-35nu.11.6; with the [Ask tools](#tool-augmented-ask-lode-8hsk--lode-35nu112--lode-8vvp) enabled, this same value is one budget for the whole free-tool-turns-then-final-answer run, not each turn individually. **Derived from the SDK estimate at decision time; 300s is now backed by a live measurement instead.** Does not reach `enrich.py`'s three call sites — those stay on `enrich_call_timeout_s` (120s) unchanged, and are unaffected by this ticket (still calling `structured_call` directly). The derivation, the measurement, the retained SDK retry-on-timeout it was chosen alongside, and the `ModelTier.max_tokens` override this knob is coupled to are all in [configuration.md's "Q&A call timeout split" write-up](#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx), deliberately not restated here. |
+| Q&A call timeout (`qa_call_timeout_s`) | runtime | `300s` | Budget for the Q&A synthesis call (`qa.py`, routed through `LLMProvider.run_tool_turns` — `lode-35nu.11.6`), split off `enrich_call_timeout_s` (`lode-wfyx`). **Per-RUN, not per-call** (`lode-35nu.11.6`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)): with `tools_enabled=False` (or `ask_tools_enabled=false`, above) a "run" is exactly one call; with the [Ask tools](#tool-augmented-ask-lode-8hsk--lode-35nu112--lode-8vvp) enabled, this same value is one budget for the whole free-tool-turns-then-final-answer run, not each turn individually. **Derived from the SDK estimate at decision time; 300s is now backed by a live measurement instead.** Does not reach `enrich.py`'s three call sites — those stay on `enrich_call_timeout_s` (120s), still calling `structured_call` directly. The derivation, the measurement, the retained SDK retry-on-timeout it was chosen alongside, and the `ModelTier.max_tokens` override this knob is coupled to are all in [configuration.md's "Q&A call timeout split" write-up](#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx), deliberately not restated here. |
 | Max free tool turns (`_DEFAULT_MAX_TOOL_TURNS`) | build | `8` | Not a `Settings` knob — an internal constant (`src/lode/llm_provider.py`) bounding `LLMProvider.run_tool_turns`'s free-tool-choice phase. This is the mechanism that bounds a run's **total** output-token spend: `max_tokens` is per-**turn**, not per-run — a deliberate asymmetry with `qa_call_timeout_s` above, decided rather than left open (`lode-3dh1`, [stack.md](stack.md#7-multi-turn-tool-use--llmproviderrun_tool_turns-decided-lode-35nu116)) — so the worst case for one `run_tool_turns` call is `(max_tool_turns + 1) × max_tokens` output tokens — **9×** today's per-tier `max_tokens` default, not 8×, because this constant bounds only the *free* tool turns and the final structured-output turn is spent on top. Lower this (or override the `max_tool_turns` parameter at a call site) to tighten that bound; a separate per-run token ceiling was considered and deferred, not built (`lode-csl2`). Why per-turn was chosen over decrementing, and the rejected alternative, are in the write-up linked above — deliberately not restated here. |
-| HF probe timeout (`hf_probe_timeout_s`) | runtime | `5s` | Per-call timeout passed to `huggingface_hub.model_info()` by the indexing-side revision probe (`resolve_model_revision`, below). Bounds a black-holed network to this instead of the OS TCP connect timeout, which the probe used to block for before falling back to `model_revision = NULL` anyway (`lode-w5nr`). Matches `httpx`'s own default rather than the Fetch timeout below (`10s`, web content fetches) — this is a small metadata GET, not a page fetch. Bounds the probe only, **not** `fastembed`'s weights download (next section). What a float timeout actually bounds in `httpx`, with the measurement: `docs/decisions.md`, the `lode-w5nr` entry. |
+| HF probe timeout (`hf_probe_timeout_s`) | runtime | `5s` | Per-call timeout passed to `huggingface_hub.model_info()` by the indexing-side revision probe (`resolve_model_revision`). Bounds a black-holed network to this instead of the OS TCP connect timeout, which the probe used to block for before falling back to `model_revision = NULL` anyway (`lode-w5nr`). Matches `httpx`'s own default rather than the Fetch timeout (`10s`, web content fetches) — this is a small metadata GET, not a page fetch. Bounds the probe only, **not** `fastembed`'s weights download — see the "Air-gapped run against an already-warm cache" paragraph of configuration.md. What a float timeout actually bounds in `httpx`, with the measurement: `docs/decisions.md`, the `lode-w5nr` entry. |
 
 The **local** models — embedder, [reranker](#retrieval-and-ranking), [faithfulness NLI](#faithfulness-gate) — all run **in-process on the ONNX runtime via `fastembed`** (no model server/daemon, **not Ollama**). The **only** remote models are the enrichment + Q&A LLMs — Anthropic by default, or an OpenAI/Azure deployment under `llm_provider = "openai"` ([LLM provider seam](stack.md#llm-provider-seam-decided-lode-568v1)). See [stack.md](stack.md).
 
@@ -621,6 +621,27 @@ a known, accepted trade-off, not a follow-up ticket.
 > is still never sent (`lode-3dlt`). **Measurement was deliberately skipped** for now;
 > the thinking+output token, truncation, latency and empty-`{}` rates on real notes
 > are a deferred follow-up needing maintainer credentials (`lode-qcth`).
+
+> **Update (lode-qcth, measured 2026-11-21) -- the deferred measurement, appended:** 30
+> immediate-route enrich calls (`enrich._call_haiku`, the default `claude-haiku-5-5` tier,
+> `reasoning_effort="low"`, `enrich.MAX_TOKENS` = 6144) against a scratch `LODE_HOME`.
+> `_call_haiku` returns only the parsed result, so token usage, `stop_reason` and latency
+> were captured outside it, by a harness that is not in the repo.
+> Sample: the 6 non-URL notes in the maintainer's DB (502-14,903 chars, three of them
+> over 10,000), 3 calls each = 18, plus 12 single calls on passages cut from this repo's
+> design docs (300-16,000 chars) as a proxy for more long text. **Only 6 real notes
+> existed**, short of the approved 30-50, so the proxy passages fill the call count; the
+> real-note evidence is thin. Results (`usage.output_tokens`, which counts thinking plus
+> the JSON): **0 of 30 truncated** (every `stop_reason` was `end_turn`), **0 of 30
+> empty-`{}`**, output tokens min 241 / median 469 / max 667, latency min 0.95 s /
+> median 3.0 s / p90 4.3 s / max 7.4 s (that and a 6.8 s call were on short inputs),
+> input tokens 1,467-8,710. Totals consumed: 14,033 output and 128,053 input tokens.
+> No response carried a thinking block at `low`. Output tokens do not grow with note
+> length, so 6144 has roughly 9x headroom on this sample. 30 calls cannot bound the
+> truncation or empty-`{}` rate below about 10% at 95% confidence, and that floor
+> assumes 30 independent calls: these are 18 distinct texts, 6 of them real notes, so
+> on real notes alone it is looser still (about 40%, counting each note once).
+> Batch-route (`submit_enrich_batch`) was not measured.
 
 `lode-3dlt` named a real but then-unreachable risk on the enrichment
 forced-tool-use branch of `AnthropicProvider.structured_call` (`enrichment_llm`,
@@ -897,12 +918,38 @@ signal**, not an exact nit tally (an addendum line, e.g. `NIT 3 addendum`, count
 not add a second parser for a more precise count; the roughness is accepted, per
 [`docs/agents-workflow.md`](agents-workflow.md#wording-only-doc-nits-go-to-the-docs-nits-collector-lode-t551).
 
+## Lock-refresh release-age cooldown (`COOLDOWN` in `scripts/update-deps.sh`, lode-3s4d)
+
+Not a `config.toml` knob: a shell variable at the top of `scripts/update-deps.sh`, default
+**`7 days`**. The script's two upgrade modes (whole-set and `--package NAME`) pass it as
+`uv lock --exclude-newer "7 days"`, so a release published less than that long ago is not taken
+and a release pulled or found malicious inside the window never reaches `uv.lock`. Change the
+value by editing that variable. `--reconcile` never applies it (it must not downgrade a pin), and
+the script unsets any `UV_EXCLUDE_NEWER` in the caller's environment so a cutoff set there cannot
+reach it. A cutoff set in a `uv.toml` is not guarded against.
+
+**The cutoff applies to the whole resolution, not only to what the run upgrades.** A pin already
+in `uv.lock` that is younger than the cutoff moves back to the newest release older than it. That
+holds under `--package NAME` too (NAME included), and whichever run took the pin, a
+`--no-cooldown` one included. The script's version diff lists each one as `old -> new`. If
+`pyproject.toml` requires a release inside the window, the run fails instead and the script
+names `--no-cooldown`. Whether a run should be allowed to move a pin back is open in `lode-hdob`.
+
+**Override for a security fix that must be taken at once:**
+`scripts/update-deps.sh --package NAME --no-cooldown` (or `--no-cooldown` alone for the whole
+set). `--no-cooldown` with `--reconcile` is refused, since reconcile has no cutoff to skip.
+
+uv records the cutoff in `uv.lock`, which would make `nox -s lock_currency` report the lock
+stale; the script follows the upgrade with a plain `uv lock` that drops it. See
+[`decisions.md`](decisions.md#a-release-age-cooldown-for-lock-refreshes-decided-lode-3s4d).
+
 ## Build constants (chosen once)
 
 | Knob | Kind | Default | Notes |
 |---|---|---|---|
 | Content-address hash `H` | build | non-crypto 128-bit (xxh3-128) | Single-user/no-sync needs only low accidental-collision probability, not crypto resistance; length-prefixed framing. Changing `H` re-keys every node. blake2b-128 (stdlib) is the no-dep fallback. ([storage.md](storage.md#identity-vs-version)) |
 | Single-instance advisory lock | build | on | Lockfile/PID beside the DB; required so async workers have a single owner. ([storage.md](storage.md#single-user-single-instance-linear-chains-no-merge)) |
+| `_PRUNE_WINDOW` (`lode.vectorstore`) | build | `60` seconds | Age a vector-table version must reach before the periodic prune (`vectorstore_optimize_interval`) removes it. A read in flight in another process survives the prune when the version it pinned was written within the window; a zero window made such a read fail with `Not found`. The age runs from when a version was written, not from when it was superseded, so a read on a version older than the window still loses its files; `VectorStore`'s reads retry once on the latest version when that happens, so the window sets how often a read is retried. 60 s is a margin, not a tuned value. Measured in [`docs/decisions.md`](decisions.md) (`lode-2brb`, Update `lode-re5e`). |
 | `ASSERTIVE_KINDS` (`lode.display`) | build | `{"action_item"}` | Annotation kinds the [stale-display policy](storage.md#stale-display-policy-decided-implemented-lode-npx4) hides (rather than shows-flagged) once not fresh. No extractor emits one yet — a forward-compatible hook for action-item extraction. |
 | `_MODEL_CACHE_IDENTITY` (`lode.config`) | build | the `(sources.hf, model_file)` pair for each pinned model id above | On-disk cache identity for the pinned models — **duplicated from `fastembed`'s own `list_supported_models()`** so `lode status`'s cold-cache hint can answer "are the weights on disk?" via `huggingface_hub.try_to_load_from_cache` alone and **never `import fastembed`** (~830 modules via onnxruntime/numpy, ~740ms warm — it made a pure-DB-read command ~1.4x slower just to print "No action needed."; `lode-l38d.6`). Needed because the HF repo id can differ from the friendly model id (`BAAI/bge-small-en-v1.5` caches under `qdrant/bge-small-en-v1.5-onnx-q`). Deliberately duplicated data, so it can drift on a `fastembed` upgrade: `tests/test_model_cache_identity.py` is the drift guard, asserting the pin still matches the installed registry (**that** test may import `fastembed`; production must not). A model id outside this set — a `config.toml` override — falls back to importing the registry, which is fine: it is already off the fast path. |
 
