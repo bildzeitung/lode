@@ -566,6 +566,21 @@ NULL `prompt_ver` as stale, so clearing the flag or removing the scope rule
 re-opens the target on the next pass regardless of route; while the gate holds,
 the gap scan excludes the target, so nothing thrashes.
 
+**`idx_jobs_target_type` on `jobs(target_version, type)` (lode-spwf).**
+`idx_jobs_live` is partial and `idx_jobs_status` is status-only, so the reconcile
+gap scans had no index for a non-live job of a given target: the embed-gap probes
+scanned the whole `jobs` table once per head, and the enrich-gap `done`/`dead`
+probes walked every job in that status once per head. A plain index serves them,
+and the externals arm's newest-enrich-job subquery too; a test runs
+`EXPLAIN QUERY PLAN` on the scans' own SQL and requires every `jobs` access to
+seek by `target_version`.
+
+`target_version` leads, not `type`. Nothing gathers `ANALYZE` statistics, and with
+`type` first the planner reorders the newest-enrich-job join to start from a
+`type = ?` seek, walking every enrich job once per external. On a synthetic
+database (3,000 notes, 1,500 externals, 24,000 jobs) that made the externals arm
+about 160 times slower than it was with no index at all.
+
 **`'failed'` joined the live scope 2026-09-03 (lode-uri7, evaluating a proposal
 raised during lode-8a37's review).** Originally scoped to `pending`/`running`
 only — `'failed'` was left out under the theory that a failed job is not really
