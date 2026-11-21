@@ -383,20 +383,27 @@ def test_periodic_optimize_prunes_history_without_losing_current_rows(
     settings = load_settings(embedding_vector_dim=DIM, vectorstore_optimize_interval=2)
     store = VectorStore(tmp_path / "vectors", settings)
 
-    for i in range(2):
-        store.replace_vectors("v1", [_row(f"a{i}", "v1", [1.0, 0.0, 0.0, 0.0])])
-        time.sleep(0.01)
+    def versions() -> set[int]:
+        # An independent connection: gone from disk, not just invisible
+        # through the held handle.
+        table = lancedb.connect(tmp_path / "vectors").open_table("embeddings")
+        return {version["version"] for version in table.list_versions()}
+
+    store.replace_vectors("v1", [_row("a0", "v1", [1.0, 0.0, 0.0, 0.0])])
+    older_than_window = versions()
+    time.sleep(0.01)
+    store.replace_vectors("v1", [_row("a1", "v1", [1.0, 0.0, 0.0, 0.0])])
 
     # The prune fired on the 2nd write and re-armed its counter.
     assert store._writes_since_optimize == 0
-    # ...and the history it pruned is genuinely gone, from an independent
-    # connection -- not just invisible through the held handle.
-    versions = (
-        lancedb.connect(tmp_path / "vectors").open_table("embeddings").list_versions()
+    # Every version from before the sleep is older than the window and gone.
+    # The 2nd write's own versions may be younger than it, so the count that
+    # remains is timing-dependent and not asserted.
+    remaining = versions()
+    assert older_than_window, "the first write recorded no versions"
+    assert older_than_window.isdisjoint(remaining), (
+        f"expected {older_than_window} pruned, still have {remaining}"
     )
-    # The first write's versions are older than the window and gone; the second
-    # write's delete version is younger than it and may remain beside the latest.
-    assert len(versions) <= 2, f"expected history pruned, got {versions}"
 
     # The current rows survived the prune, through the held handle and a fresh one.
     assert store.vectors_for("v1") == [[1.0, 0.0, 0.0, 0.0]]
@@ -422,6 +429,28 @@ def test_periodic_optimize_emits_no_lancedb_warning(tmp_path: Path) -> None:
         store.replace_vectors("v1", [_row("a", "v1", [1.0, 0.0, 0.0, 0.0])])
 
     assert store._writes_since_optimize == 0
+
+
+def test_periodic_optimize_keeps_a_version_written_within_the_window_readable(
+    tmp_path: Path,
+) -> None:
+    """A read pinned on a just-superseded version survives the prune (lode-re5e).
+
+    A second Table handle that is never refreshed stands in for another
+    process's query in flight. A zero window deletes the data file that handle
+    still points at, and its scan fails with "Not found".
+    """
+    settings = load_settings(embedding_vector_dim=DIM, vectorstore_optimize_interval=2)
+    store = VectorStore(tmp_path / "vectors", settings)
+    store.replace_vectors("v1", [_row("a", "v1", [1.0, 0.0, 0.0, 0.0])])
+    in_flight = lancedb.connect(tmp_path / "vectors").open_table("embeddings")
+
+    # Supersedes the version `in_flight` holds, then prunes.
+    store.replace_vectors("v1", [_row("b", "v1", [0.0, 1.0, 0.0, 0.0])])
+    assert store._writes_since_optimize == 0
+
+    rows = in_flight.search().where("target_version = 'v1'").to_list()
+    assert [row["passage_id"] for row in rows] == ["a"]
 
 
 def test_model_revisions_scopes_to_the_requested_model(tmp_path: Path) -> None:

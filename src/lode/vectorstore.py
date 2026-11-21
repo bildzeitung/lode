@@ -49,10 +49,11 @@ _VECTOR_TABLE = "embeddings"
 #: what makes that rank meaningful.
 _METRIC = "cosine"
 
-#: How old a table version must be before the periodic prune removes it.
-#: ``timedelta(0)`` made a reader mid-query on a just-superseded version fail
-#: with "Not found" on a file the prune had deleted; this window must outlast
-#: any one read. See ``docs/decisions.md`` (lode-re5e).
+#: How old a table version must be before the periodic prune removes it. A
+#: version younger than this keeps its files, so a read in another process that
+#: pinned it survives the prune. The age runs from when the version was
+#: written, not from when it was superseded: a read on a version older than
+#: this is not protected. See ``docs/decisions.md`` (lode-re5e).
 _PRUNE_WINDOW = timedelta(seconds=60)
 
 
@@ -195,9 +196,8 @@ class VectorStore:
         Each call is a delete + add = 2 new LanceDB versions, and a Table held
         across many calls accumulates that history in memory. Every
         ``settings.vectorstore_optimize_interval`` calls this prunes every version
-        older than ``_PRUNE_WINDOW`` -- safe because this store's
-        vectors are a regenerable cache (module docstring), so nothing here
-        needs history; the window keeps a concurrent in-flight read alive.
+        older than ``_PRUNE_WINDOW`` -- safe because this store's vectors are a
+        regenerable cache (module docstring), so nothing here needs history.
 
         Deliberately does **not** pass ``delete_unverified=True``: it would
         lift LanceDB's protection for young files that may belong to *another
