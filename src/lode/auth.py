@@ -1,9 +1,7 @@
 """Anthropic credential resolution for lode (lode-txh.4).
 
-lode never embeds an API key (``docs/stack.md``): credentials are resolved by the
-Anthropic SDK's own credential chain, first match wins -- ``ANTHROPIC_API_KEY``, then
-``ANTHROPIC_AUTH_TOKEN``, then the profile ``ANTHROPIC_PROFILE`` names, then
-workload-identity federation, then the active ``ant auth login`` profile on disk.
+lode never embeds an API key: credentials are resolved by the Anthropic SDK's own
+credential chain. ``docs/stack.md`` lists its order, under **Auth**.
 
 :func:`build_client` runs that chain and turns the "nothing resolved" outcome into
 one clear, actionable :class:`AuthError` -- so a missing credential fails loudly
@@ -23,8 +21,8 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-#: Actionable message naming every resolution path. No key is ever embedded in
-#: lode, so the only fixes are an env var or an ``ant auth login`` profile.
+#: Actionable message naming the two common fixes, not the whole chain (that is
+#: in ``docs/stack.md``). No key is ever embedded in lode.
 MISSING_CREDENTIALS_MESSAGE = (
     "No Anthropic credentials found. lode resolves them in this order: the "
     "ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) environment variable, then an "
@@ -49,9 +47,8 @@ class AuthError(RuntimeError):
 def build_client() -> anthropic.Anthropic:
     """Return an Anthropic client with resolved credentials, or raise :class:`AuthError`.
 
-    Tries the SDK credential chain listed in the module docstring (all the SDK's
-    job, no key is passed in). When that resolves nothing, raises
-    :class:`AuthError` with an actionable message.
+    Tries the SDK credential chain (all the SDK's job, no key is passed in). When
+    that resolves nothing, raises :class:`AuthError` with an actionable message.
 
     The SDK signals "no credentials" two ways: it raises
     ``anthropic.AnthropicError`` at construction (e.g. a selected profile file is

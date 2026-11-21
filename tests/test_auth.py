@@ -31,7 +31,17 @@ import pytest
 from lode import auth
 from lode.auth import AuthError, build_client
 
-CREDENTIAL_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE")
+# Every variable that selects a credential ahead of the on-disk profile. The federation
+# ones count: anthropic 2.x tries them before it looks in ANTHROPIC_CONFIG_DIR (lode-4uyu).
+CREDENTIAL_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_PROFILE",
+    "ANTHROPIC_FEDERATION_RULE_ID",
+    "ANTHROPIC_ORGANIZATION_ID",
+    "ANTHROPIC_IDENTITY_TOKEN",
+    "ANTHROPIC_IDENTITY_TOKEN_FILE",
+)
 
 
 @pytest.fixture

@@ -2049,10 +2049,10 @@ proposal. What they leave out:
   the `unit`/`tests` gates cannot spend by accident.
 - **Unset credentials in agent worktrees: rejected.** For the default provider, credentials
   resolve through the Anthropic SDK chain, which includes an `ant auth login` profile on disk
-  (`src/lode/auth.py`), so unsetting environment variables leaves the on-disk profile working. Only `llm_provider = "openai"` reads
-  its key from the environment alone (`src/lode/llm_provider.py`). The `Agent` tool also takes no
-  environment for the agent it dispatches. A scrub that covers part of the chain would read as a
-  guarantee it is not.
+  (`src/lode/auth.py`), so unsetting environment variables leaves the on-disk profile working.
+  Only `llm_provider = "openai"` reads its key from the environment alone
+  (`src/lode/llm_provider.py`). The `Agent` tool also takes no environment for the agent it
+  dispatches. A scrub that covers part of the chain would read as a guarantee it is not.
 - **Fail-closed provider: rejected for now.** There is no `llm_provider` value that refuses every
   call, and a scratch `LODE_HOME` config pointing at one would protect only agents that already
   chose a scratch home, the case that was never the risk. A new provider value is a product
