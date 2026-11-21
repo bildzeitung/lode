@@ -27,14 +27,12 @@ doesn't have) still reached the *real* ``enrich_version`` -> ``anthropic.Anthrop
 path, and the test still passed. That happens in both directions and neither one
 reports "this test touched the network":
 
-- **unkeyed** (CI, no ``ANTHROPIC_API_KEY``): ``anthropic.Anthropic()`` itself
-  constructs without error (a client with no key, token or credentials; it raises
-  ``anthropic.CredentialsError`` only when ``ANTHROPIC_CONFIG_DIR`` or
-  ``ANTHROPIC_PROFILE`` selects a profile that does not exist). The failure comes
-  from ``lode.auth.build_client`` raising ``AuthError`` on the credential-less
-  client, before a socket is ever opened, and
-  ``lode.worker.run_one``'s ``except Exception`` (a legitimate, broad job-failure
-  handler, not a bug this ticket fixes) swallows it as an ordinary job failure.
+- **unkeyed** (CI: no ``ANTHROPIC_API_KEY``, and nothing else the SDK's credential
+  chain resolves): ``lode.auth.build_client`` raises ``AuthError`` (its docstring
+  gives the two ways the SDK reports "no credentials"). ``lode.worker.run_one``
+  resets the job to ``pending`` and re-raises the ``AuthError`` (lode-9yy), and a
+  caller that drops it by design, as ``lode add``'s immediate-enrich path does,
+  leaves the test green.
   A socket block alone would never fire here: no socket is ever opened.
 - **keyed** (a dev machine with the key exported): construction succeeds and a
   real, billed Haiku/Sonnet call goes out.
