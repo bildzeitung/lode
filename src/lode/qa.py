@@ -113,11 +113,15 @@ OPUS_MODEL = "claude-opus-5-5"
 #: ``docs/configuration.md`` "Q&A call timeout split from llm_call_timeout_s"
 #: (lode-wfyx, lode-188q).
 #:
-#: Exhausting ``qa_call_timeout_s`` raises a **raw**
+#: Exhausting ``qa_call_timeout_s`` surfaces as one of two errors, by path. A
+#: turn that itself times out (after the SDK's retries) raises a **raw**
 #: ``anthropic.APITimeoutError``, not an
 #: :class:`~lode.llm_provider.LLMProviderError`: the seam wraps
 #: ``APIStatusError`` and pydantic ``ValidationError``, but deliberately not
-#: the non-status errors.
+#: the non-status errors. With the Ask tools on, a run whose turns each return
+#: but together use up the budget instead raises ``LLMProviderError`` from
+#: ``run_tool_turns``, which checks the run deadline before each free turn and
+#: before the final structured-output turn.
 #:
 #: **This is the fallback, not the last word (lode-d70n):** the active tier's
 #: :attr:`~lode.llm_provider.ModelTier.max_tokens` overrides this constant
