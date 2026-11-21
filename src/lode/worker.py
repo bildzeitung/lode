@@ -75,9 +75,10 @@ belt-and-suspenders behind the single-owner advisory lock.
   before lode-q47 nothing ever did, so a ``done`` enrich job's ``prompt_ver``
   stayed permanently NULL and :mod:`lode.reconcile`'s enrich-gap step had to
   fall back to inspecting the ``summary`` annotation instead (a signal that
-  broke for a legitimately empty summary). ``embed`` jobs are unaffected —
-  their ``prompt_ver`` stays NULL per the schema's job-identity design
-  (``docs/storage.md`` §"Schema decisions").
+  broke for a legitimately empty summary). An enrich job its handler skipped
+  (``None`` return: a gated-out target) is not stamped (lode-tkdy). ``embed``
+  jobs are unaffected — their ``prompt_ver`` stays NULL per the schema's
+  job-identity design (``docs/storage.md`` §"Schema decisions").
 - enrich job the model refused (``LLMProviderError.refusal``) →
   ``status='dead'`` on the first occurrence, no attempt charged
   (:func:`lode.jobs.record_refusal_dead`, lode-g9q3; ``docs/storage.md``
@@ -171,6 +172,9 @@ log = logging.getLogger(__name__)
 #: is nothing to report (e.g. the job was gated/skipped). :func:`run_one`
 #: appends a non-``None`` return to its ``outcomes`` sink when given one, so
 #: ``lode work`` can echo per-job outcomes instead of relying on log lines.
+#: For ``enrich`` the return also decides the ``prompt_ver`` stamp: ``None``
+#: means "skipped" and :func:`run_one` leaves ``prompt_ver`` NULL, so an enrich
+#: handler that ran must return a string (lode-tkdy).
 HandlerFn = Callable[[sqlite3.Connection, str, Path, Settings], str | None]
 
 #: Module-level handler registry — maps ``jobs.type`` → handler function.
@@ -560,8 +564,10 @@ def run_one(
       :data:`lode.enrich.ENRICH_PROMPT_VER` (lode-q47) — this is the "job
       identity" half of the ``(type, target_version, prompt_ver)`` key
       ``docs/storage.md`` documents; :mod:`lode.reconcile`'s enrich-gap step
-      reads it back to decide whether a ``done`` job is current. ``embed``
-      jobs are untouched — their ``prompt_ver`` stays NULL by design. When
+      reads it back to decide whether a ``done`` job is current. An enrich
+      handler that returns ``None`` (a gated-out skip) leaves it NULL
+      (lode-tkdy). ``embed`` jobs are untouched — their ``prompt_ver`` stays
+      NULL by design. When
       ``outcomes`` is given and the handler returned a non-``None`` string
       (lode-1gr.4), that string is appended — this is the channel
       ``lode work`` uses to echo a per-job outcome line (e.g. ``"embedded
@@ -610,7 +616,10 @@ def run_one(
     try:
         outcome = handler(conn, target_version, db_path, settings)
         with conn:
-            if job_type == "enrich":
+            # None is the enrich handler's skip signal: a gated-out job keeps
+            # prompt_ver NULL, as on the batch route, so reconcile re-opens the
+            # target once the gate lifts (docs/storage.md, lode-tkdy).
+            if job_type == "enrich" and outcome is not None:
                 # Deferred import, as in _enrich_handler below: lode.worker
                 # imports lode.enrich only when there is enrich work.
                 from lode.enrich import ENRICH_PROMPT_VER
@@ -1527,9 +1536,10 @@ def _enrich_handler(
     Returns a one-line human-readable outcome (lode-1gr.4) via
     :func:`lode.enrich.format_enrich_outcome` when enrichment actually ran, or
     ``None`` when :func:`~lode.enrich.enrich_version` skipped the version
-    (``no_egress`` / tombstone / purged) — this is the fallback handler for an
-    enrich job that escaped the batch pre-step (see module docstring); the
-    normal production path collects outcomes via
+    (not found / ``no_egress`` / tombstone / purged), which also keeps
+    :func:`run_one` from stamping ``prompt_ver`` — this is the fallback
+    handler for an enrich job that escaped the batch pre-step (see module
+    docstring); the normal production path collects outcomes via
     :func:`lode.enrich.collect_enrich_batch` instead.
     """
     from lode.enrich import enrich_version, format_enrich_outcome

@@ -58,6 +58,7 @@ from lode import cli
 from lode.answer import Claim, Support
 from lode.cli import app
 from lode.config import Settings, load_settings
+from lode.enrich import EnrichmentResult
 from lode.eval.golden import golden_set
 from lode.eval.harness import score_golden_set
 from lode.faithfulness import span_occurs
@@ -153,7 +154,9 @@ class _FakeClient:
         self.messages = _FakeMessages(claimed)
 
 
-def _fake_enrich_version(conn, version_id, settings, *, client=None) -> None:
+def _fake_enrich_version(
+    conn, version_id, settings, *, client=None
+) -> EnrichmentResult:
     """No-op stand-in for ``lode.enrich.enrich_version`` (lode-7mq).
 
     ``lode add`` calls ``enrich_version`` immediately on the capture path
@@ -161,8 +164,11 @@ def _fake_enrich_version(conn, version_id, settings, *, client=None) -> None:
     makes a live, billed API call whenever ``ANTHROPIC_API_KEY`` happens to be
     ambient — every other add-invoking test in ``test_cli.py`` already stubs
     this the same way. This gate only exercises the embed/retrieval/Q&A path,
-    not enrichment, so a no-op is the correct fake.
+    not enrichment, so a no-op is the correct fake. It returns a result, not
+    ``None``: ``None`` is the skip signal, which leaves the job's prompt_ver
+    NULL so reconcile would re-enqueue it (lode-tkdy).
     """
+    return EnrichmentResult()
 
 
 # ---------------------------------------------------------------------------

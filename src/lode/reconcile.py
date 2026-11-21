@@ -334,8 +334,9 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
     immediate path, :func:`lode.enrich.collect_enrich_batch` for the Batches
     API path) — a prior run under an older prompt/model left the job's
     ``prompt_ver`` stale (or, pre-lode-q47, NULL), so a fresh ``enrich`` job is
-    re-enqueued. This is deliberately **job-identity-based, not
-    content-based**: it does not consult the ``annotations`` table, so a head
+    re-enqueued. A gated-out job is ``done`` with ``prompt_ver`` NULL on either
+    route (lode-tkdy), so its head re-opens once the gate lifts. This is
+    deliberately **job-identity-based, not content-based**: it does not consult the ``annotations`` table, so a head
     whose enrichment ran under the current prompt but produced an *empty*
     summary (no ``summary`` row written — mirrors an empty tag/entity list) is
     correctly recognized as current, instead of being perpetually re-flagged
@@ -378,7 +379,7 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
     Tombstoned-head and ``no_egress`` externals are excluded -- ``no_egress``
     meaning the row flag *or* a ``settings.no_egress_scopes`` rule, the same
     composition :func:`lode.enrich._resolve_enrich_target` gates egress on. A
-    scope-denied external must be filtered here: the batch route marks its
+    scope-denied external must be filtered here: both enrich routes mark a
     gated-out enrich job ``done`` without a ``prompt_ver``, which would
     otherwise read as stale and re-enqueue on every pass.
 

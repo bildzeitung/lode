@@ -1419,11 +1419,11 @@ def test_submit_enrich_batch_skips_no_egress(
     assert result_id is None
     client.beta.messages.batches.create.assert_not_called()
 
-    # Job marked done immediately.
-    (status,) = conn.execute(
-        "SELECT status FROM jobs WHERE id = ?", (job_id,)
-    ).fetchone()
-    assert status == "done"
+    # Job marked done immediately, prompt_ver NULL: the same state the
+    # immediate route leaves a gated-out job in (lode-tkdy).
+    assert conn.execute(
+        "SELECT status, prompt_ver FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone() == ("done", None)
 
 
 def test_submit_enrich_batch_skips_tombstone(
