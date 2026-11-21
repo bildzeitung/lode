@@ -10,6 +10,7 @@
 #   scripts/update-deps.sh --package NAME     # bump just NAME (+ whatever it drags with it)
 #   scripts/update-deps.sh --package NAME --dry-run
 #   scripts/update-deps.sh --reconcile        # fix a STALE lock after a pyproject.toml edit, no upgrades
+#   scripts/update-deps.sh --no-cooldown      # upgrade modes only: skip the release-age cutoff
 #   scripts/update-deps.sh --no-file          # promote as usual but never file the churn stub
 #
 # What it does:
@@ -20,9 +21,18 @@
 #      pyproject.toml edit made stale -- an added or removed dependency, a range
 #      or requires-python change -- keeping every other pin. This is the remedy
 #      `nox -s lock_currency` names when it exits 1. Mutually exclusive with
-#      --package. The release-age cutoff ruled for the two upgrade modes
-#      (lode-3s4d) must never reach this one: a reconcile may not downgrade an
-#      existing pin. Steps 2-6 below are the same for all three modes.
+#      --package. Steps 2-6 below are the same for all three modes.
+#
+#      RELEASE-AGE COOLDOWN (lode-3s4d): the two upgrade modes pass
+#      `--exclude-newer "$COOLDOWN"`, so no release younger than that is taken
+#      (value and rationale: docs/configuration.md). `--no-cooldown` is the
+#      override for a security fix that must be taken at once. uv records the
+#      cutoff in uv.lock's [options], which makes a later plain `uv lock --check`
+#      (nox -s lock_currency) report the lock stale, so a second plain `uv lock`
+#      follows: it drops the recorded cutoff and keeps every pin (probed,
+#      docs/decisions.md). --reconcile never passes the cutoff, and any
+#      UV_EXCLUDE_NEWER in the caller's environment is unset so it cannot reach
+#      it either: a reconcile may not downgrade an existing pin.
 #   2. Print a readable VERSION DIFF between the saved copy and the moved
 #      uv.lock -- one line per changed package, "pkg  OLD -> NEW" for a bump,
 #      "+ pkg VERSION" for an addition, "- pkg  VERSION (removed)" -- derived
@@ -93,6 +103,8 @@ DRY_RUN=0
 PACKAGE=""
 RECONCILE=0
 NO_FILE=0
+NO_COOLDOWN=0
+COOLDOWN="7 days"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run)
@@ -111,13 +123,17 @@ while [ "$#" -gt 0 ]; do
       NO_FILE=1
       shift
       ;;
+    --no-cooldown)
+      NO_COOLDOWN=1
+      shift
+      ;;
     -h|--help)
-      echo "usage: $0 [--dry-run] [--package NAME | --reconcile] [--no-file]" >&2
+      echo "usage: $0 [--dry-run] [--package NAME | --reconcile] [--no-cooldown] [--no-file]" >&2
       exit 0
       ;;
     *)
       echo "update-deps.sh: unknown argument '$1'" >&2
-      echo "usage: $0 [--dry-run] [--package NAME | --reconcile] [--no-file]" >&2
+      echo "usage: $0 [--dry-run] [--package NAME | --reconcile] [--no-cooldown] [--no-file]" >&2
       exit 1
       ;;
   esac
@@ -127,6 +143,15 @@ if [ "$RECONCILE" -eq 1 ] && [ -n "$PACKAGE" ]; then
   echo "update-deps.sh: --reconcile and --package are mutually exclusive (--reconcile never upgrades)" >&2
   exit 1
 fi
+
+if [ "$RECONCILE" -eq 1 ] && [ "$NO_COOLDOWN" -eq 1 ]; then
+  echo "update-deps.sh: --no-cooldown has no meaning with --reconcile (it never applies a cutoff)" >&2
+  exit 1
+fi
+
+# A cutoff left in the caller's environment would be read by every uv lock below,
+# --reconcile's included; the cooldown is applied by flag, in the upgrade modes only.
+unset UV_EXCLUDE_NEWER
 
 if ! command -v uv >/dev/null 2>&1; then
   echo "update-deps.sh: uv not found on PATH -- install uv (https://docs.astral.sh/uv/)" >&2
@@ -157,10 +182,20 @@ else
   UV_LOCK_CMD+=(--upgrade)
   ATTEMPTED="full lock upgrade"
 fi
+APPLY_COOLDOWN=0
+if [ "$RECONCILE" -eq 0 ] && [ "$NO_COOLDOWN" -eq 0 ]; then
+  APPLY_COOLDOWN=1
+  UV_LOCK_CMD+=(--exclude-newer "$COOLDOWN")
+fi
 # Checked explicitly: `bash scripts/update-deps.sh` drops the shebang's -e, and a
 # failed resolve must not carry on to a "no change" diff and a green exit.
 if ! "${UV_LOCK_CMD[@]}"; then
   echo "update-deps.sh: uv lock failed (see output above) -- nothing was gated." >&2
+  exit 1
+fi
+# Drop the cutoff uv just recorded in [options] so nox -s lock_currency stays green.
+if [ "$APPLY_COOLDOWN" -eq 1 ] && ! uv lock -q; then
+  echo "update-deps.sh: uv lock (cutoff-normalising pass) failed -- nothing was gated." >&2
   exit 1
 fi
 

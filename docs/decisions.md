@@ -6559,6 +6559,42 @@ every edit is intended. Not ruled: a green reconcile files the churn-evaluation 
 like any other green run, which for a branch that only added a dependency is a ticket with nothing
 to evaluate. Open in `lode-7qo1`.
 
+## A release-age cooldown for lock refreshes (decided, lode-3s4d)
+
+Raised at `lode-1pnt`'s review: `scripts/update-deps.sh` took whatever was newest on PyPI, and the
+2026-11-20 refresh pinned releases only hours old (backrefs 8.3.1, platformdirs 4.14.8). Nothing
+was wrong with that lock, but a release pulled or found malicious days after publication would
+already be hash-pinned.
+
+Maintainer ruling 2026-11-21: a 7-day release-age cutoff, applied to the two upgrade modes
+(whole-set and `--package`) only, never to `--reconcile` (`lode-trw1`), with an explicit override
+for a security fix that must be taken at once. Built here: the script passes
+`--exclude-newer "7 days"`; the override is `--no-cooldown`; the value lives in
+[`configuration.md`](configuration.md#lock-refresh-release-age-cooldown-cooldown-in-scriptsupdate-depssh-lode-3s4d).
+
+Probe the ruling required (uv 0.11.7, throwaway project, real PyPI):
+
+- `uv lock --exclude-newer <date>` **is recorded** in `uv.lock` (`[options] exclude-newer = ...`;
+  a relative `"7 days"` also records `exclude-newer-span = "P7D"`). A later plain
+  `uv lock --check` then **exits 1** ("Resolving despite existing lockfile due to removal of global
+  exclude newer"), so `nox -s lock_currency` and CI's lock-currency job would go red on every
+  upgrade written this way.
+- A later plain `uv lock` (which is exactly what `--reconcile` runs) **drops** the recorded option
+  and **keeps every pin** (the probe's two pins were unchanged; a lock the cutoff wrote holds no
+  pin newer than it, so there is nothing for the plain run to downgrade). After it,
+  `uv lock --check` exits 0.
+- A cutoff in `pyproject.toml` (`[tool.uv] exclude-newer`) or `UV_EXCLUDE_NEWER` would be read by
+  `--reconcile`'s plain `uv lock` too, which the ruling forbids (by reasoning from uv's documented
+  precedence, not probed).
+
+Mechanism chosen, keeping `lock_currency` green: the cutoff is a CLI flag on the two upgrade
+branches of the script's `UV_LOCK_CMD` chain (so `--reconcile` is outside it by construction),
+followed by one plain `uv lock -q` that strips the recorded option; `UV_EXCLUDE_NEWER` is unset at
+script start. Rejected: `[tool.uv] exclude-newer` in `pyproject.toml` (reaches `--reconcile` and
+every `uv lock --check`, and its fixed date goes stale), and leaving the recorded cutoff in the
+lock (red `lock_currency`). Caveat: the cutoff is not recorded, so a later reader of `uv.lock`
+cannot tell it was taken under a cooldown.
+
 ## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 
 Raised 2026-11-20 while bumping the pin to 9.8.1 (`lode-1pnt`). Upstream mkdocs-material is in

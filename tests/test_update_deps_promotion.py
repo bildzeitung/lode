@@ -123,6 +123,11 @@ exit 0
     return repo, bindir
 
 
+def _lock_calls(tmp_path: Path) -> list[str]:
+    """Every `uv lock` argument line the stub recorded, in call order."""
+    return (tmp_path / "uv_lock_args").read_text(encoding="utf-8").splitlines()
+
+
 def _run_update_deps(
     repo: Path,
     bindir: Path,
@@ -234,10 +239,9 @@ def test_prints_one_name_old_to_new_line_per_moved_package(tmp_path: Path) -> No
     ]
     assert len(diff_lines) == 1
     assert diff_lines[0].split() == ["mypkg", "1.0.0", "->", "2.0.0"]
-    assert (tmp_path / "uv_lock_args").read_text(encoding="utf-8").split() == [
-        "lock",
-        "-q",
-        "--upgrade",
+    assert _lock_calls(tmp_path) == [
+        "lock -q --upgrade --exclude-newer 7 days",
+        "lock -q",
     ]
 
 
@@ -249,11 +253,9 @@ def test_package_flag_moves_only_that_package(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (tmp_path / "uv_lock_args").read_text(encoding="utf-8").split() == [
-        "lock",
-        "-q",
-        "--upgrade-package",
-        "mypkg",
+    assert _lock_calls(tmp_path) == [
+        "lock -q --upgrade-package mypkg --exclude-newer 7 days",
+        "lock -q",
     ]
 
 
@@ -290,7 +292,7 @@ def test_reconcile_runs_plain_uv_lock_through_the_gate_path(tmp_path: Path) -> N
     result = _run_update_deps(repo, bindir, extra_args=("--reconcile", "--no-file"))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (tmp_path / "uv_lock_args").read_text(encoding="utf-8").strip() == "lock -q"
+    assert _lock_calls(tmp_path) == ["lock -q"]
     assert (tmp_path / "lock_during_gate").read_text(encoding="utf-8") == CANDIDATE_LOCK
     assert (repo / "uv.lock").read_text(encoding="utf-8") == CANDIDATE_LOCK
 
@@ -318,3 +320,51 @@ def test_reconcile_and_package_are_mutually_exclusive(tmp_path: Path) -> None:
     assert "mutually exclusive" in result.stderr
     assert not (tmp_path / "uv_lock_args").exists()
     assert (repo / "uv.lock").read_text(encoding="utf-8") == ORIGINAL_LOCK
+
+
+def test_no_cooldown_drops_the_cutoff_from_an_upgrade(tmp_path: Path) -> None:
+    repo, bindir = _build_fake_repo(tmp_path)
+
+    result = _run_update_deps(repo, bindir, extra_args=("--no-cooldown", "--no-file"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _lock_calls(tmp_path) == ["lock -q --upgrade"]
+
+
+def test_reconcile_ignores_a_cutoff_in_the_environment(tmp_path: Path) -> None:
+    """UV_EXCLUDE_NEWER would reach reconcile's plain `uv lock`; the script unsets it."""
+    repo, bindir = _build_fake_repo(tmp_path)
+    stub = bindir / "uv"
+    _write_executable(
+        stub,
+        stub.read_text(encoding="utf-8").replace(
+            'if [ "$1" = "lock" ]; then',
+            'if [ "$1" = "lock" ]; then\n  echo "env=${UV_EXCLUDE_NEWER:-unset}" >> '
+            f'"{tmp_path / "uv_env"}"',
+            1,
+        ),
+    )
+    env = dict(fake_bin_env(bindir), UV_EXCLUDE_NEWER="2020-01-01")
+    result = subprocess.run(
+        ["bash", str(repo / "scripts" / "update-deps.sh"), "--reconcile", "--no-file"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "uv_env").read_text(encoding="utf-8").split() == ["env=unset"]
+
+
+def test_no_cooldown_and_reconcile_are_mutually_exclusive(tmp_path: Path) -> None:
+    repo, bindir = _build_fake_repo(tmp_path)
+
+    result = _run_update_deps(
+        repo, bindir, extra_args=("--reconcile", "--no-cooldown", "--no-file")
+    )
+
+    assert result.returncode == 1
+    assert "--no-cooldown" in result.stderr
+    assert not (tmp_path / "uv_lock_args").exists()
