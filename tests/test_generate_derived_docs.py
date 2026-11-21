@@ -181,7 +181,9 @@ def _dangling_see_below_rows(markdown: str) -> list[str]:
         # A bare "(see below)" / "see below" carries no destination at all -- always dangling.
         # Skip a line already flagged via the quoted form above, so it isn't double-counted.
         if not quoted_matches and re.search(
-            r"\(see below\)|\bsee below\b", line, re.IGNORECASE
+            r"\(see below\)|\bsee below\b|(?:--|\u2014)\s*below\b|\blinked above\b",
+            line,
+            re.IGNORECASE,
         ):
             violations.append(line)
     return violations
@@ -217,6 +219,15 @@ def test_dangling_see_below_scan_catches_the_pre_fix_rows() -> None:
         "# lode -- settings you can change\n\n## Bare JIRA issue keys\n\n" + resolvable
     )
     assert _dangling_see_below_rows(resolvable_markdown) == []
+
+    # lode-cav3: the bare dash-below and "linked above" shapes a stripped link leaves behind.
+    dash_row = (
+        "| `qa_call_timeout_s` | `300s` | split off `enrich_call_timeout_s` -- below. |"
+    )
+    above_row = "| `qa_call_timeout_s` | `300s` | all in the write-up linked above. |"
+    violations = _dangling_see_below_rows(f"# x\n\n{dash_row}\n{above_row}")
+    assert dash_row in violations
+    assert above_row in violations
 
 
 def test_emitted_anchor_ids_match_the_link_gates_github_slug() -> None:
