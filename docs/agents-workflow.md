@@ -1852,8 +1852,8 @@ writes, not a retroactive cleanup of the one write that already happened.
 This rule binds every dispatch-side writer of external calls — the main session (`CLAUDE.md` — General
 Directives), the builder ([`.claude/agents/coding.md`](../.claude/agents/coding.md) — Non-negotiables +
 Anti-patterns), and the reviewer
-([`.claude/agents/code-reviewer.md`](../.claude/agents/code-reviewer.md) — Non-negotiables +
-Anti-patterns) — since any of the three can reach a `gh` call mid-task.
+([`.claude/agents/code-reviewer.md`](../.claude/agents/code-reviewer.md) — Non-negotiables) — since
+any of the three can reach a `gh` call mid-task.
 
 #### False-positive class: a `gh` command name merely *quoted* inside unrelated text (`lode-obox`)
 

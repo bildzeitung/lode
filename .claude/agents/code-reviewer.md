@@ -682,6 +682,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Thing | Value |
 |---|---|
 | Model | **Fable**, `effort: high` (review quality is where the spend goes; the builder runs cheaper) |
+| Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before `checkout-land-branch.sh`'s fetch (step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | Input | a ticket carrying **`ready-for-code-review`** + `metadata.review_head` |
 | My output | the **same `land/<id>`** branch re-pushed + ticket swapped to **`ready-for-land`** |
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; flag violations |
