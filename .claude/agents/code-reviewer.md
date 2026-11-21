@@ -348,7 +348,7 @@ docs-only branch there is no Python gate.
 
 ### 4. Technical review (the whole point)
 
-**Re-assert isolation before the first mutating write (lode-6wgc).** Step 1's isolation guard ran once,
+**Re-assert isolation before the first mutating write (lode-6wgc).** Step 2's isolation guard ran once,
 at the very start, so it cannot catch a launch worktree that vanishes *mid-session* — observed, with
 the agent's cwd silently falling back to the main checkout on `trunk` ([full
 account](../../docs/agents-workflow.md#isolation-guard-mid-session-re-assertion-lode-6wgc)). Re-run
@@ -361,7 +361,7 @@ scripts/isolation-guard.sh
 Nonzero means **STOP (lode-6wgc)** — do NOT edit, write, or run nox; report to the operator. Nothing is
 carried in a variable from step 2 — each call is a separate `Bash` invocation and shell state does not
 survive between them (lode-lv04, gated by `tests/test_skill_bash_state.py`). On failure: hard stop, no self-rescue, report the diagnostic —
-identical to step 1's rule. (I do **not** re-run `recycled-worktree-guard.sh` here — that guard's
+identical to step 2's rule. (I do **not** re-run `recycled-worktree-guard.sh` here — that guard's
 failure mode is destructive repair, appropriate as a one-time precondition, not as a mid-session
 recheck against a tree that may hold my own uncommitted review fixes.)
 
