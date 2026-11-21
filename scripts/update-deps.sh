@@ -38,6 +38,10 @@
 #      against uv.lock's recorded hashes -- docs/stack.md), never patched in
 #      place.
 #   4. Run the gates: nox -t fix, nox -s tests -- against the promoted lock.
+#      They run against the WORKING TREE, so run --reconcile STRAIGHT AFTER
+#      the pyproject.toml edit (lode-7qo1): mid-branch, one unrelated red test
+#      rolls the reconciled lock back to the stale one (step 5) and rebuilds
+#      ./.venv without the new dependency.
 #   5. GREEN -> nothing further to do to the lock; this script never commits
 #      -- review (`git diff -- uv.lock`) and commit it yourself. ANY OTHER
 #      FAILURE -- the install itself (hash-mismatched pin, yanked release,
@@ -54,12 +58,16 @@
 #      judgment-call in the context of lode's actual call sites (lode-i642).
 #      A WORK ORDER, not a finding: required-only filing policy, see the
 #      stub's own acceptance text. Noise gate: skipped entirely when every
-#      moved package changed only its patch component. The diff parsing, the
-#      rendering and that gate live in the sourceable scripts/dep-churn-lib.sh
-#      so they are unit-tested. `--no-file` suppresses filing outright. Filing
-#      writes Dolt, so a missing/failing `bd` (or the `bd dolt push` after it)
-#      only WARNS -- it never changes this script's exit status or the lock
-#      (this script never mutates anything outside ./.venv and uv.lock).
+#      moved package changed only its patch component. With --reconcile
+#      (lode-7qo1) additions and removals are ignored too: it files only when
+#      an EXISTING pin moved across a minor or major (typically a range or
+#      requires-python edit; the test is on the diff, not on the cause). The
+#      diff parsing, the rendering and that gate live in the sourceable
+#      scripts/dep-churn-lib.sh so they are unit-tested. `--no-file`
+#      suppresses filing outright. Filing writes Dolt, so a missing/failing
+#      `bd` (or the `bd dolt push` after it) only WARNS -- it never changes
+#      this script's exit status or the lock (this script never mutates
+#      anything outside ./.venv and uv.lock).
 #
 # NO -x / TRASH-NOT-REPAIR -- deviates from the scripts/*.sh house style of
 # `#!/bin/bash -ex`: `-e` alone still aborts on any unguarded failing command,
@@ -189,7 +197,7 @@ fi
 # script's exit status or the lock outcome.
 file_churn_stub() {
   local skip
-  if skip="$(dep_stub_skip_reason "$NO_FILE" "$CHANGES_RAW")"; then
+  if skip="$(dep_stub_skip_reason "$NO_FILE" "$CHANGES_RAW" "$RECONCILE")"; then
     echo "update-deps.sh: $skip"
     return 0
   fi

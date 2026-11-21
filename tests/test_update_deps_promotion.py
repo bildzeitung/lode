@@ -25,7 +25,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from conftest import fake_bin_env
+import pytest
+from conftest import fake_bd, fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 UPDATE_DEPS_SRC = REPO_ROOT / "scripts" / "update-deps.sh"
@@ -305,6 +306,39 @@ def test_reconcile_restores_the_lock_after_a_red_gate(tmp_path: Path) -> None:
     assert result.returncode == 1, result.stdout + result.stderr
     assert "no-upgrade reconcile" in result.stdout
     assert (repo / "uv.lock").read_text(encoding="utf-8") == ORIGINAL_LOCK
+
+
+# The original lock plus one new package: a pure addition, no existing pin moved.
+ADDITION_LOCK = ORIGINAL_LOCK + ORIGINAL_LOCK.replace("mypkg", "fresh")
+
+
+@pytest.mark.parametrize(
+    ("args", "candidate", "files"),
+    [
+        (("--reconcile",), ADDITION_LOCK, False),
+        (("--reconcile",), CANDIDATE_LOCK, True),  # mypkg 1.0.0 -> 2.0.0
+        ((), ADDITION_LOCK, True),  # the upgrade modes still file an addition
+    ],
+)
+def test_reconcile_files_the_churn_stub_only_for_a_moved_existing_pin(
+    tmp_path: Path, args: tuple[str, ...], candidate: str, files: bool
+) -> None:
+    """The filing decision as update-deps.sh itself reaches it (lode-7qo1). The
+    skip policy is unit-tested in test_dep_churn_lib.py; this covers the mode
+    flag actually arriving there. `bd` is stubbed, so nothing is ever filed."""
+    repo, bindir = _build_fake_repo(tmp_path)
+    (tmp_path / "candidate.lock").write_text(candidate, encoding="utf-8")
+    bd_calls = tmp_path / "bd_calls"
+    fake_bd(bindir, {"create": "echo lode-stub"}, call_log=bd_calls)
+
+    result = _run_update_deps(repo, bindir, extra_args=args)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    if files:
+        assert bd_calls.read_text(encoding="utf-8").startswith("create --title=")
+    else:
+        assert not bd_calls.exists()
+        assert "reconcile moved no existing pin" in result.stdout
 
 
 def test_reconcile_and_package_are_mutually_exclusive(tmp_path: Path) -> None:

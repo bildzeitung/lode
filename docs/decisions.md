@@ -6608,6 +6608,17 @@ for a removed dependency or a `requires-python` change), and ruling that a whole
 every edit is intended. Not ruled: a green reconcile files the churn-evaluation stub (`lode-i642`)
 like any other green run, which for a branch that only added a dependency is a ticket with nothing
 to evaluate. Open in `lode-7qo1`.
+  - **Update (lode-7qo1, 2026-11-21, maintainer):** option (c). On a green `--reconcile`, the
+    churn-evaluation stub files only when an existing pin moved across a minor or major (a range or
+    `requires-python` edit); pure additions and removals never file in that mode, so the "Not
+    ruled" sentence above no longer holds. `--reconcile` is to be run straight after the
+    `pyproject.toml` edit, since a mid-branch unrelated red test rolls the lock back. The
+    empty-diff no-op cost (a reconcile with nothing to change still rebuilds `./.venv` and runs
+    both gates) is not ruled and is left as is. As built (not part of the ruling's text): the test
+    reads the lock diff, not the edit that caused it, so an added dependency that forces an
+    existing pin across a minor or major files too, as does a package that gains or loses one of
+    several resolved versions; and a ticket that does file still carries the whole version diff,
+    additions and removals included.
 
 ## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 
