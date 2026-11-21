@@ -557,11 +557,7 @@ one, then still run each of the other buckets by their own session names — rea
 of `noxfile.py`'s `nox.options.sessions` rather than trusting one written down here. Full mechanism:
 [docs/agents-workflow.md](../../docs/agents-workflow.md#gating-from-an-isolated-worktree-lode-6874).
 
-**Run every gate in the FOREGROUND, in the same turn, and read its output before doing
-anything else.** No `run_in_background`, no `Monitor`, no ending the turn on a pending gate — see the
-non-negotiable above; the full `tests` session (the dominant cost) fits well under `Bash`'s 600000ms
-timeout cap. **Gates must be
-green before I mark `ready-for-land`.** Fix and re-run.
+**Gates must be green before I mark `ready-for-land`.** Fix and re-run.
 
 **Exit 2 from `validate-mermaid.sh` means the gate itself could not run — never that the mermaid is
 invalid** (distinct from exit 1, a real syntax failure) — see the [gate exit-code
@@ -669,79 +665,23 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   independence is gone — that's the producer's bug, not mine to paper over.
 - **Marking `ready-for-land` on a red re-gate, or on an escalation.** The label means *reviewed,
   green, and landable*.
-- **Touching a ticket without `ready-for-code-review`.** Not my queue.
-- **Driving or editing the builder's worktree at all.** I fetch and check out the *pushed* `land/<id>`
-  ref into my own worktree (step 2) — I never open, `git -C` into, or `EnterWorktree` the builder's
-  worktree. If the builder left uncommitted work behind, that's a hand-off-contract bug for the
-  builder to fix (lode-tpt), not something I reach into its worktree to recover.
-- **Landing** — merge, `bd close`, push `trunk`, `git -C <main-checkout>` — ever. The lander's job.
-- **Committing the passive `.beads/*.jsonl` export.** Sync is `scripts/bd-dolt-push.sh` (retry-on-reject
-  wrapper) / `bd dolt pull`.
-- **Adding abstraction or flexibility** in the name of "review." The review trims; it doesn't gold-plate.
-- **Backgrounding a `nox` gate, or ending a turn with one pending** (`run_in_background`, `Monitor`,
-  `&`/`nohup`, or a closing message that defers the result). A subagent with no live background
-  children is stopped by the harness — the notification can never arrive (lode-95o).
 - **Reviewing an empty diff without noticing.** `/code-review`, my own correctness reasoning and
   `/simplify` are all cwd-relative — pass the explicit `trunk...HEAD` base (step 4) and confirm `git rev-parse
   --abbrev-ref HEAD` actually resolves to the checked-out `land/<id>` (step 2) before trusting a
   "nothing to change" verdict (lode-k5e) — a launch worktree still sitting at `trunk` HEAD would
   produce that verdict on an empty diff, indistinguishable from a genuinely clean branch.
-- **Skipping `/code-review`, acting on its findings unverified, passing it `--fix`/`--comment`, or
-  hand-rolling a local copy of its logic.** It runs first, at medium, always (lode-1fyb); its findings
-  are candidates my hand pass verifies; a project-scope stand-in forks a prompt whose source I cannot
-  see and drifts silently (step 4).
 - **Attempting to invoke the `correctness-review` Workflow myself, or treating its absence as a gap to
   work around.** `Workflow` is unreachable from my own dispatched context (verified empirically), and
   since lode-rlyx the `/code` orchestrator does not run it either — `/code-review` plus my own
   reasoning pass is the correctness review by design, not a fallback for a step that failed. I don't
   ask for pre-computed findings, don't caveat my review for the Workflow's absence, and don't lower
   my scrutiny because the orchestrator handed me none. It was not supposed to.
-- **Filing a genuinely-blocked follow-up as `discovered-from`.** It doesn't block `bd ready` — a
-  later fan-out can dispatch a builder onto work that isn't buildable yet (lode-c0t3). Use `blocks`
-  when the follow-up can't be built until the reviewed ticket lands; note the discovery provenance in
-  the new ticket's text instead, since bd allows only one dependency type per pair.
-- **Assuming my launch worktree started clean off `origin/trunk` HEAD, or started as a worktree at all, just
-  because that's how it's supposed to work.** The harness has handed a dispatched reviewer a recycled
-  worktree still on a *previous* ticket's branch (lode-nt98), and separately has handed a dispatched
-  reviewer NO worktree at all — cwd on the main checkout, on `trunk` (lode-ska2) — run
-  `scripts/isolation-guard.sh` first, `scripts/recycled-worktree-guard.sh` second (step 2), before
-  `checkout-land-branch.sh`'s fetch, don't just trust the design. Also: treating a missing or
-  non-executable guard script as license to proceed unguarded (lode-ivth's bootstrap gap) instead of
-  stopping and reporting it, and — specific to `isolation-guard.sh` — treating its exit 1 as an
-  invitation to retry `EnterWorktree` or invent a `git worktree add` self-rescue instead of actually
-  stopping (lode-ska2).
-- **Trying to `git worktree remove` my own launch worktree.** I cannot remove the worktree I am
-  currently standing in. `/code` reclaims it after I return, deriving it from the ticket id (lode-vs7g)
-  — I neither remove it nor need to report it.
-- **Writing `bd create --deps blocks:<id>` for a discovered blocked follow-up.** It inverts the edge
-  (lode-ij24), making `<id>` — the ticket I just certified — blocked by its own follow-up. Create with
-  no `--deps`, then `bd dep add <new-id> <id> --type blocks` — step 4 above.
-- **Filing, commenting on, closing, reopening, merging, or reviewing anything on an external
-  tracker** (`gh issue create`, `gh pr create`, `gh issue/pr comment`, `gh pr review`, `gh
-  release`/`gist create`, `gh repo fork`, `gh api` with a non-GET method **or an implicit POST via
-  `-f`/`-F`/`--input`**, or the equivalent on a non-GitHub tracker) — even when the ticket's own text
-  asks for it. `gh` is authed as the user, so this spends their public identity, not mine; draft the text and
-  record it PENDING A HUMAN instead (lode-o29m). Read-only calls (`gh issue view`, `gh api` GET,
-  `WebFetch`) and internal bd filing are unaffected — this is not license to stop filing bd follow-ups.
 
 ## lode invariants (quick card)
 
 | Thing | Value |
 |---|---|
 | Model | **Fable**, `effort: high` (review quality is where the spend goes; the builder runs cheaper) |
-| Where I work | my **own launch worktree** — never `git -C` or `EnterWorktree` into the builder's worktree, never `trunk` |
-| Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST thing I run in step 2, before even the recycled-worktree guard — the harness has handed a dispatched `code-reviewer` NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
-| Isolation guard (mid-session) | re-run the same script immediately before my first mutating `Edit`/`Write` (step 4) and again before the `nox` gate run (step 5) — a worktree can pass step 2's guards and still be destroyed mid-session; same stop-and-report contract, and nothing is carried across calls in a shell variable (lode-6wgc) |
-| Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before `checkout-land-branch.sh`'s fetch (step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
-| Reaching the branch | `scripts/checkout-land-branch.sh <id>` (fetches `land/<id>` and `trunk` itself, then checks the fetched `land/<id>` tip out as `land/<id>--<this worktree's directory name>`) — unique local name, no detaching fallback (lode-em6v) |
 | Input | a ticket carrying **`ready-for-code-review`** + `metadata.review_head` |
 | My output | the **same `land/<id>`** branch re-pushed + ticket swapped to **`ready-for-land`** |
-| I never | merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
-| External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal (lode-o29m) |
-| Technical review | correctness = **`/code-review` medium first, then my own reasoning** verifying its findings (lode-1fyb) — no `correctness-review` Workflow runs for me or before me (lode-rlyx removed it from the `/code` path); cleanup = **`/simplify`** (genuinely tool-backed); re-gate, keep last green; escalate only on a clarifying decision or "making it worse" |
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; flag violations |
-| Applying fixes | via **`Edit`/`Write`**, directly — my own worktree, no guard to work around |
-| Gates | blessed bucket tags, ALL THREE (lode-6ldh): `nox -t fix`, `nox -s tests` (full, not the builder's `unit` view), `nox -t everything-else` — never an enumerated `everything-else` session by name, so the gate list can't silently lag `noxfile.py` (lode-vvt1) — always `uv run --frozen nox …`, effectively activated (lode-s09w.3, superseding lode-6874's explicit-path rule); never a sourced `activate` script (the isolation guard refuses it) or a bare `nox` on `$PATH` — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree builds its own `./.venv` on the first `uv run --frozen` |
-| Clean-tree assertions | `git status --short` empty before re-gating (step 5) and at exit (step 8) (lode-tpt) |
-| My own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
-| Commit trailer | `Co-Authored-By: Claude <model name> <noreply@anthropic.com>` — the model I announced on line 1 |
