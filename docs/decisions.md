@@ -4909,6 +4909,17 @@ entries below from being rewritten to chase the current tree.)
   license — the merged result silently carries both variants of that region, duplicated. Nothing
   catches it: `check-decisions-no-silent-rewrite.sh` fires only on a line *disappearing*, and
   duplication removes nothing. The mitigation is the append-only rule itself, not a gate.
+  - **Update (lode-tikr, 2026-11-21, maintainer):** the union driver has a third failure mode. A
+    marker appended to the file's LAST entry is detached from it when another branch lands an EOF
+    append first: both sides add lines at the same position, union keeps both, and the marker ends
+    up after the other branch's lines (`lode-ucpu`'s Update, detached from the `lode-vlok` entry by
+    `lode-1pnt`'s two `##` sections). No stage sees it: the branch is correct in isolation,
+    `check-decisions-no-silent-rewrite.sh` fires only on a removed line, and the marker-shape test
+    checks shape, not position. Accepted, not gated; a post-merge gate test was rejected because it
+    would catch one shape only (a marker under a `##` heading), and when the intervening append is
+    another bullet entry the marker silently reads as that entry's. Mitigation is a by-hand step in
+    the merging stages (`lode-l8b7`): after any merge that brings a `**Update (` line into this
+    file, confirm it still follows the entry it names.
 
 - **Recording the rejected alternatives, the non-impact and the ours-side-only caveat for the union
   merge driver (`lode-fp9l`, 2026-08-09).** Follow-up to the entry directly above (`lode-4jtc.1`),
@@ -6687,3 +6698,15 @@ the SDK default, or pass `open_telemetry=False` where lode constructs its Anthro
     `docs-nit-file-repo-relative` and `ap-never-review-own-build` are lengthened so each runs through
     the operative part of its rule. Every phrase matches exactly once in `code-reviewer.md`, outside
     any fenced block.
+
+## A detached `lode-ucpu` Update stays where the union merge put it (decided, lode-tikr)
+
+Maintainer ruling 2026-11-21. `lode-ucpu`'s Update sits under the `lode-sflg` `##` section instead
+of on the `lode-vlok` entry it answers, because `/land`'s union merge placed it after `lode-1pnt`'s
+EOF append. Decided: **(Q1)** leave it; `lode-smpk`'s pointer Update on the `lode-vlok` entry is the
+repair. No verbatim move, since `check-decisions-no-silent-rewrite.sh` exits 1 on a move and the
+append-only rule is not relaxed for it. **(Q2)** recorded as a third union-driver failure mode in an
+Update on the `lode-4jtc.1` entry, with a by-hand step for the merging stages (`lode-l8b7`); no
+post-merge gate. **(Q3)** fix the attribution in `scripts/docs_index_query.py`'s chunker so entries
+after a `##` heading in this file are not all attributed to it (`lode-skv8`); the log stays
+append-only. Decision only; the two builds are the tickets named.
