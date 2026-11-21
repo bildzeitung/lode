@@ -625,19 +625,23 @@ a known, accepted trade-off, not a follow-up ticket.
 > **Update (lode-qcth, measured 2026-11-21) -- the deferred measurement, appended:** 30
 > immediate-route enrich calls (`enrich._call_haiku`, the default `claude-haiku-5-5` tier,
 > `reasoning_effort="low"`, `enrich.MAX_TOKENS` = 6144) against a scratch `LODE_HOME`.
+> `_call_haiku` returns only the parsed result, so token usage, `stop_reason` and latency
+> were captured outside it, by a harness that is not in the repo.
 > Sample: the 6 non-URL notes in the maintainer's DB (502-14,903 chars, three of them
 > over 10,000), 3 calls each = 18, plus 12 single calls on passages cut from this repo's
 > design docs (300-16,000 chars) as a proxy for more long text. **Only 6 real notes
 > existed**, short of the approved 30-50, so the proxy passages fill the call count; the
 > real-note evidence is thin. Results (`usage.output_tokens`, which counts thinking plus
 > the JSON): **0 of 30 truncated** (every `stop_reason` was `end_turn`), **0 of 30
-> empty-`{}`**, output tokens min 241 / median 469 / max 667 (about 11% of the 6144 cap),
-> latency min 0.95 s / median 3.0 s / p90 4.3 s / max 7.4 s (two slow outliers, 7.4 s and
-> 6.8 s, on short inputs), input tokens 1,467-8,710. Totals consumed: 14,033 output and
-> 128,053 input tokens. No response carried a thinking block at `low`. Output tokens
-> do not grow with note length, so 6144 has roughly 9x headroom on this sample; the
-> truncation and empty-`{}` rates are 0 here but 30 calls cannot bound a rate below
-> about 10% at 95% confidence. Batch-route (`submit_enrich_batch`) was not measured.
+> empty-`{}`**, output tokens min 241 / median 469 / max 667, latency min 0.95 s /
+> median 3.0 s / p90 4.3 s / max 7.4 s (that and a 6.8 s call were on short inputs),
+> input tokens 1,467-8,710. Totals consumed: 14,033 output and 128,053 input tokens.
+> No response carried a thinking block at `low`. Output tokens do not grow with note
+> length, so 6144 has roughly 9x headroom on this sample. 30 calls cannot bound the
+> truncation or empty-`{}` rate below about 10% at 95% confidence, and that floor
+> assumes 30 independent calls: these are 18 distinct texts, 6 of them real notes, so
+> on real notes alone it is looser still (about 40%, counting each note once).
+> Batch-route (`submit_enrich_batch`) was not measured.
 
 `lode-3dlt` named a real but then-unreachable risk on the enrichment
 forced-tool-use branch of `AnthropicProvider.structured_call` (`enrichment_llm`,
