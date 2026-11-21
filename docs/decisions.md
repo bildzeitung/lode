@@ -6085,8 +6085,8 @@ entries below from being rewritten to chase the current tree.)
     short list of incident-derived behaviours, and a miss reverts the cut.
   - **Accepted limit:** 5 dispatches do not exercise rare paths.
   - **Update (lode-w18a.10, 2026-11-21):** the `code-reviewer.md` inventory approved under this
-    entry was amended by maintainer ruling before its cut; see the entry
-    "code-reviewer.md rule inventory amended before the `lode-w18a.9` cut" at the end of this file.
+    entry was amended by maintainer ruling before its cut; see the `lode-w18a.10` entry
+    "code-reviewer.md rule inventory amended before the `lode-w18a.9` cut".
 
 - **Update (lode-5x01, 2026-11-16) — a filename typo in `lode-s09w`'s `uv` migration entry above.**
   That entry's bullet "`scripts/python-init.sh`, `venv-install` and `compile-lock.sh` are deleted
@@ -6603,16 +6603,26 @@ the SDK default, or pass `open_telemetry=False` where lode constructs its Anthro
     `run-every-gate-foreground-read-output` into `never-background-gate-or-end-turn-pending`;
     `technical-review-by-non-author` into `ap-never-review-own-build` (kept because the ruling also
     asks for that pin to be lengthened); `ap-no-ready-for-land-on-red-or-escalation` into
-    `gates-green-before-ready-for-land` and `escalation-remove-label-add-land-escalated`;
+    `gates-green-before-ready-for-land` and `escalation-remove-label-add-land-escalated` (its
+    phrase now starts at "**do not** mark `ready-for-land`");
     `ap-never-drive-builders-worktree` into `review-in-own-launch-worktree-not-builders`;
     `ap-no-gold-plating` into `simplest-thing-review-removes-overdesign`;
-    `ap-no-skipping-code-review-or-unverified-findings` into the `code-review-*` entries;
+    `ap-no-skipping-code-review-or-unverified-findings` into the `code-review-*` entries and
+    `no-handrolled-substitute-for-code-review`;
     `ap-no-invoking-correctness-review-workflow` into `no-correctness-review-workflow`;
-    `ap-discovered-from-for-blocked-followup` into
-    `out-of-scope-work-own-bd-issue-deliberate-dep-type`; `ap-assuming-launch-worktree-clean` into
-    `isolation-guard-first-action`, `recycled-worktree-guard-before-fetch` and
-    `isolation-failure-stop-no-self-rescue`. `ap-no-empty-diff-review` stays: no earlier entry pins
+    `ap-discovered-from-for-blocked-followup` into the new
+    `blocked-followup-is-blocks-not-discovered-from`, pinned on step 4's copy of the rule (the
+    `out-of-scope-work-own-bd-issue-deliberate-dep-type` pin stops before it);
+    `ap-assuming-launch-worktree-clean` into `isolation-guard-first-action`,
+    `recycled-worktree-guard-before-fetch`, `isolation-failure-stop-no-self-rescue` and
+    `script-exit-127-126-bootstrap-gap-stop`. `ap-no-empty-diff-review` stays: no earlier entry pins
     it.
+  - **One anti-pattern bullet is not a pure repeat, so part of it keeps a pin** (found in technical
+    review). The "do not invoke the Workflow" half of the `correctness-review` bullet repeats step 4,
+    but its last sentence (do not ask for pre-computed findings, do not caveat the review for the
+    Workflow's absence, do not lower scrutiny) is stated nowhere else in the file. The new entry
+    `ap-workflow-absence-no-caveat-no-lowered-scrutiny` pins that sentence. With it and the
+    `blocks` entry above, the list is 111 entries again.
   - **Decision 2: an entry for each of the 12 unpinned distinct rules** (14 entries, since the
     "Nonzero means STOP (lode-6wgc)" line and the off-trunk merge-base clause each occur at two
     sites): the rescue ref named in the hand-off; the quick-card "flag violations" row; never

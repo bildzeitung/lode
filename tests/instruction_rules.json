@@ -316,6 +316,11 @@
   },
   {
     "file": ".claude/agents/code-reviewer.md",
+    "rule": "blocked-followup-is-blocks-not-discovered-from",
+    "phrase": "`blocks` if the new ticket genuinely can't be built until *this* one lands"
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
     "rule": "never-bd-create-deps-blocks-inverts-edge",
     "phrase": "**Never `bd create --deps blocks:<id>`**"
   },
@@ -452,7 +457,7 @@
   {
     "file": ".claude/agents/code-reviewer.md",
     "rule": "escalation-remove-label-add-land-escalated",
-    "phrase": "**remove** `ready-for-code-review` so the ticket doesn't sit in my"
+    "phrase": "**do not** mark `ready-for-land`; **remove** `ready-for-code-review` so the ticket doesn't sit in my queue, and **add** `land-escalated`"
   },
   {
     "file": ".claude/agents/code-reviewer.md",
@@ -478,6 +483,11 @@
     "file": ".claude/agents/code-reviewer.md",
     "rule": "ap-no-empty-diff-review",
     "phrase": "**Reviewing an empty diff without noticing.**"
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
+    "rule": "ap-workflow-absence-no-caveat-no-lowered-scrutiny",
+    "phrase": "I don't ask for pre-computed findings, don't caveat my review for the Workflow's absence, and don't lower my scrutiny because the orchestrator handed me none."
   },
   {
     "file": ".claude/agents/code-reviewer.md",
