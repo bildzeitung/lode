@@ -686,15 +686,14 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
   four re-opens it (a new head version is a different `target_version`); a provider switch
   with an unchanged model string therefore re-opens it too. Only the `llm_provider` value is
   compared, so moving between direct OpenAI and Azure (both `openai`) does not re-open it,
-  exactly as it does not make a head stale for `lode reenrich`. There is no manual-override
-  command. The
-  existing dead -> re-enqueue self-healing stays for every other dead enrich job, since it
-  exists for real outages.
+  exactly as it does not make a head stale for `lode reenrich`. There is no manual-override command.
+  The existing dead -> re-enqueue self-healing stays for every other dead enrich job, since it
+  exists for real outages. The same rule applies to an external's in-force enrich job (lode-4kg8).
 - `lode reenrich` and the `lode status` reenrich hint skip such a head too (`lode-5try`):
   their shared stale scan applies the same standing-refusal predicate
   (`jobs.standing_enrich_refusal_exists_sql`), so neither re-sends nor keeps asking for
-  refused content until the prompt version, model or provider changes. The same rule applies to an
-  external's in-force enrich job (lode-4kg8).
+  refused content until the prompt version, model or provider changes, for note and external heads
+  alike.
 - `lode status` lists refusal-dead enrich jobs in its dead-letter output with the refusal
   category and a hint of their own; they do not get the self-healing hint, which would be
   false for them.
