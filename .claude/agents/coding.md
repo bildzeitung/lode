@@ -866,6 +866,15 @@ exactly why my push back in step 5 can be an ordinary, non-force push (lode-cln)
     stays a deliberate judgment boundary (lode-8k3) — a decision only a human should make, not a
     tooling limitation this fix removes.
 
+After **any** merge here (clean or resolved) that brings a `**Update (` line into
+`docs/decisions.md`, I read the merged file around each such line and confirm it still follows the
+entry it names (lode-l8b7; the `merge=union` driver can detach it when this branch holds an EOF
+append and trunk's marker is on the entry above it — `docs/decisions.md`, search `lode-tikr`). When
+one has been detached, trunk's marker stays where it is and I move **this branch's own appended
+lines** (the ones the merge placed ahead of the marker) to follow it and fold that into the merge commit (`git commit --amend`).
+Never move the marker itself: it is a trunk line, and `scripts/check-decisions-no-silent-rewrite.sh`
+exits 1 on a moved pre-existing line. I re-read the file once more to confirm the order.
+
 ### 4. Re-run the quality gates (must be green)
 
 This cycle swaps the ticket straight to `ready-for-land` (step 5) with no further technical

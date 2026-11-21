@@ -33,6 +33,9 @@ Newest first.
     instruction files (`lode-l8b7`), and the merge half of the rule above stays interim until
     that lands. The detached marker is not moved back. Record: `docs/decisions.md`, search
     `lode-tikr`.
+  - **Update (lode-l8b7, 2026-11-21):** the merge half of the rule above is no longer interim.
+    The step now lives in `.claude/skills/land/SKILL.md` (after the batch merge, Section 3) and
+    `.claude/agents/coding.md` (rebase pickup, step 3).
 
 ## 2026-11-20 — A decision ticket stated a failure that the code cannot reach, and the maintainer ruled on it
 

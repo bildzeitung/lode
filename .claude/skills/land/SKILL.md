@@ -976,6 +976,16 @@ report through the exit code.
 It runs **no gates** and makes **no tracker writes** — every `nox` call and every `bd` write stays
 mine, below.
 
+**By hand after the batch (lode-l8b7): confirm each `**Update (` marker still follows its entry.**
+For every `LANDED` branch whose diff adds a `**Update (` line to `docs/decisions.md`, I read the
+merged file around that line and confirm it follows the entry it names. The `merge=union` driver
+can detach it when trunk already carries an EOF append from another branch (`docs/decisions.md`,
+search `lode-tikr`). A detached marker is a defect in the combined result, not in the branch, so I
+neither bounce nor kick back anything for it. I do not edit `docs/decisions.md` on `trunk` either:
+I report it as a patch under [If the whole remedy is a one-line doc
+change](#if-the-whole-remedy-is-a-one-line-doc-change-report-the-patch--not-the-gap), naming the
+marker's verbatim first line and the entry it belongs on. No gate or test checks this position.
+
 Re-gate the combined result (this is a Python-gated repo where code changed; a **docs-only** merge
 set has no Python gate — skip nox, run `scripts/validate-mermaid.sh` only if a merged diff touched a
 `docs/` diagram).
