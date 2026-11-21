@@ -1030,21 +1030,35 @@ extensions and Material-derived theme (`variant: classic` keeps the Material loo
 
 - **Dependency**: `zensical`, pinned exactly (`==`), in the `dev` dependency group in
   `pyproject.toml`, locked by `uv.lock`; `mkdocs` and `mkdocs-material` are gone from the lock.
-- **Config**: `mkdocs.yml` keeps its name and keys (Zensical documents it as supported
-  indefinitely); only the `validation:` block was rewritten to Zensical's keys.
+- **Config**: `mkdocs.yml` keeps its name and keys; only the `validation:` block was rewritten to
+  Zensical's keys. Zensical's migration guide says "You can keep `mkdocs.yml` for as long as you
+  want", gives no end date, and names `zensical.toml` as the native format with a later "final
+  move" to it (read 2026-11-21). So the file name is not settled for good.
 - **Gate**: `nox -s docs` and `docs.yml` run `zensical build --strict`. Zensical validates every
-  internal link and link anchor at build time (`invalid_links`, `invalid_link_anchors`) and
-  `--strict` aborts on a warning, the equivalent of the old `links.anchors`/`links.not_found: warn`
-  pair. The old `nav.*` checks have no equivalent; they were all `ignore`. Zensical has no
-  output-directory flag, so the gate writes to `site_dir` (gitignored).
+  link to another page and every link anchor at build time (`invalid_links`,
+  `invalid_link_anchors`) and `--strict` aborts on a warning. That covers the old
+  `links.anchors: warn` in full and the old `links.not_found: warn` for links to pages only.
+  Measured against both builds on the same input: the old build also failed on an image whose
+  file is missing, and Zensical 0.1.3 does not. The replacement is in the staging step:
+  `scripts/build_docs_site.py` refuses to stage a page with a relative image target the staged
+  tree does not have, so both `nox -s docs` and `docs.yml` still fail on one. Links to other
+  non-page files in the repo never reach the generator, because the staging link rewrite turns
+  them into GitHub URLs. The old `nav.*` checks have no equivalent; they were all `ignore`.
+  Zensical has no output-directory flag, so the gate writes to `site_dir` (gitignored) and
+  replaces what an earlier build left there.
+- **A misspelled `validation:` key is ignored, not rejected.** Under mkdocs a renamed key was a
+  `--strict` config error; Zensical 0.1.3 builds clean with an unknown key, so a version that
+  renamed a key or dropped a check would leave `nox -s docs` green with nothing validated.
+  `tests/test_docs_site_index.py` runs a strict build against a planted broken link and anchor
+  with the repo's own `validation:` block, so that turns `nox -s tests` red instead.
 - **Slugs**: `toc.slugify: !!python/name:lode.docs_slug.github_slugify` works unchanged
   (Zensical imports it, so `lode` must be importable: it is, in the project venv). Every
   heading id on the built site was compared against the old build: no difference. A repeated
   heading still gets the `_1` suffix.
 - **Overrides**: `docs/overrides/main.html` (the `extrahead` block) renders unchanged.
 - **Search** is Zensical's built-in search; the `search` plugin entry stays.
-- **Not checked**: Zensical is `0.1.x`, so its behavior can change between versions; the exact pin
-  and `nox -s docs` are what catch that.
+- **Not checked**: Zensical is `0.1.x`, so its behavior can change between versions. The exact pin
+  holds it still; a bump is checked by `nox -s docs` and the planted-breakage test above.
 
 The sections below that name `mkdocs build` describe the site as it was built then.
 

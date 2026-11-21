@@ -21,6 +21,10 @@ that file's GitHub blob URL (fragment preserved verbatim) instead of shipping
 a broken relative link on the site. Links between published pages are left
 alone.
 
+Last, it refuses to stage a page whose markdown image points at a file the
+staged tree does not have: the site generator's link validation resolves
+links to pages only, so nothing downstream would report it.
+
 Usage:
     scripts/build_docs_site.py <output-dir>
 
@@ -114,6 +118,8 @@ _LINK_RE = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)\s]+)\)")
 # as an EXAMPLE inside backticks (or inside a fenced block) is documentation,
 # not a link, and rewriting it would corrupt the published page.
 _INLINE_CODE_RE = re.compile(r"`[^`]*`")
+# A markdown image, with or without a quoted title after the target.
+_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)")
 
 
 @functools.cache
@@ -291,6 +297,23 @@ def _rewrite_target(
     return url
 
 
+def _code_ranges(text: str) -> list[tuple[int, int]]:
+    """Character ranges of `text` that are code: fenced lines and inline spans."""
+    ranges: list[tuple[int, int]] = []
+    offset = 0
+    lines = text.split("\n")
+    for line, fenced in zip(lines, fence_flags(lines), strict=True):
+        if fenced:
+            ranges.append((offset, offset + len(line)))
+        else:
+            ranges += [
+                (offset + m.start(), offset + m.end())
+                for m in _INLINE_CODE_RE.finditer(line)
+            ]
+        offset += len(line) + 1  # +1 for the "\n" that split() removed
+    return ranges
+
+
 def _process_links(text: str, rel_path: str, published: set[str]) -> str:
     """Apply the rewrite rule to every real link, skipping code.
 
@@ -315,23 +338,35 @@ def _process_links(text: str, rel_path: str, published: set[str]) -> str:
             return match.group(0)
         return _sub(match)
 
-    protected: list[tuple[int, int]] = []
-    offset = 0
-    lines = text.split("\n")
-    for line, fenced in zip(lines, fence_flags(lines), strict=True):
-        if fenced:
-            protected.append((offset, offset + len(line)))
-        else:
-            protected += [
-                (offset + m.start(), offset + m.end())
-                for m in _INLINE_CODE_RE.finditer(line)
-            ]
-        offset += len(line) + 1  # +1 for the "\n" that split() removed
+    protected = _code_ranges(text)
 
     # Substituted over the WHOLE text, never line by line: a link's label
     # routinely wraps across lines in these docs, and _LINK_RE has to see it
     # whole or it silently stops matching.
     return _LINK_RE.sub(_sub_unless_protected, text)
+
+
+def _missing_image_targets(text: str, page: Path) -> list[str]:
+    """Relative image targets in staged `text` with no file beside `page`.
+
+    Zensical's ``invalid_links`` check resolves links to PAGES only: an image
+    whose file is missing builds clean under ``--strict`` and ships broken
+    (measured on 0.1.3). The staged tree is the site's whole input, so a
+    target absent from it is absent from the site. Images inside code are
+    examples, not images, and are skipped like links are.
+    """
+    protected = _code_ranges(text)
+    missing = []
+    for match in _IMAGE_RE.finditer(text):
+        target = match.group(1)
+        if target.startswith(("http://", "https://", "data:")):
+            continue
+        if any(lo <= match.start() < hi for lo, hi in protected):
+            continue
+        path_part = target.partition("#")[0].partition("?")[0]
+        if not (page.parent / path_part).is_file():
+            missing.append(target)
+    return missing
 
 
 def build(repo_root: Path, out_dir: Path, render_mermaid: bool = True) -> None:
@@ -359,6 +394,7 @@ def build(repo_root: Path, out_dir: Path, render_mermaid: bool = True) -> None:
     if src_assets_dir.is_dir():
         shutil.copytree(src_assets_dir, out_dir / ASSETS_DIR, dirs_exist_ok=True)
 
+    missing_images: list[str] = []
     for rel in sorted(published):
         src = docs_dir / rel
         if not src.is_file():
@@ -373,7 +409,15 @@ def build(repo_root: Path, out_dir: Path, render_mermaid: bool = True) -> None:
         dest = out_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text, encoding="utf-8")
+        missing_images += [
+            f"{rel}: {target}" for target in _missing_image_targets(text, dest)
+        ]
         print(f"staged {rel}")
+    if missing_images:
+        raise SystemExit(
+            "published page(s) reference an image the staged site does not have "
+            "(page: target):\n  " + "\n  ".join(missing_images)
+        )
 
     # lode-fhql.10 (concurrent sibling) owns the real landing page. Until it
     # lands, the generator has no index.md/README.md in the published set and would

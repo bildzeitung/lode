@@ -1,6 +1,5 @@
-# Zensical config for the lode docs site (lode-fhql.8/.9/.10; generator swapped
-# from mkdocs-material by lode-0lb8). Zensical reads this mkdocs.yml directly, so the
-# file keeps its name and its mkdocs-style keys.
+# Zensical config for the lode docs site (lode-fhql.8/.9/.10, lode-0lb8). Zensical
+# reads an mkdocs.yml directly, hence the file's name and its mkdocs-style keys.
 #
 # docs_dir points at the STAGED output of scripts/build_docs_site.py, not at
 # docs/ directly -- docs/ contains maintainer-only pages (decisions.md,
@@ -99,12 +98,21 @@ markdown_extensions:
       slugify: !!python/name:lode.docs_slug.github_slugify
 
 # What `nox -s docs` gates on (lode-fhql.20, lode-0lb8). Zensical validates every
-# internal link (`invalid_links`) and every link fragment (`invalid_link_anchors`)
-# against the slugs it actually emits, which scripts/check_links.py
-# (`nox -s linkcheck`, GitHub's algorithm) cannot see, so a link can pass there and
-# 404 on the built site. Both are on by default; they are stated here so the gate
-# does not depend on a default. `zensical build --strict` turns a warning into a
-# nonzero exit.
+# link to another page (`invalid_links`) and every link fragment
+# (`invalid_link_anchors`) against the slugs it actually emits, which
+# scripts/check_links.py (`nox -s linkcheck`, GitHub's algorithm) cannot see, so a
+# link can pass there and 404 on the built site. Both are on by default; they are
+# stated here so the gate does not depend on a default. `zensical build --strict`
+# turns a warning into a nonzero exit.
+#
+# NOT covered by this block, measured on 0.1.3, each with its own guard:
+# - an image whose file is missing builds clean (`invalid_links` resolves links to
+#   pages only): scripts/build_docs_site.py refuses to stage such a page;
+# - a `nav` entry naming a missing file builds clean:
+#   tests/test_docs_site_index.py checks every nav target;
+# - a key below that Zensical does not know is ignored, not rejected, so a renamed
+#   key would switch a check off silently: tests/test_docs_site_index.py runs a
+#   strict build against planted breakage with this block.
 #
 # `invalid_links` also catches a broken relative link between two PUBLISHED pages:
 # scripts/build_docs_site.py's staging-time link-rewrite rule already rewrites every

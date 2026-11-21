@@ -375,12 +375,13 @@ def docs(session: nox.Session) -> None:
     built site can still disagree with the source tree (a staged page, a rewritten link),
     so this session is the validator for the built site itself.
 
-    The gate is ``zensical build --strict`` (lode-0lb8): Zensical validates every internal
-    link and link anchor at build time (``invalid_links`` and ``invalid_link_anchors``,
-    both on by default and pinned in ``mkdocs.yml``'s ``validation:`` block) and
-    ``--strict`` aborts the build on any warning. The predicate lives in Zensical's own
-    config rather than a grep of its log, so a reworded message cannot turn it silently
-    green.
+    The gate is ``zensical build --strict`` (lode-0lb8): Zensical validates every link to
+    another page and every link anchor at build time (``invalid_links`` and
+    ``invalid_link_anchors``, both on by default and pinned in ``mkdocs.yml``'s
+    ``validation:`` block) and ``--strict`` aborts the build on any warning. The predicate
+    lives in Zensical's own config rather than a grep of its log, so a reworded message
+    cannot turn it silently green. Zensical does not check image targets; the staging
+    step below does, and fails this session on a missing one.
 
     **Coverage boundary:** ``mkdocs.yml``'s ``docs_dir`` points at the STAGED output of
     ``scripts/build_docs_site.py`` (lode-fhql.9's HUMAN DECISION 2026-08-14 superseded the
@@ -399,8 +400,8 @@ def docs(session: nox.Session) -> None:
 
     Resolves ``zensical``/``python`` through ``_venv_tool`` (lode-0yfn) -- an ambient
     interpreter would not have ``zensical`` (or ``lode``, which ``toc.slugify`` imports)
-    installed. The site is written to ``mkdocs.yml``'s ``site_dir`` (gitignored): Zensical
-    has no output-directory flag.
+    installed. The site is written to ``mkdocs.yml``'s ``site_dir`` (gitignored), replacing
+    whatever an earlier build left there: Zensical has no output-directory flag.
     """
     python = _venv_tool(session, "python")
     zensical = _venv_tool(session, "zensical")

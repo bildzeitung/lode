@@ -16,8 +16,12 @@ mkdocs.yml, so there is no second mechanism to gate here.
 """
 
 import re
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
+import yaml
 from conftest import load_module_from_path, mkdocs_config
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -143,7 +147,10 @@ def test_nav_only_lists_published_pages() -> None:
 
 
 def test_every_nav_target_exists() -> None:
-    """A nav entry pointing at a missing file fails ``mkdocs build --strict``.
+    """A nav entry pointing at a missing file ships as a dead menu entry.
+
+    ``zensical build --strict`` does not report it (measured on 0.1.3), so
+    this test is the only guard.
 
     Checked against docs/ (the SOURCE tree), not ``config["docs_dir"]``: that
     now points at scripts/build_docs_site.py's staged output
@@ -157,7 +164,7 @@ def test_every_nav_target_exists() -> None:
     for page in _nav_leaf_values(config["nav"]):
         assert (docs_dir / page).is_file(), (
             f"mkdocs.yml nav references {page!r}, which does not exist under "
-            f"docs/ -- this breaks the docs build."
+            f"docs/ -- the built site's nav would carry a dead entry."
         )
 
 
@@ -268,3 +275,47 @@ def test_toc_slugify_is_the_github_compatible_one() -> None:
         if isinstance(ext, dict) and "toc" in ext
     )
     assert toc["slugify"] == "lode.docs_slug.github_slugify"
+
+
+@pytest.mark.parametrize(
+    ("body", "exit_code"),
+    [
+        ("[ok](other.md#real-heading) and [ok](#here)", 0),
+        ("[broken anchor](other.md#no-such-heading)", 1),
+        ("[broken same-page anchor](#no-such-heading)", 1),
+        ("[broken page](no-such-page.md)", 1),
+    ],
+)
+def test_strict_build_fails_on_a_broken_link_or_anchor(
+    tmp_path: Path, body: str, exit_code: int
+) -> None:
+    """``nox -s docs`` is only a gate while the pinned Zensical, given THIS
+    repo's ``validation:`` block, still turns a broken link or anchor into a
+    nonzero ``--strict`` exit. Zensical ignores a ``validation:`` key it does
+    not know rather than rejecting it, so a version bump that renamed a key or
+    dropped a check would leave ``nox -s docs`` green on a clean tree with
+    nothing validated. This runs the real build against planted breakage, so
+    that bump turns the suite red instead.
+    """
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "index.md").write_text(f"# Home\n\n## Here\n\n{body}\n", encoding="utf-8")
+    (docs / "other.md").write_text("# Other\n\n## Real heading\n", encoding="utf-8")
+    (tmp_path / "mkdocs.yml").write_text(
+        yaml.safe_dump(
+            {
+                "site_name": "probe",
+                "docs_dir": "docs",
+                "validation": mkdocs_config()["validation"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "zensical", "build", "--strict"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == exit_code, result.stdout + result.stderr

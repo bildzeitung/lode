@@ -111,7 +111,7 @@ jobs:
         # empty diagram on the published site.
         run: uv run --frozen python scripts/build_docs_site.py .docs-site-src
 
-      - name: Build site (strict -- fail on broken links/nav, not just exceptions)
+      - name: Build site (strict -- fail on broken links/anchors, not just exceptions)
         # Output dir comes from mkdocs.yml's `site_dir`, not a flag -- one
         # place to change, and the upload step's `path:` below tracks it.
         run: uv run --frozen zensical build --strict

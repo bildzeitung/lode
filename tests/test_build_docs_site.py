@@ -165,6 +165,48 @@ def test_real_links_survive_the_code_skip() -> None:
     )
 
 
+def test_missing_image_targets_are_found(tmp_path: Path) -> None:
+    """Only a real, relative image whose file is absent is reported.
+
+    The site generator's own link validation does not look at image targets,
+    so this helper is the only thing between a renamed asset and a broken
+    image on the published site.
+    """
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "here.png").write_bytes(b"")
+    (tmp_path / "how-to").mkdir()
+    text = (
+        "![ok](../assets/here.png)\n"
+        '![titled](../assets/here.png "a title")\n'
+        "![gone](../assets/gone.png)\n"
+        "![wrong dir](assets/here.png)\n"
+        "![external](https://example.com/x.png)\n"
+        "Inline: `![example](nope.png)` is documentation\n"
+        "```markdown\n"
+        "![example](nope.png)\n"
+        "```\n"
+    )
+    assert build_docs_site._missing_image_targets(
+        text, tmp_path / "how-to" / "page.md"
+    ) == ["../assets/gone.png", "assets/here.png"]
+
+
+def test_build_refuses_a_page_with_a_missing_image(tmp_path: Path) -> None:
+    """The check is wired into ``build()``: staging fails, naming page and target."""
+    docs = tmp_path / "docs"
+    (docs / "assets").mkdir(parents=True)
+    (docs / "assets" / "here.png").write_bytes(b"")
+    for rel in build_docs_site.PUBLISHED_TOP_LEVEL:
+        (docs / rel).write_text("# page\n\n![ok](assets/here.png)\n", encoding="utf-8")
+    build_docs_site.build(tmp_path, tmp_path / "staged", render_mermaid=False)
+
+    (docs / "brand.md").write_text(
+        "# page\n\n![gone](assets/gone.png)\n", encoding="utf-8"
+    )
+    with pytest.raises(SystemExit, match=r"brand\.md: assets/gone\.png"):
+        build_docs_site.build(tmp_path, tmp_path / "staged", render_mermaid=False)
+
+
 def test_published_and_excluded_partition_the_top_level_docs() -> None:
     """Every top-level docs page is an explicit publish-or-exclude call.
 
