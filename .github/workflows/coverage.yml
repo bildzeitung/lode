@@ -141,7 +141,7 @@ jobs:
         # repo-scoped CODECOV_TOKEN secret was created by the repo owner
         # (lode-otsh) and can do nothing but accept coverage uploads for
         # this repository.
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml

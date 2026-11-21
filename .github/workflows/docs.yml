@@ -121,7 +121,7 @@ jobs:
       # would upload a Pages artifact for a job that can never run.
       - name: Upload Pages artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/trunk'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
@@ -145,8 +145,8 @@ jobs:
       # switch itself -- see the PENDING A HUMAN step in this workflow's own
       # header comment / this ticket's hand-off.
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
