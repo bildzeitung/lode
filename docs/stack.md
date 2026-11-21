@@ -1164,8 +1164,9 @@ parenthetical citing a bd ticket id, `show=False` footer-visibility trivia, or a
 (`screens/browse.py`) — from cells *and* headings alike (a parenthetical is judged on its visible
 text only: a link whose URL anchor carries a bd id, as most deep links into this repo's `(decided,
 lode-xxxx)` headings do, is unwrapped to its label first, so the link goes but a prose
-parenthetical whose only bd-id match was inside that URL survives; derived user pages never link
-out to unpublished maintainer docs, lode-v4k1), so the two pages read as documentation for
+parenthetical whose only bd-id match was inside that URL survives; a parenthetical holding nothing
+but such a link is dropped whole; a link with no marker in its URL is emitted as written,
+lode-v4k1), so the two pages read as documentation for
 someone using lode, not a verbatim dump of `keybindings.md`'s development history or
 `configuration.md`'s implementation notes.
 

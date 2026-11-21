@@ -282,3 +282,18 @@ def test_strip_dev_asides_link_anchor_marker_inside_and_outside_a_parenthetical(
     assert strip("Batch path (see foo.py) only.") == "Batch path only."
     # A link with no marker in its URL is untouched.
     assert strip("See [x](x.md#plain).") == "See [x](x.md#plain)."
+    # A parenthetical that is nothing but such a link goes whole: there is no prose to keep, and
+    # the label alone would leave a bare "(storage.md)" or a dangling "(below)".
+    assert strip(f"Excludes batch jobs. ({link})") == "Excludes batch jobs."
+    assert strip(f"Never a traceback ({link}).") == "Never a traceback."
+    assert strip("Never pinned. ([below](#model-provenance-decided-lode-g2745))") == (
+        "Never pinned."
+    )
+    # A link-only parenthetical with no marker in its URL is untouched.
+    assert strip("Queue ([storage.md](storage.md#queue)).") == (
+        "Queue ([storage.md](storage.md#queue))."
+    )
+    # Square brackets that are not a link are left alone.
+    assert strip("`[cli.theme.styles]` and (`user[:pass]@`)") == (
+        "`[cli.theme.styles]` and (`user[:pass]@`)"
+    )
