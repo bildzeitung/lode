@@ -18,11 +18,11 @@
 #      (only NAME and whatever it forces; every other pin stays put), or, with
 #      --reconcile, plain `uv lock` (lode-trw1): re-resolve ONLY what a
 #      pyproject.toml edit made stale -- an added or removed dependency, a range
-#      or requires-python change -- keeping every other existing pin. This is
-#      the remedy `nox -s lock_currency` names when it exits 1. --reconcile
-#      never upgrades, so it is mutually exclusive with --package, and it
-#      applies no release-age cutoff (it must not downgrade an existing pin).
-#      It runs the same version diff, promote, gate and rollback path below.
+#      or requires-python change -- keeping every other pin. This is the remedy
+#      `nox -s lock_currency` names when it exits 1. Mutually exclusive with
+#      --package. The release-age cutoff ruled for the two upgrade modes
+#      (lode-3s4d) must never reach this one: a reconcile may not downgrade an
+#      existing pin. Steps 2-6 below are the same for all three modes.
 #   2. Print a readable VERSION DIFF between the saved copy and the moved
 #      uv.lock -- one line per changed package, "pkg  OLD -> NEW" for a bump,
 #      "+ pkg VERSION" for an addition, "- pkg  VERSION (removed)" -- derived
@@ -147,16 +147,19 @@ cp -f "$LOCK" "$SAVED_LOCK"
 
 # From here until the outcome is decided an UNGATED lock sits on disk.
 RESTORE_LOCK_ON_EXIT=1
+UV_LOCK_CMD=(uv lock -q)
+if [ "$RECONCILE" -eq 1 ]; then
+  ATTEMPTED="no-upgrade reconcile"
+elif [ -n "$PACKAGE" ]; then
+  UV_LOCK_CMD+=(--upgrade-package "$PACKAGE")
+  ATTEMPTED="single package '$PACKAGE'"
+else
+  UV_LOCK_CMD+=(--upgrade)
+  ATTEMPTED="full lock upgrade"
+fi
 # Checked explicitly: `bash scripts/update-deps.sh` drops the shebang's -e, and a
 # failed resolve must not carry on to a "no change" diff and a green exit.
-if [ "$RECONCILE" -eq 1 ]; then
-  UPGRADE=()
-elif [ -n "$PACKAGE" ]; then
-  UPGRADE=(--upgrade-package "$PACKAGE")
-else
-  UPGRADE=(--upgrade)
-fi
-if ! uv lock -q "${UPGRADE[@]+"${UPGRADE[@]}"}"; then
+if ! "${UV_LOCK_CMD[@]}"; then
   echo "update-deps.sh: uv lock failed (see output above) -- nothing was gated." >&2
   exit 1
 fi
@@ -258,7 +261,7 @@ echo "update-deps.sh: FAILED ($FAILED_AT) -- restoring the committed $LOCK." >&2
 # rollback rebuild, and regardless of whether either succeeds.
 REPORT="$(cat <<REPORT_EOF
 === update-deps.sh FAILURE REPORT (paste into a bd ticket) ===
-Attempted update: $( if [ "$RECONCILE" -eq 1 ]; then echo "no-upgrade reconcile"; elif [ -n "$PACKAGE" ]; then echo "single package '$PACKAGE'"; else echo "full lock upgrade"; fi )
+Attempted update: $ATTEMPTED
 Failed at:         $FAILED_AT (see output above for the actual error)
 Candidate diff that was attempted:
 $DIFF_TEXT

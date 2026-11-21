@@ -6527,11 +6527,14 @@ way to regenerate `uv.lock`, but the script only upgraded, so the `nox -s lock_c
 message ("run the script") sent someone who had edited one dependency into a whole-lock upgrade.
 Decided: `--reconcile` runs plain `uv lock` through the same version-diff, promote, gate and
 rollback path, so only what the `pyproject.toml` edit made stale is re-resolved and every other pin
-stays. It applies no release-age cutoff (`lode-3s4d`), since a reconcile must not downgrade an
-existing pin, and it excludes `--package`. The `lock_currency` message, `docs/stack.md`,
-`docs/onboarding.md` and the script header all name it. Rejected: documenting `--package NAME` as
-the reconcile path (no natural NAME for a removed dependency or a `requires-python` change), and
-ruling that a whole-set upgrade on every edit is intended.
+stays. The release-age cutoff ruled for the upgrade modes (`lode-3s4d`, not built when this was
+written) does not apply to it, since a reconcile must not downgrade an existing pin, and it excludes
+`--package`. The `lock_currency` message, `docs/stack.md`, `docs/onboarding.md` and the script
+header all name it. Rejected: documenting `--package NAME` as the reconcile path (no natural NAME
+for a removed dependency or a `requires-python` change), and ruling that a whole-set upgrade on
+every edit is intended. Not ruled: a green reconcile files the churn-evaluation stub (`lode-i642`)
+like any other green run, which for a branch that only added a dependency is a ticket with nothing
+to evaluate. Open in `lode-7qo1`.
 
 ## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 

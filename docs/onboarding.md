@@ -58,7 +58,8 @@ worktree needs no setup step for the same reason. Re-run `uv sync` only to refre
 
 `scripts/update-deps.sh` is the **only** sanctioned way to move `uv.lock` —
 never hand-edit it. It runs `uv lock --upgrade` (or `uv lock --upgrade-package NAME` with
-`--package NAME`, or plain `uv lock` with `--reconcile`), prints a readable version diff against the committed lock (one
+`--package NAME`, or plain `uv lock` with `--reconcile`), prints a readable version diff
+against the committed lock (one
 `name  old -> new` line per changed package, no hash noise — the diff is the point), then
 keeps the moved `uv.lock` on disk — promoted **before** gating — while it installs it into a
 freshly rebuilt `./.venv` and runs the quality gates (`nox -t fix`, `nox -s tests`). Promoting first is deliberate: a test
@@ -87,11 +88,10 @@ scripts/update-deps.sh --reconcile        # stale lock after a pyproject.toml ed
 ```
 
 **Fixing a stale lock (`lode-trw1`).** When `nox -s lock_currency` exits 1 because `pyproject.toml`
-was edited without re-locking, run `scripts/update-deps.sh --reconcile`: plain `uv lock`, which
-re-resolves only what the edit changed (an added or removed dependency, a range or
-`requires-python` change) and keeps every other pin. It goes through the same diff, promote, gate
-and rollback path, applies no release-age cutoff (it never downgrades an existing pin), and is
-mutually exclusive with `--package`. A bare invocation is a whole-lock upgrade, not a re-lock.
+was edited without re-locking, run `scripts/update-deps.sh --reconcile`. It re-resolves only what
+the edit changed (an added or removed dependency, a range or `requires-python` change) and keeps
+every other pin; a bare invocation is a whole-lock upgrade, not a re-lock. `--reconcile` and
+`--package` are mutually exclusive.
 
 ### 3. Restore the issue database (beads)
 
