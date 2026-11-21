@@ -12,9 +12,17 @@ split at the deepest ATX heading level present in the file, or at top-level
 ``- `` bullets in a file with no headings at all. A post-pass hard-splits any
 unit still over :data:`MAX_UNIT_BYTES` at the next rung down -- heading ->
 bullet -> blank-line-delimited paragraph. ``docs/decisions.md`` gets its
-per-entry units from that post-pass, not from the no-headings rule: its one
-heading is the H1 title on line 1, so the heading split yields the whole file
-as a single oversized unit, which is then split at its bullets.
+per-entry units from that post-pass, not from the no-headings rule: its entries
+sit under the H1 title on line 1, so the heading split yields them as a single
+oversized unit, which is then split at its bullets.
+
+An **entry log** -- a file whose text before its first deepest-level heading is
+over :data:`MAX_UNIT_BYTES` and holds top-level bullets, which is
+``docs/decisions.md`` -- keeps splitting at top-level bullets *after* that
+heading too. The file later gained ``##`` sections at its end, so the heading
+split alone would have swallowed every entry appended after a section into that
+section's unit and attributed it to the section's heading (``lode-skv8``). A
+section's own heading and prose are the unit up to its first bullet.
 
 Boundary detection is **fence-aware**: a ``## `` or ``- `` inside a fenced code
 block is someone's example, not document structure. See :func:`_fence_flags`.
@@ -233,8 +241,24 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
 
     ranges = _split_range(lines, 1, n, primary_boundary)
 
+    is_bullet = _bullet_boundary(lines, fence_flags)
+    first_heading = next((lo for lo, _ in ranges if primary_boundary(lo - 1)), None)
+    entry_log = (
+        bool(deepest)
+        and first_heading is not None
+        and first_heading > 1
+        and _unit_bytes(lines, 1, first_heading - 1) > MAX_UNIT_BYTES
+        and any(is_bullet(i) for i in range(first_heading - 1))
+    )
+
     final_ranges: list[tuple[int, int]] = []
     for lo, hi in ranges:
+        if entry_log and first_heading is not None and lo >= first_heading:
+            for slo, shi in _split_range(lines, lo, hi, is_bullet):
+                final_ranges.extend(
+                    _hard_split(lines, fence_flags, slo, shi, try_bullet=False)
+                )
+            continue
         final_ranges.extend(
             _hard_split(lines, fence_flags, lo, hi, try_bullet=bool(deepest))
         )

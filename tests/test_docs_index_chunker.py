@@ -291,3 +291,42 @@ def test_real_corpus_units_inherit_their_file_class():
 
 def test_empty_file_yields_no_units():
     assert chunk_file("empty.md", "") == []
+
+
+# --- entry log with '##' sections (lode-skv8) --------------------------------
+
+
+def _entry_log_text() -> str:
+    big = "\n".join(f"filler line {i} " + "x" * 60 for i in range(300))
+    return (
+        "# Log\n\n"
+        f"- early entry\n{big}\n"
+        "- second early entry\n\n"
+        "## Section\n\nsection prose\n\n"
+        "- late entry A\n  - **Update (x):** stays with A\n"
+        "- late entry B\n"
+    )
+
+
+def test_entry_log_bullets_after_a_section_are_their_own_units():
+    units = chunk_file("decisions.md", _entry_log_text())
+    firsts = [u.first_line for u in units]
+    assert "## Section" in firsts
+    assert "- late entry A" in firsts
+    assert "- late entry B" in firsts
+    section = next(u for u in units if u.first_line == "## Section")
+    assert "late entry" not in section.body
+    entry_a = next(u for u in units if u.first_line == "- late entry A")
+    assert "Update (x)" in entry_a.body
+
+
+def test_small_headed_file_with_bullets_is_not_split_at_bullets():
+    text = "# T\n\n- a\n- b\n\n## S\n\n- c\n- d\n"
+    units = chunk_file("f.md", text)
+    assert [u.first_line for u in units] == ["# T", "## S"]
+
+
+def test_real_decisions_md_entry_after_a_section_starts_at_its_own_line():
+    marker = "- **/land SKILL.md does not carry a"
+    unit = next(u for u in _decisions_units() if marker in u.body)
+    assert unit.first_line.startswith(marker)

@@ -4925,6 +4925,11 @@ entries below from being rewritten to chase the current tree.)
   question can be settled empirically once the tool exists. Non-goal, inherited and unchanged: no
   existing entry in this file is rewritten, compacted or moved — this work changes how entries are
   **found**, never what they say.
+  - **Update (lode-skv8, 2026-11-21):** the single-heading premise above no longer holds: this file
+    now has `##` sections after its entries. The chunker still has one boundary rule; it now treats
+    a file whose text before its first deepest-level heading is over `MAX_UNIT_BYTES` and holds
+    top-level bullets as an entry log and keeps splitting at top-level bullets after that heading,
+    so an entry appended after a `##` section is its own unit instead of part of the section's.
 
 - **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
   decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent
@@ -6528,6 +6533,11 @@ entries below from being rewritten to chase the current tree.)
   - **Not taken.** (a) copying markers into sub-units breaks the tiling invariant; (c) an authoring
     rule would not cover the existing markers and rests on the author knowing the entry is
     oversized; (d) cannot know which paragraph a marker corrects.
+  - **Update (lode-skv8, 2026-11-21):** this file now has `##` sections at its end, so the bullet
+    list above no longer reaches it only through the H1's hard-split. The chunker treats a file whose
+    text before its first deepest-level heading is over `MAX_UNIT_BYTES` and holds top-level bullets
+    as an entry log and keeps splitting it at top-level bullets after that heading; a `##` section's
+    unit ends at its first bullet.
 
 - **The marker gate does not exempt top-level entry heads; the over-match is accepted (`lode-hp12`,
   2026-11-19, maintainer).** `lode-llxw` ruled that a new correcting entry is not a marker and its
