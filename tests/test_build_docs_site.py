@@ -296,9 +296,9 @@ def test_zensical_pin_is_carried_by_uv_lock_not_docs_yml() -> None:
     assert match, "pyproject.toml's dev group must pin zensical exactly (==)."
     pin = match.group(1)
     uv_lock = (REPO_ROOT / "uv.lock").read_text(encoding="utf-8")
-    assert re.search(
-        rf'name = "zensical"\nversion = "{re.escape(pin)}"', uv_lock
-    ), f"uv.lock must lock zensical {pin} to match pyproject.toml's dev pin."
+    assert re.search(rf'name = "zensical"\nversion = "{re.escape(pin)}"', uv_lock), (
+        f"uv.lock must lock zensical {pin} to match pyproject.toml's dev pin."
+    )
     workflow = (REPO_ROOT / ".github" / "workflows" / "docs.yml").read_text(
         encoding="utf-8"
     )
