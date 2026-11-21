@@ -4276,6 +4276,87 @@ assumption would not have closed it.
   Operative form, including why the preceding `git checkout -f trunk` is load-bearing:
   [`land/SKILL.md` — Section 1](../.claude/skills/land/SKILL.md#1-setup-the-pass--dolt-authoritative-fetch-origin).
 
+### /land design history (lode-w18a.8)
+
+Editor-facing history moved out of [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md):
+the passages the maintainer approved on lode-w18a.3, not every history note in the skill. Each entry
+names what the skill still says. Several of these stories already had a home elsewhere in this file;
+those entries point there rather than copy.
+
+- **`declare -A MSG` (lode-sfnb).** Section 3a populated a `declare -A MSG` associative array that
+  `merge_one()`, a function defined in Section 3's later fenced block, read back. Each fenced block is
+  its own Bash invocation, so `MSG` no longer existed when the loop ran: `${MSG[$id]}` silently
+  expanded to the empty string and `git merge -m ''` produced an empty-message merge or failed with
+  no output. OBSERVED landing the 2026-07-26 lode-ns3r/lode-1q2i/lode-sys4 pass: `declare -A MSG`
+  was re-declared over a variable a prior `source` had already created as an INDEXED array, which
+  bash refuses to convert (non-zero exit, completely empty stdout/stderr), and every `MSG[lode-xxx]`
+  lookup had also silently collapsed to index `0` before that. The rule and the gate are in
+  [Guard against cross-block shell state](#guard-against-cross-block-shell-state-in-skill-markdown-lode-sfnb--lode-x495);
+  the skill keeps the rule and the fix (message files under `.git/`, merge from a script).
+- **`merge_one()` was a bash function (lode-sfnb).** It was defined in Section 3's first-pass fenced
+  block and called again from the isolation-replay loop in the "Red" branch, but that branch only runs
+  after a `git reset --hard` and a re-gate, each its own Bash invocation, so `merge_one` and `MSG` had
+  already vanished. It is now `scripts/land-merge-one.sh`, which reads `MSG_DIR` files and returns
+  conflict paths over stdout instead of a global `$CONFLICTS`. The skill keeps the script pointer and
+  the 0/1/2 exit-code contract.
+- **Inline lock was inert (lode-aps3).** Section 0 used to manage the lock inline, and it never held
+  past its own fenced block. The account, and the staleness-token replacement in
+  `scripts/land-lock.sh`, are in the single-lander-lock bullet of
+  [Mechanics (decided)](#mechanics-decided). The skill keeps "Lock lives in `scripts/land-lock.sh`,
+  as a staleness token; `tests/test_land_lock.py` pins the call sites".
+- **Empty-`accepted` guard conflated missing and empty (lode-0jan).** Section 3's guard used to abort
+  identically for a missing `$STATE_DIR/accepted` (3a never ran) and an empty one (every branch left
+  the set legitimately). The distinction is recorded under Mechanics (decided); the skill keeps the
+  missing-vs-empty rule.
+- **`-C "$(git rev-parse --show-toplevel)"` was not a guard (lode-pcee).** Section 1 used to run
+  `git checkout -f trunk` through it, and the `reset --hard` two lines later carried no `-C` at all.
+  The account is the lode-pcee bullet of [Mechanics (decided)](#mechanics-decided). The skill keeps
+  "`-C "$(git rev-parse --show-toplevel)"` is not a guard: in a worktree it resolves to that
+  worktree".
+- **Explicit fence guard removed from Section 3 (lode-1nty, reversing lode-pxyt).** `land-merge-one.sh`
+  asserts the main checkout itself as its first real action, so the Green loop's fenced
+  `assert-main-checkout.sh` call is no longer needed; both call sites are protected by construction.
+  The decision and the arguments on both sides are in Mechanics (decided), "Fence-level guard vs.
+  script-level guard". The skill keeps "asserts the main checkout itself; no fence guard here".
+- **Stacked-graph snippet did not parse.** The stacked-graph logic used to be a fenced snippet in
+  Section 1a whose outer "for every ordered pair" loop existed only as a comment, so a bare
+  `continue` sat outside any loop. The O(n^2) driver and the direction test were re-improvised,
+  untested, on every pass for an algorithm whose failure is silent. It is now
+  `scripts/stacked-graph.sh` (lode-s9xe.2), pinned by `tests/test_stacked_graph.py`. The skill keeps
+  the script pointer and "Do not re-derive this logic here".
+- **`cat "$STATE_DIR/graph"` comment.** The line exists for the visibility the old `| tee` gave
+  (lode-b8sr replaced the pipeline with a redirect so the script's exit status is not swallowed).
+  The skill's comment is now just `# visibility`.
+- **`git clean -fd` ran only in the failure branch (lode-3v1p).** In the recycled-worktree guard's
+  blind-spot case the clean never fired, so untracked leftovers tripped Section 4's dirty-tree guard
+  (lode-9hgu) and leaked the worktree. It now runs unconditionally. Nothing in Section 4 changed;
+  the fix lives at the dispatch-time guard. The account is in
+  [Recycled-worktree guard](#recycled-worktree-guard-lode-nt98) and
+  [Isolating `land-review` dispatches](#isolating-land-review-dispatches-lode-g387), with the
+  reasoning in the lode-3v1p entry in [decisions.md](decisions.md). The skill keeps nothing.
+- **`drop-from-accepted.sh` replaced a `grep -vxF`/`mv` recipe (lode-s9xe.3).** The recipe was left as
+  a comment for the agent to implement inline at the exact moment a conflict had just fired; the
+  script is the executable version, with its own tests.
+- **Section 4 `$LANDED` load was a bare `cat ... || exit 1` (lode-dc4n).** It carried no diagnostic and
+  was the one `$STATE_DIR` load in the skill that dropped lode-0jan's loud/silent distinction one
+  section later. It now goes through `scripts/land-state-load.sh`; see "The missing-vs-empty policy
+  is now a shared script" under [Mechanics (decided)](#mechanics-decided).
+- **Section 4 epic-completion derivation was dead code (lode-v4rk).** The derivation the inline snippet
+  ran, `bd show <epic-id> --json | jq '.dependents[]'`, was dead: `bd show` only populates
+  `.dependents` under the opt-in `--include-dependents` flag, so `$kids` was always `[]` and the
+  `(($kids|length)>0)` false-positive guard silently ate every pass. The script
+  `scripts/epic-completion-check.sh` is extracted, not inlined, so it carries fixture-backed
+  regression tests (`tests/test_epic_completion_check.py`, including one that reproduces the old bug),
+  since no gate would ever catch a markdown-embedded jq snippet regressing. The skill's comment keeps
+  "lode-v4rk: see the script header".
+- **Kick-back conflicts load was a fourth hand-rolled spelling (lode-dc4n).** The kick-back
+  conflicts load used to be its own `cat ... 2>/dev/null` plus a separate `[ -n ... ]` check, the
+  fourth hand-rolled spelling of a `$STATE_DIR` load; it now uses
+  `scripts/land-state-load.sh --require-nonempty`, the same "missing or empty, both fatal" policy
+  and script as the isolation-replay accepted load.
+- **Rejected "search bd before filing" (lode-9t7u).** Reasoning moved to [decisions.md](decisions.md)
+  under lode-9t7u; the skill keeps "Do not add a search-then-file step".
+
 ### Where this is heading — a green-branch merge queue
 
 This is, deliberately, a **merge queue**: producers open reviewed "ready" branches, a single lander
