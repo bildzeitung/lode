@@ -1811,6 +1811,62 @@ def test_run_tool_turns_cut_off_free_turn_raises_without_running_tools(
     assert hint in str(excinfo.value)
 
 
+@pytest.mark.parametrize(
+    ("stop_reason", "hint"),
+    [
+        ("max_tokens", _BUDGET_EXHAUSTED_HINT),
+        ("model_context_window_exceeded", _CONTEXT_WINDOW_EXCEEDED_HINT),
+        ("end_turn", None),
+    ],
+)
+def test_run_tool_turns_free_turn_without_tool_use_warns_only_when_cut_off(
+    stop_reason: str, hint: str | None, caplog: pytest.LogCaptureFixture
+) -> None:
+    tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
+    no_tool = mock.MagicMock()
+    no_tool.content = [_text_block()]
+    no_tool.stop_reason = stop_reason
+    client = mock.MagicMock()
+    client.messages.create.side_effect = [
+        _tool_use_response("lookup_widget", {}),
+        no_tool,
+        _parsed_response(_Widget(name="w", count=0)),
+    ]
+
+    with caplog.at_level(logging.WARNING, logger="lode.llm_provider"):
+        result = AnthropicProvider(client).run_tool_turns(
+            model="claude-sonnet-4-6",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: "r",
+            output_schema=_Widget,
+            max_tokens=100,
+            timeout_s=30.0,
+            max_tool_turns=3,
+        )
+
+    assert result == _Widget(name="w", count=0)
+    assert client.messages.create.call_count == 3
+    # The final turn is sent the completed tool turn (prompt, tool_use,
+    # tool_result) and nothing from the turn that carried no tool_use block.
+    final_messages = client.messages.create.call_args.kwargs["messages"]
+    assert [m["role"] for m in final_messages] == ["user", "assistant", "user"]
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "lode.llm_provider" and r.levelno == logging.WARNING
+    ]
+    if hint is None:
+        assert warnings == []
+    else:
+        [message] = warnings
+        assert "free turn 2 of 3" in message
+        assert f"stop_reason={stop_reason!r}" in message
+        assert hint in message
+
+
 @pytest.mark.network
 def test_collect_batch_refusal_with_valid_text_is_errored_real_sdk() -> None:
     payload = _succeeded_payload("ver-4")
