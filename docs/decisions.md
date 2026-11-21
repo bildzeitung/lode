@@ -4926,10 +4926,18 @@ entries below from being rewritten to chase the current tree.)
   existing entry in this file is rewritten, compacted or moved — this work changes how entries are
   **found**, never what they say.
   - **Update (lode-skv8, 2026-11-21):** the single-heading premise above no longer holds: this file
-    now has `##` sections after its entries. The chunker still has one boundary rule; it now treats
-    a file whose text before its first deepest-level heading is over `MAX_UNIT_BYTES` and holds
-    top-level bullets as an entry log and keeps splitting at top-level bullets after that heading,
-    so an entry appended after a `##` section is its own unit instead of part of the section's.
+    now has `##` sections, and entries are appended after them. The heading split put each such
+    entry in the unit of the section before it. `scripts/docs_index_chunker.py` now names this file
+    as the one entry log: in it, each top-level bullet after a `##` section's own text starts a
+    unit. A section's own text ends at its last column-zero line that is not a bullet, so a
+    section's own list with prose after it stays in the section's unit. A section that ends in its
+    own list is cut at that list, since nothing tells it from appended entries. This is a step for
+    this file only, on top of the one rule above. The mechanism is the builder's and the technical
+    review's choice under the `lode-tikr` ruling, which asked for the fix and named no rule. The
+    file is named, not detected by shape: as first built, the test was "the text before the first
+    deepest-level heading is over `MAX_UNIT_BYTES` and holds top-level bullets", which
+    `stack.md`, `configuration.md` and `agents-workflow.md` also meet, and their sections were cut
+    at their bullets (measured at review: `stack.md` went from 28 units to 84).
 
 - **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
   decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent
@@ -6533,11 +6541,11 @@ entries below from being rewritten to chase the current tree.)
   - **Not taken.** (a) copying markers into sub-units breaks the tiling invariant; (c) an authoring
     rule would not cover the existing markers and rests on the author knowing the entry is
     oversized; (d) cannot know which paragraph a marker corrects.
-  - **Update (lode-skv8, 2026-11-21):** this file now has `##` sections at its end, so the bullet
-    list above no longer reaches it only through the H1's hard-split. The chunker treats a file whose
-    text before its first deepest-level heading is over `MAX_UNIT_BYTES` and holds top-level bullets
-    as an entry log and keeps splitting it at top-level bullets after that heading; a `##` section's
-    unit ends at its first bullet.
+  - **Update (lode-skv8, 2026-11-21):** "It has one" in the technical-review bullet above no longer
+    holds: this file now has `##` sections as well as the H1, and entries are appended after them.
+    The chunker cuts each such entry into its own unit; the rule is in the `lode-skv8` Update on
+    the `lode-t6o1` entry. The lookup described here is unchanged: those units start on a
+    top-level bullet, which is a structural line.
 
 - **The marker gate does not exempt top-level entry heads; the over-match is accepted (`lode-hp12`,
   2026-11-19, maintainer).** `lode-llxw` ruled that a new correcting entry is not a marker and its

@@ -211,15 +211,16 @@ def test_no_heading_file_splits_by_top_level_bullet():
 def test_real_decisions_md_oversized_entry_is_hard_split():
     # The decision record names a 556-line / 48.8 KB outlier bullet here. Pin
     # the MECHANISM, not that entry's dimensions: decisions.md splits at
-    # top-level '- ' bullets, so every unit would begin with '- ' (bar the
-    # leading preamble) if the post-pass never fired. A later unit that does
-    # NOT begin with '- ' can only be a hard-split continuation of an oversized
-    # bullet entry. Non-brittle as this append-only file grows.
+    # top-level '- ' bullets and at its '##' sections, so every unit would
+    # begin with '- ' or '## ' (bar the leading preamble) if the post-pass
+    # never fired. A later unit that begins with neither can only be a
+    # hard-split continuation of an oversized entry. Non-brittle as this
+    # append-only file grows.
     units = _decisions_units()
     assert [u for u in units if u.first_line.startswith("- ")], (
         "expected decisions.md to split on top-level '- ' bullets"
     )
-    continuations = [u for u in units[1:] if not u.first_line.startswith("- ")]
+    continuations = [u for u in units[1:] if not u.first_line.startswith(("- ", "## "))]
     assert continuations, "expected an oversized bullet entry to be hard-split"
 
 
@@ -293,40 +294,62 @@ def test_empty_file_yields_no_units():
     assert chunk_file("empty.md", "") == []
 
 
-# --- entry log with '##' sections (lode-skv8) --------------------------------
+# --- the entry log: entries appended after a '##' section (lode-skv8) ---------
 
 
 def _entry_log_text() -> str:
-    big = "\n".join(f"filler line {i} " + "x" * 60 for i in range(300))
     return (
         "# Log\n\n"
-        f"- early entry\n{big}\n"
-        "- second early entry\n\n"
+        "- early entry\n\n"
         "## Section\n\nsection prose\n\n"
+        "- the section's own bullet\n\n"
+        "section prose after its own list\n"
+        "  - **Update (s):** stays with the section\n"
         "- late entry A\n  - **Update (x):** stays with A\n"
-        "- late entry B\n"
+        "- late entry B\n\n"
+        "## Last section\n\nprose\n"
     )
 
 
-def test_entry_log_bullets_after_a_section_are_their_own_units():
-    units = chunk_file("decisions.md", _entry_log_text())
-    firsts = [u.first_line for u in units]
-    assert "## Section" in firsts
-    assert "- late entry A" in firsts
-    assert "- late entry B" in firsts
+def test_entry_log_entries_after_a_section_are_their_own_units():
+    units = chunk_file("docs/decisions.md", _entry_log_text())
+    assert [u.first_line for u in units] == [
+        "# Log",
+        "## Section",
+        "- late entry A",
+        "- late entry B",
+        "## Last section",
+    ]
+    by_first = {u.first_line: u.body for u in units}
+    assert "late entry" not in by_first["## Section"]
+    assert "Update (x)" in by_first["- late entry A"]
+
+
+def test_entry_log_section_keeps_its_own_bullets_and_the_prose_after_them():
+    # A section's own list is followed by column-zero prose; an appended
+    # entry's continuation lines are indented. Cutting at the section's first
+    # bullet would hand the prose after the list to that list's last bullet.
+    units = chunk_file("docs/decisions.md", _entry_log_text())
     section = next(u for u in units if u.first_line == "## Section")
-    assert "late entry" not in section.body
-    entry_a = next(u for u in units if u.first_line == "- late entry A")
-    assert "Update (x)" in entry_a.body
+    assert "- the section's own bullet" in section.body
+    assert "section prose after its own list" in section.body
+    assert "Update (s)" in section.body
 
 
-def test_small_headed_file_with_bullets_is_not_split_at_bullets():
-    text = "# T\n\n- a\n- b\n\n## S\n\n- c\n- d\n"
-    units = chunk_file("f.md", text)
-    assert [u.first_line for u in units] == ["# T", "## S"]
+def test_only_the_entry_log_gets_the_trailing_entry_split():
+    # The same shape under any other name keeps whole heading units: there a
+    # bullet after a heading is that section's content.
+    units = chunk_file("docs/stack.md", _entry_log_text())
+    assert [u.first_line for u in units] == ["# Log", "## Section", "## Last section"]
 
 
 def test_real_decisions_md_entry_after_a_section_starts_at_its_own_line():
     marker = "- **/land SKILL.md does not carry a"
     unit = next(u for u in _decisions_units() if marker in u.body)
     assert unit.first_line.startswith(marker)
+
+
+def test_real_decisions_md_section_with_its_own_bullets_stays_one_unit():
+    # The lode-3s4d section: a probe list, then two closing paragraphs.
+    unit = next(u for u in _decisions_units() if "Mechanism chosen, keeping" in u.body)
+    assert unit.first_line.startswith("## A release-age cooldown")

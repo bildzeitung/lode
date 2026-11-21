@@ -16,13 +16,12 @@ per-entry units from that post-pass, not from the no-headings rule: its entries
 sit under the H1 title on line 1, so the heading split yields them as a single
 oversized unit, which is then split at its bullets.
 
-An **entry log** -- a file whose text before its first deepest-level heading is
-over :data:`MAX_UNIT_BYTES` and holds top-level bullets, which is
-``docs/decisions.md`` -- keeps splitting at top-level bullets *after* that
-heading too. The file later gained ``##`` sections at its end, so the heading
-split alone would have swallowed every entry appended after a section into that
-section's unit and attributed it to the section's heading (``lode-skv8``). A
-section's own heading and prose are the unit up to its first bullet.
+``docs/decisions.md`` is also the one **entry log** (:data:`_ENTRY_LOG_STEM`):
+every branch appends its entry at EOF, so a top-level bullet can follow a ``##``
+section it has nothing to do with, and the heading split alone would put it in
+that section's unit under that section's heading (``lode-skv8``). There, the
+top-level bullets after a heading unit's own text each start a unit. See
+:func:`_split_trailing_entries`.
 
 Boundary detection is **fence-aware**: a ``## `` or ``- `` inside a fenced code
 block is someone's example, not document structure. See :func:`_fence_flags`.
@@ -58,6 +57,15 @@ _BULLET_RE = re.compile(r"^-\s")
 _REFERENCE_PROCESS_STEMS = frozenset(
     {"keybindings", "release", "onboarding", "tui", "editing", "test-suite-audit"}
 )
+
+#: The entry log: the one file where a top-level bullet after a heading is a
+#: new entry, not that section's content. Named, not inferred from shape: the
+#: append-at-EOF convention is a fact about this file (``.gitattributes`` gives
+#: it ``merge=union`` by name for the same reason), and an oversized bulleted
+#: stretch before the first deepest-level heading also describes ``stack.md``,
+#: ``configuration.md`` and ``agents-workflow.md``, whose bullets belong to
+#: their sections.
+_ENTRY_LOG_STEM = "decisions"
 
 
 @dataclass(frozen=True)
@@ -146,8 +154,9 @@ def _bullet_boundary(
 ) -> Callable[[int], bool]:
     """Predicate: is line ``i`` an unfenced top-level ``- `` bullet?
 
-    One definition, used by both callers -- the primary rule for a file with no
-    headings at all, and the next rung down when a heading unit is oversized.
+    One definition for every caller -- the primary rule for a file with no
+    headings at all, the next rung down when a heading unit is oversized, and
+    the entry log's trailing entries.
     """
 
     def is_bullet(i: int) -> bool:
@@ -220,6 +229,37 @@ def _hard_split(
     return _split_range(lines, line_lo, line_hi, paragraph_boundary)
 
 
+def _split_trailing_entries(
+    lines: list[str], fence_flags: list[bool], line_lo: int, line_hi: int
+) -> list[tuple[int, int]]:
+    """Cut the entries appended after an entry-log heading unit off as units.
+
+    ``[line_lo, line_hi]`` starts on its heading. The section's own text ends
+    at its last unfenced column-zero line that is not a top-level bullet: a
+    section's prose sits at column zero, an entry's continuation lines are
+    indented. Each top-level bullet after that line starts a unit; bullets
+    before it are the section's own list and stay in its unit. A section that
+    *ends* in its own bullet list cannot be told from one followed by entries,
+    and that list is cut off too.
+    """
+    is_bullet = _bullet_boundary(lines, fence_flags)
+    own_end = max(
+        (
+            i
+            for i in range(line_lo - 1, line_hi)
+            if not fence_flags[i] and lines[i][:1].strip() and not is_bullet(i)
+        ),
+        default=line_lo - 1,
+    )
+    first_entry = next((i for i in range(own_end + 1, line_hi) if is_bullet(i)), None)
+    if first_entry is None:
+        return [(line_lo, line_hi)]
+    return [
+        (line_lo, first_entry),
+        *_split_range(lines, first_entry + 1, line_hi, is_bullet),
+    ]
+
+
 def chunk_file(path: Path | str, text: str) -> list[Unit]:
     """Chunk one markdown file's text into :class:`Unit` objects."""
     lines = text.splitlines()
@@ -241,24 +281,21 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
 
     ranges = _split_range(lines, 1, n, primary_boundary)
 
-    is_bullet = _bullet_boundary(lines, fence_flags)
-    first_heading = next((lo for lo, _ in ranges if primary_boundary(lo - 1)), None)
-    entry_log = (
-        bool(deepest)
-        and first_heading is not None
-        and first_heading > 1
-        and _unit_bytes(lines, 1, first_heading - 1) > MAX_UNIT_BYTES
-        and any(is_bullet(i) for i in range(first_heading - 1))
-    )
+    if deepest and Path(path).stem == _ENTRY_LOG_STEM:
+        # Heading units only: the text before the first heading is left to the
+        # post-pass, which already splits it at its bullets.
+        ranges = [
+            piece
+            for lo, hi in ranges
+            for piece in (
+                _split_trailing_entries(lines, fence_flags, lo, hi)
+                if primary_boundary(lo - 1)
+                else [(lo, hi)]
+            )
+        ]
 
     final_ranges: list[tuple[int, int]] = []
     for lo, hi in ranges:
-        if entry_log and first_heading is not None and lo >= first_heading:
-            for slo, shi in _split_range(lines, lo, hi, is_bullet):
-                final_ranges.extend(
-                    _hard_split(lines, fence_flags, slo, shi, try_bullet=False)
-                )
-            continue
         final_ranges.extend(
             _hard_split(lines, fence_flags, lo, hi, try_bullet=bool(deepest))
         )
