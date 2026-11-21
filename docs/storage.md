@@ -699,10 +699,9 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
   configuration rather than recording it as refused by it. A batch success is stamped the
   same way (`annotations.model` / `provider` / `prompt_ver` and the done job's `prompt_ver`).
   The provider identity is stamped from submit time too, but an `llm_provider` change
-  between submit and collect does not reach the stamps today: collect builds its client
-  from the collect-time settings, so the poll of the old handle raises first and the jobs
-  go through the consecutive-failure budget below. `lode-6pjf` (not built yet) will compare
-  `submit_provider` with the configured provider before polling.
+  between submit and collect never reaches the stamps: `collect_enrich_batch` compares
+  `submit_provider` with the configured provider before polling and re-enqueues the batch's
+  jobs on a mismatch (`lode-6pjf`, see the consecutive-failure budget below).
   **Mechanism (`lode-4wgq`):** lode records the stamp on its own side, in
   `jobs.submit_model`, `jobs.submit_provider` and `jobs.submit_prompt_ver`, written in the
   same statement that sets `batch_handle` at submit, so it is readable before any
@@ -905,6 +904,20 @@ non-raising poll resets the count). The budget bounds only the
 *poll-raises* case; a batch whose results keep arriving as individual
 errored/expired/canceled outcomes was already bounded by the ordinary
 per-job `retry_max_attempts` dead-letter path.
+
+**Provider change between submit and collect (`lode-6pjf`, maintainer ruling
+2026-11-21).** A batch handle belongs to the provider that took it, so polling it
+with the collect-time provider's client can only fail and would burn the budget above.
+`collect_enrich_batch` therefore compares each job's recorded `submit_provider` with
+`provider_identity(settings)` **before** polling, NULL-safely (`None` is anthropic; the
+column spells it `"anthropic"`). On a mismatch it returns without polling and puts the
+batch's jobs straight back to `pending`: `batch_handle` and the `submit_*` columns
+cleared, `batch_collect_failures` zeroed, no attempt charged, so the next batch submit
+sends them to the new provider. The old batch's results are discarded (the spend was
+made at submit); an openai to anthropic switch discards results `OpenAIProvider` could
+have decoded offline. A move between direct OpenAI and Azure keeps identity `openai`
+and is not a mismatch. A job with no recorded `submit_provider` (submitted before
+`lode-4wgq`) is never a mismatch.
 
 ### The queue's clock must never go backward — nor lag the wall clock (lode-t1y)
 
