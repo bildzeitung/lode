@@ -465,8 +465,8 @@ annotation, which the head-pointer comparison flags for re-derivation. So:
   load; E7 appends the enrich-gap step; `lode-w0h.6` appends the `refresh_stale` step — the web
   connector's refresh policy, re-enqueueing a `refresh` job for any external past its TTL
   (`docs/externals.md` "Refresh policy"). `enrich_gap` skips a refusal-dead enrich job
-  while its head version, `ENRICH_PROMPT_VER` and `enrichment_llm.model` are unchanged
-  (the failure taxonomy's third class). `enrich_gap` also covers externals (lode-4kg8, see
+  while its head version, `ENRICH_PROMPT_VER`, `enrichment_llm.model` and the provider are
+  unchanged (the failure taxonomy's third class). `enrich_gap` also covers externals (lode-4kg8, see
   `docs/externals.md` "Enrich gap for externals"). `embed_gap`, `enrich_gap`, and `refresh_stale` each use
   `enqueue_derive_jobs` with `ON CONFLICT DO NOTHING` (the ``idx_jobs_live`` live-job index), so
   running any of them repeatedly enqueues no duplicates. Runs at the start of each `lode work` drain
@@ -565,6 +565,21 @@ the handler returns `None` (`enrich_version`'s only skip signal), and
 NULL `prompt_ver` as stale, so clearing the flag or removing the scope rule
 re-opens the target on the next pass regardless of route; while the gate holds,
 the gap scan excludes the target, so nothing thrashes.
+
+**`idx_jobs_target_type` on `jobs(target_version, type)` (lode-spwf).**
+`idx_jobs_live` is partial and `idx_jobs_status` is status-only, so the reconcile
+gap scans had no index for a non-live job of a given target: the embed-gap probes
+scanned the whole `jobs` table once per head, and the enrich-gap `done`/`dead`
+probes walked every job in that status once per head. A plain index serves them,
+and the externals arm's newest-enrich-job subquery too; a test runs
+`EXPLAIN QUERY PLAN` on the scans' own SQL and requires every `jobs` access to
+seek by `target_version`.
+
+`target_version` leads, not `type`. Nothing gathers `ANALYZE` statistics, and with
+`type` first the planner reorders the newest-enrich-job join to start from a
+`type = ?` seek, walking every enrich job once per external. On a synthetic
+database (3,000 notes, 1,500 externals, 24,000 jobs) that made the externals arm
+about 160 times slower than it was with no index at all.
 
 **`'failed'` joined the live scope 2026-09-03 (lode-uri7, evaluating a proposal
 raised during lode-8a37's review).** Originally scoped to `pending`/`running`
@@ -686,15 +701,14 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
   four re-opens it (a new head version is a different `target_version`); a provider switch
   with an unchanged model string therefore re-opens it too. Only the `llm_provider` value is
   compared, so moving between direct OpenAI and Azure (both `openai`) does not re-open it,
-  exactly as it does not make a head stale for `lode reenrich`. There is no manual-override
-  command. The
-  existing dead -> re-enqueue self-healing stays for every other dead enrich job, since it
-  exists for real outages.
+  exactly as it does not make a head stale for `lode reenrich`. There is no manual-override command.
+  The existing dead -> re-enqueue self-healing stays for every other dead enrich job, since it
+  exists for real outages. The same rule applies to an external's in-force enrich job (lode-4kg8).
 - `lode reenrich` and the `lode status` reenrich hint skip such a head too (`lode-5try`):
   their shared stale scan applies the same standing-refusal predicate
   (`jobs.standing_enrich_refusal_exists_sql`), so neither re-sends nor keeps asking for
-  refused content until the prompt version, model or provider changes. The same rule applies to an
-  external's in-force enrich job (lode-4kg8).
+  refused content until the prompt version, model or provider changes, for note and external heads
+  alike.
 - `lode status` lists refusal-dead enrich jobs in its dead-letter output with the refusal
   category and a hint of their own; they do not get the self-healing hint, which would be
   false for them.
@@ -1824,9 +1838,9 @@ head's `version_id`/`snapshot_id`) whose `model` disagrees with the currently co
 (`lode-568v.6`, below). A head with **no** ai annotations at all is not stale by this definition — it is
 simply unenriched, which the passive reconciliation scan's `enrich_gap` step (above) already covers on
 its own schedule; re-enqueuing it here too would just duplicate work `lode work` was already going to
-do. A head with a standing refusal-dead enrich job under the current `ENRICH_PROMPT_VER` and
-`enrichment_llm` is not stale either (`lode-5try`): the refusal is final for that version, so
-re-enqueuing would only re-send refused content (see the refusal rules above).
+do. A head with a standing refusal-dead enrich job under the current `ENRICH_PROMPT_VER`,
+`enrichment_llm.model` and provider is not stale either (`lode-5try`): the refusal is final for that
+version, so re-enqueuing would only re-send refused content (see the refusal rules above).
 
 **Provider is part of the same identity, not a second check (lode-568v.6).** `annotations.provider`
 (written since `lode-568v.4`) can disagree with the active provider even while `model` matches — the

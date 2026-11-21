@@ -22,27 +22,17 @@
   {
     "file": ".claude/agents/code-reviewer.md",
     "rule": "never-write-trunk",
-    "phrase": "I never write `trunk`.** No merge, no `bd close`, no push to `trunk`"
+    "phrase": "I never write `trunk`.** No merge, no `bd close`, no push to `trunk`, no `git -C <main-checkout>`, no committing the `.beads/*.jsonl` export."
   },
   {
     "file": ".claude/agents/code-reviewer.md",
     "rule": "only-ready-for-code-review-tickets",
-    "phrase": "I only ever touch a `ready-for-code-review` ticket."
+    "phrase": "I only ever touch a `ready-for-code-review` ticket.** If the ticket I'm handed doesn't carry that label, I stop and report"
   },
   {
     "file": ".claude/agents/code-reviewer.md",
     "rule": "never-background-gate-or-end-turn-pending",
     "phrase": "Never background a quality gate, and never end a turn with one pending."
-  },
-  {
-    "file": ".claude/agents/code-reviewer.md",
-    "rule": "gate-foreground-no-run-in-background-no-monitor",
-    "phrase": "no `run_in_background: true` on a"
-  },
-  {
-    "file": ".claude/agents/code-reviewer.md",
-    "rule": "no-deferring-closing-message",
-    "phrase": "no closing message that defers the result"
   },
   {
     "file": ".claude/agents/code-reviewer.md",
@@ -126,23 +116,8 @@
   },
   {
     "file": ".claude/agents/code-reviewer.md",
-    "rule": "never-land-no-merge-close-push-trunk",
-    "phrase": "**I do not merge to `trunk`, `bd close`, push `trunk`, touch `git -C <main-checkout>`,"
-  },
-  {
-    "file": ".claude/agents/code-reviewer.md",
     "rule": "claude-md-wins-surface-drift",
     "phrase": "**CLAUDE.md wins** — surface the drift instead of silently diverging."
-  },
-  {
-    "file": ".claude/agents/code-reviewer.md",
-    "rule": "technical-review-by-non-author",
-    "phrase": "**the technical review is done by an agent that did *not* write the code.**"
-  },
-  {
-    "file": ".claude/agents/code-reviewer.md",
-    "rule": "ready-for-code-review-label-guard",
-    "phrase": "**Guard:** the ticket **must** carry the `ready-for-code-review` label."
   },
   {
     "file": ".claude/agents/code-reviewer.md",
@@ -202,7 +177,7 @@
   {
     "file": ".claude/agents/code-reviewer.md",
     "rule": "review-head-malformed-note-not-drift",
-    "phrase": "rather than \"drift\""
+    "phrase": "I note \"malformed review_head metadata\" in my hand-off rather than \"drift\""
   },
   {
     "file": ".claude/agents/code-reviewer.md",
@@ -227,7 +202,7 @@
   {
     "file": ".claude/agents/code-reviewer.md",
     "rule": "env-builds-itself-no-shared-build-state",
-    "phrase": "There is no build step to run"
+    "phrase": "There is no build step to run: step 5's first `uv run --frozen` builds this worktree's own `./.venv` from `uv.lock`"
   },
   {
     "file": ".claude/agents/code-reviewer.md",
@@ -341,6 +316,11 @@
   },
   {
     "file": ".claude/agents/code-reviewer.md",
+    "rule": "blocked-followup-is-blocks-not-discovered-from",
+    "phrase": "`blocks` if the new ticket genuinely can't be built until *this* one lands"
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
     "rule": "never-bd-create-deps-blocks-inverts-edge",
     "phrase": "**Never `bd create --deps blocks:<id>`**"
   },
@@ -362,7 +342,7 @@
   {
     "file": ".claude/agents/code-reviewer.md",
     "rule": "docs-nit-file-repo-relative",
-    "phrase": "`--file` is **repo-relative**"
+    "phrase": "`--file` is **repo-relative** (e.g. `docs/decisions.md`); an absolute path — and a `../`-relative one, resolved the same way — is normalized against the current checkout and refused (exit 2) if it falls outside it"
   },
   {
     "file": ".claude/agents/code-reviewer.md",
@@ -387,7 +367,7 @@
   {
     "file": ".claude/agents/code-reviewer.md",
     "rule": "all-three-buckets-last-gate",
-    "phrase": "I run **all three buckets**"
+    "phrase": "I run **all three buckets** — `fix`, the full `tests` session (not the builder's fast `unit` view)"
   },
   {
     "file": ".claude/agents/code-reviewer.md",
@@ -398,11 +378,6 @@
     "file": ".claude/agents/code-reviewer.md",
     "rule": "missing-uv-exit-127-machine-fault",
     "phrase": "A missing `uv` exits 127 naming the command"
-  },
-  {
-    "file": ".claude/agents/code-reviewer.md",
-    "rule": "run-every-gate-foreground-read-output",
-    "phrase": "**Run every gate in the FOREGROUND, in the same turn, and read its output before doing"
   },
   {
     "file": ".claude/agents/code-reviewer.md",
@@ -417,7 +392,7 @@
   {
     "file": ".claude/agents/code-reviewer.md",
     "rule": "no-dangerously-disable-sandbox-retry",
-    "phrase": "**I do NOT retry with"
+    "phrase": "**I do NOT retry with `dangerouslyDisableSandbox: true`**"
   },
   {
     "file": ".claude/agents/code-reviewer.md",
@@ -482,12 +457,12 @@
   {
     "file": ".claude/agents/code-reviewer.md",
     "rule": "escalation-remove-label-add-land-escalated",
-    "phrase": "**remove** `ready-for-code-review` so the ticket doesn't sit in my"
+    "phrase": "**do not** mark `ready-for-land`; **remove** `ready-for-code-review` so the ticket doesn't sit in my queue, and **add** `land-escalated`"
   },
   {
     "file": ".claude/agents/code-reviewer.md",
     "rule": "escalation-annotate-and-dolt-push",
-    "phrase": "**annotate the ticket** (`bd update <id> --remove-label ready-for-code-review --add-label"
+    "phrase": "**annotate the ticket** (`bd update <id> --remove-label ready-for-code-review --add-label land-escalated --append-notes \"ESCALATION: <decision needed / why this is getting worse>\"`), then `scripts/bd-dolt-push.sh`"
   },
   {
     "file": ".claude/agents/code-reviewer.md",
@@ -502,27 +477,7 @@
   {
     "file": ".claude/agents/code-reviewer.md",
     "rule": "ap-never-review-own-build",
-    "phrase": "**Reviewing my own build.**"
-  },
-  {
-    "file": ".claude/agents/code-reviewer.md",
-    "rule": "ap-no-ready-for-land-on-red-or-escalation",
-    "phrase": "**Marking `ready-for-land` on a red re-gate, or on an escalation.**"
-  },
-  {
-    "file": ".claude/agents/code-reviewer.md",
-    "rule": "ap-never-drive-builders-worktree",
-    "phrase": "**Driving or editing the builder's worktree at all.**"
-  },
-  {
-    "file": ".claude/agents/code-reviewer.md",
-    "rule": "ap-never-commit-beads-jsonl",
-    "phrase": "**Committing the passive `.beads/*.jsonl` export.**"
-  },
-  {
-    "file": ".claude/agents/code-reviewer.md",
-    "rule": "ap-no-gold-plating",
-    "phrase": "**Adding abstraction or flexibility** in the name of \"review.\""
+    "phrase": "**Reviewing my own build.** I am dispatched *because* I didn't write the code"
   },
   {
     "file": ".claude/agents/code-reviewer.md",
@@ -531,32 +486,77 @@
   },
   {
     "file": ".claude/agents/code-reviewer.md",
-    "rule": "ap-no-skipping-code-review-or-unverified-findings",
-    "phrase": "**Skipping `/code-review`, acting on its findings unverified"
+    "rule": "ap-workflow-absence-no-caveat-no-lowered-scrutiny",
+    "phrase": "I don't ask for pre-computed findings, don't caveat my review for the Workflow's absence, and don't lower my scrutiny because the orchestrator handed me none."
   },
   {
     "file": ".claude/agents/code-reviewer.md",
-    "rule": "ap-no-invoking-correctness-review-workflow",
-    "phrase": "**Attempting to invoke the `correctness-review` Workflow myself"
+    "rule": "rescue-ref-named-in-handoff",
+    "phrase": "Name the rescue ref in my hand-off."
   },
   {
     "file": ".claude/agents/code-reviewer.md",
-    "rule": "ap-discovered-from-for-blocked-followup",
-    "phrase": "**Filing a genuinely-blocked follow-up as `discovered-from`.**"
+    "rule": "conventions-flag-violations",
+    "phrase": "`@import`'d into my context via CLAUDE.md; flag violations"
   },
   {
     "file": ".claude/agents/code-reviewer.md",
-    "rule": "ap-assuming-launch-worktree-clean",
-    "phrase": "**Assuming my launch worktree started clean off `origin/trunk` HEAD"
+    "rule": "never-record-land-head-origin-lacks",
+    "phrase": "never record a `land_head` that `origin/land/<id>` does not contain"
   },
   {
     "file": ".claude/agents/code-reviewer.md",
-    "rule": "ap-no-worktree-remove-of-own",
-    "phrase": "**Trying to `git worktree remove` my own launch worktree.**"
+    "rule": "fix-reformat-amend-and-never-gate-edited-tree",
+    "phrase": "`git commit --amend` the reformat in and re-run, until the gates are green *and* the tree is clean. Never gate a tree I then keep editing."
   },
   {
     "file": ".claude/agents/code-reviewer.md",
-    "rule": "ap-no-external-tracker-writes",
-    "phrase": "**Filing, commenting on, closing, reopening, merging, or reviewing anything on an external"
+    "rule": "mermaid-exit-2-quote-message-not-own-cause",
+    "phrase": "I quote that message rather than re-deriving a cause of my own"
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
+    "rule": "reassert-isolation-first-write-nonzero-stop",
+    "phrase": "Nonzero means **STOP (lode-6wgc)** — do NOT edit, write, or run nox; report to the operator."
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
+    "rule": "reassert-isolation-before-nox-nonzero-stop",
+    "phrase": "Nonzero means **STOP (lode-6wgc)** — do NOT run nox against this cwd; report to the operator."
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
+    "rule": "stacked-branch-off-trunk-merge-base-code-review",
+    "phrase": "use the off-trunk merge-base instead of `trunk` for a stacked branch"
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
+    "rule": "stacked-branch-off-trunk-merge-base-hand-pass",
+    "phrase": "`trunk...HEAD`, or the off-trunk merge-base for a stacked branch"
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
+    "rule": "check-review-head-exit-2-4-report-nothing-about-field",
+    "phrase": "I fix the invocation or report the `bd` fault, and report nothing about `review_head`"
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
+    "rule": "announced-id-not-fable-say-so",
+    "phrase": "if the announced ID is not a Fable model, the pin didn't take effect — I say so plainly"
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
+    "rule": "flag-uncertainty-not-guess",
+    "phrase": "Flag uncertainty explicitly rather than guessing."
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
+    "rule": "no-separate-git-fetch-before-checkout-script",
+    "phrase": "I run no separate `git fetch` before it"
+  },
+  {
+    "file": ".claude/agents/code-reviewer.md",
+    "rule": "pre-lode-0yfn-run-pytest-directly",
+    "phrase": "run `uv run --frozen pytest` directly for that one"
   }
 ]
