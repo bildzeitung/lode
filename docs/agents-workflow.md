@@ -1513,7 +1513,7 @@ mechanism, both spend the maintainer's attention on whatever the claim says. `lo
 batch collected after a provider switch "records the refusal as Azure's"; the maintainer ruled on that,
 and the builder copied the mechanism into `docs/decisions.md`. The code cannot reach it:
 `collect_enrich_batch` polls with the collect-time provider's client, so the old provider's handle fails
-the poll and nothing is stamped. The review caught it one step before landing (MISTAKES.md, 2026-11-20
+the poll and no refusal or success is stamped. The review caught it one step before landing (MISTAKES.md, 2026-11-20
 entry, "A decision ticket stated a failure that the code cannot reach").
 
 Two rules, one per place the claim passes through:
@@ -1521,8 +1521,9 @@ Two rules, one per place the claim passes through:
 - **Filing.** Before filing a ticket that asks the maintainer to decide about a failure, trace it in the
   code from the trigger to the wrong outcome. Mark any step not traced "not checked against the code" in
   the ticket. Applies to the builder (`coding.md`) and the reviewer (`code-reviewer.md`, follow-up step).
-- **Recording.** A builder or reviewer writing a ruling into `docs/decisions.md` writes the ruling. It
-  writes a claimed mechanism only after tracing it, or labelled as the ticket's claim.
+- **Recording.** A builder writing a ruling into `docs/decisions.md` writes the ruling. It writes a
+  claimed mechanism only after tracing it, or labelled as the ticket's claim. The reviewer holds the
+  ruling record in the diff it reviews, and any fix it makes to that record, to the same rule.
 
 ### Wording-only doc nits go to the docs-nits collector (lode-t551)
 
