@@ -783,8 +783,9 @@ def test_refusal_columns_migrated_onto_pre_existing_jobs_table(tmp_path: Path) -
         assert conn.execute("PRAGMA user_version").fetchone()[0] == _SCHEMA_VERSION
         migrated = _refusal_columns(conn)
         assert conn.execute(
-            "SELECT DISTINCT refusal, refusal_category, refusal_model FROM jobs"
-        ).fetchall() == [(0, None, None)]
+            "SELECT DISTINCT refusal, refusal_category, refusal_model, "
+            "refusal_provider FROM jobs"
+        ).fetchall() == [(0, None, None, None)]
     finally:
         conn.close()
 
@@ -793,7 +794,12 @@ def test_refusal_columns_migrated_onto_pre_existing_jobs_table(tmp_path: Path) -
         fresh = _refusal_columns(fresh_conn)
     finally:
         fresh_conn.close()
-    assert set(fresh) == {"refusal", "refusal_category", "refusal_model"}
+    assert set(fresh) == {
+        "refusal",
+        "refusal_category",
+        "refusal_model",
+        "refusal_provider",
+    }
     assert migrated == fresh
 
     # Idempotent: re-running init_db on the migrated DB must not raise.
@@ -837,8 +843,8 @@ def test_jobs_target_type_index_reaches_a_pre_existing_db(tmp_path: Path) -> Non
         # init_db's schema.sql pass built the index before the versioned step
         # ran, so drop it to exercise the step itself (and its idempotency).
         conn.execute("DROP INDEX idx_jobs_target_type")
-        storage._migrate_v4_jobs_target_type_index(conn)
-        storage._migrate_v4_jobs_target_type_index(conn)
+        storage._migrate_v5_jobs_target_type_index(conn)
+        storage._migrate_v5_jobs_target_type_index(conn)
         assert index_columns(conn) == ["target_version", "type"]
     finally:
         conn.close()

@@ -259,7 +259,23 @@ def _migrate_v3_jobs_refusal_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {declaration}")
 
 
-def _migrate_v4_jobs_target_type_index(conn: sqlite3.Connection) -> None:
+def _migrate_v4_jobs_refusal_provider(conn: sqlite3.Connection) -> None:
+    """lode-7jcp: add ``jobs.refusal_provider``, the provider half of the re-open key.
+
+    Plain nullable column add, skipped when ``jobs`` already carries it (a
+    database that had ``notes`` but no ``jobs`` reaches this step with ``jobs``
+    freshly created in the target shape). NULL is the existing
+    :func:`lode.llm_provider.provider_identity` convention for "anthropic", so
+    every pre-existing refusal row reads back as Anthropic-refused. A row an
+    ``openai`` config refused before this migration therefore re-opens once
+    under that config, and its re-run records the provider.
+    """
+    present = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "refusal_provider" not in present:
+        conn.execute("ALTER TABLE jobs ADD COLUMN refusal_provider TEXT")
+
+
+def _migrate_v5_jobs_target_type_index(conn: sqlite3.Connection) -> None:
     """lode-spwf: add ``idx_jobs_target_type`` on ``jobs (target_version, type)``.
 
     ``schema.sql`` says what the index is for and why ``target_version`` leads.
@@ -272,7 +288,7 @@ def _migrate_v4_jobs_target_type_index(conn: sqlite3.Connection) -> None:
     )
 
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 """Target ``PRAGMA user_version`` — bump alongside a new entry in
 :data:`_VERSIONED_MIGRATIONS`."""
 
@@ -280,7 +296,8 @@ _VERSIONED_MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = 
     (1, _migrate_v1_egress_log_tool_purpose),
     (2, _migrate_v2_jobs_live_includes_failed),
     (3, _migrate_v3_jobs_refusal_columns),
-    (4, _migrate_v4_jobs_target_type_index),
+    (4, _migrate_v4_jobs_refusal_provider),
+    (5, _migrate_v5_jobs_target_type_index),
 ]
 """Rebuild-shaped migrations, gated by ``PRAGMA user_version`` (see module
 docstring). Ordered ascending; each entry runs once, the first time

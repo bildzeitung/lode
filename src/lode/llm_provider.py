@@ -141,8 +141,10 @@ against exactly; read that first for the *why*. This module owns the *what*:
   OpenAI/Azure user actually needs this path; full rationale in
   ``docs/stack.md`` "LLM provider seam" / lode-35nu.11.6.
 - ``timeout_s`` is a budget for the whole **run**, not one call each: the
-  deadline is set once and each turn is sent only what remains, so a run
-  cannot outlive it however many turns it takes. ``max_tokens`` is **not**
+  deadline is set once and each turn is sent only what remains. It is not a
+  hard wall-clock cap: the SDK retries a timed-out turn at the value it was
+  sent, so a wedged run can take about 3x ``timeout_s`` (``docs/stack.md``
+  "LLM provider seam" / lode-dx0h). ``max_tokens`` is **not**
   decremented across turns -- it stays what it has always been, a per-response
   output cap, applied to each turn. That asymmetry is a DECIDED design choice
   (maintainer, lode-3dh1), not a gap left over from lode-35nu.11.6's
@@ -1000,11 +1002,11 @@ class AnthropicProvider:
         kept with ``tool_choice`` ``none``), continuing the same message
         history. Forced ``tool_choice`` is not used: Sonnet 5.5 and Opus 5.5
         reject it (lode-ugj5).
-        ``timeout_s`` bounds the whole run (``max_tokens`` does not --
-        see the module docstring): each SDK
-        call is sent the *remaining* wall-clock budget, and the run raises
-        :class:`LLMProviderError` rather than starting a call once that
-        budget is exhausted.
+        ``timeout_s`` is a budget for the whole run (``max_tokens`` is not
+        -- see the module docstring): each SDK call is sent the *remaining*
+        wall-clock budget, and the run raises :class:`LLMProviderError`
+        rather than starting a call once that budget is exhausted. A wedged
+        turn can still overrun the budget; the module docstring says how far.
         """
         if not tools:
             return self.structured_call(
@@ -1043,7 +1045,7 @@ class AnthropicProvider:
 
         total_output_tokens = 0
 
-        for _ in range(max_tool_turns):
+        for turn_index in range(max_tool_turns):
             remaining = _remaining_or_raise("starting the next free tool turn")
             try:
                 response = self._client.messages.create(
@@ -1072,9 +1074,26 @@ class AnthropicProvider:
                     what=f"Anthropic declined a free tool turn (model={model})",
                 )
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+            cut_off = stop_reason in ("max_tokens", "model_context_window_exceeded")
             if not tool_use_blocks:
+                if cut_off:
+                    # The truncated turn is dropped, so the final turn answers
+                    # without any tool call it may have been about to make;
+                    # say so rather than degrade silently (lode-c99p).
+                    _log.warning(
+                        "run_tool_turns free turn %d of %d (model=%s, "
+                        "max_tokens=%d, stop_reason=%r) was cut off before any "
+                        "tool_use block; proceeding to the final "
+                        "structured-output turn %s",
+                        turn_index + 1,
+                        max_tool_turns,
+                        model,
+                        max_tokens,
+                        stop_reason,
+                        _stop_reason_hint(stop_reason, response),
+                    )
                 break
-            if stop_reason in ("max_tokens", "model_context_window_exceeded"):
+            if cut_off:
                 # A tool_use cut off at max_tokens usually still parses as a
                 # valid partial input; running the tool on it would act on
                 # arguments the model never finished (lode-4rxs). For

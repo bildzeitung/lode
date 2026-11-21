@@ -115,10 +115,9 @@ Two files, two jobs — **never pin the same thing in both**:
 - **`uv.lock` is the only place exact versions live (`lode-s09w`, `lode-s09w.4`).** A committed,
   fully-transitive lock of the runtime dependencies **and** the `dev` dependency group — `lode-s09w`
   reversed epic `lode-g274`'s OQ#1, which had left the dev tools unlocked — consumed by every `uv
-  sync` / `uv run --frozen`. Regenerated only via `uv lock` (or `scripts/update-deps.sh`, which
-  wraps it) — never hand-edited. The older pip-compile lock and its
-  compile script are deleted (`lode-s09w.4`); `git log` and `docs/decisions.md` keep
-  their history.
+  sync` / `uv run --frozen`. Regenerated only via `scripts/update-deps.sh` (which wraps `uv lock`)
+  — never hand-edited. The older pip-compile lock and its compile script are deleted
+  (`lode-s09w.4`); `git log` and `docs/decisions.md` keep their history.
 
   **Installing from `uv.lock` verifies hashes, and that replaces `--require-hashes` (`lode-s09w.4`).**
   The old lock step ran `uv pip install --require-hashes`; the question whether `uv sync` /
@@ -343,8 +342,9 @@ Every caller below goes through `uv lock`:
   `origin/trunk` with no branch involved at all. `lock_currency` fails the same soundness test for a
   different reason: it asks whether the committed lock is a fixed point of the tree **plus the
   ambient `uv` plus today's PyPI** — an answer that can flip with no branch involved (a `uv` release
-  that changes the emitted format; `uv` is installed unpinned via `pip install -U uv`, so the
-  lander's resolver can differ from the one that produced the committed lock). So `/land` runs
+  that changes the emitted format; `uv` is unpinned — CI's `setup-uv` installs the latest release,
+  a dev machine runs whatever is on `PATH` — so the lander's resolver can differ from the one that
+  produced the committed lock). So `/land` runs
   **both** gates once on bare `origin/trunk` before entering the loop: red on either one there means
   the failure predates every branch in the set and is not attributable to any of them — stop the
   pass, don't isolate. (`tests/conftest.py` also scrubs the specific ambient colour/tty env vars
@@ -894,8 +894,14 @@ tool, and on an empty `tools` a `tool_name` would then have selected
 raises too, before any tool runs (`lode-4rxs`): a tool input truncated at the output cap usually
 still parses as a valid partial object, so `stop_reason` is the only thing that catches it. The cost
 accepted: a tool call that happened to finish on the last token fails the whole run, which nothing
-retries, instead of being executed. A `max_tokens` free turn with *no* `tool_use` block still ends
-the loop and goes to the final turn; whether that should stay is open (`lode-c99p`).
+retries, instead of being executed. A free turn with `stop_reason` `max_tokens` or
+`model_context_window_exceeded` and *no* `tool_use` block still ends the loop and goes to the final
+turn, but `run_tool_turns` logs a warning naming the stop reason and which free turn it was
+(`lode-c99p`, maintainer ruling 2026-11-20): the truncated turn is dropped, so the answer lacks any
+tool call it may have been about to make. The warning also fires when the turn was cut off while
+writing prose, where nothing is lost: the content of a free turn with no `tool_use` block never
+reaches the final turn, cut off or not. No `LLMProviderError`; a turn ending `end_turn` with no
+`tool_use` block logs nothing.
 A free turn with `stop_reason` `model_context_window_exceeded` that carries a `tool_use` block
 raises the same way, with the context-window hint (`lode-hfzw`, maintainer ruling 2026-11-19). The
 basis is Anthropic's published
@@ -904,19 +910,24 @@ page, which says of this stop reason "Treat the response as truncated." Neither 
 [context-windows](https://platform.claude.com/docs/en/build-with-claude/context-windows) page says
 whether a `tool_use` block under it can be incomplete (the first page's one statement about an
 incomplete `tool_use` is scoped to `max_tokens`), so the guard is the conservative choice, at the
-same accepted cost. Without a `tool_use` block such a free turn goes to the final turn, as a
-`max_tokens` one does.
+same accepted cost.
 
 **`timeout_s` is a budget for the whole run; `max_tokens` deliberately is not.** No new config knob
 was added — these are the same two knobs `structured_call` already took, and a call site's existing
 `ModelTier`-resolved values (e.g. `qa.MAX_TOKENS`/`qa_call_timeout_s`,
 [configuration.md](configuration.md#models)) carry over unchanged.
 
-- **`timeout_s` — per-RUN, implemented literally.** `AnthropicProvider` sets one deadline at the top
-  of the run and sends each SDK call the *remaining* wall clock (`timeout_s` minus elapsed),
-  raising `LLMProviderError` rather than starting a further call once it is exhausted, instead of
-  resetting the clock every turn. A run therefore cannot outlive `timeout_s` however many turns it
-  takes.
+- **`timeout_s` — per-RUN: one deadline, not a hard wall-clock cap.** `AnthropicProvider` sets one
+  deadline at the top of the run and sends each SDK call the *remaining* wall clock (`timeout_s`
+  minus elapsed), raising `LLMProviderError` rather than starting a further call once it is
+  exhausted, instead of resetting the clock every turn. The budget therefore bounds *when a new turn
+  may start* and what each turn is sent, not the wall clock of a wedged call: nothing in `src/lode`
+  sets `max_retries`, so the SDK default of 2 applies, and the SDK retries a timed-out turn with the
+  same timeout. A wedged turn can thus run about 3x what it was sent, which makes the worst case for
+  a whole run about 3x `timeout_s` before `APITimeoutError` reaches lode. This is the same risk
+  [configuration.md](configuration.md#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx)
+  flags for the single-call case (decision (3), SDK retry left at the default); making the budget a
+  hard cap would mean reversing that decision and is not taken here (`lode-dx0h`).
 - **`max_tokens` — per-TURN, DECIDED to stay that way (maintainer, `lode-3dh1`).** The ticket's
   acceptance criteria asked for both budgets to be per-run; only `timeout_s` is, and that asymmetry is
   now a settled design decision, not a known gap awaiting a fix. `max_tokens` is not a spend meter —
@@ -1006,8 +1017,12 @@ deciding factors were:
   Node/Chromium toolchain, per [`CLAUDE.md`](../CLAUDE.md)) and Hugo/Zola (not Python, and a second
   static-site toolchain the venv/lock already cover for nothing).
 
-**Dependency**: `mkdocs-material>=9.5,<10` in the `dev` dependency group in `pyproject.toml` (`lode-fhql.20`,
-2026-08-14 — **reverses** the original decision below to put it in its own CI-only `docs` extra).
+**Dependency**: `mkdocs-material`, pinned exactly (`==`, `lode-fhql.9`), in the `dev` dependency
+group in `pyproject.toml` (`lode-fhql.20`, 2026-08-14 — **reverses** the original decision below to
+put it in its own CI-only `docs` extra). Upstream reaches end of life on 2027-05-05; whether to stay
+or migrate is
+[open](decisions.md#mkdocs-material-is-in-maintenance-mode-stay-or-migrate-open-lode-3vet)
+(`lode-3vet`).
 The original premise was that the docs build had no local value (`lode-fhql.9`'s Pages workflow
 builds the site; no local `dev` install needs it) — that premise broke the same day a local `mkdocs
 serve` (run ad hoc for `lode-fhql.13`'s favicon sign-off) immediately surfaced two broken intra-doc

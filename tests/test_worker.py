@@ -312,13 +312,40 @@ def test_run_enrich_success_stamps_prompt_ver(
     job_id = _insert_job(conn, "enrich", "ver-1")
     _claim_one(conn, ("enrich",), _now_iso())
     noop_enrich_registry: dict[str, HandlerFn] = {
-        "enrich": lambda conn, tv, db, s: None
+        "enrich": lambda conn, tv, db, s: "enriched"
     }
     ok = run_one(conn, job_id, db_path, settings, noop_enrich_registry)
     assert ok is True
     row = _job(conn, job_id)
     assert row["status"] == "done"
     assert row["prompt_ver"] == ENRICH_PROMPT_VER
+
+
+def test_run_enrich_gated_out_job_leaves_prompt_ver_null(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A gated-out enrich job ends 'done' with prompt_ver NULL on the immediate route (lode-tkdy).
+
+    Runs the real enrich handler on a no_egress note, so the skip signal is
+    pinned end to end. Same state as lode.enrich.submit_enrich_batch's skip
+    path: not a gap while the flag holds, re-opened by reconcile once it clears.
+    """
+    from lode.reconcile import _enrich_gap_step
+
+    _insert_note_worker(conn)
+    with conn:
+        conn.execute("UPDATE notes SET no_egress = 1")
+    job_id = _insert_job(conn, "enrich", "ver-1")
+    _claim_one(conn, ("enrich",), _now_iso())
+
+    assert run_one(conn, job_id, db_path, settings, _REGISTRY) is True
+    row = _job(conn, job_id)
+    assert (row["status"], row["prompt_ver"]) == ("done", None)
+
+    assert _enrich_gap_step(conn, settings) == 0
+    with conn:
+        conn.execute("UPDATE notes SET no_egress = 0")
+    assert _enrich_gap_step(conn, settings) == 1
 
 
 def test_run_appends_handler_outcome_to_outcomes_sink(
@@ -4162,7 +4189,7 @@ def _refusing_registry(calls: list[str]) -> dict[str, HandlerFn]:
 def _refusal_row(conn: sqlite3.Connection, job_id: int) -> tuple:
     return conn.execute(
         "SELECT status, attempts, refusal, refusal_category, refusal_model, "
-        "prompt_ver FROM jobs WHERE id = ?",
+        "refusal_provider, prompt_ver FROM jobs WHERE id = ?",
         (job_id,),
     ).fetchone()
 
@@ -4183,6 +4210,7 @@ def test_run_enrich_refusal_is_dead_on_first_call_without_charging_attempts(
         1,
         "cyber",
         settings.enrichment_llm.model,
+        None,
         ENRICH_PROMPT_VER,
     )
     # Exactly one LLM call: nothing claims a dead row again.
@@ -4263,6 +4291,37 @@ def test_reconcile_reenqueues_refusal_dead_job_when_enrichment_model_changes(
     assert _enrich_statuses(conn) == [("dead",), ("pending",)]
 
 
+def test_reconcile_reenqueues_refusal_dead_job_when_provider_changes(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    from lode.reconcile import _enrich_gap_step
+
+    _insert_note_worker(conn)
+    _refuse_one(conn, db_path, settings, "ver-1")
+    # Same model string, different provider: the refusal no longer stands.
+    other = settings.model_copy(update={"llm_provider": "openai"})
+    assert other.enrichment_llm.model == settings.enrichment_llm.model
+
+    assert _enrich_gap_step(conn, other) == 1
+    assert _enrich_statuses(conn) == [("dead",), ("pending",)]
+
+
+def test_reconcile_compares_a_stored_non_anthropic_provider(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    from lode.reconcile import _enrich_gap_step
+
+    # Refused under openai: the row stores "openai", not NULL, so staying on
+    # openai keeps the refusal and moving back to anthropic re-opens it.
+    openai_settings = settings.model_copy(update={"llm_provider": "openai"})
+    _insert_note_worker(conn)
+    _refuse_one(conn, db_path, openai_settings, "ver-1")
+
+    assert _enrich_gap_step(conn, openai_settings) == 0
+    assert _enrich_gap_step(conn, settings) == 1
+    assert _enrich_statuses(conn) == [("dead",), ("pending",)]
+
+
 def test_reconcile_reenqueues_refusal_dead_job_for_a_new_head_version(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
@@ -4318,6 +4377,7 @@ def test_collect_enrich_batch_refusal_is_dead_without_charging_attempts(
         1,
         "cyber",
         settings.enrichment_llm.model,
+        None,
         ENRICH_PROMPT_VER,
     )
 
@@ -4355,7 +4415,8 @@ def test_collect_enrich_batch_openai_refusal_is_dead_with_no_category(
     )
     job_id = _insert_job(conn, "enrich", "ver-1", status="running", batch_handle=handle)
 
-    collect_enrich_batch(conn, handle, settings, provider=provider)
+    openai_settings = settings.model_copy(update={"llm_provider": "openai"})
+    collect_enrich_batch(conn, handle, openai_settings, provider=provider)
 
     assert _refusal_row(conn, job_id) == (
         "dead",
@@ -4363,6 +4424,7 @@ def test_collect_enrich_batch_openai_refusal_is_dead_with_no_category(
         1,
         None,
         settings.enrichment_llm.model,
+        "openai",
         ENRICH_PROMPT_VER,
     )
     client.responses.create.assert_called_once()

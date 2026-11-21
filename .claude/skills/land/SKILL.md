@@ -50,13 +50,11 @@ file** under `$STATE_DIR` (`.git/land-state/`, which survives `git reset --hard`
 touches the index and working tree). Logic shared by two call sites lives in `scripts/`, never in a
 bash function defined in one block and called from another.
 
-This is not a style preference — it is the defect this skill has already shipped once. Section 3a
-used to populate a `declare -A MSG` associative array that Section 3's merge loop read back; by the
-time the loop ran, `MSG` was empty, and `git merge -m ''` failed with *completely empty stdout and
-stderr* (OBSERVED, 2026-07-26, landing lode-ns3r/lode-1q2i/lode-sys4). **Every such failure is
-silent by default**, and this is the one skill that writes `trunk` — so any block that loads state
-must also *assert it loaded* and abort loudly if it did not. A loop that iterates zero times and
-exits 0 is indistinguishable from a clean pass that had nothing to do.
+This is not a style preference — it is the defect this skill has already shipped once (lode-sfnb; see
+[docs/agents-workflow.md](../../../docs/agents-workflow.md#land-design-history-lode-w18a8)). **Every
+such failure is silent by default**, and this is the one skill that writes `trunk` — so any block
+that loads state must also *assert it loaded* and abort loudly if it did not. A loop that iterates
+zero times and exits 0 is indistinguishable from a clean pass that had nothing to do.
 
 **This rule, and the mechanical gate that now backstops it repo-wide, are recorded once, in
 [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#guard-against-cross-block-shell-state-in-skill-markdown-lode-sfnb--lode-x495)
@@ -77,16 +75,11 @@ Being the **single** lander is what serializes landing. v1 guarantees that with 
 **one machine**. (The distributed `refs/locks/land` ref for true concurrent multi-machine landing is
 a deferred upgrade, recorded in `docs/decisions.md` — **not** v1.)
 
-**This lock is real state that must span the whole pass, across every fenced block below — exactly
-the shape the governing rule above warns cannot survive a `trap` or a `$$` (lode-aps3).** It used to
-be managed inline here and was therefore **inert**: the release fired the instant this block's own
-shell exited, before Section 1 ran, and the stale-lock reclaim judged liveness from a PID that is
-*always* already dead by the time a later block reads it. Both halves are now in
-`scripts/land-lock.sh`, which replaces them with a wall-clock staleness token — the full reasoning,
-and the mechanism's two known limits, are in that script's header;
+**This lock is real state that must span the whole pass, across every fenced block below
+(lode-aps3).** Lock lives in `scripts/land-lock.sh`, as a staleness token; `tests/test_land_lock.py`
+pins the call sites. The script's header has the full reasoning and the mechanism's two known limits;
 [docs/agents-workflow.md](../../../docs/agents-workflow.md#mechanics-decided)'s single-lander-lock
-bullet is the design home. `tests/test_land_lock.py` pins both the script's behaviour and these call
-sites, so this section cannot quietly go back to an inline lock.
+bullet is the design home.
 
 **The token is now a heartbeat, not a one-shot stamp (lode-m87j).** [Section
 2a](#2a-re-validate-that-beads-and-git-havent-drifted) re-stamps it once per ticket in the vet loop
@@ -114,8 +107,8 @@ Section 1. Adding release calls per exit site was deliberately rejected on that 
 
 **A pass in which every branch was bounced, escalated, held, or kicked back `needs-rebase` is NOT
 one of those exit sites (lode-0jan).** [Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)'s
-empty-`accepted` guard used to abort identically whether `$STATE_DIR/accepted` was **missing** (3a's
-precompute never ran — a real silent-failure shape, still aborted loudly, unchanged) or merely
+empty-`accepted` guard distinguishes **missing** (3a's
+precompute never ran — a real silent-failure shape, aborted loudly) from merely
 **empty** (every branch already left the set for a legitimate reason). The empty case is not a
 failure: `scripts/land-merge-batch.sh` correctly processes zero ids, the re-gate that follows is
 *skipped* (`trunk` is unchanged, so there is nothing this pass introduced to gate — see that
@@ -259,17 +252,12 @@ with git merges and pushes), so I follow the bd-sync discipline strictly (see
 
 **Refuse to start unless I am actually in the main checkout (lode-pcee) — asserted once, up front,
 as a precondition of the whole block rather than as a `-C` bolted onto individual commands.**
-`--show-toplevel` resolves relative to
-**cwd**, so `-C "$(git rev-parse --show-toplevel)"` — the form this block used to run the `checkout
--f trunk` through — is a no-op wherever it matters: in the main checkout it just re-states the cwd
-you're already in, and in a worktree it resolves to *that worktree's own root*, not the main
-checkout, so it can never redirect a command away from wherever you actually are. It reads as a
-safety guard and is not one — and the destructive `reset --hard` two lines later carried no `-C` at
-all, so from a worktree it would have hard-reset *that worktree's* branch, discarding any
-uncommitted work there with nothing in `reflog` to recover it. `--git-common-dir` is the mechanism
-that actually distinguishes the two: every worktree of a repo (main checkout included) shares one
-common `.git` directory, and only the **main checkout's own toplevel** is that directory's parent —
-a linked worktree's toplevel never is. The check is
+`-C "$(git rev-parse --show-toplevel)"` is not a guard: in a worktree it resolves to that worktree
+(history: [docs/agents-workflow.md](../../../docs/agents-workflow.md#land-design-history-lode-w18a8)).
+`--git-common-dir` is the mechanism that actually distinguishes the main checkout from a linked
+worktree: every worktree of a repo (main checkout included) shares one common `.git` directory, and
+only the **main checkout's own toplevel** is that directory's parent — a linked worktree's toplevel
+never is. The check is
 [`scripts/assert-main-checkout.sh`](../../../scripts/assert-main-checkout.sh) — extracted rather than
 inlined so it is shellcheck'd and unit-tested against real worktree fixtures the same way
 `scripts/isolation-guard.sh` and `scripts/recycled-worktree-guard.sh` are (see its own header for the
@@ -423,12 +411,9 @@ only — I never trust it as the mechanism; a producer that forgets to write it,
 must not silently break this section.
 
 **This is [`scripts/stacked-graph.sh`](../../../scripts/stacked-graph.sh) (lode-s9xe.2), not something I
-derive by hand.** It used to be a fenced snippet here whose outer "for every ordered pair" loop existed
-only as a comment — a bare `continue` sat outside any loop, so it did not parse, and the O(n²) driver
-plus the direction test got re-improvised, untested, on every pass for an algorithm whose failure is
-silent. The detection rule (shared history off `trunk`, not tip-ancestry), the direction test, and the
-two known gaps (force-push; branched-from-base rather than merged-base — OBSERVED 2026-08-07 on
-`land/lode-35nu.9`/`land/lode-kuc7`) live in the script's own header and are pinned by
+derive by hand.** The detection rule (shared history off `trunk`, not tip-ancestry), the direction
+test, and the two known gaps (force-push; branched-from-base rather than merged-base — OBSERVED
+2026-08-07 on `land/lode-35nu.9`/`land/lode-kuc7`) live in the script's own header and are pinned by
 `tests/test_stacked_graph.py`, which builds real repos for each case, including the moved-base-tip and
 two-merge-base shapes a plausible reimplementation gets wrong. **Do not re-derive this logic here.**
 
@@ -445,7 +430,7 @@ mkdir -p "$STATE_DIR"
 # $STATE_DIR/graph that the merge scripts below read as a valid "no stacks" graph. That is exactly how
 # a dependent gets merged before its base, which is what the exit-2 rule below exists to prevent.
 scripts/stacked-graph.sh --base-ref origin/trunk --report-unordered > "$STATE_DIR/graph" || exit 1
-cat "$STATE_DIR/graph"   # the visibility `tee` used to give, now that the status is the script's own
+cat "$STATE_DIR/graph"   # visibility
 ```
 
 `$STATE_DIR` is wiped at the top of every pass (Section 1, lode-wjw4), so `$STATE_DIR/graph` can never
@@ -689,16 +674,7 @@ way or was just reset there — so the sweep's ancestry predicate reclaims it sa
 about Section 4 itself needed to change. That survives the guard's own detection blind spot (the
 check cannot recognize a worktree recycled onto a `land/<other-id>` that has *since landed*, since its
 `HEAD` is by then genuinely an ancestor of `origin/trunk`) intact, since what the guard fails to notice
-already satisfies that predicate. **lode-3v1p** closed the sweep's *other* arm too: in the blind-spot
-case, the remediation's `git clean -fd` used to run only inside the failed-check branch, so it never
-fired there, and the recycled worktree's untracked leftovers survived to trip the
-[lode-9hgu dirty-tree guard](#4-land-the-survivors) below, leaking the worktree anyway. `git clean
--fd` now runs **unconditionally**, right after the ancestor check, at all three guard sites
-(`coding.md`, `code-reviewer.md`, `land-review.md`) — still scoped to `.claude/worktrees/` only by the
-same `case` precondition. Nothing in Section 4 needed to change for this either; the fix lives
-entirely at the dispatch-time guard, same layer as the rest of this fix. Full reasoning:
-[docs/decisions.md](../../../docs/decisions.md)
-(`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`).
+already satisfies that predicate.
 
 Normally that is the end of this very pass: Section 4 is
 reached even when the accepted set is **empty** (nothing between 2c and 4 exits early on that
@@ -853,20 +829,8 @@ outright, so it never has to assume anything about what does or doesn't dirty it
 than restores because it only needs to **judge**, whereas this section must actually **clean** the
 index or the merge below refuses to run — the same invariant, two different jobs.)
 
-**lode-sfnb: the `declare -A MSG` associative array this block used to populate was cross-block shell
-state, and it silently broke.** An agent executing this skill runs each fenced code block as its own,
-separate Bash tool invocation — the harness does not carry variables, arrays, or function definitions
-between them. `MSG` used to be read by a `merge_one()` function defined in a *later*, separate fenced
-block (Section 3's merge loop, ~40 lines of prose below, past the jsonl-restore snippet). By the time
-that loop ran in its own invocation, `MSG` no longer existed — `${MSG[$id]}` silently expanded to the
-empty string, and `git merge -m ''` either produced an empty-message merge or failed outright with no
-output at all. **OBSERVED** landing the 2026-07-26 lode-ns3r/lode-1q2i/lode-sys4 pass: `declare -A MSG`
-was re-declared over a variable a prior `source` had already created as an INDEXED array, which bash
-refuses to convert (non-zero exit, completely empty stdout/stderr) — and every `MSG[lode-xxx]` lookup
-had also silently collapsed to index `0` before that.
-
-**The fix: write each message to a file under `.git/`, and do the actual merge from a script, not an
-inline bash function (see [Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)
+**The fix for cross-block shell state (lode-sfnb): write each message to a file under `.git/`, and do
+the actual merge from a script, not an inline bash function (see [Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)
 below).** A file on disk and a script under `scripts/` are both available identically to *every* Bash
 invocation — there is nothing to redeclare, so this can't be silently re-split by a future editor
 moving code around the way the bash array was. `git reset --hard` (Section 3's isolation-replay path)
@@ -952,27 +916,15 @@ failure: `would be overwritten by merge` in stderr *with* an **empty** `git ls-f
 index entries) is the passive-export trap, not a conflict — restore and retry the same merge once.
 Only a genuinely unmerged index (`git ls-files -u` non-empty) is a real textual conflict.
 
-**This retry-and-classify logic is now [`scripts/land-merge-one.sh`](../../../scripts/land-merge-one.sh)
-(lode-sfnb), not an inline `merge_one()` bash function.** The function used to be defined in this same
-fenced block and then called again, unmodified, from the isolation-replay loop in the "Red" branch
-below — but that "Red" branch only runs after a `git reset --hard` and a re-gate, each their own
-separate Bash invocation, so `merge_one` (and `MSG`, see 3a above) had already vanished by the time
-that second call site needed it. A script has no such problem — it exists on disk identically for
-both call sites, with no function to redeclare. It reads its message from the `MSG_DIR` files 3a
-wrote (never a bash variable), and communicates a real conflict's paths back over **stdout** (capture
-with `CONFLICTS=$(...)`) instead of a global `$CONFLICTS` bash variable — see the script's own header
-for its full 0/1/2 exit-code contract (0 = merged, 1 = real conflict, 2 = machine fault / missing
-message — the same convention `scripts/merge-precheck.sh` and `scripts/validate-mermaid.sh` use,
-lode-9i2p).
+**This retry-and-classify logic is [`scripts/land-merge-one.sh`](../../../scripts/land-merge-one.sh)
+(lode-sfnb).** It reads its message from the `MSG_DIR` files 3a wrote (never a bash variable), and
+communicates a real conflict's paths back over **stdout** (capture with `CONFLICTS=$(...)`) — see the
+script's own header for its full 0/1/2 exit-code contract (0 = merged, 1 = real conflict, 2 = machine
+fault / missing message — the same convention `scripts/merge-precheck.sh` and
+`scripts/validate-mermaid.sh` use, lode-9i2p).
 
-That script runs a bare `git merge --no-ff` against **cwd**, with no ref or path pinning the target —
-but as of **lode-1nty**, [`land-merge-one.sh`](../../../scripts/land-merge-one.sh) asserts its own
-main-checkout identity internally, as its first real action, before attempting anything. This block
-therefore no longer needs its own `assert-main-checkout.sh` call: the guard now protects this call
-site (and the isolation-replay call site below) by construction, not by a caller remembering to fence
-it. This reverses lode-pxyt's original choice to guard this fence directly — see
-[docs/agents-workflow.md's main-checkout section](../../../docs/agents-workflow.md#mechanics-decided)
-for the decision and its reasoning.
+[`land-merge-one.sh`](../../../scripts/land-merge-one.sh) asserts the main checkout itself (lode-1nty); no
+fence guard here ([docs/agents-workflow.md's main-checkout section](../../../docs/agents-workflow.md#mechanics-decided)).
 
 **This loop is [`scripts/land-merge-batch.sh`](../../../scripts/land-merge-batch.sh) (lode-s9xe.4), not
 an inline `for`.** It drives `land-merge-one.sh` per id exactly as the loop above did (same `if CMD;
@@ -981,9 +933,7 @@ read a machine-fault 2 as a clean merge), and on a real conflict it calls
 [`scripts/drop-from-accepted.sh`](../../../scripts/drop-from-accepted.sh) (lode-s9xe.3) to enforce 3a's
 invariant — the conflicting branch AND its dependents (1a's full relation, transitively) leave
 `$STATE_DIR/accepted` **in the file**, not just in this shell's view of it, before the isolation-replay
-loop below can re-read a stale copy and re-merge one of them. This used to be a `grep -vxF`/`mv` recipe
-left as a comment for the agent to implement inline, at the exact moment a conflict had just fired;
-`drop-from-accepted.sh` is the executable version, with its own tests.
+loop below can re-read a stale copy and re-merge one of them.
 
 ```bash
 STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive here -- this is a fresh Bash
@@ -1297,8 +1247,7 @@ scripts/land-heartbeat.sh
 # held dependents are already excluded. An EMPTY file is legitimate (every branch kicked back or
 # bounced) and correctly closes nothing; a MISSING one means Section 3 never ran -- abort loudly, same
 # policy and same shared script (scripts/land-state-load.sh, lode-dc4n) as the first-pass accepted
-# load above -- this used to be a bare `cat ... || exit 1` with no diagnostic at all, the one
-# $STATE_DIR load in the skill that dropped lode-0jan's loud/silent distinction one section later.
+# load above.
 STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation again
 LANDED=$(scripts/land-state-load.sh "$STATE_DIR/landed" -- \
   "Section 3 never ran (or never reached its end-of-loop write). Nothing to close.") || exit 1
@@ -1326,13 +1275,7 @@ scripts/bd-docs-nit.sh ensure-open $LANDED   # word-split deliberately: $LANDED 
 # I only NOTICE completion here (I am the one that closed it); the review itself is the
 # separate `/epic-audit` skill. For each just-closed ticket, `scripts/epic-completion-check.sh`
 # walks to its parent epic and decides whether that epic is now fully child-complete and not
-# already flagged/audited (lode-v4rk: the derivation THIS inline snippet used to run —
-# `bd show <epic-id> --json | jq '.dependents[]'` — was dead code, since `bd show` only
-# populates `.dependents` when called with the opt-in `--include-dependents` flag; without it
-# `$kids` was always `[]`, and the `(($kids|length)>0)` false-positive guard silently ate every
-# pass. The script is extracted, not inlined, so it carries its own fixture-backed regression
-# tests — tests/test_epic_completion_check.py, including a test that reproduces the OLD bug and
-# proves it — since no gate here would ever catch a markdown-embedded jq snippet regressing).
+# already flagged/audited (lode-v4rk: see the script header).
 # The script is read-only; this loop is the one place that actually writes the label.
 for id in $LANDED; do
   RESULT=$(scripts/epic-completion-check.sh "$id")
@@ -1443,8 +1386,7 @@ STATE_DIR="$(git rev-parse --git-dir)/land-state"     # re-derive -- fresh Bash 
                                                        # FILE under $STATE_DIR is what survived,
                                                        # never a bash variable
 # scripts/land-state-load.sh --require-nonempty (lode-dc4n) -- same "missing or empty, both fatal"
-# policy as the isolation-replay accepted load above, and the same script; this used to be its own
-# fourth hand-rolled spelling (`cat ... 2>/dev/null` + a separate `[ -n ... ]` check).
+# policy as the isolation-replay accepted load above, and the same script.
 CONFLICTS=$(scripts/land-state-load.sh "$STATE_DIR/conflicts/<id>" --require-nonempty -- \
   "the producer site (2b's merge-precheck.sh call, or a Section-3 merge loop) did not persist the" \
   "conflicting paths. Refusing to kick back with a blank paths section.") || exit 1
@@ -1788,18 +1730,8 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   So *not* filing loses nothing, and it removes the dupe generator those three filings are evidence
   of.
 
-  *Rejected alternative — "search bd before filing":* the intuitive fix, and the weakest available.
-  It codifies the improvised filing path instead of removing it, expanding /land's scope in the one
-  direction its charter (surface, don't decide) says it should not go. It also aims at a step that
-  never happened: all three filings created the ticket **first** and searched afterwards or not at
-  all — lode-3kdm's close note records a pass that "searched bd only AFTER creating". A search-first
-  caveat only binds an agent already consulting this file's filing guidance, and an agent improvising
-  a filing path this file does not sanction is, by construction, not that agent — so the caveat would
-  have prevented none of the three. And it's prose discipline layered onto a file already saturated
-  with prose, where the two dedup mechanisms this repo actually relies on are structural instead:
-  `/epic-audit`'s `epic-audited` label and `/sweep`'s durable digest issue. Do not reintroduce a
-  search-then-file step here on the strength of this being re-derived as "the obvious fix" — it was
-  considered and rejected (lode-9t7u).
+  Do not add a search-then-file step (rejected, lode-9t7u; reasoning in
+  [docs/decisions.md](../../../docs/decisions.md)).
 
 ## Stop and report
 

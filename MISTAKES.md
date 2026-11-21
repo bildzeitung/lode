@@ -4,6 +4,47 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-11-20 — A decision ticket stated a failure that the code cannot reach, and the maintainer ruled on it
+
+- **What happened:** the `code-reviewer` on `lode-vlok` filed `lode-ucpu` asking whether
+  `lode-4wgq` should also carry the submit-time provider identity. Its description stated as fact
+  that a batch submitted under one provider and collected after a switch "records the refusal as
+  Azure's, so reconcile never sends the note to Azure". The maintainer ruled to widen `lode-4wgq`
+  on that description, and the builder copied the claim into `docs/decisions.md`. The
+  `lode-ucpu` technical review traced the path: `collect_enrich_batch` polls with the collect-time
+  provider's client, so the old provider's handle fails the poll and no refusal or success is
+  stamped at all.
+- **Root cause:** the ticket traced where the stamp is read (`provider_identity(settings)` at
+  collect) but not whether a result can arrive there with a mismatched provider. The builder
+  recorded the ticket's mechanism without tracing it either.
+- **Consequence:** a maintainer ruling spent on a failure that cannot happen, and a false claim
+  caught one review before it landed in the decision record. The record now states what the code
+  does, and `lode-smpk` asks the maintainer whether the provider half stands.
+- **Rule that prevents a repeat:** before filing a ticket that asks the maintainer to decide about
+  a failure, trace that failure in the code from the trigger to the wrong outcome. In the ticket,
+  mark any step that was not traced "not checked against the code", the way `lode-4wgq`'s
+  description does for its two mechanisms. A builder recording a ruling writes the ruling, and
+  writes a claimed mechanism only after tracing it or labelled as the ticket's claim. `lode-low0`
+  tracks putting both into the instruction files.
+
+## 2026-11-19 — A negative assertion on `lode status` output could never fail, because Rich wraps the line
+
+- **What happened:** `lode-5try`'s builder covered the acceptance criterion "lode status prints no
+  'run lode reenrich' hint" with `assert "lode reenrich" not in status.stdout`. Rich wraps that
+  hint at the test runner's terminal width, splitting the phrase across lines, so the assertion
+  held whether or not the fix was present. The `code-reviewer` caught it by running the test
+  against trunk's unfixed scan: the status assertion passed and only the later reenrich assertion
+  failed.
+- **Root cause:** a `not in` substring check on rendered console output proves nothing unless the
+  same substring is known to appear when the condition holds. The existing positive test for this
+  hint (`test_status_hints_enrichment_stale_uniform_disagreement`) already asserts on short
+  fragments for exactly this reason.
+- **Consequence:** none landed. Unreviewed, one of the ticket's three acceptance criteria would
+  have shipped with a test that could not detect a regression.
+- **Rule that prevents a repeat:** a negative assertion on rendered CLI or TUI output uses a
+  fragment that a positive test already proves is printed. Confirm the new test fails without the
+  fix before trusting it.
+
 ## 2026-11-17 — A docs-nits batch dropped a nit as "anchor-gone" when its anchor had never reached trunk
 
 - **What happened:** the builder draining collector `lode-rrpg` dropped nit 1
@@ -22,6 +63,11 @@ Newest first.
   for the defect the nit names and check the open collector for a nit whose replacement is this
   anchor. Drop only when the defect is gone; otherwise carry the nit over. `lode-vlyj` tracks
   putting this into the instruction files.
+  - **Update (lode-edyl, 2026-11-20):** "otherwise carry the nit over" no longer holds when the
+    defect is visible in the current text. By maintainer ruling the builder applies the fix to the
+    current text in that drain (recorded as applied (re-anchored)) or, when it does not apply
+    mechanically, files it as its own ticket. The rule in force is the "Declined nits carry over"
+    bullet in `docs/agents-workflow.md`.
 
 ## 2026-11-17 — `/land` rebuilt its accepted set from the live queue and picked up a ticket it had never vetted
 

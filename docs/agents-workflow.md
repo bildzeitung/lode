@@ -1590,20 +1590,29 @@ the next one, and every subsequent nit was silently lost. The policy now is:
   survives the human/epic filter, on the auto-select paths only (bare `/code`, `--all-ready`,
   `--single`) — `--single` takes the next survivor, same as the human/epic filter. An explicitly-named
   id (`/code lode-59da`) is an operator override and is never gated.
-- **Declined nits carry over, with an anchor-gone exception.** A nit the batch builder declines to
+- **Declined nits carry over, with anchor-gone and re-anchor exceptions.** A nit the batch builder declines to
   apply is, before hand-off, either re-appended to the successor collector (still wording-only, just
   not applicable this pass) or filed as its own ticket (a judgment call). It never closes silently
   with the batch — **except** a nit whose verbatim anchor line is no longer present anywhere in the
   file **and** whose named defect is gone from the current text too (e.g. fixed by an intervening
   comment-groomer or land): the builder drops that one and says so in the hand-off note. An absent
   anchor alone is not proof of a fix — the nit may have been written against a branch whose edit
-  never reached `trunk` (lode-vlyj). So a nit whose named defect is still visible in the current text,
-  or whose anchor equals the replacement text of another pending nit (on the collector being drained
-  or the open successor), is carried over instead, its re-appended note saying why the anchor is
-  absent and pointing at that other nit when there is one. Every nit's disposition — applied /
-  carried over / filed as ticket / dropped as anchor-gone — is listed in the hand-off note, a drop
-  recording both what was absent (the anchor) and why the defect is gone, a nit carried over this
-  way recording which kept it — the still-visible defect, or the other nit's pending replacement.
+  never reached `trunk` (lode-vlyj). So a nit whose anchor is absent but whose named defect is still
+  visible in the current text is never dropped, and **never carried over either** (lode-edyl,
+  maintainer ruling 2026-11-20): a carried-over nit would meet the same absent anchor on every later
+  drain (`append` does not check an anchor against the file, and by the same ruling no such check is
+  added). The builder instead applies the fix to the current text in that drain and records it as
+  **applied (re-anchored)**; if the fix does not apply mechanically, it files the nit as its own
+  ticket. A nit whose anchor equals another pending nit's replacement is not anchor-gone either
+  (lode-vlyj): when that other nit is applied in the same drain, this one is applied after it. When
+  the other nit is not applied in that drain (it is on the open successor, or the builder declined
+  it), a defect already visible in the current text falls under the re-anchor rule above; a defect
+  that exists only in that pending replacement keeps the nit carried over, its re-appended note
+  pointing at the other nit. Every nit's disposition — applied / applied (re-anchored) / carried
+  over / filed as ticket / dropped as anchor-gone — is listed in the hand-off note, a drop recording
+  both what was absent (the anchor) and why the defect is gone, a re-anchored apply (or the ticket
+  filed in its place) naming the absent anchor, a nit carried over behind another nit naming that
+  nit.
 - **Scope includes source comments.** Wording-only drift in a shell/Python comment is a docs-nit,
   same patch shape as a doc-prose nit — `/comment-audit`'s own misleading/drifted smell is unaffected;
   the overlap is benign because of the anchor-gone rule above (whichever fixes it first, the other
@@ -1968,7 +1977,9 @@ convention an agent honours, not a fact it can verify.
 
 **The interactive main session is bound too (maintainer ruling 2026-11-18, `lode-v3xd`),** as
 Directive 8 binds it for its own rule; there the approval is the maintainer's in-conversation
-instruction.
+instruction. Directive 10's exception for an approval the main session quotes verbatim into a
+sub-agent's brief is a maintainer ruling of 2026-11-20 (`lode-t9h1`). It amends "another agent's
+brief is not approval" for that one case only.
 
 **Why Directive 10's scratch-home scrub reads as it does (maintainer ruling 2026-11-18/19,
 `lode-v3xd`).**
@@ -1977,6 +1988,10 @@ instruction.
   approved call would run on the default provider and re-download model weights.
   `model_cache_dir()` is `$LODE_HOME/models` (`src/lode/config.py`, verified for this ruling), so
   a symlinked `models/` is the real cache.
+- **No `~/.lode/config.toml` is the one exception (maintainer ruling 2026-11-20, `lode-t9h1`).**
+  `load_settings` treats a missing file as valid, so there is no config to scrub or copy and
+  default settings are what the operator runs on too. This concerns the config only: `models/`
+  can still be symlinked.
 - **Secrets are derived, not listed.** The scrub reads the `secret=True` marking in
   `src/lode/config.py`, so a credential field added later is covered without editing the rule.
 - **Connector fields go as a group, not just secrets.** Atlassian credentials are env-var
@@ -1985,10 +2000,16 @@ instruction.
   secrets-scrubbed config still carrying `jira_enabled = true` is a live connector to the real
   site wherever those variables are set. Dropping a base URL alone is not enough, since an empty
   `confluence_base_url` means "infer" while an absent enabled flag defaults to off.
-  `no_egress_scopes` goes too because its rows name real hosts or projects.
+  `no_egress_scopes` goes too because its rows name real hosts or projects. Its `source_type='web'`
+  rows are also the operator's egress denials (enrich, cited Q&A and the Ask fetch tool refuse a
+  host they name), so a scrubbed home has none of them. The scrub stays whole all the same, which
+  is why Directive 10 forbids feeding a scratch run a real link (maintainer ruling 2026-11-20,
+  `lode-t9h1`).
 - **The group is a hand-kept list.** It was checked against `src/lode/config.py` as of this
   ruling; a connector field added later must be added to Directive 10's list.
-  `ask_tools_enabled` is not in it, since the ruling did not name it (open: `lode-t9h1`).
+  `ask_tools_enabled` is not in it (maintainer ruling 2026-11-20, `lode-t9h1`). With the
+  connector flags dropped it offers no JIRA or Confluence search tool; the public-web `fetch`
+  tool it still offers the Q&A call runs with none of the host denials above.
 
 **How approval is requested mid-run (builder's proposal, refined in technical review; confirmed by
 the maintainer 2026-11-18, `lode-v3xd`).** Directive 10's "Without approval" steps are this
@@ -4263,6 +4284,87 @@ assumption would not have closed it.
 
   Operative form, including why the preceding `git checkout -f trunk` is load-bearing:
   [`land/SKILL.md` — Section 1](../.claude/skills/land/SKILL.md#1-setup-the-pass--dolt-authoritative-fetch-origin).
+
+### /land design history (lode-w18a.8)
+
+Editor-facing history moved out of [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md):
+the passages the maintainer approved on lode-w18a.3, not every history note in the skill. Each entry
+names what the skill still says. Several of these stories already had a home elsewhere in this file;
+those entries point there rather than copy.
+
+- **`declare -A MSG` (lode-sfnb).** Section 3a populated a `declare -A MSG` associative array that
+  `merge_one()`, a function defined in Section 3's later fenced block, read back. Each fenced block is
+  its own Bash invocation, so `MSG` no longer existed when the loop ran: `${MSG[$id]}` silently
+  expanded to the empty string and `git merge -m ''` produced an empty-message merge or failed with
+  no output. OBSERVED landing the 2026-07-26 lode-ns3r/lode-1q2i/lode-sys4 pass: `declare -A MSG`
+  was re-declared over a variable a prior `source` had already created as an INDEXED array, which
+  bash refuses to convert (non-zero exit, completely empty stdout/stderr), and every `MSG[lode-xxx]`
+  lookup had also silently collapsed to index `0` before that. The rule and the gate are in
+  [Guard against cross-block shell state](#guard-against-cross-block-shell-state-in-skill-markdown-lode-sfnb--lode-x495);
+  the skill keeps the rule and the fix (message files under `.git/`, merge from a script).
+- **`merge_one()` was a bash function (lode-sfnb).** It was defined in Section 3's first-pass fenced
+  block and called again from the isolation-replay loop in the "Red" branch, but that branch only runs
+  after a `git reset --hard` and a re-gate, each its own Bash invocation, so `merge_one` and `MSG` had
+  already vanished. It is now `scripts/land-merge-one.sh`, which reads `MSG_DIR` files and returns
+  conflict paths over stdout instead of a global `$CONFLICTS`. The skill keeps the script pointer and
+  the 0/1/2 exit-code contract.
+- **Inline lock was inert (lode-aps3).** Section 0 used to manage the lock inline, and it never held
+  past its own fenced block. The account, and the staleness-token replacement in
+  `scripts/land-lock.sh`, are in the single-lander-lock bullet of
+  [Mechanics (decided)](#mechanics-decided). The skill keeps "Lock lives in `scripts/land-lock.sh`,
+  as a staleness token; `tests/test_land_lock.py` pins the call sites".
+- **Empty-`accepted` guard conflated missing and empty (lode-0jan).** Section 3's guard used to abort
+  identically for a missing `$STATE_DIR/accepted` (3a never ran) and an empty one (every branch left
+  the set legitimately). The distinction is recorded under Mechanics (decided); the skill keeps the
+  missing-vs-empty rule.
+- **`-C "$(git rev-parse --show-toplevel)"` was not a guard (lode-pcee).** Section 1 used to run
+  `git checkout -f trunk` through it, and the `reset --hard` two lines later carried no `-C` at all.
+  The account is the lode-pcee bullet of [Mechanics (decided)](#mechanics-decided). The skill keeps
+  "`-C "$(git rev-parse --show-toplevel)"` is not a guard: in a worktree it resolves to that
+  worktree".
+- **Explicit fence guard removed from Section 3 (lode-1nty, reversing lode-pxyt).** `land-merge-one.sh`
+  asserts the main checkout itself as its first real action, so the Green loop's fenced
+  `assert-main-checkout.sh` call is no longer needed; both call sites are protected by construction.
+  The decision and the arguments on both sides are in Mechanics (decided), "Fence-level guard vs.
+  script-level guard". The skill keeps "asserts the main checkout itself; no fence guard here".
+- **Stacked-graph snippet did not parse.** The stacked-graph logic used to be a fenced snippet in
+  Section 1a whose outer "for every ordered pair" loop existed only as a comment, so a bare
+  `continue` sat outside any loop. The O(n^2) driver and the direction test were re-improvised,
+  untested, on every pass for an algorithm whose failure is silent. It is now
+  `scripts/stacked-graph.sh` (lode-s9xe.2), pinned by `tests/test_stacked_graph.py`. The skill keeps
+  the script pointer and "Do not re-derive this logic here".
+- **`cat "$STATE_DIR/graph"` comment.** The line exists for the visibility the old `| tee` gave
+  (lode-b8sr replaced the pipeline with a redirect so the script's exit status is not swallowed).
+  The skill's comment is now just `# visibility`.
+- **`git clean -fd` ran only in the failure branch (lode-3v1p).** In the recycled-worktree guard's
+  blind-spot case the clean never fired, so untracked leftovers tripped Section 4's dirty-tree guard
+  (lode-9hgu) and leaked the worktree. It now runs unconditionally. Nothing in Section 4 changed;
+  the fix lives at the dispatch-time guard. The account is in
+  [Recycled-worktree guard](#recycled-worktree-guard-lode-nt98) and
+  [Isolating `land-review` dispatches](#isolating-land-review-dispatches-lode-g387), with the
+  reasoning in the lode-3v1p entry in [decisions.md](decisions.md). The skill keeps nothing.
+- **`drop-from-accepted.sh` replaced a `grep -vxF`/`mv` recipe (lode-s9xe.3).** The recipe was left as
+  a comment for the agent to implement inline at the exact moment a conflict had just fired; the
+  script is the executable version, with its own tests.
+- **Section 4 `$LANDED` load was a bare `cat ... || exit 1` (lode-dc4n).** It carried no diagnostic and
+  was the one `$STATE_DIR` load in the skill that dropped lode-0jan's loud/silent distinction one
+  section later. It now goes through `scripts/land-state-load.sh`; see "The missing-vs-empty policy
+  is now a shared script" under [Mechanics (decided)](#mechanics-decided).
+- **Section 4 epic-completion derivation was dead code (lode-v4rk).** The derivation the inline snippet
+  ran, `bd show <epic-id> --json | jq '.dependents[]'`, was dead: `bd show` only populates
+  `.dependents` under the opt-in `--include-dependents` flag, so `$kids` was always `[]` and the
+  `(($kids|length)>0)` false-positive guard silently ate every pass. The script
+  `scripts/epic-completion-check.sh` is extracted, not inlined, so it carries fixture-backed
+  regression tests (`tests/test_epic_completion_check.py`, including one that reproduces the old bug),
+  since no gate would ever catch a markdown-embedded jq snippet regressing. The skill's comment keeps
+  "lode-v4rk: see the script header".
+- **Kick-back conflicts load was a fourth hand-rolled spelling (lode-dc4n).** The kick-back
+  conflicts load used to be its own `cat ... 2>/dev/null` plus a separate `[ -n ... ]` check, the
+  fourth hand-rolled spelling of a `$STATE_DIR` load; it now uses
+  `scripts/land-state-load.sh --require-nonempty`, the same "missing or empty, both fatal" policy
+  and script as the isolation-replay accepted load.
+- **Rejected "search bd before filing" (lode-9t7u).** Reasoning moved to [decisions.md](decisions.md)
+  under lode-9t7u; the skill keeps "Do not add a search-then-file step".
 
 ### Where this is heading — a green-branch merge queue
 

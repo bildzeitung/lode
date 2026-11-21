@@ -6364,6 +6364,26 @@ entries below from being rewritten to chase the current tree.)
   - **Changed.** `CLAUDE.md` Directive 10 and the `lode-3xzy` section of
     [agents-workflow.md](agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy)
     now carry 3a and 3b.
+  - **Update (lode-t9h1, 2026-11-20):** 3a is extended to a sub-agent the main session briefs,
+    and 3b's "does not run on bare defaults" no longer holds when the operator has no
+    `~/.lode/config.toml`. See the `lode-t9h1` entry directly below.
+- **Update (lode-t9h1, 2026-11-20): the maintainer ruled on four points the `lode-v3xd` rulings
+  above did not cover, found in that ticket's technical review.**
+  - **1. `no_egress_scopes` web rows: the scrub stays as ruled.** The field is dropped whole, and
+    Directive 10 adds that a scratch run is never fed a real link (the web rows are also egress
+    denials that enrich, cited Q&A and the Ask fetch tool honour; a scrubbed home has none).
+    Not taken: keeping the web rows in the copy.
+  - **2. `ask_tools_enabled` stays out of the scrub group** and is copied through. As the ticket
+    put to the maintainer, that leaves the public-web `fetch` tool on offer to the Q&A call, with
+    no host denials (point 1). Not taken: adding it to the group.
+  - **3. Sub-agents (extends 3a above).** The interactive main session may quote the
+    maintainer's in-conversation approval verbatim in a sub-agent's brief; the quote counts as
+    approval for the spend it names. This amends "another agent's brief is not approval" for that
+    one case; the scratch `LODE_HOME` rule still binds the sub-agent.
+  - **4. No `~/.lode/config.toml` (qualifies 3b above).** Bare defaults are correct then, and
+    Directive 10 says so.
+  - **Changed.** `CLAUDE.md` Directive 10 and the `lode-3xzy` section of
+    [agents-workflow.md](agents-workflow.md#no-llm-provider-spend-without-maintainer-approval-lode-3xzy).
 - **Update (lode-gcbg, 2026-11-18): the maintainer confirmed the `lode-jb2q` rebase-pickup rules,
   points 1-3 as built.** The `lode-jb2q` entry above said confirming or reversing it was this
   ticket's to settle.
@@ -6499,3 +6519,65 @@ entries below from being rewritten to chase the current tree.)
   - **Not decided here.** Whether `lode-4wgq` also records the provider identity and
     `ENRICH_PROMPT_VER` the batch was submitted with: the batch route reads both at collect time
     too, and item 3's ruling names only the model. Open in `lode-ucpu`, which blocks `lode-4wgq`.
+
+## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
+
+Raised 2026-11-20 while bumping the pin to 9.8.1 (`lode-1pnt`). Upstream mkdocs-material is in
+maintenance mode and reaches end of life on 2027-05-05; its stated successor is Zensical. The 9.8.1
+bump buys security fixes until then. **Open** (`lode-3vet`): stay on 9.8.x past the EOL date
+(accepting no further fixes), or migrate the docs site to Zensical (or another generator) before
+it. Whoever picks it up should first check what a successor has to carry. In `mkdocs.yml`: the
+`docs/overrides` theme `custom_dir`, the `toc` slugify callable (`lode.docs_slug.github_slugify`),
+the `validation:` block and the `search` plugin. Outside it: the strict build (`nox -s docs`,
+`docs.yml`) and the Mermaid pre-render in `scripts/build_docs_site.py`.
+
+## The anthropic SDK's native OpenTelemetry tracing: leave on or disable (open, lode-sflg)
+
+Raised 2026-11-20 at `lode-1pnt`'s review. The lock refresh moved anthropic 1.4.0 to 1.17.0, which
+traces every API call through OpenTelemetry by default (`lode-4uyu`'s audit dates the feature to
+1.14.0), so `opentelemetry-api` is now a locked dependency that `import anthropic` loads. Measured
+against the locked environment, it is inert: no OpenTelemetry SDK is installed, so the spans are
+non-recording and no trace header is added to a request. It would emit only if an SDK and exporter
+were installed into lode's environment and a tracer provider registered; span content stays
+metadata-only unless `ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE=content` is also set. That path
+is outside the [egress log](externals.md#egress-log-auditability). **Open** (`lode-sflg`): leave
+the SDK default, or pass `open_telemetry=False` where lode constructs its Anthropic client.
+  - **Update (lode-ucpu, 2026-11-20, maintainer):** the "Not decided here" question is settled:
+    widen `lode-4wgq` to also record `provider_identity(settings)` and `ENRICH_PROMPT_VER` as read
+    at submit, on the refusal and success paths alongside the submit-time model. Neither
+    collect-time window is accepted. The stamps that must name what the batch was submitted with
+    are, on a refusal-dead job, `jobs.refusal_model`, `jobs.prompt_ver` and the provider stamp
+    `lode-7jcp` adds beside them (not yet landed), and on a success, `annotations.model`,
+    `annotations.provider`, `annotations.prompt_ver` and the done job's `jobs.prompt_ver`.
+    Decision only; the code is `lode-4wgq`'s.
+    - **Prompt version.** A mid-batch upgrade that bumps `ENRICH_PROMPT_VER` would otherwise
+      record the old prompt's refusal as the new prompt's, and the old prompt's enrichment as
+      current.
+    - **Provider: the window the ticket described is not reachable as the code stands**
+      (technical review, read against trunk `2f338dc7`). The ticket said a provider switch
+      between submit and collect records a refusal as the new provider's and never sends the
+      note to it. `collect_enrich_batch` builds its client from the collect-time settings and
+      nothing records which provider minted `jobs.batch_handle`, so after an `llm_provider`
+      switch the old provider's handle is polled with the new provider's client and the poll
+      raises before any stamp is written. At `batch_collect_failure_budget` consecutive failures
+      the jobs go dead as ordinary failures and reconcile re-enqueues them under the new
+      provider. The ruling was made before this was known. Whether its provider half stands,
+      and what a mid-batch provider switch should do, is open in `lode-smpk`; until that is
+      decided, `lode-4wgq`'s scope is as ruled.
+- **/land SKILL.md does not carry a "search bd before filing" step; the rejected reasoning lives here
+  (`lode-9t7u`, moved out of `.claude/skills/land/SKILL.md` by `lode-w18a.8`, 2026-11-20).** The
+  skill keeps the one-line warning "Do not add a search-then-file step (rejected, lode-9t7u)". The
+  reasoning that used to sit beside it:
+  - *Rejected alternative: "search bd before filing".* The intuitive fix, and the weakest
+    available. It codifies the improvised filing path instead of removing it, expanding /land's
+    scope in the one direction its charter (surface, don't decide) says it should not go. It also
+    aims at a step that never happened: all three filings (`lode-95yo`, `lode-3kdm`, and the
+    finding that became `lode-v4rk`) created the ticket **first** and searched afterwards or not
+    at all; `lode-3kdm`'s close note records a pass that "searched bd only AFTER creating". A
+    search-first caveat only binds an agent already consulting the skill's filing guidance, and an
+    agent improvising a filing path the skill does not sanction is, by construction, not that
+    agent, so the caveat would have prevented none of the three. And it is prose discipline layered
+    onto a skill file already saturated with prose, where the two dedup mechanisms this repo
+    actually relies on are structural instead: `/epic-audit`'s `epic-audited` label and `/sweep`'s
+    durable digest issue. Do not reintroduce a search-then-file step on the strength of this being
+    re-derived as "the obvious fix"; it was considered and rejected.

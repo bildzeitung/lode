@@ -27,7 +27,8 @@ dependencies = [
                        # dep; see tests/test_tui_markdown_syntax.py.
     "typer",       # CLI (repo convention — never argparse)
     "rich",        # CLI colour/width rendering (lode-l38d.1 — see docs/stack.md)
-    "anthropic",   # Claude API (enrichment Haiku, Q&A Sonnet/Opus)
+    "anthropic<2", # Claude API (enrichment Haiku, Q&A Sonnet/Opus). TEMPORARY ceiling:
+                   # the 2.x major is deliberately deferred to lode-4uyu; drop it there.
     "openai<3",    # OpenAI-via-Azure LLMProvider (lode-568v.3) -- Responses API.
                    # Ceiling: 3.0 swaps the default HTTP client to HTTPX2 and
                    # stops auto-installing httpx; moving is a deliberate act --
@@ -98,7 +99,7 @@ dev = [
                             # textual[syntax] (lode-sjbo). Hyphenated: a
                             # requirement names the distribution, not the
                             # import.
-    "mkdocs-material==9.5.44", # docs-site generator (lode-fhql.8; rationale
+    "mkdocs-material==9.8.1",  # docs-site generator (lode-fhql.8; rationale
                                 # in docs/stack.md). Moved here from its own
                                 # CI-only `docs` extra (lode-fhql.20) -- mkdocs
                                 # is also a VALIDATOR (`nox -s docs`, below):

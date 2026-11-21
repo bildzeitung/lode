@@ -295,7 +295,9 @@ CREATE INDEX IF NOT EXISTS idx_edges_to ON edges (to_id);
 -- (NULL when it supplied none, e.g. OpenAI/Azure); refusal_model is
 -- settings.enrichment_llm.model at refusal time, and prompt_ver is stamped
 -- with ENRICH_PROMPT_VER on the same row, so reconcile can re-open the item
--- when either differs (docs/storage.md failure taxonomy).
+-- when either differs (docs/storage.md failure taxonomy). refusal_provider
+-- (lode-7jcp) is provider_identity(settings) at refusal time -- NULL means
+-- "anthropic" -- and is compared NULL-safely (IS) beside refusal_model.
 CREATE TABLE IF NOT EXISTS jobs (
     id                     INTEGER PRIMARY KEY,
     type                   TEXT NOT NULL CHECK (type IN ('embed', 'enrich', 'refresh')),
@@ -310,6 +312,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     refusal                INTEGER NOT NULL DEFAULT 0,
     refusal_category       TEXT,
     refusal_model          TEXT,
+    refusal_provider       TEXT,
     claimed_at             TEXT,
     next_attempt_at        TEXT NOT NULL,
     created                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))

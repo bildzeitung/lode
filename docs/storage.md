@@ -556,6 +556,16 @@ allows** a re-enqueue after the prior job reached `done`/`dead` (a `prompt_ver`
 bump or re-derive must be able to enqueue again — the reconciliation scan depends
 on this). Enqueue uses `INSERT ... ON CONFLICT DO NOTHING`.
 
+**A gated-out enrich job ends `done` with `prompt_ver` NULL, on both routes
+(lode-tkdy).** `prompt_ver` is a receipt that the enrichment ran, so a job that
+was skipped (`no_egress` including a `no_egress_scopes` rule, tombstone/purged,
+target not found) is never stamped: `lode.worker.run_one` leaves it NULL when
+the handler returns `None` (`enrich_version`'s only skip signal), and
+`lode.enrich.submit_enrich_batch`'s skip path does the same. Reconcile reads a
+NULL `prompt_ver` as stale, so clearing the flag or removing the scope rule
+re-opens the target on the next pass regardless of route; while the gate holds,
+the gap scan excludes the target, so nothing thrashes.
+
 **`idx_jobs_target_type` on `jobs(target_version, type)` (lode-spwf).**
 `idx_jobs_live` is partial and `idx_jobs_status` is status-only, so the reconcile
 gap scans had no index for a non-live job of a given target: the embed-gap probes
@@ -680,16 +690,26 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
 
 - The job goes `dead` on the **first** refusal, with no retry attempts charged
   (`jobs.record_refusal_dead`). The row is marked `jobs.refusal = 1` and records
-  `refusal_category`, `refusal_model` (`enrichment_llm.model` at refusal time) and
+  `refusal_category`, `refusal_model` (`enrichment_llm.model` at refusal time),
+  `refusal_provider` (`provider_identity`; NULL means anthropic) and
   `prompt_ver` (`ENRICH_PROMPT_VER`), so a refusal-dead row is distinguishable from a
   max-retries-dead one.
 - `reconcile._enrich_gap_step` does **not** re-enqueue a refusal-dead enrich job while the
-  note's head version, `ENRICH_PROMPT_VER` and the configured `enrichment_llm.model` all
-  equal what the dead row stored. A change in any of the three re-opens it (a new head
-  version is a different `target_version`). There is no manual-override command. The
+  note's head version, `ENRICH_PROMPT_VER`, the configured `enrichment_llm.model` and the
+  configured provider identity (`provider_identity`, the value `lode reenrich` /
+  `stale_enrichment_heads` use) all equal what the dead row stored. A change in any of the
+  four re-opens it (a new head version is a different `target_version`); a provider switch
+  with an unchanged model string therefore re-opens it too. Only the `llm_provider` value is
+  compared, so moving between direct OpenAI and Azure (both `openai`) does not re-open it,
+  exactly as it does not make a head stale for `lode reenrich`. There is no manual-override
+  command. The
   existing dead -> re-enqueue self-healing stays for every other dead enrich job, since it
   exists for real outages.
-  The same rule applies to an external's in-force enrich job (lode-4kg8).
+- `lode reenrich` and the `lode status` reenrich hint skip such a head too (`lode-5try`):
+  their shared stale scan applies the same standing-refusal predicate
+  (`jobs.standing_enrich_refusal_exists_sql`), so neither re-sends nor keeps asking for
+  refused content until the prompt version, model or provider changes. The same rule applies to an
+  external's in-force enrich job (lode-4kg8).
 - `lode status` lists refusal-dead enrich jobs in its dead-letter output with the refusal
   category and a hint of their own; they do not get the self-healing hint, which would be
   false for them.
@@ -1819,7 +1839,9 @@ head's `version_id`/`snapshot_id`) whose `model` disagrees with the currently co
 (`lode-568v.6`, below). A head with **no** ai annotations at all is not stale by this definition — it is
 simply unenriched, which the passive reconciliation scan's `enrich_gap` step (above) already covers on
 its own schedule; re-enqueuing it here too would just duplicate work `lode work` was already going to
-do.
+do. A head with a standing refusal-dead enrich job under the current `ENRICH_PROMPT_VER` and
+`enrichment_llm` is not stale either (`lode-5try`): the refusal is final for that version, so
+re-enqueuing would only re-send refused content (see the refusal rules above).
 
 **Provider is part of the same identity, not a second check (lode-568v.6).** `annotations.provider`
 (written since `lode-568v.4`) can disagree with the active provider even while `model` matches — the
