@@ -30,7 +30,12 @@ from _anthropic_rig import (
     _results_handler,
     _succeeded_payload,
 )
-from conftest import _make_batch_result, fake_batch_client, structured_response
+from conftest import (
+    _make_batch_result,
+    _refused_batch_result,
+    fake_batch_client,
+    structured_response,
+)
 from pydantic import ValidationError
 
 from lode.config import Settings
@@ -2023,3 +2028,135 @@ def test_collect_enrich_batch_outcomes_default_none_is_a_no_op(
         conn, "batch-no-sink", settings, provider=AnthropicProvider(client)
     )
     assert ended is True
+
+
+# ---------------------------------------------------------------------------
+# Batch route stamps the submit-time model / provider / prompt version (lode-4wgq)
+# ---------------------------------------------------------------------------
+
+_SUBMIT_SETTINGS = Settings(enrichment_llm=ModelTier(model="submit-model"))
+_COLLECT_SETTINGS = Settings(
+    llm_provider="openai", enrichment_llm=ModelTier(model="collect-model")
+)
+_COLLECT_PROMPT_VER = "collect-prompt-ver"
+
+
+def _submit_then_collect_changed(conn: sqlite3.Connection, *, refused: bool) -> int:
+    """Submit one job under submit-time config, collect under a changed one.
+
+    The collect-time provider is injected: a real ``llm_provider`` change makes
+    the poll itself fail (the client is built from collect-time settings).
+    """
+    _insert_note(conn)
+    job_id = _insert_enrich_job(conn, "ver-1")
+    submit_enrich_batch(
+        conn,
+        [(job_id, "ver-1")],
+        _SUBMIT_SETTINGS,
+        provider=AnthropicProvider(fake_batch_client(batch_id="batch-s")),
+    )
+    if refused:
+        br = _refused_batch_result("ver-1")
+    else:
+        br = _make_batch_result("ver-1", EnrichmentResult(tags=["t"]))
+    with mock.patch("lode.enrich.ENRICH_PROMPT_VER", _COLLECT_PROMPT_VER):
+        collect_enrich_batch(
+            conn,
+            "batch-s",
+            _COLLECT_SETTINGS,
+            provider=AnthropicProvider(
+                fake_batch_client(batch_id="batch-s", results=[br])
+            ),
+        )
+    return job_id
+
+
+def test_submit_enrich_batch_records_submit_stamp(conn: sqlite3.Connection) -> None:
+    _insert_note(conn)
+    job_id = _insert_enrich_job(conn, "ver-1")
+    submit_enrich_batch(
+        conn,
+        [(job_id, "ver-1")],
+        _SUBMIT_SETTINGS,
+        provider=AnthropicProvider(fake_batch_client(batch_id="batch-s")),
+    )
+    # "anthropic" is spelled out: NULL would mean "nothing recorded".
+    assert conn.execute(
+        "SELECT submit_model, submit_provider, submit_prompt_ver FROM jobs "
+        "WHERE id = ?",
+        (job_id,),
+    ).fetchone() == ("submit-model", "anthropic", ENRICH_PROMPT_VER)
+
+
+def test_collect_batch_success_stamps_submit_time_values(
+    conn: sqlite3.Connection,
+) -> None:
+    job_id = _submit_then_collect_changed(conn, refused=False)
+
+    assert conn.execute(
+        "SELECT DISTINCT model, provider, prompt_ver FROM annotations "
+        "WHERE source_version = 'ver-1'"
+    ).fetchall() == [("submit-model", None, ENRICH_PROMPT_VER)]
+    assert conn.execute(
+        "SELECT status, prompt_ver FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone() == ("done", ENRICH_PROMPT_VER)
+
+
+@pytest.mark.parametrize(
+    ("changed_settings", "changed_prompt_ver"),
+    [
+        pytest.param(
+            Settings(enrichment_llm=ModelTier(model="collect-model")),
+            ENRICH_PROMPT_VER,
+            id="model",
+        ),
+        pytest.param(
+            Settings(
+                llm_provider="openai", enrichment_llm=ModelTier(model="submit-model")
+            ),
+            ENRICH_PROMPT_VER,
+            id="provider",
+        ),
+        pytest.param(_SUBMIT_SETTINGS, _COLLECT_PROMPT_VER, id="prompt_ver"),
+    ],
+)
+def test_collect_batch_refusal_stamps_submit_time_values_and_reopens(
+    conn: sqlite3.Connection, changed_settings: Settings, changed_prompt_ver: str
+) -> None:
+    job_id = _submit_then_collect_changed(conn, refused=True)
+
+    assert conn.execute(
+        "SELECT status, refusal, refusal_model, refusal_provider, prompt_ver "
+        "FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone() == ("dead", 1, "submit-model", None, ENRICH_PROMPT_VER)
+
+    # Still a standing refusal under the submit-time configuration ...
+    assert _enrich_gap_step(conn, _SUBMIT_SETTINGS) == 0
+    # ... and a gap once any one of the three differs from what was submitted.
+    with mock.patch("lode.reconcile.ENRICH_PROMPT_VER", changed_prompt_ver):
+        assert _enrich_gap_step(conn, changed_settings) == 1
+
+
+def test_collect_batch_without_submit_stamp_uses_collect_time_values(
+    conn: sqlite3.Connection,
+) -> None:
+    """A job in flight across the upgrade has no stamp: collect-time values apply."""
+    _insert_note(conn)
+    job_id = _insert_enrich_job(conn, "ver-1", status="running")
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET batch_handle = 'batch-old' WHERE id = ?", (job_id,)
+        )
+    br = _make_batch_result("ver-1", EnrichmentResult(tags=["t"]))
+    collect_enrich_batch(
+        conn,
+        "batch-old",
+        _COLLECT_SETTINGS,
+        provider=AnthropicProvider(
+            fake_batch_client(batch_id="batch-old", results=[br])
+        ),
+    )
+    assert conn.execute(
+        "SELECT DISTINCT model, provider FROM annotations WHERE source_version = 'ver-1'"
+    ).fetchall() == [("collect-model", "openai")]
