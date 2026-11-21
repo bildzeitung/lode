@@ -166,7 +166,7 @@ This is a scoped exception, not a change of house style:
   `build_docs_site.py`'s — a change there changes which lines count as headings, so it moves the
   same anchors one level down; added `lode-fhql.23`), `.github/workflows/docs.yml` itself, `pyproject.toml` and
   `uv.lock` (the workflow installs its toolchain with `uv sync --locked`, so the
-  `mkdocs-material` pin in `pyproject.toml`'s `dev` dependency group and every version `uv.lock` resolves
+  `zensical` pin in `pyproject.toml`'s `dev` dependency group and every version `uv.lock` resolves
   under it feed the build directly; `uv.lock` joined the filter with `lode-s09w.2`, when the
   workflow stopped carrying its own pins), and `.python-version` (the interpreter `uv sync`
   installs). `push.paths` and

@@ -284,26 +284,26 @@ def test_validate_mermaid_and_update_images_pin_match_build_docs_site() -> None:
         )
 
 
-def test_mkdocs_material_pin_is_carried_by_uv_lock_not_docs_yml() -> None:
-    """CI and a local `nox -s docs`/`mkdocs build` must render with the SAME
-    mkdocs-material (lode-fhql.9 HUMAN DECISION 2026-08-14). docs.yml builds
+def test_zensical_pin_is_carried_by_uv_lock_not_docs_yml() -> None:
+    """CI and a local `nox -s docs`/`zensical build` must render with the SAME
+    zensical (lode-fhql.9 HUMAN DECISION 2026-08-14; lode-0lb8). docs.yml builds
     from `uv sync --locked`, so the one source of truth is pyproject.toml's `dev`
     group pin and uv.lock must carry exactly that version; docs.yml must not
     hand-copy a pin of its own (lode-s09w.2).
     """
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    match = re.search(r'"mkdocs-material==([^"]+)"', pyproject)
-    assert match, "pyproject.toml's dev group must pin mkdocs-material exactly (==)."
+    match = re.search(r'"zensical==([^"]+)"', pyproject)
+    assert match, "pyproject.toml's dev group must pin zensical exactly (==)."
     pin = match.group(1)
     uv_lock = (REPO_ROOT / "uv.lock").read_text(encoding="utf-8")
     assert re.search(
-        rf'name = "mkdocs-material"\nversion = "{re.escape(pin)}"', uv_lock
-    ), f"uv.lock must lock mkdocs-material {pin} to match pyproject.toml's dev pin."
+        rf'name = "zensical"\nversion = "{re.escape(pin)}"', uv_lock
+    ), f"uv.lock must lock zensical {pin} to match pyproject.toml's dev pin."
     workflow = (REPO_ROOT / ".github" / "workflows" / "docs.yml").read_text(
         encoding="utf-8"
     )
-    assert "mkdocs-material==" not in workflow, (
-        "docs.yml must not hand-pin mkdocs-material -- it installs from uv.lock."
+    assert "zensical==" not in workflow, (
+        "docs.yml must not hand-pin zensical -- it installs from uv.lock."
     )
     assert "uv sync --locked" in workflow
 

@@ -105,7 +105,7 @@ contexts, never through this gate prose) carries **exactly one** of the three bl
   full `tests` session (not `unit`), and every `everything-else` session — since these are the
   last gates before `trunk`. Both run it, deliberately: the reviewer's run attributes a red to
   *one* branch while there is still a branch to attribute it to, and `/land`'s run catches what
-  only the merged batch breaks. The duplicated cost (one extra mkdocs build plus three lint
+  only the merged batch breaks. The duplicated cost (one extra docs-site build plus three lint
   passes per branch) is bought, not wasted.
 
 **Why a tag, not a hand-typed list:** `lode-vvt1` shipped a red `shellcheck` because a producer

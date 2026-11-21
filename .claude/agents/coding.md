@@ -592,7 +592,7 @@ made to fix a red gate and any files `nox -t fix` reformatted — either amendin
 (`git commit --amend`) or adding a follow-up commit, then re-check `git status --short` is
 empty again before step 8. Until that commit lands, the tree the gates just certified is not the tree
 `land/<id>` would receive. For any change touching `docs/` diagrams — the `docs` session (part of
-the `everything-else` bucket the reviewer runs, not the builder-side gate above) builds the mkdocs
+the `everything-else` bucket the reviewer runs, not the builder-side gate above) builds the docs
 site but does not itself validate mermaid syntax against GitHub's renderer, so this stays a
 separate, additional call even at builder time:
 

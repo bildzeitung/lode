@@ -1,4 +1,6 @@
-# MkDocs-Material config for the lode docs site (lode-fhql.8/.9/.10).
+# Zensical config for the lode docs site (lode-fhql.8/.9/.10; generator swapped
+# from mkdocs-material by lode-0lb8). Zensical reads this mkdocs.yml directly, so the
+# file keeps its name and its mkdocs-style keys.
 #
 # docs_dir points at the STAGED output of scripts/build_docs_site.py, not at
 # docs/ directly -- docs/ contains maintainer-only pages (decisions.md,
@@ -13,9 +15,9 @@
 # `nav` (decided 2026-08-14, resolving the lode-fhql.9/.10 mkdocs.yml
 # conflict; see lode-fhql.9's notes).
 #
-# `mkdocs-material` is declared in pyproject.toml's `dev` dependency group (lode-fhql.20
+# `zensical` is declared in pyproject.toml's `dev` dependency group (lode-fhql.20
 # -- reversed from an earlier CI-only `docs` extra, per docs/stack.md):
-# mkdocs is also a validator (`nox -s docs`), so it's on every dev's PATH via
+# it is also a validator (`nox -s docs`), so it's on every dev's PATH via
 # `uv sync`.
 #
 # `nav` below still curates order and labels for the same PUBLISHED set
@@ -35,6 +37,7 @@ site_dir: site
 
 theme:
   name: material
+  variant: classic
   custom_dir: docs/overrides
   logo: assets/mark.svg
   # assets/favicon-16.png (lode-fhql.22), not mark-16.png: the tab icon is a
@@ -95,30 +98,28 @@ markdown_extensions:
       # tests/test_check_links.py keeps the two copies from drifting.
       slugify: !!python/name:lode.docs_slug.github_slugify
 
-# What `nox -s docs` gates on (lode-fhql.20). mkdocs' own link validator is the
-# only thing that knows how mkdocs-material slugs a heading -- scripts/check_links.py
-# (`nox -s linkcheck`) resolves the same `#fragment` with GitHub's algorithm, so a
-# link can pass there and 404 on the built site. `anchors: warn` promotes that
-# check from its INFO default to a warning, which `mkdocs build --strict` then
-# turns into a nonzero exit.
+# What `nox -s docs` gates on (lode-fhql.20, lode-0lb8). Zensical validates every
+# internal link (`invalid_links`) and every link fragment (`invalid_link_anchors`)
+# against the slugs it actually emits, which scripts/check_links.py
+# (`nox -s linkcheck`, GitHub's algorithm) cannot see, so a link can pass there and
+# 404 on the built site. Both are on by default; they are stated here so the gate
+# does not depend on a default. `zensical build --strict` turns a warning into a
+# nonzero exit.
 #
-# `not_found: warn` (promoted from `ignore`, HUMAN DECISION 2026-08-14, lode-fhql.9):
+# `invalid_links` also catches a broken relative link between two PUBLISHED pages:
 # scripts/build_docs_site.py's staging-time link-rewrite rule already rewrites every
 # link that targets a file OUTSIDE the published set to that file's GitHub blob URL
-# (fragment preserved) before mkdocs ever sees it, so a genuinely broken relative
-# link between two PUBLISHED pages is now a real bug this gate should catch, not an
-# expected-and-ignored citation into an unpublished maintainer doc.
+# (fragment preserved) before the generator sees it (HUMAN DECISION 2026-08-14,
+# lode-fhql.9).
 #
-# `unrecognized_links`/`absolute_links` stay `ignore` ON PURPOSE: an absolute
-# https://... link (there are many, to external sites) is not something mkdocs can
-# resolve at build time either way.
+# The remaining checks are off: Zensical documents them as deprecated pending a new
+# parser.
 validation:
-  links:
-    anchors: warn
-    not_found: warn
-    unrecognized_links: ignore
-    absolute_links: ignore
-  nav:
-    omitted_files: ignore
-    not_found: ignore
-    absolute_links: ignore
+  invalid_links: true
+  invalid_link_anchors: true
+  unresolved_references: false
+  unresolved_footnotes: false
+  unused_definitions: false
+  unused_footnotes: false
+  shadowed_definitions: false
+  shadowed_footnotes: false

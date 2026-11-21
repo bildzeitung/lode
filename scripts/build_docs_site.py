@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Stage the published docs subset for the MkDocs-Material site build (lode-fhql.9).
+"""Stage the published docs subset for the Zensical site build (lode-fhql.9).
 
 This is the "wiring" .9 owns, built against the architecture .8 decided in
-docs/stack.md: MkDocs-Material never renders Mermaid at build time on its own
+docs/stack.md: the site generator never renders Mermaid at build time on its own
 (neither does Sphinx) -- both hand a live ``mermaid.js`` require to the
 visitor's browser, so a broken diagram would ship as a silently-empty box.
 This script is the *new* renderer docs/stack.md calls for: it walks every
@@ -101,7 +101,7 @@ DERIVED_PAGE_ALIASES = {
 # Static assets the theme (mkdocs.yml: theme.logo/favicon, docs/overrides/
 # main.html's OG tags) references by a docs_dir-relative path -- these are
 # not markdown and carry no mermaid/link processing, just a verbatim copy
-# into the staged tree so mkdocs can find them (lode-fhql.9/.10 mkdocs.yml
+# into the staged tree so the generator can find them (lode-fhql.9/.10 mkdocs.yml
 # merge, 2026-08-14).
 ASSETS_DIR = "assets"
 
@@ -125,7 +125,7 @@ def _alias_anchors(rel: str) -> frozenset[str]:
     so this reads at most two files per run.
 
     Used to decide whether an aliased link's fragment survives the rewrite:
-    mkdocs.yml sets `validation.links.anchors: warn`, which `mkdocs build
+    mkdocs.yml sets `validation.invalid_link_anchors`, which `zensical build
     --strict` turns into a build failure, so pointing a link at an anchor the
     derived page does not have is worse than leaving it on GitHub.
     """
@@ -222,7 +222,7 @@ def _process_mermaid(
     ``render_mermaid=False`` (the ``--no-mermaid`` / copy-only mode, lode-
     fhql.9's HUMAN DECISION 2026-08-14) skips the Docker render entirely and
     leaves every fence byte-for-byte as-is -- no substitution at all. That
-    mode exists so `nox -s docs` can stage + `mkdocs build --strict` without
+    mode exists so `nox -s docs` can stage + `zensical build --strict` without
     Docker, keeping the default `nox` set offline; the real, Docker-backed
     pre-render stays exclusive to `.github/workflows/docs.yml`, which never
     passes this flag.
@@ -376,7 +376,7 @@ def build(repo_root: Path, out_dir: Path, render_mermaid: bool = True) -> None:
         print(f"staged {rel}")
 
     # lode-fhql.10 (concurrent sibling) owns the real landing page. Until it
-    # lands, MkDocs has no index.md/README.md in the published set and would
+    # lands, the generator has no index.md/README.md in the published set and would
     # otherwise ship a homepage-less site. Synthesize a minimal placeholder
     # ONLY if the published set doesn't already provide one -- once .10 adds
     # its own index.md (or README.md) under docs/ to the published set, this
@@ -397,9 +397,9 @@ app = typer.Typer(add_completion=False)
 
 @app.command(
     help=(
-        "Stage the published docs subset into OUTPUT_DIR for `mkdocs build`, "
+        "Stage the published docs subset into OUTPUT_DIR for `zensical build`, "
         "pre-rendering every Mermaid diagram to SVG.\n\n"
-        "Run this before `mkdocs build` -- mkdocs.yml's docs_dir points at the "
+        "Run this before `zensical build` -- mkdocs.yml's docs_dir points at the "
         "staged output, never at docs/ directly, so the site can only ever ship "
         "the published set. OUTPUT_DIR is wiped and recreated on every run, and "
         "must live inside the repository."

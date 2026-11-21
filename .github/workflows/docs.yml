@@ -1,6 +1,6 @@
 name: docs
 
-# Builds the MkDocs-Material docs site (lode-fhql.8/.9) on every push and PR;
+# Builds the Zensical docs site (lode-fhql.8/.9) on every push and PR;
 # deploys to GitHub Pages only on a push to trunk. A PR build never deploys --
 # a docs change that breaks the build (including a Mermaid render failure,
 # see below) is caught before it can land, not after.
@@ -11,7 +11,7 @@ name: docs
 # Not currently enabled (checked 2026-08-12, API returned 404); the repo is
 # public, so no paid plan is required. Until this is done, the `deploy` job
 # below will fail on its first push to trunk with a Pages-not-enabled error
-# -- the `build` job (staging, Mermaid render, `mkdocs build --strict`) is
+# -- the `build` job (staging, Mermaid render, `zensical build --strict`) is
 # fully verifiable without it and is exercised on every push/PR regardless.
 #
 # push trigger convention (lode-bmvy, mirrored from build.yml/tests.yml) --
@@ -21,9 +21,9 @@ name: docs
 # paths filter (lode-ui7m) -- this is the one CI leg with a paths filter at
 # all (build.yml/tests.yml/coverage.yml deliberately have none; see
 # docs/release.md#docs-workflow-paths-filter-lode-ui7m for why this workflow
-# is the exception). Every run installs mkdocs-material's dependency tree and
+# is the exception). Every run installs zensical's dependency tree and
 # pulls the 1.6GB minlag/mermaid-cli image -- the heaviest recurring CI cost
-# this repo has -- so it's scoped to what scripts/build_docs_site.py / mkdocs
+# this repo has -- so it's scoped to what scripts/build_docs_site.py / zensical
 # actually reads. Keep push.paths and pull_request.paths identical.
 on:
   push:
@@ -83,13 +83,13 @@ jobs:
 
       - name: Install site-build toolchain (from uv.lock)
         # The toolchain is the committed uv.lock's, via the project's own `dev` dependency group --
-        # so mkdocs-material and typer are pinned by the lock, never by hand-copied
+        # so zensical and typer are pinned by the lock, never by hand-copied
         # versions in this file (decided 2026-11-18, lode-s09w.2;
         # tests/test_build_docs_site.py asserts uv.lock carries pyproject's
-        # mkdocs-material pin and that this file carries none).
+        # zensical pin and that this file carries none).
         # Cost accepted: this leg installs lode's full runtime tree too, on the
         # repo's heaviest CI leg, in exchange for one source of truth.
-        # `lode.docs_slug` (mkdocs.yml's slugify hook) is importable because uv sync installs lode
+        # `lode.docs_slug` (mkdocs.yml's slugify hook, imported by zensical) is importable because uv sync installs lode
         # editable. Shallow checkout: setuptools-scm falls back to a dev version, which
         # nothing in the built site reads (see the checkout step's note).
         run: uv sync --locked
@@ -114,7 +114,7 @@ jobs:
       - name: Build site (strict -- fail on broken links/nav, not just exceptions)
         # Output dir comes from mkdocs.yml's `site_dir`, not a flag -- one
         # place to change, and the upload step's `path:` below tracks it.
-        run: uv run --frozen mkdocs build --strict
+        run: uv run --frozen zensical build --strict
 
       # Condition is byte-identical to the `deploy` job's `if:` and must stay
       # so (tests/test_build_docs_site.py pins that). Without it, every PR
