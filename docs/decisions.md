@@ -6687,3 +6687,20 @@ the SDK default, or pass `open_telemetry=False` where lode constructs its Anthro
     `docs-nit-file-repo-relative` and `ap-never-review-own-build` are lengthened so each runs through
     the operative part of its rule. Every phrase matches exactly once in `code-reviewer.md`, outside
     any fenced block.
+
+## The trace-before-filing rule stays scoped as built (decided, lode-51cz)
+
+Raised 2026-11-21 at `lode-low0`'s technical review. `lode-low0` put two rules in
+`.claude/agents/coding.md` and `.claude/agents/code-reviewer.md`: trace a failure in the code before
+filing a ticket that asks the maintainer to decide about it, and record a claimed mechanism in this
+file only once traced or labelled as the ticket's claim. The question was whether to widen them on
+three points, none with an observed incident: (1) the other doors to the maintainer, `ESCALATION:`
+notes on an existing ticket and the decision tickets `/epic-audit` and `/land` file; (2) records
+other than this file (design docs, docstrings, commit messages); (3) claims about bd, git, the
+harness or a provider API, which have no lode code path to trace.
+
+**Decided (`lode-51cz`, 2026-11-21, maintainer):** option (a) on all three points. The `lode-low0`
+rules stay scoped as built, with no widening to `ESCALATION:` notes, `/epic-audit` or `/land`
+decision filings, records beyond this file, or claims with no lode code path. Reason: no incident has
+been observed through any of them, and epic `lode-w18a` is cutting these same instruction files, so a
+wider rule would add sites to files being cut. Revisit only on an observed incident. No build ticket.
