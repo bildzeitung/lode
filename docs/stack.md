@@ -390,7 +390,9 @@ Under anthropic 2.x (`lode-4uyu`) a client holds one credential: with both `ANTH
 `anthropic` logger, which goes wherever lode's own log records go. The key is sent as
 `Authorization: Bearer <key>`, not `X-Api-Key`; a gateway behind `ANTHROPIC_BASE_URL` must read it
 from `Authorization`. lode never sets `anthropic-version`: requests carry the SDK's default, which
-is `2026-10-21` on 2.x.
+is `2026-10-21` on 2.x. `pyproject.toml` requires `anthropic>=2` (`lode-pszk`), because the chain
+order above and this paragraph describe 2.x; the ruling is an Update on the
+[`lode-sflg` entry](decisions.md#the-anthropic-sdks-native-opentelemetry-tracing-leave-on-or-disable-open-lode-sflg).
 
 **Model-tier split mirrors the harness:** cheap/deterministic high-volume work on the cheaper tier
 (default: Claude Haiku); judgment-sensitive synthesis on a stronger tier (default: Claude Sonnet, with

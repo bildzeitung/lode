@@ -27,9 +27,9 @@ dependencies = [
                        # dep; see tests/test_tui_markdown_syntax.py.
     "typer",       # CLI (repo convention — never argparse)
     "rich",        # CLI colour/width rendering (lode-l38d.1 — see docs/stack.md)
-    "anthropic>=2",  # Claude API (enrichment Haiku, Q&A Sonnet/Opus). Floor: 2.x is the
-                   # only tested SDK major, and the credential-chain order and API
-                   # version docs/stack.md records are 2.x behaviour (lode-pszk).
+    "anthropic>=2", # Claude API (enrichment Haiku, Q&A Sonnet/Opus). Floor: 2.x is
+                    # the only tested SDK major, and the credential-chain order and
+                    # API version docs/stack.md records are 2.x behaviour (lode-pszk).
     "openai<3",    # OpenAI-via-Azure LLMProvider (lode-568v.3) -- Responses API.
                    # Ceiling: 3.0 swaps the default HTTP client to HTTPX2 and
                    # stops auto-installing httpx; moving is a deliberate act --
