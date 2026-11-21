@@ -168,7 +168,11 @@ def _dangling_see_below_rows(markdown: str) -> list[str]:
     either a `See "X" below` pointer where X is not a heading on this same page, or a bare
     `(see below)` / `see below` cross-reference with no named destination at all (lode-0teo). A
     derived page has table rows only, so any such row is a dangling pointer at the section a
-    source-doc prose block lived in, which regeneration never carries across."""
+    source-doc prose block lived in, which regeneration never carries across.
+
+    Also flags what a stripped link leaves behind (lode-cav3): a clause-ending `-- below` /
+    `— below`, and `linked above`. The dash form must end its clause, so prose like
+    `— below this length nothing runs` is not a pointer and is not flagged."""
     headings = _headings(markdown)
     violations = []
     for line in markdown.splitlines():
@@ -178,10 +182,11 @@ def _dangling_see_below_rows(markdown: str) -> list[str]:
         for match in quoted_matches:
             if match.group(1) not in headings:
                 violations.append(line)
-        # A bare "(see below)" / "see below" carries no destination at all -- always dangling.
+        # None of these shapes names a destination. "linked above" is flagged even on a row
+        # that keeps another link: the scan cannot tell which link the phrase meant.
         # Skip a line already flagged via the quoted form above, so it isn't double-counted.
         if not quoted_matches and re.search(
-            r"\(see below\)|\bsee below\b|(?:--|\u2014)\s*below\b|\blinked above\b",
+            r"\(see below\)|\bsee below\b|(?:--|\u2014)\s*below\s*[.;,)|]|\blinked above\b",
             line,
             re.IGNORECASE,
         ):
@@ -221,13 +226,19 @@ def test_dangling_see_below_scan_catches_the_pre_fix_rows() -> None:
     assert _dangling_see_below_rows(resolvable_markdown) == []
 
     # lode-cav3: the bare dash-below and "linked above" shapes a stripped link leaves behind.
+    # The em-dash row is the pre-fix text; configuration.md writes the dash that way.
     dash_row = (
         "| `qa_call_timeout_s` | `300s` | split off `enrich_call_timeout_s` -- below. |"
     )
+    em_dash_row = "| `qa_call_timeout_s` | `300s` | split off `enrich_call_timeout_s` — below. **Per-RUN** |"
     above_row = "| `qa_call_timeout_s` | `300s` | all in the write-up linked above. |"
-    violations = _dangling_see_below_rows(f"# x\n\n{dash_row}\n{above_row}")
-    assert dash_row in violations
-    assert above_row in violations
+    prose_row = (
+        "| Minimum draft length | `20` | Floor — below this length nothing runs. |"
+    )
+    violations = _dangling_see_below_rows(
+        f"# x\n\n{dash_row}\n{em_dash_row}\n{above_row}\n{prose_row}"
+    )
+    assert violations == [dash_row, em_dash_row, above_row]
 
 
 def test_emitted_anchor_ids_match_the_link_gates_github_slug() -> None:
