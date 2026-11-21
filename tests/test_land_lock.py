@@ -953,11 +953,12 @@ def test_default_staleness_threshold_is_still_about_1800s(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 
 
-# 40 rounds x 32 racers is ~1280 bash+git+flock spawns: measured 62s alone at
-# load ~10 and 85s at load ~27 (sys-time bound, not a hang), so the 120s
-# global default leaves no headroom when other gates share the machine
-# (lode-rhr3). Contention is load-bearing (docstring), so the budget grows
-# instead of the test shrinking.
+# 40 rounds x 32 racers is ~1280 bash+git+flock spawns, and the cost is fork
+# sys-time (about 3x the user time), not a hang: run alone it measured 62s at
+# load ~10 and 85-89s at load ~25, so the 120s global default has no headroom
+# once sibling xdist workers or other gates share the machine (lode-rhr3).
+# Do not cut rounds or racers to fit the default (see docstring). A wedged
+# racer still fails fast, inside `_run`'s own 30s.
 @pytest.mark.timeout(600)
 def test_concurrent_acquire_against_a_stale_lock_has_exactly_one_winner(
     tmp_path: Path,
@@ -975,10 +976,10 @@ def test_concurrent_acquire_against_a_stale_lock_has_exactly_one_winner(
 
     So a version of this test at 8-way would have passed against code that
     still admitted two landers onto `trunk`. 32 workers x 40 rounds makes a
-    regression a near-certainty to surface (P(miss) ~ 0.8^40) and costs a
-    few seconds. The assertion is `== 1`, not `<= 1`, deliberately: a "fix"
-    that simply blocked every racer would wedge landing outright while
-    satisfying any check that only counted upwards.
+    regression a near-certainty to surface (P(miss) ~ 0.8^40). The assertion
+    is `== 1`, not `<= 1`, deliberately: a "fix" that simply blocked every
+    racer would wedge landing outright while satisfying any check that only
+    counted upwards.
 
     UNLIKE the mkdir-gate design this replaces, there is no starting-state
     caveat here: `flock(1)` serializes the WHOLE acquire decision (fresh
