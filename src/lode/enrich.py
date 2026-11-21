@@ -813,41 +813,34 @@ def _requeue_on_provider_change(
 ) -> bool:
     """Re-enqueue a batch's jobs when the provider changed since submit (lode-6pjf).
 
-    Compares each job's recorded submit-time identity with
-    :func:`~lode.llm_provider.provider_identity` NULL-safely (``None`` is
-    anthropic). A job with nothing recorded (submitted before lode-4wgq) is
-    never a mismatch. The old batch's results are discarded; the jobs go back
-    to ``pending`` with no attempt charged and are sent to the new provider.
-    Returns ``True`` when it re-enqueued.
+    ``rows`` are :func:`collect_enrich_batch`'s ``(id, target_version,
+    submit_model, submit_provider, submit_prompt_ver)`` rows. Each job's
+    recorded ``submit_provider`` is compared with the configured provider in
+    the column's own spelling (anthropic spelled out, as
+    :func:`submit_enrich_batch` writes it). A job with nothing recorded
+    (submitted before lode-4wgq) is never a mismatch. The old batch's results
+    are discarded; the jobs go back to ``pending`` with no attempt charged and
+    are sent to the new provider. Returns ``True`` when it re-enqueued.
     """
-    current = provider_identity(settings)
-    stale = [
-        row[0]
-        for row in rows
-        if row[3] is not None and (None if row[3] == _ANTHROPIC else row[3]) != current
-    ]
+    current = provider_identity(settings) or _ANTHROPIC
+    stale = [row[0] for row in rows if row[3] not in (None, current)]
     if not stale:
         return False
+    now = jobs.now_iso()
+    last_error = f"provider changed since submit: batch {batch_id} discarded"
     with conn:
         conn.executemany(
             "UPDATE jobs SET status = 'pending', batch_handle = NULL, "
             "batch_collect_failures = 0, claimed_at = NULL, next_attempt_at = ?, "
             "submit_model = NULL, submit_provider = NULL, submit_prompt_ver = NULL, "
-            "last_error = ? WHERE id = ? AND status = 'running'",
-            [
-                (
-                    jobs.now_iso(),
-                    f"provider changed since submit: batch {batch_id} discarded",
-                    job_id,
-                )
-                for job_id in stale
-            ],
+            "last_error = ? WHERE id = ? AND status = 'running' AND batch_handle = ?",
+            [(now, last_error, job_id, batch_id) for job_id in stale],
         )
     log.warning(
         "collect_enrich_batch: batch=%s submitted under a different provider than "
         "the current %s; re-enqueued %d job(s), old results discarded",
         batch_id,
-        current or _ANTHROPIC,
+        current,
         len(stale),
     )
     return True
@@ -892,7 +885,10 @@ def collect_enrich_batch(
     are left alone.
 
     Returns ``True`` when the batch has ended (results processed), ``False``
-    when the batch is still in progress (caller should retry later).
+    when the batch is still in progress (caller should retry later). Also
+    ``True``, with nothing polled and no result read, when the provider changed
+    since submit and the jobs were re-enqueued
+    (:func:`_requeue_on_provider_change`): the handle is finished with.
 
     :param conn: Open SQLite connection.
     :param batch_id: The batch handle recorded by :func:`submit_enrich_batch`.
@@ -902,10 +898,6 @@ def collect_enrich_batch(
         credential-resolved via :func:`~lode.llm_provider.build_provider` if
         omitted.
     """
-    if provider is None:
-        provider = build_provider(settings)
-
-    # Map custom_id (version_id) → job_id for the in-flight set.
     rows = conn.execute(
         "SELECT id, target_version, submit_model, submit_provider, "
         "submit_prompt_ver FROM jobs "
@@ -913,10 +905,15 @@ def collect_enrich_batch(
         (batch_id,),
     ).fetchall()
 
-    # Checked before the poll: the client is built from collect-time settings,
-    # so polling another provider's handle with it can only fail (lode-6pjf).
+    # Checked before a client is built or the handle polled: the client comes
+    # from collect-time settings, so it can only fail on another provider's
+    # handle, and the check must not wait on the new provider's credential
+    # (lode-6pjf).
     if _requeue_on_provider_change(conn, rows, batch_id, settings):
         return True
+
+    if provider is None:
+        provider = build_provider(settings)
 
     # Bounded client-side (lode-olmi.15): with no timeout either call below
     # can otherwise hang indefinitely with no signal to the caller.
@@ -927,6 +924,7 @@ def collect_enrich_batch(
         log.debug("collect_enrich_batch: batch=%s still pending", batch_id)
         return False
 
+    # Map custom_id (version_id) → job_id for the in-flight set.
     job_map: dict[str, int] = {row[1]: row[0] for row in rows}
     stamps: dict[int, _SubmitStamp] = {
         row[0]: _submit_stamp(row[2:], settings) for row in rows
@@ -1099,9 +1097,11 @@ def _mark_job_failed(
     identity it now also guards on — lode-nggm) is ignored here rather than
     acted on: this caller only ever runs against batch-submitted enrich jobs,
     and :func:`lode.worker._reclaim_stale_running`'s SELECT excludes any row
-    with ``batch_handle`` set (module docstring) — the codebase's single
-    writer of ``batch_handle`` only ever sets it, never clears it, so such a
-    row is excluded from that race for the rest of its life. ``claimed_at`` is
+    with ``batch_handle`` set (module docstring) — and the one write that
+    clears a handle (:func:`_requeue_on_provider_change`) makes
+    :func:`collect_enrich_batch` return before any result is processed, so a
+    row this function is called for still holds its handle and is excluded
+    from that race. ``claimed_at`` is
     still read and passed through below (the function's signature requires
     it), it just can never be the thing that decides ``claim_lost`` here.
     """
