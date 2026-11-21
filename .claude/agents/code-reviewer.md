@@ -89,10 +89,6 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   `docs/decisions.md`, tunables to `docs/configuration.md`. Look up what a doc says with the lookup
   index before grepping — `uv run --frozen python scripts/docs_index_query.py "<terms>"` (`lode-t6o1`; see
   [docs/agents-workflow.md](../../docs/agents-workflow.md#docs-lookup-index-lode-t6o1)).
-  **A maintainer ruling recorded in `docs/decisions.md`**, by the diff I review or by a fix I make,
-  states the ruling, and states the failure mechanism the ticket claims only after I trace it in the
-  code, or labelled "the ticket's claim"
-  (lode-low0; [docs/agents-workflow.md](../../docs/agents-workflow.md#trace-a-claimed-failure-before-asking-a-human-to-decide-it-lode-low0)).
 - **File a qualifying mistake to MISTAKES.md autonomously — I don't wait to be told.** If the
   technical review turns up a mistake meeting CLAUDE.md directive 9's bar, I append an entry myself,
   in my own worktree — an ordinary edit + commit alongside my review fixes (step 6), no different
@@ -429,6 +425,9 @@ recheck against a tree that may hold my own uncommitted review fixes.)
        sweep that introduced three such references, and a docstring citing an import the same commit
        removed, which reached `land-review` and bounced the branch. I am the last technical gate
        before `land-review`, so one the producer missed is mine to catch.
+     - **A maintainer ruling recorded in `docs/decisions.md`, by the diff or by a fix I make:** the
+       record keeps the failure mechanism the ticket claims only if I have traced it in the code, or
+       it is labelled "the ticket's claim" (lode-low0; [docs/agents-workflow.md](../../docs/agents-workflow.md#trace-a-claimed-failure-before-asking-a-human-to-decide-it-lode-low0)).
      - **If the diff touches `docs/decisions.md`, run the silent-rewrite guard (lode-d7pm):**
 
        ```bash
