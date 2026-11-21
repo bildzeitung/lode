@@ -142,7 +142,7 @@ def test_profile_provider_not_falsely_rejected(monkeypatch) -> None:
         auth_token = None
         credentials = object()  # a resolved provider stands in for a profile
 
-    monkeypatch.setattr(anthropic, "Anthropic", lambda: _ProfileClient())
+    monkeypatch.setattr(anthropic, "Anthropic", lambda **_kw: _ProfileClient())
 
     assert isinstance(build_client(), _ProfileClient)
 
@@ -152,7 +152,7 @@ def test_construction_error_maps_to_auth_error(monkeypatch, isolated_sdk) -> Non
     # missing), it is wrapped in the actionable AuthError, chained for debugging.
     original = anthropic.AnthropicError("Config file not found (profile 'default').")
 
-    def _raise() -> None:
+    def _raise(**_kw: object) -> None:
         raise original
 
     monkeypatch.setattr(anthropic, "Anthropic", _raise)
