@@ -4959,6 +4959,24 @@ entries below from being rewritten to chase the current tree.)
   license — the merged result silently carries both variants of that region, duplicated. Nothing
   catches it: `check-decisions-no-silent-rewrite.sh` fires only on a line *disappearing*, and
   duplication removes nothing. The mitigation is the append-only rule itself, not a gate.
+  - **Update (lode-tikr, 2026-11-21, maintainer):** the union driver has a third failure mode. A
+    marker appended to the file's LAST entry is detached from it when another branch lands an EOF
+    append first: both sides add lines at the same position, union keeps both, and the marker ends
+    up after the other branch's lines. It has happened once: `lode-1pnt`'s two `##` sections landed
+    between the `lode-vlok` entry and `lode-ucpu`'s Update. Nothing catches it: the branch is
+    correct in isolation, and the two checks named above test removal and shape, not position.
+    Accepted without a gate. A post-merge test was rejected because it would catch one shape only,
+    a marker stranded under a `##` heading; when the other branch's append is another bullet entry,
+    the marker silently reads as that entry's. The mitigation is a by-hand step in the merging
+    stages (`/land`'s batch merge and the `coding` rebase pickup): after any merge that brings an
+    Update marker into this file, confirm it still follows the entry it names. Decision only: the
+    step is `lode-l8b7`'s, and until it lands neither stage's instruction file carries it.
+    - **Which marker moves** (technical review, `git merge-tree` run in both directions on
+      `land/lode-tikr` and `land/lode-w18a.11`): union writes the receiving side's lines first, then
+      the incoming side's. So a marker is detached only when it is on the incoming side and the EOF
+      append is on the receiving side: at `/land`, a branch's marker merged into a trunk that
+      already has the append; in a rebase pickup, trunk's marker merged into a branch that holds
+      the append. With the sides swapped the marker stays on its entry.
 
 - **Recording the rejected alternatives, the non-impact and the ours-side-only caveat for the union
   merge driver (`lode-fp9l`, 2026-08-09).** Follow-up to the entry directly above (`lode-4jtc.1`),
@@ -6830,3 +6848,17 @@ the SDK default, or pass `open_telemetry=False` where lode constructs its Anthro
     criteria (one entry per repeated rule, on the surviving copy; a pin runs through the operative
     part of its rule) apply to every inventory and are stated in `docs/agents-workflow.md`. No
     further re-approval is needed: closing `lode-w18a.11` unblocks `lode-w18a.9`.
+
+## A detached `lode-ucpu` Update stays where the union merge put it (decided, lode-tikr)
+
+Maintainer ruling 2026-11-21. `lode-ucpu`'s Update sits under the `lode-sflg` `##` section, the
+second of two that `lode-1pnt` appended at EOF, instead of on the `lode-vlok` entry it answers:
+`/land`'s union merge placed it after them (incident: `MISTAKES.md`, 2026-11-21). Three rulings.
+**The detached Update:** leave it; `lode-smpk`'s pointer Update on the `lode-vlok` entry is the
+repair. No verbatim move past `check-decisions-no-silent-rewrite.sh`, which exits 1 on a move.
+**A repeat:** the detachment is recorded as a third union-driver failure mode in an Update on the
+`lode-4jtc.1` entry, and the merging stages get a by-hand check (`lode-l8b7`); no post-merge gate.
+**The `##` headings:** fix the attribution in the docs index's chunker, so that entries after a
+`##` heading in this file are not all attributed to that heading (`lode-skv8`); the log stays
+append-only. The ruling names `scripts/docs_index_query.py`; the chunker it loads is
+`scripts/docs_index_chunker.py`. Decision only; the builds are `lode-l8b7` and `lode-skv8`.
