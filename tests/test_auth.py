@@ -49,6 +49,18 @@ def test_no_hardcoded_key_in_source() -> None:
     assert "api_key=" not in src
 
 
+@pytest.mark.network
+def test_constructed_client_has_tracing_off(monkeypatch) -> None:
+    """The client ``build_client`` constructs has the SDK's OpenTelemetry tracing off, even
+    when the environment asks for it (lode-sflg)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("ANTHROPIC_OPEN_TELEMETRY", "true")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(auth, "_has_credentials", lambda client: True)
+        client = auth.build_client()
+    assert client.open_telemetry["traces"]["enabled"] is False
+
+
 @pytest.mark.parametrize("module", ["lode.auth", "lode.enrich", "lode.tui.screens.ask"])
 def test_importing_module_does_not_import_the_sdk(module: str) -> None:
     """Importing ``lode.auth`` / ``lode.enrich`` / the TUI's ask screen must NOT
