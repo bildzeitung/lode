@@ -6572,7 +6572,9 @@ for a security fix that must be taken at once. Built here: the script passes
 `--exclude-newer "7 days"`; the override is `--no-cooldown`; the value lives in
 [`configuration.md`](configuration.md#lock-refresh-release-age-cooldown-cooldown-in-scriptsupdate-depssh-lode-3s4d).
 
-Probe the ruling required (uv 0.11.7, throwaway project, real PyPI):
+Probes (uv 0.11.7, real PyPI). The first two are the probe the ruling required, run at build on a
+throwaway project and repeated at technical review on a copy of this repo's `pyproject.toml` and
+`uv.lock` (trunk `6d0205df`, 2026-11-21). The rest were run at review only, on that copy.
 
 - `uv lock --exclude-newer <date>` **is recorded** in `uv.lock` (`[options] exclude-newer = ...`;
   a relative `"7 days"` also records `exclude-newer-span = "P7D"`). A later plain
@@ -6580,20 +6582,34 @@ Probe the ruling required (uv 0.11.7, throwaway project, real PyPI):
   exclude newer"), so `nox -s lock_currency` and CI's lock-currency job would go red on every
   upgrade written this way.
 - A later plain `uv lock` (which is exactly what `--reconcile` runs) **drops** the recorded option
-  and **keeps every pin** (the probe's two pins were unchanged; a lock the cutoff wrote holds no
-  pin newer than it, so there is nothing for the plain run to downgrade). After it,
-  `uv lock --check` exits 0.
-- A cutoff in `pyproject.toml` (`[tool.uv] exclude-newer`) or `UV_EXCLUDE_NEWER` would be read by
-  `--reconcile`'s plain `uv lock` too, which the ruling forbids (by reasoning from uv's documented
-  precedence, not probed).
+  and **keeps every pin**: on the repo copy the lock before and after it differed only by the
+  `[options]` table, for both upgrade modes. After it, `uv lock --check` exits 0.
+- **The cutoff binds the whole resolution, so an existing pin younger than it moves back.**
+  `uv lock --upgrade-package typer --exclude-newer "7 days"` moved 16 pins to an older release
+  (typer itself 0.29.2 -> 0.29.1, pydantic 2.14.4 -> 2.14.3, backrefs 8.3.1 -> 8.3, platformdirs
+  4.14.8 -> 4.14.5 and twelve more) and added `tld`, which courlan 1.4.0 (back from 1.5.0)
+  depends on. `--upgrade` gave the identical lock. Every one was a pin taken with no cutoff inside
+  the last 7 days.
+- With `typer>=0.29.2` in `pyproject.toml` the cooled-down run fails: uv reports that the release
+  "was published after the exclude newer time" and the requirements are unsatisfiable.
+- `UV_EXCLUDE_NEWER="7 days"` reaches a plain `uv lock`, which is what `--reconcile` runs: it
+  moved the same pins back and recorded the cutoff, which the ruling forbids. An `exclude-newer`
+  in a `uv.toml` beside `pyproject.toml` does the same and also makes `uv lock --check` exit 1.
+  `[tool.uv] exclude-newer` in `pyproject.toml` was not probed.
 
 Mechanism chosen, keeping `lock_currency` green: the cutoff is a CLI flag on the two upgrade
 branches of the script's `UV_LOCK_CMD` chain (so `--reconcile` is outside it by construction),
 followed by one plain `uv lock -q` that strips the recorded option; `UV_EXCLUDE_NEWER` is unset at
 script start. Rejected: `[tool.uv] exclude-newer` in `pyproject.toml` (reaches `--reconcile` and
 every `uv lock --check`, and its fixed date goes stale), and leaving the recorded cutoff in the
-lock (red `lock_currency`). Caveat: the cutoff is not recorded, so a later reader of `uv.lock`
-cannot tell it was taken under a cooldown.
+lock (red `lock_currency`). Caveats: the cutoff is not recorded, so a later reader of `uv.lock`
+cannot tell it was taken under a cooldown; and a cutoff set in a `uv.toml` is not guarded against,
+since the script unsets only the environment variable.
+
+Not covered by the ruling, open in `lode-hdob`: a pin taken with `--no-cooldown` is younger than
+the cutoff, so the next cooled-down run inside 7 days moves it back to the release it replaced.
+The version diff lists the line; nothing else flags it. Traced with the pins above, which were
+taken with no cutoff; not run with an actual `--no-cooldown` pin.
 
 ## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 
