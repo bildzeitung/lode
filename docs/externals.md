@@ -242,9 +242,9 @@ A refresh does not reliably re-open enrichment: an identical refetch mints no ne
 sub-threshold change carries the prior enrichment forward with no enrich job of its own. So
 `reconcile._enrich_gap_step` has an externals arm with the same triggers as notes — no current
 enrichment (never enriched, or max-retries-dead), a `done` job under a stale `ENRICH_PROMPT_VER`,
-and a refusal-dead job re-opened only by the note rule (prompt version or `enrichment_llm`
-change; [storage.md](storage.md) failure taxonomy). Like notes, a `done` job records no model, so a
-model change alone does not re-open a `done` enrichment.
+and a refusal-dead job re-opened only by the note rule (prompt version, `enrichment_llm.model`
+or the LLM provider; [storage.md](storage.md) failure taxonomy). Like notes, a `done` job records
+no model, so a model change alone does not re-open a `done` enrichment.
 
 **The materiality gate stays intact.** The signal is *not* "the head snapshot has no enrich job" —
 that would fire on every carried-forward head. It is the external's **in-force enrich job**: the
@@ -255,7 +255,7 @@ post-embed, so before then it may still decide). A live in-force job is left alo
 targets the head snapshot. Tombstoned-head and `no_egress` externals are excluded, where `no_egress`
 means the row flag or a `no_egress_scopes` rule (the same composition the enrich egress gate uses).
 A refused page is therefore not retried by a sub-threshold change either: the refusal stays in
-force until a change passes the materiality gate, or the prompt version or model changes.
+force until a change passes the materiality gate, or the prompt version, model or provider changes.
 
 ### Refresh policy: TTL-based revalidation (decided-for-web, `lode-w0h.6`)
 
@@ -1186,6 +1186,13 @@ display-side fix would leave the secret at rest in the DB — see
 [storage.md](storage.md#data-shape-sketch). This extends the provenance already on annotations into a straight answer to *"what of mine
 has gone to the cloud, and when?"* Cheap to keep, high-trust, and the natural audit surface if a
 sensitive note is ever suspected of having leaked.
+
+The Anthropic SDK can also trace every API call through OpenTelemetry, a record this log never
+sees. lode turns that off: `build_client` (`src/lode/auth.py`), the one place lode constructs an
+Anthropic client, passes `open_telemetry=False`, and the `ANTHROPIC_OPEN_TELEMETRY*` environment
+variables cannot turn it back on, because the SDK reads them only for a client given no option
+(`lode-sflg`; the ruling is in
+[decisions.md](decisions.md#the-anthropic-sdks-native-opentelemetry-tracing-leave-on-or-disable-open-lode-sflg)).
 
 ### Local-at-rest
 

@@ -332,6 +332,13 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status);
 
+-- Per-target lookup for reconcile's gap scans (lode-spwf), whose done/dead
+-- probes are not live-status and so miss idx_jobs_live. target_version leads
+-- on purpose: nothing gathers ANALYZE statistics, and with `type` first the
+-- planner drives the enrich-gap scan's newest-enrich-job join from a
+-- `type = ?` seek, walking every enrich job once per external.
+CREATE INDEX IF NOT EXISTS idx_jobs_target_type ON jobs (target_version, type);
+
 -- Partial unique index for live-job idempotency (see notes above). Scoped to
 -- status IN ('pending','running','failed') -- 'failed' is in-flight backoff,
 -- not a terminal outcome (DECIDED lode-uri7, widening this from the earlier

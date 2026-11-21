@@ -487,7 +487,7 @@ groups that Textual's markup parser rejects at toast render), and logs the trace
 
 **Decided: catch in the TUI (option A), not at the provider seam (option B).** The seam deliberately
 leaves the non-status SDK errors raw (`anthropic.APIConnectionError` when offline,
-`anthropic.APITimeoutError` past `qa_call_timeout_s`): "a timeout is not a rejected request"
+`anthropic.APITimeoutError` when a turn itself times out): "a timeout is not a rejected request"
 (`docs/configuration.md`, "`reasoning_effort` wired to `output_config.effort`"; `docs/stack.md`
 "Error contract" pins that the SDK status errors are the ones wrapped). Wrapping them into
 `LLMProviderError` there would reverse that choice and reach past the TUI, because the `lode ask`,
@@ -496,6 +496,12 @@ failures"). The job retry taxonomy there is keyed on the two credential errors o
 is. A TUI-side catch also covers causes that are not provider errors at all (sqlite, the vector
 store, the local embedder, a rendering fault), and a crash could lose unsaved data. The CLI still
 prints a traceback for a raw SDK error.
+
+Exhausting `qa_call_timeout_s` surfaces as one of two errors, and the worker's `except Exception`
+catches both. A turn that itself times out (after the SDK's retries) raises the raw
+`anthropic.APITimeoutError`. With the Ask tools on, `run_tool_turns` instead raises
+`LLMProviderError` when earlier turns and tool calls have used the budget up before a turn starts
+(`docs/stack.md` "7. Multi-turn tool-use", the `timeout_s` bullet).
 
 The toast is guarded by the same submission generation as the pane reset, so a superseded
 question that fails slowly cannot toast over a newer question's spinner. The log carries the
@@ -546,5 +552,5 @@ thread is not a daemon thread, so the interpreter still waits for it at exit.
   ([configuration.md](configuration.md#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx),
   the flagged risk, which also lists the levers).
 - **During retrieval:** the local embed and rerank, normally short. The first run's model weights
-  download is not bounded by any timeout (`docs/configuration.md`, the `HF_HUB_OFFLINE` note);
-  `lode models pull` moves it out of the ask.
+  download is not bounded by any timeout (`docs/configuration.md`, "Air-gapped run against an
+  already-warm cache"); `lode models pull` moves it out of the ask.
