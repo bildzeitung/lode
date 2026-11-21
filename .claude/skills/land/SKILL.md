@@ -977,14 +977,24 @@ It runs **no gates** and makes **no tracker writes** — every `nox` call and ev
 mine, below.
 
 **By hand after the batch (lode-l8b7): confirm each `**Update (` marker still follows its entry.**
-For every `LANDED` branch whose diff adds a `**Update (` line to `docs/decisions.md`, I read the
-merged file around that line and confirm it follows the entry it names. The `merge=union` driver
-can detach it when trunk already carries an EOF append from another branch (`docs/decisions.md`,
-search `lode-tikr`). A detached marker is a defect in the combined result, not in the branch, so I
-neither bounce nor kick back anything for it. I do not edit `docs/decisions.md` on `trunk` either:
-I report it as a patch under [If the whole remedy is a one-line doc
-change](#if-the-whole-remedy-is-a-one-line-doc-change-report-the-patch--not-the-gap), naming the
-marker's verbatim first line and the entry it belongs on. No gate or test checks this position.
+For every `LANDED` branch whose diff adds a `**Update (` line to `docs/decisions.md`, I confirm the
+marker still follows the entry it names. The `merge=union` driver can detach it when trunk already
+carries an EOF append from another branch: it writes trunk's lines first, then the branch's
+(`docs/decisions.md`, search `lode-tikr`). A marker's lead-in names the correcting ticket, not the
+entry, so merged `trunk` alone cannot show a detachment when the lines in between are another
+bullet entry. I compare with the branch: the entry the marker sits under in
+`git show origin/land/<id>:docs/decisions.md` is the entry it must sit under on merged `trunk`.
+The check is of what will land, so if the isolation replay below runs I repeat it for the
+replay's `LANDED` set.
+
+A detached marker is a defect in the combined result, not in the branch, so I neither bounce nor
+kick back anything for it, and I do not edit `docs/decisions.md` on `trunk`. I report it in
+[Stop and report](#stop-and-report): the marker's verbatim first line, the line it sits at
+(derived this pass), and the entry it belongs on. The repair is the human's to choose. Once
+`trunk` is pushed the marker is a pre-existing line, and
+`scripts/check-decisions-no-silent-rewrite.sh` exits 1 on moving it; the one earlier case was
+repaired with a pointer Update on the entry instead (`lode-tikr`). No gate or test checks this
+position.
 
 Re-gate the combined result (this is a Python-gated repo where code changed; a **docs-only** merge
 set has no Python gate — skip nox, run `scripts/validate-mermaid.sh` only if a merged diff touched a

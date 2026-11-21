@@ -867,13 +867,19 @@ exactly why my push back in step 5 can be an ordinary, non-force push (lode-cln)
     tooling limitation this fix removes.
 
 After **any** merge here (clean or resolved) that brings a `**Update (` line into
-`docs/decisions.md`, I read the merged file around each such line and confirm it still follows the
-entry it names (lode-l8b7; the `merge=union` driver can detach it when this branch holds an EOF
-append and trunk's marker is on the entry above it — `docs/decisions.md`, search `lode-tikr`). When
-one has been detached, trunk's marker stays where it is and I move **this branch's own appended
-lines** (the ones the merge placed ahead of the marker) to follow it and fold that into the merge commit (`git commit --amend`).
-Never move the marker itself: it is a trunk line, and `scripts/check-decisions-no-silent-rewrite.sh`
-exits 1 on a moved pre-existing line. I re-read the file once more to confirm the order.
+`docs/decisions.md`, I confirm each such marker still follows the entry it names (lode-l8b7). The
+`merge=union` driver can detach one when this branch holds an EOF append and trunk's marker is on
+the entry above it: it writes this branch's lines first, then trunk's (`docs/decisions.md`, search
+`lode-tikr`). A marker's lead-in names the correcting ticket, not the entry, so the merged file
+alone cannot show a detachment when the lines in between are another bullet entry. I compare with
+trunk: the entry the marker sits under in `git show origin/trunk:docs/decisions.md` is the entry
+it must sit under in the merged file.
+
+When one has been detached, I move **this branch's own added lines** (the ones the merge placed
+between the entry and the marker) below trunk's added lines, so the file is trunk's with this
+branch's lines added: trunk's lines keep their wording and order. I re-read the file to confirm
+the order, then commit the move as an ordinary commit on top of the merge (`git add
+docs/decisions.md`, then `git commit -m`), and name it in step 5's `REBASE PICKUP` note.
 
 ### 4. Re-run the quality gates (must be green)
 
