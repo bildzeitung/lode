@@ -115,9 +115,10 @@ Two files, two jobs — **never pin the same thing in both**:
 - **`uv.lock` is the only place exact versions live (`lode-s09w`, `lode-s09w.4`).** A committed,
   fully-transitive lock of the runtime dependencies **and** the `dev` dependency group — `lode-s09w`
   reversed epic `lode-g274`'s OQ#1, which had left the dev tools unlocked — consumed by every `uv
-  sync` / `uv run --frozen`. Regenerated only via `scripts/update-deps.sh` (which wraps `uv lock`)
-  — never hand-edited. The older pip-compile lock and its compile script are deleted
-  (`lode-s09w.4`); `git log` and `docs/decisions.md` keep their history.
+  sync` / `uv run --frozen`. Regenerated only via `scripts/update-deps.sh` (which wraps `uv lock`;
+  `--reconcile` re-locks a stale one without upgrading) — never hand-edited. The older pip-compile
+  lock and its compile script are deleted (`lode-s09w.4`); `git log` and `docs/decisions.md` keep
+  their history.
 
   **Installing from `uv.lock` verifies hashes, and that replaces `--require-hashes` (`lode-s09w.4`).**
   The old lock step ran `uv pip install --require-hashes`; the question whether `uv sync` /
@@ -294,8 +295,10 @@ target via `.python-version` (`lode-gyag`) — no machine-dependent resolution t
 Every caller below goes through `uv lock`:
 
 - `scripts/update-deps.sh` — the sanctioned way to move `uv.lock` (`lode-g274.2`/`lode-fdjr`,
-  moved onto uv by `lode-s09w.4`). Its two flows are a bare invocation for the whole set (`uv lock
-  --upgrade`) and `--package NAME` for one package (`uv lock --upgrade-package NAME`); full usage:
+  moved onto uv by `lode-s09w.4`). Its three flows are a bare invocation for the whole set (`uv lock
+  --upgrade`), `--package NAME` for one package (`uv lock --upgrade-package NAME`), and
+  `--reconcile` (plain `uv lock`, `lode-trw1`) for a lock gone stale after a `pyproject.toml` edit —
+  the remedy `nox -s lock_currency`'s exit-1 message names; full usage:
   [onboarding.md](onboarding.md#updating-dependencies). Its VERSION DIFF is one line per changed
   package, `name  old -> new`, derived from the `[[package]]` name/version pairs of the saved and
   the moved `uv.lock` (`scripts/dep-churn-lib.sh`), never from hash lines.
