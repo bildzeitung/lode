@@ -9,11 +9,17 @@ vectors are trivial to reason about; the production dim is the pinned build
 constant (``Settings.embedding_vector_dim``).
 """
 
+import time
+import warnings
+from datetime import timedelta
 from pathlib import Path
+from unittest.mock import Mock
 
 import lancedb
 import pyarrow as pa
+import pytest
 
+from lode import vectorstore
 from lode.config import load_settings
 from lode.vectorstore import VectorStore
 
@@ -22,8 +28,8 @@ from lode.vectorstore import VectorStore
 DIM = 4
 
 
-def _settings():
-    return load_settings(embedding_vector_dim=DIM)
+def _settings(**overrides):
+    return load_settings(embedding_vector_dim=DIM, **overrides)
 
 
 def _row(
@@ -42,8 +48,8 @@ def _row(
     }
 
 
-def _store(tmp_path: Path) -> VectorStore:
-    return VectorStore(tmp_path / "vectors", _settings())
+def _store(tmp_path: Path, **overrides) -> VectorStore:
+    return VectorStore(tmp_path / "vectors", _settings(**overrides))
 
 
 def test_replace_vectors_persists_at_pinned_dim_with_metadata(tmp_path: Path) -> None:
@@ -364,30 +370,39 @@ def test_a_second_connection_writing_is_still_visible_through_the_first(
 
 
 def test_periodic_optimize_prunes_history_without_losing_current_rows(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The every-N-writes `optimize()` prunes history and keeps the live rows.
 
     The interval defaults to 200 (`vectorstore_optimize_interval`), so nothing
     else in the suite reaches this branch -- it shipped entirely unexercised
     despite running a destructive prune against the live store (found on
-    technical review). Driven here with a small interval.
+    technical review). Driven here with a small interval and a millisecond
+    prune window, so the versions are old enough by the time it fires.
     """
-    settings = load_settings(embedding_vector_dim=DIM, vectorstore_optimize_interval=2)
-    store = VectorStore(tmp_path / "vectors", settings)
+    monkeypatch.setattr(vectorstore, "_PRUNE_WINDOW", timedelta(milliseconds=1))
+    store = _store(tmp_path, vectorstore_optimize_interval=2)
 
-    for i in range(2):
-        store.replace_vectors("v1", [_row(f"a{i}", "v1", [1.0, 0.0, 0.0, 0.0])])
+    def versions() -> set[int]:
+        # An independent connection: gone from disk, not just invisible
+        # through the held handle.
+        table = lancedb.connect(tmp_path / "vectors").open_table("embeddings")
+        return {version["version"] for version in table.list_versions()}
+
+    store.replace_vectors("v1", [_row("a0", "v1", [1.0, 0.0, 0.0, 0.0])])
+    older_than_window = versions()
+    time.sleep(0.01)
+    store.replace_vectors("v1", [_row("a1", "v1", [1.0, 0.0, 0.0, 0.0])])
 
     # The prune fired on the 2nd write and re-armed its counter.
     assert store._writes_since_optimize == 0
-    # ...and the history it pruned is genuinely gone, from an independent
-    # connection -- not just invisible through the held handle.
-    versions = (
-        lancedb.connect(tmp_path / "vectors").open_table("embeddings").list_versions()
-    )
-    assert len(versions) == 1, (
-        f"expected history pruned to the latest version, got {versions}"
+    # Every version from before the sleep is older than the window and gone.
+    # The 2nd write's own versions may be younger than it, so the count that
+    # remains is timing-dependent and not asserted.
+    remaining = versions()
+    assert older_than_window, "the first write recorded no versions"
+    assert older_than_window.isdisjoint(remaining), (
+        f"expected {older_than_window} pruned, still have {remaining}"
     )
 
     # The current rows survived the prune, through the held handle and a fresh one.
@@ -398,6 +413,105 @@ def test_periodic_optimize_prunes_history_without_losing_current_rows(
     store.replace_vectors("v1", [_row("b", "v1", [0.0, 1.0, 0.0, 0.0])])
     assert store._writes_since_optimize == 1
     assert store.vectors_for("v1") == [[0.0, 1.0, 0.0, 0.0]]
+
+
+def test_periodic_optimize_emits_no_lancedb_warning(tmp_path: Path) -> None:
+    """The prune path emits no `UserWarning` (lode-re5e).
+
+    lancedb >= 0.41 raises one on `cleanup_older_than` of zero or less, and
+    Python's default filters print a `UserWarning` to stderr; the window must be
+    positive so `lode work` stays silent.
+    """
+    store = _store(tmp_path, vectorstore_optimize_interval=1)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        store.replace_vectors("v1", [_row("a", "v1", [1.0, 0.0, 0.0, 0.0])])
+
+    assert store._writes_since_optimize == 0
+
+
+def test_periodic_optimize_keeps_a_version_written_within_the_window_readable(
+    tmp_path: Path,
+) -> None:
+    """A read pinned on a just-superseded version survives the prune (lode-re5e).
+
+    A second Table handle that is never refreshed stands in for another
+    process's query in flight. A zero window deletes the data file that handle
+    still points at, and its scan fails with "Not found".
+    """
+    store = _store(tmp_path, vectorstore_optimize_interval=2)
+    store.replace_vectors("v1", [_row("a", "v1", [1.0, 0.0, 0.0, 0.0])])
+    in_flight = lancedb.connect(tmp_path / "vectors").open_table("embeddings")
+
+    # Supersedes the version `in_flight` holds, then prunes.
+    store.replace_vectors("v1", [_row("b", "v1", [0.0, 1.0, 0.0, 0.0])])
+    assert store._writes_since_optimize == 0
+
+    rows = in_flight.search().where("target_version = 'v1'").to_list()
+    assert [row["passage_id"] for row in rows] == ["a"]
+
+
+@pytest.mark.parametrize(
+    ("read", "expected"),
+    [
+        (
+            lambda store: [
+                hit.passage_id for hit in store.search([0.0, 1.0, 0.0, 0.0], k=1)
+            ],
+            ["b"],
+        ),
+        (lambda store: store.vectors_for("v1"), [[0.0, 1.0, 0.0, 0.0]]),
+        (
+            lambda store: store.model_revisions(_settings().embedding_model),
+            {"after-prune"},
+        ),
+    ],
+    ids=["search", "vectors_for", "model_revisions"],
+)
+def test_a_read_whose_pinned_version_is_pruned_retries_on_the_latest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read, expected
+) -> None:
+    """A read that loses its pinned version to a prune retries once (lode-re5e).
+
+    The idle-writer case the window cannot cover: the version the reader pins
+    was the latest until the pruning write, but was written longer ago than the
+    window, so that prune deletes its data files. The writer's write lands
+    between the reader's `checkout_latest()` and its scan, where another
+    process's `lode work` meets a query in flight.
+    """
+    monkeypatch.setattr(vectorstore, "_PRUNE_WINDOW", timedelta(milliseconds=1))
+    writer = _store(tmp_path, vectorstore_optimize_interval=2)
+    writer.replace_vectors("v1", [_row("a", "v1", [1.0, 0.0, 0.0, 0.0])])
+    reader = _store(tmp_path)
+    # A raw handle on the same version as the reader's pin, never refreshed.
+    pinned = lancedb.connect(tmp_path / "vectors").open_table("embeddings")
+    pin = reader._open_or_create_table
+
+    def pin_then_prune():
+        table = pin()
+        time.sleep(0.01)  # the pinned version is now older than the window
+        writer.replace_vectors(
+            "v1",
+            [_row("b", "v1", [0.0, 1.0, 0.0, 0.0], model_revision="after-prune")],
+        )
+        return table
+
+    monkeypatch.setattr(reader, "_open_or_create_table", pin_then_prune)
+
+    assert read(reader) == expected
+    # The prune did delete the pinned version's files: without the retry the
+    # read above fails the way this never-refreshed handle does.
+    with pytest.raises(RuntimeError, match="Not found"):
+        pinned.search().where("target_version = 'v1'").to_list()
+
+
+def test_a_read_does_not_retry_an_unrelated_runtime_error(tmp_path: Path) -> None:
+    query = Mock(side_effect=RuntimeError("lance error: something else"))
+
+    with pytest.raises(RuntimeError, match="something else"):
+        _store(tmp_path)._rows(query)
+    assert query.call_count == 1
 
 
 def test_model_revisions_scopes_to_the_requested_model(tmp_path: Path) -> None:

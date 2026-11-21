@@ -3793,6 +3793,56 @@ entries below from being rewritten to chase the current tree.)
   - `lance_dir(db_path)`'s `VectorStore` is now also held for the whole `lode work` process
     (`cli.py`'s `work` command), same as the pre-existing `FastEmbedEmbedder` hoist (lode-j5r2) --
     threaded into every `drain()` call across the polling loop.
+  - **Update (2026-11-21, lode-re5e) — the zero-second prune window was a real exposure; it is now a
+    60 s window, which narrows the exposure, and a read that still loses its version retries once on
+    the latest.** lancedb 0.41 warns on
+    `optimize(cleanup_older_than=timedelta(0))` that any reader on an older version "will fail".
+    Measured with two processes (reader scanning in a loop, writer calling `replace_vectors` with
+    `vectorstore_optimize_interval=1`): a reader that calls `checkout_latest()` and then scans
+    immediately saw 0 failures in 3192 scans, but one with a 0.2 s gap between the checkout and the
+    scan (a query in flight while the prune ran) failed 28 of 118 times with
+    `Not found: .../embeddings.lance/data/...`, and a reader that never refreshed failed on nearly
+    every scan. So `checkout_latest()` per use covers a reader between queries, not one mid-query.
+    Change: `_PRUNE_WINDOW = timedelta(seconds=60)` in `lode.vectorstore`, a build constant. With a
+    2 s window the same 0.2 s-gap reader saw 0 failures in 117 scans; a 0.05 s window reproduced the
+    failures (22 of 119). So while the writer writes continuously, the failure tracks the window
+    against the read duration; 60 s is a margin over that, not a tuned value.
+    **What the window does not cover (found on technical review).** `cleanup_older_than` counts a
+    version's age from when it was written, not from when it was superseded. A version that was the
+    latest until the pruning write, but was written longer ago than the window, is deleted by that
+    same prune. Reproduced with the 60 s constant: two writes, 65 s idle, a second handle opened on
+    the table (the read in flight), a third write on which the prune fires, then a scan through the
+    second handle fails with the same `Not found`. With no idle gap the same sequence succeeds. The
+    versions the pruning write itself creates are younger than the window, so the exposed read is
+    one that starts before that write, is still running when its prune finishes, and finds the
+    writer's previous write more than 60 s old, which is how `lode work --loop` sits between notes.
+    No finite window closes that case.
+    **Maintainer ruling (2026-11-21): close it with a read-side retry, and keep the 60 s window.**
+    `VectorStore.search`, `vectors_for` and `model_revisions` run their scan through one helper
+    (`_rows`). When the scan raises lancedb's `RuntimeError` whose message contains `Not found`, the
+    helper calls `checkout_latest()` and runs the scan once more; a second failure, or any other
+    `RuntimeError`, propagates. A prune keeps the latest version's files, so the retry reads them.
+    Re-run with the retry in place, same 60 s constant and 65 s idle: the never-refreshed handle
+    still fails with `Not found`, and `vectors_for` through a `VectorStore` whose version was pinned
+    before the pruning write returns the rows of the latest version. The retried read therefore
+    answers from a newer version than the one it started on, which is what a read started a moment
+    later would have seen. lancedb gives the error no type of its own, so the match is on the
+    message text; `tests/test_vectorstore.py` reproduces the failure for all three reads and goes
+    red if a lancedb upgrade rewords it. With the retry the window decides how often a read is
+    retried. A read now fails only when a second prune also removes the version it retried on,
+    which takes a further `vectorstore_optimize_interval` writes while that one scan runs (read
+    from the write counter in `replace_vectors`, not reproduced). The write path
+    (`replace_vectors`) has no retry and the ruling did not ask for one. Measured at review: a
+    second writing process whose handle was pinned before the first one's prune fails in its
+    `delete` with the same `Not found`. No shipped command reaches that: the only caller of
+    `replace_vectors` outside the eval harness is the embed job, which runs in `lode work` under
+    `WorkerLock`, so there is one writing process.
+    Memory re-measured with the live `VmRSS` method (3000 calls, interval 100, 15 calls/s): window 0
+    grew 199 to 258 MB and window 60 s 199 to 266 MB. The 60 s window costs about 8 MB over the zero
+    window at that write rate and does not change the slope. The window keeps the versions of the
+    last 60 s, so that cost should scale with the write rate; no other rate was measured. Under
+    lancedb 0.41 both still grow about 7 MB per 300 calls, unlike the flat plateau recorded above
+    for 0.38; that regression is not caused by the window and is filed as lode-ju9d.
 
 - **2026-08-05 (lode-2nw5) — the `git restore --staged .beads/issues.jsonl` cluster: ONE site
   canonicalized (fixing a real symmetry gap), THREE sites kept as WONTFIX literals.** Filed while
