@@ -375,11 +375,19 @@ principle](externals.md#privacy-consequence-of-aggregation), not an availability
 out of scope for the vendor-neutral seam below (epic scope, decided 2026-07-22). LanceDB just stores
 the resulting local vectors.
 
-**Auth:** no hardcoded API key for any provider. Anthropic resolves via the SDK's own chain (env var,
-then an `ant auth login` profile, then workload-identity federation), same as the harness; OpenAI/Azure
-resolves via `OPENAI_API_KEY` / `AZURE_OPENAI_API_KEY` (see [LLM provider seam](#llm-provider-seam-decided-lode-568v1)
-below). If nothing resolves, fail gracefully with an actionable, provider-appropriate message (no
-traceback) and log the detail.
+**Auth:** no hardcoded API key for any provider. Anthropic resolves via the SDK's own chain (same as
+the harness); the first match wins: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, the profile
+`ANTHROPIC_PROFILE` names, the workload-identity federation variables, then the active `ant auth
+login` profile on disk. OpenAI/Azure resolves via `OPENAI_API_KEY` / `AZURE_OPENAI_API_KEY` (see
+[LLM provider seam](#llm-provider-seam-decided-lode-568v1) below). If nothing resolves, fail
+gracefully with an actionable, provider-appropriate message (no traceback) and log the detail.
+
+Under anthropic 2.x (`lode-4uyu`) a client holds one credential: with both `ANTHROPIC_API_KEY` and
+`ANTHROPIC_AUTH_TOKEN` set, the key is used and the token ignored, and the SDK logs a warning on the
+`anthropic` logger, which goes wherever lode's own log records go. The key is sent as
+`Authorization: Bearer <key>`, not `X-Api-Key`; a gateway behind `ANTHROPIC_BASE_URL` must read it
+from `Authorization`. lode never sets `anthropic-version`: requests carry the SDK's default, which
+is `2026-10-21` on 2.x.
 
 **Model-tier split mirrors the harness:** cheap/deterministic high-volume work on the cheaper tier
 (default: Claude Haiku); judgment-sensitive synthesis on a stronger tier (default: Claude Sonnet, with
@@ -430,8 +438,7 @@ def build_provider(settings: Settings) -> LLMProvider:
 ```
 
 - `settings.llm_provider == "anthropic"` → resolves via the same SDK credential chain
-  `build_client()` uses today (env var / `ant auth login` profile / workload-identity federation),
-  returns an `AnthropicProvider`.
+  `build_client()` uses today (its order is under **Auth** above), returns an `AnthropicProvider`.
 - `settings.llm_provider == "openai"` → resolves `OPENAI_API_KEY`, or — when
   `settings.azure_openai_endpoint` is non-empty — `AZURE_OPENAI_API_KEY` plus the endpoint/
   api-version routing knobs (§6 below); returns an `OpenAIProvider` (`lode-568v.3`'s implementation).

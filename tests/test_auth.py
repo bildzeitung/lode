@@ -31,7 +31,17 @@ import pytest
 from lode import auth
 from lode.auth import AuthError, build_client
 
-CREDENTIAL_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE")
+# Every variable that selects a credential ahead of the on-disk profile. The federation
+# ones count: anthropic 2.x tries them before it looks in ANTHROPIC_CONFIG_DIR (lode-4uyu).
+CREDENTIAL_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_PROFILE",
+    "ANTHROPIC_FEDERATION_RULE_ID",
+    "ANTHROPIC_ORGANIZATION_ID",
+    "ANTHROPIC_IDENTITY_TOKEN",
+    "ANTHROPIC_IDENTITY_TOKEN_FILE",
+)
 
 
 @pytest.fixture
@@ -82,7 +92,7 @@ def test_importing_module_does_not_import_the_sdk(module: str) -> None:
       screen, so every TUI start loads it.
 
     So a credential-free, embed-only drain (embeds come from the LOCAL fastembed
-    model) would otherwise pay the ~0.32s SDK import on every single run to do
+    model) would otherwise pay the ~0.7s SDK import on every single run to do
     nothing with it. ``lode.auth`` has no module-level ``import anthropic`` (it is
     deferred inside ``build_client``), and neither does ``lode.enrich`` (its
     provider import is deferred inside ``lode.llm_provider``).
