@@ -287,9 +287,7 @@ def test_reconcile_runs_plain_uv_lock_through_the_gate_path(tmp_path: Path) -> N
     candidate before the gate and keeps it on green."""
     repo, bindir = _build_fake_repo(tmp_path)
 
-    result = _run_update_deps(
-        repo, bindir, extra_args=("--reconcile", "--no-file")
-    )
+    result = _run_update_deps(repo, bindir, extra_args=("--reconcile", "--no-file"))
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert (tmp_path / "uv_lock_args").read_text(encoding="utf-8").strip() == "lock -q"
