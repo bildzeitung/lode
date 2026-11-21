@@ -678,7 +678,21 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
   `refusal_category`, `refusal_model` (`enrichment_llm.model` at refusal time),
   `refusal_provider` (`provider_identity`; NULL means anthropic) and
   `prompt_ver` (`ENRICH_PROMPT_VER`), so a refusal-dead row is distinguishable from a
-  max-retries-dead one.
+  max-retries-dead one. On the immediate route these are the values at refusal time. On
+  the batch route they are the **submit-time** values (`lode-4wgq`): a model, provider or
+  prompt-version change between submit and collect re-opens the note under the new
+  configuration rather than recording it as refused by it. A batch success is stamped the
+  same way (`annotations.model` / `provider` / `prompt_ver` and the done job's `prompt_ver`).
+  **Mechanism (`lode-4wgq`):** lode records the stamp on its own side, in
+  `jobs.submit_model`, `jobs.submit_provider` and `jobs.submit_prompt_ver`, written in the
+  same statement that sets `batch_handle` at submit, so it is readable before any
+  provider call (the collect-time provider-mismatch check needs that) and is not
+  recovered from the provider's batch result. `submit_provider` spells anthropic out
+  (`'anthropic'`, not NULL) because `provider_identity`'s NULL would otherwise be
+  indistinguishable from "nothing recorded": NULL in `submit_provider` means the job
+  was submitted before the columns existed (migration v6), and a batch in flight across the
+  upgrade is collected with the collect-time values, exactly as before. `refusal_provider`
+  and `annotations.provider` keep the NULL-means-anthropic convention; collect translates.
 - `reconcile._enrich_gap_step` does **not** re-enqueue a refusal-dead enrich job while the
   note's head version, `ENRICH_PROMPT_VER`, the configured `enrichment_llm.model` and the
   configured provider identity (`provider_identity`, the value `lode reenrich` /

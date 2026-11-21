@@ -298,6 +298,14 @@ CREATE INDEX IF NOT EXISTS idx_edges_to ON edges (to_id);
 -- when either differs (docs/storage.md failure taxonomy). refusal_provider
 -- (lode-7jcp) is provider_identity(settings) at refusal time -- NULL means
 -- "anthropic" -- and is compared NULL-safely (IS) beside refusal_model.
+--
+-- submit_model / submit_provider / submit_prompt_ver (lode-4wgq): written when
+-- a batch-route enrich job is submitted, read back at collect so every stamp
+-- names what the batch was submitted with. submit_provider is
+-- provider_identity(settings) with "anthropic" spelled out (NOT NULL once
+-- recorded), so NULL there means "nothing recorded" -- a job submitted before
+-- the columns existed -- and is never confused with an anthropic submission.
+-- All three are NULL together or set together.
 CREATE TABLE IF NOT EXISTS jobs (
     id                     INTEGER PRIMARY KEY,
     type                   TEXT NOT NULL CHECK (type IN ('embed', 'enrich', 'refresh')),
@@ -313,6 +321,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     refusal_category       TEXT,
     refusal_model          TEXT,
     refusal_provider       TEXT,
+    submit_model           TEXT,
+    submit_provider        TEXT,
+    submit_prompt_ver      TEXT,
     claimed_at             TEXT,
     next_attempt_at        TEXT NOT NULL,
     created                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))

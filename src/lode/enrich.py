@@ -293,6 +293,8 @@ def _write_enrichment(
     model: str,
     ts: str,
     provider: str | None = None,
+    *,
+    prompt_ver: str = ENRICH_PROMPT_VER,
 ) -> None:
     """Write tags, entities, the whole-item summary, and inferred edges to the DB.
 
@@ -362,7 +364,7 @@ def _write_enrichment(
                         payload,
                         model,
                         provider,
-                        ENRICH_PROMPT_VER,
+                        prompt_ver,
                         ts,
                     ),
                 )
@@ -622,6 +624,42 @@ def _build_batch_request(
     )
 
 
+_ANTHROPIC = "anthropic"
+"""``jobs.submit_provider``'s spelling of the provider identity ``None``."""
+
+
+@dataclass(frozen=True)
+class _SubmitStamp:
+    """The model, provider identity and prompt version a batch job was submitted with."""
+
+    model: str
+    provider: str | None
+    prompt_ver: str
+
+
+def _submit_stamp(
+    row: tuple[str | None, str | None, str | None], settings: Settings
+) -> _SubmitStamp:
+    """Decode a job's ``submit_*`` columns; fall back to collect-time values.
+
+    A job submitted before lode-4wgq has all three NULL (``submit_provider``
+    is never NULL once recorded), and is stamped with the collect-time values
+    as it always was.
+    """
+    model, provider, prompt_ver = row
+    if provider is None:
+        return _SubmitStamp(
+            settings.enrichment_llm.model,
+            provider_identity(settings),
+            ENRICH_PROMPT_VER,
+        )
+    return _SubmitStamp(
+        model or settings.enrichment_llm.model,
+        None if provider == _ANTHROPIC else provider,
+        prompt_ver or ENRICH_PROMPT_VER,
+    )
+
+
 def submit_enrich_batch(
     conn: sqlite3.Connection,
     job_rows: list[tuple[int, str]],
@@ -727,10 +765,24 @@ def submit_enrich_batch(
 
     # Persist the handle + flip to running so the collect step (and a restart)
     # can find these jobs (lode-i05.5).
+    # The submit-time stamp (lode-4wgq) is recorded in the same statement, so a
+    # running batch job always carries it. "anthropic" is spelled out because
+    # provider_identity's None would read as "nothing recorded" at collect.
     with conn:
         conn.executemany(
-            "UPDATE jobs SET status = 'running', batch_handle = ? WHERE id = ?",
-            [(batch_id, jid) for jid in submitted_job_ids],
+            "UPDATE jobs SET status = 'running', batch_handle = ?, "
+            "submit_model = ?, submit_provider = ?, submit_prompt_ver = ? "
+            "WHERE id = ?",
+            [
+                (
+                    batch_id,
+                    settings.enrichment_llm.model,
+                    provider_identity(settings) or _ANTHROPIC,
+                    ENRICH_PROMPT_VER,
+                    jid,
+                )
+                for jid in submitted_job_ids
+            ],
         )
 
     # Audit: one egress_log row per batch submission.
@@ -811,11 +863,15 @@ def collect_enrich_batch(
 
     # Map custom_id (version_id) → job_id for the in-flight set.
     rows = conn.execute(
-        "SELECT id, target_version FROM jobs "
+        "SELECT id, target_version, submit_model, submit_provider, "
+        "submit_prompt_ver FROM jobs "
         "WHERE type = 'enrich' AND status = 'running' AND batch_handle = ?",
         (batch_id,),
     ).fetchall()
-    job_map: dict[str, int] = {version_id: job_id for job_id, version_id in rows}
+    job_map: dict[str, int] = {row[1]: row[0] for row in rows}
+    stamps: dict[int, _SubmitStamp] = {
+        row[0]: _submit_stamp(row[2:], settings) for row in rows
+    }
 
     if not job_map:
         log.debug(
@@ -827,7 +883,6 @@ def collect_enrich_batch(
     # Raw wall clock, formatted by jobs.iso — an enrichment record timestamp,
     # not a queue predicate (see enrich_version above).
     ts = jobs.iso(datetime.now(UTC))
-    provider_name = provider_identity(settings)
 
     for result in batch_results:
         version_id = result.custom_id
@@ -840,6 +895,7 @@ def collect_enrich_batch(
             )
             continue
 
+        stamp = stamps[job_id]
         if result.outcome == "succeeded":
             try:
                 # result.parsed is the provider's raw decoded payload (a
@@ -882,14 +938,15 @@ def collect_enrich_batch(
                 target.owner_id,
                 version_id,
                 enrichment,
-                settings.enrichment_llm.model,
+                stamp.model,
                 ts,
-                provider_name,
+                stamp.provider,
+                prompt_ver=stamp.prompt_ver,
             )
             with conn:
                 conn.execute(
                     "UPDATE jobs SET status = 'done', prompt_ver = ? WHERE id = ?",
-                    (ENRICH_PROMPT_VER, job_id),
+                    (stamp.prompt_ver, job_id),
                 )
             log.info(
                 "collect_enrich_batch: batch=%s version=%s done "
@@ -914,7 +971,7 @@ def collect_enrich_batch(
                 # Terminal for this note version (lode-g9q3): dead on the
                 # first refusal, no attempt charged.
                 _mark_job_refused(
-                    conn, job_id, error_msg, result.error.refusal_category, settings
+                    conn, job_id, error_msg, result.error.refusal_category, stamp
                 )
             else:
                 _mark_job_failed(conn, job_id, error_msg, settings)
@@ -938,9 +995,13 @@ def _mark_job_refused(
     job_id: int,
     error_msg: str,
     category: str | None,
-    settings: Settings,
+    stamp: _SubmitStamp,
 ) -> None:
     """Dead-letter a batch-result enrich job the model refused (lode-g9q3).
+
+    The refusal stamps are the batch's submit-time ``stamp`` (lode-4wgq), so a
+    configuration change between submit and collect re-opens the note under the
+    new configuration instead of recording it as refused by it.
 
     The batch counterpart of :func:`lode.worker.run_one`'s refusal arm; both go
     through :func:`lode.jobs.record_refusal_dead`. ``claim_lost`` is ignored
@@ -953,9 +1014,9 @@ def _mark_job_refused(
         row[0] if row else None,
         error_msg,
         category=category,
-        model=settings.enrichment_llm.model,
-        provider=provider_identity(settings),
-        prompt_ver=ENRICH_PROMPT_VER,
+        model=stamp.model,
+        provider=stamp.provider,
+        prompt_ver=stamp.prompt_ver,
     )
 
 

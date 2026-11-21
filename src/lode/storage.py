@@ -275,7 +275,26 @@ def _migrate_v4_jobs_refusal_provider(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN refusal_provider TEXT")
 
 
-_SCHEMA_VERSION = 4
+def _migrate_v6_jobs_submit_stamp(conn: sqlite3.Connection) -> None:
+    """lode-4wgq: add the submit-time stamp columns a batch-route enrich job carries.
+
+    Three plain nullable column adds, each skipped when ``jobs`` already has
+    it (a database that had ``notes`` but no ``jobs`` reaches this step with
+    ``jobs`` freshly created in the target shape). Every pre-existing row reads
+    back NULL in all three, i.e. "nothing recorded"; a batch in flight across
+    the upgrade is therefore collected with the collect-time values, as before.
+    ``schema.sql``'s comment on the columns says what they hold.
+
+    Version 5 is taken by a sibling migration on another branch; /land orders
+    the two.
+    """
+    present = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    for column in ("submit_model", "submit_provider", "submit_prompt_ver"):
+        if column not in present:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT")
+
+
+_SCHEMA_VERSION = 6
 """Target ``PRAGMA user_version`` — bump alongside a new entry in
 :data:`_VERSIONED_MIGRATIONS`."""
 
@@ -284,6 +303,7 @@ _VERSIONED_MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = 
     (2, _migrate_v2_jobs_live_includes_failed),
     (3, _migrate_v3_jobs_refusal_columns),
     (4, _migrate_v4_jobs_refusal_provider),
+    (6, _migrate_v6_jobs_submit_stamp),
 ]
 """Rebuild-shaped migrations, gated by ``PRAGMA user_version`` (see module
 docstring). Ordered ascending; each entry runs once, the first time
