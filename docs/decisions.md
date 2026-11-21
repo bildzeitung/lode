@@ -6701,16 +6701,15 @@ whole parenthetical.
 
 **Decided (maintainer, 2026-11-21): (c).** A link whose URL carries a marker is unwrapped to its
 label before the aside pass, so the marker inside a URL no longer drops the surrounding prose
-parenthetical (it survives with the link reduced to its label). Derived user pages do not link out
-to unpublished maintainer docs. A parenthetical whose visible text carries a marker is still
-dropped. `docs/stack.md`'s "Derived reference pages" states this; the old orphan-`[label]` unwrap
-is gone because no `(url)` half is dropped any more, which also stops it eating the brackets of
-backticked TOML table names such as `[cli.theme.styles]` in `docs/settings.md`.
+parenthetical. Derived user pages do not link out to unpublished maintainer docs. A parenthetical
+whose visible text carries a marker is still dropped. `docs/stack.md`'s "Derived reference pages"
+states this; the old orphan-`[label]` unwrap is gone because no `(url)` half is dropped any more,
+which also stops it eating the brackets of backticked TOML table names such as
+`[cli.theme.styles]` in `docs/settings.md`.
 
-What the generator does about links is narrower than the ruling's sentence on maintainer docs: only
-a link whose URL carries a marker is unwrapped. A link with no marker in its URL is emitted as
-written, as it was before, whether or not its target is published (the theme rows in
-`docs/settings.md` still link `decisions.md`).
+The generator is narrower than the ruling's sentence on maintainer docs: a link with no marker in
+its URL is emitted as written, as it was before, whether or not its target is published (the theme
+rows in `docs/settings.md` still link `decisions.md`).
 
 **Not in the ruling; settled at the technical review of `lode-v4k1`.** A parenthetical that holds
 nothing but a marker-URL link, such as `([storage.md](storage.md#...-lode-aor))`, is dropped whole,

@@ -147,10 +147,9 @@ def _balanced_paren_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
-_LINK = r"\[([^\]]+)\]\(([^)]*)\)"
-_LINK_RE = re.compile(_LINK)
+_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
 # A parenthetical holding one link and nothing else: `([storage.md](storage.md#x-lode-aor))`.
-_LINK_ONLY_PAREN_RE = re.compile(r"\s*\(" + _LINK + r"\)")
+_LINK_ONLY_PAREN_RE = re.compile(r"\s*\(" + _LINK_RE.pattern + r"\)")
 
 
 def _strip_dev_asides(text: str) -> str:

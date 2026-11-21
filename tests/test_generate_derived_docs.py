@@ -282,8 +282,7 @@ def test_strip_dev_asides_link_anchor_marker_inside_and_outside_a_parenthetical(
     assert strip("Batch path (see foo.py) only.") == "Batch path only."
     # A link with no marker in its URL is untouched.
     assert strip("See [x](x.md#plain).") == "See [x](x.md#plain)."
-    # A parenthetical that is nothing but such a link goes whole: there is no prose to keep, and
-    # the label alone would leave a bare "(storage.md)" or a dangling "(below)".
+    # A parenthetical that is nothing but such a link goes whole.
     assert strip(f"Excludes batch jobs. ({link})") == "Excludes batch jobs."
     assert strip(f"Never a traceback ({link}).") == "Never a traceback."
     assert strip("Never pinned. ([below](#model-provenance-decided-lode-g2745))") == (
