@@ -999,7 +999,7 @@ pre-render mandate, the publish scope, the link policy — were set as user call
 recorded in [`decisions.md`](decisions.md) (`lode-fhql.8`); this section is where the settled outcome
 lands, so where the two differ, **this is current**.
 
-### Chosen: MkDocs-Material
+### Chosen: MkDocs-Material (now Zensical, see the migration note below)
 
 **MkDocs-Material** (`mkdocs-material`, which pulls in `mkdocs` itself as a transitive dependency),
 evaluated against **Sphinx + MyST-Parser** — the other realistic Python-native candidate. Mermaid
@@ -1027,12 +1027,51 @@ deciding factors were:
   Node/Chromium toolchain, per [`CLAUDE.md`](../CLAUDE.md)) and Hugo/Zola (not Python, and a second
   static-site toolchain the venv/lock already cover for nothing).
 
-**Dependency**: `mkdocs-material`, pinned exactly (`==`, `lode-fhql.9`), in the `dev` dependency
-group in `pyproject.toml` (`lode-fhql.20`, 2026-08-14 — **reverses** the original decision below to
-put it in its own CI-only `docs` extra). Upstream reaches end of life on 2027-05-05; the maintainer
-ruled on 2026-11-21 to migrate the docs site to Zensical before then
+**Migrated to Zensical (`lode-0lb8`, 2026-11-21).** The generator is now **Zensical** (`zensical`),
+by the creators of Material for MkDocs, which reaches end of life on 2027-05-05; the maintainer
+ruled to migrate
 ([decision](decisions.md#mkdocs-material-is-in-maintenance-mode-stay-or-migrate-open-lode-3vet),
-`lode-3vet`). The migration is `lode-0lb8`; until it lands, this section describes the site as built.
+`lode-3vet`). The rationale above for MkDocs-Material (plain Markdown, narrative fit, built-in
+search) carries over unchanged, because Zensical reads the same `mkdocs.yml`, Python-Markdown
+extensions and Material-derived theme (`variant: classic` keeps the Material look). What changed:
+
+- **Dependency**: `zensical`, pinned exactly (`==`), in the `dev` dependency group in
+  `pyproject.toml`, locked by `uv.lock`; `mkdocs` and `mkdocs-material` are gone from the lock.
+- **Config**: `mkdocs.yml` keeps its name and keys; only the `validation:` block was rewritten to
+  Zensical's keys. Zensical's migration guide says "You can keep `mkdocs.yml` for as long as you
+  want", gives no end date, and names `zensical.toml` as the native format with a later "final
+  move" to it (read 2026-11-21). So the file name is not settled for good.
+- **Gate**: `nox -s docs` and `docs.yml` run `zensical build --strict`. Zensical validates every
+  link to another page and every link anchor at build time (`invalid_links`,
+  `invalid_link_anchors`) and `--strict` aborts on a warning. That covers the old
+  `links.anchors: warn` in full and the old `links.not_found: warn` for links to pages only.
+  Measured against both builds on the same input: the old build also failed on an image whose
+  file is missing, and Zensical 0.1.3 does not. The replacement is in the staging step:
+  `scripts/build_docs_site.py` refuses to stage a page with a relative image target the staged
+  tree does not have, so both `nox -s docs` and `docs.yml` still fail on one. Links to other
+  non-page files in the repo never reach the generator, because the staging link rewrite turns
+  them into GitHub URLs. The old `nav.*` checks have no equivalent; they were all `ignore`.
+  Zensical has no output-directory flag, so the gate writes to `site_dir` (gitignored) and
+  replaces what an earlier build left there.
+- **A misspelled `validation:` key is ignored, not rejected.** Under mkdocs a renamed key was a
+  `--strict` config error; Zensical 0.1.3 builds clean with an unknown key, so a version that
+  renamed a key or dropped a check would leave `nox -s docs` green with nothing validated.
+  `tests/test_docs_site_index.py` runs a strict build against a planted broken link and anchor
+  with the repo's own `validation:` block, so that turns `nox -s tests` red instead.
+- **Slugs**: `toc.slugify: !!python/name:lode.docs_slug.github_slugify` works unchanged
+  (Zensical imports it, so `lode` must be importable: it is, in the project venv). Every
+  heading id on the built site was compared against the old build: no difference. A repeated
+  heading still gets the `_1` suffix.
+- **Overrides**: `docs/overrides/main.html` (the `extrahead` block) renders unchanged.
+- **Search** is Zensical's built-in search; the `search` plugin entry stays.
+- **Not checked**: Zensical is `0.1.x`, so its behavior can change between versions. The exact pin
+  holds it still; a bump is checked by `nox -s docs` and the planted-breakage test above.
+
+The sections below that name `mkdocs build` describe the site as it was built then.
+
+**History of the dependency's placement** (`mkdocs-material`, then): pinned in the `dev` dependency
+group in `pyproject.toml` (`lode-fhql.20`, 2026-08-14 — **reverses** the original decision below to
+put it in its own CI-only `docs` extra).
 The original premise was that the docs build had no local value (`lode-fhql.9`'s Pages workflow
 builds the site; no local `dev` install needs it) — that premise broke the same day a local `mkdocs
 serve` (run ad hoc for `lode-fhql.13`'s favicon sign-off) immediately surfaced two broken intra-doc
@@ -1196,8 +1235,8 @@ these two pages instead of falling through to GitHub — but **only when the der
 carries the cited anchor**. The derived pages are curated subsets of their maintainer sources, so a
 citation of a section they don't carry (e.g.
 `configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745`) keeps the GitHub blob
-URL: aliasing it would both lose the cited content and fail `mkdocs build --strict`, whose
-`validation.links.anchors: warn` treats a link to a nonexistent anchor as an error.
+URL: aliasing it would both lose the cited content and fail the strict docs build, whose
+link-anchor validation treats a link to a nonexistent anchor as an error.
 
 **Nav wiring landed as `lode-gecm`**: `keymap.md` and `settings.md` are now listed in `mkdocs.yml`'s
 `nav` (alongside the other top-level published pages), so both are reachable from the site menu, not

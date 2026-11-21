@@ -98,21 +98,15 @@ dev = [
                             # textual[syntax] (lode-sjbo). Hyphenated: a
                             # requirement names the distribution, not the
                             # import.
-    "mkdocs-material==9.8.1",  # docs-site generator (lode-fhql.8; rationale
-                                # in docs/stack.md). Moved here from its own
-                                # CI-only `docs` extra (lode-fhql.20) -- mkdocs
-                                # is also a VALIDATOR (`nox -s docs`, below):
-                                # a local `mkdocs build` surfaced broken
-                                # intra-doc anchors nobody had seen, so it
-                                # belongs on every dev's PATH like any other
-                                # gate tool. Pinned exact (same
-                                # pattern as ruff above, lode-fhql.9 HUMAN
-                                # DECISION 2026-08-14): CI's docs.yml installs
-                                # it from uv.lock, never a pin of its own
-                                # (tests/test_build_docs_site.py checks uv.lock
-                                # locks this version), so the renderer that
-                                # builds the published site is the same one
-                                # every developer gates against locally.
+    "zensical==0.1.3",  # docs-site generator (lode-0lb8; rationale in
+                        # docs/stack.md). It is also a VALIDATOR
+                        # (`nox -s docs`): a strict build fails on a broken
+                        # intra-doc link or anchor, so it sits on every dev's
+                        # PATH like any other gate tool. Pinned exact (same
+                        # pattern as ruff above); CI's docs.yml installs it
+                        # from uv.lock, never a pin of its own
+                        # (tests/test_build_docs_site.py checks uv.lock
+                        # locks this version).
 ]
 
 [project.scripts]

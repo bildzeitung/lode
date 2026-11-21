@@ -6623,6 +6623,19 @@ the `validation:` block and the `search` plugin. Outside it: the strict build (`
     and body no longer holds: migrate the docs site to Zensical before mkdocs-material's
     2027-05-05 end of life. Decision only; the migration is `lode-0lb8`'s. The inventory above is
     incomplete; `lode-0lb8` carries the full one.
+  - **Update (lode-0lb8, 2026-11-21):** the migration is built. `zensical` 0.1.3 replaces
+    mkdocs-material in the `dev` group and `uv.lock`; `mkdocs.yml` keeps its name (Zensical reads
+    it); `nox -s docs` and `docs.yml` run `zensical build --strict`. Checked against Zensical's own
+    docs and a real build: link and link-anchor validation exist and `--strict` fails on a broken
+    link to a page or a broken anchor, so strict anchor validation has an equivalent and no
+    maintainer decision was needed. The `toc.slugify` callable and the `docs/overrides`
+    `extrahead` override work unchanged, and every heading id matches the old build. Two things
+    the old strict build did that Zensical 0.1.3 does not, both measured at review and both given
+    a replacement on this branch: it failed on an image whose file is missing (now checked when
+    `scripts/build_docs_site.py` stages the site), and it rejected a misspelled `validation:` key
+    (now a test runs a strict build against planted breakage). What was dropped: the old `nav.*`
+    validation checks (all `ignore`). Still open: Zensical is `0.1.x`, so a version bump is a
+    behavior change; `docs/stack.md` records the details.
 
 ## The anthropic SDK's native OpenTelemetry tracing: leave on or disable (open, lode-sflg)
 

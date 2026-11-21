@@ -115,7 +115,7 @@ _DEV_ASIDE_MARKER_RE = re.compile(r"lode-[a-z0-9][a-z0-9.]*|show=False|[\w/]+\.p
 def _github_slug(heading_text: str) -> str:
     """GitHub's heading-to-anchor slug, so an emitted `<a id=...>` matches the anchor GitHub derives
     from the same heading and one link works in both renderers (GitHub's auto anchor; the explicit
-    tag under MkDocs, whose own slug algorithm differs on punctuation).
+    tag on the docs site, whose default slug algorithm differs on punctuation).
 
     `scripts/check_links.py::github_slug` is the authority for this algorithm. Copied rather than
     imported because `scripts/` is not a package and this file is executed three different ways (as

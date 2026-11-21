@@ -1,4 +1,4 @@
-"""Tests for src/lode/docs_slug.py, the mkdocs-side GitHub slugifier (lode-fhql.21).
+"""Tests for src/lode/docs_slug.py, the docs-site-side GitHub slugifier (lode-fhql.21).
 
 Behaviour of this module in isolation only. The load-bearing test -- that this
 module and ``scripts/check_links.py``'s ``github_slug`` never diverge, since one
