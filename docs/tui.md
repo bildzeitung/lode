@@ -497,8 +497,8 @@ is. A TUI-side catch also covers causes that are not provider errors at all (sql
 store, the local embedder, a rendering fault), and a crash could lose unsaved data. The CLI still
 prints a traceback for a raw SDK error.
 
-Exhausting `qa_call_timeout_s` surfaces as one of two errors on
-the Anthropic provider (`OpenAIProvider` wraps every SDK error, a timeout included), and the worker's `except Exception`
+Exhausting `qa_call_timeout_s` surfaces as one of two errors on the Anthropic provider
+(`OpenAIProvider` wraps every SDK error, a timeout included), and the worker's `except Exception`
 catches both. A turn that itself times out (after the SDK's retries) raises the raw
 `anthropic.APITimeoutError`. With the Ask tools on, `run_tool_turns` instead raises
 `LLMProviderError` when earlier turns and tool calls have used the budget up before a turn starts

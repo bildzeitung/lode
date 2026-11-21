@@ -1036,8 +1036,8 @@ deciding factors were:
   static-site toolchain the venv/lock already cover for nothing).
 
 **Migrated to Zensical (`lode-0lb8`, 2026-11-21).** The generator is now **Zensical** (`zensical`),
-by the creators of Material for MkDocs (which itself reaches end of life on 2027-05-05); the maintainer
-ruled to migrate
+by the creators of Material for MkDocs (which itself reaches end of life on 2027-05-05); the
+maintainer ruled to migrate
 ([decision](decisions.md#mkdocs-material-is-in-maintenance-mode-stay-or-migrate-open-lode-3vet),
 `lode-3vet`). The rationale above for MkDocs-Material (plain Markdown, narrative fit, built-in
 search) carries over unchanged, because Zensical reads the same `mkdocs.yml`, Python-Markdown
