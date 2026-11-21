@@ -6530,12 +6530,10 @@ it. Whoever picks it up should first check what a successor has to carry. In `mk
 `docs/overrides` theme `custom_dir`, the `toc` slugify callable (`lode.docs_slug.github_slugify`),
 the `validation:` block and the `search` plugin. Outside it: the strict build (`nox -s docs`,
 `docs.yml`) and the Mermaid pre-render in `scripts/build_docs_site.py`.
-  - **Update (lode-3vet, 2026-11-21, maintainer):** migrate the docs site to Zensical before
-    mkdocs-material's 2027-05-05 end of life; staying on 9.8.x past it is not chosen. Decision
-    only; the migration is `lode-0lb8`'s, which carries the inventory above (the `docs/overrides`
-    `custom_dir`, the `lode.docs_slug.github_slugify` toc callable, the `validation:` block under
-    `--strict`, the `search` plugin, `nox -s docs`, `docs.yml` and the Mermaid pre-render in
-    `scripts/build_docs_site.py`).
+  - **Update (lode-3vet, 2026-11-21, maintainer):** decided, so the "open" in this entry's heading
+    and body no longer holds: migrate the docs site to Zensical before mkdocs-material's
+    2027-05-05 end of life. Decision only; the migration is `lode-0lb8`'s. The inventory above is
+    incomplete; `lode-0lb8` carries the full one.
 
 ## The anthropic SDK's native OpenTelemetry tracing: leave on or disable (open, lode-sflg)
 
