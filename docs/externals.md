@@ -1187,6 +1187,13 @@ display-side fix would leave the secret at rest in the DB — see
 has gone to the cloud, and when?"* Cheap to keep, high-trust, and the natural audit surface if a
 sensitive note is ever suspected of having leaked.
 
+The Anthropic SDK can also trace every API call through OpenTelemetry, a record this log never
+sees. lode turns that off: `build_client` (`src/lode/auth.py`), the one place lode constructs an
+Anthropic client, passes `open_telemetry=False`, and the `ANTHROPIC_OPEN_TELEMETRY*` environment
+variables cannot turn it back on, because the SDK reads them only for a client given no option
+(`lode-sflg`; the ruling is in
+[decisions.md](decisions.md#the-anthropic-sdks-native-opentelemetry-tracing-leave-on-or-disable-open-lode-sflg)).
+
 ### Local-at-rest
 
 Care for the on-disk store itself — the SQLite file and LanceDB sit on the machine holding all of

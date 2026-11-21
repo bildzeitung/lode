@@ -65,7 +65,8 @@ def build_client() -> anthropic.Anthropic:
 
     sdk_error: anthropic.AnthropicError | None = None
     try:
-        client = anthropic.Anthropic()
+        # Tracing off so the egress log stays the only record of what leaves the box (lode-sflg).
+        client = anthropic.Anthropic(open_telemetry=False)
     except anthropic.AnthropicError as err:
         sdk_error = err
         _log.debug("SDK could not construct a credentialed client: %s", err)

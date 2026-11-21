@@ -6549,6 +6549,13 @@ were installed into lode's environment and a tracer provider registered; span co
 metadata-only unless `ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE=content` is also set. That path
 is outside the [egress log](externals.md#egress-log-auditability). **Open** (`lode-sflg`): leave
 the SDK default, or pass `open_telemetry=False` where lode constructs its Anthropic client.
+  - **Update (lode-sflg, 2026-11-21, maintainer):** disable. Pass `open_telemetry=False` at every
+    site lode constructs an Anthropic client, so the egress log stays the only record of what
+    leaves the box. `src/lode/auth.py`'s `build_client` is the only such site (the provider module
+    takes the client it is handed), and `tests/test_auth.py` pins that the constructed client has
+    tracing off even with `ANTHROPIC_OPEN_TELEMETRY=true` in the environment. The option exists
+    in the locked 1.17.0, so this does not wait on `lode-4uyu`'s 2.x bump, whose builder carries
+    the kwarg across the construction sites it touches.
   - **Update (lode-ucpu, 2026-11-20, maintainer):** the "Not decided here" question is settled:
     widen `lode-4wgq` to also record `provider_identity(settings)` and `ENRICH_PROMPT_VER` as read
     at submit, on the refusal and success paths alongside the submit-time model. Neither
