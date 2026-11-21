@@ -68,8 +68,11 @@ def _build_fake_repo(tmp_path: Path) -> tuple[Path, Path]:
     shutil.copy2(UPDATE_DEPS_SRC, scripts / "update-deps.sh")
     shutil.copy2(DEP_CHURN_LIB_SRC, scripts / "dep-churn-lib.sh")
 
-    # PATH stubs: `uv lock ...` writes a fixed candidate lock over uv.lock
-    # (recording its arguments) instead of resolving anything from PyPI,
+    # PATH stubs: `uv lock ...` writes a fixed candidate lock over uv.lock instead
+    # of resolving anything from PyPI, recording its arguments and the
+    # UV_EXCLUDE_NEWER it was handed. It exits $UV_LOCK_EXIT, except that the
+    # flagless `uv lock -q` exits $UV_PLAIN_LOCK_EXIT when set, so the
+    # cutoff-normalising pass can fail after a successful upgrade pass.
     # `uv sync --frozen` becomes a plain mkdir that exits $INSTALL_EXIT (never a
     # real venv, never a real install; $INSTALL_EXIT makes the "failed candidate
     # install" arm of the rollback reachable as well as the red-gate arm -- both
@@ -85,7 +88,11 @@ def _build_fake_repo(tmp_path: Path) -> tuple[Path, Path]:
         f"""#!/bin/bash
 if [ "$1" = "lock" ]; then
   echo "$*" >> "{tmp_path / "uv_lock_args"}"
+  echo "${{UV_EXCLUDE_NEWER:-unset}}" >> "{tmp_path / "uv_lock_env"}"
   cp -f "{tmp_path / "candidate.lock"}" uv.lock
+  if [ "$*" = "lock -q" ]; then
+    exit "${{UV_PLAIN_LOCK_EXIT:-${{UV_LOCK_EXIT:-0}}}}"
+  fi
   exit "${{UV_LOCK_EXIT:-0}}"
 fi
 if [ "$1 $2" = "sync --frozen" ]; then
@@ -124,6 +131,11 @@ exit 0
     return repo, bindir
 
 
+def _lock_calls(tmp_path: Path) -> list[str]:
+    """Every `uv lock` argument line the stub recorded, in call order."""
+    return (tmp_path / "uv_lock_args").read_text(encoding="utf-8").splitlines()
+
+
 def _run_update_deps(
     repo: Path,
     bindir: Path,
@@ -134,6 +146,7 @@ def _run_update_deps(
     uv_lock_exit: int = 0,
     via_bash: bool = False,
     extra_args: tuple[str, ...] = ("--no-file",),
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = dict(
         fake_bin_env(bindir),
@@ -141,6 +154,7 @@ def _run_update_deps(
         INSTALL_EXIT=str(install_exit),
         NOX_TESTS_SIGNAL_PARENT="1" if signal_parent else "0",
         UV_LOCK_EXIT=str(uv_lock_exit),
+        **(extra_env or {}),
     )
     # via_bash: `bash script` ignores the shebang's -e.
     prefix = ["bash"] if via_bash else []
@@ -175,6 +189,7 @@ def test_candidate_on_disk_during_gate_and_original_restored_after_red_gate(
     assert lock_after == ORIGINAL_LOCK
 
     assert "restored" in result.stdout
+    assert "full lock upgrade, 7 days release-age cooldown" in result.stdout
 
 
 def test_lock_stays_promoted_after_a_green_gate(tmp_path: Path) -> None:
@@ -235,10 +250,9 @@ def test_prints_one_name_old_to_new_line_per_moved_package(tmp_path: Path) -> No
     ]
     assert len(diff_lines) == 1
     assert diff_lines[0].split() == ["mypkg", "1.0.0", "->", "2.0.0"]
-    assert (tmp_path / "uv_lock_args").read_text(encoding="utf-8").split() == [
-        "lock",
-        "-q",
-        "--upgrade",
+    assert _lock_calls(tmp_path) == [
+        "lock -q --upgrade --exclude-newer 7 days",
+        "lock -q",
     ]
 
 
@@ -250,11 +264,9 @@ def test_package_flag_moves_only_that_package(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (tmp_path / "uv_lock_args").read_text(encoding="utf-8").split() == [
-        "lock",
-        "-q",
-        "--upgrade-package",
-        "mypkg",
+    assert _lock_calls(tmp_path) == [
+        "lock -q --upgrade-package mypkg --exclude-newer 7 days",
+        "lock -q",
     ]
 
 
@@ -279,6 +291,23 @@ def test_failed_uv_lock_exits_nonzero_and_restores_the_lock(tmp_path: Path) -> N
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert "uv lock failed" in result.stderr
+    assert "--no-cooldown" in result.stderr  # the cutoff was in force: name the way out
+    assert (repo / "uv.lock").read_text(encoding="utf-8") == ORIGINAL_LOCK
+    assert not (tmp_path / "lock_during_gate").exists()  # no gate ran
+
+
+def test_failed_cutoff_normalising_pass_restores_the_lock(tmp_path: Path) -> None:
+    """The upgrade pass succeeded, so uv.lock holds a candidate that still records
+    the cutoff; a failed second pass must not leave it there, ungated."""
+    repo, bindir = _build_fake_repo(tmp_path)
+
+    result = _run_update_deps(
+        repo, bindir, via_bash=True, extra_env={"UV_PLAIN_LOCK_EXIT": "1"}
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "cutoff-normalising pass" in result.stderr
+    assert len(_lock_calls(tmp_path)) == 2
     assert (repo / "uv.lock").read_text(encoding="utf-8") == ORIGINAL_LOCK
     assert not (tmp_path / "lock_during_gate").exists()  # no gate ran
 
@@ -291,7 +320,7 @@ def test_reconcile_runs_plain_uv_lock_through_the_gate_path(tmp_path: Path) -> N
     result = _run_update_deps(repo, bindir, extra_args=("--reconcile", "--no-file"))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (tmp_path / "uv_lock_args").read_text(encoding="utf-8").strip() == "lock -q"
+    assert _lock_calls(tmp_path) == ["lock -q"]
     assert (tmp_path / "lock_during_gate").read_text(encoding="utf-8") == CANDIDATE_LOCK
     assert (repo / "uv.lock").read_text(encoding="utf-8") == CANDIDATE_LOCK
 
@@ -352,3 +381,39 @@ def test_reconcile_and_package_are_mutually_exclusive(tmp_path: Path) -> None:
     assert "mutually exclusive" in result.stderr
     assert not (tmp_path / "uv_lock_args").exists()
     assert (repo / "uv.lock").read_text(encoding="utf-8") == ORIGINAL_LOCK
+
+
+def test_no_cooldown_drops_the_cutoff_from_an_upgrade(tmp_path: Path) -> None:
+    repo, bindir = _build_fake_repo(tmp_path)
+
+    result = _run_update_deps(repo, bindir, extra_args=("--no-cooldown", "--no-file"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _lock_calls(tmp_path) == ["lock -q --upgrade"]
+
+
+def test_reconcile_ignores_a_cutoff_in_the_environment(tmp_path: Path) -> None:
+    """UV_EXCLUDE_NEWER would reach reconcile's plain `uv lock`; the script unsets it."""
+    repo, bindir = _build_fake_repo(tmp_path)
+
+    result = _run_update_deps(
+        repo,
+        bindir,
+        extra_args=("--reconcile", "--no-file"),
+        extra_env={"UV_EXCLUDE_NEWER": "2020-01-01"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "uv_lock_env").read_text(encoding="utf-8").split() == ["unset"]
+
+
+def test_no_cooldown_and_reconcile_are_mutually_exclusive(tmp_path: Path) -> None:
+    repo, bindir = _build_fake_repo(tmp_path)
+
+    result = _run_update_deps(
+        repo, bindir, extra_args=("--reconcile", "--no-cooldown", "--no-file")
+    )
+
+    assert result.returncode == 1
+    assert "--no-cooldown" in result.stderr
+    assert not (tmp_path / "uv_lock_args").exists()

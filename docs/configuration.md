@@ -918,6 +918,31 @@ signal**, not an exact nit tally (an addendum line, e.g. `NIT 3 addendum`, count
 not add a second parser for a more precise count; the roughness is accepted, per
 [`docs/agents-workflow.md`](agents-workflow.md#wording-only-doc-nits-go-to-the-docs-nits-collector-lode-t551).
 
+## Lock-refresh release-age cooldown (`COOLDOWN` in `scripts/update-deps.sh`, lode-3s4d)
+
+Not a `config.toml` knob: a shell variable at the top of `scripts/update-deps.sh`, default
+**`7 days`**. The script's two upgrade modes (whole-set and `--package NAME`) pass it as
+`uv lock --exclude-newer "7 days"`, so a release published less than that long ago is not taken
+and a release pulled or found malicious inside the window never reaches `uv.lock`. Change the
+value by editing that variable. `--reconcile` never applies it (it must not downgrade a pin), and
+the script unsets any `UV_EXCLUDE_NEWER` in the caller's environment so a cutoff set there cannot
+reach it. A cutoff set in a `uv.toml` is not guarded against.
+
+**The cutoff applies to the whole resolution, not only to what the run upgrades.** A pin already
+in `uv.lock` that is younger than the cutoff moves back to the newest release older than it. That
+holds under `--package NAME` too (NAME included), and whichever run took the pin, a
+`--no-cooldown` one included. The script's version diff lists each one as `old -> new`. If
+`pyproject.toml` requires a release inside the window, the run fails instead and the script
+names `--no-cooldown`. Whether a run should be allowed to move a pin back is open in `lode-hdob`.
+
+**Override for a security fix that must be taken at once:**
+`scripts/update-deps.sh --package NAME --no-cooldown` (or `--no-cooldown` alone for the whole
+set). `--no-cooldown` with `--reconcile` is refused, since reconcile has no cutoff to skip.
+
+uv records the cutoff in `uv.lock`, which would make `nox -s lock_currency` report the lock
+stale; the script follows the upgrade with a plain `uv lock` that drops it. See
+[`decisions.md`](decisions.md#a-release-age-cooldown-for-lock-refreshes-decided-lode-3s4d).
+
 ## Build constants (chosen once)
 
 | Knob | Kind | Default | Notes |
