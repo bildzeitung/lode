@@ -672,8 +672,8 @@ def status(db: _DbOption = None) -> None:
             "note version or page snapshot: it is not retried until the note "
             "is edited or the page changes materially, the enrichment prompt "
             "version changes, or the enrichment model (enrichment_llm.model) "
-            "changes -- changing only reasoning_effort or max_tokens does not "
-            "retry it.",
+            "or the LLM provider (llm_provider) changes -- changing only "
+            "reasoning_effort or max_tokens does not retry it.",
             highlight=False,
         )
     if dead_self_healing:

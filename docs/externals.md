@@ -242,9 +242,9 @@ A refresh does not reliably re-open enrichment: an identical refetch mints no ne
 sub-threshold change carries the prior enrichment forward with no enrich job of its own. So
 `reconcile._enrich_gap_step` has an externals arm with the same triggers as notes — no current
 enrichment (never enriched, or max-retries-dead), a `done` job under a stale `ENRICH_PROMPT_VER`,
-and a refusal-dead job re-opened only by the note rule (prompt version or `enrichment_llm`
-change; [storage.md](storage.md) failure taxonomy). Like notes, a `done` job records no model, so a
-model change alone does not re-open a `done` enrichment.
+and a refusal-dead job re-opened only by the note rule (prompt version, `enrichment_llm.model`
+or the LLM provider; [storage.md](storage.md) failure taxonomy). Like notes, a `done` job records
+no model, so a model change alone does not re-open a `done` enrichment.
 
 **The materiality gate stays intact.** The signal is *not* "the head snapshot has no enrich job" —
 that would fire on every carried-forward head. It is the external's **in-force enrich job**: the
@@ -255,7 +255,7 @@ post-embed, so before then it may still decide). A live in-force job is left alo
 targets the head snapshot. Tombstoned-head and `no_egress` externals are excluded, where `no_egress`
 means the row flag or a `no_egress_scopes` rule (the same composition the enrich egress gate uses).
 A refused page is therefore not retried by a sub-threshold change either: the refusal stays in
-force until a change passes the materiality gate, or the prompt version or model changes.
+force until a change passes the materiality gate, or the prompt version, model or provider changes.
 
 ### Refresh policy: TTL-based revalidation (decided-for-web, `lode-w0h.6`)
 

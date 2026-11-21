@@ -49,8 +49,8 @@ the process is resumable the same way.
 **What it does NOT touch:** the `embed` queue (never enqueues embed jobs), and it never sweeps in
 `no_egress` content — notes/externals marked `no_egress` are excluded even if their stored
 annotations happen to be stale, because they're never sent to the cloud enrichment LLM at all. It
-also skips a head the current enrichment model already refused under the current prompt version
-— that refusal is final until the model or prompt version changes.
+also skips a head whose enrichment the model has refused — that refusal is final until the model,
+`llm_provider` or the prompt version changes.
 
 ## `lode reindex-lexical`
 

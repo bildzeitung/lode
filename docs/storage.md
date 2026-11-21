@@ -465,8 +465,8 @@ annotation, which the head-pointer comparison flags for re-derivation. So:
   load; E7 appends the enrich-gap step; `lode-w0h.6` appends the `refresh_stale` step — the web
   connector's refresh policy, re-enqueueing a `refresh` job for any external past its TTL
   (`docs/externals.md` "Refresh policy"). `enrich_gap` skips a refusal-dead enrich job
-  while its head version, `ENRICH_PROMPT_VER` and `enrichment_llm.model` are unchanged
-  (the failure taxonomy's third class). `enrich_gap` also covers externals (lode-4kg8, see
+  while its head version, `ENRICH_PROMPT_VER`, `enrichment_llm.model` and the provider are
+  unchanged (the failure taxonomy's third class). `enrich_gap` also covers externals (lode-4kg8, see
   `docs/externals.md` "Enrich gap for externals"). `embed_gap`, `enrich_gap`, and `refresh_stale` each use
   `enqueue_derive_jobs` with `ON CONFLICT DO NOTHING` (the ``idx_jobs_live`` live-job index), so
   running any of them repeatedly enqueues no duplicates. Runs at the start of each `lode work` drain
@@ -1823,9 +1823,9 @@ head's `version_id`/`snapshot_id`) whose `model` disagrees with the currently co
 (`lode-568v.6`, below). A head with **no** ai annotations at all is not stale by this definition — it is
 simply unenriched, which the passive reconciliation scan's `enrich_gap` step (above) already covers on
 its own schedule; re-enqueuing it here too would just duplicate work `lode work` was already going to
-do. A head with a standing refusal-dead enrich job under the current `ENRICH_PROMPT_VER` and
-`enrichment_llm` is not stale either (`lode-5try`): the refusal is final for that version, so
-re-enqueuing would only re-send refused content (see the refusal rules above).
+do. A head with a standing refusal-dead enrich job under the current `ENRICH_PROMPT_VER`,
+`enrichment_llm.model` and provider is not stale either (`lode-5try`): the refusal is final for that
+version, so re-enqueuing would only re-send refused content (see the refusal rules above).
 
 **Provider is part of the same identity, not a second check (lode-568v.6).** `annotations.provider`
 (written since `lode-568v.4`) can disagree with the active provider even while `model` matches — the
