@@ -1506,6 +1506,23 @@ a `/code` fan-out would dispatch it into a live batch and return a confident, wo
 class of constraint is documented, not solved: it needs a human to run the ticket by hand in a quiet
 window.
 
+### Trace a claimed failure before asking a human to decide it (lode-low0)
+
+A decision ticket that states a failure as fact gets ruled on as stated, and a ruling record that copies
+the ticket's mechanism puts that claim in `docs/decisions.md` unchecked. `lode-ucpu` did both: its
+description stated a failure the code cannot reach, the maintainer ruled on it, and the builder copied
+the mechanism into the record. The technical review caught it before it landed (MISTAKES.md, 2026-11-20
+entry, "A decision ticket stated a failure that the code cannot reach").
+
+Two rules, one per place the claim passes through:
+
+- **Filing.** Before filing a ticket that asks the maintainer to decide about a failure, trace it in the
+  code from the trigger to the wrong outcome. Mark any step not traced "not checked against the code" in
+  the ticket. Applies to the builder (`coding.md`) and the reviewer (`code-reviewer.md`, follow-up step).
+- **Recording.** A builder writing a ruling into `docs/decisions.md` writes the ruling. It writes a
+  claimed mechanism only after tracing it, or labelled as the ticket's claim. The same rule binds the
+  reviewer, for a ruling record in the diff it reviews and for any fix it makes to one.
+
 ### Wording-only doc nits go to the docs-nits collector (lode-t551)
 
 DECISION (human, 2026-09-08): a **wording-only** nit in `docs/` or in a skill/agent markdown file —
