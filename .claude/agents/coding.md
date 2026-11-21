@@ -852,7 +852,7 @@ git merge origin/trunk
 A merge **appends** to history — it never rewrites a commit already pushed to `land/<id>` — which is
 exactly why my push back in step 5 can be an ordinary, non-force push (lode-cln).
 
-- **Clean merge** → continue to gates (step 4).
+- **Clean merge** → the marker check below, then gates (step 4).
 - **Conflict** → classify it before touching anything:
   - **Mechanical** (both sides add independent, non-overlapping content at the same anchor — e.g. two
     branches each appended a distinct section to the same doc, or added an unrelated function to the
@@ -867,19 +867,21 @@ exactly why my push back in step 5 can be an ordinary, non-force push (lode-cln)
     tooling limitation this fix removes.
 
 After **any** merge here (clean or resolved) that brings a `**Update (` line into
-`docs/decisions.md`, I confirm each such marker still follows the entry it names (lode-l8b7). The
-`merge=union` driver can detach one when this branch holds an EOF append and trunk's marker is on
-the entry above it: it writes this branch's lines first, then trunk's (`docs/decisions.md`, search
-`lode-tikr`). A marker's lead-in names the correcting ticket, not the entry, so the merged file
-alone cannot show a detachment when the lines in between are another bullet entry. I compare with
-trunk: the entry the marker sits under in `git show origin/trunk:docs/decisions.md` is the entry
-it must sit under in the merged file.
+`docs/decisions.md`, I confirm each such marker still follows the entry it corrects (lode-l8b7).
+The `merge=union` driver can detach one when this branch holds an EOF append and trunk's marker is
+on the entry above it: it writes this branch's lines first, then trunk's (`docs/decisions.md`,
+search `lode-tikr`). When this branch has not changed that file there is nothing to check: the
+merged file is trunk's. A marker's lead-in names the correcting ticket, not the entry, so the
+merged file alone cannot show which entry it belongs on. I compare with trunk: the entry the
+marker sits under in trunk's copy (`git show origin/trunk:docs/decisions.md`, searched for the
+lead-in, never read whole) is the entry it must sit under in the merged file.
 
 When one has been detached, I move **this branch's own added lines** (the ones the merge placed
-between the entry and the marker) below trunk's added lines, so the file is trunk's with this
-branch's lines added: trunk's lines keep their wording and order. I re-read the file to confirm
-the order, then commit the move as an ordinary commit on top of the merge (`git add
-docs/decisions.md`, then `git commit -m`), and name it in step 5's `REBASE PICKUP` note.
+between the entry and the marker) below trunk's added lines, changing no trunk line's wording or
+order. I re-read that stretch of the file to confirm the order and run
+`scripts/check-decisions-no-silent-rewrite.sh origin/trunk`: a `REMOVED:` line my move caused
+means it disturbed a trunk line. Then I commit the move as an ordinary commit on top of the merge
+and name it in step 5's `REBASE PICKUP` note.
 
 ### 4. Re-run the quality gates (must be green)
 
@@ -936,7 +938,7 @@ hand-off metadata and swap the label myself, with the same one-script derive →
 fresh-build hand-off:
 
 ```bash
-scripts/handoff-sha.sh <id> land_head --remove-label needs-rebase --add-label ready-for-land --append-notes "REBASE PICKUP: merged trunk into the branch; <clean merge, or each conflicting file and which side's content survived>"
+scripts/handoff-sha.sh <id> land_head --remove-label needs-rebase --add-label ready-for-land --append-notes "REBASE PICKUP: merged trunk into the branch; <clean merge, or each conflicting file and which side's content survived; plus any docs/decisions.md lines moved in step 3>"
 ```
 
 Exit 0 is done; nonzero writes nothing (1 = the derived value is malformed, 2 = this CALL is broken,
