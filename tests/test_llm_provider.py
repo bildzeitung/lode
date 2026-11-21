@@ -1867,6 +1867,43 @@ def test_run_tool_turns_free_turn_without_tool_use_warns_only_when_cut_off(
         assert hint in message
 
 
+def test_run_tool_turns_warns_when_tool_turn_budget_is_exhausted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tool = ToolSpec(name="lookup_widget", description="d", input_schema={})
+    client = mock.MagicMock()
+    client.messages.create.side_effect = [
+        _tool_use_response("lookup_widget", {}),
+        _tool_use_response("lookup_widget", {}),
+        _parsed_response(_Widget(name="w", count=0)),
+    ]
+    ran: list[str] = []
+
+    with caplog.at_level(logging.WARNING, logger="lode.llm_provider"):
+        result = AnthropicProvider(client).run_tool_turns(
+            model="claude-sonnet-4-6",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            tools=(tool,),
+            tool_result=lambda name, args: ran.append(name) or "r",
+            output_schema=_Widget,
+            max_tokens=100,
+            timeout_s=30.0,
+            max_tool_turns=2,
+        )
+
+    assert result == _Widget(name="w", count=0)
+    # The last free turn's tools still run before the final turn.
+    assert ran == ["lookup_widget", "lookup_widget"]
+    [message] = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "lode.llm_provider" and r.levelno == logging.WARNING
+    ]
+    assert "max_tool_turns=2" in message
+
+
 @pytest.mark.network
 def test_collect_batch_refusal_with_valid_text_is_errored_real_sdk() -> None:
     payload = _succeeded_payload("ver-4")

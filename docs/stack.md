@@ -905,6 +905,11 @@ tool call it may have been about to make. The warning also fires when the turn w
 writing prose, where nothing is lost: the content of a free turn with no `tool_use` block never
 reaches the final turn, cut off or not. No `LLMProviderError`; a turn ending `end_turn` with no
 `tool_use` block logs nothing.
+When the model issues a `tool_use` block on every one of the `max_tool_turns` free turns, the loop
+ends by exhausting the budget and `run_tool_turns` logs a warning naming `max_tool_turns`
+(`lode-jrlk`, maintainer ruling 2026-11-21); the last turn's tools still run, and the final turn
+follows with `tool_choice` none. A run that ends because the model stopped calling tools logs
+nothing new.
 A free turn with `stop_reason` `model_context_window_exceeded` that carries a `tool_use` block
 raises the same way, with the context-window hint (`lode-hfzw`, maintainer ruling 2026-11-19). The
 basis is Anthropic's published
