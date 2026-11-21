@@ -20,8 +20,11 @@
 #      pyproject.toml edit made stale -- an added or removed dependency, a range
 #      or requires-python change -- keeping every other pin. This is the remedy
 #      `nox -s lock_currency` names when it exits 1. Mutually exclusive with
-#      --package. The release-age cutoff ruled for the two upgrade modes
-#      (lode-3s4d) must never reach this one: a reconcile may not downgrade an
+#      --package. Run it STRAIGHT AFTER the pyproject.toml edit (lode-7qo1):
+#      it gates on the full `nox -s tests` against the working tree, so an
+#      unrelated red test mid-branch rolls the reconciled lock back to the stale
+#      one and rebuilds ./.venv without the new dependency. The release-age
+#      cutoff ruled for the two upgrade modes (lode-3s4d) must never reach this one: a reconcile may not downgrade an
 #      existing pin. Steps 2-6 below are the same for all three modes.
 #   2. Print a readable VERSION DIFF between the saved copy and the moved
 #      uv.lock -- one line per changed package, "pkg  OLD -> NEW" for a bump,
@@ -54,7 +57,10 @@
 #      judgment-call in the context of lode's actual call sites (lode-i642).
 #      A WORK ORDER, not a finding: required-only filing policy, see the
 #      stub's own acceptance text. Noise gate: skipped entirely when every
-#      moved package changed only its patch component. The diff parsing, the
+#      moved package changed only its patch component. With --reconcile
+#      (lode-7qo1) additions and removals are ignored too: it files only when
+#      an EXISTING pin moved across a minor or major (a range or
+#      requires-python edit). The diff parsing, the
 #      rendering and that gate live in the sourceable scripts/dep-churn-lib.sh
 #      so they are unit-tested. `--no-file` suppresses filing outright. Filing
 #      writes Dolt, so a missing/failing `bd` (or the `bd dolt push` after it)
@@ -189,7 +195,7 @@ fi
 # script's exit status or the lock outcome.
 file_churn_stub() {
   local skip
-  if skip="$(dep_stub_skip_reason "$NO_FILE" "$CHANGES_RAW")"; then
+  if skip="$(dep_stub_skip_reason "$NO_FILE" "$CHANGES_RAW" "$RECONCILE")"; then
     echo "update-deps.sh: $skip"
     return 0
   fi

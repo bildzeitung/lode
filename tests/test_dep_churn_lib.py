@@ -199,6 +199,41 @@ def test_stub_skip_reason(no_file: int, raw: str, expect: str | None) -> None:
         assert expect in got.stdout
 
 
+@pytest.mark.parametrize(
+    ("raw", "expect"),
+    [
+        # Pure additions and removals never file in reconcile mode.
+        ("fresh\t(none)\t9.9.9", "no existing pin"),
+        ("gone\t1.0.0\t(none)", "no existing pin"),
+        ("fresh\t(none)\t9.9.9\ngone\t1.0.0\t(none)", "no existing pin"),
+        ("", "no existing pin"),
+        # An existing pin moved within its patch component does not file.
+        ("alpha\t1.2.3\t1.2.4\nfresh\t(none)\t9.9.9", "patch-level only"),
+        # An existing pin crossing a minor or major files, additions alongside or not.
+        ("alpha\t1.2.3\t1.3.0", None),
+        ("alpha\t1.2.3\t2.0.0\nfresh\t(none)\t9.9.9", None),
+    ],
+)
+def test_stub_skip_reason_reconcile(raw: str, expect: str | None) -> None:
+    got = _run(f"dep_stub_skip_reason 0 {shlex.quote(raw)} 1")
+    if expect is None:
+        assert got.returncode != 0, f"expected FILE, got skip: {got.stdout!r}"
+    else:
+        assert got.returncode == 0, got.stderr
+        assert expect in got.stdout
+
+
+def test_stub_skip_reason_reconcile_default_off() -> None:
+    # Without the third argument an addition still files (non-reconcile modes).
+    got = _run("dep_stub_skip_reason 0 'fresh\t(none)\t9.9.9'")
+    assert got.returncode != 0
+
+
+def test_update_deps_passes_reconcile_to_skip_reason() -> None:
+    body = UPDATE_DEPS.read_text(encoding="utf-8")
+    assert 'dep_stub_skip_reason "$NO_FILE" "$CHANGES_RAW" "$RECONCILE"' in body
+
+
 # --------------------------------------------------------------------------
 # The caller wiring -- the actual lode-i642 defect
 # --------------------------------------------------------------------------
