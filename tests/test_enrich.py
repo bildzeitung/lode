@@ -30,7 +30,12 @@ from _anthropic_rig import (
     _results_handler,
     _succeeded_payload,
 )
-from conftest import _make_batch_result, fake_batch_client, structured_response
+from conftest import (
+    _make_batch_result,
+    _refused_batch_result,
+    fake_batch_client,
+    structured_response,
+)
 from pydantic import ValidationError
 
 from lode.config import Settings
@@ -46,12 +51,7 @@ from lode.enrich import (
     submit_enrich_batch,
 )
 from lode.jobs import now_iso
-from lode.llm_provider import (
-    AnthropicProvider,
-    BatchResult,
-    LLMProviderError,
-    ModelTier,
-)
+from lode.llm_provider import AnthropicProvider, ModelTier
 from lode.reconcile import _enrich_gap_step
 from lode.storage import init_db
 
@@ -2056,27 +2056,17 @@ def _submit_then_collect_changed(conn: sqlite3.Connection, *, refused: bool) -> 
         provider=AnthropicProvider(fake_batch_client(batch_id="batch-s")),
     )
     if refused:
-        result = BatchResult(
-            custom_id="ver-1",
-            outcome="errored",
-            parsed=None,
-            error=LLMProviderError(
-                "refused",
-                provider="anthropic",
-                refusal=True,
-                refusal_category="cyber",
-            ),
-        )
-        collect_provider = mock.MagicMock()
-        collect_provider.collect_batch.return_value = ("ended", [result])
+        br = _refused_batch_result("ver-1")
     else:
         br = _make_batch_result("ver-1", EnrichmentResult(tags=["t"]))
-        collect_provider = AnthropicProvider(
-            fake_batch_client(batch_id="batch-s", results=[br])
-        )
     with mock.patch("lode.enrich.ENRICH_PROMPT_VER", _COLLECT_PROMPT_VER):
         collect_enrich_batch(
-            conn, "batch-s", _COLLECT_SETTINGS, provider=collect_provider
+            conn,
+            "batch-s",
+            _COLLECT_SETTINGS,
+            provider=AnthropicProvider(
+                fake_batch_client(batch_id="batch-s", results=[br])
+            ),
         )
     return job_id
 
@@ -2112,8 +2102,26 @@ def test_collect_batch_success_stamps_submit_time_values(
     ).fetchone() == ("done", ENRICH_PROMPT_VER)
 
 
+@pytest.mark.parametrize(
+    ("changed_settings", "changed_prompt_ver"),
+    [
+        pytest.param(
+            Settings(enrichment_llm=ModelTier(model="collect-model")),
+            ENRICH_PROMPT_VER,
+            id="model",
+        ),
+        pytest.param(
+            Settings(
+                llm_provider="openai", enrichment_llm=ModelTier(model="submit-model")
+            ),
+            ENRICH_PROMPT_VER,
+            id="provider",
+        ),
+        pytest.param(_SUBMIT_SETTINGS, _COLLECT_PROMPT_VER, id="prompt_ver"),
+    ],
+)
 def test_collect_batch_refusal_stamps_submit_time_values_and_reopens(
-    conn: sqlite3.Connection,
+    conn: sqlite3.Connection, changed_settings: Settings, changed_prompt_ver: str
 ) -> None:
     job_id = _submit_then_collect_changed(conn, refused=True)
 
@@ -2125,8 +2133,9 @@ def test_collect_batch_refusal_stamps_submit_time_values_and_reopens(
 
     # Still a standing refusal under the submit-time configuration ...
     assert _enrich_gap_step(conn, _SUBMIT_SETTINGS) == 0
-    # ... and a gap under the collect-time model/provider, which never saw it.
-    assert _enrich_gap_step(conn, _COLLECT_SETTINGS) == 1
+    # ... and a gap once any one of the three differs from what was submitted.
+    with mock.patch("lode.reconcile.ENRICH_PROMPT_VER", changed_prompt_ver):
+        assert _enrich_gap_step(conn, changed_settings) == 1
 
 
 def test_collect_batch_without_submit_stamp_uses_collect_time_values(

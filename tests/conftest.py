@@ -1410,6 +1410,15 @@ def _make_batch_result(
     return r
 
 
+def _refused_batch_result(version_id: str) -> mock.MagicMock:
+    """Build a mock batch result the model refused (Anthropic ``stop_reason='refusal'``)."""
+    r = _make_batch_result(version_id, EnrichmentResult())
+    r.result.message.content = []
+    r.result.message.stop_reason = "refusal"
+    r.result.message.stop_details = SimpleNamespace(category="cyber")
+    return r
+
+
 # --- Shared Anthropic tool-turn fake + stub Fetcher (lode-pw9o) ------------
 #
 # Also holds the lower-level _tool_use_block/_text_block pair (lode-gyq3),

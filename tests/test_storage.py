@@ -806,6 +806,47 @@ def test_refusal_columns_migrated_onto_pre_existing_jobs_table(tmp_path: Path) -
     init_db(db).close()
 
 
+def test_submit_stamp_columns_migrated_onto_pre_existing_jobs_table(
+    tmp_path: Path,
+) -> None:
+    """lode-4wgq: a ``jobs`` table predating the submit-stamp columns gains all three.
+
+    A pre-existing row must read back NULL in each: collect reads that as
+    "nothing recorded" for a batch in flight across the upgrade.
+    """
+
+    def _submit_columns(conn: sqlite3.Connection) -> dict[str, tuple]:
+        # name -> (type, notnull, default)
+        return {
+            r[1]: (r[2], r[3], r[4])
+            for r in conn.execute("PRAGMA table_info(jobs)")
+            if r[1].startswith("submit_")
+        }
+
+    db = tmp_path / "lode.db"
+    _seed_pre_lode_uri7_db(db)
+
+    conn = init_db(db)
+    try:
+        migrated = _submit_columns(conn)
+        assert conn.execute(
+            "SELECT DISTINCT submit_model, submit_provider, submit_prompt_ver FROM jobs"
+        ).fetchall() == [(None, None, None)]
+    finally:
+        conn.close()
+
+    fresh_conn = init_db(tmp_path / "fresh.db")
+    try:
+        fresh = _submit_columns(fresh_conn)
+    finally:
+        fresh_conn.close()
+    assert set(fresh) == {"submit_model", "submit_provider", "submit_prompt_ver"}
+    assert migrated == fresh
+
+    # Idempotent: re-running init_db on the migrated DB must not raise.
+    init_db(db).close()
+
+
 def test_schema_index_predicate_matches_live_job_statuses() -> None:
     """``idx_jobs_live``'s WHERE clause and ``jobs.LIVE_JOB_STATUSES`` are one set.
 

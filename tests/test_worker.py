@@ -35,7 +35,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from conftest import _make_batch_result, fake_batch_client
+from conftest import _make_batch_result, _refused_batch_result, fake_batch_client
 
 from lode import jobs
 from lode.auth import AuthError
@@ -4349,16 +4349,6 @@ def test_reconcile_still_reenqueues_a_non_refusal_dead_enrich_job(
 
     assert _enrich_gap_step(conn, settings) == 1
     assert _enrich_statuses(conn) == [("dead",), ("pending",)]
-
-
-def _refused_batch_result(version_id: str) -> mock.MagicMock:
-    from lode.enrich import EnrichmentResult
-
-    r = _make_batch_result(version_id, EnrichmentResult())
-    r.result.message.content = []
-    r.result.message.stop_reason = "refusal"
-    r.result.message.stop_details = SimpleNamespace(category="cyber")
-    return r
 
 
 def test_collect_enrich_batch_refusal_is_dead_without_charging_attempts(

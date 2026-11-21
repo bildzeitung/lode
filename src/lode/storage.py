@@ -285,8 +285,9 @@ def _migrate_v6_jobs_submit_stamp(conn: sqlite3.Connection) -> None:
     the upgrade is therefore collected with the collect-time values, as before.
     ``schema.sql``'s comment on the columns says what they hold.
 
-    Version 5 is taken by a sibling migration on another branch; /land orders
-    the two.
+    Independent of migration 5 (lode-spwf's index, built in parallel): the
+    gate is ``user_version < 6``, so the columns are added whether or not 5
+    has run.
     """
     present = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
     for column in ("submit_model", "submit_provider", "submit_prompt_ver"):

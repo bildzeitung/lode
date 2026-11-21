@@ -301,7 +301,8 @@ CREATE INDEX IF NOT EXISTS idx_edges_to ON edges (to_id);
 --
 -- submit_model / submit_provider / submit_prompt_ver (lode-4wgq): written when
 -- a batch-route enrich job is submitted, read back at collect so every stamp
--- names what the batch was submitted with. submit_provider is
+-- (refusal_model / refusal_provider / prompt_ver above included) names what
+-- the batch was submitted with, not the refusal-time value. submit_provider is
 -- provider_identity(settings) with "anthropic" spelled out (NOT NULL once
 -- recorded), so NULL there means "nothing recorded" -- a job submitted before
 -- the columns existed -- and is never confused with an anthropic submission.

@@ -294,7 +294,7 @@ def _write_enrichment(
     ts: str,
     provider: str | None = None,
     *,
-    prompt_ver: str = ENRICH_PROMPT_VER,
+    prompt_ver: str,
 ) -> None:
     """Write tags, entities, the whole-item summary, and inferred edges to the DB.
 
@@ -565,6 +565,7 @@ def enrich_version(
         settings.enrichment_llm.model,
         ts,
         provider_name,
+        prompt_ver=ENRICH_PROMPT_VER,
     )
 
     # Audit the egress -- one row per enrichment call.
@@ -625,7 +626,12 @@ def _build_batch_request(
 
 
 _ANTHROPIC = "anthropic"
-"""``jobs.submit_provider``'s spelling of the provider identity ``None``."""
+"""``jobs.submit_provider``'s spelling of the provider identity ``None``.
+
+Spelled out because NULL in that column means "nothing recorded"
+(``schema.sql``), which :func:`lode.llm_provider.provider_identity`'s ``None``
+would be indistinguishable from.
+"""
 
 
 @dataclass(frozen=True)
@@ -642,22 +648,18 @@ def _submit_stamp(
 ) -> _SubmitStamp:
     """Decode a job's ``submit_*`` columns; fall back to collect-time values.
 
-    A job submitted before lode-4wgq has all three NULL (``submit_provider``
-    is never NULL once recorded), and is stamped with the collect-time values
-    as it always was.
+    A job submitted before lode-4wgq has all three NULL and is stamped with
+    the collect-time values as it always was. The fallback is all or nothing,
+    so a stamp never mixes submit-time and collect-time values.
     """
     model, provider, prompt_ver = row
-    if provider is None:
+    if model is None or provider is None or prompt_ver is None:
         return _SubmitStamp(
             settings.enrichment_llm.model,
             provider_identity(settings),
             ENRICH_PROMPT_VER,
         )
-    return _SubmitStamp(
-        model or settings.enrichment_llm.model,
-        None if provider == _ANTHROPIC else provider,
-        prompt_ver or ENRICH_PROMPT_VER,
-    )
+    return _SubmitStamp(model, None if provider == _ANTHROPIC else provider, prompt_ver)
 
 
 def submit_enrich_batch(
@@ -766,8 +768,7 @@ def submit_enrich_batch(
     # Persist the handle + flip to running so the collect step (and a restart)
     # can find these jobs (lode-i05.5).
     # The submit-time stamp (lode-4wgq) is recorded in the same statement, so a
-    # running batch job always carries it. "anthropic" is spelled out because
-    # provider_identity's None would read as "nothing recorded" at collect.
+    # running batch job always carries it.
     with conn:
         conn.executemany(
             "UPDATE jobs SET status = 'running', batch_handle = ?, "
@@ -819,11 +820,13 @@ def collect_enrich_batch(
 
     - **succeeded**: validates the structured-output JSON, writes enrichment to DB
       via :func:`_write_enrichment`, marks the job ``done`` and stamps its
-      ``prompt_ver`` to the current :data:`ENRICH_PROMPT_VER` (lode-q47) — the
-      Batches API is the primary production route for enrich jobs, so this
-      mirrors the same stamp :func:`lode.worker.run_one` applies on the
-      immediate path; :mod:`lode.reconcile`'s enrich-gap step reads a
-      ``done`` job's own ``prompt_ver`` to decide whether it is current. When
+      ``prompt_ver`` (lode-q47) — the Batches API is the primary production
+      route for enrich jobs, so this mirrors the stamp
+      :func:`lode.worker.run_one` applies on the immediate path, except that
+      the model, provider identity and prompt version written here are the
+      ones the batch was submitted with (lode-4wgq, :func:`_submit_stamp`),
+      not the collect-time ones; :mod:`lode.reconcile`'s enrich-gap step reads
+      a ``done`` job's own ``prompt_ver`` to decide whether it is current. When
       ``outcomes`` is given, a formatted :func:`format_enrich_outcome` line is
       appended for each succeeded result (lode-1gr.4) — this is what lets
       ``lode work`` print a per-note outcome for a drain pass that *collects*
@@ -844,7 +847,8 @@ def collect_enrich_batch(
 
     :param conn: Open SQLite connection.
     :param batch_id: The batch handle recorded by :func:`submit_enrich_batch`.
-    :param settings: Resolved settings (model, retry knobs, …).
+    :param settings: Resolved settings (retry knobs, and the stamp values for
+        a job submitted before the ``submit_*`` columns existed).
     :param provider: Optional :class:`~lode.llm_provider.LLMProvider`;
         credential-resolved via :func:`~lode.llm_provider.build_provider` if
         omitted.
