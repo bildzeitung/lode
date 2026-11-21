@@ -2,9 +2,10 @@
 
 Surfaced by lode-8xg: a test whose mock was silently a no-op still reached the
 *real* ``enrich_version`` -> ``anthropic.Anthropic`` path, and the test still
-passed -- in an unkeyed environment ``anthropic.Anthropic()`` raises at
-construction (before any socket opens) and ``lode.worker.run_one``'s
-``except Exception`` swallows that as an ordinary job failure; in a keyed
+passed -- in an unkeyed environment ``lode.auth.build_client`` raises
+``AuthError`` on the credential-less client (before any socket opens) and
+``lode.worker.run_one``'s ``except Exception`` swallows that as an ordinary job
+failure; in a keyed
 environment it would instead make a live, billed call. Neither world reported
 "this test touched the network".
 

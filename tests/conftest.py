@@ -27,9 +27,12 @@ doesn't have) still reached the *real* ``enrich_version`` -> ``anthropic.Anthrop
 path, and the test still passed. That happens in both directions and neither one
 reports "this test touched the network":
 
-- **unkeyed** (CI, no ``ANTHROPIC_API_KEY``): ``anthropic.Anthropic()`` raises
-  ``anthropic.AnthropicError`` at *construction* — its own ``active_config``
-  profile lookup fails before a socket is ever opened — and
+- **unkeyed** (CI, no ``ANTHROPIC_API_KEY``): ``anthropic.Anthropic()`` itself
+  constructs without error (a client with no key, token or credentials; it raises
+  ``anthropic.CredentialsError`` only when ``ANTHROPIC_CONFIG_DIR`` or
+  ``ANTHROPIC_PROFILE`` selects a profile that does not exist). The failure comes
+  from ``lode.auth.build_client`` raising ``AuthError`` on the credential-less
+  client, before a socket is ever opened, and
   ``lode.worker.run_one``'s ``except Exception`` (a legitimate, broad job-failure
   handler, not a bug this ticket fixes) swallows it as an ordinary job failure.
   A socket block alone would never fire here: no socket is ever opened.
@@ -1056,8 +1059,8 @@ def _block_unmocked_network_and_llm_access(
     # Guard 1: real anthropic.Anthropic()/AsyncAnthropic() construction.
     # Unconditional regardless of ANTHROPIC_API_KEY -- it fires before the SDK's
     # own credential-chain logic runs, so it closes the unkeyed-CI gap (where
-    # construction itself raises, before any socket opens) exactly as it closes
-    # the keyed-dev-machine gap.
+    # lode.auth.build_client raises AuthError, before any socket opens) exactly as
+    # it closes the keyed-dev-machine gap.
     if not marked_network:
         import anthropic
 
