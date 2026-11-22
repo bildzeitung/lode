@@ -2038,23 +2038,31 @@ _SUBMIT_SETTINGS = Settings(enrichment_llm=ModelTier(model="submit-model"))
 _COLLECT_SETTINGS = Settings(
     llm_provider="openai", enrichment_llm=ModelTier(model="collect-model")
 )
+# Same provider as submit; a provider change re-enqueues instead (lode-6pjf).
+_COLLECT_SAME_PROVIDER = Settings(enrichment_llm=ModelTier(model="collect-model"))
 _COLLECT_PROMPT_VER = "collect-prompt-ver"
 
 
-def _submit_then_collect_changed(conn: sqlite3.Connection, *, refused: bool) -> int:
-    """Submit one job under submit-time config, collect under a changed one.
-
-    The collect-time provider is injected: a real ``llm_provider`` change makes
-    the poll itself fail (the client is built from collect-time settings).
-    """
+def _submit_one(conn: sqlite3.Connection, settings: Settings = _SUBMIT_SETTINGS) -> int:
+    """Submit one job for ``ver-1`` as ``batch-s`` under ``settings``."""
     _insert_note(conn)
     job_id = _insert_enrich_job(conn, "ver-1")
     submit_enrich_batch(
         conn,
         [(job_id, "ver-1")],
-        _SUBMIT_SETTINGS,
+        settings,
         provider=AnthropicProvider(fake_batch_client(batch_id="batch-s")),
     )
+    return job_id
+
+
+def _submit_then_collect_changed(conn: sqlite3.Connection, *, refused: bool) -> int:
+    """Submit one job under submit-time config, collect under a changed one.
+
+    The provider is the same at both ends: a provider change never reaches the
+    stamps (lode-6pjf).
+    """
+    job_id = _submit_one(conn)
     if refused:
         br = _refused_batch_result("ver-1")
     else:
@@ -2063,7 +2071,7 @@ def _submit_then_collect_changed(conn: sqlite3.Connection, *, refused: bool) -> 
         collect_enrich_batch(
             conn,
             "batch-s",
-            _COLLECT_SETTINGS,
+            _COLLECT_SAME_PROVIDER,
             provider=AnthropicProvider(
                 fake_batch_client(batch_id="batch-s", results=[br])
             ),
@@ -2072,14 +2080,7 @@ def _submit_then_collect_changed(conn: sqlite3.Connection, *, refused: bool) -> 
 
 
 def test_submit_enrich_batch_records_submit_stamp(conn: sqlite3.Connection) -> None:
-    _insert_note(conn)
-    job_id = _insert_enrich_job(conn, "ver-1")
-    submit_enrich_batch(
-        conn,
-        [(job_id, "ver-1")],
-        _SUBMIT_SETTINGS,
-        provider=AnthropicProvider(fake_batch_client(batch_id="batch-s")),
-    )
+    job_id = _submit_one(conn)
     # "anthropic" is spelled out: NULL would mean "nothing recorded".
     assert conn.execute(
         "SELECT submit_model, submit_provider, submit_prompt_ver FROM jobs "
@@ -2106,7 +2107,7 @@ def test_collect_batch_success_stamps_submit_time_values(
     ("changed_settings", "changed_prompt_ver"),
     [
         pytest.param(
-            Settings(enrichment_llm=ModelTier(model="collect-model")),
+            _COLLECT_SAME_PROVIDER,
             ENRICH_PROMPT_VER,
             id="model",
         ),
@@ -2160,3 +2161,78 @@ def test_collect_batch_without_submit_stamp_uses_collect_time_values(
     assert conn.execute(
         "SELECT DISTINCT model, provider FROM annotations WHERE source_version = 'ver-1'"
     ).fetchall() == [("collect-model", "openai")]
+
+
+@pytest.mark.parametrize(
+    ("submit_settings", "collect_settings"),
+    [
+        pytest.param(_SUBMIT_SETTINGS, _COLLECT_SETTINGS, id="anthropic-to-openai"),
+        pytest.param(_COLLECT_SETTINGS, _SUBMIT_SETTINGS, id="openai-to-anthropic"),
+    ],
+)
+def test_collect_batch_provider_change_requeues_without_polling(
+    conn: sqlite3.Connection, submit_settings: Settings, collect_settings: Settings
+) -> None:
+    job_id = _submit_one(conn, submit_settings)
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET batch_collect_failures = 2 WHERE id = ?", (job_id,)
+        )
+    polled = mock.Mock(side_effect=AssertionError("old handle was polled"))
+    provider = mock.Mock(collect_batch=polled)
+
+    ended = collect_enrich_batch(conn, "batch-s", collect_settings, provider=provider)
+
+    assert ended is True
+    polled.assert_not_called()
+    assert conn.execute(
+        "SELECT status, attempts, batch_handle, batch_collect_failures, "
+        "submit_model, submit_provider, submit_prompt_ver FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone() == ("pending", 0, None, 0, None, None, None)
+
+
+def test_collect_batch_provider_change_requeues_before_building_a_client(
+    conn: sqlite3.Connection,
+) -> None:
+    """A missing credential for the new provider must not hold the re-enqueue up."""
+    job_id = _submit_one(conn)
+    with mock.patch(
+        "lode.enrich.build_provider", side_effect=AssertionError("client built")
+    ):
+        assert collect_enrich_batch(conn, "batch-s", _COLLECT_SETTINGS) is True
+    assert conn.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone() == ("pending",)
+
+
+def test_collect_batch_openai_to_azure_is_not_a_provider_change(
+    conn: sqlite3.Connection,
+) -> None:
+    _insert_note(conn)
+    job_id = _insert_enrich_job(conn, "ver-1", status="running")
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET batch_handle = 'batch-o', submit_model = 'm', "
+            "submit_provider = 'openai', submit_prompt_ver = ? WHERE id = ?",
+            (ENRICH_PROMPT_VER, job_id),
+        )
+    br = _make_batch_result("ver-1", EnrichmentResult(tags=["t"]))
+    azure = Settings(
+        llm_provider="openai",
+        azure_openai_endpoint="https://r.openai.azure.com",
+        azure_openai_api_version="2025-04-01-preview",
+        enrichment_llm=ModelTier(model="m"),
+    )
+    collect_enrich_batch(
+        conn,
+        "batch-o",
+        azure,
+        provider=AnthropicProvider(fake_batch_client(batch_id="batch-o", results=[br])),
+    )
+    assert conn.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone() == ("done",)
+    assert conn.execute(
+        "SELECT DISTINCT provider FROM annotations WHERE source_version = 'ver-1'"
+    ).fetchall() == [("openai",)]
