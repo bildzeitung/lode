@@ -6759,6 +6759,17 @@ the SDK default, or pass `open_telemetry=False` where lode constructs its Anthro
     tracing off even with `ANTHROPIC_OPEN_TELEMETRY=true` in the environment. The option exists
     in the locked 1.17.0, so this does not wait on `lode-4uyu`'s 2.x bump, whose builder carries
     the kwarg across the construction sites it touches.
+  - **Update (lode-pszk, 2026-11-21, maintainer):** floor the `anthropic` requirement at `>=2`,
+    with no ceiling. After `lode-4uyu`, 2.x is the only tested SDK major, and `docs/stack.md`'s
+    credential-chain order and the 2026-10-21 API version are 2.x behaviour, so a 1.x install
+    would contradict documented auth behaviour: a version that demonstrably matters
+    ([Dependency locking](stack.md#dependency-locking-lode-g2741)). No `<3` ceiling, since nothing
+    shows 3.x breaks lode. This supersedes the ticket's "floor at the first `open_telemetry`
+    release" and makes its probe unnecessary (2.12.0 accepting `open_telemetry=False` was already
+    verified at `lode-4uyu`'s review).
+    - **Measured at review, not part of the ruling:** anthropic 2.0.0, the lowest release the
+      floor accepts, constructs a client with `open_telemetry=False` and reports tracing off, the
+      same as the locked 2.12.0 (construction only, no request sent).
   - **Update (lode-ucpu, 2026-11-20, maintainer):** the "Not decided here" question is settled:
     widen `lode-4wgq` to also record `provider_identity(settings)` and `ENRICH_PROMPT_VER` as read
     at submit, on the refusal and success paths alongside the submit-time model. Neither
