@@ -6947,7 +6947,7 @@ Revisit only on an observed incident. No build ticket.
 ## `/land` orders a marker-adding branch ahead of the rest of its batch; cross-batch detachment still ships (decided, lode-w7gp)
 
 Raised 2026-11-21 at `lode-l8b7`'s technical review. `lode-l8b7` adds the by-hand check from the
-`lode-tikr` ruling to `/land`'s batch merge: after the merge, confirm each `**Update (` line still
+`lode-tikr` ruling to `/land`'s batch merge: after the merge, confirm each Update line still
 follows the entry it corrects, and report one that does not. As built, `/land` only reports, so a
 detached marker lands every time it is found and, after the push, can be repaired only by a pointer
 Update (the `lode-ucpu` case). The question was whether `/land` should do more than report. The
@@ -6956,7 +6956,7 @@ options were (a) leave it as built, (b) kick a branch whose marker the merge det
 also write the pointer Update text as a ready patch.
 
 **Decided (`lode-w7gp`, 2026-11-21, maintainer):** option (c). `/land`'s Section 3a orders any
-accepted branch that adds an `**Update (` marker to `docs/decisions.md` ahead of the other branches
+accepted branch that adds an Update marker to `docs/decisions.md` ahead of the other branches
 in the batch, so its marker is placed before any same-batch end-of-file append. The mechanism, traced
 by `lode-l8b7`'s reviewer and `lode-tikr`'s review: under `merge=union`, a marker merged before a
 same-batch EOF append stays attached to its entry.
