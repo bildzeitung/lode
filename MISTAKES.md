@@ -4,6 +4,32 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-11-21 — A live measurement harness scanned `versions` for its sample, sent superseded note versions to the provider, and recorded 13 notes where 9 exist
+
+- **What happened:** `scripts/measure_enrich_batch.py` (`lode-eadh`) chose its real-note sample
+  with `SELECT version_id FROM versions WHERE op != 'delete' AND purged_at IS NULL`. The
+  maintainer ran it live, and it sent all 13 version rows of the DB's 9 notes to the Anthropic
+  Batches API, 3 requests each. The builder then recorded the sample in `docs/configuration.md`
+  as "all 13 live, non-`no_egress` notes" and derived a bound from "13 distinct texts". The
+  technical review found it before the branch landed, by counting the distinct `note_id`s
+  behind the version ids that were sent.
+- **Root cause:** liveness is per version row. `op != 'delete'` and `purged_at IS NULL` hold
+  for every superseded version, and for every version below a soft-delete tombstone. Each
+  production selector (`reconcile.py`, `retrieval.py`) goes through `notes.head_version_id`;
+  the harness did not, and nothing compared its query with one. The builder could not run the
+  script, so the count in the record was read off the request ids in the output, not off the
+  DB.
+- **Consequence:** 4 superseded bodies of 2 notes were sent (12 of the 39 real-note requests)
+  in a run that needs a new spend approval to repeat. The DB held no soft-deleted note, so no
+  deleted text was sent, but the same query would have sent it. The record overstated the
+  sample (13 notes for 9; a bound of about 20% for about 28%); both the script and the record
+  were corrected on the branch.
+- **Rule that prevents a repeat:** code that picks note bodies to send anywhere selects
+  through `notes.head_version_id` and gates that head, never by scanning `versions`, and its
+  test seeds a superseded version and a soft-deleted note and asserts neither is sent
+  (`tests/test_measure_enrich_batch.py`). A record that says "N notes" is checked by counting
+  distinct `note_id`s, not rows or request ids.
+
 ## 2026-11-21 — `/land`'s union merge detached a correction marker from the entry it corrects
 
 - **What happened:** `land/lode-ucpu` appended its `**Update (lode-ucpu` marker directly after

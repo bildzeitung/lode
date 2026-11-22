@@ -649,19 +649,29 @@ a known, accepted trade-off, not a follow-up ticket.
 > (the production wire shape), default `claude-haiku-5-5` tier, default
 > `reasoning_effort="low"`, `enrich.MAX_TOKENS` = 6144, current trunk (after `lode-4wgq`),
 > against a scratch `LODE_HOME`. Per-call `usage.output_tokens` and `stop_reason` were read
-> from the raw Batches results by `scripts/measure_enrich_batch.py`, which is in the repo,
-> so this run is reproducible from trunk (`BatchResult` drops both fields).
-> Sample: all 13 live, non-`no_egress` notes in the maintainer's DB (84-14,903 chars, three
-> over 10,000), 3 requests each = 39, plus 12 passages cut from this repo's design docs
-> (300-12,772 chars, three of them over 10,000) as a proxy for more long text. Results: **51 of 51 succeeded; 0 truncated** (every `stop_reason` was
-> `end_turn`); **0 empty-`{}`**; **0 thinking blocks**. Output tokens (thinking plus JSON)
-> min 217 / median 393 / max 706 (real notes alone: 217 / 392 / 706; proxy passages:
-> 293 / 405 / 552), total 21,240; input tokens 1,383-8,710, total 167,401. Max 706 against
-> 6144 is roughly 8.7x headroom, in line with the immediate route's 667 (`lode-qcth`):
-> the batch route does not behave differently at this cap. The same caveat applies:
-> 51 requests cannot bound the truncation or empty-`{}` rate below about 6% at 95%
-> confidence, and the real-note requests are 13 distinct texts repeated 3 times each, so
-> on distinct real notes the bound is looser (about 20%). `enrich.MAX_TOKENS`'s comment is
+> from the raw Batches results by `scripts/measure_enrich_batch.py`, which is in the repo
+> (`BatchResult` drops both fields).
+> Sample: every live version row in the maintainer's DB, which is 13 versions of 9 notes
+> (84-14,903 chars, three over 10,000; none `no_egress`, none deleted), 3 requests each =
+> 39, plus 12 passages cut from this repo's design docs (300-12,772 chars, three of them
+> over 10,000) as a proxy for more long text. The script as run selected version rows, not
+> each note's head, so 4 of the 13 are superseded earlier versions of 2 notes (one note
+> sent 4 versions, another 2). The 9 notes are the 6 non-URL notes `lode-qcth` used plus 3
+> whose bodies contain a URL; the script sends a body as text and fetches nothing.
+> Results: **51 of 51 succeeded; 0 truncated** (every `stop_reason` was `end_turn`);
+> **0 empty-`{}`**; **0 thinking blocks**. Output tokens (thinking plus JSON) min 217 /
+> median 393 / max 706 (the 39 real-note requests: 217 / 392 / 706; the 27 of those on
+> head versions: 217 / 455 / 706; proxy passages: 293 / 405 / 552), total 21,240; input
+> tokens 1,383-8,710, total 167,401. Max 706 against 6144 is roughly 8.7x headroom, in
+> line with the immediate route's 667 (`lode-qcth`): the batch route does not behave
+> differently at this cap. The same caveat applies: 51 requests cannot bound the
+> truncation or empty-`{}` rate below about 6% at 95% confidence (one-sided exact binomial
+> with zero events, 1 - 0.05^(1/n)), and that floor assumes 51 independent requests. The
+> real-note requests cover 9 distinct notes, so counting each note once the bound is
+> about 28%. The script in the repo is not byte-for-byte the one that ran: review changed
+> it to select each live note's head version (27 real-note requests on the same DB, not
+> 39), to redact the proxy passages as well, and to refuse a `LODE_HOME` spelled with an
+> unexpanded `~`. How a result is counted is unchanged. `enrich.MAX_TOKENS`'s comment is
 > unchanged: its claim that the cap is the only bound on a batch item is about the
 > mechanism, which this finding does not alter.
 

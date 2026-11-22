@@ -8,50 +8,52 @@ scratch directory, never ``~/.lode`` (the script refuses otherwise).
 It submits through the real ``enrich._build_batch_request`` and
 ``AnthropicProvider.submit_batch``, so the wire shape is the production one, then reads
 the raw Batches results to capture ``usage.output_tokens`` and ``stop_reason``, which
-``BatchResult`` discards. Source notes are read from ``--source-db`` (read-only), gated
-and redacted the way ``submit_enrich_batch`` does; a doc-passage proxy fills out the
-call count with long text.
+``BatchResult`` discards. Source notes are read from ``--source-db`` (read-only): the
+head version of each note, gated the way ``submit_enrich_batch`` gates a target. A
+doc-passage proxy fills out the call count with long text. Every body is redacted
+before it is sent.
+
+External snapshots are never read, so the ``no_egress_scopes`` denials a scrubbed
+scratch home lacks have nothing to gate. The script writes no job, annotation or
+``egress_log`` row anywhere: the batch id it prints is the only record of what was sent.
 """
 
 import json
-import os
 import sqlite3
 import statistics
 import time
+from collections import Counter
+from contextlib import closing
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
-from lode.config import Settings, load_settings
+from lode.config import Settings, load_settings, lode_home
 from lode.enrich import _build_batch_request, _resolve_enrich_target
 from lode.llm_provider import AnthropicProvider, build_provider
-from lode.redact import redact_before_egress_counting
+from lode.redact import redact_before_egress
 
 app = typer.Typer(add_completion=False)
 
 
 def _real_bodies(source_db: Path, settings: Settings) -> list[tuple[str, str]]:
-    uri = f"file:{source_db}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True)
-    try:
-        ids = [
-            r[0]
-            for r in conn.execute(
-                "SELECT version_id FROM versions WHERE op != 'delete' "
-                "AND purged_at IS NULL"
-            )
-        ]
-        out: list[tuple[str, str]] = []
-        for vid in ids:
+    # as_uri() percent-encodes the path: a raw "?" or "#" in it would end the URI's
+    # path early and drop mode=ro.
+    uri = f"{source_db.resolve().as_uri()}?mode=ro"
+    out: list[tuple[str, str]] = []
+    with closing(sqlite3.connect(uri, uri=True)) as conn:
+        # Heads only. Liveness is per version: a superseded version, and every
+        # version below a soft-delete tombstone, is still "live" on its own row.
+        heads = conn.execute(
+            "SELECT head_version_id FROM notes WHERE head_version_id IS NOT NULL"
+        ).fetchall()
+        for (vid,) in heads:
             target = _resolve_enrich_target(conn, vid, settings.no_egress_scopes)
             if target is None or not target.live or target.no_egress:
                 continue
-            body, _ = redact_before_egress_counting(target.body, settings)
-            out.append((f"note-{vid[:8]}", body))
-        return out
-    finally:
-        conn.close()
+            out.append((f"note-{vid[:8]}", target.body))
+    return out
 
 
 def _doc_passages(docs_dir: Path, count: int) -> list[tuple[str, str]]:
@@ -81,17 +83,19 @@ def main(
     poll_s: Annotated[float, typer.Option(help="Seconds between polls.")] = 20.0,
 ) -> None:
     """Run the batch-route measurement and print the summary."""
-    home = os.environ.get("LODE_HOME", "")
-    if not home or Path(home).resolve() == (Path.home() / ".lode").resolve():
+    # lode_home(), not the raw variable: it is what load_settings() resolves, and it
+    # expands "~" and falls back to ~/.lode when the variable is unset or empty.
+    if lode_home().resolve() == (Path.home() / ".lode").resolve():
         raise typer.BadParameter("LODE_HOME must be a scratch dir, not ~/.lode")
 
     settings = load_settings()
-    items = [
+    bodies = [
         (f"{cid}-r{r}", body)
         for cid, body in _real_bodies(source_db, settings)
         for r in range(repeats)
     ]
-    items += _doc_passages(docs_dir, proxy_count)
+    bodies += _doc_passages(docs_dir, proxy_count)
+    items = [(cid, redact_before_egress(body, settings)) for cid, body in bodies]
     requests = [_build_batch_request(cid, body, settings) for cid, body in items]
     typer.echo(f"submitting {len(requests)} batch request(s)")
 
@@ -104,9 +108,9 @@ def main(
         time.sleep(poll_s)
 
     chars = {cid: len(body) for cid, body in items}
-    records = []
+    records: list[dict[str, Any]] = []
     for res in client.beta.messages.batches.results(batch_id):
-        rec: dict[str, object] = {
+        rec: dict[str, Any] = {
             "custom_id": res.custom_id,
             "chars": chars.get(res.custom_id),
             "result_type": res.result.type,
@@ -126,15 +130,14 @@ def main(
         out_jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
 
     ok = [r for r in records if r["result_type"] == "succeeded"]
-    outs = [int(r["output_tokens"]) for r in ok]  # type: ignore[call-overload]
-    ins = [int(r["input_tokens"]) for r in ok]  # type: ignore[call-overload]
-    trunc = sum(r["stop_reason"] == "max_tokens" for r in ok)
-    empty = sum(bool(r["empty"]) for r in ok)
+    outs = [r["output_tokens"] for r in ok]
+    ins = [r["input_tokens"] for r in ok]
     typer.echo(
         f"calls={len(records)} succeeded={len(ok)} "
         f"non-succeeded={len(records) - len(ok)} "
-        f"truncated={trunc} empty={empty} "
-        f"thinking_blocks={sum(int(r['thinking_blocks']) for r in ok)}"  # type: ignore[call-overload]
+        f"truncated={sum(r['stop_reason'] == 'max_tokens' for r in ok)} "
+        f"empty={sum(r['empty'] for r in ok)} "
+        f"thinking_blocks={sum(r['thinking_blocks'] for r in ok)}"
     )
     if outs:
         typer.echo(
@@ -142,15 +145,7 @@ def main(
             f"max={max(outs)} total={sum(outs)}; input min={min(ins)} "
             f"max={max(ins)} total={sum(ins)}"
         )
-    typer.echo(
-        "stop_reasons="
-        + json.dumps(
-            {
-                k: sum(r.get("stop_reason") == k for r in ok)
-                for k in {r["stop_reason"] for r in ok}
-            }
-        )
-    )
+    typer.echo("stop_reasons=" + json.dumps(Counter(r["stop_reason"] for r in ok)))
 
 
 if __name__ == "__main__":
