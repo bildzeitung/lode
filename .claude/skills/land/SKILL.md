@@ -976,6 +976,27 @@ report through the exit code.
 It runs **no gates** and makes **no tracker writes** — every `nox` call and every `bd` write stays
 mine, below.
 
+**By hand after the batch (lode-l8b7): confirm each `**Update (` marker still follows its entry.**
+For every `LANDED` branch whose diff adds a `**Update (` line to `docs/decisions.md`, I confirm the
+marker still follows the entry it corrects. The `merge=union` driver can detach it when trunk
+already carries an EOF append from another branch: it writes trunk's lines first, then the
+branch's (`docs/decisions.md`, search `lode-tikr`). A marker's lead-in names the correcting
+ticket, not the entry, so merged `trunk` alone cannot show which entry it belongs on. I compare
+with the branch: the entry the marker sits under in the branch's copy
+(`git show origin/land/<id>:docs/decisions.md`, searched for the lead-in, never read whole) is the
+entry it must sit under on merged `trunk`. The check is of what will land: if the isolation replay
+below runs, I redo it for the replay's `LANDED` set and report only that result.
+
+A detached marker is a defect in the combined result, not in the branch, so the pass continues
+and the batch lands as merged: I neither bounce nor kick back anything for it, and I do not edit
+`docs/decisions.md` on `trunk`. I report it in [Stop and report](#stop-and-report): the marker's
+verbatim first line, the line it sits at (derived this pass), and the entry it belongs on. It is
+an ordinary reported discovery, not a one-line patch: the repair is the human's to choose. Once
+`trunk` is pushed the marker is a pre-existing line, and
+`scripts/check-decisions-no-silent-rewrite.sh` exits 1 on moving it; the one earlier case was
+repaired with a pointer Update on the entry instead (`lode-tikr`). No gate or test checks this
+position.
+
 Re-gate the combined result (this is a Python-gated repo where code changed; a **docs-only** merge
 set has no Python gate — skip nox, run `scripts/validate-mermaid.sh` only if a merged diff touched a
 `docs/` diagram).
@@ -1788,7 +1809,8 @@ never reached `land-review`); which I **bounced** (and the new superseding ticke
 escalation, per [1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)/[Bounce](#bounce--clear-failure));
 which I **held** as an orphaned stacked dependent (Section 3a) and what base it's waiting on; any
 **epic** I flagged `epic-ready-to-audit` because this pass closed its last child; anything that
-**drifted**; any **incidental discovery** — something I noticed about /land's own mechanics
+**drifted**; any **detached Update marker** in `docs/decisions.md` that Section 3's by-hand check
+found (lode-l8b7); any **incidental discovery** — something I noticed about /land's own mechanics
 mid-pass that isn't a per-branch verdict (see [What I never do](#what-i-never-do)) — named here
 rather than filed as a ticket; any **wording-only doc nit** appended to the docs-nits collector
 this pass (lode-t551), named here rather than dropped; and whether the **reopen-on-close backstop**
