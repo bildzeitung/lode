@@ -721,7 +721,8 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
   compared, so moving between direct OpenAI and Azure (both `openai`) does not re-open it,
   exactly as it does not make a head stale for `lode reenrich`. There is no manual-override command.
   The existing dead -> re-enqueue self-healing stays for every other dead enrich job, since it
-  exists for real outages. The same rule applies to an external's in-force enrich job (lode-4kg8).
+  exists for real outages. The refusal rule above applies equally to an external's in-force enrich
+  job (lode-4kg8).
 - `lode reenrich` and the `lode status` reenrich hint skip such a head too (`lode-5try`):
   their shared stale scan applies the same standing-refusal predicate
   (`jobs.standing_enrich_refusal_exists_sql`), so neither re-sends nor keeps asking for
