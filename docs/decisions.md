@@ -6943,3 +6943,33 @@ rules stay scoped as built, with no widening to `ESCALATION:` notes, `/epic-audi
 decision filings, records beyond this file, or claims with no lode code path. Reason: no incident has
 been observed through any of them, and epic `lode-w18a` is cutting these same instruction files.
 Revisit only on an observed incident. No build ticket.
+
+## `/land` orders a marker-adding branch ahead of the rest of its batch; cross-batch detachment still ships (decided, lode-w7gp)
+
+Raised 2026-11-21 at `lode-l8b7`'s technical review. `lode-l8b7` adds the by-hand check from the
+`lode-tikr` ruling to `/land`'s batch merge: after the merge, confirm each `**Update (` line still
+follows the entry it corrects, and report one that does not. As built, `/land` only reports, so a
+detached marker lands every time it is found and, after the push, can be repaired only by a pointer
+Update (the `lode-ucpu` case). The question was whether `/land` should do more than report. The
+options were (a) leave it as built, (b) kick a branch whose marker the merge detached back
+`needs-rebase`, (c) order marker-adding branches ahead of the rest of the batch, and (d) report and
+also write the pointer Update text as a ready patch.
+
+**Decided (`lode-w7gp`, 2026-11-21, maintainer):** option (c). `/land`'s Section 3a orders any
+accepted branch that adds an `**Update (` marker to `docs/decisions.md` ahead of the other branches
+in the batch, so its marker is placed before any same-batch end-of-file append. The mechanism, traced
+by `lode-l8b7`'s reviewer and `lode-tikr`'s review: under `merge=union`, a marker merged before a
+same-batch EOF append stays attached to its entry.
+
+**Accepted limit:** (c) covers same-batch collisions only. A marker whose EOF-append branch already
+sits on `trunk` from an earlier batch is still detached by the merge; that case still ships and is
+reported by the `lode-l8b7` by-hand check, which stays as built.
+
+**Not built:** (b), the kick-back. It costs one pickup cycle per case and needs a way to take a
+branch out of a batch that `scripts/land-merge-batch.sh` has already merged, which nobody has
+checked against `scripts/land-replay.sh`. Revisit it only on an observed cross-batch incident. (a)
+and (d) are not taken either.
+
+Decision only; the build is `lode-g78l` (the Section 3a ordering edit in
+`.claude/skills/land/SKILL.md`), already filed, and it depends on `lode-l8b7`, which owns the same
+file's Section 3 step.
