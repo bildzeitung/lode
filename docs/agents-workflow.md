@@ -2642,9 +2642,10 @@ The standing rule for any ticket that cuts an agent or skill file to save per-di
 - **A verbatim move** of a self-contained second job to its own agent file is allowed.
 - **A cut is accepted only on all three:** a human-approved rule inventory for the file, each rule with
   one pinned phrase, in `tests/instruction_rules.json` (the `tests/test_instruction_rule_inventory_gate.py`
-  gate fails when a pinned phrase is missing); one file per ticket; and a watch period in which the
-  next 5 dispatches of the trimmed agent are checked against incident-derived behaviours, a miss
-  reverting the cut. Five dispatches do not exercise rare paths; that limit is accepted.
+  gate fails unless each pinned phrase matches exactly once in its file outside fenced code blocks);
+  one file per ticket; and a watch period in which the next 5 dispatches of the trimmed agent are
+  checked against incident-derived behaviours, a miss reverting the cut. Five dispatches do not
+  exercise rare paths; that limit is accepted.
 
 Two criteria govern every file's inventory (set for `code-reviewer.md` by maintainer ruling
 `lode-w18a.10`, extended to every inventory by `lode-w18a.11`, 2026-11-21): a rule stated more than

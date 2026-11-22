@@ -6171,6 +6171,9 @@ entries below from being rewritten to chase the current tree.)
   - **Update (lode-w18a.10, 2026-11-21):** the `code-reviewer.md` inventory approved under this
     entry was amended by maintainer ruling before its cut; see the `lode-w18a.10` entry
     "code-reviewer.md rule inventory amended before the `lode-w18a.9` cut".
+  - **Update (lode-4615, 2026-11-21):** the gate in part (1) now fails unless each pinned phrase
+    matches exactly once in its file outside fenced code blocks, the property the `lode-w18a.10`
+    entry states for its inventory. From a `lode-w18a.11` review follow-up; no maintainer ruling.
 
 - **Update (lode-5x01, 2026-11-16) — a filename typo in `lode-s09w`'s `uv` migration entry above.**
   That entry's bullet "`scripts/python-init.sh`, `venv-install` and `compile-lock.sh` are deleted
