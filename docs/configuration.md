@@ -643,6 +643,28 @@ a known, accepted trade-off, not a follow-up ticket.
 > on real notes alone it is looser still (about 40%, counting each note once).
 > Batch-route (`submit_enrich_batch`) was not measured.
 
+> **Update (lode-eadh, measured 2026-11-21) -- the batch route, appended:** 51 enrich
+> requests in one Anthropic Batches submission (batch `msgbatch_01SbMB1FnVsMDTLB7Q7DXRtM`),
+> built by `enrich._build_batch_request` and submitted by `AnthropicProvider.submit_batch`
+> (the production wire shape), default `claude-haiku-5-5` tier, default
+> `reasoning_effort="low"`, `enrich.MAX_TOKENS` = 6144, current trunk (after `lode-4wgq`),
+> against a scratch `LODE_HOME`. Per-call `usage.output_tokens` and `stop_reason` were read
+> from the raw Batches results by `scripts/measure_enrich_batch.py`, which is in the repo,
+> so this run is reproducible from trunk (`BatchResult` drops both fields).
+> Sample: all 13 live, non-`no_egress` notes in the maintainer's DB (84-14,903 chars, three
+> over 10,000), 3 requests each = 39, plus 12 passages cut from this repo's design docs
+> (300-12,772 chars, three of them over 10,000) as a proxy for more long text. Results: **51 of 51 succeeded; 0 truncated** (every `stop_reason` was
+> `end_turn`); **0 empty-`{}`**; **0 thinking blocks**. Output tokens (thinking plus JSON)
+> min 217 / median 393 / max 706 (real notes alone: 217 / 392 / 706; proxy passages:
+> 293 / 405 / 552), total 21,240; input tokens 1,383-8,710, total 167,401. Max 706 against
+> 6144 is roughly 8.7x headroom, in line with the immediate route's 667 (`lode-qcth`):
+> the batch route does not behave differently at this cap. The same caveat applies:
+> 51 requests cannot bound the truncation or empty-`{}` rate below about 6% at 95%
+> confidence, and the real-note requests are 13 distinct texts repeated 3 times each, so
+> on distinct real notes the bound is looser (about 20%). `enrich.MAX_TOKENS`'s comment is
+> unchanged: its claim that the cap is the only bound on a batch item is about the
+> mechanism, which this finding does not alter.
+
 `lode-3dlt` named a real but then-unreachable risk on the enrichment
 forced-tool-use branch of `AnthropicProvider.structured_call` (`enrichment_llm`,
 [Models](#models) above): that branch never sends `thinking` at all — a
