@@ -975,6 +975,51 @@ class TestBareDocAnchorRefs:
         refs = check_links._bare_doc_anchor_refs(f"{line}\n", skip_fences=True)
         assert [target for _, target in refs] == matched
 
+    #: Destinations cut by the bare pattern at a character outside its path or
+    #: anchor class (lode-q14mi), with the page each one names.
+    _CUT_DESTS = (
+        (f"<{_DOCS}/a.md(old).md>", f"{_DOCS}/a.md(old).md"),
+        (f"{_DOCS}/a.md%28old%29.md", f"{_DOCS}/a.md(old).md"),
+        (f"<{_DOCS}/a.md\tnotes.md>", f"{_DOCS}/a.md\tnotes.md"),
+        (f"{_DOCS}/a.md,b.md", f"{_DOCS}/a.md,b.md"),
+        (f"{_DOCS}/a.md~b.md", f"{_DOCS}/a.md~b.md"),
+        (f"{_DOCS}/a.md+x.md", f"{_DOCS}/a.md+x.md"),
+    )
+
+    @pytest.mark.parametrize(("dest", "page"), _CUT_DESTS)
+    def test_live_link_cut_at_another_character_is_not_reported(
+        self, tmp_path, dest, page
+    ):
+        _write(tmp_path, page, "# P\n")
+        _write(tmp_path, "README.md", f"[x]({dest})\n")
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+    @pytest.mark.parametrize(("dest", "page"), _CUT_DESTS)
+    def test_dead_link_cut_at_another_character_is_reported_once(
+        self, tmp_path, dest, page
+    ):
+        _write(tmp_path, "README.md", f"[x]({dest})\n")
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert [(e.line, e.target) for e in errors] == [(1, dest.strip("<>"))]
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            f"![x](<{_DOCS}/a.md notes.md>)",
+            f"[ref]: <{_DOCS}/a.md notes.md>",
+        ],
+    )
+    def test_image_and_reference_definition_destinations_are_still_read(self, line):
+        """Neither walk resolves them, so masking would remove their only check
+        (the LIMIT paragraph says so)."""
+        refs = check_links._bare_doc_anchor_refs(f"{line}\n", skip_fences=True)
+        assert [target for _, target in refs] == [f"{_DOCS}/a.md"]
+
     def test_link_syntax_in_a_non_markdown_file_is_not_masked(self):
         """The markdown walk never reads such a file, so the bare pass is the
         only check its text gets."""

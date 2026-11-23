@@ -129,15 +129,17 @@ shape one is cut the same, and shape two then matches nothing.
 Cite such a page with a markdown link instead, which reads its own delimiters
 (angle brackets or percent-encoding, lode-tgr6). In a markdown file outside
 ``BARE_CITATION_EXCLUDE_DIRS`` the bare pass blanks out, before matching, each
-inline link destination that holds a space or ``%20`` and that the markdown
-walk resolves (not a URL, not one quoted in a code span), so that walk checks
-it once, whole (lode-wfy6i). The link's text, its title and link syntax quoted
-in a code span are still read. Still cut as above: such a page named by an
-image or a reference definition, and a link destination the pattern cuts at
-any other character outside its class (a tab, a parenthesis, a percent-escape
-other than ``%20``, among others). For those, write the character
-percent-encoded and begin the destination with ``./``: the pattern then
-matches nothing in it. No tracked path holds a space today.
+inline link destination that the markdown walk resolves (non-empty, not a URL,
+not one quoted in a code span) and that ``_DOC_ANCHOR_REF_RE`` does not match
+whole, so that walk checks it once, whole (lode-wfy6i, lode-q14mi): a space, a
+tab, a parenthesis, a comma or any other character outside the pattern's
+classes no longer yields a shorter path. The link's text, its title and link
+syntax quoted in a code span are still read. Still cut as above: such a page
+named by an image or a reference definition, which NEITHER walk resolves, so
+blanking their destinations would remove the only check the text gets. For
+those, write the character percent-encoded and begin the destination with
+``./``: the pattern then matches nothing in it. No tracked path holds a space
+today.
 """
 
 from __future__ import annotations
@@ -395,10 +397,12 @@ def _numbered_lines(text: str) -> Iterator[tuple[int, str]]:
 
 
 def _mask_spaced_link_destinations(line: str) -> str:
-    """``line`` with each link destination blanked out that holds a space (or
-    a ``%20``) and that the markdown walk resolves. The walk resolves such a
-    destination whole; left in place, the bare pattern would also read a
-    shorter path out of it and report that as missing (lode-wfy6i).
+    """``line`` with each link destination blanked out that the markdown walk
+    resolves and that ``_DOC_ANCHOR_REF_RE`` does not match whole. The walk
+    resolves such a destination whole; left in place, the bare pattern would
+    also read a shorter path out of it (cut at a space, tab, parenthesis,
+    comma, ``%`` escape, ...) and report that as missing (lode-wfy6i,
+    lode-q14mi).
 
     A link is found as ``_links_in_file`` finds it, with inline code spans
     taken out first, and an external destination is left alone as ``check``
@@ -410,7 +414,11 @@ def _mask_spaced_link_destinations(line: str) -> str:
     for m in _LINK_RE.finditer("".join(line[i] for i in kept)):
         group = 1 if m.group(1) is not None else 2
         dest = m.group(group)
-        if (" " in dest or "%20" in dest) and not _is_external(dest):
+        if (
+            dest
+            and not _is_external(dest)
+            and not _DOC_ANCHOR_REF_RE.fullmatch(dest)
+        ):
             for i in kept[m.start(group) : m.end(group)]:
                 chars[i] = " "
     return "".join(chars)
