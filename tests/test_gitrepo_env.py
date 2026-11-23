@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -99,15 +100,14 @@ def test_unscrubbed_git_would_hit_decoy(scratch: Path) -> None:
     assert out == ["decoy.txt"]
 
 
-def test_os_env_repr_shows_no_variable_and_keeps_all(
+def test_os_env_keeps_every_variable_and_shows_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("LODE_PROBE_SECRET", "probe-value-1234567890")
-    monkeypatch.setenv("GIT_DIR", "/decoy")
-    env = os_env({"EXTRA": "x"})
-    assert env["LODE_PROBE_SECRET"] == "probe-value-1234567890"
-    assert env["GIT_DIR"] == "/decoy"
-    assert env["EXTRA"] == "x"
-    assert "probe-value" not in repr(env)
-    assert "LODE_PROBE_SECRET" not in repr(env)
-    assert repr(env) != repr(dict(env))
+    """``os.environ`` is replaced for the call, not added to: a failing assert prints what it
+    compared, and that must not be the real environment."""
+    environ = {"LODE_PROBE_SECRET": "hunter2", "GIT_DIR": "/decoy"}
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "environ", environ)
+        env = os_env({"EXTRA": "x"})
+    assert dict(env) == {**environ, "EXTRA": "x"}
+    assert repr(env) == "<env: 3 variables>"

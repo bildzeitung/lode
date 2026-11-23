@@ -69,7 +69,7 @@ def _local_env_vars() -> frozenset[str]:
     return frozenset(out.split()) - {"GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"}
 
 
-class _GitEnv(dict[str, str]):
+class _QuietEnv(dict[str, str]):
     """An environment whose repr shows no variable.
 
     pytest prints the arguments of the call that raised, so a ``subprocess.run(...,
@@ -78,7 +78,7 @@ class _GitEnv(dict[str, str]):
     """
 
     def __repr__(self) -> str:
-        return f"<git_env: {len(self)} variables>"
+        return f"<env: {len(self)} variables>"
 
 
 def git_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -90,19 +90,19 @@ def git_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
     (lode-wcpss). A test that runs git directly passes ``env=git_env(...)``. A script under
     test is not covered: it inherits whatever environment its own runner passes.
     """
-    env = _GitEnv((k, v) for k, v in os.environ.items() if k not in _local_env_vars())
+    env = _QuietEnv((k, v) for k, v in os.environ.items() if k not in _local_env_vars())
     env.update(extra or {})
     return env
 
 
 def os_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
-    """A full copy of ``os.environ`` plus ``extra``, with a repr that shows no variable.
+    """A full copy of ``os.environ`` plus ``extra``, with a repr that shows no variable
+    (lode-ovcvs). Unlike ``git_env`` nothing is removed.
 
-    For a test's ``subprocess.run(..., env=..., check=True)``: pytest prints the arguments of
-    a call that raised, so a plain copy would print the head of the environment, credentials
-    included (lode-ovcvs). Unlike ``git_env`` nothing is removed.
+    Add a variable through ``extra`` or by assigning to the result: ``{**os_env(), ...}`` and
+    ``os_env() | {...}`` are plain dicts again, and print as one.
     """
-    env = _GitEnv(os.environ)
+    env = _QuietEnv(os.environ)
     env.update(extra or {})
     return env
 
