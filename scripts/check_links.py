@@ -26,7 +26,10 @@ Usage::
 
 Exits 1 and prints one ``file:line: reason -> target`` line per broken link
 (plus a summary count) on any broken file target or broken anchor; exits 0
-and prints a short OK line otherwise.
+and prints a short OK line otherwise. A tracked file the gate would read that
+is missing from the working tree (deleted, the deletion never staged) is
+reported in the same shape at line 0, with the two git commands that fix it in
+place of a target (lode-h85o).
 
 Scope, deliberately: relative markdown links only -- external links
 (``http(s)://``, ``mailto:``, etc.) are never resolvable against this repo
@@ -105,7 +108,9 @@ megabytes of resident text for no saved read.
 
 from __future__ import annotations
 
+import os
 import re
+import shlex
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -216,14 +221,26 @@ class LinkError:
         return f"{self.source}:{self.line}: {self.reason} -> {self.target}"
 
 
-def _missing_tracked_error(source: Path) -> LinkError:
-    """A tracked file absent from the working tree: its deletion was never
-    staged. Reported with its remedy instead of letting the read traceback."""
+def _missing_tracked_error(source: Path) -> LinkError | None:
+    """The report for a tracked file that is gone from the working tree (its
+    deletion was never staged), or ``None`` when the path is there.
+
+    Gone means the path itself: nothing at it, or a directory above it
+    replaced by a file -- the two cases git lists as deleted. A dangling
+    symlink is still there, so it is not reported here: it is a file that
+    cannot be read, which the bare-citation walk skips and the markdown walk
+    does not handle. A file a sparse checkout leaves out IS reported, although
+    git does not call it deleted: the index is not consulted.
+
+    The path is shell-quoted so either command can be pasted as printed."""
+    if os.path.lexists(source):
+        return None
+    path = shlex.quote(str(source))
     return LinkError(
         source,
         0,
-        f"git rm {source} (stage the deletion) or git restore {source}",
-        "tracked file is missing from the working tree",
+        target=f"git rm {path} (stage the deletion) or git restore {path}",
+        reason="tracked file is missing from the working tree",
     )
 
 
@@ -509,11 +526,11 @@ def check(root: Path) -> list[LinkError]:
     tracked = _tracked_paths(root)  # single 'git ls-files' fork for this call
 
     for source in _tracked_markdown_files(root, tracked):
-        try:
-            source_text = _cached_text(source, text_cache)
-        except FileNotFoundError:
-            errors.append(_missing_tracked_error(source))
+        missing = _missing_tracked_error(source)
+        if missing:
+            errors.append(missing)
             continue
+        source_text = _cached_text(source, text_cache)
         for line_no, target in _links_in_file(source_text):
             if not target or _is_external(target):
                 continue
@@ -536,6 +553,10 @@ def check(root: Path) -> list[LinkError]:
                 errors.append(error)
 
     for source in _tracked_other_files(root, tracked):
+        missing = _missing_tracked_error(source)
+        if missing:
+            errors.append(missing)
+            continue
         try:
             # Only markdown is worth caching here: a `.md` source outside
             # BARE_CITATION_EXCLUDE_DIRS was already read by the walk above
@@ -548,9 +569,6 @@ def check(root: Path) -> list[LinkError]:
                 if source.suffix == ".md"
                 else source.read_text(encoding="utf-8", errors="replace")
             )
-        except FileNotFoundError:
-            errors.append(_missing_tracked_error(source))
-            continue
         except OSError:
             continue
         for line_no, target in _bare_doc_anchor_refs(
@@ -571,10 +589,10 @@ def check(root: Path) -> list[LinkError]:
             if error:
                 errors.append(error)
     # Since lode-act5 a markdown file outside BARE_CITATION_EXCLUDE_DIRS goes
-    # through BOTH walks, so one bracketed link into a `docs/` target can
-    # produce the identical LinkError twice. De-duplicate (order-preserving;
-    # LinkError is a frozen dataclass, so hashable) -- reporting one break
-    # twice would also double-count it in the summary line.
+    # through BOTH walks, so one bracketed link into a `docs/` target, or one
+    # missing file, can produce the identical LinkError twice. De-duplicate
+    # (order-preserving; LinkError is a frozen dataclass, so hashable) --
+    # reporting one break twice would also double-count it in the summary line.
     return list(dict.fromkeys(errors))
 
 

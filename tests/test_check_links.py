@@ -740,11 +740,22 @@ def test_cli_exits_zero_on_clean_tree(tmp_path):
     assert result.returncode == 0
 
 
-@pytest.mark.parametrize("rel", [f"{_DOCS}/gone.md", "scripts/gone.sh"])
+@pytest.mark.parametrize(
+    "rel",
+    [
+        pytest.param(f"{_DOCS}/gone.md", id="markdown-walk-only"),
+        pytest.param("scripts/gone.sh", id="bare-citation-walk-only"),
+        pytest.param("notes/gone.md", id="both-walks"),
+    ],
+)
 def test_cli_reports_tracked_file_deleted_but_unstaged_without_traceback(tmp_path, rel):
-    _write(tmp_path, f"{_DOCS}/a.md", "# A\n")
-    gone = _write(tmp_path, rel, "x\n")
-    _git_init(tmp_path)
+    """One report per missing file, whichever walk reads it (a ``.md`` outside
+    ``docs/`` and ``.claude/`` is read by both). The root holds a space, so
+    the printed commands only name the file if the path is shell-quoted."""
+    root = tmp_path / "work tree"
+    _write(root, f"{_DOCS}/a.md", "# A\n")
+    gone = _write(root, rel, "x\n")
+    _git_init(root)
     gone.unlink()
 
     result = subprocess.run(
@@ -752,7 +763,7 @@ def test_cli_reports_tracked_file_deleted_but_unstaged_without_traceback(tmp_pat
             sys.executable,
             str(REPO_ROOT / "scripts" / "check_links.py"),
             "--root",
-            str(tmp_path),
+            str(root),
         ],
         capture_output=True,
         text=True,
@@ -760,9 +771,39 @@ def test_cli_reports_tracked_file_deleted_but_unstaged_without_traceback(tmp_pat
         check=False,
     )
 
+    quoted = f"'{gone}'"
     assert result.returncode == 1
     assert "Traceback" not in result.stderr
-    assert str(gone) in result.stderr
-    assert "missing from the working tree" in result.stderr
-    assert f"git rm {gone}" in result.stderr
-    assert f"git restore {gone}" in result.stderr
+    assert result.stderr.count("missing from the working tree") == 1
+    assert f"{gone}:0: tracked file is missing from the working tree" in result.stderr
+    assert f"git rm {quoted} " in result.stderr
+    assert f"git restore {quoted}\n" in result.stderr
+
+
+def test_tracked_file_under_a_directory_replaced_by_a_file_is_reported_missing(
+    tmp_path,
+):
+    """git lists such a file as deleted too, and reading it fails with
+    ``NotADirectoryError``, which is not a ``FileNotFoundError``."""
+    _write(tmp_path, f"{_DOCS}/a.md", "# A\n")
+    gone = _write(tmp_path, f"{_DOCS}/guide/intro.md", "# I\n")
+    _git_init(tmp_path)
+    gone.unlink()
+    gone.parent.rmdir()
+    gone.parent.write_text("x\n", encoding="utf-8")
+
+    errors = check(tmp_path)
+
+    assert [(e.source, e.line) for e in errors] == [(gone, 0)]
+    assert "missing from the working tree" in errors[0].reason
+
+
+def test_dangling_tracked_symlink_is_not_reported_as_missing(tmp_path):
+    """A tracked symlink whose target is absent is still in the working tree
+    (git does not list it as deleted, and ``git restore`` would change
+    nothing), so the bare-citation walk skips it like any unreadable file."""
+    _write(tmp_path, f"{_DOCS}/a.md", "# A\n")
+    (tmp_path / "current").symlink_to("build/out")
+    _git_init(tmp_path)
+
+    assert check(tmp_path) == []
