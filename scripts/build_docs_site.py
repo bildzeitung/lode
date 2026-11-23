@@ -44,6 +44,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import quote_from_bytes, unquote_to_bytes
 
 import typer
 
@@ -112,7 +113,13 @@ ASSETS_DIR = "assets"
 GITHUB_BASE = "https://github.com/bildzeitung/lode/blob/trunk"
 
 _MERMAID_FENCE_RE = re.compile(r"```mermaid\n(.*?)\n```", re.DOTALL)
-_LINK_RE = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)\s]+)\)")
+# A markdown inline link, never an image. The destination grammar is
+# scripts/check_links.py's _LINK_RE (group 2: angle-bracket destination, group
+# 3: any other; an optional title follows), differing only in capturing the
+# label as group 1. tests/test_build_docs_site.py holds the two equal.
+_LINK_RE = re.compile(
+    r"(?<!!)\[([^\]]*)\]\(\s*(?:<([^<>]*)>(?=[\s)])|([^\s)]+))(?:\s[^)]*)?\)"
+)
 # An inline code span. Same one-line, run-aware rule as scripts/check_links.py's
 # _INLINE_CODE_RE, and for the same reason: a literal `[text](foo.md)` written
 # as an EXAMPLE inside backticks (or inside a fenced block) is documentation,
@@ -260,9 +267,14 @@ def _rewrite_target(
     current_rel: str, link_target: str, published: set[str]
 ) -> str | None:
     """Return a rewritten link target, or None if the link is left alone."""
-    if link_target.startswith(("http://", "https://", "mailto:", "#")):
+    if not link_target or link_target.startswith(
+        ("http://", "https://", "mailto:", "#")
+    ):
         return None
     path_part, _, fragment = link_target.partition("#")
+    # The path of a link is percent-encoded; the published set and the alias
+    # table hold plain names. Decoded as the link gate decodes it.
+    path_part = os.fsdecode(unquote_to_bytes(path_part))
     # Resolve relative to docs/, allowing `..` to escape it (a published page
     # linking ../README.md or ../src/lode/config.py resolves repo-root-relative).
     root_rel_str = posixpath.normpath(
@@ -291,7 +303,7 @@ def _rewrite_target(
 
     # Everything else -- an unpublished docs/ page, a repo-root file, a source
     # file -- gets the one rewrite rule: its GitHub blob URL, fragment verbatim.
-    url = f"{GITHUB_BASE}/{root_rel_str}"
+    url = f"{GITHUB_BASE}/{quote_from_bytes(os.fsencode(root_rel_str), safe='/')}"
     if fragment:
         url = f"{url}#{fragment}"
     return url
@@ -323,11 +335,20 @@ def _process_links(text: str, rel_path: str, published: set[str]) -> str:
     """
 
     def _sub(match: re.Match[str]) -> str:
-        label, target = match.group(1), match.group(2)
-        rewritten = _rewrite_target(rel_path, target, published)
+        angle = match.group(2) is not None
+        group = 2 if angle else 3
+        rewritten = _rewrite_target(rel_path, match.group(group), published)
         if rewritten is None:
             return match.group(0)
-        return f"[{label}]({rewritten})"
+        # Splice over the destination alone (its angle brackets included), so
+        # a title and the spacing survive. The rewritten URL is percent-encoded,
+        # so it is a valid destination without brackets.
+        lo, hi = match.span(group)
+        if angle:
+            lo, hi = lo - 1, hi + 1
+        whole = match.group(0)
+        base = match.start()
+        return whole[: lo - base] + rewritten + whole[hi - base :]
 
     def _sub_unless_protected(match: re.Match[str]) -> str:
         # Keyed on where the link STARTS, so a link whose label is itself

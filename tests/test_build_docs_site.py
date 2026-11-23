@@ -40,11 +40,15 @@ def _uncommented_lines(text: str) -> list[str]:
 build_docs_site = load_module_from_path(
     "build_docs_site", REPO_ROOT / "scripts" / "build_docs_site.py"
 )
+check_links = load_module_from_path(
+    "check_links", REPO_ROOT / "scripts" / "check_links.py"
+)
 
 # A stand-in published set: deliberately NOT `_published_set(docs/)`, so a
 # rename under docs/how-to/ can never quietly turn these cases into a test of
 # a different rule. The real set is checked separately, below.
 PUBLISHED = {
+    "sp ace.md",
     "design.md",
     "retrieval.md",
     "storage.md",
@@ -158,6 +162,41 @@ def test_inline_code_pattern_is_the_docs_slug_copy() -> None:
     """``tests/test_check_links.py`` holds ``docs_slug``'s pattern to the link
     gate's, so the three copies cannot drift apart."""
     assert build_docs_site._INLINE_CODE_RE.pattern == docs_slug._INLINE_CODE_RE.pattern
+
+
+def test_link_pattern_is_the_gates_with_the_label_captured() -> None:
+    """The destination grammar is the link gate's, so a spelling the gate reads
+    as a link is one the rewriter reads (they differ only in the label group)."""
+    gate = check_links._LINK_RE.pattern.replace(r"\[[^\]]*\]", r"\[([^\]]*)\]", 1)
+    assert build_docs_site._LINK_RE.pattern == gate
+
+
+@pytest.mark.parametrize(
+    ("dest", "published_dest", "unpublished_dest"),
+    [
+        ("plain", "design.md", "decisions.md"),
+        ("title", 'design.md "t"', 'decisions.md "t"'),
+        ("angle", "<design.md>", "<decisions.md>"),
+        ("angle+title", '<design.md> "t"', '<decisions.md> "t"'),
+        ("angle+space", "<sp ace.md>", "<some dir/file.md>"),
+        ("percent", "sp%20ace.md", "some%20dir/file.md"),
+        ("percent+title", 'sp%20ace.md "t"', 'some%20dir/file.md "t"'),
+    ],
+)
+def test_link_spellings_rewrite_like_the_plain_link(
+    dest: str, published_dest: str, unpublished_dest: str
+) -> None:
+    del dest
+    published = f"[t]({published_dest})"
+    assert build_docs_site._process_links(published, "a.md", PUBLISHED) == published
+    out = build_docs_site._process_links(f"[t]({unpublished_dest})", "a.md", PUBLISHED)
+    name = unpublished_dest.removesuffix(' "t"').strip("<>").replace(" ", "%20")
+    title = ' "t"' if unpublished_dest.endswith('"t"') else ""
+    assert out == f"[t]({BASE}/docs/{name}{title})"
+
+
+def test_empty_angle_destination_is_left_alone() -> None:
+    assert build_docs_site._process_links("[t](<>)", "a.md", PUBLISHED) == "[t](<>)"
 
 
 def test_real_links_survive_the_code_skip() -> None:
