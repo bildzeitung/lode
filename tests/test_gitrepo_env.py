@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from _gitrepo import _commit_file, _git, _local_env_vars, git_env, os_env
+from _gitrepo import _commit_file, _git, git_env, os_env
 from conftest import tracked_paths
 
 
@@ -24,11 +24,8 @@ def _repo(path: Path, filename: str) -> Path:
 def scratch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A scratch repo, built while GIT_DIR/GIT_WORK_TREE point at a decoy repo.
 
-    Every other locating variable is unset first: a caller's own GIT_INDEX_FILE (a commit
-    hook's) would otherwise decide what the unscrubbed call in the non-vacuity test lists.
+    No other locating variable is set: ``tests/conftest.py`` drops them all at import.
     """
-    for name in _local_env_vars():
-        monkeypatch.delenv(name, raising=False)
     decoy = _repo(tmp_path / "decoy", "decoy.txt")
     monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
     monkeypatch.setenv("GIT_WORK_TREE", str(decoy))
