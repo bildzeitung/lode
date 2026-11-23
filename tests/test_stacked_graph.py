@@ -24,7 +24,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from _gitrepo import _git
+from _gitrepo import _git, git_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "stacked-graph.sh"
@@ -140,6 +140,7 @@ def test_stack_survives_the_base_tip_moving_afterwards(tmp_path: Path) -> None:
     naive = subprocess.run(
         ["git", "merge-base", "--is-ancestor", "origin/land/base", "origin/land/dep"],
         cwd=repo,
+        env=git_env(),
         capture_output=True,
         check=False,
     )

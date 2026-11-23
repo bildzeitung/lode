@@ -33,7 +33,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from _gitrepo import _git
+from _gitrepo import _git, git_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -107,6 +107,7 @@ def _diverge_and_merge(
     merge_result = subprocess.run(
         ["git", "merge", "--no-edit", "theirs"],
         cwd=repo,
+        env=git_env(),
         capture_output=True,
         text=True,
         timeout=30,

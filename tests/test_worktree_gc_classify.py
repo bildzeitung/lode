@@ -56,14 +56,13 @@ while everything stays green.
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
 import time
 from pathlib import Path
 
-from _gitrepo import _git
+from _gitrepo import _git, git_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "worktree-gc-classify.sh"
@@ -108,23 +107,13 @@ def _commit(
     wt: Path, filename: str, message: str, committer_date: str | None = None
 ) -> str:
     """`committer_date` forges the committer timestamp the script reads via
-    `git log -1 --format=%ct`. It goes through a direct `subprocess.run`
-    because `_gitrepo._git` accepts no env; everything else stays on `_git`."""
+    `git log -1 --format=%ct`."""
     (wt / filename).write_text(f"{message}\n")
     _git(wt, "add", filename)
-    if committer_date is None:
-        _git(wt, "commit", "-q", "-m", message)
-    else:
-        result = subprocess.run(
-            ["git", "commit", "-q", "-m", message],
-            cwd=wt,
-            env={**os.environ, "GIT_COMMITTER_DATE": committer_date},
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        assert result.returncode == 0, f"git commit failed: {result.stderr}"
+    forged = (
+        {"GIT_COMMITTER_DATE": committer_date} if committer_date is not None else None
+    )
+    _git(wt, "commit", "-q", "-m", message, extra_env=forged)
     return _git(wt, "rev-parse", "HEAD").stdout.strip()
 
 
@@ -160,6 +149,7 @@ def _is_ancestor(repo: Path, sha: str, ref: str) -> bool:
     result = subprocess.run(
         ["git", "merge-base", "--is-ancestor", sha, ref],
         cwd=repo,
+        env=git_env(),
         capture_output=True,
         text=True,
         timeout=30,

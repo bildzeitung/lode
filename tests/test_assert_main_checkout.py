@@ -169,22 +169,15 @@ def test_unsupported_layout_is_a_machine_fault_not_a_location_verdict(
     outer = _init_repo(tmp_path, name="outer")
     inner = _init_repo(tmp_path, name="inner")
 
-    subprocess.run(
-        [
-            "git",
-            "-c",
-            "protocol.file.allow=always",
-            "submodule",
-            "add",
-            "-q",
-            str(inner),
-            "sub",
-        ],
-        cwd=outer,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
+    _git(
+        outer,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        str(inner),
+        "sub",
     )
     sub = outer / "sub"
 

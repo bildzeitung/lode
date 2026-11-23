@@ -33,6 +33,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from _gitrepo import _git
 from _hookharness import SH, pretooluse_hook, run_hook
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -40,9 +41,7 @@ SCRIPT = REPO_ROOT / "scripts" / "trunk-write-guard.sh"
 
 
 def _init_repo(path: Path, *, branch: str) -> None:
-    subprocess.run(
-        ["git", "init", "-q", "-b", branch, str(path)], check=True, timeout=30
-    )
+    _git(path.parent, "init", "-q", "-b", branch, str(path))
     subprocess.run(
         ["git", "-C", str(path), "commit", "-q", "--allow-empty", "-m", "init"],
         check=True,
