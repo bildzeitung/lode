@@ -932,12 +932,17 @@ reach it. A cutoff set in a `uv.toml` is not guarded against.
 whole resolution, so a pin already in `uv.lock` that is younger than it would otherwise move back
 to an older release, `--package NAME` runs included. The script therefore also passes
 `--exclude-newer-package NAME=<upload time of the locked release>` for every registry package
-whose locked release is younger than the cutoff, read from `uv.lock`'s own `upload-time` values.
-The cutoff then binds only releases newer than the pin, so such a pin is kept and the
-`--no-cooldown` override for a security fix survives later cooled-down runs. A package whose pin
-is older than the cutoff is not exempted and may upgrade to any release older than the cutoff.
-The script needs GNU `date -d` to compute the cutoff time. If `pyproject.toml` requires a release
-inside the window, the run still fails and the script names `--no-cooldown`.
+whose locked release is younger than the cutoff, read from `uv.lock`'s own `upload-time` values
+(the newest among the release's files). That date replaces the cutoff for that package: the pin
+is kept, releases uploaded after it are still excluded, and the `--no-cooldown` override for a
+security fix survives later cooled-down runs. A package whose pin is older than the cutoff is not
+exempted and may upgrade to any release older than the cutoff. If `pyproject.toml` requires a
+release that is inside the window and not already locked, the run still fails and the script
+names `--no-cooldown`. The script needs GNU `date -d` to compute the cutoff time.
+
+Limit, open in `lode-amyi`: for an exempted package the run can take a release inside the window
+when that release was uploaded before the pin, for example a higher version on a newer release
+line once `pyproject.toml` allows it. The version diff shows the move.
 
 **Override for a security fix that must be taken at once:**
 `scripts/update-deps.sh --package NAME --no-cooldown` (or `--no-cooldown` alone for the whole

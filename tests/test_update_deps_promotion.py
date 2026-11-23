@@ -471,3 +471,20 @@ def test_no_exemptions_without_a_cutoff(
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "--exclude-newer-package" not in " ".join(_lock_calls(tmp_path))
+
+
+def test_a_run_that_cannot_read_its_exemptions_locks_nothing(tmp_path: Path) -> None:
+    """Carrying on with no exemptions would move every young pin back and exit
+    green, so the run stops before ``uv lock``."""
+    repo, bindir = _build_fake_repo(tmp_path)
+    lock = _registry_lock(("young", "2.0.0", "2999-01-01T00:00:00.000Z"))
+    (repo / "uv.lock").write_text(lock, encoding="utf-8")
+    _write_executable(bindir / "awk", "#!/bin/bash\nexit 1\n")
+
+    result = _run_update_deps(repo, bindir)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "could not read the pins younger than the cooldown cutoff" in result.stderr
+    assert "died after moving the lock" not in result.stderr
+    assert not (tmp_path / "uv_lock_args").exists()
+    assert (repo / "uv.lock").read_text(encoding="utf-8") == lock

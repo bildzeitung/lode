@@ -217,6 +217,77 @@ def test_stub_skip_reason(
 
 
 # --------------------------------------------------------------------------
+# dep_cooldown_exemptions
+# --------------------------------------------------------------------------
+
+_CUTOFF = "2026-11-16T00:00:00.000Z"
+
+
+def _timed_package(
+    name: str, version: str, *times: str, source: str = "registry"
+) -> str:
+    """One ``[[package]]`` table whose wheels carry the upload times ``times``."""
+    wheels = "".join(
+        f'    {{ url = "w{i}", hash = "sha256:{"0" * 64}", upload-time = "{when}" }},\n'
+        for i, when in enumerate(times)
+    )
+    return (
+        f'\n[[package]]\nname = "{name}"\nversion = "{version}"\n'
+        f'source = {{ {source} = "https://example/simple" }}\n'
+        f"wheels = [\n{wheels}]\n"
+    )
+
+
+def _exemptions(tmp_path: Path, *packages: str) -> list[str]:
+    lock = tmp_path / "uv.lock"
+    lock.write_text("version = 1\nrevision = 3\n" + "".join(packages), encoding="utf-8")
+    got = _run(f'dep_cooldown_exemptions "{lock}" "{_CUTOFF}"')
+    assert got.returncode == 0, got.stderr
+    return got.stdout.splitlines()
+
+
+@pytest.mark.parametrize(
+    ("times", "newest"),
+    [
+        # uv.lock drops trailing zeros from the fraction, so the raw strings do
+        # not sort by time: "Z" sorts above every digit and above ".".
+        (("2026-11-20T10:00:02.83Z", "2026-11-20T10:00:02.835Z"), 1),
+        (("2026-11-20T10:00:02Z", "2026-11-20T10:00:02.5Z"), 1),
+        (("2026-11-20T10:00:02.999Z", "2026-11-20T10:00:03Z"), 1),
+        (("2026-11-20T10:00:03Z", "2026-11-20T10:00:02.999Z"), 0),
+    ],
+)
+def test_cooldown_exemption_is_the_newest_upload_time_of_the_locked_files(
+    tmp_path: Path, times: tuple[str, str], newest: int
+) -> None:
+    """A cutoff earlier than any one file of the locked release makes uv move
+    the pin back, so the time handed over must be the true newest."""
+    got = _exemptions(tmp_path, _timed_package("pkg", "1.0", *times))
+    assert got == [f"pkg={times[newest]}"]
+
+
+def test_cooldown_exemptions_cover_only_registry_pins_younger_than_the_cutoff(
+    tmp_path: Path,
+) -> None:
+    got = _exemptions(
+        tmp_path,
+        _timed_package("young", "2.0", "2026-11-18T09:00:00.1Z"),
+        _timed_package("old", "1.0", "2026-11-15T23:59:59.999Z"),
+        # Uploaded at the cutoff to the millisecond: the global cutoff keeps it.
+        _timed_package("at-cutoff", "1.0", "2026-11-16T00:00:00Z"),
+        # Locked at two versions: the package-wide cutoff is the newest of both.
+        _timed_package("multi", "1.0", "2026-01-01T00:00:00.000Z"),
+        _timed_package("multi", "2.0", "2026-11-19T00:00:00.000Z"),
+        _timed_package("vcs", "1.0", "2026-11-20T00:00:00.000Z", source="git"),
+        _timed_package("no-times", "1.0"),
+    )
+    assert got == [
+        "multi=2026-11-19T00:00:00.000Z",
+        "young=2026-11-18T09:00:00.1Z",
+    ]
+
+
+# --------------------------------------------------------------------------
 # The caller wiring -- the actual lode-i642 defect
 # --------------------------------------------------------------------------
 
@@ -241,5 +312,10 @@ def test_update_deps_never_assigns_changes_raw_in_a_function() -> None:
 def test_update_deps_sources_the_library() -> None:
     body = UPDATE_DEPS.read_text(encoding="utf-8")
     assert "scripts/dep-churn-lib.sh" in body
-    for fn in ("dep_changes_raw", "dep_version_diff_text", "dep_stub_skip_reason"):
+    for fn in (
+        "dep_changes_raw",
+        "dep_version_diff_text",
+        "dep_stub_skip_reason",
+        "dep_cooldown_exemptions",
+    ):
         assert fn in body, f"update-deps.sh stopped using {fn}"
