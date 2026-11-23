@@ -395,7 +395,7 @@ def _missing_image_targets(text: str, page: Path) -> list[str]:
     missing = []
     for match in _IMAGE_RE.finditer(text):
         target = match.group(1)
-        if target.startswith(("http://", "https://", "data:")):
+        if _is_external(target):
             continue
         if any(lo <= match.start() < hi for lo, hi in protected):
             continue
