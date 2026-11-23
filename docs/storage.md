@@ -730,7 +730,15 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
   alike.
 - `lode status` lists refusal-dead enrich jobs in its dead-letter output with the refusal
   category and a hint of their own; they do not get the self-healing hint, which would be
-  false for them.
+  false for them. It does so only while the refusal still stands (`lode-54c7`,
+  `jobs_read.refusal_dead_jobs`), because a dead row is permanent and outlives its
+  re-opening. A refusal stands while the row matches the re-open key above and is still
+  what keeps `enrich_gap` from re-opening the item: for a note, the row targets the
+  current head and no later enrich job for that head is live or `done`; for an external,
+  the row is the in-force enrich job. A row that no longer stands is listed as an ordinary
+  dead-lettered enrich job, under the self-healing hint and its "already moot" caveat. When
+  `config.toml` cannot be read there is no model or provider to compare, so the key is
+  skipped and only the head tests apply.
 
 See `docs/decisions.md`, `lode-ahme`.
 

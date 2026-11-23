@@ -18,6 +18,7 @@ from lode import cli
 from lode.cli import _DbOption, _open_db, _tabular_table, app, console
 from lode.config import Settings, default_db_path, lance_dir
 from lode.drawdown import bare_jira_misconfigured
+from lode.enrich import ENRICH_PROMPT_VER
 from lode.enrichment_view import stale_enrichment_heads
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.jobs_read import (
@@ -428,10 +429,29 @@ def status(db: _DbOption = None) -> None:
     """
     db_path = db or default_db_path()
     conn = _open_db(db)
+    # `lode status` reports QUEUE health, which needs no config at all -- so
+    # it must survive a broken $LODE_HOME/config.toml rather than abort
+    # (lode-l38d.6). cli._resolve_settings_best_effort() owns that broad-catch
+    # rationale; the stderr message _resolve_settings emits internally still
+    # reaches the user, so a broken config stays visible without taking the
+    # command down.
+    #
+    # Resolved before the reads: whether a refusal still stands depends on the
+    # configured enrichment model and provider.
+    settings = cli._resolve_settings_best_effort()
+    refusal_params = (
+        None
+        if settings is None
+        else (
+            ENRICH_PROMPT_VER,
+            settings.enrichment_llm.model,
+            cli.provider_identity(settings),
+        )
+    )
     try:
         job_counts = job_status_counts(conn)
         dead_letters = dead_letter_jobs(conn)
-        refused = refusal_dead_jobs(conn)
+        refused = refusal_dead_jobs(conn, refusal_params)
         egress_counts = egress_purpose_counts(conn)
     finally:
         conn.close()
@@ -567,19 +587,11 @@ def status(db: _DbOption = None) -> None:
         )
 
     pending_or_failed = job_counts.get("pending", 0) + job_counts.get("failed", 0)
-    # `lode status` reports QUEUE health, which needs no config at all -- so
-    # it must survive a broken $LODE_HOME/config.toml rather than abort
-    # (lode-l38d.6). cli._resolve_settings_best_effort() owns that broad-catch
-    # rationale; the stderr message _resolve_settings emits internally still
-    # reaches the user, so a broken config stays visible without taking the
-    # command down.
-    #
-    # _cold_model_cache stays OUTSIDE the resolution, deliberately: that
-    # function documents "Never raises" and test_cold_model_cache_is_never_fatal
-    # pins it, so folding it in here would swallow a future bug in its
-    # internal guard into a silently-wrong "No action needed." and leave the
-    # contract unenforceable.
-    settings = cli._resolve_settings_best_effort()
+    # _cold_model_cache stays OUTSIDE the best-effort settings resolution at
+    # the top of this function, deliberately: it documents "Never raises" and
+    # test_cold_model_cache_is_never_fatal pins it, so folding it in there
+    # would swallow a future bug in its internal guard into a silently-wrong
+    # "No action needed." and leave the contract unenforceable.
     cache_cold = False if settings is None else cli._cold_model_cache(settings)
     # Same non-fatal contract as cache_cold above, and the same reason it stays
     # OUTSIDE the settings try: _model_revision_status documents "Never raises"
