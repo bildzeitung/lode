@@ -7702,6 +7702,92 @@ def test_status_lists_an_external_refusal_only_while_it_is_the_in_force_job(
     assert ("the model refused to enrich" in out) is listed
 
 
+@pytest.mark.parametrize("excluded_by", ["no_egress", "purged", "deleted"])
+def test_status_drops_a_note_refusal_reconcile_never_retries(
+    tmp_path: Path, warm_model_cache: None, excluded_by: str
+) -> None:
+    # lode-2fyr: reconcile skips a no_egress or purged head outright, so the
+    # refusal remedies cannot retry it and the refusal line must not print.
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        _seed_standing_refusal_head(conn)
+        with conn:
+            if excluded_by == "no_egress":
+                conn.execute("UPDATE notes SET no_egress = 1")
+            elif excluded_by == "purged":
+                conn.execute("UPDATE versions SET purged_at = '2026-01-01T00:00:00Z'")
+            else:
+                conn.execute(
+                    "INSERT INTO versions (version_id, note_id, body, op) "
+                    "VALUES ('ver-del', 'note-d', '', 'delete')"
+                )
+                conn.execute("UPDATE notes SET head_version_id = 'ver-del'")
+                conn.execute("UPDATE jobs SET target_version = 'ver-del'")
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    out = " ".join(result.stdout.split())
+    assert "not retried" not in out
+    assert "the model refused to enrich" not in out
+
+
+def test_status_keeps_a_note_refusal_after_a_gated_out_later_job(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # A later job gated out by no_egress is done with prompt_ver NULL, which
+    # reconcile does not count as enriched, so the refusal still stands.
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        _seed_standing_refusal_head(conn)
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+                "VALUES ('enrich', 'ver-dddddddddddddddd', 'done', ?)",
+                (now_iso(),),
+            )
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    out = " ".join(result.stdout.split())
+    assert "refused by the model (category: cyber); not retried" in out
+
+
+@pytest.mark.parametrize("excluded_by", ["tombstone", "no_egress", "scope"])
+def test_status_drops_an_external_refusal_reconcile_never_retries(
+    tmp_path: Path,
+    warm_model_cache: None,
+    monkeypatch: pytest.MonkeyPatch,
+    excluded_by: str,
+) -> None:
+    settings = Settings()
+    if excluded_by == "scope":
+        settings = Settings(
+            no_egress_scopes=[{"source_type": "web", "match": "example.com"}]
+        )
+    monkeypatch.setattr(cli, "_resolve_settings_best_effort", lambda: settings)
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        _seed_external(
+            conn,
+            external_id="https://example.com/a",
+            snapshot_id="snap-head",
+            status="tombstone" if excluded_by == "tombstone" else "ok",
+            no_egress=excluded_by == "no_egress",
+        )
+        _insert_refusal_dead_enrich(conn, "snap-head")
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    out = " ".join(result.stdout.split())
+    assert "not retried" not in out
+    assert "the model refused to enrich" not in out
+
+
 @pytest.mark.parametrize(
     ("superseded_by", "listed"), [("model", True), ("head", False)]
 )

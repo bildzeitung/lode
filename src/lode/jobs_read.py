@@ -15,9 +15,11 @@ bare-tuple shape into a new wide one.
 """
 
 import sqlite3
+from collections.abc import Sequence
 from typing import NamedTuple
 
 from lode.jobs import STANDING_REFUSAL_SQL, in_force_enrich_job_id_sql
+from lode.no_egress_scope import NoEgressScopeRule, is_no_egress_scoped
 
 
 def job_status_counts(conn: sqlite3.Connection) -> dict[str, int]:
@@ -38,7 +40,9 @@ def dead_letter_jobs(
 
 
 def refusal_dead_jobs(
-    conn: sqlite3.Connection, refusal_params: tuple[str, str | None, str | None] | None
+    conn: sqlite3.Connection,
+    refusal_params: tuple[str, str | None, str | None] | None,
+    no_egress_scopes: Sequence[NoEgressScopeRule] = (),
 ) -> dict[int, str | None]:
     """``{job_id: refusal_category}`` for every refusal-dead enrich job that still stands.
 
@@ -56,43 +60,74 @@ def refusal_dead_jobs(
     - for an external, the row is the external's in-force enrich job
       (:func:`lode.jobs.in_force_enrich_job_id_sql`, the one reconcile judges).
 
+    - the target is one reconcile's enrich-gap step looks at at all (lode-2fyr):
+      a note head that is neither a delete nor purged, on a note that is not
+      ``no_egress``; an external whose head snapshot is not a tombstone, whose
+      row is not ``no_egress`` and which no ``no_egress_scopes`` rule denies.
+      Reconcile never retries any other target, so none of the refusal
+      remedies could reach it; it falls to the ordinary dead-letter hint,
+      whose "already moot" caveat names these cases.
+
     ``refusal_params=None`` (no resolvable settings) skips only the key
     comparison; the head tests need no settings and still apply.
 
     The category is None when the provider supplied none.
     """
     standing = "j.refusal = 1" if refusal_params is None else STANDING_REFUSAL_SQL
-    # The s.external_id guard keeps a note-targeted row out of the in-force
-    # subquery, which would otherwise scan all of jobs to find nothing.
-    return dict(
-        conn.execute(
-            f"""
-            SELECT j.id, j.refusal_category FROM jobs j
-            LEFT JOIN snapshots s ON s.snapshot_id = j.target_version
-            WHERE j.type = 'enrich' AND j.status = 'dead'
-              AND {standing}
-              AND (
-                (
-                  EXISTS (
-                      SELECT 1 FROM notes n WHERE n.head_version_id = j.target_version
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1 FROM jobs j2
-                      WHERE j2.type = 'enrich'
-                        AND j2.target_version = j.target_version
-                        AND j2.id > j.id
-                        AND j2.status != 'dead'
-                  )
-                )
-                OR (
-                  s.external_id IS NOT NULL
-                  AND j.id = {in_force_enrich_job_id_sql("s.external_id")}
-                )
+    # The note arm drives from versions by primary key (notes has no index on
+    # head_version_id). The s.external_id guard keeps a note-targeted row out of
+    # the in-force subquery, which would otherwise scan all of jobs to find
+    # nothing. A later job counts as a retry only if live or done with a
+    # prompt_ver: a gated-out job is done with prompt_ver NULL, which reconcile
+    # does not count as enriched.
+    rows = conn.execute(
+        f"""
+        SELECT j.id, j.refusal_category, s.external_id, e.source_type
+        FROM jobs j
+        LEFT JOIN snapshots s ON s.snapshot_id = j.target_version
+        LEFT JOIN externals e ON e.external_id = s.external_id
+        LEFT JOIN snapshots hs ON hs.snapshot_id = e.head_snapshot_id
+        WHERE j.type = 'enrich' AND j.status = 'dead'
+          AND {standing}
+          AND (
+            (
+              EXISTS (
+                  SELECT 1 FROM versions v
+                  JOIN notes n ON n.note_id = v.note_id
+                  WHERE v.version_id = j.target_version
+                    AND n.head_version_id = v.version_id
+                    AND v.op != 'delete'
+                    AND v.purged_at IS NULL
+                    AND n.no_egress = 0
               )
-            """,
-            refusal_params or (),
-        ).fetchall()
-    )
+              AND NOT EXISTS (
+                  SELECT 1 FROM jobs j2
+                  WHERE j2.type = 'enrich'
+                    AND j2.target_version = j.target_version
+                    AND j2.id > j.id
+                    AND (
+                      j2.status IN ('pending', 'running', 'failed')
+                      OR (j2.status = 'done' AND j2.prompt_ver IS NOT NULL)
+                    )
+              )
+            )
+            OR (
+              s.external_id IS NOT NULL
+              AND j.id = {in_force_enrich_job_id_sql("s.external_id")}
+              AND e.no_egress = 0
+              AND hs.status != 'tombstone'
+            )
+          )
+        """,
+        refusal_params or (),
+    ).fetchall()
+    # Scope rules live in config, not on the row, so SQL cannot filter them.
+    return {
+        job_id: category
+        for job_id, category, external_id, source_type in rows
+        if external_id is None
+        or not is_no_egress_scoped(external_id, source_type, no_egress_scopes)
+    }
 
 
 def egress_purpose_counts(conn: sqlite3.Connection) -> list[tuple[str, int]]:

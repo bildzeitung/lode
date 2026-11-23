@@ -451,7 +451,9 @@ def status(db: _DbOption = None) -> None:
     try:
         job_counts = job_status_counts(conn)
         dead_letters = dead_letter_jobs(conn)
-        refused = refusal_dead_jobs(conn, refusal_params)
+        refused = refusal_dead_jobs(
+            conn, refusal_params, () if settings is None else settings.no_egress_scopes
+        )
         egress_counts = egress_purpose_counts(conn)
     finally:
         conn.close()
