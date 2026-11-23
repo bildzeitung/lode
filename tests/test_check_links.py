@@ -594,13 +594,14 @@ class TestScanScopeWidenedRepoWide:
         assert "no heading slug" in errors[0].reason
 
     def test_link_caught_by_both_passes_is_reported_once(self, tmp_path):
-        """A bracketed link into a `docs/` target, written in a markdown file
-        outside ``BARE_CITATION_EXCLUDE_DIRS``, matches BOTH the widened
-        bracket walk and the
-        bare-citation regex. `check` de-duplicates so one real break is
-        reported once, not twice (which would also double the summary
-        count)."""
-        _write(tmp_path, "README.md", f"[foo]({_DOCS}/foo.md#no-such-anchor)\n")
+        """A bracketed link into a `docs/` target whose text repeats its
+        destination, written in a markdown file outside
+        ``BARE_CITATION_EXCLUDE_DIRS``: the bracket walk reads the
+        destination and the bare-citation regex reads the text. `check`
+        de-duplicates so one real break is reported once, not twice (which
+        would also double the summary count)."""
+        dead = f"{_DOCS}/foo.md#no-such-anchor"
+        _write(tmp_path, "README.md", f"[`{dead}`]({dead})\n")
         _write(tmp_path, f"{_DOCS}/foo.md", "# Real Heading\n")
         _git_init(tmp_path)
 
@@ -908,29 +909,37 @@ class TestBareDocAnchorRefs:
         )
         assert [target for _, target in refs] == matched
 
-    #: Destinations of pages whose path holds a space, one per LIMIT shape and
-    #: spelling. The shorter path the bare pattern reads out of each
-    #: (``page.md`` in the docs directory, ``a.md``) is never written by the
-    #: tests that use these.
-    _SPACED_DESTS = (
-        f"<{_DOCS}/my {_DOCS}/page.md>",
-        f"<{_DOCS}/a.md notes.md>",
-        f"{_DOCS}/a.md%20notes.md",
+    #: Link destinations the bare pattern would cut a shorter path out of, with
+    #: the page each one names: one per LIMIT shape and spelling for a space
+    #: (lode-wfy6i), then other characters outside the pattern's path class
+    #: (lode-q14mi). The shorter path (``page.md`` in the docs directory,
+    #: ``a.md``) is never written by the tests that use these.
+    _CUT_DESTS = (
+        (f"<{_DOCS}/my {_DOCS}/page.md>", f"{_DOCS}/my {_DOCS}/page.md"),
+        (f"<{_DOCS}/a.md notes.md>", f"{_DOCS}/a.md notes.md"),
+        (f"{_DOCS}/a.md%20notes.md", f"{_DOCS}/a.md notes.md"),
+        (f"<{_DOCS}/a.md(old).md>", f"{_DOCS}/a.md(old).md"),
+        (f"{_DOCS}/a.md%28old%29.md", f"{_DOCS}/a.md(old).md"),
+        (f"<{_DOCS}/a.md\tnotes.md>", f"{_DOCS}/a.md\tnotes.md"),
+        (f"{_DOCS}/a.md,b.md", f"{_DOCS}/a.md,b.md"),
     )
 
-    @pytest.mark.parametrize("dest", _SPACED_DESTS)
-    def test_live_spaced_link_outside_docs_is_not_reported(self, tmp_path, dest):
-        """lode-wfy6i: the bare pass does not cut a shorter path out of a link
-        destination the markdown walk resolves whole."""
-        _write(tmp_path, f"{_DOCS}/my {_DOCS}/page.md", "# P\n")
-        _write(tmp_path, f"{_DOCS}/a.md notes.md", "# N\n")
+    @pytest.mark.parametrize(("dest", "page"), _CUT_DESTS)
+    def test_live_link_the_bare_pattern_would_cut_is_not_reported(
+        self, tmp_path, dest, page
+    ):
+        """The bare pass does not cut a shorter path out of a link destination
+        the markdown walk resolves whole."""
+        _write(tmp_path, page, "# P\n")
         _write(tmp_path, "README.md", f"[x]({dest})\n")
         _git_init(tmp_path)
 
         assert check(tmp_path) == []
 
-    @pytest.mark.parametrize("dest", _SPACED_DESTS)
-    def test_dead_spaced_link_outside_docs_is_reported_once(self, tmp_path, dest):
+    @pytest.mark.parametrize("dest", [dest for dest, _ in _CUT_DESTS])
+    def test_dead_link_the_bare_pattern_would_cut_is_reported_once(
+        self, tmp_path, dest
+    ):
         """Once, as written, by the markdown walk -- and not a second time as
         the shorter path."""
         _write(tmp_path, "README.md", f"[x]({dest})\n")
@@ -957,55 +966,42 @@ class TestBareDocAnchorRefs:
                 f"[x](https://example.com/a%20b?next={_DOCS}/gone.md)",
                 [f"{_DOCS}/gone.md"],
             ),
-            # Only the destination goes: the text, a title and the rest of the
-            # line are read as before, and so is a destination without a space.
+            # Only the path of the destination goes: the text, a title and the
+            # rest of the line are read.
             (
                 f"[see {_DOCS}/b.md](<{_DOCS}/a.md notes.md>) and {_DOCS}/c.md",
                 [f"{_DOCS}/b.md", f"{_DOCS}/c.md"],
             ),
-            (
-                f'[x]({_DOCS}/a.md "see {_DOCS}/b.md")',
-                [f"{_DOCS}/a.md", f"{_DOCS}/b.md"],
-            ),
+            (f'[x]({_DOCS}/a.md "see {_DOCS}/b.md")', [f"{_DOCS}/b.md"]),
+            # So is the fragment: after a path that is not `.md` the markdown
+            # walk does not look at it.
+            (f"[x](a.txt#{_DOCS}/gone.md)", [f"{_DOCS}/gone.md"]),
+            (f"[x](<my a.txt#{_DOCS}/gone.md>)", [f"{_DOCS}/gone.md"]),
         ],
     )
-    def test_only_a_spaced_destination_the_markdown_walk_resolves_is_masked(
+    def test_only_the_path_of_a_destination_the_markdown_walk_resolves_is_masked(
         self, line, matched
     ):
         refs = check_links._bare_doc_anchor_refs(f"{line}\n", skip_fences=True)
         assert [target for _, target in refs] == matched
 
-    #: Destinations cut by the bare pattern at a character outside its path or
-    #: anchor class (lode-q14mi), with the page each one names.
-    _CUT_DESTS = (
-        (f"<{_DOCS}/a.md(old).md>", f"{_DOCS}/a.md(old).md"),
-        (f"{_DOCS}/a.md%28old%29.md", f"{_DOCS}/a.md(old).md"),
-        (f"<{_DOCS}/a.md\tnotes.md>", f"{_DOCS}/a.md\tnotes.md"),
-        (f"{_DOCS}/a.md,b.md", f"{_DOCS}/a.md,b.md"),
-        (f"{_DOCS}/a.md~b.md", f"{_DOCS}/a.md~b.md"),
-        (f"{_DOCS}/a.md+x.md", f"{_DOCS}/a.md+x.md"),
-    )
-
-    @pytest.mark.parametrize(("dest", "page"), _CUT_DESTS)
-    def test_live_link_cut_at_another_character_is_not_reported(
-        self, tmp_path, dest, page
-    ):
-        _write(tmp_path, page, "# P\n")
-        _write(tmp_path, "README.md", f"[x]({dest})\n")
+    def test_live_link_with_a_dot_in_its_anchor_is_not_reported(self, tmp_path):
+        """The bare pattern's anchor class holds no dot, so it would look up
+        the anchor cut there."""
+        _write(tmp_path, f"{_DOCS}/t.md", '<a id="v1.2"></a>\n')
+        _write(tmp_path, "README.md", f"[x]({_DOCS}/t.md#v1.2)\n")
         _git_init(tmp_path)
 
         assert check(tmp_path) == []
 
-    @pytest.mark.parametrize(("dest", "page"), _CUT_DESTS)
-    def test_dead_link_cut_at_another_character_is_reported_once(
-        self, tmp_path, dest, page
-    ):
-        _write(tmp_path, "README.md", f"[x]({dest})\n")
+    def test_live_link_below_the_root_is_not_read_from_the_root(self, tmp_path):
+        """A link is relative to its file. The bare pass does not also read
+        its destination as a path from the repo root, where the page is not."""
+        _write(tmp_path, f"sub/{_DOCS}/t.md", "# T\n")
+        _write(tmp_path, "sub/README.md", f"[x]({_DOCS}/t.md)\n")
         _git_init(tmp_path)
 
-        errors = check(tmp_path)
-
-        assert [(e.line, e.target) for e in errors] == [(1, dest.strip("<>"))]
+        assert check(tmp_path) == []
 
     @pytest.mark.parametrize(
         "line",
