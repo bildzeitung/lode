@@ -40,12 +40,12 @@ one.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from _gitrepo import os_env
 
 #: Anchored on ``__file__``, never ``Path.cwd()`` -- same reason ``conftest.py``'s
 #: ``_CHECKOUT_ROOT`` is, and the same convention as ``tests/test_validate_mermaid_gate.py`` and
@@ -100,7 +100,7 @@ def test_canary_passes_with_force_color_set_in_ambient_env() -> None:
     Contrast ``test_cli_console.py``'s control, which earns its keep by asserting a *different*
     value (``is False`` against ``is True``).
     """
-    env = dict(os.environ)
+    env = os_env()
     env["FORCE_COLOR"] = "3"
     # Both pollutants ride the SAME nested run: a second ~15-20s nested pytest session per
     # landing-gate pass buys nothing over one, and each canary can only be reddened by its own

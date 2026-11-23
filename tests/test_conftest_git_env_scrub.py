@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
 
-from _gitrepo import _commit_file, _git
+from _gitrepo import _commit_file, _git, os_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -39,7 +38,7 @@ def test_script_under_test_acts_on_scratch_repo_not_decoy(tmp_path: Path) -> Non
     _git(decoy, "config", "user.email", "t@t")
     _commit_file(decoy, "decoy.txt", "x\n", "decoy")
     index_before = _git(decoy, "ls-files", "-s").stdout
-    env = dict(os.environ)
+    env = os_env()
     env["GIT_DIR"] = str(decoy / ".git")
     env["GIT_WORK_TREE"] = str(decoy)
     env["GIT_INDEX_FILE"] = str(decoy / ".git" / "index")

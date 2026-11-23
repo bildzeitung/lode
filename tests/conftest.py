@@ -2071,7 +2071,9 @@ def fake_bin_env(bin_dir: Path) -> dict[str, str]:
     How a test puts a fake tool (usually a fake ``bd``) in front of the real
     one for a subprocess under test: the real environment untouched, except
     ``PATH`` gaining ``bin_dir`` at the front. Callers needing further keys
-    overlay them on the result, as :func:`run_block` does with ``TMPDIR``.
+    assign them on the result, as :func:`run_block` does with ``TMPDIR``: the
+    result is an ``os_env``, and a dict rebuilt from it (``dict(env, K=v)``,
+    ``{**env, ...}``) prints its variables again.
 
     An unset ``PATH`` yields ``bin_dir`` alone rather than a trailing empty
     entry, which POSIX reads as the current directory.

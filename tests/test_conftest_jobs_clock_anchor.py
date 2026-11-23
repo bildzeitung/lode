@@ -102,6 +102,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from _gitrepo import os_env
 from conftest import _DISABLE_JOBS_CLOCK_ANCHOR_RESET_ENV_VAR
 
 from lode import jobs
@@ -154,7 +155,7 @@ _NESTED_TIMEOUT_S = 150
 
 def _run_synthetic_repro(*, fixture_disabled: bool) -> subprocess.CompletedProcess[str]:
     """Run ``_SYNTHETIC_REPRO`` in a nested subprocess, with the anchor-reset fixture on or off."""
-    env = dict(os.environ)
+    env = os_env()
     if fixture_disabled:
         env[_DISABLE_JOBS_CLOCK_ANCHOR_RESET_ENV_VAR] = "1"
     else:

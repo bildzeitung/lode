@@ -69,6 +69,8 @@ def test_git_env_keeps_extra() -> None:
 def test_git_env_repr_shows_no_variable(monkeypatch: pytest.MonkeyPatch) -> None:
     """A failing ``subprocess.run(..., env=git_env(), check=True)`` has its arguments
     printed by pytest; the environment's names and values must not be among them."""
+    # conftest's import has already run and cached git's variable list, so git_env starts
+    # no git while os.environ has no PATH.
     with monkeypatch.context() as patch:
         patch.setattr(os, "environ", {"LODE_PROBE_SECRET": "hunter2"})
         env = git_env({"GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z"})
