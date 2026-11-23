@@ -172,10 +172,13 @@ if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
             # no segment at all. Emitting nothing means "counted nowhere".
             # lode-7guf: land-escalated always counts (never dependency-gated);
             # a dependency-blocked human ticket is excluded from `human` only.
+            # A `human` ticket counts only while `open`, matching the
+            # `--status open` filter in /sweep: a deferred one is parked, not
+            # decidable. (No apostrophes here: this jq is single-quoted.)
             def stage:
                 if   hasl("sweep-digest")                    then empty
                 elif hasl("land-escalated")                  then "human"
-                elif hasl("human") and (isblocked | not)     then "human"
+                elif hasl("human") and .status == "open" and (isblocked | not) then "human"
                 elif hasl("human")                           then empty
                 elif hasl("needs-rebase")                    then "rebase"
                 elif hasl("ready-for-land")                  then "land"
