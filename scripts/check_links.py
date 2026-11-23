@@ -127,11 +127,17 @@ A ``%20`` for the space is not read either (``%`` is outside the class):
 shape one is cut the same, and shape two then matches nothing.
 
 Cite such a page with a markdown link instead, which reads its own delimiters
-(angle brackets or percent-encoding, lode-tgr6). In a file outside
-``BARE_CITATION_EXCLUDE_DIRS`` the link's text goes through this pattern as
-well and can be cut the same way: write each space as ``%20``, and begin the
-destination with ``./`` where it would otherwise begin at the docs directory.
-The pattern then matches nothing in it. No tracked path holds a space today.
+(angle brackets or percent-encoding, lode-tgr6). In a markdown file outside
+``BARE_CITATION_EXCLUDE_DIRS`` the bare pass blanks out, before matching, each
+inline link destination that holds a space or ``%20`` and that the markdown
+walk resolves (not a URL, not one quoted in a code span), so that walk checks
+it once, whole (lode-wfy6i). The link's text, its title and link syntax quoted
+in a code span are still read. Still cut as above: such a page named by an
+image or a reference definition, and a link destination the pattern cuts at
+any other character outside its class (a tab, a parenthesis, a percent-escape
+other than ``%20``, among others). For those, write the character
+percent-encoded and begin the destination with ``./``: the pattern then
+matches nothing in it. No tracked path holds a space today.
 """
 
 from __future__ import annotations
@@ -388,6 +394,28 @@ def _numbered_lines(text: str) -> Iterator[tuple[int, str]]:
     return enumerate(lines, start=1)
 
 
+def _mask_spaced_link_destinations(line: str) -> str:
+    """``line`` with each link destination blanked out that holds a space (or
+    a ``%20``) and that the markdown walk resolves. The walk resolves such a
+    destination whole; left in place, the bare pattern would also read a
+    shorter path out of it and report that as missing (lode-wfy6i).
+
+    A link is found as ``_links_in_file`` finds it, with inline code spans
+    taken out first, and an external destination is left alone as ``check``
+    leaves it."""
+    in_span = {i for s in _INLINE_CODE_RE.finditer(line) for i in range(*s.span())}
+    # kept[i]: where the i-th character outside a code span sits in `line`.
+    kept = [i for i in range(len(line)) if i not in in_span]
+    chars = list(line)
+    for m in _LINK_RE.finditer("".join(line[i] for i in kept)):
+        group = 1 if m.group(1) is not None else 2
+        dest = m.group(group)
+        if (" " in dest or "%20" in dest) and not _is_external(dest):
+            for i in kept[m.start(group) : m.end(group)]:
+                chars[i] = " "
+    return "".join(chars)
+
+
 def _bare_doc_anchor_refs(text: str, *, skip_fences: bool) -> list[tuple[int, str]]:
     """``(line_number, target)`` for every bare ``docs/<path>.md#<anchor>``
     text reference in a tracked file -- no markdown link brackets required.
@@ -398,10 +426,15 @@ def _bare_doc_anchor_refs(text: str, *, skip_fences: bool) -> list[tuple[int, st
     where a fence-shaped line carries no such meaning -- see
     ``tests/test_check_links.py`` for why applying it there would silently
     under-check.
+
+    A markdown source is also the only kind the markdown walk reads, so the
+    same flag turns on ``_mask_spaced_link_destinations``.
     """
     lines = _content_lines(text) if skip_fences else _numbered_lines(text)
     refs = []
     for line_no, line in lines:
+        if skip_fences:
+            line = _mask_spaced_link_destinations(line)
         for m in _DOC_ANCHOR_REF_RE.finditer(line):
             refs.append((line_no, m.group(0)))
     return refs
@@ -537,7 +570,11 @@ def _slugs_for_file(path: Path, text_cache: dict[Path, str]) -> set[str]:
 def _links_in_file(text: str) -> list[tuple[int, str]]:
     """``(line_number, target)`` for every real inline link outside a fenced
     code block, with inline code spans stripped first so a literal
-    markdown-syntax example inside backticks is never matched as a real link."""
+    markdown-syntax example inside backticks is never matched as a real link.
+
+    ``_mask_spaced_link_destinations`` must find the same links: what it
+    blanks, the bare pass no longer reads, so a link only it found would be
+    checked by neither walk."""
     links = []
     for line_no, line in _content_lines(text):
         scrubbed = _INLINE_CODE_RE.sub("", line)

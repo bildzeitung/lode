@@ -893,8 +893,8 @@ class TestBareDocAnchorRefs:
             (f"{_DOCS}/a.md%20notes.md", [f"{_DOCS}/a.md"]),
             # The docs directory again after the space: read from there on.
             (f"{_DOCS}/my {_DOCS}/page.md#a", [f"{_DOCS}/page.md#a"]),
-            # The spelling the LIMIT gives for a link: `%20` undoes the second
-            # shape, a leading `./` the first.
+            # The spelling the LIMIT gives for a destination that is still
+            # cut: `%20` undoes the second shape, a leading `./` the first.
             (f"{_DOCS}/my%20{_DOCS}/page.md", []),
             (f"./{_DOCS}/a.md%20notes.md", []),
         ],
@@ -907,6 +907,81 @@ class TestBareDocAnchorRefs:
             f"see {written} here\n", skip_fences=False
         )
         assert [target for _, target in refs] == matched
+
+    #: Destinations of pages whose path holds a space, one per LIMIT shape and
+    #: spelling. The shorter path the bare pattern reads out of each
+    #: (``page.md`` in the docs directory, ``a.md``) is never written by the
+    #: tests that use these.
+    _SPACED_DESTS = (
+        f"<{_DOCS}/my {_DOCS}/page.md>",
+        f"<{_DOCS}/a.md notes.md>",
+        f"{_DOCS}/a.md%20notes.md",
+    )
+
+    @pytest.mark.parametrize("dest", _SPACED_DESTS)
+    def test_live_spaced_link_outside_docs_is_not_reported(self, tmp_path, dest):
+        """lode-wfy6i: the bare pass does not cut a shorter path out of a link
+        destination the markdown walk resolves whole."""
+        _write(tmp_path, f"{_DOCS}/my {_DOCS}/page.md", "# P\n")
+        _write(tmp_path, f"{_DOCS}/a.md notes.md", "# N\n")
+        _write(tmp_path, "README.md", f"[x]({dest})\n")
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+    @pytest.mark.parametrize("dest", _SPACED_DESTS)
+    def test_dead_spaced_link_outside_docs_is_reported_once(self, tmp_path, dest):
+        """Once, as written, by the markdown walk -- and not a second time as
+        the shorter path."""
+        _write(tmp_path, "README.md", f"[x]({dest})\n")
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert [(e.line, e.target) for e in errors] == [(1, dest.strip("<>"))]
+
+    @pytest.mark.parametrize(
+        ("line", "matched"),
+        [
+            # Blanked: what the markdown walk resolves, however it is dressed.
+            (f"[x](<{_DOCS}/a.md notes.md>)", []),
+            (f'[x](<{_DOCS}/a.md notes.md> "title")', []),
+            # A code span is taken out before the link is looked for, as in
+            # the markdown walk: a `]` or link-shaped text in one hides no link.
+            (f"[`a]b`](<{_DOCS}/a.md notes.md>)", []),
+            (f"`[a](b` and [x](<{_DOCS}/a.md notes.md>)", []),
+            # Not blanked: the markdown walk resolves none of these.
+            (f"`[x]({_DOCS}/t.md#a%20b)`", [f"{_DOCS}/t.md#a%20b"]),
+            (f"[x](<mailto:a?subject=see {_DOCS}/gone.md>)", [f"{_DOCS}/gone.md"]),
+            (
+                f"[x](https://example.com/a%20b?next={_DOCS}/gone.md)",
+                [f"{_DOCS}/gone.md"],
+            ),
+            # Only the destination goes: the text, a title and the rest of the
+            # line are read as before, and so is a destination without a space.
+            (
+                f"[see {_DOCS}/b.md](<{_DOCS}/a.md notes.md>) and {_DOCS}/c.md",
+                [f"{_DOCS}/b.md", f"{_DOCS}/c.md"],
+            ),
+            (
+                f'[x]({_DOCS}/a.md "see {_DOCS}/b.md")',
+                [f"{_DOCS}/a.md", f"{_DOCS}/b.md"],
+            ),
+        ],
+    )
+    def test_only_a_spaced_destination_the_markdown_walk_resolves_is_masked(
+        self, line, matched
+    ):
+        refs = check_links._bare_doc_anchor_refs(f"{line}\n", skip_fences=True)
+        assert [target for _, target in refs] == matched
+
+    def test_link_syntax_in_a_non_markdown_file_is_not_masked(self):
+        """The markdown walk never reads such a file, so the bare pass is the
+        only check its text gets."""
+        refs = check_links._bare_doc_anchor_refs(
+            f"# [x](<{_DOCS}/a.md gone.md>)\n", skip_fences=False
+        )
+        assert refs == [(1, f"{_DOCS}/a.md")]
 
 
 def test_real_repo_passes_the_gate():
