@@ -17,6 +17,8 @@ bare-tuple shape into a new wide one.
 import sqlite3
 from typing import NamedTuple
 
+from lode.jobs import STANDING_REFUSAL_SQL, in_force_enrich_job_id_sql
+
 
 def job_status_counts(conn: sqlite3.Connection) -> dict[str, int]:
     """``{status: count}`` over every row in ``jobs`` -- ``lode status``'s table."""
@@ -35,15 +37,60 @@ def dead_letter_jobs(
     ).fetchall()
 
 
-def refusal_dead_jobs(conn: sqlite3.Connection) -> dict[int, str | None]:
-    """``{job_id: refusal_category}`` for every dead job the model refused (lode-g9q3).
+def refusal_dead_jobs(
+    conn: sqlite3.Connection, refusal_params: tuple[str, str | None, str | None] | None
+) -> dict[int, str | None]:
+    """``{job_id: refusal_category}`` for every refusal-dead enrich job that still stands.
+
+    A dead row is permanent, so a refusal that reconcile has re-opened (or will
+    on its next scan) stays in ``jobs`` for good. A refusal stands (lode-54c7)
+    only while it is what keeps reconcile's enrich-gap step from re-opening the
+    item:
+
+    - :data:`lode.jobs.STANDING_REFUSAL_SQL` matches ``refusal_params`` (prompt
+      version, enrichment model, provider -- the key reconcile binds); and
+    - for a note, the row targets the note's current head and no later enrich
+      job for that head is live or ``done`` (a refusal re-opened under another
+      model matches the key again once the model is set back, but the later job
+      has retried it);
+    - for an external, the row is the external's in-force enrich job
+      (:func:`lode.jobs.in_force_enrich_job_id_sql`, the one reconcile judges).
+
+    ``refusal_params=None`` (no resolvable settings) skips only the key
+    comparison; the head tests need no settings and still apply.
 
     The category is None when the provider supplied none.
     """
+    standing = "j.refusal = 1" if refusal_params is None else STANDING_REFUSAL_SQL
+    # The s.external_id guard keeps a note-targeted row out of the in-force
+    # subquery, which would otherwise scan all of jobs to find nothing.
     return dict(
         conn.execute(
-            "SELECT id, refusal_category FROM jobs "
-            "WHERE status = 'dead' AND refusal = 1"
+            f"""
+            SELECT j.id, j.refusal_category FROM jobs j
+            LEFT JOIN snapshots s ON s.snapshot_id = j.target_version
+            WHERE j.type = 'enrich' AND j.status = 'dead'
+              AND {standing}
+              AND (
+                (
+                  EXISTS (
+                      SELECT 1 FROM notes n WHERE n.head_version_id = j.target_version
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM jobs j2
+                      WHERE j2.type = 'enrich'
+                        AND j2.target_version = j.target_version
+                        AND j2.id > j.id
+                        AND j2.status != 'dead'
+                  )
+                )
+                OR (
+                  s.external_id IS NOT NULL
+                  AND j.id = {in_force_enrich_job_id_sql("s.external_id")}
+                )
+              )
+            """,
+            refusal_params or (),
         ).fetchall()
     )
 

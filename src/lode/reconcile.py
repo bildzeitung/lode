@@ -427,10 +427,7 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
         SELECT i.head, i.external_id, i.source_type
         FROM (
             SELECT e.head_snapshot_id AS head, e.external_id, e.source_type,
-                   (SELECT j.id FROM jobs j
-                    JOIN snapshots s2 ON s2.snapshot_id = j.target_version
-                    WHERE s2.external_id = e.external_id AND j.type = 'enrich'
-                    ORDER BY j.id DESC LIMIT 1) AS jid
+                   {jobs.in_force_enrich_job_id_sql("e.external_id")} AS jid
             FROM externals e
             JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id
             WHERE s.status != 'tombstone' AND e.no_egress = 0

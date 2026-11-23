@@ -7511,14 +7511,7 @@ def test_status_lists_refusal_dead_enrich_job_with_category(
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
-        with conn:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version, status, last_error, "
-                "next_attempt_at, refusal, refusal_category) "
-                "VALUES ('enrich', 'ver-dddddddddddddddd', 'dead', 'refused', ?, 1, "
-                "'cyber')",
-                (now_iso(),),
-            )
+        _seed_standing_refusal_head(conn)
     finally:
         conn.close()
     result = runner.invoke(app, ["status", "--db", str(db_path)])
@@ -7536,6 +7529,203 @@ def test_status_lists_refusal_dead_enrich_job_with_category(
     assert "reasoning_effort or max_tokens does not retry it" in out
     assert "self-healing" not in out
     assert "No action needed." not in out
+
+
+def _insert_refusal_dead_enrich(
+    conn: sqlite3.Connection,
+    target: str,
+    *,
+    category: str = "cyber",
+    prompt_ver: str = ENRICH_PROMPT_VER,
+    model: str | None = None,
+) -> None:
+    """A refusal-dead enrich job for ``target``; the defaults stamp the current
+    prompt version, model and provider, so the refusal matches the re-open key."""
+    with conn:
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status, last_error, "
+            "next_attempt_at, refusal, refusal_category, prompt_ver, refusal_model) "
+            "VALUES ('enrich', ?, 'dead', 'refused', ?, 1, ?, ?, ?)",
+            (
+                target,
+                now_iso(),
+                category,
+                prompt_ver,
+                model or Settings().enrichment_llm.model,
+            ),
+        )
+
+
+def _insert_enrich_job(conn: sqlite3.Connection, target: str, status: str) -> None:
+    """An enrich job for ``target`` in ``status``, stamped with the current
+    prompt version."""
+    with conn:
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status, next_attempt_at, "
+            "prompt_ver) VALUES ('enrich', ?, ?, ?, ?)",
+            (target, status, now_iso(), ENRICH_PROMPT_VER),
+        )
+
+
+def _seed_standing_refusal_head(conn: sqlite3.Connection) -> None:
+    """A note head 'ver-dddddddddddddddd' with a standing refusal-dead enrich job
+    (category 'cyber') (lode-54c7)."""
+    with conn:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-d')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-dddddddddddddddd', 'note-d', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-dddddddddddddddd' "
+            "WHERE note_id = 'note-d'"
+        )
+    _insert_refusal_dead_enrich(conn, "ver-dddddddddddddddd")
+
+
+def _supersede_standing_refusal(conn: sqlite3.Connection, by: str) -> None:
+    """Stop :func:`_seed_standing_refusal_head`'s refusal from standing. ``by`` is
+    'model', 'prompt_ver' or 'head', else the status of a later enrich job for
+    the same head."""
+    if by not in ("model", "prompt_ver", "head"):
+        _insert_enrich_job(conn, "ver-dddddddddddddddd", by)
+        return
+    with conn:
+        if by == "model":
+            conn.execute("UPDATE jobs SET refusal_model = 'an-older-model'")
+        elif by == "prompt_ver":
+            conn.execute("UPDATE jobs SET prompt_ver = 'an-older-prompt-ver'")
+        else:
+            conn.execute(
+                "INSERT INTO versions (version_id, note_id, body, op) "
+                "VALUES ('ver-new', 'note-d', 'edited', 'update')"
+            )
+            conn.execute("UPDATE notes SET head_version_id = 'ver-new'")
+
+
+@pytest.mark.parametrize(
+    "superseded_by", ["model", "prompt_ver", "head", "pending", "done"]
+)
+def test_status_drops_a_refusal_that_no_longer_stands(
+    tmp_path: Path, warm_model_cache: None, superseded_by: str
+) -> None:
+    # lode-54c7: a refusal-dead row reconcile would re-open must not claim
+    # "not retried" or trigger the refusal "Action needed" hint. Nor must one a
+    # later job has already retried: a refusal re-opened under another model
+    # matches the re-open key again once the model is set back.
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        _seed_standing_refusal_head(conn)
+        _supersede_standing_refusal(conn, superseded_by)
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    out = " ".join(result.stdout.split())
+    assert "not retried" not in out
+    assert "the model refused to enrich" not in out
+
+
+def test_status_keeps_a_standing_refusal_alongside_a_superseded_one(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        _seed_standing_refusal_head(conn)
+        _insert_refusal_dead_enrich(
+            conn, "ver-gone", category="old", prompt_ver="p", model="m"
+        )
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    out = " ".join(result.stdout.split())
+    assert "refused by the model (category: cyber); not retried" in out
+    assert "category: old" not in out
+    assert "Action needed" in out
+
+
+def test_status_keeps_a_note_refusal_whose_later_retry_also_died(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # Refused, re-opened under another model, refused again, model set back:
+    # reconcile sees the first refusal standing and does not retry the head, so
+    # status must still list it.
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        _seed_standing_refusal_head(conn)
+        _insert_refusal_dead_enrich(
+            conn, "ver-dddddddddddddddd", category="later", model="another-model"
+        )
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    out = " ".join(result.stdout.split())
+    assert "refused by the model (category: cyber); not retried" in out
+    assert "category: later" not in out
+
+
+@pytest.mark.parametrize(
+    ("later_head_job", "listed"),
+    [
+        # The head snapshot was carried forward and owns no enrich job, so the
+        # refusal on the older snapshot is still the external's in-force job.
+        (None, True),
+        ("done", False),
+        # A later job that died without a refusal is one reconcile re-enqueues.
+        ("dead", False),
+    ],
+)
+def test_status_lists_an_external_refusal_only_while_it_is_the_in_force_job(
+    tmp_path: Path, warm_model_cache: None, later_head_job: str | None, listed: bool
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        _seed_external(conn, external_id="ext-1", snapshot_id="snap-head")
+        with conn:
+            conn.execute(
+                "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
+                "VALUES ('snap-old', 'ext-1', 'older body', 'ok')"
+            )
+        _insert_refusal_dead_enrich(conn, "snap-old")
+        if later_head_job is not None:
+            _insert_enrich_job(conn, "snap-head", later_head_job)
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    out = " ".join(result.stdout.split())
+    assert ("refused by the model (category: cyber); not retried" in out) is listed
+    assert ("the model refused to enrich" in out) is listed
+
+
+@pytest.mark.parametrize(
+    ("superseded_by", "listed"), [("model", True), ("head", False)]
+)
+def test_status_without_settings_drops_only_refusals_off_a_live_head(
+    tmp_path: Path,
+    warm_model_cache: None,
+    monkeypatch: pytest.MonkeyPatch,
+    superseded_by: str,
+    listed: bool,
+) -> None:
+    # A broken config.toml leaves no model or provider to compare, so a row
+    # refused under another model stays listed; the head test needs no settings.
+    monkeypatch.setattr(cli, "_resolve_settings_best_effort", lambda: None)
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        _seed_standing_refusal_head(conn)
+        _supersede_standing_refusal(conn, superseded_by)
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    out = " ".join(result.stdout.split())
+    assert ("refused by the model (category: cyber); not retried" in out) is listed
 
 
 # --- lode-5try: a standing refusal exempts a head from reenrich / the status hint ---

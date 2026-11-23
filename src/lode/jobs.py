@@ -105,6 +105,32 @@ def standing_enrich_refusal_exists_sql(target_col: str) -> str:
           )"""
 
 
+def in_force_enrich_job_id_sql(external_id_expr: str) -> str:
+    """Scalar SQL subquery: the id of an external's in-force enrich job (lode-4kg8).
+
+    The newest ``enrich`` job (highest ``jobs.id``) across *all* of the
+    external's snapshots, NULL when it has none: a carried-forward head
+    snapshot owns no enrich job of its own, so the job that speaks for the
+    external is the latest one on any of its snapshots. ``external_id_expr`` is
+    a caller-written SQL expression (never user input). Shared by reconcile's
+    externals enrich-gap arm and ``lode status``'s refusal listing
+    (:func:`lode.jobs_read.refusal_dead_jobs`), so the two cannot disagree
+    about which job that is.
+
+    The ``j`` alias is load-bearing: ``test_reconcile_gap_scans_seek_jobs_by_target``
+    recognises the planner's jobs steps by the aliases ``j``/``je``. Inside the
+    subquery ``j`` and ``s2`` are its own rows and shadow any outer row of the
+    same name (``refusal_dead_jobs``'s outer jobs row is also ``j``), so
+    ``external_id_expr`` must not reference either alias.
+    """
+    return f"""(
+              SELECT j.id FROM jobs j
+              JOIN snapshots s2 ON s2.snapshot_id = j.target_version
+              WHERE s2.external_id = {external_id_expr} AND j.type = 'enrich'
+              ORDER BY j.id DESC LIMIT 1
+          )"""
+
+
 def enqueue_derive_jobs(
     conn: sqlite3.Connection,
     target_version: str,
