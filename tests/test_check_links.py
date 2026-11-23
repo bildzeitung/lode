@@ -339,6 +339,42 @@ class TestCheck:
         assert [e.target for e in errors] == ["no such.md", "no%20such.md"]
         assert all("does not exist" in e.reason for e in errors)
 
+    def test_link_path_percent_escapes_are_decoded(self, tmp_path):
+        """``%23`` is a ``#`` in the file name, never the start of the anchor,
+        and an escape that is not UTF-8 is that byte of the name. A ``)`` in a
+        name is written ``%29``, or as itself inside angle brackets."""
+        _write(tmp_path, f"{_DOCS}/a#b.md", "## Part\n")
+        _write(tmp_path, f"{_DOCS}/" + os.fsdecode(b"caf\xe9.md"), "# C\n")
+        _write(tmp_path, f"{_DOCS}/a (b).md", "## Part\n")
+        _write(
+            tmp_path,
+            f"{_DOCS}/a.md",
+            "[1](a%23b.md#part) [2](caf%E9.md) [3](a%20%28b%29.md) "
+            '[4](<a (b).md>) [5](<a (b).md#part> "t")\n',
+        )
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+    def test_link_destination_that_names_no_file(self, tmp_path):
+        """A decoded NUL is reported, not a ``ValueError`` out of ``resolve()``.
+        ``<t.md>`` with no whitespace before the title is not an angle-bracket
+        destination (CommonMark), so ``t.md``, which is there, is not reached.
+        A blank destination is no link, and not an ``IndexError``."""
+        _write(tmp_path, f"{_DOCS}/t.md", "# T\n")
+        _write(
+            tmp_path, f"{_DOCS}/a.md", '[1](x%00.md)\n[2](<t.md>"t")\n[3]( ) [4](<>)\n'
+        )
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert [(e.line, e.target) for e in errors] == [
+            (1, "x%00.md"),
+            (2, '<t.md>"t"'),
+        ]
+        assert all("does not exist" in e.reason for e in errors)
+
     def test_broken_file_target_is_reported(self, tmp_path):
         _write(tmp_path, f"{_DOCS}/a.md", "See [missing](nope.md).\n")
         _git_init(tmp_path)

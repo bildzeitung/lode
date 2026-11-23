@@ -117,7 +117,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import unquote
+from urllib.parse import unquote_to_bytes
 
 import typer
 
@@ -138,8 +138,17 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: the identical concern noted near that regex's definition below.)
 BARE_CITATION_EXCLUDE_DIRS = ("docs", ".claude")
 
-# A markdown inline link: `[text](target)`, never an image (`![...]`).
-_LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
+# A markdown inline link, never an image (`![...]`): `[text](destination)`,
+# with an optional title after the destination, on one line. Group 1 is an
+# angle-bracket destination (`<sp ace.md>`), which may hold spaces and
+# parentheses and ends at a `>` that whitespace or the closing `)` follows
+# (CommonMark: `<a.md>x` is not one). Group 2 is any other destination, which
+# ends at the first whitespace or `)`. Not recognised: a backslash escape
+# (`\>`, `\)`), and a `)` in a destination without angle brackets (`%29`
+# spells it there).
+_LINK_RE = re.compile(
+    r"(?<!!)\[[^\]]*\]\(\s*(?:<([^<>]*)>(?=[\s)])|([^\s)]+))(?:\s[^)]*)?\)"
+)
 # Inline code spans -- stripped before link and anchor-tag scanning so a
 # *literal* markdown example inside backticks (docs/editing.md has several:
 # `` `[text](url)` ``) is never mistaken for a real link or anchor. A span is
@@ -486,16 +495,13 @@ def _links_in_file(text: str) -> list[tuple[int, str]]:
     for line_no, line in _content_lines(text):
         scrubbed = _INLINE_CODE_RE.sub("", line)
         for m in _LINK_RE.finditer(scrubbed):
-            raw_target = m.group(1).strip()
-            # An angle-bracket destination runs whole to its closing `>` (it
-            # may hold spaces); otherwise the target ends at the first
-            # whitespace. Either way an optional `"title"` after it is dropped.
-            if raw_target.startswith("<") and ">" in raw_target:
-                target = raw_target[1 : raw_target.index(">")]
-            else:
-                target = raw_target.split(None, 1)[0].strip("<>")
-            links.append((line_no, target))
+            angle, plain = m.groups()
+            links.append((line_no, plain if angle is None else angle))
     return links
+
+
+#: The reason reported for a target that names no file, wherever it is found.
+_NO_SUCH_FILE = "target file does not exist"
 
 
 def _resolve_error(
@@ -513,7 +519,7 @@ def _resolve_error(
     broken bare citation always report in the same words -- the two passes had
     already drifted to different wordings for the identical failure."""
     if not target_path.exists():
-        return LinkError(source, line_no, target, "target file does not exist")
+        return LinkError(source, line_no, target, _NO_SUCH_FILE)
     if not anchor or target_path.suffix != ".md":
         return None
     if target_path not in slug_cache:
@@ -545,8 +551,15 @@ def check(root: Path) -> list[LinkError]:
             if not target or _is_external(target):
                 continue
             file_part, _, anchor = target.partition("#")
-            # The path of a link is percent-encoded (`sp%20ace.md`).
-            file_part = unquote(file_part)
+            # The path of a link is percent-encoded (`sp%20ace.md`). Decoded
+            # as bytes, then as `_tracked_paths` decodes a name, so an escape
+            # that is not UTF-8 (`%E9`) names the file whose name holds it.
+            # The anchor is compared as written.
+            file_part = os.fsdecode(unquote_to_bytes(file_part))
+            if "\0" in file_part:
+                # No file name holds a NUL, and resolve() raises on one.
+                errors.append(LinkError(source, line_no, target, _NO_SUCH_FILE))
+                continue
             # A markdown link is relative to the file it is written in.
             target_path = (
                 (source.parent / file_part).resolve() if file_part else source.resolve()
