@@ -45,9 +45,15 @@ def match_fence_marker(stripped: str) -> tuple[str, str] | None:
     or closes a fence, else ``None``. ``marker`` is the literal run of
     backticks/tildes (e.g. ``"```"``, ``"````"``, ``"~~~"``); ``info`` is
     everything after it verbatim (an opener's info string, or a closer's
-    trailing garbage, which callers ignore)."""
+    trailing garbage, which callers ignore).
+
+    CommonMark: a backtick fence's info string may not contain a backtick, so
+    a line starting with a three-backtick inline code span is prose, not a
+    fence. Tilde fences have no such restriction."""
     m = _FENCE_MARKER_RE.match(stripped)
     if not m:
+        return None
+    if m.group(1)[0] == "`" and "`" in m.group(2):
         return None
     return m.group(1), m.group(2)
 

@@ -116,3 +116,17 @@ def test_fence_boundaries(tmp_path: Path) -> None:
         "agent.md: split (0 matches)",
         "agent.md: unclosed (0 matches)",
     ]
+
+
+def test_prose_line_opening_with_triple_backtick_span_stays_prose(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "agent.md").write_text(
+        "```inline``` code starts this line.\nprose pinned phrase\n"
+        "```bash\nrm x\n```\nmore prose.\n"
+    )
+    inventory = [
+        {"file": "agent.md", "rule": "prose", "phrase": "prose pinned phrase"},
+        {"file": "agent.md", "rule": "fenced", "phrase": "rm x"},
+    ]
+    assert rule_problems(inventory, tmp_path) == ["agent.md: fenced (0 matches)"]
