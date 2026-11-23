@@ -3905,6 +3905,35 @@ entries below from being rewritten to chase the current tree.)
     the loop, its cost in time per call on the write and read paths was not measured, and no cap was
     chosen, so the reconnect ships and the capped `Session` is filed as lode-3gr3.
 
+    **Update (lode-3gr3): the capped `Session` measured with the prune in the loop; it buys nothing
+    over the reconnect, so the reconnect stays.** `scripts/measure_vectorstore_session.py` (offline,
+    no provider call): lancedb 0.41, 5 rows of 768 floats per call, 50 cycling `target_version`s,
+    prune every 200 calls (`cleanup_older_than` 60 s), and per call one write (`checkout_latest`,
+    delete, add) and two reads (a cosine search and a `target_version` filter), as many calls as the
+    machine runs, not paced. Both caches capped at 8 MB unless stated. RSS in MB at calls 300 / 900 /
+    1500 / 2100 / 3000, and per-call median (p95) in ms for the write and for the two reads together:
+    - reconnect (shipped; default `Session`, Table dropped after each prune): 261 / 280 / 286 / 292 /
+      300; write 11.1 (13.8), reads 19.4 (23.3).
+    - capped `Session`, Table held, prune in the loop: 262 / 294 / 301 / 305 / 301 to 311 over two runs;
+      write 11.2 (13.7), reads 19.8 (23.7). A first run of this mode measured 18.4 / 31.4 ms medians
+      while the machine was busy; the repeat matched the others, so that run is noise, not a cost.
+    - capped at 64 MB instead: 3000 calls ended at 354, still rising slowly; write 11.6 (23.2), reads
+      20.6 (36.4).
+    - default `Session`, Table held, prune in the loop: 262 / 320 / 378 / 424 / 496; write 11.2, reads
+      19.5. So the prune does not bound memory (as the Update above found), and the held default is
+      the growth lode-ju9d fixed.
+    The 8 MB cap and the reconnect end within about 1 to 10 MB of each other at 3000 calls and both
+    flatten (the cap more slowly: 294 at call 900 against 280), with no measurable difference in
+    per-call time on the write or read paths. Since the capped `Session` is not measurably better, adds a
+    build constant and a second mechanism to hold, and the reads gain nothing from it (they build a
+    `VectorStore` per call, so a fresh `Session` per call is already what they get), nothing is
+    replaced: `replace_vectors` keeps dropping its Table after the prune, the
+    `vectorstore_optimize_interval` row keeps saying the interval is also the reconnect period, and no
+    cap constant is added. Not measured: per-call time at small caps below 8 MB, and the smallest cap
+    that costs nothing (the 8 MB cap already costs nothing measurable, so a smaller one buys little);
+    behaviour beyond 3000 calls (one run per mode on one machine, except
+    capped at 8 MB, which ran twice).
+
 - **2026-08-05 (lode-2nw5) — the `git restore --staged .beads/issues.jsonl` cluster: ONE site
   canonicalized (fixing a real symmetry gap), THREE sites kept as WONTFIX literals.** Filed while
   technically reviewing `lode-do3q` (entry above), which deliberately scoped out this second,
