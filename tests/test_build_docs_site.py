@@ -18,6 +18,8 @@ import yaml
 from conftest import load_module_from_path
 from test_skill_bash_state import _strip_comment
 
+from lode import docs_slug
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -143,6 +145,19 @@ def test_links_in_code_are_never_rewritten() -> None:
     assert f"Real: [decisions]({BASE}/docs/decisions.md)" in out
     assert "Inline: `[decisions](decisions.md)` stays verbatim" in out
     assert out.count("(decisions.md)") == 2  # the inline span and the fenced one
+
+
+def test_double_backtick_span_link_is_not_rewritten_but_one_between_spans_is() -> None:
+    text = "A: ``[d](decisions.md)``\nB: `` ` `` [d](decisions.md) `` ` ``\n"
+    out = build_docs_site._process_links(text, "design.md", PUBLISHED)
+    assert "A: ``[d](decisions.md)``" in out
+    assert f"[d]({BASE}/docs/decisions.md) ``" in out
+
+
+def test_inline_code_pattern_is_the_docs_slug_copy() -> None:
+    """``tests/test_check_links.py`` holds ``docs_slug``'s pattern to the link
+    gate's, so the three copies cannot drift apart."""
+    assert build_docs_site._INLINE_CODE_RE.pattern == docs_slug._INLINE_CODE_RE.pattern
 
 
 def test_real_links_survive_the_code_skip() -> None:

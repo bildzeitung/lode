@@ -113,11 +113,11 @@ GITHUB_BASE = "https://github.com/bildzeitung/lode/blob/trunk"
 
 _MERMAID_FENCE_RE = re.compile(r"```mermaid\n(.*?)\n```", re.DOTALL)
 _LINK_RE = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)\s]+)\)")
-# An inline code span. Same one-line rule as scripts/check_links.py's
+# An inline code span. Same one-line, run-aware rule as scripts/check_links.py's
 # _INLINE_CODE_RE, and for the same reason: a literal `[text](foo.md)` written
 # as an EXAMPLE inside backticks (or inside a fenced block) is documentation,
 # not a link, and rewriting it would corrupt the published page.
-_INLINE_CODE_RE = re.compile(r"`[^`]*`")
+_INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`).+?(?<!`)\1(?!`)")
 # A markdown image, with or without a quoted title after the target.
 _IMAGE_RE = re.compile(r"!\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)")
 
