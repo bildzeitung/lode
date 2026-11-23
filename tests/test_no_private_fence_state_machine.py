@@ -22,19 +22,24 @@ passes for free.
 
 The shape being forbidden, concretely: an ``if`` whose test is a literal
 fence-marker ``.startswith(...)`` call or ``in``/``not in`` membership check,
-whose body (or else-branch) assigns any value to a plain name -- i.e. a private
-open/close state (a boolean flag or a string-valued open marker).
-tests/conftest.py's own ``fence_scan`` is exactly this shape, which is why it is the one sanctioned
-exemption rather than something the gate could ever selectively allow inside
-other files.
+whose body (or else-branch) assigns any value to a plain name -- i.e. private
+open/close state, whether a boolean flag or a string holding the open marker
+(lode-8ph6). tests/conftest.py's own ``fence_scan`` keeps exactly this state,
+which is why it is a sanctioned exemption rather than something the gate could
+ever selectively allow inside other files.
 
-Two things it deliberately does not do. It does not resolve names: a fence
-marker hoisted to a module constant (``_FENCE = "```"`` ... ``if
+What it deliberately does not do. It does not resolve names: a fence marker
+hoisted to a module constant (``_FENCE = "```"`` ... ``if
 line.startswith(_FENCE)``) puts no literal in the ``if`` test and slips
-through, as does the precompiled-regex shape below. Reading ``fence_scan``'s output and testing a block's own leading marker
-without assigning to a name is a legitimate shape (pinned below). This
-gate catches the shapes that have actually recurred five times, not an
-adversary.
+through, as does the precompiled-regex shape below. For the same reason it
+does not ask whether the assigned name is fence state: ``lang = "bash"`` under
+a literal marker test is flagged too. That width costs nothing today --
+measured at lode-8ph6 over every scanned module, ZERO ``if``s carry a literal
+fence marker in their test at all. And only a plain ``name = value`` statement
+counts: tuple-unpacking, annotated and augmented assignments are not looked
+at. Reading ``fence_scan``'s output and testing a block's own leading marker
+without assigning to a name is a legitimate shape (pinned below). This gate
+catches the shapes that have actually recurred five times, not an adversary.
 """
 
 from __future__ import annotations
@@ -95,17 +100,18 @@ def _is_fence_marker_test(test: ast.expr) -> bool:
     return False
 
 
-def _assigns_a_plain_name(body: list[ast.stmt]) -> bool:
-    """Whether any statement in ``body`` assigns ANY value to a plain name --
-    searched recursively, since the assignment may sit one level deeper (e.g.
-    inside a nested ``if``/``else``). Any value, not just a boolean-flag shape:
-    a machine keeping the open marker in a string variable (``fence = marker``
-    / ``fence = ''``) is the same private open/close state (lode-8ph6)."""
+def _assigns_a_plain_name(node: ast.If) -> bool:
+    """Whether ``node``'s body or else-branch assigns ANY value to a plain
+    name, at any depth (the assignment may sit inside a nested
+    ``if``/``else``). Any value, not just a boolean-flag shape: a machine
+    keeping the open marker in a string variable (``fence = marker`` /
+    ``fence = ''``) is the same private open/close state (lode-8ph6). Walking
+    the whole node is safe: its test is an expression, which cannot hold an
+    ``ast.Assign``."""
     return any(
         isinstance(sub, ast.Assign)
         and any(isinstance(t, ast.Name) for t in sub.targets)
-        for stmt in body
-        for sub in ast.walk(stmt)
+        for sub in ast.walk(node)
     )
 
 
@@ -119,7 +125,7 @@ def fence_toggle_findings(tree: ast.AST) -> list[int]:
         for node in ast.walk(tree)
         if isinstance(node, ast.If)
         and _is_fence_marker_test(node.test)
-        and (_assigns_a_plain_name(node.body) or _assigns_a_plain_name(node.orelse))
+        and _assigns_a_plain_name(node)
     ]
 
 
@@ -148,8 +154,11 @@ def test_no_private_fence_toggle_state_machine_outside_conftest() -> None:
         "private fence-toggle state machine(s) found outside tests/conftest.py: "
         f"{offenders} -- reuse tests/conftest.py's fence_scan/bash_fence_blocks "
         "(tests/scripts) or src/lode/fence_parsing.py (src/) "
-        "instead of hand-rolling a new open/close flag "
-        "(lode-ovgs, lode-p4qb, lode-kjei, lode-jm4a, lode-oqqw, lode-k5qb, lode-ee7b)"
+        "instead of hand-rolling new open/close state -- a flag or an "
+        "open-marker variable; the gate flags any name assigned under an `if` "
+        "that tests a literal fence marker "
+        "(lode-ovgs, lode-p4qb, lode-kjei, lode-jm4a, lode-oqqw, lode-k5qb, lode-ee7b, "
+        "lode-8ph6)"
     )
 
 
@@ -244,9 +253,10 @@ def content_lines(text):
 
 
 def test_gate_ignores_a_bare_if_with_no_flag_assignment() -> None:
-    """A fence-marker test that only ``continue``s or appends to a list (not a
-    boolean flag) is not a toggle -- e.g. `fenced_violations`-style code that
-    reads `fence_scan`'s output rather than re-deriving fence state itself."""
+    """A fence-marker test that only ``continue``s or appends to a list
+    (assigns no plain name) keeps no state -- e.g. `fenced_violations`-style
+    code that reads `fence_scan`'s output rather than re-deriving fence state
+    itself."""
     src = """
 def h(blocks):
     out = []
@@ -300,21 +310,28 @@ def f(text):
 
 
 def test_gate_catches_a_string_valued_open_fence_variable() -> None:
-    """lode-8ph6: the lode-4615 builder's private loop kept the open marker in
-    a string variable, so the assigned value is a Name / str constant, not a
-    boolean-flag shape. It must be flagged."""
-    src = """
-def f(text):
-    fence = ''
+    """lode-8ph6: the private loop the lode-4615 builder wrote in
+    tests/test_instruction_rule_inventory_gate.py (that ticket's review
+    replaced it with conftest's ``fence_scan``), reproduced verbatim. It keeps
+    the open marker in a string variable, so the assigned value is a Name / str
+    constant, not a boolean-flag shape. It must be flagged."""
+    src = r"""
+def _outside_fences(text: str) -> str:
+    kept = []
+    fence = ""
     for line in text.splitlines():
-        stripped = line.strip()
+        stripped = line.lstrip()
         marker = stripped[:3]
         if fence:
             if marker == fence:
-                fence = ''
-                continue
+                fence = ""
+            continue
         if marker in ("```", "~~~"):
             fence = marker
             continue
+        kept.append(line)
+    return "\n".join(kept)
 """
-    assert fence_toggle_findings(ast.parse(src))
+    assert fence_toggle_findings(ast.parse(src)), (
+        "gate failed to catch a string-valued open-fence variable"
+    )
