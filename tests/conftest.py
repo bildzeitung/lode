@@ -1270,6 +1270,24 @@ def mkdocs_config() -> dict:
     )
 
 
+def tracked_paths(*pathspec: str, root: Path = _CHECKOUT_ROOT) -> list[str]:
+    """Tracked paths under ``root``, relative to it, optionally narrowed by ``pathspec``.
+
+    Repo-relative for the default ``root``, the checkout's top level.
+
+    Listed NUL-separated and read as bytes, each name ``os.fsdecode``d: plain
+    ``git ls-files`` text C-quotes a non-ASCII name (``"caf\\303\\251.py"``), ``-z`` text
+    mode decodes strictly and newline-translates, and a bytes read has neither problem
+    (the listing ``scripts/check_links.py`` uses).
+    """
+    out = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "--", *pathspec],
+        capture_output=True,
+        check=True,
+    ).stdout
+    return [os.fsdecode(name) for name in out.split(b"\0") if name]
+
+
 def load_module_from_path(name: str, path: Path) -> ModuleType:
     """Load the script/module at ``path`` under module name ``name``.
 

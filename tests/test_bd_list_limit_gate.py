@@ -160,7 +160,6 @@ it reject legitimate bounded queries.
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -174,6 +173,7 @@ from conftest import (
     MARKDOWN_CORPUS_GLOBS,
     fence_scan,
     markdown_corpus_blocks,
+    tracked_paths,
 )
 
 # Reuse lode-x495's fence-extraction and comment-stripping rather than adding a second,
@@ -742,12 +742,7 @@ def test_scan_scope_covers_every_tracked_sh_file() -> None:
     scope-widening correction: `.claude/statusline.sh` is the site lode-9bbq fixed and
     the reason this ticket exists, so it gets a failure message of its own rather than
     only showing up inside a set diff."""
-    tracked = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "ls-files", "*.sh"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.split()
+    tracked = tracked_paths("*.sh")
     scanned = {
         str(p.relative_to(REPO_ROOT))
         for base in SH_GLOB_DIRS

@@ -71,7 +71,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from conftest import project_venv_bin
+from conftest import project_venv_bin, tracked_paths
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -203,17 +203,8 @@ def find_multi_except_violations(path: str, text: str) -> list[MultiExceptClause
     return [c for c in find_multi_except_clauses(path, text) if c.violation]
 
 
-def _tracked_python_files() -> list[str]:
-    return subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "ls-files", "*.py"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.splitlines()
-
-
 def test_no_bare_or_unmarked_multi_exception_in_tracked_source() -> None:
-    tracked = _tracked_python_files()
+    tracked = tracked_paths("*.py")
     assert tracked, "git ls-files returned no *.py paths -- this gate would be vacuous"
 
     all_violations: list[MultiExceptClause] = []
