@@ -536,3 +536,22 @@ def test_model_revisions_scopes_to_the_requested_model(tmp_path: Path) -> None:
 
     assert store.model_revisions(_settings().embedding_model) == {"sha-1"}
     assert store.model_revisions("some-other/model") == {"sha-other"}
+
+
+def test_periodic_optimize_drops_the_held_table_and_reconnects(
+    tmp_path: Path,
+) -> None:
+    """The prune releases the held connection; the next call reopens it (lode-ju9d).
+
+    The per-connection memory growth is only released by a new connection, so
+    the cached Table must not survive the prune.
+    """
+    store = _store(tmp_path, vectorstore_optimize_interval=2)
+
+    store.replace_vectors("v1", [_row("a", "v1", [1.0, 0.0, 0.0, 0.0])])
+    assert store._table is not None
+    store.replace_vectors("v1", [_row("b", "v1", [0.0, 1.0, 0.0, 0.0])])
+    assert store._table is None
+
+    assert store.vectors_for("v1") == [[0.0, 1.0, 0.0, 0.0]]
+    assert store._table is not None

@@ -3843,6 +3843,35 @@ entries below from being rewritten to chase the current tree.)
     last 60 s, so that cost should scale with the write rate; no other rate was measured. Under
     lancedb 0.41 both still grow about 7 MB per 300 calls, unlike the flat plateau recorded above
     for 0.38; that regression is not caused by the window and is filed as lode-ju9d.
+  - **Update (lode-ju9d, 2026-11-22) — the periodic prune does not bound memory on lancedb 0.38 or
+    0.41; the growth is per-connection state, and dropping the connection every interval bounds it.**
+    One standalone script (a mirror of `replace_vectors`: 5 rows of 768 floats per call, `target_version`
+    cycling over 50 values, a held Table with `checkout_latest()` each call, 3000 calls at about 15
+    calls/s, live `VmRSS` every 300 calls, optimize every 100 calls with a 60 s window where run) gave
+    RSS in MB at calls 300 / 1500 / 3000:
+    - 0.41, held Table, prune every 100: 245 / 351 / 474.
+    - 0.41, held Table, no prune: 238 / 351 / 487.
+    - 0.38, held Table, prune every 100: 220 / 297 / 380.
+    - 0.38, held Table, no prune: 212 / 287 / 378.
+    - 0.41, prune every 100, window 0: 234 / 335 / 453.
+    - 0.41, a fresh connection and table open every call, no prune: 205 / 207 / 209 (flat).
+    - 0.41, prune every 100 and a new connection every 100 calls: 227 / 246 / 253.
+    - 0.41, new connection every 100 calls, no prune: 219 / 227 / 233.
+    - 0.41, prune every 100 and the table reopened on the same connection every 100 calls: 234 / 336 / 456.
+    So the prune had no effect on memory in this method on either version (0.38 with and without it
+    grew about 17 MB per 300 calls, 0.41 about 25), which does not reproduce the flat plateau recorded
+    above for 0.38 with the prune; the script behind that entry was not kept, so the difference (rows
+    per call, vector width, how the calls were paced) is not known. A fresh connection per call is flat,
+    and replacing the connection every 100 calls removes the growth while reopening only the table on the
+    same connection does not, so the growth sits in state the connection holds. **Cause not found beyond
+    that**: what lancedb keeps per connection was not inspected. **Mitigation built:** `replace_vectors`
+    sets `self._table = None` after its periodic prune, so the next call opens a new connection
+    (`_open_or_create_table` already does that when nothing is cached), and the `checkout_latest()` after
+    the prune is gone since the handle is discarded. The prune stays because it still deletes old
+    version files from disk, which these runs did not measure. The saving lode-2brb bought (no
+    `list_tables`/`open_table`/schema compare per call) now applies to runs of
+    `vectorstore_optimize_interval` calls instead of the process lifetime. Not measured: the prune's
+    effect on disk size, other write rates, and a longer run than 3000 calls.
 
 - **2026-08-05 (lode-2nw5) — the `git restore --staged .beads/issues.jsonl` cluster: ONE site
   canonicalized (fixing a real symmetry gap), THREE sites kept as WONTFIX literals.** Filed while

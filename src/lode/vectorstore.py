@@ -199,9 +199,10 @@ class VectorStore:
         per row (a missing key converts to ``NULL``, same as an explicit ``None``)
         — an empty list just clears the version.
 
-        **Periodically prunes the held Table's version history (lode-2brb).**
-        Each call is a delete + add = 2 new LanceDB versions, and a Table held
-        across many calls accumulates that history in memory. Every
+        **Periodically prunes old versions and drops the held Table (lode-2brb,
+        lode-ju9d).** Each call is a delete + add = 2 new LanceDB versions. A
+        Table held across many calls grows the process's memory with call count;
+        the next call after the drop reconnects, which is what releases it. Every
         ``settings.vectorstore_optimize_interval`` calls this prunes every version
         older than ``_PRUNE_WINDOW``. Nothing stored here needs history: the
         vectors are a regenerable cache (module docstring). A read in another
@@ -220,7 +221,10 @@ class VectorStore:
         self._writes_since_optimize += 1
         if self._writes_since_optimize >= self._settings.vectorstore_optimize_interval:
             table.optimize(cleanup_older_than=_PRUNE_WINDOW)
-            table.checkout_latest()
+            # Drop the connection too: the growth lives in per-connection state
+            # that neither optimize() nor reopening the table on the same
+            # connection releases (lode-ju9d).
+            self._table = None
             self._writes_since_optimize = 0
 
     def _rows(self, query: Callable[[Any], Any]) -> list[dict[str, Any]]:
