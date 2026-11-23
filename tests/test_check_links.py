@@ -130,6 +130,39 @@ class TestDocsSlugCopyAgrees:
                 docs_slug.anchor_slugs(path.read_text(encoding="utf-8")) == expected
             ), f"anchor-set copies disagree on {path}"
 
+    def test_three_backtick_inline_span_is_prose_not_a_fence(self, tmp_path):
+        """A line starting with a three-backtick inline code span must not
+        toggle the fence (lode-7jwe); both anchor-set copies agree."""
+        text = (
+            "```inline``` code starts this line.\n\n## Heading\n\nSee [x](/nope.md).\n"
+        )
+        assert [n for n, _ in check_links._content_lines(text)] == [1, 2, 3, 4, 5]
+        assert check_links._headings(text) == ["Heading"]
+        path = _write(tmp_path, "a.md", text)
+        assert docs_slug.anchor_slugs(text) == check_links._slugs_for_file(path, {})
+        assert "heading" in docs_slug.anchor_slugs(text)
+
+    def test_three_backtick_inline_span_inside_a_fence_does_not_close_it(
+        self, tmp_path
+    ):
+        """One regex decides opens and closes, so the same line inside an open
+        fence is content, not a close (lode-7jwe); both anchor-set copies
+        agree."""
+        text = "```text\n```a``` b\n## Not a heading\n```\n\n## Heading\n"
+        assert [n for n, _ in check_links._content_lines(text)] == [5, 6]
+        path = _write(tmp_path, "a.md", text)
+        assert docs_slug.anchor_slugs(text) == check_links._slugs_for_file(path, {})
+        assert docs_slug.anchor_slugs(text) == {"heading"}
+
+    def test_any_fence_marker_still_closes_a_backtick_fence(self):
+        """The any-marker close is this gate's recorded divergence from
+        ``fence_parsing`` (see ``_content_lines``), so it is asserted on the
+        gate alone: a ``~~~`` line, or a backtick run carrying an info string,
+        closes a backtick-opened block."""
+        for closer in ("~~~", "```bash"):
+            text = f"```\n## Not a heading\n{closer}\n## Heading\n"
+            assert check_links._headings(text) == ["Heading"], closer
+
 
 class TestCheck:
     def test_clean_tree_has_no_errors(self, tmp_path):
