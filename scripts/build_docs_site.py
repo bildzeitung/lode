@@ -294,11 +294,9 @@ def _rewrite_target(
     # else falls through to the GitHub blob URL below, which still resolves to
     # exactly what was cited.
     alias = DERIVED_PAGE_ALIASES.get(root_rel_str)
-    # The fragment is looked up percent-decoded and ONLY so: that is how the
-    # strict build's anchor check reads it (run on Zensical 0.1.3). The link
-    # gate also tries it as written, but `#a%20b` to an id spelled `a%20b`
-    # fails the strict build, so that link goes to GitHub. The rewritten link
-    # keeps the fragment as written.
+    # Matched percent-decoded ONLY: the strict build's anchor check (run on
+    # Zensical 0.1.3) never tries a fragment as written, unlike the link gate,
+    # so `#a%20b` to an id spelled `a%20b` has to go to GitHub.
     if alias in published and (
         not fragment or unquote(fragment) in _alias_anchors(alias)
     ):
