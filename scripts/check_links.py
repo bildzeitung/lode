@@ -134,9 +134,14 @@ BARE_CITATION_EXCLUDE_DIRS = ("docs", ".claude")
 
 # A markdown inline link: `[text](target)`, never an image (`![...]`).
 _LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
-# Inline code spans -- stripped before link scanning so a *literal* markdown
-# example inside backticks (docs/editing.md has several: `` `[text](url)` ``)
-# is never mistaken for a real link.
+# Inline code spans -- stripped before link and anchor-tag scanning so a
+# *literal* markdown example inside backticks (docs/editing.md has several:
+# `` `[text](url)` ``) is never mistaken for a real link or anchor. It pairs
+# single backticks left to right on ONE line, which is narrower than a real
+# code span on both sides: the text of a double-backtick span is not
+# stripped, and whatever sits between two backticks that do not delimit one
+# span (an escaped backtick, the close of a span opened on the line above and
+# the open of one closed on the line below) is.
 _INLINE_CODE_RE = re.compile(r"`[^`]*`")
 _LINK_TEXT_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _ATX_HEADING_RE = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
@@ -393,8 +398,15 @@ def _slugs_for_file(path: Path, text_cache: dict[Path, str]) -> set[str]:
     (including GitHub's disambiguating ``-1``, ``-2``, ... suffixes for
     repeated headings) plus every literal id from an explicit
     ``<a id="...">``/``<a name="...">`` anchor tag outside a fenced code
-    block, matched one line at a time (as ``docs_slug.anchor_slugs`` does), so
-    a tag split across lines offers no anchor.
+    block and outside an inline code span, matched one line at a time (as
+    ``docs_slug.anchor_slugs`` does), so a tag split across lines offers no
+    anchor.
+
+    An inline code span here is exactly what ``_INLINE_CODE_RE`` strips, so
+    its limits are this function's: a tag in a double-backtick span still
+    counts as an anchor, and a real tag between two backticks that do not
+    delimit one span is lost. Indented code blocks are not tracked at all, so
+    a tag in one still counts.
 
     Reads through ``text_cache`` (lode-6e9c): a link *target* is almost
     always some ``docs/*.md`` page the bracketed walk already read as a
@@ -411,7 +423,7 @@ def _slugs_for_file(path: Path, text_cache: dict[Path, str]) -> set[str]:
         seen_counts[base] = count + 1
         slugs.add(slug)
     for _, line in _content_lines(text):
-        slugs.update(_HTML_ANCHOR_RE.findall(line))
+        slugs.update(_HTML_ANCHOR_RE.findall(_INLINE_CODE_RE.sub("", line)))
     return slugs
 
 

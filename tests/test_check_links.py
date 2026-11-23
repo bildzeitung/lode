@@ -163,6 +163,46 @@ class TestDocsSlugCopyAgrees:
         assert got == {"out", "real"}
         assert docs_slug.anchor_slugs(text) == got
 
+    def test_anchor_tag_inside_an_inline_code_span_is_not_an_anchor(self, tmp_path):
+        """An explicit anchor tag inside an inline code span is literal code,
+        so neither anchor-set copy counts it (lode-8raj)."""
+        text = 'write `<a id="lit"></a>` above\n## H\n<a id="real"></a>\n'
+        path = _write(tmp_path, "a.md", text)
+        got = check_links._slugs_for_file(path, {})
+        assert got == {"h", "real"}
+        assert docs_slug.anchor_slugs(text) == got
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            pytest.param(
+                '`x` <a id="kept"></a> `y`\n', {"kept"}, id="tag-between-two-spans"
+            ),
+            pytest.param(
+                '``<a id="double"></a>``\n', {"double"}, id="double-backtick-span"
+            ),
+            pytest.param(
+                'para\n\n    <a id="indented"></a>\n',
+                {"indented"},
+                id="indented-code-block",
+            ),
+            pytest.param(
+                'ends` <a id="lost"></a> and `starts\n',
+                set(),
+                id="tag-between-two-wrapped-spans",
+            ),
+        ],
+    )
+    def test_anchor_tag_code_span_limits(self, tmp_path, text, expected):
+        """Where the one-line, single-backtick span strip stops, in both
+        anchor-set copies alike: a tag between two separate spans is kept; a
+        tag in a double-backtick span or an indented code block still counts
+        (neither is recognised as code); and a real tag between the close of
+        one wrapped span and the open of the next is lost."""
+        path = _write(tmp_path, "a.md", text)
+        assert check_links._slugs_for_file(path, {}) == expected
+        assert docs_slug.anchor_slugs(text) == expected
+
     def test_anchor_tag_split_across_lines_is_not_an_anchor(self, tmp_path):
         """Both anchor-set copies match the tag one line at a time, so a tag
         whose ``<a`` and ``id=`` sit on different lines offers no anchor to
