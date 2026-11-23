@@ -5121,6 +5121,28 @@ entries below from being rewritten to chase the current tree.)
     reachable today: a `##` section over `MAX_UNIT_BYTES` with no heading inside it is still cut
     at its own bullets, and a hit on one of those units gets no `NOTE` for an Update elsewhere in
     the section (what is left of limit (2) in the `lode-kys3` Update); open in `lode-tb0j`.
+  - **Update (lode-tb0j, 2026-11-23):** the one limit in the `lode-pe38` Update above no longer
+    holds. Every `##` section of this file over `MAX_UNIT_BYTES` is one entry for the split-entry
+    `NOTE`, whether the chunker cut it at the headings inside it or, having none, at its own
+    bullets or paragraphs: a hit on any unit of it lists every Update marker in the section's own
+    text. The chunker's function is renamed `oversized_sections` (it was `heading_cut_sections`)
+    and reports all of them. Candidate chosen is the one the ticket named; its open question is
+    answered by accepting the cost: a hit on an own bullet that carries its own Update marker also
+    lists the markers of the section's other bullets, as it already does under a sub-heading. The
+    builder's choice, kept at technical review, no maintainer ruling. No section of this file is
+    oversized today, so the `NOTE` line's length on one cannot be measured. Measured at review
+    instead: the longest `NOTE` this file prints today lists 21 markers (the review-architecture
+    entry the `lode-funp` entry measured), and two of the eight `##` sections have the shape this
+    change is for, top-level bullets of their own with prose after them (`lode-3s4d`, 8,590
+    bytes, and `lode-w7gp`, 3,659 bytes). One limit, run at review on synthetic text, not
+    reachable today. A section's own text ends at its last column-zero line that is not a bullet
+    (the `lode-skv8` rule), so one such line in an entry appended after a section, an unindented
+    continuation line say, makes every entry before it part of the section's own text. Once that
+    text is over `MAX_UNIT_BYTES`, a hit on any of those entries lists the markers of all of
+    them. This change moves no unit. Before it, only a column-zero heading line did that (run at
+    review on trunk: limit (1) of the `lode-kys3` Update, seen through the `lode-pe38` rule); now
+    any column-zero line does. Counted at review: the entry list before the first `##` of this
+    file holds no such line.
 
 - **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
   decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent
@@ -6743,6 +6765,10 @@ entries below from being rewritten to chase the current tree.)
     chunker cut at the headings inside it is one entry, and the lookup asks the chunker for that
     section's range. The rule is in the `lode-pe38` Update on the `lode-t6o1` entry. No section
     of this file is cut that way today.
+  - **Update (lode-tb0j, 2026-11-23):** "that the chunker cut at the headings inside it" in the
+    `lode-pe38` Update above no longer holds: every `##` section of this file over
+    `MAX_UNIT_BYTES` is one entry, with a heading inside it or without. The rule is in the
+    `lode-tb0j` Update on the `lode-t6o1` entry. No section of this file is over the limit today.
 
 - **The marker gate does not exempt top-level entry heads; the over-match is accepted (`lode-hp12`,
   2026-11-19, maintainer).** `lode-llxw` ruled that a new correcting entry is not a marker and its
@@ -6966,6 +6992,36 @@ taken with no cutoff; not run with an actual `--no-cooldown` pin.
     without the exemption it went to 2.2.1 (2024-02-18). The other shapes (a package locked at
     two versions of which one is young, an old release that gained a file inside the window)
     follow from the same rule and were not run.
+  - **Update (lode-amyi, 2026-11-23, maintainer):** decided, so the "open in `lode-amyi`" above no
+    longer holds. Ruling, option (b), the refuse form: after the cooled-down pass,
+    `scripts/update-deps.sh` compares each package it exempted (pin younger than the cutoff, given
+    `--exclude-newer-package`) against its pre-run locked version. If any exempted package's
+    version changed, the script exits non-zero naming each such package with old -> new, unless an
+    explicit `--allow-exempt-move` flag is passed. Rationale: after the `lode-hdob` ruling an
+    exempted pin should never move in a cooled-down run, so any move means the cooldown was
+    bypassed for that package; a warning that scrolls by is too weak for a supply-chain rule.
+    Built: `dep_exempt_moves` in `scripts/dep-churn-lib.sh`, called from `update-deps.sh` right
+    after the version diff is printed and before anything is installed or gated; the refusal
+    restores the lock itself. Stated in `configuration.md`.
+
+    **What the ruling does not state is the builder's and the reviewer's reading, not a second
+    maintainer statement.** `--dry-run` is refused too (exit 1), so a dry run does not exit 0 on
+    a run the real mode refuses. An exempted package that leaves the lock is not a move. With
+    `--allow-exempt-move` the script names the moved pins on stderr and carries on. The check
+    compares versions only, so it refuses more than the rationale's "the cooldown was bypassed"
+    covers: a move to a release older than the global cutoff (for example a pin moved down by a
+    new cap in `pyproject.toml`) is refused as well, and the message says the release taken can
+    be one inside the window, not that it is.
+
+    Probes at review (uv 0.11.7, real PyPI, 2026-11-23; the tests use a stub `uv`).
+    - The traced case above: a throwaway project with urllib3 locked at 1.26.20 and the script's
+      `COOLDOWN` set to `900 days` (a cutoff of 2024-06-06). `--dry-run` printed
+      `urllib3 1.26.20 -> 2.2.2`, refused with exit 1 and left the lock as it was;
+      `--dry-run --allow-exempt-move` named the pin and exited 0.
+    - A copy of this repo's `pyproject.toml` and `uv.lock`, 14 pins exempted: `--dry-run` and
+      `--dry-run --package typer` changed no pin and were not refused.
+    - Not run against a real `uv`: a refusal outside `--dry-run`, a move to a release older than
+      the cutoff, and the two-version and late-file shapes named above.
 
 ## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 

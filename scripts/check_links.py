@@ -134,9 +134,14 @@ BARE_CITATION_EXCLUDE_DIRS = ("docs", ".claude")
 
 # A markdown inline link: `[text](target)`, never an image (`![...]`).
 _LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
-# Inline code spans -- stripped before link scanning so a *literal* markdown
-# example inside backticks (docs/editing.md has several: `` `[text](url)` ``)
-# is never mistaken for a real link.
+# Inline code spans -- stripped before link and anchor-tag scanning so a
+# *literal* markdown example inside backticks (docs/editing.md has several:
+# `` `[text](url)` ``) is never mistaken for a real link or anchor. It pairs
+# single backticks left to right on ONE line, which is narrower than a real
+# code span on both sides: the text of a double-backtick span is not
+# stripped, and whatever sits between two backticks that do not delimit one
+# span (an escaped backtick, the close of a span opened on the line above and
+# the open of one closed on the line below) is.
 _INLINE_CODE_RE = re.compile(r"`[^`]*`")
 _LINK_TEXT_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _ATX_HEADING_RE = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
@@ -276,6 +281,24 @@ def _tracked_other_files(root: Path, tracked: list[Path]) -> list[Path]:
     )
 
 
+def _numbered_lines(text: str) -> Iterator[tuple[int, str]]:
+    """``(line_number, line)`` for every line of ``text``, numbered from 1 --
+    the single home of where a line ends in this gate: at ``"\\n"`` and
+    nowhere else. Every file the gate reads comes through ``read_text``, which
+    has already turned ``\\r\\n`` and a bare ``\\r`` into ``"\\n"``.
+
+    Never ``str.splitlines()``: it also breaks at a form feed, U+2028 and six
+    more characters (``\\x0b``, ``\\x1c``-``\\x1e``, ``\\x85``, U+2029), so text
+    after one would be a line of its own here -- a heading, a fence marker --
+    while ``docs_slug.anchor_slugs``, which must return the same anchor set,
+    splits on ``"\\n"`` and sees none.
+    """
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()  # a final "\n" ends the last line, it does not start another
+    return enumerate(lines, start=1)
+
+
 def _bare_doc_anchor_refs(text: str, *, skip_fences: bool) -> list[tuple[int, str]]:
     """``(line_number, target)`` for every bare ``docs/<path>.md#<anchor>``
     text reference in a tracked file -- no markdown link brackets required.
@@ -287,7 +310,7 @@ def _bare_doc_anchor_refs(text: str, *, skip_fences: bool) -> list[tuple[int, st
     ``tests/test_check_links.py`` for why applying it there would silently
     under-check.
     """
-    lines = _content_lines(text) if skip_fences else enumerate(text.splitlines(), 1)
+    lines = _content_lines(text) if skip_fences else _numbered_lines(text)
     refs = []
     for line_no, line in lines:
         for m in _DOC_ANCHOR_REF_RE.finditer(line):
@@ -351,7 +374,7 @@ def _content_lines(text: str) -> Iterator[tuple[int, str]]:
     ``fence_parsing`` reports there too.
     """
     in_fence = False
-    for line_no, line in enumerate(text.splitlines(), start=1):
+    for line_no, line in _numbered_lines(text):
         if _FENCE_RE.match(line):
             in_fence = not in_fence
             continue
@@ -393,8 +416,15 @@ def _slugs_for_file(path: Path, text_cache: dict[Path, str]) -> set[str]:
     (including GitHub's disambiguating ``-1``, ``-2``, ... suffixes for
     repeated headings) plus every literal id from an explicit
     ``<a id="...">``/``<a name="...">`` anchor tag outside a fenced code
-    block, matched one line at a time (as ``docs_slug.anchor_slugs`` does), so
-    a tag split across lines offers no anchor.
+    block and outside an inline code span, matched one line at a time (as
+    ``docs_slug.anchor_slugs`` does), so a tag split across lines offers no
+    anchor.
+
+    An inline code span here is exactly what ``_INLINE_CODE_RE`` strips, so
+    its limits are this function's: a tag in a double-backtick span still
+    counts as an anchor, and a real tag between two backticks that do not
+    delimit one span is lost. Indented code blocks are not tracked at all, so
+    a tag in one still counts.
 
     Reads through ``text_cache`` (lode-6e9c): a link *target* is almost
     always some ``docs/*.md`` page the bracketed walk already read as a
@@ -411,7 +441,7 @@ def _slugs_for_file(path: Path, text_cache: dict[Path, str]) -> set[str]:
         seen_counts[base] = count + 1
         slugs.add(slug)
     for _, line in _content_lines(text):
-        slugs.update(_HTML_ANCHOR_RE.findall(line))
+        slugs.update(_HTML_ANCHOR_RE.findall(_INLINE_CODE_RE.sub("", line)))
     return slugs
 
 
