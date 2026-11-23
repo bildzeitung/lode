@@ -364,6 +364,8 @@ def test_missing_image_targets_are_found(tmp_path: Path) -> None:
         "![protocol-relative](//cdn.example/x.png)\n"
         "![upper](HTTPS://x.y/z.png)\n"
         "![data](data:image/png;base64,AAAA)\n"
+        "![a scheme to the gate's rule](gone:1.png)\n"
+        "![the same name as a path](./gone:1.png)\n"
         "Inline: `![example](nope.png)` is documentation\n"
         "```markdown\n"
         "![example](nope.png)\n"
@@ -371,7 +373,7 @@ def test_missing_image_targets_are_found(tmp_path: Path) -> None:
     )
     assert build_docs_site._missing_image_targets(
         text, tmp_path / "how-to" / "page.md"
-    ) == ["../assets/gone.png", "assets/here.png"]
+    ) == ["../assets/gone.png", "assets/here.png", "./gone:1.png"]
 
 
 def test_build_refuses_a_page_with_a_missing_image(tmp_path: Path) -> None:
