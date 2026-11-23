@@ -41,19 +41,9 @@ one.
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
-from pathlib import Path
 
 import pytest
-
-#: Anchored on ``__file__``, never ``Path.cwd()`` -- same reason ``conftest.py``'s
-#: ``_CHECKOUT_ROOT`` is, and the same convention as ``tests/test_validate_mermaid_gate.py`` and
-#: ``tests/test_code_concurrency_cap.py``. A cwd-relative node id here makes the nested run exit 4
-#: ("file or directory not found") for a plain ``pytest`` invoked from a subdirectory, and the
-#: failure then reads as "the scrub is broken" -- a false red of exactly the kind this ticket
-#: exists to eliminate.
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from _nested_pytest import run_nested_pytest
 
 #: One of the six tests lode-kq4v found reddened by an ambient FORCE_COLOR -- any single one
 #: proves the mechanism (they fail and pass together, per lode-kq4v's own repro); picked for being
@@ -106,28 +96,8 @@ def test_canary_passes_with_force_color_set_in_ambient_env() -> None:
     # landing-gate pass buys nothing over one, and each canary can only be reddened by its own
     # pollutant, so the assertion message still attributes a red to the right pin.
     env["COLUMNS"] = _POLLUTED_COLUMNS
-    # -p no:cacheprovider keeps the nested run off .pytest_cache state shared with the outer run;
-    # -p no:xdist keeps it single-process -- a direct, minimal repro of what lode-kq4v observed,
-    # with nothing about xdist's worker fan-out in the way.
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-p",
-            "no:cacheprovider",
-            "-p",
-            "no:xdist",
-            "-q",
-            _CANARY_TEST,
-            _WIDTH_CANARY_TEST,
-        ],
-        env=env,
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=_NESTED_TIMEOUT_S,
-        check=False,  # a red nested run is this test's own assertion, not an exception
+    result = run_nested_pytest(
+        _CANARY_TEST, _WIDTH_CANARY_TEST, env=env, timeout_s=_NESTED_TIMEOUT_S
     )
     assert result.returncode == 0, (
         "canary test failed under FORCE_COLOR=3 despite tests/conftest.py's scrub "

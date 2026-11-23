@@ -97,21 +97,13 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pytest
+from _nested_pytest import run_nested_pytest
 from conftest import _DISABLE_JOBS_CLOCK_ANCHOR_RESET_ENV_VAR
 
 from lode import jobs
-
-#: Anchored on ``__file__``, never ``Path.cwd()`` -- same convention as
-#: ``tests/test_conftest_color_scrub.py`` and ``tests/conftest.py``'s own ``_CHECKOUT_ROOT``. A
-#: cwd-relative node id makes the nested run exit 4 ("file or directory not found") for a plain
-#: ``pytest`` invoked from a subdirectory, and that reads as "the fixture is broken" -- a false
-#: red of exactly the kind lode-x10m exists to eliminate.
-REPO_ROOT = Path(__file__).resolve().parent.parent
 
 #: Far enough in the future that no plausible wall-clock drift during a test run could explain a
 #: victim reading it -- distinguishing "the poison survived" from "the machine is slow".
@@ -159,32 +151,15 @@ def _run_synthetic_repro(*, fixture_disabled: bool) -> subprocess.CompletedProce
         env[_DISABLE_JOBS_CLOCK_ANCHOR_RESET_ENV_VAR] = "1"
     else:
         env.pop(_DISABLE_JOBS_CLOCK_ANCHOR_RESET_ENV_VAR, None)
-    return subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            # Keep the nested run off .pytest_cache state shared with the outer run, and
-            # single-process so the two node ids stay in the order given.
-            "-p",
-            "no:cacheprovider",
-            "-p",
-            "no:xdist",
-            # pytest-randomly is not currently installed, and pytest accepts ``-p no:`` for an
-            # absent plugin. Named anyway because this test's subject IS an ordering effect:
-            # were that plugin ever added, it would shuffle these two node ids and make this
-            # test intermittent -- reintroducing, in the pin itself, the flake it guards against.
-            "-p",
-            "no:randomly",
-            "-q",
-            *_SYNTHETIC_REPRO,
-        ],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=_NESTED_TIMEOUT_S,
-        check=False,  # a red nested run is this test's own assertion, not an exception
+    # pytest-randomly is not currently installed, and pytest accepts ``-p no:`` for an
+    # absent plugin. Named anyway because this test's subject IS an ordering effect:
+    # were that plugin ever added, it would shuffle these two node ids and make this
+    # test intermittent -- reintroducing, in the pin itself, the flake it guards against.
+    return run_nested_pytest(
+        *_SYNTHETIC_REPRO,
         env=env,
+        timeout_s=_NESTED_TIMEOUT_S,
+        extra_args=("-p", "no:randomly"),
     )
 
 
