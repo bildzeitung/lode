@@ -121,8 +121,10 @@ _LINK_RE = re.compile(
     r"(?<!!)\[([^\]]*)\]\(\s*(?:<([^<>]*)>(?=[\s)])|([^\s)]+))(?:\s[^)]*)?\)"
 )
 # What scripts/check_links.py's _SCHEME_RE and _is_external treat as external:
-# a URI scheme in any letter case, or a protocol-relative `//`.
-# tests/test_build_docs_site.py holds the pattern equal to the gate's.
+# a URI scheme in any letter case, or a protocol-relative `//`. A relative path
+# whose first segment holds a colon (`a.md:12`) is a scheme to both; `./a.md:12`
+# is the spelling both read as a path.
+# tests/test_build_docs_site.py holds the pattern and the rule to the gate's.
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
 
 
