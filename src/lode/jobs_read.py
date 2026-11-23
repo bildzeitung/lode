@@ -18,7 +18,11 @@ import sqlite3
 from collections.abc import Sequence
 from typing import NamedTuple
 
-from lode.jobs import STANDING_REFUSAL_SQL, in_force_enrich_job_id_sql
+from lode.jobs import (
+    LIVE_JOB_STATUSES_SQL,
+    STANDING_REFUSAL_SQL,
+    in_force_enrich_job_id_sql,
+)
 from lode.no_egress_scope import NoEgressScopeRule, is_no_egress_scoped
 
 
@@ -42,7 +46,7 @@ def dead_letter_jobs(
 def refusal_dead_jobs(
     conn: sqlite3.Connection,
     refusal_params: tuple[str, str | None, str | None] | None,
-    no_egress_scopes: Sequence[NoEgressScopeRule] = (),
+    no_egress_scopes: Sequence[NoEgressScopeRule],
 ) -> dict[int, str | None]:
     """``{job_id: refusal_category}`` for every refusal-dead enrich job that still stands.
 
@@ -54,12 +58,14 @@ def refusal_dead_jobs(
     - :data:`lode.jobs.STANDING_REFUSAL_SQL` matches ``refusal_params`` (prompt
       version, enrichment model, provider -- the key reconcile binds); and
     - for a note, the row targets the note's current head and no later enrich
-      job for that head is live or ``done`` (a refusal re-opened under another
-      model matches the key again once the model is set back, but the later job
-      has retried it);
+      job for that head is live, or ``done`` with a ``prompt_ver`` (a refusal
+      re-opened under another model matches the key again once the model is set
+      back, but the later job has retried it; a job that skipped its target,
+      gated out by ``no_egress`` say, is ``done`` with ``prompt_ver`` NULL,
+      which reconcile does not count as enriched);
     - for an external, the row is the external's in-force enrich job
-      (:func:`lode.jobs.in_force_enrich_job_id_sql`, the one reconcile judges).
-
+      (:func:`lode.jobs.in_force_enrich_job_id_sql`, the one reconcile judges);
+      and
     - the target is one reconcile's enrich-gap step looks at at all (lode-2fyr):
       a note head that is neither a delete nor purged, on a note that is not
       ``no_egress``; an external whose head snapshot is not a tombstone, whose
@@ -68,8 +74,10 @@ def refusal_dead_jobs(
       remedies could reach it; it falls to the ordinary dead-letter hint,
       whose "already moot" caveat names these cases.
 
-    ``refusal_params=None`` (no resolvable settings) skips only the key
-    comparison; the head tests need no settings and still apply.
+    ``refusal_params=None`` (no resolvable settings) skips the key comparison,
+    and an empty ``no_egress_scopes`` skips the scope test, so without
+    settings a scope-denied external's refusal stays listed; the tests on the
+    rows themselves need no settings and still apply.
 
     The category is None when the provider supplied none.
     """
@@ -77,9 +85,7 @@ def refusal_dead_jobs(
     # The note arm drives from versions by primary key (notes has no index on
     # head_version_id). The s.external_id guard keeps a note-targeted row out of
     # the in-force subquery, which would otherwise scan all of jobs to find
-    # nothing. A later job counts as a retry only if live or done with a
-    # prompt_ver: a gated-out job is done with prompt_ver NULL, which reconcile
-    # does not count as enriched.
+    # nothing.
     rows = conn.execute(
         f"""
         SELECT j.id, j.refusal_category, s.external_id, e.source_type
@@ -106,16 +112,16 @@ def refusal_dead_jobs(
                     AND j2.target_version = j.target_version
                     AND j2.id > j.id
                     AND (
-                      j2.status IN ('pending', 'running', 'failed')
+                      j2.status IN ({LIVE_JOB_STATUSES_SQL})
                       OR (j2.status = 'done' AND j2.prompt_ver IS NOT NULL)
                     )
               )
             )
             OR (
               s.external_id IS NOT NULL
-              AND j.id = {in_force_enrich_job_id_sql("s.external_id")}
               AND e.no_egress = 0
               AND hs.status != 'tombstone'
+              AND j.id = {in_force_enrich_job_id_sql("s.external_id")}
             )
           )
         """,

@@ -695,9 +695,10 @@ def status(db: _DbOption = None) -> None:
             "[warn]Action needed:[/warn] some dead-lettered jobs (embed/enrich) "
             "are usually self-healing -- the next reconciliation scan should "
             "re-enqueue them on its own, unless the job is already moot: its "
-            "target note has since been tombstoned, purged, superseded, or "
-            "(enrich only) marked no_egress, or the work already succeeded "
-            "under a later job (a dead row is a permanent record and is not "
+            "target note or page has since been tombstoned, purged, superseded, "
+            "or (enrich only) marked no_egress or covered by a no_egress_scopes "
+            "rule, or the work already succeeded under a later job (a dead row "
+            "is a permanent record and is not "
             "cleared once it heals). Run 'lode work' to drain them now, or "
             "'lode reembed'/'lode reenrich' to force it.",
             highlight=False,

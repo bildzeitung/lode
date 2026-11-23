@@ -7706,8 +7706,9 @@ def test_status_lists_an_external_refusal_only_while_it_is_the_in_force_job(
 def test_status_drops_a_note_refusal_reconcile_never_retries(
     tmp_path: Path, warm_model_cache: None, excluded_by: str
 ) -> None:
-    # lode-2fyr: reconcile skips a no_egress or purged head outright, so the
-    # refusal remedies cannot retry it and the refusal line must not print.
+    # lode-2fyr: reconcile skips a no_egress, purged or deleted head outright,
+    # so the refusal remedies cannot retry it and the refusal line must not
+    # print; the row falls to the self-healing hint and its "already moot" caveat.
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -7731,6 +7732,7 @@ def test_status_drops_a_note_refusal_reconcile_never_retries(
     out = " ".join(result.stdout.split())
     assert "not retried" not in out
     assert "the model refused to enrich" not in out
+    assert "self-healing" in out
 
 
 def test_status_keeps_a_note_refusal_after_a_gated_out_later_job(
@@ -7751,22 +7753,23 @@ def test_status_keeps_a_note_refusal_after_a_gated_out_later_job(
     finally:
         conn.close()
     result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
     out = " ".join(result.stdout.split())
     assert "refused by the model (category: cyber); not retried" in out
 
 
-@pytest.mark.parametrize("excluded_by", ["tombstone", "no_egress", "scope"])
-def test_status_drops_an_external_refusal_reconcile_never_retries(
+@pytest.mark.parametrize("excluded_by", ["tombstone", "no_egress", "scope", None])
+def test_status_lists_an_external_refusal_only_if_reconcile_looks_at_it(
     tmp_path: Path,
     warm_model_cache: None,
     monkeypatch: pytest.MonkeyPatch,
-    excluded_by: str,
+    excluded_by: str | None,
 ) -> None:
-    settings = Settings()
-    if excluded_by == "scope":
-        settings = Settings(
-            no_egress_scopes=[{"source_type": "web", "match": "example.com"}]
-        )
+    # Every case carries a scope rule; only "scope" names the seeded host. The
+    # None case is the control: the same seed stays listed when nothing
+    # excludes it.
+    scoped_host = "example.com" if excluded_by == "scope" else "other.example"
+    settings = Settings(no_egress_scopes=[{"source_type": "web", "match": scoped_host}])
     monkeypatch.setattr(cli, "_resolve_settings_best_effort", lambda: settings)
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
@@ -7784,8 +7787,10 @@ def test_status_drops_an_external_refusal_reconcile_never_retries(
     result = runner.invoke(app, ["status", "--db", str(db_path)])
     assert result.exit_code == 0
     out = " ".join(result.stdout.split())
-    assert "not retried" not in out
-    assert "the model refused to enrich" not in out
+    listed = excluded_by is None
+    assert ("refused by the model (category: cyber); not retried" in out) is listed
+    assert ("the model refused to enrich" in out) is listed
+    assert ("self-healing" in out) is not listed
 
 
 @pytest.mark.parametrize(
