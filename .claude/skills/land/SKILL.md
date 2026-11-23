@@ -781,24 +781,25 @@ edges**, restricted to `$ACCEPTED`:
     [docs/agents-workflow.md](../../../docs/agents-workflow.md#stacked-land-branches-lode-02v)) or the
     hold note explains why it's still waiting.
 
-**Marker-adding branches merge first (lode-g78l; maintainer ruling `lode-w7gp`, option (c):
-`docs/decisions.md`, search `lode-w7gp`).** Whenever the sort above has more than one id free to
-take next, I take a marker-adding one first; ties keep the existing order, and a stacked dependent
-still never moves ahead of its base. An id is marker-adding when
+**Marker-adding branches merge first (lode-g78l; maintainer ruling, option (c): `docs/decisions.md`,
+search `lode-w7gp`).** Whenever the sort above has more than one id free to take next, I take a
+marker-adding one first; ties keep the existing order, and a stacked dependent still never moves
+ahead of its base. An id is marker-adding when
 `git diff origin/trunk...origin/land/<id> -- docs/decisions.md` has an added line **containing**
 `**Update (` (`grep -E '^\+.*\*\*Update \('` over that diff prints one). Containing, not starting
-with: most markers are `- **Update (` sub-bullets, and some sit mid-line. For an id stacked on a
-base `B` in `$ACCEPTED`, I diff against `origin/land/<B>` instead of `origin/trunk`, so `B`'s
-marker is not counted as the dependent's own.
+with: most markers are `- **Update (` sub-bullets, and some sit mid-line. The diff base is the one
+[2c](#2c-run-the-semantic-gate) gave land-review: `origin/land/<base-id>` in place of
+`origin/trunk` for an id stacked on exactly one live base, so the base's marker is not counted as
+the dependent's own.
 
 A marker merged before a same-batch EOF append stays attached to its entry under `merge=union`; in
-the reverse order it detaches. **Accepted limit:** the rule prevents same-batch detachments only,
-and not all of those. Two marker-adding branches keep their existing order, so a collision between
-them (for example, one also appends at EOF) is not prevented. Neither is the case where an
-appending branch merges ahead of the base of a marker-adding dependent: a base gets no priority
-from its dependent. Cross-batch detachments, where the append is already on `trunk`, are not
-prevented either. All of these still land and are reported by Section 3's lode-l8b7 by-hand check.
-The kick-back alternative (option (b)) is revisited only on an observed cross-batch incident.
+the reverse order it detaches. **Accepted limit:** the rule acts within one batch only, and three
+detachments are not prevented. Two marker-adding branches keep their existing order, so a
+collision between them (for example, one also appends at EOF) can detach a marker. So can an
+appending branch that merges ahead of the base of a marker-adding dependent: a base gets no
+priority from its dependent. So can any cross-batch case, where the append is already on `trunk`.
+Each still lands and is reported by Section 3's lode-l8b7 by-hand check. The kick-back alternative
+(option (b)) is revisited only on an observed cross-batch incident.
 
 Once ordered (and any orphaned dependents pulled out), `$ACCEPTED` below refers to this **ordered,
 possibly-reduced** set, not the raw land-review output.
