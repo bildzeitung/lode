@@ -3905,6 +3905,67 @@ entries below from being rewritten to chase the current tree.)
     the loop, its cost in time per call on the write and read paths was not measured, and no cap was
     chosen, so the reconnect ships and the capped `Session` is filed as lode-3gr3.
 
+  - **Update (lode-3gr3, 2026-11-23) — the capped `Session` measured with the prune in the loop: it
+    ends about 7 MB below the reconnect, is not flat either, and costs no time; that is too little
+    to add a second mechanism for, so the reconnect stays.**
+    `scripts/measure_vectorstore_session.py` (kept in the repo; offline, no provider call) drives
+    `lode.vectorstore.VectorStore` itself on lancedb 0.41. Per call: one `replace_vectors` of 5 rows
+    of 768 floats with `target_version` cycling over 50 values, the prune every 200 calls with the
+    shipped 60 s window, and, in the runs with reads, one `search` and one `vectors_for`, each on a
+    new `VectorStore` as the shipped read callers build one. Three writers: the shipped one
+    (default `Session`, Table dropped after each prune); one that keeps its Table across the prune
+    on the default `Session` (what lode-ju9d replaced); and one that keeps its Table while every
+    connection in the process, the reads' included, gets its own `Session` with both caches capped
+    (the lode-3gr3 proposal). The runs are paced at 15 calls/s like the ones above, which puts call
+    900 at 61 to 68 s. A prune removes no version younger than the window (checked through
+    `VectorStore`: 83 versions after a prune 40 calls in, 4 after a prune that followed a 62 s
+    wait), so the prunes before about call 800 removed none and the 11 from call 1000 on had
+    versions to remove. RSS in MB at calls 300 / 900 / 1500 / 2100 / 3000:
+    - with reads, shipped reconnect, two runs: 277 / 296 / 304 / 309 / 313 and 265 / 285 / 294 /
+      301 / 305.
+    - with reads, capped at 8 MB, two runs: 263 / 290 / 296 / 301 / 304 and 263 / 281 / 287 / 293 /
+      297.
+    - with reads, capped at 64 MB: 277 / 336 / 351 / 358 / 366.
+    - with reads, Table held on the default `Session`: 269 / 333 / 390 / 444 / 516.
+    - writes only, shipped reconnect: 228 / 243 / 249 / 254 / 259 (the Update above measured 227 /
+      253 / 260 at calls 300 / 1500 / 3000 the same way).
+    - writes only, capped at 8 MB: 220 / 232 / 239 / 243 / 247.
+    - writes only, Table held on the default `Session`: 234 / 290 / 347 / 399 / 478.
+    Per-call time comes from four further runs with reads, made one at a time, alternating the two
+    modes, and not paced (about 41 ms per call, so there only the last 8 prunes had versions to
+    remove). Write, median (p95) / mean in ms: 11.6 (13.0) / 13.3 and 11.6 (12.8) / 13.2 on the
+    reconnect, 11.9 (13.1) / 13.5 and 11.7 (12.9) / 13.3 capped at 8 MB; the mean includes the prune
+    calls. The two reads together, median (p95): 28.8 (31.2) and 28.4 (30.8) on the reconnect, 29.8
+    (32.0) and 28.7 (31.1) capped. The write straight after a prune, the one that pays for the
+    reconnect, averaged 16.1 and 13.4 ms on the reconnect and 12.7 and 12.3 ms capped: a few ms on
+    one write in 200. Those four runs ended at 309 and 305 MB (reconnect) and 299 and 302 MB
+    (capped). Timing follows machine load more than mode: the paced runs above ran three at a time
+    on a machine doing other work, and six of the nine measured about 21 ms per write and 55 ms per
+    pair of reads whatever the mode (reconnect 21.3 / 54.9, capped 21.7 / 55.9), so no timing figure
+    is taken from them.
+    So with the prune in the loop the 8 MB cap ends on average 7 MB below the reconnect with reads
+    (301 against 308 MB at call 3000 over four runs each, where the runs of one mode are spread over
+    6 to 8 MB) and 12 MB below it on writes alone (one run each). It is not flat: on writes alone it
+    grew 27 MB between calls 300 and 3000, against 11 MB in the run above without the prune (212 /
+    220 / 223), and over their last 900 calls both modes still rise 3 to 5 MB. Why the capped
+    `Session` grows more with the prune in the loop was not looked into. A 64 MB cap ends over 60
+    MB above the 8 MB one. The held default `Session` is the growth lode-ju9d fixed, and the prune
+    does not limit it. The cap costs nothing measurable per call, on the write or on reads that get
+    a capped `Session` too.
+    **Decided in the build: nothing is replaced.** The capped `Session` saves about 7 MB in 300 at
+    3000 calls and no time, the reads gain nothing from it (a new `VectorStore` per call already
+    gives each a new `Session`), and it would add a build constant and a second mechanism to hold.
+    `replace_vectors` keeps dropping its Table after the prune, the `vectorstore_optimize_interval`
+    row keeps saying the interval is also the reconnect period, and no cap constant is added. What
+    the cap would have removed and the reconnect keeps: the interval sets how much cache builds up
+    between reconnects (about 88 KB per call, the Update above), so a much larger
+    `vectorstore_optimize_interval` raises peak memory in proportion.
+    Not measured: caps below 8 MB, anything beyond 3000 calls for the capped `Session`, and any
+    machine but one. The build's first version of the script mirrored `replace_vectors` on a
+    3-column table and did not call it, ran its reads on the writer's Table, and was not paced, so
+    its prunes removed nothing in the first 60 s, more than half of each run; its figures (300 MB
+    for the reconnect and 301 to 311 MB capped at call 3000) are replaced by the ones above.
+
 - **2026-08-05 (lode-2nw5) — the `git restore --staged .beads/issues.jsonl` cluster: ONE site
   canonicalized (fixing a real symmetry gap), THREE sites kept as WONTFIX literals.** Filed while
   technically reviewing `lode-do3q` (entry above), which deliberately scoped out this second,
