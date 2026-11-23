@@ -983,5 +983,10 @@
     "file": ".claude/agents/coding.md",
     "rule": "commit-only-on-task-worktree-branch",
     "phrase": "or committing on any branch but my task's worktree branch."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "parent-child-related-do-not-gate-dispatch",
+    "phrase": "`parent-child` *groups* an epic's children without gating them (a child is dispatchable while the epic is open — by design), `discovered-from` is provenance-only, and `related` is a soft link — **none of those three block `bd ready`.**"
   }
 ]
