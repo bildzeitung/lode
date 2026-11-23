@@ -321,9 +321,8 @@ os.environ.pop("NO_COLOR", None)
 #: Drop git's repository-locating variables (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, ...) from the
 #: process environment once, so every subprocess a test starts (a script under test, a hook
 #: one-liner, a per-module runner passing no env) resolves its repository from cwd, not from the
-#: caller's. A test that needs one passes it explicitly in its own ``env=``. This is a real-checkout
-#: listing hazard too: ``tracked_paths`` reads the index on disk, not a commit hook's
-#: ``GIT_INDEX_FILE`` (lode-a50si).
+#: caller's. A test that needs one passes it explicitly in its own ``env=``. What dropping
+#: ``GIT_INDEX_FILE`` costs is in ``git_env``'s docstring (lode-a50si).
 for _name in _local_env_vars():
     os.environ.pop(_name, None)
 
