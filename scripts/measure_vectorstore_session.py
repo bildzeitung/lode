@@ -1,31 +1,69 @@
 """Measure VectorStore memory and per-call time across lancedb Session settings (lode-3gr3).
 
-Offline: writes 5 random 768-float rows per call into a temp LanceDB directory, with
-``target_version`` cycling over 50 values. No provider call is made.
+Offline, and Linux only (it reads ``VmRSS`` from ``/proc``). Drives
+``lode.vectorstore.VectorStore`` on a temp LanceDB directory. Each call is one
+``replace_vectors`` of 5 random rows at the pinned vector width, with
+``target_version`` cycling over 50 values, and, unless ``--no-reads``, one ``search``
+and one ``vectors_for``, each on a new ``VectorStore`` as the shipped read callers
+build one. No provider call is made.
 
 Modes (``--mode``):
-  reconnect  the lode-ju9d behaviour: default Session, Table dropped after each prune
-  held       default Session, Table held, prune in the loop (what lode-ju9d replaced)
-  capped     ``lancedb.Session(metadata_cache_size_bytes=--cap)``, Table held, prune in the loop
+  reconnect  ``VectorStore`` as shipped: default Session, Table dropped after each prune
+  held       default Session, Table kept across the prune (what lode-ju9d replaced)
+  capped     Table kept across the prune, and every connection in the process gets its
+             own ``lancedb.Session`` with both caches capped at ``--cap`` bytes
 
-Run: uv run --frozen python scripts/measure_vectorstore_session.py --mode capped --calls 3000
+Run: uv run --frozen python scripts/measure_vectorstore_session.py --mode capped
 """
 
 import random
 import tempfile
 import time
-from datetime import timedelta
-from typing import Annotated
+from contextlib import ExitStack
+from enum import StrEnum
+from typing import Annotated, Any
+from unittest import mock
 
 import lancedb
-import pyarrow as pa
 import typer
+
+from lode.config import Settings
+from lode.vectorstore import VectorStore
 
 app = typer.Typer(add_completion=False)
 
-DIM = 768
 ROWS = 5
 VERSIONS = 50
+
+
+class Mode(StrEnum):
+    RECONNECT = "reconnect"
+    HELD = "held"
+    CAPPED = "capped"
+
+
+class _HeldStore(VectorStore):
+    """A ``VectorStore`` that keeps the Table ``replace_vectors`` drops after its prune."""
+
+    def replace_vectors(
+        self, target_version: str, rows: list[dict[str, object]]
+    ) -> None:
+        table = self._table
+        super().replace_vectors(target_version, rows)
+        if self._table is None:
+            self._table = table
+
+
+def _capped_connect(cap: int) -> Any:
+    connect = lancedb.connect
+
+    def capped(uri: Any) -> Any:
+        session = lancedb.Session(
+            index_cache_size_bytes=cap, metadata_cache_size_bytes=cap
+        )
+        return connect(uri, session=session)
+
+    return capped
 
 
 def _rss_mb() -> float:
@@ -36,83 +74,87 @@ def _rss_mb() -> float:
     return float("nan")
 
 
-def _schema() -> pa.Schema:
-    return pa.schema(
-        [
-            pa.field("passage_id", pa.string()),
-            pa.field("target_version", pa.string()),
-            pa.field("vector", pa.list_(pa.float32(), DIM)),
-        ]
+def _summary(seconds: list[float]) -> str:
+    ordered = sorted(seconds)
+    n = len(ordered)
+    return (
+        f"median={ordered[n // 2] * 1e3:.2f} p95={ordered[int(n * 0.95)] * 1e3:.2f}"
+        f" mean={sum(ordered) / n * 1e3:.2f}"
     )
 
 
 @app.command()
 def main(
-    mode: Annotated[str, typer.Option(help="reconnect | held | capped")] = "capped",
-    calls: Annotated[int, typer.Option()] = 3000,
-    interval: Annotated[int, typer.Option(help="prune every N calls")] = 200,
-    cap: Annotated[int, typer.Option(help="metadata cache bytes (capped)")] = 8 * 2**20,
-    report_every: Annotated[int, typer.Option()] = 300,
+    mode: Annotated[Mode, typer.Option()] = Mode.CAPPED,
+    calls: Annotated[int, typer.Option(min=1)] = 3000,
+    interval: Annotated[int, typer.Option(min=1, help="prune every N calls")] = 200,
+    cap: Annotated[
+        int, typer.Option(help="index and metadata cache bytes, each (capped)")
+    ] = 8 * 2**20,
+    rate: Annotated[
+        float, typer.Option(min=0, help="calls per second; 0 runs unpaced")
+    ] = 15.0,
+    reads: Annotated[bool, typer.Option(help="run the two reads per call")] = True,
+    report_every: Annotated[int, typer.Option(min=1)] = 300,
 ) -> None:
     """Run one measurement and print RSS and per-call times."""
     rng = random.Random(0)
-    schema = _schema()
-    tmp = tempfile.mkdtemp(prefix="lode-3gr3-")
-
-    def connect():
-        if mode == "capped":
-            session = lancedb.Session(
-                index_cache_size_bytes=cap, metadata_cache_size_bytes=cap
-            )
-            return lancedb.connect(tmp, session=session)
-        return lancedb.connect(tmp)
-
-    def open_table():
-        db = connect()
-        return db.create_table("embeddings", schema=schema, exist_ok=True)
-
-    table = open_table()
-    since = 0
+    settings = Settings(vectorstore_optimize_interval=interval)
     write_t: list[float] = []
+    after_prune_t: list[float] = []
     read_t: list[float] = []
-    print(f"mode={mode} calls={calls} interval={interval} cap={cap}")
-    print(f"call 0 rss_mb={_rss_mb():.1f}")
-    for i in range(1, calls + 1):
-        tv = f"{i % VERSIONS:064x}"
-        rows = [
-            {
-                "passage_id": f"{tv}:{j}",
-                "target_version": tv,
-                "vector": [rng.random() for _ in range(DIM)],
-            }
-            for j in range(ROWS)
-        ]
-        t0 = time.perf_counter()
-        table.checkout_latest()
-        table.delete(f"target_version = '{tv}'")
-        table.add(rows)
-        since += 1
-        if since >= interval:
-            table.optimize(cleanup_older_than=timedelta(seconds=60))
-            since = 0
-            if mode == "reconnect":
-                table = open_table()
-        write_t.append(time.perf_counter() - t0)
-        t0 = time.perf_counter()
-        table.checkout_latest()
-        table.search(rows[0]["vector"]).metric("cosine").limit(5).to_list()
-        table.search().where(f"target_version = '{tv}'").limit(100).to_list()
-        read_t.append(time.perf_counter() - t0)
-        if i % report_every == 0:
-            print(f"call {i} rss_mb={_rss_mb():.1f}")
-    write_t.sort()
-    read_t.sort()
-    n = len(write_t)
-    print(
-        f"write ms median={write_t[n // 2] * 1e3:.2f} p95={write_t[int(n * 0.95)] * 1e3:.2f}"
-        f" | read(2 queries) ms median={read_t[n // 2] * 1e3:.2f}"
-        f" p95={read_t[int(n * 0.95)] * 1e3:.2f}"
-    )
+    with ExitStack() as stack:
+        tmp = stack.enter_context(tempfile.TemporaryDirectory(prefix="lode-3gr3-"))
+        if mode is Mode.CAPPED:
+            stack.enter_context(
+                mock.patch.object(lancedb, "connect", _capped_connect(cap))
+            )
+        store = (VectorStore if mode is Mode.RECONNECT else _HeldStore)(tmp, settings)
+        print(
+            f"mode={mode.value} calls={calls} interval={interval} cap={cap}"
+            f" rate={rate} reads={reads}"
+        )
+        print(f"call 0 rss_mb={_rss_mb():.1f}")
+        start = time.perf_counter()
+        for i in range(1, calls + 1):
+            began = time.perf_counter()
+            tv = f"{i % VERSIONS:064x}"
+            vectors = [
+                [rng.random() for _ in range(settings.embedding_vector_dim)]
+                for _ in range(ROWS)
+            ]
+            rows: list[dict[str, object]] = [
+                {
+                    "passage_id": f"{tv}:{j}",
+                    "target_version": tv,
+                    "vector": vector,
+                    "model": settings.embedding_model,
+                    "model_revision": None,
+                }
+                for j, vector in enumerate(vectors)
+            ]
+            t0 = time.perf_counter()
+            store.replace_vectors(tv, rows)
+            took = time.perf_counter() - t0
+            write_t.append(took)
+            # The call after a prune is the one that pays the reconnect.
+            if i % interval == 1 and i > 1:
+                after_prune_t.append(took)
+            if reads:
+                t0 = time.perf_counter()
+                VectorStore(tmp, settings).search(vectors[0], k=5)
+                VectorStore(tmp, settings).vectors_for(tv)
+                read_t.append(time.perf_counter() - t0)
+            if i % report_every == 0:
+                elapsed = time.perf_counter() - start
+                print(f"call {i} rss_mb={_rss_mb():.1f} elapsed_s={elapsed:.0f}")
+            if rate:
+                time.sleep(max(0.0, 1 / rate - (time.perf_counter() - began)))
+    print(f"write ms {_summary(write_t)}")
+    if after_prune_t:
+        print(f"write ms on the call after each prune {_summary(after_prune_t)}")
+    if read_t:
+        print(f"read (2 queries) ms {_summary(read_t)}")
 
 
 if __name__ == "__main__":
