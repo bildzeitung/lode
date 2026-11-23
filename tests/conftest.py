@@ -1869,6 +1869,14 @@ def fence_scan(
       same false-assurance shape this generator exists to delete: a gate
       would report "clean" for a block it never parsed.
 
+    A line that starts with a backtick run and has another backtick later on
+    it opens nothing (CommonMark: a backtick fence's info string may not hold
+    a backtick; the rule lives in
+    :func:`lode.fence_parsing.match_fence_marker`), so a prose line that begins
+    with a three-backtick inline code span is yielded as an ordinary line
+    outside every fence. A tilde opener is not restricted. Latent as well: no
+    tracked markdown file has such a line (lode-423g).
+
     **Only ONE fence is ever tracked open at a time (lode-kjei)** -- this is
     what closes the asymmetry that survived lode-xqc7's constant-sharing: the
     old ``bash_fence_blocks`` opened ``current`` (its own tracking state) only

@@ -1,11 +1,13 @@
 """ONE importable CommonMark fence-parsing primitive (``lode-ee7b``).
 
-Hosts the three CommonMark rules every fence-aware scanner in this repo needs
+Hosts the four CommonMark rules every fence-aware scanner in this repo needs
 to agree on: a fence may be indented, is opened by a run of three-or-more
-backticks or tildes, and is closed only by a run of the SAME marker character
-that is AT LEAST AS LONG as the opener (so a ```` ``` ```` line inside a
-four-backtick block, or a ``~~~`` line inside a ```` ``` ````-opened block, is
-content, not a close).
+backticks or tildes, is NOT opened by a backtick run with another backtick
+later on the line (a backtick fence's info string may not hold one, so a prose
+line starting with a three-backtick inline code span opens nothing), and is
+closed only by a run of the SAME marker character that is AT LEAST AS LONG as
+the opener (so a ```` ``` ```` line inside a four-backtick block, or a ``~~~``
+line inside a ```` ``` ````-opened block, is content, not a close).
 
 Importable from **both** ``src/`` and ``tests/`` -- this module is under
 ``src/lode/`` specifically so production code (``docs_index_chunker.py``) can
@@ -13,9 +15,9 @@ use it without tests/ needing to import from src/ or vice versa creating a
 one-way dependency tests/ already has on src/ anyway (pytest's own
 ``sys.path`` setup makes ``src/`` importable from ``tests/``).
 
-Before this module, the same three rules were independently hand-rolled
-TWICE: in ``tests/conftest.py``'s ``fence_scan`` (test-side gates) and in
-``src/lode/docs_index_chunker.py``'s former ``_fence_flags`` (the docs-index
+Before this module, the indent, opening-run and closing rules were
+independently hand-rolled TWICE: in ``tests/conftest.py``'s ``fence_scan``
+(test-side gates) and in ``src/lode/docs_index_chunker.py``'s former ``_fence_flags`` (the docs-index
 chunker). ``scripts/check_links.py`` is a third fence scanner but not a third
 copy: its ``_content_lines`` deliberately implements a DIFFERENT, simpler rule (toggles
 on ANY fence-looking line, regardless of marker character or length) and is
@@ -45,11 +47,20 @@ def match_fence_marker(stripped: str) -> tuple[str, str] | None:
     or closes a fence, else ``None``. ``marker`` is the literal run of
     backticks/tildes (e.g. ``"```"``, ``"````"``, ``"~~~"``); ``info`` is
     everything after it verbatim (an opener's info string, or a closer's
-    trailing garbage, which callers ignore)."""
+    trailing garbage, which callers ignore).
+
+    CommonMark: a backtick fence's info string may not contain a backtick, so
+    a line starting with a three-backtick inline code span is prose, not a
+    fence. Tilde fences have no such restriction. That makes this an opener
+    test: callers consult it only while no fence is open, and
+    :func:`closes_fence` alone decides whether a line closes one."""
     m = _FENCE_MARKER_RE.match(stripped)
     if not m:
         return None
-    return m.group(1), m.group(2)
+    marker, info = m.groups()
+    if marker[0] == "`" and "`" in info:
+        return None
+    return marker, info
 
 
 def closes_fence(stripped: str, fence: str) -> bool:

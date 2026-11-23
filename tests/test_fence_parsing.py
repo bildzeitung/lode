@@ -58,3 +58,15 @@ def test_fence_flags_closer_with_trailing_content_is_not_a_close() -> None:
 def test_fence_flags_unterminated_fence_stays_open() -> None:
     lines = ["```", "still inside"]
     assert fence_flags(lines) == [False, True]
+
+
+def test_match_fence_marker_backtick_info_with_backtick_is_prose() -> None:
+    assert match_fence_marker("```inline``` code starts this line.") is None
+    assert match_fence_marker("````bash `x`") is None
+    # tilde fences may carry a backtick in the info string
+    assert match_fence_marker("~~~a`b") == ("~~~", "a`b")
+
+
+def test_fence_flags_prose_line_with_triple_backtick_span_is_not_a_fence() -> None:
+    lines = ["```inline``` code", "prose", "```bash", "rm x", "```", "more"]
+    assert fence_flags(lines) == [False, False, False, True, True, False]
