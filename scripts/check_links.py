@@ -343,9 +343,12 @@ def _content_lines(text: str) -> Iterator[tuple[int, str]]:
     doesn't today), which is exactly the kind of no-behaviour-change bar this
     ticket held everywhere else.
 
-    The one rule shared with ``fence_parsing`` is the OPENER rule: a backtick
-    run followed by another backtick on the line (an inline code span written
-    with three backticks) is prose, not a fence (lode-7jwe).
+    One rule here is the same as ``fence_parsing``'s, as a local copy in
+    ``_FENCE_RE`` and not an import: a backtick run with another backtick later
+    on the line (an inline code span written with three backticks) is not a
+    fence marker (lode-7jwe). ``_FENCE_RE`` decides opens and closes alike, so
+    such a line inside an open fence is content and does not close it -- what
+    ``fence_parsing`` reports there too.
     """
     in_fence = False
     for line_no, line in enumerate(text.splitlines(), start=1):

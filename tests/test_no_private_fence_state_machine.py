@@ -236,7 +236,7 @@ def test_gate_ignores_check_links_regex_based_fence_toggle() -> None:
     EXEMPT: the detection rule itself is what keeps it clean, not a carve-out."""
     src = r"""
 import re
-_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+_FENCE_RE = re.compile(r"^\s*(`{3,}(?!.*`)|~{3,})")
 
 def content_lines(text):
     in_fence = False
