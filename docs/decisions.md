@@ -6960,7 +6960,7 @@ options were (a) leave it as built, (b) kick a branch whose marker the merge det
 `needs-rebase`, (c) order marker-adding branches ahead of the rest of the batch, and (d) report and
 also write the pointer Update text as a ready patch.
 
-**Decided (`lode-w7gp`, 2026-11-21 and 2026-11-22, maintainer):** option (c), and option (b), the
+**Decided (`lode-w7gp`, 2026-11-21 and 2026-11-22, maintainer):** option (c). Option (b), the
 kick-back, is revisited only on an observed cross-batch incident. The maintainer's two statements
 in full: on 2026-11-21, "w7gp - go with (c)"; on 2026-11-22, "endorse the revisit-(b) line." The
 line endorsed is in the ticket's note on the first statement, written by the `/code` session that
