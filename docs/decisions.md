@@ -4993,6 +4993,11 @@ entries below from being rewritten to chase the current tree.)
       append is on the receiving side: at `/land`, a branch's marker merged into a trunk that
       already has the append; in a rebase pickup, trunk's marker merged into a branch that holds
       the append. With the sides swapped the marker stays on its entry.
+  - **Update (lode-w7gp, 2026-11-21, maintainer):** a second mitigation is ruled for the third
+    failure mode: `/land` is to merge a marker-adding branch ahead of the rest of its batch (build:
+    `lode-g78l`). As ruled it covers same-batch collisions only, and review traced same-batch
+    shapes it also misses. The by-hand step stays. Ruling, limit and trace: the `##` entry
+    "(decided, lode-w7gp)" below.
 
 - **Recording the rejected alternatives, the non-impact and the ours-side-only caveat for the union
   merge driver (`lode-fp9l`, 2026-08-09).** Follow-up to the entry directly above (`lode-4jtc.1`),
@@ -6943,3 +6948,55 @@ rules stay scoped as built, with no widening to `ESCALATION:` notes, `/epic-audi
 decision filings, records beyond this file, or claims with no lode code path. Reason: no incident has
 been observed through any of them, and epic `lode-w18a` is cutting these same instruction files.
 Revisit only on an observed incident. No build ticket.
+
+## `/land` orders a marker-adding branch ahead of the rest of its batch; cross-batch detachment still ships (decided, lode-w7gp)
+
+Raised 2026-11-21 at `lode-l8b7`'s technical review. `lode-l8b7` adds the by-hand check from the
+`lode-tikr` ruling to `/land`'s batch merge: after the merge, confirm each Update marker still
+follows the entry it corrects, and report one that does not. As built, `/land` only reports, so a
+detached marker lands every time it is found and, after the push, can be repaired only by a pointer
+Update (the `lode-ucpu` case). The question was whether `/land` should do more than report. The
+options were (a) leave it as built, (b) kick a branch whose marker the merge detached back
+`needs-rebase`, (c) order marker-adding branches ahead of the rest of the batch, and (d) report and
+also write the pointer Update text as a ready patch.
+
+**Decided (`lode-w7gp`, 2026-11-21 and 2026-11-22, maintainer):** option (c). Option (b), the
+kick-back, is revisited only on an observed cross-batch incident. The maintainer's two statements
+in full: on 2026-11-21, "w7gp - go with (c)"; on 2026-11-22, "endorse the revisit-(b) line." The
+line endorsed is in the ticket's note on the first statement, written by the `/code` session that
+took it: "(b) kick-back is not built; revisit only on an observed cross-batch incident." Once
+`lode-g78l` lands, `/land`'s Section 3a orders any accepted branch that adds an Update marker to
+`docs/decisions.md` ahead of the other branches in the batch; until then Section 3a has no such
+rule. The mechanism is the one in the `lode-4jtc.1` entry's `lode-tikr` Update: union writes the
+receiving side's lines first, so a marker merged before a same-batch EOF append stays attached to
+its entry.
+
+**Accepted limit**, as the ticket stated it for option (c): same-batch collisions only. When the
+EOF append is already on `trunk` from an earlier batch (the cross-batch case), the merge still
+detaches the marker; that case still ships and is reported by the `lode-l8b7` by-hand check, which
+stays as built. Not every same-batch collision is covered either: see the trace below, which is
+not part of the ruling.
+
+**Not taken:** (a), (b) and (d). Neither statement gives reasons. The ticket description carries
+(b)'s cost and what was not checked about it.
+
+**Traced at technical review, not part of the ruling.** Scratch repo, this file `merge=union`,
+real `git merge --no-ff` in batch order; `lode-tikr`'s review had traced the first case with
+`git merge-tree`. "Last entry" means the file's last entry before the batch.
+
+- A branch with a marker on the last entry, then a branch with an EOF append: the marker stays on
+  its entry. In the other order it lands under the appended section. This is the case the ruling
+  orders.
+- As above, but the appending branch also adds a marker, on the last entry or on an older one.
+  Both branches are then marker-adding, and the ruling does not order them. If the appending
+  branch merges first, the other branch's marker on the last entry lands under the appended
+  section. A branch that corrects an entry with a new entry, plus the marker the preamble's
+  `lode-llxw` rule requires, has this shape.
+- Two branches that each add a marker on the last entry and an EOF append: in either order, the
+  second branch's marker lands under the first branch's section.
+
+The `lode-l8b7` check still reports the last two. Not ruled on: an order between two marker-adding
+branches, and how marker-first sits with Section 3a's base-before-dependent order. Both are noted
+on `lode-g78l`.
+
+Decision only; the build is `lode-g78l`, an edit to Section 3a of `.claude/skills/land/SKILL.md`.
