@@ -353,3 +353,28 @@ def test_real_decisions_md_section_with_its_own_bullets_stays_one_unit():
     # The lode-3s4d section: a probe list, then two closing paragraphs.
     unit = next(u for u in _decisions_units() if "Mechanism chosen, keeping" in u.body)
     assert unit.first_line.startswith("## A release-age cooldown")
+
+
+def test_entry_log_h3_does_not_move_the_split_level():
+    # One '###' anywhere must not push every '##' section into the unit of the
+    # entry before it (lode-kys3).
+    text = _entry_log_text() + "\n## Deep section\n\nprose\n\n### Sub\n\nmore\n"
+    firsts = [u.first_line for u in chunk_file("docs/decisions.md", text)]
+    assert "## Section" in firsts
+    assert "## Last section" in firsts
+    assert "## Deep section" in firsts
+    assert "### Sub" not in firsts
+
+
+def test_real_decisions_md_with_an_appended_h3_keeps_every_h2_section_a_unit():
+    text = (Path(__file__).resolve().parents[1] / "docs" / "decisions.md").read_text(
+        encoding="utf-8"
+    )
+    base = {u.first_line for u in chunk_file("docs/decisions.md", text)}
+    probe = chunk_file(
+        "docs/decisions.md", text + "\n## New\n\nprose\n### Sub\n\nmore\n"
+    )
+    probe_firsts = {u.first_line for u in probe}
+    assert {f for f in base if f.startswith("## ")} <= probe_firsts
+    assert all(u.line_hi - u.line_lo >= 0 for u in probe)
+    assert all(len(u.body.encode()) <= _chunker.MAX_UNIT_BYTES for u in probe)

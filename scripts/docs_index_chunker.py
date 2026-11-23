@@ -19,8 +19,8 @@ oversized unit, which is then split at its bullets.
 ``docs/decisions.md`` is also the one **entry log** (:data:`_ENTRY_LOG_STEM`):
 every branch appends its entry at EOF, so a top-level bullet can follow a ``##``
 section it has nothing to do with, and the heading split alone would put it in
-that section's unit under that section's heading (``lode-skv8``). There, the
-top-level bullets after a heading unit's own text each start a unit. See
+that section's unit under that section's heading (``lode-skv8``). There the
+split level is capped at ``##`` (``lode-kys3``), and the top-level bullets after a heading unit's own text each start a unit. See
 :func:`_split_trailing_entries`.
 
 Boundary detection is **fence-aware**: a ``## `` or ``- `` inside a fenced code
@@ -255,6 +255,10 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
         return []
     fence_flags = _fence_flags(lines)
     deepest = _deepest_heading_level(lines, fence_flags)
+    # The entry log's sections are its ``##`` headings; a deeper heading
+    # inside one must not move the split level, or every ``##`` section ends
+    # up inside the unit of the entry before it (``lode-kys3``).
+    split_level = min(deepest, 2) if Path(path).stem == _ENTRY_LOG_STEM else deepest
 
     if deepest:
 
@@ -262,7 +266,7 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
             if fence_flags[i]:
                 return False
             m = _HEADING_RE.match(lines[i])
-            return bool(m) and len(m.group(1)) == deepest
+            return bool(m) and len(m.group(1)) == split_level
     else:
         primary_boundary = _bullet_boundary(lines, fence_flags)
 
