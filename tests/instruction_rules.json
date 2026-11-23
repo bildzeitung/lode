@@ -582,7 +582,7 @@
   {
     "file": ".claude/agents/coding.md",
     "rule": "never-write-trunk",
-    "phrase": "I never write `trunk`.** No merge, no `bd close`, no push to `trunk`"
+    "phrase": "I never write `trunk`.** No merge, no `bd close`, no push to `trunk`, no `git -C <main-checkout>`, no committing the `.beads/*.jsonl` export."
   },
   {
     "file": ".claude/agents/coding.md",
@@ -592,7 +592,7 @@
   {
     "file": ".claude/agents/coding.md",
     "rule": "bd-only-tracker",
-    "phrase": "bd is the only task tracker."
+    "phrase": "bd is the only task tracker.** No TodoWrite, no markdown checklists, no `MEMORY.md`. If a piece of work will take more than ~2 minutes, it is a bd issue *before* I start coding."
   },
   {
     "file": ".claude/agents/coding.md",
@@ -652,17 +652,17 @@
   {
     "file": ".claude/agents/coding.md",
     "rule": "free-text-dispatch-files-issue",
-    "phrase": "so there is no id to show or claim yet"
+    "phrase": "so there is no id to show or claim yet and I **file the issue myself first**"
   },
   {
     "file": ".claude/agents/coding.md",
     "rule": "human-or-epic-ticket-stop",
-    "phrase": "rather than guess at the decision a `human` label exists to defer"
+    "phrase": "and wants it built, I **stop and report** — rather than guess at the decision a `human` label exists to defer"
   },
   {
     "file": ".claude/agents/coding.md",
     "rule": "claim-idempotent-backstop",
-    "phrase": "this call is an **idempotent backstop**"
+    "phrase": "this call is an **idempotent backstop** — a second `--claim` is a verified no-op, it never errors or churns state. I run it anyway: it costs nothing, and it is the **primary** claim on the **free-text path**, where `/code` handed me a *task* with no id and I filed the issue myself in step 1 — there nothing has claimed it yet, so this is the real claim. Either way, claim before I touch a file."
   },
   {
     "file": ".claude/agents/coding.md",
@@ -683,11 +683,6 @@
     "file": ".claude/agents/coding.md",
     "rule": "no-builder-worktree-lock",
     "phrase": "A builder-side `git worktree lock .` therefore **cannot succeed**"
-  },
-  {
-    "file": ".claude/agents/coding.md",
-    "rule": "design-check-before-write",
-    "phrase": "**never** `bd update --design=…` unconditionally"
   },
   {
     "file": ".claude/agents/coding.md",
@@ -737,7 +732,7 @@
   {
     "file": ".claude/agents/coding.md",
     "rule": "trace-failure-before-decide-ticket",
-    "phrase": "A ticket that asks the maintainer to decide about a failure:"
+    "phrase": "A ticket that asks the maintainer to decide about a failure:** before filing it I trace that failure in the code from the trigger to the wrong outcome, and mark any step I did not trace \"not checked against the code\" in the ticket"
   },
   {
     "file": ".claude/agents/coding.md",
@@ -777,7 +772,7 @@
   {
     "file": ".claude/agents/coding.md",
     "rule": "gate-buckets-builder-subset",
-    "phrase": "coding builders run `fix` + the `tests` bucket's fast `unit` view"
+    "phrase": "coding builders run `fix` + the `tests` bucket's fast `unit` view only** — not the full `tests` session, and not `everything-else` at all"
   },
   {
     "file": ".claude/agents/coding.md",
@@ -816,11 +811,6 @@
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "handoff-clean-tree-assert",
-    "phrase": "Immediately before applying the label, assert the tree is clean — one last time:"
-  },
-  {
-    "file": ".claude/agents/coding.md",
     "rule": "handoff-sha-single-script",
     "phrase": "One script derives `HEAD`, shape-checks it and writes the field in a single process"
   },
@@ -842,7 +832,7 @@
   {
     "file": ".claude/agents/coding.md",
     "rule": "escalation-label-and-note",
-    "phrase": "**do not** set `ready-for-code-review`; instead"
+    "phrase": "**do not** set `ready-for-code-review`; instead `bd update <id> --add-label land-escalated --append-notes \"ESCALATION: <the decision needed>\"`, then `scripts/bd-dolt-push.sh`"
   },
   {
     "file": ".claude/agents/coding.md",
@@ -851,23 +841,8 @@
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "bp-file-issues-before-coding",
-    "phrase": "File issues for anything non-trivial (>~2 min), before coding."
-  },
-  {
-    "file": ".claude/agents/coding.md",
-    "rule": "bp-one-task-per-session",
-    "phrase": "One task per session; start fresh often."
-  },
-  {
-    "file": ".claude/agents/coding.md",
     "rule": "bp-implementable-from-text",
     "phrase": "Every issue should be implementable from its own text:"
-  },
-  {
-    "file": ".claude/agents/coding.md",
-    "rule": "bp-only-blocks-gates-dispatch",
-    "phrase": "Use the right dependency type — only `blocks` gates dispatch."
   },
   {
     "file": ".claude/agents/coding.md",
@@ -881,77 +856,122 @@
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-reviewing-own-build",
-    "phrase": "Reviewing my own build**"
+    "rule": "gates-green-before-handoff",
+    "phrase": "Gates must be green before I hand off** — `fix` + the `tests` bucket's `unit` view above, regardless of whether the diff touches Python, shell, or docs"
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-removing-worktree-fresh-build",
-    "phrase": "Removing my worktree** (`git worktree remove`"
+    "rule": "surface-escalation-async-never-block-batch",
+    "phrase": "surface it in my final message — asynchronously.** I never block a parallel batch waiting on a human."
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-ready-on-red-or-escalation",
-    "phrase": "Marking `ready-for-code-review` on a red build, or on a build-time escalation."
+    "rule": "isolation-failure-full-stop-no-self-rescue",
+    "phrase": "On a failure here, I stop — full stop.** I do **not** attempt `EnterWorktree` a second time, I do **not** attempt `git worktree add` + `git -C` as a self-rescue"
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-ready-on-dirty-tree",
-    "phrase": "Marking `ready-for-code-review` (or pushing during a rebase pickup) on a dirty tree"
+    "rule": "script-exit-127-126-bootstrap-gap-stop",
+    "phrase": "Exit 127 / \"No such file or directory\" (script missing) or 126 / \"Permission denied\" (not executable) means exactly that — report and stop"
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-committing-jsonl",
-    "phrase": "Committing the passive `.beads/*.jsonl` export.**"
+    "rule": "nonzero-stop-after-first-write-reassert",
+    "phrase": "A nonzero exit means: **STOP (lode-6wgc)** — my launch worktree is gone or my cwd has moved off it since step 3. Do NOT edit, write, or run nox; report to the operator."
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-design-overwrite",
-    "phrase": "Writing `--design` on a ticket that already has one, for any reason**"
+    "rule": "nonzero-stop-after-commit-reassert",
+    "phrase": "A nonzero exit means: **STOP (lode-6wgc)** — do NOT commit or run nox against this cwd; a commit here could land on `trunk`. Report to the operator."
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-working-on-trunk",
-    "phrase": "Working on `trunk`, or committing on any branch but my task's worktree branch."
+    "rule": "rescue-ref-named-in-report",
+    "phrase": "rather than silently building on top of contamination. Name the `rescue/` ref in that report."
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-skipping-guards",
-    "phrase": "Skipping `scripts/isolation-guard.sh` or `scripts/recycled-worktree-guard.sh`"
+    "rule": "never-git-worktree-unlock",
+    "phrase": "and I do **not** run `git worktree unlock .` later either: that exits 0 and strips the harness's lock, not one of mine."
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-pushing-on-failing-gate",
-    "phrase": "Pushing or handing off on a failing gate."
+    "rule": "background-gate-means-listed",
+    "phrase": "So — no `run_in_background: true` on a gate, no `Monitor` armed on one, no backgrounding it by any other means (`&`, `nohup`, a detached script), and no closing message that defers the result"
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-decision-in-bd-note",
-    "phrase": "Recording an architectural decision in a bd note or memory instead of `docs/`."
+    "rule": "docs-nit-file-repo-relative",
+    "phrase": "`--file` is **repo-relative** (e.g. `docs/decisions.md`); an absolute path — and a `../`-relative one, resolved the same way — is normalized against the current checkout and refused (exit 2) if it falls outside it, as is any `.claude/worktrees/`-spelled path"
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-silent-scope-expansion",
-    "phrase": "Expanding a task's scope silently**"
+    "rule": "docs-nit-duplicate-collectors-report-never-pick",
+    "phrase": "**Exit 1 means the script refused because 2+ open collectors exist and at least one carries a non-standard title** — read its stderr, report the duplicate-collector ambiguity in my hand-off, and never pick one."
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-filing-blocked-as-discovered-from",
-    "phrase": "Filing a genuinely-blocked follow-up as `discovered-from`.**"
+    "rule": "missing-uv-machine-fault-stop",
+    "phrase": "A missing `uv` exits 127 naming the command: a machine fault, report it and stop."
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-deps-blocks-inversion",
-    "phrase": "Writing `bd create --deps blocks:<id>` for a discovered blocked follow-up.**"
+    "rule": "pre-lode-0yfn-pytest-fallback",
+    "phrase": "On a branch whose base predates lode-0yfn, `-s unit` instead dies with `Program pytest not found` (no `_venv_tool()` yet) — run `uv run --frozen pytest -m \"not slow\"` directly."
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-blocking-parallel-batch",
-    "phrase": "Blocking a parallel batch** waiting on a human"
+    "rule": "mermaid-quote-message-not-own-cause",
+    "phrase": "I quote that message rather than re-deriving a cause of my own, because inventing a plausible machine-level story is precisely the bug that created this exit code (lode-9i2p)."
   },
   {
     "file": ".claude/agents/coding.md",
-    "rule": "ap-external-tracker-writes",
-    "phrase": "Filing, commenting on, closing, reopening, merging, or reviewing anything on an external"
+    "rule": "escalation-revert-to-last-green-and-push",
+    "phrase": "**revert to the last green commit** and push the branch (so the work isn't stranded),"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ask-before-assuming-flag-uncertainty",
+    "phrase": "Ask before assuming intent; flag uncertainty explicitly rather than guessing."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "never-bd-import-jsonl",
+    "phrase": "**Never `bd import` the JSONL as a substitute for `bd dolt pull`** — import only upserts and silently misses deletions."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "claude-md-wins-on-disagreement",
+    "phrase": "Where this doc and those disagree, **CLAUDE.md wins** — tell the human about the drift instead of silently diverging."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "non-sonnet-announced-id-say-so",
+    "phrase": "if the announced ID is not a Sonnet model, the pin didn't take effect — I say so plainly so the operator can see the mismatch before I do any work."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "handoff-sha-exit-codes-nonzero-writes-nothing",
+    "phrase": "Exit 0 is the write done. Exit 1 = the derived value is malformed (nothing was written), 2 = this CALL is broken (fix the invocation), 3 = `bd update` itself failed, 4 = origin's `land/<id>` is not at `HEAD` (push first), 5 = `git ls-remote origin` failed — fix and re-run; a nonzero exit writes nothing."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "final-report-contents",
+    "phrase": "Then I **stop** and report: which ticket, that the gates are green, the `land/<id>` branch and head SHA, the **worktree path** I left on disk"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "rebase-pickup-merge-never-rebase",
+    "phrase": "`git rebase origin/trunk` rewrites commits already pushed to `land/<id>`, which would need a force-push to land; merging instead keeps the push an ordinary fast-forward (lode-cln)."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "rebase-pickup-rejected-push-refetch-remerge-retry",
+    "phrase": "A rejection means the remote moved since I fetched — re-fetch, re-merge, and retry"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "rebase-pickup-genuine-conflict-escalates",
+    "phrase": "**Genuine disagreement** (the two sides changed the *same* content in incompatible ways, and picking one discards the other's intent) → `git merge --abort` and escalate (below)."
   }
 ]

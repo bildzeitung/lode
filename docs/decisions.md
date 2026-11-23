@@ -7306,3 +7306,50 @@ branches, and how marker-first sits with Section 3a's base-before-dependent orde
 on `lode-g78l`.
 
 Decision only; the build is `lode-g78l`, an edit to Section 3a of `.claude/skills/land/SKILL.md`.
+
+## coding.md rule inventory amended before the `lode-w18a.12` cut (decided, lode-w18a.13)
+
+Maintainer ruling 2026-11-23, on a review finding from `lode-w18a.6`. The approved `coding.md`
+inventory in `tests/instruction_rules.json` (78 entries) did not meet the two criteria in
+`docs/agents-workflow.md` (one entry per repeated rule, pinned on the surviving copy; a pin runs
+through the operative part of its rule). Option (b), amend, scoped as below; no cut to `coding.md`.
+The amended list goes back to the maintainer for re-approval (`lode-9d9t`) before `lode-w18a.12`
+cuts. The `coding.md` inventory is now 82 entries: 78, minus 18 collapsed, plus 22 added.
+
+- **Decision 1: repeats collapsed to one entry.** Removed, with the entry that carries each rule:
+  `ap-reviewing-own-build` (`never-review-own-work`), `ap-working-on-trunk` (`never-edit-on-trunk`),
+  `ap-committing-jsonl` (`never-write-trunk`; its `bd import` sentence has its own entry, below),
+  `ap-removing-worktree-fresh-build` (`must-not-remove-worktree`), `bp-file-issues-before-coding`
+  (`bd-only-tracker`, whose pin now runs through the 2-minute rule), `ap-decision-in-bd-note`
+  (`design-decisions-are-doc-edits`), `handoff-clean-tree-assert` and `ap-ready-on-dirty-tree`
+  (`never-hand-off-dirty-worktree`), `ap-external-tracker-writes` (`no-external-tracker-write`),
+  `ap-skipping-guards` (`isolation-guard-first-action`; its bootstrap-gap and no-self-rescue halves
+  have their own entries), `design-check-before-write` and `ap-design-overwrite`
+  (`design-nonempty-never-write`), `ap-silent-scope-expansion` (`track-discovered-work`),
+  `bp-only-blocks-gates-dispatch` and `ap-filing-blocked-as-discovered-from`
+  (`blocked-followup-uses-blocks`), `ap-deps-blocks-inversion` (`never-create-deps-blocks-form`),
+  `ap-ready-on-red-or-escalation` (`escalation-label-and-note` and `gates-green-before-handoff`),
+  and `bp-one-task-per-session` (`one-task-per-worktree`; the ticket called this one arguable).
+  Where the ticket named three copies of one rule, the survivor is the non-negotiables or step copy,
+  not the anti-pattern copy, since the Anti-patterns section is what `lode-w18a.12` cuts.
+- **Decision 2: 22 entries for the 16 unpinned distinct rules** (some items needed two entries):
+  isolation failure is a full stop; guard-script exit 127/126 is a bootstrap gap; both `STOP
+  (lode-6wgc)` lines; the rescue ref named in the report; never `git worktree unlock .`; the list of
+  ways a gate must not be backgrounded; docs-nit `--file` is repo-relative and the exit-1
+  duplicate-collector stop; a missing `uv`, and the pre-`lode-0yfn` pytest fallback; quoting the
+  mermaid message; revert to the last green commit on escalation; flag uncertainty; never `bd
+  import` the JSONL; CLAUDE.md wins; say so when the announced ID is not Sonnet; the `handoff-sha.sh`
+  exit codes and the final report's contents; and the three rebase-pickup anti-pattern bullets
+  (merge, never rebase; re-fetch and re-merge on a rejected push; escalate a genuine conflict, pinned
+  on the Rebase pickup section's copy, which is where the rule survives).
+- **Decision 3: seven short pins lengthened, two moved.** Lengthened: `never-write-trunk`,
+  `trace-failure-before-decide-ticket`, `human-or-epic-ticket-stop`, `free-text-dispatch-files-issue`,
+  `claim-idempotent-backstop`, `gate-buckets-builder-subset`, `escalation-label-and-note`. Moved onto
+  the step copy: `ap-pushing-on-failing-gate` (now `gates-green-before-handoff`, on "Gates must be
+  green before I hand off") and `ap-blocking-parallel-batch` (now
+  `surface-escalation-async-never-block-batch`, on step 9's "surface it in my final message"). The
+  bold-lead and heading-only pins and `bp-heartbeat` are left as built, per the ruling.
+
+Every phrase matches exactly once in `coding.md` outside fenced blocks
+(`tests/test_instruction_rule_inventory_gate.py` is green). Decision only; the re-approval gate is
+the human ticket that blocks `lode-w18a.12`.
