@@ -222,14 +222,17 @@ def _tracked_paths(root: Path) -> list[Path]:
     once and passes the result to both filters below (lode-6e9c) -- before
     lode-act5 widened the markdown walk repo-wide the two filters issued
     genuinely different pathspec-scoped queries; once both became the
-    identical unscoped one, forking git twice bought nothing."""
+    identical unscoped one, forking git twice bought nothing.
+
+    ``-z``: NUL-separated and never C-quoted, so a path holding a space or a
+    non-ASCII byte reaches ``Path`` as the real name."""
     out = subprocess.run(
-        ["git", "-C", str(root), "ls-files"],
+        ["git", "-C", str(root), "ls-files", "-z"],
         capture_output=True,
         text=True,
         check=True,
     ).stdout
-    return [Path(p) for p in out.split()]
+    return [Path(p) for p in out.split("\0") if p]
 
 
 def _tracked_markdown_files(root: Path, tracked: list[Path]) -> list[Path]:

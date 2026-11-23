@@ -411,6 +411,15 @@ class TestBareDocAnchorRefs:
         assert errors[0].target == f"{_DOCS}/release.md#no-such-anchor"
         assert "no heading slug" in errors[0].reason
 
+    def test_bare_reference_in_file_whose_name_has_a_space_is_reported(self, tmp_path):
+        _write(tmp_path, "scripts/a b.sh", f"# {_DOCS}/does-not-exist.md\n")
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert len(errors) == 1
+        assert "does not exist" in errors[0].reason
+
     def test_bare_reference_to_missing_file_is_reported(self, tmp_path):
         _write(
             tmp_path,
