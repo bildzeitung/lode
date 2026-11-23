@@ -222,8 +222,11 @@ class TestDocsSlugCopyAgrees:
             pytest.param(
                 '`x` <a id="kept"></a> `y`\n', {"kept"}, id="tag-between-two-spans"
             ),
+            pytest.param('``<a id="double"></a>``\n', set(), id="double-backtick-span"),
             pytest.param(
-                '``<a id="double"></a>``\n', {"double"}, id="double-backtick-span"
+                '`` ` `` <a id="kept"></a> `` ` ``\n',
+                {"kept"},
+                id="tag-between-literal-backtick-double-spans",
             ),
             pytest.param(
                 'para\n\n    <a id="indented"></a>\n',
@@ -238,14 +241,31 @@ class TestDocsSlugCopyAgrees:
         ],
     )
     def test_anchor_tag_code_span_limits(self, tmp_path, text, expected):
-        """Where the one-line, single-backtick span strip stops, in both
-        anchor-set copies alike: a tag between two separate spans is kept; a
-        tag in a double-backtick span or an indented code block still counts
-        (neither is recognised as code); and a real tag between the close of
-        one wrapped span and the open of the next is lost."""
+        """Where the one-line, run-aware span strip stops, in both
+        anchor-set copies alike: a tag between two separate spans is kept
+        (double-backtick spans showing a literal backtick included); a tag in
+        a double-backtick span is stripped; a tag in an indented code block
+        still counts (not recognised as code); and a real tag between the
+        close of one wrapped span and the open of the next is lost."""
         path = _write(tmp_path, "a.md", text)
         assert check_links._slugs_for_file(path, {}) == expected
         assert docs_slug.anchor_slugs(text) == expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            pytest.param("``[x](a.md)``\n", [], id="link-in-double-backtick-span"),
+            pytest.param(
+                "`` ` `` [x](a.md) `` ` ``\n",
+                [(1, "a.md")],
+                id="link-between-literal-backtick-double-spans",
+            ),
+        ],
+    )
+    def test_link_code_span_runs(self, text, expected):
+        """A link in a double-backtick span is code; a real link between two
+        double-backtick spans that each show a literal backtick is kept."""
+        assert check_links._links_in_file(text) == expected
 
     def test_anchor_tag_split_across_lines_is_not_an_anchor(self, tmp_path):
         """Both anchor-set copies match the tag one line at a time, so a tag

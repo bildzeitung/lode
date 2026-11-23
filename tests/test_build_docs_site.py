@@ -145,6 +145,13 @@ def test_links_in_code_are_never_rewritten() -> None:
     assert out.count("(decisions.md)") == 2  # the inline span and the fenced one
 
 
+def test_double_backtick_span_link_is_not_rewritten_but_one_between_spans_is() -> None:
+    text = "A: ``[d](decisions.md)``\nB: `` ` `` [d](decisions.md) `` ` ``\n"
+    out = build_docs_site._process_links(text, "design.md", PUBLISHED)
+    assert "A: ``[d](decisions.md)``" in out
+    assert f"[d]({BASE}/docs/decisions.md) ``" in out
+
+
 def test_real_links_survive_the_code_skip() -> None:
     """The two forms the code-skip must NOT swallow.
 

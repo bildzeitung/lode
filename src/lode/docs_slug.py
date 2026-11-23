@@ -71,7 +71,7 @@ def github_slug(heading_text: str) -> str:
 # instead, and on its own cases for the code-span rule.
 _ATX_HEADING_RE = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
 _HTML_ANCHOR_RE = re.compile(r'<a\s+(?:id|name)=["\']([^"\']+)["\']', re.IGNORECASE)
-_INLINE_CODE_RE = re.compile(r"`[^`]*`")
+_INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`).+?(?<!`)\1(?!`)")
 
 
 def anchor_slugs(text: str) -> set[str]:
