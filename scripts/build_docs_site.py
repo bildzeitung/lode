@@ -333,38 +333,38 @@ def _process_links(text: str, rel_path: str, published: set[str]) -> str:
     that documents markdown syntax must ship that example verbatim, not a
     rewritten GitHub URL.
     """
-
-    def _sub(match: re.Match[str]) -> str:
-        angle = match.group(2) is not None
-        group = 2 if angle else 3
-        rewritten = _rewrite_target(rel_path, match.group(group), published)
-        if rewritten is None:
-            return match.group(0)
-        # Splice over the destination alone (its angle brackets included), so
-        # a title and the spacing survive. The rewritten URL is percent-encoded,
-        # so it is a valid destination without brackets.
-        lo, hi = match.span(group)
-        if angle:
-            lo, hi = lo - 1, hi + 1
-        whole = match.group(0)
-        base = match.start()
-        return whole[: lo - base] + rewritten + whole[hi - base :]
-
-    def _sub_unless_protected(match: re.Match[str]) -> str:
-        # Keyed on where the link STARTS, so a link whose label is itself
-        # backticked -- [`configuration.md`](configuration.md), the dominant
-        # form in these docs -- is still rewritten; only a link that starts
-        # inside code is left alone.
-        if any(lo <= match.start() < hi for lo, hi in protected):
-            return match.group(0)
-        return _sub(match)
-
     protected = _code_ranges(text)
-
-    # Substituted over the WHOLE text, never line by line: a link's label
+    out: list[str] = []
+    pos = 0
+    # Searched over the WHOLE text, never line by line: a link's label
     # routinely wraps across lines in these docs, and _LINK_RE has to see it
     # whole or it silently stops matching.
-    return _LINK_RE.sub(_sub_unless_protected, text)
+    while match := _LINK_RE.search(text, pos):
+        start, end = match.span()
+        label_end = match.end(1)
+        if "\n" in text[label_end:end]:
+            # The gate reads a destination and its title on ONE line, so a
+            # match that runs past the line its label ends on is prose holding
+            # an unclosed `](`, not a link. Look again from just past the
+            # label: a real link further on is still read.
+            end = label_end
+        elif not any(lo <= start < hi for lo, hi in protected):
+            # Keyed on where the link STARTS, so a link whose label is itself
+            # backticked -- [`configuration.md`](configuration.md), the
+            # dominant form in these docs -- is still rewritten; only a link
+            # that starts inside code is left alone.
+            group = 2 if match.group(2) is not None else 3
+            rewritten = _rewrite_target(rel_path, match.group(group), published)
+            if rewritten is not None:
+                # Spliced over the destination text alone, so its angle
+                # brackets, a title and the spacing survive.
+                dest_start, dest_end = match.span(group)
+                out += [text[pos:dest_start], rewritten]
+                pos = dest_end
+        out.append(text[pos:end])
+        pos = end
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def _missing_image_targets(text: str, page: Path) -> list[str]:
