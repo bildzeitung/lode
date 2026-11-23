@@ -290,17 +290,22 @@ def test_cli_still_prints_results_when_the_invocation_log_cannot_be_written(
     assert "docs/" in result.output
 
 
-def _write_split_entry_doc(directory: Path, *, title: bool) -> tuple[Path, str, int]:
+def _write_split_entry_doc(
+    directory: Path, *, title: bool, h3_section: bool = False
+) -> tuple[Path, str, int]:
     """Write a decisions.md-shaped fixture; return its path, text and marker line.
 
     One entry over MAX_UNIT_BYTES whose only Update marker is its last line,
     then a small entry carrying a marker of its own. ``title`` adds the H1 line
     the real ``docs/decisions.md`` opens with, which changes the rule the
-    chunker reaches the entries by.
+    chunker reaches the entries by. ``h3_section`` puts a ``##`` section with a
+    ``###`` sub-heading ahead of the entries, so they are reached as entries
+    appended after a section whose unit holds a deeper heading (``lode-kys3``).
     """
     pad = "\n\n".join(f"  filler paragraph {i} " + "x" * 2000 for i in range(10))
     text = (
         ("# Title\n\nPreamble.\n\n" if title else "")
+        + ("## Section\n\nprose\n\n### Sub\n\nmore\n" if h3_section else "")
         + "- **Big entry.** stale claim zorblax\n\n"
         + pad
         + "\n\n  **Update (lode-test, 2026-01-01)** -- corrected.\n"
@@ -315,14 +320,20 @@ def _write_split_entry_doc(directory: Path, *, title: bool) -> tuple[Path, str, 
     return doc, text, marker_line
 
 
-@pytest.mark.parametrize("title", [True, False], ids=["h1-title", "no-heading"])
+@pytest.mark.parametrize(
+    ("title", "h3_section"),
+    [(True, False), (False, False), (True, True)],
+    ids=["h1-title", "no-heading", "after-a-section-with-an-h3"],
+)
 def test_split_entry_markers_points_every_piece_of_a_split_entry_at_its_marker(
-    tmp_path: Path, title: bool
+    tmp_path: Path, title: bool, h3_section: bool
 ) -> None:
     """An Update marker at the end of an entry over MAX_UNIT_BYTES lands in a
     different unit from the stale claim (lode-funp); every chunk of that entry
     must still point at it, and no unit outside it may."""
-    doc, text, marker_line = _write_split_entry_doc(tmp_path, title=title)
+    doc, text, marker_line = _write_split_entry_doc(
+        tmp_path, title=title, h3_section=h3_section
+    )
     units = _query_module._build._chunker.chunk_file(doc, text)
     big_lo = next(u.line_lo for u in units if u.first_line.startswith("- **Big"))
     small_lo = next(u.line_lo for u in units if u.first_line.startswith("- **Small"))

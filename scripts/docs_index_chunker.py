@@ -20,8 +20,8 @@ oversized unit, which is then split at its bullets.
 every branch appends its entry at EOF, so a top-level bullet can follow a ``##``
 section it has nothing to do with, and the heading split alone would put it in
 that section's unit under that section's heading (``lode-skv8``). There the
-split level is capped at ``##`` (``lode-kys3``), and the top-level bullets after a heading unit's own text each start a unit. See
-:func:`_split_trailing_entries`.
+split level is capped at ``##`` (``lode-kys3``), and the top-level bullets after
+a heading unit's own text each start a unit. See :func:`_split_trailing_entries`.
 
 Boundary detection is **fence-aware**: a ``## `` or ``- `` inside a fenced code
 block is someone's example, not document structure. See :func:`_fence_flags`.
@@ -254,13 +254,15 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
     if n == 0:
         return []
     fence_flags = _fence_flags(lines)
-    deepest = _deepest_heading_level(lines, fence_flags)
-    # The entry log's sections are its ``##`` headings; a deeper heading
-    # inside one must not move the split level, or every ``##`` section ends
-    # up inside the unit of the entry before it (``lode-kys3``).
-    split_level = min(deepest, 2) if Path(path).stem == _ENTRY_LOG_STEM else deepest
+    split_level = _deepest_heading_level(lines, fence_flags)
+    is_entry_log = Path(path).stem == _ENTRY_LOG_STEM
+    if is_entry_log:
+        # The entry log's sections are its ``##`` headings; a deeper heading
+        # inside one must not move the split level, or every ``##`` section
+        # ends up inside the unit of the entry before it (``lode-kys3``).
+        split_level = min(split_level, 2)
 
-    if deepest:
+    if split_level:
 
         def primary_boundary(i: int) -> bool:
             if fence_flags[i]:
@@ -272,8 +274,8 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
 
     ranges = _split_range(lines, 1, n, primary_boundary)
 
-    if deepest and Path(path).stem == _ENTRY_LOG_STEM:
-        # Heading units only: the text before the first deepest-level heading
+    if split_level and is_entry_log:
+        # Heading units only: the text before the first split-level heading
         # is left to the post-pass, which splits it at its bullets.
         cut: list[tuple[int, int]] = []
         for lo, hi in ranges:
@@ -286,7 +288,7 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
     final_ranges: list[tuple[int, int]] = []
     for lo, hi in ranges:
         final_ranges.extend(
-            _hard_split(lines, fence_flags, lo, hi, try_bullet=bool(deepest))
+            _hard_split(lines, fence_flags, lo, hi, try_bullet=bool(split_level))
         )
 
     doc_class = classify(path)

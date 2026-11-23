@@ -358,23 +358,39 @@ def test_real_decisions_md_section_with_its_own_bullets_stays_one_unit():
 def test_entry_log_h3_does_not_move_the_split_level():
     # One '###' anywhere must not push every '##' section into the unit of the
     # entry before it (lode-kys3).
-    text = _entry_log_text() + "\n## Deep section\n\nprose\n\n### Sub\n\nmore\n"
-    firsts = [u.first_line for u in chunk_file("docs/decisions.md", text)]
-    assert "## Section" in firsts
-    assert "## Last section" in firsts
-    assert "## Deep section" in firsts
-    assert "### Sub" not in firsts
-
-
-def test_real_decisions_md_with_an_appended_h3_keeps_every_h2_section_a_unit():
-    text = (Path(__file__).resolve().parents[1] / "docs" / "decisions.md").read_text(
-        encoding="utf-8"
+    # The '###' is column-zero text of its own '##' section: the section's own
+    # list before it stays in the section's unit, and an entry appended after
+    # it is still cut off.
+    text = _entry_log_text() + (
+        "\n## Deep section\n\nprose\n\n- the deep section's own bullet\n\n"
+        "### Sub\n\nmore\n- late entry C\n"
     )
-    base = {u.first_line for u in chunk_file("docs/decisions.md", text)}
+    units = chunk_file("docs/decisions.md", text)
+    assert [u.first_line for u in units] == [
+        "# Log",
+        "## Section",
+        "- late entry A",
+        "- late entry B",
+        "## Last section",
+        "## Deep section",
+        "- late entry C",
+    ]
+    deep = units[-2].body
+    assert "- the deep section's own bullet" in deep
+    assert "### Sub" in deep
+
+
+def test_real_decisions_md_with_an_appended_h3_leaves_every_existing_unit_in_place():
+    path = DOCS_DIR / "decisions.md"
     probe = chunk_file(
-        "docs/decisions.md", text + "\n## New\n\nprose\n### Sub\n\nmore\n"
+        path, path.read_text(encoding="utf-8") + "\n## New\n\nprose\n### Sub\n\nmore\n"
     )
-    probe_firsts = {u.first_line for u in probe}
-    assert {f for f in base if f.startswith("## ")} <= probe_firsts
-    assert all(u.line_hi - u.line_lo >= 0 for u in probe)
-    assert all(len(u.body.encode()) <= _chunker.MAX_UNIT_BYTES for u in probe)
+
+    def starts(units):
+        return [(u.line_lo, u.first_line) for u in units]
+
+    assert starts(probe[:-1]) == starts(_decisions_units())
+    assert probe[-1].first_line == "## New"
+    assert "### Sub" in probe[-1].body
+    assert [u.line_lo for u in probe[1:]] == [u.line_hi + 1 for u in probe[:-1]]
+    assert all(_bytes(u) <= MAX_UNIT_BYTES for u in probe)
