@@ -95,8 +95,9 @@ class VectorStore:
     def __init__(self, lance_dir: str | Path, settings: Settings | None = None) -> None:
         self._lance_dir = lance_dir
         self._settings = settings or Settings()
-        # The opened Table (None until first use) and the writes since it was
-        # last pruned -- see _open_or_create_table and replace_vectors.
+        # The opened Table (None until first use, and again after each periodic
+        # prune) and the writes since that prune -- see _open_or_create_table
+        # and replace_vectors.
         self._table = None
         self._writes_since_optimize = 0
 
@@ -153,15 +154,17 @@ class VectorStore:
         is touched, so healing it here covers every call path uniformly.
 
         **Caches the opened Table across calls on this instance (lode-2brb),**
-        so a shared ``VectorStore`` pays ``list_tables`` + ``open_table`` +
-        the schema compare on its *first* call only instead of on every embed
-        job. LanceDB tables are snapshot-versioned, so a held handle would
+        so a shared ``VectorStore`` pays ``connect`` + ``list_tables`` +
+        ``open_table`` + the schema compare once per open instead of on every
+        embed job: on its first call, and on the first call after each
+        periodic prune, where :meth:`replace_vectors` discards the handle.
+        LanceDB tables are snapshot-versioned, so a held handle would
         otherwise read a stale version; ``checkout_latest()`` on every reuse
         is what makes holding it safe, and ``tests/test_vectorstore.py``'s
         held-table staleness gate pins that. Note the consequence for the
-        schema self-heal above: it too is first-call-only per instance, which
-        is sound because ``Settings`` (and so the pinned schema) is fixed for
-        an instance's lifetime.
+        schema self-heal above: it too runs once per open, which is sound
+        because ``Settings`` (and so the pinned schema) is fixed for an
+        instance's lifetime.
 
         Why the Table and not the ``lancedb.connect()`` handle, and the
         measurements behind that: ``docs/decisions.md`` (lode-2brb).
@@ -199,13 +202,17 @@ class VectorStore:
         per row (a missing key converts to ``NULL``, same as an explicit ``None``)
         — an empty list just clears the version.
 
-        **Periodically prunes the held Table's version history (lode-2brb).**
-        Each call is a delete + add = 2 new LanceDB versions, and a Table held
-        across many calls accumulates that history in memory. Every
-        ``settings.vectorstore_optimize_interval`` calls this prunes every version
-        older than ``_PRUNE_WINDOW``. Nothing stored here needs history: the
+        **Periodically prunes old versions and drops the held Table (lode-2brb,
+        lode-ju9d).** Every ``settings.vectorstore_optimize_interval`` calls
+        this prunes every version older than ``_PRUNE_WINDOW`` (each call is a
+        delete + add = 2 new LanceDB versions) and then discards the held
+        Table, so the next call opens a new connection. The prune frees disk,
+        not memory: the connection's lancedb cache grows with every call made
+        on it, and only a new connection releases it (``docs/decisions.md``,
+        lode-2brb, Update lode-ju9d). Nothing stored here needs history: the
         vectors are a regenerable cache (module docstring). A read in another
-        process that still holds a pruned version is recovered by :meth:`_rows`.
+        process that still holds a pruned version is recovered by
+        :meth:`_rows`.
 
         Deliberately does **not** pass ``delete_unverified=True``: it would
         lift LanceDB's protection for young files that may belong to *another
@@ -220,7 +227,11 @@ class VectorStore:
         self._writes_since_optimize += 1
         if self._writes_since_optimize >= self._settings.vectorstore_optimize_interval:
             table.optimize(cleanup_older_than=_PRUNE_WINDOW)
-            table.checkout_latest()
+            # The Table is the only holder of its connection, so this frees
+            # both. The connection's metadata cache is what grows per call;
+            # neither optimize() nor reopening the table on the same connection
+            # releases it (lode-ju9d).
+            self._table = None
             self._writes_since_optimize = 0
 
     def _rows(self, query: Callable[[Any], Any]) -> list[dict[str, Any]]:

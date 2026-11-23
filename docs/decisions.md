@@ -3844,6 +3844,67 @@ entries below from being rewritten to chase the current tree.)
     lancedb 0.41 both still grow about 7 MB per 300 calls, unlike the flat plateau recorded above
     for 0.38; that regression is not caused by the window and is filed as lode-ju9d.
 
+  - **Update (lode-ju9d, 2026-11-22) — the periodic prune does not limit memory on lancedb 0.38 or
+    0.41; what grows is the connection's lancedb metadata cache, and `replace_vectors` now drops the
+    connection every interval, which releases it.**
+    One standalone script (a mirror of `replace_vectors`: 5 rows of 768 floats per call, `target_version`
+    cycling over 50 values, a held Table with `checkout_latest()` each call, 3000 calls at about 15
+    calls/s, live `VmRSS` every 300 calls, optimize every 100 calls with a 60 s window where run) gave
+    RSS in MB at calls 300 / 1500 / 3000:
+    - 0.41, held Table, prune every 100: 245 / 351 / 474.
+    - 0.41, held Table, no prune: 238 / 351 / 487.
+    - 0.38, held Table, prune every 100: 220 / 297 / 380.
+    - 0.38, held Table, no prune: 212 / 287 / 378.
+    - 0.41, prune every 100, window 0: 234 / 335 / 453.
+    - 0.41, a fresh connection and table open every call, no prune: 205 / 207 / 209 (flat).
+    - 0.41, prune every 100 and a new connection every 100 calls: 227 / 246 / 253.
+    - 0.41, new connection every 100 calls, no prune: 219 / 227 / 233.
+    - 0.41, prune every 100 and the table reopened on the same connection every 100 calls: 234 / 336 / 456.
+    So the prune had no effect on memory in this method on either version (0.38 with and without it
+    grew about 17 MB per 300 calls, 0.41 about 25), which does not reproduce the flat plateau recorded
+    above for 0.38 with the prune; the script behind that entry was not kept, so the difference (rows
+    per call, vector width, how the calls were paced) is not known. A fresh connection per call is flat,
+    and replacing the connection every 100 calls removes most of the growth (about 3 MB per 300 calls
+    was left in that run, against about 25) while reopening only the table on the same connection does
+    not, so the growth sits in state the connection holds. The build did not look further than that;
+    the review did, below. **Mitigation built:** `replace_vectors`
+    sets `self._table = None` after its periodic prune, so the next call opens a new connection
+    (`_open_or_create_table` already does that when nothing is cached), and the `checkout_latest()` after
+    the prune is gone since the handle is discarded. The prune stays because it still deletes old
+    version files from disk, which these runs did not measure. The saving lode-2brb bought (no
+    `list_tables`/`open_table`/schema compare per call) now applies to runs of
+    `vectorstore_optimize_interval` calls instead of the process lifetime. Not measured: the prune's
+    effect on disk size, and other write rates.
+    **Found on technical review: the cause, and the mitigation measured through `VectorStore` itself.**
+    The state that grows is the metadata cache of the connection's lancedb `Session`. lancedb documents
+    the default `Session` as a 6 GB index cache and a 1 GB metadata cache, and `Session.size_bytes`
+    reports what it holds. Same workload as above (lancedb 0.41, 5 rows of 768 floats, 50 cycling
+    versions, 15 calls/s), a held Table on a connection given an explicit default `Session`, no prune:
+    `size_bytes` was 24.5 / 129.7 / 261.2 MB at calls 300 / 1500 / 3000 (26.3 MB per 300 calls, about
+    88 KB and 10 cache entries per call) while RSS went 226 / 342 / 481 MB. Capping only
+    `metadata_cache_size_bytes` at 8 MB held `size_bytes` at 8.0 to 8.1 MB over 900 calls; capping only
+    `index_cache_size_bytes` did not (24.5 / 50.8 / 77.1 MB at calls 300 / 600 / 900). A new connection
+    gets a new `Session`, which is why the reconnect releases the memory and reopening the table on
+    the same connection does not. Left alone, the growth would stop at the 1 GB cap; no run went that
+    far. Dropping the Table does drop the connection: the Table is the only object holding it (a weak
+    reference to the `LanceDBConnection` is dead as soon as `replace_vectors` returns from the prune).
+    The mitigation as shipped, driven through `lode.vectorstore.VectorStore` with the same workload,
+    RSS in MB:
+    - default interval 200, calls 300 / 1500 / 3000 / 4500 / 6000: 227 / 253 / 260 / 263 / 267.
+    - interval 100, calls 300 / 1500 / 3000: 226 / 243 / 250.
+    - interval never reached (Table held, no prune, no drop), calls 300 / 1500 / 3000: 227 / 339 / 477.
+    So at the default interval the growth is not gone but slows: 33 MB between calls 300 and 3000 and
+    7 MB over the next 3000 (about 0.7 MB per 300 calls, against about 28 when held). Whether that
+    remainder levels off was not measured. The cache refills between reconnects at about 88 KB per
+    call, so the interval also sets the peak: about 18 MB of cache at 200 calls, and proportionally
+    more for a larger `vectorstore_optimize_interval`.
+    **An alternative measured at review and not built:** a held Table on a connection whose `Session`
+    caps both caches at 8 MB, no prune, went 212 / 220 / 223 MB at calls 300 / 1500 / 3000 with
+    `size_bytes` at 8.0 to 8.3 MB throughout. That is flatter than the reconnect and would return
+    `vectorstore_optimize_interval` to setting the disk prune only. It was not run with the prune in
+    the loop, its cost in time per call on the write and read paths was not measured, and no cap was
+    chosen, so the reconnect ships and the capped `Session` is filed as lode-3gr3.
+
 - **2026-08-05 (lode-2nw5) — the `git restore --staged .beads/issues.jsonl` cluster: ONE site
   canonicalized (fixing a real symmetry gap), THREE sites kept as WONTFIX literals.** Filed while
   technically reviewing `lode-do3q` (entry above), which deliberately scoped out this second,
