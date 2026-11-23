@@ -414,11 +414,7 @@ def _mask_spaced_link_destinations(line: str) -> str:
     for m in _LINK_RE.finditer("".join(line[i] for i in kept)):
         group = 1 if m.group(1) is not None else 2
         dest = m.group(group)
-        if (
-            dest
-            and not _is_external(dest)
-            and not _DOC_ANCHOR_REF_RE.fullmatch(dest)
-        ):
+        if dest and not _is_external(dest) and not _DOC_ANCHOR_REF_RE.fullmatch(dest):
             for i in kept[m.start(group) : m.end(group)]:
                 chars[i] = " "
     return "".join(chars)
