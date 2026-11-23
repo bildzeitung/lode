@@ -227,8 +227,8 @@ def _missing_tracked_error(source: Path) -> LinkError | None:
     Gone means the path itself: nothing at it, or a directory above it
     replaced by a file -- the two cases git lists as deleted. A dangling
     symlink is still there, so it is not reported here: it is a file that
-    cannot be read, which the bare-citation walk skips and the markdown walk
-    does not handle. A file a sparse checkout leaves out IS reported, although
+    cannot be read, which the markdown walk reports and the bare-citation
+    walk skips. A file a sparse checkout leaves out IS reported, although
     git does not call it deleted: the index is not consulted.
 
     The path is shell-quoted so either command can be pasted as printed."""
@@ -534,7 +534,15 @@ def check(root: Path) -> list[LinkError]:
         if missing:
             errors.append(missing)
             continue
-        source_text = _cached_text(source, text_cache)
+        try:
+            source_text = _cached_text(source, text_cache)
+        except OSError as exc:
+            # Present but unreadable (dangling symlink, directory in its
+            # place, no read permission): no single remedy, so name the cause.
+            errors.append(
+                LinkError(source, 0, str(exc), "tracked file cannot be read")
+            )
+            continue
         for line_no, target in _links_in_file(source_text):
             if not target or _is_external(target):
                 continue

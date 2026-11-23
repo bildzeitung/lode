@@ -889,3 +889,44 @@ def test_dangling_tracked_symlink_is_not_reported_as_missing(tmp_path):
     _git_init(tmp_path)
 
     assert check(tmp_path) == []
+
+
+@pytest.mark.parametrize("state", ["dangling-symlink", "directory", "no-permission"])
+def test_cli_reports_tracked_markdown_that_cannot_be_read_without_traceback(
+    tmp_path, state
+):
+    """The path is there (so not the missing-file report) but reading it
+    raises; the gate names the file and the error and stays red."""
+    if state == "no-permission" and os.geteuid() == 0:
+        pytest.skip("root reads files regardless of mode")
+    _write(tmp_path, f"{_DOCS}/a.md", "# A\n")
+    bad = tmp_path / _DOCS / "x.md"
+    if state == "dangling-symlink":
+        bad.symlink_to("nowhere.md")
+        _git_init(tmp_path)
+    else:
+        _write(tmp_path, f"{_DOCS}/x.md", "# X\n")
+        _git_init(tmp_path)
+        if state == "directory":
+            bad.unlink()
+            bad.mkdir()
+        else:
+            bad.chmod(0)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "check_links.py"),
+            "--root",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    assert result.stderr.count("tracked file cannot be read") == 1
+    assert f"{bad}:0: tracked file cannot be read -> " in result.stderr
