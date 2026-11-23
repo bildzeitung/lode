@@ -4941,6 +4941,24 @@ entries below from being rewritten to chase the current tree.)
     the same before this change: the split level is the deepest heading in the file, so one `###`
     anywhere in this file puts every `##` section in the unit of the entry before it (run at
     review on this file with a `###` appended; open in `lode-kys3`).
+  - **Update (lode-kys3, 2026-11-22):** the "Not fixed here" sentence of the `lode-skv8` Update
+    above no longer holds. In this file the split level is now capped at `##`: the chunker splits
+    at `##` when a deeper heading is present, and a `###` is text of the `##` section it sits in.
+    Every other file keeps the deepest-level rule. Run at review on this file with `## New`, prose
+    and a `### Sub` appended: every existing unit starts on the line it starts on today, and the
+    appended section is one unit. The ticket named two candidates and left the choice open: a
+    gate test forbidding a heading deeper than `##` in this file, or a split at every
+    `##`-or-deeper heading. The cap is neither; it is the builder's choice, kept at technical
+    review, with no maintainer ruling. The split at every `##`-or-deeper heading was run at review
+    on synthetic text and not taken: it cuts a section's own list off as entries wherever a `###`
+    follows the list, and in a section under `MAX_UNIT_BYTES` it puts a claim and its Update in
+    different units with no split-entry `NOTE`. Two limits of the cap, both run at review.
+    (1) A `###` is a column-zero line, so by the `lode-skv8` rule above it extends its section's
+    own text: entries appended after a section and before a `###` that has no `##` of its own stay
+    in that section's unit. (2) A `##` section over `MAX_UNIT_BYTES` is cut at its bullets, then
+    at paragraphs, never at its `###` headings, and the split-entry `NOTE` for a piece of it lists
+    only the markers between the nearest heading or bullet on each side. Not reachable today (no
+    `###` in this file; its largest `##` unit is 4640 bytes); open in `lode-vt7x`.
 
 - **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
   decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent

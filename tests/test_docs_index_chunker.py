@@ -353,3 +353,44 @@ def test_real_decisions_md_section_with_its_own_bullets_stays_one_unit():
     # The lode-3s4d section: a probe list, then two closing paragraphs.
     unit = next(u for u in _decisions_units() if "Mechanism chosen, keeping" in u.body)
     assert unit.first_line.startswith("## A release-age cooldown")
+
+
+def test_entry_log_h3_does_not_move_the_split_level():
+    # One '###' anywhere must not push every '##' section into the unit of the
+    # entry before it (lode-kys3).
+    # The '###' is column-zero text of its own '##' section: the section's own
+    # list before it stays in the section's unit, and an entry appended after
+    # it is still cut off.
+    text = _entry_log_text() + (
+        "\n## Deep section\n\nprose\n\n- the deep section's own bullet\n\n"
+        "### Sub\n\nmore\n- late entry C\n"
+    )
+    units = chunk_file("docs/decisions.md", text)
+    assert [u.first_line for u in units] == [
+        "# Log",
+        "## Section",
+        "- late entry A",
+        "- late entry B",
+        "## Last section",
+        "## Deep section",
+        "- late entry C",
+    ]
+    deep = units[-2].body
+    assert "- the deep section's own bullet" in deep
+    assert "### Sub" in deep
+
+
+def test_real_decisions_md_with_an_appended_h3_leaves_every_existing_unit_in_place():
+    path = DOCS_DIR / "decisions.md"
+    probe = chunk_file(
+        path, path.read_text(encoding="utf-8") + "\n## New\n\nprose\n### Sub\n\nmore\n"
+    )
+
+    def starts(units):
+        return [(u.line_lo, u.first_line) for u in units]
+
+    assert starts(probe[:-1]) == starts(_decisions_units())
+    assert probe[-1].first_line == "## New"
+    assert "### Sub" in probe[-1].body
+    assert [u.line_lo for u in probe[1:]] == [u.line_hi + 1 for u in probe[:-1]]
+    assert all(_bytes(u) <= MAX_UNIT_BYTES for u in probe)
