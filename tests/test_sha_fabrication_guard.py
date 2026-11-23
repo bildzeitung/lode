@@ -51,7 +51,7 @@ import time
 from pathlib import Path
 
 import pytest
-from _gitrepo import git_env
+from _gitrepo import _git
 from _hookharness import SH, pretooluse_hook, run_hook
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -69,16 +69,7 @@ FABRICATED_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
 def _real_sha() -> str:
     """A real, existing 40-hex commit SHA from this repo's own history (HEAD)."""
-    out = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=REPO_ROOT,
-        env=git_env(),
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=True,
-    )
-    sha = out.stdout.strip()
+    sha = _git(REPO_ROOT, "rev-parse", "HEAD").stdout.strip()
     assert len(sha) == 40 and all(c in "0123456789abcdef" for c in sha), sha
     return sha
 

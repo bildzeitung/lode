@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from _gitrepo import _git, git_env
+from _gitrepo import _commit_file, _git, _local_env_vars, git_env
 from conftest import tracked_paths
 
 
@@ -15,17 +15,19 @@ def _repo(path: Path, filename: str) -> Path:
     _git(path, "init", "-q", "-b", "trunk")
     _git(path, "config", "user.name", "t")
     _git(path, "config", "user.email", "t@t")
-    (path / filename).write_text("x\n")
-    _git(path, "add", filename)
-    _git(path, "commit", "-q", "-m", filename)
+    _commit_file(path, filename, "x\n", filename)
     return path
 
 
 @pytest.fixture
 def scratch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A scratch repo, built while GIT_DIR/GIT_WORK_TREE point at a decoy repo."""
-    monkeypatch.delenv("GIT_DIR", raising=False)
-    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+    """A scratch repo, built while GIT_DIR/GIT_WORK_TREE point at a decoy repo.
+
+    Every other locating variable is unset first: a caller's own GIT_INDEX_FILE (a commit
+    hook's) would otherwise decide what the unscrubbed call in the non-vacuity test lists.
+    """
+    for name in _local_env_vars():
+        monkeypatch.delenv(name, raising=False)
     decoy = _repo(tmp_path / "decoy", "decoy.txt")
     monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
     monkeypatch.setenv("GIT_WORK_TREE", str(decoy))
@@ -40,11 +42,53 @@ def test_tracked_paths_acts_on_root_not_decoy(scratch: Path) -> None:
     assert tracked_paths(root=scratch) == ["scratch.txt"]
 
 
-def test_git_env_drops_locating_vars_keeps_extra(scratch: Path) -> None:
+@pytest.mark.parametrize(
+    "name",
+    [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_PREFIX",
+    ],
+)
+def test_git_env_drops_a_locating_var(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(name, "x")
+    assert name not in git_env()
+
+
+def test_git_env_keeps_extra() -> None:
     env = git_env({"GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z"})
-    assert "GIT_DIR" not in env
-    assert "GIT_WORK_TREE" not in env
     assert env["GIT_COMMITTER_DATE"] == "2026-01-01T00:00:00Z"
+
+
+def test_git_env_repr_shows_no_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failing ``subprocess.run(..., env=git_env(), check=True)`` has its arguments
+    printed by pytest; the environment's names and values must not be among them."""
+    monkeypatch.setenv("LODE_PROBE_SECRET", "hunter2")
+    env = git_env({"GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z"})
+    assert env["LODE_PROBE_SECRET"] == "hunter2"
+    shown = f"{env!r} {env}"
+    assert "hunter2" not in shown
+    assert "LODE_PROBE_SECRET" not in shown
+    assert "GIT_COMMITTER_DATE" not in shown
+
+
+def test_git_env_keeps_config_passed_through_the_environment(
+    scratch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``git -c`` and GIT_CONFIG_COUNT config is not a repository location: it still
+    reaches the scratch repo."""
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "lode.probe")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "count")
+    assert _git(scratch, "config", "lode.probe").stdout.strip() == "count"
+    monkeypatch.delenv("GIT_CONFIG_COUNT")
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'lode.probe'='parameters'")
+    assert _git(scratch, "config", "lode.probe").stdout.strip() == "parameters"
 
 
 def test_unscrubbed_git_would_hit_decoy(scratch: Path) -> None:

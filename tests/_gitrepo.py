@@ -52,7 +52,13 @@ from pathlib import Path
 
 @functools.cache
 def _local_env_vars() -> frozenset[str]:
-    """git's own list of repository-locating variables (GIT_DIR, GIT_WORK_TREE, ...)."""
+    """The variables that locate a repository (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, ...).
+
+    git's own list, minus the two that carry ``git -c`` / env-injected config. Those say
+    nothing about where the repository is, and git keeps the same two when it runs a command
+    in another repository itself: without them a machine that supplies ``user.name`` or
+    ``safe.directory`` through the environment would lose it for every test-side git call.
+    """
     out = subprocess.run(
         ["git", "rev-parse", "--local-env-vars"],
         capture_output=True,
@@ -60,7 +66,19 @@ def _local_env_vars() -> frozenset[str]:
         timeout=30,
         check=True,
     ).stdout
-    return frozenset(out.split())
+    return frozenset(out.split()) - {"GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"}
+
+
+class _GitEnv(dict[str, str]):
+    """An environment whose repr shows no variable.
+
+    pytest prints the arguments of the call that raised, so a ``subprocess.run(...,
+    env=..., check=True)`` that fails would otherwise print the head of the caller's
+    environment, credentials included, into the test output.
+    """
+
+    def __repr__(self) -> str:
+        return f"<git_env: {len(self)} variables>"
 
 
 def git_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -69,18 +87,21 @@ def git_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
 
     git exports those to hooks, so a test run under a hook (or any caller that sets them)
     would otherwise have ``cwd=scratch_repo`` ignored and act on the outer repository
-    (lode-wcpss). Every test that runs git directly passes ``env=git_env(...)``.
+    (lode-wcpss). A test that runs git directly passes ``env=git_env(...)``. A script under
+    test is not covered: it inherits whatever environment its own runner passes.
     """
-    env = {k: v for k, v in os.environ.items() if k not in _local_env_vars()}
+    env = _GitEnv((k, v) for k, v in os.environ.items() if k not in _local_env_vars())
     env.update(extra or {})
     return env
 
 
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+def _git(
+    repo: Path, *args: str, extra_env: Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess:
     result = subprocess.run(
         ["git", *args],
         cwd=repo,
-        env=git_env(),
+        env=git_env(extra_env),
         capture_output=True,
         text=True,
         timeout=30,
