@@ -408,7 +408,8 @@ def _slugs_for_file(path: Path, text_cache: dict[Path, str]) -> set[str]:
         slug = base if count == 0 else f"{base}-{count}"
         seen_counts[base] = count + 1
         slugs.add(slug)
-    slugs.update(_HTML_ANCHOR_RE.findall(text))
+    for _, line in _content_lines(text):
+        slugs.update(_HTML_ANCHOR_RE.findall(line))
     return slugs
 
 

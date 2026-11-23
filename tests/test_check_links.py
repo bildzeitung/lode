@@ -154,6 +154,15 @@ class TestDocsSlugCopyAgrees:
         assert docs_slug.anchor_slugs(text) == check_links._slugs_for_file(path, {})
         assert docs_slug.anchor_slugs(text) == {"heading"}
 
+    def test_anchor_tag_inside_a_fence_is_not_an_anchor(self, tmp_path):
+        """An explicit anchor tag inside a fenced block is literal code, so
+        neither anchor-set copy counts it (lode-ho02)."""
+        text = '```\n<a id="infence"></a>\n```\n## Out\n<a id="real"></a>\n'
+        path = _write(tmp_path, "a.md", text)
+        got = check_links._slugs_for_file(path, {})
+        assert got == {"out", "real"}
+        assert docs_slug.anchor_slugs(text) == got
+
     def test_any_fence_marker_still_closes_a_backtick_fence(self):
         """The any-marker close is this gate's recorded divergence from
         ``fence_parsing`` (see ``_content_lines``), so it is asserted on the
