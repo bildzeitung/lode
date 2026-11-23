@@ -16,8 +16,8 @@
 # What it does:
 #   1. Save a copy of the committed uv.lock, then move it in place:
 #      `uv lock --upgrade` (whole set), `uv lock --upgrade-package NAME`
-#      (only NAME and whatever it forces; every other pin stays put, except
-#      under the cooldown below), or, with --reconcile, plain `uv lock`
+#      (only NAME and whatever it forces; every other pin stays put), or,
+#      with --reconcile, plain `uv lock`
 #      (lode-trw1): re-resolve ONLY what a pyproject.toml edit made stale -- an
 #      added or removed dependency, a range or requires-python change --
 #      keeping every other pin. This is the remedy `nox -s lock_currency` names
@@ -26,9 +26,13 @@
 #
 #      RELEASE-AGE COOLDOWN (lode-3s4d): the two upgrade modes pass
 #      `--exclude-newer "$COOLDOWN"`; `--no-cooldown` omits it. The cutoff binds
-#      the WHOLE resolution, so it also moves a pin already in uv.lock that is
-#      younger than it BACK to an older release (open question: lode-hdob).
-#      What a run then shows, and when to override: docs/configuration.md,
+#      the WHOLE resolution, so a pin already in uv.lock that is younger than it
+#      would move BACK; every such pin is therefore also passed
+#      `--exclude-newer-package NAME=<upload time of the locked release>`
+#      (lode-hdob), so a cooled-down run never moves an existing pin back and
+#      a `--no-cooldown` security fix survives later cooled-down runs. A pin
+#      older than the cutoff gets none (why: dep_cooldown_exemptions in
+#      scripts/dep-churn-lib.sh). When to override: docs/configuration.md,
 #      "Lock-refresh release-age cooldown". uv records the cutoff in uv.lock's
 #      [options], which `uv lock --check` (nox -s lock_currency) reads as a
 #      stale lock, so a second plain `uv lock` follows: it drops the recorded
@@ -181,8 +185,13 @@ cleanup() {
 trap cleanup EXIT
 cp -f "$LOCK" "$SAVED_LOCK"
 
-# From here until the outcome is decided an UNGATED lock sits on disk.
-RESTORE_LOCK_ON_EXIT=1
+# The parsing, the rendering, the stub's skip policy and the cooldown exemptions
+# all live in the sourceable scripts/dep-churn-lib.sh so they are unit-tested
+# (tests/test_dep_churn_lib.py) rather than trapped in this script's uninvokable
+# middle.
+# shellcheck source=dep-churn-lib.sh
+. "$REPO/scripts/dep-churn-lib.sh"
+
 UV_LOCK_PLAIN=(uv lock -q)
 UV_LOCK_CMD=("${UV_LOCK_PLAIN[@]}")
 if [ "$RECONCILE" -eq 1 ]; then
@@ -199,7 +208,26 @@ if [ "$RECONCILE" -eq 0 ] && [ "$NO_COOLDOWN" -eq 0 ]; then
   APPLY_COOLDOWN=1
   UV_LOCK_CMD+=(--exclude-newer "$COOLDOWN")
   ATTEMPTED+=", $COOLDOWN release-age cooldown"
+  # Pins younger than the cutoff are held where they are (lode-hdob): each gets
+  # its own cutoff, the upload time of the release the lock holds. Both steps
+  # are checked: a run that lost its exemptions would move those pins back and
+  # still exit green.
+  if ! CUTOFF_TS="$(date -u -d "$COOLDOWN ago" +%Y-%m-%dT%H:%M:%S.000Z)"; then
+    echo "update-deps.sh: could not compute the cooldown cutoff with GNU date -d \"$COOLDOWN ago\" -- $LOCK is untouched." >&2
+    exit 1
+  fi
+  if ! EXEMPTIONS="$(dep_cooldown_exemptions "$LOCK" "$CUTOFF_TS")"; then
+    echo "update-deps.sh: could not read the pins younger than the cooldown cutoff from $LOCK -- $LOCK is untouched." >&2
+    exit 1
+  fi
+  while IFS= read -r exemption; do
+    if [ -n "$exemption" ]; then
+      UV_LOCK_CMD+=(--exclude-newer-package "$exemption")
+    fi
+  done <<< "$EXEMPTIONS"
 fi
+# From here until the outcome is decided an UNGATED lock sits on disk.
+RESTORE_LOCK_ON_EXIT=1
 # Checked explicitly: `bash scripts/update-deps.sh` drops the shebang's -e, and a
 # failed resolve must not carry on to a "no change" diff and a green exit.
 if ! "${UV_LOCK_CMD[@]}"; then
@@ -215,15 +243,9 @@ if [ "$APPLY_COOLDOWN" -eq 1 ] && ! "${UV_LOCK_PLAIN[@]}"; then
   exit 1
 fi
 
-# Readable name/version diff. The parsing, the rendering and the stub's skip
-# policy all live in the sourceable scripts/dep-churn-lib.sh so they are
-# unit-tested (tests/test_dep_churn_lib.py) rather than trapped in this
-# script's uninvokable middle. Both values below are assigned HERE, at top
-# level -- see that library's CONTRACT note for why nothing there may return a
-# value by setting a global.
-# shellcheck source=dep-churn-lib.sh
-. "$REPO/scripts/dep-churn-lib.sh"
-
+# Readable name/version diff. The values below are assigned HERE, at top level --
+# see dep-churn-lib.sh's CONTRACT note for why nothing there may return a value
+# by setting a global.
 CHANGES_RAW="$(dep_changes_raw "$SAVED_LOCK" "$LOCK")"
 DIFF_TEXT="$(dep_version_diff_text "$LOCK" "$CHANGES_RAW")"
 echo "$DIFF_TEXT"

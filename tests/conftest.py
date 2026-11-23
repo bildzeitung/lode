@@ -2044,6 +2044,25 @@ def fake_bin_env(bin_dir: Path) -> dict[str, str]:
     return dict(os.environ, PATH=path)
 
 
+def uv_lock_package(
+    name: str, version: str, *upload_times: str, source: str = "registry"
+) -> str:
+    """One uv.lock ``[[package]]`` table with one wheel per upload time.
+
+    ``source`` is the key of the table's ``source = { ... }`` line; only
+    ``registry`` packages carry upload times in a real lock.
+    """
+    wheels = "".join(
+        f'    {{ url = "w{i}", hash = "sha256:{"0" * 64}", upload-time = "{when}" }},\n'
+        for i, when in enumerate(upload_times)
+    )
+    return (
+        f'\n[[package]]\nname = "{name}"\nversion = "{version}"\n'
+        f'source = {{ {source} = "https://example/simple" }}\n'
+        f"wheels = [\n{wheels}]\n"
+    )
+
+
 def path_without_tool(tmp_path: Path, tool: str) -> str:
     """A PATH string that resolves every ordinary tool (git, bash, coreutils,
     ...) but never ``tool``.

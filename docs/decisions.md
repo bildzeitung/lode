@@ -6717,6 +6717,62 @@ Not covered by the ruling, open in `lode-hdob`: a pin taken with `--no-cooldown`
 the cutoff, so the next cooled-down run inside 7 days moves it back to the release it replaced.
 The version diff lists the line; nothing else flags it. Traced with the pins above, which were
 taken with no cutoff; not run with an actual `--no-cooldown` pin.
+  - **Update (lode-hdob, 2026-11-23, maintainer):** decided, so the "open in `lode-hdob`" above no
+    longer holds. Ruling 2026-11-21, as recorded on the ticket: "option (c). A cooled-down
+    update-deps.sh run never moves an existing pin back. Every package already in uv.lock gets
+    --exclude-newer-package NAME=&lt;upload-time of its currently locked version, read from
+    uv.lock&gt;, so the cutoff binds only releases newer than the pin. NOT 'NAME=now': that would let
+    an upgrade of an existing package take a release inside the window and defeat the cooldown."
+
+    Built: for every registry package whose locked release is younger than the cutoff,
+    `scripts/update-deps.sh` also passes `--exclude-newer-package NAME=<upload time of the locked
+    release>`, read from `uv.lock`'s own `upload-time` values (the newest across that package's
+    files; `dep_cooldown_exemptions` in `scripts/dep-churn-lib.sh`). The pin is kept, releases
+    uploaded after it are still excluded, and a `--no-cooldown` security fix is held by later
+    cooled-down runs. The script needs GNU `date -d`. The header of `scripts/update-deps.sh`,
+    `configuration.md` and `onboarding.md` state the same.
+
+    **The build is narrower than the ruling's wording, and this is the builder's and the
+    reviewer's reading, not a second maintainer statement.** The ruling names every package in
+    `uv.lock`; the build exempts only pins younger than the cutoff. uv's per-package date replaces
+    the global cutoff in both directions, so a pin older than the cutoff that is given its own
+    upload time cannot upgrade at all, and the literal form would make both upgrade modes change
+    nothing. Probed at review (below). What each package gets is the later of the global cutoff
+    and its pin's upload time, which keeps both things the ruling states: no pin moves back, and
+    every release uploaded after the pin is still bound.
+
+    Probes (uv 0.11.7, real PyPI, a copy of this repo's `pyproject.toml` and `uv.lock` on
+    2026-11-23; 17 packages exempted, `anthropic`, `zensical` and `zensical-ui` among them).
+    - At build: `uv lock --upgrade` and `uv lock --upgrade-package typer`, each with
+      `--exclude-newer "7 days"` plus the exemptions and followed by a plain `uv lock`, changed no
+      pin, and `uv lock --check` then exited 0. Repeated at review for `--upgrade`: the lock came
+      back byte-identical. So the fourth probe of this entry (a release `pyproject.toml` requires
+      inside the window) no longer fails when that release is already locked, which is what the
+      `zensical==0.1.3` refusal was.
+    - At review, an old pin upgrading under the exemptions, which the build had not probed. With
+      certifi, idna, httpcore2 and httpx2 first moved to older releases on the copy, the script's
+      own `--dry-run` took certifi 2026.5.20 -> 2026.10.23, idna 3.11 -> 3.20 and httpcore2 and
+      httpx2 2.3.0 -> 2.16.0 (not 2.16.2, which was inside the window), re-added httpx2-jsfetch,
+      which the staging had dropped, and moved none of the 15 pins still younger than the cutoff.
+      `--package certifi` moved certifi only; `--package typer`, a young pin, changed nothing.
+    - At review, the literal form: on the same staged lock, `uv lock --upgrade --exclude-newer
+      "7 days"` with the exemptions plus `certifi=<upload time of 2026.5.20>` left certifi at
+      2026.5.20 while idna and httpx2 upgraded.
+    - At review, why the newest file's time: `typer` exempted at its wheel's upload time, 1.2 s
+      before its sdist's, moved 0.29.2 -> 0.29.1. `uv.lock` drops trailing zeros from the
+      fraction (`...:20.49Z`), so the script compares the times on a fixed-width key; a plain
+      string comparison picks the wrong file when two times differ only past such a fraction.
+    - Not checked against a real run: a dependency `--reconcile` newly adds is exempted from the
+      next cooled-down run by the same rule.
+
+    Limit of the mechanism, not ruled on, open in `lode-amyi`: the per-package date admits every
+    release of that package uploaded up to it, so a cooled-down run can take a release inside the
+    window for an exempted package when a higher version was uploaded before the pin. Traced on a
+    throwaway project: urllib3 pinned at 1.26.20 (uploaded 2024-08-29) under a global cutoff of
+    2024-06-01 plus the exemption the script would pass went to 2.2.2 (uploaded 2024-06-17);
+    without the exemption it went to 2.2.1 (2024-02-18). The other shapes (a package locked at
+    two versions of which one is young, an old release that gained a file inside the window)
+    follow from the same rule and were not run.
 
 ## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 

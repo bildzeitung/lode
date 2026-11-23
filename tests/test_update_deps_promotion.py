@@ -26,7 +26,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import fake_bd, fake_bin_env
+from conftest import fake_bd, fake_bin_env, uv_lock_package
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 UPDATE_DEPS_SRC = REPO_ROOT / "scripts" / "update-deps.sh"
@@ -417,3 +417,56 @@ def test_no_cooldown_and_reconcile_are_mutually_exclusive(tmp_path: Path) -> Non
     assert result.returncode == 1
     assert "--no-cooldown" in result.stderr
     assert not (tmp_path / "uv_lock_args").exists()
+
+
+_YOUNG_PIN = uv_lock_package("young", "2.0.0", "2999-01-01T00:00:00.000Z")
+_OLD_PIN = uv_lock_package("old", "1.0.0", "2000-01-01T00:00:00.000Z")
+
+
+@pytest.mark.parametrize("extra_args", [(), ("--package", "old")])
+def test_cooled_down_run_exempts_only_pins_younger_than_the_cutoff(
+    tmp_path: Path, extra_args: tuple[str, ...]
+) -> None:
+    """lode-hdob: a pin younger than the cutoff gets its own cutoff, the upload
+    time of its locked release, so the global cutoff cannot move it back; an
+    older pin gets none. Which pins qualify is tested in test_dep_churn_lib.py;
+    this is the wiring, and the direction of the script's own cutoff."""
+    repo, bindir = _build_fake_repo(tmp_path)
+    (repo / "uv.lock").write_text(_YOUNG_PIN + _OLD_PIN, encoding="utf-8")
+
+    result = _run_update_deps(repo, bindir, extra_args=(*extra_args, "--no-file"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    first_call = _lock_calls(tmp_path)[0]
+    assert "--exclude-newer 7 days" in first_call
+    assert "--exclude-newer-package young=2999-01-01T00:00:00.000Z" in first_call
+    assert first_call.count("--exclude-newer-package") == 1
+
+
+@pytest.mark.parametrize("extra_args", [("--no-cooldown",), ("--reconcile",)])
+def test_no_exemptions_without_a_cutoff(
+    tmp_path: Path, extra_args: tuple[str, ...]
+) -> None:
+    repo, bindir = _build_fake_repo(tmp_path)
+    (repo / "uv.lock").write_text(_YOUNG_PIN, encoding="utf-8")
+
+    result = _run_update_deps(repo, bindir, extra_args=(*extra_args, "--no-file"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--exclude-newer-package" not in " ".join(_lock_calls(tmp_path))
+
+
+def test_a_run_that_cannot_read_its_exemptions_locks_nothing(tmp_path: Path) -> None:
+    """Carrying on with no exemptions would move every young pin back and exit
+    green, so the run stops before ``uv lock``."""
+    repo, bindir = _build_fake_repo(tmp_path)
+    (repo / "uv.lock").write_text(_YOUNG_PIN, encoding="utf-8")
+    _write_executable(bindir / "awk", "#!/bin/bash\nexit 1\n")
+
+    result = _run_update_deps(repo, bindir)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "could not read the pins younger than the cooldown cutoff" in result.stderr
+    assert "died after moving the lock" not in result.stderr
+    assert not (tmp_path / "uv_lock_args").exists()
+    assert (repo / "uv.lock").read_text(encoding="utf-8") == _YOUNG_PIN

@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# Sourceable helpers for scripts/update-deps.sh's VERSION DIFF and the filing
-# decision for its churn-evaluation stub ticket (lode-i642). Extracted so the
-# parsing, the rendering and the noise gate are covered by `nox -s shellcheck`
-# and tests/test_dep_churn_lib.py -- the same shape
-# scripts/gate-lib.sh and scripts/shell-quote-split.sh already use.
+# Sourceable helpers for scripts/update-deps.sh's VERSION DIFF, the filing
+# decision for its churn-evaluation stub ticket (lode-i642) and its cooldown
+# exemptions (lode-hdob). Extracted so the parsing, the rendering and the noise
+# gate are covered by `nox -s shellcheck` and tests/test_dep_churn_lib.py -- the
+# same shape scripts/gate-lib.sh and scripts/shell-quote-split.sh already use.
 #
 # CONTRACT: every function here returns its data on STDOUT and holds no
 # cross-call state. Callers assign the result themselves. That is deliberate
@@ -119,4 +119,36 @@ dep_stub_skip_reason() {
     return 1
   fi
   return 0
+}
+
+# NAME=UPLOAD-TIME lines on stdout, sorted by name, for every registry package
+# in the uv.lock-shaped file $1 whose locked release was uploaded after the
+# cutoff $2 (an ISO-8601 UTC timestamp ending in Z, as uv.lock writes them).
+# update-deps.sh hands each line to `uv lock --exclude-newer-package`, which
+# REPLACES the global cutoff for that package: the pin stays, and only releases
+# uploaded later than it are excluded (lode-hdob). A pin at or before the cutoff
+# is deliberately left out: its own upload time as the cutoff would stop it
+# upgrading at all (probed, docs/decisions.md).
+#
+# The time is the NEWEST upload-time among the package's files, across every
+# version it is locked at: a per-package cutoff earlier than any one file of
+# the locked release makes uv move the pin back (probed, docs/decisions.md).
+# uv.lock drops trailing zeros from the fraction ("...:02.83Z", "...:02Z"), so
+# times are compared on a fixed-width key, never as the raw strings.
+dep_cooldown_exemptions() {
+  awk -v cut="$2" -F'"' '
+    function key(t,   frac) {
+      frac = substr(t, 21)
+      sub(/Z$/, "", frac)
+      return substr(t, 1, 19) "." substr(frac "000000000", 1, 9)
+    }
+    /^\[\[package\]\]/ { n = ""; reg = 0 }
+    /^name = "/ && n == "" { n = $2 }
+    /^source = \{ registry/ { reg = 1 }
+    reg && match($0, /upload-time = "[^"]+"/) {
+      t = substr($0, RSTART + 15, RLENGTH - 16)
+      if (!(n in m) || key(t) > key(m[n])) m[n] = t
+    }
+    END { for (k in m) if (key(m[k]) > key(cut)) print k "=" m[k] }
+  ' "$1" | sort
 }
