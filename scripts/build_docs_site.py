@@ -390,12 +390,17 @@ def _missing_image_targets(text: str, page: Path) -> list[str]:
     (measured on 0.1.3). The staged tree is the site's whole input, so a
     target absent from it is absent from the site. Images inside code are
     examples, not images, and are skipped like links are.
+
+    A target ``_is_external`` is true for is not looked up: Zensical emits it
+    as written, a URL (measured on 0.1.3). So an image file named like a
+    scheme (``fig:1.png``) is not checked under that spelling; ``./fig:1.png``
+    is a path, and is checked.
     """
     protected = _code_ranges(text)
     missing = []
     for match in _IMAGE_RE.finditer(text):
         target = match.group(1)
-        if target.startswith(("http://", "https://", "data:")):
+        if _is_external(target):
             continue
         if any(lo <= match.start() < hi for lo, hi in protected):
             continue
