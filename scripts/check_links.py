@@ -127,11 +127,12 @@ A ``%20`` for the space is not read either (``%`` is outside the class):
 shape one is cut the same, and shape two then matches nothing.
 
 Cite such a page with a markdown link instead, which reads its own delimiters
-(angle brackets or percent-encoding, lode-tgr6). In a file outside
-``BARE_CITATION_EXCLUDE_DIRS`` the link's text goes through this pattern as
-well and can be cut the same way: write each space as ``%20``, and begin the
-destination with ``./`` where it would otherwise begin at the docs directory.
-The pattern then matches nothing in it. No tracked path holds a space today.
+(angle brackets or percent-encoding, lode-tgr6). In a markdown file outside
+``BARE_CITATION_EXCLUDE_DIRS`` the bare pass blanks out a link destination
+that holds a space or ``%20`` before matching (lode-wfy6i), so such a link is
+resolved once, whole, by the markdown walk and is not cut. A destination
+without either is still seen by the bare pass, as is the link's text.
+No tracked path holds a space today.
 """
 
 from __future__ import annotations
@@ -388,6 +389,20 @@ def _numbered_lines(text: str) -> Iterator[tuple[int, str]]:
     return enumerate(lines, start=1)
 
 
+def _mask_spaced_link_destinations(line: str) -> str:
+    """``line`` with each markdown link destination that holds a space (or a
+    ``%20``) blanked out. The markdown walk resolves such a destination whole;
+    left in place, the bare pattern would also read a shorter path out of it
+    and report that as missing (lode-wfy6i). Other destinations stay visible
+    to the bare walk, as before."""
+    for m in reversed(list(_LINK_RE.finditer(line))):
+        dest = 1 if m.group(1) is not None else 2
+        text = m.group(dest)
+        if " " in text or "%20" in text:
+            line = line[: m.start(dest)] + " " * len(text) + line[m.end(dest) :]
+    return line
+
+
 def _bare_doc_anchor_refs(text: str, *, skip_fences: bool) -> list[tuple[int, str]]:
     """``(line_number, target)`` for every bare ``docs/<path>.md#<anchor>``
     text reference in a tracked file -- no markdown link brackets required.
@@ -402,6 +417,8 @@ def _bare_doc_anchor_refs(text: str, *, skip_fences: bool) -> list[tuple[int, st
     lines = _content_lines(text) if skip_fences else _numbered_lines(text)
     refs = []
     for line_no, line in lines:
+        if skip_fences:
+            line = _mask_spaced_link_destinations(line)
         for m in _DOC_ANCHOR_REF_RE.finditer(line):
             refs.append((line_no, m.group(0)))
     return refs

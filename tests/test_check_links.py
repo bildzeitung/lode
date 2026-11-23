@@ -908,6 +908,34 @@ class TestBareDocAnchorRefs:
         )
         assert [target for _, target in refs] == matched
 
+    @pytest.mark.parametrize(
+        "dest",
+        [
+            f"<{_DOCS}/my {_DOCS}/page.md>",
+            f"<{_DOCS}/a.md notes.md>",
+            f"{_DOCS}/a.md%20notes.md",
+        ],
+    )
+    def test_live_spaced_link_outside_docs_is_not_reported(self, tmp_path, dest):
+        """lode-wfy6i: the bare pass does not cut a shorter path out of a link
+        destination the markdown walk resolves whole."""
+        _write(tmp_path, f"{_DOCS}/my {_DOCS}/page.md", "# P\n")
+        _write(tmp_path, f"{_DOCS}/a.md", "# A\n")
+        _write(tmp_path, f"{_DOCS}/a.md notes.md", "# N\n")
+        _write(tmp_path, "README.md", f"[x]({dest})\n")
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+    def test_dead_spaced_link_outside_docs_is_reported_once(self, tmp_path):
+        _write(tmp_path, f"{_DOCS}/a.md", "# A\n")
+        _write(tmp_path, "README.md", f"[x](<{_DOCS}/a.md gone.md>)\n")
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert [(e.line, e.target) for e in errors] == [(1, f"{_DOCS}/a.md gone.md")]
+
 
 def test_real_repo_passes_the_gate():
     """The acceptance criterion, for both passes at once: every relative
