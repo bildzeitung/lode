@@ -143,6 +143,28 @@ def test_rewrite_target(current: str, target: str, expected: str | None) -> None
     assert build_docs_site._rewrite_target(current, target, PUBLISHED) == expected
 
 
+def test_alias_fragment_is_matched_decoded_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The strict build's anchor check decodes a fragment and never tries it
+    as written (run on Zensical 0.1.3), so an id that itself holds a
+    percent-escape is not reached by the same text, only by that text encoded
+    once more. The link gate accepts the first spelling; this rule must not,
+    or the link it writes fails the docs build."""
+    monkeypatch.setattr(
+        build_docs_site, "_alias_anchors", lambda rel: frozenset({"a%20b", "c d"})
+    )
+    cases = {
+        "configuration.md#c%20d": "settings.md#c%20d",
+        "configuration.md#a%20b": f"{BASE}/docs/configuration.md#a%20b",
+        "configuration.md#a%2520b": "settings.md#a%2520b",
+    }
+    for target, expected in cases.items():
+        assert (
+            build_docs_site._rewrite_target("design.md", target, PUBLISHED) == expected
+        )
+
+
 def test_links_in_code_are_never_rewritten() -> None:
     """A markdown example inside a fence or backticks is documentation.
 
