@@ -28,7 +28,7 @@ and this is the recipe that actually reproduces (verified during lode-kq4v's tec
 The test below then fails, carrying the nested run's own
 ``AssertionError: assert '\\x1b[' not in ...`` at ``tests/test_cli.py`` -- the exact symptom
 lode-kq4v reported. Restoring the pops makes it pass again. No ambient ``FORCE_COLOR`` is needed:
-the helper sets it for the subprocess explicitly.
+the test sets it for the subprocess explicitly.
 
 Note the recipe must leave the four pop *statements'* names alone. An earlier version of this
 docstring said to replace a scrub ``for`` loop "with an empty iterable"; that raised
@@ -40,9 +40,8 @@ one.
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from _gitrepo import os_env
 from _nested_pytest import run_nested_pytest
 
 #: One of the six tests lode-kq4v found reddened by an ambient FORCE_COLOR -- any single one
@@ -90,7 +89,7 @@ def test_canary_passes_with_force_color_set_in_ambient_env() -> None:
     Contrast ``test_cli_console.py``'s control, which earns its keep by asserting a *different*
     value (``is False`` against ``is True``).
     """
-    env = dict(os.environ)
+    env = os_env()
     env["FORCE_COLOR"] = "3"
     # Both pollutants ride the SAME nested run: a second ~15-20s nested pytest session per
     # landing-gate pass buys nothing over one, and each canary can only be reddened by its own
