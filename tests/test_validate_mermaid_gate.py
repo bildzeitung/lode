@@ -44,12 +44,12 @@ probe passes) but whose ``run`` fails, across both sides of that partition; the
 per-code rationale is inline in the parametrize list.
 """
 
-import os
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+from _gitrepo import os_env
 from conftest import fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -124,11 +124,7 @@ def _run_gate(
     fake docker beats a real one here, and how the grep tests below beat a real
     grep.
     """
-    env = (
-        fake_bin_env(path_dir)
-        if inherit_path
-        else {**os.environ, "PATH": str(path_dir)}
-    )
+    env = fake_bin_env(path_dir) if inherit_path else os_env({"PATH": str(path_dir)})
     return subprocess.run(
         [str(SCRIPT)],
         cwd=REPO_ROOT,

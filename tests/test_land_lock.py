@@ -100,7 +100,7 @@ from pathlib import Path
 
 import conftest
 import pytest
-from _gitrepo import _git
+from _gitrepo import _git, os_env
 from conftest import (
     _BLOCKQUOTE_MARKER,
     LAND_SKILL_BASH,
@@ -168,7 +168,7 @@ def _write_stale_lock(repo: Path, *, age: int = 100_000) -> int:
 def _run(
     *args: str, repo: Path, env_overrides: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess:
-    env = {**os.environ, **(env_overrides or {})}
+    env = os_env(env_overrides)
     return subprocess.run(
         ["bash", str(SCRIPT), *args],
         cwd=repo,
@@ -1101,7 +1101,7 @@ def test_flock_missing_from_path_is_a_reported_machine_fault(tmp_path: Path) -> 
     # before trusting the assertion below to mean anything.
     probe = subprocess.run(
         ["bash", "-c", "command -v flock"],
-        env={**os.environ, "PATH": path_without_flock},
+        env=os_env({"PATH": path_without_flock}),
         capture_output=True,
         text=True,
         timeout=10,

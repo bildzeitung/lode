@@ -20,11 +20,10 @@ mid-pass. That file, not an env var, is this script's only real input beyond
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
-from _gitrepo import _git
+from _gitrepo import _git, os_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-heartbeat.sh"
@@ -65,7 +64,7 @@ def _run(*args: str, repo: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=30,
-        env=os.environ.copy(),
+        env=os_env(),
         check=False,
     )
 
@@ -77,7 +76,7 @@ def _land_lock(*args: str, repo: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=30,
-        env=os.environ.copy(),
+        env=os_env(),
         check=False,
     )
 

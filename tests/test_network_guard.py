@@ -22,7 +22,6 @@ has become a no-op and the guard is back to resting on ``pytest.fail`` raising a
 """
 
 import asyncio
-import os
 import socket
 import sqlite3
 import subprocess
@@ -31,6 +30,7 @@ from pathlib import Path
 
 import anthropic
 import pytest
+from _gitrepo import os_env
 from conftest import _OfflineQueryEmbedder, _unconsumed_violations_message
 
 from lode import embedding as embedding_module
@@ -402,7 +402,7 @@ def test_swallowed_violation_fails_the_run_in_teardown(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,  # a non-zero exit is the expected outcome, not an error
-        env={**os.environ, "PYTHONPATH": str(_TESTS_DIR)},
+        env=os_env({"PYTHONPATH": str(_TESTS_DIR)}),
         cwd=tmp_path,
         timeout=300,
     )

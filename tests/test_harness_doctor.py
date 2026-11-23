@@ -28,7 +28,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from _gitrepo import _git
+from _gitrepo import _git, os_env
 from _hookharness import SETTINGS
 from conftest import fake_bin_env
 
@@ -147,7 +147,7 @@ def test_missing_prerequisite_fails(tmp_path: Path) -> None:
         for p in os.environ.get("PATH", "").split(os.pathsep)
         if p and not (Path(p) / "bd").exists()
     )
-    result = _run(repo, env=dict(os.environ, PATH=without_bd))
+    result = _run(repo, env=os_env({"PATH": without_bd}))
     assert result.returncode == 1, result.stdout + result.stderr
     assert "bd NOT on PATH (required)" in result.stdout
 

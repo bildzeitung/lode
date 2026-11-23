@@ -19,12 +19,11 @@ cases below assert the *refusals* as hard as the reclaims:
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 from pathlib import Path
 
-from _gitrepo import _git
+from _gitrepo import _git, os_env
 from conftest import _CHECKOUT_ROOT as REPO_ROOT
 
 SCRIPT = REPO_ROOT / "scripts" / "worktree-gc-sweep.sh"
@@ -82,7 +81,7 @@ def _sweep(
         capture_output=True,
         text=True,
         check=False,
-        env={**os.environ, **(env or {})},
+        env=os_env(env),
     )
 
 

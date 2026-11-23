@@ -148,8 +148,8 @@ def _run_update_deps(
     extra_args: tuple[str, ...] = ("--no-file",),
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    env = dict(
-        fake_bin_env(bindir),
+    env = fake_bin_env(bindir)
+    env.update(
         NOX_TESTS_EXIT=str(nox_tests_exit),
         INSTALL_EXIT=str(install_exit),
         NOX_TESTS_SIGNAL_PARENT="1" if signal_parent else "0",
