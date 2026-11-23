@@ -388,6 +388,11 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
     gated-out enrich job ``done`` without a ``prompt_ver``, which would
     otherwise read as stale and re-enqueue on every pass.
 
+    ``lode status`` repeats both arms' target filters in
+    :func:`lode.jobs_read.refusal_dead_jobs`, so that it lists a refusal only
+    for a target this step looks at; a filter added to either arm here must be
+    added there too.
+
     Returns the count of gap versions found (each triggered one enqueue call).
     """
     settings = settings or Settings()
