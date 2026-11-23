@@ -24,8 +24,7 @@ The shape being forbidden, concretely: an ``if`` whose test is a literal
 fence-marker ``.startswith(...)`` call or ``in``/``not in`` membership check,
 whose body (or else-branch) assigns any value to a plain name -- i.e. a private
 open/close state (a boolean flag or a string-valued open marker).
-tests/conftest.py's own
-``fence_scan`` is exactly this shape, which is why it is the one sanctioned
+tests/conftest.py's own ``fence_scan`` is exactly this shape, which is why it is the one sanctioned
 exemption rather than something the gate could ever selectively allow inside
 other files.
 
