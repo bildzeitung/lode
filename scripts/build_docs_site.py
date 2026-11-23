@@ -44,7 +44,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import quote_from_bytes, unquote_to_bytes
+from urllib.parse import quote_from_bytes, unquote, unquote_to_bytes
 
 import typer
 
@@ -304,7 +304,12 @@ def _rewrite_target(
     # else falls through to the GitHub blob URL below, which still resolves to
     # exactly what was cited.
     alias = DERIVED_PAGE_ALIASES.get(root_rel_str)
-    if alias in published and (not fragment or fragment in _alias_anchors(alias)):
+    # Matched percent-decoded ONLY: the strict build's anchor check (run on
+    # Zensical 0.1.3) never tries a fragment as written, unlike the link gate,
+    # so `#a%20b` to an id spelled `a%20b` has to go to GitHub.
+    if alias in published and (
+        not fragment or unquote(fragment) in _alias_anchors(alias)
+    ):
         # A fresh relative link from the current page's directory: the alias
         # target's filename differs from what the source markdown wrote.
         current_dir = posixpath.dirname(current_rel)

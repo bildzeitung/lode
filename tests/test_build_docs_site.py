@@ -126,12 +126,39 @@ EXCLUDED = {
             "../configuration.md#no-such-section",
             f"{BASE}/docs/configuration.md#no-such-section",
         ),
+        # A percent-encoded fragment is looked up decoded and kept as written.
+        (
+            "design.md",
+            "configuration.md#async%2Dwork-queue",
+            "settings.md#async%2Dwork-queue",
+        ),
+        (
+            "design.md",
+            "configuration.md#no%2Dsuch-section",
+            f"{BASE}/docs/configuration.md#no%2Dsuch-section",
+        ),
         ("how-to/README.md", "../keybindings.md", "../keymap.md"),
         ("how-to/README.md", "../configuration.md", "../settings.md"),
     ],
 )
 def test_rewrite_target(current: str, target: str, expected: str | None) -> None:
     assert build_docs_site._rewrite_target(current, target, PUBLISHED) == expected
+
+
+def test_alias_fragment_is_matched_decoded_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unlike the link gate, never as written: the strict build (run on
+    Zensical 0.1.3) rejects ``#a%20b`` to an id spelled ``a%20b``."""
+    monkeypatch.setattr(
+        build_docs_site, "_alias_anchors", lambda rel: frozenset({"a%20b"})
+    )
+
+    def rewrite(target: str) -> str | None:
+        return build_docs_site._rewrite_target("design.md", target, PUBLISHED)
+
+    assert rewrite("configuration.md#a%20b") == f"{BASE}/docs/configuration.md#a%20b"
+    assert rewrite("configuration.md#a%2520b") == "settings.md#a%2520b"
 
 
 def test_links_in_code_are_never_rewritten() -> None:
