@@ -303,6 +303,7 @@ def test_update_deps_sources_the_library() -> None:
         "dep_version_diff_text",
         "dep_stub_skip_reason",
         "dep_cooldown_exemptions",
+        "dep_exempt_moves",
     ):
         assert fn in body, f"update-deps.sh stopped using {fn}"
 
@@ -313,12 +314,20 @@ def test_update_deps_sources_the_library() -> None:
 
 
 def test_exempt_moves_lists_only_moved_exempted_packages() -> None:
-    exemptions = "young=2026-11-18T09:00:00.1Z\nother=2026-11-19T00:00:00.000Z"
-    raw = "young\t1.0\t2.0\nfree\t1.0\t2.0\nother\t(none)\t1.0\ngone\t1.0\t(none)"
-    # young: exempted and moved; free: moved, not exempted; other: an addition.
+    exempted = ("young", "multi", "added", "gone")
+    exemptions = "\n".join(f"{name}=2026-11-18T09:00:00.1Z" for name in exempted)
+    raw = "\n".join(
+        (
+            "young\t1.0\t2.0",
+            "multi\t1.0\t1.0,2.0",  # gained a second locked version
+            "free\t1.0\t2.0",  # moved, not exempted
+            "added\t(none)\t1.0",
+            "gone\t1.0\t(none)",
+        )
+    )
     got = _run(f"dep_exempt_moves '{exemptions}' '{raw}'")
     assert got.returncode == 0, got.stderr
-    assert got.stdout.splitlines() == ["young\t1.0\t2.0"]
+    assert got.stdout.splitlines() == ["young\t1.0\t2.0", "multi\t1.0\t1.0,2.0"]
 
 
 def test_exempt_moves_is_empty_without_exemptions_or_moves() -> None:

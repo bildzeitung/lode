@@ -976,9 +976,12 @@ names `--no-cooldown`. The script needs GNU `date -d` to compute the cutoff time
 release inside the window when that release was uploaded before the pin, for example a higher
 version on a newer release line once `pyproject.toml` allows it. After the cooled-down pass the
 script compares every exempted package with its pre-run locked version; if any changed it prints
-each as `NAME OLD -> NEW`, restores `uv.lock` and exits 1. `--allow-exempt-move` lets the run
-proceed despite such a move (the version diff then shows it). The check applies to `--dry-run`
-too; `--no-cooldown` and `--reconcile` exempt nothing, so it never fires there.
+each as `NAME  OLD -> NEW`, restores `uv.lock` and exits 1, before anything is installed or
+gated. Only versions are compared, so a move to a release older than the cutoff is refused too
+(for example a pin moved down by a new cap in `pyproject.toml`); an exempted package that leaves
+the lock is not a move. With `--allow-exempt-move` the script names the moved pins and carries
+on. The check applies to `--dry-run` too; `--no-cooldown` and `--reconcile` exempt nothing, so
+it never fires there and the flag does nothing.
 
 **Override for a security fix that must be taken at once:**
 `scripts/update-deps.sh --package NAME --no-cooldown` (or `--no-cooldown` alone for the whole

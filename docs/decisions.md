@@ -6975,8 +6975,27 @@ taken with no cutoff; not run with an actual `--no-cooldown` pin.
     exempted pin should never move in a cooled-down run, so any move means the cooldown was
     bypassed for that package; a warning that scrolls by is too weak for a supply-chain rule.
     Built: `dep_exempt_moves` in `scripts/dep-churn-lib.sh`, called from `update-deps.sh` right
-    after the version diff is printed (so `--dry-run` is refused too, and the lock is restored by
-    the existing EXIT trap). Stated in `configuration.md`.
+    after the version diff is printed and before anything is installed or gated; the refusal
+    restores the lock itself. Stated in `configuration.md`.
+
+    **What the ruling does not state is the builder's and the reviewer's reading, not a second
+    maintainer statement.** `--dry-run` is refused too (exit 1), so a dry run does not exit 0 on
+    a run the real mode refuses. An exempted package that leaves the lock is not a move. With
+    `--allow-exempt-move` the script names the moved pins on stderr and carries on. The check
+    compares versions only, so it refuses more than the rationale's "the cooldown was bypassed"
+    covers: a move to a release older than the global cutoff (for example a pin moved down by a
+    new cap in `pyproject.toml`) is refused as well, and the message says the release taken can
+    be one inside the window, not that it is.
+
+    Probes at review (uv 0.11.7, real PyPI, 2026-11-23; the tests use a stub `uv`).
+    - The traced case above: a throwaway project with urllib3 locked at 1.26.20 and the script's
+      `COOLDOWN` set to `900 days` (a cutoff of 2024-06-06). `--dry-run` printed
+      `urllib3 1.26.20 -> 2.2.2`, refused with exit 1 and left the lock as it was;
+      `--dry-run --allow-exempt-move` named the pin and exited 0.
+    - A copy of this repo's `pyproject.toml` and `uv.lock`, 14 pins exempted: `--dry-run` and
+      `--dry-run --package typer` changed no pin and were not refused.
+    - Not run against a real `uv`: a refusal outside `--dry-run`, a move to a release older than
+      the cutoff, and the two-version and late-file shapes named above.
 
 ## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 

@@ -42,9 +42,10 @@
 #      pin: no flag, and UV_EXCLUDE_NEWER is unset.
 #      EXEMPTED PINS MUST NOT MOVE (lode-amyi): a per-package date replaces the
 #      global cutoff, so an exempted package can still take a release inside the
-#      window that was uploaded before its pin. After the run, if any exempted
-#      package changed version the script prints each as "pkg OLD -> NEW" and
-#      exits 1 (lock restored), unless --allow-exempt-move is given.
+#      window that was uploaded before its pin. Once the VERSION DIFF of step 2
+#      is printed, --dry-run included, if any exempted package changed version
+#      the script prints each as "pkg  OLD -> NEW", restores the lock and exits
+#      1. With --allow-exempt-move it prints them and carries on.
 #   2. Print a readable VERSION DIFF between the saved copy and the moved
 #      uv.lock -- one line per changed package, "pkg  OLD -> NEW" for a bump,
 #      "+ pkg VERSION" for an addition, "- pkg  VERSION (removed)" -- derived
@@ -262,13 +263,21 @@ CHANGES_RAW="$(dep_changes_raw "$SAVED_LOCK" "$LOCK")"
 DIFF_TEXT="$(dep_version_diff_text "$LOCK" "$CHANGES_RAW")"
 echo "$DIFF_TEXT"
 
-# A pin the cooldown exempted must not move (lode-amyi); the EXIT trap restores the lock.
-if [ "$ALLOW_EXEMPT_MOVE" -eq 0 ] && [ -n "$EXEMPTIONS" ]; then
-  EXEMPT_MOVES="$(dep_exempt_moves "$EXEMPTIONS" "$CHANGES_RAW")"
-  if [ -n "$EXEMPT_MOVES" ]; then
-    echo "update-deps.sh: REFUSED -- the cooldown exempted these pins (younger than the cutoff) and they moved, so a release inside the window was taken:" >&2
-    printf '%s\n' "$EXEMPT_MOVES" | awk -F'\t' '{ printf "  %s  %s -> %s\n", $1, $2, $3 }' >&2
-    echo "update-deps.sh: $LOCK is restored; --allow-exempt-move proceeds anyway." >&2
+# A pin the cooldown exempted must not move (lode-amyi). Only versions are
+# compared, so a move to a release older than the cutoff is refused as well.
+if [ -n "$EXEMPTIONS" ]; then
+  EXEMPT_MOVES="$(dep_exempt_moves "$EXEMPTIONS" "$CHANGES_RAW" |
+    awk -F'\t' '{ printf "  %s  %s -> %s\n", $1, $2, $3 }')"
+  if [ -n "$EXEMPT_MOVES" ] && [ "$ALLOW_EXEMPT_MOVE" -eq 1 ]; then
+    echo "update-deps.sh: WARNING -- --allow-exempt-move: carrying on although these cooldown-exempted pins moved:" >&2
+    echo "$EXEMPT_MOVES" >&2
+  elif [ -n "$EXEMPT_MOVES" ]; then
+    # Restored here, not by the EXIT trap: the trap's message reports a death.
+    cp -f "$SAVED_LOCK" "$LOCK"
+    RESTORE_LOCK_ON_EXIT=0
+    echo "update-deps.sh: REFUSED -- these pins are younger than the cooldown cutoff, so the run exempted them, and they moved; the release taken can be one inside the window:" >&2
+    echo "$EXEMPT_MOVES" >&2
+    echo "update-deps.sh: $LOCK is restored; --allow-exempt-move carries on despite such a move." >&2
     exit 1
   fi
 fi

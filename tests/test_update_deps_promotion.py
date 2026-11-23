@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -474,26 +473,32 @@ def test_a_run_that_cannot_read_its_exemptions_locks_nothing(tmp_path: Path) -> 
 
 
 def _young_pin_repo(tmp_path: Path) -> tuple[Path, Path]:
-    """A fake repo whose locked ``mypkg`` was uploaded a day ago, so the cooldown
-    exempts it; the stub ``uv lock`` then moves it 1.0.0 -> 2.0.0 (lode-amyi)."""
+    """A fake repo whose locked ``mypkg`` is younger than the cutoff, so the
+    cooldown exempts it; the stub ``uv lock`` then moves it 1.0.0 -> 2.0.0
+    (lode-amyi)."""
     repo, bindir = _build_fake_repo(tmp_path)
-    when = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     (repo / "uv.lock").write_text(
-        uv_lock_package("mypkg", "1.0.0", when), encoding="utf-8"
+        uv_lock_package("mypkg", "1.0.0", "2999-01-01T00:00:00.000Z"),
+        encoding="utf-8",
     )
     return repo, bindir
 
 
-def test_a_moved_exempted_pin_is_refused_and_the_lock_restored(tmp_path: Path) -> None:
+@pytest.mark.parametrize("extra_args", [("--no-file",), ("--dry-run",)])
+def test_a_moved_exempted_pin_is_refused_and_the_lock_restored(
+    tmp_path: Path, extra_args: tuple[str, ...]
+) -> None:
     repo, bindir = _young_pin_repo(tmp_path)
     original = (repo / "uv.lock").read_text(encoding="utf-8")
 
-    result = _run_update_deps(repo, bindir)
+    result = _run_update_deps(repo, bindir, extra_args=extra_args)
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert "REFUSED" in result.stderr
     assert "mypkg  1.0.0 -> 2.0.0" in result.stderr
+    assert "died after moving the lock" not in result.stderr
     assert (repo / "uv.lock").read_text(encoding="utf-8") == original
+    assert not (repo / ".venv").exists()  # nothing was installed
     assert not (tmp_path / "lock_during_gate").exists()  # no gate ran
 
 
@@ -506,6 +511,7 @@ def test_allow_exempt_move_lets_the_run_proceed(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "REFUSED" not in result.stderr
+    assert "mypkg  1.0.0 -> 2.0.0" in result.stderr  # named, not only in the diff
     assert (repo / "uv.lock").read_text(encoding="utf-8") == CANDIDATE_LOCK
 
 
@@ -519,3 +525,4 @@ def test_an_unmoved_exempted_pin_passes(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "REFUSED" not in result.stderr
+    assert "--allow-exempt-move" not in result.stderr
