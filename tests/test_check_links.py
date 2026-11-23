@@ -8,6 +8,7 @@ locking the exact real-world case that motivated the gate.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -411,13 +412,21 @@ class TestBareDocAnchorRefs:
         assert errors[0].target == f"{_DOCS}/release.md#no-such-anchor"
         assert "no heading slug" in errors[0].reason
 
-    def test_bare_reference_in_file_whose_name_has_a_space_is_reported(self, tmp_path):
-        _write(tmp_path, "scripts/a b.sh", f"# {_DOCS}/does-not-exist.md\n")
+    @pytest.mark.parametrize(
+        "name",
+        ["a b.sh", "café.sh", os.fsdecode(b"bad\xff.sh"), "a\rb.sh"],
+        ids=["space", "non-ascii", "not-utf-8", "carriage-return"],
+    )
+    def test_bare_reference_in_oddly_named_file_is_reported(self, tmp_path, name):
+        """A tracked name that plain ``git ls-files`` output cannot carry
+        whole: split at the space, C-quoted for the other three."""
+        source = _write(tmp_path, f"scripts/{name}", f"# {_DOCS}/does-not-exist.md\n")
         _git_init(tmp_path)
 
         errors = check(tmp_path)
 
         assert len(errors) == 1
+        assert errors[0].source == source
         assert "does not exist" in errors[0].reason
 
     def test_bare_reference_to_missing_file_is_reported(self, tmp_path):

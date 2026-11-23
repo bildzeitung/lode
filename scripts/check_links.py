@@ -105,6 +105,7 @@ megabytes of resident text for no saved read.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -225,14 +226,16 @@ def _tracked_paths(root: Path) -> list[Path]:
     identical unscoped one, forking git twice bought nothing.
 
     ``-z``: NUL-separated and never C-quoted, so a path holding a space or a
-    non-ASCII byte reaches ``Path`` as the real name."""
+    non-ASCII byte reaches ``Path`` as the real name. The output is read as
+    bytes and each name goes through ``os.fsdecode``: text mode would raise on
+    a name that is not valid in the locale encoding and would turn a carriage
+    return in a name into a newline."""
     out = subprocess.run(
         ["git", "-C", str(root), "ls-files", "-z"],
         capture_output=True,
-        text=True,
         check=True,
     ).stdout
-    return [Path(p) for p in out.split("\0") if p]
+    return [Path(os.fsdecode(p)) for p in out.split(b"\0") if p]
 
 
 def _tracked_markdown_files(root: Path, tracked: list[Path]) -> list[Path]:
