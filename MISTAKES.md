@@ -4,6 +4,24 @@ Log of mistakes made while working on this repo (CLAUDE.md, General Directive 9)
 Each entry: what happened / root cause / consequence / the rule that prevents a repeat.
 Newest first.
 
+## 2026-11-23 — A memory-bound claim in docs/ could not be re-verified because the measurement script behind it was not kept
+
+- **What happened:** `lode-2brb` recorded that a periodic optimize held `VectorStore` RSS flat
+  on lancedb 0.38, and `docs/configuration.md` and `config.py` then said the
+  `vectorstore_optimize_interval` knob "bounds" memory. `lode-ju9d` re-measured on 0.38 and saw
+  linear growth with or without the prune. The `lode-2brb` script had not been kept, so it was
+  impossible to tell whether the earlier plateau was real under different parameters or a
+  measurement artifact. `lode-ju9d`'s own probe scripts were not committed either (found by its
+  land-review).
+- **Root cause:** the numbers behind a design claim in `docs/` came from a throwaway script whose
+  workload parameters (rows per call, vector width, pacing) were neither committed nor recorded.
+- **Consequence:** a config knob claimed a memory bound that does not reproduce, and the
+  follow-up had to re-derive the method from scratch before it could establish a baseline.
+- **Rule that prevents a repeat:** when a `docs/` entry records measured numbers that a claim
+  depends on, commit the harness under `scripts/` (as `lode-eadh` did with
+  `scripts/measure_enrich_batch.py`), or at minimum record every workload parameter in the
+  entry, so the claim can be re-run when a dependency changes.
+
 ## 2026-11-21 — A live measurement harness scanned `versions` for its sample, sent superseded note versions to the provider, and recorded 13 notes where 9 exist
 
 - **What happened:** `scripts/measure_enrich_batch.py` (`lode-eadh`) chose its real-note sample
