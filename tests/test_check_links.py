@@ -238,6 +238,16 @@ class TestDocsSlugCopyAgrees:
                 set(),
                 id="tag-between-two-wrapped-spans",
             ),
+            pytest.param(
+                'ends`` <a id="lost"></a> and ``starts\n',
+                set(),
+                id="tag-between-two-wrapped-double-spans",
+            ),
+            pytest.param(
+                'ends` <a id="kept"></a> and ``starts\n',
+                {"kept"},
+                id="tag-between-wrapped-runs-of-different-length",
+            ),
         ],
     )
     def test_anchor_tag_code_span_limits(self, tmp_path, text, expected):
@@ -246,26 +256,16 @@ class TestDocsSlugCopyAgrees:
         (double-backtick spans showing a literal backtick included); a tag in
         a double-backtick span is stripped; a tag in an indented code block
         still counts (not recognised as code); and a real tag between the
-        close of one wrapped span and the open of the next is lost."""
+        close of one wrapped span and the open of the next is lost when the
+        two backtick runs are the same length, kept when they differ."""
         path = _write(tmp_path, "a.md", text)
         assert check_links._slugs_for_file(path, {}) == expected
         assert docs_slug.anchor_slugs(text) == expected
 
-    @pytest.mark.parametrize(
-        ("text", "expected"),
-        [
-            pytest.param("``[x](a.md)``\n", [], id="link-in-double-backtick-span"),
-            pytest.param(
-                "`` ` `` [x](a.md) `` ` ``\n",
-                [(1, "a.md")],
-                id="link-between-literal-backtick-double-spans",
-            ),
-        ],
-    )
-    def test_link_code_span_runs(self, text, expected):
-        """A link in a double-backtick span is code; a real link between two
-        double-backtick spans that each show a literal backtick is kept."""
-        assert check_links._links_in_file(text) == expected
+    def test_inline_code_pattern_is_the_gate_copy(self):
+        """``tests/test_build_docs_site.py`` holds the site builder's copy to
+        this one, so the three cannot drift apart."""
+        assert docs_slug._INLINE_CODE_RE.pattern == check_links._INLINE_CODE_RE.pattern
 
     def test_anchor_tag_split_across_lines_is_not_an_anchor(self, tmp_path):
         """Both anchor-set copies match the tag one line at a time, so a tag
@@ -369,6 +369,29 @@ class TestCheck:
         _git_init(tmp_path)
 
         assert check(tmp_path) == []
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            pytest.param("``[x](a.md)``\n", [], id="link-in-double-backtick-span"),
+            pytest.param(
+                "`` ` `` [x](a.md) `` ` ``\n",
+                [(1, "a.md")],
+                id="link-between-literal-backtick-double-spans",
+            ),
+            pytest.param(
+                "ends`` [x](a.md) and ``starts\n",
+                [],
+                id="link-between-two-wrapped-double-spans",
+            ),
+        ],
+    )
+    def test_link_code_span_runs(self, text, expected):
+        """A link in a double-backtick span is code; a real link between two
+        double-backtick spans that each show a literal backtick is kept; a
+        real link between the close of one wrapped span and the open of the
+        next, both runs the same length, is lost."""
+        assert check_links._links_in_file(text) == expected
 
     def test_heading_inside_fenced_code_block_is_not_a_real_heading(self, tmp_path):
         """A shell comment like ``# run tests`` inside a fenced code block

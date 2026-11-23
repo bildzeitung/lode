@@ -140,7 +140,7 @@ _LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 # an opening backtick run, the shortest text, and a closing run of exactly
 # the same length (CommonMark), matched on ONE line. Not recognised: a span
 # wrapped across lines and a backslash-escaped backtick, so whatever sits
-# between two such backticks on a line is stripped.
+# between two such backtick runs of the same length on a line is stripped.
 _INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`).+?(?<!`)\1(?!`)")
 _LINK_TEXT_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _ATX_HEADING_RE = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
@@ -420,10 +420,10 @@ def _slugs_for_file(path: Path, text_cache: dict[Path, str]) -> set[str]:
     anchor.
 
     An inline code span here is exactly what ``_INLINE_CODE_RE`` strips, so
-    its limits are this function's: a real tag between two backticks that do
-    not delimit one span (a wrapped span's close and the next one's open, or
-    escaped backticks) is lost. Indented code blocks are not tracked at all,
-    so a tag in one still counts.
+    its limits are this function's: a real tag between two backtick runs of
+    the same length that do not delimit one span (a wrapped span's close and
+    the next one's open, or escaped backticks) is lost. Indented code blocks
+    are not tracked at all, so a tag in one still counts.
 
     Reads through ``text_cache`` (lode-6e9c): a link *target* is almost
     always some ``docs/*.md`` page the bracketed walk already read as a
