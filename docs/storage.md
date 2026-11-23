@@ -734,9 +734,12 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
   `jobs_read.refusal_dead_jobs`), because a dead row is permanent and outlives its
   re-opening. A refusal stands while the row matches the re-open key above and is still
   what keeps `enrich_gap` from re-opening the item: for a note, the row targets the
-  current head and no later enrich job for that head is live, or `done` with a `prompt_ver`
-  (a job that skipped its target, such as one gated out by `no_egress`, is `done` without
-  one and has not retried anything); for an external, the row is the in-force enrich job.
+  current head and no later enrich job for that head is live, or `done` under the current
+  `ENRICH_PROMPT_VER` (`lode-ocdr`). That is the only `done` job `enrich_gap` counts as
+  enriched: a job that skipped its target, such as one gated out by `no_egress`, is `done`
+  without a `prompt_ver`, and one done under another prompt version is not current, so
+  after either the refusal still holds the head. For an external, the row is the in-force
+  enrich job; a later job of any kind is in force in its place.
   The target must also be one `enrich_gap` looks at at all (`lode-2fyr`): a refusal on a
   `no_egress` note, a purged or deleted head, an external whose head snapshot is a
   tombstone, or an external that is `no_egress` by its flag or by a `no_egress_scopes` rule
@@ -751,8 +754,9 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
   of a refused external stays under the self-healing hint, whose caveat names a superseded
   target. When
   `config.toml` cannot be read there is no model or provider to compare and no scope rules
-  to apply, so the key and the scope-rule test are skipped (a scope-denied external's
-  refusal stays listed) and only the tests on the rows themselves apply.
+  to apply, so the whole key, prompt version included, and the scope-rule test are skipped
+  (a refusal stamped under another prompt version stays listed, as does a scope-denied
+  external's refusal) and only the tests on the rows themselves apply.
 
 See `docs/decisions.md`, `lode-ahme`.
 

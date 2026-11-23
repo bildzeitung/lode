@@ -65,6 +65,7 @@ from lode.hashing import NO_PARENT, content_version_id
 from lode.ids import short_version_id
 from lode.jobs import enqueue_derive_jobs, now_iso
 from lode.llm_provider import AnthropicProvider, LLMAuthError, LLMProviderError
+from lode.reconcile import _enrich_gap_step
 from lode.redact import REDACTION_MARKER
 from lode.storage import init_db
 from lode.versions import delete, purge, save
@@ -7735,34 +7736,20 @@ def test_status_drops_a_note_refusal_reconcile_never_retries(
     assert "self-healing" in out
 
 
-def test_status_keeps_a_note_refusal_after_a_gated_out_later_job(
-    tmp_path: Path, warm_model_cache: None
+@pytest.mark.parametrize(
+    "later_prompt_ver",
+    [
+        # A job gated out by no_egress is done with prompt_ver NULL.
+        None,
+        # lode-ocdr: done under a prompt version that is not the current one.
+        "an-older-prompt-ver",
+    ],
+)
+def test_status_keeps_a_note_refusal_after_a_later_done_job_reconcile_does_not_count(
+    tmp_path: Path, warm_model_cache: None, later_prompt_ver: str | None
 ) -> None:
-    # A later job gated out by no_egress is done with prompt_ver NULL, which
-    # reconcile does not count as enriched, so the refusal still stands.
-    db_path = tmp_path / "lode.db"
-    conn = init_db(db_path)
-    try:
-        _seed_standing_refusal_head(conn)
-        with conn:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
-                "VALUES ('enrich', 'ver-dddddddddddddddd', 'done', ?)",
-                (now_iso(),),
-            )
-    finally:
-        conn.close()
-    result = runner.invoke(app, ["status", "--db", str(db_path)])
-    assert result.exit_code == 0
-    out = " ".join(result.stdout.split())
-    assert "refused by the model (category: cyber); not retried" in out
-
-
-def test_status_keeps_a_note_refusal_after_a_later_job_done_under_another_prompt(
-    tmp_path: Path, warm_model_cache: None
-) -> None:
-    # lode-ocdr: reconcile counts only a job done under the current prompt
-    # version as enriched, so it still holds the head on the refusal.
+    # Reconcile counts only a job done under the current prompt version as
+    # enriched, so after either later job it still holds the head on the refusal.
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -7770,10 +7757,10 @@ def test_status_keeps_a_note_refusal_after_a_later_job_done_under_another_prompt
         with conn:
             conn.execute(
                 "INSERT INTO jobs (type, target_version, status, next_attempt_at, "
-                "prompt_ver) VALUES ('enrich', 'ver-dddddddddddddddd', 'done', ?, "
-                "'an-older-prompt-ver')",
-                (now_iso(),),
+                "prompt_ver) VALUES ('enrich', 'ver-dddddddddddddddd', 'done', ?, ?)",
+                (now_iso(), later_prompt_ver),
             )
+        assert _enrich_gap_step(conn) == 0
     finally:
         conn.close()
     result = runner.invoke(app, ["status", "--db", str(db_path)])

@@ -78,9 +78,11 @@ def refusal_dead_jobs(
       whose "already moot" caveat names these cases.
 
     ``refusal_params=None`` (no resolvable settings) skips the key comparison,
-    and an empty ``no_egress_scopes`` skips the scope test, so without
-    settings a scope-denied external's refusal stays listed; the tests on the
-    rows themselves need no settings and still apply.
+    prompt version included, so a refusal stamped under another prompt version
+    stays listed, even after a later job done under that version. An empty
+    ``no_egress_scopes`` skips the scope test, so without settings a
+    scope-denied external's refusal stays listed too. The tests on the rows
+    themselves need no settings and still apply.
 
     The category is None when the provider supplied none.
     """
