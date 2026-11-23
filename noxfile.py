@@ -314,11 +314,12 @@ def shellcheck(session: nox.Session) -> None:
     ``_venv_tool`` (lode-0yfn) — see its docstring.
     """
     files = subprocess.run(
-        ["git", "ls-files", "*.sh"],
+        ["git", "ls-files", "-z", "*.sh"],
         capture_output=True,
-        text=True,
         check=True,
-    ).stdout.split()
+    ).stdout
+    # -z, bytes, fsdecode per name: a path with a space or non-ASCII byte stays whole.
+    files = [os.fsdecode(p) for p in files.split(b"\0") if p]
     if not files:
         session.skip("no tracked shell scripts to check")
     session.run(_venv_tool(session, "shellcheck"), "--severity=warning", *files)

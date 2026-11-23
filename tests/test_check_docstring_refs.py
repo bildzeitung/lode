@@ -117,6 +117,14 @@ class TestCheck:
         assert unresolved[0].ref == "lode.timestamps.this_symbol_was_renamed_away"
         assert unresolved[0].line_no == 1
 
+    def test_ref_in_python_file_with_space_in_name_is_reported(self, tmp_path):
+        role = _role("func", "lode.timestamps.this_symbol_was_renamed_away")
+        _write(tmp_path, "tests/my test.py", f'"""See {role}."""\n')
+        _git_init(tmp_path)
+
+        unresolved, _wrapped = check(tmp_path)
+        assert [f.path.name for f in unresolved] == ["my test.py"]
+
     def test_third_party_ref_is_never_flagged(self, tmp_path):
         func_role = _role("func", "httpx.get")
         class_role = _role("class", "pathlib.Path")
