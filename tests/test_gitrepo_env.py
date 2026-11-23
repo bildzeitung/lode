@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from _gitrepo import _commit_file, _git, _local_env_vars, git_env
+from _gitrepo import _commit_file, _git, _local_env_vars, git_env, os_env
 from conftest import tracked_paths
 
 
@@ -97,3 +97,17 @@ def test_unscrubbed_git_would_hit_decoy(scratch: Path) -> None:
         ["git", "ls-files"], cwd=scratch, capture_output=True, text=True, check=True
     ).stdout.split()
     assert out == ["decoy.txt"]
+
+
+def test_os_env_repr_shows_no_variable_and_keeps_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LODE_PROBE_SECRET", "probe-value-1234567890")
+    monkeypatch.setenv("GIT_DIR", "/decoy")
+    env = os_env({"EXTRA": "x"})
+    assert env["LODE_PROBE_SECRET"] == "probe-value-1234567890"
+    assert env["GIT_DIR"] == "/decoy"
+    assert env["EXTRA"] == "x"
+    assert "probe-value" not in repr(env)
+    assert "LODE_PROBE_SECRET" not in repr(env)
+    assert repr(env) != repr(dict(env))

@@ -45,6 +45,7 @@ from types import SimpleNamespace
 import click
 import pytest
 import typer.main
+from _gitrepo import os_env
 from conftest import claims_response
 from rich.console import Console
 from rich.table import Table
@@ -6106,7 +6107,7 @@ def test_config_output_has_no_ansi_when_piped(tmp_path: Path) -> None:
     # actually needs to exercise NO_COLOR detection: a fresh subprocess with
     # the env set before import, not a monkeypatch after.
     home = tmp_path / "home"
-    env = {**os.environ, "LODE_HOME": str(home), "NO_COLOR": "1", "COLUMNS": "80"}
+    env = os_env({"LODE_HOME": str(home), "NO_COLOR": "1", "COLUMNS": "80"})
     result = subprocess.run(
         [sys.executable, "-m", "lode.cli", "config"],
         env=env,

@@ -95,6 +95,18 @@ def git_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def os_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
+    """A full copy of ``os.environ`` plus ``extra``, with a repr that shows no variable.
+
+    For a test's ``subprocess.run(..., env=..., check=True)``: pytest prints the arguments of
+    a call that raised, so a plain copy would print the head of the environment, credentials
+    included (lode-ovcvs). Unlike ``git_env`` nothing is removed.
+    """
+    env = _GitEnv(os.environ)
+    env.update(extra or {})
+    return env
+
+
 def _git(
     repo: Path, *args: str, extra_env: Mapping[str, str] | None = None
 ) -> subprocess.CompletedProcess:

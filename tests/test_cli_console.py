@@ -54,9 +54,10 @@ docs/stack.md's ``rich`` row each carry their own local design conclusion
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
+
+from _gitrepo import os_env
 
 
 def _console_no_color(*, no_color_env: str | None) -> bool:
@@ -68,7 +69,7 @@ def _console_no_color(*, no_color_env: str | None) -> bool:
     to exercise this path, which nothing in-process can do (see module
     docstring).
     """
-    env = dict(os.environ)
+    env = os_env()
     if no_color_env is None:
         env.pop("NO_COLOR", None)
     else:
