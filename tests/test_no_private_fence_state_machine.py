@@ -22,8 +22,9 @@ passes for free.
 
 The shape being forbidden, concretely: an ``if`` whose test is a literal
 fence-marker ``.startswith(...)`` call or ``in``/``not in`` membership check,
-whose body (or else-branch) assigns a boolean-flag-shaped value to a plain
-name -- i.e. a private open/close toggle. tests/conftest.py's own
+whose body (or else-branch) assigns any value to a plain name -- i.e. a private
+open/close state (a boolean flag or a string-valued open marker).
+tests/conftest.py's own
 ``fence_scan`` is exactly this shape, which is why it is the one sanctioned
 exemption rather than something the gate could ever selectively allow inside
 other files.
@@ -31,12 +32,8 @@ other files.
 Two things it deliberately does not do. It does not resolve names: a fence
 marker hoisted to a module constant (``_FENCE = "```"`` ... ``if
 line.startswith(_FENCE)``) puts no literal in the ``if`` test and slips
-through, as does the precompiled-regex shape below. And the flag-shape
-narrowing is, today, unexercised -- measured over every scanned module, ZERO
-``if``s carry a literal fence marker in their test at all, so nothing in the
-repo currently depends on the toggle half to stay green. It is kept because
-reading ``fence_scan``'s output and testing a block's own leading marker is a
-legitimate shape (pinned below) that the marker test alone would reject. This
+through, as does the precompiled-regex shape below. Reading ``fence_scan``'s output and testing a block's own leading marker
+without assigning to a name is a legitimate shape (pinned below). This
 gate catches the shapes that have actually recurred five times, not an
 adversary.
 """
@@ -99,26 +96,15 @@ def _is_fence_marker_test(test: ast.expr) -> bool:
     return False
 
 
-def _looks_like_a_boolean_flag(value: ast.expr) -> bool:
-    """Whether an assigned value is the shape a fence open/close flag takes:
-    a literal bool, a ``not <flag>`` toggle, a ternary, a boolean combinator,
-    or a comparison (a membership test deciding the new state) -- every shape
-    the five prior private machines used to flip their flag."""
-    if isinstance(value, ast.Constant) and isinstance(value.value, bool):
-        return True
-    if isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.Not):
-        return True
-    return isinstance(value, (ast.IfExp, ast.BoolOp, ast.Compare))
-
-
-def _toggles_a_flag(body: list[ast.stmt]) -> bool:
-    """Whether any statement in ``body`` assigns a boolean-flag-shaped value
-    to a plain name -- searched recursively, since the assignment may sit one
-    level deeper (e.g. inside a nested ``if``/``else``)."""
+def _assigns_a_plain_name(body: list[ast.stmt]) -> bool:
+    """Whether any statement in ``body`` assigns ANY value to a plain name --
+    searched recursively, since the assignment may sit one level deeper (e.g.
+    inside a nested ``if``/``else``). Any value, not just a boolean-flag shape:
+    a machine keeping the open marker in a string variable (``fence = marker``
+    / ``fence = ''``) is the same private open/close state (lode-8ph6)."""
     return any(
         isinstance(sub, ast.Assign)
         and any(isinstance(t, ast.Name) for t in sub.targets)
-        and _looks_like_a_boolean_flag(sub.value)
         for stmt in body
         for sub in ast.walk(stmt)
     )
@@ -127,14 +113,14 @@ def _toggles_a_flag(body: list[ast.stmt]) -> bool:
 def fence_toggle_findings(tree: ast.AST) -> list[int]:
     """The line number of every ``ast.If`` in ``tree`` whose test is a literal
     fence-marker startswith/membership check AND whose body (or else-branch)
-    assigns a boolean-flag-shaped value -- the private open/close state
+    assigns any value to a plain name -- the private open/close state
     machine this gate exists to forbid."""
     return [
         node.lineno
         for node in ast.walk(tree)
         if isinstance(node, ast.If)
         and _is_fence_marker_test(node.test)
-        and (_toggles_a_flag(node.body) or _toggles_a_flag(node.orelse))
+        and (_assigns_a_plain_name(node.body) or _assigns_a_plain_name(node.orelse))
     ]
 
 
@@ -312,3 +298,24 @@ def f(text):
     assert offenders, (
         "widened scan failed to catch a private toggle under a src/-style dir"
     )
+
+
+def test_gate_catches_a_string_valued_open_fence_variable() -> None:
+    """lode-8ph6: the lode-4615 builder's private loop kept the open marker in
+    a string variable, so the assigned value is a Name / str constant, not a
+    boolean-flag shape. It must be flagged."""
+    src = """
+def f(text):
+    fence = ''
+    for line in text.splitlines():
+        stripped = line.strip()
+        marker = stripped[:3]
+        if fence:
+            if marker == fence:
+                fence = ''
+                continue
+        if marker in ("```", "~~~"):
+            fence = marker
+            continue
+"""
+    assert fence_toggle_findings(ast.parse(src))
