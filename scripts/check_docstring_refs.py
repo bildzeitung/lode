@@ -73,6 +73,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import os
 import re
 import subprocess
 import sys
@@ -131,17 +132,21 @@ def _tracked_python_files(root: Path) -> list[Path]:
     sourced from ``git ls-files``, like ``check_links.py``'s own walk, so
     scratch or gitignored files never enter this gate. (The pathspec scoping
     is this gate's own: ``check_links.py`` dropped its pathspecs in lode-6e9c
-    once its walk went repo-wide.)"""
+    once its walk went repo-wide.)
+
+    ``-z``, read as bytes with ``os.fsdecode`` per name, as ``check_links.py``'s
+    ``_tracked_paths`` does: a path holding a space or a non-ASCII byte reaches
+    ``Path`` as the real name instead of being split or C-quoted away."""
     existing_dirs = [d for d in SCAN_DIRS if (root / d).is_dir()]
     if not existing_dirs:
         return []
     out = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "--", *existing_dirs],
+        ["git", "-C", str(root), "ls-files", "-z", "--", *existing_dirs],
         capture_output=True,
-        text=True,
         check=True,
     ).stdout
-    return sorted(root / rel for rel in out.split() if rel.endswith(".py"))
+    names = (os.fsdecode(p) for p in out.split(b"\0") if p)
+    return sorted(root / rel for rel in names if rel.endswith(".py"))
 
 
 def normalize_ref(raw: str) -> str:
