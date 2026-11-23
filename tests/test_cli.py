@@ -7940,3 +7940,31 @@ def test_reenrich_skips_an_external_head_with_a_standing_refusal(
     result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
     assert result.exit_code == 0, result.output
     assert "nothing to re-enrich" in result.stdout
+
+
+def test_status_keeps_a_later_non_refusal_dead_job_off_the_self_healing_hint(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # lode-exje: reconcile skips a head while any standing refusal holds it, so
+    # a later non-refusal dead enrich job on that head is not re-enqueued
+    # either and must not be told it will be.
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        _seed_standing_refusal_head(conn)
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status, last_error, "
+                "next_attempt_at, prompt_ver) VALUES ('enrich', "
+                "'ver-dddddddddddddddd', 'dead', 'boom after retries', ?, ?)",
+                (now_iso(), ENRICH_PROMPT_VER),
+            )
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    out = " ".join(result.stdout.split())
+    assert "refused by the model (category: cyber); not retried" in out
+    assert "boom after retries (not retried while the refusal" in out
+    assert "the model refused to enrich" in out
+    assert "self-healing" not in out

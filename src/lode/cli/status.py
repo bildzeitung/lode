@@ -486,8 +486,22 @@ def status(db: _DbOption = None) -> None:
     # A refusal-dead enrich job (lode-g9q3) is classified by neither arm below:
     # reconcile does not re-enqueue it, so the self-healing hint would be false
     # for it. It gets its own line and hint instead.
+    # A non-refusal dead enrich job on a target a standing refusal also holds
+    # is not re-enqueued either: the enrich-gap step skips the whole target
+    # while any standing refusal exists for it (lode-exje). It rides under the
+    # refusal hint, not the self-healing one.
+    refused_targets = {
+        target for job_id, _, target, _ in dead_letters if job_id in refused
+    }
+    shadowed = {
+        job_id
+        for job_id, job_type, target, _ in dead_letters
+        if job_type == "enrich" and job_id not in refused and target in refused_targets
+    }
     dead_types = {
-        job_type for job_id, job_type, _, _ in dead_letters if job_id not in refused
+        job_type
+        for job_id, job_type, _, _ in dead_letters
+        if job_id not in refused and job_id not in shadowed
     }
     dead_recoveries = {t: dead_letter_recovery(t) for t in dead_types}
     dead_self_healing = "self_healing" in dead_recoveries.values()
@@ -574,6 +588,16 @@ def status(db: _DbOption = None) -> None:
             console.print(
                 f"  job {job_id} ({job_type}) target={_short(target_version)}: "
                 f"refused by the model (category: {category}); not retried",
+                style="warn",
+                markup=False,
+                highlight=False,
+            )
+            continue
+        if job_id in shadowed:
+            console.print(
+                f"  job {job_id} ({job_type}) target={_short(target_version)}: "
+                f"{last_error or 'no error recorded'} (not retried while the "
+                "refusal on the same target stands)",
                 style="warn",
                 markup=False,
                 highlight=False,
