@@ -5129,8 +5129,20 @@ entries below from being rewritten to chase the current tree.)
     and reports all of them. Candidate chosen is the one the ticket named; its open question is
     answered by accepting the cost: a hit on an own bullet that carries its own Update marker also
     lists the markers of the section's other bullets, as it already does under a sub-heading. The
-    NOTE line's length on a real section is not measured; no section of this file is oversized
-    today. The builder's choice, no maintainer ruling.
+    builder's choice, kept at technical review, no maintainer ruling. No section of this file is
+    oversized today, so the `NOTE` line's length on one cannot be measured. Measured at review
+    instead: the longest `NOTE` this file prints today lists 21 markers (the review-architecture
+    entry the `lode-funp` entry measured), and two of the eight `##` sections have the shape this
+    change is for, top-level bullets of their own with prose after them (`lode-3s4d`, 8,590
+    bytes, and `lode-w7gp`, 3,659 bytes). One limit, run at review on synthetic text, not
+    reachable today. A section's own text ends at its last column-zero line that is not a bullet
+    (the `lode-skv8` rule), so one such line in an entry appended after a section, an unindented
+    continuation line say, makes every entry before it part of the section's own text. Once that
+    text is over `MAX_UNIT_BYTES`, a hit on any of those entries lists the markers of all of
+    them. This change moves no unit. Before it, only a column-zero heading line did that (run at
+    review on trunk: limit (1) of the `lode-kys3` Update, seen through the `lode-pe38` rule); now
+    any column-zero line does. Counted at review: the entry list before the first `##` of this
+    file holds no such line.
 
 - **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
   decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent
@@ -6753,6 +6765,10 @@ entries below from being rewritten to chase the current tree.)
     chunker cut at the headings inside it is one entry, and the lookup asks the chunker for that
     section's range. The rule is in the `lode-pe38` Update on the `lode-t6o1` entry. No section
     of this file is cut that way today.
+  - **Update (lode-tb0j, 2026-11-23):** "that the chunker cut at the headings inside it" in the
+    `lode-pe38` Update above no longer holds: every `##` section of this file over
+    `MAX_UNIT_BYTES` is one entry, with a heading inside it or without. The rule is in the
+    `lode-tb0j` Update on the `lode-t6o1` entry. No section of this file is over the limit today.
 
 - **The marker gate does not exempt top-level entry heads; the over-match is accepted (`lode-hp12`,
   2026-11-19, maintainer).** `lode-llxw` ruled that a new correcting entry is not a marker and its

@@ -24,7 +24,7 @@ split level is capped at ``##`` (``lode-kys3``), and the top-level bullets after
 a heading unit's own text each start a unit. See :func:`_split_trailing_entries`.
 A ``##`` section still over :data:`MAX_UNIT_BYTES` is cut at every heading inside
 it before the post-pass reaches it (``lode-vt7x``); :func:`oversized_sections`
-names every such section, cut at headings or not (``lode-tb0j``).
+names every such section (``lode-tb0j``).
 
 Boundary detection is **fence-aware**: a ``## `` or ``- `` inside a fenced code
 block is someone's example, not document structure. See :func:`_fence_flags`.
@@ -314,15 +314,19 @@ def _ranges(
 
 
 def oversized_sections(path: Path | str, text: str) -> list[tuple[int, int]]:
-    """Line ranges of the entry-log ``##`` sections over :data:`MAX_UNIT_BYTES`,
-    which :func:`chunk_file` cuts at the headings inside them, or at their own
-    bullets or paragraphs when there is none; ``[]`` for any other file.
+    """Line ranges of the entry-log sections over :data:`MAX_UNIT_BYTES`;
+    ``[]`` for any other file. A section is the range of a split-level
+    heading: a ``##``, or the H1 of a log with no deeper heading.
 
     Each range is the section's own text, without the entries appended after
     it. Public because ``split_entry_markers`` in
     ``scripts/docs_index_query.py`` cannot find it from the units: a bullet of
     the section's own list, cut off by the post-pass, opens a unit just as an
     appended entry does.
+
+    The own text is what :func:`_split_trailing_entries` says it is, so a
+    column-zero line that is not a bullet, anywhere in an entry appended after
+    a section, puts every entry before it in that section's range.
     """
     _, oversized = _ranges(path, text.splitlines())
     return oversized
