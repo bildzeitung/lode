@@ -16,8 +16,10 @@ unresolved or line-wrapped reference in this file's own source text.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+import pytest
 from _gitrepo import _git
 from conftest import load_module_from_path
 from typer.testing import CliRunner
@@ -117,13 +119,22 @@ class TestCheck:
         assert unresolved[0].ref == "lode.timestamps.this_symbol_was_renamed_away"
         assert unresolved[0].line_no == 1
 
-    def test_ref_in_python_file_with_space_in_name_is_reported(self, tmp_path):
+    @pytest.mark.parametrize(
+        "name",
+        ["my test.py", "café.py", os.fsdecode(b"bad\xff.py"), "a\rb.py"],
+        ids=["space", "non-ascii", "not-utf-8", "carriage-return"],
+    )
+    def test_ref_in_oddly_named_python_file_is_reported(self, tmp_path, name):
+        """Each name is lost by a simpler listing: a whitespace split cuts the
+        first, plain ``git ls-files`` C-quotes the other three, and ``-z``
+        output read in text mode raises on the third and newline-translates
+        the fourth."""
         role = _role("func", "lode.timestamps.this_symbol_was_renamed_away")
-        _write(tmp_path, "tests/my test.py", f'"""See {role}."""\n')
+        source = _write(tmp_path, f"tests/{name}", f'"""See {role}."""\n')
         _git_init(tmp_path)
 
         unresolved, _wrapped = check(tmp_path)
-        assert [f.path.name for f in unresolved] == ["my test.py"]
+        assert [f.path for f in unresolved] == [source]
 
     def test_third_party_ref_is_never_flagged(self, tmp_path):
         func_role = _role("func", "httpx.get")
