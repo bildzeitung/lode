@@ -568,5 +568,390 @@
     "file": ".claude/agents/code-reviewer.md",
     "rule": "decision-ticket-failure-traced-before-filing",
     "phrase": "**A ticket that asks the maintainer to decide about a failure:** before filing it I trace that failure in the code from the trigger to the wrong outcome, and mark any step I did not trace \"not checked against the code\" in the ticket"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "never-edit-on-trunk",
+    "phrase": "Never edit, create, or delete a file while on `trunk`."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "isolation-guard-first-action",
+    "phrase": "asserts it mechanically as my very first executable action"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "never-write-trunk",
+    "phrase": "I never write `trunk`.** No merge, no `bd close`, no push to `trunk`"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "one-task-per-worktree",
+    "phrase": "One task per worktree, one worktree per task."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "bd-only-tracker",
+    "phrase": "bd is the only task tracker."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "design-decisions-are-doc-edits",
+    "phrase": "Design decisions are doc edits, not notes."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "docs-index-before-grep",
+    "phrase": "try the lookup index first"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "trace-claimed-mechanism-in-decisions",
+    "phrase": "I write the failure mechanism the ticket claims only after tracing it in the code"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "file-mistakes-autonomously",
+    "phrase": "File a qualifying mistake to MISTAKES.md autonomously"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "simplest-thing",
+    "phrase": "Simplest thing that works."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "never-background-gate",
+    "phrase": "Never background a quality gate, and never end a turn with one pending."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "never-hand-off-dirty-worktree",
+    "phrase": "Never hand off a dirty worktree — and never trust a gate run against one."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "no-external-tracker-write",
+    "phrase": "I never WRITE to an external tracker under the user's identity"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "no-llm-spend",
+    "phrase": "No LLM-provider spend without maintainer approval; approved spend runs against a scratch"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "brief-carries-directive-10",
+    "phrase": "Every brief I give a sub-agent carries Directive 10's text"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "never-bd-ready-self-pick",
+    "phrase": "I never run `bd ready` to pick my own work."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "free-text-dispatch-files-issue",
+    "phrase": "so there is no id to show or claim yet"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "human-or-epic-ticket-stop",
+    "phrase": "rather than guess at the decision a `human` label exists to defer"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "claim-idempotent-backstop",
+    "phrase": "this call is an **idempotent backstop**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "bash-call-shapes-plain-calls",
+    "phrase": "Bash call shapes in this file (lode-fvg0) — plain calls, values carried by copy."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "recycled-worktree-guard-before-work",
+    "phrase": "Recycled-worktree guard (lode-nt98) — assert I actually started at `origin/trunk` HEAD"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "rescue-branch-not-optional",
+    "phrase": "The `rescue/` branch is not optional."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "no-builder-worktree-lock",
+    "phrase": "A builder-side `git worktree lock .` therefore **cannot succeed**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "design-check-before-write",
+    "phrase": "**never** `bd update --design=…` unconditionally"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "design-nonempty-never-write",
+    "phrase": "Never write `--design` on this ticket**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "design-empty-record-root-cause",
+    "phrase": "recording the root cause and intended fix *before* coding is safe and expected"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "reassert-isolation-before-first-write",
+    "phrase": "Re-assert isolation before the first mutating write (lode-6wgc)."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "create-files-with-write-tool",
+    "phrase": "Create new files with the `Write` tool**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "match-surrounding-idiom",
+    "phrase": "Match the surrounding code's idiom, naming, and comment density"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "track-discovered-work",
+    "phrase": "Track work you **discover** mid-task as its own issue"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "never-create-deps-blocks-form",
+    "phrase": "**Never `bd create --deps blocks:<id>`**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "independent-followup-discovered-from",
+    "phrase": "Independent — safely buildable on its own right now"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "blocked-followup-uses-blocks",
+    "phrase": "Genuinely can't be built until this ticket lands"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "trace-failure-before-decide-ticket",
+    "phrase": "A ticket that asks the maintainer to decide about a failure:"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "wording-only-nit-to-collector",
+    "phrase": "A wording-only doc nit outside this branch's scope"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "docs-nits-drain-dispositions",
+    "phrase": "If I am the builder draining a docs-nits collector itself"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "stacked-builds-on-branch",
+    "phrase": "Building on top of an unlanded `land/<id>` branch (rare — stacked branches, lode-02v)."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "builds-on-is-breadcrumb",
+    "phrase": "This is redundancy and intent, never the mechanism.**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "no-dangling-cross-references",
+    "phrase": "Before committing: no dangling cross-references to lines this diff deletes"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "reassert-isolation-before-commit",
+    "phrase": "Re-assert isolation once more before the first `git commit` (lode-6wgc)"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "commit-trailer-model-name",
+    "phrase": "is the display name of the model I announced on line 1"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "gate-buckets-builder-subset",
+    "phrase": "coding builders run `fix` + the `tests` bucket's fast `unit` view"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "gate-through-uv-run-frozen",
+    "phrase": "Gate through `uv run --frozen` — never a sourced `activate` script"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "commit-everything-gate-loop-produced",
+    "phrase": "stage and commit **everything the gate loop produced**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "mermaid-validation-separate-call",
+    "phrase": "this stays a separate, additional call even at builder time"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "mermaid-exit-2-escalation",
+    "phrase": "An exit-2 gate is an **escalation, not a skip**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "no-dangerously-disable-sandbox-retry",
+    "phrase": "I do NOT retry with `dangerouslyDisableSandbox: true`"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "push-to-land-branch",
+    "phrase": "I push my worktree HEAD to the derived `land/<ticket-id>`"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "never-review-own-work",
+    "phrase": "I do not review my own work."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "handoff-clean-tree-assert",
+    "phrase": "Immediately before applying the label, assert the tree is clean — one last time:"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "handoff-sha-single-script",
+    "phrase": "One script derives `HEAD`, shape-checks it and writes the field in a single process"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "must-not-remove-worktree",
+    "phrase": "I must NOT remove my worktree.**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "build-time-escalation",
+    "phrase": "Build-time escalation — the only thing that pulls a human in."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "escalation-records-review-head",
+    "phrase": "record `review_head` even though I'm not marking `ready-for-code-review` yet."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "escalation-label-and-note",
+    "phrase": "**do not** set `ready-for-code-review`; instead"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "bp-heartbeat",
+    "phrase": "The heartbeat is ready → claim → build → ready-for-code-review."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "bp-file-issues-before-coding",
+    "phrase": "File issues for anything non-trivial (>~2 min), before coding."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "bp-one-task-per-session",
+    "phrase": "One task per session; start fresh often."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "bp-implementable-from-text",
+    "phrase": "Every issue should be implementable from its own text:"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "bp-only-blocks-gates-dispatch",
+    "phrase": "Use the right dependency type — only `blocks` gates dispatch."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "bp-remember",
+    "phrase": "Cross-session insight → `bd remember`**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "bp-json",
+    "phrase": "Parse with `--json`** when scripting bd output"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-reviewing-own-build",
+    "phrase": "Reviewing my own build**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-removing-worktree-fresh-build",
+    "phrase": "Removing my worktree** (`git worktree remove`"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-ready-on-red-or-escalation",
+    "phrase": "Marking `ready-for-code-review` on a red build, or on a build-time escalation."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-ready-on-dirty-tree",
+    "phrase": "Marking `ready-for-code-review` (or pushing during a rebase pickup) on a dirty tree"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-committing-jsonl",
+    "phrase": "Committing the passive `.beads/*.jsonl` export.**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-design-overwrite",
+    "phrase": "Writing `--design` on a ticket that already has one, for any reason**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-working-on-trunk",
+    "phrase": "Working on `trunk`, or committing on any branch but my task's worktree branch."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-skipping-guards",
+    "phrase": "Skipping `scripts/isolation-guard.sh` or `scripts/recycled-worktree-guard.sh`"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-pushing-on-failing-gate",
+    "phrase": "Pushing or handing off on a failing gate."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-decision-in-bd-note",
+    "phrase": "Recording an architectural decision in a bd note or memory instead of `docs/`."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-silent-scope-expansion",
+    "phrase": "Expanding a task's scope silently**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-filing-blocked-as-discovered-from",
+    "phrase": "Filing a genuinely-blocked follow-up as `discovered-from`.**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-deps-blocks-inversion",
+    "phrase": "Writing `bd create --deps blocks:<id>` for a discovered blocked follow-up.**"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-blocking-parallel-batch",
+    "phrase": "Blocking a parallel batch** waiting on a human"
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "ap-external-tracker-writes",
+    "phrase": "Filing, commenting on, closing, reopening, merging, or reviewing anything on an external"
   }
 ]
