@@ -322,7 +322,7 @@ def github_slug(heading_text: str) -> str:
 
 def _content_lines(text: str) -> Iterator[tuple[int, str]]:
     """``(line_number, line)`` for every line OUTSIDE a fenced code block --
-    the single home of the fence rule, shared by the heading and link scanners
+    the single home of the fence rule, shared by every scanner that skips code
     so they can never disagree about what counts as code (a shell comment like
     ``# run tests`` inside a ```bash``` fence must never read as a heading, nor
     a literal ``[text](url)`` example inside a fence as a real link).
@@ -392,7 +392,9 @@ def _slugs_for_file(path: Path, text_cache: dict[Path, str]) -> set[str]:
     """All valid anchor slugs for a markdown file: every heading's slug
     (including GitHub's disambiguating ``-1``, ``-2``, ... suffixes for
     repeated headings) plus every literal id from an explicit
-    ``<a id="...">``/``<a name="...">`` anchor tag.
+    ``<a id="...">``/``<a name="...">`` anchor tag outside a fenced code
+    block, matched one line at a time (as ``docs_slug.anchor_slugs`` does), so
+    a tag split across lines offers no anchor.
 
     Reads through ``text_cache`` (lode-6e9c): a link *target* is almost
     always some ``docs/*.md`` page the bracketed walk already read as a
