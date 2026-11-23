@@ -117,6 +117,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import unquote
 
 import typer
 
@@ -486,8 +487,13 @@ def _links_in_file(text: str) -> list[tuple[int, str]]:
         scrubbed = _INLINE_CODE_RE.sub("", line)
         for m in _LINK_RE.finditer(scrubbed):
             raw_target = m.group(1).strip()
-            # Strip an optional `"title"` after the URL, and a wrapping <>.
-            target = raw_target.split(None, 1)[0].strip("<>")
+            # An angle-bracket destination runs whole to its closing `>` (it
+            # may hold spaces); otherwise the target ends at the first
+            # whitespace. Either way an optional `"title"` after it is dropped.
+            if raw_target.startswith("<") and ">" in raw_target:
+                target = raw_target[1 : raw_target.index(">")]
+            else:
+                target = raw_target.split(None, 1)[0].strip("<>")
             links.append((line_no, target))
     return links
 
@@ -539,6 +545,8 @@ def check(root: Path) -> list[LinkError]:
             if not target or _is_external(target):
                 continue
             file_part, _, anchor = target.partition("#")
+            # The path of a link is percent-encoded (`sp%20ace.md`).
+            file_part = unquote(file_part)
             # A markdown link is relative to the file it is written in.
             target_path = (
                 (source.parent / file_part).resolve() if file_part else source.resolve()

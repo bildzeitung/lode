@@ -316,6 +316,29 @@ class TestCheck:
 
         assert check(tmp_path) == []
 
+    def test_link_to_spaced_file_name_resolves(self, tmp_path):
+        """An angle-bracket destination is read whole and a percent-encoded one
+        is decoded, each with or without a trailing title."""
+        _write(tmp_path, f"{_DOCS}/sp ace.md", "# Spaced\n\n## Part\n")
+        _write(
+            tmp_path,
+            f"{_DOCS}/a.md",
+            '[1](<sp ace.md>) [2](sp%20ace.md) [3](<sp ace.md> "t") '
+            '[4](sp%20ace.md "t") [5](<sp ace.md#part>) [6](sp%20ace.md#part)\n',
+        )
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+    def test_link_to_missing_spaced_file_name_is_reported(self, tmp_path):
+        _write(tmp_path, f"{_DOCS}/a.md", "[1](<no such.md>) [2](no%20such.md)\n")
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert [e.target for e in errors] == ["no such.md", "no%20such.md"]
+        assert all("does not exist" in e.reason for e in errors)
+
     def test_broken_file_target_is_reported(self, tmp_path):
         _write(tmp_path, f"{_DOCS}/a.md", "See [missing](nope.md).\n")
         _git_init(tmp_path)
