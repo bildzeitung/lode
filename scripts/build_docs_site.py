@@ -120,6 +120,18 @@ _MERMAID_FENCE_RE = re.compile(r"```mermaid\n(.*?)\n```", re.DOTALL)
 _LINK_RE = re.compile(
     r"(?<!!)\[([^\]]*)\]\(\s*(?:<([^<>]*)>(?=[\s)])|([^\s)]+))(?:\s[^)]*)?\)"
 )
+# What scripts/check_links.py's _SCHEME_RE and _is_external treat as external:
+# a URI scheme in any letter case, or a protocol-relative `//`. A relative path
+# whose first segment holds a colon (`a.md:12`) is a scheme to both; `./a.md:12`
+# is the spelling both read as a path.
+# tests/test_build_docs_site.py holds the pattern and the rule to the gate's.
+_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
+
+
+def _is_external(target: str) -> bool:
+    return target.startswith("//") or bool(_SCHEME_RE.match(target))
+
+
 # An inline code span. Same one-line, run-aware rule as scripts/check_links.py's
 # _INLINE_CODE_RE, and for the same reason: a literal `[text](foo.md)` written
 # as an EXAMPLE inside backticks (or inside a fenced block) is documentation,
@@ -267,9 +279,7 @@ def _rewrite_target(
     current_rel: str, link_target: str, published: set[str]
 ) -> str | None:
     """Return a rewritten link target, or None if the link is left alone."""
-    if not link_target or link_target.startswith(
-        ("http://", "https://", "mailto:", "#")
-    ):
+    if not link_target or link_target.startswith("#") or _is_external(link_target):
         return None
     path_part, _, fragment = link_target.partition("#")
     # The path of a link is percent-encoded; the published set and the alias

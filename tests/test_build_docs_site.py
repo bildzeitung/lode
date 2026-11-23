@@ -100,6 +100,8 @@ EXCLUDED = {
         ("design.md", "../README.md", f"{BASE}/README.md"),
         ("design.md", "../src/lode/config.py", f"{BASE}/src/lode/config.py"),
         ("design.md", "./decisions.md", f"{BASE}/docs/decisions.md"),
+        # Without the ./ a colon in the first segment reads as a URI scheme.
+        ("design.md", "./decisions.md:12", f"{BASE}/docs/decisions.md%3A12"),
         # Unenumerated material is unpublished by default (stack.md: PUBLISHED
         # is the authoritative list, EXCLUDED is only commentary).
         ("design.md", "research/notes.md", f"{BASE}/docs/research/notes.md"),
@@ -169,6 +171,40 @@ def test_link_pattern_is_the_gates_with_the_label_captured() -> None:
     as a link is one the rewriter reads (they differ only in the label group)."""
     gate = check_links._LINK_RE.pattern.replace(r"\[[^\]]*\]", r"\[([^\]]*)\]", 1)
     assert build_docs_site._LINK_RE.pattern == gate
+
+
+def test_scheme_pattern_is_the_gates() -> None:
+    assert build_docs_site._SCHEME_RE.pattern == check_links._SCHEME_RE.pattern
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "ftp://h/x",
+        "HTTPS://x.y/z",
+        "tel:+15550100",
+        "//cdn.example/x.js",
+        "Mailto:a@b.c",
+        # A colon in the first path segment is a scheme to the gate as well.
+        "decisions.md:12",
+        "c:x",
+    ],
+)
+def test_external_per_the_gate_is_left_alone(target: str) -> None:
+    assert check_links._is_external(target)
+    assert build_docs_site._rewrite_target("design.md", target, PUBLISHED) is None
+    link = f"[t]({target})"
+    assert build_docs_site._process_links(link, "design.md", PUBLISHED) == link
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["how-to/a.md:12", "/abs.md", "#a:b", "1a:b", " https://x.y/z"],
+)
+def test_external_rule_is_no_wider_than_the_gates(target: str) -> None:
+    """Shapes near the rule that the gate does not call external. Compared
+    with the gate, not with False, so a change to its rule turns this red."""
+    assert build_docs_site._is_external(target) == check_links._is_external(target)
 
 
 @pytest.mark.parametrize(
