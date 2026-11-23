@@ -7557,14 +7557,20 @@ def _insert_refusal_dead_enrich(
         )
 
 
-def _insert_enrich_job(conn: sqlite3.Connection, target: str, status: str) -> None:
-    """An enrich job for ``target`` in ``status``, stamped with the current
-    prompt version."""
+def _insert_enrich_job(
+    conn: sqlite3.Connection,
+    target: str,
+    status: str,
+    *,
+    prompt_ver: str | None = ENRICH_PROMPT_VER,
+) -> None:
+    """An enrich job for ``target`` in ``status``; the default stamps the
+    current prompt version."""
     with conn:
         conn.execute(
             "INSERT INTO jobs (type, target_version, status, next_attempt_at, "
             "prompt_ver) VALUES ('enrich', ?, ?, ?, ?)",
-            (target, status, now_iso(), ENRICH_PROMPT_VER),
+            (target, status, now_iso(), prompt_ver),
         )
 
 
@@ -7754,12 +7760,9 @@ def test_status_keeps_a_note_refusal_after_a_later_done_job_reconcile_does_not_c
     conn = init_db(db_path)
     try:
         _seed_standing_refusal_head(conn)
-        with conn:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version, status, next_attempt_at, "
-                "prompt_ver) VALUES ('enrich', 'ver-dddddddddddddddd', 'done', ?, ?)",
-                (now_iso(), later_prompt_ver),
-            )
+        _insert_enrich_job(
+            conn, "ver-dddddddddddddddd", "done", prompt_ver=later_prompt_ver
+        )
         assert _enrich_gap_step(conn) == 0
     finally:
         conn.close()
@@ -7828,6 +7831,41 @@ def test_status_without_settings_drops_only_refusals_off_a_live_head(
     assert result.exit_code == 0
     out = " ".join(result.stdout.split())
     assert ("refused by the model (category: cyber); not retried" in out) is listed
+
+
+@pytest.mark.parametrize("later_older_ver_job", [False, True])
+def test_status_without_settings_drops_a_refusal_under_another_prompt_ver(
+    tmp_path: Path,
+    warm_model_cache: None,
+    monkeypatch: pytest.MonkeyPatch,
+    later_older_ver_job: bool,
+) -> None:
+    # lode-iqhb: the prompt version needs no settings, so it is still compared.
+    monkeypatch.setattr(cli, "_resolve_settings_best_effort", lambda: None)
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        _seed_standing_refusal_head(conn)
+        _supersede_standing_refusal(conn, "prompt_ver")
+        if later_older_ver_job:
+            _insert_enrich_job(
+                conn, "ver-dddddddddddddddd", "done", prompt_ver="an-older-prompt-ver"
+            )
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    out = " ".join(result.stdout.split())
+    assert "not retried" not in out
+    assert "the model refused to enrich" not in out
+    assert "self-healing" in out
+    # Reconcile re-opens the head, as the self-healing hint says. Asserted after
+    # the status run: the job it enqueues would itself keep the refusal unlisted.
+    conn = init_db(db_path)
+    try:
+        assert _enrich_gap_step(conn) == 1
+    finally:
+        conn.close()
 
 
 # --- lode-5try: a standing refusal exempts a head from reenrich / the status hint ---
