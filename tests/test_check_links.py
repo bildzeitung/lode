@@ -130,6 +130,20 @@ class TestDocsSlugCopyAgrees:
                 docs_slug.anchor_slugs(path.read_text(encoding="utf-8")) == expected
             ), f"anchor-set copies disagree on {path}"
 
+    def test_three_backtick_inline_span_is_prose_not_a_fence(self, tmp_path):
+        """A line starting with a three-backtick inline code span must not
+        toggle the fence (lode-7jwe); both anchor-set copies agree."""
+        text = (
+            "```inline``` code starts this line.\n\n"
+            "## Heading\n\nSee [x](/nope.md).\n"
+        )
+        assert [n for n, _ in check_links._content_lines(text)] == [1, 2, 3, 4, 5]
+        assert check_links._headings(text) == ["Heading"]
+        path = tmp_path / "a.md"
+        path.write_text(text, encoding="utf-8")
+        assert docs_slug.anchor_slugs(text) == check_links._slugs_for_file(path, {})
+        assert "heading" in docs_slug.anchor_slugs(text)
+
 
 class TestCheck:
     def test_clean_tree_has_no_errors(self, tmp_path):

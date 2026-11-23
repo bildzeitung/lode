@@ -140,7 +140,10 @@ _LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 _INLINE_CODE_RE = re.compile(r"`[^`]*`")
 _LINK_TEXT_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _ATX_HEADING_RE = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
-_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+# A backtick run followed by another backtick on the line is an inline code
+# span, not a fence (CommonMark: a backtick fence's info string holds no
+# backtick); tilde fences have no such restriction.
+_FENCE_RE = re.compile(r"^\s*(`{3,}(?!.*`)|~{3,})")
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
 # An explicit HTML anchor (`<a id="foo"></a>` or the older `name=`) is a
 # second, independent way to make a target addressable in GFM -- not derived
@@ -339,6 +342,10 @@ def _content_lines(text: str) -> Iterator[tuple[int, str]]:
     ``~~~``-inside-``` `` example in these docs would newly toggle where it
     doesn't today), which is exactly the kind of no-behaviour-change bar this
     ticket held everywhere else.
+
+    The one rule shared with ``fence_parsing`` is the OPENER rule: a backtick
+    run followed by another backtick on the line (an inline code span written
+    with three backticks) is prose, not a fence (lode-7jwe).
     """
     in_fence = False
     for line_no, line in enumerate(text.splitlines(), start=1):
