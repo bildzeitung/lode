@@ -89,7 +89,8 @@ scripts/update-deps.sh --reconcile        # stale lock after a pyproject.toml ed
 
 **Release-age cooldown (`lode-3s4d`).** The two upgrade modes skip any release younger than 7 days.
 A pin already in the lock is never moved back by it, even one younger than 7 days. For a
-security fix that must be taken at once, add `--no-cooldown`. Value and rationale:
+security fix that must be taken at once, add `--no-cooldown`. A run in which such a pin still
+moves is refused unless `--allow-exempt-move` is given. Value and rationale:
 [`configuration.md`](configuration.md#lock-refresh-release-age-cooldown-cooldown-in-scriptsupdate-depssh-lode-3s4d).
 
 **Fixing a stale lock (`lode-trw1`).** When `nox -s lock_currency` exits 1 because `pyproject.toml`

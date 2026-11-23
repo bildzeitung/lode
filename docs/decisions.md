@@ -6966,6 +6966,17 @@ taken with no cutoff; not run with an actual `--no-cooldown` pin.
     without the exemption it went to 2.2.1 (2024-02-18). The other shapes (a package locked at
     two versions of which one is young, an old release that gained a file inside the window)
     follow from the same rule and were not run.
+  - **Update (lode-amyi, 2026-11-23, maintainer):** decided, so the "open in `lode-amyi`" above no
+    longer holds. Ruling, option (b), the refuse form: after the cooled-down pass,
+    `scripts/update-deps.sh` compares each package it exempted (pin younger than the cutoff, given
+    `--exclude-newer-package`) against its pre-run locked version. If any exempted package's
+    version changed, the script exits non-zero naming each such package with old -> new, unless an
+    explicit `--allow-exempt-move` flag is passed. Rationale: after the `lode-hdob` ruling an
+    exempted pin should never move in a cooled-down run, so any move means the cooldown was
+    bypassed for that package; a warning that scrolls by is too weak for a supply-chain rule.
+    Built: `dep_exempt_moves` in `scripts/dep-churn-lib.sh`, called from `update-deps.sh` right
+    after the version diff is printed (so `--dry-run` is refused too, and the lock is restored by
+    the existing EXIT trap). Stated in `configuration.md`.
 
 ## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 

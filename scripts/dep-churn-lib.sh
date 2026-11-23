@@ -152,3 +152,18 @@ dep_cooldown_exemptions() {
     END { for (k in m) if (key(m[k]) > key(cut)) print k "=" m[k] }
   ' "$1" | sort
 }
+
+# "name<TAB>old<TAB>new" lines on stdout for every package named in the
+# exemption lines $1 (NAME=UPLOAD-TIME, as dep_cooldown_exemptions prints them)
+# that the raw change lines $2 show moved from one version to another. Additions
+# and removals are not moves. After the lode-hdob ruling an exempted pin must not
+# move in a cooled-down run: its per-package date replaces the global cutoff, so
+# a move means a release inside the window was taken (lode-amyi). Empty output
+# means no exempted pin moved.
+dep_exempt_moves() {
+  local exemptions="$1" raw="$2"
+  awk -F'\t' '
+    NR == FNR { split($0, p, "="); if (p[1] != "") ex[p[1]] = 1; next }
+    NF >= 3 && ($1 in ex) && $2 != "(none)" && $3 != "(none)" { print }
+  ' <(printf '%s\n' "$exemptions") <(printf '%s\n' "$raw")
+}

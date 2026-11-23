@@ -12,6 +12,7 @@
 #   scripts/update-deps.sh --reconcile        # fix a STALE lock after a pyproject.toml edit, no upgrades
 #   scripts/update-deps.sh --no-cooldown      # upgrade modes only: skip the release-age cutoff
 #   scripts/update-deps.sh --no-file          # promote as usual but never file the churn stub
+#   scripts/update-deps.sh --allow-exempt-move  # proceed although a cooldown-exempted pin moved
 #
 # What it does:
 #   1. Save a copy of the committed uv.lock, then move it in place:
@@ -39,6 +40,11 @@
 #      cutoff and keeps every pin (probed, docs/decisions.md). --reconcile
 #      never gets a cutoff, since a reconcile may not downgrade an existing
 #      pin: no flag, and UV_EXCLUDE_NEWER is unset.
+#      EXEMPTED PINS MUST NOT MOVE (lode-amyi): a per-package date replaces the
+#      global cutoff, so an exempted package can still take a release inside the
+#      window that was uploaded before its pin. After the run, if any exempted
+#      package changed version the script prints each as "pkg OLD -> NEW" and
+#      exits 1 (lock restored), unless --allow-exempt-move is given.
 #   2. Print a readable VERSION DIFF between the saved copy and the moved
 #      uv.lock -- one line per changed package, "pkg  OLD -> NEW" for a bump,
 #      "+ pkg VERSION" for an addition, "- pkg  VERSION (removed)" -- derived
@@ -118,8 +124,10 @@ PACKAGE=""
 RECONCILE=0
 NO_FILE=0
 NO_COOLDOWN=0
+ALLOW_EXEMPT_MOVE=0
+EXEMPTIONS=""
 COOLDOWN="7 days"
-USAGE="usage: $0 [--dry-run] [--package NAME | --reconcile] [--no-cooldown] [--no-file]"
+USAGE="usage: $0 [--dry-run] [--package NAME | --reconcile] [--no-cooldown] [--allow-exempt-move] [--no-file]"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run)
@@ -140,6 +148,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-cooldown)
       NO_COOLDOWN=1
+      shift
+      ;;
+    --allow-exempt-move)
+      ALLOW_EXEMPT_MOVE=1
       shift
       ;;
     -h|--help)
@@ -249,6 +261,17 @@ fi
 CHANGES_RAW="$(dep_changes_raw "$SAVED_LOCK" "$LOCK")"
 DIFF_TEXT="$(dep_version_diff_text "$LOCK" "$CHANGES_RAW")"
 echo "$DIFF_TEXT"
+
+# A pin the cooldown exempted must not move (lode-amyi); the EXIT trap restores the lock.
+if [ "$ALLOW_EXEMPT_MOVE" -eq 0 ] && [ -n "$EXEMPTIONS" ]; then
+  EXEMPT_MOVES="$(dep_exempt_moves "$EXEMPTIONS" "$CHANGES_RAW")"
+  if [ -n "$EXEMPT_MOVES" ]; then
+    echo "update-deps.sh: REFUSED -- the cooldown exempted these pins (younger than the cutoff) and they moved, so a release inside the window was taken:" >&2
+    printf '%s\n' "$EXEMPT_MOVES" | awk -F'\t' '{ printf "  %s  %s -> %s\n", $1, $2, $3 }' >&2
+    echo "update-deps.sh: $LOCK is restored; --allow-exempt-move proceeds anyway." >&2
+    exit 1
+  fi
+fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
   cp -f "$SAVED_LOCK" "$LOCK"

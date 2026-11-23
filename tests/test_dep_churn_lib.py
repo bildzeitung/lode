@@ -305,3 +305,28 @@ def test_update_deps_sources_the_library() -> None:
         "dep_cooldown_exemptions",
     ):
         assert fn in body, f"update-deps.sh stopped using {fn}"
+
+
+# --------------------------------------------------------------------------
+# dep_exempt_moves
+# --------------------------------------------------------------------------
+
+
+def test_exempt_moves_lists_only_moved_exempted_packages() -> None:
+    exemptions = "young=2026-11-18T09:00:00.1Z\nother=2026-11-19T00:00:00.000Z"
+    raw = "\n".join(
+        [
+            "young\t1.0\t2.0",  # exempted and moved
+            "free\t1.0\t2.0",  # moved but not exempted
+            "other\t(none)\t1.0",  # exempted but an addition
+            "gone\t1.0\t(none)",
+        ]
+    )
+    got = _run(f"dep_exempt_moves '{exemptions}' '{raw}'")
+    assert got.returncode == 0, got.stderr
+    assert got.stdout.splitlines() == ["young\t1.0\t2.0"]
+
+
+def test_exempt_moves_is_empty_without_exemptions_or_moves() -> None:
+    assert _run("dep_exempt_moves '' $'a\\t1\\t2'").stdout == ""
+    assert _run("dep_exempt_moves 'a=2026-11-18T09:00:00Z' ''").stdout == ""
