@@ -14,7 +14,8 @@ unit still over :data:`MAX_UNIT_BYTES` at the next rung down -- heading ->
 bullet -> blank-line-delimited paragraph. ``docs/decisions.md`` gets its
 per-entry units from that post-pass, not from the no-headings rule: its entries
 sit under the H1 title on line 1, so the heading split yields them as a single
-oversized unit, which is then split at its bullets.
+oversized unit, which is then split at its bullets. In that file an oversized
+``##`` section is first cut at the headings inside it (``lode-vt7x``).
 
 ``docs/decisions.md`` is also the one **entry log** (:data:`_ENTRY_LOG_STEM`):
 every branch appends its entry at EOF, so a top-level bullet can follow a ``##``
@@ -183,11 +184,17 @@ def _hard_split(
     line_hi: int,
     *,
     try_bullet: bool,
+    try_heading: bool = False,
 ) -> list[tuple[int, int]]:
     """Post-pass: recursively hard-split an oversized unit at the next boundary
     down. ``try_bullet`` is True only for a unit that came from the heading
     split (a bullet-split or paragraph-split unit is already at (or past) the
     deepest rule, so it goes straight to paragraph splitting).
+
+    ``try_heading`` (entry log only, ``lode-vt7x``) puts a rung ahead of the
+    bullet rung that cuts at the headings inside the unit: the entry log's
+    split level is capped at ``##``, so a ``###`` in an oversized section is
+    otherwise never a boundary.
 
     ``split_entry_markers`` in ``scripts/docs_index_query.py`` relies on the
     paragraph rung being the only one that cuts a unit somewhere other than a
@@ -195,6 +202,28 @@ def _hard_split(
     and paragraph has to keep that true or be taught to it."""
     if _unit_bytes(lines, line_lo, line_hi) <= MAX_UNIT_BYTES:
         return [(line_lo, line_hi)]
+
+    if try_heading:
+        sub_ranges = _split_range(
+            lines,
+            line_lo,
+            line_hi,
+            lambda i: not fence_flags[i] and bool(_HEADING_RE.match(lines[i])),
+        )
+        if len(sub_ranges) > 1:
+            out_h: list[tuple[int, int]] = []
+            for slo, shi in sub_ranges:
+                out_h.extend(
+                    _hard_split(
+                        lines,
+                        fence_flags,
+                        slo,
+                        shi,
+                        try_bullet=try_bullet,
+                        try_heading=True,
+                    )
+                )
+            return out_h
 
     if try_bullet:
         sub_ranges = _split_range(
@@ -288,7 +317,14 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
     final_ranges: list[tuple[int, int]] = []
     for lo, hi in ranges:
         final_ranges.extend(
-            _hard_split(lines, fence_flags, lo, hi, try_bullet=bool(split_level))
+            _hard_split(
+                lines,
+                fence_flags,
+                lo,
+                hi,
+                try_bullet=bool(split_level),
+                try_heading=bool(split_level) and is_entry_log,
+            )
         )
 
     doc_class = classify(path)

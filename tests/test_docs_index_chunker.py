@@ -394,3 +394,24 @@ def test_real_decisions_md_with_an_appended_h3_leaves_every_existing_unit_in_pla
     assert "### Sub" in probe[-1].body
     assert [u.line_lo for u in probe[1:]] == [u.line_hi + 1 for u in probe[:-1]]
     assert all(_bytes(u) <= MAX_UNIT_BYTES for u in probe)
+
+
+def test_entry_log_oversized_section_is_cut_at_its_h3_headings():
+    # A '##' section over MAX_UNIT_BYTES is cut at its '###' headings before
+    # any bullet or paragraph cut, so each sub-heading starts its own unit
+    # (lode-vt7x).
+    para = "word " * 400
+    body = "\n\n".join(para for _ in range(6))
+    text = (
+        "# Log\n\n## Big\n\nintro\n\n- own bullet\n\n### A\n\n"
+        + body
+        + "\n\n### B\n\n"
+        + body
+        + "\n"
+    )
+    units = chunk_file("docs/decisions.md", text)
+    assert all(_bytes(u) <= MAX_UNIT_BYTES for u in units)
+    firsts = [u.first_line for u in units]
+    assert "### A" in firsts
+    assert "### B" in firsts
+    assert [u.line_lo for u in units[1:]] == [u.line_hi + 1 for u in units[:-1]]
