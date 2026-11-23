@@ -1741,8 +1741,9 @@ def nox_session_tags(node: ast.FunctionDef) -> list[str]:
 # lode-jm4a, lode-oqqw) before lode-k5qb stopped asserting it here on comment
 # authority alone: it is now a mechanical, AST-based gate,
 # tests/test_no_private_fence_state_machine.py, that fails the suite the
-# moment ANY module under tests/*.py or scripts/*.py (other than this file)
-# hand-rolls a fence-toggle open/close flag again. Trust that gate, not this
+# moment ANY module in its scan hand-rolls fence open/close state again; that
+# module's SCAN_DIRS and EXEMPT say what it scans and which homes are
+# sanctioned (this file is one). Trust that gate, not this
 # paragraph. The count is deliberately not restated here either: it has been
 # hand-incremented (and gone stale) once per unification ticket, so the list
 # below carries it and nothing else does.

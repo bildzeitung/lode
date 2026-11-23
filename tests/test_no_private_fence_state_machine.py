@@ -28,18 +28,28 @@ open/close state, whether a boolean flag or a string holding the open marker
 which is why it is a sanctioned exemption rather than something the gate could
 ever selectively allow inside other files.
 
+Which assignments count (lode-un73): a plain ``name = value``; a tuple or list
+target holding at least one plain name (``fence, opened = marker, n``, the
+shape ``fence_scan`` itself opens with); and an annotated assignment that has
+a value (``fence: str = marker`` -- a bare ``fence: str`` assigns nothing).
+
 What it deliberately does not do. It does not resolve names: a fence marker
 hoisted to a module constant (``_FENCE = "```"`` ... ``if
 line.startswith(_FENCE)``) puts no literal in the ``if`` test and slips
 through, as does the precompiled-regex shape below. For the same reason it
 does not ask whether the assigned name is fence state: ``lang = "bash"`` under
 a literal marker test is flagged too. That width costs nothing today --
-measured at lode-8ph6 over every scanned module, ZERO ``if``s carry a literal
-fence marker in their test at all. And only a plain ``name = value`` statement
-counts: tuple-unpacking, annotated and augmented assignments are not looked
-at. Reading ``fence_scan``'s output and testing a block's own leading marker
-without assigning to a name is a legitimate shape (pinned below). This gate
-catches the shapes that have actually recurred five times, not an adversary.
+measured at lode-un73 over every scanned module, subpackages included, ZERO
+``if``s carry a literal fence marker in their test at all. Three assignment
+shapes are not looked at. Augmented assignments: ``depth += 1`` is also the
+shape of a plain fence counter, which keeps no open/close state, so a toggle
+written ``in_fence ^= True`` passes with it. Walruses. And attribute or
+subscript targets (``self.in_fence = not self.in_fence``), unless a plain name
+shares the tuple. Loop and comprehension targets are left out on purpose: a
+read-only consumer may iterate under a marker test (pinned below). Reading
+``fence_scan``'s output and testing a block's own leading marker without
+assigning to a name is a legitimate shape (pinned below). This gate catches
+the shapes that have actually recurred five times, not an adversary.
 """
 
 from __future__ import annotations
@@ -47,6 +57,8 @@ from __future__ import annotations
 import ast
 import sys
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCAN_DIRS = (REPO_ROOT / "tests", REPO_ROOT / "scripts", REPO_ROOT / "src" / "lode")
@@ -100,17 +112,34 @@ def _is_fence_marker_test(test: ast.expr) -> bool:
     return False
 
 
+def _binds_a_name(target: ast.expr) -> bool:
+    """Whether an assignment target is a plain name, or a tuple/list holding
+    at least one (starred or nested included)."""
+    if isinstance(target, ast.Name):
+        return True
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_binds_a_name(e) for e in target.elts)
+    if isinstance(target, ast.Starred):
+        return _binds_a_name(target.value)
+    return False
+
+
 def _assigns_a_plain_name(node: ast.If) -> bool:
     """Whether ``node``'s body or else-branch assigns ANY value to a plain
     name, at any depth (the assignment may sit inside a nested
     ``if``/``else``). Any value, not just a boolean-flag shape: a machine
     keeping the open marker in a string variable (``fence = marker`` /
-    ``fence = ''``) is the same private open/close state (lode-8ph6). Walking
-    the whole node is safe: its test is an expression, which cannot hold an
-    ``ast.Assign``."""
+    ``fence = ''``) is the same private open/close state (lode-8ph6). Which
+    statements count as an assignment is in the module docstring. Walking the
+    whole node is safe: its test is an expression, which cannot hold an
+    assignment statement."""
     return any(
-        isinstance(sub, ast.Assign)
-        and any(isinstance(t, ast.Name) for t in sub.targets)
+        (isinstance(sub, ast.Assign) and any(_binds_a_name(t) for t in sub.targets))
+        or (
+            isinstance(sub, ast.AnnAssign)
+            and sub.value is not None
+            and _binds_a_name(sub.target)
+        )
         for sub in ast.walk(node)
     )
 
@@ -133,14 +162,14 @@ def _scan_paths() -> list[Path]:
     return [
         path
         for scan_dir in SCAN_DIRS
-        for path in sorted(scan_dir.glob("*.py"))
+        for path in sorted(scan_dir.rglob("*.py"))
         if path not in EXEMPT
     ]
 
 
 def test_no_private_fence_toggle_state_machine_outside_conftest() -> None:
-    """THE GATE: every module under tests/*.py, scripts/*.py, and
-    src/lode/*.py, except the two sanctioned homes (tests/conftest.py's
+    """THE GATE: every module under tests/, scripts/, and src/lode/
+    (recursively), except the two sanctioned homes (tests/conftest.py's
     ``fence_scan`` and src/lode/fence_parsing.py's primitives), must be free
     of a private fence-toggle open/close state machine."""
     offenders: list[str] = []
@@ -270,7 +299,7 @@ def h(blocks):
 
 
 def test_scan_dirs_covers_src_lode(tmp_path, monkeypatch) -> None:
-    """lode-ee7b AC4: the gate's scan is widened to cover src/*.py, and fails
+    """lode-ee7b AC4: the gate's scan is widened to cover src/lode/, and fails
     on a newly introduced private fence toggle there -- proven by pointing the
     gate's own SCAN_DIRS at a throwaway tree standing in for src/lode/,
     holding the exact pre-lode-jm4a shape from
@@ -335,3 +364,54 @@ def _outside_fences(text: str) -> str:
     assert fence_toggle_findings(ast.parse(src)), (
         "gate failed to catch a string-valued open-fence variable"
     )
+
+
+def _under_a_marker_test(statement: str) -> ast.AST:
+    """``statement`` as the whole body of an ``if`` testing a literal marker."""
+    return ast.parse(f'if line.startswith("```"):\n    {statement}\n')
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "fence, opened = marker, n",
+        "[fence, opened] = marker, n",
+        "*fence, = marker",
+        "self.fence, opened = marker, n",
+        "fence: str = marker",
+    ],
+)
+def test_gate_catches_a_tuple_target_or_annotated_assignment(statement: str) -> None:
+    """lode-un73: conftest's ``fence_scan`` opens with a tuple target; a
+    private copy mirroring it must be flagged, however the target is spelled
+    and as long as one element is a plain name. So must an annotated
+    assignment that has a value."""
+    assert fence_toggle_findings(_under_a_marker_test(statement))
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "fence: str",
+        "depth += 1",
+        "for part in line.split(): parts.append(part)",
+        "parts.extend(part for part in line.split())",
+    ],
+)
+def test_gate_ignores_a_statement_that_keeps_no_open_close_state(
+    statement: str,
+) -> None:
+    """lode-un73: a bare annotation assigns nothing, ``depth += 1`` is a plain
+    fence counter, and a loop or comprehension target belongs to a read-only
+    consumer. None is open/close state."""
+    assert fence_toggle_findings(_under_a_marker_test(statement)) == []
+
+
+def test_scan_paths_recurse_into_subpackages(tmp_path, monkeypatch) -> None:
+    """lode-un73: a .py file in a subdirectory of a scan dir is scanned."""
+    gate = sys.modules[__name__]
+    (tmp_path / "sub").mkdir()
+    nested = tmp_path / "sub" / "nested.py"
+    nested.write_text("x = 1\n")
+    monkeypatch.setattr(gate, "SCAN_DIRS", (tmp_path,))
+    assert nested in gate._scan_paths()
