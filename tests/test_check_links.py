@@ -1027,3 +1027,21 @@ def test_unreadable_markdown_is_one_error_however_many_links_reach_it(tmp_path):
         check_links.LinkError(path, 0, reason, "file cannot be read")
         for path, reason in zip(bad, why, strict=True)
     ]
+
+
+@pytest.mark.parametrize(
+    "citation",
+    [
+        f"{_DOCS}/my notes.md",
+        f"{_DOCS}/x/my notes.md#a",
+        f"{_DOCS}/my%20notes.md",
+        f"{_DOCS}/my notes/page.md",
+    ],
+)
+def test_bare_citation_of_a_spaced_name_matches_nothing(citation):
+    """lode-905hd: the module docstring's LIMIT. A spaced name is neither
+    matched whole nor cut at the space into a shorter path."""
+    assert (
+        check_links._bare_doc_anchor_refs(f"see {citation} here\n", skip_fences=False)
+        == []
+    )

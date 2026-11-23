@@ -107,6 +107,19 @@ actually dominated, since nearly every anchor target is a ``docs/`` page the
 walk had already read. Non-markdown files in the bare pass are deliberately
 NOT cached: they are read exactly once, so retaining them would cost
 megabytes of resident text for no saved read.
+
+LIMIT (lode-905hd): a bare citation of a page whose file name holds a space
+is NOT supported, in any spelling. The citation pattern's path class is word
+characters, dot, slash and hyphen, so the text up to the space never reaches
+a ``.md`` ending and nothing matches -- a dead citation of such a page is not
+reported, and a live one is not resolved. It is never cut at the space and
+resolved as a shorter path: the match needs ``.md`` straight after the path
+characters, and a ``%20`` spelling fails the same way (``%`` is outside the
+class). A bare citation has no delimiter, so a space in it cannot be told
+from the prose around it; widening the pattern would swallow the following
+words. Cite such a page with a markdown link instead, which reads its own
+delimiters (angle brackets or percent-encoding, lode-tgr6). No tracked path
+holds a space today.
 """
 
 from __future__ import annotations
