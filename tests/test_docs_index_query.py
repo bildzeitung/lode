@@ -346,6 +346,39 @@ def test_split_entry_markers_points_every_piece_of_a_split_entry_at_its_marker(
         )
 
 
+def test_split_entry_markers_in_a_section_cut_at_its_h3_headings(
+    tmp_path: Path,
+) -> None:
+    """A ``##`` section over MAX_UNIT_BYTES is cut at its ``###`` headings
+    (lode-vt7x). Each is a structural line, so the block a hit belongs to is
+    the sub-heading's own: every paragraph piece of an oversized sub-heading
+    points at that sub-heading's marker, and no unit outside it does."""
+    paragraph = "word " * 400
+    text = (
+        "# Title\n\n## Section\n\nintro\n\n### A\n\n"
+        + "\n\n".join([paragraph] * 6)
+        + "\n\n### B\n\n"
+        + "\n\n".join([paragraph] * 10)
+        + "\n\n**Update (lode-test, 2026-01-01)** -- corrected.\n"
+    )
+    doc = tmp_path / "decisions.md"
+    doc.write_text(text, encoding="utf-8")
+    marker_line = len(text.splitlines())
+    units = _query_module._build._chunker.chunk_file(doc, text)
+    assert [u.first_line for u in units[:4]] == [
+        "# Title",
+        "## Section",
+        "### A",
+        "### B",
+    ]
+    pieces = units[3:]
+    assert len(pieces) > 1
+    for u in units:
+        assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
+            [marker_line] if u in pieces else []
+        )
+
+
 def test_split_entry_markers_agrees_with_the_chunker_on_the_real_decisions_md() -> None:
     """The lookup must fire on the file it exists for, whose shape a fixture
     can get wrong: the real file opens with an H1 title, so its entries come

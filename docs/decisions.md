@@ -5020,6 +5020,27 @@ entries below from being rewritten to chase the current tree.)
     at paragraphs, never at its `###` headings, and the split-entry `NOTE` for a piece of it lists
     only the markers between the nearest heading or bullet on each side. Not reachable today (no
     `###` in this file; its largest `##` unit is 4640 bytes); open in `lode-vt7x`.
+  - **Update (lode-vt7x, 2026-11-23):** the first half of limit (2) in the `lode-kys3` Update
+    above no longer holds. In this file a `##` section over `MAX_UNIT_BYTES` is now cut at every
+    heading inside it, whatever its level, before it is cut at bullets or paragraphs, so a `###`
+    and the text under it make one unit. The cut is made in `chunk_file`, on a section's own text
+    once the entries appended after it are cut off, and `_hard_split` is unchanged; no maintainer
+    ruling. The ticket's candidate was a rung in `_hard_split` ahead of the bullet rung, and the
+    ticket left what that rung does to the other files unmeasured. As first built it was that
+    rung, switched on for every oversized range of this file, the text before the first `##`
+    included. That text is the entry list: run at technical review on synthetic text, a `###`
+    there took the entries after it into its unit wherever they fit in one. The cut was moved at
+    review to where only a `##` section of this file reaches it, so a heading before the first
+    `##` is still not a boundary. Measured at review with trunk's chunker and this one over
+    all 21 `docs/*.md` files: the unit lists are identical, this file's 241 units included, since
+    no `##` section here is over the limit. Run at review on this file with a 24 KB `## New` section
+    appended, holding `### A` and `### B` at 12 KB each: the appended units are `## New`, `### A`
+    and `### B`, and every existing unit starts on the line it starts on today. Two limits, both
+    run at review on synthetic text, neither reachable today. (1) The second half of limit (2)
+    still holds: a hit under `### A` gets no split-entry `NOTE` for an Update placed under
+    `### B`, since each sub-heading starts a block of its own; open in `lode-pe38`. (2) The cut
+    is at every heading level at once, so a `###` directly followed by a `####` becomes a unit
+    holding only its heading line, even where the `###` and its sub-sections would fit in one.
 
 - **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
   decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent

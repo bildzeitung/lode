@@ -380,17 +380,118 @@ def test_entry_log_h3_does_not_move_the_split_level():
     assert "### Sub" in deep
 
 
+def _starts(units) -> list[tuple[int, str]]:
+    return [(u.line_lo, u.first_line) for u in units]
+
+
+def _tiles(units) -> bool:
+    return [u.line_lo for u in units[1:]] == [u.line_hi + 1 for u in units[:-1]]
+
+
 def test_real_decisions_md_with_an_appended_h3_leaves_every_existing_unit_in_place():
     path = DOCS_DIR / "decisions.md"
     probe = chunk_file(
         path, path.read_text(encoding="utf-8") + "\n## New\n\nprose\n### Sub\n\nmore\n"
     )
-
-    def starts(units):
-        return [(u.line_lo, u.first_line) for u in units]
-
-    assert starts(probe[:-1]) == starts(_decisions_units())
+    assert _starts(probe[:-1]) == _starts(_decisions_units())
     assert probe[-1].first_line == "## New"
     assert "### Sub" in probe[-1].body
-    assert [u.line_lo for u in probe[1:]] == [u.line_hi + 1 for u in probe[:-1]]
+    assert _tiles(probe)
+    assert all(_bytes(u) <= MAX_UNIT_BYTES for u in probe)
+
+
+#: Six paragraphs, about 12 KB: two of them under one heading are over the limit.
+_SIX_PARAGRAPHS = "\n\n".join("word " * 400 for _ in range(6))
+
+#: The text of a '##' section over MAX_UNIT_BYTES, to go under its heading line:
+#: its own text and bullet, then two sub-headings that each fit in a unit.
+_OVERSIZED_SECTION_TEXT = (
+    "intro\n\n- own bullet\n\n### A\n\n"
+    + _SIX_PARAGRAPHS
+    + "\n\n### B\n\n"
+    + _SIX_PARAGRAPHS
+    + "\n"
+)
+
+
+def test_entry_log_oversized_section_is_cut_at_its_h3_headings():
+    # A '##' section over MAX_UNIT_BYTES is cut at its '###' headings before
+    # any bullet or paragraph cut: each sub-heading keeps its text in its own
+    # unit, the section's own bullet stays with the section, and the entries
+    # appended after the section are still cut off (lode-vt7x).
+    text = (
+        "# Log\n\n## Big\n\n"
+        + _OVERSIZED_SECTION_TEXT
+        + "- late entry A\n  continuation\n- late entry B\n"
+    )
+    units = chunk_file("docs/decisions.md", text)
+    assert [u.first_line for u in units] == [
+        "# Log",
+        "## Big",
+        "### A",
+        "### B",
+        "- late entry A",
+        "- late entry B",
+    ]
+    assert "- own bullet" in units[1].body
+    assert all(_bytes(u) <= MAX_UNIT_BYTES for u in units)
+    assert _tiles(units)
+
+
+def test_entry_log_fenced_hash_line_in_an_oversized_section_is_not_a_cut():
+    text = (
+        "# Log\n\n## Big\n\nintro\n\n"
+        "```bash\n# a comment\n### not a heading\n```\n\n"
+        + _SIX_PARAGRAPHS
+        + "\n\n### B\n\n"
+        + _SIX_PARAGRAPHS
+        + "\n"
+    )
+    units = chunk_file("docs/decisions.md", text)
+    assert [u.first_line for u in units] == ["# Log", "## Big", "### B"]
+
+
+def test_entry_log_heading_before_the_first_section_does_not_take_the_entries_after_it():
+    # The heading cut is for '##' sections. The text before the first section
+    # is the entry list: a cut at a heading there would put the entries after
+    # it in that heading's unit whenever they fit in one.
+    entries = "".join(f"- entry {i}\n  {'x' * 1500}\n" for i in range(40))
+    text = (
+        "# Log\n\n"
+        + entries
+        + "### Sub\n\nprose\n- later entry A\n- later entry B\n\n## Section\n\nprose\n"
+    )
+    firsts = [u.first_line for u in chunk_file("docs/decisions.md", text)]
+    assert firsts[-3:] == ["- later entry A", "- later entry B", "## Section"]
+    assert "### Sub" not in firsts
+
+
+def test_only_the_entry_log_gets_the_heading_cut():
+    # In any other file a shallower heading can sit in the tail of an
+    # oversized deepest-level unit; there the cut stays at paragraphs.
+    text = (
+        "# Title\n\n### X\n\n"
+        + _SIX_PARAGRAPHS
+        + "\n\n## Next\n\n"
+        + _SIX_PARAGRAPHS
+        + "\n"
+    )
+    firsts = [u.first_line for u in chunk_file("docs/stack.md", text)]
+    assert sum(first.startswith("word ") for first in firsts) == 12
+
+
+def test_real_decisions_md_with_an_oversized_section_appended_is_cut_at_its_h3_headings():
+    path = DOCS_DIR / "decisions.md"
+    existing = _decisions_units()
+    probe = chunk_file(
+        path,
+        path.read_text(encoding="utf-8") + "\n## New\n\n" + _OVERSIZED_SECTION_TEXT,
+    )
+    assert _starts(probe[: len(existing)]) == _starts(existing)
+    assert [u.first_line for u in probe[len(existing) :]] == [
+        "## New",
+        "### A",
+        "### B",
+    ]
+    assert _tiles(probe)
     assert all(_bytes(u) <= MAX_UNIT_BYTES for u in probe)

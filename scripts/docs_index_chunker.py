@@ -22,6 +22,8 @@ section it has nothing to do with, and the heading split alone would put it in
 that section's unit under that section's heading (``lode-skv8``). There the
 split level is capped at ``##`` (``lode-kys3``), and the top-level bullets after
 a heading unit's own text each start a unit. See :func:`_split_trailing_entries`.
+A ``##`` section still over :data:`MAX_UNIT_BYTES` is cut at every heading inside
+it before the post-pass reaches it (``lode-vt7x``).
 
 Boundary detection is **fence-aware**: a ``## `` or ``- `` inside a fenced code
 block is someone's example, not document structure. See :func:`_fence_flags`.
@@ -275,14 +277,28 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
     ranges = _split_range(lines, 1, n, primary_boundary)
 
     if split_level and is_entry_log:
+
+        def is_heading(i: int) -> bool:
+            return not fence_flags[i] and bool(_HEADING_RE.match(lines[i]))
+
         # Heading units only: the text before the first split-level heading
         # is left to the post-pass, which splits it at its bullets.
         cut: list[tuple[int, int]] = []
         for lo, hi in ranges:
-            if primary_boundary(lo - 1):
-                cut.extend(_split_trailing_entries(lines, fence_flags, lo, hi))
-            else:
+            if not primary_boundary(lo - 1):
                 cut.append((lo, hi))
+                continue
+            section, *entries = _split_trailing_entries(lines, fence_flags, lo, hi)
+            if _unit_bytes(lines, *section) > MAX_UNIT_BYTES:
+                # The capped split level leaves a deeper heading out of the
+                # boundaries, so an oversized section is cut at every heading
+                # in it before the post-pass cuts at bullets or paragraphs
+                # (``lode-vt7x``). A heading is a structural line, which is
+                # all ``split_entry_markers`` needs of a cut made here.
+                cut.extend(_split_range(lines, *section, is_heading))
+            else:
+                cut.append(section)
+            cut.extend(entries)
         ranges = cut
 
     final_ranges: list[tuple[int, int]] = []
