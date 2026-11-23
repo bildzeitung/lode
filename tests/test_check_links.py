@@ -164,9 +164,7 @@ class TestDocsSlugCopyAgrees:
         assert docs_slug.anchor_slugs(text) == got
 
     @pytest.mark.parametrize("marker", ["```", "~~~", "  ```"])
-    def test_anchor_tag_in_a_fence_info_string_is_not_an_anchor(
-        self, tmp_path, marker
-    ):
+    def test_anchor_tag_in_a_fence_info_string_is_not_an_anchor(self, tmp_path, marker):
         """A fence opener's info string is not content, so a tag there offers
         no anchor to either copy (lode-wo3w)."""
         text = f'{marker}<a id="x"></a>\ncode\n{marker.strip()}\n## Out\n'
