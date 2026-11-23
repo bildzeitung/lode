@@ -7379,3 +7379,12 @@ plus 22 for the unpinned rules, plus 2 added in technical review.
 
 Every phrase matches exactly once in `coding.md` outside fenced blocks
 (`tests/test_instruction_rule_inventory_gate.py` is green).
+
+  - **Update (lode-mkmn, 2026-11-23, maintainer):** the amended inventory is re-approved with one
+    addition, built by `lode-w18a.14` as an edit to `tests/instruction_rules.json`. The new entry
+    `parent-child-related-do-not-gate-dispatch` pins the clause of the "Use the right dependency
+    type" best-practice bullet that says what `parent-child` and `related` do, ending at "none of
+    those three block `bd ready`." That bullet is the only place `coding.md` explains them
+    (`lode-c0t3`), and `lode-w18a.13` collapsed it without pinning the clause. "Declare blockers up
+    front so `bd ready` stays honest." stays unpinned: it restates the rule, so `lode-w18a.12` may
+    cut it. The `coding.md` inventory is now 85 entries.
