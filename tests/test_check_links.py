@@ -738,3 +738,31 @@ def test_cli_exits_zero_on_clean_tree(tmp_path):
     )
 
     assert result.returncode == 0
+
+
+@pytest.mark.parametrize("rel", [f"{_DOCS}/gone.md", "scripts/gone.sh"])
+def test_cli_reports_tracked_file_deleted_but_unstaged_without_traceback(tmp_path, rel):
+    _write(tmp_path, f"{_DOCS}/a.md", "# A\n")
+    gone = _write(tmp_path, rel, "x\n")
+    _git_init(tmp_path)
+    gone.unlink()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "check_links.py"),
+            "--root",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    assert str(gone) in result.stderr
+    assert "missing from the working tree" in result.stderr
+    assert f"git rm {gone}" in result.stderr
+    assert f"git restore {gone}" in result.stderr

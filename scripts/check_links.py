@@ -216,6 +216,17 @@ class LinkError:
         return f"{self.source}:{self.line}: {self.reason} -> {self.target}"
 
 
+def _missing_tracked_error(source: Path) -> LinkError:
+    """A tracked file absent from the working tree: its deletion was never
+    staged. Reported with its remedy instead of letting the read traceback."""
+    return LinkError(
+        source,
+        0,
+        f"git rm {source} (stage the deletion) or git restore {source}",
+        "tracked file is missing from the working tree",
+    )
+
+
 def _is_external(target: str) -> bool:
     """True for anything not resolvable as a path in this repo: a URL with a
     scheme (``http:``, ``mailto:``, ...) or a protocol-relative ``//...``."""
@@ -498,7 +509,11 @@ def check(root: Path) -> list[LinkError]:
     tracked = _tracked_paths(root)  # single 'git ls-files' fork for this call
 
     for source in _tracked_markdown_files(root, tracked):
-        source_text = _cached_text(source, text_cache)
+        try:
+            source_text = _cached_text(source, text_cache)
+        except FileNotFoundError:
+            errors.append(_missing_tracked_error(source))
+            continue
         for line_no, target in _links_in_file(source_text):
             if not target or _is_external(target):
                 continue
@@ -533,6 +548,9 @@ def check(root: Path) -> list[LinkError]:
                 if source.suffix == ".md"
                 else source.read_text(encoding="utf-8", errors="replace")
             )
+        except FileNotFoundError:
+            errors.append(_missing_tracked_error(source))
+            continue
         except OSError:
             continue
         for line_no, target in _bare_doc_anchor_refs(
