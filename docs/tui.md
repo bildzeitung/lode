@@ -489,13 +489,13 @@ groups that Textual's markup parser rejects at toast render), and logs the trace
 leaves the Anthropic provider's non-status SDK errors raw (`anthropic.APIConnectionError` when
 offline, `anthropic.APITimeoutError` when a turn itself times out): "a timeout is not a rejected
 request" (`docs/configuration.md`, "`reasoning_effort` wired to `output_config.effort`";
-`docs/stack.md` "Error contract" pins that the SDK status errors are the ones wrapped). Wrapping them into
-`LLMProviderError` there would reverse that choice and reach past the TUI, because the `lode ask`,
-`lode work` and `lode add` handlers name that class (`docs/storage.md` "Transient vs. permanent job
-failures"). The job retry taxonomy there is keyed on the two credential errors only, and stays as it
-is. A TUI-side catch also covers causes that are not provider errors at all (sqlite, the vector
-store, the local embedder, a rendering fault), and a crash could lose unsaved data. The CLI still
-prints a traceback for a raw SDK error.
+`docs/stack.md` "Error contract" pins that the SDK status errors are the ones wrapped). Wrapping
+them into `LLMProviderError` there would reverse that choice and reach past the TUI, because the
+`lode ask`, `lode work` and `lode add` handlers name that class (`docs/storage.md` "Transient vs.
+permanent job failures"). The job retry taxonomy there is keyed on the two credential errors only,
+and stays as it is. A TUI-side catch also covers causes that are not provider errors at all (sqlite,
+the vector store, the local embedder, a rendering fault), and a crash could lose unsaved data. The
+CLI still prints a traceback for a raw SDK error.
 
 Exhausting `qa_call_timeout_s` surfaces as one of two errors on the Anthropic provider
 (`OpenAIProvider` wraps every SDK error, a timeout included), and the worker's `except Exception`

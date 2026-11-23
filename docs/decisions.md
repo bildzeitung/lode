@@ -6919,10 +6919,6 @@ prose. As first built it was unwrapped like any other, which ended five `docs/se
 with `(storage.md)`, `(externals.md)`, `(stack.md)` twice, and, on the `enrichment_llm` row,
 `(below)`, pointing at a "Model provenance" section the page does not carry.
 
-**Update (lode-kp9p, 2026-11-22):** Whitespace only, renders the same: the last line above was
-followed directly by the `## A detached \`lode-ucpu\` Update stays where the union merge put it
-(decided, lode-tikr)` heading with no empty line between them; the empty line now sits there.
-
 ## A detached `lode-ucpu` Update stays where the union merge put it (decided, lode-tikr)
 
 Maintainer ruling 2026-11-21. `lode-ucpu`'s Update sits under the `lode-sflg` `##` section, the
