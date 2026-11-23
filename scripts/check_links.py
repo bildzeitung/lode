@@ -539,9 +539,7 @@ def check(root: Path) -> list[LinkError]:
         except OSError as exc:
             # Present but unreadable (dangling symlink, directory in its
             # place, no read permission): no single remedy, so name the cause.
-            errors.append(
-                LinkError(source, 0, str(exc), "tracked file cannot be read")
-            )
+            errors.append(LinkError(source, 0, str(exc), "tracked file cannot be read"))
             continue
         for line_no, target in _links_in_file(source_text):
             if not target or _is_external(target):
