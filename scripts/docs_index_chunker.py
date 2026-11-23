@@ -107,7 +107,7 @@ def _fence_flags(lines: list[str]) -> list[bool]:
     was a private third copy of the same CommonMark rule set already
     hand-rolled in ``tests/conftest.py`` (``fence_scan``) -- outside the reach
     of ``tests/test_no_private_fence_state_machine.py``, which now also scans
-    ``src/*.py``.
+    ``src/lode/``.
     """
     return _shared_fence_flags(lines)
 
