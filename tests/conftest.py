@@ -1271,7 +1271,9 @@ def mkdocs_config() -> dict:
 
 
 def tracked_paths(*pathspec: str, root: Path = _CHECKOUT_ROOT) -> list[str]:
-    """Repo-relative tracked paths under ``root``, optionally narrowed by ``pathspec``.
+    """Tracked paths under ``root``, relative to it, optionally narrowed by ``pathspec``.
+
+    Repo-relative for the default ``root``, the checkout's top level.
 
     Listed NUL-separated and read as bytes, each name ``os.fsdecode``d: plain
     ``git ls-files`` text C-quotes a non-ASCII name (``"caf\\303\\251.py"``), ``-z`` text
@@ -1279,7 +1281,7 @@ def tracked_paths(*pathspec: str, root: Path = _CHECKOUT_ROOT) -> list[str]:
     (the listing ``scripts/check_links.py`` uses).
     """
     out = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z", *pathspec],
+        ["git", "-C", str(root), "ls-files", "-z", "--", *pathspec],
         capture_output=True,
         check=True,
     ).stdout

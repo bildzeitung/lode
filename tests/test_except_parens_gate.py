@@ -203,12 +203,8 @@ def find_multi_except_violations(path: str, text: str) -> list[MultiExceptClause
     return [c for c in find_multi_except_clauses(path, text) if c.violation]
 
 
-def _tracked_python_files() -> list[str]:
-    return tracked_paths("*.py")
-
-
 def test_no_bare_or_unmarked_multi_exception_in_tracked_source() -> None:
-    tracked = _tracked_python_files()
+    tracked = tracked_paths("*.py")
     assert tracked, "git ls-files returned no *.py paths -- this gate would be vacuous"
 
     all_violations: list[MultiExceptClause] = []

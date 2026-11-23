@@ -24,6 +24,7 @@ happens to be clean):
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -47,12 +48,12 @@ _INDEX_ARTIFACT_SUFFIXES = (".sqlite3", ".sqlite", ".db")
 _PROSE_SUFFIXES = (".md",)
 
 
-def _find_index_artifacts(tracked_paths: list[str]) -> list[str]:
-    """Return the subset of ``tracked_paths`` that look like a committed
+def _find_index_artifacts(paths: list[str]) -> list[str]:
+    """Return the subset of ``paths`` that look like a committed
     docs-index artifact. Pure function so the sabotage test below can drive
     it with a synthetic list, without needing to actually `git add` a file."""
     offenders = []
-    for raw in tracked_paths:
+    for raw in paths:
         name = Path(raw).name
         named_like_index = any(
             sub in name for sub in _INDEX_ARTIFACT_NAME_SUBSTRINGS
@@ -87,12 +88,8 @@ def _load_build_module() -> object:
 # --- 1. No index artifact is git-tracked -----------------------------------
 
 
-def _tracked_paths(root: Path = REPO_ROOT) -> list[str]:
-    return tracked_paths(root=root)
-
-
 def test_no_index_artifact_is_git_tracked() -> None:
-    tracked = _tracked_paths()
+    tracked = tracked_paths()
     # Non-vacuity pin (the sibling gates' `bd_lines > 0` move): without it, a
     # `git ls-files` that ever returned nothing -- wrong checkout, a future
     # pathspec filter -- would make this gate pass green forever with nothing
@@ -135,20 +132,31 @@ def test_gate_composes_real_discovery_with_the_match() -> None:
     which proves the matcher but not the *gate*. This one appends a synthetic
     offender to the REAL `git ls-files` output, so discovery and matching are
     exercised together -- the arrangement the live check actually runs."""
-    tracked = [*_tracked_paths(), ".lode/docs-index.sqlite3"]
+    tracked = [*tracked_paths(), ".lode/docs-index.sqlite3"]
     assert _find_index_artifacts(tracked) == [".lode/docs-index.sqlite3"]
 
 
-def test_gate_listing_catches_a_db_under_a_non_ascii_directory(tmp_path: Path) -> None:
-    """Plain ``git ls-files`` C-quotes ``data/caf\\303\\251/x.db`` so its basename ends in
-    a quote and the suffix arm misses it; the listing the gate uses must not."""
+@pytest.mark.parametrize(
+    "dirname",
+    ["a b", "café", os.fsdecode(b"bad\xff"), "a\rb"],
+    ids=["space", "non-ascii", "not-utf-8", "carriage-return"],
+)
+def test_gate_listing_catches_a_db_under_an_oddly_named_directory(
+    tmp_path: Path, dirname: str
+) -> None:
+    """Plain ``git ls-files`` C-quotes the last three paths (``data/caf\\303\\251/x.db``
+    in quotes), so the basename ends in a quote and the suffix arm misses it. ``-z``
+    output read in text mode raises on the third and newline-translates the fourth. A
+    whitespace split cuts the first. ``conftest.tracked_paths`` is the listing of all
+    three gates that use it, so this pins it for the other two as well."""
     _git(tmp_path, "init", "-q")
-    (tmp_path / "data" / "café").mkdir(parents=True)
-    (tmp_path / "data" / "café" / "x.db").write_bytes(b"")
+    (tmp_path / "data" / dirname).mkdir(parents=True)
+    (tmp_path / "data" / dirname / "x.db").write_bytes(b"")
     (tmp_path / "data" / "plain.db").write_bytes(b"")
-    _git(tmp_path, "add", "-A")
-    assert sorted(_find_index_artifacts(_tracked_paths(tmp_path))) == [
-        "data/café/x.db",
+    # -f: an ignore rule for *.db in the user's git config would leave the index empty.
+    _git(tmp_path, "add", "-f", "--", "data")
+    assert _find_index_artifacts(tracked_paths(root=tmp_path)) == [
+        f"data/{dirname}/x.db",
         "data/plain.db",
     ]
 
