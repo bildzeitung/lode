@@ -154,6 +154,19 @@ class TestDocsSlugCopyAgrees:
         assert docs_slug.anchor_slugs(text) == check_links._slugs_for_file(path, {})
         assert docs_slug.anchor_slugs(text) == {"heading"}
 
+    @pytest.mark.parametrize("sep", ["\x0c", "\u2028"])
+    def test_non_newline_line_break_chars_do_not_split_lines(self, tmp_path, sep):
+        """Only ``\\n`` ends a line: a form feed or U+2028 neither makes a heading
+        out of text after it nor opens a fence; both anchor-set copies agree
+        (lode-bdyx)."""
+        for text, expected in (
+            (f"a{sep}## H\n", set()),
+            (f'a{sep}```\n<a id="ff"></a>\n', {"ff"}),
+        ):
+            path = _write(tmp_path, "a.md", text)
+            assert check_links._slugs_for_file(path, {}) == expected
+            assert docs_slug.anchor_slugs(text) == expected
+
     def test_anchor_tag_inside_a_fence_is_not_an_anchor(self, tmp_path):
         """An explicit anchor tag inside a fenced block is literal code, so
         neither anchor-set copy counts it (lode-ho02)."""

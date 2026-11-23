@@ -351,7 +351,11 @@ def _content_lines(text: str) -> Iterator[tuple[int, str]]:
     ``fence_parsing`` reports there too.
     """
     in_fence = False
-    for line_no, line in enumerate(text.splitlines(), start=1):
+    # "\n" only, never str.splitlines(): must break lines where docs_slug.anchor_slugs does.
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()  # a final "\n" ends the last line, it does not start another
+    for line_no, line in enumerate(lines, start=1):
         if _FENCE_RE.match(line):
             in_fence = not in_fence
             continue
