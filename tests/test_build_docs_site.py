@@ -124,6 +124,17 @@ EXCLUDED = {
             "../configuration.md#no-such-section",
             f"{BASE}/docs/configuration.md#no-such-section",
         ),
+        # A percent-encoded fragment is looked up decoded and kept as written.
+        (
+            "design.md",
+            "configuration.md#async%2Dwork-queue",
+            "settings.md#async%2Dwork-queue",
+        ),
+        (
+            "design.md",
+            "configuration.md#no%2Dsuch-section",
+            f"{BASE}/docs/configuration.md#no%2Dsuch-section",
+        ),
         ("how-to/README.md", "../keybindings.md", "../keymap.md"),
         ("how-to/README.md", "../configuration.md", "../settings.md"),
     ],

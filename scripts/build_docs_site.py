@@ -44,7 +44,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import quote_from_bytes, unquote_to_bytes
+from urllib.parse import quote_from_bytes, unquote, unquote_to_bytes
 
 import typer
 
@@ -294,7 +294,13 @@ def _rewrite_target(
     # else falls through to the GitHub blob URL below, which still resolves to
     # exactly what was cited.
     alias = DERIVED_PAGE_ALIASES.get(root_rel_str)
-    if alias in published and (not fragment or fragment in _alias_anchors(alias)):
+    # The fragment is looked up as written, then percent-decoded -- the order
+    # the link gate uses -- and kept as written in the rewritten link.
+    if alias in published and (
+        not fragment
+        or fragment in _alias_anchors(alias)
+        or unquote(fragment) in _alias_anchors(alias)
+    ):
         # A fresh relative link from the current page's directory: the alias
         # target's filename differs from what the source markdown wrote.
         current_dir = posixpath.dirname(current_rel)
