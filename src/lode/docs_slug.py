@@ -63,11 +63,12 @@ def github_slug(heading_text: str) -> str:
     return text.replace(" ", "-")
 
 
-# Character-for-character `scripts/check_links.py`'s `_ATX_HEADING_RE` and
-# `_HTML_ANCHOR_RE` and `_INLINE_CODE_RE`. Same copy-plus-equivalence-test discipline as
-# `_LINK_TEXT_RE` above: that gate cannot import this module (see the module
-# docstring), so `tests/test_check_links.py` asserts the two implementations
-# return the identical anchor set for every `docs/*.md` file instead.
+# Character-for-character `scripts/check_links.py`'s `_ATX_HEADING_RE`,
+# `_HTML_ANCHOR_RE` and `_INLINE_CODE_RE`. Same copy-plus-equivalence-test
+# discipline as `_LINK_TEXT_RE` above: that gate cannot import this module
+# (see the module docstring), so `tests/test_check_links.py` asserts the two
+# implementations return the identical anchor set for every `docs/*.md` file
+# instead, and on its own cases for the code-span rule.
 _ATX_HEADING_RE = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
 _HTML_ANCHOR_RE = re.compile(r'<a\s+(?:id|name)=["\']([^"\']+)["\']', re.IGNORECASE)
 _INLINE_CODE_RE = re.compile(r"`[^`]*`")
@@ -83,8 +84,8 @@ def anchor_slugs(text: str) -> set[str]:
     is skipped for the same reason, as is one inside an inline code span.
 
     ``scripts/check_links.py::_slugs_for_file`` is the authority for this
-    algorithm -- this is the importable copy of it, for callers that can
-    ``import lode``.
+    algorithm, and its docstring states the limits of the code-span rule --
+    this is the importable copy of it, for callers that can ``import lode``.
     """
     lines = text.split("\n")
     slugs: set[str] = set()
