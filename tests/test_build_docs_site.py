@@ -171,6 +171,27 @@ def test_link_pattern_is_the_gates_with_the_label_captured() -> None:
     assert build_docs_site._LINK_RE.pattern == gate
 
 
+def test_scheme_pattern_is_the_gates() -> None:
+    assert build_docs_site._SCHEME_RE.pattern == check_links._SCHEME_RE.pattern
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "ftp://h/x",
+        "HTTPS://x.y/z",
+        "tel:+15550100",
+        "//cdn.example/x.js",
+        "Mailto:a@b.c",
+    ],
+)
+def test_external_per_the_gate_is_left_alone(target: str) -> None:
+    assert check_links._is_external(target)
+    assert build_docs_site._rewrite_target("design.md", target, PUBLISHED) is None
+    link = f"[t]({target})"
+    assert build_docs_site._process_links(link, "design.md", PUBLISHED) == link
+
+
 @pytest.mark.parametrize(
     ("published", "unpublished", "rewritten"),
     [
