@@ -999,7 +999,7 @@ correctly, passes both guards, and is then destroyed *mid-session*.** During a b
 it**. Its own background job logged `FileNotFoundError: [Errno 2] No such file or directory` for that
 path; the agent then found `pwd == /home/dmklein/PROJECTS/lode` and `HEAD == trunk`. This differs from
 `lode-ska2`/`lode-jk44` (no worktree handed over at dispatch) and `lode-nt98` (a *wrong*, recycled
-worktree handed over at dispatch): both of those are dispatch-time faults the step-3/step-1 guards
+worktree handed over at dispatch): both of those are dispatch-time faults the step-3/step-2 guards
 catch before any work starts. This one happened **after** both guards had already passed — the
 merge-base/isolation checks run once, at the start of the cycle, and have no way to observe a worktree
 vanishing an arbitrary number of steps later.
