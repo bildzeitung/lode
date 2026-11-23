@@ -7060,6 +7060,7 @@ as it was before this change. The ruling speaks of a prose parenthetical, and th
 prose. As first built it was unwrapped like any other, which ended five `docs/settings.md` rows
 with `(storage.md)`, `(externals.md)`, `(stack.md)` twice, and, on the `enrichment_llm` row,
 `(below)`, pointing at a "Model provenance" section the page does not carry.
+
 ## A detached `lode-ucpu` Update stays where the union merge put it (decided, lode-tikr)
 
 Maintainer ruling 2026-11-21. `lode-ucpu`'s Update sits under the `lode-sflg` `##` section, the
