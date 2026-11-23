@@ -281,6 +281,24 @@ def _tracked_other_files(root: Path, tracked: list[Path]) -> list[Path]:
     )
 
 
+def _numbered_lines(text: str) -> Iterator[tuple[int, str]]:
+    """``(line_number, line)`` for every line of ``text``, numbered from 1 --
+    the single home of where a line ends in this gate: at ``"\\n"`` and
+    nowhere else. Every file the gate reads comes through ``read_text``, which
+    has already turned ``\\r\\n`` and a bare ``\\r`` into ``"\\n"``.
+
+    Never ``str.splitlines()``: it also breaks at a form feed, U+2028 and six
+    more characters (``\\x0b``, ``\\x1c``-``\\x1e``, ``\\x85``, U+2029), so text
+    after one would be a line of its own here -- a heading, a fence marker --
+    while ``docs_slug.anchor_slugs``, which must return the same anchor set,
+    splits on ``"\\n"`` and sees none.
+    """
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()  # a final "\n" ends the last line, it does not start another
+    return enumerate(lines, start=1)
+
+
 def _bare_doc_anchor_refs(text: str, *, skip_fences: bool) -> list[tuple[int, str]]:
     """``(line_number, target)`` for every bare ``docs/<path>.md#<anchor>``
     text reference in a tracked file -- no markdown link brackets required.
@@ -292,7 +310,7 @@ def _bare_doc_anchor_refs(text: str, *, skip_fences: bool) -> list[tuple[int, st
     ``tests/test_check_links.py`` for why applying it there would silently
     under-check.
     """
-    lines = _content_lines(text) if skip_fences else enumerate(text.splitlines(), 1)
+    lines = _content_lines(text) if skip_fences else _numbered_lines(text)
     refs = []
     for line_no, line in lines:
         for m in _DOC_ANCHOR_REF_RE.finditer(line):
@@ -356,7 +374,7 @@ def _content_lines(text: str) -> Iterator[tuple[int, str]]:
     ``fence_parsing`` reports there too.
     """
     in_fence = False
-    for line_no, line in enumerate(text.splitlines(), start=1):
+    for line_no, line in _numbered_lines(text):
         if _FENCE_RE.match(line):
             in_fence = not in_fence
             continue
