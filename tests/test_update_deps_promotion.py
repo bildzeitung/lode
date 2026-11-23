@@ -26,7 +26,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import fake_bd, fake_bin_env
+from conftest import fake_bd, fake_bin_env, uv_lock_package
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 UPDATE_DEPS_SRC = REPO_ROOT / "scripts" / "update-deps.sh"
@@ -419,43 +419,27 @@ def test_no_cooldown_and_reconcile_are_mutually_exclusive(tmp_path: Path) -> Non
     assert not (tmp_path / "uv_lock_args").exists()
 
 
-def _registry_lock(*pins: tuple[str, str, str]) -> str:
-    """A lock of ``(name, version, upload-time)`` registry packages, plus an
-    editable root package that has no upload time."""
-    root = '[[package]]\nname = "root"\nversion = "0.1"\nsource = { editable = "." }\n'
-    return root + "".join(
-        f'\n[[package]]\nname = "{name}"\nversion = "{ver}"\n'
-        'source = { registry = "https://pypi.org/simple" }\n'
-        f'sdist = {{ url = "u", hash = "sha256:{"0" * 64}", upload-time = "{when}" }}\n'
-        "wheels = [\n"
-        f'    {{ url = "w", hash = "sha256:{"1" * 64}", upload-time = "{when[:-4]}999Z" }},\n'
-        "]\n"
-        for name, ver, when in pins
-    )
+_YOUNG_PIN = uv_lock_package("young", "2.0.0", "2999-01-01T00:00:00.000Z")
+_OLD_PIN = uv_lock_package("old", "1.0.0", "2000-01-01T00:00:00.000Z")
 
 
-@pytest.mark.parametrize(
-    "extra_args", [(), ("--package", "young"), ("--package", "old")]
-)
+@pytest.mark.parametrize("extra_args", [(), ("--package", "old")])
 def test_cooled_down_run_exempts_only_pins_younger_than_the_cutoff(
     tmp_path: Path, extra_args: tuple[str, ...]
 ) -> None:
-    """lode-hdob: a pin younger than the cutoff gets its own cutoff, the newest
-    upload time of its locked release, so the global cutoff cannot move it back;
-    an older pin, and a package with no registry upload time, get none."""
+    """lode-hdob: a pin younger than the cutoff gets its own cutoff, the upload
+    time of its locked release, so the global cutoff cannot move it back; an
+    older pin gets none. Which pins qualify is tested in test_dep_churn_lib.py;
+    this is the wiring, and the direction of the script's own cutoff."""
     repo, bindir = _build_fake_repo(tmp_path)
-    lock = _registry_lock(
-        ("young", "2.0.0", "2999-01-01T00:00:00.000Z"),
-        ("old", "1.0.0", "2000-01-01T00:00:00.000Z"),
-    )
-    (repo / "uv.lock").write_text(lock, encoding="utf-8")
+    (repo / "uv.lock").write_text(_YOUNG_PIN + _OLD_PIN, encoding="utf-8")
 
     result = _run_update_deps(repo, bindir, extra_args=(*extra_args, "--no-file"))
 
     assert result.returncode == 0, result.stdout + result.stderr
     first_call = _lock_calls(tmp_path)[0]
     assert "--exclude-newer 7 days" in first_call
-    assert "--exclude-newer-package young=2999-01-01T00:00:00.999Z" in first_call
+    assert "--exclude-newer-package young=2999-01-01T00:00:00.000Z" in first_call
     assert first_call.count("--exclude-newer-package") == 1
 
 
@@ -464,8 +448,7 @@ def test_no_exemptions_without_a_cutoff(
     tmp_path: Path, extra_args: tuple[str, ...]
 ) -> None:
     repo, bindir = _build_fake_repo(tmp_path)
-    lock = _registry_lock(("young", "2.0.0", "2999-01-01T00:00:00.000Z"))
-    (repo / "uv.lock").write_text(lock, encoding="utf-8")
+    (repo / "uv.lock").write_text(_YOUNG_PIN, encoding="utf-8")
 
     result = _run_update_deps(repo, bindir, extra_args=(*extra_args, "--no-file"))
 
@@ -477,8 +460,7 @@ def test_a_run_that_cannot_read_its_exemptions_locks_nothing(tmp_path: Path) -> 
     """Carrying on with no exemptions would move every young pin back and exit
     green, so the run stops before ``uv lock``."""
     repo, bindir = _build_fake_repo(tmp_path)
-    lock = _registry_lock(("young", "2.0.0", "2999-01-01T00:00:00.000Z"))
-    (repo / "uv.lock").write_text(lock, encoding="utf-8")
+    (repo / "uv.lock").write_text(_YOUNG_PIN, encoding="utf-8")
     _write_executable(bindir / "awk", "#!/bin/bash\nexit 1\n")
 
     result = _run_update_deps(repo, bindir)
@@ -487,4 +469,4 @@ def test_a_run_that_cannot_read_its_exemptions_locks_nothing(tmp_path: Path) -> 
     assert "could not read the pins younger than the cooldown cutoff" in result.stderr
     assert "died after moving the lock" not in result.stderr
     assert not (tmp_path / "uv_lock_args").exists()
-    assert (repo / "uv.lock").read_text(encoding="utf-8") == lock
+    assert (repo / "uv.lock").read_text(encoding="utf-8") == _YOUNG_PIN

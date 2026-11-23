@@ -126,7 +126,9 @@ dep_stub_skip_reason() {
 # cutoff $2 (an ISO-8601 UTC timestamp ending in Z, as uv.lock writes them).
 # update-deps.sh hands each line to `uv lock --exclude-newer-package`, which
 # REPLACES the global cutoff for that package: the pin stays, and only releases
-# uploaded later than it are excluded (lode-hdob).
+# uploaded later than it are excluded (lode-hdob). A pin at or before the cutoff
+# is deliberately left out: its own upload time as the cutoff would stop it
+# upgrading at all (probed, docs/decisions.md).
 #
 # The time is the NEWEST upload-time among the package's files, across every
 # version it is locked at: a per-package cutoff earlier than any one file of
@@ -143,13 +145,9 @@ dep_cooldown_exemptions() {
     /^\[\[package\]\]/ { n = ""; reg = 0 }
     /^name = "/ && n == "" { n = $2 }
     /^source = \{ registry/ { reg = 1 }
-    reg && n != "" {
-      line = $0
-      while (match(line, /upload-time = "[^"]+"/)) {
-        t = substr(line, RSTART + 15, RLENGTH - 16)
-        if (!(n in m) || key(t) > key(m[n])) m[n] = t
-        line = substr(line, RSTART + RLENGTH)
-      }
+    reg && match($0, /upload-time = "[^"]+"/) {
+      t = substr($0, RSTART + 15, RLENGTH - 16)
+      if (!(n in m) || key(t) > key(m[n])) m[n] = t
     }
     END { for (k in m) if (key(m[k]) > key(cut)) print k "=" m[k] }
   ' "$1" | sort

@@ -28,6 +28,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import uv_lock_package
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LIB = REPO_ROOT / "scripts" / "dep-churn-lib.sh"
@@ -223,21 +224,6 @@ def test_stub_skip_reason(
 _CUTOFF = "2026-11-16T00:00:00.000Z"
 
 
-def _timed_package(
-    name: str, version: str, *times: str, source: str = "registry"
-) -> str:
-    """One ``[[package]]`` table whose wheels carry the upload times ``times``."""
-    wheels = "".join(
-        f'    {{ url = "w{i}", hash = "sha256:{"0" * 64}", upload-time = "{when}" }},\n'
-        for i, when in enumerate(times)
-    )
-    return (
-        f'\n[[package]]\nname = "{name}"\nversion = "{version}"\n'
-        f'source = {{ {source} = "https://example/simple" }}\n'
-        f"wheels = [\n{wheels}]\n"
-    )
-
-
 def _exemptions(tmp_path: Path, *packages: str) -> list[str]:
     lock = tmp_path / "uv.lock"
     lock.write_text("version = 1\nrevision = 3\n" + "".join(packages), encoding="utf-8")
@@ -262,7 +248,7 @@ def test_cooldown_exemption_is_the_newest_upload_time_of_the_locked_files(
 ) -> None:
     """A cutoff earlier than any one file of the locked release makes uv move
     the pin back, so the time handed over must be the true newest."""
-    got = _exemptions(tmp_path, _timed_package("pkg", "1.0", *times))
+    got = _exemptions(tmp_path, uv_lock_package("pkg", "1.0", *times))
     assert got == [f"pkg={times[newest]}"]
 
 
@@ -271,15 +257,15 @@ def test_cooldown_exemptions_cover_only_registry_pins_younger_than_the_cutoff(
 ) -> None:
     got = _exemptions(
         tmp_path,
-        _timed_package("young", "2.0", "2026-11-18T09:00:00.1Z"),
-        _timed_package("old", "1.0", "2026-11-15T23:59:59.999Z"),
+        uv_lock_package("young", "2.0", "2026-11-18T09:00:00.1Z"),
+        uv_lock_package("old", "1.0", "2026-11-15T23:59:59.999Z"),
         # Uploaded at the cutoff to the millisecond: the global cutoff keeps it.
-        _timed_package("at-cutoff", "1.0", "2026-11-16T00:00:00Z"),
+        uv_lock_package("at-cutoff", "1.0", "2026-11-16T00:00:00Z"),
         # Locked at two versions: the package-wide cutoff is the newest of both.
-        _timed_package("multi", "1.0", "2026-01-01T00:00:00.000Z"),
-        _timed_package("multi", "2.0", "2026-11-19T00:00:00.000Z"),
-        _timed_package("vcs", "1.0", "2026-11-20T00:00:00.000Z", source="git"),
-        _timed_package("no-times", "1.0"),
+        uv_lock_package("multi", "1.0", "2026-01-01T00:00:00.000Z"),
+        uv_lock_package("multi", "2.0", "2026-11-19T00:00:00.000Z"),
+        uv_lock_package("vcs", "1.0", "2026-11-20T00:00:00.000Z", source="git"),
+        uv_lock_package("no-times", "1.0"),
     )
     assert got == [
         "multi=2026-11-19T00:00:00.000Z",

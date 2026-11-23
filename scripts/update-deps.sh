@@ -31,8 +31,8 @@
 #      `--exclude-newer-package NAME=<upload time of the locked release>`
 #      (lode-hdob), so a cooled-down run never moves an existing pin back and
 #      a `--no-cooldown` security fix survives later cooled-down runs. A pin
-#      older than the cutoff gets none: its own upload time as the cutoff
-#      would stop it upgrading at all. When to override: docs/configuration.md,
+#      older than the cutoff gets none (why: dep_cooldown_exemptions in
+#      scripts/dep-churn-lib.sh). When to override: docs/configuration.md,
 #      "Lock-refresh release-age cooldown". uv records the cutoff in uv.lock's
 #      [options], which `uv lock --check` (nox -s lock_currency) reads as a
 #      stale lock, so a second plain `uv lock` follows: it drops the recorded
