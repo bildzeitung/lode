@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
-from _gitrepo import _commit_file, _git, _local_env_vars, git_env
+from _gitrepo import _commit_file, _git, _local_env_vars, git_env, os_env
 from conftest import tracked_paths
 
 
@@ -97,3 +98,16 @@ def test_unscrubbed_git_would_hit_decoy(scratch: Path) -> None:
         ["git", "ls-files"], cwd=scratch, capture_output=True, text=True, check=True
     ).stdout.split()
     assert out == ["decoy.txt"]
+
+
+def test_os_env_keeps_every_variable_and_shows_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``os.environ`` is replaced for the call, not added to: a failing assert prints what it
+    compared, and that must not be the real environment."""
+    environ = {"LODE_PROBE_SECRET": "hunter2", "GIT_DIR": "/decoy"}
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "environ", environ)
+        env = os_env({"EXTRA": "x"})
+    assert dict(env) == {**environ, "EXTRA": "x"}
+    assert repr(env) == "<env: 3 variables>"
