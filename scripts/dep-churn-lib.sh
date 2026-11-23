@@ -158,10 +158,8 @@ dep_cooldown_exemptions() {
 # that the raw change lines $2 show moved from one version to another. A removal
 # is not a move (an addition cannot name an exempted package: it was in the
 # lock); a package that gains, loses or changes one of several locked versions
-# is. After the lode-hdob ruling an exempted pin must not move in a cooled-down
-# run: its per-package date replaces the global cutoff, so the release it moved
-# to can be one inside the window (lode-amyi). Empty output means no exempted
-# pin moved.
+# is. Empty output means no exempted pin moved. Why a move is refused: the
+# header of update-deps.sh (lode-amyi).
 dep_exempt_moves() {
   local exemptions="$1" raw="$2"
   awk -F'\t' '

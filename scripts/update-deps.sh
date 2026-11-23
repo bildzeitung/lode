@@ -265,13 +265,13 @@ echo "$DIFF_TEXT"
 
 # A pin the cooldown exempted must not move (lode-amyi). Only versions are
 # compared, so a move to a release older than the cutoff is refused as well.
-if [ -n "$EXEMPTIONS" ]; then
-  EXEMPT_MOVES="$(dep_exempt_moves "$EXEMPTIONS" "$CHANGES_RAW" |
-    awk -F'\t' '{ printf "  %s  %s -> %s\n", $1, $2, $3 }')"
-  if [ -n "$EXEMPT_MOVES" ] && [ "$ALLOW_EXEMPT_MOVE" -eq 1 ]; then
+EXEMPT_MOVES="$(dep_exempt_moves "$EXEMPTIONS" "$CHANGES_RAW" |
+  awk -F'\t' '{ printf "  %s  %s -> %s\n", $1, $2, $3 }')"
+if [ -n "$EXEMPT_MOVES" ]; then
+  if [ "$ALLOW_EXEMPT_MOVE" -eq 1 ]; then
     echo "update-deps.sh: WARNING -- --allow-exempt-move: carrying on although these cooldown-exempted pins moved:" >&2
     echo "$EXEMPT_MOVES" >&2
-  elif [ -n "$EXEMPT_MOVES" ]; then
+  else
     # Restored here, not by the EXIT trap: the trap's message reports a death.
     cp -f "$SAVED_LOCK" "$LOCK"
     RESTORE_LOCK_ON_EXIT=0

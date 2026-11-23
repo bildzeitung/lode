@@ -316,20 +316,20 @@ def test_update_deps_sources_the_library() -> None:
 def test_exempt_moves_lists_only_moved_exempted_packages() -> None:
     exempted = ("young", "multi", "added", "gone")
     exemptions = "\n".join(f"{name}=2026-11-18T09:00:00.1Z" for name in exempted)
-    raw = "\n".join(
-        (
-            "young\t1.0\t2.0",
-            "multi\t1.0\t1.0,2.0",  # gained a second locked version
-            "free\t1.0\t2.0",  # moved, not exempted
-            "added\t(none)\t1.0",
-            "gone\t1.0\t(none)",
-        )
-    )
-    got = _run(f"dep_exempt_moves '{exemptions}' '{raw}'")
+    rows = [
+        ("young", "1.0", "2.0"),
+        ("multi", "1.0", "1.0,2.0"),  # gained a second locked version
+        ("free", "1.0", "2.0"),  # moved, not exempted
+        ("added", "(none)", "1.0"),
+        ("gone", "1.0", "(none)"),
+    ]
+    raw = "\n".join("\t".join(row) for row in rows)
+    got = _run(f"dep_exempt_moves {shlex.quote(exemptions)} {shlex.quote(raw)}")
     assert got.returncode == 0, got.stderr
     assert got.stdout.splitlines() == ["young\t1.0\t2.0", "multi\t1.0\t1.0,2.0"]
 
 
 def test_exempt_moves_is_empty_without_exemptions_or_moves() -> None:
-    assert _run("dep_exempt_moves '' $'a\\t1\\t2'").stdout == ""
-    assert _run("dep_exempt_moves 'a=2026-11-18T09:00:00Z' ''").stdout == ""
+    moved = shlex.quote("a\t1\t2")
+    assert _run(f"dep_exempt_moves '' {moved}").stdout == ""
+    assert _run("dep_exempt_moves a=2026-11-18T09:00:00Z ''").stdout == ""
