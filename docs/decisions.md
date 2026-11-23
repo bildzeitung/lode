@@ -6717,6 +6717,26 @@ Not covered by the ruling, open in `lode-hdob`: a pin taken with `--no-cooldown`
 the cutoff, so the next cooled-down run inside 7 days moves it back to the release it replaced.
 The version diff lists the line; nothing else flags it. Traced with the pins above, which were
 taken with no cutoff; not run with an actual `--no-cooldown` pin.
+  - **Update (lode-hdob, 2026-11-23, maintainer):** decided, so the "open in `lode-hdob`" above no
+    longer holds. Ruling 2026-11-21: option (c), a cooled-down run never moves an existing pin
+    back. Built: for every registry package whose locked release is younger than the cutoff,
+    `scripts/update-deps.sh` also passes `--exclude-newer-package NAME=<upload time of the locked
+    release>`, read from `uv.lock`'s own `upload-time` values (the newest across that package's
+    files; `dep_cooldown_exemptions` in `scripts/dep-churn-lib.sh`). The cutoff then binds only
+    releases newer than the pin, and a `--no-cooldown` security fix is held by later cooled-down
+    runs. Not `NAME=now`: that would let an upgrade of an existing package take a release inside
+    the window. A package whose pin is older than the cutoff gets no exemption, since a
+    per-package date equal to its pin's upload time would stop it upgrading at all.
+    Probe of the pinned-upload-time form (uv 0.11.7, real PyPI, copy of this repo's
+    `pyproject.toml` and `uv.lock` on 2026-11-23, 17 packages exempted, `anthropic`, `zensical` and
+    `zensical-ui` among them): `uv lock --upgrade` and `uv lock --upgrade-package typer`, each
+    with `--exclude-newer "7 days"` plus the exemptions and followed by a plain `uv lock`, changed
+    no pin, and `uv lock --check` then exited 0. Not probed: an old pin actually upgrading under
+    the exemptions (no release was available to take on that day). Consequence 3 above no longer
+    fails for a release already locked, which is what the `zensical==0.1.3` refusal was.
+    A dependency `--reconcile` newly adds is exempted from the next cooled-down run by the same
+    rule (consequence 4); not checked against a real run. The script needs GNU `date -d`.
+    The header of `scripts/update-deps.sh`, `configuration.md` and `onboarding.md` state the same.
 
 ## mkdocs-material is in maintenance mode: stay or migrate (open, lode-3vet)
 

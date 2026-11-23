@@ -26,9 +26,12 @@
 #
 #      RELEASE-AGE COOLDOWN (lode-3s4d): the two upgrade modes pass
 #      `--exclude-newer "$COOLDOWN"`; `--no-cooldown` omits it. The cutoff binds
-#      the WHOLE resolution, so it also moves a pin already in uv.lock that is
-#      younger than it BACK to an older release (open question: lode-hdob).
-#      What a run then shows, and when to override: docs/configuration.md,
+#      the WHOLE resolution, so a pin already in uv.lock that is younger than it
+#      would move BACK; every such pin is therefore also passed
+#      `--exclude-newer-package NAME=<upload time of the locked release>`
+#      (lode-hdob), so a cooled-down run never moves an existing pin back and
+#      a `--no-cooldown` security fix survives later cooled-down runs.
+#      When to override: docs/configuration.md,
 #      "Lock-refresh release-age cooldown". uv records the cutoff in uv.lock's
 #      [options], which `uv lock --check` (nox -s lock_currency) reads as a
 #      stale lock, so a second plain `uv lock` follows: it drops the recorded
@@ -181,6 +184,13 @@ cleanup() {
 trap cleanup EXIT
 cp -f "$LOCK" "$SAVED_LOCK"
 
+# The parsing, the rendering, the stub's skip policy and the cooldown exemptions
+# all live in the sourceable scripts/dep-churn-lib.sh so they are unit-tested
+# (tests/test_dep_churn_lib.py) rather than trapped in this script's uninvokable
+# middle.
+# shellcheck source=dep-churn-lib.sh
+. "$REPO/scripts/dep-churn-lib.sh"
+
 # From here until the outcome is decided an UNGATED lock sits on disk.
 RESTORE_LOCK_ON_EXIT=1
 UV_LOCK_PLAIN=(uv lock -q)
@@ -199,6 +209,17 @@ if [ "$RECONCILE" -eq 0 ] && [ "$NO_COOLDOWN" -eq 0 ]; then
   APPLY_COOLDOWN=1
   UV_LOCK_CMD+=(--exclude-newer "$COOLDOWN")
   ATTEMPTED+=", $COOLDOWN release-age cooldown"
+  # Pins younger than the cutoff are held where they are (lode-hdob): each gets
+  # its own cutoff, the upload time of the release the lock holds.
+  if ! CUTOFF_TS="$(date -u -d "$COOLDOWN ago" +%Y-%m-%dT%H:%M:%S.000Z)"; then
+    echo "update-deps.sh: could not compute the cooldown cutoff with GNU date -d \"$COOLDOWN ago\"." >&2
+    exit 1
+  fi
+  while IFS= read -r exemption; do
+    if [ -n "$exemption" ]; then
+      UV_LOCK_CMD+=(--exclude-newer-package "$exemption")
+    fi
+  done <<< "$(dep_cooldown_exemptions "$LOCK" "$CUTOFF_TS")"
 fi
 # Checked explicitly: `bash scripts/update-deps.sh` drops the shebang's -e, and a
 # failed resolve must not carry on to a "no change" diff and a green exit.
@@ -215,15 +236,9 @@ if [ "$APPLY_COOLDOWN" -eq 1 ] && ! "${UV_LOCK_PLAIN[@]}"; then
   exit 1
 fi
 
-# Readable name/version diff. The parsing, the rendering and the stub's skip
-# policy all live in the sourceable scripts/dep-churn-lib.sh so they are
-# unit-tested (tests/test_dep_churn_lib.py) rather than trapped in this
-# script's uninvokable middle. Both values below are assigned HERE, at top
-# level -- see that library's CONTRACT note for why nothing there may return a
-# value by setting a global.
-# shellcheck source=dep-churn-lib.sh
-. "$REPO/scripts/dep-churn-lib.sh"
-
+# Readable name/version diff. The values below are assigned HERE, at top level --
+# see dep-churn-lib.sh's CONTRACT note for why nothing there may return a value
+# by setting a global.
 CHANGES_RAW="$(dep_changes_raw "$SAVED_LOCK" "$LOCK")"
 DIFF_TEXT="$(dep_version_diff_text "$LOCK" "$CHANGES_RAW")"
 echo "$DIFF_TEXT"

@@ -120,3 +120,28 @@ dep_stub_skip_reason() {
   fi
   return 0
 }
+
+# NAME=UPLOAD-TIME lines on stdout, sorted by name, for every registry package
+# in the uv.lock-shaped file $1 whose locked release was uploaded after the
+# cutoff $2 (an ISO-8601 UTC timestamp in uv.lock's own format, compared as a
+# string). The time is the newest upload-time among that package's files, so
+# every file of the locked release stays inside it; a package locked at several
+# versions takes the newest across them. update-deps.sh hands each line to
+# `uv lock --exclude-newer-package`, which overrides the global cutoff for that
+# package: the pin stays and only releases newer than it are excluded (lode-hdob).
+dep_cooldown_exemptions() {
+  awk -v cut="$2" -F'"' '
+    /^\[\[package\]\]/ { n = ""; reg = 0 }
+    /^name = "/ && n == "" { n = $2 }
+    /^source = \{ registry/ { reg = 1 }
+    reg && n != "" {
+      line = $0
+      while (match(line, /upload-time = "[^"]+"/)) {
+        t = substr(line, RSTART + 15, RLENGTH - 16)
+        if (!(n in m) || t > m[n]) m[n] = t
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+    END { for (k in m) if (m[k] > cut) print k "=" m[k] }
+  ' "$1" | sort
+}

@@ -928,12 +928,16 @@ value by editing that variable. `--reconcile` never applies it (it must not down
 the script unsets any `UV_EXCLUDE_NEWER` in the caller's environment so a cutoff set there cannot
 reach it. A cutoff set in a `uv.toml` is not guarded against.
 
-**The cutoff applies to the whole resolution, not only to what the run upgrades.** A pin already
-in `uv.lock` that is younger than the cutoff moves back to the newest release older than it. That
-holds under `--package NAME` too (NAME included), and whichever run took the pin, a
-`--no-cooldown` one included. The script's version diff lists each one as `old -> new`. If
-`pyproject.toml` requires a release inside the window, the run fails instead and the script
-names `--no-cooldown`. Whether a run should be allowed to move a pin back is open in `lode-hdob`.
+**A cooled-down run never moves an existing pin back (lode-hdob).** uv applies the cutoff to the
+whole resolution, so a pin already in `uv.lock` that is younger than it would otherwise move back
+to an older release, `--package NAME` runs included. The script therefore also passes
+`--exclude-newer-package NAME=<upload time of the locked release>` for every registry package
+whose locked release is younger than the cutoff, read from `uv.lock`'s own `upload-time` values.
+The cutoff then binds only releases newer than the pin, so such a pin is kept and the
+`--no-cooldown` override for a security fix survives later cooled-down runs. A package whose pin
+is older than the cutoff is not exempted and may upgrade to any release older than the cutoff.
+The script needs GNU `date -d` to compute the cutoff time. If `pyproject.toml` requires a release
+inside the window, the run still fails and the script names `--no-cooldown`.
 
 **Override for a security fix that must be taken at once:**
 `scripts/update-deps.sh --package NAME --no-cooldown` (or `--no-cooldown` alone for the whole

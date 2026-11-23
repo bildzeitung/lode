@@ -417,3 +417,57 @@ def test_no_cooldown_and_reconcile_are_mutually_exclusive(tmp_path: Path) -> Non
     assert result.returncode == 1
     assert "--no-cooldown" in result.stderr
     assert not (tmp_path / "uv_lock_args").exists()
+
+
+def _registry_lock(*pins: tuple[str, str, str]) -> str:
+    """A lock of ``(name, version, upload-time)`` registry packages, plus an
+    editable root package that has no upload time."""
+    root = '[[package]]\nname = "root"\nversion = "0.1"\nsource = { editable = "." }\n'
+    return root + "".join(
+        f'\n[[package]]\nname = "{name}"\nversion = "{ver}"\n'
+        'source = { registry = "https://pypi.org/simple" }\n'
+        f'sdist = {{ url = "u", hash = "sha256:{"0" * 64}", upload-time = "{when}" }}\n'
+        "wheels = [\n"
+        f'    {{ url = "w", hash = "sha256:{"1" * 64}", upload-time = "{when[:-4]}999Z" }},\n'
+        "]\n"
+        for name, ver, when in pins
+    )
+
+
+@pytest.mark.parametrize(
+    "extra_args", [(), ("--package", "young"), ("--package", "old")]
+)
+def test_cooled_down_run_exempts_only_pins_younger_than_the_cutoff(
+    tmp_path: Path, extra_args: tuple[str, ...]
+) -> None:
+    """lode-hdob: a pin younger than the cutoff gets its own cutoff, the newest
+    upload time of its locked release, so the global cutoff cannot move it back;
+    an older pin, and a package with no registry upload time, get none."""
+    repo, bindir = _build_fake_repo(tmp_path)
+    lock = _registry_lock(
+        ("young", "2.0.0", "2999-01-01T00:00:00.000Z"),
+        ("old", "1.0.0", "2000-01-01T00:00:00.000Z"),
+    )
+    (repo / "uv.lock").write_text(lock, encoding="utf-8")
+
+    result = _run_update_deps(repo, bindir, extra_args=(*extra_args, "--no-file"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    first_call = _lock_calls(tmp_path)[0]
+    assert "--exclude-newer 7 days" in first_call
+    assert "--exclude-newer-package young=2999-01-01T00:00:00.999Z" in first_call
+    assert first_call.count("--exclude-newer-package") == 1
+
+
+@pytest.mark.parametrize("extra_args", [("--no-cooldown",), ("--reconcile",)])
+def test_no_exemptions_without_a_cutoff(
+    tmp_path: Path, extra_args: tuple[str, ...]
+) -> None:
+    repo, bindir = _build_fake_repo(tmp_path)
+    lock = _registry_lock(("young", "2.0.0", "2999-01-01T00:00:00.000Z"))
+    (repo / "uv.lock").write_text(lock, encoding="utf-8")
+
+    result = _run_update_deps(repo, bindir, extra_args=(*extra_args, "--no-file"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--exclude-newer-package" not in " ".join(_lock_calls(tmp_path))
