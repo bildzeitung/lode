@@ -51,6 +51,7 @@ import time
 from pathlib import Path
 
 import pytest
+from _gitrepo import git_env
 from _hookharness import SH, pretooluse_hook, run_hook
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -71,6 +72,7 @@ def _real_sha() -> str:
     out = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=REPO_ROOT,
+        env=git_env(),
         capture_output=True,
         text=True,
         timeout=30,

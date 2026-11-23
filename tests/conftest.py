@@ -204,6 +204,7 @@ from unittest import mock
 
 import pytest
 import yaml
+from _gitrepo import git_env
 from pydantic import BaseModel
 from textual.pilot import Pilot
 
@@ -1282,6 +1283,7 @@ def tracked_paths(*pathspec: str, root: Path = _CHECKOUT_ROOT) -> list[str]:
     """
     out = subprocess.run(
         ["git", "-C", str(root), "ls-files", "-z", "--", *pathspec],
+        env=git_env(),
         capture_output=True,
         check=True,
     ).stdout

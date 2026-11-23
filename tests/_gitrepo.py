@@ -43,14 +43,44 @@ carried an inventory that was already stale by the time it was built.
 
 from __future__ import annotations
 
+import functools
+import os
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
+
+
+@functools.cache
+def _local_env_vars() -> frozenset[str]:
+    """git's own list of repository-locating variables (GIT_DIR, GIT_WORK_TREE, ...)."""
+    out = subprocess.run(
+        ["git", "rev-parse", "--local-env-vars"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    ).stdout
+    return frozenset(out.split())
+
+
+def git_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The environment for a test-side git subprocess: ``os.environ`` without the variables
+    that locate a repository, plus ``extra``.
+
+    git exports those to hooks, so a test run under a hook (or any caller that sets them)
+    would otherwise have ``cwd=scratch_repo`` ignored and act on the outer repository
+    (lode-wcpss). Every test that runs git directly passes ``env=git_env(...)``.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in _local_env_vars()}
+    env.update(extra or {})
+    return env
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     result = subprocess.run(
         ["git", *args],
         cwd=repo,
+        env=git_env(),
         capture_output=True,
         text=True,
         timeout=30,

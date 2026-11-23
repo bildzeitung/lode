@@ -56,14 +56,13 @@ while everything stays green.
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
 import time
 from pathlib import Path
 
-from _gitrepo import _git
+from _gitrepo import _git, git_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "worktree-gc-classify.sh"
@@ -118,7 +117,7 @@ def _commit(
         result = subprocess.run(
             ["git", "commit", "-q", "-m", message],
             cwd=wt,
-            env={**os.environ, "GIT_COMMITTER_DATE": committer_date},
+            env=git_env({"GIT_COMMITTER_DATE": committer_date}),
             capture_output=True,
             text=True,
             timeout=30,
@@ -160,6 +159,7 @@ def _is_ancestor(repo: Path, sha: str, ref: str) -> bool:
     result = subprocess.run(
         ["git", "merge-base", "--is-ancestor", sha, ref],
         cwd=repo,
+        env=git_env(),
         capture_output=True,
         text=True,
         timeout=30,

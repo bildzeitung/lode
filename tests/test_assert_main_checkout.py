@@ -46,7 +46,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from _gitrepo import _git
+from _gitrepo import _git, git_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "assert-main-checkout.sh"
@@ -181,6 +181,7 @@ def test_unsupported_layout_is_a_machine_fault_not_a_location_verdict(
             "sub",
         ],
         cwd=outer,
+        env=git_env(),
         check=True,
         capture_output=True,
         text=True,
