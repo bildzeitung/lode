@@ -754,10 +754,10 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
   of a refused external stays under the self-healing hint, whose caveat names a superseded
   target. When
   `config.toml` cannot be read there is no model or provider to compare and no scope rules
-  to apply, so the model, provider and scope-rule tests are skipped (a refusal stamped under
-  another model stays listed, as does a scope-denied external's refusal). The prompt version
-  is a code constant and is still compared, so a refusal stamped under another prompt
-  version is not listed (`lode-iqhb`); the tests on the rows themselves apply too.
+  to apply, so a refusal stamped under another model or provider stays listed, as does a
+  scope-denied external's refusal. The prompt version is a code constant and is still
+  compared (`lode-iqhb`): a refusal stamped under another prompt version is listed as an
+  ordinary dead-lettered enrich job. The tests on the rows themselves apply too.
 
 See `docs/decisions.md`, `lode-ahme`.
 

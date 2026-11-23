@@ -70,6 +70,12 @@ LIVE_JOB_STATUSES = ("pending", "running", "failed")
 LIVE_JOB_STATUSES_SQL = ", ".join(f"'{status}'" for status in LIVE_JOB_STATUSES)
 
 
+#: The part of :data:`STANDING_REFUSAL_SQL` that needs no settings: refused
+#: under the current prompt version. Binds one positional parameter,
+#: ``ENRICH_PROMPT_VER``. ``lode status`` applies it alone when ``config.toml``
+#: cannot be read (lode-iqhb), so that path shares the key's own spelling.
+STANDING_REFUSAL_NO_SETTINGS_SQL = "j.refusal = 1 AND j.prompt_ver IS ?"
+
 #: A refusal-dead enrich job ``j`` that still stands (lode-g9q3): refused under
 #: the current prompt version, enrichment model and provider (lode-7jcp). Binds
 #: three positional parameters, ``ENRICH_PROMPT_VER``,
@@ -80,7 +86,7 @@ LIVE_JOB_STATUSES_SQL = ", ".join(f"'{status}'" for status in LIVE_JOB_STATUSES)
 #: keeps ``NOT (...)`` from going NULL on an unstamped row, which would
 #: silently read as "not a gap".
 STANDING_REFUSAL_SQL = (
-    "j.refusal = 1 AND j.prompt_ver IS ? AND j.refusal_model IS ?"
+    f"{STANDING_REFUSAL_NO_SETTINGS_SQL} AND j.refusal_model IS ?"
     " AND j.refusal_provider IS ?"
 )
 
