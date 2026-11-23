@@ -182,34 +182,6 @@ def _snippet(body: str) -> str:
 _UPDATE_MARKER = "**Update ("
 
 
-def _heading_cut_section(
-    units: list, line_lo: int, line_hi: int
-) -> tuple[int, int] | None:
-    """Line range of the heading-cut ``##`` section holding the unit
-    ``(line_lo, line_hi)``, or ``None`` when that unit is not part of one.
-
-    A unit opening on a ``###`` or deeper heading exists only because the
-    chunker cut an oversized section there, so it continues the section of the
-    unit before it, as does a paragraph piece (a unit opening on no structural
-    line). A section is a heading-cut one only when it has a ``###`` unit.
-    """
-    is_structural_line = _build._chunker.is_structural_line
-    groups: list[list] = []
-    for unit in units:
-        if groups and (
-            unit.first_line.startswith("###") or not is_structural_line(unit.first_line)
-        ):
-            groups[-1].append(unit)
-        else:
-            groups.append([unit])
-    for group in groups:
-        if any(u.first_line.startswith("###") for u in group) and any(
-            (u.line_lo, u.line_hi) == (line_lo, line_hi) for u in group
-        ):
-            return group[0].line_lo, group[-1].line_hi
-    return None
-
-
 def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     """Line numbers of the ``**Update (`` markers in the entry a hit belongs to,
     when that hit is only one chunk of a hard-split entry; otherwise ``[]``.
@@ -220,38 +192,41 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     chunker's tiling invariant forbids copying the marker into each sub-unit,
     so the pointers are derived here at output time instead.
 
-    The entry is the block between the structural lines (any heading, any
-    top-level bullet) on either side of the hit. Only a paragraph-split piece
-    lies strictly inside such a block: every other unit starts on a structural
-    line (or on line 1) and runs at least as far as the next. That holds
-    whichever rule produced the unit, so it needs no assumption about the file
-    -- ``decisions.md`` itself opens with an H1 title and reaches its bullets
-    through the heading unit's hard-split.
+    A ``##`` section of ``decisions.md`` that the chunker cut at the headings
+    inside it is one entry, and every unit of it is a chunk of that entry: an
+    Update under one sub-heading can correct a claim under a sibling
+    (``lode-pe38``). The chunker names those sections.
+
+    Anywhere else the entry is the block between the structural lines (any
+    heading, any top-level bullet) on either side of the hit. Only a
+    paragraph-split piece lies strictly inside such a block: every other unit
+    starts on a structural line (or on line 1) and runs at least as far as the
+    next. That holds whichever rule produced the unit, so it needs no
+    assumption about the file -- ``decisions.md`` itself opens with an H1 title
+    and reaches its bullets through the heading unit's hard-split.
     """
     text = Path(path).read_text(encoding="utf-8")
     lines = text.splitlines()
     flags = fence_flags(lines)
     chunker = _build._chunker
-    if Path(path).stem == chunker._ENTRY_LOG_STEM:
-        # A ``##`` section the chunker cut at its ``###`` headings (lode-vt7x)
-        # is one entry: an Update under one sub-heading corrects a claim under
-        # a sibling, so every unit of the section shares the section's markers
-        # (lode-pe38).
-        group = _heading_cut_section(chunker.chunk_file(path, text), line_lo, line_hi)
-        if group is not None:
-            return [
-                n
-                for n in range(group[0], group[1] + 1)
-                if not flags[n - 1] and _UPDATE_MARKER in lines[n - 1]
-            ]
-    is_structural_line = chunker.is_structural_line
-    boundaries = [
-        i + 1
-        for i, line in enumerate(lines)
-        if not flags[i] and is_structural_line(line)
-    ]
-    entry_lo = max((b for b in boundaries if b <= line_lo), default=1)
-    entry_hi = next((b - 1 for b in boundaries if b > line_lo), len(lines))
+    section = next(
+        (
+            (lo, hi)
+            for lo, hi in chunker.heading_cut_sections(path, text)
+            if lo <= line_lo <= hi
+        ),
+        None,
+    )
+    if section is not None:
+        entry_lo, entry_hi = section
+    else:
+        boundaries = [
+            i + 1
+            for i, line in enumerate(lines)
+            if not flags[i] and chunker.is_structural_line(line)
+        ]
+        entry_lo = max((b for b in boundaries if b <= line_lo), default=1)
+        entry_hi = next((b - 1 for b in boundaries if b > line_lo), len(lines))
     if line_hi > entry_hi or (entry_lo, entry_hi) == (line_lo, line_hi):
         return []
     return [
