@@ -45,6 +45,7 @@ src/lode/_version.py
 # Beads / Dolt files (added by bd init)
 .dolt/
 .beads-credential-key
+*.gate.lock*
 
 # Beads / Dolt files (added by bd init)
 .beads/proxieddb/
