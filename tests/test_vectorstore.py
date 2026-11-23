@@ -405,7 +405,8 @@ def test_periodic_optimize_prunes_history_without_losing_current_rows(
         f"expected {older_than_window} pruned, still have {remaining}"
     )
 
-    # The current rows survived the prune, through the held handle and a fresh one.
+    # The current rows survived the prune, through this store (which reopens
+    # after it) and a fresh one.
     assert store.vectors_for("v1") == [[1.0, 0.0, 0.0, 0.0]]
     assert _store(tmp_path).vectors_for("v1") == [[1.0, 0.0, 0.0, 0.0]]
 
@@ -539,19 +540,26 @@ def test_model_revisions_scopes_to_the_requested_model(tmp_path: Path) -> None:
 
 
 def test_periodic_optimize_drops_the_held_table_and_reconnects(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The prune releases the held connection; the next call reopens it (lode-ju9d).
+    """The first call after a prune opens a new connection (lode-ju9d).
 
-    The per-connection memory growth is only released by a new connection, so
-    the cached Table must not survive the prune.
+    The memory a connection accumulates is only released with the connection.
+    Reopening the table on the same connection was measured not to release it,
+    so the count of `lancedb.connect` calls is what is pinned, not the cached
+    handle.
     """
+    connect = Mock(wraps=lancedb.connect)
+    monkeypatch.setattr(lancedb, "connect", connect)
     store = _store(tmp_path, vectorstore_optimize_interval=2)
 
     store.replace_vectors("v1", [_row("a", "v1", [1.0, 0.0, 0.0, 0.0])])
-    assert store._table is not None
     store.replace_vectors("v1", [_row("b", "v1", [0.0, 1.0, 0.0, 0.0])])
-    assert store._table is None
+    # Both writes ran on one connection; the prune fired on the second.
+    assert connect.call_count == 1
 
     assert store.vectors_for("v1") == [[0.0, 1.0, 0.0, 0.0]]
-    assert store._table is not None
+    assert connect.call_count == 2
+    # And the reopened handle is held again until the next prune.
+    assert store.vectors_for("v1") == [[0.0, 1.0, 0.0, 0.0]]
+    assert connect.call_count == 2

@@ -484,9 +484,9 @@ class Settings(BaseModel):
         200,
         Kind.RUNTIME,
         "How many replace_vectors() calls a shared VectorStore makes before "
-        "pruning its held Table's version history, which bounds that Table's "
-        "memory growth over a long-running process (lode-2brb; "
-        "docs/configuration.md).",
+        "pruning old table versions from disk and reopening its LanceDB "
+        "connection; the reopen is what releases the memory a long-running "
+        "process accumulates (lode-2brb, lode-ju9d; docs/configuration.md).",
         gt=0,
     )
     stale_running_timeout_s: int = _knob(
