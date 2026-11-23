@@ -40,11 +40,15 @@ def _uncommented_lines(text: str) -> list[str]:
 build_docs_site = load_module_from_path(
     "build_docs_site", REPO_ROOT / "scripts" / "build_docs_site.py"
 )
+check_links = load_module_from_path(
+    "check_links_for_build_docs", REPO_ROOT / "scripts" / "check_links.py"
+)
 
 # A stand-in published set: deliberately NOT `_published_set(docs/)`, so a
 # rename under docs/how-to/ can never quietly turn these cases into a test of
 # a different rule. The real set is checked separately, below.
 PUBLISHED = {
+    "sp ace.md",
     "design.md",
     "retrieval.md",
     "storage.md",
@@ -158,6 +162,104 @@ def test_inline_code_pattern_is_the_docs_slug_copy() -> None:
     """``tests/test_check_links.py`` holds ``docs_slug``'s pattern to the link
     gate's, so the three copies cannot drift apart."""
     assert build_docs_site._INLINE_CODE_RE.pattern == docs_slug._INLINE_CODE_RE.pattern
+
+
+def test_link_pattern_is_the_gates_with_the_label_captured() -> None:
+    """The destination grammar is the link gate's, so a spelling the gate reads
+    as a link is one the rewriter reads (they differ only in the label group)."""
+    gate = check_links._LINK_RE.pattern.replace(r"\[[^\]]*\]", r"\[([^\]]*)\]", 1)
+    assert build_docs_site._LINK_RE.pattern == gate
+
+
+@pytest.mark.parametrize(
+    ("published", "unpublished", "rewritten"),
+    [
+        pytest.param(
+            "design.md", "decisions.md", f"{BASE}/docs/decisions.md", id="plain"
+        ),
+        pytest.param(
+            'design.md "t"',
+            'decisions.md "t"',
+            f'{BASE}/docs/decisions.md "t"',
+            id="title",
+        ),
+        pytest.param(
+            "<design.md>", "<decisions.md>", f"<{BASE}/docs/decisions.md>", id="angle"
+        ),
+        pytest.param(
+            '<design.md> "t"',
+            '<decisions.md> "t"',
+            f'<{BASE}/docs/decisions.md> "t"',
+            id="angle+title",
+        ),
+        pytest.param(
+            "<sp ace.md>",
+            "<some dir/file.md>",
+            f"<{BASE}/docs/some%20dir/file.md>",
+            id="angle+space",
+        ),
+        pytest.param(
+            "sp%20ace.md",
+            "some%20dir/file.md",
+            f"{BASE}/docs/some%20dir/file.md",
+            id="percent",
+        ),
+        pytest.param(
+            'sp%20ace.md "t"',
+            'some%20dir/file.md "t"',
+            f'{BASE}/docs/some%20dir/file.md "t"',
+            id="percent+title",
+        ),
+        pytest.param(
+            "<sp ace.md#a b>",
+            "<../some dir/f.py#a) b>",
+            f"<{BASE}/some%20dir/f.py#a) b>",
+            id="angle, fragment kept as written",
+        ),
+        pytest.param(
+            "sp%20ace.md#a%20b",
+            "100%25%23.md#a%20b",
+            f"{BASE}/docs/100%25%23.md#a%20b",
+            id="percent, an encoded % and # stay in the path",
+        ),
+    ],
+)
+def test_link_spellings_rewrite_like_the_plain_link(
+    published: str, unpublished: str, rewritten: str
+) -> None:
+    """Each spelling of a link the gate reads: left as written when its target
+    is published, and otherwise only the destination text is replaced."""
+    link = f"[t]({published})"
+    assert build_docs_site._process_links(link, "a.md", PUBLISHED) == link
+    out = build_docs_site._process_links(f"[t]({unpublished})", "a.md", PUBLISHED)
+    assert out == f"[t]({rewritten})"
+
+
+def test_empty_angle_destination_is_left_alone() -> None:
+    assert build_docs_site._process_links("[t](<>)", "a.md", PUBLISHED) == "[t](<>)"
+
+
+def test_a_destination_and_title_are_read_on_one_line_as_the_gate_reads_them() -> None:
+    """The gate scans a line at a time, so text after `](` that runs on to a
+    later line is prose, not a link: it stays as written, and a real link
+    inside it is still rewritten."""
+    for prose in (
+        "call handlers[name](event,\npayload) here",
+        "[t](decisions.md\n\nnext paragraph (aside) end",
+        "[t](<decisions\n.md>)",
+        "[t](\ndecisions.md)",
+    ):
+        assert check_links._links_in_file(prose) == []
+        assert build_docs_site._process_links(prose, "a.md", PUBLISHED) == prose
+    unclosed = "see notes[1](unclosed\nand [d](decisions.md) after"
+    assert check_links._links_in_file(unclosed) == [(2, "decisions.md")]
+    out = build_docs_site._process_links(unclosed, "a.md", PUBLISHED)
+    assert out == f"see notes[1](unclosed\nand [d]({BASE}/docs/decisions.md) after"
+    # A label that wraps is the one reading the gate does not share.
+    wrapped = build_docs_site._process_links(
+        '[a label\nthat wraps](decisions.md "t")', "a.md", PUBLISHED
+    )
+    assert wrapped == f'[a label\nthat wraps]({BASE}/docs/decisions.md "t")'
 
 
 def test_real_links_survive_the_code_skip() -> None:
