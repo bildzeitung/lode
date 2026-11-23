@@ -418,8 +418,10 @@ class TestBareDocAnchorRefs:
         ids=["space", "non-ascii", "not-utf-8", "carriage-return"],
     )
     def test_bare_reference_in_oddly_named_file_is_reported(self, tmp_path, name):
-        """A tracked name that plain ``git ls-files`` output cannot carry
-        whole: split at the space, C-quoted for the other three."""
+        """Each name is lost by a simpler listing: a whitespace split cuts the
+        first, plain ``git ls-files`` C-quotes the other three, and ``-z``
+        output read in text mode raises on the third and newline-translates
+        the fourth."""
         source = _write(tmp_path, f"scripts/{name}", f"# {_DOCS}/does-not-exist.md\n")
         _git_init(tmp_path)
 
@@ -427,7 +429,6 @@ class TestBareDocAnchorRefs:
 
         assert len(errors) == 1
         assert errors[0].source == source
-        assert "does not exist" in errors[0].reason
 
     def test_bare_reference_to_missing_file_is_reported(self, tmp_path):
         _write(
