@@ -192,10 +192,12 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     chunker's tiling invariant forbids copying the marker into each sub-unit,
     so the pointers are derived here at output time instead.
 
-    A ``##`` section of ``decisions.md`` that the chunker cut at the headings
-    inside it is one entry, and every unit of it is a chunk of that entry: an
-    Update under one sub-heading can correct a claim under a sibling
-    (``lode-pe38``). The chunker names those sections.
+    A ``##`` section of ``decisions.md`` over the unit limit is one entry, and
+    every unit of it is a chunk of that entry: an Update under one sub-heading
+    can correct a claim under a sibling (``lode-pe38``), and one in a closing
+    paragraph a claim in an own bullet (``lode-tb0j``). The chunker names those
+    sections. A hit on an own bullet that carries its own Update marker also
+    lists the markers of the section's other bullets.
 
     Anywhere else the entry is the block between the structural lines (any
     heading, any top-level bullet) on either side of the hit. Only a
@@ -212,7 +214,7 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     section = next(
         (
             (lo, hi)
-            for lo, hi in chunker.heading_cut_sections(path, text)
+            for lo, hi in chunker.oversized_sections(path, text)
             if lo <= line_lo <= hi
         ),
         None,
