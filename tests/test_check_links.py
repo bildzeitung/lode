@@ -40,6 +40,19 @@ github_slug = check_links.github_slug
 #: reference is gated too, so every such fixture needs the same treatment.
 _DOCS = "doc" + "s"
 
+#: Every character ``str.splitlines()`` breaks a line at besides ``\n`` and
+#: ``\r``. None of them ends a line for the gate.
+_SPLITLINES_ONLY_BREAKS = (
+    "\x0b",
+    "\x0c",
+    "\x1c",
+    "\x1d",
+    "\x1e",
+    "\x85",
+    "\u2028",
+    "\u2029",
+)
+
 
 def _git_init(root: Path) -> None:
     """A real git repo is required -- the gate scopes to ``git ls-files``, not
@@ -52,7 +65,7 @@ def _git_init(root: Path) -> None:
 def _write(root: Path, rel: str, content: str) -> Path:
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
     return path
 
 
@@ -154,11 +167,13 @@ class TestDocsSlugCopyAgrees:
         assert docs_slug.anchor_slugs(text) == check_links._slugs_for_file(path, {})
         assert docs_slug.anchor_slugs(text) == {"heading"}
 
-    @pytest.mark.parametrize("sep", ["\x0c", "\u2028"])
+    @pytest.mark.parametrize("sep", _SPLITLINES_ONLY_BREAKS)
     def test_non_newline_line_break_chars_do_not_split_lines(self, tmp_path, sep):
-        """Only ``\\n`` ends a line: a form feed or U+2028 neither makes a heading
-        out of text after it nor opens a fence; both anchor-set copies agree
-        (lode-bdyx)."""
+        """Only ``\\n`` ends a line: a form feed, U+2028 or any other character
+        ``str.splitlines()`` breaks at neither makes a heading out of text after
+        it nor opens a fence, and is not counted in a line number; both
+        anchor-set copies agree (lode-bdyx)."""
+        assert f"a{sep}b".splitlines() == ["a", "b"]
         for text, expected in (
             (f"a{sep}## H\n", set()),
             (f'a{sep}```\n<a id="ff"></a>\n', {"ff"}),
@@ -166,6 +181,22 @@ class TestDocsSlugCopyAgrees:
             path = _write(tmp_path, "a.md", text)
             assert check_links._slugs_for_file(path, {}) == expected
             assert docs_slug.anchor_slugs(text) == expected
+        assert list(check_links._content_lines(f"a{sep}b\nc\n")) == [
+            (1, f"a{sep}b"),
+            (2, "c"),
+        ]
+
+    def test_crlf_and_bare_cr_are_newlines_to_both_copies(self, tmp_path):
+        """The gate and the site builder both open a file with newline
+        translation, so ``\\r\\n`` and a bare ``\\r`` are already ``\\n`` when
+        either copy splits lines."""
+        path = tmp_path / "a.md"
+        path.write_bytes(
+            b'## One\r\n```\r\n## Not\r\n```\r## Two\r\n<a id="x"></a>\r\n'
+        )
+        got = check_links._slugs_for_file(path, {})
+        assert got == {"one", "two", "x"}
+        assert docs_slug.anchor_slugs(path.read_text(encoding="utf-8")) == got
 
     def test_anchor_tag_inside_a_fence_is_not_an_anchor(self, tmp_path):
         """An explicit anchor tag inside a fenced block is literal code, so
@@ -603,6 +634,17 @@ class TestBareDocAnchorRefs:
         _git_init(tmp_path)
 
         assert len(check(tmp_path)) == 1
+
+    @pytest.mark.parametrize("sep", _SPLITLINES_ONLY_BREAKS)
+    def test_reported_line_of_a_non_markdown_citation_counts_newlines_only(self, sep):
+        """A non-markdown source is numbered like a markdown one: a form feed
+        (a page break in a source file) above a citation does not shift the
+        line the gate reports for it."""
+        ref = f"{_DOCS}/x.md#anchor"
+        refs = check_links._bare_doc_anchor_refs(
+            f"a{sep}b\n# {ref}\n", skip_fences=False
+        )
+        assert refs == [(2, ref)]
 
 
 def test_real_repo_passes_the_gate():
