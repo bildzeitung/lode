@@ -189,13 +189,13 @@ def test_unmocked_enrich_job_fails_loudly_not_swallowed(
 ) -> None:
     """The acceptance bar (bd show lode-85q): FAILS in both a keyed and an
     unkeyed environment, with a message naming the client access -- the guard's
-    raise must not be absorbed into a job row that leaves the test green.
+    raise must reach pytest, not be absorbed into a job row.
 
     ``pytest.fail()`` raises a ``BaseException`` subclass, so it passes through
     both of ``worker.run_one``'s handlers (the ``AuthError`` arm and the broad
     ``except Exception`` job-failure handler). Had the guard raised an ordinary
-    ``Exception``, ``except Exception`` would record ``status='failed'`` and the
-    test would stay green, whether or not ``ANTHROPIC_API_KEY`` is set.
+    ``Exception``, ``except Exception`` would record ``status='failed'`` and
+    return, and the raise would never reach pytest.
     """
     if ambient_key is None:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -207,8 +207,8 @@ def test_unmocked_enrich_job_fails_loudly_not_swallowed(
     with pytest.raises(pytest.fail.Exception, match="anthropic.Anthropic"):
         claim_and_run_one(conn, db_path, Settings(), types=("enrich",))
 
-    # The guard's raise must pass through run_one's handlers without the job
-    # being recorded as an ordinary failure.
+    # Still 'running': the raise passed both run_one handlers, so neither wrote
+    # the row.
     (status,) = conn.execute(
         "SELECT status FROM jobs WHERE target_version = 'v1'"
     ).fetchone()
