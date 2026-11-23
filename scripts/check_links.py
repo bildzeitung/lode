@@ -180,10 +180,12 @@ _HTML_ANCHOR_RE = re.compile(r'<a\s+(?:id|name)=["\']([^"\']+)["\']', re.IGNOREC
 # actually writes, AND what a `help=` docs/ footnote in `src/lode/cli/` writes
 # when it points at a whole page rather than a specific heading (e.g. "See
 # docs/how-to/maintenance-commands.md.", lode-6lvu). The `#<anchor>` suffix is
-# optional -- `(?:#[\w-]+)?` -- so both shapes are recognized by one regex; a
-# reference lacking it still gets its FILE existence verified by
-# `_resolve_error` (anchor checking simply doesn't apply when there is no
-# anchor to check, same as an anchor-less markdown link).
+# optional, so both shapes are recognized by one regex; a reference lacking
+# it still gets its FILE existence verified by `_resolve_error` (anchor
+# checking simply doesn't apply when there is no anchor to check, same as an
+# anchor-less markdown link). The anchor takes whole percent-escapes
+# (`%C3%A9`) beside word characters and hyphens: cut at the `%`, an encoded
+# anchor would be looked up as its first few characters. The path takes none.
 # The `(?<![\w./-])` lookbehind makes "root-relative" mechanical: it refuses
 # any `docs/` preceded by a path character, so a URL into ANOTHER repo's docs
 # (`https://github.com/org/repo/blob/main/docs/release.md#anchor`) is never
@@ -197,7 +199,9 @@ _HTML_ANCHOR_RE = re.compile(r'<a\s+(?:id|name)=["\']([^"\']+)["\']', re.IGNOREC
 # scanned by this same regex, as a tracked file outside
 # BARE_CITATION_EXCLUDE_DIRS -- see tests/test_check_links.py's `_DOCS` split
 # for the identical concern.)
-_DOC_ANCHOR_REF_RE = re.compile(r"(?<![\w./-])docs/[\w./-]+\.md(?:#[\w-]+)?(?![\w-])")
+_DOC_ANCHOR_REF_RE = re.compile(
+    r"(?<![\w./-])docs/[\w./-]+\.md(?:#(?:[\w-]|%[0-9A-Fa-f]{2})+)?(?![\w-])"
+)
 # Extensions skipped when walking tracked files OUTSIDE
 # BARE_CITATION_EXCLUDE_DIRS for a bare docs/ anchor reference:
 # machine-generated data/lock formats, whose contents
@@ -536,7 +540,15 @@ def _resolve_error(
     anchor, a file that cannot be read for its anchors, or fine. Shared by
     both walks in ``check`` so a broken link and a broken bare citation always
     report in the same words -- the two passes had already drifted to
-    different wordings for the identical failure."""
+    different wordings for the identical failure.
+
+    ``anchor`` is the fragment as the source wrote it. It names an anchor as
+    written or, failing that, percent-decoded as UTF-8 (``caf%C3%A9`` is the
+    ``café`` slug) -- the two lookups a browser makes, in that order, so an
+    explicit ``<a id="a%20b">`` is still reached by ``#a%20b``. An escape that
+    is not UTF-8 decodes to U+FFFD, which is what ``_cached_text`` makes of
+    such a byte in the target. The report quotes the anchor as written: a
+    decoded one may hold a newline."""
     if not target_path.exists():
         return LinkError(source, line_no, target, _NO_SUCH_FILE)
     if not anchor or target_path.suffix != ".md":
@@ -546,7 +558,8 @@ def _resolve_error(
             slug_cache[target_path] = _slugs_for_file(target_path, text_cache)
         except OSError as exc:
             return _unreadable_error(target_path, exc)
-    if anchor in slug_cache[target_path]:
+    slugs = slug_cache[target_path]
+    if anchor in slugs or unquote(anchor) in slugs:
         return None
     try:
         display = target_path.relative_to(root)
@@ -580,10 +593,8 @@ def check(root: Path) -> list[LinkError]:
             # The path of a link is percent-encoded (`sp%20ace.md`). Decoded
             # as bytes, then as `_tracked_paths` decodes a name, so an escape
             # that is not UTF-8 (`%E9`) names the file whose name holds it.
-            # The anchor is percent-decoded too (`caf%C3%A9`), as a browser
-            # matches a fragment; the reported target stays as written.
+            # The anchor stays as written: `_resolve_error` decodes it.
             file_part = os.fsdecode(unquote_to_bytes(file_part))
-            anchor = unquote(anchor)
             if "\0" in file_part:
                 # No file name holds a NUL, and resolve() raises on one.
                 errors.append(LinkError(source, line_no, target, _NO_SUCH_FILE))

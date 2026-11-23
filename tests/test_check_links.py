@@ -357,23 +357,32 @@ class TestCheck:
 
         assert check(tmp_path) == []
 
-    def test_percent_encoded_anchor_is_decoded_before_the_slug_lookup(self, tmp_path):
-        """``#caf%C3%A9`` matches the ``café`` heading; an encoded anchor that
-        names no heading is reported as written; ``%23`` in the path stays in
-        the file name."""
+    def test_percent_encoded_anchor_matches_the_decoded_slug(self, tmp_path):
+        """``#caf%C3%A9`` matches the ``café`` heading, in another file and in
+        the link's own; an encoded anchor that names no heading is reported as
+        written; ``%23`` in the path stays in the file name."""
         _write(tmp_path, f"{_DOCS}/t.md", "## café\n")
         _write(tmp_path, f"{_DOCS}/a#b.md", "## Part\n")
         _write(
             tmp_path,
             f"{_DOCS}/a.md",
-            "[1](t.md#caf%C3%A9) [2](t.md#caf%C3%A8) [3](a%23b.md#part)\n",
+            "## café\n\n[1](t.md#caf%C3%A9) [2](t.md#caf%C3%A8) [3](a%23b.md#part) "
+            "[4](#caf%C3%A9)\n",
         )
         _git_init(tmp_path)
 
         errors = check(tmp_path)
 
         assert [e.target for e in errors] == ["t.md#caf%C3%A8"]
-        assert "no heading slug" in errors[0].reason
+        assert errors[0].reason == f"no heading slug '#caf%C3%A8' in {_DOCS}/t.md"
+
+    def test_anchor_is_looked_up_as_written_before_it_is_decoded(self, tmp_path):
+        """An explicit id is literal, so ``#a%20b`` reaches ``<a id="a%20b">``."""
+        _write(tmp_path, f"{_DOCS}/t.md", '<a id="a%20b"></a>\n')
+        _write(tmp_path, f"{_DOCS}/a.md", "[1](t.md#a%20b)\n")
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
 
     def test_link_destination_that_names_no_file(self, tmp_path):
         """A decoded NUL is reported, not a ``ValueError`` out of ``resolve()``.
@@ -636,6 +645,33 @@ class TestBareDocAnchorRefs:
         assert len(errors) == 1
         assert errors[0].target == f"{_DOCS}/release.md#no-such-anchor"
         assert "no heading slug" in errors[0].reason
+
+    def test_bare_reference_with_a_percent_encoded_anchor_is_read_whole(self, tmp_path):
+        """The anchor is not cut at its first ``%`` (cut there, every anchor
+        below would be the live ``#caf``): an encoded anchor is decoded like a
+        link's, and a dead one is reported as written. ``README.md`` is in
+        both walks, and its dead link is still one entry. ``%2`` is no escape,
+        so that anchor does end at the ``%``."""
+        _write(tmp_path, f"{_DOCS}/t.md", "## café\n\n## caf\n")
+        readme = _write(
+            tmp_path,
+            "README.md",
+            f"[1]({_DOCS}/t.md#caf%C3%A9) [2]({_DOCS}/t.md#caf%C3%A8)\n",
+        )
+        script = _write(
+            tmp_path,
+            "scripts/x.sh",
+            f"# {_DOCS}/t.md#caf%C3%A9 {_DOCS}/t.md#caf%C3%A8 {_DOCS}/t.md#caf%2\n",
+        )
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        dead = f"{_DOCS}/t.md#caf%C3%A8"
+        assert [(e.source, e.target) for e in errors] == [
+            (readme, dead),
+            (script, dead),
+        ]
 
     @pytest.mark.parametrize(
         "name",
