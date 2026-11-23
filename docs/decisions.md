@@ -6960,20 +6960,24 @@ options were (a) leave it as built, (b) kick a branch whose marker the merge det
 `needs-rebase`, (c) order marker-adding branches ahead of the rest of the batch, and (d) report and
 also write the pointer Update text as a ready patch.
 
-**Decided (`lode-w7gp`, 2026-11-21, maintainer):** option (c). The ruling in full: "w7gp - go with
-(c)". Once `lode-g78l` lands, `/land`'s Section 3a orders any accepted branch that adds an Update
-marker to `docs/decisions.md` ahead of the other branches in the batch; until then Section 3a has
-no such rule. The mechanism is the one in the `lode-4jtc.1` entry's `lode-tikr` Update: union
-writes the receiving side's lines first, so a marker merged before a same-batch EOF append stays
-attached to its entry.
+**Decided (`lode-w7gp`, 2026-11-21 and 2026-11-22, maintainer):** option (c), and option (b), the
+kick-back, is revisited only on an observed cross-batch incident. The maintainer's two statements
+in full: on 2026-11-21, "w7gp - go with (c)"; on 2026-11-22, "endorse the revisit-(b) line." The
+line endorsed is in the ticket's note on the first statement, written by the `/code` session that
+took it: "(b) kick-back is not built; revisit only on an observed cross-batch incident." Once
+`lode-g78l` lands, `/land`'s Section 3a orders any accepted branch that adds an Update marker to
+`docs/decisions.md` ahead of the other branches in the batch; until then Section 3a has no such
+rule. The mechanism is the one in the `lode-4jtc.1` entry's `lode-tikr` Update: union writes the
+receiving side's lines first, so a marker merged before a same-batch EOF append stays attached to
+its entry.
 
 **Accepted limit**, as the ticket stated it for option (c): same-batch collisions only. When the
-EOF append is already on `trunk` from an earlier batch, the merge still detaches the marker; that
-case still ships and is reported by the `lode-l8b7` by-hand check, which stays as built.
+EOF append is already on `trunk` from an earlier batch (the cross-batch case), the merge still
+detaches the marker; that case still ships and is reported by the `lode-l8b7` by-hand check, which
+stays as built. Not every same-batch collision is covered either: see the trace below, which is
+not part of the ruling.
 
-**Not taken:** (a), (b) and (d). The ruling gives no reasons. The ticket's ruling note, written by
-the `/code` session that took the ruling, adds that (b), the kick-back, is revisited only on an
-observed cross-batch incident; the ruling as quoted does not say so. The ticket description carries
+**Not taken:** (a), (b) and (d). Neither statement gives reasons. The ticket description carries
 (b)'s cost and what was not checked about it.
 
 **Traced at technical review, not part of the ruling.** Scratch repo, this file `merge=union`,
