@@ -781,6 +781,18 @@ edges**, restricted to `$ACCEPTED`:
     [docs/agents-workflow.md](../../../docs/agents-workflow.md#stacked-land-branches-lode-02v)) or the
     hold note explains why it's still waiting.
 
+**Marker-adding branches merge first (lode-g78l, maintainer ruling lode-w7gp option (c)).** Among the
+ids the base-before-dependent order leaves free, merge first every accepted branch whose diff
+(`git diff origin/trunk...origin/land/<id> -- docs/decisions.md`) **adds** a line starting
+`**Update (` at any indent; ties keep the existing order. A marker merged before a same-batch EOF
+append stays attached to its entry under `merge=union`; in the reverse order it detaches. Base-before-
+dependent still wins: a stacked dependent never moves ahead of its base. **Accepted limit:** this
+covers same-batch collisions only, and only a marker-adding branch against a branch that is not
+marker-adding. Two marker-adding branches keep their existing order, so a collision between them
+(for example, one also appends at EOF) is not prevented. Cross-batch detachments are not prevented
+either. Both still land and are reported by the lode-l8b7 by-hand check, which stays unchanged. The
+kick-back alternative (option (b)) is revisited only on an observed cross-batch incident.
+
 Once ordered (and any orphaned dependents pulled out), `$ACCEPTED` below refers to this **ordered,
 possibly-reduced** set, not the raw land-review output.
 
