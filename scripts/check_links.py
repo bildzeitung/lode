@@ -107,6 +107,31 @@ actually dominated, since nearly every anchor target is a ``docs/`` page the
 walk had already read. Non-markdown files in the bare pass are deliberately
 NOT cached: they are read exactly once, so retaining them would cost
 megabytes of resident text for no saved read.
+
+LIMIT (lode-905hd): a bare citation of a page whose path holds a space is
+NOT supported, in any spelling. ``_DOC_ANCHOR_REF_RE``'s path class holds no
+space, and a bare citation has no delimiter, so admitting one would swallow
+the prose after it. What the pattern does with such a citation:
+
+- In two shapes it matches a SHORTER path and checks that in the page's
+  place. One: the text before the space already ends in ``.md`` (a page named
+  ``a.md notes.md`` is read as ``a.md``). Two: the text after the space
+  starts at the docs directory again (a directory named ``my docs``, say,
+  inside it), and the citation is read from there on. The shorter path is
+  reported missing when it does not exist, although the cited page does; when
+  it exists the citation passes, although the cited page may not.
+- Otherwise it matches nothing, and a dead citation of the page is not
+  reported.
+
+A ``%20`` for the space is not read either (``%`` is outside the class):
+shape one is cut the same, and shape two then matches nothing.
+
+Cite such a page with a markdown link instead, which reads its own delimiters
+(angle brackets or percent-encoding, lode-tgr6). In a file outside
+``BARE_CITATION_EXCLUDE_DIRS`` the link's text goes through this pattern as
+well and can be cut the same way: write each space as ``%20``, and begin the
+destination with ``./`` where it would otherwise begin at the docs directory.
+The pattern then matches nothing in it. No tracked path holds a space today.
 """
 
 from __future__ import annotations
