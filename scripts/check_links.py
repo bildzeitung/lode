@@ -29,7 +29,10 @@ Exits 1 and prints one ``file:line: reason -> target`` line per broken link
 and prints a short OK line otherwise. A tracked file the gate would read that
 is missing from the working tree (deleted, the deletion never staged) is
 reported in the same shape at line 0, with the two git commands that fix it in
-place of a target (lode-h85o).
+place of a target (lode-h85o). A markdown file that is there but cannot be
+read (a dangling symlink, a directory in its place, no read permission) is
+reported at line 0 too, with the system's reason in place of a target
+(lode-l8coy).
 
 Scope, deliberately: relative markdown links only -- external links
 (``http(s)://``, ``mailto:``, etc.) are never resolvable against this repo
@@ -227,9 +230,9 @@ def _missing_tracked_error(source: Path) -> LinkError | None:
     Gone means the path itself: nothing at it, or a directory above it
     replaced by a file -- the two cases git lists as deleted. A dangling
     symlink is still there, so it is not reported here: it is a file that
-    cannot be read, which the markdown walk reports and the bare-citation
-    walk skips. A file a sparse checkout leaves out IS reported, although
-    git does not call it deleted: the index is not consulted.
+    cannot be read (``_unreadable_error``). A file a sparse checkout leaves
+    out IS reported, although git does not call it deleted: the index is not
+    consulted.
 
     The path is shell-quoted so either command can be pasted as printed."""
     if os.path.lexists(source):
@@ -241,6 +244,21 @@ def _missing_tracked_error(source: Path) -> LinkError | None:
         target=f"git rm {path} (stage the deletion) or git restore {path}",
         reason="tracked file is missing from the working tree",
     )
+
+
+def _unreadable_error(path: Path, exc: OSError) -> LinkError:
+    """The report for a markdown file that is there but cannot be read: a
+    dangling symlink, a directory in its place, no read permission. There is
+    no single remedy, so the line gives the system's reason.
+
+    Built from the file alone -- never from the link that led to it, and
+    without ``str(exc)``, which repeats the path as the caller spelled it --
+    so every failed read of one file is the identical entry, and ``check``'s
+    de-duplication leaves one line per spelling of its path. A walk source is
+    ``root / <tracked rel>`` and a link target is resolved, so the spellings
+    differ only under a symlink. A link through a dangling symlink never gets
+    here: its target does not exist, and the link is reported as such."""
+    return LinkError(path, 0, exc.strerror or str(exc), "file cannot be read")
 
 
 def _is_external(target: str) -> bool:
@@ -503,15 +521,19 @@ def _resolve_error(
     text_cache: dict[Path, str],
 ) -> LinkError | None:
     """The verdict on one already-resolved target: missing file, missing
-    anchor, or fine. Shared by both walks in ``check`` so a broken link and a
-    broken bare citation always report in the same words -- the two passes had
-    already drifted to different wordings for the identical failure."""
+    anchor, a file that cannot be read for its anchors, or fine. Shared by
+    both walks in ``check`` so a broken link and a broken bare citation always
+    report in the same words -- the two passes had already drifted to
+    different wordings for the identical failure."""
     if not target_path.exists():
         return LinkError(source, line_no, target, "target file does not exist")
     if not anchor or target_path.suffix != ".md":
         return None
     if target_path not in slug_cache:
-        slug_cache[target_path] = _slugs_for_file(target_path, text_cache)
+        try:
+            slug_cache[target_path] = _slugs_for_file(target_path, text_cache)
+        except OSError as exc:
+            return _unreadable_error(target_path, exc)
     if anchor in slug_cache[target_path]:
         return None
     try:
@@ -537,9 +559,7 @@ def check(root: Path) -> list[LinkError]:
         try:
             source_text = _cached_text(source, text_cache)
         except OSError as exc:
-            # Present but unreadable (dangling symlink, directory in its
-            # place, no read permission): no single remedy, so name the cause.
-            errors.append(LinkError(source, 0, str(exc), "tracked file cannot be read"))
+            errors.append(_unreadable_error(source, exc))
             continue
         for line_no, target in _links_in_file(source_text):
             if not target or _is_external(target):
@@ -600,7 +620,8 @@ def check(root: Path) -> list[LinkError]:
                 errors.append(error)
     # Since lode-act5 a markdown file outside BARE_CITATION_EXCLUDE_DIRS goes
     # through BOTH walks, so one bracketed link into a `docs/` target, or one
-    # missing file, can produce the identical LinkError twice. De-duplicate
+    # missing file, can produce the identical LinkError twice; so can each
+    # link into a file that cannot be read (`_unreadable_error`). De-duplicate
     # (order-preserving; LinkError is a frozen dataclass, so hashable) --
     # reporting one break twice would also double-count it in the summary line.
     return list(dict.fromkeys(errors))

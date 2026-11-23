@@ -8,6 +8,7 @@ locking the exact real-world case that motivated the gate.
 
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 import sys
@@ -891,27 +892,43 @@ def test_dangling_tracked_symlink_is_not_reported_as_missing(tmp_path):
     assert check(tmp_path) == []
 
 
-@pytest.mark.parametrize("state", ["dangling-symlink", "directory", "no-permission"])
+def _make_unreadable(path: Path, state: str) -> str:
+    """Leave ``path`` in place but unreadable; return the system's reason."""
+    if state == "dangling-symlink":
+        path.unlink()
+        path.symlink_to("nowhere.md")
+        return os.strerror(errno.ENOENT)
+    if state == "directory":
+        path.unlink()
+        path.mkdir()
+        return os.strerror(errno.EISDIR)
+    path.chmod(0)
+    return os.strerror(errno.EACCES)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        "dangling-symlink",
+        "directory",
+        pytest.param(
+            "no-permission",
+            marks=pytest.mark.skipif(
+                os.geteuid() == 0, reason="root reads files regardless of mode"
+            ),
+        ),
+    ],
+)
 def test_cli_reports_tracked_markdown_that_cannot_be_read_without_traceback(
     tmp_path, state
 ):
     """The path is there (so not the missing-file report) but reading it
-    raises; the gate names the file and the error and stays red."""
-    if state == "no-permission" and os.geteuid() == 0:
-        pytest.skip("root reads files regardless of mode")
+    raises; the gate names the file and the reason, once each, and stays
+    red."""
     _write(tmp_path, f"{_DOCS}/a.md", "# A\n")
-    bad = tmp_path / _DOCS / "x.md"
-    if state == "dangling-symlink":
-        bad.symlink_to("nowhere.md")
-        _git_init(tmp_path)
-    else:
-        _write(tmp_path, f"{_DOCS}/x.md", "# X\n")
-        _git_init(tmp_path)
-        if state == "directory":
-            bad.unlink()
-            bad.mkdir()
-        else:
-            bad.chmod(0)
+    bad = _write(tmp_path, f"{_DOCS}/x.md", "# X\n")
+    _git_init(tmp_path)
+    why = _make_unreadable(bad, state)
 
     result = subprocess.run(
         [
@@ -928,5 +945,26 @@ def test_cli_reports_tracked_markdown_that_cannot_be_read_without_traceback(
 
     assert result.returncode == 1
     assert "Traceback" not in result.stderr
-    assert result.stderr.count("tracked file cannot be read") == 1
-    assert f"{bad}:0: tracked file cannot be read -> " in result.stderr
+    assert result.stderr.count("cannot be read") == 1
+    assert f"{bad}:0: file cannot be read -> {why}\n" in result.stderr
+
+
+def test_unreadable_markdown_is_one_error_however_many_links_reach_it(tmp_path):
+    """A link or a bare citation with an anchor reads its target for the
+    anchors. That read fails as the walk's own read of the file does, and
+    each failure is the same entry, so a file is reported once. ``NOTES.md``
+    is a source in both walks; the bare-citation walk skips it."""
+    _write(tmp_path, "README.md", "[n](NOTES.md#n)\n")
+    _write(tmp_path, f"{_DOCS}/a.md", "[x](x.md#x) and [again](x.md#x)\n")
+    _write(tmp_path, "scripts/s.sh", f"# see {_DOCS}/x.md#x\n")
+    bad = [
+        _write(tmp_path, "NOTES.md", "# N\n"),
+        _write(tmp_path, f"{_DOCS}/x.md", "# X\n"),
+    ]
+    _git_init(tmp_path)
+    why = [_make_unreadable(path, "directory") for path in bad]
+
+    assert check(tmp_path) == [
+        check_links.LinkError(path, 0, reason, "file cannot be read")
+        for path, reason in zip(bad, why, strict=True)
+    ]
