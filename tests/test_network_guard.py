@@ -188,14 +188,14 @@ def test_unmocked_enrich_job_fails_loudly_not_swallowed(
     ambient_key: str | None,
 ) -> None:
     """The acceptance bar (bd show lode-85q): FAILS in both a keyed and an
-    unkeyed environment, with a message naming the client access -- never a
-    quietly-recorded ``status='failed'`` job row that leaves the test green.
+    unkeyed environment, with a message naming the client access -- the guard's
+    raise must not be absorbed into a job row that leaves the test green.
 
-    ``worker.run_one``'s ``except Exception`` (a legitimate, broad job-failure
-    handler, left alone here -- lode-85q explicitly scopes fixing it out) would
-    ordinarily swallow this; the guard's ``pytest.fail()`` raises a
-    ``BaseException`` subclass that blows straight through it regardless of
-    whether ``ANTHROPIC_API_KEY`` happens to be set.
+    ``pytest.fail()`` raises a ``BaseException`` subclass, so it passes through
+    both of ``worker.run_one``'s handlers (the ``AuthError`` arm and the broad
+    ``except Exception`` job-failure handler). Had the guard raised an ordinary
+    ``Exception``, ``except Exception`` would record ``status='failed'`` and the
+    test would stay green, whether or not ``ANTHROPIC_API_KEY`` is set.
     """
     if ambient_key is None:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -207,14 +207,14 @@ def test_unmocked_enrich_job_fails_loudly_not_swallowed(
     with pytest.raises(pytest.fail.Exception, match="anthropic.Anthropic"):
         claim_and_run_one(conn, db_path, Settings(), types=("enrich",))
 
-    # The job must NOT have been silently recorded as an ordinary failure --
-    # the whole point is that this never reaches run_one's except Exception.
+    # The guard's raise must pass through run_one's handlers without the job
+    # being recorded as an ordinary failure.
     (status,) = conn.execute(
         "SELECT status FROM jobs WHERE target_version = 'v1'"
     ).fetchone()
     assert status == "running", (
-        "job status advanced past 'running' -- the real client construction "
-        "was caught by run_one's except Exception instead of blowing through it"
+        "job status advanced past 'running' -- run_one handled the guard's "
+        "raise instead of letting it pass through"
     )
 
 
