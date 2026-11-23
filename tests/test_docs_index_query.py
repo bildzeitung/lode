@@ -382,6 +382,34 @@ def test_split_entry_markers_in_a_section_cut_at_its_h3_headings(
         )
 
 
+def test_split_entry_markers_in_an_oversized_section_with_no_heading(
+    tmp_path: Path,
+) -> None:
+    """A ``##`` section over MAX_UNIT_BYTES with no heading inside it is cut at
+    its own bullets, and is one entry (lode-tb0j): an Update in its closing
+    paragraph is pointed at by every unit of the section, not by the entry
+    after it."""
+    own_bullets = [f"- own bullet {i} " + "x" * 3000 for i in range(8)]
+    marker = "**Update (lode-test, 2026-01-01)** -- corrected."
+    text = (
+        "# Title\n\n## Section\n\nintro\n\n"
+        + "\n".join(own_bullets)
+        + f"\n\n{marker}\n"
+        "- **Entry after.** e\n"
+        "  **Update (lode-other)** -- not the section's.\n"
+    )
+    doc = tmp_path / "decisions.md"
+    doc.write_text(text, encoding="utf-8")
+    marker_line = text.splitlines().index(marker) + 1
+    units = _query_module._build._chunker.chunk_file(doc, text)
+    assert [u.first_line for u in units[:2]] == ["# Title", "## Section"]
+    assert len(units) > 4
+    for u in units:
+        assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
+            [marker_line] if u in units[1:-1] else []
+        )
+
+
 def test_split_entry_markers_agrees_with_the_chunker_on_the_real_decisions_md() -> None:
     """The lookup must fire on the file it exists for, whose shape a fixture
     can get wrong: the real file opens with an H1 title, so its entries come
@@ -398,7 +426,7 @@ def test_split_entry_markers_agrees_with_the_chunker_on_the_real_decisions_md() 
     flags = _query_module.fence_flags(lines)
     chunker = _query_module._build._chunker
 
-    sections = chunker.heading_cut_sections(path, text)
+    sections = chunker.oversized_sections(path, text)
     entries: list[list] = []
     for unit in chunker.chunk_file(path, text):
         in_section = any(lo < unit.line_lo <= hi for lo, hi in sections)

@@ -5121,6 +5121,16 @@ entries below from being rewritten to chase the current tree.)
     reachable today: a `##` section over `MAX_UNIT_BYTES` with no heading inside it is still cut
     at its own bullets, and a hit on one of those units gets no `NOTE` for an Update elsewhere in
     the section (what is left of limit (2) in the `lode-kys3` Update); open in `lode-tb0j`.
+  - **Update (lode-tb0j, 2026-11-23):** the one limit in the `lode-pe38` Update above no longer
+    holds. Every `##` section of this file over `MAX_UNIT_BYTES` is one entry for the split-entry
+    `NOTE`, whether the chunker cut it at the headings inside it or, having none, at its own
+    bullets or paragraphs: a hit on any unit of it lists every Update marker in the section's own
+    text. The chunker's function is renamed `oversized_sections` (it was `heading_cut_sections`)
+    and reports all of them. Candidate chosen is the one the ticket named; its open question is
+    answered by accepting the cost: a hit on an own bullet that carries its own Update marker also
+    lists the markers of the section's other bullets, as it already does under a sub-heading. The
+    NOTE line's length on a real section is not measured; no section of this file is oversized
+    today. The builder's choice, no maintainer ruling.
 
 - **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
   decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent

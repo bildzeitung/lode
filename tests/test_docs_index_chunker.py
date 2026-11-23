@@ -27,7 +27,7 @@ MAX_UNIT_BYTES = _chunker.MAX_UNIT_BYTES
 Unit = _chunker.Unit
 chunk_corpus = _chunker.chunk_corpus
 chunk_file = _chunker.chunk_file
-heading_cut_sections = _chunker.heading_cut_sections
+oversized_sections = _chunker.oversized_sections
 classify = _chunker.classify
 
 DOCS_DIR = REPO_ROOT / "docs"
@@ -439,26 +439,26 @@ def test_entry_log_oversized_section_is_cut_at_its_h3_headings():
     assert _tiles(units)
 
 
-def test_heading_cut_sections_is_the_cut_section_without_the_entries_after_it():
+def test_oversized_sections_is_the_cut_section_without_the_entries_after_it():
     text = (
         "# Log\n\n## Small\n\nprose\n\n### Sub\n\nmore\n\n## Big\n\n"
         + _OVERSIZED_SECTION_TEXT
         + "- late entry A\n  continuation\n- late entry B\n"
     )
     starts = {u.first_line: u.line_lo for u in chunk_file("docs/decisions.md", text)}
-    assert heading_cut_sections("docs/decisions.md", text) == [
+    assert oversized_sections("docs/decisions.md", text) == [
         (starts["## Big"], starts["- late entry A"] - 1)
     ]
-    assert heading_cut_sections("docs/stack.md", text) == []
+    assert oversized_sections("docs/stack.md", text) == []
 
 
-def test_heading_cut_sections_leaves_out_an_oversized_section_with_no_heading_in_it():
-    # Such a section goes to the post-pass whole, and its pieces are found by
-    # the structural lines around them.
+def test_oversized_sections_names_a_section_with_no_heading_in_it():
     text = "# Log\n\n## Big\n\n" + _SIX_PARAGRAPHS + "\n\n" + _SIX_PARAGRAPHS + "\n"
     assert len(chunk_file("docs/decisions.md", text)) > 2
-    assert heading_cut_sections("docs/decisions.md", text) == []
-    assert heading_cut_sections("docs/decisions.md", "") == []
+    assert oversized_sections("docs/decisions.md", text) == [
+        (3, len(text.splitlines()))
+    ]
+    assert oversized_sections("docs/decisions.md", "") == []
 
 
 def test_entry_log_fenced_hash_line_in_an_oversized_section_is_not_a_cut():
