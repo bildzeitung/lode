@@ -7758,6 +7758,30 @@ def test_status_keeps_a_note_refusal_after_a_gated_out_later_job(
     assert "refused by the model (category: cyber); not retried" in out
 
 
+def test_status_keeps_a_note_refusal_after_a_later_job_done_under_another_prompt(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # lode-ocdr: reconcile counts only a job done under the current prompt
+    # version as enriched, so it still holds the head on the refusal.
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        _seed_standing_refusal_head(conn)
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status, next_attempt_at, "
+                "prompt_ver) VALUES ('enrich', 'ver-dddddddddddddddd', 'done', ?, "
+                "'an-older-prompt-ver')",
+                (now_iso(),),
+            )
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    out = " ".join(result.stdout.split())
+    assert "refused by the model (category: cyber); not retried" in out
+
+
 @pytest.mark.parametrize("excluded_by", ["tombstone", "no_egress", "scope", None])
 def test_status_lists_an_external_refusal_only_if_reconcile_looks_at_it(
     tmp_path: Path,
