@@ -77,16 +77,22 @@ def refusal_dead_jobs(
       remedies could reach it; it falls to the ordinary dead-letter hint,
       whose "already moot" caveat names these cases.
 
-    ``refusal_params=None`` (no resolvable settings) skips the key comparison,
-    prompt version included, so a refusal stamped under another prompt version
-    stays listed, even after a later job done under that version. An empty
+    ``refusal_params=None`` (no resolvable settings) skips the model and
+    provider comparison only: the prompt version is a code constant, so it is
+    still compared, and a refusal stamped under another prompt version is not
+    listed. A refusal stamped under another model stays listed. An empty
     ``no_egress_scopes`` skips the scope test, so without settings a
     scope-denied external's refusal stays listed too. The tests on the rows
     themselves need no settings and still apply.
 
     The category is None when the provider supplied none.
     """
-    standing = "j.refusal = 1" if refusal_params is None else STANDING_REFUSAL_SQL
+    if refusal_params is None:
+        standing = "j.refusal = 1 AND j.prompt_ver IS ?"
+        standing_params: tuple[str | None, ...] = (ENRICH_PROMPT_VER,)
+    else:
+        standing = STANDING_REFUSAL_SQL
+        standing_params = refusal_params
     # The note arm drives from versions by primary key (notes has no index on
     # head_version_id). The s.external_id guard keeps a note-targeted row out of
     # the in-force subquery, which would otherwise scan all of jobs to find
@@ -130,7 +136,7 @@ def refusal_dead_jobs(
             )
           )
         """,
-        (*(refusal_params or ()), ENRICH_PROMPT_VER),
+        (*standing_params, ENRICH_PROMPT_VER),
     ).fetchall()
     # Scope rules live in config, not on the row, so SQL cannot filter them.
     return {
