@@ -411,7 +411,7 @@ def _slugs_for_file(path: Path, text_cache: dict[Path, str]) -> set[str]:
         seen_counts[base] = count + 1
         slugs.add(slug)
     for _, line in _content_lines(text):
-        slugs.update(_HTML_ANCHOR_RE.findall(line))
+        slugs.update(_HTML_ANCHOR_RE.findall(_INLINE_CODE_RE.sub("", line)))
     return slugs
 
 

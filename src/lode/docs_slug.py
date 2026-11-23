@@ -64,12 +64,13 @@ def github_slug(heading_text: str) -> str:
 
 
 # Character-for-character `scripts/check_links.py`'s `_ATX_HEADING_RE` and
-# `_HTML_ANCHOR_RE`. Same copy-plus-equivalence-test discipline as
+# `_HTML_ANCHOR_RE` and `_INLINE_CODE_RE`. Same copy-plus-equivalence-test discipline as
 # `_LINK_TEXT_RE` above: that gate cannot import this module (see the module
 # docstring), so `tests/test_check_links.py` asserts the two implementations
 # return the identical anchor set for every `docs/*.md` file instead.
 _ATX_HEADING_RE = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
 _HTML_ANCHOR_RE = re.compile(r'<a\s+(?:id|name)=["\']([^"\']+)["\']', re.IGNORECASE)
+_INLINE_CODE_RE = re.compile(r"`[^`]*`")
 
 
 def anchor_slugs(text: str) -> set[str]:
@@ -79,7 +80,7 @@ def anchor_slugs(text: str) -> set[str]:
     suffixes when a heading repeats -- plus the literal id of every explicit
     ``<a id="...">`` / ``<a name="...">`` anchor. Headings inside fenced code
     blocks are not headings and are skipped; an explicit anchor tag inside one
-    is skipped for the same reason.
+    is skipped for the same reason, as is one inside an inline code span.
 
     ``scripts/check_links.py::_slugs_for_file`` is the authority for this
     algorithm -- this is the importable copy of it, for callers that can
@@ -97,7 +98,7 @@ def anchor_slugs(text: str) -> set[str]:
             count = seen.get(base, 0)
             seen[base] = count + 1
             slugs.add(base if count == 0 else f"{base}-{count}")
-        slugs.update(_HTML_ANCHOR_RE.findall(line))
+        slugs.update(_HTML_ANCHOR_RE.findall(_INLINE_CODE_RE.sub("", line)))
     return slugs
 
 

@@ -163,6 +163,16 @@ class TestDocsSlugCopyAgrees:
         assert got == {"out", "real"}
         assert docs_slug.anchor_slugs(text) == got
 
+    def test_anchor_tag_inside_an_inline_code_span_is_not_an_anchor(self, tmp_path):
+        """An explicit anchor tag inside an inline code span is literal code,
+        so neither anchor-set copy counts it (lode-8raj). An indented code
+        block is not tracked by either scanner and is left out."""
+        text = 'write `<a id="lit"></a>` above\n## H\n<a id="real"></a>\n'
+        path = _write(tmp_path, "a.md", text)
+        got = check_links._slugs_for_file(path, {})
+        assert got == {"h", "real"}
+        assert docs_slug.anchor_slugs(text) == got
+
     def test_anchor_tag_split_across_lines_is_not_an_anchor(self, tmp_path):
         """Both anchor-set copies match the tag one line at a time, so a tag
         whose ``<a`` and ``id=`` sit on different lines offers no anchor to
