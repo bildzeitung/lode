@@ -7556,6 +7556,17 @@ def _insert_refusal_dead_enrich(
         )
 
 
+def _insert_enrich_job(conn: sqlite3.Connection, target: str, status: str) -> None:
+    """An enrich job for ``target`` in ``status``, stamped with the current
+    prompt version."""
+    with conn:
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status, next_attempt_at, "
+            "prompt_ver) VALUES ('enrich', ?, ?, ?, ?)",
+            (target, status, now_iso(), ENRICH_PROMPT_VER),
+        )
+
+
 def _seed_standing_refusal_head(conn: sqlite3.Connection) -> None:
     """A note head 'ver-dddddddddddddddd' with a standing refusal-dead enrich job
     (category 'cyber') (lode-54c7)."""
@@ -7576,23 +7587,20 @@ def _supersede_standing_refusal(conn: sqlite3.Connection, by: str) -> None:
     """Stop :func:`_seed_standing_refusal_head`'s refusal from standing. ``by`` is
     'model', 'prompt_ver' or 'head', else the status of a later enrich job for
     the same head."""
+    if by not in ("model", "prompt_ver", "head"):
+        _insert_enrich_job(conn, "ver-dddddddddddddddd", by)
+        return
     with conn:
         if by == "model":
             conn.execute("UPDATE jobs SET refusal_model = 'an-older-model'")
         elif by == "prompt_ver":
             conn.execute("UPDATE jobs SET prompt_ver = 'an-older-prompt-ver'")
-        elif by == "head":
+        else:
             conn.execute(
                 "INSERT INTO versions (version_id, note_id, body, op) "
                 "VALUES ('ver-new', 'note-d', 'edited', 'update')"
             )
             conn.execute("UPDATE notes SET head_version_id = 'ver-new'")
-        else:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version, status, next_attempt_at, "
-                "prompt_ver) VALUES ('enrich', 'ver-dddddddddddddddd', ?, ?, ?)",
-                (by, now_iso(), ENRICH_PROMPT_VER),
-            )
 
 
 @pytest.mark.parametrize(
@@ -7684,13 +7692,7 @@ def test_status_lists_an_external_refusal_only_while_it_is_the_in_force_job(
             )
         _insert_refusal_dead_enrich(conn, "snap-old")
         if later_head_job is not None:
-            with conn:
-                conn.execute(
-                    "INSERT INTO jobs (type, target_version, status, "
-                    "next_attempt_at, prompt_ver) "
-                    "VALUES ('enrich', 'snap-head', ?, ?, ?)",
-                    (later_head_job, now_iso(), ENRICH_PROMPT_VER),
-                )
+            _insert_enrich_job(conn, "snap-head", later_head_job)
     finally:
         conn.close()
     result = runner.invoke(app, ["status", "--db", str(db_path)])

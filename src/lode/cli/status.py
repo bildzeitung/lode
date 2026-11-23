@@ -334,7 +334,8 @@ def _enrichment_model_stale(
 
     Opens its own connection (mirroring :func:`_model_revision_status`'s
     independent LanceDB read below) rather than reusing ``status``'s early,
-    already-closed one -- this runs later, once ``settings`` is resolved.
+    already-closed one -- a failure here must stay inside this probe's own
+    guard, not reach the queue reads.
 
     Never raises: any failure (a locked DB, an unexpectedly old schema, a
     failed connection open) is reported as ``False`` -- this can only ever
@@ -428,13 +429,11 @@ def status(db: _DbOption = None) -> None:
     none of those apply (lode-8vcq, lode-tix0).
     """
     db_path = db or default_db_path()
-    conn = _open_db(db)
-    # `lode status` reports QUEUE health, which needs no config at all -- so
-    # it must survive a broken $LODE_HOME/config.toml rather than abort
-    # (lode-l38d.6). cli._resolve_settings_best_effort() owns that broad-catch
-    # rationale; the stderr message _resolve_settings emits internally still
-    # reaches the user, so a broken config stays visible without taking the
-    # command down.
+    # `lode status` reports QUEUE health, so it must survive a broken
+    # $LODE_HOME/config.toml rather than abort (lode-l38d.6).
+    # cli._resolve_settings_best_effort() owns that broad-catch rationale; the
+    # stderr message _resolve_settings emits internally still reaches the
+    # user, so a broken config stays visible without taking the command down.
     #
     # Resolved before the reads: whether a refusal still stands depends on the
     # configured enrichment model and provider.
@@ -448,6 +447,7 @@ def status(db: _DbOption = None) -> None:
             cli.provider_identity(settings),
         )
     )
+    conn = _open_db(db)
     try:
         job_counts = job_status_counts(conn)
         dead_letters = dead_letter_jobs(conn)

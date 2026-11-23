@@ -118,7 +118,10 @@ def in_force_enrich_job_id_sql(external_id_expr: str) -> str:
     about which job that is.
 
     The ``j`` alias is load-bearing: ``test_reconcile_gap_scans_seek_jobs_by_target``
-    recognises the planner's jobs steps by the aliases ``j``/``je``.
+    recognises the planner's jobs steps by the aliases ``j``/``je``. Inside the
+    subquery ``j`` and ``s2`` are its own rows and shadow any outer row of the
+    same name (``refusal_dead_jobs``'s outer jobs row is also ``j``), so
+    ``external_id_expr`` must not reference either alias.
     """
     return f"""(
               SELECT j.id FROM jobs j
