@@ -18,6 +18,7 @@ import sqlite3
 from collections.abc import Sequence
 from typing import NamedTuple
 
+from lode.enrich import ENRICH_PROMPT_VER
 from lode.jobs import (
     LIVE_JOB_STATUSES_SQL,
     STANDING_REFUSAL_SQL,
@@ -58,11 +59,13 @@ def refusal_dead_jobs(
     - :data:`lode.jobs.STANDING_REFUSAL_SQL` matches ``refusal_params`` (prompt
       version, enrichment model, provider -- the key reconcile binds); and
     - for a note, the row targets the note's current head and no later enrich
-      job for that head is live, or ``done`` with a ``prompt_ver`` (a refusal
-      re-opened under another model matches the key again once the model is set
-      back, but the later job has retried it; a job that skipped its target,
-      gated out by ``no_egress`` say, is ``done`` with ``prompt_ver`` NULL,
-      which reconcile does not count as enriched);
+      job for that head is live, or ``done`` under the current
+      :data:`lode.enrich.ENRICH_PROMPT_VER` (a refusal re-opened under another
+      model matches the key again once the model is set back, but the later
+      job has retried it; a job that skipped its target, gated out by
+      ``no_egress`` say, is ``done`` with ``prompt_ver`` NULL, and one done
+      under another prompt version is not current either: reconcile counts
+      neither as enriched, so the refusal still holds the head);
     - for an external, the row is the external's in-force enrich job
       (:func:`lode.jobs.in_force_enrich_job_id_sql`, the one reconcile judges);
       and
@@ -75,9 +78,11 @@ def refusal_dead_jobs(
       whose "already moot" caveat names these cases.
 
     ``refusal_params=None`` (no resolvable settings) skips the key comparison,
-    and an empty ``no_egress_scopes`` skips the scope test, so without
-    settings a scope-denied external's refusal stays listed; the tests on the
-    rows themselves need no settings and still apply.
+    prompt version included, so a refusal stamped under another prompt version
+    stays listed, even after a later job done under that version. An empty
+    ``no_egress_scopes`` skips the scope test, so without settings a
+    scope-denied external's refusal stays listed too. The tests on the rows
+    themselves need no settings and still apply.
 
     The category is None when the provider supplied none.
     """
@@ -113,7 +118,7 @@ def refusal_dead_jobs(
                     AND j2.id > j.id
                     AND (
                       j2.status IN ({LIVE_JOB_STATUSES_SQL})
-                      OR (j2.status = 'done' AND j2.prompt_ver IS NOT NULL)
+                      OR (j2.status = 'done' AND j2.prompt_ver = ?)
                     )
               )
             )
@@ -125,7 +130,7 @@ def refusal_dead_jobs(
             )
           )
         """,
-        refusal_params or (),
+        (*(refusal_params or ()), ENRICH_PROMPT_VER),
     ).fetchall()
     # Scope rules live in config, not on the row, so SQL cannot filter them.
     return {
