@@ -3965,6 +3965,9 @@ entries below from being rewritten to chase the current tree.)
     3-column table and did not call it, ran its reads on the writer's Table, and was not paced, so
     its prunes removed nothing in the first 60 s, more than half of each run; its figures (300 MB
     for the reconnect and 301 to 311 MB capped at call 3000) are replaced by the ones above.
+  - **Update (lode-wbl9, 2026-11-23):** wording only. In the lode-3gr3 Update above, under "Decided
+    in the build: nothing is replaced", "The capped `Session` saves about 7 MB in 300 at 3000
+    calls" should read "saves about 7 MB of about 300 MB at 3000 calls".
 
 - **2026-08-05 (lode-2nw5) — the `git restore --staged .beads/issues.jsonl` cluster: ONE site
   canonicalized (fixing a real symmetry gap), THREE sites kept as WONTFIX literals.** Filed while

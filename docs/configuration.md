@@ -670,10 +670,10 @@ a known, accepted trade-off, not a follow-up ticket.
 > real-note requests cover 9 distinct notes, so counting each note once the bound is
 > about 28%. The script in the repo is not byte-for-byte the one that ran: review changed
 > it to select each live note's head version (27 real-note requests on the same DB, not
-> 39), to redact the proxy passages as well, and to refuse a `LODE_HOME` spelled with an
-> unexpanded `~`. How a result is counted is unchanged. `enrich.MAX_TOKENS`'s comment is
-> unchanged: its claim that the cap is the only bound on a batch item is about the
-> mechanism, which this finding does not alter.
+> 39), to redact the proxy passages as well, and to refuse `~/.lode` however `LODE_HOME`
+> spells it (an unexpanded `~` included). How a result is counted is unchanged.
+> `enrich.MAX_TOKENS`'s comment is unchanged: its claim that the cap is the only bound on
+> a batch item is about the mechanism, which this finding does not alter.
 
 `lode-3dlt` named a real but then-unreachable risk on the enrichment
 forced-tool-use branch of `AnthropicProvider.structured_call` (`enrichment_llm`,
