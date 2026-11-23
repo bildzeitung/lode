@@ -6639,6 +6639,11 @@ entries below from being rewritten to chase the current tree.)
     - Decision only; the code is `lode-6pjf`'s, which depends on `lode-4wgq`. Until `lode-6pjf`
       lands, the code behaves as in (a), and `lode-4wgq`'s provider-case test must inject the
       collect-time provider.
+    - **Update (lode-zqjp, 2026-11-21, maintainer):** `lode-6pjf` settled item 2's "dead-letter or
+      re-enqueue" as re-enqueue. On a stored-vs-collect provider mismatch, `collect_enrich_batch`
+      returns the batch's jobs to pending before it builds the provider client, and the old
+      handle is never polled. The mechanism is in `docs/storage.md`, "Provider change between
+      submit and collect".
 
 ## A stale `uv.lock` is fixed by `scripts/update-deps.sh --reconcile`, a no-upgrade mode (decided, lode-trw1)
 
