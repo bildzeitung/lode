@@ -357,6 +357,24 @@ class TestCheck:
 
         assert check(tmp_path) == []
 
+    def test_percent_encoded_anchor_is_decoded_before_the_slug_lookup(self, tmp_path):
+        """``#caf%C3%A9`` matches the ``café`` heading; an encoded anchor that
+        names no heading is reported as written; ``%23`` in the path stays in
+        the file name."""
+        _write(tmp_path, f"{_DOCS}/t.md", "## café\n")
+        _write(tmp_path, f"{_DOCS}/a#b.md", "## Part\n")
+        _write(
+            tmp_path,
+            f"{_DOCS}/a.md",
+            "[1](t.md#caf%C3%A9) [2](t.md#caf%C3%A8) [3](a%23b.md#part)\n",
+        )
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert [e.target for e in errors] == ["t.md#caf%C3%A8"]
+        assert "no heading slug" in errors[0].reason
+
     def test_link_destination_that_names_no_file(self, tmp_path):
         """A decoded NUL is reported, not a ``ValueError`` out of ``resolve()``.
         ``<t.md>`` with no whitespace before the title is not an angle-bracket

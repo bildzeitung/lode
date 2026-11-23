@@ -120,7 +120,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import unquote_to_bytes
+from urllib.parse import unquote, unquote_to_bytes
 
 import typer
 
@@ -580,8 +580,10 @@ def check(root: Path) -> list[LinkError]:
             # The path of a link is percent-encoded (`sp%20ace.md`). Decoded
             # as bytes, then as `_tracked_paths` decodes a name, so an escape
             # that is not UTF-8 (`%E9`) names the file whose name holds it.
-            # The anchor is compared as written.
+            # The anchor is percent-decoded too (`caf%C3%A9`), as a browser
+            # matches a fragment; the reported target stays as written.
             file_part = os.fsdecode(unquote_to_bytes(file_part))
+            anchor = unquote(anchor)
             if "\0" in file_part:
                 # No file name holds a NUL, and resolve() raises on one.
                 errors.append(LinkError(source, line_no, target, _NO_SUCH_FILE))
