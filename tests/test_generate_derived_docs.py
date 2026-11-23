@@ -257,3 +257,42 @@ def test_emitted_anchor_ids_match_the_link_gates_github_slug() -> None:
         assert generate_derived_docs._github_slug(heading) == check_links.github_slug(
             heading
         )
+
+
+def test_strip_dev_asides_link_anchor_marker_inside_and_outside_a_parenthetical() -> (
+    None
+):
+    """lode-v4k1: a link whose URL carries a bd id is unwrapped to its label, and the bd id in a
+    URL alone never drops the prose parenthetical around it."""
+    strip = generate_derived_docs._strip_dev_asides
+    link = "[storage.md](storage.md#crash-reclaim-pinned-lode-aor)"
+    # Outside a parenthetical: the link is unwrapped, nothing else is lost.
+    assert strip(f"Reclaimed after a crash, see {link}.") == (
+        "Reclaimed after a crash, see storage.md."
+    )
+    # Inside a parenthetical whose only marker is the URL: the parenthetical survives.
+    assert strip(f"Batch path (Anthropic's Batches API, see {link}) only.") == (
+        "Batch path (Anthropic's Batches API, see storage.md) only."
+    )
+    # A visible-text marker still drops the aside, link or not.
+    assert (
+        strip(f"Batch path (decided, lode-abcd, see {link}) only.")
+        == "Batch path only."
+    )
+    assert strip("Batch path (see foo.py) only.") == "Batch path only."
+    # A link with no marker in its URL is untouched.
+    assert strip("See [x](x.md#plain).") == "See [x](x.md#plain)."
+    # A parenthetical that is nothing but such a link goes whole.
+    assert strip(f"Excludes batch jobs. ({link})") == "Excludes batch jobs."
+    assert strip(f"Never a traceback ({link}).") == "Never a traceback."
+    assert strip("Never pinned. ([below](#model-provenance-decided-lode-g2745))") == (
+        "Never pinned."
+    )
+    # A link-only parenthetical with no marker in its URL is untouched.
+    assert strip("Queue ([storage.md](storage.md#queue)).") == (
+        "Queue ([storage.md](storage.md#queue))."
+    )
+    # Square brackets that are not a link are left alone.
+    assert strip("`[cli.theme.styles]` and (`user[:pass]@`)") == (
+        "`[cli.theme.styles]` and (`user[:pass]@`)"
+    )

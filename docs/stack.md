@@ -390,7 +390,9 @@ Under anthropic 2.x (`lode-4uyu`) a client holds one credential: with both `ANTH
 `anthropic` logger, which goes wherever lode's own log records go. The key is sent as
 `Authorization: Bearer <key>`, not `X-Api-Key`; a gateway behind `ANTHROPIC_BASE_URL` must read it
 from `Authorization`. lode never sets `anthropic-version`: requests carry the SDK's default, which
-is `2026-10-21` on 2.x.
+is `2026-10-21` on 2.x. `pyproject.toml` requires `anthropic>=2` (`lode-pszk`), because the chain
+order above and this paragraph describe 2.x; the ruling is an Update on the
+[`lode-sflg` entry](decisions.md#the-anthropic-sdks-native-opentelemetry-tracing-leave-on-or-disable-open-lode-sflg).
 
 **Model-tier split mirrors the harness:** cheap/deterministic high-volume work on the cheaper tier
 (default: Claude Haiku); judgment-sensitive synthesis on a stronger tier (default: Claude Sonnet, with
@@ -1036,8 +1038,8 @@ deciding factors were:
   static-site toolchain the venv/lock already cover for nothing).
 
 **Migrated to Zensical (`lode-0lb8`, 2026-11-21).** The generator is now **Zensical** (`zensical`),
-by the creators of Material for MkDocs, which reaches end of life on 2027-05-05; the maintainer
-ruled to migrate
+by the creators of Material for MkDocs (which itself reaches end of life on 2027-05-05); the
+maintainer ruled to migrate
 ([decision](decisions.md#mkdocs-material-is-in-maintenance-mode-stay-or-migrate-open-lode-3vet),
 `lode-3vet`). The rationale above for MkDocs-Material (plain Markdown, narrative fit, built-in
 search) carries over unchanged, because Zensical reads the same `mkdocs.yml`, Python-Markdown
@@ -1217,7 +1219,10 @@ truncated page would get committed. The generator also strips maintainer-only as
 parenthetical citing a bd ticket id, `show=False` footer-visibility trivia, or a source-file path
 (`screens/browse.py`) — from cells *and* headings alike, so the two pages read as documentation for
 someone using lode, not a verbatim dump of `keybindings.md`'s development history or
-`configuration.md`'s implementation notes.
+`configuration.md`'s implementation notes. A link whose URL carries one of those markers (as most
+deep links into this repo's `(decided, lode-xxxx)` headings do) is unwrapped to its label first, so
+a parenthetical is judged on its visible text; one holding nothing but such a link is dropped
+whole, and a link with no marker in its URL is emitted as written (lode-v4k1).
 
 `docs/keymap.md` links back to `keybindings.md`'s GitHub URL for whoever actually needs to add or
 rebind a key, and points out that the in-app `Ctrl+_`/`?` help overlay (not the page) is the

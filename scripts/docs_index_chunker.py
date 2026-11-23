@@ -12,9 +12,16 @@ split at the deepest ATX heading level present in the file, or at top-level
 ``- `` bullets in a file with no headings at all. A post-pass hard-splits any
 unit still over :data:`MAX_UNIT_BYTES` at the next rung down -- heading ->
 bullet -> blank-line-delimited paragraph. ``docs/decisions.md`` gets its
-per-entry units from that post-pass, not from the no-headings rule: its one
-heading is the H1 title on line 1, so the heading split yields the whole file
-as a single oversized unit, which is then split at its bullets.
+per-entry units from that post-pass, not from the no-headings rule: its entries
+sit under the H1 title on line 1, so the heading split yields them as a single
+oversized unit, which is then split at its bullets.
+
+``docs/decisions.md`` is also the one **entry log** (:data:`_ENTRY_LOG_STEM`):
+every branch appends its entry at EOF, so a top-level bullet can follow a ``##``
+section it has nothing to do with, and the heading split alone would put it in
+that section's unit under that section's heading (``lode-skv8``). There, the
+top-level bullets after a heading unit's own text each start a unit. See
+:func:`_split_trailing_entries`.
 
 Boundary detection is **fence-aware**: a ``## `` or ``- `` inside a fenced code
 block is someone's example, not document structure. See :func:`_fence_flags`.
@@ -50,6 +57,13 @@ _BULLET_RE = re.compile(r"^-\s")
 _REFERENCE_PROCESS_STEMS = frozenset(
     {"keybindings", "release", "onboarding", "tui", "editing", "test-suite-audit"}
 )
+
+#: The entry log: the one file where a top-level bullet after a heading is a
+#: new entry, not that section's content. Named, not inferred from shape: the
+#: append-at-EOF convention is a fact about this file (``.gitattributes`` gives
+#: it ``merge=union`` by name for the same reason), and in every other doc a
+#: bullet under a heading belongs to that heading's section.
+_ENTRY_LOG_STEM = "decisions"
 
 
 @dataclass(frozen=True)
@@ -138,8 +152,7 @@ def _bullet_boundary(
 ) -> Callable[[int], bool]:
     """Predicate: is line ``i`` an unfenced top-level ``- `` bullet?
 
-    One definition, used by both callers -- the primary rule for a file with no
-    headings at all, and the next rung down when a heading unit is oversized.
+    One definition for every caller.
     """
 
     def is_bullet(i: int) -> bool:
@@ -212,6 +225,28 @@ def _hard_split(
     return _split_range(lines, line_lo, line_hi, paragraph_boundary)
 
 
+def _split_trailing_entries(
+    lines: list[str], fence_flags: list[bool], line_lo: int, line_hi: int
+) -> list[tuple[int, int]]:
+    """Cut the entries appended after an entry-log heading unit off as units.
+
+    ``[line_lo, line_hi]`` starts on its heading. The section's own text ends
+    at its last unfenced column-zero line that is not a top-level bullet: a
+    section's prose sits at column zero, an entry's continuation lines are
+    indented. Each top-level bullet after that line starts a unit; bullets
+    before it are the section's own list and stay in its unit. A section that
+    *ends* in its own bullet list cannot be told from one followed by entries,
+    and that list is cut off too.
+    """
+    is_bullet = _bullet_boundary(lines, fence_flags)
+    own_end = max(
+        i
+        for i in range(line_lo - 1, line_hi)
+        if not fence_flags[i] and lines[i][:1].strip() and not is_bullet(i)
+    )
+    return _split_range(lines, line_lo, line_hi, lambda i: i > own_end and is_bullet(i))
+
+
 def chunk_file(path: Path | str, text: str) -> list[Unit]:
     """Chunk one markdown file's text into :class:`Unit` objects."""
     lines = text.splitlines()
@@ -232,6 +267,17 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
         primary_boundary = _bullet_boundary(lines, fence_flags)
 
     ranges = _split_range(lines, 1, n, primary_boundary)
+
+    if deepest and Path(path).stem == _ENTRY_LOG_STEM:
+        # Heading units only: the text before the first deepest-level heading
+        # is left to the post-pass, which splits it at its bullets.
+        cut: list[tuple[int, int]] = []
+        for lo, hi in ranges:
+            if primary_boundary(lo - 1):
+                cut.extend(_split_trailing_entries(lines, fence_flags, lo, hi))
+            else:
+                cut.append((lo, hi))
+        ranges = cut
 
     final_ranges: list[tuple[int, int]] = []
     for lo, hi in ranges:

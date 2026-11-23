@@ -147,20 +147,37 @@ def _balanced_paren_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
+_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
+# A parenthetical holding one link and nothing else: `([storage.md](storage.md#x-lode-aor))`.
+_LINK_ONLY_PAREN_RE = re.compile(r"\s*\(" + _LINK_RE.pattern + r"\)")
+
+
 def _strip_dev_asides(text: str) -> str:
-    """Drop TOP-LEVEL parenthetical asides that cite a bd ticket id or `show=False` --
+    """Drop TOP-LEVEL parenthetical asides that cite a bd ticket id, `show=False` or a `.py` path --
     maintainer-facing provenance/footer-visibility trivia, not something someone using lode needs
-    to know. Nesting-aware, so a citation like `(see [stack.md](stack.md#lode-123))` is dropped as
-    one whole span rather than leaving a dangling `(see [stack.md])` behind. Leaves any other
-    parenthetical untouched. One right-to-left pass suffices: dropping a top-level span removes its
-    nested spans with it, so no new top-level span is ever exposed by a removal."""
+    to know. Nesting-aware, so a citation like `(see [stack.md](stack.md#x), lode-123)` is judged
+    as one whole span. Leaves any other parenthetical untouched.
+
+    A link whose URL carries a marker (a heading anchor titled `(decided, lode-xxxx)`) is handled
+    FIRST, because the marker inside a URL is not a maintainer aside and must not get the prose
+    parenthetical around the link dropped. Such a link is unwrapped to its label: the anchor it
+    names is not something a derived user page links to. When the link is all its parenthetical
+    holds, the parenthetical goes with it: it is a bare citation with no prose to keep, and
+    unwrapped it would leave a bare `(stack.md)` or a dangling `(below)`.
+
+    One right-to-left pass then suffices: dropping a top-level span removes its nested spans with
+    it, so no new top-level span is ever exposed by a removal."""
+
+    def has_marker_url(link: re.Match[str]) -> bool:
+        return bool(_DEV_ASIDE_MARKER_RE.search(link.group(2)))
+
+    text = _LINK_ONLY_PAREN_RE.sub(
+        lambda m: "" if has_marker_url(m) else m.group(0), text
+    )
+    text = _LINK_RE.sub(lambda m: m.group(1) if has_marker_url(m) else m.group(0), text)
     for start, end in reversed(_balanced_paren_spans(text)):
         if _DEV_ASIDE_MARKER_RE.search(text[start:end]):
             text = text[:start].rstrip() + text[end:]
-    # A markdown link whose `(url)` half was just dropped above (the url pointed at a bd-id
-    # anchor) leaves an orphaned `[label]` with no following `(...)` -- no longer a link, just
-    # bracket noise. Unwrap it to plain text rather than shipping dead-looking brackets.
-    text = re.sub(r"\[([^\]]+)\](?!\()", r"\1", text)
     return text.strip()
 
 

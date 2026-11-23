@@ -3459,6 +3459,40 @@ def test_batch_collect_returns_count_of_ended_batches(
     assert row["status"] == "done"
 
 
+def test_drain_provider_change_resubmits_batch_job_in_the_same_pass(
+    conn: sqlite3.Connection, db_path: Path
+) -> None:
+    """A batch submitted under another provider costs no failed pass (lode-6pjf).
+
+    The submit pre-step claims ``pending`` rows only, so the resubmit below
+    happens only because the collect pre-step re-enqueued the job first.
+    """
+    _insert_note_worker(conn)
+    job_id = _insert_job(conn, "enrich", status="running", batch_handle="batch-old")
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET submit_model = 'm', submit_provider = 'anthropic', "
+            "submit_prompt_ver = ?, batch_collect_failures = 2 WHERE id = ?",
+            (ENRICH_PROMPT_VER, job_id),
+        )
+    client = fake_batch_client(batch_id="batch-new")
+
+    drain(
+        conn,
+        db_path,
+        Settings(llm_provider="openai"),
+        _registry=_noop_registry(),
+        _batch_client=AnthropicProvider(client),
+    )
+
+    client.beta.messages.batches.retrieve.assert_not_called()
+    assert conn.execute(
+        "SELECT status, attempts, batch_handle, batch_collect_failures, "
+        "submit_provider FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone() == ("running", 0, "batch-new", 0, "openai")
+
+
 def test_batch_collect_isolates_one_poisoned_handle_from_a_healthy_one(
     conn: sqlite3.Connection,
     db_path: Path,

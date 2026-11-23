@@ -27,7 +27,9 @@ dependencies = [
                        # dep; see tests/test_tui_markdown_syntax.py.
     "typer",       # CLI (repo convention — never argparse)
     "rich",        # CLI colour/width rendering (lode-l38d.1 — see docs/stack.md)
-    "anthropic",   # Claude API (enrichment Haiku, Q&A Sonnet/Opus)
+    "anthropic>=2", # Claude API (enrichment Haiku, Q&A Sonnet/Opus). Floor: 2.x is
+                    # the only tested SDK major, and the credential-chain order and
+                    # API version docs/stack.md records are 2.x behaviour (lode-pszk).
     "openai<3",    # OpenAI-via-Azure LLMProvider (lode-568v.3) -- Responses API.
                    # Ceiling: 3.0 swaps the default HTTP client to HTTPX2 and
                    # stops auto-installing httpx; moving is a deliberate act --
@@ -124,12 +126,12 @@ addopts = "--strict-markers"
 # intermittent whole-suite hang this ticket root-caused (a leaked root-logger
 # DEBUG level enabling a never-returning latency-probe worker, see
 # tests/conftest.py's `_restore_root_logger_state`). 120s comfortably clears
-# every real test's cost -- the slowest offline tests pay a one-time
-# FastEmbedCrossEncoder model-load of a few seconds each -- while still
-# turning a future wedged test into a named failure long before it could
-# stall a `/land` pass for 20+ minutes. `tests/test_eval_live.py`'s live eval
-# leg (~273s, only runs opted-in via `nox -s eval`) overrides this with its
-# own `@pytest.mark.timeout(...)`.
+# the cost of every test without its own `@pytest.mark.timeout(...)` -- the
+# slowest of those pay a one-time FastEmbedCrossEncoder model-load of a few
+# seconds each -- while still turning a future wedged test into a named
+# failure long before it could stall a `/land` pass for 20+ minutes. That
+# marker goes on a test whose measured cost does not fit (the live eval leg,
+# a few subprocess-heavy offline tests), with the reason beside it.
 timeout = 120
 markers = [
     "slow: real model-load cost (the FastEmbedCrossEncoder reranker or the live eval Q&A leg), not just more assertions — excluded from the fast inner-loop (`nox -s unit` / `pytest -m 'not slow'`), always included in the full suite (`nox -s tests`, the landing gate).",

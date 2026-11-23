@@ -2,11 +2,11 @@
 
 Surfaced by lode-8xg: a test whose mock was silently a no-op still reached the
 *real* ``enrich_version`` -> ``anthropic.Anthropic`` path, and the test still
-passed -- in an unkeyed environment ``anthropic.Anthropic()`` raises at
-construction (before any socket opens) and ``lode.worker.run_one``'s
-``except Exception`` swallows that as an ordinary job failure; in a keyed
-environment it would instead make a live, billed call. Neither world reported
-"this test touched the network".
+passed. In an unkeyed environment ``lode.auth.build_client`` raises
+``AuthError`` before any socket opens; ``lode.worker.run_one`` re-raises it,
+and ``lode add``'s immediate-enrich path drops it by design, so the test stays
+green. In a keyed environment the test would instead make a live, billed call.
+Neither world reports "this test touched the network".
 
 These tests exercise ``tests/conftest.py``'s ``_block_unmocked_network_and_llm_access``
 fixture directly -- none of them carry ``@pytest.mark.network``, so the guard is

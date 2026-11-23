@@ -30,6 +30,30 @@ Newest first.
   (`tests/test_measure_enrich_batch.py`). A record that says "N notes" is checked by counting
   distinct `note_id`s, not rows or request ids.
 
+## 2026-11-21 — `/land`'s isolation replay bounced a reviewed branch on a flaky test
+
+- **What happened:** a `/land` pass merged four accepted branches; the combined re-gate failed
+  one test (`test_reconcile_gap_scans_seek_jobs_by_target`). `scripts/land-replay.sh` then
+  reported `BOUNCED lode-6pjf` on a different test,
+  `tests/test_vectorstore.py::test_periodic_optimize_prunes_history_without_losing_current_rows`.
+  That test is unrelated to the branch's diff (enrich batch collect). It passed 3/3 on the branch
+  tip and passed in the combined run with the branch merged. The lander checked this before
+  running the bounce and declined it. Only `lode-54c7`, the real culprit (reproduced on a scratch
+  merge with trunk), was bounced.
+- **Root cause:** the replay attributes the first red after a merge to that merge, with no check
+  that the failing test is the one the combined re-gate reported or that it fails again. Under
+  load (four full suites back to back) a flaky test was enough to blame an innocent branch. The
+  baseline gate catches ambient breakage, not a flaky test after the baseline.
+- **Consequence:** none, because the lander checked. Acting on the replay verbatim would have
+  run `bd supersede` on a reviewed, correct ticket, opened a rebuild with a false "turned the gate
+  red" finding, and deleted `land/lode-6pjf`.
+- **Rule that prevents a repeat:** before acting on a replay `BOUNCED <id>`, compare its failing
+  test(s) with the combined re-gate's. If they differ, or the test has no plausible link to the
+  branch's diff, re-run that test on the branch tip (and on trunk + branch) before bouncing. A red
+  that does not reproduce is a flaky test: do not bounce, and leave the ticket `ready-for-land`.
+  Mechanising this in `land-replay.sh` (re-run a red once before attributing it) is a decision
+  for the maintainer.
+
 ## 2026-11-21 — `/land`'s union merge detached a correction marker from the entry it corrects
 
 - **What happened:** `land/lode-ucpu` appended its `**Update (lode-ucpu` marker directly after
@@ -59,6 +83,9 @@ Newest first.
     instruction files (`lode-l8b7`), and the merge half of the rule above stays interim until
     that lands. The detached marker is not moved back. Record: `docs/decisions.md`, search
     `lode-tikr`.
+  - **Update (lode-l8b7, 2026-11-21):** the merge half of the rule above is no longer interim.
+    The step now lives in `.claude/skills/land/SKILL.md` (after the batch merge, Section 3) and
+    `.claude/agents/coding.md` (rebase pickup, step 3).
 
 ## 2026-11-20 — A decision ticket stated a failure that the code cannot reach, and the maintainer ruled on it
 

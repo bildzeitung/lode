@@ -27,11 +27,12 @@ doesn't have) still reached the *real* ``enrich_version`` -> ``anthropic.Anthrop
 path, and the test still passed. That happens in both directions and neither one
 reports "this test touched the network":
 
-- **unkeyed** (CI, no ``ANTHROPIC_API_KEY``): ``anthropic.Anthropic()`` raises
-  ``anthropic.AnthropicError`` at *construction* — its own ``active_config``
-  profile lookup fails before a socket is ever opened — and
-  ``lode.worker.run_one``'s ``except Exception`` (a legitimate, broad job-failure
-  handler, not a bug this ticket fixes) swallows it as an ordinary job failure.
+- **unkeyed** (CI: no ``ANTHROPIC_API_KEY``, and nothing else the SDK's credential
+  chain resolves): ``lode.auth.build_client`` raises ``AuthError`` (its docstring
+  gives the two ways the SDK reports "no credentials"). ``lode.worker.run_one``
+  resets the job to ``pending`` and re-raises the ``AuthError`` (lode-9yy), and a
+  caller that drops it by design, as ``lode add``'s immediate-enrich path does,
+  leaves the test green.
   A socket block alone would never fire here: no socket is ever opened.
 - **keyed** (a dev machine with the key exported): construction succeeds and a
   real, billed Haiku/Sonnet call goes out.
@@ -1056,8 +1057,8 @@ def _block_unmocked_network_and_llm_access(
     # Guard 1: real anthropic.Anthropic()/AsyncAnthropic() construction.
     # Unconditional regardless of ANTHROPIC_API_KEY -- it fires before the SDK's
     # own credential-chain logic runs, so it closes the unkeyed-CI gap (where
-    # construction itself raises, before any socket opens) exactly as it closes
-    # the keyed-dev-machine gap.
+    # lode.auth.build_client raises AuthError, before any socket opens) exactly as
+    # it closes the keyed-dev-machine gap.
     if not marked_network:
         import anthropic
 
@@ -1765,7 +1766,10 @@ def nox_session_tags(node: ast.FunctionDef) -> list[str]:
 # tests/test_bd_list_limit_gate.py's inline-span scan (`inline_violations`) is
 # a further consumer -- of `fence_scan` directly, since lode-kjei collapsed its
 # own open/close loop onto the same generator `bash_fence_blocks` is now built
-# on (see `fence_scan` below). A change to the rules stated in `fence_scan`'s
+# on (see `fence_scan` below).
+# tests/test_instruction_rule_inventory_gate.py's `_outside_fences` reads
+# `fence_scan` directly too, keeping only the lines outside every fence
+# (lode-4615). A change to the rules stated in `fence_scan`'s
 # docstring changes what every gate above considers "executed"/"fenced", so the
 # rules are stated ONCE there and nowhere else -- on the TEST side.
 # `scripts/check_links.py`'s `_content_lines` makes the same "single home of

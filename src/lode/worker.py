@@ -819,7 +819,9 @@ def _batch_collect_enrich(
     Finds all distinct ``batch_handle`` values on running enrich jobs, calls
     :func:`lode.enrich.collect_enrich_batch` for each, and returns the total
     count of jobs whose batch ended (results processed this pass — not all may
-    have been individually ``done``, some may be ``failed`` / ``dead``).
+    have been individually ``done``, some may be ``failed`` / ``dead``). A
+    batch whose jobs ``collect_enrich_batch`` re-enqueued because the provider
+    changed since submit (lode-6pjf) is counted too, though nothing was polled.
 
     Batches still in progress are left untouched; they will be checked again on
     the next drain tick. This IS the resume-on-restart mechanism (lode-i05.5):

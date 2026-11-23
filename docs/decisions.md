@@ -4925,6 +4925,22 @@ entries below from being rewritten to chase the current tree.)
   question can be settled empirically once the tool exists. Non-goal, inherited and unchanged: no
   existing entry in this file is rewritten, compacted or moved — this work changes how entries are
   **found**, never what they say.
+  - **Update (lode-skv8, 2026-11-21):** the single-heading premise above no longer holds: this file
+    now has `##` sections, and entries are appended after them. The heading split put each such
+    entry in the unit of the section before it. `scripts/docs_index_chunker.py` now names this file
+    as the one entry log: in it, each top-level bullet after a `##` section's own text starts a
+    unit. A section's own text ends at its last column-zero line that is not a bullet, so a
+    section's own list with prose after it stays in the section's unit. A section that ends in its
+    own list is cut at that list, since nothing tells it from appended entries. This is a step for
+    this file only, on top of the one rule above. The mechanism is the builder's and the technical
+    review's choice under the `lode-tikr` ruling, which asked for the fix and named no rule. The
+    file is named, not detected by shape: as first built, the test was "the text before the first
+    deepest-level heading is over `MAX_UNIT_BYTES` and holds top-level bullets", which
+    `stack.md`, `configuration.md` and `agents-workflow.md` also meet, and their sections were cut
+    at their bullets (measured at review: `stack.md` went from 28 units to 84). Not fixed here, and
+    the same before this change: the split level is the deepest heading in the file, so one `###`
+    anywhere in this file puts every `##` section in the unit of the entry before it (run at
+    review on this file with a `###` appended; open in `lode-kys3`).
 
 - **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
   decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent
@@ -4977,6 +4993,11 @@ entries below from being rewritten to chase the current tree.)
       append is on the receiving side: at `/land`, a branch's marker merged into a trunk that
       already has the append; in a rebase pickup, trunk's marker merged into a branch that holds
       the append. With the sides swapped the marker stays on its entry.
+  - **Update (lode-w7gp, 2026-11-21, maintainer):** a second mitigation is ruled for the third
+    failure mode: `/land` is to merge a marker-adding branch ahead of the rest of its batch (build:
+    `lode-g78l`). As ruled it covers same-batch collisions only, and review traced same-batch
+    shapes it also misses. The by-hand step stays. Ruling, limit and trace: the `##` entry
+    "(decided, lode-w7gp)" below.
 
 - **Recording the rejected alternatives, the non-impact and the ours-side-only caveat for the union
   merge driver (`lode-fp9l`, 2026-08-09).** Follow-up to the entry directly above (`lode-4jtc.1`),
@@ -6155,6 +6176,9 @@ entries below from being rewritten to chase the current tree.)
   - **Update (lode-w18a.10, 2026-11-21):** the `code-reviewer.md` inventory approved under this
     entry was amended by maintainer ruling before its cut; see the `lode-w18a.10` entry
     "code-reviewer.md rule inventory amended before the `lode-w18a.9` cut".
+  - **Update (lode-4615, 2026-11-21):** the gate in part (1) now fails unless each pinned phrase
+    matches exactly once in its file outside fenced code blocks, the property the `lode-w18a.10`
+    entry states for its inventory. From a `lode-w18a.11` review follow-up; no maintainer ruling.
 
 - **Update (lode-5x01, 2026-11-16) — a filename typo in `lode-s09w`'s `uv` migration entry above.**
   That entry's bullet "`scripts/python-init.sh`, `venv-install` and `compile-lock.sh` are deleted
@@ -6528,6 +6552,11 @@ entries below from being rewritten to chase the current tree.)
   - **Not taken.** (a) copying markers into sub-units breaks the tiling invariant; (c) an authoring
     rule would not cover the existing markers and rests on the author knowing the entry is
     oversized; (d) cannot know which paragraph a marker corrects.
+  - **Update (lode-skv8, 2026-11-21):** "It has one" in the technical-review bullet above no longer
+    holds: this file now has `##` sections as well as the H1, and entries are appended after them.
+    The chunker cuts each such entry into its own unit; the rule is in the `lode-skv8` Update on
+    the `lode-t6o1` entry. The lookup described here is unchanged: those units start on a
+    top-level bullet, which is a structural line.
 
 - **The marker gate does not exempt top-level entry heads; the over-match is accepted (`lode-hp12`,
   2026-11-19, maintainer).** `lode-llxw` ruled that a new correcting entry is not a marker and its
@@ -6735,6 +6764,17 @@ the SDK default, or pass `open_telemetry=False` where lode constructs its Anthro
     tracing off even with `ANTHROPIC_OPEN_TELEMETRY=true` in the environment. The option exists
     in the locked 1.17.0, so this does not wait on `lode-4uyu`'s 2.x bump, whose builder carries
     the kwarg across the construction sites it touches.
+  - **Update (lode-pszk, 2026-11-21, maintainer):** floor the `anthropic` requirement at `>=2`,
+    with no ceiling. After `lode-4uyu`, 2.x is the only tested SDK major, and `docs/stack.md`'s
+    credential-chain order and the 2026-10-21 API version are 2.x behaviour, so a 1.x install
+    would contradict documented auth behaviour: a version that demonstrably matters
+    ([Dependency locking](stack.md#dependency-locking-lode-g2741)). No `<3` ceiling, since nothing
+    shows 3.x breaks lode. This supersedes the ticket's "floor at the first `open_telemetry`
+    release" and makes its probe unnecessary (2.12.0 accepting `open_telemetry=False` was already
+    verified at `lode-4uyu`'s review).
+    - **Measured at review, not part of the ruling:** anthropic 2.0.0, the lowest release the
+      floor accepts, constructs a client with `open_telemetry=False` and reports tracing off, the
+      same as the locked 2.12.0 (construction only, no request sent).
   - **Update (lode-ucpu, 2026-11-20, maintainer):** the "Not decided here" question is settled:
     widen `lode-4wgq` to also record `provider_identity(settings)` and `ENRICH_PROMPT_VER` as read
     at submit, on the refusal and success paths alongside the submit-time model. Neither
@@ -6849,6 +6889,35 @@ the SDK default, or pass `open_telemetry=False` where lode constructs its Anthro
     part of its rule) apply to every inventory and are stated in `docs/agents-workflow.md`. No
     further re-approval is needed: closing `lode-w18a.11` unblocks `lode-w18a.9`.
 
+## A derived page strips a bd-id-anchored link but keeps the prose parenthetical around it (decided, lode-v4k1)
+
+Raised 2026-11-21 at `lode-cav3`'s review. `_strip_dev_asides` in `scripts/generate_derived_docs.py`
+matched its maintainer-aside marker (a bd id, `show=False`, a `.py` path) over a span's raw text,
+link URLs included. Most deep-link anchors into `configuration.md` and `stack.md` carry a bd id
+because the headings read `(decided, lode-xxxx)`, so a link's `(url)` half was dropped as an aside
+(leaving an orphaned `[label]`, unwrapped to plain text), and a prose parenthetical whose only bd
+id sat inside a link URL was dropped whole. Options were (a) leave it, (b) match visible text only
+and keep the link, rewriting same-page fragments, (c) keep stripping links but stop dropping the
+whole parenthetical.
+
+**Decided (maintainer, 2026-11-21): (c).** A link whose URL carries a marker is unwrapped to its
+label before the aside pass, so the marker inside a URL no longer drops the surrounding prose
+parenthetical. Derived user pages do not link out to unpublished maintainer docs. A parenthetical
+whose visible text carries a marker is still dropped. `docs/stack.md`'s "Derived reference pages"
+states this; the old orphan-`[label]` unwrap is gone because no `(url)` half is dropped any more,
+which also stops it eating the brackets of backticked TOML table names such as
+`[cli.theme.styles]` in `docs/settings.md`.
+
+The generator is narrower than the ruling's sentence on maintainer docs: a link with no marker in
+its URL is emitted as written, as it was before, whether or not its target is published (the theme
+rows in `docs/settings.md` still link `decisions.md`).
+
+**Not in the ruling; settled at the technical review of `lode-v4k1`.** A parenthetical that holds
+nothing but a marker-URL link, such as `([storage.md](storage.md#...-lode-aor))`, is dropped whole,
+as it was before this change. The ruling speaks of a prose parenthetical, and this one has no
+prose. As first built it was unwrapped like any other, which ended five `docs/settings.md` rows
+with `(storage.md)`, `(externals.md)`, `(stack.md)` twice, and, on the `enrichment_llm` row,
+`(below)`, pointing at a "Model provenance" section the page does not carry.
 ## A detached `lode-ucpu` Update stays where the union merge put it (decided, lode-tikr)
 
 Maintainer ruling 2026-11-21. `lode-ucpu`'s Update sits under the `lode-sflg` `##` section, the
@@ -6879,3 +6948,55 @@ rules stay scoped as built, with no widening to `ESCALATION:` notes, `/epic-audi
 decision filings, records beyond this file, or claims with no lode code path. Reason: no incident has
 been observed through any of them, and epic `lode-w18a` is cutting these same instruction files.
 Revisit only on an observed incident. No build ticket.
+
+## `/land` orders a marker-adding branch ahead of the rest of its batch; cross-batch detachment still ships (decided, lode-w7gp)
+
+Raised 2026-11-21 at `lode-l8b7`'s technical review. `lode-l8b7` adds the by-hand check from the
+`lode-tikr` ruling to `/land`'s batch merge: after the merge, confirm each Update marker still
+follows the entry it corrects, and report one that does not. As built, `/land` only reports, so a
+detached marker lands every time it is found and, after the push, can be repaired only by a pointer
+Update (the `lode-ucpu` case). The question was whether `/land` should do more than report. The
+options were (a) leave it as built, (b) kick a branch whose marker the merge detached back
+`needs-rebase`, (c) order marker-adding branches ahead of the rest of the batch, and (d) report and
+also write the pointer Update text as a ready patch.
+
+**Decided (`lode-w7gp`, 2026-11-21 and 2026-11-22, maintainer):** option (c). Option (b), the
+kick-back, is revisited only on an observed cross-batch incident. The maintainer's two statements
+in full: on 2026-11-21, "w7gp - go with (c)"; on 2026-11-22, "endorse the revisit-(b) line." The
+line endorsed is in the ticket's note on the first statement, written by the `/code` session that
+took it: "(b) kick-back is not built; revisit only on an observed cross-batch incident." Once
+`lode-g78l` lands, `/land`'s Section 3a orders any accepted branch that adds an Update marker to
+`docs/decisions.md` ahead of the other branches in the batch; until then Section 3a has no such
+rule. The mechanism is the one in the `lode-4jtc.1` entry's `lode-tikr` Update: union writes the
+receiving side's lines first, so a marker merged before a same-batch EOF append stays attached to
+its entry.
+
+**Accepted limit**, as the ticket stated it for option (c): same-batch collisions only. When the
+EOF append is already on `trunk` from an earlier batch (the cross-batch case), the merge still
+detaches the marker; that case still ships and is reported by the `lode-l8b7` by-hand check, which
+stays as built. Not every same-batch collision is covered either: see the trace below, which is
+not part of the ruling.
+
+**Not taken:** (a), (b) and (d). Neither statement gives reasons. The ticket description carries
+(b)'s cost and what was not checked about it.
+
+**Traced at technical review, not part of the ruling.** Scratch repo, this file `merge=union`,
+real `git merge --no-ff` in batch order; `lode-tikr`'s review had traced the first case with
+`git merge-tree`. "Last entry" means the file's last entry before the batch.
+
+- A branch with a marker on the last entry, then a branch with an EOF append: the marker stays on
+  its entry. In the other order it lands under the appended section. This is the case the ruling
+  orders.
+- As above, but the appending branch also adds a marker, on the last entry or on an older one.
+  Both branches are then marker-adding, and the ruling does not order them. If the appending
+  branch merges first, the other branch's marker on the last entry lands under the appended
+  section. A branch that corrects an entry with a new entry, plus the marker the preamble's
+  `lode-llxw` rule requires, has this shape.
+- Two branches that each add a marker on the last entry and an EOF append: in either order, the
+  second branch's marker lands under the first branch's section.
+
+The `lode-l8b7` check still reports the last two. Not ruled on: an order between two marker-adding
+branches, and how marker-first sits with Section 3a's base-before-dependent order. Both are noted
+on `lode-g78l`.
+
+Decision only; the build is `lode-g78l`, an edit to Section 3a of `.claude/skills/land/SKILL.md`.
