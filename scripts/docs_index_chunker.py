@@ -23,7 +23,8 @@ that section's unit under that section's heading (``lode-skv8``). There the
 split level is capped at ``##`` (``lode-kys3``), and the top-level bullets after
 a heading unit's own text each start a unit. See :func:`_split_trailing_entries`.
 A ``##`` section still over :data:`MAX_UNIT_BYTES` is cut at every heading inside
-it before the post-pass reaches it (``lode-vt7x``).
+it before the post-pass reaches it (``lode-vt7x``); :func:`heading_cut_sections`
+names those sections.
 
 Boundary detection is **fence-aware**: a ``## `` or ``- `` inside a fenced code
 block is someone's example, not document structure. See :func:`_fence_flags`.
@@ -249,12 +250,14 @@ def _split_trailing_entries(
     return _split_range(lines, line_lo, line_hi, lambda i: i > own_end and is_bullet(i))
 
 
-def chunk_file(path: Path | str, text: str) -> list[Unit]:
-    """Chunk one markdown file's text into :class:`Unit` objects."""
-    lines = text.splitlines()
+def _ranges(
+    path: Path | str, lines: list[str]
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """The line range of every unit of a file, and the ranges of the entry-log
+    sections that were cut at the headings inside them (``lode-vt7x``)."""
     n = len(lines)
     if n == 0:
-        return []
+        return [], []
     fence_flags = _fence_flags(lines)
     split_level = _deepest_heading_level(lines, fence_flags)
     is_entry_log = Path(path).stem == _ENTRY_LOG_STEM
@@ -276,6 +279,7 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
 
     ranges = _split_range(lines, 1, n, primary_boundary)
 
+    heading_cut: list[tuple[int, int]] = []
     if split_level and is_entry_log:
 
         def is_heading(i: int) -> bool:
@@ -289,15 +293,16 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
                 cut.append((lo, hi))
                 continue
             section, *entries = _split_trailing_entries(lines, fence_flags, lo, hi)
+            pieces = [section]
             if _unit_bytes(lines, *section) > MAX_UNIT_BYTES:
                 # The capped split level leaves a deeper heading out of the
                 # boundaries, so an oversized section is cut at every heading
                 # in it before the post-pass cuts at bullets or paragraphs
-                # (``lode-vt7x``). A heading is a structural line, which is
-                # all ``split_entry_markers`` needs of a cut made here.
-                cut.extend(_split_range(lines, *section, is_heading))
-            else:
-                cut.append(section)
+                # (``lode-vt7x``).
+                pieces = _split_range(lines, *section, is_heading)
+                if len(pieces) > 1:
+                    heading_cut.append(section)
+            cut.extend(pieces)
             cut.extend(entries)
         ranges = cut
 
@@ -306,10 +311,30 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
         final_ranges.extend(
             _hard_split(lines, fence_flags, lo, hi, try_bullet=bool(split_level))
         )
+    return final_ranges, heading_cut
 
+
+def heading_cut_sections(path: Path | str, text: str) -> list[tuple[int, int]]:
+    """Line ranges of the entry-log ``##`` sections :func:`chunk_file` cuts at
+    the headings inside them (``lode-vt7x``); ``[]`` for any other file.
+
+    Each range is the section's own text, without the entries appended after
+    it. Public because ``split_entry_markers`` in
+    ``scripts/docs_index_query.py`` cannot find it from the units: a bullet of
+    the section's own list, cut off by the post-pass under an oversized
+    sub-heading, opens a unit just as an appended entry does.
+    """
+    _, heading_cut = _ranges(path, text.splitlines())
+    return heading_cut
+
+
+def chunk_file(path: Path | str, text: str) -> list[Unit]:
+    """Chunk one markdown file's text into :class:`Unit` objects."""
+    lines = text.splitlines()
+    ranges, _ = _ranges(path, lines)
     doc_class = classify(path)
     units = []
-    for lo, hi in final_ranges:
+    for lo, hi in ranges:
         body_lines = lines[lo - 1 : hi]
         body = "\n".join(body_lines)
         units.append(

@@ -5102,6 +5102,25 @@ entries below from being rewritten to chase the current tree.)
     `### B`, since each sub-heading starts a block of its own; open in `lode-pe38`. (2) The cut
     is at every heading level at once, so a `###` directly followed by a `####` becomes a unit
     holding only its heading line, even where the `###` and its sub-sections would fit in one.
+  - **Update (lode-pe38, 2026-11-23):** limit (1) of the `lode-vt7x` Update above no longer
+    holds. A `##` section of this file that the chunker cut at the headings inside it is now one
+    entry for the split-entry `NOTE`: a hit on any unit of it, the `##` unit included, lists every
+    Update marker in the section's own text, so a hit under `### A` is pointed at an Update under
+    `### B`. The entries appended after the section are not part of it. The chunker reports the
+    range of each such section (`heading_cut_sections`) and `split_entry_markers` reads it; this
+    is the technical review's mechanism, with no maintainer ruling. As first built, the lookup
+    worked the section out from each unit's first line: a unit opening on a `###` or on no
+    structural line continued the section of the unit before it. Run at review on synthetic
+    text, with `### A` over the limit and holding eight of the section's own bullets: the
+    post-pass cut `### A` at those bullets, each bullet unit started a group of its own, and the
+    `##` unit and the `### A` unit still got no `NOTE` for the Update under `### B`. A unit's
+    first line does not tell a section's own bullet from an entry appended after the section;
+    the chunker's cut does. Measured at review with trunk's chunker and this one over all 21
+    `docs/*.md` files: the unit lists are identical, and no section of this file is cut at its
+    headings, so no `NOTE` printed today changes. One limit, run at review on synthetic text, not
+    reachable today: a `##` section over `MAX_UNIT_BYTES` with no heading inside it is still cut
+    at its own bullets, and a hit on one of those units gets no `NOTE` for an Update elsewhere in
+    the section (what is left of limit (2) in the `lode-kys3` Update); open in `lode-tb0j`.
 
 - **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
   decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent
@@ -6718,6 +6737,12 @@ entries below from being rewritten to chase the current tree.)
     The chunker cuts each such entry into its own unit; the rule is in the `lode-skv8` Update on
     the `lode-t6o1` entry. The lookup described here is unchanged: those units start on a
     top-level bullet, which is a structural line.
+  - **Update (lode-pe38, 2026-11-23):** "The entry is found as the block between the structural
+    lines" in the Decided bullet above no longer holds for one case, and "makes no assumption
+    about how the file is chunked" no longer holds with it: a `##` section of this file that the
+    chunker cut at the headings inside it is one entry, and the lookup asks the chunker for that
+    section's range. The rule is in the `lode-pe38` Update on the `lode-t6o1` entry. No section
+    of this file is cut that way today.
 
 - **The marker gate does not exempt top-level entry heads; the over-match is accepted (`lode-hp12`,
   2026-11-19, maintainer).** `lode-llxw` ruled that a new correcting entry is not a marker and its

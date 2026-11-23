@@ -350,32 +350,35 @@ def test_split_entry_markers_in_a_section_cut_at_its_h3_headings(
     tmp_path: Path,
 ) -> None:
     """A ``##`` section over MAX_UNIT_BYTES is cut at its ``###`` headings
-    (lode-vt7x). Each is a structural line, so the block a hit belongs to is
-    the sub-heading's own: every paragraph piece of an oversized sub-heading
-    points at that sub-heading's marker, and no unit outside it does."""
+    (lode-vt7x), and the section is one entry (lode-pe38): an Update under
+    ``### B`` is pointed at by every unit of the section. ``### A`` is itself
+    oversized and holds the section's own list, so its bullets are units that
+    open like an appended entry; the entry after the section is not one of
+    them."""
     paragraph = "word " * 400
+    own_bullets = [f"- own bullet {i} " + "x" * 3000 for i in range(8)]
+    marker = "**Update (lode-test, 2026-01-01)** -- corrected."
     text = (
         "# Title\n\n## Section\n\nintro\n\n### A\n\n"
-        + "\n\n".join([paragraph] * 6)
+        + "\n".join(own_bullets)
         + "\n\n### B\n\n"
         + "\n\n".join([paragraph] * 10)
-        + "\n\n**Update (lode-test, 2026-01-01)** -- corrected.\n"
+        + f"\n\n{marker}\n"
+        "- **Entry after.** e\n"
+        "  **Update (lode-other)** -- not the section's.\n"
     )
     doc = tmp_path / "decisions.md"
     doc.write_text(text, encoding="utf-8")
-    marker_line = len(text.splitlines())
+    marker_line = text.splitlines().index(marker) + 1
     units = _query_module._build._chunker.chunk_file(doc, text)
-    assert [u.first_line for u in units[:4]] == [
-        "# Title",
-        "## Section",
-        "### A",
-        "### B",
-    ]
-    pieces = units[3:]
-    assert len(pieces) > 1
+    firsts = [u.first_line for u in units]
+    assert firsts[:3] == ["# Title", "## Section", "### A"]
+    assert firsts[3:11] == own_bullets
+    assert firsts[11] == "### B"
+    assert firsts[-2:] == [marker, "- **Entry after.** e"]
     for u in units:
         assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
-            [marker_line] if u in pieces else []
+            [marker_line] if u in units[1:-1] else []
         )
 
 
@@ -386,7 +389,8 @@ def test_split_entry_markers_agrees_with_the_chunker_on_the_real_decisions_md() 
 
     Entry boundaries are taken from the chunker's own units rather than from a
     second line scan: a unit that does not open on a structural line continues
-    the entry of the unit before it.
+    the entry of the unit before it, and so does a unit inside a section the
+    chunker reports as cut at its headings.
     """
     path = REPO_ROOT / "docs" / "decisions.md"
     text = path.read_text(encoding="utf-8")
@@ -394,12 +398,14 @@ def test_split_entry_markers_agrees_with_the_chunker_on_the_real_decisions_md() 
     flags = _query_module.fence_flags(lines)
     chunker = _query_module._build._chunker
 
+    sections = chunker.heading_cut_sections(path, text)
     entries: list[list] = []
     for unit in chunker.chunk_file(path, text):
-        if not entries or chunker.is_structural_line(unit.first_line):
-            entries.append([unit])
-        else:
+        in_section = any(lo < unit.line_lo <= hi for lo, hi in sections)
+        if entries and (in_section or not chunker.is_structural_line(unit.first_line)):
             entries[-1].append(unit)
+        else:
+            entries.append([unit])
 
     noted = 0
     for entry in entries:
