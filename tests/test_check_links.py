@@ -208,6 +208,26 @@ class TestDocsSlugCopyAgrees:
         assert got == {"out", "real"}
         assert docs_slug.anchor_slugs(text) == got
 
+    @pytest.mark.parametrize("marker", ["```", "~~~", "  ```"])
+    def test_anchor_tag_in_a_fence_info_string_is_not_an_anchor(self, tmp_path, marker):
+        """A fence opener's info string is not content, so a tag there offers
+        no anchor to either copy (lode-wo3w)."""
+        text = f'{marker}<a id="x"></a>\ncode\n{marker.strip()}\n## Out\n'
+        path = _write(tmp_path, "a.md", text)
+        got = check_links._slugs_for_file(path, {})
+        assert got == {"out"}
+        assert docs_slug.anchor_slugs(text) == got
+
+    def test_anchor_tag_after_a_three_backtick_span_is_an_anchor(self, tmp_path):
+        """A line starting with a three-backtick inline span opens no fence
+        (lode-7jwe), so it has no info string: a tag after the span is an
+        anchor to both copies."""
+        text = '```span``` <a id="kept"></a>\n## Out\n'
+        path = _write(tmp_path, "a.md", text)
+        got = check_links._slugs_for_file(path, {})
+        assert got == {"kept", "out"}
+        assert docs_slug.anchor_slugs(text) == got
+
     def test_anchor_tag_inside_an_inline_code_span_is_not_an_anchor(self, tmp_path):
         """An explicit anchor tag inside an inline code span is literal code,
         so neither anchor-set copy counts it (lode-8raj)."""

@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import re
 
-from lode.fence_parsing import fence_flags
+from lode.fence_parsing import fence_flags, match_fence_marker
 
 # Character-for-character `scripts/check_links.py`'s own `_LINK_TEXT_RE`,
 # `[^\]]*` included: the two differ only on a heading whose link text is EMPTY
@@ -81,7 +81,8 @@ def anchor_slugs(text: str) -> set[str]:
     suffixes when a heading repeats -- plus the literal id of every explicit
     ``<a id="...">`` / ``<a name="...">`` anchor. Headings inside fenced code
     blocks are not headings and are skipped; an explicit anchor tag inside one
-    is skipped for the same reason, as is one inside an inline code span.
+    is skipped for the same reason, as is one inside an inline code span or
+    in the info string on a fence's opening line.
 
     ``scripts/check_links.py::_slugs_for_file`` is the authority for this
     algorithm, and its docstring states the limits of the code-span rule --
@@ -91,7 +92,10 @@ def anchor_slugs(text: str) -> set[str]:
     slugs: set[str] = set()
     seen: dict[str, int] = {}
     for line, fenced in zip(lines, fence_flags(lines), strict=True):
-        if fenced:
+        # `fence_flags` reports a fence's opening line as not fenced, but the
+        # text after its marker is the info string, not content: the gate's
+        # `_content_lines` yields no marker line at all.
+        if fenced or match_fence_marker(line.strip()):
             continue
         heading = _ATX_HEADING_RE.match(line)
         if heading:
