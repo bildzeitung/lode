@@ -83,7 +83,8 @@ def fence_flags(lines: list[str]) -> list[bool]:
     spot). One consequence, deliberate: a would-be closer carrying trailing
     content (```` ```python ````) is content, not a close -- CommonMark's rule,
     and the rule ``fence_scan`` has always applied. Measured against the real
-    ``docs/`` corpus: unit count unchanged.
+    ``docs/`` corpus: unit count unchanged (929 before and after the
+    backtick-info opener rule in :func:`match_fence_marker`).
     """
     flags = []
     open_marker: str | None = None
