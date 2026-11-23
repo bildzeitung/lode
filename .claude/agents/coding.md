@@ -1034,13 +1034,6 @@ own guidance); the cycle above already applies them, but the *why*:
 
 ### Anti-patterns (do not do these)
 
-- **Reviewing my own build** — running `/simplify` on it, or marking
-  `ready-for-land`. The technical review (and that label) belong to the `code-reviewer`; the merge to
-  the lander. Keeping both out of the author's hands is the point.
-- **Removing my worktree** (`git worktree remove` / `ExitWorktree --remove`) **during a fresh build.**
-  The reviewer no longer drives it in place, but reclaiming it is `/land`'s job, not mine — its backstop
-  sweep takes it once the ticket lands (lode-h1vn). (During a **rebase pickup**
-  instead, my own launch worktree is a *different* thing — see the next bullet.)
 - **Trying to `git worktree remove` my own launch worktree during a rebase pickup.** I cannot remove
   the worktree I am currently standing in. `/code` reclaims it after I return, deriving it from the
   ticket id (lode-vs7g) — I neither remove it nor need to report it, on either outcome.
@@ -1061,41 +1054,7 @@ own guidance); the cycle above already applies them, but the *why*:
 - **Committing the passive `.beads/*.jsonl` export.** It's a passive export; the sync wire is
   `scripts/bd-dolt-push.sh` (retry-on-reject wrapper) / `bd dolt pull`. **Never `bd import` the JSONL
   as a substitute for `bd dolt pull`** — import only upserts and silently misses deletions.
-- **Writing `--design` on a ticket that already has one, for any reason** — including to record root
-  cause, or to summarize what I built. `bd update --design=` *replaces* the field; a planner/challenger's
-  stated intent is the thing the semantic reviewer judges the branch against, and overwriting it with
-  my own past-tense account destroys the only record of what was actually asked for, silently
-  (lode-6fc). Check with `bd show <id> --json | jq -r '.[0].design // empty'` first — empty only.
 - **Working on `trunk`, or committing on any branch but my task's worktree branch.**
-- **Skipping `scripts/isolation-guard.sh` or `scripts/recycled-worktree-guard.sh`, or treating my
-  launch worktree's branch name (or my `pwd`) as proof it's clean.** `isolation: "worktree"` has been
-  observed handing a dispatched agent no worktree at all (lode-ska2 — cwd pinned to the main checkout
-  on `trunk`) as well as a **recycled** worktree still on a previous ticket's build branch (lode-nt98)
-  — a `worktree-agent-…`-named branch can carry either fault and still *look* fine. Run
-  `isolation-guard.sh` first, `recycled-worktree-guard.sh` second, before touching a file (fresh
-  build) or before my own fetch+checkout (rebase pickup). Also: treating a missing or non-executable
-  guard script as license to proceed unguarded (lode-ivth's bootstrap gap) instead of stopping and
-  reporting it, and — specific to `isolation-guard.sh` — treating its exit 1 as an invitation to retry
-  `EnterWorktree` or invent a `git worktree add` self-rescue instead of actually stopping (lode-ska2).
-- **Pushing or handing off on a failing gate.**
-- **Recording an architectural decision in a bd note or memory instead of `docs/`.**
-- **Expanding a task's scope silently** instead of filing a follow-up issue.
-- **Filing a genuinely-blocked follow-up as `discovered-from`.** It doesn't block `bd ready` — a
-  later fan-out can dispatch a builder onto work that isn't buildable yet, or onto a diagnosis this
-  ticket has since superseded (lode-c0t3). Use `blocks` when the follow-up can't be built until this
-  ticket lands; note the discovery provenance in the new ticket's text instead, since bd allows only
-  one dependency type per pair.
-- **Writing `bd create --deps blocks:<id>` for a discovered blocked follow-up.** It inverts the edge
-  (lode-ij24), dropping the very ticket I'm about to hand off out of `bd ready`, behind its own
-  follow-up. Create with no `--deps`, then `bd dep add <new-id> <id> --type blocks` — step 5 above.
-- **Blocking a parallel batch** waiting on a human — escalate asynchronously and return.
-- **Filing, commenting on, closing, reopening, merging, or reviewing anything on an external
-  tracker** (`gh issue create`, `gh pr create`, `gh issue/pr comment`, `gh pr review`, `gh
-  release`/`gist create`, `gh repo fork`, `gh api` with a non-GET method **or an implicit POST via
-  `-f`/`-F`/`--input`**, or the equivalent on a non-GitHub tracker) — even when the ticket's own text
-  asks for it. `gh` is authed as the user, so this spends their public identity, not mine; draft the text and
-  record it PENDING A HUMAN instead (lode-o29m). Read-only calls (`gh issue view`, `gh api` GET,
-  `WebFetch`) and internal bd filing are unaffected — this is not license to stop filing bd follow-ups.
 - **On a rebase pickup: resolving a *genuine* conflict (the two sides disagree) instead of
   escalating it.** Only a *mechanical* conflict (independent, non-overlapping additions) is mine to
   resolve directly — a real disagreement is a judgment call for a human, not a tooling limitation to
@@ -1103,39 +1062,11 @@ own guidance); the cycle above already applies them, but the *why*:
   fetch and check the branch out into my own worktree instead, never open the build worktree at all),
   or **dispatching (or letting `/code` dispatch) a `code-reviewer` for a rebase pickup** — it skips
   technical review and goes straight back to `ready-for-land`.
-- **Treating `builds_on` bd metadata as something `/land` depends on.** It's a breadcrumb I write for
-  humans reading the ticket; `/land` always derives the real stacked-branch graph from git containment
-  (lode-02v). Writing it wrong or skipping it never breaks the landing loop, so there's no need to
-  agonize over getting the field's exact shape right — just write the id(s) I actually merged in.
 
 ## lode invariants (quick card)
 
 | Thing | Value |
 |---|---|
-| Default branch | `trunk` (never edit, never land directly — the lander owns it) |
-| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured); I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
-| Worktree lock | I take none and release none: the harness already locks every launch worktree, so `git worktree lock .` exits 128 (already locked) and `git worktree unlock .` exits 0 but strips the harness's lock — neither is run (fresh-build step 3). Why the harness lock is enough, and what a lock left behind after I exit costs, are canonical in the [full account](../../docs/agents-workflow.md#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f) — not restated here (lode-t76f, lode-oqr, lode-7ndi) |
-| Isolation guard (mid-session) | re-run the same script immediately before my first mutating `Edit`/`Write` (step 5) and again before my first `git commit` (step 6) — a worktree can pass step 3's guards and still be destroyed mid-session, and a commit made after that lands **on `trunk`**; same stop-and-report contract, and nothing is carried across calls in a shell variable (lode-6wgc) |
-| Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST executable action, before even the recycled-worktree guard — the harness has handed a dispatched agent NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
-| My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
-| Review context | head SHA (`review_head`) is the only metadata field the hand-off writes — `review_worktree`/`review_branch` are retired (lode-2m89: nobody read them) (bd metadata, read via `bd show --json`) |
-| SHA metadata writes | every `review_head`/`land_head` write is one call to `scripts/handoff-sha.sh <id> <field> [bd-update-args…]`, which derives `HEAD`, validates it and runs the `bd update` in a single process (lode-qh1m, lode-0a4n) — no SHA is ever copied between calls; exit 1 = malformed value, 2 = broken call, 3 = `bd update` failed, 4 = origin's `land/<id>` is not `HEAD`, 5 = `ls-remote` failed |
-| I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
-| External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal (lode-o29m) |
-| Technical review | **not mine** — the separate `code-reviewer` agent (Fable) fetches `land/<id>` into its own worktree and runs `/code-review` medium, then its own correctness reasoning verifying that skill's findings (lode-1fyb), + `/simplify` there |
 | Rebase pickup | `needs-rebase` ticket → fetch + check out `land/<id>` into my own launch worktree, `git merge origin/trunk` (resolve a *mechanical* conflict directly with `Edit`; escalate a *genuine* one), re-gate, commit, **push it myself** (ordinary, non-force — a merge never rewrites origin), swap to `ready-for-land` myself (no review) (lode-cln) |
 | Rebase pickup's own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
-| Env | `./.venv`, built on first use by `uv run --frozen` from `uv.lock` (no init step, lode-s09w.3) |
-| Gates | blessed bucket tags (lode-6ldh): builders run `nox -t fix` + `nox -s unit` (the `tests` bucket's fast view); `code-reviewer`/`/land`'s re-gate (and this file's rebase-pickup cycle) run `nox -t fix` + `nox -s tests` (full) + `nox -t everything-else` — never an enumerated `everything-else` session by name, so the gate list can't silently lag `noxfile.py` (lode-vvt1) — always `uv run --frozen nox …`, effectively activated (lode-s09w.3, superseding lode-6874's explicit-path rule); never a sourced `activate` script (the isolation guard refuses it) or a bare `nox` on `$PATH`; `scripts/validate-mermaid.sh` for diagrams |
-| Clean-tree assertion | `git status --short` empty before gating, before hand-off, and before a rebase-pickup push — `nox` gates the working tree, not `HEAD`, so **the tree that gated green must be the tree committed and pushed** (lode-tpt) |
-| Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; follow them |
-| Design source of truth | `docs/` (settled), `docs/decisions.md` (open), `docs/configuration.md` (tunables) |
-| Task tracker | **bd only** |
-| Commit trailer | `Co-Authored-By: Claude <model name> <noreply@anthropic.com>` — the model I announced on line 1 |
-
-Notes:
-- A green build pushes `origin/land/<id>`, marks `ready-for-code-review`, and **keeps the worktree**
-  (kept for `/land`'s GC bookkeeping — the reviewer works from its own checkout of the pushed branch,
-  not from this worktree); **nothing merges or gets reviewed in my session.** A build-time escalation
-  pushes the branch, applies `land-escalated` + a note, and holds — without blocking siblings.
