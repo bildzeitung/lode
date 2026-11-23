@@ -350,9 +350,9 @@ def test_split_entry_markers_in_a_section_cut_at_its_h3_headings(
     tmp_path: Path,
 ) -> None:
     """A ``##`` section over MAX_UNIT_BYTES is cut at its ``###`` headings
-    (lode-vt7x). Each is a structural line, so the block a hit belongs to is
-    the sub-heading's own: every paragraph piece of an oversized sub-heading
-    points at that sub-heading's marker, and no unit outside it does."""
+    (lode-vt7x). The section is one entry (lode-pe38): an Update under ``###
+    B`` is pointed at by a hit under the sibling ``### A`` and by the ``##``
+    unit itself, as well as by B's own pieces."""
     paragraph = "word " * 400
     text = (
         "# Title\n\n## Section\n\nintro\n\n### A\n\n"
@@ -371,12 +371,15 @@ def test_split_entry_markers_in_a_section_cut_at_its_h3_headings(
         "### A",
         "### B",
     ]
-    pieces = units[3:]
-    assert len(pieces) > 1
-    for u in units:
-        assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
-            [marker_line] if u in pieces else []
-        )
+    assert len(units[3:]) > 1
+    for u in units[1:]:
+        assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == [
+            marker_line
+        ]
+    assert (
+        _query_module.split_entry_markers(str(doc), units[0].line_lo, units[0].line_hi)
+        == []
+    )
 
 
 def test_split_entry_markers_agrees_with_the_chunker_on_the_real_decisions_md() -> None:
@@ -396,7 +399,11 @@ def test_split_entry_markers_agrees_with_the_chunker_on_the_real_decisions_md() 
 
     entries: list[list] = []
     for unit in chunker.chunk_file(path, text):
-        if not entries or chunker.is_structural_line(unit.first_line):
+        if (
+            not entries
+            or chunker.is_structural_line(unit.first_line)
+            and not unit.first_line.startswith("###")
+        ):
             entries.append([unit])
         else:
             entries[-1].append(unit)
