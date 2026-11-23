@@ -22,7 +22,10 @@ def _repo(path: Path, filename: str) -> Path:
 
 @pytest.fixture
 def scratch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A scratch repo, built while GIT_DIR/GIT_WORK_TREE point at a decoy repo."""
+    """A scratch repo, built while GIT_DIR/GIT_WORK_TREE point at a decoy repo.
+
+    No other locating variable is set: ``tests/conftest.py`` drops them all at import.
+    """
     decoy = _repo(tmp_path / "decoy", "decoy.txt")
     monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
     monkeypatch.setenv("GIT_WORK_TREE", str(decoy))
