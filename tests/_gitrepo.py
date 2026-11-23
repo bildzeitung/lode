@@ -87,8 +87,15 @@ def git_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
 
     git exports those to hooks, so a test run under a hook (or any caller that sets them)
     would otherwise have ``cwd=scratch_repo`` ignored and act on the outer repository
-    (lode-wcpss). A test that runs git directly passes ``env=git_env(...)``. A script under
-    test is not covered: it inherits whatever environment its own runner passes.
+    (lode-wcpss). A test that runs git directly passes ``env=git_env(...)``. ``tests/conftest.py``
+    also drops the same variables from ``os.environ`` at import (lode-a50si), so a script under
+    test is covered too unless a test sets one itself.
+
+    ``GIT_INDEX_FILE`` is dropped with the rest, on purpose. git exports it to every commit
+    hook, as an absolute path in a linked worktree and for ``git commit -a`` or ``git commit
+    <path>``; left in place, a scratch-repo call would read and write that index. The cost:
+    under such a hook a listing of the real checkout (``tracked_paths``) reads the index on
+    disk, which for ``-a`` and ``<path>`` is not the one being committed.
     """
     env = _QuietEnv((k, v) for k, v in os.environ.items() if k not in _local_env_vars())
     env.update(extra or {})

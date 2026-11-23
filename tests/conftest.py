@@ -204,7 +204,7 @@ from unittest import mock
 
 import pytest
 import yaml
-from _gitrepo import git_env
+from _gitrepo import _local_env_vars, git_env
 from pydantic import BaseModel
 from textual.pilot import Pilot
 
@@ -317,6 +317,14 @@ os.environ.pop("FORCE_COLOR", None)
 os.environ.pop("TTY_COMPATIBLE", None)
 os.environ.pop("TTY_INTERACTIVE", None)
 os.environ.pop("NO_COLOR", None)
+
+#: Drop git's repository-locating variables (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, ...) from the
+#: process environment once, so every subprocess a test starts (a script under test, a hook
+#: one-liner, a per-module runner passing no env) resolves its repository from cwd, not from the
+#: caller's. A test that needs one passes it explicitly in its own ``env=``. What dropping
+#: ``GIT_INDEX_FILE`` costs is in ``git_env``'s docstring (lode-a50si).
+for _name in _local_env_vars():
+    os.environ.pop(_name, None)
 
 #: Pin the shared ``console``/``err_console`` render WIDTH for the same reason, in the same
 #: place, under the same ordering constraint as the four pops above. rich's ``Console.size``
