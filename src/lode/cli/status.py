@@ -487,9 +487,12 @@ def status(db: _DbOption = None) -> None:
     # reconcile does not re-enqueue it, so the self-healing hint would be false
     # for it. It gets its own line and hint instead.
     # A non-refusal dead enrich job on a target a standing refusal also holds
-    # is not re-enqueued either: the enrich-gap step skips the whole target
-    # while any standing refusal exists for it (lode-exje). It rides under the
-    # refusal hint, not the self-healing one.
+    # is not re-enqueued either (lode-exje): the enrich-gap step skips a note
+    # head while any standing refusal exists for it, and judges an external by
+    # its in-force job alone, which a listed external refusal is. It rides
+    # under the refusal hint, not the self-healing one. A dead job on an older
+    # snapshot of that external is not matched: its target is superseded,
+    # which the self-healing hint's caveat names.
     refused_targets = {
         target for job_id, _, target, _ in dead_letters if job_id in refused
     }

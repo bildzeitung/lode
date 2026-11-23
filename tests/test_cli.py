@@ -7942,8 +7942,18 @@ def test_reenrich_skips_an_external_head_with_a_standing_refusal(
     assert "nothing to re-enrich" in result.stdout
 
 
+@pytest.mark.parametrize(
+    ("job_type", "target", "held"),
+    [
+        ("enrich", "ver-dddddddddddddddd", True),
+        # Controls: reconcile's embed gap ignores refusals, and a refusal holds
+        # only its own target.
+        ("embed", "ver-dddddddddddddddd", False),
+        ("enrich", "ver-another", False),
+    ],
+)
 def test_status_keeps_a_later_non_refusal_dead_job_off_the_self_healing_hint(
-    tmp_path: Path, warm_model_cache: None
+    tmp_path: Path, warm_model_cache: None, job_type: str, target: str, held: bool
 ) -> None:
     # lode-exje: reconcile skips a head while any standing refusal holds it, so
     # a later non-refusal dead enrich job on that head is not re-enqueued
@@ -7952,19 +7962,34 @@ def test_status_keeps_a_later_non_refusal_dead_job_off_the_self_healing_hint(
     conn = init_db(db_path)
     try:
         _seed_standing_refusal_head(conn)
-        with conn:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version, status, last_error, "
-                "next_attempt_at, prompt_ver) VALUES ('enrich', "
-                "'ver-dddddddddddddddd', 'dead', 'boom after retries', ?, ?)",
-                (now_iso(), ENRICH_PROMPT_VER),
-            )
+    finally:
+        conn.close()
+    _insert_dead_job(db_path, job_type, target)
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    out = " ".join(result.stdout.split())
+    assert "refused by the model (category: cyber); not retried" in out
+    assert "the model refused to enrich" in out
+    assert ("boom (not retried while the refusal" in out) is held
+    assert ("self-healing" in out) is not held
+
+
+def test_status_holds_an_older_dead_job_on_a_refused_external_snapshot(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # The listed refusal is the external's in-force job, the only one reconcile
+    # judges, so the older dead job on the same snapshot is not retried.
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        _seed_external(conn, external_id="ext-1", snapshot_id="snap-head")
+        _insert_enrich_job(conn, "snap-head", "dead")
+        _insert_refusal_dead_enrich(conn, "snap-head")
     finally:
         conn.close()
     result = runner.invoke(app, ["status", "--db", str(db_path)])
     assert result.exit_code == 0
     out = " ".join(result.stdout.split())
     assert "refused by the model (category: cyber); not retried" in out
-    assert "boom after retries (not retried while the refusal" in out
-    assert "the model refused to enrich" in out
+    assert "no error recorded (not retried while the refusal" in out
     assert "self-healing" not in out

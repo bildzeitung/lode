@@ -391,7 +391,10 @@ def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None)
     ``lode status`` repeats both arms' target filters in
     :func:`lode.jobs_read.refusal_dead_jobs`, so that it lists a refusal only
     for a target this step looks at; a filter added to either arm here must be
-    added there too.
+    added there too. ``lode status`` also tells the user that no other dead
+    enrich job on a listed refusal's target is retried (lode-exje), which holds
+    only while the note arm exempts the whole head and the externals arm judges
+    the in-force job alone.
 
     Returns the count of gap versions found (each triggered one enqueue call).
     """
