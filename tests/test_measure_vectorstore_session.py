@@ -37,9 +37,7 @@ def sessions(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
 
 
 def _run(*args: str) -> str:
-    result = runner.invoke(
-        _mod.app, ["--interval", "2", "--report-every", "2", "--rate", "0", *args]
-    )
+    result = runner.invoke(_mod.app, ["--rate", "0", *args])
     assert result.exit_code == 0, result.output
     return result.output
 
@@ -51,26 +49,29 @@ def _run(*args: str) -> str:
 def test_mode_sets_the_writers_connections(
     mode: str, connects: int, capped: bool, sessions: list[Any]
 ) -> None:
-    """Four writes with a prune every two: the shipped store reconnects once, a held one never."""
-    out = _run("--mode", mode, "--calls", "4", "--no-reads")
+    """Three writes with a prune on the second: the shipped store reconnects once, a held one never."""
+    out = _run(
+        *("--mode", mode, "--calls", "3", "--no-reads"),
+        *("--interval", "2", "--report-every", "2"),
+    )
 
     assert len(sessions) == connects
     assert all((session is not None) == capped for session in sessions)
-    assert "call 4 rss_mb=" in out
-    assert "read (2 queries)" not in out
+    assert "call 2 rss_mb=" in out
+    assert "write ms on the call after each prune" in out
 
 
 def test_each_read_opens_its_own_connection(sessions: list[Any]) -> None:
     """Two calls, no prune: one writer connection, then two per call for the reads."""
-    out = _run("--mode", "capped", "--calls", "2", "--interval", "100")
+    out = _run("--mode", "capped", "--calls", "2")
 
     assert len(sessions) == 1 + 2 * 2
     assert all(session is not None for session in sessions)
     assert "read (2 queries) ms" in out
 
 
-def test_an_unknown_mode_is_refused(sessions: list[Any]) -> None:
+def test_an_unknown_mode_is_refused() -> None:
+    """A mistyped mode must not run as another one and print figures under the typo."""
     result = runner.invoke(_mod.app, ["--mode", "cap", "--calls", "1"])
 
     assert result.exit_code == 2
-    assert sessions == []

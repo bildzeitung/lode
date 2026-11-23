@@ -101,7 +101,6 @@ def main(
     rng = random.Random(0)
     settings = Settings(vectorstore_optimize_interval=interval)
     write_t: list[float] = []
-    after_prune_t: list[float] = []
     read_t: list[float] = []
     with ExitStack() as stack:
         tmp = stack.enter_context(tempfile.TemporaryDirectory(prefix="lode-3gr3-"))
@@ -135,11 +134,7 @@ def main(
             ]
             t0 = time.perf_counter()
             store.replace_vectors(tv, rows)
-            took = time.perf_counter() - t0
-            write_t.append(took)
-            # The call after a prune is the one that pays the reconnect.
-            if i % interval == 1 and i > 1:
-                after_prune_t.append(took)
+            write_t.append(time.perf_counter() - t0)
             if reads:
                 t0 = time.perf_counter()
                 VectorStore(tmp, settings).search(vectors[0], k=5)
@@ -151,6 +146,9 @@ def main(
             if rate:
                 time.sleep(max(0.0, 1 / rate - (time.perf_counter() - began)))
     print(f"write ms {_summary(write_t)}")
+    # The prune runs on every interval-th call, so the call after it, the one that
+    # pays for the reconnect, sits at every interval-th index.
+    after_prune_t = write_t[interval::interval]
     if after_prune_t:
         print(f"write ms on the call after each prune {_summary(after_prune_t)}")
     if read_t:
