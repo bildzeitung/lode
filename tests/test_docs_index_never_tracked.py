@@ -24,11 +24,11 @@ happens to be clean):
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import load_module_from_path
+from _gitrepo import _git
+from conftest import load_module_from_path, tracked_paths
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -87,13 +87,8 @@ def _load_build_module() -> object:
 # --- 1. No index artifact is git-tracked -----------------------------------
 
 
-def _tracked_paths() -> list[str]:
-    return subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "ls-files"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.splitlines()
+def _tracked_paths(root: Path = REPO_ROOT) -> list[str]:
+    return tracked_paths(root=root)
 
 
 def test_no_index_artifact_is_git_tracked() -> None:
@@ -142,6 +137,20 @@ def test_gate_composes_real_discovery_with_the_match() -> None:
     exercised together -- the arrangement the live check actually runs."""
     tracked = [*_tracked_paths(), ".lode/docs-index.sqlite3"]
     assert _find_index_artifacts(tracked) == [".lode/docs-index.sqlite3"]
+
+
+def test_gate_listing_catches_a_db_under_a_non_ascii_directory(tmp_path: Path) -> None:
+    """Plain ``git ls-files`` C-quotes ``data/caf\\303\\251/x.db`` so its basename ends in
+    a quote and the suffix arm misses it; the listing the gate uses must not."""
+    _git(tmp_path, "init", "-q")
+    (tmp_path / "data" / "café").mkdir(parents=True)
+    (tmp_path / "data" / "café" / "x.db").write_bytes(b"")
+    (tmp_path / "data" / "plain.db").write_bytes(b"")
+    _git(tmp_path, "add", "-A")
+    assert sorted(_find_index_artifacts(_tracked_paths(tmp_path))) == [
+        "data/café/x.db",
+        "data/plain.db",
+    ]
 
 
 # --- 2. The build target resolves outside the worktree ---------------------
