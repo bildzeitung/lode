@@ -41,7 +41,7 @@ build_docs_site = load_module_from_path(
     "build_docs_site", REPO_ROOT / "scripts" / "build_docs_site.py"
 )
 check_links = load_module_from_path(
-    "check_links", REPO_ROOT / "scripts" / "check_links.py"
+    "check_links_for_build_docs", REPO_ROOT / "scripts" / "check_links.py"
 )
 
 # A stand-in published set: deliberately NOT `_published_set(docs/)`, so a
