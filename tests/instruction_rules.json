@@ -657,7 +657,7 @@
   {
     "file": ".claude/agents/coding.md",
     "rule": "human-or-epic-ticket-stop",
-    "phrase": "and wants it built, I **stop and report** — rather than guess at the decision a `human` label exists to defer"
+    "phrase": "I **stop and report** — rather than guess at the decision a `human` label exists to defer"
   },
   {
     "file": ".claude/agents/coding.md",
@@ -867,7 +867,7 @@
   {
     "file": ".claude/agents/coding.md",
     "rule": "isolation-failure-full-stop-no-self-rescue",
-    "phrase": "On a failure here, I stop — full stop.** I do **not** attempt `EnterWorktree` a second time, I do **not** attempt `git worktree add` + `git -C` as a self-rescue"
+    "phrase": "On a failure here, I stop — full stop.** I do **not** attempt `EnterWorktree` a second time, I do **not** attempt `git worktree add` + `git -C` as a self-rescue, and I do not run `Edit`/`Write`/`nox` against whatever checkout I landed in."
   },
   {
     "file": ".claude/agents/coding.md",
@@ -887,12 +887,12 @@
   {
     "file": ".claude/agents/coding.md",
     "rule": "rescue-ref-named-in-report",
-    "phrase": "rather than silently building on top of contamination. Name the `rescue/` ref in that report."
+    "phrase": "On a failure I reset **and report it explicitly in my final hand-off** (this is live evidence of a harness bug, not a routine hiccup) rather than silently building on top of contamination. Name the `rescue/` ref in that report."
   },
   {
     "file": ".claude/agents/coding.md",
     "rule": "never-git-worktree-unlock",
-    "phrase": "and I do **not** run `git worktree unlock .` later either: that exits 0 and strips the harness's lock, not one of mine."
+    "phrase": "I do **not** run `git worktree unlock .` later either: that exits 0 and strips the harness's lock, not one of mine."
   },
   {
     "file": ".claude/agents/coding.md",
@@ -957,21 +957,31 @@
   {
     "file": ".claude/agents/coding.md",
     "rule": "final-report-contents",
-    "phrase": "Then I **stop** and report: which ticket, that the gates are green, the `land/<id>` branch and head SHA, the **worktree path** I left on disk"
+    "phrase": "Then I **stop** and report: which ticket, that the gates are green, the `land/<id>` branch and head SHA, the **worktree path** I left on disk (for `/land`'s GC — the reviewer never opens it), and a one-line summary of what I built — or, on a build-time escalation, exactly what decision the human owes."
   },
   {
     "file": ".claude/agents/coding.md",
     "rule": "rebase-pickup-merge-never-rebase",
-    "phrase": "`git rebase origin/trunk` rewrites commits already pushed to `land/<id>`, which would need a force-push to land; merging instead keeps the push an ordinary fast-forward (lode-cln)."
+    "phrase": "Rebasing instead of merging during a rebase pickup.** `git rebase origin/trunk` rewrites commits already pushed to `land/<id>`, which would need a force-push to land; merging instead keeps the push an ordinary fast-forward (lode-cln)."
   },
   {
     "file": ".claude/agents/coding.md",
     "rule": "rebase-pickup-rejected-push-refetch-remerge-retry",
-    "phrase": "A rejection means the remote moved since I fetched — re-fetch, re-merge, and retry"
+    "phrase": "Force-pushing during a rebase pickup, or reaching for `--force`/`--force-with-lease` when a plain push is rejected.** A rejection means the remote moved since I fetched — re-fetch, re-merge, and retry"
   },
   {
     "file": ".claude/agents/coding.md",
     "rule": "rebase-pickup-genuine-conflict-escalates",
     "phrase": "**Genuine disagreement** (the two sides changed the *same* content in incompatible ways, and picking one discards the other's intent) → `git merge --abort` and escalate (below)."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "handoff-dirty-tree-back-to-step-6",
+    "phrase": "So I go back to **step 6** (commit, re-gate, re-push) rather than push them straight out, and derive the SHA fresh afterwards."
+  },
+  {
+    "file": ".claude/agents/coding.md",
+    "rule": "commit-only-on-task-worktree-branch",
+    "phrase": "or committing on any branch but my task's worktree branch."
   }
 ]
