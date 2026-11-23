@@ -828,6 +828,32 @@ class TestBareDocAnchorRefs:
         )
         assert refs == [(2, ref)]
 
+    @pytest.mark.parametrize(
+        ("written", "matched"),
+        [
+            # Before the space no `.md`, after it no docs directory: no match.
+            (f"{_DOCS}/my notes.md", []),
+            (f"{_DOCS}/my%20notes.md", []),
+            # `.md` already before the space: cut there, the anchor lost.
+            (f"{_DOCS}/a.md notes.md#x", [f"{_DOCS}/a.md"]),
+            (f"{_DOCS}/a.md%20notes.md", [f"{_DOCS}/a.md"]),
+            # The docs directory again after the space: read from there on.
+            (f"{_DOCS}/my {_DOCS}/page.md#a", [f"{_DOCS}/page.md#a"]),
+            # The spelling the LIMIT gives for a link: `%20` undoes the second
+            # shape, a leading `./` the first.
+            (f"{_DOCS}/my%20{_DOCS}/page.md", []),
+            (f"./{_DOCS}/a.md%20notes.md", []),
+        ],
+    )
+    def test_citation_of_a_path_holding_a_space_is_never_read_whole(
+        self, written, matched
+    ):
+        """lode-905hd: the module docstring's LIMIT, shape by shape."""
+        refs = check_links._bare_doc_anchor_refs(
+            f"see {written} here\n", skip_fences=False
+        )
+        assert [target for _, target in refs] == matched
+
 
 def test_real_repo_passes_the_gate():
     """The acceptance criterion, for both passes at once: every relative
@@ -1027,21 +1053,3 @@ def test_unreadable_markdown_is_one_error_however_many_links_reach_it(tmp_path):
         check_links.LinkError(path, 0, reason, "file cannot be read")
         for path, reason in zip(bad, why, strict=True)
     ]
-
-
-@pytest.mark.parametrize(
-    "citation",
-    [
-        f"{_DOCS}/my notes.md",
-        f"{_DOCS}/x/my notes.md#a",
-        f"{_DOCS}/my%20notes.md",
-        f"{_DOCS}/my notes/page.md",
-    ],
-)
-def test_bare_citation_of_a_spaced_name_matches_nothing(citation):
-    """lode-905hd: the module docstring's LIMIT. A spaced name is neither
-    matched whole nor cut at the space into a shorter path."""
-    assert (
-        check_links._bare_doc_anchor_refs(f"see {citation} here\n", skip_fences=False)
-        == []
-    )
