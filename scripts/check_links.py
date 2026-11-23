@@ -128,15 +128,14 @@ shape one is cut the same, and shape two then matches nothing.
 
 Cite such a page with a markdown link instead, which reads its own delimiters
 (angle brackets or percent-encoding, lode-tgr6). In a markdown file outside
-``BARE_CITATION_EXCLUDE_DIRS`` the bare pass blanks out a link destination
-that holds a space or ``%20`` before matching (lode-wfy6i), so such a link is
-resolved once, whole, by the markdown walk and is not cut. Only a destination
-that walk resolves is blanked: that of an inline link outside a code span,
-not an image and not a URL. Everything else is still seen by the bare pass:
-a destination without a space, the link's text, and link syntax quoted in a
-code span. Still cut as above: such a page named by an image or a reference
-definition, and a link destination the pattern cuts at a tab, a parenthesis
-or a percent-escape other than ``%20``. For those, write the character
+``BARE_CITATION_EXCLUDE_DIRS`` the bare pass blanks out, before matching, each
+inline link destination that holds a space or ``%20`` and that the markdown
+walk resolves (not a URL, not one quoted in a code span), so that walk checks
+it once, whole (lode-wfy6i). The link's text, its title and link syntax quoted
+in a code span are still read. Still cut as above: such a page named by an
+image or a reference definition, and a link destination the pattern cuts at
+any other character outside its class (a tab, a parenthesis, a percent-escape
+other than ``%20``, among others). For those, write the character
 percent-encoded and begin the destination with ``./``: the pattern then
 matches nothing in it. No tracked path holds a space today.
 """
@@ -403,16 +402,10 @@ def _mask_spaced_link_destinations(line: str) -> str:
 
     A link is found as ``_links_in_file`` finds it, with inline code spans
     taken out first, and an external destination is left alone as ``check``
-    leaves it. So nothing is blanked that the markdown walk does not resolve:
-    link syntax quoted in a code span, a URL and every destination without a
-    space stay visible to the bare pass."""
+    leaves it."""
+    in_span = {i for s in _INLINE_CODE_RE.finditer(line) for i in range(*s.span())}
     # kept[i]: where the i-th character outside a code span sits in `line`.
-    kept: list[int] = []
-    end = 0
-    for span in _INLINE_CODE_RE.finditer(line):
-        kept.extend(range(end, span.start()))
-        end = span.end()
-    kept.extend(range(end, len(line)))
+    kept = [i for i in range(len(line)) if i not in in_span]
     chars = list(line)
     for m in _LINK_RE.finditer("".join(line[i] for i in kept)):
         group = 1 if m.group(1) is not None else 2
@@ -577,7 +570,11 @@ def _slugs_for_file(path: Path, text_cache: dict[Path, str]) -> set[str]:
 def _links_in_file(text: str) -> list[tuple[int, str]]:
     """``(line_number, target)`` for every real inline link outside a fenced
     code block, with inline code spans stripped first so a literal
-    markdown-syntax example inside backticks is never matched as a real link."""
+    markdown-syntax example inside backticks is never matched as a real link.
+
+    ``_mask_spaced_link_destinations`` must find the same links: what it
+    blanks, the bare pass no longer reads, so a link only it found would be
+    checked by neither walk."""
     links = []
     for line_no, line in _content_lines(text):
         scrubbed = _INLINE_CODE_RE.sub("", line)

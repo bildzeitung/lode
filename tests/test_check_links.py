@@ -908,9 +908,10 @@ class TestBareDocAnchorRefs:
         )
         assert [target for _, target in refs] == matched
 
-    #: A link destination per LIMIT shape, each a page whose path holds a space.
-    #: The shorter path the bare pattern reads out of each (``page.md`` in the
-    #: docs directory, ``a.md``) is never written by the tests that use these.
+    #: Destinations of pages whose path holds a space, one per LIMIT shape and
+    #: spelling. The shorter path the bare pattern reads out of each
+    #: (``page.md`` in the docs directory, ``a.md``) is never written by the
+    #: tests that use these.
     _SPACED_DESTS = (
         f"<{_DOCS}/my {_DOCS}/page.md>",
         f"<{_DOCS}/a.md notes.md>",
@@ -945,7 +946,6 @@ class TestBareDocAnchorRefs:
             # Blanked: what the markdown walk resolves, however it is dressed.
             (f"[x](<{_DOCS}/a.md notes.md>)", []),
             (f'[x](<{_DOCS}/a.md notes.md> "title")', []),
-            (f"[`page`](<{_DOCS}/a.md notes.md>)", []),
             # A code span is taken out before the link is looked for, as in
             # the markdown walk: a `]` or link-shaped text in one hides no link.
             (f"[`a]b`](<{_DOCS}/a.md notes.md>)", []),
@@ -963,7 +963,10 @@ class TestBareDocAnchorRefs:
                 f"[see {_DOCS}/b.md](<{_DOCS}/a.md notes.md>) and {_DOCS}/c.md",
                 [f"{_DOCS}/b.md", f"{_DOCS}/c.md"],
             ),
-            (f'[x]({_DOCS}/a.md "see {_DOCS}/b.md")', [f"{_DOCS}/a.md", f"{_DOCS}/b.md"]),
+            (
+                f'[x]({_DOCS}/a.md "see {_DOCS}/b.md")',
+                [f"{_DOCS}/a.md", f"{_DOCS}/b.md"],
+            ),
         ],
     )
     def test_only_a_spaced_destination_the_markdown_walk_resolves_is_masked(
