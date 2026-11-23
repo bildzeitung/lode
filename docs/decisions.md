@@ -6381,6 +6381,9 @@ entries below from being rewritten to chase the current tree.)
   - **Update (lode-4615, 2026-11-21):** the gate in part (1) now fails unless each pinned phrase
     matches exactly once in its file outside fenced code blocks, the property the `lode-w18a.10`
     entry states for its inventory. From a `lode-w18a.11` review follow-up; no maintainer ruling.
+  - **Update (lode-w18a.13, 2026-11-23):** the `coding.md` inventory approved under this entry was
+    amended by maintainer ruling before its cut; see the entry "coding.md rule inventory amended
+    before the `lode-w18a.12` cut".
 
 - **Update (lode-5x01, 2026-11-16) — a filename typo in `lode-s09w`'s `uv` migration entry above.**
   That entry's bullet "`scripts/python-init.sh`, `venv-install` and `compile-lock.sh` are deleted
@@ -7306,3 +7309,70 @@ branches, and how marker-first sits with Section 3a's base-before-dependent orde
 on `lode-g78l`.
 
 Decision only; the build is `lode-g78l`, an edit to Section 3a of `.claude/skills/land/SKILL.md`.
+
+## coding.md rule inventory amended before the `lode-w18a.12` cut (decided, lode-w18a.13)
+
+Maintainer ruling 2026-11-23, on a review finding from `lode-w18a.6`. The `coding.md` inventory in
+`tests/instruction_rules.json` (78 entries: the 77 that `lode-w18a.6` added, approved as is, and one
+older) did not meet the two criteria in `docs/agents-workflow.md` (one entry per repeated rule,
+pinned on the surviving copy; a pin runs through the operative part of its rule). The ruling: amend
+the list, scoped as below, with no cut to `coding.md`. The alternative on the ticket was to keep the
+list as approved and record the exception. The amended list goes back to the maintainer for
+re-approval (`lode-9d9t`) before `lode-w18a.12` cuts; that gate is the human ticket `lode-mkmn`,
+which blocks `lode-w18a.12`. The `coding.md` inventory is now 84 entries: 78, minus 18 collapsed,
+plus 22 for the unpinned rules, plus 2 added in technical review.
+
+- **Decision 1: repeats collapsed to one entry.** Removed, with the entry that carries each rule:
+  `ap-reviewing-own-build` (`never-review-own-work`), `ap-working-on-trunk` (`never-edit-on-trunk`),
+  `ap-committing-jsonl` (`never-write-trunk`; its `bd import` sentence has its own entry, below),
+  `ap-removing-worktree-fresh-build` (`must-not-remove-worktree`), `bp-file-issues-before-coding`
+  (`bd-only-tracker`, whose pin now runs through the 2-minute rule), `ap-decision-in-bd-note`
+  (`design-decisions-are-doc-edits`), `handoff-clean-tree-assert` and `ap-ready-on-dirty-tree`
+  (`never-hand-off-dirty-worktree`), `ap-external-tracker-writes` (`no-external-tracker-write`),
+  `ap-skipping-guards` (`isolation-guard-first-action`; its bootstrap-gap and no-self-rescue halves
+  have their own entries), `design-check-before-write` and `ap-design-overwrite`
+  (`design-nonempty-never-write`), `ap-silent-scope-expansion` (`track-discovered-work`),
+  `bp-only-blocks-gates-dispatch` and `ap-filing-blocked-as-discovered-from`
+  (`blocked-followup-uses-blocks`), `ap-deps-blocks-inversion` (`never-create-deps-blocks-form`),
+  `ap-ready-on-red-or-escalation` (`escalation-label-and-note` and `gates-green-before-handoff`),
+  and `bp-one-task-per-session` (`one-task-per-worktree`; the ticket called this one arguable).
+  Where the ticket named three copies of one rule, the survivor is the non-negotiables or step copy,
+  not the anti-pattern copy: the ruling's Decision 3 calls the step copy the surviving one.
+  `one-task-per-worktree` and `must-not-remove-worktree`, which the ticket listed as one group, both
+  stay, because they pin different rules (one task per worktree; do not remove it).
+- **Two collapsed copies are not pure repeats, so part of each keeps a pin** (added in technical
+  review; the maintainer accepts or drops them at `lode-mkmn`). Step 9's clean-tree paragraph also
+  says what to do when the tree is dirty at hand-off: go back to step 6 (commit, re-gate, re-push).
+  The surviving non-negotiable says only "commit the remainder and re-check", so the re-gate is
+  stated nowhere else; `handoff-dirty-tree-back-to-step-6` pins it. The "Working on `trunk`"
+  anti-pattern bullet also forbids committing on any branch but the task's worktree branch, stated
+  nowhere else; `commit-only-on-task-worktree-branch` pins that half. Run at review on a scratch
+  copy of `coding.md`: with either passage removed, the gate stays green on the list as built and
+  fails on this one.
+- **Decision 2: 22 entries for the 16 unpinned distinct rules** (some items needed more than one):
+  isolation failure is a full stop; guard-script exit 127/126 is a bootstrap gap; both `STOP
+  (lode-6wgc)` lines; the rescue ref named in the report; never `git worktree unlock .`; the list of
+  ways a gate must not be backgrounded; docs-nit `--file` is repo-relative and the exit-1
+  duplicate-collector stop; a missing `uv`, and the pre-`lode-0yfn` pytest fallback; quoting the
+  mermaid message; revert to the last green commit on escalation; flag uncertainty; never `bd
+  import` the JSONL; CLAUDE.md wins; say so when the announced ID is not Sonnet; the `handoff-sha.sh`
+  exit codes and the final report's contents; and the three rebase-pickup anti-pattern bullets.
+  Two of those, merge never rebase, and no force-push with a re-fetch and re-merge on a rejected
+  push, are pinned on the anti-pattern bullets themselves, the only copies that state them as
+  prohibitions (`git rebase` and `--force` are named nowhere else in the file), so `lode-w18a.12`
+  keeps both bullets. The third, escalate a genuine conflict, is pinned on the Rebase pickup
+  section's copy. `lode-w18a.7` moves that section out of `coding.md`, so it repoints the `file` of
+  each entry whose text it moves. At review the pins for the isolation full stop, the rescue ref,
+  the final report and the two rebase bullets were lengthened to cover the whole instruction (the
+  rebase pins now start at the bullet's lead, which is the prohibition).
+- **Decision 3: seven short pins lengthened, two moved.** Lengthened: `never-write-trunk`,
+  `trace-failure-before-decide-ticket`, `human-or-epic-ticket-stop`, `free-text-dispatch-files-issue`,
+  `claim-idempotent-backstop`, `gate-buckets-builder-subset`, `escalation-label-and-note`. Moved onto
+  the step copy: `ap-pushing-on-failing-gate` (now `gates-green-before-handoff`, on "Gates must be
+  green before I hand off") and `ap-blocking-parallel-batch` (now
+  `surface-escalation-async-never-block-batch`, on step 9's "surface it in my final message"). The
+  bold-lead and heading-only pins and `bp-heartbeat` are left as built, per the ruling
+  (`bd-only-tracker` is lengthened under Decision 1, above).
+
+Every phrase matches exactly once in `coding.md` outside fenced blocks
+(`tests/test_instruction_rule_inventory_gate.py` is green).
