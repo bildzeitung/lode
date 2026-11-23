@@ -742,7 +742,14 @@ immediate path and `enrich.collect_enrich_batch` for the batch path. The shipped
   tombstone, or an external that is `no_egress` by its flag or by a `no_egress_scopes` rule
   is not listed, because none of the refusal hint's remedies can retry it. A row that no
   longer stands, or whose target is excluded this way, is listed as an ordinary
-  dead-lettered enrich job, under the self-healing hint and its "already moot" caveat. When
+  dead-lettered enrich job, under the self-healing hint and its "already moot" caveat. A
+  dead enrich job that is not itself a refusal but has the same target as a listed refusal
+  is not retried either (`lode-exje`): `enrich_gap` skips a note head while any standing
+  refusal exists for it, and judges an external by its in-force job alone. Such a job is
+  listed as not retried while that refusal stands and is kept off the self-healing hint; a
+  dead embed job on the same target is not affected. A dead enrich job on an older snapshot
+  of a refused external stays under the self-healing hint, whose caveat names a superseded
+  target. When
   `config.toml` cannot be read there is no model or provider to compare and no scope rules
   to apply, so the key and the scope-rule test are skipped (a scope-denied external's
   refusal stays listed) and only the tests on the rows themselves apply.
