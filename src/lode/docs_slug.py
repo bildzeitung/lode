@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import re
 
-from lode.fence_parsing import fence_flags
+from lode.fence_parsing import fence_flags, match_fence_marker
 
 # Character-for-character `scripts/check_links.py`'s own `_LINK_TEXT_RE`,
 # `[^\]]*` included: the two differ only on a heading whose link text is EMPTY
@@ -97,6 +97,9 @@ def anchor_slugs(text: str) -> set[str]:
             count = seen.get(base, 0)
             seen[base] = count + 1
             slugs.add(base if count == 0 else f"{base}-{count}")
+        if match_fence_marker(line.strip()):
+            # A fence opener's trailing text is its info string, not content.
+            continue
         slugs.update(_HTML_ANCHOR_RE.findall(line))
     return slugs
 
