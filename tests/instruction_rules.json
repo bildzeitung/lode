@@ -988,5 +988,880 @@
     "file": ".claude/agents/coding.md",
     "rule": "parent-child-related-do-not-gate-dispatch",
     "phrase": "`parent-child` *groups* an epic's children without gating them (a child is dispatchable while the epic is open — by design), `discovered-from` is provenance-only, and `related` is a soft link — **none of those three block `bd ready`.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "sole-producer-two-phases",
+    "phrase": "`/code` is lode's **sole producer** entry point"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "neither-review-is-authors",
+    "phrase": "so *neither* review of a branch is its author's"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "producer-never-writes-trunk",
+    "phrase": "A producer **never** merges to `trunk`, closes the ticket, pushes `trunk`, or writes the main checkout"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "no-code-parallel",
+    "phrase": "There is **no separate `/code-parallel`.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "bare-code-fans-out-by-default",
+    "phrase": "Bare `/code` is the **default**: it fans out across the whole independent, unblocked ready frontier."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "single-is-one-producer",
+    "phrase": "**`/code <id>`** or **`/code --single`** — **one** producer."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "skill-launches-in-order",
+    "phrase": "this skill's only job is to launch them correctly **in order, build then review**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "one-invocation-at-a-time",
+    "phrase": "run only one `/code` invocation at a time (concurrent invocations are unsupported,"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "sweeps-race-across-invocations",
+    "phrase": "so invocation B's sweep can select a ticket whose agent from invocation A is still"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "more-parallelism-same-invocation",
+    "phrase": "Need more parallelism? Pass more IDs (or use bare `/code`) to the **same** invocation instead of launching a second one."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-one-shared-budget",
+    "phrase": "Concurrency cap — one shared budget for every dispatch below (lode-2cf)."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-computed-before-step-0",
+    "phrase": "**Before step 0**, compute the cap once and hold it for the rest of the invocation."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-derivation-in-script",
+    "phrase": "The derivation itself lives in `scripts/code-concurrency-cap.sh` (lode-54mo)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-call-anchored-to-repo-root",
+    "phrase": "The call is anchored to the repo root rather than resolved against the session's cwd"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-fallback-stays",
+    "phrase": "The `|| …=4` fallback stays regardless."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-fallback-is-exit-status-propagation",
+    "phrase": "Its mechanism is **exit-status propagation, not emptiness**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "never-proceed-on-bad-cap",
+    "phrase": "**Never proceed on an empty or non-numeric cap** — say so before continuing."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-env-override-wins",
+    "phrase": "**`LODE_CODE_MAX_CONCURRENT_AGENTS`** (env var) wins outright when set — no clamping, no derivation"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-env-set-machine-locally",
+    "phrase": "Set it durably, machine-locally, **without editing this file**, via `.claude/settings.local.json`'s"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-unset-derived-from-meminfo",
+    "phrase": "**Unset** → derived from `/proc/meminfo` (`MemAvailable`, falling back to `MemTotal`)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-workers-and-test-workers-move-together",
+    "phrase": "the two knobs are meant to move together"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-heuristic-not-memory-bound",
+    "phrase": "the cap is a throughput heuristic, **not** a worst-case memory bound; don't \"tighten\" it into one"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-script-wins-on-disagreement",
+    "phrase": "`scripts/code-concurrency-cap.sh` is the executable source of truth and wins on any disagreement."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-shared-across-all-dispatch-sources",
+    "phrase": "**The cap is one shared budget across every dispatch source in this invocation**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-queue-overflow",
+    "phrase": "**queue** it instead and dispatch it only once an in-flight agent completes and frees a slot"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-sweep-needs-rebase-every-invocation",
+    "phrase": "**Sweep for `needs-rebase` kick-backs first — every invocation, regardless of argument.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-limit-0-load-bearing",
+    "phrase": "**`--limit 0` is load-bearing, not noise** — canonical reason + measurements"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-dispatch-coding-per-hit-no-isolation",
+    "phrase": "For **each** hit, dispatch a `coding` producer (`subagent_type: \"coding\"` — **no call-site"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-branch-checked-out-in-same-launch-worktree",
+    "phrase": "From there it fetches `origin/land/<id>` and checks it out **into that same"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-tell-it-rebase-pickup",
+    "phrase": "Tell it explicitly this is a **rebase pickup**, not a fresh build"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-prompt-merge-not-rebase",
+    "phrase": "**merge current `trunk` in** (do not rebase)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-prompt-regate-all-three-buckets",
+    "phrase": "re-gate at the reviewer/`/land` level — ALL three blessed nox bucket tags"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-prompt-push-ordinary-by-refspec",
+    "phrase": "an ordinary push by explicit refspec"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-prompt-swap-to-ready-for-land-itself",
+    "phrase": "swap `needs-rebase` straight to `ready-for-land` yourself. Do not merge, close, or push trunk."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-prompt-mechanical-conflict-resolved",
+    "phrase": "if both sides added independent, non-overlapping content (a **mechanical**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-prompt-genuine-conflict-escalates",
+    "phrase": "sides genuinely **disagree**, abort the merge and escalate yourself"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-prompt-dont-remove-own-worktree",
+    "phrase": "Don't try to remove your own launch worktree on the way out"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-merge-keeps-push-fast-forward",
+    "phrase": "a merge commit appends to history, it never rewrites what `land/<id>` already carries on origin"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-expect-merge-to-conflict",
+    "phrase": "Expect the merge to **conflict**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-dispatch-concurrently-under-cap",
+    "phrase": "Dispatch every hit **concurrently** with each other and with any Phase 1 builds below"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-no-phase2-reviewer-for-pickup",
+    "phrase": "**Do not dispatch a Phase 2 `code-reviewer` for a rebase pickup**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-empty-sweep-is-not-error",
+    "phrase": "`trunk` moved. If the sweep finds nothing, say so and move on; it's not an error."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-immediately-either-outcome",
+    "phrase": "**Reclaim its launch worktree the moment it returns — either outcome (lode-vs7g).** A subagent"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-orchestrator-does-it-not-batched",
+    "phrase": "so **I** do it, from my own (repo-root) context, immediately after collecting its result"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-single-copy",
+    "phrase": "**This same block is the reclaim referenced by step 1 and Phase 2 below; it is the only copy.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-derived-from-ticket-id",
+    "phrase": "the ticket id alone **derives** both the path and the branch"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-destructive-calls-in-script",
+    "phrase": "The destructive calls (`git worktree unlock`/`remove --force`, `git branch -D`) live in a `scripts/` helper, not inline"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-derive-not-trust-report",
+    "phrase": "Deriving rather than trusting a reported string is what makes this **actually** close the leak"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-never-touches-builder-worktree",
+    "phrase": "It cannot touch the **builder's** worktree"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-harness-does-not-unlock",
+    "phrase": "**The harness does not reliably unlock a launch worktree on agent exit (lode-7ndi)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-unlock-only-own-directory-lock",
+    "phrase": "never `-f -f`, and never touching a lock whose reason names anything else"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-only-after-collecting-result",
+    "phrase": "Run it **only** after collecting that agent's result"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-never-speculative",
+    "phrase": "never speculatively, never \"to see if it's done\""
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-safe-on-both-outcomes",
+    "phrase": "Safe on **both** outcomes: by the time the agent returns"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-matters-most-on-escalation",
+    "phrase": "Reclaiming here rather than leaving it to `/land` matters most on an **escalation**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-land-backstops-partial-net",
+    "phrase": "note they are a *partial* net, not a total one"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step1-sweep-stranded-ready-for-code-review",
+    "phrase": "**Sweep for stranded `ready-for-code-review` re-entries too — same invocation, same reason.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step1-phase2-only-reviews-this-invocations-builds",
+    "phrase": "Phase 2 only dispatches a reviewer for a ticket *this same invocation's* Phase 1 just built"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step1-limit-0-load-bearing",
+    "phrase": "**`--limit 0` is load-bearing, not noise — same reason as step 0's `needs-rebase` sweep above.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step1-hit-is-from-previous-invocation",
+    "phrase": "Any hit here is, by construction, stranded from a **previous** invocation"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step1-confirm-hand-off-reviewable",
+    "phrase": "confirm the hand-off is actually reviewable before dispatching"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step1-derive-empty-review-head",
+    "phrase": "**If it's empty, derive it from the live branch before giving up (lode-uomo).**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step1-derived-review-head-drift-uninformative",
+    "phrase": "the reviewer's `review_head`-vs-tip drift check is *uninformative* for this ticket"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step1-no-branch-dont-guess-surface-it",
+    "phrase": "still don't guess — leave the label alone and surface it in the final report"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step1-dispatch-code-reviewer-like-phase2",
+    "phrase": "Otherwise dispatch a `code-reviewer` exactly as Phase 2 does below"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step1-dispatch-concurrently-under-cap",
+    "phrase": "Dispatch every hit **concurrently** with each other, with any step-0 rebase pickups, and with this invocation's own Phase 1 builds"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step1-empty-sweep-is-not-error",
+    "phrase": "slots free. If the sweep finds nothing, say so and move on; it's not an error."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step1-reclaim-each-reviewer",
+    "phrase": "**Reclaim each reviewer's launch worktree the moment it returns**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-no-argument-or-all-ready-fans-out",
+    "phrase": "**No argument** (the **default**), or **`--all-ready`** → read the filtered `bd ready --json`"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-dont-dispatch-blocker-in-batch",
+    "phrase": "Don't dispatch a ticket whose blocker is also in the batch — surface that instead of guessing the order."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-single-resolves-pick-itself",
+    "phrase": "**`--single`** (no ID) → one producer; `/code` resolves the pick **itself**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-single-same-selection-as-bare",
+    "phrase": "`--single` collapses to \"bare `/code`, limited to one ticket\""
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-one-id-one-producer",
+    "phrase": "**One bd issue ID** (e.g. `lode-ai1`) → one producer; tell the agent to claim and implement it."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-several-ids-independent-only",
+    "phrase": "Only dispatch IDs that are genuinely **independent**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-free-text-agent-files-issue",
+    "phrase": "it files the bd issue itself before coding, per its own rules."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-exclude-human-and-epics",
+    "phrase": "**Auto-select paths only — exclude `human`-labeled tickets and epics (lode-8pqv).**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-human-label-never-auto-selected",
+    "phrase": "any ticket carrying the **`human`** label — it exists precisely because an agent cannot resolve"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-epic-never-auto-selected",
+    "phrase": "any ticket with **`issue_type == epic`** — a container with no implementable acceptance"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-read-frontier-as-json",
+    "phrase": "**Read the frontier as JSON on every auto-select path, including `--single`; the `human` label is invisible otherwise.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-labels-null-needs-default",
+    "phrase": "(`labels` is `null`, not `[]`, on a ticket with none — hence the `// []`.)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-report-each-dropped",
+    "phrase": "**report each ticket dropped** — id + reason"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-nothing-survives-dispatch-nothing",
+    "phrase": "**If nothing survives the filter, dispatch nothing and say so**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step2-filter-only-auto-select-explicit-ids-unfiltered",
+    "phrase": "**Explicitly-named IDs are an operator override and are never filtered**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "epic-debate-gate-exclude-undebated-children",
+    "phrase": "**Auto-select paths only — also exclude children of an un-debated epic (lode-bw5k).**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "epic-debate-gate-report-every-skip",
+    "phrase": "**report every `SKIP`** — id + reason (`epic not debated (<epic-id>)`)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "epic-debate-gate-reads-only",
+    "phrase": "it never writes bd state, and it derives the parent epic from the candidate's `dependencies[]`"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "epic-debate-gate-no-escape-hatch-flag",
+    "phrase": "**No new escape-hatch flag.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "epic-debate-gate-scope-auto-select-only",
+    "phrase": "**Scope: this gate runs only inside step 2's auto-select filtering, exactly like the `human`/epic filter above.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "epic-debate-gate-never-gates-inflight-tickets",
+    "phrase": "It never applies to step 0's `needs-rebase` pickups or step 1's stranded"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "nits-threshold-gate-below-batch-worth-building",
+    "phrase": "**Auto-select paths only — also gate a docs-nits collector below the batch-worth-building"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "nits-threshold-gate-report-skip",
+    "phrase": "**report every `SKIP`** — id + reason — in step 5's skip list"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "nits-threshold-gate-single-takes-next-survivor",
+    "phrase": "**`--single` takes the next survivor** exactly as the human/epic filter does"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "nits-threshold-gate-read-only",
+    "phrase": "The gate is read-only (`bd show` + `scripts/bd-docs-nit.sh count`, itself read-only)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "nits-open-successor-at-claim-any-path",
+    "phrase": "**At the point a docs-nits collector *is* claimed for dispatch — any path, an explicitly-named id included — open its empty successor collector first (lode-z1n5 part 3),**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-dispatch-coding-per-task-no-isolation",
+    "phrase": "**Phase 1 — dispatch one `coding` builder per task** via the Agent tool with"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-subagent-needs-harness-worktree",
+    "phrase": "A subagent is pinned at the repo root and **cannot** call `EnterWorktree` to *create* its own"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-frontmatter-isolation-sufficient",
+    "phrase": "measured sufficient on its own for both roles (`lode-09td`)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-reference-statement-four-dispatch-sites",
+    "phrase": "**This is the reference statement for all four dispatch sites in this file**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-coding-launches-off-origin-trunk",
+    "phrase": "Every `coding` dispatch launches already cwd'd inside"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "claim-from-orchestrator-before-dispatch",
+    "phrase": "**Claim each resolved ticket from *here*, before dispatch — don't rely on the builder to do it"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "claim-skipped-claim-observed",
+    "phrase": "A skipped claim was observed to carry a ticket all the way to `ready-for-land` while it stayed `open`"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "claim-every-path-where-id-known",
+    "phrase": "for **every dispatch path where the id is known at dispatch**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "claim-no-dolt-push-needed",
+    "phrase": "no `bd dolt push` needed here"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "claim-builder-claim-idempotent-backstop",
+    "phrase": "The builder's own step-2 claim then becomes an **idempotent backstop**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "claim-primary-on-free-text-path",
+    "phrase": "the *primary* claim on the **one path with no id at dispatch — free-text**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "claim-docs-nits-successor-collector",
+    "phrase": "**If the just-claimed ticket carries the `docs-nits` label, open its empty successor collector right here (lode-z1n5 part 3)**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-solo-one-builder-foreground",
+    "phrase": "dispatch **exactly one** builder in the foreground."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-fan-out-concurrent-up-to-cap",
+    "phrase": "dispatch **one builder per ticket, concurrently**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-fan-out-queue-remaining",
+    "phrase": "queue any remaining tickets and dispatch each as an in-flight agent completes and frees a slot"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-builder-escalation-doesnt-block-siblings",
+    "phrase": "one builder's escalation must **not** block its siblings"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-builder-prompt-shape",
+    "phrase": "Implement lode-ai1 as a producer following your cycle"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-builder-never-rereads-bd-ready",
+    "phrase": "builder never re-reads `bd ready` to pick its own ticket"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-verify-hand-off-before-reviewer",
+    "phrase": "**Phase 2 — verify the hand-off, then dispatch a `code-reviewer` per built ticket.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-never-trust-notification-alone",
+    "phrase": "Never trust a builder's task-notification alone"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-check-labels-and-remote-branch",
+    "phrase": "check the **actual** state in bd and on origin"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-dispatch-reviewer-only-if-both-checks-pass",
+    "phrase": "Dispatch the reviewer **only** for a ticket where both checks pass."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-land-escalated-skip-never-resume",
+    "phrase": "**Skip it.** No reviewer, and never resume it to"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-stalled-builder-resume-via-sendmessage",
+    "phrase": "Resume that same builder (`SendMessage` to its agent id/name"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-stalled-builder-rerun-gate-foreground",
+    "phrase": "it must re-run the gate in the **FOREGROUND** within its own turn"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-recheck-after-resume",
+    "phrase": "Re-check both conditions once it returns before proceeding."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "no-correctness-review-workflow",
+    "phrase": "**Do NOT run a `correctness-review` Workflow here, or anywhere in this skill (lode-rlyx).**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "reviewer-pass-is-the-correctness-review",
+    "phrase": "**are** the correctness review (lode-1fyb) — not a backstop to one."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "correctness-workflow-the-measure",
+    "phrase": "**The measure** (2026-07-26 fan-out): four workflow runs consumed"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "correctness-workflow-figures-not-reproducible",
+    "phrase": "are not reproducible from this repo"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "correctness-workflow-script-gone",
+    "phrase": "`.claude/workflows/correctness-review.js` is **gone from the tree entirely**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "correctness-workflow-do-not-reconstruct",
+    "phrase": "Do not reconstruct it without new evidence"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-dispatch-code-reviewer-no-isolation",
+    "phrase": "For every ticket that passes both checks: use the Agent tool with `subagent_type: \"code-reviewer\"`"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-reviewer-never-opens-builder-worktree",
+    "phrase": "the builder's worktree is never opened by the reviewer under this architecture"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-reviewer-cadence-matches-build",
+    "phrase": "Match the build cadence: one reviewer in the foreground for a solo build"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-reviewer-subject-to-cap",
+    "phrase": "**subject to the same concurrency cap as everything else**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-reviewer-prompt-shape",
+    "phrase": "Technically review lode-ai1 (it is `ready-for-code-review`)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-reviewer-code-review-medium-never-fix-comment",
+    "phrase": "(always; never `--fix`/`--comment`)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-reviewer-skill-failure-retry-once",
+    "phrase": "if the skill is missing or fails, retry once, carry on with the hand pass, and record it"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-reviewer-escalates-only-on-decision-or-worse",
+    "phrase": "only on a clarifying decision or \"making it worse.\""
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-give-context-not-precomputed-findings",
+    "phrase": "What it must not be given is a fan-out's worth of pre-computed findings to adjudicate."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-reclaim-reviewer-worktree-per-ticket",
+    "phrase": "Run [step 0's reclaim block](#reclaim) with `ID` set to this ticket"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-reviewer-branch-derives-reclaim",
+    "phrase": "reviewer's branch is `land/<id>--<its-own-worktree-dir>`"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step5-relay-each-result",
+    "phrase": "**Relay each result to the user.** Agent final messages aren't shown to the user"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step5-relay-builder-escalation",
+    "phrase": "If a **builder** escalated, say so"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step5-relay-reviewer-escalation",
+    "phrase": "If a **reviewer** escalated, likewise"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step5-fan-out-per-ticket-roll-up",
+    "phrase": "For a fan-out, give a per-ticket roll-up"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step5-report-step0-sweep",
+    "phrase": "Report the **Step 0 sweep** the same way"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step5-report-step1-sweep",
+    "phrase": "Report step 1's sweep too"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step5-report-cap-throttle",
+    "phrase": "If the concurrency cap ever throttled dispatch this invocation"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step5-report-all-auto-select-skips",
+    "phrase": "also report **every ticket the `human`/epic filter passed over**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step5-say-so-even-when-nothing-skipped",
+    "phrase": "Say so explicitly **even when nothing was skipped**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step5-reclaim-one-line-tally",
+    "phrase": "Mention the launch-worktree reclaims (lode-vs7g) only as a one-line tally"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-only-sanctioned-way-to-spin-up-coding",
+    "phrase": "This skill is the **only** sanctioned way to spin up coding work from the main session"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-fan-out-within-one-invocation",
+    "phrase": "**fan out within one invocation rather than starting a second concurrent `/code`.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-two-phases-in-order",
+    "phrase": "**Two phases, in order: build then review.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-reviewer-after-builder-never-parallel",
+    "phrase": "never in parallel with its own build"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-no-reviewer-for-build-time-escalation",
+    "phrase": "Don't dispatch a reviewer for a ticket that escalated at build time."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-phase2-runs-no-correctness-workflow",
+    "phrase": "**Phase 2 runs NO `correctness-review` Workflow"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-recycled-worktree-observed",
+    "phrase": "has been observed handing a dispatched agent a *recycled* worktree still checked out on a previous ticket's build branch"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-recycled-mitigation-lives-in-agents",
+    "phrase": "The shipped mitigation is defensive and lives in the agents, not here"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-recycled-merge-base-vs-origin-trunk",
+    "phrase": "(never bare local `trunk` — lode-isl3)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-recycled-mitigation-not-root-cause-fix",
+    "phrase": "**This is a mitigation, not a root-cause fix, and the root cause is still open**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-step0-third-mode-not-phase",
+    "phrase": "**Step 0's rebase pickup is a third mode, not a phase.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-step0-skips-phase2-never-dispatch-reviewer",
+    "phrase": "Never dispatch a `code-reviewer` for one."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-step0-self-heals-clean-and-mechanical-only",
+    "phrase": "**Self-healing covers a clean merge and a *mechanical* conflict**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-step0-genuine-disagreement-needs-human",
+    "phrase": "a conflict where the two sides *genuinely disagree* still escalates to a human"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-step0-whole-cycle-is-producers-job",
+    "phrase": "is the dispatched `coding` producer's own job, start to finish (lode-cln)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-step0-push-stays-fast-forward-after-conflict",
+    "phrase": "that stays true after a conflict is resolved"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-step1-pulled-forward-phase2-not-fourth-mode",
+    "phrase": "**Step 1's stranded-review sweep is Phase 2 pulled forward, not a fourth mode.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-step1-review-head-guard-defense-in-depth",
+    "phrase": "the guard stays as defense-in-depth"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-step1-require-review-head-not-review-worktree",
+    "phrase": "`review_head` — the field the reviewer actually reads"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-producers-mutate-only-in-worktrees",
+    "phrase": "Producers do all repo mutation inside `isolation: \"worktree\"` worktrees and push to `origin/land/<id>`"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-nothing-merges-no-self-review",
+    "phrase": "**nothing merges and nothing the author wrote is reviewed by its author.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-main-session-stays-on-trunk",
+    "phrase": "The main session stays on `trunk` and never edits files here."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-ambiguous-argument-ask-user",
+    "phrase": "If an argument is genuinely ambiguous"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-mistakes-nothing-to-add",
+    "phrase": "**MISTAKES.md: nothing for this skill to add.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-docs-nits-relay-only",
+    "phrase": "**Docs nits: same story (lode-t551).**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-reviewer-pickup-worktree-reclaimed-by-me",
+    "phrase": "**A reviewer's or rebase-pickup's own launch worktree is reclaimed by me, right after it returns"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-reclaim-must-not-touch-fresh-build-worktree",
+    "phrase": "what it must **not** touch — a *fresh build*'s worktree"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "notes-fresh-build-worktree-kept-until-land",
+    "phrase": "deliberately kept through the whole build → review → land lifecycle"
   }
 ]
