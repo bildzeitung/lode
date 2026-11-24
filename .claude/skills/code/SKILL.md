@@ -13,10 +13,8 @@ description: Build one or more lode tasks as PRODUCERS in two phases — dispatc
 2. **Technical review — `code-reviewer` subagent (Fable):** fetches the pushed `land/<id>` branch and
    checks it out into its own launch worktree (never `EnterWorktree`, never the builder's worktree),
    runs `/code-review` at medium first, then its own reasoned **correctness pass** against the diff,
-   verifying that skill's findings (lode-1fyb) — with no `correctness-review` Workflow behind either
-   (lode-rlyx reversed lode-905v on measured cost) — plus the
-   genuinely tool-backed **`/simplify`**, re-gates, re-pushes `land/<id>`, and swaps the ticket to
-   **`ready-for-land`** (or escalates).
+   verifying that skill's findings (lode-1fyb) — plus the genuinely tool-backed **`/simplify`**,
+   re-gates, re-pushes `land/<id>`, and swaps the ticket to **`ready-for-land`** (or escalates).
 
 Splitting build (cheap) from review (Fable) means the technical review is done by an agent that didn't
 write the code — and the lander's later semantic review is too, so *neither* review of a branch is its
@@ -107,9 +105,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 >   agents are still in flight; when the next dispatch would exceed `CODE_MAX_CONCURRENT_AGENTS`,
 >   **queue** it instead and dispatch it only once an in-flight agent completes and frees a slot —
 >   across *all* sources, not per-step (e.g. a Phase 2 review that becomes dispatchable while step 0's
->   rebase pickups are still running competes for the same slots they hold). Full rationale and the
->   override mechanism are documented in
->   [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#concurrency-cap-lode-2cf).
+>   rebase pickups are still running competes for the same slots they hold).
 
 0. **Sweep for `needs-rebase` kick-backs first — every invocation, regardless of argument.**
    `/land`'s cheap conflict precheck can kick a `ready-for-land` branch back: it strips
@@ -286,7 +282,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    them draw from the one shared budget; queue the overflow and dispatch it as slots free. If the
    sweep finds nothing, say so and move on; it's not an error. **Reclaim each reviewer's launch
    worktree the moment it returns** — [step 0's reclaim block](#reclaim), `ID` set to that ticket
-   (lode-vs7g). This sweep dispatches the identical subagent, so the identical reclaim applies.
+   (lode-vs7g).
 
 2. **Resolve the task set** from the argument:
    - **No argument** (the **default**), or **`--all-ready`** → read the filtered `bd ready --json`
@@ -326,13 +322,11 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > bd ready --json | jq -r '.[] | select((.labels // []) | index("human") | not) | select(.issue_type != "epic") | .id'
    > ```
    >
-   > (`labels` is `null`, not `[]`, on a ticket with none — hence the `// []`.) `bd ready` is already
-   > priority-ordered, so this list's first entry **is** the highest-priority buildable item — no extra
-   > sort needed. On the no-argument and `--all-ready` paths, filter the frontier this way **before**
-   > fanning out across all of it. On `--single`, filter the same way and dispatch just the **top**
-   > entry. Either way, **report each ticket dropped** — id + reason
-   > (`human`-labeled or epic) — per step 5: a skip is a signal to the operator, not noise to drop
-   > silently.
+   > (`labels` is `null`, not `[]`, on a ticket with none — hence the `// []`.) On the no-argument and
+   > `--all-ready` paths, filter the frontier this way **before** fanning out across all of it. On
+   > `--single`, filter the same way and dispatch just the **top** entry. Either way, **report each
+   > ticket dropped** — id + reason (`human`-labeled or epic) — per step 5: a skip is a signal to the
+   > operator, not noise to drop silently.
    >
    > **If nothing survives the filter, dispatch nothing and say so** — never fall back to a
    > filtered-out ticket. A frontier of nothing but `human` tickets and epics is a real, reachable
@@ -351,8 +345,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > is the intended stress-test gate a plan/epic should pass **before** its children get built, but
    > nothing enforced that — `lode-olmi`'s children were built and landed without the epic ever having
    > been debated, caught only by a human noticing after the fact. So, for **every candidate that
-   > survives the `human`/epic filter above** (same three auto-select paths, same exclusion of
-   > explicitly-named IDs — an operator naming a ticket is never second-guessed here either), run:
+   > survives the `human`/epic filter above**, run:
    >
    > ```bash
    > scripts/epic-debate-gate.sh <candidate-id>
@@ -380,8 +373,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > re-gating them here would strand in-flight work behind a retroactively-applied check.
 
    > **Auto-select paths only — also gate a docs-nits collector below the batch-worth-building
-   > threshold (lode-z1n5 part 2).** For **every candidate that survives the two filters above** (same
-   > three auto-select paths, same exclusion of explicitly-named IDs), run:
+   > threshold (lode-z1n5 part 2).** For **every candidate that survives the two filters above**, run:
    >
    > ```bash
    > scripts/docs-nits-threshold-gate.sh <candidate-id>
@@ -529,10 +521,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    worktree is never opened by the reviewer under this architecture. Match the build cadence: one
    reviewer in the foreground for a solo build; one reviewer per ticket concurrently
    (`run_in_background: true`) for a fan-out, each dispatched as its builder's hand-off is verified —
-   **subject to the same concurrency cap as everything else** (`CODE_MAX_CONCURRENT_AGENTS`): a
-   reviewer that becomes dispatchable while the budget is already full from Phase 1 builders (or step
-   0/1 sweeps still in flight) queues behind them and dispatches the moment a slot frees, rather than
-   exceeding the cap.
+   **subject to the same concurrency cap as everything else** (`CODE_MAX_CONCURRENT_AGENTS`).
 
    Pass the ticket id, e.g.:
 
@@ -561,8 +550,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    reviewer's branch is `land/<id>--<its-own-worktree-dir>`, so the ticket id derives both the worktree
    and the branch. Everything in that worktree is already on `origin/land/<id>` by the time the reviewer
    **returns** — a clean pass pushes at step 7 of `code-reviewer.md`, and an escalation re-pushes its
-   reverted-to-green commit too, so nothing local is ever lost. It matters most on an escalation: that
-   branch never merges into `trunk`, so `/land`'s backstop 1 can never reclaim this worktree.
+   reverted-to-green commit too, so nothing local is ever lost.
 
 5. **Relay each result to the user.** Agent final messages aren't shown to the user — surface what
    matters per ticket across **both** phases: that the build gates passed and the technical review +
@@ -602,17 +590,13 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   at it, so a second invocation's sweep can still select it and double-dispatch at the same
   ticket. Fan-out within a single invocation never hits this: each producer/reviewer pair is
   dispatched once, by that invocation's own Phase 1/2, for a ticket only that invocation resolved.
-- **Two phases, in order: build then review.** Phase 1 (`coding`, Sonnet) builds and **keeps its
-  worktree**; phase 2 (`code-reviewer`, Fable) fetches the pushed branch into its *own* launch worktree
-  (never `EnterWorktree`, never the builder's worktree) and runs the technical review. The review must
-  run on the *built* branch, so always dispatch the reviewer *after* its builder returns
-  `ready-for-code-review` — never in parallel with its own build. Don't dispatch a reviewer for a
-  ticket that escalated at build time.
+- **Two phases, in order: build then review.** The review must run on the *built* branch, so always
+  dispatch the reviewer *after* its builder returns `ready-for-code-review` — never in parallel with
+  its own build. Don't dispatch a reviewer for a ticket that escalated at build time.
 - **Phase 2 runs NO `correctness-review` Workflow — the reviewer's `/code-review` run plus its own
   reasoned pass is the whole correctness review (lode-rlyx, reversing lode-905v on measured cost;
-  lode-1fyb).** The script no longer exists —
-  it was deleted outright once its manual-use grace period produced zero runs (lode-blrl). Rationale,
-  numbers, and the retrieval SHA: [the Phase 2 note above](#no-correctness-workflow).
+  lode-1fyb).** Rationale, numbers, and the retrieval SHA:
+  [the Phase 2 note above](#no-correctness-workflow).
 - **`isolation: "worktree"` has been observed handing a dispatched agent a *recycled* worktree still
   checked out on a previous ticket's build branch, rather than a fresh one off `origin/trunk` HEAD** —
   confirmed for both a Phase 1 builder and a Phase 2 reviewer (lode-eshl's technical review; the eshl
@@ -639,8 +623,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   start to finish (lode-cln):** it merges `origin/trunk` into the branch rather than rebasing onto
   it, so its push back to `land/<id>` is an ordinary fast-forward, never a rewrite — and that stays
   true after a conflict is resolved, since resolving changes the merge commit's tree, not its
-  ancestry. Full reasoning:
-  [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#the-step-0-pickup-merges-it-never-rebases-lode-cln).
+  ancestry.
 - **Step 1's stranded-review sweep is Phase 2 pulled forward, not a fourth mode.** It dispatches the
   exact same `code-reviewer` subagent, the same way, for the same reason — the only difference is the
   ticket was left `ready-for-code-review` by a *previous* invocation (a human's exit-(a) re-entry)
@@ -654,8 +637,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   (lode-k5e).)
 - Producers do all repo mutation inside `isolation: "worktree"` worktrees and push to
   `origin/land/<id>`; **nothing merges and nothing the author wrote is reviewed by its author.** The
-  main session stays on `trunk` and never edits files here. Landing those branches is `/land`'s job,
-  not this skill's.
+  main session stays on `trunk` and never edits files here.
 - If an argument is genuinely ambiguous (looks like it might be an ID but isn't one that exists, or a
   fan-out set with hidden dependencies), ask the user before dispatching rather than guessing.
 - **MISTAKES.md: nothing for this skill to add.** `/code` dispatches `coding` and `code-reviewer` and
@@ -672,7 +654,4 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   reclaim block](#reclaim). The one thing worth repeating here is what it must **not** touch — a *fresh
   build*'s worktree, which is branch-named `worktree-agent-*` (never `land/<id>--*`, so the derived
   reclaim skips it by construction) and is deliberately kept through the whole build → review → land
-  lifecycle (`docs/decisions.md`), since `/land` reclaims it on a clean land — via its end-of-pass
-  backstop sweep, which since **lode-h1vn** owns all local worktree GC (the per-ticket `review_worktree`
-  loop is deleted; a landed builder worktree's HEAD is an ancestor of `trunk`, so the backstop catches
-  it). `/land`'s backstops stay exactly as they were.
+  lifecycle (`docs/decisions.md`).
