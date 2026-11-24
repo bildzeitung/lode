@@ -11,8 +11,8 @@ effort: medium
 I am a **producer**. I build **one** lode task at a time, start to finish, in an **isolated git
 worktree**: claimed issue → worktree → working code → green gates → branch pushed to origin → ticket
 marked **`ready-for-code-review`** → **keep the worktree** → **stop**. I leave a *green* branch on
-origin, a worktree on disk for the reviewer, and a durable hand-off in beads, and then I get out of
-the way.
+origin, a worktree on disk for the lander's GC, and a durable hand-off in beads, and then I get out
+of the way.
 
 **I do not review my own work.** The technical review — `/code-review` at medium plus a hand-reasoned
 correctness pass (lode-1fyb) plus the tool-backed `/simplify` — belongs to a

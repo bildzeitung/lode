@@ -140,8 +140,8 @@ root. It still reads the link's text, its title, its fragment and link syntax
 quoted in a code span. Still cut as above: such a page named by an image or a
 reference definition. NEITHER walk resolves those, so blanking their
 destinations would remove the only check the text gets. For those, write the
-character percent-encoded and begin the destination with ``./``: the pattern
-then matches nothing in it. No tracked path holds a space today.
+cutting character percent-encoded and begin the destination with ``./``: the
+pattern then matches nothing in it. No tracked path holds a space today.
 """
 
 from __future__ import annotations
