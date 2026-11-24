@@ -30,7 +30,7 @@ from pathlib import Path
 import pytest
 from _gitrepo import _git
 from _hookharness import SETTINGS
-from conftest import fake_bin_env
+from conftest import REBASE_PICKUP_REFERENCE, fake_bin_env, markdown_corpus_text
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "harness-doctor.sh"
@@ -51,6 +51,7 @@ def _required_scripts() -> list[str]:
 REQUIRED_SCRIPTS = _required_scripts()
 REQUIRED_AGENTS = ["coding", "code-reviewer", "land-review"]
 REQUIRED_SKILLS = ["code", "land", "challenge", "epic-audit", "sweep", "release"]
+PICKUP_REFERENCE = REBASE_PICKUP_REFERENCE.relative_to(REPO_ROOT)
 
 # Beads is deliberately NOT installed in CI (lode-fqob), so a `bd` stub goes
 # in front of the real one for every subprocess this module launches -- these
@@ -100,6 +101,7 @@ def _build_healthy_repo(tmp_path: Path) -> Path:
         skill_dir = repo / ".claude" / "skills" / s
         skill_dir.mkdir(parents=True, exist_ok=True)
         (skill_dir / "SKILL.md").write_text("stub\n")
+    (repo / PICKUP_REFERENCE).write_text("stub\n")
 
     (repo / ".claude" / "settings.json").write_text(
         '{"worktree": {"baseRef": "fresh"}, "hooks": {"PreToolUse": []}}\n'
@@ -182,6 +184,14 @@ def test_missing_skill_fails(tmp_path: Path) -> None:
     result = _run(repo)
     assert result.returncode == 1, result.stdout + result.stderr
     assert ".claude/skills/land/SKILL.md missing" in result.stdout
+
+
+def test_missing_rebase_pickup_reference_fails(tmp_path: Path) -> None:
+    repo = _build_healthy_repo(tmp_path)
+    (repo / PICKUP_REFERENCE).unlink()
+    result = _run(repo)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"{PICKUP_REFERENCE} missing" in result.stdout
 
 
 def test_missing_settings_json_fails(tmp_path: Path) -> None:
@@ -276,11 +286,10 @@ def test_every_script_the_harness_invokes_by_path_is_checked() -> None:
     agent/skill half is what caught `scripts/release.sh` and its two
     siblings missing from the first draft of the list.
     """
-    sources = [SETTINGS, *sorted(REPO_ROOT.glob(".claude/skills/*/SKILL.md"))]
-    sources += sorted(REPO_ROOT.glob(".claude/agents/*.md"))
+    sources = [SETTINGS.read_text(), *(text for _, text in markdown_corpus_text())]
     referenced: set[str] = set()
-    for path in sources:
-        referenced |= set(re.findall(r"scripts/[A-Za-z0-9._-]+\.sh", path.read_text()))
+    for text in sources:
+        referenced |= set(re.findall(r"scripts/[A-Za-z0-9._-]+\.sh", text))
     missing = sorted(referenced - set(REQUIRED_SCRIPTS))
     assert not missing, (
         f"scripts referenced by the harness but not checked by harness-doctor: "

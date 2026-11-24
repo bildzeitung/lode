@@ -960,17 +960,17 @@
     "phrase": "Then I **stop** and report: which ticket, that the gates are green, the `land/<id>` branch and head SHA, the **worktree path** I left on disk (for `/land`'s GC — the reviewer never opens it), and a one-line summary of what I built — or, on a build-time escalation, exactly what decision the human owes."
   },
   {
-    "file": ".claude/agents/coding.md",
+    "file": ".claude/skills/code/rebase-pickup.md",
     "rule": "rebase-pickup-merge-never-rebase",
     "phrase": "Rebasing instead of merging during a rebase pickup.** `git rebase origin/trunk` rewrites commits already pushed to `land/<id>`, which would need a force-push to land; merging instead keeps the push an ordinary fast-forward (lode-cln)."
   },
   {
-    "file": ".claude/agents/coding.md",
+    "file": ".claude/skills/code/rebase-pickup.md",
     "rule": "rebase-pickup-rejected-push-refetch-remerge-retry",
     "phrase": "Force-pushing during a rebase pickup, or reaching for `--force`/`--force-with-lease` when a plain push is rejected.** A rejection means the remote moved since I fetched — re-fetch, re-merge, and retry"
   },
   {
-    "file": ".claude/agents/coding.md",
+    "file": ".claude/skills/code/rebase-pickup.md",
     "rule": "rebase-pickup-genuine-conflict-escalates",
     "phrase": "**Genuine disagreement** (the two sides changed the *same* content in incompatible ways, and picking one discards the other's intent) → `git merge --abort` and escalate (below)."
   },

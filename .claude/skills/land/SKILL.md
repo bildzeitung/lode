@@ -472,9 +472,9 @@ be thrown back.
 The landing context is **minimal by design** — `land_head` + a one-line `land_summary` in bd
 metadata, read via `bd show <id> --json` (the branch name is *derived*, `land/<id>`, never stored).
 `land_head`/`land_summary` is the one field-name convention across the whole loop: `code-reviewer`
-writes it when swapping a ticket to `ready-for-land`, and a rebase pickup (`coding.md`) refreshes
+writes it when swapping a ticket to `ready-for-land`, and a rebase pickup (`.claude/skills/code/rebase-pickup.md`) refreshes
 `land_head` on every re-push. `land_summary` describes what the branch does and stays the
-reviewer's across a pickup (`coding.md`'s rebase-pickup step 5 has the rule and its one exception,
+reviewer's across a pickup (`.claude/skills/code/rebase-pickup.md` step 5 has the rule and its one exception,
 lode-jb2q). The SHA exists only to **detect drift**: a push onto the branch *after* the ticket was
 marked ready.
 

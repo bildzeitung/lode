@@ -124,6 +124,9 @@ done
 for s in code land challenge epic-audit sweep release; do
   if [ -f ".claude/skills/$s/SKILL.md" ]; then ok ".claude/skills/$s/SKILL.md"; else bad ".claude/skills/$s/SKILL.md missing"; fi
 done
+# The coding agent's rebase-pickup cycle: coding.md holds only a pointer to it.
+pickup=.claude/skills/code/rebase-pickup.md
+if [ -f "$pickup" ]; then ok "$pickup"; else bad "$pickup missing"; fi
 
 echo
 echo "settings"

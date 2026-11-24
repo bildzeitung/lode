@@ -131,9 +131,11 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    From there it fetches `origin/land/<id>` and checks it out **into that same
    launch worktree** — no `EnterWorktree`, no `git -C` into anything else needed; `Edit`/`Write`/`nox`
    all work natively once the branch is checked out locally. Tell it explicitly this is a **rebase
-   pickup**, not a fresh build, e.g.:
+   pickup**, not a fresh build, and name `.claude/skills/code/rebase-pickup.md` as the file whose cycle it
+   runs, e.g.:
 
-   > lode-ai1 carries `needs-rebase` (kicked back by `/land`'s conflict precheck) — fetch it and
+   > lode-ai1 carries `needs-rebase` (kicked back by `/land`'s conflict precheck) — a rebase pickup:
+   > read `.claude/skills/code/rebase-pickup.md` whole first and run its cycle. Fetch the branch and
    > **merge current `trunk` in** (do not rebase): `scripts/checkout-land-branch.sh lode-ai1` (it
    > fetches `land/lode-ai1` and `trunk` itself, then checks the `land/lode-ai1` tip out as
    > `land/lode-ai1--<your own launch worktree's directory name>` — unique by
@@ -146,7 +148,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > then `git push origin HEAD:land/lode-ai1` (an ordinary push by explicit refspec — the merge only
    > appends, it never rewrites what's already on `land/lode-ai1`), refresh `land_head`, put your
    > account of the merge in the hand-off's `REBASE PICKUP` note and leave `land_summary` as the
-   > reviewer wrote it (your `coding.md` step 5 has the one exception),
+   > reviewer wrote it (your `.claude/skills/code/rebase-pickup.md` step 5 has the one exception),
    > and swap `needs-rebase` straight to `ready-for-land` yourself. Do not merge, close, or push trunk.
    > On a merge conflict: if both sides added independent, non-overlapping content (a **mechanical**
    > conflict), resolve it directly with `Edit` and continue, then finish the same way; if the two

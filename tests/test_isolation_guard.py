@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 from _gitrepo import _git
-from conftest import AGENTS_DIR
+from conftest import AGENTS_DIR, REBASE_PICKUP_REFERENCE
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "isolation-guard.sh"
@@ -181,7 +181,8 @@ def test_a_near_miss_directory_name_is_refused(
 
 def test_every_agent_definition_invokes_the_guard() -> None:
     """The guard only protects a dispatch that actually calls it, and every
-    call site is prose in a `.claude/agents/*.md` file -- so a new agent
+    call site is prose in a `.claude/agents/*.md` file or in the rebase-pickup
+    file the `coding` agent runs its second cycle from -- so a new agent
     definition would ship unguarded with nothing going red.
 
     This pins the call sites themselves against the SHIPPED files (the
@@ -194,7 +195,7 @@ def test_every_agent_definition_invokes_the_guard() -> None:
 
     missing = [
         path.name
-        for path in agent_defs
+        for path in [*agent_defs, REBASE_PICKUP_REFERENCE]
         if "scripts/isolation-guard.sh" not in path.read_text(encoding="utf-8")
     ]
     assert not missing, (
