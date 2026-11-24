@@ -86,10 +86,11 @@ tracked ``*.md`` file, repo-wide, for the full walk; ``_tracked_other_files``
 directories now gets BOTH passes. That is deliberate, not an oversight: the
 bare pass alone still catches a citation with no markdown brackets at all
 (backtick-quoted prose, e.g. tests/README.md's `` `docs/conventions.md` ``
-mentions), a shape the bracket walk cannot see. Where the two passes do
-overlap -- a bracketed link into a ``docs/`` target, matched by both --
-``check`` de-duplicates its result list, so one real break is still reported
-exactly once.
+mentions), a shape the bracket walk cannot see. Where the two passes report
+the same break -- a link into a ``docs/`` target whose text repeats its
+destination (the destination's own path is read by the bracket walk alone,
+see LIMIT below) -- ``check`` de-duplicates its result list, so one real
+break is still reported exactly once.
 
 RETIRED (lode-6e9c): once the full bracketed-link walk widened repo-wide
 (lode-act5, above), the old ``SCAN_DIRS`` name stopped bounding any scan at
@@ -128,16 +129,19 @@ shape one is cut the same, and shape two then matches nothing.
 
 Cite such a page with a markdown link instead, which reads its own delimiters
 (angle brackets or percent-encoding, lode-tgr6). In a markdown file outside
-``BARE_CITATION_EXCLUDE_DIRS`` the bare pass blanks out, before matching, each
-inline link destination that holds a space or ``%20`` and that the markdown
-walk resolves (not a URL, not one quoted in a code span), so that walk checks
-it once, whole (lode-wfy6i). The link's text, its title and link syntax quoted
-in a code span are still read. Still cut as above: such a page named by an
-image or a reference definition, and a link destination the pattern cuts at
-any other character outside its class (a tab, a parenthesis, a percent-escape
-other than ``%20``, among others). For those, write the character
-percent-encoded and begin the destination with ``./``: the pattern then
-matches nothing in it. No tracked path holds a space today.
+``BARE_CITATION_EXCLUDE_DIRS`` the bare pass blanks out, before matching, the
+path of each inline link destination that the markdown walk resolves (not a
+URL, not one quoted in a code span), so that walk alone checks it, whole and
+relative to its file (lode-wfy6i, lode-q14mi). The bare pattern then reads
+nothing that starts in that path: no shorter path cut at a space, a tab, a
+parenthesis, a comma or any other character outside its classes, no anchor
+cut at a dot, and no link written below the repo root as a path from the
+root. It still reads the link's text, its title, its fragment and link syntax
+quoted in a code span. Still cut as above: such a page named by an image or a
+reference definition. NEITHER walk resolves those, so blanking their
+destinations would remove the only check the text gets. For those, write the
+character percent-encoded and begin the destination with ``./``: the pattern
+then matches nothing in it. No tracked path holds a space today.
 """
 
 from __future__ import annotations
@@ -364,7 +368,8 @@ def _tracked_other_files(root: Path, tracked: list[Path]) -> list[Path]:
     ``BARE_CITATION_EXCLUDE_DIRS`` still never gets this pass -- unchanged
     from before this ticket, and out of its scope. The resulting two-pass
     overlap (impossible before lode-act5, since no file was ever in both
-    walks' input sets) is handled by ``check``'s de-duplication, not by
+    walks' input sets) is handled by ``_mask_link_destinations`` for a link
+    destination and by ``check``'s de-duplication for the rest, not by
     narrowing this set.
 
     ``tracked``: see ``_tracked_markdown_files`` above -- identical role."""
@@ -394,15 +399,18 @@ def _numbered_lines(text: str) -> Iterator[tuple[int, str]]:
     return enumerate(lines, start=1)
 
 
-def _mask_spaced_link_destinations(line: str) -> str:
-    """``line`` with each link destination blanked out that holds a space (or
-    a ``%20``) and that the markdown walk resolves. The walk resolves such a
-    destination whole; left in place, the bare pattern would also read a
-    shorter path out of it and report that as missing (lode-wfy6i).
+def _mask_link_destinations(line: str) -> str:
+    """``line`` with the path blanked out of each link destination that the
+    markdown walk resolves (each one that is not external), so that walk
+    alone reads it. The module docstring's LIMIT paragraph lists what the bare
+    pattern would read out of such a path (lode-wfy6i, lode-q14mi).
+
+    The fragment stays in place: ``_resolve_error`` does not look at one after
+    a path that is not ``.md``, so the bare pass is the only check that text
+    gets.
 
     A link is found as ``_links_in_file`` finds it, with inline code spans
-    taken out first, and an external destination is left alone as ``check``
-    leaves it."""
+    taken out first."""
     in_span = {i for s in _INLINE_CODE_RE.finditer(line) for i in range(*s.span())}
     # kept[i]: where the i-th character outside a code span sits in `line`.
     kept = [i for i in range(len(line)) if i not in in_span]
@@ -410,8 +418,9 @@ def _mask_spaced_link_destinations(line: str) -> str:
     for m in _LINK_RE.finditer("".join(line[i] for i in kept)):
         group = 1 if m.group(1) is not None else 2
         dest = m.group(group)
-        if (" " in dest or "%20" in dest) and not _is_external(dest):
-            for i in kept[m.start(group) : m.end(group)]:
+        if not _is_external(dest):
+            path_end = m.start(group) + len(dest.partition("#")[0])
+            for i in kept[m.start(group) : path_end]:
                 chars[i] = " "
     return "".join(chars)
 
@@ -428,13 +437,13 @@ def _bare_doc_anchor_refs(text: str, *, skip_fences: bool) -> list[tuple[int, st
     under-check.
 
     A markdown source is also the only kind the markdown walk reads, so the
-    same flag turns on ``_mask_spaced_link_destinations``.
+    same flag turns on ``_mask_link_destinations``.
     """
     lines = _content_lines(text) if skip_fences else _numbered_lines(text)
     refs = []
     for line_no, line in lines:
         if skip_fences:
-            line = _mask_spaced_link_destinations(line)
+            line = _mask_link_destinations(line)
         for m in _DOC_ANCHOR_REF_RE.finditer(line):
             refs.append((line_no, m.group(0)))
     return refs
@@ -572,7 +581,7 @@ def _links_in_file(text: str) -> list[tuple[int, str]]:
     code block, with inline code spans stripped first so a literal
     markdown-syntax example inside backticks is never matched as a real link.
 
-    ``_mask_spaced_link_destinations`` must find the same links: what it
+    ``_mask_link_destinations`` must find the same links: what it
     blanks, the bare pass no longer reads, so a link only it found would be
     checked by neither walk."""
     links = []
@@ -715,8 +724,8 @@ def check(root: Path) -> list[LinkError]:
             if error:
                 errors.append(error)
     # Since lode-act5 a markdown file outside BARE_CITATION_EXCLUDE_DIRS goes
-    # through BOTH walks, so one bracketed link into a `docs/` target, or one
-    # missing file, can produce the identical LinkError twice; so can each
+    # through BOTH walks, so a link whose text repeats its `docs/` destination,
+    # or one missing file, can produce the identical LinkError twice; so can each
     # link into a file that cannot be read (`_unreadable_error`). De-duplicate
     # (order-preserving; LinkError is a frozen dataclass, so hashable) --
     # reporting one break twice would also double-count it in the summary line.
