@@ -1,12 +1,10 @@
 # Rebase pickup — the `coding` agent's second job
 
-This file is read by the `coding` agent (`.claude/agents/coding.md`) when `/code` dispatches it at a
-ticket that already carries `needs-rebase`. It holds the whole rebase-pickup cycle and the two
-anti-patterns that forbid a rebase and a force-push. Below, "the fresh-build cycle", "the build
-cycle" and "above" in a reference to either mean the producer cycle in
-[`coding.md`](../../agents/coding.md#the-producer-cycle). That file's Non-negotiables, its "Bash call
-shapes" rule (the fenced blocks here are plain calls too) and its other anti-patterns, some of them
-written for a rebase pickup, still bind one.
+The `coding` agent (`.claude/agents/coding.md`) runs this cycle when `/code` dispatches it at a
+`needs-rebase` ticket. Below, "the fresh-build cycle", "the build cycle" and "above" in a reference
+to either mean the producer cycle in [`coding.md`](../../agents/coding.md#the-producer-cycle). That
+file's Non-negotiables, its "Bash call shapes" rule (the fenced blocks here are plain calls too) and
+its other anti-patterns, some of them written for a rebase pickup, still bind one.
 
 ## Rebase pickup — needs-rebase kick-backs
 

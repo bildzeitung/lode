@@ -132,7 +132,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    launch worktree** — no `EnterWorktree`, no `git -C` into anything else needed; `Edit`/`Write`/`nox`
    all work natively once the branch is checked out locally. Tell it explicitly this is a **rebase
    pickup**, not a fresh build, and name `.claude/skills/code/rebase-pickup.md` as the file whose cycle it
-   runs (its `coding.md` points there on a `needs-rebase` dispatch), e.g.:
+   runs, e.g.:
 
    > lode-ai1 carries `needs-rebase` (kicked back by `/land`'s conflict precheck) — a rebase pickup:
    > read `.claude/skills/code/rebase-pickup.md` whole first and run its cycle. Fetch the branch and

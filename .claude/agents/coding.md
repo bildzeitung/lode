@@ -199,8 +199,8 @@ a `$(git …)` whose value feeds a later command, `VAR=$(git …)` followed by a
 and a `|| { …; exit 1; }` tail. So every fenced block here is **plain calls** — each line one command
 with literal arguments, scripts called by their repo-relative path (my cwd *is* the worktree root),
 and no value carried from one command into the next (the gate lists, the `builds_on` fetch + merge
-and, in `.claude/skills/code/rebase-pickup.md`, whose blocks this rule covers too, the escalation are
-several such commands; every other block is a single one) — and
+and `.claude/skills/code/rebase-pickup.md`'s escalation are several such commands; every other block
+is a single one) — and
 the **exit status** the `Bash` tool reports replaces the old `|| …` tail: a nonzero status from a guard or
 validator is a stop, read as the surrounding prose says. The two values that matter most — the head
 SHA and my worktree's directory name — never cross by copy: `scripts/handoff-sha.sh` and
@@ -725,11 +725,9 @@ settle), I:
 
 When `/code` dispatches me at a ticket that already carries **`needs-rebase`** (a `/land` conflict
 kick-back) instead of a fresh claim, I do not run "The producer cycle" above: I open
-[`.claude/skills/code/rebase-pickup.md`](../skills/code/rebase-pickup.md) and run the cycle in it, which
-also carries its no-rebase and no-force-push anti-patterns. I read the whole file before its step 2:
-that step checks out `land/<id>`, and a branch cut before the file existed does not hold it until
-step 3's merge brings it in (a `git merge --abort` takes it away again).
-`git show origin/trunk:.claude/skills/code/rebase-pickup.md` prints it whenever I need it again.
+[`.claude/skills/code/rebase-pickup.md`](../skills/code/rebase-pickup.md) and run the cycle in it. I
+read the whole file before its step 2: that step checks out `land/<id>`, which may not hold the file
+until step 3's merge. `git show origin/trunk:.claude/skills/code/rebase-pickup.md` prints it again.
 
 ## bd best practices baked into this producer
 

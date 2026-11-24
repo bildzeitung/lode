@@ -6387,6 +6387,35 @@ entries below from being rewritten to chase the current tree.)
   - **Update (lode-w18a.13, 2026-11-23):** the `coding.md` inventory approved under this entry was
     amended by maintainer ruling before its cut; see the entry "coding.md rule inventory amended
     before the `lode-w18a.12` cut".
+  - **Update (lode-w18a.7, 2026-11-23, maintainer):** the rebase-pickup cycle has moved, and not
+    to "its own agent file" as the bullet above has it. Decided on `lode-w18a.7`: (1) the
+    destination is `.claude/skills/code/rebase-pickup.md`, a file the `coding` agent opens on a
+    `needs-rebase` dispatch. A new agent under `.claude/agents/` would have changed `/code` step
+    0's dispatch, which still names `subagent_type: "coding"`; `docs/` was ruled out because an
+    agent executes the file. (2) Every gate that scans `.claude/agents/*.md` for the moved fenced
+    blocks is widened to cover the new file, and none is weakened. (3) The two anti-pattern
+    bullets that forbid a rebase and a force-push move with the cycle; their inventory entries
+    and `rebase-pickup-genuine-conflict-escalates` are repointed to the new file. (4) The text
+    moves byte-identical, link repoints excepted.
+    - **As built.** The moved section differs from trunk's `coding.md` in four link targets and
+      nothing else (the `#the-producer-cycle` anchor is now a link into `coding.md`; three
+      `../../docs/` paths are `../../../docs/`), and the two bullets are identical; both were
+      compared at review with `diff` and `cmp`. `coding.md` is 58,049 bytes, down from 76,602;
+      the new file is 19,889, so the two together are 1,336 bytes larger and only a
+      `needs-rebase` dispatch reads the second.
+    - **Gates.** The file is in `tests/conftest.py`'s `MARKDOWN_CORPUS_GLOBS`, which feeds
+      `test_skill_bash_state`, `test_bd_list_limit_gate`, `test_sweep_pipeline_label_roster_gate`
+      and `test_validate_sha40_call_sites` (which holds it to the agent-file rules);
+      `test_isolation_guard`'s call-site pin names it, and `test_harness_doctor`'s script check
+      reads the same corpus. Of the eight gates the decision named, three read no instruction
+      markdown and had nothing to widen: `test_no_hand_derived_skill_md_path` scans `tests/*.py`,
+      and `test_recycled_worktree_guard` and `test_trunk_write_guard` run the script and the
+      hook. `tests/test_rebase_pickup_reference.py` pins the dispatch path and the order of the
+      file's guard calls.
+    - **A cost the move brings.** The cycle is now a working-tree file, and its own step 2 checks
+      out `land/<id>`. A branch cut before the file existed does not hold it until step 3 merges
+      trunk in. `coding.md`'s pointer tells the agent to read the file whole first and gives the
+      `git show origin/trunk:` call that prints it again.
 
 - **Update (lode-5x01, 2026-11-16) — a filename typo in `lode-s09w`'s `uv` migration entry above.**
   That entry's bullet "`scripts/python-init.sh`, `venv-install` and `compile-lock.sh` are deleted

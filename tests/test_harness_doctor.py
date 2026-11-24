@@ -30,7 +30,7 @@ from pathlib import Path
 import pytest
 from _gitrepo import _git
 from _hookharness import SETTINGS
-from conftest import REBASE_PICKUP_REFERENCE, fake_bin_env, markdown_corpus_files
+from conftest import REBASE_PICKUP_REFERENCE, fake_bin_env, markdown_corpus_text
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "harness-doctor.sh"
@@ -286,10 +286,10 @@ def test_every_script_the_harness_invokes_by_path_is_checked() -> None:
     agent/skill half is what caught `scripts/release.sh` and its two
     siblings missing from the first draft of the list.
     """
-    sources = [SETTINGS, *markdown_corpus_files()]
+    sources = [SETTINGS.read_text(), *(text for _, text in markdown_corpus_text())]
     referenced: set[str] = set()
-    for path in sources:
-        referenced |= set(re.findall(r"scripts/[A-Za-z0-9._-]+\.sh", path.read_text()))
+    for text in sources:
+        referenced |= set(re.findall(r"scripts/[A-Za-z0-9._-]+\.sh", text))
     missing = sorted(referenced - set(REQUIRED_SCRIPTS))
     assert not missing, (
         f"scripts referenced by the harness but not checked by harness-doctor: "
