@@ -21,9 +21,9 @@ that file's GitHub blob URL (fragment preserved verbatim) instead of shipping
 a broken relative link on the site. Links between published pages are left
 alone.
 
-Last, it refuses to stage a page whose markdown image points at a file the
-staged tree does not have: the site generator's link validation resolves
-links to pages only, so nothing downstream would report it.
+Last, it refuses to stage a page whose image (markdown or an HTML ``<img>``)
+points at a file the staged tree does not have: the site generator's link
+validation resolves links to pages only, so nothing downstream would report it.
 
 Usage:
     scripts/build_docs_site.py <output-dir>
@@ -117,9 +117,10 @@ _MERMAID_FENCE_RE = re.compile(r"```mermaid\n(.*?)\n```", re.DOTALL)
 # scripts/check_links.py's _LINK_RE (group 2: angle-bracket destination, group
 # 3: any other; an optional title follows), differing only in capturing the
 # label as group 1. tests/test_build_docs_site.py holds the two equal.
-_LINK_RE = re.compile(
-    r"(?<!!)\[([^\]]*)\]\(\s*(?:<([^<>]*)>(?=[\s)])|([^\s)]+))(?:\s[^)]*)?\)"
-)
+# _DESTINATION is shared with _IMAGE_RE, so an image's destination is read by
+# the grammar that test pins.
+_DESTINATION = r"\(\s*(?:<([^<>]*)>(?=[\s)])|([^\s)]+))(?:\s[^)]*)?\)"
+_LINK_RE = re.compile(r"(?<!!)\[([^\]]*)\]" + _DESTINATION)
 # What scripts/check_links.py's _SCHEME_RE and _is_external treat as external:
 # a URI scheme in any letter case, or a protocol-relative `//`. A relative path
 # whose first segment holds a colon (`a.md:12`) is a scheme to both; `./a.md:12`
@@ -137,8 +138,23 @@ def _is_external(target: str) -> bool:
 # as an EXAMPLE inside backticks (or inside a fenced block) is documentation,
 # not a link, and rewriting it would corrupt the published page.
 _INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`).+?(?<!`)\1(?!`)")
-# A markdown image, with or without a quoted title after the target.
-_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)")
+# A markdown inline image, with or without a quoted title after the target.
+_IMAGE_RE = re.compile(r"!\[[^\]]*\]" + _DESTINATION)
+# A reference-style image -- full `![alt][label]`, collapsed `![label][]` or
+# shortcut `![label]` -- and the `[label]: destination` definition it names.
+# One whitespace character may separate the two bracket pairs, and the
+# destination may sit on the line after the label; it holds no whitespace, in
+# angle brackets or out of them.
+_REF_IMAGE_RE = re.compile(r"!\[([^\]]*)\](?:\s?\[([^\]]*)\])?(?!\()")
+_REF_DEF_RE = re.compile(r"^ {0,3}\[([^\[\]]+)\]:[ ]*(?:\n[ ]*)?(\S+)", re.MULTILINE)
+# An HTML image's src attribute, quoted or bare. A quoted attribute value
+# before it is skipped whole, so a `src=` or a `>` inside one is not read as
+# the tag's own; `data-src` and `srcset` are other attributes.
+_HTML_IMG_RE = re.compile(
+    r"<img\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*?\ssrc\s*=\s*"
+    r"(?:\"([^\"]*)\"|'([^']*)'|([^\s>\"']+))",
+    re.IGNORECASE,
+)
 
 
 @functools.cache
@@ -383,7 +399,7 @@ def _process_links(text: str, rel_path: str, published: set[str]) -> str:
 
 
 def _missing_image_targets(text: str, page: Path) -> list[str]:
-    """Relative image targets in staged `text` with no file beside `page`.
+    """Image targets in staged `text` with no file beside `page`.
 
     Zensical's ``invalid_links`` check resolves links to PAGES only: an image
     whose file is missing builds clean under ``--strict`` and ships broken
@@ -391,21 +407,50 @@ def _missing_image_targets(text: str, page: Path) -> list[str]:
     target absent from it is absent from the site. Images inside code are
     examples, not images, and are skipped like links are.
 
+    Inline, reference-style and HTML ``<img src>`` images are read, the
+    patterns matched to what Zensical 0.1.3 was measured to emit. They still
+    differ from it. Measured on 0.1.3, a missing file ships unreported when it
+    is named by ``srcset``, by a reference definition inside a block quote or a
+    list item, or by an image whose label is undefined and whose alt text is
+    itself a defined label. Other measured differences fail the build on an
+    image the site does not show, or shows whole; they include an image inside
+    an HTML comment or an indented code block, one after a backslash, and a
+    bare destination holding a parenthesis.
+
     A target ``_is_external`` is true for is not looked up: Zensical emits it
     as written, a URL (measured on 0.1.3). So an image file named like a
     scheme (``fig:1.png``) is not checked under that spelling; ``./fig:1.png``
-    is a path, and is checked.
+    is a path, and is checked. A target with a single leading ``/`` is always
+    reported: the site is served under a sub-path, and a lookup on the build
+    machine's filesystem root would say nothing about it.
     """
     protected = _code_ranges(text)
+
+    def in_code(pos: int) -> bool:
+        return any(lo <= pos < hi for lo, hi in protected)
+
+    # Labels are matched as the site's parser matches them: lower-cased, a
+    # definition's stripped, a use's whitespace runs collapsed; the last
+    # definition of a label wins.
+    defs = {
+        m.group(1).strip().lower(): m.group(2).lstrip("<").rstrip(">")
+        for m in _REF_DEF_RE.finditer(text)
+        if not in_code(m.start())
+    }
+    found = [
+        (m.start(), next(g for g in m.groups() if g is not None))
+        for m in (*_IMAGE_RE.finditer(text), *_HTML_IMG_RE.finditer(text))
+    ]
+    for m in _REF_IMAGE_RE.finditer(text):
+        label = re.sub(r"\s+", " ", (m.group(2) or m.group(1)).lower())
+        if label in defs:
+            found.append((m.start(), defs[label]))
     missing = []
-    for match in _IMAGE_RE.finditer(text):
-        target = match.group(1)
-        if _is_external(target):
+    for pos, target in sorted(found):
+        if not target or _is_external(target) or in_code(pos):
             continue
-        if any(lo <= match.start() < hi for lo, hi in protected):
-            continue
-        path_part = target.partition("#")[0].partition("?")[0]
-        if not (page.parent / path_part).is_file():
+        path_part = unquote(target.partition("#")[0].partition("?")[0])
+        if target.startswith("/") or not (page.parent / path_part).is_file():
             missing.append(target)
     return missing
 

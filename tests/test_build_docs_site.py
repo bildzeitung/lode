@@ -376,6 +376,70 @@ def test_missing_image_targets_are_found(tmp_path: Path) -> None:
     ) == ["../assets/gone.png", "assets/here.png", "./gone:1.png"]
 
 
+def test_missing_image_targets_read_the_site_generators_shapes(
+    tmp_path: Path,
+) -> None:
+    """Each shape is looked up where the site reads an image file, and only there.
+
+    Every row is a reading measured on a scratch Zensical 0.1.3 strict build.
+    """
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "here.png").write_bytes(b"")
+    (tmp_path / "assets" / "my diagram.png").write_bytes(b"")
+    (tmp_path / "how-to").mkdir()
+    page = tmp_path / "how-to" / "page.md"
+    present = (
+        "![x](<../assets/here.png>)\n"
+        "![x](<//cdn.example/x.png>)\n"
+        "![x](<https://example.com/x.png>)\n"
+        "![x](<../assets/my diagram.png>)\n"
+        '![x](<../assets/my diagram.png> "t")\n'
+        "![x](../assets/my%20diagram.png)\n"
+        '<img src="../assets/here.png" width="4">\n'
+        # Neither `data-src` nor text inside another attribute is the src.
+        '<img data-src="../assets/gone.png" src="../assets/here.png">\n'
+        "<img alt=\"src='../assets/gone.png'\" src='../assets/here.png'>\n"
+        '<img data-src="../assets/gone.png" alt="no src at all">\n'
+        "![x][r]\n![r][]\n![r]\n"
+        # A padded label in a use names no definition: the site shows text.
+        "![x][ gone ]\n\n"
+        "[r]: ../assets/here.png\n"
+        "[gone]: ../assets/gone.png\n"
+    )
+    assert build_docs_site._missing_image_targets(present, page) == []
+    missing = {
+        "![x](<../assets/gone one.png>)": "../assets/gone one.png",
+        "![x](../assets/gone%20two.png)": "../assets/gone%20two.png",
+        '<img src="../assets/gone.png" width="4">': "../assets/gone.png",
+        "<IMG ALT='a > b'\n SRC = '../assets/gone.png'>": "../assets/gone.png",
+        "<img alt=a src=../assets/gone.png>": "../assets/gone.png",
+        "![x][r]\n\n[R]: ../assets/gone.png": "../assets/gone.png",
+        "![r][]\n\n[r]: <../assets/gone.png>": "../assets/gone.png",
+        "![r]\n\n[r]: ../assets/gone.png": "../assets/gone.png",
+        "![x] [a\nb]\n\n[a b]:\n  ../assets/gone.png": "../assets/gone.png",
+        "![x][r]\n\n[r]: ../assets/here.png\n[r]: ../assets/gone.png": (
+            "../assets/gone.png"
+        ),
+    }
+    for text, target in missing.items():
+        assert build_docs_site._missing_image_targets(text, page) == [target], text
+
+
+def test_missing_image_targets_report_a_single_leading_slash(
+    tmp_path: Path,
+) -> None:
+    """A `/`-rooted image is reported even when that path exists on the builder."""
+    existing = tmp_path / "abs.png"
+    existing.write_bytes(b"")
+    # In angle brackets, so a temporary directory whose path holds a space or a
+    # parenthesis is still read whole.
+    text = f'![x](<{existing}>)\n<img src="{existing}">\n'
+    assert build_docs_site._missing_image_targets(text, tmp_path / "page.md") == [
+        str(existing),
+        str(existing),
+    ]
+
+
 def test_build_refuses_a_page_with_a_missing_image(tmp_path: Path) -> None:
     """The check is wired into ``build()``: staging fails, naming page and target."""
     docs = tmp_path / "docs"
