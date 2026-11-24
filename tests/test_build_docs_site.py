@@ -425,6 +425,38 @@ def test_missing_image_targets_read_the_site_generators_shapes(
         assert build_docs_site._missing_image_targets(text, page) == [target], text
 
 
+def test_missing_image_targets_read_srcset_candidates(tmp_path: Path) -> None:
+    """Every srcset candidate on <source> or <img> is looked up like a src."""
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "here.png").write_bytes(b"")
+    (tmp_path / "how-to").mkdir()
+    page = tmp_path / "how-to" / "page.md"
+    present = (
+        '<source srcset="../assets/here.png" media="(prefers-color-scheme: dark)">\n'
+        '<img srcset="../assets/here.png 1x, ../assets/here.png 2x" src="../assets/here.png">\n'
+        '<source srcset="https://example.com/x.png 2x, //cdn.example/y.png">\n'
+        "<source data-srcset='../assets/gone.png'>\n"
+        "<source alt=\"srcset='../assets/gone.png'\">\n"
+    )
+    assert build_docs_site._missing_image_targets(present, page) == []
+    missing = {
+        '<source srcset="../assets/gone.png" media="x">': ["../assets/gone.png"],
+        "<img srcset='../assets/gone-2x.png 2x' src='../assets/here.png'>": [
+            "../assets/gone-2x.png"
+        ],
+        '<img srcset="../assets/here.png 1x,\n ../assets/gone.png 2x">': [
+            "../assets/gone.png"
+        ],
+        "<source srcset=../assets/gone.png>": ["../assets/gone.png"],
+        '<source srcset="../assets/a.png 1x, ../assets/b.png 2x">': [
+            "../assets/a.png",
+            "../assets/b.png",
+        ],
+    }
+    for text, targets in missing.items():
+        assert build_docs_site._missing_image_targets(text, page) == targets, text
+
+
 def test_missing_image_targets_report_a_single_leading_slash(
     tmp_path: Path,
 ) -> None:

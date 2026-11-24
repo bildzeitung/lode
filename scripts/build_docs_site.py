@@ -155,6 +155,14 @@ _HTML_IMG_RE = re.compile(
     r"(?:\"([^\"]*)\"|'([^']*)'|([^\s>\"']+))",
     re.IGNORECASE,
 )
+# An HTML `srcset` attribute on an <img> or <source>, quoted or bare; its value
+# is a comma-separated list of candidates, each a URL then an optional
+# descriptor. Quoted attribute values before it are skipped whole, as above.
+_HTML_SRCSET_RE = re.compile(
+    r"<(?:img|source)\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*?\ssrcset\s*=\s*"
+    r"(?:\"([^\"]*)\"|'([^']*)'|([^\s>\"']+))",
+    re.IGNORECASE,
+)
 
 
 @functools.cache
@@ -407,12 +415,12 @@ def _missing_image_targets(text: str, page: Path) -> list[str]:
     target absent from it is absent from the site. Images inside code are
     examples, not images, and are skipped like links are.
 
-    Inline, reference-style and HTML ``<img src>`` images are read, the
-    patterns matched to what Zensical 0.1.3 was measured to emit. They still
-    differ from it. Measured on 0.1.3, a missing file ships unreported when it
-    is named by ``srcset``, by a reference definition inside a block quote or a
-    list item, or by an image whose label is undefined and whose alt text is
-    itself a defined label. Other measured differences fail the build on an
+    Inline, reference-style, HTML ``<img src>`` and ``srcset`` (on ``<img>``
+    or ``<source>``, every candidate) images are read, the patterns matched to
+    what Zensical 0.1.3 was measured to emit. They still differ from it.
+    Measured on 0.1.3, a missing file ships unreported when it is named by a
+    reference definition inside a block quote or a list item, or by an image
+    whose label is undefined and whose alt text is itself a defined label. Other measured differences fail the build on an
     image the site does not show, or shows whole; they include an image inside
     an HTML comment or an indented code block, one after a backslash, and a
     bare destination holding a parenthesis.
@@ -441,6 +449,11 @@ def _missing_image_targets(text: str, page: Path) -> list[str]:
         (m.start(), next(g for g in m.groups() if g is not None))
         for m in (*_IMAGE_RE.finditer(text), *_HTML_IMG_RE.finditer(text))
     ]
+    for m in _HTML_SRCSET_RE.finditer(text):
+        value = next(g for g in m.groups() if g is not None)
+        found.extend(
+            (m.start(), cand.split()[0]) for cand in value.split(",") if cand.split()
+        )
     for m in _REF_IMAGE_RE.finditer(text):
         label = re.sub(r"\s+", " ", (m.group(2) or m.group(1)).lower())
         if label in defs:
