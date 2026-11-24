@@ -89,8 +89,7 @@ def test_no_plain_environ_copy_under_tests() -> None:
     ]
     assert not hits, (
         "plain full copy of os.environ under tests/ -- use os_env() from "
-        "tests/_gitrepo.py (its repr shows a variable count only):\n"
-        + "\n".join(hits)
+        "tests/_gitrepo.py (its repr shows a variable count only):\n" + "\n".join(hits)
     )
 
 
