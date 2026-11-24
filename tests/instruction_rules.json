@@ -1041,11 +1041,6 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
-    "rule": "fan-out-safe-within-one-invocation",
-    "phrase": "Fan-out (N producers in parallel) is safe and encouraged **within** a single invocation"
-  },
-  {
-    "file": ".claude/skills/code/SKILL.md",
     "rule": "cap-computed-before-step-0",
     "phrase": "**Before step 0**, compute the cap once and hold it for the rest of the invocation."
   },
@@ -1132,7 +1127,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step0-dispatch-coding-per-hit-no-isolation",
-    "phrase": "For **each** hit, dispatch a `coding` producer (`subagent_type: \"coding\"` — **no call-site"
+    "phrase": "For **each** hit, dispatch a `coding` producer (`subagent_type: \"coding\"` — **no call-site `isolation` option**"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1177,7 +1172,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step0-prompt-mechanical-conflict-resolved",
-    "phrase": "if both sides added independent, non-overlapping content (a **mechanical**"
+    "phrase": "if both sides added independent, non-overlapping content (a **mechanical** conflict), resolve it directly with `Edit` and continue, then finish the same way"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1332,7 +1327,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step1-derive-is-backstop-resolution-time-write-is-norm",
-    "phrase": "stays the norm and this stays the backstop"
+    "phrase": "(b), the resolution-time write in [`docs/land-escalation-runbook.md`](../../../docs/land-escalation-runbook.md), stays the norm and this stays the backstop"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1362,7 +1357,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step2-no-argument-or-all-ready-fans-out",
-    "phrase": "**No argument** (the **default**), or **`--all-ready`** → read the filtered `bd ready --json`"
+    "phrase": "**No argument** (the **default**), or **`--all-ready`** → read the filtered `bd ready --json` frontier (callout below) and **fan out** across the **independent, unblocked** frontier (honoring the dependency graph)."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1418,11 +1413,6 @@
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step2-labels-null-needs-default",
     "phrase": "(`labels` is `null`, not `[]`, on a ticket with none — hence the `// []`.)"
-  },
-  {
-    "file": ".claude/skills/code/SKILL.md",
-    "rule": "step2-filter-before-fan-out-single-takes-top",
-    "phrase": "On the no-argument and `--all-ready` paths, filter the frontier this way **before** fanning out across all of it. On `--single`, filter the same way and dispatch just the **top** entry."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1512,7 +1502,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "phase1-dispatch-coding-per-task-no-isolation",
-    "phrase": "**Phase 1 — dispatch one `coding` builder per task** via the Agent tool with"
+    "phrase": "**Phase 1 — dispatch one `coding` builder per task** via the Agent tool with `subagent_type: \"coding\"` — **no call-site `isolation` option.**"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1646,11 +1636,6 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
-    "rule": "phase2-stalled-never-send-reviewer-into-unverified-worktree",
-    "phrase": "Do **not** send a reviewer into an unverified worktree."
-  },
-  {
-    "file": ".claude/skills/code/SKILL.md",
     "rule": "phase2-stalled-builder-resume-via-sendmessage",
     "phrase": "Resume that same builder (`SendMessage` to its agent id/name"
   },
@@ -1697,7 +1682,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "phase2-dispatch-code-reviewer-no-isolation",
-    "phrase": "For every ticket that passes both checks: use the Agent tool with `subagent_type: \"code-reviewer\"`"
+    "phrase": "For every ticket that passes both checks: use the Agent tool with `subagent_type: \"code-reviewer\"` — **no call-site `isolation` option**"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1727,7 +1712,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "phase2-reviewer-code-review-medium-never-fix-comment",
-    "phrase": "(always; never `--fix`/`--comment`)"
+    "phrase": "Run `/code-review` at effort medium against `trunk...HEAD` first (always; never `--fix`/`--comment`)"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1747,12 +1732,12 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "phase2-reviewer-escalates-only-on-decision-or-worse",
-    "phrase": "only on a clarifying decision or \"making it worse.\""
+    "phrase": "Escalate (revert to green, swap to `land-escalated`, don't mark ready) only on a clarifying decision or \"making it worse.\""
   },
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "phase2-give-reviewer-useful-context",
-    "phrase": "Give the reviewer whatever *context* is genuinely useful — which sibling branches in this fan-out touch the same files"
+    "phrase": "Give the reviewer whatever *context* is genuinely useful — which sibling branches in this fan-out touch the same files, what the ticket's own hand-off notes warn about, any specific claim worth checking."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
