@@ -1,21 +1,33 @@
-"""Gate: no test builds a plain full copy of ``os.environ`` (lode-jtozo).
+"""Gate: no test builds a plain full copy of ``os.environ`` or passes it on
+whole (lode-jtozo).
 
 A plain ``dict`` of the whole environment prints its first variables, values
 included, in a pytest failure whenever a subprocess call it feeds cannot start
-its command. ``tests/_gitrepo.py``'s ``os_env()`` returns a mapping whose repr
-shows only a variable count, and lode-ovcvs / lode-fe2xj converted every site.
-This scan keeps the conversion from regrowing: it fails on the shapes
-``dict(os.environ)``, ``os.environ.copy()``, ``**os.environ``,
-``os.environ.items()`` and ``os.environ | ...`` in any tracked ``tests/*.py``
-except ``tests/_gitrepo.py``, which builds the quiet mapping.
+its command, and so does ``os.environ`` itself passed as ``env=``.
+``tests/_gitrepo.py``'s ``os_env()`` returns a mapping whose repr shows only a
+variable count, and every test that needs the whole environment calls it
+(lode-ovcvs, lode-fe2xj). This scan fails on ``dict(os.environ)``,
+``os.environ.copy()``, ``x.update(os.environ)``, ``**os.environ``,
+``name=os.environ``, ``os.environ.items()`` and ``os.environ | ...`` in any
+tracked ``tests/*.py`` except ``tests/_gitrepo.py``, which builds the quiet
+mapping.
+
+``os.environ.items()`` is refused wherever it appears, because a filtered copy
+is built from it; a loop that only reads can iterate the keys.
 
 AST, not text: the rule's own name appears in docstrings and comments
 (``tests/_nested_pytest.py``), which a text grep would flag.
 
-Blind spots, deliberately left on prose: a dict rebuilt from an ``os_env()``
-result held in a variable (``{**env}``, ``dict(env, K=v)``, ``env.copy()``),
-and ``from os import environ`` spellings. ``pytest --showlocals`` prints the
-environment whatever its type.
+Blind spots, deliberately left on prose:
+
+- a dict rebuilt from an ``os_env()`` result held in a variable (``{**env}``,
+  ``dict(env, K=v)``, ``env.copy()``);
+- ``os.environ`` under another name (``from os import environ``,
+  ``import os as x``, ``env = os.environ``);
+- the other ways of building the copy (``d |= os.environ``, a comprehension
+  over bare ``os.environ``, another mapping type's constructor).
+
+``pytest --showlocals`` prints the environment whatever its type.
 """
 
 from __future__ import annotations
@@ -40,19 +52,17 @@ def _is_os_environ(node: ast.AST) -> bool:
 
 
 def find_environ_copies(text: str) -> list[tuple[int, str]]:
-    """(lineno, shape) for every plain full-copy use of ``os.environ``."""
+    """(lineno, shape) for every use of ``os.environ`` the gate refuses."""
     tree = ast.parse(text)
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             func = node.func
-            if (
-                isinstance(func, ast.Name)
-                and func.id == "dict"
-                and node.args
-                and _is_os_environ(node.args[0])
-            ):
-                found.append((node.lineno, "dict(os.environ)"))
+            if node.args and _is_os_environ(node.args[0]):
+                if isinstance(func, ast.Name) and func.id == "dict":
+                    found.append((node.lineno, "dict(os.environ)"))
+                elif isinstance(func, ast.Attribute) and func.attr == "update":
+                    found.append((node.lineno, ".update(os.environ)"))
             if (
                 isinstance(func, ast.Attribute)
                 and func.attr in {"copy", "items"}
@@ -60,9 +70,9 @@ def find_environ_copies(text: str) -> list[tuple[int, str]]:
             ):
                 found.append((node.lineno, f"os.environ.{func.attr}()"))
             found.extend(
-                (kw.value.lineno, "**os.environ")
+                (kw.value.lineno, f"{kw.arg}=os.environ" if kw.arg else "**os.environ")
                 for kw in node.keywords
-                if kw.arg is None and _is_os_environ(kw.value)
+                if _is_os_environ(kw.value)
             )
         elif isinstance(node, ast.Dict):
             found.extend(
@@ -88,7 +98,7 @@ def test_no_plain_environ_copy_under_tests() -> None:
         )
     ]
     assert not hits, (
-        "plain full copy of os.environ under tests/ -- use os_env() from "
+        "os.environ copied or passed whole under tests/ -- use os_env() from "
         "tests/_gitrepo.py (its repr shows a variable count only):\n" + "\n".join(hits)
     )
 
@@ -99,8 +109,10 @@ def test_no_plain_environ_copy_under_tests() -> None:
         ("e = dict(os.environ)", "dict(os.environ)"),
         ("e = dict(os.environ, A='1')", "dict(os.environ)"),
         ("e = os.environ.copy()", "os.environ.copy()"),
+        ("e.update(os.environ)", ".update(os.environ)"),
         ("e = {**os.environ, 'A': '1'}", "{**os.environ}"),
         ("f(**os.environ)", "**os.environ"),
+        ("f(cmd, env=os.environ)", "env=os.environ"),
         ("e = [k for k, v in os.environ.items()]", "os.environ.items()"),
         ("e = os.environ | {'A': '1'}", "os.environ | ..."),
     ],
@@ -115,6 +127,8 @@ def test_matcher_flags_each_shape(line: str, shape: str) -> None:
         "e = os.environ.get('A')",
         "e = os.environ['A']",
         "e = 'A' in os.environ",
+        "os.environ.update({'A': '1'})",
+        "f(cmd, env=other)",
         "e = {**other, 'A': '1'}",
         "e = dict(other)",
         "'''dict(os.environ) in a docstring'''",
