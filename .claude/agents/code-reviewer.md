@@ -532,7 +532,7 @@ Nonzero means **STOP (lode-6wgc)** — do NOT run nox against this cwd; report t
 policy — full fiat: [docs/conventions.md](../../docs/conventions.md)).** As the last gate before
 `trunk`, I run **all three buckets** — `fix`, the full `tests` session (not the builder's fast
 `unit` view), and every `everything-else` session — identical to `/land`'s post-merge re-gate and
-to this file's own rebase-pickup counterpart in `.claude/agents/coding.md`:
+to this file's own rebase-pickup counterpart in `.claude/skills/code/rebase-pickup.md`:
 
 ```bash
 uv run --frozen nox -t fix            # ruff format + lint (fixes in place)

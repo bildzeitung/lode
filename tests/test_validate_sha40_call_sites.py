@@ -79,8 +79,18 @@ CALL_SITES: list[tuple[str, list[str]]] = [
 
 AGENTS_PREFIX = ".claude/agents/"
 
-AGENT_SITES = [(p, b) for p, b in CALL_SITES if p.startswith(AGENTS_PREFIX)]
-SKILL_SITES = [(p, b) for p, b in CALL_SITES if not p.startswith(AGENTS_PREFIX)]
+#: The rebase-pickup cycle the ``coding`` agent opens on a ``needs-rebase``
+#: dispatch lives under skills/ but is executed by that agent, so the strict
+#: agent rules apply to it, not the skill rules (lode-w18a.7).
+AGENT_EXECUTED_REFERENCE = ".claude/skills/code/rebase-pickup.md"
+
+
+def _is_agent_file(path: str) -> bool:
+    return path.startswith(AGENTS_PREFIX) or path == AGENT_EXECUTED_REFERENCE
+
+
+AGENT_SITES = [(p, b) for p, b in CALL_SITES if _is_agent_file(p)]
+SKILL_SITES = [(p, b) for p, b in CALL_SITES if not _is_agent_file(p)]
 
 #: Raw text of every agent file: a hand-copied write is as dangerous in an
 #: inline code span or a list item as in a fenced block, and the blocks view
@@ -88,7 +98,7 @@ SKILL_SITES = [(p, b) for p, b in CALL_SITES if not p.startswith(AGENTS_PREFIX)]
 AGENT_TEXT = {
     rel: text
     for path, text in markdown_corpus_text()
-    if (rel := str(path.relative_to(REPO_ROOT))).startswith(AGENTS_PREFIX)
+    if _is_agent_file(rel := str(path.relative_to(REPO_ROOT)))
 }
 
 
@@ -196,10 +206,10 @@ def test_no_agent_file_writes_or_reads_a_drift_field_by_hand(field: str) -> None
 @pytest.mark.parametrize(
     ("agent", "script", "needle"),
     [
-        ("coding.md", HANDOFF, "review_head"),
-        ("coding.md", HANDOFF, "land_head"),
-        ("code-reviewer.md", HANDOFF, "land_head"),
-        ("code-reviewer.md", REVIEW_HEAD_CHECK, ""),
+        (".claude/agents/coding.md", HANDOFF, "review_head"),
+        (AGENT_EXECUTED_REFERENCE, HANDOFF, "land_head"),
+        (".claude/agents/code-reviewer.md", HANDOFF, "land_head"),
+        (".claude/agents/code-reviewer.md", REVIEW_HEAD_CHECK, ""),
     ],
 )
 def test_agent_files_still_call_the_hand_off_scripts(
@@ -207,7 +217,7 @@ def test_agent_files_still_call_the_hand_off_scripts(
 ) -> None:
     """Non-vacuity for the strict gate above: it would pass vacuously if the
     agent simply stopped recording the hand-off."""
-    blocks = dict(AGENT_SITES)[f".claude/agents/{agent}"]
+    blocks = dict(AGENT_SITES)[agent]
     assert _calls(blocks, script, needle), f"{agent} no longer calls {script} {needle}"
 
 

@@ -691,7 +691,7 @@ remediation, because it is destructive and fires exactly when the worktree's pro
 understood:
 
 - **It only runs in an isolated launch worktree — mechanically, at all four call sites.**
-  `coding.md`'s rebase-pickup step 2, `code-reviewer.md`'s step 2, `land-review.md`'s first action,
+  `.claude/skills/code/rebase-pickup.md` step 2, `code-reviewer.md`'s step 2, `land-review.md`'s first action,
   and `coding.md`'s fresh-build site (step 3) each invoke the same
   `scripts/recycled-worktree-guard.sh`, which wraps its remediation in an explicit
   `case "$TOP" in */.claude/worktrees/*) ;; ... esac` on `git rev-parse --show-toplevel`, in the same
@@ -726,7 +726,7 @@ nothing reads `decisions.md` immediately before a destructive command — so tho
 decision-timeline pointers instead (`uv run --frozen python scripts/docs_index_query.py "lode-zt62"`).
 
 **Scope: only the fresh-build start state (`coding.md` step 3) and each cycle's own pre-checkout start
-state (`coding.md`'s rebase-pickup step 2, `code-reviewer.md` step 2) — never a reason to avoid the
+state (`.claude/skills/code/rebase-pickup.md` step 2, `code-reviewer.md` step 2) — never a reason to avoid the
 deliberate non-trunk checkouts those latter two cycles perform right afterward.** A rebase pickup
 fetches and checks out an existing `land/<id>` on purpose (it's mid-flight work being resumed, not a
 fresh build), and a `code-reviewer` always checks out the branch it's reviewing on purpose — both are
@@ -959,7 +959,7 @@ documented exit 2, never git's raw, undocumented 128 — lode-t6ni, [below](#pre
 Every call site treats any non-zero exit as the same hard stop, so none of these are distinguished in
 practice — the distinction is for the *diagnostic*, not the caller's control flow. It runs as the
 **first executable action** of `coding.md`'s fresh-build cycle (step 3),
-`coding.md`'s rebase-pickup cycle (step 2, ahead of the recycled-worktree guard there too),
+`.claude/skills/code/rebase-pickup.md`'s cycle (step 2, ahead of the recycled-worktree guard there too),
 `code-reviewer.md`'s step 2 (ahead of its recycled-worktree guard), and `land-review.md`'s first
 action — before `EnterWorktree` is even considered, closing the window in which the `lode-ska2`
 incident's reviewer improvised its workaround. Full call sites:
@@ -3477,7 +3477,7 @@ Concretely, the whole cycle stays inside the one dispatched `coding` producer, s
   descends from what's already there,
 - refresh `land_head`, record the merge as a `REBASE PICKUP` note on the ticket, and swap
   `needs-rebase` straight to `ready-for-land` itself. `land_summary` stays the reviewer's
-  (lode-jb2q: the rule and its one exception are in `coding.md`'s rebase-pickup step 5, the dated
+  (lode-jb2q: the rule and its one exception are in `.claude/skills/code/rebase-pickup.md` step 5, the dated
   record in `docs/decisions.md`).
 
 **Expect the merge to conflict — that is the normal case, not the exception.** `/land` only applies
