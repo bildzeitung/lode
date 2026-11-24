@@ -34,11 +34,10 @@ the corresponding test red, verified by hand while writing this suite.
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
-from _gitrepo import _branch_from, _commit_file, _git
+from _gitrepo import _branch_from, _commit_file, _git, os_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "merge-precheck.sh"
@@ -255,7 +254,7 @@ def test_mktemp_failure_is_a_machine_fault_not_a_conflict(tmp_path: Path) -> Non
         capture_output=True,
         text=True,
         timeout=30,
-        env={**os.environ, "TMPDIR": str(tmp_path / "does-not-exist")},
+        env=os_env({"TMPDIR": str(tmp_path / "does-not-exist")}),
         check=False,
     )
 

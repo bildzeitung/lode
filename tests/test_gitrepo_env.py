@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from _gitrepo import _commit_file, _git, git_env, os_env
-from conftest import tracked_paths
+from conftest import fake_bin_env, tracked_paths
 
 
 def _repo(path: Path, filename: str) -> Path:
@@ -66,13 +66,14 @@ def test_git_env_keeps_extra() -> None:
 def test_git_env_repr_shows_no_variable(monkeypatch: pytest.MonkeyPatch) -> None:
     """A failing ``subprocess.run(..., env=git_env(), check=True)`` has its arguments
     printed by pytest; the environment's names and values must not be among them."""
-    monkeypatch.setenv("LODE_PROBE_SECRET", "hunter2")
-    env = git_env({"GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z"})
-    assert env["LODE_PROBE_SECRET"] == "hunter2"
-    shown = f"{env!r} {env}"
-    assert "hunter2" not in shown
-    assert "LODE_PROBE_SECRET" not in shown
-    assert "GIT_COMMITTER_DATE" not in shown
+    # conftest's import has already run and cached git's variable list, so git_env starts
+    # no git while os.environ has no PATH.
+    environ = {"LODE_PROBE_SECRET": "hunter2"}
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "environ", environ)
+        env = git_env({"GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z"})
+    assert dict(env) == {**environ, "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z"}
+    assert repr(env) == "<env: 2 variables>"
 
 
 def test_git_env_keeps_config_passed_through_the_environment(
@@ -108,3 +109,16 @@ def test_os_env_keeps_every_variable_and_shows_none(
         env = os_env({"EXTRA": "x"})
     assert dict(env) == {**environ, "EXTRA": "x"}
     assert repr(env) == "<env: 3 variables>"
+
+
+def test_fake_bin_env_shows_no_variable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``fake_bin_env`` feeds many ``check=False`` subprocess calls; a plain dict would print
+    the head of the environment when one cannot start its command."""
+    environ = {"LODE_PROBE_SECRET": "hunter2", "PATH": "/usr/bin"}
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "environ", environ)
+        env = fake_bin_env(tmp_path)
+    assert dict(env) == {**environ, "PATH": f"{tmp_path}{os.pathsep}/usr/bin"}
+    assert repr(env) == "<env: 2 variables>"

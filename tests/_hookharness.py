@@ -24,10 +24,11 @@ shared (lode-zlg8).
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
+
+from _gitrepo import os_env
 
 SETTINGS = Path(__file__).resolve().parent.parent / ".claude" / "settings.json"
 SH = shutil.which("sh") or "/bin/sh"
@@ -99,7 +100,7 @@ def run_hook(
     )
     env: dict[str, str] | None = None
     if path is not None or project_dir is not None:
-        env = dict(os.environ) if path is None else {"PATH": path}
+        env = os_env() if path is None else {"PATH": path}
         if project_dir is not None:
             env["CLAUDE_PROJECT_DIR"] = project_dir
     proc = subprocess.run(

@@ -8,13 +8,12 @@ process, so a dispatched agent never copies a SHA or directory name by hand.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
-from _gitrepo import _commit_file, _git
+from _gitrepo import _commit_file, _git, os_env
 from conftest import fake_bd, fake_bin_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -56,11 +55,12 @@ def bd(tmp_path: Path) -> Path:
 def _run(
     script: str, cwd: Path, *args: str, bindir: Path | None = None, **env: str
 ) -> subprocess.CompletedProcess[str]:
-    base = fake_bin_env(bindir) if bindir else dict(os.environ)
+    base = fake_bin_env(bindir) if bindir else os_env()
+    base.update(env)
     return subprocess.run(
         [str(SCRIPTS / script), *args],
         cwd=cwd,
-        env={**base, **env},
+        env=base,
         capture_output=True,
         text=True,
         check=False,

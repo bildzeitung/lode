@@ -23,13 +23,12 @@ behavior around a bounced branch.
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
-from _gitrepo import _git
+from _gitrepo import _git, os_env
 from conftest import fake_bin_env, path_without_tool
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -181,7 +180,7 @@ def _run(
     if fake_nox is not None:
         env = fake_bin_env(fake_nox)
     else:
-        env = dict(os.environ, PATH=path_without_tool(repo.parent, "uv"))
+        env = os_env({"PATH": path_without_tool(repo.parent, "uv")})
     return subprocess.run(
         args,
         cwd=repo,

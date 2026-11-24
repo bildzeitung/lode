@@ -29,25 +29,26 @@ whether the derivation logic underneath is correct.
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 from pathlib import Path
 
 import pytest
+from _gitrepo import os_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "code-concurrency-cap.sh"
 NOXFILE = REPO_ROOT / "noxfile.py"
 
-# Base env: the real environment, minus anything that would let a pinned
-# per-machine override or an ambient LODE_TEST_WORKERS leak into a test that
-# means to exercise the derivation path.
-_SCRUBBED = {
-    k: v
-    for k, v in os.environ.items()
-    if k not in ("LODE_CODE_MAX_CONCURRENT_AGENTS", "LODE_TEST_WORKERS")
-}
+
+def _scrubbed_env() -> dict[str, str]:
+    """The real environment, minus anything that would let a pinned per-machine
+    override or an ambient LODE_TEST_WORKERS leak into a test that means to
+    exercise the derivation path."""
+    env = os_env()
+    for name in ("LODE_CODE_MAX_CONCURRENT_AGENTS", "LODE_TEST_WORKERS"):
+        env.pop(name, None)
+    return env
 
 
 def _meminfo(tmp_path: Path, available_kib: int, total_kib: int = 99_999_999) -> Path:
@@ -59,7 +60,8 @@ def _meminfo(tmp_path: Path, available_kib: int, total_kib: int = 99_999_999) ->
 
 
 def _run(env_overrides: dict[str, str]) -> subprocess.CompletedProcess:
-    env = {**_SCRUBBED, **env_overrides}
+    env = _scrubbed_env()
+    env.update(env_overrides)
     return subprocess.run(
         ["bash", str(SCRIPT)],
         cwd=REPO_ROOT,

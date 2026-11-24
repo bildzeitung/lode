@@ -204,7 +204,7 @@ from unittest import mock
 
 import pytest
 import yaml
-from _gitrepo import _local_env_vars, git_env
+from _gitrepo import _local_env_vars, git_env, os_env
 from pydantic import BaseModel
 from textual.pilot import Pilot
 
@@ -2071,14 +2071,16 @@ def fake_bin_env(bin_dir: Path) -> dict[str, str]:
     How a test puts a fake tool (usually a fake ``bd``) in front of the real
     one for a subprocess under test: the real environment untouched, except
     ``PATH`` gaining ``bin_dir`` at the front. Callers needing further keys
-    overlay them on the result, as :func:`run_block` does with ``TMPDIR``.
+    assign them on the result, as :func:`run_block` does with ``TMPDIR``: the
+    result is an ``os_env``, and a dict rebuilt from it (``dict(env, K=v)``,
+    ``{**env, ...}``) prints its variables again.
 
     An unset ``PATH`` yields ``bin_dir`` alone rather than a trailing empty
     entry, which POSIX reads as the current directory.
     """
     existing = os.environ.get("PATH", "")
     path = f"{bin_dir}{os.pathsep}{existing}" if existing else str(bin_dir)
-    return dict(os.environ, PATH=path)
+    return os_env({"PATH": path})
 
 
 def uv_lock_package(
@@ -2169,7 +2171,8 @@ def run_block(
     inheriting the live checkout, the exact defect class the lode-s9xe.13
     incident (commit efbfa79) proved is not theoretical.
     """
-    env = dict(fake_bin_env(bin_dir), TMPDIR=str(sweep_tmp.parent))
+    env = fake_bin_env(bin_dir)
+    env["TMPDIR"] = str(sweep_tmp.parent)
     return subprocess.run(
         ["bash", "-c", block],
         capture_output=True,
