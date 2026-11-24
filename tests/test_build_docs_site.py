@@ -376,6 +376,52 @@ def test_missing_image_targets_are_found(tmp_path: Path) -> None:
     ) == ["../assets/gone.png", "assets/here.png", "./gone:1.png"]
 
 
+def test_missing_image_targets_read_the_site_generators_shapes(
+    tmp_path: Path,
+) -> None:
+    """Destination shapes the site reads as a file are looked up the same way."""
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "here.png").write_bytes(b"")
+    (tmp_path / "assets" / "my diagram.png").write_bytes(b"")
+    (tmp_path / "how-to").mkdir()
+    page = tmp_path / "how-to" / "page.md"
+    present = (
+        "![x](<../assets/here.png>)\n"
+        "![x](<//cdn.example/x.png>)\n"
+        "![x](<https://example.com/x.png>)\n"
+        "![x](<../assets/my diagram.png>)\n"
+        '![x](<../assets/my diagram.png> "t")\n'
+        "![x](../assets/my%20diagram.png)\n"
+        '<img src="../assets/here.png" width="4">\n'
+        "![x][r]\n![r][]\n\n[r]: ../assets/here.png\n"
+    )
+    assert build_docs_site._missing_image_targets(present, page) == []
+    missing = {
+        "![x](<../assets/gone one.png>)": "<../assets/gone one.png>"[1:-1],
+        "![x](../assets/gone%20two.png)": "../assets/gone%20two.png",
+        '<img src="../assets/gone.png" width="4">': "../assets/gone.png",
+        "<IMG alt='a' src='../assets/gone3.png'>": "../assets/gone3.png",
+        "![x][r]\n\n[R]: ../assets/gone4.png": "../assets/gone4.png",
+        "![r][]\n\n[r]: <../assets/gone 5.png>": "../assets/gone 5.png",
+    }
+    for text, target in missing.items():
+        assert build_docs_site._missing_image_targets(text, page) == [target], text
+
+
+def test_missing_image_targets_report_a_single_leading_slash(
+    tmp_path: Path,
+) -> None:
+    """A `/`-rooted image is reported even when that path exists on the builder."""
+    (tmp_path / "page.md").write_text("")
+    existing = tmp_path / "abs.png"
+    existing.write_bytes(b"")
+    text = f"![x]({existing})\n![y](/assets/here.png)\n"
+    assert build_docs_site._missing_image_targets(text, tmp_path / "page.md") == [
+        str(existing),
+        "/assets/here.png",
+    ]
+
+
 def test_build_refuses_a_page_with_a_missing_image(tmp_path: Path) -> None:
     """The check is wired into ``build()``: staging fails, naming page and target."""
     docs = tmp_path / "docs"

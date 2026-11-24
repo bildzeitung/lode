@@ -137,8 +137,22 @@ def _is_external(target: str) -> bool:
 # as an EXAMPLE inside backticks (or inside a fenced block) is documentation,
 # not a link, and rewriting it would corrupt the published page.
 _INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`).+?(?<!`)\1(?!`)")
-# A markdown image, with or without a quoted title after the target.
-_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)")
+# A markdown inline image, with or without a quoted title after the target. The
+# destination grammar is _LINK_RE's (group 1: angle-bracket destination, which
+# may hold spaces; group 2: any other).
+_IMAGE_RE = re.compile(
+    r"!\[[^\]]*\]\(\s*(?:<([^<>]*)>(?=[\s)])|([^\s)]+))(?:\s[^)]*)?\)"
+)
+# A reference-style image `![alt][label]` (or collapsed `![label][]`) and the
+# `[label]: destination` definition it names; labels match case-insensitively.
+_REF_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\[([^\]]*)\]")
+_REF_DEF_RE = re.compile(
+    r"^ {0,3}\[([^\]]+)\]:[ \t]*(?:<([^<>]*)>|(\S+))", re.MULTILINE
+)
+# An HTML image's src attribute.
+_HTML_IMG_RE = re.compile(
+    r"<img\b[^>]*?\bsrc\s*=\s*(?:\"([^\"]*)\"|'([^']*)')", re.IGNORECASE
+)
 
 
 @functools.cache
@@ -383,7 +397,7 @@ def _process_links(text: str, rel_path: str, published: set[str]) -> str:
 
 
 def _missing_image_targets(text: str, page: Path) -> list[str]:
-    """Relative image targets in staged `text` with no file beside `page`.
+    """Image targets in staged `text` with no file beside `page`.
 
     Zensical's ``invalid_links`` check resolves links to PAGES only: an image
     whose file is missing builds clean under ``--strict`` and ships broken
@@ -391,21 +405,45 @@ def _missing_image_targets(text: str, page: Path) -> list[str]:
     target absent from it is absent from the site. Images inside code are
     examples, not images, and are skipped like links are.
 
+    Read: inline images (a destination in angle brackets may hold spaces; the
+    path is percent-decoded before the lookup, as the site does), reference-style
+    images (full and collapsed) through their ``[label]: target`` definition,
+    and HTML ``<img src>``. A shortcut ``![label]`` is not read.
+
     A target ``_is_external`` is true for is not looked up: Zensical emits it
     as written, a URL (measured on 0.1.3). So an image file named like a
     scheme (``fig:1.png``) is not checked under that spelling; ``./fig:1.png``
-    is a path, and is checked.
+    is a path, and is checked. A target with a single leading ``/`` is always
+    reported: the site is served under a sub-path, and a lookup on the build
+    machine's filesystem root would say nothing about it.
     """
     protected = _code_ranges(text)
+
+    def in_code(pos: int) -> bool:
+        return any(lo <= pos < hi for lo, hi in protected)
+
+    defs = {
+        m.group(1).strip().casefold(): m.group(2) or m.group(3)
+        for m in _REF_DEF_RE.finditer(text)
+        if not in_code(m.start())
+    }
+    found: list[tuple[int, str]] = []
+    for m in _IMAGE_RE.finditer(text):
+        found.append((m.start(), m.group(1) if m.group(1) is not None else m.group(2)))
+    for m in _HTML_IMG_RE.finditer(text):
+        found.append((m.start(), m.group(1) if m.group(1) is not None else m.group(2)))
+    for m in _REF_IMAGE_RE.finditer(text):
+        label = (m.group(2) or m.group(1)).strip().casefold()
+        if label in defs:
+            found.append((m.start(), defs[label]))
     missing = []
-    for match in _IMAGE_RE.finditer(text):
-        target = match.group(1)
-        if _is_external(target):
+    for pos, target in sorted(found):
+        if not target or _is_external(target) or in_code(pos):
             continue
-        if any(lo <= match.start() < hi for lo, hi in protected):
-            continue
-        path_part = target.partition("#")[0].partition("?")[0]
-        if not (page.parent / path_part).is_file():
+        path_part = unquote(target.partition("#")[0].partition("?")[0])
+        if (target.startswith("/") and not target.startswith("//")) or not (
+            page.parent / path_part
+        ).is_file():
             missing.append(target)
     return missing
 
