@@ -2221,10 +2221,16 @@ def _fenced_bash(markdown: str) -> str:
 SKILLS_DIR = _CHECKOUT_ROOT / ".claude" / "skills"
 AGENTS_DIR = _CHECKOUT_ROOT / ".claude" / "agents"
 
+#: The rebase-pickup cycle the ``coding`` agent opens on a ``needs-rebase``
+#: dispatch. It sits under skills/ but a dispatched agent executes it, so a
+#: gate that holds agent definitions to a stricter rule than skills applies
+#: that rule to this file too.
+REBASE_PICKUP_REFERENCE = SKILLS_DIR / "code" / "rebase-pickup.md"
+
 #: (root, glob pattern) pairs covering the whole markdown corpus a Claude Code
-#: agent executes bash out of: every skill's ``SKILL.md``, the rebase-pickup
-#: reference file the ``coding`` agent opens on a ``needs-rebase`` dispatch, and
-#: every subagent definition under ``.claude/agents``. The single source of truth for the
+#: agent executes bash out of: every skill's ``SKILL.md``,
+#: :data:`REBASE_PICKUP_REFERENCE`, and every subagent definition under
+#: ``.claude/agents``. The single source of truth for the
 #: scan surface -- :func:`markdown_corpus_files` below is its flattened,
 #: sorted-per-glob-then-concatenated view. A module that needs its own
 #: monkeypatch target keeps a local alias bound to this tuple (e.g.
@@ -2238,7 +2244,7 @@ AGENTS_DIR = _CHECKOUT_ROOT / ".claude" / "agents"
 #: is the supported narrowing; mutating is now a ``TypeError``.
 MARKDOWN_CORPUS_GLOBS: tuple[tuple[Path, str], ...] = (
     (SKILLS_DIR, "*/SKILL.md"),
-    (SKILLS_DIR, "code/rebase-pickup.md"),
+    (REBASE_PICKUP_REFERENCE.parent, REBASE_PICKUP_REFERENCE.name),
     (AGENTS_DIR, "*.md"),
 )
 

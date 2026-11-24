@@ -134,7 +134,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    pickup**, not a fresh build, and name `.claude/skills/code/rebase-pickup.md` as the file whose cycle it
    runs (its `coding.md` points there on a `needs-rebase` dispatch), e.g.:
 
-   > lode-ai1 carries `needs-rebase` (kicked back by `/land`'s conflict precheck) — fetch it and
+   > lode-ai1 carries `needs-rebase` (kicked back by `/land`'s conflict precheck) — a rebase pickup:
+   > read `.claude/skills/code/rebase-pickup.md` whole first and run its cycle. Fetch the branch and
    > **merge current `trunk` in** (do not rebase): `scripts/checkout-land-branch.sh lode-ai1` (it
    > fetches `land/lode-ai1` and `trunk` itself, then checks the `land/lode-ai1` tip out as
    > `land/lode-ai1--<your own launch worktree's directory name>` — unique by

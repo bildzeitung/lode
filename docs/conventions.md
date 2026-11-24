@@ -77,7 +77,8 @@ any tracked-source bare or unmarked multi-exception `except`, so a dropped `# fm
 ## Nox gate invocation: by blessed bucket tag, never by enumerated session name
 
 Gate prose in instruction files (`.claude/agents/coding.md`, `.claude/agents/code-reviewer.md`,
-`.claude/skills/code/SKILL.md`, `docs/agents-workflow.md`) invokes nox gates by **blessed tag**
+`.claude/skills/code/SKILL.md`, `.claude/skills/code/rebase-pickup.md`, `docs/agents-workflow.md`)
+invokes nox gates by **blessed tag**
 — `nox -t fix`, `nox -t everything-else` — never by naming individual sessions
 (`nox -s shellcheck`, `nox -s docs`, …). Every `@nox.session` in `noxfile.py` other than the
 four CI-only/packaging sessions named in `tests/test_nox_bucket_gate.py`'s `_EXEMPT_SESSIONS`

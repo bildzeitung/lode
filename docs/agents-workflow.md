@@ -644,7 +644,8 @@ with the staleness window stated plainly rather than implied away, wherever each
 Everything below holds regardless of which `baseRef` value is in effect — none of it is specific to
 the decision above.
 
-The guard's ancestry assertion is defence in depth, not the root-cause fix. `coding.md` (both cycles),
+The guard's ancestry assertion is defence in depth, not the root-cause fix. `coding.md` (both cycles;
+the rebase-pickup one is in `.claude/skills/code/rebase-pickup.md`),
 `code-reviewer.md`, and `land-review.md` all assert, as the first thing they do after confirming
 they're in a worktree at all (never on `pwd` or the branch name alone — a recycled worktree's branch
 still looks like a normal `worktree-agent-…` name), that `HEAD` is an ancestor of `origin/trunk` —
@@ -775,7 +776,9 @@ worktree-**leak** fix on that role. Full reasoning, including the two runner-up 
 why the unconditional-clean shape won: [docs/decisions.md](decisions.md)
 (`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`). Full account of the guard sites:
 [land-review.md](../.claude/agents/land-review.md),
-[coding.md](../.claude/agents/coding.md), [code-reviewer.md](../.claude/agents/code-reviewer.md), and
+[coding.md](../.claude/agents/coding.md),
+[rebase-pickup.md](../.claude/skills/code/rebase-pickup.md),
+[code-reviewer.md](../.claude/agents/code-reviewer.md), and
 [Isolating `land-review` dispatches](#isolating-land-review-dispatches-lode-g387), below.
 
 **2026-07-21 update (lode-ag7j) — CC 2.1.216 data point, guard KEPT.** Claude Code 2.1.216 shipped
@@ -963,7 +966,9 @@ practice — the distinction is for the *diagnostic*, not the caller's control f
 `code-reviewer.md`'s step 2 (ahead of its recycled-worktree guard), and `land-review.md`'s first
 action — before `EnterWorktree` is even considered, closing the window in which the `lode-ska2`
 incident's reviewer improvised its workaround. Full call sites:
-[coding.md](../.claude/agents/coding.md), [code-reviewer.md](../.claude/agents/code-reviewer.md),
+[coding.md](../.claude/agents/coding.md),
+[rebase-pickup.md](../.claude/skills/code/rebase-pickup.md),
+[code-reviewer.md](../.claude/agents/code-reviewer.md),
 [land-review.md](../.claude/agents/land-review.md).
 
 **What "mechanical, not by reading an instruction" means in practice here, honestly stated.** This is
@@ -2639,7 +2644,12 @@ The standing rule for any ticket that cuts an agent or skill file to save per-di
   with its existing link to `docs/`.
 - **Shortening is not:** a long-form rule keeps its wording, because each was lengthened after an
   observed failure.
-- **A verbatim move** of a self-contained second job to its own agent file is allowed.
+- **A verbatim move** of a self-contained second job out of an agent file is allowed. The one made
+  so far (`lode-w18a.7`): `coding.md`'s rebase-pickup cycle is in
+  [`.claude/skills/code/rebase-pickup.md`](../.claude/skills/code/rebase-pickup.md), a file the
+  `coding` agent opens on a `needs-rebase` dispatch, so `/code` still dispatches
+  `subagent_type: "coding"`. The file is in `tests/conftest.py`'s `MARKDOWN_CORPUS_GLOBS`, so every
+  gate that scans the agent definitions' fenced blocks through it scans this file too.
 - **A cut is accepted only on all three:** a human-approved rule inventory for the file, each rule with
   one pinned phrase, in `tests/instruction_rules.json` (the `tests/test_instruction_rule_inventory_gate.py`
   gate fails unless each pinned phrase matches exactly once in its file outside fenced code blocks);

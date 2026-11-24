@@ -16,7 +16,8 @@ Two shapes, two rules:
   branch tip, and a `--set-metadata <field>=` write, must each call
   `scripts/validate-sha40.sh <field> "$VAR"` in that same block, on the same
   variable (shell state does not survive between blocks, lode-sfnb).
-- **Dispatched agents** (`.claude/agents/*.md`) cannot carry a value between
+- **Dispatched agents** (`.claude/agents/*.md`, and the rebase-pickup file the
+  `coding` agent executes) cannot carry a value between
   commands at all -- the harness isolation classifier refuses a variable or
   `$(...)` (lode-fvg0) -- and copying a SHA from one call's output into the next
   let the validator check one paste while the other was written (lode-0a4n).
@@ -36,7 +37,11 @@ import re
 from pathlib import Path
 
 import pytest
-from conftest import markdown_corpus_blocks, markdown_corpus_text
+from conftest import (
+    REBASE_PICKUP_REFERENCE,
+    markdown_corpus_blocks,
+    markdown_corpus_text,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -79,10 +84,9 @@ CALL_SITES: list[tuple[str, list[str]]] = [
 
 AGENTS_PREFIX = ".claude/agents/"
 
-#: The rebase-pickup cycle the ``coding`` agent opens on a ``needs-rebase``
-#: dispatch lives under skills/ but is executed by that agent, so the strict
-#: agent rules apply to it, not the skill rules (lode-w18a.7).
-AGENT_EXECUTED_REFERENCE = ".claude/skills/code/rebase-pickup.md"
+#: Executed by a dispatched agent, so the strict agent rules apply to it, not
+#: the skill rules.
+AGENT_EXECUTED_REFERENCE = str(REBASE_PICKUP_REFERENCE.relative_to(REPO_ROOT))
 
 
 def _is_agent_file(path: str) -> bool:

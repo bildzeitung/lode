@@ -2,10 +2,11 @@
 
 This file is read by the `coding` agent (`.claude/agents/coding.md`) when `/code` dispatches it at a
 ticket that already carries `needs-rebase`. It holds the whole rebase-pickup cycle and the two
-anti-patterns that guard it, moved here from `coding.md` (lode-w18a.7). Below, "the fresh-build cycle"
-and "above" in a reference to it mean the producer cycle in
-[`coding.md`](../../agents/coding.md#the-producer-cycle), and the Non-negotiables and the other
-anti-patterns in that file still bind a rebase pickup.
+anti-patterns that forbid a rebase and a force-push. Below, "the fresh-build cycle", "the build
+cycle" and "above" in a reference to either mean the producer cycle in
+[`coding.md`](../../agents/coding.md#the-producer-cycle). That file's Non-negotiables, its "Bash call
+shapes" rule (the fenced blocks here are plain calls too) and its other anti-patterns, some of them
+written for a rebase pickup, still bind one.
 
 ## Rebase pickup — needs-rebase kick-backs
 

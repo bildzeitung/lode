@@ -3,7 +3,8 @@
 **Blessed gate-invocation buckets (lode-6ldh, superseding lode-vvt1's bare-nox-everywhere
 rule).** Every DEFAULT-set session (plus ``unit``) carries exactly one of three nox tags --
 ``fix`` (unchanged), ``tests``, or ``everything-else`` -- and instruction-file gate prose
-(``coding.md``, ``code-reviewer.md``, ``code/SKILL.md``, ``docs/agents-workflow.md``) invokes
+(``coding.md``, ``code-reviewer.md``, ``code/SKILL.md``, ``code/rebase-pickup.md``,
+``docs/agents-workflow.md``) invokes
 gates by TAG (``nox -t fix``, ``nox -t everything-else``), never by enumerating individual
 session names -- with ONE deliberate exception, the ``tests`` bucket, which is invoked by
 session name (``nox -s unit`` for builders, ``nox -s tests`` for the reviewer and ``/land``)
