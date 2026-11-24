@@ -13,9 +13,9 @@ uv run --frozen nox -s unit     # fast tier: excludes @pytest.mark.slow
 ## Why scanners read the skills' Markdown
 
 lode drives a large share of its own coding/review/land workflow through `.claude/skills/*/SKILL.md`
-and `.claude/agents/*.md` (plus `.claude/skills/code/rebase-pickup.md`, which the coding agent executes) — Markdown files
-containing fenced ```bash/```sh blocks that a Claude Code
-agent executes directly, one fenced block at a time, as separate tool invocations. That shell code is
+and `.claude/agents/*.md` (plus `.claude/skills/code/rebase-pickup.md`, which the `coding` agent
+executes) — Markdown files containing fenced ```bash/```sh blocks that a Claude Code agent executes
+directly, one fenced block at a time, as separate tool invocations. That shell code is
 real, load-bearing logic (it claims bd issues, drives git, gates and lands branches) but it is **not
 Python and not a `scripts/*.sh` file a linter or shellcheck run over `scripts/` would ever see** — it
 lives embedded inside prose, inside a `.md` file. No linter, no `nox -s shellcheck` run, and no
