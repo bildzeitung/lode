@@ -7420,3 +7420,144 @@ Every phrase matches exactly once in `coding.md` outside fenced blocks
     `bp-only-blocks-gates-dispatch`. "Declare blockers up front so `bd ready` stays honest." and
     "start fresh often" (in the "One task per session" bullet) stay unpinned, and `lode-w18a.12` may
     cut them. The `coding.md` inventory is now 85 entries.
+
+## code/SKILL.md rule inventory amended to the two criteria, no cut (decided, lode-w18a.19)
+
+Maintainer ruling 2026-11-24, on a review finding from `lode-w18a.18`. The `.claude/skills/code/SKILL.md`
+inventory in `tests/instruction_rules.json` (175 entries, approved before the `lode-w18a.18` cut) did
+not meet the two criteria in `docs/agents-workflow.md`: eight rules were pinned on two copies, three
+pins stopped before the operative part, and two sentences restored at `lode-w18a.18` review had no pin.
+The ruling: amend the list, with **no cut** and no second `/code` watch period. The alternative on the
+ticket was to keep the list as approved and record the exception. `.claude/skills/code/SKILL.md` is
+byte-identical to `trunk` (`git diff --stat` lists only `tests/instruction_rules.json` and this file).
+A later cut stays possible under the amended list, filed separately. The amended list goes to the
+maintainer for re-approval (`lode-9d9t`) at `lode-w18a.20`. The `code/SKILL.md` inventory is now 188
+entries: 175, minus 8 collapsed, plus 21 added. 38 approved pins were lengthened and 2 were
+re-anchored. The technical review changed the list as built; the "Technical review" bullet says how.
+
+- **Decision 1: eight pairs collapsed to one entry, judged pair by pair.** The rule of `lode-w18a.11`:
+  two pins only where the orchestrator acts at each site. Removed, with the entry that carries each
+  rule:
+  - `notes-step0-skips-phase2-never-dispatch-reviewer` (`step0-no-phase2-reviewer-for-pickup`). Step 0
+    is where the orchestrator dispatches; the Notes sentence is a restatement.
+  - `nits-open-successor-at-claim-any-path` (`claim-docs-nits-successor-collector`, lengthened through
+    "an explicitly-named id included"). The step 2 copy is a pointer ("the claim call below ... is
+    where this actually runs"); the successor is opened only at the step 3 claim, where the command
+    sits. The rest of the step 2 callout keeps three pins (Decision 2): the tail of that same sentence,
+    which is the only sentence in the file that says outright that an explicitly-named dispatch skips
+    the threshold gate, and the two sentences after it.
+  - `notes-phase2-runs-no-correctness-workflow` (`no-correctness-review-workflow`, the Phase 2 copy).
+  - `phase2-reviewer-branch-derives-reclaim` (`reclaim-derived-from-ticket-id`, in the step 0 reclaim
+    block, which is the only copy of the reclaim; lengthened, it now starts at "I don't need the agent
+    to tell me which worktree was its own" and runs through the branch name and the derivation). The
+    Phase 2 pointer keeps its own pin, `phase2-reclaim-reviewer-worktree-per-ticket`, since the
+    orchestrator runs the reclaim at that site.
+  - `notes-reclaim-must-not-touch-fresh-build-worktree` (`reclaim-never-touches-builder-worktree`,
+    lengthened through "so it stays for `/land` to reclaim on a clean land"). The ticket did not list
+    `notes-fresh-build-worktree-kept-until-land`, so it stays as built.
+  - `notes-step0-push-stays-fast-forward-after-conflict` (`step0-merge-keeps-push-fast-forward`,
+    lengthened through "so the push back is an ordinary fast-forward", and
+    `step0-expect-merge-to-conflict`, lengthened through "and resolving it keeps the push a
+    fast-forward all the same", which is where the "stays true after a conflict" half lives).
+  - `notes-fan-out-within-one-invocation` (`more-parallelism-same-invocation`, the topology callout).
+    That callout's other sentence, "Fan-out ... is safe and encouraged within a single invocation",
+    states the same rule and has no pin.
+  - `cap-one-shared-budget` (`cap-shared-across-all-dispatch-sources`, lengthened through "builders and
+    reviewers are not separate pools"). The removed pin was the callout's heading words.
+  - None of the eight was kept as two pins. The ticket named pairs 2 and 4 as the likeliest; at both,
+    the second copy is a pointer or a restated derivation, not a site with a command of its own.
+- **Re-anchored (2):** `step0-empty-sweep-is-not-error` and `step1-empty-sweep-is-not-error` pin one
+  byte-identical sentence at two steps, so no phrase can match it once without a neighbour. Both pins
+  stay, as the ruling asks for each to be re-anchored. Each now starts at the rule and ends in the
+  element after it: step 0's at the `<a id="reclaim"></a>` line (an anchor the `#reclaim` links need
+  anyway), step 1's at the first words of the next sentence's bold lead ("**Reclaim each reviewer's",
+  in the same paragraph; `step1-reclaim-each-reviewer` already pins those words). Neither starts in an
+  unrelated sentence. The trailing neighbour is the one cost: moving that anchor, rewording that lead,
+  or putting text between the sentence and its neighbour turns the gate red for a rule that did not
+  change.
+- **Decision 2: 2 restored sentences and 19 further unpinned rules, 21 added entries in all.** The two
+  sentences restored at `lode-w18a.18` review: `nits-successor-runs-at-the-claim-call-below` (step 2)
+  and `phase2-reviewer-worktree-already-on-origin-nothing-lost` (Phase 2). Then a full pass over the
+  file for rules with no pin. Added: `cap-env-reread-each-invocation`,
+  `step0-prompt-checkout-land-branch-script`,
+  `step0-prompt-refresh-land-head-and-rebase-pickup-note`, `reclaim-covers-every-worktree-of-ticket`,
+  `step1-derived-sha-write-and-dispatch`, `step1-derive-is-backstop-resolution-time-write-is-norm`,
+  `epic-debate-gate-unblock-by-debating-or-label`,
+  `nits-successor-explicit-id-skips-threshold-gate-but-still-needs-it`,
+  `nits-successor-never-contends-with-append-create-on-zero`, `phase1-fan-out-collect-each-result`,
+  `phase1-builder-prompt-no-self-review-merge-close-push`, `phase1-builder-prompt-escalate-on-decision`,
+  `phase1-builder-prompt-red-gate-fix-hand-off-only-green`,
+  `phase2-prompt-checkout-land-branch-script`, `phase2-prompt-own-correctness-pass-verifies-each-finding`,
+  `phase2-prompt-simplify-regate-push-swap-never-merge-close-push-trunk`,
+  `phase2-give-reviewer-useful-context`, `step5-relay-per-ticket-contents`, and
+  `notes-docs-nits-skill-only-relays-in-summary`. The two checkout-script entries (step 0 prompt and
+  Phase 2 prompt) are two sites, each a prompt the orchestrator writes. Not pinned on purpose: rationale
+  and measurements (the crash account, the `/proc/meminfo` formula numbers that the file itself says
+  may lag the script, the workflow cost figures, the harness lock measurement), pointers to other docs,
+  and the frontmatter description. Whether those are rules is a judgment call; the maintainer may add
+  any of them at `lode-w18a.20`.
+- **Decision 3: 38 pins lengthened through the operative part.** They are the 3 the ticket named, the
+  6 marked "lengthened" in Decision 1, 22 found in the build's pass, and 7 found at technical review.
+  The three the ticket named: `notes-ambiguous-argument-ask-user` (now through "ask the user before
+  dispatching rather than guessing"), `step5-report-cap-throttle` (through "say so", and on through the
+  cap value and queue drain), and `phase1-coding-launches-off-origin-trunk` (through "on its own branch
+  off `origin/trunk` HEAD"). The 22: `step0-tell-it-rebase-pickup` (names `rebase-pickup.md`),
+  `step0-prompt-regate-all-three-buckets`
+  (the bucket list and why), `step0-dispatch-concurrently-under-cap` and
+  `step1-dispatch-concurrently-under-cap` (the background dispatch and the cap),
+  `reclaim-orchestrator-does-it-not-batched`, `reclaim-safe-on-both-outcomes`,
+  `step2-single-resolves-pick-itself`, `step2-several-ids-independent-only`,
+  `step2-nothing-survives-dispatch-nothing`, `epic-debate-gate-report-every-skip` and
+  `nits-threshold-gate-report-skip` (both now start at "Keep every `BUILD`"), `cap-queue-overflow`
+  (starts at "Track how many dispatched agents are still in flight"),
+  `phase2-land-escalated-skip-never-resume`, `phase2-reviewer-cadence-matches-build`,
+  `phase2-reclaim-reviewer-worktree-per-ticket`, and the step 5 pins
+  `step5-relay-builder-escalation`, `step5-relay-reviewer-escalation`,
+  `step5-fan-out-per-ticket-roll-up`, `step5-report-step0-sweep`, `step5-report-step1-sweep`,
+  `step5-report-all-auto-select-skips` and `step5-reclaim-one-line-tally`. The 7 found at technical
+  review: `step0-dispatch-coding-per-hit-no-isolation`, `phase1-dispatch-coding-per-task-no-isolation`
+  and `phase2-dispatch-code-reviewer-no-isolation` (each now runs through "no call-site `isolation`
+  option"; the Phase 1 copy is the one the file calls the reference statement for all four dispatch
+  sites, and no pin covered those words there), `phase2-reviewer-code-review-medium-never-fix-comment`
+  (it pinned only the parenthetical; now starts at "Run `/code-review` at effort medium against
+  `trunk...HEAD` first"), `phase2-reviewer-escalates-only-on-decision-or-worse` (now starts at
+  "Escalate"), `step0-prompt-mechanical-conflict-resolved` (through "resolve it directly with `Edit`
+  and continue, then finish the same way") and `step2-no-argument-or-all-ready-fans-out` (through the
+  fan-out across the independent, unblocked frontier). Bold-lead and heading-only pins stay as built
+  (`lode-w18a.13` precedent). Many approved pins end where a source line ended; those stay where the
+  rule's operative words fall inside the pin.
+- **Technical review: what it changed in the list as built, and what it left for `lode-w18a.20`.**
+  - Three entries the build added are dropped (24 added became 21), because each restates a rule
+    another entry carries, which is what criterion 1 rules out: `fan-out-safe-within-one-invocation`
+    (same callout and same rule as `more-parallelism-same-invocation`, the carrier Decision 1 names for
+    pair 7), `step2-filter-before-fan-out-single-takes-top` (its two halves restate
+    `step2-no-argument-or-all-ready-fans-out` and `step2-single-resolves-pick-itself`, both lengthened
+    here; the `lode-w18a.18` cut removed the priority-order sentence from that callout as a repeat of
+    the `--single` bullet), and `phase2-stalled-never-send-reviewer-into-unverified-worktree` (restates
+    `phase2-dispatch-reviewer-only-if-both-checks-pass`, a few lines above it). None of the three
+    was ever an approved entry; the maintainer may restore any of them.
+  - Two of the build's new pins are lengthened: `step1-derive-is-backstop-resolution-time-write-is-norm`
+    pinned a predicate with no subject and now starts at "(b), the resolution-time write in";
+    `phase2-give-reviewer-useful-context` stopped inside its list and now runs through "any specific
+    claim worth checking."
+  - Kept, though it is the tail of the step 2 sentence whose lead Decision 1 unpinned:
+    `nits-successor-explicit-id-skips-threshold-gate-but-still-needs-it`. Its "still needs this" half
+    repeats the step 3 pin; its other half is the sentence the `lode-w18a.18` review relied on when it
+    accepted cutting the scope parenthetical from the docs-nits callout.
+  - **Left as approved: repeats outside the eight pairs the ruling named.** Removing an approved entry
+    beyond the ruling's list is the maintainer's call, so these still have two entries each, and
+    criterion 1 is met for the eight pairs, not for the whole file:
+    `notes-no-reviewer-for-build-time-escalation` (also `phase2-land-escalated-skip-never-resume`),
+    `notes-reviewer-pickup-worktree-reclaimed-by-me` (also `reclaim-immediately-either-outcome`),
+    `notes-fresh-build-worktree-kept-until-land` (also `reclaim-never-touches-builder-worktree`),
+    `notes-two-phases-in-order` (also `skill-launches-in-order`), and
+    `notes-nothing-merges-no-self-review` (also `neither-review-is-authors` and
+    `producer-never-writes-trunk`). `notes-docs-nits-skill-only-relays-in-summary`, added here, pins
+    the operative sentence of the bullet whose bold lead `notes-docs-nits-relay-only` pins: one rule,
+    two entries, because bold-lead pins stay as built. This list is a reading at review, not a search.
+- **Not checked:** whether the pass found every unpinned rule, and whether more repeats than those
+  listed above are pinned twice. Both were a read of the whole file against the pins, not a mechanical
+  check, and "distinct rule" is a judgment (see Decision 2).
+
+Every phrase matches exactly once in `.claude/skills/code/SKILL.md` outside fenced blocks
+(`tests/test_instruction_rule_inventory_gate.py` is green).

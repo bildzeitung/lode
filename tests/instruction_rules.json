@@ -1041,11 +1041,6 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
-    "rule": "cap-one-shared-budget",
-    "phrase": "Concurrency cap — one shared budget for every dispatch below (lode-2cf)."
-  },
-  {
-    "file": ".claude/skills/code/SKILL.md",
     "rule": "cap-computed-before-step-0",
     "phrase": "**Before step 0**, compute the cap once and hold it for the rest of the invocation."
   },
@@ -1086,6 +1081,11 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
+    "rule": "cap-env-reread-each-invocation",
+    "phrase": "The skill re-reads it fresh at the start of every invocation."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
     "rule": "cap-unset-derived-from-meminfo",
     "phrase": "**Unset** → derived from `/proc/meminfo` (`MemAvailable`, falling back to `MemTotal`)"
   },
@@ -1107,12 +1107,12 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "cap-shared-across-all-dispatch-sources",
-    "phrase": "**The cap is one shared budget across every dispatch source in this invocation**"
+    "phrase": "**The cap is one shared budget across every dispatch source in this invocation** — step 0's rebase pickups, step 1's stranded-review pickups, Phase 1 builders, and Phase 2 reviewers all draw from the same count; builders and reviewers are not separate pools."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "cap-queue-overflow",
-    "phrase": "**queue** it instead and dispatch it only once an in-flight agent completes and frees a slot"
+    "phrase": "Track how many dispatched agents are still in flight; when the next dispatch would exceed `CODE_MAX_CONCURRENT_AGENTS`, **queue** it instead and dispatch it only once an in-flight agent completes and frees a slot"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1127,7 +1127,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step0-dispatch-coding-per-hit-no-isolation",
-    "phrase": "For **each** hit, dispatch a `coding` producer (`subagent_type: \"coding\"` — **no call-site"
+    "phrase": "For **each** hit, dispatch a `coding` producer (`subagent_type: \"coding\"` — **no call-site `isolation` option**"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1137,7 +1137,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step0-tell-it-rebase-pickup",
-    "phrase": "Tell it explicitly this is a **rebase pickup**, not a fresh build"
+    "phrase": "Tell it explicitly this is a **rebase pickup**, not a fresh build, and name `.claude/skills/code/rebase-pickup.md` as the file whose cycle it runs"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1146,13 +1146,23 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-prompt-checkout-land-branch-script",
+    "phrase": "`scripts/checkout-land-branch.sh lode-ai1` (it fetches `land/lode-ai1` and `trunk` itself, then checks the `land/lode-ai1` tip out as `land/lode-ai1--<your own launch worktree's directory name>` — unique by construction, so it never collides with a leftover checkout and the old `--detach` fallback is never needed)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
     "rule": "step0-prompt-regate-all-three-buckets",
-    "phrase": "re-gate at the reviewer/`/land` level — ALL three blessed nox bucket tags"
+    "phrase": "re-gate at the reviewer/`/land` level — ALL three blessed nox bucket tags (lode-6ldh): `nox -t fix`, `nox -s tests` (full, not the builder's fast `unit` view), and `nox -t everything-else` — since this cycle swaps straight to `ready-for-land` with no further review"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step0-prompt-push-ordinary-by-refspec",
     "phrase": "an ordinary push by explicit refspec"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step0-prompt-refresh-land-head-and-rebase-pickup-note",
+    "phrase": "refresh `land_head`, put your account of the merge in the hand-off's `REBASE PICKUP` note and leave `land_summary` as the reviewer wrote it (your `.claude/skills/code/rebase-pickup.md` step 5 has the one exception)"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1162,7 +1172,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step0-prompt-mechanical-conflict-resolved",
-    "phrase": "if both sides added independent, non-overlapping content (a **mechanical**"
+    "phrase": "if both sides added independent, non-overlapping content (a **mechanical** conflict), resolve it directly with `Edit` and continue, then finish the same way"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1177,17 +1187,17 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step0-merge-keeps-push-fast-forward",
-    "phrase": "a merge commit appends to history, it never rewrites what `land/<id>` already carries on origin"
+    "phrase": "a merge commit appends to history, it never rewrites what `land/<id>` already carries on origin, so the push back is an ordinary fast-forward"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step0-expect-merge-to-conflict",
-    "phrase": "Expect the merge to **conflict**"
+    "phrase": "Expect the merge to **conflict** — a branch only carries `needs-rebase` because it already failed `/land`'s clean-merge precheck — and resolving it keeps the push a fast-forward all the same"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step0-dispatch-concurrently-under-cap",
-    "phrase": "Dispatch every hit **concurrently** with each other and with any Phase 1 builds below"
+    "phrase": "Dispatch every hit **concurrently** with each other and with any Phase 1 builds below (`run_in_background: true`), **subject to the concurrency cap**"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1197,7 +1207,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step0-empty-sweep-is-not-error",
-    "phrase": "`trunk` moved. If the sweep finds nothing, say so and move on; it's not an error."
+    "phrase": "If the sweep finds nothing, say so and move on; it's not an error. <a id=\"reclaim\"></a>"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1207,7 +1217,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "reclaim-orchestrator-does-it-not-batched",
-    "phrase": "so **I** do it, from my own (repo-root) context, immediately after collecting its result"
+    "phrase": "so **I** do it, from my own (repo-root) context, immediately after collecting its result — not batched to the end of the fan-out, and not left for the ticket to land"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1217,7 +1227,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "reclaim-derived-from-ticket-id",
-    "phrase": "the ticket id alone **derives** both the path and the branch"
+    "phrase": "I don't need the agent to tell me *which* worktree was its own — since lode-em6v every reviewer / rebase pickup checks the branch out as `land/<id>--<its-own-worktree-dir>`, so the ticket id alone **derives** both the path and the branch"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1231,8 +1241,13 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
+    "rule": "reclaim-covers-every-worktree-of-ticket",
+    "phrase": "and it reclaims **every** worktree that ticket accumulated (a ticket reviewed or picked up across N cycles leaves N of them), not just the last one"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
     "rule": "reclaim-never-touches-builder-worktree",
-    "phrase": "It cannot touch the **builder's** worktree"
+    "phrase": "It cannot touch the **builder's** worktree: that one is branch-named `worktree-agent-*`, never `land/<id>--*`, so it stays for `/land` to reclaim on a clean land"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1257,7 +1272,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "reclaim-safe-on-both-outcomes",
-    "phrase": "Safe on **both** outcomes: by the time the agent returns"
+    "phrase": "Safe on **both** outcomes: by the time the agent returns, everything in its worktree is already on `origin/land/<id>` — a clean pickup pushes first, and an escalation's aborted merge leaves the checkout an exact mirror of what was fetched"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1301,8 +1316,18 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
+    "rule": "step1-derived-sha-write-and-dispatch",
+    "phrase": "If that resolves to a well-formed 40-hex SHA, write it and dispatch normally (below), same as if it had been present all along."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
     "rule": "step1-derived-review-head-drift-uninformative",
     "phrase": "the reviewer's `review_head`-vs-tip drift check is *uninformative* for this ticket"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "step1-derive-is-backstop-resolution-time-write-is-norm",
+    "phrase": "(b), the resolution-time write in [`docs/land-escalation-runbook.md`](../../../docs/land-escalation-runbook.md), stays the norm and this stays the backstop"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1317,12 +1342,12 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step1-dispatch-concurrently-under-cap",
-    "phrase": "Dispatch every hit **concurrently** with each other, with any step-0 rebase pickups, and with this invocation's own Phase 1 builds"
+    "phrase": "Dispatch every hit **concurrently** with each other, with any step-0 rebase pickups, and with this invocation's own Phase 1 builds, **subject to the same concurrency cap**"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step1-empty-sweep-is-not-error",
-    "phrase": "slots free. If the sweep finds nothing, say so and move on; it's not an error."
+    "phrase": "If the sweep finds nothing, say so and move on; it's not an error. **Reclaim each reviewer's"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1332,7 +1357,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step2-no-argument-or-all-ready-fans-out",
-    "phrase": "**No argument** (the **default**), or **`--all-ready`** → read the filtered `bd ready --json`"
+    "phrase": "**No argument** (the **default**), or **`--all-ready`** → read the filtered `bd ready --json` frontier (callout below) and **fan out** across the **independent, unblocked** frontier (honoring the dependency graph)."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1342,7 +1367,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step2-single-resolves-pick-itself",
-    "phrase": "**`--single`** (no ID) → one producer; `/code` resolves the pick **itself**"
+    "phrase": "**`--single`** (no ID) → one producer; `/code` resolves the pick **itself** — build the same filtered `bd ready --json` frontier the callout below defines, take the **top** entry (`bd ready` is already priority-ordered, so no extra sort is needed), dispatch it as an explicitly-named id."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1357,7 +1382,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step2-several-ids-independent-only",
-    "phrase": "Only dispatch IDs that are genuinely **independent**"
+    "phrase": "Only dispatch IDs that are genuinely **independent** (no unmet dependency between them); if two share a dependency, say so and let the human sequence them rather than racing."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1397,7 +1422,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step2-nothing-survives-dispatch-nothing",
-    "phrase": "**If nothing survives the filter, dispatch nothing and say so**"
+    "phrase": "**If nothing survives the filter, dispatch nothing and say so** — never fall back to a filtered-out ticket."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1412,7 +1437,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "epic-debate-gate-report-every-skip",
-    "phrase": "**report every `SKIP`** — id + reason (`epic not debated (<epic-id>)`)"
+    "phrase": "Keep every `BUILD` in the buildable set; **report every `SKIP`** — id + reason (`epic not debated (<epic-id>)`) — in step 5's skip list"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1423,6 +1448,11 @@
     "file": ".claude/skills/code/SKILL.md",
     "rule": "epic-debate-gate-no-escape-hatch-flag",
     "phrase": "**No new escape-hatch flag.**"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "epic-debate-gate-unblock-by-debating-or-label",
+    "phrase": "The unblock is to actually debate the epic (`/challenge <epic-id>`, cheap) or hand-apply the `epic-debated` label to acknowledge it was debated informally"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1442,7 +1472,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "nits-threshold-gate-report-skip",
-    "phrase": "**report every `SKIP`** — id + reason — in step 5's skip list"
+    "phrase": "Keep every `BUILD` in the buildable set; **report every `SKIP`** — id + reason — in step 5's skip list"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1456,13 +1486,23 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
-    "rule": "nits-open-successor-at-claim-any-path",
-    "phrase": "**At the point a docs-nits collector *is* claimed for dispatch — any path, an explicitly-named id included — open its empty successor collector first (lode-z1n5 part 3),**"
+    "rule": "nits-successor-explicit-id-skips-threshold-gate-but-still-needs-it",
+    "phrase": "unlike the threshold gate above which only runs on the auto-select paths (an explicitly-named dispatch, `/code lode-59da`, skips the gate but still needs this)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "nits-successor-runs-at-the-claim-call-below",
+    "phrase": "The claim call below (right after this step's own `bd update <id> --claim`) is where this actually runs — see the note right under it."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "nits-successor-never-contends-with-append-create-on-zero",
+    "phrase": "This never contends with `scripts/bd-docs-nit.sh append`'s own create-on-zero path (part 1) or `/land`'s reopen-on-close (part 4)"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "phase1-dispatch-coding-per-task-no-isolation",
-    "phrase": "**Phase 1 — dispatch one `coding` builder per task** via the Agent tool with"
+    "phrase": "**Phase 1 — dispatch one `coding` builder per task** via the Agent tool with `subagent_type: \"coding\"` — **no call-site `isolation` option.**"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1482,7 +1522,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "phase1-coding-launches-off-origin-trunk",
-    "phrase": "Every `coding` dispatch launches already cwd'd inside"
+    "phrase": "Every `coding` dispatch launches already cwd'd inside `.claude/worktrees/agent-<hash>` on its own branch off `origin/trunk` HEAD."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1517,7 +1557,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "claim-docs-nits-successor-collector",
-    "phrase": "**If the just-claimed ticket carries the `docs-nits` label, open its empty successor collector right here (lode-z1n5 part 3)**"
+    "phrase": "**If the just-claimed ticket carries the `docs-nits` label, open its empty successor collector right here (lode-z1n5 part 3)** — unconditional on every path, an explicitly-named id included"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1536,6 +1576,11 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-fan-out-collect-each-result",
+    "phrase": "Collect each result as it finishes. Each builds, pushes `origin/land/<its-id>`, **keeps its worktree**, and marks its own ticket `ready-for-code-review` independently"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
     "rule": "phase1-builder-escalation-doesnt-block-siblings",
     "phrase": "one builder's escalation must **not** block its siblings"
   },
@@ -1543,6 +1588,21 @@
     "file": ".claude/skills/code/SKILL.md",
     "rule": "phase1-builder-prompt-shape",
     "phrase": "Implement lode-ai1 as a producer following your cycle"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-builder-prompt-no-self-review-merge-close-push",
+    "phrase": "Do **not** review your own work, merge, close, or push trunk."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-builder-prompt-escalate-on-decision",
+    "phrase": "Stop and escalate (revert to green, annotate `land-escalated`, don't hand off) if a clarifying decision is needed during the build."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase1-builder-prompt-red-gate-fix-hand-off-only-green",
+    "phrase": "A red gate is yours to fix and re-run — hand off only on green."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1572,7 +1632,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "phase2-land-escalated-skip-never-resume",
-    "phrase": "**Skip it.** No reviewer, and never resume it to"
+    "phrase": "**Skip it.** No reviewer, and never resume it to \"complete the hand-off\" — that would override the escalation. Surface it in step 5."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1622,7 +1682,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "phase2-dispatch-code-reviewer-no-isolation",
-    "phrase": "For every ticket that passes both checks: use the Agent tool with `subagent_type: \"code-reviewer\"`"
+    "phrase": "For every ticket that passes both checks: use the Agent tool with `subagent_type: \"code-reviewer\"` — **no call-site `isolation` option**"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1632,7 +1692,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "phase2-reviewer-cadence-matches-build",
-    "phrase": "Match the build cadence: one reviewer in the foreground for a solo build"
+    "phrase": "Match the build cadence: one reviewer in the foreground for a solo build; one reviewer per ticket concurrently (`run_in_background: true`) for a fan-out, each dispatched as its builder's hand-off is verified"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1646,8 +1706,18 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-prompt-checkout-land-branch-script",
+    "phrase": "run `scripts/checkout-land-branch.sh lode-ai1` in your own launch worktree (it fetches `land/lode-ai1` and `trunk` itself, then checks the `land/lode-ai1` tip out as `land/lode-ai1--<your own launch worktree's directory name>` — unique by construction, so no `--detach` fallback is ever needed)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
     "rule": "phase2-reviewer-code-review-medium-never-fix-comment",
-    "phrase": "(always; never `--fix`/`--comment`)"
+    "phrase": "Run `/code-review` at effort medium against `trunk...HEAD` first (always; never `--fix`/`--comment`)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-prompt-own-correctness-pass-verifies-each-finding",
+    "phrase": "then your own reasoned correctness pass over the same diff, verifying each of the skill's findings against the code before acting on it"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1656,8 +1726,18 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-prompt-simplify-regate-push-swap-never-merge-close-push-trunk",
+    "phrase": "Then `/simplify`, re-gate, commit, `git push origin HEAD:land/lode-ai1`, and swap the ticket to `ready-for-land`. Do **not** merge, close, or push trunk."
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
     "rule": "phase2-reviewer-escalates-only-on-decision-or-worse",
-    "phrase": "only on a clarifying decision or \"making it worse.\""
+    "phrase": "Escalate (revert to green, swap to `land-escalated`, don't mark ready) only on a clarifying decision or \"making it worse.\""
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
+    "rule": "phase2-give-reviewer-useful-context",
+    "phrase": "Give the reviewer whatever *context* is genuinely useful — which sibling branches in this fan-out touch the same files, what the ticket's own hand-off notes warn about, any specific claim worth checking."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1667,12 +1747,12 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "phase2-reclaim-reviewer-worktree-per-ticket",
-    "phrase": "Run [step 0's reclaim block](#reclaim) with `ID` set to this ticket"
+    "phrase": "Run [step 0's reclaim block](#reclaim) with `ID` set to this ticket, right after collecting the reviewer's result (per ticket, not batched to the end of the fan-out)"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
-    "rule": "phase2-reviewer-branch-derives-reclaim",
-    "phrase": "reviewer's branch is `land/<id>--<its-own-worktree-dir>`"
+    "rule": "phase2-reviewer-worktree-already-on-origin-nothing-lost",
+    "phrase": "Everything in that worktree is already on `origin/land/<id>` by the time the reviewer **returns** — a clean pass pushes at step 7 of `code-reviewer.md`, and an escalation re-pushes its reverted-to-green commit too, so nothing local is ever lost."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1681,38 +1761,43 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
+    "rule": "step5-relay-per-ticket-contents",
+    "phrase": "that the build gates passed and the technical review + re-gate passed, the **`land/<id>`** branch and head SHA, and that it reached **`ready-for-land`** (so `/land` can pick it up)"
+  },
+  {
+    "file": ".claude/skills/code/SKILL.md",
     "rule": "step5-relay-builder-escalation",
-    "phrase": "If a **builder** escalated, say so"
+    "phrase": "If a **builder** escalated, say so — it reverted to green, pushed, applied `land-escalated`, did **not** hand off, and a human owes a build decision."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step5-relay-reviewer-escalation",
-    "phrase": "If a **reviewer** escalated, likewise"
+    "phrase": "If a **reviewer** escalated, likewise — green branch pushed, `land-escalated` set, not landable until the human decides."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step5-fan-out-per-ticket-roll-up",
-    "phrase": "For a fan-out, give a per-ticket roll-up"
+    "phrase": "For a fan-out, give a per-ticket roll-up: which reached ready-for-land, which are still in review, which escalated (at build or review) and why."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step5-report-step0-sweep",
-    "phrase": "Report the **Step 0 sweep** the same way"
+    "phrase": "Report the **Step 0 sweep** the same way — which `needs-rebase` tickets were found, which rebased clean and are back at `ready-for-land`, and which hit a rebase conflict and were escalated (say which one, so a human can resolve it)."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step5-report-step1-sweep",
-    "phrase": "Report step 1's sweep too"
+    "phrase": "Report step 1's sweep too — which stranded `ready-for-code-review` tickets were found, which got a `code-reviewer` dispatched, and which were left alone for missing `review_head`."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step5-report-cap-throttle",
-    "phrase": "If the concurrency cap ever throttled dispatch this invocation"
+    "phrase": "If the concurrency cap ever throttled dispatch this invocation (more dispatchable work than free slots at some point), say so — which cap value was in effect and roughly how the queue drained"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step5-report-all-auto-select-skips",
-    "phrase": "also report **every ticket the `human`/epic filter passed over**"
+    "phrase": "also report **every ticket the `human`/epic filter passed over** — id + reason (`human`-labeled or epic), every ticket the epic-debate gate skipped — id + `epic not debated (<epic-id>)`, and every docs-nits collector the threshold gate skipped — id + `docs-nits below threshold (n/N)`."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1722,17 +1807,12 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "step5-reclaim-one-line-tally",
-    "phrase": "Mention the launch-worktree reclaims (lode-vs7g) only as a one-line tally"
+    "phrase": "Mention the launch-worktree reclaims (lode-vs7g) only as a one-line tally (\"reclaimed N reviewer/pickup worktrees\") — it's routine housekeeping, not a caveat; report it *individually* only where one failed to reclaim"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "notes-only-sanctioned-way-to-spin-up-coding",
     "phrase": "This skill is the **only** sanctioned way to spin up coding work from the main session"
-  },
-  {
-    "file": ".claude/skills/code/SKILL.md",
-    "rule": "notes-fan-out-within-one-invocation",
-    "phrase": "**fan out within one invocation rather than starting a second concurrent `/code`.**"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1748,11 +1828,6 @@
     "file": ".claude/skills/code/SKILL.md",
     "rule": "notes-no-reviewer-for-build-time-escalation",
     "phrase": "Don't dispatch a reviewer for a ticket that escalated at build time."
-  },
-  {
-    "file": ".claude/skills/code/SKILL.md",
-    "rule": "notes-phase2-runs-no-correctness-workflow",
-    "phrase": "**Phase 2 runs NO `correctness-review` Workflow"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1781,11 +1856,6 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
-    "rule": "notes-step0-skips-phase2-never-dispatch-reviewer",
-    "phrase": "Never dispatch a `code-reviewer` for one."
-  },
-  {
-    "file": ".claude/skills/code/SKILL.md",
     "rule": "notes-step0-self-heals-clean-and-mechanical-only",
     "phrase": "**Self-healing covers a clean merge and a *mechanical* conflict**"
   },
@@ -1798,11 +1868,6 @@
     "file": ".claude/skills/code/SKILL.md",
     "rule": "notes-step0-whole-cycle-is-producers-job",
     "phrase": "is the dispatched `coding` producer's own job, start to finish (lode-cln)"
-  },
-  {
-    "file": ".claude/skills/code/SKILL.md",
-    "rule": "notes-step0-push-stays-fast-forward-after-conflict",
-    "phrase": "that stays true after a conflict is resolved"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1837,7 +1902,7 @@
   {
     "file": ".claude/skills/code/SKILL.md",
     "rule": "notes-ambiguous-argument-ask-user",
-    "phrase": "If an argument is genuinely ambiguous"
+    "phrase": "If an argument is genuinely ambiguous (looks like it might be an ID but isn't one that exists, or a fan-out set with hidden dependencies), ask the user before dispatching rather than guessing."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1851,13 +1916,13 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
-    "rule": "notes-reviewer-pickup-worktree-reclaimed-by-me",
-    "phrase": "**A reviewer's or rebase-pickup's own launch worktree is reclaimed by me, right after it returns"
+    "rule": "notes-docs-nits-skill-only-relays-in-summary",
+    "phrase": "this skill only relays that it happened, in its dispatch-summary report"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
-    "rule": "notes-reclaim-must-not-touch-fresh-build-worktree",
-    "phrase": "what it must **not** touch — a *fresh build*'s worktree"
+    "rule": "notes-reviewer-pickup-worktree-reclaimed-by-me",
+    "phrase": "**A reviewer's or rebase-pickup's own launch worktree is reclaimed by me, right after it returns"
   },
   {
     "file": ".claude/skills/code/SKILL.md",
