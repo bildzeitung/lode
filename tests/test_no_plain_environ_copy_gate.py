@@ -24,6 +24,8 @@ Blind spots, deliberately left on prose:
   ``dict(env, K=v)``, ``env.copy()``);
 - ``os.environ`` under another name (``from os import environ``,
   ``import os as x``, ``env = os.environ``);
+- ``os.environ`` passed by position (``run(cwd, os.environ)``) or compared in
+  an ``assert``;
 - the other ways of building the copy (``d |= os.environ``, a comprehension
   over bare ``os.environ``, another mapping type's constructor).
 
@@ -53,9 +55,8 @@ def _is_os_environ(node: ast.AST) -> bool:
 
 def find_environ_copies(text: str) -> list[tuple[int, str]]:
     """(lineno, shape) for every use of ``os.environ`` the gate refuses."""
-    tree = ast.parse(text)
     found: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
+    for node in ast.walk(ast.parse(text)):
         if isinstance(node, ast.Call):
             func = node.func
             if node.args and _is_os_environ(node.args[0]):
@@ -115,10 +116,11 @@ def test_no_plain_environ_copy_under_tests() -> None:
         ("f(cmd, env=os.environ)", "env=os.environ"),
         ("e = [k for k, v in os.environ.items()]", "os.environ.items()"),
         ("e = os.environ | {'A': '1'}", "os.environ | ..."),
+        ("e = {'A': '1'} | os.environ", "os.environ | ..."),
     ],
 )
 def test_matcher_flags_each_shape(line: str, shape: str) -> None:
-    assert [s for _, s in find_environ_copies(f"import os\n{line}\n")] == [shape]
+    assert find_environ_copies(line) == [(1, shape)]
 
 
 @pytest.mark.parametrize(
@@ -135,4 +137,4 @@ def test_matcher_flags_each_shape(line: str, shape: str) -> None:
     ],
 )
 def test_matcher_passes_non_copies(line: str) -> None:
-    assert find_environ_copies(f"import os\n{line}\n") == []
+    assert find_environ_copies(line) == []
