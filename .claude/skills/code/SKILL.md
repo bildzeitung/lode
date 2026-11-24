@@ -13,9 +13,8 @@ description: Build one or more lode tasks as PRODUCERS in two phases — dispatc
 2. **Technical review — `code-reviewer` subagent (Fable):** fetches the pushed `land/<id>` branch and
    checks it out into its own launch worktree (never `EnterWorktree`, never the builder's worktree),
    runs `/code-review` at medium first, then its own reasoned **correctness pass** against the diff,
-   verifying that skill's findings (lode-1fyb) — plus the
-   genuinely tool-backed **`/simplify`**, re-gates, re-pushes `land/<id>`, and swaps the ticket to
-   **`ready-for-land`** (or escalates).
+   verifying that skill's findings (lode-1fyb) — plus the genuinely tool-backed **`/simplify`**,
+   re-gates, re-pushes `land/<id>`, and swaps the ticket to **`ready-for-land`** (or escalates).
 
 Splitting build (cheap) from review (Fable) means the technical review is done by an agent that didn't
 write the code — and the lander's later semantic review is too, so *neither* review of a branch is its
@@ -323,11 +322,11 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > bd ready --json | jq -r '.[] | select((.labels // []) | index("human") | not) | select(.issue_type != "epic") | .id'
    > ```
    >
-   > (`labels` is `null`, not `[]`, on a ticket with none — hence the `// []`.) On the no-argument and `--all-ready` paths, filter the frontier this way **before**
-   > fanning out across all of it. On `--single`, filter the same way and dispatch just the **top**
-   > entry. Either way, **report each ticket dropped** — id + reason
-   > (`human`-labeled or epic) — per step 5: a skip is a signal to the operator, not noise to drop
-   > silently.
+   > (`labels` is `null`, not `[]`, on a ticket with none — hence the `// []`.) On the no-argument and
+   > `--all-ready` paths, filter the frontier this way **before** fanning out across all of it. On
+   > `--single`, filter the same way and dispatch just the **top** entry. Either way, **report each
+   > ticket dropped** — id + reason (`human`-labeled or epic) — per step 5: a skip is a signal to the
+   > operator, not noise to drop silently.
    >
    > **If nothing survives the filter, dispatch nothing and say so** — never fall back to a
    > filtered-out ticket. A frontier of nothing but `human` tickets and epics is a real, reachable
@@ -392,7 +391,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > **At the point a docs-nits collector *is* claimed for dispatch — any path, an explicitly-named id
    > included — open its empty successor collector first (lode-z1n5 part 3),** unconditional, unlike
    > the threshold gate above which only runs on the auto-select paths (an explicitly-named dispatch,
-   > `/code lode-59da`, skips the gate but still needs this).
+   > `/code lode-59da`, skips the gate but still needs this). The claim call below (right after this
+   > step's own `bd update <id> --claim`) is where this actually runs — see the note right under it.
    > This never contends with `scripts/bd-docs-nit.sh append`'s own create-on-zero path (part 1) or
    > `/land`'s reopen-on-close (part 4) — a resulting 2+-open-collectors race is exactly what append's
    > convergence step exists to resolve on the next append, no different from any other create race
@@ -548,7 +548,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    reclaim block](#reclaim) with `ID` set to this ticket, right after collecting the reviewer's result
    (per ticket, not batched to the end of the fan-out). Nothing needs to be passed back for this: the
    reviewer's branch is `land/<id>--<its-own-worktree-dir>`, so the ticket id derives both the worktree
-   and the branch.
+   and the branch. Everything in that worktree is already on `origin/land/<id>` by the time the reviewer
+   **returns** — a clean pass pushes at step 7 of `code-reviewer.md`, and an escalation re-pushes its
+   reverted-to-green commit too, so nothing local is ever lost.
 
 5. **Relay each result to the user.** Agent final messages aren't shown to the user — surface what
    matters per ticket across **both** phases: that the build gates passed and the technical review +
@@ -588,14 +590,13 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   at it, so a second invocation's sweep can still select it and double-dispatch at the same
   ticket. Fan-out within a single invocation never hits this: each producer/reviewer pair is
   dispatched once, by that invocation's own Phase 1/2, for a ticket only that invocation resolved.
-- **Two phases, in order: build then review.** The review must
-  run on the *built* branch, so always dispatch the reviewer *after* its builder returns
-  `ready-for-code-review` — never in parallel with its own build. Don't dispatch a reviewer for a
-  ticket that escalated at build time.
+- **Two phases, in order: build then review.** The review must run on the *built* branch, so always
+  dispatch the reviewer *after* its builder returns `ready-for-code-review` — never in parallel with
+  its own build. Don't dispatch a reviewer for a ticket that escalated at build time.
 - **Phase 2 runs NO `correctness-review` Workflow — the reviewer's `/code-review` run plus its own
   reasoned pass is the whole correctness review (lode-rlyx, reversing lode-905v on measured cost;
-  lode-1fyb).** Rationale,
-  numbers, and the retrieval SHA: [the Phase 2 note above](#no-correctness-workflow).
+  lode-1fyb).** Rationale, numbers, and the retrieval SHA:
+  [the Phase 2 note above](#no-correctness-workflow).
 - **`isolation: "worktree"` has been observed handing a dispatched agent a *recycled* worktree still
   checked out on a previous ticket's build branch, rather than a fresh one off `origin/trunk` HEAD** —
   confirmed for both a Phase 1 builder and a Phase 2 reviewer (lode-eshl's technical review; the eshl
