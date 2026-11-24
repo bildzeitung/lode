@@ -157,7 +157,8 @@ The remaining ~130 files are ordinary tests, organized by what they cover:
 - **Infrastructure the tests themselves depend on** — `conftest.py` (shared autouse fixtures: an
   isolated `$LODE_HOME` per test, ambient-env scrubbing, the network-egress guard, the jobs clock
   anchor, `pytest_configure`'s wrong-source-tree check), `test_conftest_color_scrub.py`,
-  `test_conftest_jobs_clock_anchor.py`, `test_network_guard.py`, `test_source_tree_guard.py`,
+  `test_conftest_git_env_scrub.py`, `test_conftest_jobs_clock_anchor.py`, `_nested_pytest.py` (the
+  nested pytest runner those three share), `test_network_guard.py`, `test_source_tree_guard.py`,
   `_gitrepo.py` (shared helper for driving real throwaway git repos), `_hookharness.py` (above),
   `test_precondition_guards.py`, `test_validate_mermaid_gate.py`.
 
