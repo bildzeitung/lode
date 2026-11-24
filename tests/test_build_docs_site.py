@@ -413,6 +413,8 @@ def test_missing_image_targets_read_the_site_generators_shapes(
         '<img src="../assets/gone.png" width="4">': "../assets/gone.png",
         "<IMG ALT='a > b'\n SRC = '../assets/gone.png'>": "../assets/gone.png",
         "<img alt=a src=../assets/gone.png>": "../assets/gone.png",
+        # No whitespace before the attribute: a tag only inside an HTML block.
+        '<p><img alt="a"src="../assets/gone.png"></p>': "../assets/gone.png",
         "![x][r]\n\n[R]: ../assets/gone.png": "../assets/gone.png",
         "![r][]\n\n[r]: <../assets/gone.png>": "../assets/gone.png",
         "![r]\n\n[r]: ../assets/gone.png": "../assets/gone.png",
@@ -426,15 +428,23 @@ def test_missing_image_targets_read_the_site_generators_shapes(
 
 
 def test_missing_image_targets_read_srcset_candidates(tmp_path: Path) -> None:
-    """Every srcset candidate on <source> or <img> is looked up like a src."""
-    (tmp_path / "assets").mkdir()
+    """Every srcset candidate on <source> or <img> is looked up like a src.
+
+    A candidate's URL is read as an HTML parser reads it, so a comma inside
+    one is part of it. Every row is a reading measured on a scratch Zensical
+    0.1.3 strict build.
+    """
+    (tmp_path / "assets" / "w_300,h_200").mkdir(parents=True)
     (tmp_path / "assets" / "here.png").write_bytes(b"")
+    (tmp_path / "assets" / "w_300,h_200" / "a.png").write_bytes(b"")
     (tmp_path / "how-to").mkdir()
     page = tmp_path / "how-to" / "page.md"
     present = (
         '<source srcset="../assets/here.png" media="(prefers-color-scheme: dark)">\n'
         '<img srcset="../assets/here.png 1x, ../assets/here.png 2x" src="../assets/here.png">\n'
         '<source srcset="https://example.com/x.png 2x, //cdn.example/y.png">\n'
+        '<img srcset="../assets/w_300,h_200/a.png 2x, ../assets/here.png,">\n'
+        '<img srcset="data:image/png;base64,AAAA 1x">\n'
         "<source data-srcset='../assets/gone.png'>\n"
         "<source alt=\"srcset='../assets/gone.png'\">\n"
     )
@@ -448,8 +458,17 @@ def test_missing_image_targets_read_srcset_candidates(tmp_path: Path) -> None:
             "../assets/gone.png"
         ],
         "<source srcset=../assets/gone.png>": ["../assets/gone.png"],
-        '<source srcset="../assets/a.png 1x, ../assets/b.png 2x">': [
+        # Reported in the order written.
+        '<source srcset="../assets/b.png 1x,../assets/a.png 2x">': [
+            "../assets/b.png",
             "../assets/a.png",
+        ],
+        # One URL: no descriptor or whitespace sits before the comma.
+        '<source srcset="../assets/a.png,../assets/b.png">': [
+            "../assets/a.png,../assets/b.png"
+        ],
+        '<p><source media="x"srcset=",../assets/gone.png 1x,, ../assets/b.png,"></p>': [
+            "../assets/gone.png",
             "../assets/b.png",
         ],
     }

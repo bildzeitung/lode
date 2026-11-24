@@ -147,22 +147,24 @@ _IMAGE_RE = re.compile(r"!\[[^\]]*\]" + _DESTINATION)
 # angle brackets or out of them.
 _REF_IMAGE_RE = re.compile(r"!\[([^\]]*)\](?:\s?\[([^\]]*)\])?(?!\()")
 _REF_DEF_RE = re.compile(r"^ {0,3}\[([^\[\]]+)\]:[ ]*(?:\n[ ]*)?(\S+)", re.MULTILINE)
-# An HTML image's src attribute, quoted or bare. A quoted attribute value
-# before it is skipped whole, so a `src=` or a `>` inside one is not read as
-# the tag's own; `data-src` and `srcset` are other attributes.
-_HTML_IMG_RE = re.compile(
-    r"<img\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*?\ssrc\s*=\s*"
-    r"(?:\"([^\"]*)\"|'([^']*)'|([^\s>\"']+))",
-    re.IGNORECASE,
+# An HTML attribute's value, quoted or bare, on a tag named by `{tags}`. A
+# quoted attribute value before it is skipped whole, so a `src=` or a `>`
+# inside one is not read as the tag's own. The name follows whitespace or a
+# closing quote, so `data-src` is another attribute; `alt="x"src=` is read
+# because the site reads it inside an HTML block (measured on 0.1.3).
+_HTML_ATTR = (
+    r"<(?:{tags})\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*?(?<=[\s\"']){attr}\s*=\s*"
+    r"(?:\"([^\"]*)\"|'([^']*)'|([^\s>\"']+))"
 )
-# An HTML `srcset` attribute on an <img> or <source>, quoted or bare; its value
-# is a comma-separated list of candidates, each a URL then an optional
-# descriptor. Quoted attribute values before it are skipped whole, as above.
+_HTML_IMG_RE = re.compile(_HTML_ATTR.format(tags="img", attr="src"), re.IGNORECASE)
 _HTML_SRCSET_RE = re.compile(
-    r"<(?:img|source)\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*?\ssrcset\s*=\s*"
-    r"(?:\"([^\"]*)\"|'([^']*)'|([^\s>\"']+))",
-    re.IGNORECASE,
+    _HTML_ATTR.format(tags="img|source", attr="srcset"), re.IGNORECASE
 )
+# One candidate of a srcset value, split as an HTML parser splits it: the URL
+# is a run of non-whitespace less the commas at either end, so a comma inside
+# it is part of it. A comma ending the run ends the candidate; otherwise a
+# descriptor follows, up to the next comma.
+_SRCSET_CANDIDATE_RE = re.compile(r"([^\s,](?:\S*[^\s,])?)(?:,|[^,]*)")
 
 
 @functools.cache
@@ -415,15 +417,18 @@ def _missing_image_targets(text: str, page: Path) -> list[str]:
     target absent from it is absent from the site. Images inside code are
     examples, not images, and are skipped like links are.
 
-    Inline, reference-style, HTML ``<img src>`` and ``srcset`` (on ``<img>``
-    or ``<source>``, every candidate) images are read, the patterns matched to
-    what Zensical 0.1.3 was measured to emit. They still differ from it.
-    Measured on 0.1.3, a missing file ships unreported when it is named by a
-    reference definition inside a block quote or a list item, or by an image
-    whose label is undefined and whose alt text is itself a defined label. Other measured differences fail the build on an
-    image the site does not show, or shows whole; they include an image inside
-    an HTML comment or an indented code block, one after a backslash, and a
-    bare destination holding a parenthesis.
+    Inline and reference-style images, an HTML ``<img src>`` and every
+    candidate of a ``srcset`` on an ``<img>`` or a ``<source>`` are read, the
+    patterns matched to what Zensical 0.1.3 was measured to emit. They still
+    differ from it. Measured on 0.1.3, a missing file ships unreported when it
+    is named by a reference definition inside a block quote or a list item, or
+    by an image whose label is undefined and whose alt text is itself a
+    defined label. Other measured differences fail the build on an image the
+    site does not show, or shows whole; they include an image inside an HTML
+    comment or an indented code block, one after a backslash, a bare
+    destination holding a parenthesis, an HTML attribute value holding a
+    character reference (``&amp;``), and an HTML tag in a paragraph with no
+    space before the attribute.
 
     A target ``_is_external`` is true for is not looked up: Zensical emits it
     as written, a URL (measured on 0.1.3). So an image file named like a
@@ -452,14 +457,16 @@ def _missing_image_targets(text: str, page: Path) -> list[str]:
     for m in _HTML_SRCSET_RE.finditer(text):
         value = next(g for g in m.groups() if g is not None)
         found.extend(
-            (m.start(), cand.split()[0]) for cand in value.split(",") if cand.split()
+            (m.start(), c.group(1)) for c in _SRCSET_CANDIDATE_RE.finditer(value)
         )
     for m in _REF_IMAGE_RE.finditer(text):
         label = re.sub(r"\s+", " ", (m.group(2) or m.group(1)).lower())
         if label in defs:
             found.append((m.start(), defs[label]))
     missing = []
-    for pos, target in sorted(found):
+    # Sorted on position alone: one tag's srcset candidates share a position,
+    # and the stable sort keeps them in the order written.
+    for pos, target in sorted(found, key=lambda entry: entry[0]):
         if not target or _is_external(target) or in_code(pos):
             continue
         path_part = unquote(target.partition("#")[0].partition("?")[0])
