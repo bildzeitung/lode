@@ -27,6 +27,10 @@ lives only in a new entry leaves the stale entry retrievable with no warning. Wh
 the correction, the corrected entry gets an appended `**Update (<id>[, <date>])` marker. The new
 entry that does the correcting is not itself a marker, and its head is free: it need not open with
 the Update lead-in.
+Under a `## ` entry the marker is indented two spaces under the entry, never a column-zero bullet
+after its closing paragraph: the docs index (`scripts/docs_index_chunker.py`) cuts a column-zero
+bullet after a `## ` section's own text off as a unit of its own, so a hit on the entry would not
+show the correction (`lode-v1gnv`; gated by `tests/test_decisions_supersession_markers.py`).
 
 **This file is out of scope for pointer sweeps, by construction (`lode-1dmu`, 2026-08-08).** A
 mechanical sweep that repoints every reference to a file/symbol that moved or was renamed (e.g. the

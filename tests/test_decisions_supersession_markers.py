@@ -79,6 +79,8 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
+from lode.fence_parsing import fence_flags
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DECISIONS = REPO_ROOT / "docs" / "decisions.md"
 
@@ -308,3 +310,63 @@ def test_wrap_scan_catches_a_line_wrapped_marker() -> None:
     first pass shipped."""
     assert _wrapped_markers(["  **Update (lode-", "  zzzz) - the wrapped id.**"])
     assert not _wrapped_markers(["  **Update (lode-zzzz) - the same id, intact.**"])
+
+
+_COLUMN_ZERO_UPDATE = re.compile(r"^-\s+\*\*Update \(")
+
+
+def _detached_updates(lines: list[str]) -> list[str]:
+    """Column-zero ``- **Update (`` bullets that sit directly after a ``##``
+    section's own text (lode-v1gnv).
+
+    ``scripts/docs_index_chunker.py`` ends a ``##`` section's own text at its
+    last unfenced column-zero line that is not a top-level bullet, and starts a
+    new retrieval unit at every top-level bullet after it, so such a marker is
+    indexed apart from the entry it corrects. Indented two spaces it stays
+    inside the entry's unit. Top-level Update bullets that are entries of their
+    own sit before the first ``##`` heading and are not scanned.
+    """
+    flags = fence_flags(lines)
+    heading_at = [
+        i for i, line in enumerate(lines) if not flags[i] and line.startswith("## ")
+    ]
+    offenders: list[str] = []
+    for start, end in zip(heading_at, [*heading_at[1:], len(lines)], strict=True):
+        own_end = max(
+            i
+            for i in range(start, end)
+            if not flags[i] and lines[i][:1].strip() and not lines[i].startswith("- ")
+        )
+        offenders.extend(
+            f"  L{i + 1}: {lines[i].strip()}"
+            for i in range(own_end + 1, end)
+            if not flags[i] and _COLUMN_ZERO_UPDATE.match(lines[i])
+        )
+    return offenders
+
+
+def test_no_update_marker_detached_from_its_section_entry() -> None:
+    """An Update marker appended to a ``##`` entry is indented under it."""
+    detached = _detached_updates(_decisions_lines())
+
+    assert not detached, (
+        "docs/decisions.md has a column-zero '- **Update (' bullet directly "
+        "after a '##' entry's own text, which the docs index cuts off as a "
+        "unit of its own, so a hit on the entry never shows it -- indent the "
+        "marker two spaces under the entry (lode-v1gnv):\n" + "\n".join(detached)
+    )
+
+
+def test_detached_update_scan_is_not_vacuous() -> None:
+    """The scan fires on a detached marker and leaves the indented shape, an
+    Update inside a fence, and a pre-``##`` top-level entry alone."""
+    entry = ["## An entry (decided, lode-zzzz)", "", "Closing paragraph."]
+    detached = [*entry, "", "- **Update (lode-yyyy, 2026-01-01): the correction.**"]
+    indented = [*entry, "", "  **Update (lode-yyyy, 2026-01-01): the correction.**"]
+    fenced = [*entry, "```", "- **Update (lode-yyyy): an example.**", "```"]
+    pre_heading = ["- **Update (lode-yyyy): an entry of its own.**", *entry]
+
+    assert _detached_updates(detached)
+    assert not _detached_updates(indented)
+    assert not _detached_updates(fenced)
+    assert not _detached_updates(pre_heading)
