@@ -7603,3 +7603,26 @@ Every phrase matches exactly once in `.claude/skills/code/SKILL.md` outside fenc
     1 is met for every repeat the review listed; the ruling accepts as a limit that completeness of
     the pin set and of the repeat list was judged by reading, not checked mechanically.
     `.claude/skills/code/SKILL.md` is byte-identical to `trunk`, so there is no watch period.
+
+## Bash `git commit`/`merge`/`push` and `nox` on `trunk` ask, except under a live `/land` lock (decided, lode-21sxk)
+
+Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling recorded on
+`lode-21sxk` the same day after the first build escalated.
+
+- **Decision.** `scripts/trunk-bash-guard.sh` is a `PreToolUse(Bash)` hook that returns
+  `permissionDecision: "ask"` (never `"deny"`) when a command runs `git commit`, `git merge`,
+  `git push` or `nox` and the cwd's branch is `trunk`. It extends `lode-p8zl`'s `Edit|Write` guard to
+  the commit and `nox -t fix` reformat that the `lode-6wgc` step-6 window leaves open. Every other
+  Bash call on `trunk` stays silent, and file writes through Bash (python, sed, heredoc) stay
+  uncovered by ruling. The checkpoints in `coding.md` and `code-reviewer.md` are unchanged.
+- **jq.** The guard reads `tool_input.command`, so `lode-p8zl` ruling 3 (no jq) cannot hold for it;
+  it follows the three older Bash guards' deny-everything-when-jq-is-missing wrapper (`lode-oii9`).
+- **Lander exemption (option 1 of the escalation).** `/land` runs unattended on `trunk` in the main
+  checkout and itself merges, commits `--no-verify`, pushes and re-gates there, and an `ask` forces a
+  prompt even over `permissions.allow`, so the unattended loop would stall. The guard is therefore
+  silent when the branch is `trunk` AND `scripts/land-lock.sh held` (a new read-only subcommand that
+  reuses the lock's own staleness rule) reports a live lock. A stale lock does not exempt.
+- **Accepted limit.** While a land pass holds the lock, any other agent whose cwd falls back to
+  `trunk` is exempt too. This bends `lode-8uh71`'s "never tell a subagent from the main session"
+  point on purpose. Matching is conservative (see the script header), and only a leading
+  `cd <dir> &&` is followed when choosing the cwd whose branch is checked.

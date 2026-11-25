@@ -36,4 +36,7 @@ def test_settings_json_still_carries_all_three_guards() -> None:
     assert any("sha-fabrication-guard.sh" in c for c in bash_hooks), (
         "lode-fpmi sha-fabrication guard missing"
     )
-    assert len(bash_hooks) == 3
+    assert any("trunk-bash-guard.sh" in c for c in bash_hooks), (
+        "lode-21sxk trunk Bash guard missing"
+    )
+    assert len(bash_hooks) == 4

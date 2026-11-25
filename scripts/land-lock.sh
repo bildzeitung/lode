@@ -326,6 +326,7 @@
 #   pins this.
 #
 # Usage: scripts/land-lock.sh acquire
+#        scripts/land-lock.sh held
 #        scripts/land-lock.sh heartbeat <own-token>|--land-lock-blind
 #        scripts/land-lock.sh release <own-token>|--land-lock-blind
 #
@@ -366,6 +367,12 @@
 #                     entirely the caller's business.
 #          exit 2 -> usage error (a caller bug, never a lock verdict). NOT
 #                     where a rev-parse/machine failure lands -- see below.
+# held: read-only query (lode-21sxk) -- exit 0 iff a LIVE lock exists, i.e. an
+#       `acquire` run right now would skip rather than reclaim it (same
+#       staleness rule, same malformed-record-is-held reading); exit 1 for
+#       no lock, a stale lock, or an undeterminable lock path. Prints nothing
+#       and never writes, so it is safe from a PreToolUse hook
+#       (scripts/trunk-bash-guard.sh).
 # heartbeat <own-token>: re-stamps the lock this pass already holds, so the
 #            staleness check measures idle time from the LAST heartbeat
 #            rather than the original `acquire` (CAVEAT 1). Call it
@@ -502,9 +509,10 @@ note_machine_fault() {
 # <argc>:<subcommand> shapes rather than as a chain of negated conditions, so
 # adding a fourth shape is one more `case` arm and nothing else.
 case "$#:${1:-}" in
-  1:acquire | 2:heartbeat | 2:release) ;;
+  1:acquire | 1:held | 2:heartbeat | 2:release) ;;
   *)
     echo "usage: $0 acquire" >&2
+    echo "       $0 held" >&2
     echo "       $0 heartbeat <own-token>|$BLIND_SENTINEL" >&2
     echo "       $0 release <own-token>|$BLIND_SENTINEL" >&2
     exit 2
@@ -577,6 +585,7 @@ if ! GIT_COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"; 
   # substitution captures only stdout). `$cmd` is validated to exactly these
   # three values above, so no `*)` arm is reachable.
   case "$cmd" in
+    held) exit 1 ;;
     acquire)
       echo "land-lock: MACHINE FAULT -- 'git rev-parse --git-common-dir'" \
         "failed (git's own error is above); cannot derive the lock path." \
@@ -739,6 +748,25 @@ write_lock() {
   ( set -o noclobber
     lock_record "$1" > "$LOCK" ) 2>/dev/null
 }
+
+if [ "$cmd" = "held" ]; then
+  [ -e "$LOCK" ] || exit 1
+  RECORD=""
+  read -r RECORD < "$LOCK" 2>/dev/null || true
+  EPOCH="$(epoch_of "$RECORD")"
+  MONO="$(monotonic_of "$RECORD")"
+  RBOOT="$(bootid_of "$RECORD")"
+  [ -n "$EPOCH" ] || [ -n "$MONO" ] || exit 0
+  CBOOT="$(boot_id)"
+  if [ -n "$MONO" ] && [ -n "$RBOOT" ] && [ -n "$CBOOT" ]; then
+    [ "$RBOOT" = "$CBOOT" ] || exit 1
+    [ $(( $(boot_uptime) - MONO )) -lt "$STALE_SECONDS" ] && exit 0
+    exit 1
+  fi
+  [ -n "$EPOCH" ] || exit 0
+  [ $(( $(date -u +%s) - EPOCH )) -lt "$STALE_SECONDS" ] && exit 0
+  exit 1
+fi
 
 if [ "$cmd" = "release" ]; then
   # Ownership check (lode-q9pm): only when the caller supplied its own
