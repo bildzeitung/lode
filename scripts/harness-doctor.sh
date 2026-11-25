@@ -93,6 +93,7 @@ scripts/check-decisions-no-silent-rewrite.sh
 scripts/gh-write-guard.sh
 scripts/sha-fabrication-guard.sh
 scripts/trunk-write-guard.sh
+scripts/trunk-bash-guard.sh
 scripts/bd-deps-blocks-guard.sh
 scripts/discard-beads-passive-export-churn.sh
 scripts/release.sh

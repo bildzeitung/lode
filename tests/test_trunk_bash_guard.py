@@ -126,7 +126,9 @@ def test_script_silent_off_trunk(feature_repo: Path, command: str) -> None:
 
 
 @pytest.mark.parametrize("command", SILENT)
-def test_script_silent_for_unrelated_calls_on_trunk(trunk_repo: Path, command: str) -> None:
+def test_script_silent_for_unrelated_calls_on_trunk(
+    trunk_repo: Path, command: str
+) -> None:
     proc = _run(command, trunk_repo)
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == ""
@@ -236,13 +238,17 @@ def test_held_outside_a_repo_is_1(tmp_path: Path) -> None:
 
 # --- hook-level (through the committed .claude/settings.json wrapper, via /bin/sh) -------------
 
-needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="the wrapper shells out to jq")
+needs_jq = pytest.mark.skipif(
+    shutil.which("jq") is None, reason="the wrapper shells out to jq"
+)
 
 
 @needs_jq
 def test_hook_asks_on_trunk(trunk_repo: Path) -> None:
     hook = pretooluse_hook("trunk-bash-guard.sh")
-    out = run_hook(hook, "uv run --frozen nox -t fix", cwd=trunk_repo, project_dir=str(REPO_ROOT))
+    out = run_hook(
+        hook, "uv run --frozen nox -t fix", cwd=trunk_repo, project_dir=str(REPO_ROOT)
+    )
     assert out is not None
     assert out["permissionDecision"] == "ask"
     assert "lode-21sxk" in out["permissionDecisionReason"]
@@ -251,7 +257,9 @@ def test_hook_asks_on_trunk(trunk_repo: Path) -> None:
 @needs_jq
 def test_hook_silent_off_trunk(feature_repo: Path) -> None:
     hook = pretooluse_hook("trunk-bash-guard.sh")
-    out = run_hook(hook, "git commit -m x", cwd=feature_repo, project_dir=str(REPO_ROOT))
+    out = run_hook(
+        hook, "git commit -m x", cwd=feature_repo, project_dir=str(REPO_ROOT)
+    )
     assert out is None
 
 
@@ -263,7 +271,9 @@ def test_hook_silent_for_unrelated_call_on_trunk(trunk_repo: Path) -> None:
 
 
 @needs_jq
-def test_hook_falls_through_when_script_missing(tmp_path: Path, trunk_repo: Path) -> None:
+def test_hook_falls_through_when_script_missing(
+    tmp_path: Path, trunk_repo: Path
+) -> None:
     empty = tmp_path / "no-scripts-here"
     empty.mkdir()
     hook = pretooluse_hook("trunk-bash-guard.sh")
@@ -271,7 +281,9 @@ def test_hook_falls_through_when_script_missing(tmp_path: Path, trunk_repo: Path
     assert out is None
 
 
-def test_hook_denies_everything_when_jq_is_missing(tmp_path: Path, trunk_repo: Path) -> None:
+def test_hook_denies_everything_when_jq_is_missing(
+    tmp_path: Path, trunk_repo: Path
+) -> None:
     hook = pretooluse_hook("trunk-bash-guard.sh")
     nojq = tmp_path / "bin"
     nojq.mkdir()
