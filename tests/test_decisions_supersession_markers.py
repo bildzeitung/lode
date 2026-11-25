@@ -53,18 +53,18 @@ normalizations -- the fix for the ticket reintroducing the ticket's own
 defect. The off-pattern scan cannot see it (nothing off-pattern is present),
 so it is pinned separately.
 
-*No marker cut off from its ``##`` entry* (lode-v1gnv). The docs index starts
-a unit at every column-zero bullet after a ``##`` section's own text, so an
-Update written there is indexed apart from the entry it corrects, and a hit on
-the entry shows no sign of it. The scan takes its units from the chunker
-(``scripts/docs_index_chunker.py``) and holds no copy of that boundary rule.
-Units before the first ``##`` heading are not scanned: that part of the log is
-top-level bullets only, each one a unit, and the older Update bullets there
-are entries of their own.
+*No marker cut off from its ``##`` entry* (the preamble's lode-v1gnv
+paragraph, which gives the mechanism). The scan takes its units from the
+chunker (``scripts/docs_index_chunker.py``) and holds no copy of its boundary
+rule.
 
-- Accepted over-match: from the first ``##`` heading on, the scan cannot tell
-  a cut-off marker from a new entry whose head opens with the lead-in, so that
-  head goes red too. The way out is again to reword the head.
+- Accepted over-match: the scan cannot tell a cut-off marker from a new entry
+  whose head opens with the lead-in, so that head goes red too. The way out
+  is again to reword the head.
+- KNOWN MISS: units before the first ``##`` heading are not scanned. That part
+  of the log is top-level bullets only, each one a unit, and seven of them are
+  entries whose own head opens with the lead-in. A marker written at column
+  zero after a bullet entry there is cut off the same way and stays green.
 - KNOWN MISS: an indented marker under a ``##`` section that ends in its own
   column-zero bullet list is indexed with the last bullet of that list, not
   with the heading. No section ends that way today.
@@ -74,7 +74,7 @@ sabotage tests below can prove each actually fires on a violation rather than
 passing vacuously -- same shape as tests/test_keybindings_doc.py.
 
 FORMER KNOWN LIMITATION (lode-nlk6), now covered by a SEPARATE mechanism
-(lode-rl6s): none of the checks in THIS module -- neither scan, nor the
+(lode-rl6s): none of the checks in THIS module -- no scan, nor the
 preamble-states-the-rule check -- can detect a SILENT IN-PLACE REWRITE, the
 exact failure the preamble's own sentence forbids. Every check here keys on
 an artifact a *marker* leaves behind (an off-pattern keyword, a wrapped id,
@@ -335,7 +335,7 @@ def test_wrap_scan_catches_a_line_wrapped_marker() -> None:
     assert not _wrapped_markers(["  **Update (lode-zzzz) - the same id, intact.**"])
 
 
-_COLUMN_ZERO_UPDATE = re.compile(r"^-\s+\*\*Update \(")
+_COLUMN_ZERO_UPDATE = re.compile(r"-\s+\*\*Update \(")
 
 
 def _detached_updates(lines: list[str]) -> list[str]:
