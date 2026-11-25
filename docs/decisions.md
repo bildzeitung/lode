@@ -36,13 +36,13 @@ from its entry and a hit on the entry does not show the correction. The gate nam
 such a bullet. It cannot tell a marker from a new entry whose head opens with the lead-in, so such a
 head fails too: reword it.
 
-**The indent rule also applies under a top-level bullet entry before the first `## ` heading (`lode-px81z`, 2026-11-25).**
+**Before the first `## ` heading the marker is indented too (`lode-px81z`, 2026-11-25).**
 There the chunker makes every column-zero bullet a unit of its own, so a marker written at column
 zero after a bullet entry is cut off from it the same way. Indent it two spaces under that entry.
 The gate scans those units too. Seven older entries whose own head opens with the lead-in are
-excused by name in the gate module. Each corrects an entry that carries its own indented marker
-(checked on that date; the `lode-3xzy` entry had none and got one then). Nothing is added to that
-list: a new head that opens with the lead-in is reworded.
+excused by name in the gate module. Each bears on an earlier entry that carries its own indented
+marker (checked on that date; the `lode-3xzy` entry had none and got one then). Nothing is added to
+that list: a new head that opens with the lead-in is reworded.
 
 **This file is out of scope for pointer sweeps, by construction (`lode-1dmu`, 2026-08-08).** A
 mechanical sweep that repoints every reference to a file/symbol that moved or was renamed (e.g. the

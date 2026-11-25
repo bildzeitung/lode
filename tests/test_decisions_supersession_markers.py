@@ -61,11 +61,8 @@ rule.
 - Accepted over-match: the scan cannot tell a cut-off marker from a new entry
   whose head opens with the lead-in, so that head goes red too. The way out
   is again to reword the head.
-- Units before the first ``##`` heading are scanned too (lode-px81z). That part
-  of the log is top-level bullets only, each one a unit, so a marker written at
-  column zero after a bullet entry is cut off the same way. Seven older entries
-  there open with the lead-in themselves and are excused by name in
-  ``_DETACHED_ALLOWLIST``.
+- Excused: seven entries before the first ``##`` heading whose own head opens
+  with the lead-in, by name in ``_DETACHED_ALLOWLIST``.
 - KNOWN MISS: an indented marker under a ``##`` section that ends in its own
   column-zero bullet list is indexed with the last bullet of that list, not
   with the heading. No section ends that way today.
@@ -338,12 +335,10 @@ def test_wrap_scan_catches_a_line_wrapped_marker() -> None:
 _COLUMN_ZERO_UPDATE = re.compile(r"-\s+\*\*Update \(")
 
 
-# Entries whose own head opens with the Update lead-in, committed before this
-# gate existed (lode-px81z). Rewriting a committed line is barred, so each is
-# excused here by its head up to the lead-in's closing parenthesis. The reason
-# names the earlier entry it bears on, which carries an indented marker of its
-# own, so an excused head hides no correction. Never add a key: a new head is
-# not committed yet, so reword it.
+# Heads that open with the Update lead-in and predate this gate (lode-px81z).
+# A committed line cannot be reworded, so each is excused by its head through
+# the lead-in's closing parenthesis; the reason names the entry it bears on,
+# which carries its own indented marker. Never add a key: reword a new head.
 _DETACHED_ALLOWLIST: dict[str, str] = {
     "- **Update (lode-nt98, lode-qv5t, 2026-07-20)": "corrects the lode-g387 entry",
     "- **Update (`lode-5ido`, 2026-08-08)": "corrects the lode-p8zl rulings entry",
@@ -355,19 +350,24 @@ _DETACHED_ALLOWLIST: dict[str, str] = {
 }
 
 
-def _detached_updates(
-    lines: list[str], allowlist: Iterable[str] = _DETACHED_ALLOWLIST
-) -> list[str]:
-    """Index units that open with a column-zero ``- **Update (`` bullet
-    (lode-v1gnv, lode-px81z), minus the ``allowlist`` heads."""
+def _update_heads(lines: list[str]) -> list[_chunker.Unit]:
+    """Index units that open with a column-zero ``- **Update (`` bullet."""
     # The chunker keys its entry-log rules on the file's name, so the sample
     # inputs of the non-vacuity test are chunked under the real path too.
     units = _chunker.chunk_file(DECISIONS, "\n".join(lines))
+    return [unit for unit in units if _COLUMN_ZERO_UPDATE.match(unit.first_line)]
+
+
+def _detached_updates(
+    lines: list[str], allowlist: Iterable[str] = _DETACHED_ALLOWLIST
+) -> list[str]:
+    """The :func:`_update_heads` units (lode-v1gnv, lode-px81z), minus the
+    ``allowlist`` heads."""
+    excused = tuple(allowlist)
     return [
         f"  L{unit.line_lo}: {unit.first_line.strip()}"
-        for unit in units
-        if _COLUMN_ZERO_UPDATE.match(unit.first_line)
-        and not any(unit.first_line.startswith(a) for a in allowlist)
+        for unit in _update_heads(lines)
+        if not unit.first_line.startswith(excused)
     ]
 
 
@@ -389,17 +389,14 @@ def test_no_update_marker_detached_from_its_entry() -> None:
 def test_every_detached_allowlist_entry_excuses_exactly_one_live_head() -> None:
     """A key matching nothing is a dead excuse; one matching two heads excuses
     a head nobody vetted."""
-    units = _chunker.chunk_file(DECISIONS, "\n".join(_decisions_lines()))
+    heads = _update_heads(_decisions_lines())
     for allowed, reason in _DETACHED_ALLOWLIST.items():
         assert reason.strip(), f"allowlist entry {allowed!r} carries no reason"
-        assert _COLUMN_ZERO_UPDATE.match(allowed), (
-            f"allowlist entry {allowed!r} excuses a head the scan would not "
-            "flag anyway -- drop the entry"
-        )
-        opened = [u for u in units if u.first_line.startswith(allowed)]
-        assert len(opened) == 1, (
-            f"allowlist entry {allowed!r} must open exactly one unit, "
-            f"but opens {len(opened)}"
+        excused = [u.line_lo for u in heads if u.first_line.startswith(allowed)]
+        assert len(excused) == 1, (
+            f"allowlist entry {allowed!r} must excuse exactly one head, but "
+            f"excuses those at lines {excused}. A second head is not excused: "
+            "indent it under its entry, or reword it"
         )
 
 
