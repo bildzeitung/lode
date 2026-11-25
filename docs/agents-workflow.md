@@ -1083,7 +1083,8 @@ hook that asks the same way when a command runs `git commit`, `git merge`, `git 
 cwd on `trunk` — the commit or `nox -t fix` reformat that the `Edit|Write` hook cannot see. It needs
 `jq` (it reads `tool_input.command`), so it denies every Bash call when `jq` is missing, like its
 three siblings. A live `/land` single-lander lock (`scripts/land-lock.sh held`) exempts it, so the
-unattended `/loop /land` pass is not stalled; a stale lock does not. Accepted limit: while a land
+unattended `/loop /land` pass is not stalled; a stale lock does not, so a pass whose last heartbeat
+is older than `LAND_LOCK_STALE_SECONDS` gets the prompt too. Accepted limit: while a land
 pass holds the lock, any other agent whose cwd falls back to `trunk` is exempt too. Full ruling:
 [`docs/decisions.md`](decisions.md) (`uv run --frozen python scripts/docs_index_query.py "lode-21sxk"`).
 

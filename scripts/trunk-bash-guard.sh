@@ -24,27 +24,36 @@
 #     main session" point.
 #
 # MATCHING is conservative (a false ask is cheap, a miss is what this exists to stop): the command
-# is split on ; & | ( ) { } backtick and newlines; in each segment env assignments, option words
-# and wrappers (env, sudo, uv run, python -m, bash, eval, xargs, ...) are skipped and the first
-# remaining word must be `nox` (any path) or `git` followed, past its global options, by commit,
-# merge or push.
+# is split on ; & | ( ) { } backtick and newlines; in each segment env assignments, option words,
+# numeric words, shell keywords (if, then, do, !, ...) and wrappers (env, sudo, uv run, python -m,
+# bash, eval, xargs, timeout, ...) are skipped and the first remaining word must be `nox` (any
+# path) or `git` followed, past its global options, by commit, merge or push.
 #
-# KNOWN LIMITS: only a LEADING `cd <dir> &&|;` is followed when picking the cwd whose branch is
-# checked; a later cd, `git -C <dir>` and a `bash -c` string hiding a cd are judged against the
-# hook's own cwd. A command built by variable expansion or a script that itself commits is not
-# seen.
+# KNOWN LIMITS:
+#   - FALSE ASKS: quoted text and heredoc bodies are split and matched like commands, so
+#     `bd update x --notes "gates: fix green; nox -s unit green"` asks on trunk. So does
+#     `command -v nox`.
+#   - MISSES: a wrapper option that takes a separate value word (`uv run --with x nox`,
+#     `sudo -u me git push`) hides the command behind that word. A command built by variable
+#     expansion, or a script that itself commits, is not seen.
+#   - CWD: only a LEADING `cd <dir>` (ended by &&, ; or a newline) is followed when picking the
+#     cwd whose branch is checked, and only when <dir> is a literal path or starts with `~`; a
+#     target that is not an existing directory (a variable, a typo), a later cd, `git -C <dir>`
+#     and a `bash -c` string hiding a cd are all judged against the hook's own cwd.
 #
 # Usage: scripts/trunk-bash-guard.sh "<the Bash command>"
 # Prints nothing (allow) or one PreToolUse hookSpecificOutput JSON object with permissionDecision
 # "ask". ALWAYS exits 0: a PreToolUse hook exiting non-zero is itself a defect.
 
 set -uo pipefail
+# No pathname expansion: segment_hits word-splits the command text unquoted.
+set -f
 
 CMD="${1:-}"
 [ -n "$CMD" ] || exit 0
 
-# Split into candidate segments, one per line.
-SEGMENTS="$(printf '%s\n' "$CMD" | tr ';&|(){}`' '\n')"
+# Split into candidate segments, one per line, after joining backslash-newline continuations.
+SEGMENTS="$(printf '%s\n' "${CMD//$'\\\n'/ }" | tr ';&|(){}`' '\n')"
 
 segment_hits() {
   local seg="$1" tok base sub
@@ -58,11 +67,12 @@ segment_hits() {
     tok="${toks[$i]}"
     base="${tok##*/}"
     case "$tok" in
-      -* | *=*) ;;
+      -* | *=* | [0-9]* | '!') ;;
       *)
         case "$base" in
-          env | command | exec | sudo | time | nohup | uv | uvx | run | python | python3 | \
-            bash | sh | dash | zsh | eval | xargs | timeout) ;;
+          env | command | exec | sudo | time | nohup | uv | uvx | run | python* | \
+            bash | sh | dash | zsh | eval | xargs | timeout | \
+            if | then | else | elif | while | until | do) ;;
           *) break ;;
         esac
         ;;
@@ -98,10 +108,15 @@ while IFS= read -r seg; do
 done <<<"$SEGMENTS"
 [ "$hit" = 1 ] || exit 0
 
-# The cwd the command will run in: the hook's own, unless it opens with `cd <dir> &&|;`.
+# The cwd the command will run in: the hook's own, unless it opens with `cd <dir>` ended by
+# &&, ; or a newline.
 DIR="."
-if [[ "$CMD" =~ ^[[:space:]]*cd[[:space:]]+(\"([^\"]*)\"|\'([^\']*)\'|([^[:space:];\&|]+))[[:space:]]*(\&\&|\;) ]]; then
+LEADING_CD='^[[:space:]]*cd[[:space:]]+("([^"]*)"|'"'([^']*)'"'|([^[:space:];&|]+))[[:blank:]]*(&&|;|'$'\n'')'
+if [[ "$CMD" =~ $LEADING_CD ]]; then
   cand="${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
+  case "$cand" in
+    '~' | '~/'*) cand="${HOME:-}${cand#'~'}" ;;
+  esac
   [ -d "$cand" ] && DIR="$cand"
 fi
 

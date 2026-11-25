@@ -20,8 +20,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_settings_json_still_carries_all_three_guards() -> None:
-    """No regression to any of the three committed guards from adding a new one."""
+def test_settings_json_still_carries_every_bash_guard() -> None:
+    """No regression to any committed Bash guard from adding a new one."""
     settings = json.loads(SETTINGS.read_text())
     bash_hooks = [
         h["command"]

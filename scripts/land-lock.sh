@@ -371,7 +371,8 @@
 #       `acquire` run right now would skip rather than reclaim it (same
 #       staleness rule, same malformed-record-is-held reading); exit 1 for
 #       no lock, a stale lock, or an undeterminable lock path. Prints nothing
-#       and never writes, so it is safe from a PreToolUse hook
+#       on stdout (git's own error reaches stderr outside a repository) and
+#       never writes, so it is safe from a PreToolUse hook
 #       (scripts/trunk-bash-guard.sh).
 # heartbeat <own-token>: re-stamps the lock this pass already holds, so the
 #            staleness check measures idle time from the LAST heartbeat
@@ -503,11 +504,11 @@ note_machine_fault() {
   fi
 }
 
-# acquire takes no further argument; heartbeat/release now each REQUIRE
-# exactly one further argument -- their own token, or the explicit
-# $BLIND_SENTINEL opt-out (lode-yuwt). Stated as the three legal
+# acquire and held take no further argument; heartbeat/release now each
+# REQUIRE exactly one further argument -- their own token, or the explicit
+# $BLIND_SENTINEL opt-out (lode-yuwt). Stated as the legal
 # <argc>:<subcommand> shapes rather than as a chain of negated conditions, so
-# adding a fourth shape is one more `case` arm and nothing else.
+# adding another shape is one more `case` arm and nothing else.
 case "$#:${1:-}" in
   1:acquire | 1:held | 2:heartbeat | 2:release) ;;
   *)
@@ -583,7 +584,7 @@ fi
 if ! GIT_COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"; then
   # git's own diagnostic already went to stderr above (this command
   # substitution captures only stdout). `$cmd` is validated to exactly these
-  # three values above, so no `*)` arm is reachable.
+  # four values above, so no `*)` arm is reachable.
   case "$cmd" in
     held) exit 1 ;;
     acquire)
@@ -749,23 +750,51 @@ write_lock() {
     lock_record "$1" > "$LOCK" ) 2>/dev/null
 }
 
+lock_staleness() {
+  # The ONE staleness rule, shared by `acquire` (reclaim or skip) and `held`
+  # (lode-21sxk). Sets STALE_REASON for the record in $1: empty means the lock
+  # is live, or its age is unknown (malformed or unreadable record, a boot
+  # field missing, this boot's boot_id unreadable) -- stay conservative and
+  # never guess an age; non-empty says why it is reclaimable.
+  #
+  # lode-3874: judged from the non-stepping boot clock whenever the record
+  # carries both boot-relative fields -- see the header's CLOCK SOURCE
+  # section. A record without them (written before those fields existed) is
+  # judged by the wall-clock epoch instead.
+  local epoch mono rboot cboot age
+  STALE_REASON=""
+  epoch="$(epoch_of "$1")"
+  mono="$(monotonic_of "$1")"
+  rboot="$(bootid_of "$1")"
+  if [ -z "$epoch" ] && [ -z "$mono" ]; then
+    return 0
+  fi
+  cboot="$(boot_id)"
+  if [ -n "$mono" ] && [ -n "$rboot" ] && [ -n "$cboot" ]; then
+    if [ "$rboot" != "$cboot" ]; then
+      # The recording boot is gone -- nothing from it can still hold this
+      # lock, regardless of the recorded age. Unconditionally stale.
+      STALE_REASON="the recording boot is gone (boot_id mismatch)"
+      return 0
+    fi
+    age=$(( $(boot_uptime) - mono ))
+  elif [ -n "$epoch" ]; then
+    age=$(( $(date -u +%s) - epoch ))
+  else
+    return 0
+  fi
+  if [ "$age" -ge "$STALE_SECONDS" ]; then
+    STALE_REASON="age ${age}s >= ${STALE_SECONDS}s"
+  fi
+}
+
 if [ "$cmd" = "held" ]; then
   [ -e "$LOCK" ] || exit 1
   RECORD=""
   read -r RECORD < "$LOCK" 2>/dev/null || true
-  EPOCH="$(epoch_of "$RECORD")"
-  MONO="$(monotonic_of "$RECORD")"
-  RBOOT="$(bootid_of "$RECORD")"
-  [ -n "$EPOCH" ] || [ -n "$MONO" ] || exit 0
-  CBOOT="$(boot_id)"
-  if [ -n "$MONO" ] && [ -n "$RBOOT" ] && [ -n "$CBOOT" ]; then
-    [ "$RBOOT" = "$CBOOT" ] || exit 1
-    [ $(( $(boot_uptime) - MONO )) -lt "$STALE_SECONDS" ] && exit 0
-    exit 1
-  fi
-  [ -n "$EPOCH" ] || exit 0
-  [ $(( $(date -u +%s) - EPOCH )) -lt "$STALE_SECONDS" ] && exit 0
-  exit 1
+  lock_staleness "$RECORD"
+  [ -z "$STALE_REASON" ] || exit 1
+  exit 0
 fi
 
 if [ "$cmd" = "release" ]; then
@@ -938,42 +967,8 @@ fi
 # rather than crashing: stay conservative and skip rather than guess.
 RECORD=""
 read -r RECORD < "$LOCK" || true
-RECORDED_EPOCH="$(epoch_of "$RECORD")"
-RECORDED_MONO="$(monotonic_of "$RECORD")"
-RECORDED_BOOTID="$(bootid_of "$RECORD")"
-
-if [ -z "$RECORDED_EPOCH" ] && [ -z "$RECORDED_MONO" ]; then
-  skip_lock_still_held "$RECORD"
-fi
-
-# lode-3874: judge staleness from the non-stepping boot clock whenever the
-# record carries both boot-relative fields -- see the header's CLOCK SOURCE
-# section. A record without them (written before those fields existed) is
-# judged by the wall-clock epoch instead.
-CURRENT_BOOTID="$(boot_id)"
-RECLAIM_REASON=""
-if [ -n "$RECORDED_MONO" ] && [ -n "$RECORDED_BOOTID" ] && [ -n "$CURRENT_BOOTID" ]; then
-  if [ "$RECORDED_BOOTID" != "$CURRENT_BOOTID" ]; then
-    # The recording boot is gone -- nothing from it can still hold this
-    # lock, regardless of the recorded age. Unconditionally stale.
-    RECLAIM_REASON="the recording boot is gone (boot_id mismatch)"
-  else
-    AGE=$(( $(boot_uptime) - RECORDED_MONO ))
-    if [ "$AGE" -lt "$STALE_SECONDS" ]; then
-      skip_lock_still_held "$RECORD"
-    fi
-    RECLAIM_REASON="age ${AGE}s >= ${STALE_SECONDS}s"
-  fi
-elif [ -n "$RECORDED_EPOCH" ]; then
-  AGE=$(( $(date -u +%s) - RECORDED_EPOCH ))
-  if [ "$AGE" -lt "$STALE_SECONDS" ]; then
-    skip_lock_still_held "$RECORD"
-  fi
-  RECLAIM_REASON="age ${AGE}s >= ${STALE_SECONDS}s"
-else
-  # No usable wall-clock epoch, and the boot-relative path is unusable
-  # (a boot field missing, or this boot's boot_id unreadable) -- stay
-  # conservative.
+lock_staleness "$RECORD"
+if [ -z "$STALE_REASON" ]; then
   skip_lock_still_held "$RECORD"
 fi
 
@@ -981,7 +976,7 @@ fi
 # this section, so the reclaim itself needs no further coordination: no
 # retry loop, no gate object, no ownership re-check. This IS the atomic
 # reclaim (CAVEAT 2).
-echo "land-lock: reclaiming stale lock (${RECLAIM_REASON})," \
+echo "land-lock: reclaiming stale lock (${STALE_REASON})," \
   "previously held by: $RECORD"
 rm -f "$LOCK"
 if write_lock "$TOKEN"; then

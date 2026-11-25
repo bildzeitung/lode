@@ -7618,11 +7618,25 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
 - **jq.** The guard reads `tool_input.command`, so `lode-p8zl` ruling 3 (no jq) cannot hold for it;
   it follows the three older Bash guards' deny-everything-when-jq-is-missing wrapper (`lode-oii9`).
 - **Lander exemption (option 1 of the escalation).** `/land` runs unattended on `trunk` in the main
-  checkout and itself merges, commits `--no-verify`, pushes and re-gates there, and an `ask` forces a
-  prompt even over `permissions.allow`, so the unattended loop would stall. The guard is therefore
-  silent when the branch is `trunk` AND `scripts/land-lock.sh held` (a new read-only subcommand that
-  reuses the lock's own staleness rule) reports a live lock. A stale lock does not exempt.
+  checkout and itself merges, commits `--no-verify`, pushes and re-gates there. The ticket's claim,
+  not checked against the harness: an `ask` forces a prompt even over `permissions.allow`, so the
+  unattended loop would stall. The guard is therefore silent when the branch is `trunk` AND
+  `scripts/land-lock.sh held` reports a live lock. `held` is a new read-only subcommand; it and
+  `acquire` call the same `lock_staleness` function, so the two cannot disagree about which lock is
+  live. A stale lock does not exempt.
+- **What the exemption covers, read off `.claude/skills/land/SKILL.md` at review.** Every
+  `git commit`, `git merge`, `git push` and `nox` call the skill makes on `trunk` sits between
+  Section 0's `acquire` and the pass-end release, the branch deletes and the `MISTAKES.md` commit on
+  a pass that never reaches Section 4 included. The exemption lapses if such a call starts more than
+  `LAND_LOCK_STALE_SECONDS` (default 1800) after the pass's last heartbeat: the pass then gets the
+  `ask` and waits for a human. The most exposed calls are Section 4's reformat commit and
+  `git push origin trunk`: they follow Section 3's combined re-gate with no heartbeat in between,
+  so that re-gate has to finish inside the window.
 - **Accepted limit.** While a land pass holds the lock, any other agent whose cwd falls back to
   `trunk` is exempt too. This bends `lode-8uh71`'s "never tell a subagent from the main session"
-  point on purpose. Matching is conservative (see the script header), and only a leading
-  `cd <dir> &&` is followed when choosing the cwd whose branch is checked.
+  point on purpose.
+- **Matching limits.** Matching is conservative, and the script header lists what it gets wrong in
+  each direction. Quoted text is matched like a command, so a `bd` note containing `; nox -s unit`
+  asks on `trunk`. A wrapper option with a separate value word (`uv run --with x nox`) hides the
+  command. Only a leading `cd <dir>` with a literal or `~` target is followed when choosing the cwd
+  whose branch is checked.

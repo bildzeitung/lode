@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 import pytest
-from _gitrepo import _git
+from _gitrepo import _git, os_env
 from _hookharness import SH, pretooluse_hook, run_hook
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -46,6 +46,13 @@ ASKING = [
     "x=$(git merge foo)",
     "bash -c 'git commit -m x'",
     "git add a &&\ngit commit -m x",
+    "if ! git diff --quiet; then git commit -m x; fi",
+    "for b in a b; do git push origin $b; done",
+    "! git push",
+    "timeout 600 uv run --frozen nox -t fix",
+    "python3.12 -m nox -t fix",
+    "uv run --frozen \\\n  nox -t fix",
+    "git \\\n  commit -m x",
 ]
 
 SILENT = [
@@ -70,7 +77,9 @@ def _init_repo(path: Path, *, branch: str) -> None:
     _git(path, "commit", "-q", "--allow-empty", "-m", "init")
 
 
-def _run(command: str, cwd: Path) -> subprocess.CompletedProcess:
+def _run(
+    command: str, cwd: Path, *, home: Path | None = None
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         [str(SCRIPT), command],
         cwd=cwd,
@@ -78,10 +87,15 @@ def _run(command: str, cwd: Path) -> subprocess.CompletedProcess:
         text=True,
         timeout=30,
         check=False,
+        env=os_env({"HOME": str(home)} if home else None),
     )
 
 
 def _live_lock(repo: Path) -> None:
+    # A successful acquire deletes land-lock.sh's machine-wide fault counter under $TMPDIR, so
+    # point it at a throwaway directory.
+    fault_tmp = repo.parent / "fault-tmpdir"
+    fault_tmp.mkdir(exist_ok=True)
     proc = subprocess.run(
         ["bash", str(LAND_LOCK), "acquire"],
         cwd=repo,
@@ -89,6 +103,7 @@ def _live_lock(repo: Path) -> None:
         text=True,
         timeout=30,
         check=False,
+        env=os_env({"TMPDIR": str(fault_tmp)}),
     )
     assert proc.returncode == 0, proc.stderr
 
@@ -166,6 +181,32 @@ def test_leading_cd_into_feature_checkout_is_silent_from_a_trunk_cwd(
     assert proc.stdout.strip() == ""
 
 
+def test_leading_cd_ended_by_a_newline_is_followed(
+    tmp_path: Path, feature_repo: Path
+) -> None:
+    main = tmp_path / "main"
+    _init_repo(main, branch="trunk")
+    proc = _run(f"cd {main}\ngit commit -m x", feature_repo)
+    assert '"permissionDecision": "ask"' in proc.stdout
+
+
+def test_leading_cd_with_a_tilde_target_is_followed(
+    tmp_path: Path, feature_repo: Path
+) -> None:
+    main = tmp_path / "home" / "main"
+    main.parent.mkdir()
+    _init_repo(main, branch="trunk")
+    proc = _run("cd ~/main && git commit -m x", feature_repo, home=main.parent)
+    assert '"permissionDecision": "ask"' in proc.stdout
+
+
+def test_leading_cd_to_an_unresolvable_target_falls_back_to_the_hook_cwd(
+    trunk_repo: Path,
+) -> None:
+    proc = _run('cd "$NOWHERE" && git commit -m x', trunk_repo)
+    assert '"permissionDecision": "ask"' in proc.stdout
+
+
 def test_live_land_lock_exempts_trunk(trunk_repo: Path) -> None:
     _live_lock(trunk_repo)
     for command in ("git merge --no-ff land/x", "git push origin trunk", "nox -t fix"):
@@ -181,16 +222,16 @@ def test_stale_land_lock_does_not_exempt(trunk_repo: Path) -> None:
     assert '"permissionDecision": "ask"' in proc.stdout
 
 
-def test_live_lock_exempts_from_a_linked_worktree_that_is_on_trunk_only(
+def test_live_lock_taken_in_the_main_checkout_exempts_a_linked_worktree_on_trunk(
     tmp_path: Path, trunk_repo: Path
 ) -> None:
     # The lock lives under the common git dir, so it is visible from any checkout of the repo.
-    _live_lock(trunk_repo)
-    _git(trunk_repo, "branch", "side")
+    _git(trunk_repo, "checkout", "-q", "-b", "side")
     wt = tmp_path / "wt"
-    _git(trunk_repo, "worktree", "add", "-q", str(wt), "side")
-    proc = _run("git commit -m x", wt)
-    assert proc.stdout.strip() == ""
+    _git(trunk_repo, "worktree", "add", "-q", str(wt), "trunk")
+    assert '"permissionDecision": "ask"' in _run("git commit -m x", wt).stdout
+    _live_lock(trunk_repo)
+    assert _run("git commit -m x", wt).stdout.strip() == ""
 
 
 # --- land-lock.sh held ------------------------------------------------------------------------
