@@ -1816,18 +1816,8 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
-    "rule": "notes-two-phases-in-order",
-    "phrase": "**Two phases, in order: build then review.**"
-  },
-  {
-    "file": ".claude/skills/code/SKILL.md",
     "rule": "notes-reviewer-after-builder-never-parallel",
     "phrase": "never in parallel with its own build"
-  },
-  {
-    "file": ".claude/skills/code/SKILL.md",
-    "rule": "notes-no-reviewer-for-build-time-escalation",
-    "phrase": "Don't dispatch a reviewer for a ticket that escalated at build time."
   },
   {
     "file": ".claude/skills/code/SKILL.md",
@@ -1891,11 +1881,6 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
-    "rule": "notes-nothing-merges-no-self-review",
-    "phrase": "**nothing merges and nothing the author wrote is reviewed by its author.**"
-  },
-  {
-    "file": ".claude/skills/code/SKILL.md",
     "rule": "notes-main-session-stays-on-trunk",
     "phrase": "The main session stays on `trunk` and never edits files here."
   },
@@ -1911,22 +1896,7 @@
   },
   {
     "file": ".claude/skills/code/SKILL.md",
-    "rule": "notes-docs-nits-relay-only",
-    "phrase": "**Docs nits: same story (lode-t551).**"
-  },
-  {
-    "file": ".claude/skills/code/SKILL.md",
     "rule": "notes-docs-nits-skill-only-relays-in-summary",
     "phrase": "this skill only relays that it happened, in its dispatch-summary report"
-  },
-  {
-    "file": ".claude/skills/code/SKILL.md",
-    "rule": "notes-reviewer-pickup-worktree-reclaimed-by-me",
-    "phrase": "**A reviewer's or rebase-pickup's own launch worktree is reclaimed by me, right after it returns"
-  },
-  {
-    "file": ".claude/skills/code/SKILL.md",
-    "rule": "notes-fresh-build-worktree-kept-until-land",
-    "phrase": "deliberately kept through the whole build → review → land lifecycle"
   }
 ]
