@@ -36,6 +36,14 @@ from its entry and a hit on the entry does not show the correction. The gate nam
 such a bullet. It cannot tell a marker from a new entry whose head opens with the lead-in, so such a
 head fails too: reword it.
 
+**Before the first `## ` heading the marker is indented too (`lode-px81z`, 2026-11-25).**
+There the chunker makes every column-zero bullet a unit of its own, so a marker written at column
+zero after a bullet entry is cut off from it the same way. Indent it two spaces under that entry.
+The gate scans those units too. Seven older entries whose own head opens with the lead-in are
+excused by name in the gate module. Each bears on an earlier entry that carries its own indented
+marker (checked on that date; the `lode-3xzy` entry had none and got one then). Nothing is added to
+that list: a new head that opens with the lead-in is reworded.
+
 **This file is out of scope for pointer sweeps, by construction (`lode-1dmu`, 2026-08-08).** A
 mechanical sweep that repoints every reference to a file/symbol that moved or was renamed (e.g. the
 pre-split monolithic CLI module's later break-up into a package) must skip this file. Every entry
@@ -6676,6 +6684,9 @@ entries below from being rewritten to chase the current tree.)
     send nothing to a provider and the offline gates run them; the directive lists the live eval
     (`LODE_RUN_LIVE_EVAL=1`) instead.
   - **Rejected.** Unsetting credentials and a fail-closed provider; no new mechanism built.
+  - **Update (lode-v3xd, 2026-11-19):** the Open point above is settled: the maintainer confirmed
+    the mid-run behaviour as built. See the `lode-v3xd` entry directly below for that and its
+    other rulings. (Marker added 2026-11-25, `lode-px81z`.)
 - **Update (lode-v3xd, 2026-11-19): the maintainer ruled on every open point of the `lode-3xzy`
   entry above.**
   - **Confirmed as built (1-6).** (1) Without approval an agent makes no provider call; it
