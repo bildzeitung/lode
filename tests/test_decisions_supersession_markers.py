@@ -408,7 +408,9 @@ def test_detached_update_scan_is_not_vacuous() -> None:
     fenced = [*entry, "```", update, "```"]
     # The chunker splits the pre-heading region at bullets only once it is
     # oversized, as the real file's is.
-    bullet = "- " + "A pre-heading entry (lode-wwww). " * (_chunker.MAX_UNIT_BYTES // 30)
+    bullet = "- " + "A pre-heading entry (lode-wwww). " * (
+        _chunker.MAX_UNIT_BYTES // 30
+    )
     pre_heading = [bullet, "", update, *entry]
     pre_heading_indented = [bullet, f"  {update}", *entry]
 
