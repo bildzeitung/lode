@@ -28,6 +28,14 @@ the correction, the corrected entry gets an appended `**Update (<id>[, <date>])`
 entry that does the correcting is not itself a marker, and its head is free: it need not open with
 the Update lead-in.
 
+**Under a `## ` entry the marker is indented, never a column-zero bullet (`lode-v1gnv`, 2026-11-25).**
+Write it two spaces in, after the entry's closing paragraph, as every existing one is (checked on
+that date). The docs index (`scripts/docs_index_chunker.py`) starts a unit of its own at every
+column-zero bullet after a `## ` section's own text, so a column-zero marker there is indexed apart
+from its entry and a hit on the entry does not show the correction. The gate named above fails on
+such a bullet. It cannot tell a marker from a new entry whose head opens with the lead-in, so such a
+head fails too: reword it.
+
 **This file is out of scope for pointer sweeps, by construction (`lode-1dmu`, 2026-08-08).** A
 mechanical sweep that repoints every reference to a file/symbol that moved or was renamed (e.g. the
 pre-split monolithic CLI module's later break-up into a package) must skip this file. Every entry

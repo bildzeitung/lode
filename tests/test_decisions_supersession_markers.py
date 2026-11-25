@@ -1,8 +1,8 @@
 r"""Guards docs/decisions.md's supersession-marker convention (lode-ur6o).
 
 The convention itself is stated once, in that file's own preamble; this module
-deliberately does not restate it, so the two cannot drift. It pins two
-properties, because either alone leaves a hole:
+deliberately does not restate it, so the two cannot drift. It pins three
+properties, because any one alone leaves a hole:
 
 *No off-pattern marker.* A stale-flag keyword opening a bold span, a
 blockquote, or a parenthetical, with no ``Update (`` on the line to make it
@@ -53,12 +53,28 @@ normalizations -- the fix for the ticket reintroducing the ticket's own
 defect. The off-pattern scan cannot see it (nothing off-pattern is present),
 so it is pinned separately.
 
-Both scans are module-level helpers taking their lines as a parameter, so the
+*No marker cut off from its ``##`` entry* (the preamble's lode-v1gnv
+paragraph, which gives the mechanism). The scan takes its units from the
+chunker (``scripts/docs_index_chunker.py``) and holds no copy of its boundary
+rule.
+
+- Accepted over-match: the scan cannot tell a cut-off marker from a new entry
+  whose head opens with the lead-in, so that head goes red too. The way out
+  is again to reword the head.
+- KNOWN MISS: units before the first ``##`` heading are not scanned. That part
+  of the log is top-level bullets only, each one a unit, and seven of them are
+  entries whose own head opens with the lead-in. A marker written at column
+  zero after a bullet entry there is cut off the same way and stays green.
+- KNOWN MISS: an indented marker under a ``##`` section that ends in its own
+  column-zero bullet list is indexed with the last bullet of that list, not
+  with the heading. No section ends that way today.
+
+Every scan is a module-level helper taking its lines as a parameter, so the
 sabotage tests below can prove each actually fires on a violation rather than
 passing vacuously -- same shape as tests/test_keybindings_doc.py.
 
 FORMER KNOWN LIMITATION (lode-nlk6), now covered by a SEPARATE mechanism
-(lode-rl6s): none of the checks in THIS module -- neither scan, nor the
+(lode-rl6s): none of the checks in THIS module -- no scan, nor the
 preamble-states-the-rule check -- can detect a SILENT IN-PLACE REWRITE, the
 exact failure the preamble's own sentence forbids. Every check here keys on
 an artifact a *marker* leaves behind (an off-pattern keyword, a wrapped id,
@@ -75,12 +91,21 @@ not a restatement here.
 
 from __future__ import annotations
 
+import itertools
 import re
 from collections.abc import Iterable
 from pathlib import Path
 
+from conftest import load_module_from_path
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DECISIONS = REPO_ROOT / "docs" / "decisions.md"
+
+# A name private to this module: tests/test_docs_index_chunker.py loads the
+# same file as "docs_index_chunker", and a second load under one name asserts.
+_chunker = load_module_from_path(
+    "_marker_gate_docs_index_chunker", REPO_ROOT / "scripts" / "docs_index_chunker.py"
+)
 
 # Marker vocabulary, matched in TitleCase and ALL-CAPS but deliberately NOT
 # lowercase: a case-insensitive group false-positives on ordinary parenthesised
@@ -308,3 +333,55 @@ def test_wrap_scan_catches_a_line_wrapped_marker() -> None:
     first pass shipped."""
     assert _wrapped_markers(["  **Update (lode-", "  zzzz) - the wrapped id.**"])
     assert not _wrapped_markers(["  **Update (lode-zzzz) - the same id, intact.**"])
+
+
+_COLUMN_ZERO_UPDATE = re.compile(r"-\s+\*\*Update \(")
+
+
+def _detached_updates(lines: list[str]) -> list[str]:
+    """Index units from the first ``##`` heading on that open with a
+    column-zero ``- **Update (`` bullet (lode-v1gnv)."""
+    # The chunker keys its entry-log rules on the file's name, so the sample
+    # inputs of the non-vacuity test are chunked under the real path too.
+    units = _chunker.chunk_file(DECISIONS, "\n".join(lines))
+    from_first_section = itertools.dropwhile(
+        lambda unit: not unit.first_line.startswith("## "), units
+    )
+    return [
+        f"  L{unit.line_lo}: {unit.first_line.strip()}"
+        for unit in from_first_section
+        if _COLUMN_ZERO_UPDATE.match(unit.first_line)
+    ]
+
+
+def test_no_update_marker_detached_from_its_section_entry() -> None:
+    """An Update marker appended to a ``##`` entry is indented under it."""
+    detached = _detached_updates(_decisions_lines())
+
+    assert not detached, (
+        "docs/decisions.md has a column-zero '- **Update (' bullet that the "
+        "docs index cuts off as a unit of its own, so a hit on the entry it "
+        "corrects never shows it. If it is a marker on the '##' entry above "
+        "it, indent it two spaces under that entry. If it is a new entry of "
+        "its own, reword its head so that it does not open with the Update "
+        "lead-in (lode-v1gnv):\n" + "\n".join(detached)
+    )
+
+
+def test_detached_update_scan_is_not_vacuous() -> None:
+    """The scan fires on a column-zero Update bullet after a ``##`` section,
+    directly or behind another appended entry, and leaves the indented shape,
+    an Update inside a fence, and a pre-``##`` top-level entry alone."""
+    entry = ["## An entry (decided, lode-zzzz)", "", "Closing paragraph."]
+    update = "- **Update (lode-yyyy, 2026-01-01): the correction.**"
+    detached = [*entry, "", update]
+    after_entry = [*entry, "", "- **An appended entry (lode-xxxx).**", update]
+    indented = [*entry, "", f"  {update}"]
+    fenced = [*entry, "```", update, "```"]
+    pre_heading = [update, *entry]
+
+    assert _detached_updates(detached)
+    assert _detached_updates(after_entry)
+    assert not _detached_updates(indented)
+    assert not _detached_updates(fenced)
+    assert not _detached_updates(pre_heading)
