@@ -53,8 +53,8 @@ normalizations -- the fix for the ticket reintroducing the ticket's own
 defect. The off-pattern scan cannot see it (nothing off-pattern is present),
 so it is pinned separately.
 
-*No marker cut off from its ``##`` entry* (the preamble's lode-v1gnv
-paragraph, which gives the mechanism). The scan takes its units from the
+*No marker cut off from its entry* (the preamble's lode-v1gnv and lode-px81z
+paragraphs, which give the mechanism). The scan takes its units from the
 chunker (``scripts/docs_index_chunker.py``) and holds no copy of its boundary
 rule.
 
@@ -65,7 +65,7 @@ rule.
   of the log is top-level bullets only, each one a unit, so a marker written at
   column zero after a bullet entry is cut off the same way. Seven older entries
   there open with the lead-in themselves and are excused by name in
-  ``_DETACHED_ALLOWLIST``; the file is append-only, so that list does not grow.
+  ``_DETACHED_ALLOWLIST``.
 - KNOWN MISS: an indented marker under a ``##`` section that ends in its own
   column-zero bullet list is indexed with the last bullet of that list, not
   with the heading. No section ends that way today.
@@ -339,16 +339,19 @@ _COLUMN_ZERO_UPDATE = re.compile(r"-\s+\*\*Update \(")
 
 
 # Entries whose own head opens with the Update lead-in, committed before this
-# gate existed. Rewriting a committed line is barred, so each is excused here
-# by the opening text of its head, which carries the id of its marker slot.
+# gate existed (lode-px81z). Rewriting a committed line is barred, so each is
+# excused here by its head up to the lead-in's closing parenthesis. The reason
+# names the earlier entry it bears on, which carries an indented marker of its
+# own, so an excused head hides no correction. Never add a key: a new head is
+# not committed yet, so reword it.
 _DETACHED_ALLOWLIST: dict[str, str] = {
-    "- **Update (lode-nt98,": "entry head predating the gate (lode-px81z)",
-    "- **Update (`lode-5ido`,": "entry head predating the gate (lode-px81z)",
-    "- **Update (lode-8n4k,": "entry head predating the gate (lode-px81z)",
-    "- **Update (lode-5x01,": "entry head predating the gate (lode-px81z)",
-    "- **Update (lode-v3xd,": "entry head predating the gate (lode-px81z)",
-    "- **Update (lode-t9h1,": "entry head predating the gate (lode-px81z)",
-    "- **Update (lode-gcbg,": "entry head predating the gate (lode-px81z)",
+    "- **Update (lode-nt98, lode-qv5t, 2026-07-20)": "corrects the lode-g387 entry",
+    "- **Update (`lode-5ido`, 2026-08-08)": "corrects the lode-p8zl rulings entry",
+    "- **Update (lode-8n4k, 2026-08-08)": "corrects the lode-2m89 entry",
+    "- **Update (lode-5x01, 2026-11-16)": "corrects the lode-s09w entry",
+    "- **Update (lode-v3xd, 2026-11-19)": "rules on the lode-3xzy entry",
+    "- **Update (lode-t9h1, 2026-11-20)": "extends the lode-v3xd entry",
+    "- **Update (lode-gcbg, 2026-11-18)": "confirms the lode-jb2q entry",
 }
 
 
@@ -368,17 +371,18 @@ def _detached_updates(
     ]
 
 
-def test_no_update_marker_detached_from_its_section_entry() -> None:
-    """An Update marker appended to a ``##`` entry is indented under it."""
+def test_no_update_marker_detached_from_its_entry() -> None:
+    """An Update marker appended to an entry is indented under it."""
     detached = _detached_updates(_decisions_lines())
 
     assert not detached, (
         "docs/decisions.md has a column-zero '- **Update (' bullet that the "
         "docs index cuts off as a unit of its own, so a hit on the entry it "
-        "corrects never shows it. If it is a marker on the '##' entry above "
-        "it, indent it two spaces under that entry. If it is a new entry of "
-        "its own, reword its head so that it does not open with the Update "
-        "lead-in (lode-v1gnv):\n" + "\n".join(detached)
+        "corrects never shows it. If it is a marker on the entry above it (a "
+        "'##' section or a top-level bullet), indent it two spaces under "
+        "that entry. If it is a new entry of its own, reword its head so "
+        "that it does not open with the Update lead-in (lode-v1gnv, "
+        "lode-px81z):\n" + "\n".join(detached)
     )
 
 
@@ -388,6 +392,10 @@ def test_every_detached_allowlist_entry_excuses_exactly_one_live_head() -> None:
     units = _chunker.chunk_file(DECISIONS, "\n".join(_decisions_lines()))
     for allowed, reason in _DETACHED_ALLOWLIST.items():
         assert reason.strip(), f"allowlist entry {allowed!r} carries no reason"
+        assert _COLUMN_ZERO_UPDATE.match(allowed), (
+            f"allowlist entry {allowed!r} excuses a head the scan would not "
+            "flag anyway -- drop the entry"
+        )
         opened = [u for u in units if u.first_line.startswith(allowed)]
         assert len(opened) == 1, (
             f"allowlist entry {allowed!r} must open exactly one unit, "
@@ -406,11 +414,9 @@ def test_detached_update_scan_is_not_vacuous() -> None:
     after_entry = [*entry, "", "- **An appended entry (lode-xxxx).**", update]
     indented = [*entry, "", f"  {update}"]
     fenced = [*entry, "```", update, "```"]
-    # The chunker splits the pre-heading region at bullets only once it is
-    # oversized, as the real file's is.
-    bullet = "- " + "A pre-heading entry (lode-wwww). " * (
-        _chunker.MAX_UNIT_BYTES // 30
-    )
+    # The chunker cuts the text before the first heading at its bullets only
+    # when that text is over MAX_UNIT_BYTES, as the real file's is.
+    bullet = "- A pre-heading entry (lode-wwww). " + "x" * _chunker.MAX_UNIT_BYTES
     pre_heading = [bullet, "", update, *entry]
     pre_heading_indented = [bullet, f"  {update}", *entry]
 
@@ -420,4 +426,6 @@ def test_detached_update_scan_is_not_vacuous() -> None:
     assert not _detached_updates(fenced)
     assert _detached_updates(pre_heading)
     assert not _detached_updates(pre_heading_indented)
-    assert not _detached_updates(pre_heading, allowlist=[update[:20]])
+    assert not _detached_updates(
+        pre_heading, allowlist=["- **Update (lode-yyyy, 2026-01-01)"]
+    )
