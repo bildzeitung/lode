@@ -7562,18 +7562,25 @@ re-anchored. The technical review changed the list as built; the "Technical revi
 Every phrase matches exactly once in `.claude/skills/code/SKILL.md` outside fenced blocks
 (`tests/test_instruction_rule_inventory_gate.py` is green).
 
-- **Update (lode-w18a.21, 2026-11-25, maintainer ruling recorded on `lode-w18a.20`):** the repeats listed
-  above as "Left as approved" are collapsed, and the empty-sweep pins and the dropped pins are settled.
-  Six `code/SKILL.md` entries are removed from `tests/instruction_rules.json`, each repeating a rule a
-  main-body entry still pins (the carrier was re-read before removal): `notes-no-reviewer-for-build-time-escalation`
-  (`phase2-land-escalated-skip-never-resume`), `notes-reviewer-pickup-worktree-reclaimed-by-me`
-  (`reclaim-immediately-either-outcome`), `notes-fresh-build-worktree-kept-until-land`
-  (`reclaim-never-touches-builder-worktree`), `notes-two-phases-in-order` (`skill-launches-in-order`),
-  `notes-nothing-merges-no-self-review` (`neither-review-is-authors`, `producer-never-writes-trunk`), and
-  `notes-docs-nits-relay-only`, whose bold lead pinned the same rule as
-  `notes-docs-nits-skill-only-relays-in-summary`; the latter stays because it carries the operative words
-  ("this skill only relays that it happened"). Decided: the three entries dropped at technical review stay
-  dropped, and the `step0-empty-sweep-is-not-error` / `step1-empty-sweep-is-not-error` pins are accepted as
-  re-anchored. The `code/SKILL.md` inventory is now 182 entries (188 minus 6), so criterion 1 is met for
-  the whole file as far as the review's reading went. `.claude/skills/code/SKILL.md` is byte-identical to
-  `trunk`, so there is no watch period.
+  - **Update (lode-w18a.21, 2026-11-25, maintainer ruling recorded on `lode-w18a.20`):** the amended
+    inventory is approved with one named amendment, built here as an edit to
+    `tests/instruction_rules.json`; no further re-approval and no cut follows. The repeats listed
+    above as "Left as approved" are collapsed: six `code/SKILL.md` entries are removed, each
+    repeating a rule another entry still pins (each carrier was read in place in the file before
+    removal, and again at technical review). Five have a main-body carrier:
+    `notes-no-reviewer-for-build-time-escalation` (`phase2-land-escalated-skip-never-resume`),
+    `notes-reviewer-pickup-worktree-reclaimed-by-me` (`reclaim-immediately-either-outcome`),
+    `notes-fresh-build-worktree-kept-until-land` (`reclaim-never-touches-builder-worktree`; Decision
+    1's "so it stays as built" for that entry no longer holds), `notes-two-phases-in-order`
+    (`skill-launches-in-order`), and `notes-nothing-merges-no-self-review`
+    (`neither-review-is-authors`, `producer-never-writes-trunk`). The sixth is
+    `notes-docs-nits-relay-only`, whose bold lead pinned the same rule as
+    `notes-docs-nits-skill-only-relays-in-summary` on the same Notes bullet; the latter stays
+    because it carries the operative words ("this skill only relays that it happened"). The ruling
+    names these six only: every other bold-lead pin stays as built. The three entries dropped at
+    technical review stay dropped, and the `step0-empty-sweep-is-not-error` /
+    `step1-empty-sweep-is-not-error` pins are accepted as re-anchored, their neighbour-text
+    brittleness included. The `code/SKILL.md` inventory is now 182 entries (188 minus 6). Criterion
+    1 is met for every repeat the review listed; the ruling accepts as a limit that completeness of
+    the pin set and of the repeat list was judged by reading, not checked mechanically.
+    `.claude/skills/code/SKILL.md` is byte-identical to `trunk`, so there is no watch period.
