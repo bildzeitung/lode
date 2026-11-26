@@ -7690,11 +7690,14 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
     gate behaved this way before this ticket. The header's KNOWN LIMITS has the detail; whether to
     close it is `lode-3cxzs`.
 
-  - **Update (lode-v62sn, 2026-11-26):** the "Accepted limit" bullet's reason for `acquire`'s
+  - **Update (lode-v62sn, 2026-11-25):** the "Accepted limit" bullet's reason for `acquire`'s
     reading, "a heartbeat's rewrite can be caught half-written", no longer holds. Since
     `lode-409kw` landed, `heartbeat` stages the record in a temp file and renames it over
-    `land.lock`, so it cannot leave a partial record. An unreadable record can still come from an
-    `acquire` cut off mid-create (`write_lock` makes the file before filling it; `lode-7ruca`,
-    still open when this was written, run and confirmed a 0-byte `land.lock` that never ages out)
-    or from a hand edit. How `acquire` and `held` read such a record is still not ruled on; the
-    maintainer note on `lode-409kw` (2026-11-25) rules no change to it.
+    `land.lock`: a reader sees the old record or the new one, and a heartbeat that fails or is
+    killed leaves the previous record in place. The known remaining sources of a record with no
+    readable age are a hand edit and an `acquire` cut off mid-create. When this was written,
+    `write_lock` made the file before filling it: a killed `acquire` left a 0-byte `land.lock`
+    that the next `acquire` skipped and `held` reported live (run at review). `lode-7ruca` covers
+    that; it was open, its fix built but not landed. How `acquire` and `held` read such a record
+    is unchanged and still not ruled on: the maintainer note on `lode-409kw` (2026-11-25) says
+    only "No change to held/acquire's reading of an unreadable record is ruled".
