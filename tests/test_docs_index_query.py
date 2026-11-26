@@ -340,9 +340,20 @@ def test_split_entry_markers_points_every_piece_of_a_split_entry_at_its_marker(
     pieces = [u for u in units if big_lo <= u.line_lo < small_lo]
     assert len(pieces) > 1
     assert any(u.line_hi < marker_line for u in pieces)
+    # An entry after a ``##`` section reads as part of that section (lode-8cp63),
+    # so there the small entry's marker is listed with the big one's.
+    small_marker = next(
+        i + 1 for i, line in enumerate(text.splitlines()) if "lode-other" in line
+    )
+    in_section = h3_section
     for u in units:
-        assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
-            [marker_line] if u in pieces else []
+        if in_section and u.first_line != "# Title":
+            expected = [marker_line, small_marker]
+        else:
+            expected = [marker_line] if u in pieces else []
+        assert (
+            _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi)
+            == expected
         )
 
 
@@ -432,6 +443,11 @@ def test_split_entry_markers_agrees_with_the_chunker_on_the_real_decisions_md() 
     chunker = _query_module._build._chunker
 
     sections = chunker.oversized_sections(path, text)
+    oversized_starts = {lo for lo, _ in sections}
+    # A ``##`` section under the limit is one entry too (lode-8cp63).
+    sections += [
+        s for s in chunker.heading_sections(path, text) if s[0] not in oversized_starts
+    ]
     entries: list[list] = []
     for unit in chunker.chunk_file(path, text):
         in_section = any(lo < unit.line_lo <= hi for lo, hi in sections)
@@ -480,3 +496,33 @@ def test_cli_prints_note_for_a_hit_in_a_split_entry(
     assert result.exit_code == 0, result.output
     assert "decisions.md:" in result.stdout
     assert "NOTE" not in result.stdout
+
+
+def test_split_entry_markers_in_a_section_under_the_limit_with_own_bullets(
+    tmp_path: Path,
+) -> None:
+    """A ``##`` section under MAX_UNIT_BYTES that ends in its own bullet list
+    has its bullets cut into units, and its Update sits under the last
+    (lode-8cp63). A hit on an earlier bullet still lists it; the section
+    before it does not."""
+    marker = "  **Update (lode-test, 2026-01-01)** -- corrects bullet one."
+    text = (
+        "# Title\n\n## Before\n\nprose\n\n- lone bullet\n\n"
+        "## Section\n\nintro\n\n"
+        "- **Bullet one.** stale zorblax\n"
+        "- **Bullet two.** other\n"
+        f"{marker}\n"
+    )
+    doc = tmp_path / "decisions.md"
+    doc.write_text(text, encoding="utf-8")
+    marker_line = text.splitlines().index(marker) + 1
+    units = _query_module._build._chunker.chunk_file(doc, text)
+    assert [u.first_line for u in units][-2:] == [
+        "- **Bullet one.** stale zorblax",
+        "- **Bullet two.** other",
+    ]
+    for u in units:
+        in_section = u.line_lo >= text.splitlines().index("## Section") + 1
+        assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
+            [marker_line] if in_section else []
+        )

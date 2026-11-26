@@ -332,6 +332,31 @@ def oversized_sections(path: Path | str, text: str) -> list[tuple[int, int]]:
     return oversized
 
 
+def heading_sections(path: Path | str, text: str) -> list[tuple[int, int]]:
+    """Line ranges of every ``##`` section of the entry log, heading to the line
+    before the next ``##``, whatever its size; ``[]`` for any other file.
+
+    Unlike :func:`oversized_sections` the range includes the bullets after the
+    section's own text, which the chunker cuts off as units of their own
+    (:func:`_split_trailing_entries`). ``split_entry_markers`` in
+    ``scripts/docs_index_query.py`` reads the section as one entry, so a hit on
+    one bullet lists the Update markers sitting under a later one
+    (``lode-8cp63``). A top-level bullet appended after a section it does not
+    belong to cannot be told from the section's own, so it is read as one.
+    """
+    if Path(path).stem != _ENTRY_LOG_STEM:
+        return []
+    lines = text.splitlines()
+    flags = _fence_flags(lines)
+    starts = [
+        i + 1
+        for i, line in enumerate(lines)
+        if not flags[i] and (m := _HEADING_RE.match(line)) and len(m.group(1)) == 2
+    ]
+    ends = [s - 1 for s in starts[1:]] + ([len(lines)] if starts else [])
+    return list(zip(starts, ends, strict=True))
+
+
 def chunk_file(path: Path | str, text: str) -> list[Unit]:
     """Chunk one markdown file's text into :class:`Unit` objects."""
     lines = text.splitlines()

@@ -197,7 +197,10 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     can correct a claim under a sibling (``lode-pe38``), and one in a closing
     paragraph a claim in an own bullet (``lode-tb0j``). The chunker names those
     sections. A hit on an own bullet that carries its own Update marker also
-    lists the markers of the section's other bullets.
+    lists the markers of the section's other bullets. A section under the
+    limit is read the same way (``lode-8cp63``): its bullets are units of their
+    own and its markers sit under the last, so a hit on any of them lists the
+    markers of the whole ``##`` section, bullets after its own text included.
 
     Anywhere else the entry is the block between the structural lines (any
     heading, any top-level bullet) on either side of the hit. Only a
@@ -219,6 +222,16 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
         ),
         None,
     )
+    if section is None:
+        oversized = chunker.oversized_sections(path, text)
+        section = next(
+            (
+                (lo, hi)
+                for lo, hi in chunker.heading_sections(path, text)
+                if lo <= line_lo <= hi and all(lo != olo for olo, _ in oversized)
+            ),
+            None,
+        )
     if section is not None:
         entry_lo, entry_hi = section
     else:
