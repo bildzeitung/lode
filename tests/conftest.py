@@ -653,6 +653,22 @@ def _isolate_lode_home(
 
 
 @pytest.fixture(autouse=True)
+def _isolate_tmpdir(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # scripts/land-lock.sh keeps its machine-wide consecutive-MACHINE-FAULT counter at
+    # ${TMPDIR:-/tmp}/lode-land-lock-fault-count and deletes it on every successful acquire, so
+    # any test running that script with the inherited TMPDIR would zero a real /land loop's
+    # counter (lode-8flnd).
+    #
+    # Covers a subprocess whose env is copied from os.environ while a test runs. NOT covered:
+    # an env built at import (a module-level `fake_bin_env(...)`) keeps the inherited TMPDIR,
+    # and Python's own `tempfile` caches its directory at first use, so in-process temp files
+    # may not follow the redirect.
+    monkeypatch.setenv("TMPDIR", str(tmp_path_factory.mktemp("tmpdir")))
+
+
+@pytest.fixture(autouse=True)
 def _restore_root_logger_state():
     """Snapshot and restore the root logger's level + handler set (lode-kmes).
 

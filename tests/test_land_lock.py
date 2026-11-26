@@ -1302,10 +1302,10 @@ def test_uncreatable_lock_reports_a_machine_fault_not_another_lander(
 #
 # The counter is deliberately NOT under $GIT_COMMON_DIR (see land-lock.sh's own
 # comment beside LAND_LOCK_FAULT_COUNT_FILE) -- it lives under $TMPDIR, so every
-# test here overrides TMPDIR to a throwaway, per-test directory. Without that
-# override these tests would pollute -- and be polluted by -- the real
-# machine-wide counter file (including a concurrent test run, or a real /land
-# loop on the same box).
+# test here overrides TMPDIR to a directory under its own tmp_path, where
+# `_fault_count_path` can name the exact file the script counts in. Isolation
+# from the real machine-wide counter (a concurrent test run's, or a real /land
+# loop's on the same box) is conftest's `_isolate_tmpdir`, for the whole suite.
 # ---------------------------------------------------------------------------
 
 
@@ -1313,6 +1313,9 @@ def test_uncreatable_lock_reports_a_machine_fault_not_another_lander(
 #: -- _fault_env and _fault_count_path must never disagree about it, or an
 #: `assert not ...exists()` would pass against a path the script never writes.
 _FAULT_TMPDIR_NAME = "fault-tmpdir"
+
+#: land-lock.sh's LAND_LOCK_FAULT_COUNT_FILE, relative to $TMPDIR.
+_FAULT_COUNT_NAME = "lode-land-lock-fault-count"
 
 
 def _fault_env(tmp_path: Path) -> dict[str, str]:
@@ -1322,7 +1325,7 @@ def _fault_env(tmp_path: Path) -> dict[str, str]:
 
 
 def _fault_count_path(tmp_path: Path) -> Path:
-    return tmp_path / _FAULT_TMPDIR_NAME / "lode-land-lock-fault-count"
+    return tmp_path / _FAULT_TMPDIR_NAME / _FAULT_COUNT_NAME
 
 
 def _faulty_repo_and_env(tmp_path: Path) -> tuple[Path, dict[str, str]]:
@@ -2143,3 +2146,32 @@ def test_section_0_then_section_1_leaves_the_token_readable_by_section_2a(
         f"token) of the lock record this pass itself just wrote -- "
         f"read_back={readback.stdout.strip()!r}, lock_record={lock_record!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# The suite never touches the real machine-wide fault counter (lode-8flnd)
+# ---------------------------------------------------------------------------
+
+
+def test_suite_redirects_tmpdir_so_acquire_leaves_the_real_fault_counter_alone(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """conftest's autouse fixture points $TMPDIR at a throwaway, so an acquire made with the
+    inherited environment (no `_fault_env`) removes only a counter in that throwaway."""
+    redirected = Path(os.environ.get("TMPDIR", "/tmp"))
+    # Checked before the sentinel is written, so a run without the redirect fails here and
+    # never touches the real counter. pytest's base temp sits BELOW the machine's temp dir,
+    # whatever $TMPDIR the run inherited, so the real one can never satisfy this.
+    assert redirected.is_relative_to(tmp_path_factory.getbasetemp()), (
+        f"$TMPDIR is {redirected}, not a throwaway under pytest's base temp: an acquire "
+        "here would delete the machine-wide land-lock fault counter (lode-8flnd)"
+    )
+    sentinel = redirected / _FAULT_COUNT_NAME
+    sentinel.write_text("2\n")
+    repo = _init_repo(tmp_path)
+
+    result = _run("acquire", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    # The subprocess followed the redirect: it reset the counter in the throwaway.
+    assert not sentinel.exists()
