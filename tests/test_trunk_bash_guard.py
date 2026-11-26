@@ -78,7 +78,7 @@ SILENT = [
     "python3 -I - <<'E'\nimport subprocess\nsubprocess.run(['git', 'commit'])\nE",
     "git status # git push",
     "echo $((1<<2)) # nox",
-    "grep -nF 'git push origin trunk' docs/x.md",
+    "grep -nF 'git push origin trunk' notes.txt",
     'grep -rn "nox -s tests" docs | head -3',
 ]
 
