@@ -2085,3 +2085,26 @@ def test_section_0_then_section_1_leaves_the_token_readable_by_section_2a(
         f"token) of the lock record this pass itself just wrote -- "
         f"read_back={readback.stdout.strip()!r}, lock_record={lock_record!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# The suite never touches the real machine-wide fault counter (lode-8flnd)
+# ---------------------------------------------------------------------------
+
+
+def test_suite_redirects_tmpdir_so_acquire_leaves_the_real_fault_counter_alone(
+    tmp_path: Path,
+) -> None:
+    """conftest's autouse fixture points $TMPDIR at a throwaway, so an acquire made with the
+    inherited environment (no `_fault_env`) removes only a counter in that throwaway."""
+    real_tmp = Path(os.environ["TMPDIR"])
+    assert real_tmp != Path("/tmp")
+    sentinel = real_tmp / "lode-land-lock-fault-count"
+    sentinel.write_text("2\n")
+    repo = _init_repo(tmp_path)
+
+    result = _run("acquire", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    # The acquire reset the counter it was pointed at: the redirected one, not /tmp's.
+    assert not sentinel.exists()
