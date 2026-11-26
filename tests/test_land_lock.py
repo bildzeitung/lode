@@ -660,6 +660,40 @@ def test_heartbeat_whose_rename_fails_removes_its_temp_file(tmp_path: Path) -> N
     assert sorted(p.name for p in lock.parent.glob("land.lock*")) == ["land.lock"]
 
 
+def test_acquire_cut_off_while_writing_leaves_no_land_lock(tmp_path: Path) -> None:
+    """lode-7ruca: an `acquire` killed inside `lock_record` (the `hostname`
+    shim kills its parent) must not leave an empty land.lock, which the next
+    acquire would read as "age unknown" and skip forever. The next acquire
+    takes the lock cleanly."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    path = _path_with_shim(tmp_path, "hostname", "kill -9 $PPID\nsleep 1")
+
+    _run("acquire", repo=repo, env_overrides={"PATH": path})
+
+    assert not lock.exists()
+    second = _run("acquire", repo=repo)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert lock.stat().st_size > 0
+
+
+def test_acquire_whose_publish_fails_is_a_machine_fault_with_no_temp_file(
+    tmp_path: Path,
+) -> None:
+    """lode-7ruca: when the staged record cannot be published (`ln` fails
+    with no land.lock present) the existing MACHINE FAULT branch reports it
+    and no `land.lock.acq.<pid>` is left behind."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    path = _path_with_shim(tmp_path, "ln", "exit 1")
+
+    result = _run("acquire", repo=repo, env_overrides={"PATH": path})
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "MACHINE FAULT" in result.stderr
+    assert sorted(p.name for p in lock.parent.glob("land.lock*")) == ["land.lock.flock"]
+
+
 def test_stale_lock_refreshed_by_heartbeat_is_not_reclaimed(tmp_path: Path) -> None:
     """The regression this subcommand exists to prevent: a lock old enough to
     be judged stale under the TTL must NOT be reclaimed by a later `acquire`

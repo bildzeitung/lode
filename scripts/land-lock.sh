@@ -234,7 +234,7 @@
 # way the reclaim decision does.
 #
 # `acquire`'s own O_EXCL create (the FRESH-lock path) was always atomic on its
-# own and remains so, unchanged (`write_lock`'s `noclobber`) -- it is now ALSO
+# own and remains so, unchanged (`write_lock`'s `ln` create) -- it is now ALSO
 # inside the flock'd section, which is what closes route 2 above.
 #
 # NOTE: this remains a DIFFERENT object and a DIFFERENT concern from
@@ -744,18 +744,26 @@ skip_lock_still_held() {
 }
 
 write_lock() {
-  # Atomic create: `set -o noclobber` makes the `>` redirect fail if the file
-  # already exists, so two concurrent FRESH attempts can't both think they
-  # got it. Takes the new owner token as $1. This guarantee covers THIS
-  # function only -- the reclaim path below never calls it without first
-  # holding the exclusive `flock` (CAVEAT 2), which is what extends the same
-  # single-winner property to the reclaim case.
+  # Atomic create: the record is staged in a temp file beside $LOCK and
+  # published with `ln`, which fails if $LOCK already exists, so two
+  # concurrent FRESH attempts can't both think they got it. Takes the new
+  # owner token as $1. This guarantee covers THIS function only -- the reclaim
+  # path below never calls it without first holding the exclusive `flock`
+  # (CAVEAT 2), which is what extends the same single-winner property to the
+  # reclaim case.
   #
-  # The redirect creates $LOCK before `lock_record` fills it, so an `acquire`
-  # cut off in between leaves an empty record, which the reclaim path reads as
-  # "age unknown" and never reclaims (lode-7ruca).
-  ( set -o noclobber
-    lock_record "$1" > "$LOCK" ) 2>/dev/null
+  # Staging first means $LOCK appears only once its record is complete: an
+  # `acquire` cut off or failing mid-write leaves no $LOCK (or none of ours),
+  # never an empty one that reads as "age unknown" and never ages out
+  # (lode-7ruca). A kill in that window can leave `$LOCK.acq.PID` behind,
+  # which nothing reads. Needs hard links on the filesystem holding .git.
+  local tmp="$LOCK.acq.$$"
+  if lock_record "$1" > "$tmp" 2>/dev/null && ln "$tmp" "$LOCK" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null || true
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null || true
+  return 1
 }
 
 lock_staleness() {
