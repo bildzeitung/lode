@@ -39,6 +39,20 @@ set -euo pipefail
 # call (measured over 20 runs at technical review; lode-p8zl acceptance, "open risk to check").
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 
+# A rebase stopped on trunk detaches HEAD; the branch being rebuilt is named in head-name, under
+# the checkout's own git dir (rebase state is per worktree). The extra git call is paid only on a
+# detached HEAD. Ruling (lode-3cxzs): docs/decisions.md, the Update under the lode-21sxk entry;
+# what it makes ask is in scripts/trunk-bash-guard.sh, KNOWN LIMITS, MID-REBASE.
+if [ "$branch" = "HEAD" ]; then
+  gitdir="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
+  for f in "$gitdir/rebase-merge/head-name" "$gitdir/rebase-apply/head-name"; do
+    if [ -f "$f" ] && [ "$(cat "$f" 2>/dev/null)" = "refs/heads/trunk" ]; then
+      branch=trunk
+      break
+    fi
+  done
+fi
+
 if [ "$branch" = "trunk" ]; then
   printf '%s' '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "lode-p8zl: this Edit/Write targets a checkout on trunk. The STOP banner in CLAUDE.md requires every file change to go through a worktree -- confirm this is a sanctioned exception (e.g. the doc-only --no-verify path the Workflow gotchas section of CLAUDE.md describes) before proceeding. A dispatched subagent should treat a prompt here as a signal it was not dispatched into an isolated worktree (lode-ska2/lode-jk44/lode-6wgc) and stop rather than approve; a human at the terminal can approve and continue."}}'
 fi

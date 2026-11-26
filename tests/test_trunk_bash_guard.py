@@ -18,7 +18,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from _gitrepo import _git, os_env
+from _gitrepo import _git, _stop_rebase_on_conflict, os_env
 from _hookharness import SH, pretooluse_hook, run_hook
 from test_land_lock import _fault_env, _write_stale_lock
 from test_land_lock import _run as _land_lock
@@ -343,3 +343,36 @@ def test_script_exits_zero_on_malformed_shell_text(
     ro_trunk: Path, command: str
 ) -> None:
     _asks(command, ro_trunk)
+
+
+# --- a rebase stopped on a conflict: HEAD is detached (lode-3cxzs) ------------------------------
+
+
+@pytest.mark.parametrize("apply", [False, True], ids=["merge", "apply"])
+def test_stopped_rebase_of_trunk_asks(trunk_repo: Path, apply: bool) -> None:
+    _stop_rebase_on_conflict(trunk_repo, apply=apply)
+    for command in ("git rebase --continue", "git commit -am x", "nox -t fix"):
+        assert _asks(command, trunk_repo), command
+
+
+def test_stopped_rebase_of_another_branch_is_silent(trunk_repo: Path) -> None:
+    _stop_rebase_on_conflict(trunk_repo, rebased="other")
+    assert not _asks("git rebase --continue", trunk_repo)
+
+
+def test_stopped_rebase_is_read_from_the_checkouts_own_git_dir(
+    tmp_path: Path, trunk_repo: Path
+) -> None:
+    # Rebase state is per worktree: trunk mid-rebase in a linked worktree asks there, and leaves
+    # the main checkout, detached on another commit, silent.
+    _git(trunk_repo, "checkout", "-q", "--detach")
+    wt = tmp_path / "wt"
+    _git(trunk_repo, "worktree", "add", "-q", str(wt), "trunk")
+    _stop_rebase_on_conflict(wt)
+    assert _asks("git commit -am x", wt)
+    assert not _asks("git commit -am x", trunk_repo)
+
+
+def test_plain_detached_head_is_silent(trunk_repo: Path) -> None:
+    _git(trunk_repo, "checkout", "-q", "--detach")
+    assert not _asks("git commit -am x", trunk_repo)

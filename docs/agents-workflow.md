@@ -1087,7 +1087,8 @@ Bash call when `jq` is missing, like its three siblings. A live `/land` single-l
 stale lock does not, so a pass whose last heartbeat is older than `LAND_LOCK_STALE_SECONDS` gets
 the prompt too. Accepted limit: while the lock is live, any other agent whose cwd falls back to
 `trunk` is exempt too, and a pass that dies without releasing leaves the lock live until it ages
-out. Full ruling:
+out. Both hooks also ask while a rebase of `trunk` is stopped: `HEAD` is detached then, so they
+read the branch from the rebase's `head-name` (lode-3cxzs). Full ruling:
 [`docs/decisions.md`](decisions.md) (`uv run --frozen python scripts/docs_index_query.py "lode-21sxk"`).
 
 ### Precondition guards (the 0/1/2 family) (lode-t6ni)

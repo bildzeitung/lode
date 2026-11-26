@@ -33,7 +33,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from _gitrepo import _git
+import pytest
+from _gitrepo import _git, _stop_rebase_on_conflict
 from _hookharness import SH, pretooluse_hook, run_hook
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -42,18 +43,10 @@ SCRIPT = REPO_ROOT / "scripts" / "trunk-write-guard.sh"
 
 def _init_repo(path: Path, *, branch: str) -> None:
     _git(path.parent, "init", "-q", "-b", branch, str(path))
-    subprocess.run(
-        ["git", "-C", str(path), "commit", "-q", "--allow-empty", "-m", "init"],
-        check=True,
-        timeout=30,
-        env={
-            "GIT_AUTHOR_NAME": "t",
-            "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "t",
-            "GIT_COMMITTER_EMAIL": "t@t",
-            "PATH": "/usr/bin:/bin",
-        },
-    )
+    # Identity in the repo's own config: _stop_rebase_on_conflict commits here after init.
+    _git(path, "config", "user.email", "t@t")
+    _git(path, "config", "user.name", "t")
+    _git(path, "commit", "-q", "--allow-empty", "-m", "init")
 
 
 # --- script-level -----------------------------------------------------------------------------
@@ -165,3 +158,55 @@ def test_wrapper_is_posix_shell_compatible() -> None:
         [SH, "-n", "-c", hook], capture_output=True, text=True, timeout=30, check=False
     )
     assert proc.returncode == 0, proc.stderr
+
+
+# --- a rebase stopped on a conflict: HEAD is detached (lode-3cxzs) ------------------------------
+
+
+def _script_stdout(cwd: Path) -> str:
+    proc = subprocess.run(
+        [str(SCRIPT)], cwd=cwd, capture_output=True, text=True, timeout=30, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout
+
+
+@pytest.mark.parametrize("apply", [False, True], ids=["merge", "apply"])
+def test_script_asks_while_a_rebase_of_trunk_is_stopped(
+    tmp_path: Path, apply: bool
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo, branch="trunk")
+    _stop_rebase_on_conflict(repo, apply=apply)
+    assert '"permissionDecision": "ask"' in _script_stdout(repo)
+
+
+def test_script_silent_while_a_rebase_of_another_branch_is_stopped(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo, branch="trunk")
+    _stop_rebase_on_conflict(repo, rebased="other")
+    assert _script_stdout(repo).strip() == ""
+
+
+def test_script_reads_a_stopped_rebase_from_the_checkouts_own_git_dir(
+    tmp_path: Path,
+) -> None:
+    # Rebase state is per worktree: trunk mid-rebase in a linked worktree asks there, and leaves
+    # the main checkout, detached on another commit, silent.
+    repo = tmp_path / "repo"
+    _init_repo(repo, branch="trunk")
+    _git(repo, "checkout", "-q", "--detach")
+    wt = tmp_path / "wt"
+    _git(repo, "worktree", "add", "-q", str(wt), "trunk")
+    _stop_rebase_on_conflict(wt)
+    assert '"permissionDecision": "ask"' in _script_stdout(wt)
+    assert _script_stdout(repo).strip() == ""
+
+
+def test_script_silent_on_a_plain_detached_head(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo, branch="trunk")
+    _git(repo, "checkout", "-q", "--detach")
+    assert _script_stdout(repo).strip() == ""
