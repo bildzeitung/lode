@@ -51,13 +51,12 @@
 #     see as one (`#` straight after `)`) holding two apostrophes around a command.
 #   - NOT MATCHED: every other git subcommand, history-writing ones included (`git reset`,
 #     `git stash`, `git am`, `git revert` and the like): outside the ruled scope.
-#   - MID-REBASE: while a rebase of trunk is stopped (a conflict, an `edit` step) HEAD is detached
-#     and the branch reads `HEAD`; the gate then reads rebase-merge/head-name and
-#     rebase-apply/head-name under the checkout's own git dir and treats refs/heads/trunk as trunk
-#     (lode-3cxzs), so every guarded command asks, including during a maintainer's own approved
-#     rebase. A `git pull --rebase` on trunk that stops on a conflict is such a rebase: the pull
-#     is silent, `git rebase --continue` and `--abort` after it ask. Any other detached HEAD stays
-#     silent, including a stopped rebase of another branch that also moves trunk (`--update-refs`).
+#   - MID-REBASE: a stopped rebase of trunk (a conflict, an `edit` step) detaches HEAD; the gate
+#     reads the rebase's head-name and still counts the checkout as on trunk (lode-3cxzs), so
+#     every guarded command asks, including during a maintainer's own approved rebase. A
+#     `git pull --rebase` on trunk that stops on a conflict is such a rebase: the pull is silent,
+#     `git rebase --continue` and `--abort` after it ask. Any other detached HEAD stays silent,
+#     including a stopped rebase of another branch that also moves trunk (`--update-refs`).
 #   - CWD: only a LEADING `cd <dir>` (ended by &&, ; or a newline) is followed when picking the
 #     cwd whose branch is checked, and only when <dir> is a literal path or starts with `~`; a
 #     target that is not an existing directory (a variable, a typo), a later cd, `git -C <dir>`

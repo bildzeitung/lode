@@ -34,9 +34,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from _gitrepo import _git
+from _gitrepo import _git, _stop_rebase_on_conflict
 from _hookharness import SH, pretooluse_hook, run_hook
-from test_trunk_bash_guard import _stop_rebase_on_conflict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "trunk-write-guard.sh"
@@ -44,7 +43,7 @@ SCRIPT = REPO_ROOT / "scripts" / "trunk-write-guard.sh"
 
 def _init_repo(path: Path, *, branch: str) -> None:
     _git(path.parent, "init", "-q", "-b", branch, str(path))
-    # In the repo's own config: the stopped-rebase tests commit again, with no ambient identity.
+    # Identity in the repo's own config: _stop_rebase_on_conflict commits here after init.
     _git(path, "config", "user.email", "t@t")
     _git(path, "config", "user.name", "t")
     _git(path, "commit", "-q", "--allow-empty", "-m", "init")
@@ -188,6 +187,21 @@ def test_script_silent_while_a_rebase_of_another_branch_is_stopped(
     repo = tmp_path / "repo"
     _init_repo(repo, branch="trunk")
     _stop_rebase_on_conflict(repo, rebased="other")
+    assert _script_stdout(repo).strip() == ""
+
+
+def test_script_reads_a_stopped_rebase_from_the_checkouts_own_git_dir(
+    tmp_path: Path,
+) -> None:
+    # Rebase state is per worktree: trunk mid-rebase in a linked worktree asks there, and leaves
+    # the main checkout, detached on another commit, silent.
+    repo = tmp_path / "repo"
+    _init_repo(repo, branch="trunk")
+    _git(repo, "checkout", "-q", "--detach")
+    wt = tmp_path / "wt"
+    _git(repo, "worktree", "add", "-q", str(wt), "trunk")
+    _stop_rebase_on_conflict(wt)
+    assert '"permissionDecision": "ask"' in _script_stdout(wt)
     assert _script_stdout(repo).strip() == ""
 
 

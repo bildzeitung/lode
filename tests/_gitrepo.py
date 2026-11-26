@@ -146,3 +146,28 @@ def _commit_file(repo: Path, path: str, content: str, message: str) -> None:
     full.write_text(content)
     _git(repo, "add", path)
     _git(repo, "commit", "-q", "-m", message)
+
+
+def _stop_rebase_on_conflict(
+    repo: Path, *, rebased: str = "trunk", apply: bool = False
+) -> None:
+    """Leave `repo` (on trunk, identity configured) with a rebase of `rebased` stopped on a
+    conflict: trunk and `other` each change f.txt, and `rebased` is rebased onto the other one."""
+    _commit_file(repo, "f.txt", "base\n", "base")
+    _branch_from(repo, "trunk", "other")
+    _commit_file(repo, "f.txt", "other\n", "other")
+    _git(repo, "checkout", "-q", "trunk")
+    _commit_file(repo, "f.txt", "trunk\n", "trunk")
+    _git(repo, "checkout", "-q", rebased)
+    onto = "other" if rebased == "trunk" else "trunk"
+    proc = subprocess.run(
+        ["git", "rebase", "-q", *(["--apply"] if apply else []), onto],
+        cwd=repo,
+        env=git_env(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode != 0, "the rebase was meant to stop on a conflict"
+    assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "HEAD"

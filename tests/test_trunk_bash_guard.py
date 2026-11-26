@@ -18,7 +18,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from _gitrepo import _branch_from, _commit_file, _git, git_env, os_env
+from _gitrepo import _git, _stop_rebase_on_conflict, os_env
 from _hookharness import SH, pretooluse_hook, run_hook
 from test_land_lock import _fault_env, _write_stale_lock
 from test_land_lock import _run as _land_lock
@@ -348,40 +348,11 @@ def test_script_exits_zero_on_malformed_shell_text(
 # --- a rebase stopped on a conflict: HEAD is detached (lode-3cxzs) ------------------------------
 
 
-def _stop_rebase_on_conflict(
-    repo: Path, *, rebased: str = "trunk", apply: bool = False
-) -> None:
-    """Leave `repo` (on trunk, identity configured) with a rebase of `rebased` stopped on a
-    conflict: trunk and `other` each change f.txt, and `rebased` is rebased onto the other one."""
-    _commit_file(repo, "f.txt", "base\n", "base")
-    _branch_from(repo, "trunk", "other")
-    _commit_file(repo, "f.txt", "other\n", "other")
-    _git(repo, "checkout", "-q", "trunk")
-    _commit_file(repo, "f.txt", "trunk\n", "trunk")
-    _git(repo, "checkout", "-q", rebased)
-    onto = "other" if rebased == "trunk" else "trunk"
-    proc = subprocess.run(
-        ["git", "rebase", "-q", *(["--apply"] if apply else []), onto],
-        cwd=repo,
-        env=git_env(),
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert proc.returncode != 0, "the rebase was meant to stop on a conflict"
-    assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "HEAD"
-
-
 @pytest.mark.parametrize("apply", [False, True], ids=["merge", "apply"])
-@pytest.mark.parametrize(
-    "command", ["git rebase --continue", "git commit -am x", "nox -t fix"]
-)
-def test_stopped_rebase_of_trunk_asks(
-    trunk_repo: Path, command: str, apply: bool
-) -> None:
+def test_stopped_rebase_of_trunk_asks(trunk_repo: Path, apply: bool) -> None:
     _stop_rebase_on_conflict(trunk_repo, apply=apply)
-    assert _asks(command, trunk_repo)
+    for command in ("git rebase --continue", "git commit -am x", "nox -t fix"):
+        assert _asks(command, trunk_repo), command
 
 
 def test_stopped_rebase_of_another_branch_is_silent(trunk_repo: Path) -> None:
