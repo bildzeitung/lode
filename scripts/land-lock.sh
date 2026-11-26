@@ -80,7 +80,7 @@
 # mid-`trunk`-merge -- the dangerous direction -- which is why the window is
 # large (1800s) and has never been reduced.
 #
-# `heartbeat` re-stamps the SAME record `acquire` wrote, with no atomicity
+# `heartbeat` re-stamps the SAME record `acquire` wrote, with no noclobber
 # contest (see its own comment below) -- so as long as SOMETHING calls it
 # periodically during a pass, the token's age never reflects more than the
 # GAP since the last call, not the pass's total duration. FOUR call sites make
@@ -750,6 +750,10 @@ write_lock() {
   # function only -- the reclaim path below never calls it without first
   # holding the exclusive `flock` (CAVEAT 2), which is what extends the same
   # single-winner property to the reclaim case.
+  #
+  # The redirect creates $LOCK before `lock_record` fills it, so an `acquire`
+  # cut off in between leaves an empty record, which the reclaim path reads as
+  # "age unknown" and never reclaims (lode-7ruca).
   ( set -o noclobber
     lock_record "$1" > "$LOCK" ) 2>/dev/null
 }
@@ -832,20 +836,25 @@ if [ "$cmd" = "heartbeat" ]; then
   # Best-effort re-stamp of the SAME record `acquire` wrote -- refreshes the
   # recorded time so a later tick's staleness check measures idle time since
   # the LAST heartbeat, not the age of the original `acquire` (lode-m87j; see
-  # CAVEAT 1 above). Deliberately NOT `write_lock`'s atomic/noclobber create:
+  # CAVEAT 1 above). Deliberately NOT `write_lock`'s noclobber create:
   # overwriting the existing record is exactly the point here, and the
   # documented one-lander-per-machine convention means no other WRITER should
   # be touching this file while a pass holds it. Concurrent READERS are a
   # different matter and are routine -- every `/loop 5m /land` tick's own
-  # `acquire` reads this file, and `>` truncates before it writes, so a reader
-  # CAN catch a half-written record. That is safe by construction, not by
-  # luck: the reclaim path below treats an unparseable record as "age unknown"
-  # and skips the tick rather than reclaiming. Keep that path conservative --
-  # making it guess an age would turn this benign interleaving into a reclaim
-  # of a live lock. If the file is somehow already gone (heartbeat called
-  # without ever acquiring -- should not happen at either documented call
-  # site), this creates it fresh rather than erroring: either way the caller's
-  # intent ("the pass is still alive right now") is the same.
+  # `acquire` reads this file. The record is therefore written to a temp file
+  # beside $LOCK and `mv -f`'d over it (rename is atomic), so a reader sees
+  # the old record or the new one, never a half-written one, and a write that
+  # fails or is cut off leaves the previous record in place (lode-409kw). A
+  # heartbeat killed before the rename leaves its `land.lock.hb.<pid>` behind;
+  # nothing reads or sweeps those. If the file is somehow already gone
+  # (heartbeat called without ever acquiring -- should not happen at either
+  # documented call site), this creates it fresh rather than erroring: either
+  # way the caller's intent ("the pass is still alive right now") is the same.
+  #
+  # Not under `acquire`'s flock: a reclaim landing between the read below and
+  # the rename has its record replaced by this pass's. That needs this pass's
+  # own record to have gone stale mid-run -- already two landers -- and the
+  # reclaimer's next heartbeat then fails the ownership check.
   #
   # PRESERVES the owner token (field 5, lode-ao95) rather than regenerating or
   # blanking it -- `lock_record`'s token positional is mandatory specifically
@@ -885,13 +894,16 @@ if [ "$cmd" = "heartbeat" ]; then
   if [ -z "$CUR_TOKEN" ]; then
     CUR_TOKEN="${OWN_TOKEN:-$(new_token)}"
   fi
-  if lock_record "$CUR_TOKEN" > "$LOCK" 2>/dev/null; then
+  HB_TMP="$LOCK.hb.$$"
+  if lock_record "$CUR_TOKEN" > "$HB_TMP" 2>/dev/null && mv -f "$HB_TMP" "$LOCK" 2>/dev/null; then
     exit 0
   fi
+  rm -f "$HB_TMP" 2>/dev/null || true
   echo "land-lock: heartbeat could not write $LOCK (unwritable or missing git" \
-    "dir, or no space). Not fatal to this step by itself -- the token simply" \
-    "ages from its last successful stamp -- but a human should check" \
-    "disk/permissions if this repeats every tick." >&2
+    "dir, or no space). Not fatal to this step by itself -- any previous" \
+    "record is left in place, so the token simply ages from its last" \
+    "successful stamp -- but a human should check disk/permissions if this" \
+    "repeats every tick." >&2
   exit 1
 fi
 
