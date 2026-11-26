@@ -5162,6 +5162,37 @@ entries below from being rewritten to chase the current tree.)
     review on trunk: limit (1) of the `lode-kys3` Update, seen through the `lode-pe38` rule); now
     any column-zero line does. Counted at review: the entry list before the first `##` of this
     file holds no such line.
+  - **Update (lode-8cp63, 2026-11-25):** "The entries appended after the section are not part of
+    it" in the `lode-pe38` Update above now holds only for a hit inside an oversized section's own
+    text. The `lode-skv8` rule cuts a section that ends in its own list at that list, and the
+    markers of such a section, written after its closing text as the preamble asks, sit under its
+    last bullet. A hit on the section's heading unit or on an earlier bullet got no split-entry
+    `NOTE` for them: run at review with the new lookup switched off, on the "Accepted limit"
+    bullet of the `lode-21sxk` section (8,795 bytes, under the limit). Now every other hit at or
+    after the first `##` of this file lists the Update markers between its own last line and the
+    next `##`. The chunker reports each `##` range (`heading_sections`) and `split_entry_markers`
+    reads it; no unit moves. The ticket's candidate was to read every `##` section as one entry,
+    and as first built the lookup did: every unit between two `##` headings listed every marker
+    between them. Narrowed at technical review to the markers below the hit, since a marker is
+    appended after the text it corrects; no maintainer ruling. Measured at review on this file,
+    against trunk. As built, 10 units gained a `NOTE`, and three of them (the `lode-sflg` section
+    unit and the two entries appended after it, `lode-9t7u` and `lode-w18a.10`) each listed all
+    five markers of the three. As narrowed, 8 gain one: the `lode-21sxk` heading unit and its five
+    bullets above the last list that section's three markers, and the `lode-sflg` section unit and
+    the `lode-9t7u` entry each list the `lode-w18a.11` Update on the `lode-w18a.10` entry below
+    them. Three limits. (1) A hit lists the markers of every entry appended between it and the
+    next `##`, since nothing tells those entries from the section's own bullets: the two
+    `lode-w18a.11` listings above, and one more for each marker-carrying bullet entry appended
+    after the last `##` of this file until a `##` follows it. The unit each entry is indexed in
+    (the `lode-tikr` ruling) is unchanged. (2) A marker placed above the text it corrects is not
+    listed for a hit on that text (run at review on synthetic text). Before this change a whole
+    unit after a `##` listed nothing, and a piece of a hard-split entry there listed every marker
+    of its entry; such a piece now lists only those below it. No unit after the first `##` is
+    such a piece today. (3) A hit inside an oversized section's own text still lists only that
+    text's markers, not one under a bullet after it (run at review on synthetic text; no section
+    is oversized today); open in `lode-ineef`. The `NOTE` line now reads "see the Update markers
+    at line ...", since "this chunk is part of a split entry" was not true of every hit that gets
+    one.
 
 - **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
   decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent
@@ -6823,6 +6854,11 @@ entries below from being rewritten to chase the current tree.)
     `lode-pe38` Update above no longer holds: every `##` section of this file over
     `MAX_UNIT_BYTES` is one entry, with a heading inside it or without. The rule is in the
     `lode-tb0j` Update on the `lode-t6o1` entry. No section of this file is over the limit today.
+  - **Update (lode-8cp63, 2026-11-25):** "under any hit that is one chunk of a split entry" in the
+    Decided bullet above no longer names every hit that gets the `NOTE`: a hit at or after the
+    first `##` of this file also gets it for the Update markers below it, up to the next `##`,
+    whether or not an entry was split. The line now reads "see the Update markers at line ...".
+    The rule and its limits are in the `lode-8cp63` Update on the `lode-t6o1` entry.
 
 - **The marker gate does not exempt top-level entry heads; the over-match is accepted (`lode-hp12`,
   2026-11-19, maintainer).** `lode-llxw` ruled that a new correcting entry is not a marker and its

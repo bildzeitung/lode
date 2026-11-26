@@ -320,20 +320,14 @@ def _write_split_entry_doc(
     return doc, text, marker_line
 
 
-@pytest.mark.parametrize(
-    ("title", "h3_section"),
-    [(True, False), (False, False), (True, True)],
-    ids=["h1-title", "no-heading", "after-a-section-with-an-h3"],
-)
+@pytest.mark.parametrize("title", [True, False], ids=["h1-title", "no-heading"])
 def test_split_entry_markers_points_every_piece_of_a_split_entry_at_its_marker(
-    tmp_path: Path, title: bool, h3_section: bool
+    tmp_path: Path, title: bool
 ) -> None:
     """An Update marker at the end of an entry over MAX_UNIT_BYTES lands in a
     different unit from the stale claim (lode-funp); every chunk of that entry
     must still point at it, and no unit outside it may."""
-    doc, text, marker_line = _write_split_entry_doc(
-        tmp_path, title=title, h3_section=h3_section
-    )
+    doc, text, marker_line = _write_split_entry_doc(tmp_path, title=title)
     units = _query_module._build._chunker.chunk_file(doc, text)
     big_lo = next(u.line_lo for u in units if u.first_line.startswith("- **Big"))
     small_lo = next(u.line_lo for u in units if u.first_line.startswith("- **Small"))
@@ -344,6 +338,32 @@ def test_split_entry_markers_points_every_piece_of_a_split_entry_at_its_marker(
         assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
             [marker_line] if u in pieces else []
         )
+
+
+def test_split_entry_markers_for_a_split_entry_after_a_section(tmp_path: Path) -> None:
+    """An entry appended after a ``##`` section cannot be told from the
+    section's own bullets, so from the heading unit on every unit lists the
+    markers below it (lode-8cp63): the pieces of the split entry above its
+    marker still point at it, the heading unit and the big entry's pieces also
+    list the small entry's marker, and no unit lists a marker above it."""
+    doc, text, marker_line = _write_split_entry_doc(
+        tmp_path, title=True, h3_section=True
+    )
+    small_marker = next(
+        i + 1 for i, line in enumerate(text.splitlines()) if "lode-other" in line
+    )
+    units = _query_module._build._chunker.chunk_file(doc, text)
+    assert [u.first_line for u in units[:3]] == [
+        "# Title",
+        "## Section",
+        "- **Big entry.** stale claim zorblax",
+    ]
+    assert sum(u.line_hi < marker_line for u in units[2:]) > 1
+    assert _query_module.split_entry_markers(str(doc), 1, units[0].line_hi) == []
+    for u in units[1:]:
+        assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == [
+            m for m in (marker_line, small_marker) if m > u.line_hi
+        ]
 
 
 def test_split_entry_markers_in_a_section_cut_at_its_h3_headings(
@@ -423,7 +443,10 @@ def test_split_entry_markers_agrees_with_the_chunker_on_the_real_decisions_md() 
     Entry boundaries are taken from the chunker's own units rather than from a
     second line scan: a unit that does not open on a structural line continues
     the entry of the unit before it, and so does a unit inside a section the
-    chunker reports as oversized.
+    chunker reports as oversized. Any other unit at or after the first ``##``
+    lists the markers below it, up to the next ``##`` (lode-8cp63); where each
+    ``##`` section starts is read off the units too, not off
+    ``heading_sections``, which the lookup itself calls.
     """
     path = REPO_ROOT / "docs" / "decisions.md"
     text = path.read_text(encoding="utf-8")
@@ -431,10 +454,22 @@ def test_split_entry_markers_agrees_with_the_chunker_on_the_real_decisions_md() 
     flags = _query_module.fence_flags(lines)
     chunker = _query_module._build._chunker
 
-    sections = chunker.oversized_sections(path, text)
+    def markers(lo: int, hi: int) -> list[int]:
+        return [
+            n
+            for n in range(lo, hi + 1)
+            if not flags[n - 1] and _query_module._UPDATE_MARKER in lines[n - 1]
+        ]
+
+    oversized = chunker.oversized_sections(path, text)
+    units = chunker.chunk_file(path, text)
+    h2_starts = [u.line_lo for u in units if u.first_line.startswith("## ")]
+    assert h2_starts == [lo for lo, _ in chunker.heading_sections(path, text)]
     entries: list[list] = []
-    for unit in chunker.chunk_file(path, text):
-        in_section = any(lo < unit.line_lo <= hi for lo, hi in sections)
+    for unit in units:
+        # Strictly after the section's first line: the unit on that line opens
+        # the entry.
+        in_section = any(lo < unit.line_lo <= hi for lo, hi in oversized)
         if entries and (in_section or not chunker.is_structural_line(unit.first_line)):
             entries[-1].append(unit)
         else:
@@ -442,20 +477,41 @@ def test_split_entry_markers_agrees_with_the_chunker_on_the_real_decisions_md() 
 
     noted = 0
     for entry in entries:
-        expected = []
-        if len(entry) > 1:
-            expected = [
-                n
-                for n in range(entry[0].line_lo, entry[-1].line_hi + 1)
-                if not flags[n - 1] and _query_module._UPDATE_MARKER in lines[n - 1]
-            ]
-        noted += bool(expected)
+        whole = markers(entry[0].line_lo, entry[-1].line_hi) if len(entry) > 1 else []
+        noted += bool(whole)
         for unit in entry:
+            below = unit.line_lo >= h2_starts[0] and not any(
+                lo <= unit.line_lo <= hi for lo, hi in oversized
+            )
+            next_h2 = next((s for s in h2_starts if s > unit.line_lo), len(lines) + 1)
+            expected = markers(unit.line_hi + 1, next_h2 - 1) if below else whole
             assert (
                 _query_module.split_entry_markers(str(path), unit.line_lo, unit.line_hi)
                 == expected
             )
     assert noted, "no split entry of docs/decisions.md carries an Update marker"
+
+
+def test_split_entry_markers_points_the_accepted_limit_bullet_at_its_update() -> None:
+    """The case lode-8cp63 was filed for, on the real file: the lode-21sxk
+    section ends in its own bullet list, and the lode-v62sn Update that
+    corrects its "Accepted limit" bullet sits under the last bullet."""
+    path = REPO_ROOT / "docs" / "decisions.md"
+    text = path.read_text(encoding="utf-8")
+    (bullet,) = [
+        u
+        for u in _query_module._build._chunker.chunk_file(path, text)
+        if u.first_line.startswith("- **Accepted limit.** While a land pass holds")
+    ]
+    (update,) = [
+        n
+        for n, line in enumerate(text.splitlines(), start=1)
+        if "**Update (lode-v62sn, 2026-11-25):**" in line
+    ]
+    assert update > bullet.line_hi
+    assert update in _query_module.split_entry_markers(
+        str(path), bullet.line_lo, bullet.line_hi
+    )
 
 
 def test_cli_prints_note_for_a_hit_in_a_split_entry(
@@ -480,3 +536,68 @@ def test_cli_prints_note_for_a_hit_in_a_split_entry(
     assert result.exit_code == 0, result.output
     assert "decisions.md:" in result.stdout
     assert "NOTE" not in result.stdout
+
+
+def test_split_entry_markers_in_a_section_under_the_limit_with_own_bullets(
+    tmp_path: Path,
+) -> None:
+    """A ``##`` section under MAX_UNIT_BYTES that ends in its own bullet list
+    has its bullets cut into units, and its Update sits under the last
+    (lode-8cp63). A hit on the heading unit or an earlier bullet lists it; the
+    bullet it sits under shows it and gets no NOTE. The lookup stops at the
+    next ``##`` and never looks above the hit: the bullet before ``## Section``
+    lists nothing, and no unit of ``## Section`` lists that bullet's marker."""
+    lone_marker = "  **Update (lode-lone)** -- the lone bullet's."
+    marker = "  **Update (lode-test, 2026-01-01)** -- corrects bullet one."
+    text = (
+        f"# Title\n\n## Before\n\nprose\n\n- lone bullet\n{lone_marker}\n\n"
+        "## Section\n\nintro\n\n"
+        "- **Bullet one.** stale zorblax\n"
+        "- **Bullet two.** other\n"
+        f"{marker}\n"
+    )
+    doc = tmp_path / "decisions.md"
+    doc.write_text(text, encoding="utf-8")
+    lines = text.splitlines()
+    lone_line, marker_line = lines.index(lone_marker) + 1, lines.index(marker) + 1
+    units = _query_module._build._chunker.chunk_file(doc, text)
+    expected = {
+        "# Title": [],
+        "## Before": [lone_line],
+        "- lone bullet": [],
+        "## Section": [marker_line],
+        "- **Bullet one.** stale zorblax": [marker_line],
+        "- **Bullet two.** other": [],
+    }
+    assert [u.first_line for u in units] == list(expected)
+    for u in units:
+        assert (
+            _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi)
+            == expected[u.first_line]
+        )
+
+
+def test_split_entry_markers_on_the_bullets_after_an_oversized_section(
+    tmp_path: Path,
+) -> None:
+    """The bullets after an oversized section's own text are read as they are
+    after a small one (lode-8cp63): the earlier bullet lists the Update under
+    the later."""
+    marker = "  **Update (lode-test, 2026-01-01)** -- corrects bullet one."
+    text = (
+        "# Title\n\n## Section\n\n"
+        + "\n\n".join(["word " * 400] * 10)
+        + "\n- **Bullet one.** stale zorblax\n- **Bullet two.** other\n"
+        f"{marker}\n"
+    )
+    doc = tmp_path / "decisions.md"
+    doc.write_text(text, encoding="utf-8")
+    marker_line = text.splitlines().index(marker) + 1
+    chunker = _query_module._build._chunker
+    assert chunker.oversized_sections(doc, text)
+    one, two = chunker.chunk_file(doc, text)[-2:]
+    assert one.first_line.startswith("- **Bullet one.")
+    assert _query_module.split_entry_markers(str(doc), one.line_lo, one.line_hi) == [
+        marker_line
+    ]
+    assert _query_module.split_entry_markers(str(doc), two.line_lo, two.line_hi) == []

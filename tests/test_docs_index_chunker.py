@@ -28,6 +28,7 @@ Unit = _chunker.Unit
 chunk_corpus = _chunker.chunk_corpus
 chunk_file = _chunker.chunk_file
 oversized_sections = _chunker.oversized_sections
+heading_sections = _chunker.heading_sections
 classify = _chunker.classify
 
 DOCS_DIR = REPO_ROOT / "docs"
@@ -459,6 +460,21 @@ def test_oversized_sections_names_a_section_with_no_heading_in_it():
         (3, len(text.splitlines()))
     ]
     assert oversized_sections("docs/decisions.md", "") == []
+
+
+def test_heading_sections_run_from_each_h2_to_the_line_before_the_next():
+    text = (
+        "# Log\n\n- entry\n\n## One\n\nprose\n\n### Sub\n\n"
+        "```\n## not a heading\n```\n- bullet\n\n## Two\n\nprose\n- late entry\n"
+    )
+    lines = text.splitlines()
+    one, two = lines.index("## One") + 1, lines.index("## Two") + 1
+    assert heading_sections("docs/decisions.md", text) == [
+        (one, two - 1),
+        (two, len(lines)),
+    ]
+    assert heading_sections("docs/stack.md", text) == []
+    assert heading_sections("docs/decisions.md", "# Log\n\n- entry\n") == []
 
 
 def test_entry_log_fenced_hash_line_in_an_oversized_section_is_not_a_cut():

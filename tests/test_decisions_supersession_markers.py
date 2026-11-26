@@ -65,7 +65,9 @@ rule.
   with the lead-in, by name in ``_DETACHED_ALLOWLIST``.
 - KNOWN MISS: an indented marker under a ``##`` section that ends in its own
   column-zero bullet list is indexed with the last bullet of that list, not
-  with the heading. No section ends that way today.
+  with the heading. The lode-21sxk section ends that way. The query's NOTE
+  covers it (lode-8cp63): a hit on the section's heading unit or on an earlier
+  bullet lists the markers below it.
 
 Every scan is a module-level helper taking its lines as a parameter, so the
 sabotage tests below can prove each actually fires on a violation rather than

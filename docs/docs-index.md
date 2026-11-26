@@ -23,9 +23,10 @@ over the same terms and marks the printed rows `[fallback: OR match]` instead of
 results." (A transcript review found the AND-only mode missed roughly half of real multi-term
 queries.)
 
-**Split-entry `NOTE` (`lode-funp`):** an entry too long for one chunk is split across several, so a
-hit can show a claim whose `**Update (` correction sits in a different chunk. Such a hit is followed
-by a `NOTE` line giving the line numbers of every Update marker in that entry — read those lines too.
+**Split-entry `NOTE` (`lode-funp`, `lode-8cp63`):** an entry too long for one chunk, or a `##`
+section of `decisions.md` that ends in a bullet list, is split across several, so a hit can show a
+claim whose `**Update (` correction sits in a different chunk. Such a hit is followed by a `NOTE`
+line giving the line numbers of the Update markers that may correct it — read those lines too.
 
 Read the cited range yourself once you have the pointer. Reach for a doc directly only when the
 index turns up nothing relevant.

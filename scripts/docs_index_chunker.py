@@ -40,6 +40,7 @@ Each file is also :func:`classify`-ied as ``"decision-record"`` or
 
 from __future__ import annotations
 
+import itertools
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -67,6 +68,10 @@ _REFERENCE_PROCESS_STEMS = frozenset(
 #: it ``merge=union`` by name for the same reason), and in every other doc a
 #: bullet under a heading belongs to that heading's section.
 _ENTRY_LOG_STEM = "decisions"
+
+#: The heading level of the entry log's sections: the cap on its split level
+#: (``lode-kys3``) and the level :func:`heading_sections` reports.
+_ENTRY_LOG_SECTION_LEVEL = 2
 
 
 @dataclass(frozen=True)
@@ -265,7 +270,7 @@ def _ranges(
         # The entry log's sections are its ``##`` headings; a deeper heading
         # inside one must not move the split level, or every ``##`` section
         # ends up inside the unit of the entry before it (``lode-kys3``).
-        split_level = min(split_level, 2)
+        split_level = min(split_level, _ENTRY_LOG_SECTION_LEVEL)
 
     if split_level:
 
@@ -330,6 +335,34 @@ def oversized_sections(path: Path | str, text: str) -> list[tuple[int, int]]:
     """
     _, oversized = _ranges(path, text.splitlines())
     return oversized
+
+
+def heading_sections(path: Path | str, text: str) -> list[tuple[int, int]]:
+    """Line ranges of every ``##`` section of the entry log, heading to the line
+    before the next ``##``, whatever its size; ``[]`` for any other file.
+
+    Unlike :func:`oversized_sections` the range includes the top-level bullets
+    after the section's own text, each a unit of its own
+    (:func:`_split_trailing_entries`): the section's own closing list, the
+    entries appended after the section, or both. Nothing here tells the two
+    apart. Public for ``split_entry_markers`` in
+    ``scripts/docs_index_query.py`` (``lode-8cp63``).
+
+    A log with no ``##`` has none: unlike :func:`oversized_sections`, its H1
+    is not read as a section here.
+    """
+    if Path(path).stem != _ENTRY_LOG_STEM:
+        return []
+    lines = text.splitlines()
+    flags = _fence_flags(lines)
+    starts = [
+        i + 1
+        for i, line in enumerate(lines)
+        if not flags[i]
+        and (m := _HEADING_RE.match(line))
+        and len(m.group(1)) == _ENTRY_LOG_SECTION_LEVEL
+    ]
+    return [(lo, nxt - 1) for lo, nxt in itertools.pairwise([*starts, len(lines) + 1])]
 
 
 def chunk_file(path: Path | str, text: str) -> list[Unit]:
