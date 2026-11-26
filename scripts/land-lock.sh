@@ -80,7 +80,7 @@
 # mid-`trunk`-merge -- the dangerous direction -- which is why the window is
 # large (1800s) and has never been reduced.
 #
-# `heartbeat` re-stamps the SAME record `acquire` wrote, with no atomicity
+# `heartbeat` re-stamps the SAME record `acquire` wrote, with no noclobber
 # contest (see its own comment below) -- so as long as SOMETHING calls it
 # periodically during a pass, the token's age never reflects more than the
 # GAP since the last call, not the pass's total duration. FOUR call sites make
@@ -779,12 +779,20 @@ if [ "$cmd" = "heartbeat" ]; then
   # `acquire` reads this file. The record is therefore written to a temp file
   # beside $LOCK and `mv -f`'d over it (rename is atomic), so a reader sees
   # the old record or the new one, never a half-written one, and a write that
-  # fails or is cut off leaves the previous record in place (lode-409kw). The
-  # reclaim path below still treats an unparseable record as "age unknown"
-  # and skips the tick; keep that conservative. If the file is somehow already gone (heartbeat called
+  # fails or is cut off leaves the previous record in place (lode-409kw). A
+  # heartbeat killed before the rename leaves its `land.lock.hb.<pid>` behind;
+  # nothing reads or sweeps those. The reclaim path below treats an
+  # unparseable record as "age unknown" and skips the tick; keep that
+  # conservative. If the file is somehow already gone (heartbeat called
   # without ever acquiring -- should not happen at either documented call
   # site), this creates it fresh rather than erroring: either way the caller's
   # intent ("the pass is still alive right now") is the same.
+  #
+  # The read-compare-rename below does not take `acquire`'s flock, so a
+  # reclaim landing between the read and the rename has its new record
+  # replaced by this pass's. That takes a holder whose record went stale while
+  # it was still running, which already means two landers; the reclaimer's own
+  # next heartbeat then fails the ownership check.
   #
   # PRESERVES the owner token (field 5, lode-ao95) rather than regenerating or
   # blanking it -- `lock_record`'s token positional is mandatory specifically
@@ -830,10 +838,10 @@ if [ "$cmd" = "heartbeat" ]; then
   fi
   rm -f "$HB_TMP" 2>/dev/null || true
   echo "land-lock: heartbeat could not write $LOCK (unwritable or missing git" \
-    "dir, or no space). Not fatal to this step by itself -- the previous" \
+    "dir, or no space). Not fatal to this step by itself -- any previous" \
     "record is left in place, so the token simply ages from its last" \
-    "successful stamp -- but a human should check" \
-    "disk/permissions if this repeats every tick." >&2
+    "successful stamp -- but a human should check disk/permissions if this" \
+    "repeats every tick." >&2
   exit 1
 fi
 

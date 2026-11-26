@@ -530,11 +530,10 @@ def test_heartbeat_on_a_missing_lock_creates_one(tmp_path: Path) -> None:
 def test_heartbeat_whose_write_fails_leaves_the_previous_record_intact(
     tmp_path: Path,
 ) -> None:
-    """lode-409kw: the old `> "$LOCK"` truncated the record before writing, so a
-    write that failed after the open succeeded left an empty land.lock. With the
-    record written to a temp file and renamed over, a read-only git dir (the
-    temp file cannot be created, while the old `>` on the existing writable
-    lock would have succeeded) must leave the previous record byte-identical."""
+    """lode-409kw: a heartbeat that cannot write its temp file beside the lock
+    leaves the existing record byte-identical and says so. The git dir is
+    read-only while land.lock itself stays writable, so a heartbeat that wrote
+    land.lock in place would succeed here and fail the exit-code assert."""
     repo = _init_repo(tmp_path)
     _write_stale_lock(repo)
     lock = _lock_path(repo)
@@ -544,11 +543,63 @@ def test_heartbeat_whose_write_fails_leaves_the_previous_record_intact(
     try:
         result = _run("heartbeat", BLIND, repo=repo)
     finally:
-        git_dir.chmod(0o755)
+        git_dir.chmod(0o755)  # or tmp_path teardown fails
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert "previous record is left in place" in result.stderr
     assert lock.read_bytes() == before
+
+
+def _path_with_shim(tmp_path: Path, tool: str, body: str) -> str:
+    """A $PATH whose first entry holds a bash script named `tool`."""
+    shim_dir = tmp_path / f"shim-{tool}"
+    shim_dir.mkdir()
+    shim = shim_dir / tool
+    shim.write_text(f"#!/usr/bin/env bash\n{body}\n")
+    shim.chmod(0o755)
+    return f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+
+
+def test_heartbeat_keeps_the_previous_record_whole_while_it_writes(
+    tmp_path: Path,
+) -> None:
+    """lode-409kw: a reader (or a kill) arriving while heartbeat is still
+    producing the new record finds the previous record whole, never an empty or
+    cut-off land.lock -- which `acquire` would read as "age unknown" and never
+    reclaim. The `hostname` shim runs inside `lock_record`, after the output
+    redirect is already open, and copies land.lock aside at that moment."""
+    repo = _init_repo(tmp_path)
+    _write_stale_lock(repo)
+    lock = _lock_path(repo)
+    before = lock.read_bytes()
+    seen = tmp_path / "seen-mid-write"
+    path = _path_with_shim(
+        tmp_path, "hostname", f'cp -f "{lock}" "{seen}"\necho some-host'
+    )
+
+    result = _run("heartbeat", BLIND, repo=repo, env_overrides={"PATH": path})
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert seen.read_bytes() == before
+    assert lock.read_bytes() != before  # the heartbeat itself did re-stamp
+
+
+def test_heartbeat_whose_rename_fails_removes_its_temp_file(tmp_path: Path) -> None:
+    """lode-409kw: when the temp file is written but cannot be renamed over
+    land.lock, the previous record stays byte-identical and no
+    `land.lock.hb.<pid>` is left behind in the git dir."""
+    repo = _init_repo(tmp_path)
+    _write_stale_lock(repo)
+    lock = _lock_path(repo)
+    before = lock.read_bytes()
+    path = _path_with_shim(tmp_path, "mv", "exit 1")
+
+    result = _run("heartbeat", BLIND, repo=repo, env_overrides={"PATH": path})
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "previous record is left in place" in result.stderr
+    assert lock.read_bytes() == before
+    assert sorted(p.name for p in lock.parent.glob("land.lock*")) == ["land.lock"]
 
 
 def test_stale_lock_refreshed_by_heartbeat_is_not_reclaimed(tmp_path: Path) -> None:
