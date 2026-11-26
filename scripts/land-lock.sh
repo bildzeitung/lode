@@ -80,7 +80,7 @@
 # mid-`trunk`-merge -- the dangerous direction -- which is why the window is
 # large (1800s) and has never been reduced.
 #
-# `heartbeat` re-stamps the SAME record `acquire` wrote, with no noclobber
+# `heartbeat` re-stamps the SAME record `acquire` wrote, with no single-winner
 # contest (see its own comment below) -- so as long as SOMETHING calls it
 # periodically during a pass, the token's age never reflects more than the
 # GAP since the last call, not the pass's total duration. FOUR call sites make
@@ -233,8 +233,8 @@
 # need no such check -- neither one contends against a concurrent acquire the
 # way the reclaim decision does.
 #
-# `acquire`'s own O_EXCL create (the FRESH-lock path) was always atomic on its
-# own and remains so, unchanged (`write_lock`'s `ln` create) -- it is now ALSO
+# `acquire`'s own fail-if-present create (the FRESH-lock path) was always
+# atomic on its own and remains so (`write_lock`) -- it is now ALSO
 # inside the flock'd section, which is what closes route 2 above.
 #
 # NOTE: this remains a DIFFERENT object and a DIFFERENT concern from
@@ -745,25 +745,31 @@ skip_lock_still_held() {
 
 write_lock() {
   # Atomic create: the record is staged in a temp file beside $LOCK and
-  # published with `ln`, which fails if $LOCK already exists, so two
+  # published with `ln -T`, which fails if $LOCK already exists, so two
   # concurrent FRESH attempts can't both think they got it. Takes the new
   # owner token as $1. This guarantee covers THIS function only -- the reclaim
   # path below never calls it without first holding the exclusive `flock`
   # (CAVEAT 2), which is what extends the same single-winner property to the
-  # reclaim case.
+  # reclaim case. `-T` is load-bearing: without it a $LOCK that is a directory
+  # makes `ln` link the record INSIDE it and exit 0, so every acquire wins.
   #
   # Staging first means $LOCK appears only once its record is complete: an
   # `acquire` cut off or failing mid-write leaves no $LOCK (or none of ours),
   # never an empty one that reads as "age unknown" and never ages out
-  # (lode-7ruca). A kill in that window can leave `$LOCK.acq.PID` behind,
-  # which nothing reads. Needs hard links on the filesystem holding .git.
-  local tmp="$LOCK.acq.$$"
-  if lock_record "$1" > "$tmp" 2>/dev/null && ln "$tmp" "$LOCK" 2>/dev/null; then
-    rm -f "$tmp" 2>/dev/null || true
-    return 0
-  fi
+  # (lode-7ruca). A kill in that window leaves `$LOCK.acq.PID` behind. Killed
+  # between the `ln` and the `rm`, that name is a second link to the live
+  # record, and an acquire reusing the PID would stage straight into it,
+  # rewriting the holder's record in place. Hence the sweep before staging:
+  # every call site holds the flock, so any `$LOCK.acq.*` belongs to a dead
+  # acquire.
+  #
+  # Needs hard links on the filesystem holding .git. Without them `ln` fails
+  # with no $LOCK present and acquire reports a MACHINE FAULT every tick.
+  local tmp="$LOCK.acq.$$" rc=0
+  rm -f "$LOCK".acq.* 2>/dev/null || true
+  { lock_record "$1" > "$tmp" && ln -T "$tmp" "$LOCK"; } 2>/dev/null || rc=1
   rm -f "$tmp" 2>/dev/null || true
-  return 1
+  return "$rc"
 }
 
 lock_staleness() {
@@ -844,7 +850,7 @@ if [ "$cmd" = "heartbeat" ]; then
   # Best-effort re-stamp of the SAME record `acquire` wrote -- refreshes the
   # recorded time so a later tick's staleness check measures idle time since
   # the LAST heartbeat, not the age of the original `acquire` (lode-m87j; see
-  # CAVEAT 1 above). Deliberately NOT `write_lock`'s noclobber create:
+  # CAVEAT 1 above). Deliberately NOT `write_lock`'s fail-if-present publish:
   # overwriting the existing record is exactly the point here, and the
   # documented one-lander-per-machine convention means no other WRITER should
   # be touching this file while a pass holds it. Concurrent READERS are a
@@ -971,15 +977,17 @@ fi
 # `write_lock` failed. Distinguish the two reasons, because they need opposite
 # remedies and the misleading one blocks landing indefinitely: the lock file
 # genuinely exists (another pass, or an abandoned one), OR it could not be
-# created at all (unwritable/missing .git, a full disk). `write_lock` discards
-# its own stderr to keep the ordinary "already exists" case quiet, so the file
-# itself is the only signal left -- name the machine fault explicitly rather
-# than reporting it as "another /land is running" for as long as it persists
-# (lode-aps3's own notes: "lock was not held" must be observable, never silent).
+# created at all (unwritable/missing .git, a full disk, a filesystem without
+# hard links). `write_lock` discards its own stderr to keep the ordinary
+# "already exists" case quiet, so the file itself is the only signal left --
+# name the machine fault explicitly rather than reporting it as "another /land
+# is running" for as long as it persists (lode-aps3's own notes: "lock was not
+# held" must be observable, never silent).
 if [ ! -e "$LOCK" ]; then
   echo "land-lock: MACHINE FAULT -- cannot create $LOCK (unwritable or missing" \
-    "git dir, or no space). This is not another lander; landing stays blocked" \
-    "until it is fixed. Skipping this tick." >&2
+    "git dir, no space, or a filesystem without hard links). This is not" \
+    "another lander; landing stays blocked until it is fixed. Skipping this" \
+    "tick." >&2
   note_machine_fault
   exit 1
 fi
@@ -1008,8 +1016,12 @@ if write_lock "$TOKEN"; then
   echo "land-lock: acquired via reclaim (token $TOKEN)"
   exit 0
 fi
+# A heartbeat runs outside the flock, so one from the holder just judged stale
+# can re-create $LOCK between the `rm` above and the publish. That also lands
+# here, as one wrong MACHINE FAULT line; the next tick reads a live lock.
 echo "land-lock: MACHINE FAULT -- could not write the lock after reclaiming" \
-  "it (unwritable or missing git dir, or no space). This is not another" \
-  "lander; landing stays blocked until it is fixed. Skipping this tick." >&2
+  "it (unwritable or missing git dir, no space, or a filesystem without hard" \
+  "links). This is not another lander; landing stays blocked until it is" \
+  "fixed. Skipping this tick." >&2
 note_machine_fault
 exit 1

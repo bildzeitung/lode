@@ -664,17 +664,22 @@ def test_acquire_cut_off_while_writing_leaves_no_land_lock(tmp_path: Path) -> No
     """lode-7ruca: an `acquire` killed inside `lock_record` (the `hostname`
     shim kills its parent) must not leave an empty land.lock, which the next
     acquire would read as "age unknown" and skip forever. The next acquire
-    takes the lock cleanly."""
+    takes the lock cleanly and removes the dead one's staging file."""
     repo = _init_repo(tmp_path)
     lock = _lock_path(repo)
     path = _path_with_shim(tmp_path, "hostname", "kill -9 $PPID\nsleep 1")
 
-    _run("acquire", repo=repo, env_overrides={"PATH": path})
+    first = _run("acquire", repo=repo, env_overrides={"PATH": path})
 
+    assert first.returncode == -9, first.stdout + first.stderr
     assert not lock.exists()
     second = _run("acquire", repo=repo)
     assert second.returncode == 0, second.stdout + second.stderr
     assert lock.stat().st_size > 0
+    assert sorted(p.name for p in lock.parent.glob("land.lock*")) == [
+        "land.lock",
+        "land.lock.flock",
+    ]
 
 
 def test_acquire_whose_publish_fails_is_a_machine_fault_with_no_temp_file(
@@ -692,6 +697,20 @@ def test_acquire_whose_publish_fails_is_a_machine_fault_with_no_temp_file(
     assert result.returncode == 1, result.stdout + result.stderr
     assert "MACHINE FAULT" in result.stderr
     assert sorted(p.name for p in lock.parent.glob("land.lock*")) == ["land.lock.flock"]
+
+
+def test_acquire_does_not_win_when_land_lock_is_a_directory(tmp_path: Path) -> None:
+    """Plain `ln` treats an existing directory as a place to link INTO and
+    exits 0, which would hand every acquire the lock. It must skip instead."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    lock.mkdir()
+
+    result = _run("acquire", repo=repo)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "another /land" in result.stderr
+    assert list(lock.iterdir()) == []
 
 
 def test_stale_lock_refreshed_by_heartbeat_is_not_reclaimed(tmp_path: Path) -> None:
@@ -1305,7 +1324,7 @@ def test_every_write_lock_call_site_is_inside_the_flocked_section() -> None:
     gate it at any contention level this suite can afford; and the obvious
     extra stress arrangement does NOT help either -- starting a round with
     NO lock present still yields exactly one winner even with route 2
-    reintroduced, because `write_lock`'s `noclobber` is itself atomic. What
+    reintroduced, because `write_lock`'s create is itself atomic. What
     actually distinguishes the two designs is WHERE the call sits, so that
     is what this asserts.
 
