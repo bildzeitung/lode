@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 #
 # PreToolUse(Bash) guard body (lode-21sxk): ask for confirmation before a Bash call that runs
-# `git commit`, `git merge`, `git push` or `nox` from a cwd whose branch is `trunk`.
+# `git commit`, `git merge`, `git push`, `git rebase`, `git cherry-pick` or `nox` from a cwd whose
+# branch is `trunk`.
 #
 # Companion to scripts/trunk-write-guard.sh (lode-p8zl), which covers the Edit|Write tools. That
 # hook cannot see a commit or a `nox -t fix` reformat issued through Bash, which is the lode-6wgc
 # step-6 window: a worktree destroyed mid-session drops the agent's cwd back onto the main
 # checkout on trunk, where `git commit` succeeds against trunk. Scope is exactly those commands;
 # every other Bash call on trunk is silent (the main session lives on trunk), and file writes
-# through Bash (python/sed/heredoc) stay uncovered by maintainer ruling.
+# through Bash (python/sed/heredoc) stay uncovered by maintainer ruling. `git pull` is
+# deliberately NOT covered: the main session pulls on trunk routinely (lode-u4ea7).
 #
 # CONTRACT (the rulings, the lander exemption's rationale and its accepted limit are recorded
 # once, in docs/decisions.md under lode-21sxk):
@@ -47,6 +49,8 @@
 #     body that no shell reads, is taken out with the text around it. Wrong pairs that still come
 #     out even are not noticed: `"note :) $(echo "x"; git push)"`, or a comment the scan does not
 #     see as one (`#` straight after `)`) holding two apostrophes around a command.
+#   - NOT COVERED by ruling: `git pull` (also `pull --rebase`), `git reset`, `git stash`, `git am`,
+#     `git revert`. `git rebase` and `git cherry-pick` ask like commit/merge/push (lode-u4ea7).
 #   - CWD: only a LEADING `cd <dir>` (ended by &&, ; or a newline) is followed when picking the
 #     cwd whose branch is checked, and only when <dir> is a literal path or starts with `~`; a
 #     target that is not an existing directory (a variable, a typo), a later cd, `git -C <dir>`
@@ -228,7 +232,7 @@ segment_hits() {
     case "${toks[i]}" in
       -C | -c | --git-dir | --work-tree | --namespace) i=$((i + 1)) ;;
       -*) ;;
-      commit | merge | push) return 0 ;;
+      commit | merge | push | rebase | cherry-pick) return 0 ;;
       *) return 1 ;;
     esac
   done
@@ -270,5 +274,5 @@ branch="$(git -C "$DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 (cd "$DIR" && bash "$HERE/land-lock.sh" held) >/dev/null 2>&1 && exit 0
 
-printf '%s' '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "lode-21sxk: this Bash call runs git commit/merge/push or nox from a checkout on trunk. The STOP banner in CLAUDE.md requires every change to go through a worktree -- confirm this is a sanctioned exception (e.g. the doc-only --no-verify path the Workflow gotchas section of CLAUDE.md describes) before proceeding. A dispatched subagent should treat a prompt here as a signal its worktree is gone (lode-6wgc) and stop rather than approve; a human at the terminal can approve and continue. A live /land lock exempts the lander itself."}}'
+printf '%s' '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "lode-21sxk: this Bash call runs git commit/merge/push/rebase/cherry-pick or nox from a checkout on trunk. The STOP banner in CLAUDE.md requires every change to go through a worktree -- confirm this is a sanctioned exception (e.g. the doc-only --no-verify path the Workflow gotchas section of CLAUDE.md describes) before proceeding. A dispatched subagent should treat a prompt here as a signal its worktree is gone (lode-6wgc) and stop rather than approve; a human at the terminal can approve and continue. A live /land lock exempts the lander itself."}}'
 exit 0

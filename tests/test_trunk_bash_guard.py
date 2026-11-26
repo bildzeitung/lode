@@ -31,6 +31,13 @@ ASKING = [
     "git commit --no-verify -m x",
     "git merge --no-ff land/lode-abc",
     "git push origin trunk",
+    "git rebase origin/trunk",
+    "git cherry-pick abc123",
+    "git -C /some/where rebase -i HEAD~2",
+    "git -c user.name=x cherry-pick -x abc123",
+    'git -c "user.name=A B" rebase main',
+    "git add a && git cherry-pick abc123",
+    "\\git rebase main",
     "git -C /some/where push",
     "git -c user.name=x commit -m x",
     "nox -t fix",
@@ -85,6 +92,10 @@ SILENT = [
     "git diff",
     "git add a",
     "git fetch origin",
+    "git pull",
+    "git pull --rebase",
+    "git -C /some/where pull --rebase origin trunk",
+    "echo git rebase; echo git cherry-pick",
     "ls -la",
     "bd update lode-1 --notes 'git commit later'",
     "echo git push",
@@ -224,7 +235,13 @@ def test_leading_cd_to_an_unresolvable_target_falls_back_to_the_hook_cwd(
 
 def test_live_land_lock_exempts_trunk(trunk_repo: Path) -> None:
     _live_lock(trunk_repo)
-    for command in ("git merge --no-ff land/x", "git push origin trunk", "nox -t fix"):
+    for command in (
+        "git merge --no-ff land/x",
+        "git push origin trunk",
+        "git rebase origin/trunk",
+        "git cherry-pick abc123",
+        "nox -t fix",
+    ):
         assert not _asks(command, trunk_repo), command
 
 

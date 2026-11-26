@@ -7678,3 +7678,13 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
   - The script header's KNOWN LIMITS lists the false asks, the misses that remain (an unknown word
     before the command, a command in backticks inside double quotes, wrong pairs that come out
     even) and which leading `cd` is followed.
+
+  - **Update (lode-u4ea7, maintainer ruling 2026-11-25, from the second review's finding 8):**
+    `git rebase` and `git cherry-pick` also ask on `trunk`, with the same contract (gate on the
+    branch, ask never deny, silent under a live `/land` lock) and the same matcher, so the `-C` /
+    `-c` option skipping, quoted words and backslash-prefixed `git` apply to them unchanged. `git
+    pull` stays silent on purpose: the main session pulls on `trunk` routinely and would be
+    prompted constantly. Read at build: no `/land` or `/sweep` flow runs `git rebase` or `git
+    cherry-pick` (the only mentions in `land/SKILL.md` and `sweep/SKILL.md` are prose that forbids
+    `pull --rebase`), so the lock exemption has nothing new to cover. The header's KNOWN LIMITS
+    now names the subcommands that are not covered (`pull`, `reset`, `stash`, `am`, `revert`).
