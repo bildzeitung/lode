@@ -660,6 +660,85 @@ def test_heartbeat_whose_rename_fails_removes_its_temp_file(tmp_path: Path) -> N
     assert sorted(p.name for p in lock.parent.glob("land.lock*")) == ["land.lock"]
 
 
+def test_acquire_cut_off_while_writing_leaves_no_land_lock(tmp_path: Path) -> None:
+    """lode-7ruca: an `acquire` killed inside `lock_record` (the `hostname`
+    shim kills its parent) must not leave an empty land.lock, which the next
+    acquire would read as "age unknown" and skip forever. The next acquire
+    takes the lock cleanly and removes the dead one's staging file."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    path = _path_with_shim(tmp_path, "hostname", "kill -9 $PPID")
+
+    first = _run("acquire", repo=repo, env_overrides={"PATH": path})
+
+    assert first.returncode == -9, first.stdout + first.stderr
+    assert not lock.exists()
+    second = _run("acquire", repo=repo)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert lock.stat().st_size > 0
+    assert sorted(p.name for p in lock.parent.glob("land.lock*")) == [
+        "land.lock",
+        "land.lock.flock",
+    ]
+
+
+def test_acquire_whose_publish_fails_is_a_machine_fault_with_no_temp_file(
+    tmp_path: Path,
+) -> None:
+    """lode-7ruca: when the staged record cannot be published (`ln` fails
+    with no land.lock present) the existing MACHINE FAULT branch reports it
+    and no `land.lock.acq.<pid>` is left behind."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    path = _path_with_shim(tmp_path, "ln", "exit 1")
+
+    result = _run("acquire", repo=repo, env_overrides={"PATH": path})
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "MACHINE FAULT" in result.stderr
+    assert sorted(p.name for p in lock.parent.glob("land.lock*")) == ["land.lock.flock"]
+
+
+def test_reclaim_that_loses_its_publish_to_a_heartbeat_skips_without_a_fault(
+    tmp_path: Path,
+) -> None:
+    """A heartbeat from the holder just judged stale can re-create land.lock
+    between the reclaim's `rm` and its publish. That holder is alive, so
+    acquire skips the tick and reports no MACHINE FAULT. The `rm` shim plays
+    the heartbeat: it writes a record right after removing land.lock."""
+    repo = _init_repo(tmp_path)
+    _write_stale_lock(repo)
+    lock = _lock_path(repo)
+    path = _path_with_shim(
+        tmp_path,
+        "rm",
+        'command -p rm "$@"\n'
+        'case "${!#}" in */land.lock) echo revived > "${!#}" ;; esac',
+    )
+
+    result = _run("acquire", repo=repo, env_overrides={"PATH": path})
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "reclaiming stale lock" in result.stdout
+    assert "another /land" in result.stderr
+    assert "MACHINE FAULT" not in result.stderr
+    assert lock.read_text() == "revived\n"
+
+
+def test_acquire_does_not_win_when_land_lock_is_a_directory(tmp_path: Path) -> None:
+    """Plain `ln` treats an existing directory as a place to link INTO and
+    exits 0, which would hand every acquire the lock. It must skip instead."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    lock.mkdir()
+
+    result = _run("acquire", repo=repo)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "another /land" in result.stderr
+    assert list(lock.iterdir()) == []
+
+
 def test_stale_lock_refreshed_by_heartbeat_is_not_reclaimed(tmp_path: Path) -> None:
     """The regression this subcommand exists to prevent: a lock old enough to
     be judged stale under the TTL must NOT be reclaimed by a later `acquire`
@@ -1271,7 +1350,7 @@ def test_every_write_lock_call_site_is_inside_the_flocked_section() -> None:
     gate it at any contention level this suite can afford; and the obvious
     extra stress arrangement does NOT help either -- starting a round with
     NO lock present still yields exactly one winner even with route 2
-    reintroduced, because `write_lock`'s `noclobber` is itself atomic. What
+    reintroduced, because `write_lock`'s create is itself atomic. What
     actually distinguishes the two designs is WHERE the call sits, so that
     is what this asserts.
 
