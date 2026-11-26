@@ -5196,6 +5196,33 @@ entries below from being rewritten to chase the current tree.)
     is oversized today); open in `lode-ineef`. The `NOTE` line now reads "see the Update markers
     at line ...", since "this chunk is part of a split entry" was not true of every hit that gets
     one.
+  - **Update (lode-ineef, 2026-11-26):** limit (3) of the `lode-8cp63` Update above no longer
+    holds, and "now holds only for a hit inside an oversized section's own text" in the same
+    Update with it. A hit inside an oversized `##` section's own text now also lists the Update
+    markers between the end of that text and the next `##`: the section's own closing bullets
+    and the entries appended after it, which nothing tells apart, so a hit there lists the
+    markers of those entries too. Candidate chosen is the ticket's suggested fix, not its notes'
+    single-rule alternative (which would delete `oversized_sections`); the builder's choice, kept
+    at technical review, no maintainer ruling. The single rule would stop listing a marker above
+    the hit, which the `lode-pe38` and `lode-tb0j` rule lists today (read in the code, not run);
+    the fix chosen only adds markers. The two pinned cases
+    (`test_split_entry_markers_in_a_section_cut_at_its_h3_headings` and
+    `test_split_entry_markers_in_an_oversized_section_with_no_heading`) change accordingly: the
+    section's units gain the marker of the entry after the section. Kept at review as the cost
+    of the fix: before it, a section's heading unit listed the markers under its closing bullets
+    while the section was under the limit (the `lode-8cp63` rule) and stopped listing them once
+    the section grew over it (run at review: the new test fails against trunk's lookup). No
+    section of this file is oversized today, so no `NOTE` printed today changes. Two cases
+    changed at technical review, both run on synthetic text against the branch as built. (1) A
+    log with no `##` is as it was before this change. As built, a hit in an oversized H1
+    section's own text listed every marker from the end of that text to the end of the file,
+    those of the later H1 sections included; it lists its own text's markers only, since
+    `heading_sections` reads no H1 as a section. (2) An oversized section with nowhere to cut is
+    one unit. As built, a hit on it listed the markers inside the hit itself; it lists only the
+    markers after its own text. One limit: limit (1) of the `lode-8cp63` Update now holds for
+    every unit of an oversized section as well, so once the last `##` section of this file is
+    over the limit, each of its units lists the marker of every bullet entry appended after it
+    until a `##` follows.
 
 - **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
   decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent

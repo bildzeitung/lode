@@ -197,7 +197,12 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     can correct a claim under a sibling (``lode-pe38``), and one in a closing
     paragraph a claim in an own bullet (``lode-tb0j``). The chunker names those
     sections. A hit on an own bullet that carries its own Update marker also
-    lists the markers of the section's other bullets.
+    lists the markers of the section's other bullets. Every unit of the
+    section also lists the markers after its own text, up to the next ``##``
+    (``lode-ineef``), for the reason the next paragraph gives. A log with no
+    ``##`` has no such range: a hit in an oversized H1 section lists its own
+    text's markers only. A unit that is the section's whole own text is no
+    chunk of it, and the next paragraph's rule reads it.
 
     Any other hit at or after the first ``##`` of ``decisions.md`` lists the
     markers between its own last line and the next ``##`` (``lode-8cp63``): a
@@ -230,11 +235,11 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     def containing(ranges: list[tuple[int, int]]) -> tuple[int, int] | None:
         return next(((lo, hi) for lo, hi in ranges if lo <= line_lo <= hi), None)
 
+    section = containing(chunker.heading_sections(path, text))
     entry = containing(chunker.oversized_sections(path, text))
+    if section is not None and entry in (None, (line_lo, line_hi)):
+        return markers(line_hi + 1, section[1])
     if entry is None:
-        section = containing(chunker.heading_sections(path, text))
-        if section is not None:
-            return markers(line_hi + 1, section[1])
         boundaries = [
             i + 1
             for i, line in enumerate(lines)
@@ -246,7 +251,8 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
         )
     if line_hi > entry[1] or entry == (line_lo, line_hi):
         return []
-    return markers(*entry)
+    # ``section`` is set here only for a chunk of an oversized ``##`` section.
+    return markers(entry[0], section[1] if section else entry[1])
 
 
 def query(
