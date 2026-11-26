@@ -3,7 +3,8 @@
 Extends lode-p8zl's Edit|Write trunk guard to Bash calls that run `git commit`, `git merge`,
 `git push` or `nox` on a cwd whose branch is trunk. The maintainer rulings (ask never deny,
 gate on the branch, the /land lock exemption and its accepted limit) are recorded in
-docs/decisions.md (lode-8uh71) and the script header, not restated here.
+docs/decisions.md (lode-21sxk) and the script header, not restated here. `land-lock.sh held`
+itself is tested in tests/test_land_lock.py.
 
 Two layers, like tests/test_trunk_write_guard.py: SCRIPT-LEVEL tests drive the script directly;
 HOOK-LEVEL tests drive the one-liner from the committed `.claude/settings.json` through
@@ -70,17 +71,18 @@ SILENT = [
 ]
 
 
-def _init_repo(path: Path, *, branch: str) -> None:
+def _init_repo(path: Path, *, branch: str) -> Path:
     _git(path.parent, "init", "-q", "-b", branch, str(path))
     _git(path, "config", "user.email", "t@t")
     _git(path, "config", "user.name", "t")
     _git(path, "commit", "-q", "--allow-empty", "-m", "init")
+    return path
 
 
-def _run(
-    command: str, cwd: Path, *, home: Path | None = None
-) -> subprocess.CompletedProcess:
-    return subprocess.run(
+def _asks(command: str, cwd: Path, *, home: Path | None = None) -> bool:
+    """Whether the script asks about `command` run from `cwd`. It must exit 0 either way, and
+    print the ask or nothing."""
+    proc = subprocess.run(
         [str(SCRIPT), command],
         cwd=cwd,
         capture_output=True,
@@ -89,6 +91,12 @@ def _run(
         check=False,
         env=os_env({"HOME": str(home)} if home else None),
     )
+    assert proc.returncode == 0, proc.stderr
+    if not proc.stdout.strip():
+        return False
+    assert '"permissionDecision": "ask"' in proc.stdout
+    assert "lode-21sxk" in proc.stdout
+    return True
 
 
 def _live_lock(repo: Path) -> None:
@@ -108,118 +116,90 @@ def _live_lock(repo: Path) -> None:
     assert proc.returncode == 0, proc.stderr
 
 
+@pytest.fixture(scope="module")
+def ro_trunk(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A checkout on trunk shared by the tests that only read it. Never lock it."""
+    return _init_repo(tmp_path_factory.mktemp("ro-trunk") / "repo", branch="trunk")
+
+
+@pytest.fixture(scope="module")
+def ro_feature(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A checkout off trunk shared by the tests that only read it."""
+    return _init_repo(
+        tmp_path_factory.mktemp("ro-feature") / "repo", branch="worktree-agent-abc123"
+    )
+
+
 @pytest.fixture
 def trunk_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    _init_repo(repo, branch="trunk")
-    return repo
-
-
-@pytest.fixture
-def feature_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    _init_repo(repo, branch="worktree-agent-abc123")
-    return repo
+    return _init_repo(tmp_path / "repo", branch="trunk")
 
 
 # --- script-level -----------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("command", ASKING)
-def test_script_asks_on_trunk(trunk_repo: Path, command: str) -> None:
-    proc = _run(command, trunk_repo)
-    assert proc.returncode == 0, proc.stderr
-    assert '"permissionDecision": "ask"' in proc.stdout
-    assert "lode-21sxk" in proc.stdout
+def test_script_asks_on_trunk(ro_trunk: Path, command: str) -> None:
+    assert _asks(command, ro_trunk)
 
 
 @pytest.mark.parametrize("command", ASKING)
-def test_script_silent_off_trunk(feature_repo: Path, command: str) -> None:
-    proc = _run(command, feature_repo)
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == ""
+def test_script_silent_off_trunk(ro_feature: Path, command: str) -> None:
+    assert not _asks(command, ro_feature)
 
 
-@pytest.mark.parametrize("command", SILENT)
+@pytest.mark.parametrize("command", [*SILENT, ""])
 def test_script_silent_for_unrelated_calls_on_trunk(
-    trunk_repo: Path, command: str
+    ro_trunk: Path, command: str
 ) -> None:
-    proc = _run(command, trunk_repo)
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == ""
+    assert not _asks(command, ro_trunk)
 
 
 def test_script_silent_outside_any_git_repo(tmp_path: Path) -> None:
-    empty = tmp_path / "not-a-repo"
-    empty.mkdir()
-    proc = _run("git commit -m x", empty)
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == ""
+    assert not _asks("git commit -m x", tmp_path)
 
 
-def test_script_silent_on_empty_command(trunk_repo: Path) -> None:
-    proc = _run("", trunk_repo)
-    assert proc.returncode == 0
-    assert proc.stdout.strip() == ""
-
-
+@pytest.mark.parametrize(
+    "template",
+    ["cd {main} && git commit -m x", "cd {main}\ngit commit -m x"],
+    ids=["and", "newline"],
+)
 def test_leading_cd_into_trunk_checkout_asks_from_a_feature_cwd(
-    tmp_path: Path, feature_repo: Path
+    tmp_path: Path, ro_feature: Path, template: str
 ) -> None:
-    main = tmp_path / "main"
-    _init_repo(main, branch="trunk")
-    proc = _run(f"cd {main} && git commit -m x", feature_repo)
-    assert '"permissionDecision": "ask"' in proc.stdout
-
-
-def test_leading_cd_into_feature_checkout_is_silent_from_a_trunk_cwd(
-    tmp_path: Path, trunk_repo: Path
-) -> None:
-    wt = tmp_path / "wt"
-    _init_repo(wt, branch="worktree-agent-xyz")
-    proc = _run(f'cd "{wt}" && git commit -m x', trunk_repo)
-    assert proc.stdout.strip() == ""
-
-
-def test_leading_cd_ended_by_a_newline_is_followed(
-    tmp_path: Path, feature_repo: Path
-) -> None:
-    main = tmp_path / "main"
-    _init_repo(main, branch="trunk")
-    proc = _run(f"cd {main}\ngit commit -m x", feature_repo)
-    assert '"permissionDecision": "ask"' in proc.stdout
+    main = _init_repo(tmp_path / "main", branch="trunk")
+    assert _asks(template.format(main=main), ro_feature)
 
 
 def test_leading_cd_with_a_tilde_target_is_followed(
-    tmp_path: Path, feature_repo: Path
+    tmp_path: Path, ro_feature: Path
 ) -> None:
-    main = tmp_path / "home" / "main"
-    main.parent.mkdir()
-    _init_repo(main, branch="trunk")
-    proc = _run("cd ~/main && git commit -m x", feature_repo, home=main.parent)
-    assert '"permissionDecision": "ask"' in proc.stdout
+    _init_repo(tmp_path / "main", branch="trunk")
+    assert _asks("cd ~/main && git commit -m x", ro_feature, home=tmp_path)
+
+
+def test_leading_cd_into_feature_checkout_is_silent_from_a_trunk_cwd(
+    ro_trunk: Path, ro_feature: Path
+) -> None:
+    assert not _asks(f'cd "{ro_feature}" && git commit -m x', ro_trunk)
 
 
 def test_leading_cd_to_an_unresolvable_target_falls_back_to_the_hook_cwd(
-    trunk_repo: Path,
+    ro_trunk: Path,
 ) -> None:
-    proc = _run('cd "$NOWHERE" && git commit -m x', trunk_repo)
-    assert '"permissionDecision": "ask"' in proc.stdout
+    assert _asks('cd "$NOWHERE" && git commit -m x', ro_trunk)
 
 
 def test_live_land_lock_exempts_trunk(trunk_repo: Path) -> None:
     _live_lock(trunk_repo)
     for command in ("git merge --no-ff land/x", "git push origin trunk", "nox -t fix"):
-        proc = _run(command, trunk_repo)
-        assert proc.returncode == 0, proc.stderr
-        assert proc.stdout.strip() == "", command
+        assert not _asks(command, trunk_repo), command
 
 
 def test_stale_land_lock_does_not_exempt(trunk_repo: Path) -> None:
     old = int(time.time()) - 100_000
     (trunk_repo / ".git" / "land.lock").write_text(f"1 h {old} 2020-01-01T00:00:00Z\n")
-    proc = _run("git commit -m x", trunk_repo)
-    assert '"permissionDecision": "ask"' in proc.stdout
+    assert _asks("git commit -m x", trunk_repo)
 
 
 def test_live_lock_taken_in_the_main_checkout_exempts_a_linked_worktree_on_trunk(
@@ -229,52 +209,9 @@ def test_live_lock_taken_in_the_main_checkout_exempts_a_linked_worktree_on_trunk
     _git(trunk_repo, "checkout", "-q", "-b", "side")
     wt = tmp_path / "wt"
     _git(trunk_repo, "worktree", "add", "-q", str(wt), "trunk")
-    assert '"permissionDecision": "ask"' in _run("git commit -m x", wt).stdout
+    assert _asks("git commit -m x", wt)
     _live_lock(trunk_repo)
-    assert _run("git commit -m x", wt).stdout.strip() == ""
-
-
-# --- land-lock.sh held ------------------------------------------------------------------------
-
-
-def _held(repo: Path) -> int:
-    return subprocess.run(
-        ["bash", str(LAND_LOCK), "held"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    ).returncode
-
-
-def test_held_is_1_with_no_lock(trunk_repo: Path) -> None:
-    assert _held(trunk_repo) == 1
-
-
-def test_held_is_0_for_a_live_lock_and_does_not_modify_it(trunk_repo: Path) -> None:
-    _live_lock(trunk_repo)
-    lock = trunk_repo / ".git" / "land.lock"
-    before = lock.read_text()
-    assert _held(trunk_repo) == 0
-    assert lock.read_text() == before
-
-
-def test_held_is_1_for_a_stale_lock_and_leaves_it_in_place(trunk_repo: Path) -> None:
-    old = int(time.time()) - 100_000
-    lock = trunk_repo / ".git" / "land.lock"
-    lock.write_text(f"1 h {old} 2020-01-01T00:00:00Z\n")
-    assert _held(trunk_repo) == 1
-    assert lock.exists()
-
-
-def test_held_treats_a_malformed_lock_as_held(trunk_repo: Path) -> None:
-    (trunk_repo / ".git" / "land.lock").write_text("garbage\n")
-    assert _held(trunk_repo) == 0
-
-
-def test_held_outside_a_repo_is_1(tmp_path: Path) -> None:
-    assert _held(tmp_path) == 1
+    assert not _asks("git commit -m x", wt)
 
 
 # --- hook-level (through the committed .claude/settings.json wrapper, via /bin/sh) -------------
@@ -284,66 +221,39 @@ needs_jq = pytest.mark.skipif(
 )
 
 
+def _hook(command: str, cwd: Path, **kwargs: str) -> dict | None:
+    kwargs.setdefault("project_dir", str(REPO_ROOT))
+    return run_hook(pretooluse_hook("trunk-bash-guard.sh"), command, cwd=cwd, **kwargs)
+
+
 @needs_jq
-def test_hook_asks_on_trunk(trunk_repo: Path) -> None:
-    hook = pretooluse_hook("trunk-bash-guard.sh")
-    out = run_hook(
-        hook, "uv run --frozen nox -t fix", cwd=trunk_repo, project_dir=str(REPO_ROOT)
-    )
+def test_hook_asks_on_trunk(ro_trunk: Path) -> None:
+    out = _hook("uv run --frozen nox -t fix", ro_trunk)
     assert out is not None
     assert out["permissionDecision"] == "ask"
     assert "lode-21sxk" in out["permissionDecisionReason"]
 
 
 @needs_jq
-def test_hook_silent_off_trunk(feature_repo: Path) -> None:
-    hook = pretooluse_hook("trunk-bash-guard.sh")
-    out = run_hook(
-        hook, "git commit -m x", cwd=feature_repo, project_dir=str(REPO_ROOT)
-    )
-    assert out is None
+def test_hook_silent_off_trunk(ro_feature: Path) -> None:
+    assert _hook("git commit -m x", ro_feature) is None
 
 
 @needs_jq
-def test_hook_silent_for_unrelated_call_on_trunk(trunk_repo: Path) -> None:
-    hook = pretooluse_hook("trunk-bash-guard.sh")
-    out = run_hook(hook, "git status", cwd=trunk_repo, project_dir=str(REPO_ROOT))
-    assert out is None
+def test_hook_silent_for_unrelated_call_on_trunk(ro_trunk: Path) -> None:
+    assert _hook("git status", ro_trunk) is None
 
 
 @needs_jq
-def test_hook_falls_through_when_script_missing(
-    tmp_path: Path, trunk_repo: Path
-) -> None:
-    empty = tmp_path / "no-scripts-here"
-    empty.mkdir()
-    hook = pretooluse_hook("trunk-bash-guard.sh")
-    out = run_hook(hook, "git commit -m x", cwd=trunk_repo, project_dir=str(empty))
-    assert out is None
+def test_hook_falls_through_when_script_missing(tmp_path: Path, ro_trunk: Path) -> None:
+    assert _hook("git commit -m x", ro_trunk, project_dir=str(tmp_path)) is None
 
 
-def test_hook_denies_everything_when_jq_is_missing(
-    tmp_path: Path, trunk_repo: Path
-) -> None:
-    hook = pretooluse_hook("trunk-bash-guard.sh")
-    nojq = tmp_path / "bin"
-    nojq.mkdir()
-    for tool in ("git", "bash", "cat", "tr", "dirname", "sh"):
-        found = shutil.which(tool)
-        if found:
-            (nojq / tool).symlink_to(found)
-    proc = subprocess.run(
-        [SH, "-c", hook],
-        input='{"tool_input": {"command": "ls"}}',
-        cwd=trunk_repo,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-        env={"PATH": str(nojq), "CLAUDE_PROJECT_DIR": str(REPO_ROOT)},
-    )
-    assert proc.returncode == 0
-    assert '"permissionDecision":"deny"' in proc.stdout.replace(" ", "")
+def test_hook_denies_everything_when_jq_is_missing(ro_trunk: Path) -> None:
+    out = _hook("ls", ro_trunk, path="/nonexistent")
+    assert out is not None
+    assert out["permissionDecision"] == "deny"
+    assert "lode-21sxk" in out["permissionDecisionReason"]
 
 
 def test_wrapper_is_posix_shell_compatible() -> None:

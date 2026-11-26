@@ -1084,8 +1084,9 @@ cwd on `trunk` — the commit or `nox -t fix` reformat that the `Edit|Write` hoo
 `jq` (it reads `tool_input.command`), so it denies every Bash call when `jq` is missing, like its
 three siblings. A live `/land` single-lander lock (`scripts/land-lock.sh held`) exempts it, so the
 unattended `/loop /land` pass is not stalled; a stale lock does not, so a pass whose last heartbeat
-is older than `LAND_LOCK_STALE_SECONDS` gets the prompt too. Accepted limit: while a land
-pass holds the lock, any other agent whose cwd falls back to `trunk` is exempt too. Full ruling:
+is older than `LAND_LOCK_STALE_SECONDS` gets the prompt too. Accepted limit: while the lock is
+live, any other agent whose cwd falls back to `trunk` is exempt too, and a pass that dies without
+releasing leaves the lock live until it ages out. Full ruling:
 [`docs/decisions.md`](decisions.md) (`uv run --frozen python scripts/docs_index_query.py "lode-21sxk"`).
 
 ### Precondition guards (the 0/1/2 family) (lode-t6ni)
@@ -1764,7 +1765,8 @@ silently fall through — verified live during this guard's own land review, `gh
 **not** denied under `PATH=/nonexistent`. All three hooks now deny outright when `jq` is unreachable,
 before attempting to parse `tool_input.command` at all; `docs/onboarding.md` documents `jq` as a
 required prerequisite, and the full fail-closed-vs-fail-open reasoning is recorded in
-[`docs/decisions.md`](decisions.md).
+[`docs/decisions.md`](decisions.md). The fourth Bash guard, `trunk-bash-guard.sh` (`lode-21sxk`),
+carries the same wrapper.
 
 **`gh api` is the hard case: it is read-or-write depending on flags, so it cannot be allowed merely by
 matching a verb — it needs a positive read test.** Allowed only when an explicit `-X GET`/`--method GET`
@@ -3753,7 +3755,8 @@ assumption would not have closed it.
   stale-break) is the documented upgrade for true concurrent multi-machine landing — and the natural
   seam toward real CI.
 
-  **The guard is `scripts/land-lock.sh` (`acquire` / `heartbeat` / `release`), and its liveness
+  **The guard is `scripts/land-lock.sh` (`acquire` / `heartbeat` / `release`, plus the read-only
+  `held` query the trunk Bash guard asks, lode-21sxk), and its liveness
   signal is a staleness token — never a PID (lode-aps3), and never the wall clock (lode-3874).**
   The token's AGE is judged from `/proc/uptime` (a boot-relative, CLOCK_BOOTTIME-style reading) plus
   the kernel `boot_id`, not `date`: OBSERVED LIVE 2026-09-16, a WSL2 host's wall clock stepped ~99

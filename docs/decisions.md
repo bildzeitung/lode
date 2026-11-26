@@ -7634,9 +7634,9 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
   so that re-gate has to finish inside the window.
 - **Accepted limit.** While a land pass holds the lock, any other agent whose cwd falls back to
   `trunk` is exempt too. This bends `lode-8uh71`'s "never tell a subagent from the main session"
-  point on purpose.
-- **Matching limits.** Matching is conservative, and the script header lists what it gets wrong in
-  each direction. Quoted text is matched like a command, so a `bd` note containing `; nox -s unit`
-  asks on `trunk`. A wrapper option with a separate value word (`uv run --with x nox`) hides the
-  command. Only a leading `cd <dir>` with a literal or `~` target is followed when choosing the cwd
-  whose branch is checked.
+  point on purpose. "Holds" means the record is live, not that a pass is running: a pass that dies
+  without releasing leaves the guard silent on `trunk` until the record ages out, up to
+  `LAND_LOCK_STALE_SECONDS` after its last heartbeat.
+- **Matching limits.** Matching is conservative: quoted text is matched like a command on purpose,
+  because a false ask is cheap and a miss is what the guard exists to stop. The script header's
+  KNOWN LIMITS lists the false asks, the misses and which leading `cd` is followed.

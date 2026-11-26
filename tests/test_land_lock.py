@@ -262,6 +262,64 @@ def test_release_with_no_lock_held_is_a_harmless_no_op(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# held -- the read-only liveness query scripts/trunk-bash-guard.sh asks
+# (lode-21sxk). Exit 0 iff `acquire` would skip rather than reclaim.
+# ---------------------------------------------------------------------------
+
+
+def test_held_is_1_with_no_lock(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+
+    assert _run("held", repo=repo).returncode == 1
+    assert not _lock_path(repo).exists()
+
+
+def test_held_is_0_for_a_live_lock_and_does_not_modify_it(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    assert (
+        _run("acquire", repo=repo, env_overrides=_fault_env(tmp_path)).returncode == 0
+    )
+    before = _lock_path(repo).read_text()
+
+    result = _run("held", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert _lock_path(repo).read_text() == before
+
+
+def test_held_is_1_for_a_stale_lock_and_leaves_it_in_place(tmp_path: Path) -> None:
+    """`held` reports what `acquire` would reclaim, but the reclaim itself
+    stays `acquire`'s: a query that removed the record would not be read-only."""
+    repo = _init_repo(tmp_path)
+    _write_stale_lock(repo)
+    before = _lock_path(repo).read_text()
+
+    assert _run("held", repo=repo).returncode == 1
+    assert _lock_path(repo).read_text() == before
+
+
+def test_held_treats_a_malformed_lock_as_held(tmp_path: Path) -> None:
+    """Same "age unknown, never guess" reading `acquire` gives a record it
+    cannot parse -- which is also what a `held` racing a heartbeat's
+    truncate-then-write sees."""
+    repo = _init_repo(tmp_path)
+    _lock_path(repo).write_text("garbage\n")
+
+    assert _run("held", repo=repo).returncode == 0
+
+
+def test_held_outside_any_git_repository_is_1(tmp_path: Path) -> None:
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+
+    result = _run("held", repo=outside)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert result.stdout == ""
+
+
+# ---------------------------------------------------------------------------
 # A rev-parse failure must land inside the documented 0/1/2 contract, never
 # escape as git's own bare 128 (lode-8qkb)
 #

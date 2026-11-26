@@ -373,7 +373,11 @@
 #       no lock, a stale lock, or an undeterminable lock path. Prints nothing
 #       on stdout (git's own error reaches stderr outside a repository) and
 #       never writes, so it is safe from a PreToolUse hook
-#       (scripts/trunk-bash-guard.sh).
+#       (scripts/trunk-bash-guard.sh). That hook stays silent on `trunk`
+#       while this exits 0, so the staleness window has a second consumer:
+#       a pass whose heartbeats lapse past it is prompted at its own next
+#       commit/merge/push/nox, and a pass that dies without `release`
+#       leaves the hook silent until the record ages out.
 # heartbeat <own-token>: re-stamps the lock this pass already holds, so the
 #            staleness check measures idle time from the LAST heartbeat
 #            rather than the original `acquire` (CAVEAT 1). Call it
@@ -504,7 +508,7 @@ note_machine_fault() {
   fi
 }
 
-# acquire and held take no further argument; heartbeat/release now each
+# acquire and held take no further argument; heartbeat/release each
 # REQUIRE exactly one further argument -- their own token, or the explicit
 # $BLIND_SENTINEL opt-out (lode-yuwt). Stated as the legal
 # <argc>:<subcommand> shapes rather than as a chain of negated conditions, so
@@ -583,8 +587,8 @@ fi
 # theory that the Section 1 guard already handles it.
 if ! GIT_COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"; then
   # git's own diagnostic already went to stderr above (this command
-  # substitution captures only stdout). `$cmd` is validated to exactly these
-  # four values above, so no `*)` arm is reachable.
+  # substitution captures only stdout). `$cmd` was validated by the usage `case`
+  # above, so no `*)` arm is reachable.
   case "$cmd" in
     held) exit 1 ;;
     acquire)
