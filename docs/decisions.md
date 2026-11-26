@@ -7665,10 +7665,10 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
     built, a blanked string vanished from the word list, so `git -C "$ROOT" commit` and
     `"$ROOT/.venv/bin/nox" -t fix` stopped asking; and a quote the scan paired wrongly (an
     apostrophe in a heredoc whose delimiter it did not recognise, a `$'it\'s'` string, a quote
-    inside `"$(...)"`) blanked the command that followed. Now a blanked string leaves a one-word
-    placeholder, a string that is one plain word stays as written, any heredoc delimiter is
-    recognised, and when the scan cannot pair something the WHOLE command is matched unstripped
-    rather than only the text after that point.
+    inside `"$(...)"`) blanked the command that followed. Now a string that is text is kept as
+    one word, each space and separator in it replaced, so it holds its place and a quoted path or
+    subcommand still reads; any heredoc delimiter is recognised; and when the scan cannot pair
+    something the WHOLE command is matched unstripped rather than only the text after that point.
   - **Replay of the final guard** over the same 2,014 calls, run from a trunk checkout with no lock
     held: 15 non-`/land` asks (12 real trunk merge/push/`nox`, 2 real commits in a scratch repo
     reached by `cd $D`, 1 `python3 -c` string quoting a `nox` command) and 119 `/land` asks, the

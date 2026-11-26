@@ -15,16 +15,16 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
 from _gitrepo import _git, os_env
 from _hookharness import SH, pretooluse_hook, run_hook
+from test_land_lock import _fault_env, _write_stale_lock
+from test_land_lock import _run as _land_lock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "trunk-bash-guard.sh"
-LAND_LOCK = REPO_ROOT / "scripts" / "land-lock.sh"
 
 ASKING = [
     "git commit -m x",
@@ -64,17 +64,16 @@ ASKING = [
     # Heredocs a shell reads.
     "bash <<'EOF'\ngit commit -m x\nEOF",
     "cat <<EOF | bash\ngit push\nEOF",
-    # A blanked or quoted word must not move or hide the words around it.
+    # A quoted word must not move or hide the words around it, nor stop being read itself.
     'git -C "$ROOT" commit -m x',
     'git -C "/a b" push',
     'git --git-dir "$X/.git" commit',
     'git -c "user.name=A B" commit -m x',
     'git "commit" -m x',
     '"$ROOT/.venv/bin/nox" -t fix',
-    '"$HOME/my dir"/.venv/bin/nox -t fix',
-    'sudo -u "a b" git push',
-    # Text before the command that a naive scan pairs wrongly: each of these once blanked the
-    # command between a stray apostrophe and the next real quote.
+    '"$HOME/my dir/.venv/bin/nox" -t fix',
+    'env "A=b c" git push',
+    # A stray apostrophe before the command must not hide it up to the next real quote.
     "cat <<\\EOF > f\nit's\nEOF\ngit commit -m 'msg'",
     "cat <<'E-O-F' > f\nit's\nE-O-F\ngit commit -m 'msg'",
     "echo $'it\\'s'; git commit -m 'x'",
@@ -144,18 +143,8 @@ def _asks(command: str, cwd: Path, *, home: Path | None = None) -> bool:
 
 def _live_lock(repo: Path) -> None:
     # A successful acquire deletes land-lock.sh's machine-wide fault counter under $TMPDIR, so
-    # point it at a throwaway directory.
-    fault_tmp = repo.parent / "fault-tmpdir"
-    fault_tmp.mkdir(exist_ok=True)
-    proc = subprocess.run(
-        ["bash", str(LAND_LOCK), "acquire"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-        env=os_env({"TMPDIR": str(fault_tmp)}),
-    )
+    # _fault_env points it at a throwaway directory.
+    proc = _land_lock("acquire", repo=repo, env_overrides=_fault_env(repo.parent))
     assert proc.returncode == 0, proc.stderr
 
 
@@ -240,8 +229,7 @@ def test_live_land_lock_exempts_trunk(trunk_repo: Path) -> None:
 
 
 def test_stale_land_lock_does_not_exempt(trunk_repo: Path) -> None:
-    old = int(time.time()) - 100_000
-    (trunk_repo / ".git" / "land.lock").write_text(f"1 h {old} 2020-01-01T00:00:00Z\n")
+    _write_stale_lock(trunk_repo)
     assert _asks("git commit -m x", trunk_repo)
 
 
