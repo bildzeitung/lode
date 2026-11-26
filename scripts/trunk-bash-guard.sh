@@ -53,9 +53,11 @@
 #     `git stash`, `git am`, `git revert` and the like): outside the ruled scope.
 #   - MID-REBASE: while a rebase of trunk is stopped (a conflict, an `edit` step) HEAD is detached
 #     and the branch reads `HEAD`; the gate then reads rebase-merge/head-name and
-#     rebase-apply/head-name and treats refs/heads/trunk as trunk (lode-3cxzs), so every guarded
-#     command asks, including during a maintainer's own approved rebase. Any other detached HEAD
-#     stays silent.
+#     rebase-apply/head-name under the checkout's own git dir and treats refs/heads/trunk as trunk
+#     (lode-3cxzs), so every guarded command asks, including during a maintainer's own approved
+#     rebase. A `git pull --rebase` on trunk that stops on a conflict is such a rebase: the pull
+#     is silent, `git rebase --continue` and `--abort` after it ask. Any other detached HEAD stays
+#     silent, including a stopped rebase of another branch that also moves trunk (`--update-refs`).
 #   - CWD: only a LEADING `cd <dir>` (ended by &&, ; or a newline) is followed when picking the
 #     cwd whose branch is checked, and only when <dir> is a literal path or starts with `~`; a
 #     target that is not an existing directory (a variable, a typo), a later cd, `git -C <dir>`
@@ -276,6 +278,7 @@ fi
 branch="$(git -C "$DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 if [ "$branch" = "HEAD" ]; then
   # A rebase stopped on trunk detaches HEAD; the branch being rebuilt is named in head-name.
+  # Rebase state is per worktree, so this is the checkout's own git dir, not the common one.
   gitdir="$(git -C "$DIR" rev-parse --absolute-git-dir 2>/dev/null || true)"
   for f in "$gitdir/rebase-merge/head-name" "$gitdir/rebase-apply/head-name"; do
     if [ -f "$f" ] && [ "$(cat "$f" 2>/dev/null)" = "refs/heads/trunk" ]; then

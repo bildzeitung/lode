@@ -33,8 +33,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from _gitrepo import _git, git_env
+import pytest
+from _gitrepo import _git
 from _hookharness import SH, pretooluse_hook, run_hook
+from test_trunk_bash_guard import _stop_rebase_on_conflict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "trunk-write-guard.sh"
@@ -42,18 +44,10 @@ SCRIPT = REPO_ROOT / "scripts" / "trunk-write-guard.sh"
 
 def _init_repo(path: Path, *, branch: str) -> None:
     _git(path.parent, "init", "-q", "-b", branch, str(path))
-    subprocess.run(
-        ["git", "-C", str(path), "commit", "-q", "--allow-empty", "-m", "init"],
-        check=True,
-        timeout=30,
-        env={
-            "GIT_AUTHOR_NAME": "t",
-            "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "t",
-            "GIT_COMMITTER_EMAIL": "t@t",
-            "PATH": "/usr/bin:/bin",
-        },
-    )
+    # In the repo's own config: the stopped-rebase tests commit again, with no ambient identity.
+    _git(path, "config", "user.email", "t@t")
+    _git(path, "config", "user.name", "t")
+    _git(path, "commit", "-q", "--allow-empty", "-m", "init")
 
 
 # --- script-level -----------------------------------------------------------------------------
@@ -167,47 +161,38 @@ def test_wrapper_is_posix_shell_compatible() -> None:
     assert proc.returncode == 0, proc.stderr
 
 
-def test_script_asks_while_a_rebase_of_trunk_is_stopped(tmp_path: Path) -> None:
-    # lode-3cxzs: a stopped rebase detaches HEAD, so the branch gate alone would stay silent.
+# --- a rebase stopped on a conflict: HEAD is detached (lode-3cxzs) ------------------------------
+
+
+def _script_stdout(cwd: Path) -> str:
+    proc = subprocess.run(
+        [str(SCRIPT)], cwd=cwd, capture_output=True, text=True, timeout=30, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout
+
+
+@pytest.mark.parametrize("apply", [False, True], ids=["merge", "apply"])
+def test_script_asks_while_a_rebase_of_trunk_is_stopped(
+    tmp_path: Path, apply: bool
+) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo, branch="trunk")
-    env = git_env()
-    for args in (
-        ["checkout", "-q", "-b", "other"],
-        ["commit", "-q", "--allow-empty", "-m", "other"],
-        ["checkout", "-q", "trunk"],
-        ["commit", "-q", "--allow-empty", "-m", "trunk"],
-    ):
-        _git(repo, *args)
-    (repo / "f.txt").write_text("trunk\n")
-    _git(repo, "add", "f.txt")
-    _git(repo, "commit", "-q", "-m", "t2")
-    _git(repo, "checkout", "-q", "other")
-    (repo / "f.txt").write_text("other\n")
-    _git(repo, "add", "f.txt")
-    _git(repo, "commit", "-q", "-m", "o2")
-    _git(repo, "checkout", "-q", "trunk")
-    proc = subprocess.run(
-        ["git", "rebase", "-q", "other"],
-        cwd=repo,
-        env=env,
-        capture_output=True,
-        check=False,
-    )
-    assert proc.returncode != 0, "the rebase was meant to stop on a conflict"
-    out = subprocess.run(
-        [str(SCRIPT)], cwd=repo, capture_output=True, text=True, timeout=30, check=False
-    )
-    assert out.returncode == 0, out.stderr
-    assert '"permissionDecision": "ask"' in out.stdout
+    _stop_rebase_on_conflict(repo, apply=apply)
+    assert '"permissionDecision": "ask"' in _script_stdout(repo)
+
+
+def test_script_silent_while_a_rebase_of_another_branch_is_stopped(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo, branch="trunk")
+    _stop_rebase_on_conflict(repo, rebased="other")
+    assert _script_stdout(repo).strip() == ""
 
 
 def test_script_silent_on_a_plain_detached_head(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo, branch="trunk")
     _git(repo, "checkout", "-q", "--detach")
-    out = subprocess.run(
-        [str(SCRIPT)], cwd=repo, capture_output=True, text=True, timeout=30, check=False
-    )
-    assert out.returncode == 0, out.stderr
-    assert out.stdout.strip() == ""
+    assert _script_stdout(repo).strip() == ""

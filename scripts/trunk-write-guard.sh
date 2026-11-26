@@ -39,8 +39,10 @@ set -euo pipefail
 # call (measured over 20 runs at technical review; lode-p8zl acceptance, "open risk to check").
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 
-# A rebase stopped on trunk detaches HEAD (lode-3cxzs); the branch being rebuilt is named in
-# head-name. The extra git call is paid only on a detached HEAD.
+# A rebase stopped on trunk detaches HEAD; the branch being rebuilt is named in head-name, under
+# the checkout's own git dir (rebase state is per worktree). The extra git call is paid only on a
+# detached HEAD. Ruling (lode-3cxzs): docs/decisions.md, the Update under the lode-21sxk entry;
+# what it makes ask is in scripts/trunk-bash-guard.sh, KNOWN LIMITS, MID-REBASE.
 if [ "$branch" = "HEAD" ]; then
   gitdir="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
   for f in "$gitdir/rebase-merge/head-name" "$gitdir/rebase-apply/head-name"; do

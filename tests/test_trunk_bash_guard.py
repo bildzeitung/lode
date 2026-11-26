@@ -18,7 +18,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from _gitrepo import _git, git_env, os_env
+from _gitrepo import _branch_from, _commit_file, _git, git_env, os_env
 from _hookharness import SH, pretooluse_hook, run_hook
 from test_land_lock import _fault_env, _write_stale_lock
 from test_land_lock import _run as _land_lock
@@ -345,69 +345,63 @@ def test_script_exits_zero_on_malformed_shell_text(
     _asks(command, ro_trunk)
 
 
-# --- a rebase of trunk stopped on a conflict (lode-3cxzs) ---------------------------------------
+# --- a rebase stopped on a conflict: HEAD is detached (lode-3cxzs) ------------------------------
 
 
-def _stop_rebase_on_conflict(repo: Path, *, onto: str, apply: bool = False) -> None:
-    """Leave `repo` mid-rebase of trunk: a conflicting commit on `other`, rebased from trunk."""
-    (repo / "f.txt").write_text("base\n")
-    _git(repo, "add", "f.txt")
-    _git(repo, "commit", "-q", "-m", "base")
-    _git(repo, "checkout", "-q", "-b", onto)
-    (repo / "f.txt").write_text("other\n")
-    _git(repo, "commit", "-q", "-am", "other")
+def _stop_rebase_on_conflict(
+    repo: Path, *, rebased: str = "trunk", apply: bool = False
+) -> None:
+    """Leave `repo` (on trunk, identity configured) with a rebase of `rebased` stopped on a
+    conflict: trunk and `other` each change f.txt, and `rebased` is rebased onto the other one."""
+    _commit_file(repo, "f.txt", "base\n", "base")
+    _branch_from(repo, "trunk", "other")
+    _commit_file(repo, "f.txt", "other\n", "other")
     _git(repo, "checkout", "-q", "trunk")
-    (repo / "f.txt").write_text("trunk\n")
-    _git(repo, "commit", "-q", "-am", "trunk")
-    args = ["rebase", "-q", *(["--apply"] if apply else []), onto]
+    _commit_file(repo, "f.txt", "trunk\n", "trunk")
+    _git(repo, "checkout", "-q", rebased)
+    onto = "other" if rebased == "trunk" else "trunk"
     proc = subprocess.run(
-        ["git", *args],
+        ["git", "rebase", "-q", *(["--apply"] if apply else []), onto],
         cwd=repo,
         env=git_env(),
         capture_output=True,
         text=True,
+        timeout=30,
         check=False,
     )
     assert proc.returncode != 0, "the rebase was meant to stop on a conflict"
+    assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "HEAD"
 
 
-@pytest.mark.parametrize("apply", [False, True])
+@pytest.mark.parametrize("apply", [False, True], ids=["merge", "apply"])
 @pytest.mark.parametrize(
     "command", ["git rebase --continue", "git commit -am x", "nox -t fix"]
 )
 def test_stopped_rebase_of_trunk_asks(
-    tmp_path: Path, command: str, apply: bool
+    trunk_repo: Path, command: str, apply: bool
 ) -> None:
-    repo = _init_repo(tmp_path / "repo", branch="trunk")
-    _stop_rebase_on_conflict(repo, onto="other", apply=apply)
-    assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "HEAD"
-    assert _asks(command, repo)
+    _stop_rebase_on_conflict(trunk_repo, apply=apply)
+    assert _asks(command, trunk_repo)
 
 
-def test_stopped_rebase_of_another_branch_is_silent(tmp_path: Path) -> None:
-    repo = _init_repo(tmp_path / "repo", branch="trunk")
-    (repo / "f.txt").write_text("base\n")
-    _git(repo, "add", "f.txt")
-    _git(repo, "commit", "-q", "-m", "base")
-    _git(repo, "checkout", "-q", "-b", "feat")
-    (repo / "f.txt").write_text("feat\n")
-    _git(repo, "commit", "-q", "-am", "feat")
-    _git(repo, "checkout", "-q", "trunk")
-    (repo / "f.txt").write_text("trunk\n")
-    _git(repo, "commit", "-q", "-am", "trunk")
-    _git(repo, "checkout", "-q", "feat")
-    proc = subprocess.run(
-        ["git", "rebase", "-q", "trunk"],
-        cwd=repo,
-        env=git_env(),
-        capture_output=True,
-        check=False,
-    )
-    assert proc.returncode != 0
-    assert not _asks("git rebase --continue", repo)
+def test_stopped_rebase_of_another_branch_is_silent(trunk_repo: Path) -> None:
+    _stop_rebase_on_conflict(trunk_repo, rebased="other")
+    assert not _asks("git rebase --continue", trunk_repo)
 
 
-def test_plain_detached_head_is_silent(tmp_path: Path) -> None:
-    repo = _init_repo(tmp_path / "repo", branch="trunk")
-    _git(repo, "checkout", "-q", "--detach")
-    assert not _asks("git commit -am x", repo)
+def test_stopped_rebase_is_read_from_the_checkouts_own_git_dir(
+    tmp_path: Path, trunk_repo: Path
+) -> None:
+    # Rebase state is per worktree: trunk mid-rebase in a linked worktree asks there, and leaves
+    # the main checkout, detached on another commit, silent.
+    _git(trunk_repo, "checkout", "-q", "--detach")
+    wt = tmp_path / "wt"
+    _git(trunk_repo, "worktree", "add", "-q", str(wt), "trunk")
+    _stop_rebase_on_conflict(wt)
+    assert _asks("git commit -am x", wt)
+    assert not _asks("git commit -am x", trunk_repo)
+
+
+def test_plain_detached_head_is_silent(trunk_repo: Path) -> None:
+    _git(trunk_repo, "checkout", "-q", "--detach")
+    assert not _asks("git commit -am x", trunk_repo)

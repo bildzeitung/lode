@@ -4498,6 +4498,9 @@ entries below from being rewritten to chase the current tree.)
     `tests/test_trunk_write_guard.py`.
   **Update (`lode-5ido`, 2026-08-08):** RULING 1's premise is stale (the `PreToolUse` payload now carries
   `agent_id`/`agent_type`) but its conclusion stands. See the `lode-5ido` entry below.
+  **Update (`lode-3cxzs`, 2026-11-25):** `git rev-parse --abbrev-ref HEAD` is no longer the guard's
+  only read of the branch. On a detached `HEAD` it also reads a stopped rebase's `head-name` and
+  asks when that names `trunk`. See the `lode-3cxzs` Update under the `lode-21sxk` entry.
 
 - **2026-08-08 — DECIDED (maintainer, `lode-3dh1`): `run_tool_turns`' `max_tokens` stays per-TURN,
   not per-run; total spend is bounded by `max_tool_turns` instead.** `lode-35nu.11.6`'s acceptance
@@ -7710,8 +7713,13 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
   - **Update (lode-3cxzs, maintainer ruling 2026-11-25):** the MID-REBASE limit above is closed,
     option (b). When `git rev-parse --abbrev-ref HEAD` prints `HEAD`, both `trunk-bash-guard.sh`
     and `trunk-write-guard.sh` also read `rebase-merge/head-name` and `rebase-apply/head-name`
-    under the git dir and treat `refs/heads/trunk` as trunk, so `git rebase --continue`,
-    `git commit`, `git push`, `nox` and Edit/Write ask while a rebase of trunk is stopped. The cost
-    is that they also ask during the maintainer's own approved rebase of trunk; the guards are
-    Claude Code hooks, so that cost lands only on Claude's tool calls, which is the case to stop.
-    Any other detached HEAD stays silent.
+    under the checkout's own git dir (`--absolute-git-dir`: rebase state is per worktree) and treat
+    `refs/heads/trunk` as trunk, so `git rebase --continue`, `git commit`, `git push`, `nox` and
+    Edit/Write ask while a rebase of trunk is stopped. The cost is that they also ask during the
+    maintainer's own approved rebase of trunk; the guards are Claude Code hooks, so that cost lands
+    only on Claude's tool calls, which is the case to stop. Any other detached HEAD stays silent.
+    Two consequences the ruling does not name, both run at review in a scratch repo. After a
+    `git pull --rebase` on `trunk` that stops on a conflict (the pull itself is still silent),
+    `git rebase --continue`, `git rebase --abort` and Edit/Write ask. A rebase of another branch
+    that also moves `trunk` (`--update-refs` from a branch stacked on it) is silent when it starts
+    and while it is stopped: the checkout was never on `trunk`.
