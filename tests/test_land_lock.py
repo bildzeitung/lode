@@ -667,7 +667,7 @@ def test_acquire_cut_off_while_writing_leaves_no_land_lock(tmp_path: Path) -> No
     takes the lock cleanly and removes the dead one's staging file."""
     repo = _init_repo(tmp_path)
     lock = _lock_path(repo)
-    path = _path_with_shim(tmp_path, "hostname", "kill -9 $PPID\nsleep 1")
+    path = _path_with_shim(tmp_path, "hostname", "kill -9 $PPID")
 
     first = _run("acquire", repo=repo, env_overrides={"PATH": path})
 
@@ -697,6 +697,32 @@ def test_acquire_whose_publish_fails_is_a_machine_fault_with_no_temp_file(
     assert result.returncode == 1, result.stdout + result.stderr
     assert "MACHINE FAULT" in result.stderr
     assert sorted(p.name for p in lock.parent.glob("land.lock*")) == ["land.lock.flock"]
+
+
+def test_reclaim_that_loses_its_publish_to_a_heartbeat_skips_without_a_fault(
+    tmp_path: Path,
+) -> None:
+    """A heartbeat from the holder just judged stale can re-create land.lock
+    between the reclaim's `rm` and its publish. That holder is alive, so
+    acquire skips the tick and reports no MACHINE FAULT. The `rm` shim plays
+    the heartbeat: it writes a record right after removing land.lock."""
+    repo = _init_repo(tmp_path)
+    _write_stale_lock(repo)
+    lock = _lock_path(repo)
+    path = _path_with_shim(
+        tmp_path,
+        "rm",
+        'command -p rm "$@"\n'
+        'case "${!#}" in */land.lock) echo revived > "${!#}" ;; esac',
+    )
+
+    result = _run("acquire", repo=repo, env_overrides={"PATH": path})
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "reclaiming stale lock" in result.stdout
+    assert "another /land" in result.stderr
+    assert "MACHINE FAULT" not in result.stderr
+    assert lock.read_text() == "revived\n"
 
 
 def test_acquire_does_not_win_when_land_lock_is_a_directory(tmp_path: Path) -> None:
