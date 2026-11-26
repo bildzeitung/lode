@@ -183,8 +183,8 @@ _UPDATE_MARKER = "**Update ("
 
 
 def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
-    """Line numbers of the ``**Update (`` markers in the entry a hit belongs to,
-    when that hit is only one chunk of a hard-split entry; otherwise ``[]``.
+    """Line numbers of the ``**Update (`` markers that may correct a hit, when
+    that hit is only one chunk of the entry it belongs to; otherwise ``[]``.
 
     The chunker hard-splits a top-level ``- `` entry over ``MAX_UNIT_BYTES``
     into several units, so a marker appended at the entry's end can sit in a
@@ -197,10 +197,16 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     can correct a claim under a sibling (``lode-pe38``), and one in a closing
     paragraph a claim in an own bullet (``lode-tb0j``). The chunker names those
     sections. A hit on an own bullet that carries its own Update marker also
-    lists the markers of the section's other bullets. A section under the
-    limit is read the same way (``lode-8cp63``): its bullets are units of their
-    own and its markers sit under the last, so a hit on any of them lists the
-    markers of the whole ``##`` section, bullets after its own text included.
+    lists the markers of the section's other bullets.
+
+    Any other hit at or after the first ``##`` of ``decisions.md`` lists the
+    markers between its own last line and the next ``##`` (``lode-8cp63``). A
+    section that ends in its own bullet list has each bullet cut off as a unit
+    and its markers appended under the last, so a hit on the heading unit or
+    an earlier bullet has to look past its own block. The markers above the
+    hit are left out: a marker is appended after the text it corrects. The
+    entries appended after a section cannot be told from its own bullets, so a
+    hit also lists the markers of every entry between it and the next ``##``.
 
     Anywhere else the entry is the block between the structural lines (any
     heading, any top-level bullet) on either side of the hit. Only a
@@ -223,12 +229,11 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
         None,
     )
     if section is None:
-        oversized = chunker.oversized_sections(path, text)
         section = next(
             (
-                (lo, hi)
+                (line_hi + 1, hi)
                 for lo, hi in chunker.heading_sections(path, text)
-                if lo <= line_lo <= hi and all(lo != olo for olo, _ in oversized)
+                if lo <= line_lo <= hi
             ),
             None,
         )
@@ -353,9 +358,8 @@ def main(
             if markers:
                 where = ", ".join(str(n) for n in markers)
                 print(
-                    f"    NOTE: this chunk is part of a split entry that carries "
-                    f"Update markers at line {where} -- they may correct "
-                    f"claims shown here; read them."
+                    f"    NOTE: see the Update markers at line {where} -- "
+                    f"they may correct claims shown here; read them."
                 )
     else:
         print("No results.")

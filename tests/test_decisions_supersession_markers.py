@@ -66,8 +66,8 @@ rule.
 - KNOWN MISS: an indented marker under a ``##`` section that ends in its own
   column-zero bullet list is indexed with the last bullet of that list, not
   with the heading. The lode-21sxk section ends that way. The query's NOTE
-  covers it (lode-8cp63): a hit on any bullet of the section lists the
-  section's markers. The unit a marker sits in is unchanged.
+  covers it (lode-8cp63): a hit on the section's heading unit or on an earlier
+  bullet lists the markers below it. The unit a marker sits in is unchanged.
 
 Every scan is a module-level helper taking its lines as a parameter, so the
 sabotage tests below can prove each actually fires on a violation rather than

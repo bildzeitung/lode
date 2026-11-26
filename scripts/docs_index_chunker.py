@@ -336,13 +336,12 @@ def heading_sections(path: Path | str, text: str) -> list[tuple[int, int]]:
     """Line ranges of every ``##`` section of the entry log, heading to the line
     before the next ``##``, whatever its size; ``[]`` for any other file.
 
-    Unlike :func:`oversized_sections` the range includes the bullets after the
-    section's own text, which the chunker cuts off as units of their own
-    (:func:`_split_trailing_entries`). ``split_entry_markers`` in
-    ``scripts/docs_index_query.py`` reads the section as one entry, so a hit on
-    one bullet lists the Update markers sitting under a later one
-    (``lode-8cp63``). A top-level bullet appended after a section it does not
-    belong to cannot be told from the section's own, so it is read as one.
+    Unlike :func:`oversized_sections` the range includes the top-level bullets
+    after the section's own text, each a unit of its own
+    (:func:`_split_trailing_entries`): the section's own closing list, the
+    entries appended after the section, or both. Nothing here tells the two
+    apart. Public for ``split_entry_markers`` in
+    ``scripts/docs_index_query.py`` (``lode-8cp63``).
     """
     if Path(path).stem != _ENTRY_LOG_STEM:
         return []
