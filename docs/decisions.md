@@ -7786,3 +7786,114 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
     `git rebase --continue`, `git rebase --abort` and Edit/Write ask. A rebase of another branch
     that also moves `trunk` (`--update-refs` from a branch stacked on it) is silent when it starts
     and while it is stopped: the checkout was never on `trunk`.
+
+## docs-index: usage evaluation, verdict, and ranked agent-input alternatives (open, lode-a55l6)
+
+Raised by `lode-2e6x`, the evaluation `lode-t6o1`'s index was always owed. Nothing is built under
+it. Every number below was measured on 2026-11-26 from the two instruments `lode-dozi` shipped:
+`scripts/docs_index_log.py` over the invocation log, and `scripts/docs_index_usage_report.py` over
+the Claude Code transcripts, plus three throwaway scripts of mine over the same transcripts (not
+committed; the method is stated where a figure depends on it).
+
+**Data window and its limits.** The log snapshot is 342 lines, 2026-09-13 to 2026-11-26. It is
+thin until the middle of November: 18 lines from 2026-09-13 to 2026-09-27, then 324 lines on the 13
+days from 2026-11-14 to 2026-11-26 (about 25 a day, peak 64). So the dense window is 13 days, one
+day short of the ticket's two weeks, and the cause of the November jump was not investigated. The
+transcripts on this machine start 2026-11-14, so every transcript figure covers those same 13
+days, 1,718 transcript files, 32,544 distinct tool calls. **One machine's traffic only**: another
+maintainer's, or this one's before November, may differ. The log cannot tell producer from reviewer
+from lander: `cwd` separates a launch worktree (309 lines after the fallback landed) from the main
+checkout (29), and `CLAUDE_CODE_CHILD_SESSION` is `1` on all 342, so it separates nothing. The
+fallback (`lode-qcp0`) landed 2026-09-13 19:39 local, so 338 of the 342 lines post-date it and a
+before/after comparison has 4 lines on the before side: not measurable. This entry reports
+the 342-line snapshot; probes run while writing it added a few lines to the live log.
+
+**Measured usage and hit rate.**
+
+- 342 invocations in 69 sessions; median 80 ms; median query 3 words.
+- 14 of 342 returned nothing (4.1%). **All 14 are a bare bd id** (12 distinct ids). The fallback
+  fired on 84 queries (25%) and none of them stayed empty. Had the tool stayed AND-only those 84 would
+  have been empty too, a 29% miss rate against the observed 4%.
+- A non-empty result is weak evidence of a useful one. 116 of 338 post-fallback queries (34%)
+  returned exactly the 5-result default limit, and 82 of the 84 fallback queries did: an OR
+  over several terms is almost always satisfiable. The log records no outcome, so relevance is
+  **unmeasured**.
+- 95 queries (28%) are a bare bd id and 163 (48%) contain one.
+- Of the 12 zero-hit ids, 5 appear nowhere in `docs/` today, and 7 appear there now. Of the 3 of
+  those I re-ran (`lode-6pjf`, `lode-vlok`, `lode-xuoz`) all return hits today, so the likely
+  cause is a lookup run before the entry landed or from a worktree whose base predates it. Not
+  checked: which of the 7 were that.
+
+**Index against direct reads of `docs/*.md`.**
+
+- The shipped report's headline is wrong. It counts a tool call once per transcript line that carries
+  it, and Claude Code logs the same call several times (5,321 classified blocks, 3,385 distinct
+  ids: a 1.57x inflation), so its "819 index / 4,501 direct / 15%" is not the figure. Its index
+  marker also matches any command that merely names the script, such as a `bd` note.
+- By distinct tool-call id: **2,838 direct reads** (2,759 from worktrees or subagents, 79 from the
+  main session) against **205 invocations** under a strict "runs the script" match, or 547 under
+  the report's loose match. The log counts about 324 invocations in the same 13 days, so the strict
+  match undercounts. Index share of docs lookups is therefore **between 7% and 16%, about 10%
+  by the log**.
+- Direct reads are `grep` 1,302, `sed` 1,036, the `Read` tool 373 (all but 2 with an offset or
+  limit, so no one is reading whole docs), `awk` 84, the rest 43. 1,148 (40%) touch
+  `decisions.md`, then `agents-workflow.md` 527, `stack.md` 303, `configuration.md` 249. 250 of the
+  Bash reads name a bd id: the `grep -n lode-xxxx` convention that `lode-2e6x`'s ticket text
+  predicted. A session that reads docs directly does it a median 2 times (max 14).
+- Share of all tool calls: docs-direct 8.7%, index 0.6% to 1.7%. `git` is 21%, `grep` and `sed`
+  together 19%, `bd` 7%.
+
+**Verdict: KEEP, with small changes (proposals A and B). Do not retire it and do not invest
+further than that.** It earns its keep on id-less phrase queries, which grep cannot do: 247 of
+the 342 queries are not a bare id, and the fallback turns what was a roughly 29% miss rate into
+about 4% on a count of results alone. It is not the main route, and cannot become one by
+routing, because it does not save calls: an index pointer followed by `sed -n` is two calls, the same
+as `grep -n lode-xxxx` followed by `sed -n`. What it saves is context (no file load) and the
+phrase search. Judge it on those, not on call counts.
+
+*What would falsify the verdict.* Retire if a pointer-follow measurement (proposal B) shows fewer than
+about half of the non-id queries are followed by a read of the cited range. Change the verdict
+upward if agents that use it finish tickets in measurably fewer tool calls than agents that do not
+(not measured here; there is no per-ticket call count joined to index use).
+
+**Ranked proposals** (expected effect per unit of build cost; each is tied to a measured signal).
+
+- **A. Make the bd-id lookup first-class (small).** Signal: 28% of queries are a bare id and all 14
+  misses are one. Do: rank an exact-token match on the id first, and on zero hits say whether
+  the id exists in `bd` but has no docs entry, so the agent stops searching. Optionally print
+  the `sed -n` line. *Falsified if* the 7 ids that now have docs mentions turn out to
+  all have been looked up before their entry existed, in which case the tool is already correct
+  and only the message is worth changing.
+- **B. Measure the pointer-follow rate (small, a prerequisite).** Signal: the log has no outcome, so
+  hit rate says nothing about usefulness (34% of queries sit at the result cap). Do: in the report,
+  for each index call, check whether one of the next few calls in the same transcript reads a range
+  overlapping a cited one. Fix the report's double counting in the same change. *Falsified if*
+  the number is not stable across two windows, in which case it cannot steer anything.
+- **C. Fold the guard ritual into fewer calls (small to medium).** Signal: `isolation-guard.sh`
+  1,159, `recycled-worktree-guard.sh` 629, `bd-dolt-push.sh` 319, `handoff-sha.sh` 298 and
+  `checkout-land-branch.sh` 199 are 2,604 calls, 8.0% of all tool calls, the same size as docs
+  lookup and fully deterministic. This is not an input mechanism; it is where the data shows calls
+  going, and the guards are safety-critical, so it needs a debate before a build. *Falsified
+  if* most of the 1,159 `isolation-guard.sh` calls are the single mandatory first one (about 0.8
+  guard calls per `Agent` dispatch across the window says merging saves little).
+- **D. Trim the instruction prose loaded per dispatch (medium to high, already under way).**
+  Signal: a producer loads `CLAUDE.md` and its imports (about 33 KB) plus `coding.md` (58 KB), a
+  reviewer 33 KB plus 52 KB, and `/land`'s skill is 137 KB, over 1,383 `Agent` dispatches in the
+  window. This is a cost per dispatch in tokens, not tool calls, and I did not measure tokens. The
+  `lode-w18a` rule-inventory tickets already own it, so a new ticket would duplicate them.
+  *Falsified if* a token count per dispatch shows the prose is a small fraction of a dispatch.
+- **E. A `decisions.md` digest or per-section summaries (low).** Signal: 40% of docs reads touch the
+  7,788-line file. Against it: a generated digest costs provider calls (directive 10), a hand-kept
+  one drifts from an append-only log, and a read that follows a `grep -n` of an id already
+  lands on the passage. *Would become worth doing if* the pointer-follow rate (B) shows agents reading
+  the ranges and still missing the Update markers.
+- **F. A code graph or symbol index (lowest, not recommended now).** Signal: Bash `grep`, `sed`,
+  `awk`, `head`, `tail` and `cat` naming `src/` or `tests/` came to about 3,400 calls by one
+  rough match, plus 286 `Read`s of `src/` and 348 of `tests/`, so code navigation is as large as docs
+  lookup, which the ticket named as the revisit trigger. But nothing shows those calls fail or
+  repeat, and the 2026-09-13 objections (provider calls, hooks and committed artifacts colliding with
+  the worktree discipline) stand. *Falsified if* a sample of sessions shows repeated greps for the
+  same symbol inside one session.
+
+**Open (`lode-a55l6`).** Accept KEEP, or retire the index? And which of A to F, if any, become
+an epic with debated children? Proposal A and B together are the smallest useful step.
