@@ -396,9 +396,12 @@ def test_split_entry_markers_in_a_section_cut_at_its_h3_headings(
     assert firsts[3:11] == own_bullets
     assert firsts[11] == "### B"
     assert firsts[-2:] == [marker, "- **Entry after.** e"]
+    other_line = text.splitlines().index(
+        "  **Update (lode-other)** -- not the section's."
+    ) + 1
     for u in units:
         assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
-            [marker_line] if u in units[1:-1] else []
+            [marker_line, other_line] if u in units[1:-1] else []
         )
 
 
@@ -429,9 +432,10 @@ def test_split_entry_markers_in_an_oversized_section_with_no_heading(
     units = _query_module._build._chunker.chunk_file(doc, text)
     assert [u.first_line for u in units[:2]] == ["# Title", "## Section"]
     assert len(units) > 4
+    other_line = lines.index("  **Update (lode-other)** -- not the section's.") + 1
     for u in units:
         assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
-            marker_lines if u in units[1:-1] else []
+            [*marker_lines, other_line] if u in units[1:-1] else []
         )
 
 
@@ -601,3 +605,31 @@ def test_split_entry_markers_on_the_bullets_after_an_oversized_section(
         marker_line
     ]
     assert _query_module.split_entry_markers(str(doc), two.line_lo, two.line_hi) == []
+
+
+def test_split_entry_markers_in_an_oversized_section_with_closing_bullets(
+    tmp_path: Path,
+) -> None:
+    """A hit in an oversized section's own text lists the Update under a
+    top-level bullet after that text, before the next ``##`` (lode-ineef), and
+    nothing from the next section."""
+    marker = "  **Update (lode-test, 2026-01-01)** -- corrects bullet one."
+    next_marker = "  **Update (lode-next)** -- the next section's."
+    text = (
+        "# Title\n\n## Section\n\n"
+        + "\n\n".join(["word " * 400] * 10)
+        + "\n\n- **Bullet one.** stale\n- **Bullet two.** other\n"
+        f"{marker}\n\n## Next\n\n- next bullet\n{next_marker}\n"
+    )
+    doc = tmp_path / "decisions.md"
+    doc.write_text(text, encoding="utf-8")
+    marker_line = text.splitlines().index(marker) + 1
+    chunker = _query_module._build._chunker
+    assert chunker.oversized_sections(doc, text)
+    units = chunker.chunk_file(doc, text)
+    own = [u for u in units if u.line_hi < marker_line - 2 and u.line_lo > 3]
+    assert len(own) > 1
+    for u in [units[1], *own]:
+        assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == [
+            marker_line
+        ]

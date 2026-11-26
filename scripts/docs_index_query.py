@@ -197,7 +197,11 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     can correct a claim under a sibling (``lode-pe38``), and one in a closing
     paragraph a claim in an own bullet (``lode-tb0j``). The chunker names those
     sections. A hit on an own bullet that carries its own Update marker also
-    lists the markers of the section's other bullets.
+    lists the markers of the section's other bullets. The markers after the
+    section's own text, up to the next ``##``, are listed for every unit of
+    it too (``lode-ineef``): a section that ends in its own bullet list carries
+    its Updates under the last bullet, and so do the entries appended after it,
+    which cannot be told apart.
 
     Any other hit at or after the first ``##`` of ``decisions.md`` lists the
     markers between its own last line and the next ``##`` (``lode-8cp63``): a
@@ -230,20 +234,26 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     def containing(ranges: list[tuple[int, int]]) -> tuple[int, int] | None:
         return next(((lo, hi) for lo, hi in ranges if lo <= line_lo <= hi), None)
 
+    section = containing(chunker.heading_sections(path, text))
     entry = containing(chunker.oversized_sections(path, text))
-    if entry is None:
-        section = containing(chunker.heading_sections(path, text))
-        if section is not None:
-            return markers(line_hi + 1, section[1])
-        boundaries = [
-            i + 1
-            for i, line in enumerate(lines)
-            if not flags[i] and chunker.is_structural_line(line)
-        ]
-        entry = (
-            max((b for b in boundaries if b <= line_lo), default=1),
-            next((b - 1 for b in boundaries if b > line_lo), len(lines)),
-        )
+    if entry is not None:
+        if line_hi > entry[1]:
+            return []
+        # The section's own closing bullets and the entries appended after it
+        # follow the own text, up to the next ``##`` (``lode-ineef``).
+        tail = markers(entry[1] + 1, section[1] if section else len(lines))
+        return markers(*entry) + tail
+    if section is not None:
+        return markers(line_hi + 1, section[1])
+    boundaries = [
+        i + 1
+        for i, line in enumerate(lines)
+        if not flags[i] and chunker.is_structural_line(line)
+    ]
+    entry = (
+        max((b for b in boundaries if b <= line_lo), default=1),
+        next((b - 1 for b in boundaries if b > line_lo), len(lines)),
+    )
     if line_hi > entry[1] or entry == (line_lo, line_hi):
         return []
     return markers(*entry)

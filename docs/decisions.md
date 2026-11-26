@@ -5196,6 +5196,18 @@ entries below from being rewritten to chase the current tree.)
     is oversized today); open in `lode-ineef`. The `NOTE` line now reads "see the Update markers
     at line ...", since "this chunk is part of a split entry" was not true of every hit that gets
     one.
+  - **Update (lode-ineef, 2026-11-26):** limit (3) of the `lode-8cp63` Update above no longer
+    holds, and "now holds only for a hit inside an oversized section's own text" in the same
+    Update with it. A hit inside an oversized section's own text now also lists the Update
+    markers between the end of that text and the next `##` (or the end of the file, for a log
+    with no `##`): the section's own closing bullets and the entries appended after it, which
+    nothing tells apart, so a hit there lists the markers of those entries too. Candidate chosen
+    is the ticket's suggested fix, not its notes' single-rule alternative (which would delete
+    `oversized_sections`); the builder's choice, no maintainer ruling. The two pinned cases
+    (`test_split_entry_markers_in_a_section_cut_at_its_h3_headings` and
+    `test_split_entry_markers_in_an_oversized_section_with_no_heading`) change accordingly: the
+    section's units gain the marker of the entry after the section. No section of this file is
+    oversized today, so no `NOTE` printed today changes.
 
 - **Union merge driver for this file (`lode-4jtc.1`, 2026-08-09).** Every branch that records a
   decision appends at EOF, so any two concurrent branches conflict here BY CONSTRUCTION, independent
