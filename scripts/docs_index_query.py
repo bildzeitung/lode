@@ -183,8 +183,8 @@ _UPDATE_MARKER = "**Update ("
 
 
 def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
-    """Line numbers of the ``**Update (`` markers that may correct a hit, when
-    that hit is only one chunk of the entry it belongs to; otherwise ``[]``.
+    """Line numbers of the ``**Update (`` markers that may correct a hit and
+    can sit in a different unit from it; ``[]`` when there is none to list.
 
     The chunker hard-splits a top-level ``- `` entry over ``MAX_UNIT_BYTES``
     into several units, so a marker appended at the entry's end can sit in a
@@ -200,13 +200,12 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     lists the markers of the section's other bullets.
 
     Any other hit at or after the first ``##`` of ``decisions.md`` lists the
-    markers between its own last line and the next ``##`` (``lode-8cp63``). A
+    markers between its own last line and the next ``##`` (``lode-8cp63``): a
     section that ends in its own bullet list has each bullet cut off as a unit
-    and its markers appended under the last, so a hit on the heading unit or
-    an earlier bullet has to look past its own block. The markers above the
-    hit are left out: a marker is appended after the text it corrects. The
-    entries appended after a section cannot be told from its own bullets, so a
-    hit also lists the markers of every entry between it and the next ``##``.
+    and its markers appended under the last. Not above the hit, since a marker
+    is appended after the text it corrects; and through every entry up to the
+    next ``##``, since an entry appended after a section cannot be told from
+    the section's own bullets.
 
     Anywhere else the entry is the block between the structural lines (any
     heading, any top-level bullet) on either side of the hit. Only a
@@ -220,40 +219,34 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     lines = text.splitlines()
     flags = fence_flags(lines)
     chunker = _build._chunker
-    section = next(
-        (
-            (lo, hi)
-            for lo, hi in chunker.oversized_sections(path, text)
-            if lo <= line_lo <= hi
-        ),
-        None,
-    )
-    if section is None:
-        section = next(
-            (
-                (line_hi + 1, hi)
-                for lo, hi in chunker.heading_sections(path, text)
-                if lo <= line_lo <= hi
-            ),
-            None,
-        )
-    if section is not None:
-        entry_lo, entry_hi = section
-    else:
+
+    def markers(lo: int, hi: int) -> list[int]:
+        return [
+            n
+            for n in range(lo, hi + 1)
+            if not flags[n - 1] and _UPDATE_MARKER in lines[n - 1]
+        ]
+
+    def containing(ranges: list[tuple[int, int]]) -> tuple[int, int] | None:
+        return next(((lo, hi) for lo, hi in ranges if lo <= line_lo <= hi), None)
+
+    entry = containing(chunker.oversized_sections(path, text))
+    if entry is None:
+        section = containing(chunker.heading_sections(path, text))
+        if section is not None:
+            return markers(line_hi + 1, section[1])
         boundaries = [
             i + 1
             for i, line in enumerate(lines)
             if not flags[i] and chunker.is_structural_line(line)
         ]
-        entry_lo = max((b for b in boundaries if b <= line_lo), default=1)
-        entry_hi = next((b - 1 for b in boundaries if b > line_lo), len(lines))
-    if line_hi > entry_hi or (entry_lo, entry_hi) == (line_lo, line_hi):
+        entry = (
+            max((b for b in boundaries if b <= line_lo), default=1),
+            next((b - 1 for b in boundaries if b > line_lo), len(lines)),
+        )
+    if line_hi > entry[1] or entry == (line_lo, line_hi):
         return []
-    return [
-        n
-        for n in range(entry_lo, entry_hi + 1)
-        if not flags[n - 1] and _UPDATE_MARKER in lines[n - 1]
-    ]
+    return markers(*entry)
 
 
 def query(
@@ -301,9 +294,9 @@ def query(
         "of docs/.\n\nRun this when you need the passage that settles a "
         "question -- a decision id, a term, a phrase. It prints ranked "
         "pointers (path:line_lo-line_hi), each with the unit's first line and "
-        "a short snippet; read the cited range yourself. A hit in an entry "
-        "split across chunks also gets a NOTE naming the lines of that "
-        "entry's Update markers; read those too.\n\nThe "
+        "a short snippet; read the cited range yourself. A hit whose Update "
+        "markers can sit in another chunk also gets a NOTE naming their "
+        "lines; read those too.\n\nThe "
         "index is rebuilt from docs/ on every run, so results are never "
         "stale.\n\nWhen nothing matches every term at once, it retries "
         "matching ANY term and marks those rows as an OR-match fallback."
