@@ -7607,7 +7607,8 @@ Every phrase matches exactly once in `.claude/skills/code/SKILL.md` outside fenc
 ## Bash `git commit`/`merge`/`push` and `nox` on `trunk` ask, except under a live `/land` lock (decided, lode-21sxk)
 
 Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling recorded on
-`lode-21sxk` the same day after the first build escalated.
+`lode-21sxk` the same day after the first build escalated, plus a second ruling the same day
+(RULING 2 on the ticket) that sent the reviewed branch back for the two amendments below.
 
 - **Decision.** `scripts/trunk-bash-guard.sh` is a `PreToolUse(Bash)` hook that returns
   `permissionDecision: "ask"` (never `"deny"`) when a command runs `git commit`, `git merge`,
@@ -7618,9 +7619,17 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
 - **jq.** The guard reads `tool_input.command`, so `lode-p8zl` ruling 3 (no jq) cannot hold for it;
   it follows the three older Bash guards' deny-everything-when-jq-is-missing wrapper (`lode-oii9`).
 - **Lander exemption (option 1 of the escalation).** `/land` runs unattended on `trunk` in the main
-  checkout and itself merges, commits `--no-verify`, pushes and re-gates there. The ticket's claim,
-  not checked against the harness: an `ask` forces a prompt even over `permissions.allow`, so the
-  unattended loop would stall. The guard is therefore silent when the branch is `trunk` AND
+  checkout and itself merges, commits `--no-verify`, pushes and re-gates there. An `ask` forces a prompt that the
+  classifier does not decide, so the unattended loop would stall. Sources (RULING 2): the hooks doc
+  (https://code.claude.com/docs/en/hooks) says "In auto mode, a PreToolUse hook's "ask" normally
+  sends the tool call to the permission prompt, and the classifier doesn't decide it.", and the
+  permission-modes doc (https://code.claude.com/docs/en/permission-modes) says auto mode "still
+  shows you those prompts" when an ask rule or a hook forces them. Neither page states in one
+  sentence how a hook `ask` ranks against a `permissions.allow` rule in default mode, so the
+  ticket's "even over `permissions.allow`" is read from those two sentences, not quoted. Replay
+  of 757 past `/land` Bash calls from the main checkout: 130 matched the as-built guard, and all
+  130 ran between a land-lock acquire and its release, so the lock exemption covers every one.
+  The guard is therefore silent when the branch is `trunk` AND
   `scripts/land-lock.sh held` reports a live lock. `held` is a new read-only subcommand; it and
   `acquire` call the same `lock_staleness` function, so the two cannot disagree about which lock is
   live. A stale lock does not exempt.
@@ -7637,6 +7646,18 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
   point on purpose. "Holds" means the record is live, not that a pass is running: a pass that dies
   without releasing leaves the guard silent on `trunk` until the record ages out, up to
   `LAND_LOCK_STALE_SECONDS` after its last heartbeat.
-- **Matching limits.** Matching is conservative: quoted text is matched like a command on purpose,
-  because a false ask is cheap and a miss is what the guard exists to stop. The script header's
-  KNOWN LIMITS lists the false asks, the misses and which leading `cd` is followed.
+- **Quote-aware matching (RULING 2).** The first build matched quoted text and heredoc bodies like
+  commands, on the reasoning that a false ask is cheap. Replay of 2,014 past main-checkout Bash
+  calls showed 40 non-`/land` asks, only 12 of them a real trunk merge, push or `nox`: 28 were
+  false (14 of them in `/sweep`, which pastes ticket prose into `bd` calls). The matcher now
+  ignores heredoc bodies, the contents of quoted strings and comments, except (i) a quoted string
+  that is the argument of `-c` or `eval` and (ii) a heredoc body whose command line names bash,
+  sh, dash or zsh. A double-quoted string holding `$(` is also kept, and a quote or heredoc the
+  scan cannot pair leaves the rest of the command unstripped: both only add asks. Replay of the
+  final guard over the same 2,014 calls, run from a trunk checkout with no lock held: 15 non-`/land`
+  asks (12 real trunk merge/push/`nox`, 2 real commits in a scratch repo reached by `cd $D`, 1
+  `python3 -c` string quoting a `nox` command) and 119 `/land` asks. The 11 `/land` calls that no
+  longer ask are all `bd`, `cat`, `grep` or `bd-docs-nit.sh` calls whose quoted prose or heredoc mentions a command, none a
+  real trunk write. The script header's KNOWN LIMITS lists the false asks, the misses (a command in
+  backticks inside double quotes, a heredoc fed to a shell through a pipe) and which leading `cd`
+  is followed.

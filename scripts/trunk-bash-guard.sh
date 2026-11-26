@@ -19,18 +19,25 @@
 #     unattended /land pass is not stalled. A stale lock does not exempt.
 #
 # MATCHING is conservative, because a false ask is cheap and a miss is what this exists to stop.
-# The command is split on ; & | ( ) { } backtick and newlines with no regard for quoting, and
+# strip_quoted first blanks what the shell does not run as a command: the contents of quoted
+# strings, heredoc bodies and comments. Two exceptions stay visible, because they ARE commands:
+# a quoted string that is the argument of `-c` (any `-[a-z]*c`, so `bash -lc` too) or of `eval`, and
+# the body of a heredoc whose command line names bash, sh, dash or zsh. A double-quoted string that
+# holds `$(` is kept as well. The result is split on ; & | ( ) { } backtick and newlines, and
 # segment_hits below finds each segment's command word. scripts/shell-quote-split.sh is
-# deliberately not used: a quote-aware split would turn `bash -c 'cd x; git commit'` into a miss,
-# and that library denies past its scan cap, which this guard must never do.
+# deliberately not used: it denies past its scan cap, which this guard must never do. Whenever the
+# scan cannot pair a quote or find a heredoc terminator, the text from there on stays unstripped.
 #
 # KNOWN LIMITS:
-#   - FALSE ASKS: quoted text and heredoc bodies are split and matched like commands, so
-#     `bd update x --notes "gates: fix green; nox -s unit green"` asks on trunk. So does
-#     `command -v nox`.
+#   - FALSE ASKS: a kept string is matched like a command, so `python3 -c '...`nox -t fix`...'`
+#     and `bd update x --notes "$(echo; nox)"` ask on trunk. So does `command -v nox`, and a
+#     `git commit` that runs in a scratch repo reached by anything but a leading `cd` literal.
 #   - MISSES: a wrapper option that takes a separate value word (`uv run --with x nox`,
 #     `sudo -u me git push`) hides the command behind that word. A command built by variable
-#     expansion, or a script that itself commits, is not seen.
+#     expansion, or a script that itself commits, is not seen. A command inside backticks within
+#     double quotes, `echo "`git commit`"`, is blanked with the string. A heredoc fed to a shell
+#     through a pipe (`cat <<E | bash`) or by a word written after the delimiter (`<<E bash`) is
+#     not recognised as one.
 #   - CWD: only a LEADING `cd <dir>` (ended by &&, ; or a newline) is followed when picking the
 #     cwd whose branch is checked, and only when <dir> is a literal path or starts with `~`; a
 #     target that is not an existing directory (a variable, a typo), a later cd, `git -C <dir>`
@@ -41,7 +48,7 @@
 # "ask". ALWAYS exits 0: a PreToolUse hook exiting non-zero is itself a defect.
 
 set -uo pipefail
-# No pathname expansion: segment_hits word-splits the command text unquoted.
+# No pathname expansion: segment_hits and feeds_shell word-split command text unquoted.
 set -f
 
 QUOTES="[\"']"
@@ -53,6 +60,132 @@ case "${CMD//$QUOTES/}" in
   *git* | *nox*) ;;
   *) exit 0 ;;
 esac
+
+STOP="[\\\\'\"<#"$'\n]'
+SHELLS=" bash sh dash zsh "
+# A string is code, not text, when it directly follows `-c` (or `bash -lc`) or `eval`.
+ARGC='(^|[[:space:]])(-[A-Za-z]*c|eval)[[:space:]]*$'
+HEREDOC="^<<(-?)[[:blank:]]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\\2"
+STRIPPED=""
+
+# Does the command line being read (the text of $1 after its last separator) name a shell?
+feeds_shell() {
+  local seg="${1##*[;&|(){\}\`]}" tok
+  seg="${seg##*$'\n'}"
+  for tok in $seg; do
+    tok="${tok//$QUOTES/}"
+    [[ "$SHELLS" == *" ${tok##*/} "* ]] && return 0
+  done
+  return 1
+}
+
+# Sets STRIPPED: $1 with quoted contents, heredoc bodies and comments blanked (see MATCHING).
+strip_quoted() {
+  local rest="$1" out="" pre ch rest2 body c line found e
+  local -a pend=()
+  while [ -n "$rest" ]; do
+    pre="${rest%%$STOP*}"
+    out+="$pre"
+    rest="${rest:${#pre}}"
+    [ -n "$rest" ] || break
+    ch="${rest:0:1}"
+    case "$ch" in
+      '\')
+        out+="${rest:0:2}"
+        rest="${rest:2}"
+        ;;
+      "'")
+        rest2="${rest:1}"
+        if [[ "$rest2" == *\'* ]]; then
+          body="${rest2%%\'*}"
+          rest="${rest2#*\'}"
+          if [[ "$out" =~ $ARGC ]]; then out+="'$body'"; else out+="''"; fi
+        else
+          out+="$rest"
+          rest=""
+        fi
+        ;;
+      '"')
+        rest2="${rest:1}"
+        body=""
+        found=0
+        while :; do
+          pre="${rest2%%[\"\\\\]*}"
+          [ "$pre" = "$rest2" ] && break
+          body+="$pre"
+          rest2="${rest2:${#pre}}"
+          c="${rest2:0:1}"
+          if [ "$c" = '"' ]; then
+            found=1
+            rest2="${rest2:1}"
+            break
+          fi
+          body+="${rest2:0:2}"
+          rest2="${rest2:2}"
+        done
+        if [ "$found" = 1 ]; then
+          rest="$rest2"
+          if [[ "$out" =~ $ARGC || "$body" == *'$('* ]]; then out+="\"$body\""; else out+='""'; fi
+        else
+          out+="$rest"
+          rest=""
+        fi
+        ;;
+      '<')
+        if [[ "$rest" == '<<<'* ]]; then
+          out+="<<<"
+          rest="${rest:3}"
+        elif [[ "$rest" =~ $HEREDOC ]]; then
+          e="${BASH_REMATCH[0]}"
+          if feeds_shell "$out"; then c=keep; else c=drop; fi
+          pend+=("$c:${BASH_REMATCH[1]}:${BASH_REMATCH[3]}")
+          out+="$e"
+          rest="${rest:${#e}}"
+        else
+          out+="<"
+          rest="${rest:1}"
+        fi
+        ;;
+      '#')
+        c="${out: -1}"
+        case "$c" in
+          '' | ' ' | $'\t' | $'\n' | ';' | '&' | '|' | '(')
+            if [[ "$rest" == *$'\n'* ]]; then rest=$'\n'"${rest#*$'\n'}"; else rest=""; fi
+            ;;
+          *)
+            out+="#"
+            rest="${rest:1}"
+            ;;
+        esac
+        ;;
+      $'\n')
+        out+=$'\n'
+        rest="${rest:1}"
+        for e in "${pend[@]}"; do
+          body=""
+          found=0
+          rest2="$rest"
+          while [ -n "$rest2" ]; do
+            line="${rest2%%$'\n'*}"
+            if [ "$line" = "$rest2" ]; then rest2=""; else rest2="${rest2#*$'\n'}"; fi
+            c="$line"
+            [[ "$e" == *:-:* ]] && c="${line#"${line%%[!$'\t']*}"}"
+            if [ "$c" = "${e##*:}" ]; then
+              found=1
+              break
+            fi
+            body+="$line"$'\n'
+          done
+          [ "$found" = 1 ] || break
+          [[ "$e" == keep:* ]] && out+="$body"
+          rest="$rest2"
+        done
+        pend=()
+        ;;
+    esac
+  done
+  STRIPPED="$out"
+}
 
 segment_hits() {
   local -a toks
@@ -92,8 +225,9 @@ any_segment_hits() {
   return 1
 }
 
-# One candidate segment per line, after joining backslash-newline continuations.
-SEGMENTS="$(printf '%s\n' "${CMD//$'\\\n'/ }" | tr ';&|(){}`' '\n')"
+# One candidate segment per line of the stripped text, after joining backslash-newline continuations.
+strip_quoted "$CMD"
+SEGMENTS="$(printf '%s\n' "${STRIPPED//$'\\\n'/ }" | tr ';&|(){}`' '\n')"
 any_segment_hits <<<"$SEGMENTS" || exit 0
 
 # The cwd the command will run in: the hook's own, unless it opens with `cd <dir>` ended by

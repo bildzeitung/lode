@@ -68,6 +68,18 @@ SILENT = [
     "uv run --frozen python scripts/x.py",
     "uv run --frozen pytest -m 'not slow'",
     "scripts/handoff-sha.sh lode-1 review_head",
+    # Real shapes from the lode-21sxk replay that the quote-aware matcher silences.
+    'bd update lode-1 --append-notes "gates: fix green; nox -s unit green; git push later"',
+    "bd update lode-1 --notes 'MAINTAINER RULING: run nox -t fix\nthen git commit; git push'",
+    'NEW=$(bd create --type=task --title="x" --description="Why.\n\n- git commit then nox -t fix;\n  git push origin trunk\n")',
+    'cat > "$S/t0.md" <<\'EOF\'\n## Goal\n\nRecord it; git commit; nox -t fix; git push origin trunk\nEOF\nbd update lode-1 --description "$(cat $S/t0.md)"',
+    "cat <<-EOF\n\tgit push\n\tEOF\nls",
+    "cat > a <<'A'\ngit push\nA\ncat > b <<'B'\nnox\nB",
+    "python3 -I - <<'E'\nimport subprocess\nsubprocess.run(['git', 'commit'])\nE",
+    "git status # git push",
+    "echo $((1<<2)) # nox",
+    "grep -nF 'git push origin trunk' docs/x.md",
+    'grep -rn "nox -s tests" docs | head -3',
 ]
 
 
@@ -262,3 +274,35 @@ def test_wrapper_is_posix_shell_compatible() -> None:
         [SH, "-n", "-c", hook], capture_output=True, text=True, timeout=30, check=False
     )
     assert proc.returncode == 0, proc.stderr
+
+
+# Known false asks the quote-aware matcher keeps on purpose (script header, KNOWN LIMITS).
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -c 'o = \"`uv run nox -t fix`\"'",
+        'bd update x --notes "$(echo; nox)"',
+    ],
+)
+def test_script_keeps_the_documented_false_asks(ro_trunk: Path, command: str) -> None:
+    assert _asks(command, ro_trunk)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo '",
+        'echo "',
+        "cat <<",
+        "cat <<'",
+        "x <<<",
+        "# ",
+        "\\",
+        "git commit \\",
+        "<<EOF\n",
+    ],
+)
+def test_script_exits_zero_on_malformed_shell_text(
+    ro_trunk: Path, command: str
+) -> None:
+    _asks(command, ro_trunk)
