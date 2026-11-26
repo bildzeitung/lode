@@ -776,12 +776,12 @@ if [ "$cmd" = "heartbeat" ]; then
   # documented one-lander-per-machine convention means no other WRITER should
   # be touching this file while a pass holds it. Concurrent READERS are a
   # different matter and are routine -- every `/loop 5m /land` tick's own
-  # `acquire` reads this file, and `>` truncates before it writes, so a reader
-  # CAN catch a half-written record. That is safe by construction, not by
-  # luck: the reclaim path below treats an unparseable record as "age unknown"
-  # and skips the tick rather than reclaiming. Keep that path conservative --
-  # making it guess an age would turn this benign interleaving into a reclaim
-  # of a live lock. If the file is somehow already gone (heartbeat called
+  # `acquire` reads this file. The record is therefore written to a temp file
+  # beside $LOCK and `mv -f`'d over it (rename is atomic), so a reader sees
+  # the old record or the new one, never a half-written one, and a write that
+  # fails or is cut off leaves the previous record in place (lode-409kw). The
+  # reclaim path below still treats an unparseable record as "age unknown"
+  # and skips the tick; keep that conservative. If the file is somehow already gone (heartbeat called
   # without ever acquiring -- should not happen at either documented call
   # site), this creates it fresh rather than erroring: either way the caller's
   # intent ("the pass is still alive right now") is the same.
@@ -824,12 +824,15 @@ if [ "$cmd" = "heartbeat" ]; then
   if [ -z "$CUR_TOKEN" ]; then
     CUR_TOKEN="${OWN_TOKEN:-$(new_token)}"
   fi
-  if lock_record "$CUR_TOKEN" > "$LOCK" 2>/dev/null; then
+  HB_TMP="$LOCK.hb.$$"
+  if lock_record "$CUR_TOKEN" > "$HB_TMP" 2>/dev/null && mv -f "$HB_TMP" "$LOCK" 2>/dev/null; then
     exit 0
   fi
+  rm -f "$HB_TMP" 2>/dev/null || true
   echo "land-lock: heartbeat could not write $LOCK (unwritable or missing git" \
-    "dir, or no space). Not fatal to this step by itself -- the token simply" \
-    "ages from its last successful stamp -- but a human should check" \
+    "dir, or no space). Not fatal to this step by itself -- the previous" \
+    "record is left in place, so the token simply ages from its last" \
+    "successful stamp -- but a human should check" \
     "disk/permissions if this repeats every tick." >&2
   exit 1
 fi

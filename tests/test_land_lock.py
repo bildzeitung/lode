@@ -526,6 +526,31 @@ def test_heartbeat_on_a_missing_lock_creates_one(tmp_path: Path) -> None:
     assert _lock_path(repo).exists()
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_heartbeat_whose_write_fails_leaves_the_previous_record_intact(
+    tmp_path: Path,
+) -> None:
+    """lode-409kw: the old `> "$LOCK"` truncated the record before writing, so a
+    write that failed after the open succeeded left an empty land.lock. With the
+    record written to a temp file and renamed over, a read-only git dir (the
+    temp file cannot be created, while the old `>` on the existing writable
+    lock would have succeeded) must leave the previous record byte-identical."""
+    repo = _init_repo(tmp_path)
+    _write_stale_lock(repo)
+    lock = _lock_path(repo)
+    before = lock.read_bytes()
+    git_dir = repo / ".git"
+    git_dir.chmod(0o555)
+    try:
+        result = _run("heartbeat", BLIND, repo=repo)
+    finally:
+        git_dir.chmod(0o755)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "previous record is left in place" in result.stderr
+    assert lock.read_bytes() == before
+
+
 def test_stale_lock_refreshed_by_heartbeat_is_not_reclaimed(tmp_path: Path) -> None:
     """The regression this subcommand exists to prevent: a lock old enough to
     be judged stale under the TTL must NOT be reclaimed by a later `acquire`
