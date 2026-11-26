@@ -17,7 +17,7 @@
 #   - Decide "ask", never "deny" (ruling 1) -- a human at the terminal can approve and continue; a
 #     dispatched subagent cannot approve anything and is stopped. Human presence is the
 #     discriminator, without the payload ever encoding it.
-#   - Use NO jq (ruling 3) -- this guard parses no tool_input at all, so unlike the three
+#   - Use NO jq (ruling 3) -- this guard parses no tool_input at all, so unlike the
 #     PreToolUse(Bash) guards it adds nothing to the lode-oii9 jq-missing surface.
 #
 # Full rulings and rationale: docs/decisions.md
