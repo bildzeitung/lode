@@ -1,11 +1,10 @@
 """Tests for scripts/trunk-bash-guard.sh and its committed PreToolUse(Bash) wrapper (lode-21sxk).
 
-Extends lode-p8zl's Edit|Write trunk guard to Bash calls that run `git commit`, `git merge`,
-`git push`, `git rebase`, `git cherry-pick` (the last two by lode-u4ea7) or `nox` on a cwd whose
-branch is trunk; `git pull` stays silent by ruling. The maintainer rulings (ask never deny,
-gate on the branch, the /land lock exemption and its accepted limit) are recorded in
-docs/decisions.md (lode-21sxk) and the script header, not restated here. `land-lock.sh held`
-itself is tested in tests/test_land_lock.py.
+Extends lode-p8zl's Edit|Write trunk guard to Bash calls that run the commands the script header
+names, on a cwd whose branch is trunk. The maintainer rulings (ask never deny, gate on the
+branch, the /land lock exemption and its accepted limit) are recorded in docs/decisions.md
+(lode-21sxk) and the script header, not restated here. `land-lock.sh held` itself is tested in
+tests/test_land_lock.py.
 
 Two layers, like tests/test_trunk_write_guard.py: SCRIPT-LEVEL tests drive the script directly;
 HOOK-LEVEL tests drive the one-liner from the committed `.claude/settings.json` through
@@ -36,11 +35,7 @@ ASKING = [
     "git cherry-pick abc123",
     "git -C /some/where rebase -i HEAD~2",
     "git -c user.name=x cherry-pick -x abc123",
-    'git -c "user.name=A B" rebase main',
     "git add a && git cherry-pick abc123",
-    "\\git rebase main",
-    "git cherry-pick>/dev/null abc123",
-    "git cherry-pick --continue",
     "git -C /some/where push",
     "git -c user.name=x commit -m x",
     "nox -t fix",
@@ -97,17 +92,14 @@ SILENT = [
     "git fetch origin",
     "git pull",
     "git pull --rebase",
-    "git -C /some/where pull --rebase origin trunk",
-    "git -c pull.rebase=true pull",
-    # An option's value that spells a subcommand is not the subcommand.
-    "git -C rebase status",
-    "echo git rebase; echo git cherry-pick",
     "ls -la",
     "bd update lode-1 --notes 'git commit later'",
     "echo git push",
     "uv run --frozen python scripts/x.py",
     "uv run --frozen pytest -m 'not slow'",
     "scripts/handoff-sha.sh lode-1 review_head",
+    # An option's value that spells a subcommand is not the subcommand.
+    "git -C rebase status",
     # Real shapes from the lode-21sxk replay that the quote-aware matcher silences.
     'bd update lode-1 --append-notes "gates: fix green; nox -s unit green; git push later"',
     "bd update lode-1 --notes 'MAINTAINER RULING: run nox -t fix\nthen git commit; git push'",

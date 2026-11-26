@@ -1080,15 +1080,14 @@ rulings and rationale: [`docs/decisions.md`](decisions.md)
 
 The Bash-side counterpart is `scripts/trunk-bash-guard.sh` (lode-21sxk), a fourth `PreToolUse(Bash)`
 hook that asks the same way when a command runs `git commit`, `git merge`, `git push`, `git rebase`,
-`git cherry-pick` (the last two by `lode-u4ea7`) or `nox` from a cwd on `trunk` — the commit or
-`nox -t fix` reformat that the `Edit|Write` hook cannot see. `git pull` is left silent on purpose:
-the main session pulls on `trunk` routinely. It needs
-`jq` (it reads `tool_input.command`), so it denies every Bash call when `jq` is missing, like its
-three siblings. A live `/land` single-lander lock (`scripts/land-lock.sh held`) exempts it, so the
-unattended `/loop /land` pass is not stalled; a stale lock does not, so a pass whose last heartbeat
-is older than `LAND_LOCK_STALE_SECONDS` gets the prompt too. Accepted limit: while the lock is
-live, any other agent whose cwd falls back to `trunk` is exempt too, and a pass that dies without
-releasing leaves the lock live until it ages out. Full ruling:
+`git cherry-pick` or `nox` from a cwd on `trunk` — the commit or `nox -t fix` reformat that the
+`Edit|Write` hook cannot see. It needs `jq` (it reads `tool_input.command`), so it denies every
+Bash call when `jq` is missing, like its three siblings. A live `/land` single-lander lock
+(`scripts/land-lock.sh held`) exempts it, so the unattended `/loop /land` pass is not stalled; a
+stale lock does not, so a pass whose last heartbeat is older than `LAND_LOCK_STALE_SECONDS` gets
+the prompt too. Accepted limit: while the lock is live, any other agent whose cwd falls back to
+`trunk` is exempt too, and a pass that dies without releasing leaves the lock live until it ages
+out. Full ruling:
 [`docs/decisions.md`](decisions.md) (`uv run --frozen python scripts/docs_index_query.py "lode-21sxk"`).
 
 ### Precondition guards (the 0/1/2 family) (lode-t6ni)

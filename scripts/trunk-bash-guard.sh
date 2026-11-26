@@ -9,8 +9,8 @@
 # step-6 window: a worktree destroyed mid-session drops the agent's cwd back onto the main
 # checkout on trunk, where `git commit` succeeds against trunk. Scope is exactly those commands;
 # every other Bash call on trunk is silent (the main session lives on trunk), and file writes
-# through Bash (python/sed/heredoc) stay uncovered by maintainer ruling. `git pull` is
-# deliberately NOT covered: the main session pulls on trunk routinely (lode-u4ea7).
+# through Bash (python/sed/heredoc) stay uncovered by maintainer ruling. `git pull`, `--rebase`
+# included, is deliberately NOT covered: the main session pulls on trunk routinely (lode-u4ea7).
 #
 # CONTRACT (the rulings, the lander exemption's rationale and its accepted limit are recorded
 # once, in docs/decisions.md under lode-21sxk):
@@ -49,8 +49,8 @@
 #     body that no shell reads, is taken out with the text around it. Wrong pairs that still come
 #     out even are not noticed: `"note :) $(echo "x"; git push)"`, or a comment the scan does not
 #     see as one (`#` straight after `)`) holding two apostrophes around a command.
-#   - NOT MATCHED: `git pull` (also `pull --rebase`), left out by ruling (above); and `git reset`,
-#     `git stash`, `git am` and `git revert`, which no ruling has put in scope.
+#   - NOT MATCHED: every other git subcommand, history-writing ones included (`git reset`,
+#     `git stash`, `git am`, `git revert` and the like): outside the ruled scope.
 #   - MID-REBASE: while a rebase of trunk is stopped (a conflict, an `edit` step) HEAD is detached,
 #     so the branch reads `HEAD`, not `trunk`, and every command is silent, `git rebase --continue`
 #     and `git commit` included. A stopped cherry-pick keeps HEAD on trunk and still asks.
