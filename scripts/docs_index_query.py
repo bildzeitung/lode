@@ -199,11 +199,10 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     sections. A hit on an own bullet that carries its own Update marker also
     lists the markers of the section's other bullets. Every unit of the
     section also lists the markers after its own text, up to the next ``##``
-    (``lode-ineef``): a section that ends in its own bullet list carries its
-    Updates under the last bullet, and those bullets cannot be told from the
-    entries appended after the section. A log with no ``##`` has no such
-    range, and a hit in an oversized H1 section lists its own text's markers
-    only.
+    (``lode-ineef``), for the reason the next paragraph gives. A log with no
+    ``##`` has no such range: a hit in an oversized H1 section lists its own
+    text's markers only. A unit that is the section's whole own text is no
+    chunk of it, and the next paragraph's rule reads it.
 
     Any other hit at or after the first ``##`` of ``decisions.md`` lists the
     markers between its own last line and the next ``##`` (``lode-8cp63``): a
@@ -238,28 +237,22 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
 
     section = containing(chunker.heading_sections(path, text))
     entry = containing(chunker.oversized_sections(path, text))
-    if entry is not None:
-        if line_hi > entry[1]:
-            return []
-        # A unit that is the whole own text shows that text's markers itself.
-        own = [] if entry == (line_lo, line_hi) else markers(*entry)
-        # The section's own closing bullets and the entries appended after it
-        # follow the own text, up to the next ``##`` (``lode-ineef``).
-        return own + (markers(entry[1] + 1, section[1]) if section else [])
-    if section is not None:
+    if section is not None and entry in (None, (line_lo, line_hi)):
         return markers(line_hi + 1, section[1])
-    boundaries = [
-        i + 1
-        for i, line in enumerate(lines)
-        if not flags[i] and chunker.is_structural_line(line)
-    ]
-    entry = (
-        max((b for b in boundaries if b <= line_lo), default=1),
-        next((b - 1 for b in boundaries if b > line_lo), len(lines)),
-    )
+    if entry is None:
+        boundaries = [
+            i + 1
+            for i, line in enumerate(lines)
+            if not flags[i] and chunker.is_structural_line(line)
+        ]
+        entry = (
+            max((b for b in boundaries if b <= line_lo), default=1),
+            next((b - 1 for b in boundaries if b > line_lo), len(lines)),
+        )
     if line_hi > entry[1] or entry == (line_lo, line_hi):
         return []
-    return markers(*entry)
+    # ``section`` is set here only for a chunk of an oversized ``##`` section.
+    return markers(entry[0], section[1] if section else entry[1])
 
 
 def query(

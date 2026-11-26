@@ -380,6 +380,7 @@ def test_split_entry_markers_in_a_section_cut_at_its_h3_headings(
     paragraph = "word " * 400
     own_bullets = [f"- own bullet {i} " + "x" * 3000 for i in range(8)]
     marker = "**Update (lode-test, 2026-01-01)** -- corrected."
+    other = "  **Update (lode-other)** -- the entry's."
     text = (
         "# Title\n\n## Section\n\nintro\n\n### A\n\n"
         + "\n".join(own_bullets)
@@ -387,20 +388,18 @@ def test_split_entry_markers_in_a_section_cut_at_its_h3_headings(
         + "\n\n".join([paragraph] * 10)
         + f"\n\n{marker}\n"
         "- **Entry after.** e\n"
-        "  **Update (lode-other)** -- the entry's.\n"
+        f"{other}\n"
     )
     doc = tmp_path / "decisions.md"
     doc.write_text(text, encoding="utf-8")
-    marker_line = text.splitlines().index(marker) + 1
+    lines = text.splitlines()
+    marker_line, other_line = lines.index(marker) + 1, lines.index(other) + 1
     units = _query_module._build._chunker.chunk_file(doc, text)
     firsts = [u.first_line for u in units]
     assert firsts[:3] == ["# Title", "## Section", "### A"]
     assert firsts[3:11] == own_bullets
     assert firsts[11] == "### B"
     assert firsts[-2:] == [marker, "- **Entry after.** e"]
-    other_line = (
-        text.splitlines().index("  **Update (lode-other)** -- the entry's.") + 1
-    )
     for u in units:
         assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
             [marker_line, other_line] if u in units[1:-1] else []
@@ -422,21 +421,22 @@ def test_split_entry_markers_in_an_oversized_section_with_no_heading(
     own_bullets = [f"- own bullet {i} " + "x" * 3000 for i in range(8)]
     own_bullets[2] += "\n" + own_marker
     marker = "**Update (lode-test, 2026-01-01)** -- corrected."
+    other = "  **Update (lode-other)** -- the entry's."
     text = (
         "# Title\n\n## Section\n\nintro\n\n"
         + "\n".join(own_bullets)
         + f"\n\n{marker}\n"
         "- **Entry after.** e\n"
-        "  **Update (lode-other)** -- the entry's.\n"
+        f"{other}\n"
     )
     doc = tmp_path / "decisions.md"
     doc.write_text(text, encoding="utf-8")
     lines = text.splitlines()
     marker_lines = [lines.index(own_marker) + 1, lines.index(marker) + 1]
+    other_line = lines.index(other) + 1
     units = _query_module._build._chunker.chunk_file(doc, text)
     assert [u.first_line for u in units[:2]] == ["# Title", "## Section"]
     assert len(units) > 4
-    other_line = lines.index("  **Update (lode-other)** -- the entry's.") + 1
     for u in units:
         assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
             [*marker_lines, other_line] if u in units[1:-1] else []
@@ -588,38 +588,14 @@ def test_split_entry_markers_in_a_section_under_the_limit_with_own_bullets(
         )
 
 
-def test_split_entry_markers_on_the_bullets_after_an_oversized_section(
-    tmp_path: Path,
-) -> None:
-    """The bullets after an oversized section's own text are read as they are
-    after a small one (lode-8cp63): the earlier bullet lists the Update under
-    the later."""
-    marker = "  **Update (lode-test, 2026-01-01)** -- corrects bullet one."
-    text = (
-        "# Title\n\n## Section\n\n"
-        + "\n\n".join(["word " * 400] * 10)
-        + "\n- **Bullet one.** stale zorblax\n- **Bullet two.** other\n"
-        f"{marker}\n"
-    )
-    doc = tmp_path / "decisions.md"
-    doc.write_text(text, encoding="utf-8")
-    marker_line = text.splitlines().index(marker) + 1
-    chunker = _query_module._build._chunker
-    assert chunker.oversized_sections(doc, text)
-    one, two = chunker.chunk_file(doc, text)[-2:]
-    assert one.first_line.startswith("- **Bullet one.")
-    assert _query_module.split_entry_markers(str(doc), one.line_lo, one.line_hi) == [
-        marker_line
-    ]
-    assert _query_module.split_entry_markers(str(doc), two.line_lo, two.line_hi) == []
-
-
 def test_split_entry_markers_in_an_oversized_section_with_closing_bullets(
     tmp_path: Path,
 ) -> None:
     """A hit in an oversized section's own text lists the Update under a
     top-level bullet after that text, before the next ``##`` (lode-ineef), and
-    nothing from the next section."""
+    nothing from the next section. The bullets after the own text are read as
+    they are after a small section (lode-8cp63): the earlier bullet lists the
+    Update under the later."""
     marker = "  **Update (lode-test, 2026-01-01)** -- corrects bullet one."
     next_marker = "  **Update (lode-next)** -- the next section's."
     text = (
