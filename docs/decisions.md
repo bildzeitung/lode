@@ -7701,3 +7701,8 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
     `acquire` and `held` read such a record is unchanged and still not ruled on: the maintainer
     note on `lode-409kw` (2026-11-25) says only "No change to held/acquire's reading of an
     unreadable record is ruled".
+
+  - **Update (2026-11-25, maintainer edit):** `lode-7ruca` landed (merge `dbbfe07f`): `acquire` now writes
+    its record to a temporary file and only then creates `land.lock`, so it can no longer leave a
+    partial one. A hand edit is the only known remaining source of a record with no readable age.
+    The reading is still not ruled on.
