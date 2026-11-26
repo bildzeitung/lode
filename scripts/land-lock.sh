@@ -736,6 +736,10 @@ write_lock() {
   # function only -- the reclaim path below never calls it without first
   # holding the exclusive `flock` (CAVEAT 2), which is what extends the same
   # single-winner property to the reclaim case.
+  #
+  # The redirect creates $LOCK before `lock_record` fills it, so an `acquire`
+  # cut off in between leaves an empty record, which the reclaim path reads as
+  # "age unknown" and never reclaims (lode-7ruca).
   ( set -o noclobber
     lock_record "$1" > "$LOCK" ) 2>/dev/null
 }
@@ -771,7 +775,7 @@ if [ "$cmd" = "heartbeat" ]; then
   # Best-effort re-stamp of the SAME record `acquire` wrote -- refreshes the
   # recorded time so a later tick's staleness check measures idle time since
   # the LAST heartbeat, not the age of the original `acquire` (lode-m87j; see
-  # CAVEAT 1 above). Deliberately NOT `write_lock`'s atomic/noclobber create:
+  # CAVEAT 1 above). Deliberately NOT `write_lock`'s noclobber create:
   # overwriting the existing record is exactly the point here, and the
   # documented one-lander-per-machine convention means no other WRITER should
   # be touching this file while a pass holds it. Concurrent READERS are a
@@ -781,18 +785,15 @@ if [ "$cmd" = "heartbeat" ]; then
   # the old record or the new one, never a half-written one, and a write that
   # fails or is cut off leaves the previous record in place (lode-409kw). A
   # heartbeat killed before the rename leaves its `land.lock.hb.<pid>` behind;
-  # nothing reads or sweeps those. The reclaim path below treats an
-  # unparseable record as "age unknown" and skips the tick; keep that
-  # conservative. If the file is somehow already gone (heartbeat called
-  # without ever acquiring -- should not happen at either documented call
-  # site), this creates it fresh rather than erroring: either way the caller's
-  # intent ("the pass is still alive right now") is the same.
+  # nothing reads or sweeps those. If the file is somehow already gone
+  # (heartbeat called without ever acquiring -- should not happen at either
+  # documented call site), this creates it fresh rather than erroring: either
+  # way the caller's intent ("the pass is still alive right now") is the same.
   #
-  # The read-compare-rename below does not take `acquire`'s flock, so a
-  # reclaim landing between the read and the rename has its new record
-  # replaced by this pass's. That takes a holder whose record went stale while
-  # it was still running, which already means two landers; the reclaimer's own
-  # next heartbeat then fails the ownership check.
+  # Not under `acquire`'s flock: a reclaim landing between the read below and
+  # the rename has its record replaced by this pass's. That needs this pass's
+  # own record to have gone stale mid-run -- already two landers -- and the
+  # reclaimer's next heartbeat then fails the ownership check.
   #
   # PRESERVES the owner token (field 5, lode-ao95) rather than regenerating or
   # blanking it -- `lock_record`'s token positional is mandatory specifically

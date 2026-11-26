@@ -557,7 +557,7 @@ def _path_with_shim(tmp_path: Path, tool: str, body: str) -> str:
     shim = shim_dir / tool
     shim.write_text(f"#!/usr/bin/env bash\n{body}\n")
     shim.chmod(0o755)
-    return f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+    return fake_bin_env(shim_dir)["PATH"]
 
 
 def test_heartbeat_keeps_the_previous_record_whole_while_it_writes(
@@ -843,18 +843,14 @@ def test_wall_clock_jump_does_not_reclaim_a_live_lock(tmp_path: Path) -> None:
     fields = lock.read_text().split()
     assert len(fields) == 7, fields  # must be a new-format record to prove this
 
-    shim_dir = tmp_path / "lying-date"
-    shim_dir.mkdir()
-    date_shim = shim_dir / "date"
-    date_shim.write_text(
-        "#!/usr/bin/env bash\n"
+    lying_path = _path_with_shim(
+        tmp_path,
+        "date",
         'case "$*" in\n'
         '  *"+%s"*) echo 999999999999 ;;\n'
         "  *) echo 2099-01-01T00:00:00Z ;;\n"
-        "esac\n"
+        "esac",
     )
-    date_shim.chmod(0o755)
-    lying_path = f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}"
 
     second = _run(
         "acquire",
