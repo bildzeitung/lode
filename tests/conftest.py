@@ -661,6 +661,11 @@ def _isolate_tmpdir(
     # any test running that script with the inherited TMPDIR would zero a real /land loop's
     # counter (lode-8flnd). Redirect TMPDIR for every test; tests that need a specific one
     # still override it through their subprocess env.
+    #
+    # Covers a subprocess whose env is copied from os.environ while a test runs. NOT covered:
+    # an env built at import (a module-level `fake_bin_env(...)`) keeps the inherited TMPDIR,
+    # and Python's own `tempfile` caches its directory at first use, so in-process temp files
+    # may not follow the redirect.
     monkeypatch.setenv("TMPDIR", str(tmp_path_factory.mktemp("tmpdir")))
 
 
