@@ -396,9 +396,9 @@ def test_split_entry_markers_in_a_section_cut_at_its_h3_headings(
     assert firsts[3:11] == own_bullets
     assert firsts[11] == "### B"
     assert firsts[-2:] == [marker, "- **Entry after.** e"]
-    other_line = text.splitlines().index(
-        "  **Update (lode-other)** -- not the section's."
-    ) + 1
+    other_line = (
+        text.splitlines().index("  **Update (lode-other)** -- not the section's.") + 1
+    )
     for u in units:
         assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
             [marker_line, other_line] if u in units[1:-1] else []
