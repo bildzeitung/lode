@@ -19,25 +19,34 @@
 #     unattended /land pass is not stalled. A stale lock does not exempt.
 #
 # MATCHING is conservative, because a false ask is cheap and a miss is what this exists to stop.
-# strip_quoted first blanks what the shell does not run as a command: the contents of quoted
-# strings, heredoc bodies and comments. Two exceptions stay visible, because they ARE commands:
-# a quoted string that is the argument of `-c` (any `-[a-z]*c`, so `bash -lc` too) or of `eval`, and
-# the body of a heredoc whose command line names bash, sh, dash or zsh. A double-quoted string that
-# holds `$(` is kept as well. The result is split on ; & | ( ) { } backtick and newlines, and
-# segment_hits below finds each segment's command word. scripts/shell-quote-split.sh is
-# deliberately not used: it denies past its scan cap, which this guard must never do. Whenever the
-# scan cannot pair a quote or find a heredoc terminator, the text from there on stays unstripped.
+# strip_quoted first blanks what the shell does not run as a command: quoted strings, heredoc
+# bodies and comments. A blanked string leaves a one-word placeholder, so `git -C "a b" commit`
+# keeps its word positions, and a string that is one plain word (`"$ROOT/.venv/bin/nox"`,
+# `"commit"`) stays as written. Three things stay visible because they ARE commands, or hold one:
+# a quoted string that is the argument of `-c` (any `-[a-z]*c`, so `bash -lc` too) or of `eval`,
+# unless it reads like git's `-c section.key=value`; the body of a heredoc whose command line
+# names bash, sh, dash or zsh; and a double-quoted string that holds `$(`. The result is split on
+# ; & | ( ) { } backtick and newlines, and segment_hits below finds each segment's command word.
+# scripts/shell-quote-split.sh is deliberately not used: it denies past its scan cap, which this
+# guard must never do. This is not a shell parser, and a quote it pairs wrongly would blank a real
+# command. So whenever the scan meets something it cannot pair (a quote with no partner, a heredoc
+# with no terminator, a `"$(` string that an inner quote cut short), the WHOLE command is matched
+# unstripped: one stray quote before that point means the pairs already made cannot be trusted.
 #
 # KNOWN LIMITS:
 #   - FALSE ASKS: a kept string is matched like a command, so `python3 -c '...`nox -t fix`...'`
 #     and `bd update x --notes "$(echo; nox)"` ask on trunk. So does `command -v nox`, and a
 #     `git commit` that runs in a scratch repo reached by anything but a leading `cd` literal.
-#   - MISSES: a wrapper option that takes a separate value word (`uv run --with x nox`,
-#     `sudo -u me git push`) hides the command behind that word. A command built by variable
-#     expansion, or a script that itself commits, is not seen. A command inside backticks within
-#     double quotes, `echo "`git commit`"`, is blanked with the string. A heredoc fed to a shell
-#     through a pipe (`cat <<E | bash`) or by a word written after the delimiter (`<<E bash`) is
-#     not recognised as one.
+#     A command the scan gave up on is matched with its prose and heredoc bodies included.
+#   - MISSES: a word before the command that segment_hits' wrapper list does not know hides it:
+#     another wrapper (`nice nox`), a wrapper option's separate value word (`uv run --with x nox`,
+#     `sudo -u me git push`), or a redirection written first (`>log nox`). So does a `$(...)`
+#     between `git` and its subcommand. A command built by variable expansion, or a script that
+#     itself commits, is not seen. A command inside backticks within double quotes,
+#     `echo "`git commit`"`, or inside `$(...)` or backticks in a heredoc body that no shell
+#     reads, is blanked with the text around it. Wrong pairs that still come out even are not
+#     noticed: `"note :) $(echo "x"; git push)"`, or a comment the scan does not see as one
+#     (`#` straight after `)`) holding two apostrophes around a command.
 #   - CWD: only a LEADING `cd <dir>` (ended by &&, ; or a newline) is followed when picking the
 #     cwd whose branch is checked, and only when <dir> is a literal path or starts with `~`; a
 #     target that is not an existing directory (a variable, a typo), a later cd, `git -C <dir>`
@@ -50,6 +59,9 @@
 set -uo pipefail
 # No pathname expansion: segment_hits and feeds_shell word-split command text unquoted.
 set -f
+# Byte-wise string handling: every character the scan looks for is ASCII, and strip_quoted is
+# several times faster on a long command without multibyte matching.
+LC_ALL=C
 
 QUOTES="[\"']"
 CMD="${1:-}"
@@ -63,26 +75,53 @@ esac
 
 STOP="[\\\\'\"<#"$'\n]'
 SHELLS=" bash sh dash zsh "
-# A string is code, not text, when it directly follows `-c` (or `bash -lc`) or `eval`.
+# A string is code, not text, when it directly follows `-c` (or `bash -lc`) or `eval` ...
 ARGC='(^|[[:space:]])(-[A-Za-z]*c|eval)[[:space:]]*$'
-HEREDOC="^<<(-?)[[:blank:]]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\\2"
+# ... unless it reads `section.key=value`: that is git's own `-c`, and no shell word starts so.
+GIT_CONFIG='^[A-Za-z][-A-Za-z0-9]*\.[^[:space:]=]*='
+PLAIN_WORD='^[^[:space:];&|(){}<>`]+$'
+# What a blanked string leaves behind, so the words around it keep their positions.
+BLANK="_"
+HEREDOC="^<<(-?)[[:blank:]]*([^[:space:];&|<>()]+)"
+DELIM_QUOTING="[\"'\\\\]"
+SEPARATORS='[;&|(){}<>`]'
 STRIPPED=""
 
-# Does the command line being read (the text of $1 after its last separator) name a shell?
+# Does the command line $1 name a shell anywhere on it?
 feeds_shell() {
-  local seg="${1##*[;&|(){\}\`]}" tok
-  seg="${seg##*$'\n'}"
-  for tok in $seg; do
+  local tok
+  for tok in ${1//$SEPARATORS/ }; do
     tok="${tok//$QUOTES/}"
     [[ "$SHELLS" == *" ${tok##*/} "* ]] && return 0
   done
   return 1
 }
 
+# Reads a string that honours backslash escapes off the front of strip_quoted's `rest`, up to
+# its closing quote $1: sets `body`, leaves `rest` after the quote. Fails when there is none.
+close_escaped() {
+  local stop="[$1\\\\]" pre
+  body=""
+  while :; do
+    pre="${rest%%$stop*}"
+    [ "$pre" = "$rest" ] && return 1
+    body+="$pre"
+    rest="${rest:${#pre}}"
+    if [ "${rest:0:1}" = "$1" ]; then
+      rest="${rest:1}"
+      return 0
+    fi
+    body+="${rest:0:2}"
+    rest="${rest:2}"
+  done
+}
+
 # Sets STRIPPED: $1 with quoted contents, heredoc bodies and comments blanked (see MATCHING).
+# Every `return 0` inside the loop is the scan giving up, which leaves $1 as it came.
 strip_quoted() {
-  local rest="$1" out="" pre ch rest2 body c line found e
+  local rest="$1" out="" pre ch body line word keep opens closes
   local -a pend=()
+  STRIPPED="$1"
   while [ -n "$rest" ]; do
     pre="${rest%%$STOP*}"
     out+="$pre"
@@ -94,61 +133,50 @@ strip_quoted() {
         out+="${rest:0:2}"
         rest="${rest:2}"
         ;;
-      "'")
-        rest2="${rest:1}"
-        if [[ "$rest2" == *\'* ]]; then
-          body="${rest2%%\'*}"
-          rest="${rest2#*\'}"
-          if [[ "$out" =~ $ARGC ]]; then out+="'$body'"; else out+="''"; fi
+      "'" | '"')
+        rest="${rest:1}"
+        if [ "$ch" = '"' ] || [ "${out: -1}" = '$' ]; then
+          close_escaped "$ch" || return 0
         else
-          out+="$rest"
-          rest=""
+          [[ "$rest" == *\'* ]] || return 0
+          body="${rest%%\'*}"
+          rest="${rest#*\'}"
         fi
-        ;;
-      '"')
-        rest2="${rest:1}"
-        body=""
-        found=0
-        while :; do
-          pre="${rest2%%[\"\\\\]*}"
-          [ "$pre" = "$rest2" ] && break
-          body+="$pre"
-          rest2="${rest2:${#pre}}"
-          c="${rest2:0:1}"
-          if [ "$c" = '"' ]; then
-            found=1
-            rest2="${rest2:1}"
-            break
-          fi
-          body+="${rest2:0:2}"
-          rest2="${rest2:2}"
-        done
-        if [ "$found" = 1 ]; then
-          rest="$rest2"
-          if [[ "$out" =~ $ARGC || "$body" == *'$('* ]]; then out+="\"$body\""; else out+='""'; fi
-        else
-          out+="$rest"
-          rest=""
+        keep=0
+        if [ "$ch" = '"' ] && [[ "$body" == *'$('* ]]; then
+          # Unbalanced parentheses mean a quote inside the `$(` ended the string early.
+          opens="${body//[^(]/}"
+          closes="${body//[^)]/}"
+          [ "${#opens}" = "${#closes}" ] || return 0
+          keep=1
+        elif [[ "$body" =~ $PLAIN_WORD ]]; then
+          keep=1
+        elif [[ "$out" =~ $ARGC && ! "$body" =~ $GIT_CONFIG ]]; then
+          keep=1
         fi
+        [ "$keep" = 1 ] || body="$BLANK"
+        out+="$ch$body$ch"
         ;;
       '<')
         if [[ "$rest" == '<<<'* ]]; then
           out+="<<<"
           rest="${rest:3}"
         elif [[ "$rest" =~ $HEREDOC ]]; then
-          e="${BASH_REMATCH[0]}"
-          if feeds_shell "$out"; then c=keep; else c=drop; fi
-          pend+=("$c:${BASH_REMATCH[1]}:${BASH_REMATCH[3]}")
-          out+="$e"
-          rest="${rest:${#e}}"
+          # One pend entry per heredoc: `-` or `.` (leading tabs stripped or not), then the
+          # delimiter with its quoting removed.
+          word="${BASH_REMATCH[2]}"
+          pend+=("${BASH_REMATCH[1]:-.}${word//$DELIM_QUOTING/}")
+          out+="${BASH_REMATCH[0]}"
+          rest="${rest:${#BASH_REMATCH[0]}}"
+        elif [[ "$rest" == '<<'* ]]; then
+          return 0
         else
           out+="<"
           rest="${rest:1}"
         fi
         ;;
       '#')
-        c="${out: -1}"
-        case "$c" in
+        case "${out: -1}" in
           '' | ' ' | $'\t' | $'\n' | ';' | '&' | '|' | '(')
             if [[ "$rest" == *$'\n'* ]]; then rest=$'\n'"${rest#*$'\n'}"; else rest=""; fi
             ;;
@@ -159,26 +187,22 @@ strip_quoted() {
         esac
         ;;
       $'\n')
+        keep=0
+        if [ "${#pend[@]}" -gt 0 ] && feeds_shell "${out##*$'\n'}"; then keep=1; fi
         out+=$'\n'
         rest="${rest:1}"
-        for e in "${pend[@]}"; do
+        for word in "${pend[@]}"; do
           body=""
-          found=0
-          rest2="$rest"
-          while [ -n "$rest2" ]; do
-            line="${rest2%%$'\n'*}"
-            if [ "$line" = "$rest2" ]; then rest2=""; else rest2="${rest2#*$'\n'}"; fi
-            c="$line"
-            [[ "$e" == *:-:* ]] && c="${line#"${line%%[!$'\t']*}"}"
-            if [ "$c" = "${e##*:}" ]; then
-              found=1
-              break
-            fi
+          while :; do
+            [ -n "$rest" ] || return 0
+            line="${rest%%$'\n'*}"
+            if [ "$line" = "$rest" ]; then rest=""; else rest="${rest#*$'\n'}"; fi
+            pre="$line"
+            [ "${word:0:1}" = - ] && pre="${line#"${line%%[!$'\t']*}"}"
+            [ "$pre" = "${word:1}" ] && break
             body+="$line"$'\n'
           done
-          [ "$found" = 1 ] || break
-          [[ "$e" == keep:* ]] && out+="$body"
-          rest="$rest2"
+          [ "$keep" = 1 ] && out+="$body"
         done
         pend=()
         ;;
@@ -189,13 +213,14 @@ strip_quoted() {
 
 segment_hits() {
   local -a toks
+  local seg="${1//[<>]/ }"
   # shellcheck disable=SC2206
-  toks=(${1//$QUOTES/})
+  toks=(${seg//$QUOTES/})
   local i n=${#toks[@]} tok
   for ((i = 0; i < n; i++)); do
-    tok="${toks[i]}"
+    tok="${toks[i]#\\}"
     case "$tok" in
-      -* | *=* | [0-9]* | '!') continue ;;
+      -* | *=* | [0-9]* | '!' | "$BLANK") continue ;;
     esac
     case "${tok##*/}" in
       env | command | exec | sudo | time | nohup | uv | uvx | run | python* | \

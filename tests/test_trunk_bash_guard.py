@@ -54,6 +54,30 @@ ASKING = [
     "python3.12 -m nox -t fix",
     "uv run --frozen \\\n  nox -t fix",
     "git \\\n  commit -m x",
+    "git commit>/dev/null -m x",
+    "\\git commit -m x",
+    # Strings that are commands, or hold one.
+    'eval "git push"',
+    'bash -lc "nox -t fix"',
+    'out="$(cd "$ROOT" && git push 2>&1)"',
+    'echo "$(echo "hi"; git push)"',
+    # Heredocs a shell reads.
+    "bash <<'EOF'\ngit commit -m x\nEOF",
+    "cat <<EOF | bash\ngit push\nEOF",
+    # A blanked or quoted word must not move or hide the words around it.
+    'git -C "$ROOT" commit -m x',
+    'git -C "/a b" push',
+    'git --git-dir "$X/.git" commit',
+    'git -c "user.name=A B" commit -m x',
+    'git "commit" -m x',
+    '"$ROOT/.venv/bin/nox" -t fix',
+    '"$HOME/my dir"/.venv/bin/nox -t fix',
+    'sudo -u "a b" git push',
+    # Text before the command that a naive scan pairs wrongly: each of these once blanked the
+    # command between a stray apostrophe and the next real quote.
+    "cat <<\\EOF > f\nit's\nEOF\ngit commit -m 'msg'",
+    "cat <<'E-O-F' > f\nit's\nE-O-F\ngit commit -m 'msg'",
+    "echo $'it\\'s'; git commit -m 'x'",
 ]
 
 SILENT = [
@@ -80,6 +104,13 @@ SILENT = [
     "echo $((1<<2)) # nox",
     "grep -nF 'git push origin trunk' notes.txt",
     'grep -rn "nox -s tests" docs | head -3',
+    # A quoted single word stays visible, and is still only an argument here.
+    'git log --grep "commit"',
+    'bd update lode-1 --notes "nox"',
+    # Heredoc delimiters and strings the scan must pair correctly to stay silent.
+    "cat <<\\EOF\ngit push\nEOF\nls",
+    "cat <<'E-O-F'\nit's nox\nE-O-F\nls 'a b'",
+    "echo $'x\\'; nox; \\''",
 ]
 
 
@@ -282,6 +313,9 @@ def test_wrapper_is_posix_shell_compatible() -> None:
     [
         "python3 -c 'o = \"`uv run nox -t fix`\"'",
         'bd update x --notes "$(echo; nox)"',
+        # The scan gives up on the inner quotes, so the whole command is matched unstripped.
+        'bd update x --notes "$(cat <<\'EOF\'\nprose "quoted" here\nnox gates green\nEOF\n)"',
+        "echo 'unterminated; nox",
     ],
 )
 def test_script_keeps_the_documented_false_asks(ro_trunk: Path, command: str) -> None:

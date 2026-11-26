@@ -7619,17 +7619,21 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
 - **jq.** The guard reads `tool_input.command`, so `lode-p8zl` ruling 3 (no jq) cannot hold for it;
   it follows the three older Bash guards' deny-everything-when-jq-is-missing wrapper (`lode-oii9`).
 - **Lander exemption (option 1 of the escalation).** `/land` runs unattended on `trunk` in the main
-  checkout and itself merges, commits `--no-verify`, pushes and re-gates there. An `ask` forces a prompt that the
-  classifier does not decide, so the unattended loop would stall. Sources (RULING 2): the hooks doc
-  (https://code.claude.com/docs/en/hooks) says "In auto mode, a PreToolUse hook's "ask" normally
-  sends the tool call to the permission prompt, and the classifier doesn't decide it.", and the
-  permission-modes doc (https://code.claude.com/docs/en/permission-modes) says auto mode "still
-  shows you those prompts" when an ask rule or a hook forces them. Neither page states in one
-  sentence how a hook `ask` ranks against a `permissions.allow` rule in default mode, so the
-  ticket's "even over `permissions.allow`" is read from those two sentences, not quoted. Replay
-  of 757 past `/land` Bash calls from the main checkout: 130 matched the as-built guard, and all
-  130 ran between a land-lock acquire and its release, so the lock exemption covers every one.
-  The guard is therefore silent when the branch is `trunk` AND
+  checkout and itself merges, commits `--no-verify`, pushes and re-gates there. An `ask` forces a
+  prompt that the classifier does not decide, so the unattended loop would stall. Sources
+  (RULING 2): the hooks doc (https://code.claude.com/docs/en/hooks) says "In auto mode, a
+  PreToolUse hook's "ask" normally sends the tool call to the permission prompt, and the classifier
+  doesn't decide it.", and the permission-modes doc
+  (https://code.claude.com/docs/en/permission-modes) says auto mode "still shows you those prompts"
+  when an ask rule or a hook forces them. Both quotes were re-read on the live pages at review.
+  Neither page states in one sentence how a hook `ask` ranks against a `permissions.allow` rule in
+  default mode, so the ticket's "even over `permissions.allow`" is read from those two sentences,
+  not quoted. Replay of 757 past `/land` Bash calls from the main checkout: 130 matched the
+  as-built guard. RULING 2 says all 130 ran between a land-lock acquire and its release; the
+  review's own check by session order found 121, the other 9 being `bd` calls made after the
+  release whose quoted prose mentions a command. The final guard matches 119 of the 757 and all
+  119 ran between an acquire and its release, so the lock exemption covers every one. The guard is
+  therefore silent when the branch is `trunk` AND
   `scripts/land-lock.sh held` reports a live lock. `held` is a new read-only subcommand; it and
   `acquire` call the same `lock_staleness` function, so the two cannot disagree about which lock is
   live. A stale lock does not exempt.
@@ -7645,19 +7649,32 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
   `trunk` is exempt too. This bends `lode-8uh71`'s "never tell a subagent from the main session"
   point on purpose. "Holds" means the record is live, not that a pass is running: a pass that dies
   without releasing leaves the guard silent on `trunk` until the record ages out, up to
-  `LAND_LOCK_STALE_SECONDS` after its last heartbeat.
+  `LAND_LOCK_STALE_SECONDS` after its last heartbeat. A record with no readable age (an empty or
+  cut-off `land.lock`) never ages out: `acquire` skips every tick and `held` reports it live, so
+  the guard stays silent until someone deletes the file. Not ruled on; `held` reads such a record
+  as live because `acquire` does, and `acquire` does because a heartbeat's rewrite can be caught
+  half-written (follow-up `lode-409kw`).
 - **Quote-aware matching (RULING 2).** The first build matched quoted text and heredoc bodies like
-  commands, on the reasoning that a false ask is cheap. Replay of 2,014 past main-checkout Bash
-  calls showed 40 non-`/land` asks, only 12 of them a real trunk merge, push or `nox`: 28 were
-  false (14 of them in `/sweep`, which pastes ticket prose into `bd` calls). The matcher now
-  ignores heredoc bodies, the contents of quoted strings and comments, except (i) a quoted string
-  that is the argument of `-c` or `eval` and (ii) a heredoc body whose command line names bash,
-  sh, dash or zsh. A double-quoted string holding `$(` is also kept, and a quote or heredoc the
-  scan cannot pair leaves the rest of the command unstripped: both only add asks. Replay of the
-  final guard over the same 2,014 calls, run from a trunk checkout with no lock held: 15 non-`/land`
-  asks (12 real trunk merge/push/`nox`, 2 real commits in a scratch repo reached by `cd $D`, 1
-  `python3 -c` string quoting a `nox` command) and 119 `/land` asks. The 11 `/land` calls that no
-  longer ask are all `bd`, `cat`, `grep` or `bd-docs-nit.sh` calls whose quoted prose or heredoc mentions a command, none a
-  real trunk write. The script header's KNOWN LIMITS lists the false asks, the misses (a command in
-  backticks inside double quotes, a heredoc fed to a shell through a pipe) and which leading `cd`
-  is followed.
+  commands, on the reasoning that a false ask is cheap. RULING 2's replay of 2,014 past
+  main-checkout Bash calls showed 40 non-`/land` asks, only 12 of them a real trunk merge, push or
+  `nox`: 28 were false (14 of them in `/sweep`, which pastes ticket prose into `bd` calls). The
+  matcher now ignores heredoc bodies, the contents of quoted strings and comments, except (i) a
+  quoted string that is the argument of `-c` or `eval` and (ii) a heredoc body whose command line
+  names bash, sh, dash or zsh. A double-quoted string holding `$(` is also kept.
+  - **Changed at the second review, because blanking a string must not hide a real command.** As
+    built, a blanked string vanished from the word list, so `git -C "$ROOT" commit` and
+    `"$ROOT/.venv/bin/nox" -t fix` stopped asking; and a quote the scan paired wrongly (an
+    apostrophe in a heredoc whose delimiter it did not recognise, a `$'it\'s'` string, a quote
+    inside `"$(...)"`) blanked the command that followed. Now a blanked string leaves a one-word
+    placeholder, a string that is one plain word stays as written, any heredoc delimiter is
+    recognised, and when the scan cannot pair something the WHOLE command is matched unstripped
+    rather than only the text after that point.
+  - **Replay of the final guard** over the same 2,014 calls, run from a trunk checkout with no lock
+    held: 15 non-`/land` asks (12 real trunk merge/push/`nox`, 2 real commits in a scratch repo
+    reached by `cd $D`, 1 `python3 -c` string quoting a `nox` command) and 119 `/land` asks, the
+    same calls before and after the second review's changes. The 11 `/land` calls that no longer
+    ask are all `bd`, `cat`, `grep` or `bd-docs-nit.sh` calls whose quoted prose or heredoc
+    mentions a command, none a real trunk write (each read at review).
+  - The script header's KNOWN LIMITS lists the false asks, the misses that remain (an unknown word
+    before the command, a command in backticks inside double quotes, wrong pairs that come out
+    even) and which leading `cd` is followed.
