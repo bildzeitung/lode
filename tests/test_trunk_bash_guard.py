@@ -18,7 +18,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from _gitrepo import _git, os_env
+from _gitrepo import _git, git_env, os_env
 from _hookharness import SH, pretooluse_hook, run_hook
 from test_land_lock import _fault_env, _write_stale_lock
 from test_land_lock import _run as _land_lock
@@ -343,3 +343,71 @@ def test_script_exits_zero_on_malformed_shell_text(
     ro_trunk: Path, command: str
 ) -> None:
     _asks(command, ro_trunk)
+
+
+# --- a rebase of trunk stopped on a conflict (lode-3cxzs) ---------------------------------------
+
+
+def _stop_rebase_on_conflict(repo: Path, *, onto: str, apply: bool = False) -> None:
+    """Leave `repo` mid-rebase of trunk: a conflicting commit on `other`, rebased from trunk."""
+    (repo / "f.txt").write_text("base\n")
+    _git(repo, "add", "f.txt")
+    _git(repo, "commit", "-q", "-m", "base")
+    _git(repo, "checkout", "-q", "-b", onto)
+    (repo / "f.txt").write_text("other\n")
+    _git(repo, "commit", "-q", "-am", "other")
+    _git(repo, "checkout", "-q", "trunk")
+    (repo / "f.txt").write_text("trunk\n")
+    _git(repo, "commit", "-q", "-am", "trunk")
+    args = ["rebase", "-q", *(["--apply"] if apply else []), onto]
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        env=git_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0, "the rebase was meant to stop on a conflict"
+
+
+@pytest.mark.parametrize("apply", [False, True])
+@pytest.mark.parametrize(
+    "command", ["git rebase --continue", "git commit -am x", "nox -t fix"]
+)
+def test_stopped_rebase_of_trunk_asks(
+    tmp_path: Path, command: str, apply: bool
+) -> None:
+    repo = _init_repo(tmp_path / "repo", branch="trunk")
+    _stop_rebase_on_conflict(repo, onto="other", apply=apply)
+    assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "HEAD"
+    assert _asks(command, repo)
+
+
+def test_stopped_rebase_of_another_branch_is_silent(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo", branch="trunk")
+    (repo / "f.txt").write_text("base\n")
+    _git(repo, "add", "f.txt")
+    _git(repo, "commit", "-q", "-m", "base")
+    _git(repo, "checkout", "-q", "-b", "feat")
+    (repo / "f.txt").write_text("feat\n")
+    _git(repo, "commit", "-q", "-am", "feat")
+    _git(repo, "checkout", "-q", "trunk")
+    (repo / "f.txt").write_text("trunk\n")
+    _git(repo, "commit", "-q", "-am", "trunk")
+    _git(repo, "checkout", "-q", "feat")
+    proc = subprocess.run(
+        ["git", "rebase", "-q", "trunk"],
+        cwd=repo,
+        env=git_env(),
+        capture_output=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    assert not _asks("git rebase --continue", repo)
+
+
+def test_plain_detached_head_is_silent(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo", branch="trunk")
+    _git(repo, "checkout", "-q", "--detach")
+    assert not _asks("git commit -am x", repo)

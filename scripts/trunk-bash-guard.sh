@@ -51,10 +51,11 @@
 #     see as one (`#` straight after `)`) holding two apostrophes around a command.
 #   - NOT MATCHED: every other git subcommand, history-writing ones included (`git reset`,
 #     `git stash`, `git am`, `git revert` and the like): outside the ruled scope.
-#   - MID-REBASE: while a rebase of trunk is stopped (a conflict, an `edit` step) HEAD is detached,
-#     so the branch reads `HEAD`, not `trunk`, and every command is silent, `git rebase --continue`
-#     and `git commit` included. A stopped cherry-pick keeps HEAD on trunk and still asks.
-#     Whether to close this is lode-3cxzs.
+#   - MID-REBASE: while a rebase of trunk is stopped (a conflict, an `edit` step) HEAD is detached
+#     and the branch reads `HEAD`; the gate then reads rebase-merge/head-name and
+#     rebase-apply/head-name and treats refs/heads/trunk as trunk (lode-3cxzs), so every guarded
+#     command asks, including during a maintainer's own approved rebase. Any other detached HEAD
+#     stays silent.
 #   - CWD: only a LEADING `cd <dir>` (ended by &&, ; or a newline) is followed when picking the
 #     cwd whose branch is checked, and only when <dir> is a literal path or starts with `~`; a
 #     target that is not an existing directory (a variable, a typo), a later cd, `git -C <dir>`
@@ -273,6 +274,16 @@ if [[ "$CMD" =~ $LEADING_CD ]]; then
 fi
 
 branch="$(git -C "$DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+if [ "$branch" = "HEAD" ]; then
+  # A rebase stopped on trunk detaches HEAD; the branch being rebuilt is named in head-name.
+  gitdir="$(git -C "$DIR" rev-parse --absolute-git-dir 2>/dev/null || true)"
+  for f in "$gitdir/rebase-merge/head-name" "$gitdir/rebase-apply/head-name"; do
+    if [ -f "$f" ] && [ "$(cat "$f" 2>/dev/null)" = "refs/heads/trunk" ]; then
+      branch=trunk
+      break
+    fi
+  done
+fi
 [ "$branch" = "trunk" ] || exit 0
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

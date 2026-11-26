@@ -7706,3 +7706,12 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
     its record to a temporary file and only then creates `land.lock`, so it can no longer leave a
     partial one. A hand edit is the only known remaining source of a record with no readable age.
     The reading is still not ruled on.
+
+  - **Update (lode-3cxzs, maintainer ruling 2026-11-25):** the MID-REBASE limit above is closed,
+    option (b). When `git rev-parse --abbrev-ref HEAD` prints `HEAD`, both `trunk-bash-guard.sh`
+    and `trunk-write-guard.sh` also read `rebase-merge/head-name` and `rebase-apply/head-name`
+    under the git dir and treat `refs/heads/trunk` as trunk, so `git rebase --continue`,
+    `git commit`, `git push`, `nox` and Edit/Write ask while a rebase of trunk is stopped. The cost
+    is that they also ask during the maintainer's own approved rebase of trunk; the guards are
+    Claude Code hooks, so that cost lands only on Claude's tool calls, which is the case to stop.
+    Any other detached HEAD stays silent.

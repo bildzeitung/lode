@@ -33,7 +33,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from _gitrepo import _git
+from _gitrepo import _git, git_env
 from _hookharness import SH, pretooluse_hook, run_hook
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -165,3 +165,49 @@ def test_wrapper_is_posix_shell_compatible() -> None:
         [SH, "-n", "-c", hook], capture_output=True, text=True, timeout=30, check=False
     )
     assert proc.returncode == 0, proc.stderr
+
+
+def test_script_asks_while_a_rebase_of_trunk_is_stopped(tmp_path: Path) -> None:
+    # lode-3cxzs: a stopped rebase detaches HEAD, so the branch gate alone would stay silent.
+    repo = tmp_path / "repo"
+    _init_repo(repo, branch="trunk")
+    env = git_env()
+    for args in (
+        ["checkout", "-q", "-b", "other"],
+        ["commit", "-q", "--allow-empty", "-m", "other"],
+        ["checkout", "-q", "trunk"],
+        ["commit", "-q", "--allow-empty", "-m", "trunk"],
+    ):
+        _git(repo, *args)
+    (repo / "f.txt").write_text("trunk\n")
+    _git(repo, "add", "f.txt")
+    _git(repo, "commit", "-q", "-m", "t2")
+    _git(repo, "checkout", "-q", "other")
+    (repo / "f.txt").write_text("other\n")
+    _git(repo, "add", "f.txt")
+    _git(repo, "commit", "-q", "-m", "o2")
+    _git(repo, "checkout", "-q", "trunk")
+    proc = subprocess.run(
+        ["git", "rebase", "-q", "other"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert proc.returncode != 0, "the rebase was meant to stop on a conflict"
+    out = subprocess.run(
+        [str(SCRIPT)], cwd=repo, capture_output=True, text=True, timeout=30, check=False
+    )
+    assert out.returncode == 0, out.stderr
+    assert '"permissionDecision": "ask"' in out.stdout
+
+
+def test_script_silent_on_a_plain_detached_head(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo, branch="trunk")
+    _git(repo, "checkout", "-q", "--detach")
+    out = subprocess.run(
+        [str(SCRIPT)], cwd=repo, capture_output=True, text=True, timeout=30, check=False
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == ""
