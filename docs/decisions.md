@@ -7695,9 +7695,9 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
     `lode-409kw` landed, `heartbeat` stages the record in a temp file and renames it over
     `land.lock`: a reader sees the old record or the new one, and a heartbeat that fails or is
     killed leaves the previous record in place. The known remaining sources of a record with no
-    readable age are a hand edit and an `acquire` cut off mid-create. When this was written,
-    `write_lock` made the file before filling it: a killed `acquire` left a 0-byte `land.lock`
-    that the next `acquire` skipped and `held` reported live (run at review). `lode-7ruca` covers
-    that; it was open, its fix built but not landed. How `acquire` and `held` read such a record
-    is unchanged and still not ruled on: the maintainer note on `lode-409kw` (2026-11-25) says
-    only "No change to held/acquire's reading of an unreadable record is ruled".
+    readable age are a hand edit and an `acquire` cut off mid-create: when this was written,
+    `write_lock` made the file before filling it, and a killed `acquire` left a 0-byte `land.lock`
+    (run at review). `lode-7ruca` covers that; it was open, its fix built but not landed. How
+    `acquire` and `held` read such a record is unchanged and still not ruled on: the maintainer
+    note on `lode-409kw` (2026-11-25) says only "No change to held/acquire's reading of an
+    unreadable record is ruled".
