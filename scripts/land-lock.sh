@@ -376,7 +376,7 @@
 #       (scripts/trunk-bash-guard.sh). That hook stays silent on `trunk`
 #       while this exits 0, so the staleness window has a second consumer:
 #       a pass whose heartbeats lapse past it is prompted at its own next
-#       commit/merge/push/nox, and a pass that dies without `release`
+#       command the hook matches, and a pass that dies without `release`
 #       leaves the hook silent until the record ages out.
 # heartbeat <own-token>: re-stamps the lock this pass already holds, so the
 #            staleness check measures idle time from the LAST heartbeat

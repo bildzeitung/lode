@@ -49,8 +49,12 @@
 #     body that no shell reads, is taken out with the text around it. Wrong pairs that still come
 #     out even are not noticed: `"note :) $(echo "x"; git push)"`, or a comment the scan does not
 #     see as one (`#` straight after `)`) holding two apostrophes around a command.
-#   - NOT COVERED by ruling: `git pull` (also `pull --rebase`), `git reset`, `git stash`, `git am`,
-#     `git revert`. `git rebase` and `git cherry-pick` ask like commit/merge/push (lode-u4ea7).
+#   - NOT MATCHED: `git pull` (also `pull --rebase`), left out by ruling (above); and `git reset`,
+#     `git stash`, `git am` and `git revert`, which no ruling has put in scope.
+#   - MID-REBASE: while a rebase of trunk is stopped (a conflict, an `edit` step) HEAD is detached,
+#     so the branch reads `HEAD`, not `trunk`, and every command is silent, `git rebase --continue`
+#     and `git commit` included. A stopped cherry-pick keeps HEAD on trunk and still asks.
+#     Whether to close this is lode-3cxzs.
 #   - CWD: only a LEADING `cd <dir>` (ended by &&, ; or a newline) is followed when picking the
 #     cwd whose branch is checked, and only when <dir> is a literal path or starts with `~`; a
 #     target that is not an existing directory (a variable, a typo), a later cd, `git -C <dir>`

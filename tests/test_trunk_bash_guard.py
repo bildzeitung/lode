@@ -1,7 +1,8 @@
 """Tests for scripts/trunk-bash-guard.sh and its committed PreToolUse(Bash) wrapper (lode-21sxk).
 
 Extends lode-p8zl's Edit|Write trunk guard to Bash calls that run `git commit`, `git merge`,
-`git push` or `nox` on a cwd whose branch is trunk. The maintainer rulings (ask never deny,
+`git push`, `git rebase`, `git cherry-pick` (the last two by lode-u4ea7) or `nox` on a cwd whose
+branch is trunk; `git pull` stays silent by ruling. The maintainer rulings (ask never deny,
 gate on the branch, the /land lock exemption and its accepted limit) are recorded in
 docs/decisions.md (lode-21sxk) and the script header, not restated here. `land-lock.sh held`
 itself is tested in tests/test_land_lock.py.
@@ -38,6 +39,8 @@ ASKING = [
     'git -c "user.name=A B" rebase main',
     "git add a && git cherry-pick abc123",
     "\\git rebase main",
+    "git cherry-pick>/dev/null abc123",
+    "git cherry-pick --continue",
     "git -C /some/where push",
     "git -c user.name=x commit -m x",
     "nox -t fix",
@@ -95,6 +98,9 @@ SILENT = [
     "git pull",
     "git pull --rebase",
     "git -C /some/where pull --rebase origin trunk",
+    "git -c pull.rebase=true pull",
+    # An option's value that spells a subcommand is not the subcommand.
+    "git -C rebase status",
     "echo git rebase; echo git cherry-pick",
     "ls -la",
     "bd update lode-1 --notes 'git commit later'",

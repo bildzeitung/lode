@@ -7684,7 +7684,14 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
     branch, ask never deny, silent under a live `/land` lock) and the same matcher, so the `-C` /
     `-c` option skipping, quoted words and backslash-prefixed `git` apply to them unchanged. `git
     pull` stays silent on purpose: the main session pulls on `trunk` routinely and would be
-    prompted constantly. Read at build: no `/land` or `/sweep` flow runs `git rebase` or `git
-    cherry-pick` (the only mentions in `land/SKILL.md` and `sweep/SKILL.md` are prose that forbids
-    `pull --rebase`), so the lock exemption has nothing new to cover. The header's KNOWN LIMITS
-    now names the subcommands that are not covered (`pull`, `reset`, `stash`, `am`, `revert`).
+    prompted constantly. Read at build, and again at review with a grep of `.claude/` and
+    `scripts/`: no `/land` or `/sweep` flow, and no script, runs `git rebase` or `git cherry-pick`
+    (`land/SKILL.md` names `pull --rebase` only to forbid it; every other hit in the two skill files
+    is prose about the `needs-rebase` kick-back), so the lock exemption has nothing new to cover.
+    The header's KNOWN LIMITS now names the subcommands that are not matched (`pull`, `reset`,
+    `stash`, `am`, `revert`). Limit found at review, run in a scratch repo: while a rebase of
+    `trunk` is stopped on a conflict, `HEAD` is detached, the branch gate reads `HEAD` rather than
+    `trunk`, and every guarded command is silent, `git rebase --continue` and `git commit`
+    included. A stopped cherry-pick keeps `HEAD` on `trunk` and still asks. The gate behaved this
+    way for commit, push and `nox` before this ticket; the header states the limit, and whether to
+    close it is `lode-3cxzs`.

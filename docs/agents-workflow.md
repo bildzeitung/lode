@@ -1079,8 +1079,10 @@ rulings and rationale: [`docs/decisions.md`](decisions.md)
 (`uv run --frozen python scripts/docs_index_query.py "lode-p8zl"`).
 
 The Bash-side counterpart is `scripts/trunk-bash-guard.sh` (lode-21sxk), a fourth `PreToolUse(Bash)`
-hook that asks the same way when a command runs `git commit`, `git merge`, `git push` or `nox` from a
-cwd on `trunk` — the commit or `nox -t fix` reformat that the `Edit|Write` hook cannot see. It needs
+hook that asks the same way when a command runs `git commit`, `git merge`, `git push`, `git rebase`,
+`git cherry-pick` (the last two by `lode-u4ea7`) or `nox` from a cwd on `trunk` — the commit or
+`nox -t fix` reformat that the `Edit|Write` hook cannot see. `git pull` is left silent on purpose:
+the main session pulls on `trunk` routinely. It needs
 `jq` (it reads `tool_input.command`), so it denies every Bash call when `jq` is missing, like its
 three siblings. A live `/land` single-lander lock (`scripts/land-lock.sh held`) exempts it, so the
 unattended `/loop /land` pass is not stalled; a stale lock does not, so a pass whose last heartbeat
