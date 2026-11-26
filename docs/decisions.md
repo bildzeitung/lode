@@ -7678,3 +7678,14 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
   - The script header's KNOWN LIMITS lists the false asks, the misses that remain (an unknown word
     before the command, a command in backticks inside double quotes, wrong pairs that come out
     even) and which leading `cd` is followed.
+
+  - **Update (lode-u4ea7, maintainer ruling 2026-11-25, from the second review's finding 8):**
+    `git rebase` and `git cherry-pick` also ask on `trunk`, under the same contract and the same
+    matcher. `git pull` stays silent on purpose: the main session pulls on `trunk` routinely and
+    would be prompted constantly. The lock exemption has nothing new to cover: read at build and
+    grepped at review (`.claude/`, `scripts/`), no `/land` or `/sweep` flow and no script runs
+    either command (`land/SKILL.md` names `pull --rebase` only to forbid it). Limit found at
+    review, run in a scratch repo: a rebase of `trunk` stopped on a conflict detaches `HEAD`, so
+    the branch gate reads `HEAD` and every guarded command is silent until the rebase ends. The
+    gate behaved this way before this ticket. The header's KNOWN LIMITS has the detail; whether to
+    close it is `lode-3cxzs`.

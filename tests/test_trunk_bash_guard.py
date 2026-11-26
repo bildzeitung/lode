@@ -1,10 +1,10 @@
 """Tests for scripts/trunk-bash-guard.sh and its committed PreToolUse(Bash) wrapper (lode-21sxk).
 
-Extends lode-p8zl's Edit|Write trunk guard to Bash calls that run `git commit`, `git merge`,
-`git push` or `nox` on a cwd whose branch is trunk. The maintainer rulings (ask never deny,
-gate on the branch, the /land lock exemption and its accepted limit) are recorded in
-docs/decisions.md (lode-21sxk) and the script header, not restated here. `land-lock.sh held`
-itself is tested in tests/test_land_lock.py.
+Extends lode-p8zl's Edit|Write trunk guard to Bash calls that run the commands the script header
+names, on a cwd whose branch is trunk. The maintainer rulings (ask never deny, gate on the
+branch, the /land lock exemption and its accepted limit) are recorded in docs/decisions.md
+(lode-21sxk) and the script header, not restated here. `land-lock.sh held` itself is tested in
+tests/test_land_lock.py.
 
 Two layers, like tests/test_trunk_write_guard.py: SCRIPT-LEVEL tests drive the script directly;
 HOOK-LEVEL tests drive the one-liner from the committed `.claude/settings.json` through
@@ -31,6 +31,11 @@ ASKING = [
     "git commit --no-verify -m x",
     "git merge --no-ff land/lode-abc",
     "git push origin trunk",
+    "git rebase origin/trunk",
+    "git cherry-pick abc123",
+    "git -C /some/where rebase -i HEAD~2",
+    "git -c user.name=x cherry-pick -x abc123",
+    "git add a && git cherry-pick abc123",
     "git -C /some/where push",
     "git -c user.name=x commit -m x",
     "nox -t fix",
@@ -85,12 +90,16 @@ SILENT = [
     "git diff",
     "git add a",
     "git fetch origin",
+    "git pull",
+    "git pull --rebase",
     "ls -la",
     "bd update lode-1 --notes 'git commit later'",
     "echo git push",
     "uv run --frozen python scripts/x.py",
     "uv run --frozen pytest -m 'not slow'",
     "scripts/handoff-sha.sh lode-1 review_head",
+    # An option's value that spells a subcommand is not the subcommand.
+    "git -C rebase status",
     # Real shapes from the lode-21sxk replay that the quote-aware matcher silences.
     'bd update lode-1 --append-notes "gates: fix green; nox -s unit green; git push later"',
     "bd update lode-1 --notes 'MAINTAINER RULING: run nox -t fix\nthen git commit; git push'",
@@ -224,7 +233,13 @@ def test_leading_cd_to_an_unresolvable_target_falls_back_to_the_hook_cwd(
 
 def test_live_land_lock_exempts_trunk(trunk_repo: Path) -> None:
     _live_lock(trunk_repo)
-    for command in ("git merge --no-ff land/x", "git push origin trunk", "nox -t fix"):
+    for command in (
+        "git merge --no-ff land/x",
+        "git push origin trunk",
+        "git rebase origin/trunk",
+        "git cherry-pick abc123",
+        "nox -t fix",
+    ):
         assert not _asks(command, trunk_repo), command
 
 
