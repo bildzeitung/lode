@@ -1245,10 +1245,9 @@ def test_uncreatable_lock_reports_a_machine_fault_not_another_lander(
 # The counter is deliberately NOT under $GIT_COMMON_DIR (see land-lock.sh's own
 # comment beside LAND_LOCK_FAULT_COUNT_FILE) -- it lives under $TMPDIR, so every
 # test here overrides TMPDIR to a directory under its own tmp_path, where
-# `_fault_count_path` can name the exact file the script counts in. What keeps
-# the real machine-wide counter (a concurrent test run's, or a real /land
-# loop's on the same box) out of reach is conftest's `_isolate_tmpdir`, for
-# every test in the suite, not this override.
+# `_fault_count_path` can name the exact file the script counts in. Isolation
+# from the real machine-wide counter (a concurrent test run's, or a real /land
+# loop's on the same box) is conftest's `_isolate_tmpdir`, for the whole suite.
 # ---------------------------------------------------------------------------
 
 
@@ -1256,6 +1255,9 @@ def test_uncreatable_lock_reports_a_machine_fault_not_another_lander(
 #: -- _fault_env and _fault_count_path must never disagree about it, or an
 #: `assert not ...exists()` would pass against a path the script never writes.
 _FAULT_TMPDIR_NAME = "fault-tmpdir"
+
+#: land-lock.sh's LAND_LOCK_FAULT_COUNT_FILE, relative to $TMPDIR.
+_FAULT_COUNT_NAME = "lode-land-lock-fault-count"
 
 
 def _fault_env(tmp_path: Path) -> dict[str, str]:
@@ -1265,7 +1267,7 @@ def _fault_env(tmp_path: Path) -> dict[str, str]:
 
 
 def _fault_count_path(tmp_path: Path) -> Path:
-    return tmp_path / _FAULT_TMPDIR_NAME / "lode-land-lock-fault-count"
+    return tmp_path / _FAULT_TMPDIR_NAME / _FAULT_COUNT_NAME
 
 
 def _faulty_repo_and_env(tmp_path: Path) -> tuple[Path, dict[str, str]]:
@@ -2106,7 +2108,7 @@ def test_suite_redirects_tmpdir_so_acquire_leaves_the_real_fault_counter_alone(
         f"$TMPDIR is {redirected}, not a throwaway under pytest's base temp: an acquire "
         "here would delete the machine-wide land-lock fault counter (lode-8flnd)"
     )
-    sentinel = redirected / "lode-land-lock-fault-count"
+    sentinel = redirected / _FAULT_COUNT_NAME
     sentinel.write_text("2\n")
     repo = _init_repo(tmp_path)
 

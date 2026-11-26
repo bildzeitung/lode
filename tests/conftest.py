@@ -659,8 +659,7 @@ def _isolate_tmpdir(
     # scripts/land-lock.sh keeps its machine-wide consecutive-MACHINE-FAULT counter at
     # ${TMPDIR:-/tmp}/lode-land-lock-fault-count and deletes it on every successful acquire, so
     # any test running that script with the inherited TMPDIR would zero a real /land loop's
-    # counter (lode-8flnd). Redirect TMPDIR for every test; tests that need a specific one
-    # still override it through their subprocess env.
+    # counter (lode-8flnd).
     #
     # Covers a subprocess whose env is copied from os.environ while a test runs. NOT covered:
     # an env built at import (a module-level `fake_bin_env(...)`) keeps the inherited TMPDIR,
