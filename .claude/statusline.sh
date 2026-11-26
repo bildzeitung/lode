@@ -185,12 +185,21 @@ if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
                 elif hasl("ready-for-code-review")           then "review"
                 elif .status == "in_progress"                then "build"
                 else empty end;
-            reduce (.[] | stage) as $s ({}; .[$s] += 1)
+            # nits: pending NIT notes on OPEN docs-nits collectors, counted
+            # the same way as scripts/bd-docs-nit.sh count ((?m) is
+            # load-bearing there too). A claimed (in_progress) collector is
+            # already visible as build: via the stage ladder, so it is not
+            # counted again here.
+            def nits:
+                [ .[] | select(hasl("docs-nits") and .status == "open")
+                  | (.notes // "") | [scan("(?m)^NIT")] | length ] | add // 0;
+            nits as $n
+            | reduce (.[] | stage) as $s ({}; .[$s] += 1)
             | [ (.build // 0), (.review // 0), (.land // 0),
-                (.rebase // 0), (.human // 0) ] | join(" ")
+                (.rebase // 0), (.human // 0), $n ] | join(" ")
         ' "$cache" 2>/dev/null)
         if [ -n "$counts" ]; then
-            read -r build review land rebase human <<< "$counts"
+            read -r build review land rebase human nits <<< "$counts"
             # in_progress with no live agent backing it is stale -> mark "?".
             stale=""; [ "${build:-0}" -gt 0 ] && [ "${live_agents:-0}" -eq 0 ] && stale="?"
             segs=()
@@ -199,6 +208,7 @@ if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
             [ "${land:-0}"   -gt 0 ] && segs+=("land:${land}")
             [ "${rebase:-0}" -gt 0 ] && segs+=("rebase:${rebase}")
             [ "${human:-0}"  -gt 0 ] && segs+=("!human:${human}")
+            [ "${nits:-0}"   -gt 0 ] && segs+=("nits:${nits}")
             [ ${#segs[@]} -gt 0 ] && pipeline_part="${segs[*]}"
         fi
     fi
