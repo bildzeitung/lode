@@ -7689,3 +7689,12 @@ Ruling source: `lode-8uh71` (maintainer, 2026-11-25), plus the maintainer ruling
     the branch gate reads `HEAD` and every guarded command is silent until the rebase ends. The
     gate behaved this way before this ticket. The header's KNOWN LIMITS has the detail; whether to
     close it is `lode-3cxzs`.
+
+  - **Update (lode-v62sn, 2026-11-26):** the "Accepted limit" bullet's reason for `acquire`'s
+    reading, "a heartbeat's rewrite can be caught half-written", no longer holds. Since
+    `lode-409kw` landed, `heartbeat` stages the record in a temp file and renames it over
+    `land.lock`, so it cannot leave a partial record. An unreadable record can still come from an
+    `acquire` cut off mid-create (`write_lock` makes the file before filling it; `lode-7ruca`,
+    still open when this was written, run and confirmed a 0-byte `land.lock` that never ages out)
+    or from a hand edit. How `acquire` and `held` read such a record is still not ruled on; the
+    maintainer note on `lode-409kw` (2026-11-25) rules no change to it.
