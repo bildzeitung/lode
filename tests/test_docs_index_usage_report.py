@@ -441,8 +441,8 @@ def test_scan_keeps_a_quoted_command_substitution_intact(tmp_path: Path) -> None
 
 
 def test_scan_survives_an_unbalanced_quote(tmp_path: Path) -> None:
-    """(vii) A line shlex cannot tokenize is classified whole rather than
-    dropped or crashing the scan (lode-wtk2)."""
+    """(vii) A command whose quote never closes is still classified rather
+    than dropped or crashing the scan (lode-wtk2)."""
     _write_transcript(
         tmp_path / "proj" / "s1.jsonl",
         [
@@ -710,12 +710,25 @@ def test_classify_keeps_the_lines_after_a_hash_or_an_open_quote(
         ('bd create --description="see; grep -n foo docs/design.md"', None),
         # A '#' mid-word is not a comment.
         ("echo $#; grep -n foo docs/design.md", "direct"),
-        # A heredoc opener inside a quoted argument opens no heredoc.
+        # A heredoc opener inside a quoted argument or a comment opens no
+        # heredoc.
         ("python3 -c '\nprint(1 << 3)\n'\ngrep x docs/design.md", "direct"),
+        ('python3 -c "print(1 << 3)"\ngrep x docs/design.md', "direct"),
+        ("# see <<EOF\ngrep x docs/design.md", "direct"),
         (
             "cat > x <<'EOF'\ngrep y docs/design.md\nEOF\ngrep z docs/design.md",
             "direct",
         ),
+        # A heredoc inside a double-quoted command substitution is one: its
+        # body is dropped, so a quote in it exposes no command and hides none.
+        (
+            'git c -m "$(cat <<\'EOF\'\nan "a\ngrep x docs/design.md\nb" c\nEOF\n)"',
+            None,
+        ),
+        ('echo "$(cat <<EOF\nan odd " here\nEOF\n)"; grep x docs/design.md', "direct"),
+        # A quote never closed hides a heredoc opener after it; the fallback
+        # still drops that body.
+        ("echo $'it\\'s'\ncat > x <<EOF\ngrep y docs/design.md\nEOF", None),
     ],
 )
 def test_classify_reads_escaped_and_mid_word_quotes_like_the_shell(

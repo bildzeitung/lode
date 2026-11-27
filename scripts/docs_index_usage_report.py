@@ -108,7 +108,8 @@ _SED_INPLACE_RE = re.compile(r"\bsed\b[^|;&\n]*(?:-[A-Za-z]*i\b|--in-place)")
 #: ``<<<`` (a herestring, which has no body) is excluded by the lookahead.
 _HEREDOC_OPEN_RE = re.compile(r"(?<!<)<<(?!<)(-?)\s*([\'\"]?)(\w+)\2")
 
-
+#: What :func:`_mask_line` writes over a comment's text. Not a blank, so
+#: :func:`_split_segments` can tell a comment from quoted text and drop it.
 _COMMENT = "\0"
 
 
@@ -122,6 +123,12 @@ def _mask_line(line: str, quote: str) -> tuple[str, str]:
     comment's text. A ``#`` opens a comment only at the start of a word, so
     ``$#`` and ``a#b`` do not. Quote delimiters are kept; the result has the
     line's length, so an index into it is an index into ``line``.
+
+    A command substitution is not followed: ``"$(...)"`` is quoted text. The
+    one thing kept from it is a ``<`` inside a double quote after a ``$(`` on
+    the same line, so the heredoc opener of ``"$(cat <<'EOF'`` stays visible
+    to :func:`_strip_heredoc_bodies`. ANSI-C quoting is read as a single
+    quote, so the ``\\'`` in ``$'it\\'s'`` closes it.
     """
     out = list(line)
     i = 0
@@ -134,7 +141,7 @@ def _mask_line(line: str, quote: str) -> tuple[str, str]:
         if quote:
             if char == quote:
                 quote = ""
-            else:
+            elif not (char == "<" and quote == '"' and "$(" in line[:i]):
                 out[i] = " "
         elif char in "'\"":
             quote = char
@@ -145,7 +152,9 @@ def _mask_line(line: str, quote: str) -> tuple[str, str]:
     return "".join(out), quote
 
 
-def _strip_heredoc_bodies(command: str) -> tuple[list[str], list[str]]:
+def _strip_heredoc_bodies(
+    command: str, carry_quotes: bool = True
+) -> tuple[list[str], list[str]]:
     """The command's lines with every heredoc BODY removed -- the lines
     between a ``<<WORD`` opener and its terminating ``WORD`` line, the
     terminator included -- each paired with its :func:`_mask_line` mask. The
@@ -157,12 +166,15 @@ def _strip_heredoc_bodies(command: str) -> tuple[list[str], list[str]]:
     split into segments and one body line classified as a genuine direct read
     (lode-wtk2). Delimiters opened on one line are consumed in order, and a
     ``<<-`` body may indent its terminator. An opener inside a quoted
-    argument (``python3 -c 'print(1 << 3)'``) opens nothing. A body is not
-    scanned for quotes, so its apostrophes open none.
+    argument (``python3 -c 'print(1 << 3)'``) opens nothing, except the one
+    :func:`_mask_line` keeps: ``"$(cat <<'EOF'``, whose body is dropped like
+    any other. A body is not scanned for quotes, so its apostrophes open none.
 
     If a quote is still open at the end, where it went wrong is unknown, so
-    the masks are redone one physical line at a time. Each mask ends in the
-    line's break: a newline, or a blank when a quote carries across it.
+    the whole strip is redone with ``carry_quotes`` off: every physical line
+    starts unquoted, and an opener the stray quote hid is found. Each mask
+    ends in the line's break: a newline, or a blank when a quote carries
+    across it.
     """
     kept: list[str] = []
     masks: list[str] = []
@@ -175,6 +187,8 @@ def _strip_heredoc_bodies(command: str) -> tuple[list[str], list[str]]:
                 pending.pop(0)
             continue
         mask, quote = _mask_line(line, quote)
+        if not carry_quotes:
+            quote = ""
         kept.append(line)
         masks.append(mask + (" " if quote else "\n"))
         pending.extend(
@@ -183,7 +197,7 @@ def _strip_heredoc_bodies(command: str) -> tuple[list[str], list[str]]:
             if mask[m.start()] == "<"
         )
     if quote:
-        masks = [_mask_line(line, "")[0] + "\n" for line in kept]
+        return _strip_heredoc_bodies(command, carry_quotes=False)
     return kept, masks
 
 
