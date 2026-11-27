@@ -7994,6 +7994,38 @@ one is taken, B: the retire condition rests on it.
   - **Update (lode-fg7w7.3, 2026-11-27):** proposal C's "Not checked: whether it covers what the
     re-assertions check" is now checked, read from the scripts: partly. See the entry "Fold the
     deterministic guard-script ritual into fewer tool calls" (`lode-fg7w7.3`) below.
+  - **Update (lode-fg7w7, maintainer ruling 2026-11-27, from a `/challenge` of the epic):** the
+    retire condition above is made exact, and it changes. All of it is recorded on `lode-fg7w7`
+    and `lode-fg7w7.2`.
+    - **One window, not two.** B is measured once, on the existing transcripts. The falsifier's
+      "not stable across two windows" no longer applies, so the outcome rests on one 13-day,
+      one-machine run.
+    - **A hard 50% line.** Below 50% of id-less queries followed means retire; 50% or more
+      means keep. There is no grey zone. B records the number as an Update marker here and files
+      a `human` ticket to confirm it and, if it triggers, to carry out the retire.
+    - **The snippet case.** A hand-read sample of at least 40 id-less index calls (raised from
+      20; at 20 the margin is about ±11 points) is classified by hand. A call answered from the
+      snippet alone counts as a follow, and the 50% line applies to that corrected rate. This
+      replaces "an answer taken from the snippet counts as no follow" in proposal B.
+    - **What a follow is.** The read must overlap a cited range. It can be an explicit range read
+      (`sed -n a,b`, the `Read` tool with offset and limit, an `awk` `NR` range, `head` or
+      `tail`), or a whole-file read (`Read` with no range, or `cat`) of a cited file. A `grep`
+      alone does not count. Paths match as `docs/<file>`, whichever checkout or git ref they
+      come from. The read must come within the next 5 tool-call positions, and calls made in
+      parallel in one turn count as one position. A read credits every index call whose window
+      it falls in and whose own cited range it overlaps; a re-query gets no special case. The
+      cited ranges are every printed `path:lo-hi` plus the Update-marker lines a `NOTE` names.
+      The denominator is id-less calls with at least one hit. Zero-hit calls and calls with no
+      saved output are left out, and their counts are reported.
+    - **A probe before the ruling.** 192 id-less calls; any read of a `docs/` range before a
+      re-query counted, with no overlap check. The upper bounds were 30% at N=1, 41% at N=3, 45%
+      at N=5, 52% at N=10 and 55% at N=20. At N=5 the raw rate is therefore likely below 50%, and
+      the snippet correction will probably decide the verdict. The maintainer saw these numbers
+      and was warned not to tune the parameters to the verdict. They were chosen for what they
+      mean.
+    - **Proposal A.** Its optional "print the `sed -n` line" is dropped: it would raise the follow
+      rate by design. The zero-hit message checks a local `git grep` of `trunk` as well as `bd`,
+      since a stale worktree base is the likely cause of the zero-hit lookups above.
 
 ## docs-index usage report: count each tool call once, and classify an index call by segment (lode-yt7q2)
 
