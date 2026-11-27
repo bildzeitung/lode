@@ -661,7 +661,7 @@ _MULTILINE_QUOTE = 'python3 -c "\nprint(1)\n";'
             "index",
         ),
         (_MULTILINE_QUOTE + " grep -n lode-x docs/decisions.md", "direct"),
-        ('python3 -c "\ngrep x docs/a.md\n"', None),
+        ('python3 -c "\ngrep x docs/design.md\n"', None),
         ('python3 -c "\nuv run python scripts/docs_index_query.py x\n"', None),
     ],
 )
