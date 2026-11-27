@@ -1742,6 +1742,7 @@ The read-only allowlist:
   list|view`, `gh repo view`, `gh label list`;
 - **gh's repo-*admin* surface, read-only forms** (`lode-9l3d`) — `gh run list|view`, `gh workflow
   list|view`, `gh secret|variable|ssh-key|gpg-key|cache list`;
+- **GitHub search** — `gh search repos|issues|prs|code|commits`;
 - **`gh api`, allowed only on a positive read test** — see below.
 
 Everything else that reaches `gh` at a command position is denied **because it is absent from this

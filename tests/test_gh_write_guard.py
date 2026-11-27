@@ -294,6 +294,12 @@ ALLOWED = [
     "gh ssh-key list",
     "gh gpg-key list",
     "gh cache list",
+    # -- gh search: every subcommand is a read of public GitHub search --
+    'gh search repos "textual textarea" --limit 8',
+    "gh search issues --repo o/r flaky",
+    "gh search prs is:open",
+    "gh search code TextAreaTheme",
+    "gh search commits fix",
     "gh api repos/x/y/issues",  # no fields, no method: GET by default
     "gh api repos/x/y/issues -X GET",
     # Fields on an EXPLICIT GET are query params, not a body -- gh documents this as the way
