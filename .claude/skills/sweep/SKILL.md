@@ -32,9 +32,8 @@ and the decisions that shaped it — lives in the epic `lode-nps` and its childr
 ## How I'm triggered
 
 I take no arguments — there is nothing to scope to, I sweep the whole human-decision queue every
-pass. Typically invoked on demand as bare **`/sweep`**; it can also run
-self-paced as `/loop 30m /sweep` (escalations are exceptions and epics complete rarely, so a slow
-tick is fine).
+pass. Typically invoked on demand as bare **`/sweep`**; it can also run self-paced as
+`/loop 30m /sweep` (escalations are exceptions and epics complete rarely, so a slow tick is fine).
 
 ## Non-goals — hold the line
 

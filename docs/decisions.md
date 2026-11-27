@@ -7955,12 +7955,8 @@ one is taken, B: the retire condition rests on it.
     not taken. The maintainer chose this over plain KEEP so the verdict cannot outlive the
     measurement it rests on, and took C although it is outside the "agent inputs" question
     because it is the largest deterministic cost the data shows.
-
-  - **Update (lode-vly6z, 2026-11-26):** wording only, no claim changes. In the entry's
-    opening paragraph, "throwaway scripts of mine over the same transcripts" means the evaluator's
-    throwaway scripts over the same transcripts.
-  - **Update (lode-vly6z, 2026-11-26):** wording only, no claim changes. In the paragraph on the
-    zero-hit ids, "those I re-ran (lode-6pjf, lode-vlok, lode-xuoz)" means those
-    re-run while writing this entry.
-  - **Update (lode-vly6z, 2026-11-26):** wording only, no claim changes. In proposal D's cost
-    paragraph, "I did not measure tokens" means tokens were not measured.
+  - **Update (lode-vly6z, 2026-11-26):** wording only, no claim changes. Three first-person
+    phrases above are reworded: "throwaway scripts of mine" (opening paragraph) means the
+    evaluator's throwaway scripts, "those I re-ran" (the zero-hit ids bullet) means those re-run
+    while writing this entry, and "I did not measure tokens" (proposal D) means tokens were not
+    measured.
