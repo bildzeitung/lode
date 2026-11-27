@@ -647,3 +647,48 @@ def test_scan_index_marker_needs_an_invocation_not_a_mention(
         ],
     )
     assert [r["kind"] for r in scan(tmp_path)] == (["index"] if expected else [])
+
+
+_MULTILINE_QUOTE = 'python3 -c "\nprint(1)\n";'
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (
+            _MULTILINE_QUOTE
+            + ' uv run --frozen python scripts/docs_index_query.py "x"',
+            "index",
+        ),
+        (_MULTILINE_QUOTE + " grep -n lode-x docs/decisions.md", "direct"),
+        ('python3 -c "\ngrep x docs/design.md\n"', None),
+        ('python3 -c "\nuv run python scripts/docs_index_query.py x\n"', None),
+    ],
+)
+def test_classify_honours_quotes_across_newlines(
+    command: str, expected: str | None
+) -> None:
+    assert _report_module._classify("Bash", {"command": command}) == expected
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (
+            '# look it up\nuv run --frozen python scripts/docs_index_query.py "x"',
+            "index",
+        ),
+        ("ls -la  # list\ngrep -n foo docs/design.md", "direct"),
+        ("echo $#\ngrep -n foo docs/design.md", "direct"),
+        ("# don't\ncd x\ngrep y docs/design.md\n# it's fine", "direct"),
+        ('echo "unclosed\ngrep -n foo docs/design.md', "direct"),
+        ("# grep -n foo docs/design.md\nls", None),
+    ],
+)
+def test_classify_keeps_the_lines_after_a_hash_or_an_open_quote(
+    command: str, expected: str | None
+) -> None:
+    """A ``#`` -- a comment, or mid-word as in ``$#`` -- costs at most its
+    own line, an apostrophe in a comment opens no quote, and a quote never
+    closed falls back to one physical line at a time."""
+    assert _report_module._classify("Bash", {"command": command}) == expected

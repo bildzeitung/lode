@@ -64,8 +64,8 @@ _INDEX_SCRIPT_MARKER = "docs_index_query.py"
 _DIRECT_BASH_COMMANDS = frozenset({"grep", "sed", "head", "cat", "tail", "awk"})
 
 #: Separators that break one Bash command LINE into independent segments --
-#: ``;``, ``|``/``||``, ``&``/``&&``, and subshell grouping ``(``/``)`` (a
-#: newline is handled before this, by splitting the command into lines).
+#: ``;``, ``|``/``||``, ``&``/``&&``, and subshell grouping ``(``/``)`` (an
+#: unquoted newline is handled before this, by :func:`_logical_lines`).
 #: ``_classify`` used to judge a whole line at once (lode-wtk2): a genuine
 #: read piped into ``tee`` was excluded wholesale because the write check saw
 #: ``tee`` anywhere on the line, and a line merely pairing a docs path with
@@ -83,6 +83,12 @@ _DIRECT_BASH_COMMANDS = frozenset({"grep", "sed", "head", "cat", "tail", "awk"})
 #: :data:`_REDIRECT_TO_DOCS_RE` and the heredoc check need them to stay inside
 #: the segment they qualify.
 _SEGMENT_PUNCTUATION_CHARS = "();&|"
+
+#: To :func:`_logical_lines` a ``#`` opens a comment only at the start of a
+#: word: at the start of a line, or after whitespace or one of these
+#: separators. It does not take ``$#``, ``${x#y}`` or ``a#b`` for a comment;
+#: shlex in :func:`_split_line_segments` does, to the end of that line.
+_COMMENT_PRECEDERS = " \t" + _SEGMENT_PUNCTUATION_CHARS
 
 #: Argument-forwarding wrappers a real command name can follow -- same
 #: allowlist and same under-count-not-over-count rationale as lode-dozi's
@@ -110,7 +116,9 @@ def _split_line_segments(line: str) -> list[str]:
 
     A line shlex cannot tokenize at all (an unbalanced quote) is returned
     whole, which degrades that one line to the pre-``lode-wtk2`` line-level
-    behaviour rather than dropping it.
+    behaviour rather than dropping it. A line here is what
+    :func:`_split_segments` hands over, so it holds a newline wherever a
+    quoted argument spans one.
     """
     lexer = shlex.shlex(line, posix=False, punctuation_chars=_SEGMENT_PUNCTUATION_CHARS)
     lexer.whitespace_split = True
@@ -158,12 +166,53 @@ def _strip_heredoc_bodies(command: str) -> list[str]:
     return kept
 
 
+def _logical_lines(text: str) -> list[str]:
+    """``text`` split at every newline OUTSIDE quotes, so a newline inside a
+    multi-line quoted argument stays part of that argument and the closing
+    quote is not misread as an opening one (lode-k813a). A backslash-newline
+    continuation splits like any other unquoted newline. If a quote is still
+    open at the end, where it went wrong is unknown, so every newline splits.
+
+    Each piece is handed to shlex as its own line: shlex drops everything
+    from a ``#`` to the end of its line, so a comment or a mid-word ``#``
+    such as ``$#`` must not share a line with a later command. A comment's
+    own text is skipped here, as a shell skips it: an apostrophe in a comment
+    opens no quote.
+    """
+    lines: list[str] = []
+    start = 0
+    quote = ""
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char == "\\" and quote != "'" and text[i + 1 : i + 2] != "\n":
+            i += 2
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char == "#" and (i == start or text[i - 1] in _COMMENT_PRECEDERS):
+            end = text.find("\n", i)
+            i = len(text) if end == -1 else end
+            continue
+        elif char == "\n":
+            lines.append(text[start:i])
+            start = i + 1
+        i += 1
+    if quote:
+        return text.split("\n")
+    lines.append(text[start:])
+    return lines
+
+
 def _split_segments(command: str) -> list[str]:
     """Split a Bash command into independent segments -- heredoc bodies
-    stripped first, then on newlines, then on the in-line shell separators --
-    dropping any segment with no non-whitespace content."""
+    stripped first, then on unquoted newlines, then on the in-line shell
+    separators -- dropping any segment with no non-whitespace content."""
     segments: list[str] = []
-    for line in _strip_heredoc_bodies(command):
+    for line in _logical_lines("\n".join(_strip_heredoc_bodies(command))):
         segments.extend(_split_line_segments(line))
     return [seg for seg in segments if seg.strip()]
 
