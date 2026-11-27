@@ -31,6 +31,7 @@ flags those rows as fallback hits (``lode-qcp0``).
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import sqlite3
 import subprocess
@@ -257,12 +258,17 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     return markers(entry[0], section[1] if section else entry[1])
 
 
-#: A query that is exactly one bd issue id (``lode-k813a``, ``lode-fg7w7.1``).
-_BD_ID = re.compile(r"[a-z][a-z0-9]*-[a-z0-9]+(?:\.[0-9]+)*")
+#: A query that is exactly one of this repo's bd issue ids (``lode-k813a``,
+#: ``lode-fg7w7.1``). The prefix is the ``issue-prefix`` pinned in
+#: ``.beads/config.yaml``, so an ordinary hyphenated word is never looked up.
+_BD_ID = re.compile(r"lode-[a-z0-9]+(?:\.[0-9]+)*")
 
-#: Hard cap on each subprocess of the zero-hit id check; the query itself
-#: takes ~80 ms, so a hung bd (a Dolt lock) must not noticeably delay it.
+#: Hard cap on each subprocess of the zero-hit id check. ``bd show`` takes
+#: over a second, and far longer while another process holds the Dolt lock.
 _ID_CHECK_TIMEOUT_S = 5
+
+#: The ref a new worktree is branched from, so the one a stale checkout lags.
+_TRUNK_REF = "origin/trunk"
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -288,29 +294,49 @@ def zero_hit_id_note(raw_query: str) -> str | None:
 
     Tells the caller to stop searching docs/: either the id has an entry on
     ``origin/trunk`` that this checkout predates (a worktree's base lags), or
-    it exists in bd with no docs entry, or it does not exist in bd. Never
-    depends on bd being reachable: any failure of either probe yields ``None``
-    and the caller prints the plain ``No results.``
+    it exists in bd with no docs entry, or it is not in the local bd database.
+    Never depends on git or bd being reachable: a failure or timeout of either
+    probe yields ``None`` and the caller prints the plain ``No results.``
     """
     bd_id = raw_query.strip()
     if not _BD_ID.fullmatch(bd_id):
         return None
-    grep = _run(["git", "grep", "-l", "-F", "-e", bd_id, "origin/trunk", "--", "docs/"])
-    if grep is not None and grep.returncode == 0 and grep.stdout.strip():
+    # ``-w`` and the top-level ``*.md`` pathspec hold this probe to what the
+    # index matches: a whole id, in the files it chunks.
+    pathspec = ":(glob)docs/*.md"
+    grep = _run(["git", "grep", "-l", "-w", "-F", "-e", bd_id, _TRUNK_REF, "--", pathspec])
+    # Exit 1 is "no match"; any other failure (128: no such ref) says nothing
+    # about trunk's docs, so the bd answer below would claim too much.
+    if grep is None or grep.returncode not in (0, 1):
+        return None
+    if grep.returncode == 0:
         files = ", ".join(
-            line.removeprefix("origin/trunk:") for line in grep.stdout.split()
+            line.removeprefix(f"{_TRUNK_REF}:") for line in grep.stdout.splitlines()
         )
         return (
-            f"{bd_id} has a docs entry on origin/trunk ({files}) that this "
-            f"checkout predates; read it with `git show origin/trunk:<file>`."
+            f"{bd_id} has a docs entry on {_TRUNK_REF} ({files}) that this "
+            f"checkout predates; find its lines with "
+            f"`git grep -n -w -F {bd_id} {_TRUNK_REF} -- docs/`."
         )
-    shown = _run(["bd", "show", bd_id, "--json"])
+    # ``--readonly``: a lookup must never write bd state, and a bd killed at
+    # the timeout must not be mid-write.
+    shown = _run(["bd", "--readonly", "show", bd_id, "--json"])
     if shown is None:
         return None
-    if shown.returncode == 0:
+    missing = f"{bd_id} does not exist in the local bd database"
+    if shown.returncode != 0:
+        if "no issues found" in shown.stdout + shown.stderr:
+            return f"{missing}."
+        return None
+    # bd resolves a unique partial id, so exit 0 alone does not prove this id.
+    try:
+        found = [issue["id"] for issue in json.loads(shown.stdout)]
+    except (ValueError, TypeError, KeyError):  # fmt: skip
+        return None
+    if bd_id in found:
         return f"{bd_id} exists in bd but no docs/ entry mentions it; see `bd show {bd_id}`."
-    if "no issues found" in shown.stdout + shown.stderr:
-        return f"{bd_id} does not exist in bd."
+    if found:
+        return f"{missing}; bd resolves it to {', '.join(found)}."
     return None
 
 
