@@ -673,3 +673,66 @@ def test_split_entry_markers_in_an_oversized_h1_section_of_a_log_with_no_h2(
         assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
             [own_line] if u.line_hi <= own_line else []
         )
+
+
+def _fake_run(
+    monkeypatch: pytest.MonkeyPatch, grep: tuple[int, str], bd: tuple[int, str] | None
+) -> None:
+    """Stub the id-check subprocesses; ``bd=None`` simulates bd unavailable."""
+    import subprocess
+
+    def fake(args: list[str]) -> subprocess.CompletedProcess[str] | None:
+        rc, out = grep if args[0] == "git" else (bd if bd else (None, ""))
+        if rc is None:
+            return None
+        return subprocess.CompletedProcess(args, rc, out, "")
+
+    monkeypatch.setattr(_query_module, "_run", fake)
+
+
+def test_zero_hit_bare_id_exists_in_bd(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_run(monkeypatch, (1, ""), (0, "[{}]"))
+    result = runner.invoke(app, ["lode-zzzzz"])
+    assert "No results." in result.stdout
+    assert "exists in bd but no docs/ entry" in result.stdout
+
+
+def test_zero_hit_bare_id_missing_from_bd(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_run(monkeypatch, (1, ""), (1, '{"error": "no issues found matching"}'))
+    result = runner.invoke(app, ["lode-zzzzz"])
+    assert "does not exist in bd" in result.stdout
+
+
+def test_zero_hit_bare_id_on_origin_trunk(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_run(monkeypatch, (0, "origin/trunk:docs/decisions.md\n"), (0, "[{}]"))
+    result = runner.invoke(app, ["lode-zzzzz"])
+    assert "origin/trunk (docs/decisions.md)" in result.stdout
+    assert "exists in bd" not in result.stdout
+
+
+def test_zero_hit_bare_id_falls_back_when_bd_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_run(monkeypatch, (1, ""), None)
+    result = runner.invoke(app, ["lode-zzzzz"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "No results."
+
+
+def test_zero_hit_non_id_query_gets_no_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_run(monkeypatch, (1, ""), (0, "[{}]"))
+    result = runner.invoke(app, ["zzz not an id zzz"])
+    assert result.stdout.strip() == "No results."
+
+
+def test_run_returns_none_when_the_subprocess_hangs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+
+    def hang(*_a: object, **kw: object) -> None:
+        assert kw["timeout"] == _query_module._ID_CHECK_TIMEOUT_S
+        raise subprocess.TimeoutExpired("bd", 5)
+
+    monkeypatch.setattr(subprocess, "run", hang)
+    assert _query_module._run(["bd", "show", "x"]) is None

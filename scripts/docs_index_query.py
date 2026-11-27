@@ -31,7 +31,9 @@ flags those rows as fallback hits (``lode-qcp0``).
 from __future__ import annotations
 
 import importlib.util
+import re
 import sqlite3
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -255,6 +257,63 @@ def split_entry_markers(path: str, line_lo: int, line_hi: int) -> list[int]:
     return markers(entry[0], section[1] if section else entry[1])
 
 
+#: A query that is exactly one bd issue id (``lode-k813a``, ``lode-fg7w7.1``).
+_BD_ID = re.compile(r"[a-z][a-z0-9]*-[a-z0-9]+(?:\.[0-9]+)*")
+
+#: Hard cap on each subprocess of the zero-hit id check; the query itself
+#: takes ~80 ms, so a hung bd (a Dolt lock) must not noticeably delay it.
+_ID_CHECK_TIMEOUT_S = 5
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _run(args: list[str]) -> subprocess.CompletedProcess[str] | None:
+    """Run ``args`` in the repo with a hard timeout; ``None`` when the tool is
+    missing, hangs, or cannot start, so every caller falls back quietly."""
+    try:
+        return subprocess.run(
+            args,
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=_ID_CHECK_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):  # fmt: skip
+        return None
+
+
+def zero_hit_id_note(raw_query: str) -> str | None:
+    """For a zero-hit query that is a bare bd id, a line saying why, else ``None``.
+
+    Tells the caller to stop searching docs/: either the id has an entry on
+    ``origin/trunk`` that this checkout predates (a worktree's base lags), or
+    it exists in bd with no docs entry, or it does not exist in bd. Never
+    depends on bd being reachable: any failure of either probe yields ``None``
+    and the caller prints the plain ``No results.``
+    """
+    bd_id = raw_query.strip()
+    if not _BD_ID.fullmatch(bd_id):
+        return None
+    grep = _run(["git", "grep", "-l", "-F", "-e", bd_id, "origin/trunk", "--", "docs/"])
+    if grep is not None and grep.returncode == 0 and grep.stdout.strip():
+        files = ", ".join(
+            line.removeprefix("origin/trunk:") for line in grep.stdout.split()
+        )
+        return (
+            f"{bd_id} has a docs entry on origin/trunk ({files}) that this "
+            f"checkout predates; read it with `git show origin/trunk:<file>`."
+        )
+    shown = _run(["bd", "show", bd_id, "--json"])
+    if shown is None:
+        return None
+    if shown.returncode == 0:
+        return f"{bd_id} exists in bd but no docs/ entry mentions it; see `bd show {bd_id}`."
+    if "no issues found" in shown.stdout + shown.stderr:
+        return f"{bd_id} does not exist in bd."
+    return None
+
+
 def query(
     raw_query: str,
     doc_class: str | None = None,
@@ -362,6 +421,9 @@ def main(
                 )
     else:
         print("No results.")
+        note = zero_hit_id_note(text) if doc_class is None else None
+        if note:
+            print(note)
 
     # Logged AFTER the results are printed, and failing open: instrumentation
     # must never break or delay the thing it measures. An unwritable cache dir
