@@ -1,6 +1,6 @@
 ---
 name: sweep
-description: The third `/loop` leg — a SURFACE-ONLY human-decision surfacer. Scans bd for work that has stopped waiting on a human and nothing else consumes (`land-escalated` branches, `human`-labeled decision tickets that are not dependency-blocked, epics ready for a human close-decision), dedups against a durable cross-machine digest issue, and surfaces new items; every pass's report ends with the full "Actionable now" list of what's decidable right now (every current, non-deferred row, in full — not just the delta), and also lists every `deferred`-status ticket (§2a), every `in_progress` ticket claimed more than 24h ago that carries no pipeline label (§2b), every dependency-blocked `human`-labeled ticket (§2c), and every open docs-nits collector with its pending nit count (§2d) in its report each pass (read-only, no dedup, never in the digest) so parked, stranded, not-yet-decidable, and pending-nit work stays visible. Writes no `trunk`, makes no decisions, dispatches no builders/landers/auditors. Run self-paced as `/loop 30m /sweep`. Examples — "/sweep", "/loop 30m /sweep", "what needs a human decision right now?", "sweep the human-decision queue".
+description: The third `/loop` leg — a SURFACE-ONLY human-decision surfacer. Scans bd for work that has stopped waiting on a human and nothing else consumes (`land-escalated` branches, `human`-labeled decision tickets that are not dependency-blocked, epics ready for a human close-decision), dedups against a durable cross-machine digest issue, and surfaces new items; every pass's report ends with the full "Actionable now" list of what's decidable right now (every current, non-deferred row, in full — not just the delta), and also lists every `deferred`-status ticket (§2a), every `in_progress` ticket claimed more than 24h ago that carries no pipeline label (§2b), every dependency-blocked `human`-labeled ticket (§2c), and every open docs-nits collector with its pending nit count (§2d) in its report each pass (read-only, no dedup, never in the digest) so parked, stranded, not-yet-decidable, and pending-nit work stays visible. Writes no `trunk`, makes no decisions, dispatches no builders/landers/auditors. Typically invoked on demand; can also run as `/loop 30m /sweep`. Examples — "/sweep", "/loop 30m /sweep", "what needs a human decision right now?", "sweep the human-decision queue".
 ---
 
 # sweep
@@ -32,8 +32,8 @@ and the decisions that shaped it — lives in the epic `lode-nps` and its childr
 ## How I'm triggered
 
 I take no arguments — there is nothing to scope to, I sweep the whole human-decision queue every
-pass. Typically run self-paced as **`/loop 30m /sweep`** (escalations are exceptions and epics
-complete rarely, so a slow tick is fine), or invoked ad hoc as bare `/sweep`.
+pass. Typically invoked on demand as bare **`/sweep`**; it can also run self-paced as
+`/loop 30m /sweep` (escalations are exceptions and epics complete rarely, so a slow tick is fine).
 
 ## Non-goals — hold the line
 
