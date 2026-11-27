@@ -647,3 +647,25 @@ def test_scan_index_marker_needs_an_invocation_not_a_mention(
         ],
     )
     assert [r["kind"] for r in scan(tmp_path)] == (["index"] if expected else [])
+
+
+_MULTILINE_QUOTE = 'python3 -c "\nprint(1)\n";'
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (
+            _MULTILINE_QUOTE
+            + ' uv run --frozen python scripts/docs_index_query.py "x"',
+            "index",
+        ),
+        (_MULTILINE_QUOTE + " grep -n lode-x docs/decisions.md", "direct"),
+        ('python3 -c "\ngrep x docs/a.md\n"', None),
+        ('python3 -c "\nuv run python scripts/docs_index_query.py x\n"', None),
+    ],
+)
+def test_classify_honours_quotes_across_newlines(
+    command: str, expected: str | None
+) -> None:
+    assert _report_module._classify("Bash", {"command": command}) == expected

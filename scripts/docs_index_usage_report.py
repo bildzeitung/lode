@@ -162,10 +162,41 @@ def _split_segments(command: str) -> list[str]:
     """Split a Bash command into independent segments -- heredoc bodies
     stripped first, then on newlines, then on the in-line shell separators --
     dropping any segment with no non-whitespace content."""
+    lines = _strip_heredoc_bodies(command)
+    joined = _newlines_to_separators("\n".join(lines))
+    # A quote left open across the whole command cannot be honoured over
+    # newlines; fall back to splitting per physical line.
+    chunks = [joined] if joined is not None else lines
     segments: list[str] = []
-    for line in _strip_heredoc_bodies(command):
-        segments.extend(_split_line_segments(line))
+    for chunk in chunks:
+        segments.extend(_split_line_segments(chunk))
     return [seg for seg in segments if seg.strip()]
+
+
+def _newlines_to_separators(text: str) -> str | None:
+    """``text`` with every UNQUOTED newline replaced by ``;``, so a newline
+    inside a multi-line quoted argument stays part of that argument and the
+    closing quote is not misread as an opening one (lode-k813a). ``None`` if
+    a quote is still open at the end."""
+    out: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char == "\\" and quote != "'" and text[i + 1 : i + 2] not in ("", "\n"):
+            out.append(text[i : i + 2])
+            i += 2
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char == "\n":
+            char = ";"
+        out.append(char)
+        i += 1
+    return None if quote else "".join(out)
 
 
 def _segment_tokens(segment: str) -> list[str]:
