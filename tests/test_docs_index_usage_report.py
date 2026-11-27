@@ -4,7 +4,7 @@ baseline script (lode-dozi).
 Uses SYNTHETIC transcript fixtures under tmp_path -- never a real
 ~/.claude/projects transcript -- both to keep the test hermetic and because
 this script's whole point is to be pointed at a directory via
---projects-dir/`scan(projects_dir=...)`.
+--projects-dir/`scan(<dir>, ...)`.
 """
 
 import json
@@ -565,23 +565,33 @@ def test_scan_still_counts_a_read_after_a_heredoc_terminator(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     "layout",
     [
-        {"s1.jsonl": ["blob", "assistant"]},
-        {"s1.jsonl": ["assistant", "blob"]},
+        {"proj/s1.jsonl": ["blob", "assistant"]},
+        {"proj/s1.jsonl": ["assistant", "blob"]},
         # The same subagent transcript under two session directories, one copy
-        # holding only the api-request-blob line; either may sort first.
+        # carrying the call only on its api-request-blob line.
         {
-            "s1/subagents/agent-a.jsonl": ["blob"],
-            "s2/subagents/agent-a.jsonl": ["blob", "assistant"],
+            "proj/s1/subagents/agent-a.jsonl": ["blob"],
+            "proj/s2/subagents/agent-a.jsonl": ["blob", "assistant"],
         },
         {
-            "s1/subagents/agent-a.jsonl": ["assistant", "blob"],
-            "s2/subagents/agent-a.jsonl": ["blob"],
+            "proj/s1/subagents/agent-a.jsonl": ["assistant", "blob"],
+            "proj/s2/subagents/agent-a.jsonl": ["blob"],
         },
+        {"proj/s1.jsonl": ["blob"], "proj--worktree/s1.jsonl": ["assistant"]},
+    ],
+    ids=[
+        "blob-first",
+        "assistant-first",
+        "session-copy-blob-only-first",
+        "session-copy-blob-only-last",
+        "two-scanned-directories",
     ],
 )
 def test_scan_counts_a_tool_use_id_once_with_the_assistant_lines_day_and_role(
     tmp_path: Path, layout: dict[str, list[str]]
 ) -> None:
+    """Each top-level directory of ``layout`` is scanned as its own root, the
+    way ``report`` passes one per transcript directory in scope."""
     block = {
         "type": "tool_use",
         "id": "toolu_1",
@@ -599,8 +609,8 @@ def test_scan_counts_a_tool_use_id_once_with_the_assistant_lines_day_and_role(
         },
     }
     for name, kinds in layout.items():
-        _write_transcript(tmp_path / "proj" / name, [lines[k] for k in kinds])
-    rows = scan(tmp_path)
+        _write_transcript(tmp_path / name, [lines[k] for k in kinds])
+    rows = scan(*sorted(tmp_path.iterdir()))
     assert len(rows) == 1
     assert rows[0]["day"] == "2026-11-20"
     assert rows[0]["is_subagent"] is True

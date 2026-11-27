@@ -6247,8 +6247,7 @@ entries below from being rewritten to chase the current tree.)
   marker of the same id under the `lode-wtk2` entry below, and in the entry "docs-index: usage
   evaluation, verdict, and ranked agent-input alternatives" (`lode-a55l6`).
 
-  **Update (lode-yt7q2, 2026-11-26):** both defects behind the marker above (it points at the
-  marker that names them, under the `lode-wtk2` entry below) are fixed in
+  **Update (lode-yt7q2, 2026-11-26):** both defects behind the marker above are fixed in
   `docs_index_usage_report.py`; the 2026-09 figures stay unreliable, since they were produced
   before the fix and cannot be re-measured. See the entry "docs-index usage report: count each
   tool call once, and classify an index call by segment" (`lode-yt7q2`).
@@ -7973,24 +7972,22 @@ Fixes the two defects `lode-2e6x` found in `scripts/docs_index_usage_report.py`,
 `lode-a55l6` ruling. The mechanism is the ticket's, traced there in the code and measured on the
 2026-11 transcripts; this entry records the fix.
 
-- **Each tool call is counted once.** `scan()` now counts a `tool_use` id once across the whole
-  scan. Claude Code writes most assistant turns twice, an `assistant` line (timestamp, cwd)
+- **Each tool call is counted once.** `scan()` now counts a `tool_use` id once. Claude Code
+  writes most assistant turns twice, an `assistant` line (timestamp, cwd)
   and a timestamp-less, cwd-less `api-request-blob` line, so the timestamped copy is kept and with
   it the correct day and main-versus-subagent role. A block with no id is never merged. Dedupe on
   the id rather than on the line `type` so a further format change cannot bring the repeats back.
-  The dedupe spans transcripts rather than one file (changed at review): one subagent transcript
-  sits under three session directories on this machine, two of the copies carry its calls only
-  on `api-request-blob` lines, and a per-file dedupe left their 10 rows in the `unknown` day and
-  the `main` role. `report` still calls `scan()` once per transcript directory in scope, so an id
-  repeated across two of those directories would count twice; this machine's scope is one
-  directory.
+  The dedupe spans every transcript the report scans rather than one file (changed at review):
+  one subagent transcript sits under three session directories on this machine, two of the
+  copies carry its calls only on `api-request-blob` lines, and a per-file dedupe left their 10
+  rows in the `unknown` day and the `main` role.
 - **`index` is judged per Bash segment.** A segment counts only when its command is the script
   itself, or is `python*` or `uv` and the script is the word a `python*` word runs, with only
   options between the two. `sed`, `grep`, `bd` and `cat` naming the script, and
   `test_docs_index_query.py`, no longer count. Nor does the script handed as a file to what `uv
-  run` or `python` really runs (changed at review). The ticket's rule, "an interpreter or `uv`
+  run` or `python` really runs (changed at review): the ticket's rule, "an interpreter or `uv`
   with the script as an argument", still counted forms such as `uv run --frozen ruff format
-  scripts/docs_index_query.py` and `uv run --frozen python edit.py scripts/docs_index_query.py`:
+  scripts/docs_index_query.py` and `uv run --frozen python edit.py scripts/docs_index_query.py`,
   5 of the 285 calls it matched, none of which runs the index. The narrower rule misses `python
   -X importtime <script>` and `uv run <script>`; neither form is in the transcripts.
 - **Measured after the fix** (2026-11-27, transcripts 2026-11-14 to 2026-11-27, default scope):
