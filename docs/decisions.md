@@ -7976,6 +7976,24 @@ one is taken, B: the retire condition rests on it.
     evaluator's throwaway scripts, "those I re-ran" (the zero-hit ids bullet) means those re-run
     while writing this entry, and "I did not measure tokens" (proposal D) means tokens were not
     measured.
+  - **Update (lode-fg7w7.2, 2026-11-27):** proposal B is built and run, and the retire condition
+    is evaluated. Two maintainer rulings (the `/challenge` of 2026-11-27) shape it: one window is
+    enough, so the falsifier's "not stable across two windows" check no longer applies; and the
+    threshold is a hard 50% on the id-less pointer-follow rate, no grey zone, below it = retire.
+    `scripts/docs_index_usage_report.py` now prints the rate. A call is followed when one of the
+    next 5 tool calls in the same transcript (any tool; window set by `--window`) reads a range
+    overlapping a cited `path:lo-hi`, the cited ranges parsed from the call's recorded result and
+    paths normalized to `docs/<name>.md`. Counted reads: `Read` by offset/limit, and `cat`, `sed
+    -n a,bp`, `head`, `tail -n +K`, `awk NR` on a docs file; a `grep` has no range and does not
+    count, nor does an answer taken from the snippet. Zero-hit calls are outside the denominator.
+    An id query is one whose command contains a `lode-` word of 3-6 characters. On all projects'
+    transcripts, 2026-11 corpus: 290 index calls, 34 zero-hit; all queries 123 of 256 followed
+    (48%), **id-less queries 36 of 105 followed (34%)**, 14 more id-less calls zero-hit. Window 3
+    gives 31% and window 10 gives 38% for id-less. Of the 36, one is a whole-file read. A hand
+    read of 24 id-less cited calls found 6 followed, 18 not; of the 18 about 3 show use the metric
+    misses (a near-miss read of the same doc, a read in the same command as the query, a refined
+    re-query), so the rate undercounts by a few points, not 16. By the rule as ruled, 34% is below
+    50%: the retire condition is met. A `human` ticket carries the confirmation and any retire.
 
 ## docs-index usage report: count each tool call once, and classify an index call by segment (lode-yt7q2)
 

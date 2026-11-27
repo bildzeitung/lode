@@ -692,3 +692,136 @@ def test_classify_keeps_the_lines_after_a_hash_or_an_open_quote(
     own line, an apostrophe in a comment opens no quote, and a quote never
     closed falls back to one physical line at a time."""
     assert _report_module._classify("Bash", {"command": command}) == expected
+
+
+def _use(tid: str, name: str, tool_input: dict) -> dict:
+    return {
+        "message": {
+            "content": [
+                {"type": "tool_use", "id": tid, "name": name, "input": tool_input}
+            ]
+        }
+    }
+
+
+def _result(tid: str, text: str) -> dict:
+    return {
+        "message": {
+            "content": [{"type": "tool_result", "tool_use_id": tid, "content": text}]
+        }
+    }
+
+
+def _index_call(tid: str, query: str, result: str) -> list[dict]:
+    command = f'uv run --frozen python scripts/docs_index_query.py "{query}"'
+    return [_use(tid, "Bash", {"command": command}), _result(tid, result)]
+
+
+_CITES = (
+    "/wt/a/docs/stack.md:100-120  Title\n    snippet\n"
+    "/wt/a/docs/design.md:5-9  Other\n    snippet\n"
+)
+
+
+def _follow_rows(tmp_path: Path, entries: list[dict], window: int = 5) -> list[dict]:
+    _write_transcript(tmp_path / "proj" / "s.jsonl", entries)
+    return _report_module.scan_follow(tmp_path, window=window)
+
+
+@pytest.mark.parametrize(
+    ("follow_call", "status"),
+    [
+        (
+            (
+                "Read",
+                {"file_path": "/other/wt/docs/stack.md", "offset": 110, "limit": 5},
+            ),
+            "followed",
+        ),
+        (
+            ("Read", {"file_path": "/x/docs/stack.md", "offset": 121, "limit": 5}),
+            "not-followed",
+        ),
+        (("Bash", {"command": "sed -n 90,100p docs/stack.md"}), "followed"),
+        (("Bash", {"command": "sed -n 101,130p docs/stack.md"}), "followed"),
+        (("Bash", {"command": "sed -n 121,130p docs/stack.md"}), "not-followed"),
+        (("Bash", {"command": "head -n 50 docs/stack.md"}), "not-followed"),
+        (("Bash", {"command": "head -n 105 docs/stack.md"}), "followed"),
+        (("Bash", {"command": "awk 'NR>=118 && NR<=140' docs/stack.md"}), "followed"),
+        (
+            ("Bash", {"command": "awk 'NR>=121 && NR<=140' docs/stack.md"}),
+            "not-followed",
+        ),
+        (("Bash", {"command": "tail -n +119 docs/stack.md"}), "followed"),
+        (("Bash", {"command": "grep -n foo docs/stack.md"}), "not-followed"),
+        (("Bash", {"command": "sed -n 100,120p docs/storage.md"}), "not-followed"),
+    ],
+)
+def test_follow_requires_a_read_range_overlapping_a_cited_range(
+    tmp_path: Path, follow_call: tuple[str, dict], status: str
+) -> None:
+    entries = _index_call("i1", "retrieval pipeline", _CITES)
+    entries.append(_use("c1", *follow_call))
+    assert _follow_rows(tmp_path, entries)[0]["status"] == status
+
+
+def test_follow_window_and_row_kinds(tmp_path: Path) -> None:
+    def ls(prefix: str, count: int) -> list[dict]:
+        return [_use(f"{prefix}{n}", "Bash", {"command": "ls"}) for n in range(count)]
+
+    sed = {"command": "sed -n 100,110p docs/stack.md"}
+    entries = [
+        *_index_call("i1", "inside window", _CITES),
+        *ls("f", 3),
+        _use("r1", "Bash", sed),
+        *_index_call("i2", "outside window", _CITES),
+        *ls("g", 4),
+        _use("r2", "Bash", sed),
+        *_index_call("i3", "nothing", "No results."),
+        _use(
+            "i4",
+            "Bash",
+            {"command": 'python scripts/docs_index_query.py "lode-abc1"'},
+        ),
+        *_index_call("i5", "lode-t6o1 history", _CITES),
+        _use("r3", "Read", {"file_path": "docs/stack.md"}),
+    ]
+    rows = _follow_rows(tmp_path, entries, window=4)
+    assert [r["status"] for r in rows] == [
+        "followed",
+        "not-followed",
+        "zero-hit",
+        "no-result",
+        "followed",
+    ]
+    assert [r["idless"] for r in rows] == [True, True, True, False, False]
+    assert rows[4]["whole_file_only"] is True
+    assert rows[0]["whole_file_only"] is False
+
+    summary = _report_module.summarize_follow(rows)
+    assert summary["overall"]["cited"] == 3
+    assert summary["overall"]["followed"] == 2
+    assert summary["idless"]["cited"] == 2
+    assert summary["idless"]["followed"] == 1
+    assert summary["idless"]["rate"] == 0.5
+    assert summary["idless"]["zero_hit"] == 1
+
+
+def test_follow_counts_a_duplicated_call_once(tmp_path: Path) -> None:
+    entries = _index_call("i1", "dup", _CITES)
+    _write_transcript(tmp_path / "a" / "s.jsonl", entries)
+    _write_transcript(tmp_path / "b" / "s.jsonl", entries)
+    assert len(_report_module.scan_follow(tmp_path)) == 1
+
+
+def test_report_cli_prints_the_follow_rate_with_its_window(tmp_path: Path) -> None:
+    entries = _index_call("i1", "x y", _CITES)
+    entries.append(_use("c1", "Read", {"file_path": "docs/stack.md", "offset": 100}))
+    _write_transcript(tmp_path / "proj" / "s.jsonl", entries)
+    result = runner.invoke(
+        app,
+        ["--projects-dir", str(tmp_path), "--all-projects", "--window", "3"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "window: next 3 tool calls" in result.output
+    assert "id-less queries: 1/1 followed = 100%" in result.output

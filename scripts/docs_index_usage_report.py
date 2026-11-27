@@ -45,6 +45,7 @@ TRANSCRIPT-ENCODING CAVEATS (hit while writing this):
 from __future__ import annotations
 
 import json
+import math
 import re
 import shlex
 from collections import Counter, defaultdict
@@ -496,6 +497,264 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+#: How many tool calls after an index call may carry the read that counts as
+#: following it (lode-fg7w7.2). Calls are counted in transcript order, any
+#: tool, the index's own repeat calls included. One window only, by ruling.
+DEFAULT_FOLLOW_WINDOW = 5
+
+#: One cited row of the index's output: ``<path>:<lo>-<hi>``, any marker or
+#: title after it ignored. The path is that of the checkout that ran the
+#: query, so :func:`_docs_relpath` normalizes it before comparing.
+_CITED_RE = re.compile(r"^(\S+\.md):(\d+)-(\d+)", re.MULTILINE)
+
+#: A bd id anywhere in the index command marks an id query. Any ``lode-``
+#: word of 3-6 letters or digits matches, so a query naming ``lode-index``
+#: counts as an id query too; the over-match is accepted.
+_BD_ID_RE = re.compile(r"\blode-[a-z0-9]{3,6}\b", re.IGNORECASE)
+
+_SED_RANGE_RE = re.compile(r"^(\d+)(?:,(\d+|\$))?p$")
+_AWK_PAIR_RE = re.compile(r"NR\s*==\s*(\d+)\s*,\s*NR\s*==\s*(\d+)")
+_AWK_CMP_RE = re.compile(r"NR\s*(>=|>|<=|<|==)\s*(\d+)")
+
+_Range = tuple[int | float, int | float]
+
+
+def _docs_relpath(path: str) -> str | None:
+    """``path`` reduced to its ``docs/<name>.md`` tail, so a worktree path and
+    a main-checkout path name the same file; ``None`` for anything else."""
+    cut = path.rfind("docs/")
+    if cut == -1 or not path.endswith(".md"):
+        return None
+    return path[cut:]
+
+
+def _awk_ranges(program: str) -> list[_Range]:
+    pair = _AWK_PAIR_RE.search(program)
+    if pair:
+        return [(int(pair.group(1)), int(pair.group(2)))]
+    lo: int | float = 1
+    hi: int | float = math.inf
+    found = False
+    for op, num in _AWK_CMP_RE.findall(program):
+        n = int(num)
+        found = True
+        if op in (">=", "=="):
+            lo = max(lo, n)
+        if op == ">":
+            lo = max(lo, n + 1)
+        if op in ("<=", "=="):
+            hi = min(hi, n)
+        if op == "<":
+            hi = min(hi, n - 1)
+    return [(lo, hi)] if found else []
+
+
+def _head_count(args: list[str]) -> int:
+    for i, tok in enumerate(args):
+        if tok == "-n" and i + 1 < len(args) and args[i + 1].isdigit():
+            return int(args[i + 1])
+        if re.fullmatch(r"-n\d+|-\d+", tok):
+            return int(tok.lstrip("-n"))
+    return 10
+
+
+def _segment_line_ranges(name: str | None, tokens: list[str]) -> list[_Range]:
+    """The line ranges a ``cat``/``sed``/``head``/``tail``/``awk`` segment
+    reads, or ``[]`` when its range cannot be read off the command. A ``grep``
+    has no range and is never a follow."""
+    if name == "cat":
+        return [(1, math.inf)]
+    if name == "sed":
+        ranges: list[_Range] = []
+        for tok in tokens:
+            m = _SED_RANGE_RE.match(tok)
+            if m:
+                end = m.group(2)
+                lo = int(m.group(1))
+                ranges.append((lo, math.inf if end == "$" else int(end or lo)))
+        return ranges
+    if name == "head":
+        return [(1, _head_count(tokens))]
+    if name == "tail":
+        for tok in tokens:
+            if re.fullmatch(r"\+\d+", tok):
+                return [(int(tok[1:]), math.inf)]
+        return []
+    if name == "awk":
+        return [r for tok in tokens for r in _awk_ranges(tok)]
+    return []
+
+
+def _tool_reads(tool_name: str, tool_input: dict[str, Any]) -> list[tuple[str, _Range]]:
+    """``(docs path, line range)`` for every read of ``docs/*.md`` one tool
+    call makes: a ``Read`` by its offset and limit (absent = to the end), a
+    ``cat``/``sed``/``head``/``tail``/``awk`` segment by the range it names."""
+    reads: list[tuple[str, _Range]] = []
+    if tool_name == "Read":
+        rel = _docs_relpath(str(tool_input.get("file_path", "")))
+        if rel:
+            offset = tool_input.get("offset")
+            limit = tool_input.get("limit")
+            lo = offset if isinstance(offset, int) and offset > 0 else 1
+            hi = lo + limit - 1 if isinstance(limit, int) and limit > 0 else math.inf
+            reads.append((rel, (lo, hi)))
+    elif tool_name == "Bash":
+        command = str(tool_input.get("command", ""))
+        if not _mentions_docs_md(command):
+            return reads
+        for seg in _split_segments(command):
+            if _is_write_form(seg):
+                continue
+            tokens = _segment_tokens(seg)
+            paths = [rel for tok in tokens if (rel := _docs_relpath(tok))]
+            if not paths:
+                continue
+            ranges = _segment_line_ranges(_segment_command_name(seg), tokens)
+            reads.extend((p, r) for p in paths for r in ranges)
+    return reads
+
+
+def _iter_blocks(transcript_path: Path) -> Iterator[dict[str, Any]]:
+    """Every ``tool_use`` and ``tool_result`` block of a transcript, in file
+    order."""
+    try:
+        handle = transcript_path.open(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    with handle:
+        for line in handle:
+            if '"tool_use' not in line and '"tool_result"' not in line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            message = entry.get("message") if isinstance(entry, dict) else None
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if isinstance(item, dict) and item.get("type") in (
+                    "tool_use",
+                    "tool_result",
+                ):
+                    yield item
+
+
+def _result_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
+    return ""
+
+
+def _overlaps(cited: tuple[str, int, int], read: tuple[str, _Range]) -> bool:
+    path, lo, hi = cited
+    rpath, (rlo, rhi) = read
+    return path == rpath and lo <= rhi and rlo <= hi
+
+
+def scan_follow(
+    *projects_dirs: Path, window: int = DEFAULT_FOLLOW_WINDOW
+) -> list[dict[str, Any]]:
+    """One row per docs-index call: ``{idless, status, whole_file_only}``.
+
+    ``status`` is ``"followed"`` when one of the next ``window`` tool calls in
+    the same transcript reads a range overlapping a cited ``path:lo-hi`` (cited
+    ranges are parsed from the call's recorded result, never re-queried),
+    ``"not-followed"`` when none does, ``"zero-hit"`` when the result cites
+    nothing, ``"no-result"`` when the transcript holds no result for the call.
+    An answer taken from the snippet alone is, by ruling, not a follow.
+    ``whole_file_only`` marks a follow whose every overlapping read takes the
+    whole file or an open-ended tail from line 1, which overlaps any range.
+    """
+    rows: list[dict[str, Any]] = []
+    done: set[str] = set()
+    transcripts = sorted(p for d in projects_dirs for p in d.rglob("*.jsonl"))
+    for transcript_path in transcripts:
+        calls: list[list[tuple[str, _Range]]] = []
+        index_calls: dict[str, tuple[int, bool]] = {}
+        results: dict[str, str] = {}
+        seen: set[str] = set()
+        for block in _iter_blocks(transcript_path):
+            if block["type"] == "tool_result":
+                tid = block.get("tool_use_id")
+                if isinstance(tid, str) and tid in index_calls:
+                    results.setdefault(tid, _result_text(block.get("content")))
+                continue
+            tid = block.get("id")
+            if not isinstance(tid, str) or not tid or tid in seen:
+                continue
+            seen.add(tid)
+            name = block.get("name", "")
+            tool_input = block.get("input") or {}
+            if _classify(name, tool_input) == "index" and tid not in done:
+                command = str(tool_input.get("command", ""))
+                index_calls[tid] = (len(calls), not _BD_ID_RE.search(command))
+            calls.append(_tool_reads(name, tool_input))
+        for tid, (pos, idless) in index_calls.items():
+            done.add(tid)
+            row: dict[str, Any] = {"idless": idless, "whole_file_only": False}
+            if tid not in results:
+                row["status"] = "no-result"
+                rows.append(row)
+                continue
+            cited = [
+                (_docs_relpath(m.group(1)), int(m.group(2)), int(m.group(3)))
+                for m in _CITED_RE.finditer(results[tid])
+            ]
+            cited = [(p, lo, hi) for p, lo, hi in cited if p]
+            if not cited:
+                row["status"] = "zero-hit"
+                rows.append(row)
+                continue
+            hits = [
+                read
+                for reads in calls[pos + 1 : pos + 1 + window]
+                for read in reads
+                if any(_overlaps(c, read) for c in cited)
+            ]
+            row["status"] = "followed" if hits else "not-followed"
+            row["whole_file_only"] = bool(hits) and all(
+                r[1][0] <= 1 and r[1][1] == math.inf for r in hits
+            )
+            rows.append(row)
+    return rows
+
+
+def summarize_follow(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Counts and follow rates, overall and for id-less queries. The rate's
+    denominator is the calls that cited something and have a recorded result."""
+
+    def tally(subset: list[dict[str, Any]]) -> dict[str, Any]:
+        counts = Counter(r["status"] for r in subset)
+        cited = counts["followed"] + counts["not-followed"]
+        return {
+            "calls": len(subset),
+            "zero_hit": counts["zero-hit"],
+            "no_result": counts["no-result"],
+            "cited": cited,
+            "followed": counts["followed"],
+            "whole_file_only": sum(1 for r in subset if r["whole_file_only"]),
+            "rate": counts["followed"] / cited if cited else None,
+        }
+
+    return {
+        "overall": tally(rows),
+        "idless": tally([r for r in rows if r["idless"]]),
+    }
+
+
+def _print_follow(label: str, t: dict[str, Any]) -> None:
+    rate = "n/a" if t["rate"] is None else f"{t['rate']:.0%}"
+    print(
+        f"    {label}: {t['followed']}/{t['cited']} followed = {rate} "
+        f"(whole-file-only follows {t['whole_file_only']}, zero-hit {t['zero_hit']}, "
+        f"no result recorded {t['no_result']})"
+    )
+
+
 def _print_split(label: str, split: dict[str, dict[str, int]]) -> None:
     print()
     print(f"{label}:")
@@ -534,6 +793,14 @@ def report(
             help="Scan every project's transcripts, not just this project's.",
         ),
     ] = False,
+    window: Annotated[
+        int,
+        typer.Option(
+            "--window",
+            min=1,
+            help="Tool calls after an index call that may follow it.",
+        ),
+    ] = DEFAULT_FOLLOW_WINDOW,
 ) -> None:
     """Print the index-vs-direct-access baseline mined from transcripts."""
     resolved_projects_dir = (
@@ -565,6 +832,11 @@ def report(
         print(f"unnarrowed Grep (may or may not have read docs/): {ambiguous_count}")
     _print_split("per day", result["per_day"])
     _print_split("main vs subagent", result["per_role"])
+    follow = summarize_follow(scan_follow(*roots, window=window))
+    print()
+    print(f"pointer-follow rate (window: next {window} tool calls):")
+    _print_follow("all queries", follow["overall"])
+    _print_follow("id-less queries", follow["idless"])
 
 
 if __name__ == "__main__":
