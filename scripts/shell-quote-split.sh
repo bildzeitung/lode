@@ -124,10 +124,21 @@ strip_quoted_heredoc_bodies() {
 # untouched -- EXCEPT `$(` and a bare backtick inside "...", which the shell
 # really does execute (command substitution is live inside double quotes).
 #
+# A literal newline INSIDE '...' or "..." is emitted as a space (lode-2ctid): it is
+# part of one quoted argument, and left as a newline it would start a fake
+# segment that line-anchored greps read as a command position. A newline OUTSIDE
+# quotes still separates segments. If the scan ENDS inside a quote (unbalanced --
+# e.g. an apostrophe in an unquoted heredoc body fed to `bash`), the quote
+# structure is unreliable, so the scan is redone keeping in-quote newlines
+# (the pre-lode-2ctid, conservative behaviour). Optional $2=keep disables the
+# in-quote rewrite.
+#
 # RESIDUAL (fail-OPEN, accepted): an UNBALANCED quote leaves the tail "inside"
 # a quote, so nothing after it splits -- the PERMISSIVE direction, not the
 # conservative one. Accepted rather than fixed; documented alongside the
-# other residuals in docs/agents-workflow.md.
+# other residuals in docs/agents-workflow.md. Likewise a BALANCED pair of stray
+# apostrophes inside an unquoted heredoc body can hide a newline-separated line
+# between them (lode-2ctid).
 # PERFORMANCE (review, lode-dia6). `local LC_ALL=C` is load-bearing, not a
 # micro-optimization. Under a UTF-8 locale bash must walk the string to find
 # CHARACTER i, so `${s:i:1}` is O(i) and this loop is O(n^2) -- measured 4.0s on
@@ -139,7 +150,7 @@ strip_quoted_heredoc_bodies() {
 # [[:space:]] semantics -- pinned by a test.
 _split_unquoted() {
   local LC_ALL=C
-  local s="$1" out="" c state=none i=0 len
+  local s="$1" out="" c state=none i=0 len keep="${2:-}"
   len=${#s}
   while ((i < len)); do
     c="${s:i:1}"
@@ -166,11 +177,17 @@ _split_unquoted() {
       i=$((i + 1))
     elif [[ "$state" == "none" && ';&|(){}`' == *"$c"* ]]; then
       out+=$'\n'
+    elif [[ "$state" != "none" && "$c" == $'\n' && -z "$keep" ]]; then
+      out+=" "
     else
       out+="$c"
     fi
     i=$((i + 1))
   done
+  if [[ "$state" != "none" && -z "$keep" ]]; then
+    _split_unquoted "$1" keep
+    return
+  fi
   printf '%s' "$out"
 }
 

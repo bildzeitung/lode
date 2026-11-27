@@ -261,6 +261,11 @@ DENIED = [
     'git commit -m "walking through" ; GH issue create --title x',
     "GH issue create --title x",
     "Gh pr create --title x",
+    # lode-2ctid: a real write after a newline OUTSIDE a multi-line quoted string.
+    'git commit -m "a\nb"\ngh issue create',
+    # lode-2ctid: an unbalanced quote (stray apostrophe in an unquoted heredoc body) keeps
+    # in-quote newlines, so a live write after it is still seen.
+    "bash <<EOF\ndon't\ngh issue create\nEOF",
 ]
 
 # Commands that must NOT be denied. Three families, all load-bearing:
@@ -341,6 +346,11 @@ ALLOWED = [
     "bd create --title x --description y --type=task",
     "bd update lode-1 --add-label ready-for-code-review",
     "bd dep add lode-new lode-1 --type blocks",
+    # lode-2ctid: a quoted multi-line string whose continuation line starts with a gh verb.
+    'git commit -m "guard: x\n\ngh issue create is denied"',
+    'git commit -m "guard: gh issue create is denied"',
+    'git commit -m "x\n\nthe gh issue create verb is denied"',
+    "git commit -m 'x\ngh issue create'",
 ]
 
 # The hook must never *approve* anything: a non-matching command falls through silently so
