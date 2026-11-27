@@ -560,3 +560,57 @@ def test_scan_still_counts_a_read_after_a_heredoc_terminator(tmp_path: Path) -> 
     )
     rows = scan(tmp_path)
     assert [r["kind"] for r in rows] == ["direct"]
+
+
+def test_scan_counts_a_tool_use_id_once_with_the_assistant_lines_day_and_role(
+    tmp_path: Path,
+) -> None:
+    block = {
+        "type": "tool_use",
+        "id": "toolu_1",
+        "name": "Read",
+        "input": {"file_path": "/repo/docs/design.md"},
+    }
+    blob = {"type": "api-request-blob", "message": {"content": [block]}}
+    assistant = {
+        "type": "assistant",
+        "timestamp": "2026-11-20T10:00:00.000Z",
+        "isSidechain": False,
+        "cwd": "/repo/.claude/worktrees/agent-x",
+        "message": {"content": [block]},
+    }
+    # Blob first: the timestamped line must still win.
+    _write_transcript(tmp_path / "proj" / "s1.jsonl", [blob, assistant])
+    rows = scan(tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["day"] == "2026-11-20"
+    assert rows[0]["is_subagent"] is True
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("sed -n 1,5p scripts/docs_index_query.py", False),
+        ("pytest tests/test_docs_index_query.py", False),
+        ("bd update lode-x --append-notes 'see scripts/docs_index_query.py'", False),
+        ('uv run --frozen python scripts/docs_index_query.py "x"', True),
+        (".venv/bin/python scripts/docs_index_query.py \"x\"", True),
+        ('cd /r && python3 scripts/docs_index_query.py "x"', True),
+        ('scripts/docs_index_query.py "x"', True),
+    ],
+)
+def test_scan_index_marker_needs_an_invocation_not_a_mention(
+    tmp_path: Path, command: str, expected: bool
+) -> None:
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-11-20T10:00:00.000Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": command},
+            )
+        ],
+    )
+    assert [r["kind"] for r in scan(tmp_path)] == (["index"] if expected else [])

@@ -217,6 +217,27 @@ def _is_write_form(segment: str) -> bool:
     )
 
 
+_INTERPRETER_RE = re.compile(r"^(?:python[\d.]*|uv)$")
+
+
+def _is_index_segment(segment: str) -> bool:
+    """Whether this SEGMENT runs the docs index: its command is an interpreter,
+    ``uv`` or the script itself, and an argument has the script's basename. A
+    segment that merely names the script (``sed``, ``grep``, ``bd``, or a
+    different file such as ``test_docs_index_query.py``) is not an invocation
+    (lode-yt7q2)."""
+    name = _segment_command_name(segment)
+    if name is None:
+        return False
+    if name != _INDEX_SCRIPT_MARKER and not _INTERPRETER_RE.match(name):
+        return False
+    try:
+        tokens = shlex.split(segment)
+    except ValueError:
+        tokens = segment.split()
+    return any(tok.rsplit("/", 1)[-1] == _INDEX_SCRIPT_MARKER for tok in tokens)
+
+
 def _classify_bash_segment(segment: str) -> str | None:
     """Classify one already-split Bash command segment: ``"direct"`` if it
     reads ``docs/*.md``, else ``None``."""
@@ -279,14 +300,17 @@ def _classify(tool_name: str, tool_input: dict[str, Any]) -> str | None:
     """
     if tool_name == "Bash":
         command = str(tool_input.get("command", ""))
+        segments = None
         if _INDEX_SCRIPT_MARKER in command:
-            return "index"
+            segments = _split_segments(command)
+            if any(_is_index_segment(seg) for seg in segments):
+                return "index"
         # No segment can mention a docs path the whole line doesn't, so this
         # is a safe superset test -- and it keeps the segment split, the only
         # expensive step here, off the overwhelming majority of commands.
         if not _mentions_docs_md(command):
             return None
-        for segment in _split_segments(command):
+        for segment in segments if segments is not None else _split_segments(command):
             if _classify_bash_segment(segment) == "direct":
                 return "direct"
         return None
@@ -357,12 +381,30 @@ def project_scope_dirs(projects_dir: Path, cwd: Path) -> list[Path]:
     ]
 
 
+def _dedupe_tool_uses(
+    pairs: Iterator[tuple[dict[str, Any], dict[str, Any]]],
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Return each tool_use once per ``id``. Claude Code records most assistant
+    turns twice -- an ``assistant`` line and a timestamp-less, cwd-less
+    ``api-request-blob`` line -- so the copy that carries a timestamp wins, and
+    with it the right day and role. A block with no id is never merged
+    (lode-yt7q2)."""
+    kept: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    for n, (entry, tool_use) in enumerate(pairs):
+        tool_id = tool_use.get("id")
+        key = tool_id if isinstance(tool_id, str) and tool_id else f"\0{n}"
+        held = kept.get(key)
+        if held is None or (not held[0].get("timestamp") and entry.get("timestamp")):
+            kept[key] = (entry, tool_use)
+    return list(kept.values())
+
+
 def scan(projects_dir: Path) -> list[dict[str, Any]]:
     """Scan every transcript under ``projects_dir`` (at any depth) and return
     one row per classified tool_use: ``{day, session, is_subagent, kind}``."""
     rows: list[dict[str, Any]] = []
     for transcript_path in sorted(projects_dir.rglob("*.jsonl")):
-        for entry, tool_use in _iter_tool_uses(transcript_path):
+        for entry, tool_use in _dedupe_tool_uses(_iter_tool_uses(transcript_path)):
             kind = _classify(tool_use.get("name", ""), tool_use.get("input") or {})
             if kind is None:
                 continue

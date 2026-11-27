@@ -6247,6 +6247,11 @@ entries below from being rewritten to chase the current tree.)
   marker of the same id under the `lode-wtk2` entry below, and in the entry "docs-index: usage
   evaluation, verdict, and ranked agent-input alternatives" (`lode-a55l6`).
 
+  **Update (lode-yt7q2, 2026-11-26):** both defects the marker above names are fixed in
+  `docs_index_usage_report.py`; the 2026-09 figures stay unreliable, since they were produced
+  before the fix and cannot be re-measured. See the entry "docs-index usage report: count each
+  tool call once, and classify an index call by segment" (`lode-yt7q2`).
+
 - **2026-09-14 (`lode-wtk2`) — CORRECTION: `_classify` now judges Bash SEGMENTS, not
   whole lines, and the baseline figure above is re-measured.** Appended, not rewritten in place, per
   this file's preamble. `_classify` used to run its write/version-control exclusion and its
@@ -6342,6 +6347,11 @@ entries below from being rewritten to chase the current tree.)
   in the `main` row. Whether the 2026-09 transcripts repeated calls the same way cannot be
   checked: they are gone from this machine. See the entry "docs-index: usage evaluation, verdict,
   and ranked agent-input alternatives" (`lode-a55l6`); the defects are filed as `lode-yt7q2`.
+
+  **Update (lode-yt7q2, 2026-11-26):** both defects the marker above names are fixed in
+  `docs_index_usage_report.py`; the 2026-09 figures stay unreliable, since they were produced
+  before the fix and cannot be re-measured. See the entry "docs-index usage report: count each
+  tool call once, and classify an index call by segment" (`lode-yt7q2`).
 
 - **`scripts/` sibling loading keeps three short UNCACHED bootstraps, not one shared one
   (`lode-7l68`, 2026-09-14).** `lode-wtk2` consolidated the sibling-loader *body* into
@@ -7955,3 +7965,20 @@ one is taken, B: the retire condition rests on it.
     not taken. The maintainer chose this over plain KEEP so the verdict cannot outlive the
     measurement it rests on, and took C although it is outside the "agent inputs" question
     because it is the largest deterministic cost the data shows.
+
+## docs-index usage report: count each tool call once, and classify an index call by segment (lode-yt7q2)
+
+Fixes the two defects `lode-2e6x` found in `scripts/docs_index_usage_report.py`, independent of the
+`lode-a55l6` ruling. The mechanism is the ticket's, traced there in the code and measured on the
+2026-11 transcripts; this entry records the fix.
+
+- **Each tool call is counted once.** `scan()` now dedupes on the `tool_use` id within a
+  transcript. Claude Code writes most assistant turns twice, an `assistant` line (timestamp, cwd)
+  and a timestamp-less, cwd-less `api-request-blob` line, so the timestamped copy is kept and with
+  it the correct day and main-versus-subagent role. A block with no id is never merged. Dedupe on
+  the id rather than on the line `type` so a further format change cannot bring the repeats back.
+- **`index` is judged per Bash segment.** A segment counts only when its command is `python*`,
+  `uv` or the script itself and an argument has the basename `docs_index_query.py`. `sed`, `grep`,
+  `bd` and `cat` naming the script, and `test_docs_index_query.py`, no longer count.
+- Figures printed by the report before this change, here and in the `lode-dozi` and `lode-wtk2`
+  entries, are not comparable with ones printed after it; each carries an Update marker.
