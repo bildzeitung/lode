@@ -7945,3 +7945,13 @@ joined to index use).
 **Open (`lode-a55l6`).** Accept KEEP, or retire the index? And which of A to F, if any, become
 an epic with debated children? Proposals A and B together are the smallest useful step. If only
 one is taken, B: the retire condition rests on it.
+
+  - **Update (lode-a55l6, maintainer ruling 2026-11-26):** decided, no longer open. The index is
+    KEPT PROVISIONALLY. The "Retire if" falsifier above is the condition it stands on: retire it if
+    proposal B shows that fewer than about half of the id-less queries are followed by a read of the
+    cited range. Proposals A, B and C become epic `lode-fg7w7`, one child each (A `lode-fg7w7.1`,
+    B `lode-fg7w7.2`, which waits on `lode-yt7q2`, and C `lode-fg7w7.3`). Each is debated before
+    it is built, and C's child is a debate only, with no guard changed under it. D, E and F are
+    not taken. The maintainer chose this over plain KEEP so the verdict cannot outlive the
+    measurement it rests on, and took C although it is outside the "agent inputs" question
+    because it is the largest deterministic cost the data shows.
