@@ -2575,6 +2575,13 @@ entries below from being rewritten to chase the current tree.)
      range-granularity question it forces. **Owned by `lode-o7pf`**, which makes this call before
      building anything. See
      [editing.md — Inline lint squiggles, deferred](editing.md#inline-lint-squiggles--deferred-not-built-see-lode-o7pf).
+
+     **Update (lode-o7pf.1, 2026-11-27):** both halves of item 1 are decided — hand-rolled rules, and
+     each rule returns explicit `[start, end)` character ranges on its line, which settles range
+     granularity. They are rendered by a `TextArea.get_line` override; the design is recorded, not
+     yet built. Four questions about how individual rules behave were raised at review and are open,
+     owned by `lode-kgg0h`. See
+     [editing.md — Inline lint squiggles](editing.md#inline-lint-squiggles--get_line-underlines-see-lode-o7pf).
   2. **Whether a custom `.scm` injection query ever ships** to reach inline colouring (emphasis,
      strong, inline code, inline links) — currently block-level only. **Unowned; leaning no** — it
      means hand-building an injection subsystem against Textual's private highlight path, the same
