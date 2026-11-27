@@ -699,8 +699,10 @@ def test_classify_keeps_the_lines_after_a_hash_or_an_open_quote(
     [
         # An escaped quote does not close the quoted argument (lode-d3snk).
         (
-            'python3 -c "\nprint(\\"a (b)\\")\n"; uv run --frozen python'
-            ' scripts/docs_index_query.py "x"',
+            (
+                'python3 -c "\nprint(\\"a (b)\\")\n"; uv run --frozen python'
+                ' scripts/docs_index_query.py "x"'
+            ),
             "index",
         ),
         ('grep -n -E "see \\"x|y" docs/design.md', "direct"),
@@ -710,7 +712,10 @@ def test_classify_keeps_the_lines_after_a_hash_or_an_open_quote(
         ("echo $#; grep -n foo docs/design.md", "direct"),
         # A heredoc opener inside a quoted argument opens no heredoc.
         ("python3 -c '\nprint(1 << 3)\n'\ngrep x docs/design.md", "direct"),
-        ("cat > x <<'EOF'\ngrep y docs/design.md\nEOF\ngrep z docs/design.md", "direct"),
+        (
+            "cat > x <<'EOF'\ngrep y docs/design.md\nEOF\ngrep z docs/design.md",
+            "direct",
+        ),
     ],
 )
 def test_classify_reads_escaped_and_mid_word_quotes_like_the_shell(
