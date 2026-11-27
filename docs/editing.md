@@ -84,8 +84,8 @@ queries, maintaining a child `Parser`/`Tree` per `(inline)` node, byte-offset-ad
 into the parent's coordinate space, incrementally re-parsing on edits — and splicing the merged
 captures into `TextArea`'s **private** `_build_highlight_map` path, since Textual's own
 highlighter only ever queries the single outer tree. That's a multi-day build on unsupported
-private API, the same private-API fragility class the lint design avoids by using the public `get_line` hook. Block-only colouring was
-accepted instead; a custom `.scm` ships only if a future ticket explicitly justifies that cost.
+private API. Block-only colouring was accepted instead; a custom `.scm` ships only if a future
+ticket explicitly justifies that cost.
 
 **`textual[syntax]` is a hard dependency** (`pyproject.toml` `[project].dependencies`, not an
 optional extra) — it pulls ~15 tree-sitter grammar packages (there is no markdown-only extra).
@@ -173,16 +173,22 @@ and blocking for the browser's full foreground lifetime) that must not freeze th
 loop. Only the cheap cursor/line read stays on the event loop — reading it from a worker thread
 would race the user's own typing.
 
+<!-- The section's old heading anchor. An append-only decisions.md entry ("Markdown editing — open
+items parked in editing.md") links to it and cannot be repointed. -->
+<a id="inline-lint-squiggles--deferred-not-built-see-lode-o7pf"></a>
 ## Inline lint squiggles — get_line underlines (see `lode-o7pf`)
 
-<a id="inline-lint-squiggles--deferred-not-built-see-lode-o7pf"></a>
-
 Inline lint squiggles are plain underlines on markdown-lint-flagged character ranges in the
-**editable** note bodies, updated as you type. They were first deferred out of `lode-ev5j` into
-their own epic, `lode-o7pf`; the design below is the settled one (verified against `textual`
-8.2.8 / `rich` 15.0.0). It supersedes both the earlier `_highlights`-injection design and the
-interim `render_line` post-processing idea. The old anchor above is kept so existing links
-resolve.
+**editable** note bodies, updated as you type. **This section is the settled design, not shipped
+code:** the rule engine (`lode-o7pf.2`), the widget (`lode-o7pf.3`) and the wiring (`lode-o7pf.4`)
+are not built, so nothing under `src/lode/` implements it yet. The Textual behaviour it relies on
+is verified against `textual` 8.2.8 / `rich` 15.0.0.
+
+The feature was first deferred out of `lode-ev5j` into its own epic, `lode-o7pf`. This design
+replaces two earlier ones: injecting ranges into `TextArea`'s private `_highlights` map (unsupported
+API, UTF-8 byte offsets, and re-injection after every edit, since the syntax highlighter clears the
+map), and post-processing the `Strip` returned by a `render_line` override (which would redo the
+cell-column, scroll, gutter and soft-wrap arithmetic Textual already does after `get_line`).
 
 **Mechanism: override `TextArea.get_line`, a documented public hook.** Its docstring invites
 stylizing the returned `Text` ("You can stylize the Text object returned here to apply additional
@@ -196,21 +202,26 @@ underline survives all of them.
 **Visual:** `Style(underline=True)` only — no colour, no background — so each range keeps its own
 text and syntax colour. Rich has no underline colour (no SGR 58), and syntax styles applied after
 `get_line` would override a lint foreground on headings and code anyway. No `TextAreaTheme` entry
-and no palette key. See [Squiggle form](#squiggle-form-decided-in-advance-straight-underline-not-wavy-undercurl)
-for why it is straight, not undercurl.
+and no palette key. See
+[Squiggle form](#squiggle-form-decided-in-advance-straight-underline-not-wavy-undercurl) for why
+it is straight, not undercurl.
 
 **Scope: visible lines, lazily.** Lint runs inside `get_line`, which Textual calls only for lines
 it is about to draw, so only visible lines are linted and the result is always current — no
 `Changed` handler, timer, debounce or explicit cache invalidation. Every edit, undo and redo
 already clears Textual's line cache (and Textual must keep that clear, since its cache key does not
-include the text), on the grammar-less fallback path too. Rules may read neighbouring lines.
+include the text). Rules may read neighbouring lines. Two costs follow from where the hook sits:
+Textual calls `get_line` once per **wrapped row**, not once per document line, and with soft wrap
+on (the default, which `_markdown_text_area` keeps) every cursor move re-fetches every visible row,
+not only an edit.
 
 **Fence context.** Fence state comes from `lode.fence_parsing` (`fence_flags` /
-`match_fence_marker`), the repo's one sanctioned CommonMark fence scanner — never a second one.
-`fence_flags` is whole-buffer O(n), so it is computed **once per render pass** (memoized across
-the `get_line` calls of that pass), not once per line. Lines inside a fence and fence delimiter
-lines are exempt from every rule (`fence_flags` reports the opener as outside, so the opener is
-checked with `match_fence_marker`).
+`match_fence_marker`), the repo's one sanctioned CommonMark fence scanner. `fence_flags` is
+whole-buffer O(n), so its result is memoized for **one render pass**: built on the first `get_line`
+call of the pass and dropped when the pass ends (a `render_lines` override brackets a pass), so a
+repaint served entirely from Textual's line cache, such as a cursor blink, does no scan. Lines
+inside a fence and fence delimiter lines are exempt from every rule (`fence_flags` reports the
+opener as outside, so the opener is checked with `match_fence_marker`).
 
 **Rules (v1).** Hand-rolled pure functions over `(lines, index, fence context)` returning
 character ranges `[start, end)` on that line; no new dependency (no `pymarkdownlnt`).
@@ -227,10 +238,24 @@ character ranges `[start, end)` on that line; no new dependency (no `pymarkdownl
 Excluded on purpose: MD012 and MD047 (nothing to underline — blank lines and a missing final
 newline have no characters) and MD034 bare URL (would flag most work notes).
 
-**Screen set.** `EditScreen` and `CaptureScreen` bodies only; `version_view` and `snapshot_viewer`
-(read-only) stay clean. Wiring: a `TextArea` subclass in its **own module** (one-widget-per-module
-fiat, [conventions.md](conventions.md)), opted in through `_markdown_text_area` for the two
-editable bodies. It works on the grammar-less fallback `TextArea` too.
+**Open, not yet ruled on (`lode-kgg0h`).** Four questions about the table were raised when this
+section was reviewed. The table above is the design until they are decided:
+
+- **MD009 underlines the space just typed.** One trailing space is flagged, two are not, three
+  are, so the underline comes and goes at every word boundary typed at the end of a line. Checked
+  against `textual` 8.2.8 with a throwaway copy of the table row; no rule knows where the cursor is.
+- **MD018 flags lines that are not headings**, such as `#1234 fixed the retry` or `#eng-oncall` —
+  the reason MD034 is excluded. From the table's wording; not checked against code.
+- **Only fenced code is exempt.** An indented code block, an inline code span and a fence inside a
+  block quote are linted as prose: `fence_flags` reports none of them as inside a fence.
+- **MD022 on a heading with no text** (a bare `##`) has nothing to underline. From the table's
+  wording; not checked against code.
+
+**Screen set.** `EditScreen` and `CaptureScreen` bodies only; the read-only `VersionViewScreen`
+and `SnapshotViewerScreen` bodies stay clean. Wiring: a `TextArea` subclass in its **own module**
+([one-widget-per-module fiat](conventions.md#textual-one-screen-or-custom-widget-per-module)),
+opted in through `_markdown_text_area`. It works on the grammar-less fallback `TextArea` too:
+neither `get_line` nor the line-cache clear depends on a grammar.
 
 **Testing.** Pure per-rule unit tests (including non-ASCII lines, a code fence and the two-space
 exemption); assertions on the spans of the `Text` that `get_line` returns, with no
@@ -239,7 +264,8 @@ exemption); assertions on the spans of the `Text` that `get_line` returns, with 
 ## Squiggle form, decided in advance: straight underline, not wavy undercurl
 
 Inline lint squiggles are a **plain, straight underline in the text's own colour** — never a wavy
-"undercurl." A wavy squiggle needs the terminal control sequence SGR `4:3` (undercurl), which is terminal-dependent (kitty/WezTerm/VTE-based terminals support it,
+"undercurl." A wavy squiggle needs the terminal control sequence SGR `4:3` (undercurl), which is
+terminal-dependent (kitty/WezTerm/VTE-based terminals support it,
 many others don't) and — decisively — **stock Rich cannot emit it at all**: `lode-ev5j.1`'s spike
 confirmed `rich.style.Style(underline=True)` renders through a real `Console` as plain SGR `4`,
 never `4:3`, and `Style.__init__`'s parameter list has no undercurl parameter — there is no code
