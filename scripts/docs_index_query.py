@@ -270,8 +270,6 @@ _ID_CHECK_TIMEOUT_S = 5
 #: The ref a new worktree is branched from, so the one a stale checkout lags.
 _TRUNK_REF = "origin/trunk"
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-
 
 def _run(args: list[str]) -> subprocess.CompletedProcess[str] | None:
     """Run ``args`` in the repo with a hard timeout; ``None`` when the tool is
@@ -279,7 +277,7 @@ def _run(args: list[str]) -> subprocess.CompletedProcess[str] | None:
     try:
         return subprocess.run(
             args,
-            cwd=_REPO_ROOT,
+            cwd=_build.REPO_ROOT,
             capture_output=True,
             text=True,
             timeout=_ID_CHECK_TIMEOUT_S,
@@ -304,7 +302,9 @@ def zero_hit_id_note(raw_query: str) -> str | None:
     # ``-w`` and the top-level ``*.md`` pathspec hold this probe to what the
     # index matches: a whole id, in the files it chunks.
     pathspec = ":(glob)docs/*.md"
-    grep = _run(["git", "grep", "-l", "-w", "-F", "-e", bd_id, _TRUNK_REF, "--", pathspec])
+    grep = _run(
+        ["git", "grep", "-l", "-w", "-F", "-e", bd_id, _TRUNK_REF, "--", pathspec]
+    )
     # Exit 1 is "no match"; any other failure (128: no such ref) says nothing
     # about trunk's docs, so the bd answer below would claim too much.
     if grep is None or grep.returncode not in (0, 1):
@@ -316,7 +316,7 @@ def zero_hit_id_note(raw_query: str) -> str | None:
         return (
             f"{bd_id} has a docs entry on {_TRUNK_REF} ({files}) that this "
             f"checkout predates; find its lines with "
-            f"`git grep -n -w -F {bd_id} {_TRUNK_REF} -- docs/`."
+            f"`git grep -n -w -F {bd_id} {_TRUNK_REF} -- '{pathspec}'`."
         )
     # ``--readonly``: a lookup must never write bd state, and a bd killed at
     # the timeout must not be mid-write.
@@ -447,6 +447,8 @@ def main(
                 )
     else:
         print("No results.")
+        # Under a --class filter a zero hit says nothing about the other
+        # class, so "no docs/ entry mentions it" would be a false claim.
         note = zero_hit_id_note(text) if doc_class is None else None
         if note:
             print(note)

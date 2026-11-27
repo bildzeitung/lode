@@ -29,6 +29,7 @@ _query_module = load_module_from_path(
 )
 _escape_query = _query_module._escape_query
 query = _query_module.query
+_zero_hit_id_note = _query_module.zero_hit_id_note
 app = _query_module.app
 
 runner = CliRunner()
@@ -703,17 +704,32 @@ def _fake_run(
     return calls
 
 
-def test_zero_hit_bare_id_exists_in_bd(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_prints_the_id_note_after_no_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _fake_run(monkeypatch, (1, ""), (0, '[{"id": "lode-zzzzz"}]'))
     result = runner.invoke(app, ["lode-zzzzz"])
-    assert "No results." in result.stdout
-    assert "lode-zzzzz exists in bd but no docs/ entry" in result.stdout
+    assert result.stdout.splitlines() == [
+        "No results.",
+        "lode-zzzzz exists in bd but no docs/ entry mentions it; see `bd show lode-zzzzz`.",
+    ]
+
+
+def test_cli_prints_no_id_note_under_a_class_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _fake_run(monkeypatch, (1, ""), (0, '[{"id": "lode-zzzzz"}]'))
+    result = runner.invoke(app, ["lode-zzzzz", "--class", "decision-record"])
+    assert result.stdout.strip() == "No results."
+    assert calls == []
 
 
 def test_zero_hit_bare_id_missing_from_bd(monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_run(monkeypatch, (1, ""), _BD_UNKNOWN)
-    result = runner.invoke(app, ["lode-zzzzz"])
-    assert "lode-zzzzz does not exist in the local bd database." in result.stdout
+    assert (
+        _zero_hit_id_note("lode-zzzzz")
+        == "lode-zzzzz does not exist in the local bd database."
+    )
 
 
 def test_zero_hit_partial_id_is_not_reported_as_existing(
@@ -721,9 +737,10 @@ def test_zero_hit_partial_id_is_not_reported_as_existing(
 ) -> None:
     """bd resolves a unique partial id and exits 0 with the full id's issue."""
     _fake_run(monkeypatch, (1, ""), (0, '[{"id": "lode-zzzzzq"}]'))
-    result = runner.invoke(app, ["lode-zzzzz"])
-    assert "exists in bd" not in result.stdout
-    assert "local bd database; bd resolves it to lode-zzzzzq." in result.stdout
+    assert _zero_hit_id_note("lode-zzzzz") == (
+        "lode-zzzzz does not exist in the local bd database; "
+        "bd resolves it to lode-zzzzzq."
+    )
 
 
 def test_zero_hit_bare_id_on_origin_trunk(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -732,8 +749,9 @@ def test_zero_hit_bare_id_on_origin_trunk(monkeypatch: pytest.MonkeyPatch) -> No
         (0, "origin/trunk:docs/decisions.md\norigin/trunk:docs/a b.md\n"),
         (0, '[{"id": "lode-zzzzz"}]'),
     )
-    result = runner.invoke(app, ["lode-zzzzz"])
-    assert "origin/trunk (docs/decisions.md, docs/a b.md)" in result.stdout
+    note = _zero_hit_id_note("lode-zzzzz")
+    assert note is not None
+    assert "origin/trunk (docs/decisions.md, docs/a b.md)" in note
     assert [args[0] for args in calls] == ["git"]
 
 
@@ -743,35 +761,27 @@ def test_zero_hit_bare_id_on_origin_trunk(monkeypatch: pytest.MonkeyPatch) -> No
         pytest.param((1, ""), None, id="bd-unavailable"),
         pytest.param((1, ""), (1, "database is locked"), id="bd-other-error"),
         pytest.param((1, ""), (0, "not json"), id="bd-unparseable"),
-        pytest.param((128, ""), (0, '[{"id": "lode-zzzzz"}]'), id="no-origin-trunk-ref"),
+        pytest.param(
+            (128, ""), (0, '[{"id": "lode-zzzzz"}]'), id="no-origin-trunk-ref"
+        ),
         pytest.param(None, (0, '[{"id": "lode-zzzzz"}]'), id="git-unavailable"),
     ],
 )
-def test_zero_hit_bare_id_falls_back_when_a_probe_fails(
+def test_zero_hit_bare_id_gets_no_note_when_a_probe_fails(
     monkeypatch: pytest.MonkeyPatch,
     grep: tuple[int, str] | None,
     bd: tuple[int, str] | None,
 ) -> None:
     _fake_run(monkeypatch, grep, bd)
-    result = runner.invoke(app, ["lode-zzzzz"])
-    assert result.exit_code == 0
-    assert result.stdout.strip() == "No results."
+    assert _zero_hit_id_note("lode-zzzzz") is None
 
 
-@pytest.mark.parametrize(
-    "argv",
-    [
-        pytest.param(["zzqx_nohit_a zzqx_nohit_b"], id="words"),
-        pytest.param(["zzqx-nohit"], id="hyphenated-word"),
-        pytest.param(["lode-zzzzz", "--class", "decision-record"], id="class-filter"),
-    ],
-)
-def test_zero_hit_query_that_is_not_an_unfiltered_bare_id_runs_no_probe(
-    monkeypatch: pytest.MonkeyPatch, argv: list[str]
+@pytest.mark.parametrize("text", ["zzqx_nohit_a zzqx_nohit_b", "zzqx-nohit"])
+def test_a_query_that_is_not_a_bare_bd_id_runs_no_probe(
+    monkeypatch: pytest.MonkeyPatch, text: str
 ) -> None:
     calls = _fake_run(monkeypatch, (1, ""), (0, '[{"id": "lode-zzzzz"}]'))
-    result = runner.invoke(app, argv)
-    assert result.stdout.strip() == "No results."
+    assert _zero_hit_id_note(text) is None
     assert calls == []
 
 
@@ -785,11 +795,11 @@ def test_zero_hit_trunk_probe_matches_whole_ids_in_indexed_files_only(
     _git(tmp_path, "init", "-q", "-b", "trunk", str(repo))
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "test")
-    _commit_file(repo, "docs/a.md", "See lode-zzzzzq and (lode-yyyyy.2).\n", "a")
+    _commit_file(repo, "docs/design.md", "See lode-zzzzzq and (lode-yyyyy.2).\n", "a")
     _commit_file(repo, "docs/data.csv", "lode-zzzzz\n", "csv")
-    _commit_file(repo, "docs/overrides/b.md", "lode-zzzzz\n", "nested")
+    _commit_file(repo, "docs/how-to/README.md", "lode-zzzzz\n", "nested")
     _git(repo, "update-ref", "refs/remotes/origin/trunk", "HEAD")
-    monkeypatch.setattr(_query_module, "_REPO_ROOT", repo)
+    monkeypatch.setattr(_query_module._build, "REPO_ROOT", repo)
     real_run = _query_module._run
 
     def git_only(args: list[str]) -> subprocess.CompletedProcess[str] | None:
@@ -799,11 +809,10 @@ def test_zero_hit_trunk_probe_matches_whole_ids_in_indexed_files_only(
 
     monkeypatch.setattr(_query_module, "_run", git_only)
 
-    note = _query_module.zero_hit_id_note
-    assert "does not exist in the local bd database" in note("lode-zzzzz")
-    assert "origin/trunk (docs/a.md)" in note("lode-zzzzzq")
+    assert "does not exist in the local bd database" in _zero_hit_id_note("lode-zzzzz")
+    assert "origin/trunk (docs/design.md)" in _zero_hit_id_note("lode-zzzzzq")
     # The index matches a parent id inside a child's, and so does the probe.
-    assert "origin/trunk (docs/a.md)" in note("lode-yyyyy")
+    assert "origin/trunk (docs/design.md)" in _zero_hit_id_note("lode-yyyyy")
 
 
 def test_run_returns_none_when_the_subprocess_hangs(
