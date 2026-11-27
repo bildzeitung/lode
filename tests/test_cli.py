@@ -144,6 +144,7 @@ HELP_COMMAND_ORDER = [
     "purge",
     "recover",
     "notes",
+    "search",
     "show",
     "status",
     "stats",
