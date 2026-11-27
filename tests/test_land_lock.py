@@ -301,8 +301,7 @@ def test_held_is_1_for_a_stale_lock_and_leaves_it_in_place(tmp_path: Path) -> No
 
 def test_held_treats_a_malformed_lock_as_held(tmp_path: Path) -> None:
     """Same "age unknown, never guess" reading `acquire` gives a record it
-    cannot parse -- which is also what a `held` racing a heartbeat's
-    truncate-then-write sees."""
+    cannot parse."""
     repo = _init_repo(tmp_path)
     _lock_path(repo).write_text("garbage\n")
 
