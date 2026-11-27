@@ -84,9 +84,10 @@ _DIRECT_BASH_COMMANDS = frozenset({"grep", "sed", "head", "cat", "tail", "awk"})
 #: the segment they qualify.
 _SEGMENT_PUNCTUATION_CHARS = "();&|"
 
-#: A ``#`` opens a comment only at the start of a word: at the start of a
-#: line, or after whitespace or one of these separators. ``$#``, ``${x#y}``
-#: and ``a#b`` are not comments.
+#: To :func:`_logical_lines` a ``#`` opens a comment only at the start of a
+#: word: at the start of a line, or after whitespace or one of these
+#: separators. It does not take ``$#``, ``${x#y}`` or ``a#b`` for a comment;
+#: shlex in :func:`_split_line_segments` does, to the end of that line.
 _COMMENT_PRECEDERS = " \t" + _SEGMENT_PUNCTUATION_CHARS
 
 #: Argument-forwarding wrappers a real command name can follow -- same
@@ -165,31 +166,18 @@ def _strip_heredoc_bodies(command: str) -> list[str]:
     return kept
 
 
-def _split_segments(command: str) -> list[str]:
-    """Split a Bash command into independent segments -- heredoc bodies
-    stripped first, then on unquoted newlines, then on the in-line shell
-    separators -- dropping any segment with no non-whitespace content."""
-    lines = _strip_heredoc_bodies(command)
-    # A quote left open across the whole command cannot be honoured over
-    # newlines; fall back to splitting per physical line.
-    logical = _logical_lines("\n".join(lines))
-    segments: list[str] = []
-    for line in lines if logical is None else logical:
-        segments.extend(_split_line_segments(line))
-    return [seg for seg in segments if seg.strip()]
-
-
-def _logical_lines(text: str) -> list[str] | None:
-    """``text`` split at every UNQUOTED newline, so a newline inside a
+def _logical_lines(text: str) -> list[str]:
+    """``text`` split at every newline OUTSIDE quotes, so a newline inside a
     multi-line quoted argument stays part of that argument and the closing
-    quote is not misread as an opening one (lode-k813a). ``None`` if a quote
-    is still open at the end.
+    quote is not misread as an opening one (lode-k813a). A backslash-newline
+    continuation splits like any other unquoted newline. If a quote is still
+    open at the end, where it went wrong is unknown, so every newline splits.
 
-    The pieces stay separate lines, not one line joined with ``;``: shlex
-    drops everything from a ``#`` to the end of ITS line, so on one joined
-    line a comment -- or a mid-word ``#`` such as ``$#`` -- would discard
-    every command after it. A comment's own text is skipped here, as a shell
-    skips it: an apostrophe in a comment opens no quote.
+    Each piece is handed to shlex as its own line: shlex drops everything
+    from a ``#`` to the end of its line, so a comment or a mid-word ``#``
+    such as ``$#`` must not share a line with a later command. A comment's
+    own text is skipped here, as a shell skips it: an apostrophe in a comment
+    opens no quote.
     """
     lines: list[str] = []
     start = 0
@@ -197,7 +185,7 @@ def _logical_lines(text: str) -> list[str] | None:
     i = 0
     while i < len(text):
         char = text[i]
-        if char == "\\" and quote != "'" and text[i + 1 : i + 2] not in ("", "\n"):
+        if char == "\\" and quote != "'" and text[i + 1 : i + 2] != "\n":
             i += 2
             continue
         if quote:
@@ -214,9 +202,19 @@ def _logical_lines(text: str) -> list[str] | None:
             start = i + 1
         i += 1
     if quote:
-        return None
+        return text.split("\n")
     lines.append(text[start:])
     return lines
+
+
+def _split_segments(command: str) -> list[str]:
+    """Split a Bash command into independent segments -- heredoc bodies
+    stripped first, then on unquoted newlines, then on the in-line shell
+    separators -- dropping any segment with no non-whitespace content."""
+    segments: list[str] = []
+    for line in _logical_lines("\n".join(_strip_heredoc_bodies(command))):
+        segments.extend(_split_line_segments(line))
+    return [seg for seg in segments if seg.strip()]
 
 
 def _segment_tokens(segment: str) -> list[str]:

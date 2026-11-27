@@ -8021,12 +8021,12 @@ Fixes the two defects `lode-2e6x` found in `scripts/docs_index_usage_report.py`,
   `_split_segments` now splits at a newline only outside quotes. Measured by running the script
   from before and after the fix over the same transcripts (2026-11-14 to 2026-11-27, default
   scope) and comparing by `tool_use` id: 6 calls change class. 2 index runs behind the closing
-  quote of a multi-line argument are now counted.
-  So are 2 direct reads on a line that ended inside an open quote (a multi-line commit message):
-  such a line was judged whole, as its first command, an in-place `sed`. 1 index row and 1 direct
-  row that were never real are gone: a line of quoted `bd create` text that began with the
-  script's path, and a `grep` of a non-docs file whose line ended inside an open quote and so
-  took the docs path of the `git add` after it. The report printed 283 / 2,995 before and
-  284 / 2,996 after. The third of the 3 lost index runs is still missed, as is any command whose
-  quoted text holds an escaped quote or whose quote opens mid-word: the newline scan follows the
-  shell there and the `shlex` separator split does not (`lode-d3snk`).
+  quote of a multi-line argument are now counted. So are 2 direct reads on a line that ended
+  inside an open quote (a multi-line commit message): such a line was judged whole, as its first
+  command, an in-place `sed`. 1 index row and 1 direct row that were never real are gone: a line
+  of quoted `bd create` text that began with the script's path, and a `grep` of a non-docs file
+  whose line ended inside an open quote and so took the docs path of the `git add` after it. The
+  report printed 283 / 2,995 before and 284 / 2,996 after. The third of the 3 lost index runs is
+  still missed, as is any command whose quoted text holds an escaped quote or whose quote opens
+  mid-word: the newline scan follows the shell there and the `shlex` separator split does not
+  (`lode-d3snk`).
