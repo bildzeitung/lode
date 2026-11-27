@@ -779,6 +779,7 @@ _COMMAND_MODULES = (
     "purge",
     "recover",
     "notes",
+    "search",
     "show",
     "status",
     "stats",

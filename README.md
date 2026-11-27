@@ -94,7 +94,7 @@ record which model revision produced the vectors (`HF_HUB_OFFLINE=1` skips it to
 
 **Built end-to-end.** The core loop ships: notes, version chains, cited Q&A, a minimal eval
 harness, and a web connector, behind a Textual TUI and a full CLI (`lode add`, `lode ask`, `lode
-notes`, `lode work`, `lode models pull`, …). See [`docs/design.md`](docs/design.md) for the
+notes`, `lode search`, `lode work`, `lode models pull`, …). See [`docs/design.md`](docs/design.md) for the
 overview and a map of the design docs, with the reasoning behind every decision. Additional
 connectors (e.g. Atlassian) are being added one at a time — see
 [`docs/decisions.md`](docs/decisions.md) for what's still open.

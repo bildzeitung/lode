@@ -1,5 +1,6 @@
 """``lode notes`` -- list notes, live by default, tombstoned with --deleted."""
 
+from collections.abc import Sequence
 from typing import Annotated
 
 import typer
@@ -7,7 +8,7 @@ from rich.markup import escape
 
 from lode.cli import _DbOption, _short_date, app, console
 from lode.config import default_db_path
-from lode.notes_read import list_deleted_notes, list_notes
+from lode.notes_read import NoteRow, list_deleted_notes, list_notes
 
 
 @app.command(
@@ -59,6 +60,11 @@ def notes_(
     # Every row in ``--deleted`` mode is a tombstone by construction of the
     # flag, so this is computed once, not per-row -- empty in live mode.
     marker = " [deleted]" if deleted else ""
+    print_note_rows(rows, marker)
+
+
+def print_note_rows(rows: Sequence[NoteRow], marker: str = "") -> None:
+    """Render note rows one per block, shared by ``lode notes`` and ``lode search``."""
     for i, row in enumerate(rows):
         if i:
             console.print()
