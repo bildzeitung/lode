@@ -127,18 +127,32 @@ strip_quoted_heredoc_bodies() {
 # A literal newline INSIDE '...' or "..." is emitted as a space (lode-2ctid): it is
 # part of one quoted argument, and left as a newline it would start a fake
 # segment that line-anchored greps read as a command position. A newline OUTSIDE
-# quotes still separates segments. If the scan ENDS inside a quote (unbalanced --
-# e.g. an apostrophe in an unquoted heredoc body fed to `bash`), the quote
-# structure is unreliable, so the scan is redone keeping in-quote newlines
-# (the pre-lode-2ctid, conservative behaviour). Optional $2=keep disables the
-# in-quote rewrite.
+# quotes still separates segments.
+#
+# That join TRUSTS this scanner's quote state across a line break, and a wrong
+# "inside a quote" there hides a whole live line -- a false ALLOW. So the join
+# is abandoned for the WHOLE string, and every in-quote newline kept (each line
+# is a segment of its own), whenever the string holds a construct this flat
+# scanner does not model. Each one was probed hiding a `gh` write between two
+# stray quote characters:
+#   - `<<` anywhere: an unquoted heredoc body is free text, not shell quoting.
+#   - an unquoted `#`: an apostrophe in a comment opens no quote.
+#   - `$'`: ANSI-C quoting, where a backslash-escaped ' does not close the string.
+#   - `$(` or a backtick inside "...": a nested parse context with its own
+#     quotes and its own command-separating newlines.
+#   - the scan ENDING inside a quote (unbalanced).
+# Every test is deliberately loose (any `<<`, any unquoted `#`): a false trigger
+# only costs the join, never a segment start. Optional $2=keep forces the same.
+# With none of them present the scanner's quote state is the shell's, so a
+# joined line is one the shell does not run -- unless the whole quoted word is
+# handed to a shell (`bash -c "..."`), the quoted-indirection residual in
+# docs/agents-workflow.md.
 #
 # RESIDUAL (fail-OPEN, accepted): an UNBALANCED quote leaves the tail "inside"
-# a quote, so nothing after it splits -- the PERMISSIVE direction, not the
-# conservative one. Accepted rather than fixed; documented alongside the
-# other residuals in docs/agents-workflow.md. Likewise a BALANCED pair of stray
-# apostrophes inside an unquoted heredoc body can hide a newline-separated line
-# between them (lode-2ctid).
+# a quote, so nothing after it splits at a control character -- the PERMISSIVE
+# direction, not the conservative one. Accepted rather than fixed; documented
+# alongside the other residuals in docs/agents-workflow.md.
+#
 # PERFORMANCE (review, lode-dia6). `local LC_ALL=C` is load-bearing, not a
 # micro-optimization. Under a UTF-8 locale bash must walk the string to find
 # CHARACTER i, so `${s:i:1}` is O(i) and this loop is O(n^2) -- measured 4.0s on
@@ -150,7 +164,8 @@ strip_quoted_heredoc_bodies() {
 # [[:space:]] semantics -- pinned by a test.
 _split_unquoted() {
   local LC_ALL=C
-  local s="$1" out="" c state=none i=0 len keep="${2:-}"
+  local s="$1" out="" c state=none i=0 len keep="${2:-}" joined="" distrust=""
+  [[ "$s" == *'<<'* ]] && keep=keep
   len=${#s}
   while ((i < len)); do
     c="${s:i:1}"
@@ -161,6 +176,7 @@ _split_unquoted() {
     elif [[ "$state" == "none" && "$c" == "'" ]]; then
       state=single
       out+="$c"
+      [[ "$i" -gt 0 && "${s:i-1:1}" == '$' ]] && distrust=1
     elif [[ "$state" == "single" && "$c" == "'" ]]; then
       state=none
       out+="$c"
@@ -172,19 +188,25 @@ _split_unquoted() {
       out+="$c"
     elif [[ "$state" == "double" && "$c" == '`' ]]; then
       out+=$'\n'
+      distrust=1
     elif [[ "$state" == "double" && "$c" == '$' && "${s:i+1:1}" == '(' ]]; then
       out+=$'\n'
       i=$((i + 1))
+      distrust=1
     elif [[ "$state" == "none" && ';&|(){}`' == *"$c"* ]]; then
       out+=$'\n'
+    elif [[ "$state" == "none" && "$c" == '#' ]]; then
+      out+="$c"
+      distrust=1
     elif [[ "$state" != "none" && "$c" == $'\n' && -z "$keep" ]]; then
       out+=" "
+      joined=1
     else
       out+="$c"
     fi
     i=$((i + 1))
   done
-  if [[ "$state" != "none" && -z "$keep" ]]; then
+  if [[ -n "$joined" && (-n "$distrust" || "$state" != "none") ]]; then
     _split_unquoted "$1" keep
     return
   fi

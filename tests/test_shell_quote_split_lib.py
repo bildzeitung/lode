@@ -241,6 +241,59 @@ def test_split_does_not_leak_the_c_locale_to_its_caller() -> None:
     )
 
 
+def _split(text: str, *args: str) -> str:
+    """`_split_unquoted`'s raw output, run under `set -euo pipefail` as both guards run it."""
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'set -euo pipefail; source "$1"; shift; _split_unquoted "$@"',
+            "_",
+            str(LIB),
+            text,
+            *args,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_split_joins_a_newline_inside_a_quoted_argument() -> None:
+    """lode-2ctid: a newline inside '...' or "..." belongs to one argument, so it must not start
+    a segment; a newline outside quotes still does. `keep` as $2 turns the join off."""
+    assert _split('a "b\nc" d\ne') == 'a "b c" d\ne'
+    assert _split("a 'b\nc' d\ne") == "a 'b c' d\ne"
+    assert _split('a "b\nc" d\ne', "keep") == 'a "b\nc" d\ne'
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat <<EOF\ndon't\nEOF\nMARK\ncat <<EOF\ncan't\nEOF",
+        "# don't\nMARK\n# that's it",
+        'echo "$(true\nMARK\n)"',
+        'echo "`true\nMARK\n`"',
+        "echo $'a\\'b'\nMARK\necho \\'",
+        "echo 'a\nMARK",
+    ],
+    ids=["heredoc", "comment", "dollar-paren", "backtick", "ansi-c", "unbalanced"],
+)
+def test_split_keeps_every_newline_where_its_quote_state_cannot_be_trusted(
+    command: str,
+) -> None:
+    """lode-2ctid: the join trusts the scanner's quote state across a line break. Each command
+    here holds one construct the scanner does not model, with `MARK` on a line the shell RUNS
+    while the scanner counts it as inside a quote. Joining would hide that line from both
+    guards' line-anchored greps -- a false ALLOW -- so it must stay a line of its own."""
+    assert "MARK" in _split(command).split("\n"), (
+        f"_split_unquoted joined a live line into a quoted argument: {command!r}"
+    )
+
+
 def test_scan_length_cap_is_declared_and_enforced_once_and_shared() -> None:
     """lode-rjqm: BOTH halves of the scan-length cap -- the value
     (`SHELL_QUOTE_SPLIT_MAX_LEN`) and its enforcement (`deny_if_over_scan_cap`) -- live exactly
