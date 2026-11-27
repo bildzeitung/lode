@@ -745,6 +745,11 @@ def _follow_rows(tmp_path: Path, entries: list[dict], window: int = 5) -> list[d
         (("Bash", {"command": "sed -n 90,100p docs/stack.md"}), "followed"),
         (("Bash", {"command": "sed -n 101,130p docs/stack.md"}), "followed"),
         (("Bash", {"command": "sed -n 121,130p docs/stack.md"}), "not-followed"),
+        (("Bash", {"command": "sed -n '10,20p;118,119p' docs/stack.md"}), "followed"),
+        (
+            ("Bash", {"command": "sed -n '10,20p;121,130p' docs/stack.md"}),
+            "not-followed",
+        ),
         (("Bash", {"command": "head -n 50 docs/stack.md"}), "not-followed"),
         (("Bash", {"command": "head -n 105 docs/stack.md"}), "followed"),
         (("Bash", {"command": "awk 'NR>=118 && NR<=140' docs/stack.md"}), "followed"),
@@ -812,6 +817,71 @@ def test_follow_counts_a_duplicated_call_once(tmp_path: Path) -> None:
     _write_transcript(tmp_path / "a" / "s.jsonl", entries)
     _write_transcript(tmp_path / "b" / "s.jsonl", entries)
     assert len(_report_module.scan_follow(tmp_path)) == 1
+
+
+@pytest.mark.parametrize("cut", [1, 2])
+def test_follow_takes_the_copy_of_a_call_that_shows_the_most(
+    tmp_path: Path, cut: int
+) -> None:
+    """A copy that stops before the result, or before the read, sorts first
+    and must not fix the row."""
+    entries = _index_call("i1", "dup", _CITES)
+    entries.append(_use("c1", "Bash", {"command": "sed -n 100,110p docs/stack.md"}))
+    _write_transcript(tmp_path / "a" / "s.jsonl", entries[:cut])
+    _write_transcript(tmp_path / "b" / "s.jsonl", entries)
+    assert [r["status"] for r in _report_module.scan_follow(tmp_path)] == ["followed"]
+
+
+@pytest.mark.parametrize(
+    ("command", "idless"),
+    [
+        ('uv run --frozen python scripts/docs_index_query.py "lode-abc1 words"', False),
+        (
+            'bd show lode-abc1; uv run python scripts/docs_index_query.py "words" | head',
+            True,
+        ),
+        (
+            'python scripts/docs_index_query.py "words"; grep -n lode-abc1 docs/stack.md',
+            True,
+        ),
+        (
+            'for q in lode-abc1 "two words"; do echo "= $q"; '
+            'uv run python scripts/docs_index_query.py "$q"; done',
+            False,
+        ),
+        (
+            'for q in one two; do echo "= $q"; '
+            'python scripts/docs_index_query.py "$q"; done',
+            True,
+        ),
+    ],
+)
+def test_id_query_is_judged_on_the_segment_that_runs_the_index(
+    tmp_path: Path, command: str, idless: bool
+) -> None:
+    entries = [_use("i1", "Bash", {"command": command}), _result("i1", _CITES)]
+    assert _follow_rows(tmp_path, entries)[0]["idless"] is idless
+
+
+@pytest.mark.parametrize(
+    ("result", "status"),
+    [
+        ("No results.", "zero-hit"),
+        ("Exit code 127\n/bin/bash: ./venv/bin/python: No such file", "uncited"),
+        (" Usage: docs_index_query.py [OPTIONS] {text}", "uncited"),
+    ],
+)
+def test_follow_zero_hit_is_only_the_index_saying_no_results(
+    tmp_path: Path, result: str, status: str
+) -> None:
+    rows = _follow_rows(tmp_path, _index_call("i1", "x y", result))
+    assert rows[0]["status"] == status
+    summary = _report_module.summarize_follow(rows)["overall"]
+    assert (summary["zero_hit"], summary["uncited"]) == (
+        int(status == "zero-hit"),
+        int(status == "uncited"),
+    )
+    assert summary["cited"] == 0
 
 
 def test_report_cli_prints_the_follow_rate_with_its_window(tmp_path: Path) -> None:

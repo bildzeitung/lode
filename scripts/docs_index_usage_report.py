@@ -29,10 +29,11 @@ TRANSCRIPT-ENCODING CAVEATS (hit while writing this):
 
 - A ``tool_result`` (and occasionally ``tool_use.input``) is not reliably
   one shape: content can be a plain string, or a list of content blocks
-  (``{"type": "text", "text": ...}``). This script only reads ``tool_use``
-  blocks, which are consistently a dict with ``name``/``input`` keys in every
-  transcript sampled -- it never depends on ``tool_result`` shape at all, so
-  that particular inconsistency doesn't reach this script's own parsing.
+  (``{"type": "text", "text": ...}``). The index-vs-direct counts only read
+  ``tool_use`` blocks, which are consistently a dict with ``name``/``input``
+  keys in every transcript sampled, so that inconsistency doesn't reach them.
+  The pointer-follow rate does read an index call's ``tool_result``, in
+  either shape (:func:`_result_text`).
 - Not every JSON line is a message turn (``type`` values like
   ``"last-prompt"``, ``"mode"``, ``"bridge-session"``, or a hook-attachment
   record carry no ``message`` key at all) -- skipped via a plain ``.get``,
@@ -507,11 +508,26 @@ DEFAULT_FOLLOW_WINDOW = 5
 #: query, so :func:`_docs_relpath` normalizes it before comparing.
 _CITED_RE = re.compile(r"^(\S+\.md):(\d+)-(\d+)", re.MULTILINE)
 
-#: A bd id anywhere in the index command marks an id query. Any ``lode-``
-#: word of 3-6 letters or digits matches, so a query naming ``lode-index``
-#: counts as an id query too; the over-match is accepted.
+#: A bd id, as :func:`_is_id_query` looks for one. Any ``lode-`` word of 3-6
+#: letters or digits matches, so a query naming ``lode-index`` counts as an
+#: id query too; the over-match is accepted.
 _BD_ID_RE = re.compile(r"\blode-[a-z0-9]{3,6}\b", re.IGNORECASE)
 
+#: What the index prints when a query matches nothing.
+_NO_RESULTS = "No results."
+
+#: Which copy of an index call wins when more than one transcript holds it:
+#: the one that shows the most. A copy can stop before the call's result or
+#: before the read that follows it.
+_STATUS_RANK = {
+    "no-result": 0,
+    "uncited": 1,
+    "zero-hit": 1,
+    "not-followed": 2,
+    "followed": 3,
+}
+
+#: One command of a ``sed`` script: ``Np``, ``A,Bp`` or ``A,$p``.
 _SED_RANGE_RE = re.compile(r"^(\d+)(?:,(\d+|\$))?p$")
 _AWK_PAIR_RE = re.compile(r"NR\s*==\s*(\d+)\s*,\s*NR\s*==\s*(\d+)")
 _AWK_CMP_RE = re.compile(r"NR\s*(>=|>|<=|<|==)\s*(\d+)")
@@ -567,11 +583,12 @@ def _segment_line_ranges(name: str | None, tokens: list[str]) -> list[_Range]:
     if name == "sed":
         ranges: list[_Range] = []
         for tok in tokens:
-            m = _SED_RANGE_RE.match(tok)
-            if m:
-                end = m.group(2)
-                lo = int(m.group(1))
-                ranges.append((lo, math.inf if end == "$" else int(end or lo)))
+            for part in tok.split(";"):
+                m = _SED_RANGE_RE.match(part.strip())
+                if m:
+                    end = m.group(2)
+                    lo = int(m.group(1))
+                    ranges.append((lo, math.inf if end == "$" else int(end or lo)))
         return ranges
     if name == "head":
         return [(1, _head_count(tokens))]
@@ -655,6 +672,44 @@ def _overlaps(cited: tuple[str, int, int], read: tuple[str, _Range]) -> bool:
     return path == rpath and lo <= rhi and rlo <= hi
 
 
+def _is_id_query(command: str) -> bool:
+    """Whether an index call's query names a bd id. Only the segments that
+    run the index are searched, so an id elsewhere in the command (``bd show
+    lode-abc1; <index> "words"``) does not make it an id query. A query that
+    arrives through a shell variable (``for q in lode-abc1 ...; do <index>
+    "$q"; done``) cannot be read off its segment, so the whole command is
+    searched instead."""
+    segments = [seg for seg in _split_segments(command) if _is_index_segment(seg)]
+    if any("$" in seg for seg in segments):
+        return bool(_BD_ID_RE.search(command))
+    return any(_BD_ID_RE.search(seg) for seg in segments)
+
+
+def _follow_status(
+    result: str | None, later_calls: list[list[tuple[str, _Range]]]
+) -> tuple[str, bool]:
+    """``(status, whole_file_only)`` of one index call, from its recorded
+    result and the reads of the tool calls in its window."""
+    if result is None:
+        return "no-result", False
+    cited = [
+        (rel, int(m.group(2)), int(m.group(3)))
+        for m in _CITED_RE.finditer(result)
+        if (rel := _docs_relpath(m.group(1)))
+    ]
+    if not cited:
+        return ("zero-hit" if _NO_RESULTS in result else "uncited"), False
+    hits = [
+        read
+        for reads in later_calls
+        for read in reads
+        if any(_overlaps(c, read) for c in cited)
+    ]
+    if not hits:
+        return "not-followed", False
+    return "followed", all(lo <= 1 and hi == math.inf for _, (lo, hi) in hits)
+
+
 def scan_follow(
     *projects_dirs: Path, window: int = DEFAULT_FOLLOW_WINDOW
 ) -> list[dict[str, Any]]:
@@ -663,14 +718,17 @@ def scan_follow(
     ``status`` is ``"followed"`` when one of the next ``window`` tool calls in
     the same transcript reads a range overlapping a cited ``path:lo-hi`` (cited
     ranges are parsed from the call's recorded result, never re-queried),
-    ``"not-followed"`` when none does, ``"zero-hit"`` when the result cites
-    nothing, ``"no-result"`` when the transcript holds no result for the call.
+    ``"not-followed"`` when none does, ``"zero-hit"`` when the index answered
+    ``No results.``, ``"uncited"`` when the result cites nothing for any other
+    reason (the command failed, printed ``--help``, or had its output filtered
+    away), ``"no-result"`` when the transcript holds no result for the call.
     An answer taken from the snippet alone is, by ruling, not a follow.
     ``whole_file_only`` marks a follow whose every overlapping read takes the
     whole file or an open-ended tail from line 1, which overlaps any range.
+
+    A call held by more than one transcript is one row: :data:`_STATUS_RANK`.
     """
-    rows: list[dict[str, Any]] = []
-    done: set[str] = set()
+    rows: dict[str, dict[str, Any]] = {}
     transcripts = sorted(p for d in projects_dirs for p in d.rglob("*.jsonl"))
     for transcript_path in transcripts:
         calls: list[list[tuple[str, _Range]]] = []
@@ -689,38 +747,22 @@ def scan_follow(
             seen.add(tid)
             name = block.get("name", "")
             tool_input = block.get("input") or {}
-            if _classify(name, tool_input) == "index" and tid not in done:
+            if _classify(name, tool_input) == "index":
                 command = str(tool_input.get("command", ""))
-                index_calls[tid] = (len(calls), not _BD_ID_RE.search(command))
+                index_calls[tid] = (len(calls), not _is_id_query(command))
             calls.append(_tool_reads(name, tool_input))
         for tid, (pos, idless) in index_calls.items():
-            done.add(tid)
-            row: dict[str, Any] = {"idless": idless, "whole_file_only": False}
-            if tid not in results:
-                row["status"] = "no-result"
-                rows.append(row)
-                continue
-            cited = [
-                (_docs_relpath(m.group(1)), int(m.group(2)), int(m.group(3)))
-                for m in _CITED_RE.finditer(results[tid])
-            ]
-            cited = [(p, lo, hi) for p, lo, hi in cited if p]
-            if not cited:
-                row["status"] = "zero-hit"
-                rows.append(row)
-                continue
-            hits = [
-                read
-                for reads in calls[pos + 1 : pos + 1 + window]
-                for read in reads
-                if any(_overlaps(c, read) for c in cited)
-            ]
-            row["status"] = "followed" if hits else "not-followed"
-            row["whole_file_only"] = bool(hits) and all(
-                r[1][0] <= 1 and r[1][1] == math.inf for r in hits
+            status, whole_file_only = _follow_status(
+                results.get(tid), calls[pos + 1 : pos + 1 + window]
             )
-            rows.append(row)
-    return rows
+            held = rows.get(tid)
+            if held is None or _STATUS_RANK[status] > _STATUS_RANK[held["status"]]:
+                rows[tid] = {
+                    "idless": idless,
+                    "status": status,
+                    "whole_file_only": whole_file_only,
+                }
+    return list(rows.values())
 
 
 def summarize_follow(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -733,6 +775,7 @@ def summarize_follow(rows: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "calls": len(subset),
             "zero_hit": counts["zero-hit"],
+            "uncited": counts["uncited"],
             "no_result": counts["no-result"],
             "cited": cited,
             "followed": counts["followed"],
@@ -751,7 +794,7 @@ def _print_follow(label: str, t: dict[str, Any]) -> None:
     print(
         f"    {label}: {t['followed']}/{t['cited']} followed = {rate} "
         f"(whole-file-only follows {t['whole_file_only']}, zero-hit {t['zero_hit']}, "
-        f"no result recorded {t['no_result']})"
+        f"result cites nothing {t['uncited']}, no result recorded {t['no_result']})"
     )
 
 
