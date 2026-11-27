@@ -6359,6 +6359,14 @@ entries below from being rewritten to chase the current tree.)
   is in the `lode-k813a` marker under the entry "docs-index usage report: count each tool call
   once, and classify an index call by segment" (`lode-yt7q2`).
 
+  **Update (lode-d3snk, 2026-11-27):** this entry's `shlex` separator split is replaced. `shlex`
+  in non-POSIX mode has no backslash escapes and opens a quote only at the start of a token, so
+  it disagreed with the newline scan about an escaped or mid-word quote. One scan
+  (`_mask_line`) now decides what is quoted, and the heredoc, newline and separator splits all
+  read that mask. What it changed on real transcripts is in the `lode-d3snk` marker under the
+  entry "docs-index usage report: count each tool call once, and classify an index call by
+  segment" (`lode-yt7q2`).
+
 - **`scripts/` sibling loading keeps three short UNCACHED bootstraps, not one shared one
   (`lode-7l68`, 2026-09-14).** `lode-wtk2` consolidated the sibling-loader *body* into
   [`scripts/docs_index_loader.py`](../scripts/docs_index_loader.py)'s `load_sibling()`, but each of
@@ -8030,3 +8038,13 @@ Fixes the two defects `lode-2e6x` found in `scripts/docs_index_usage_report.py`,
   still missed, as is any command whose quoted text holds an escaped quote or whose quote opens
   mid-word: the newline scan follows the shell there and the `shlex` separator split does not
   (`lode-d3snk`).
+
+  **Update (lode-d3snk, 2026-11-27):** the escaped-quote and mid-word-quote misses above are fixed.
+  The `shlex` separator split is gone; one scan decides what is quoted, and it also keeps a
+  `<<` inside a quoted argument from opening a heredoc. Measured by running the script from
+  before and after the fix over the same transcripts (2026-11-14 to 2026-11-27, default scope)
+  and comparing by `tool_use` id: 12 calls change class. 1 index run is now counted (the third
+  lost run), 9 direct reads are now counted (a `grep` or `sed` of a docs file whose command
+  held an escaped or nested quote), 2 direct rows are gone (a `bd create --description="..."`
+  text whose quote opened mid-word). Each was read from the first 400 characters of its command; the report
+  printed 293 index / 2,651 direct on the Bash calls before and 294 / 2,658 after.
