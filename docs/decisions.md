@@ -8041,10 +8041,17 @@ Fixes the two defects `lode-2e6x` found in `scripts/docs_index_usage_report.py`,
 
   **Update (lode-d3snk, 2026-11-27):** the escaped-quote and mid-word-quote misses above are fixed.
   The `shlex` separator split is gone; one scan decides what is quoted, and it also keeps a
-  `<<` inside a quoted argument from opening a heredoc. Measured by running the script from
-  before and after the fix over the same transcripts (2026-11-14 to 2026-11-27, default scope)
-  and comparing by `tool_use` id: 12 calls change class. 1 index run is now counted (the third
-  lost run), 9 direct reads are now counted (a `grep` or `sed` of a docs file whose command
-  held an escaped or nested quote), 2 direct rows are gone (a `bd create --description="..."`
-  text whose quote opened mid-word). Each was read from the first 400 characters of its command; the report
-  printed 293 index / 2,651 direct on the Bash calls before and 294 / 2,658 after.
+  `<<` inside a quoted argument from opening a heredoc. One `<<` inside a quote still opens
+  one: in a double quote after a `$(` on the same line, as in `git commit -m "$(cat <<'EOF'`,
+  whose body is dropped as before. Measured by running the script from before and after the fix
+  over the same transcripts (2026-11-14 to 2026-11-27, default scope) and comparing Bash calls
+  by `tool_use` id: 13 calls change class, and each command was read in full. 1 index run is
+  now counted (the third lost run). 9 direct rows are now counted: 8 are a `grep`, `sed`, `awk`
+  or `tail` of a docs file in a command that held an escaped or nested quote, and 1 is a
+  `grep -v` whose pattern names a docs path, which the classifier does not tell from a path it
+  reads. 3 direct rows are gone: 2 are `bd create --description="..."` text whose quote opened
+  mid-word, and 1 is a `python -c "..."` probe from this ticket's own review that held `grep`
+  commands as strings. The report printed 299 / 3,124 before and 300 / 3,130 after. Not fixed:
+  ANSI-C quoting is read as a single quote, so the `\'` in `$'it\'s'` closes it and a command
+  after it on the same line is missed. A scan that reads it changed no call on these
+  transcripts.
