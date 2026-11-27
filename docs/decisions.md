@@ -8080,6 +8080,9 @@ Fixes the two defects `lode-2e6x` found in `scripts/docs_index_usage_report.py`,
   still missed, as is any command whose quoted text holds an escaped quote or whose quote opens
   mid-word: the newline scan follows the shell there and the `shlex` separator split does not
   (`lode-d3snk`).
+  **Update (lode-htkr3, 2026-11-27):** the `lode-d3snk` Update marker that answers the last
+  sentence above was appended by mistake under the next section, "Fold the deterministic
+  guard-script ritual into fewer tool calls", at its end. It belongs to this entry; read it there.
 
 ## Fold the deterministic guard-script ritual into fewer tool calls (open, lode-fg7w7.3)
 
@@ -8213,3 +8216,23 @@ write once the checkpoints are gone? The `human`-labelled ticket `lode-htkr3` as
   ANSI-C quoting is read as a single quote, so the `\'` in `$'it\'s'` closes it and a command
   after it on the same line is missed. A scan that reads it changed no call on these
   transcripts.
+  **Update (lode-htkr3, 2026-11-27):** the Update marker directly above (`lode-d3snk`) does not
+  belong to this section. It corrects the "Still missed" bullet of the `lode-yt7q2` entry just
+  before this one, where a pointer to it has been added.
+  **Update (lode-htkr3, 2026-11-27) -- DECIDED (maintainer):** proposals 2 and 3 are approved;
+  proposals 1 and 4 are rejected.
+  - Proposal 1 rejected: both mid-session `isolation-guard.sh` re-assertions stay. The hooks are
+    not widened, so `lode-p8zl` ruling 1 (gate on the branch) stands, and the `lode-21sxk` live-lock
+    limit and the `lode-gro8` Bash-write residual keep the checkpoints they were accepted with. The
+    non-`trunk` gap therefore stays closed by the checkpoints, not by a hook. Saving around 550
+    calls was not worth reopening those three rulings.
+  - Proposal 2 approved, built as `lode-fg7w7.4`: one plain call to a wrapper that runs the two
+    start guards in order and stops on the first refusal, naming the guard that refused. Both
+    scripts and their tests stay separate siblings; `lode-fvg0`'s plain-call rule stands (no `&&`).
+  - Proposal 3 approved, built as `lode-fg7w7.5`: `handoff-sha.sh --push`, with an exit code for
+    "written, push failed" distinct from write failures 1 to 5, and not used on the builder's
+    escalation path, which writes the `land-escalated` label between the handoff and the push.
+  - Proposal 4 rejected: it saves no call beyond proposal 2, and it would add the recycled guard's
+    reset and `git clean -fd` to the comment groomer's path.
+  Upper-bound saving of what was approved: about 910 calls (612 + 298) over the measured window.
+  No check is removed.
