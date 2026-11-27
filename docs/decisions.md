@@ -8030,3 +8030,68 @@ Fixes the two defects `lode-2e6x` found in `scripts/docs_index_usage_report.py`,
   still missed, as is any command whose quoted text holds an escaped quote or whose quote opens
   mid-word: the newline scan follows the shell there and the `shlex` separator split does not
   (`lode-d3snk`).
+
+## Fold the deterministic guard-script ritual into fewer tool calls (open, lode-fg7w7.3)
+
+Proposal C of the `lode-a55l6` entry, raised as a debate under epic `lode-fg7w7`. Nothing is built
+under it and no guard script is changed. A human approves a consolidation before any build ticket is
+filed. Call counts are the `lode-a55l6` entry's (13-day window of local transcripts, one machine);
+the saving figures below are upper bounds worked out from those counts, not measurements.
+
+**What each script guarantees, and its call count**
+
+| Script | Calls | Guarantee |
+|---|---|---|
+| `isolation-guard.sh` (`lode-ska2`) | 1,159 (612 are a transcript's first, about 550 are `lode-6wgc` re-assertions) | cwd's toplevel is under `.claude/worktrees/`; otherwise stop. Never repairs. |
+| `recycled-worktree-guard.sh` (`lode-nt98`, `lode-ivth`) | 629 | cwd is inside a worktree (its own `case` repeats the isolation predicate) and HEAD is an ancestor of `origin/trunk`; otherwise reset and clean, after tagging a `rescue/` ref. |
+| `checkout-land-branch.sh` (`lode-qh1m`) | 199 | fetch `land/<id>` and `trunk`, check the tip out under a name derived from this worktree's directory. Exit 1 when not in a worktree. |
+| `handoff-sha.sh` (`lode-qh1m`, `lode-0a4n`) | 298 | derive HEAD, check origin's `land/<id>` is at it, write the metadata and labels in one process. |
+| `bd-dolt-push.sh` (`lode-83d`) | 319 | `bd dolt push` with backoff and `bd dolt pull` between attempts. |
+
+The last four are 1,445 calls (4.4% of all tool calls); with the re-assertions, about 2,000.
+
+**Does `trunk-write-guard.sh` already cover the isolation-guard re-assertions? Partly.** Read from the
+scripts, not run against a real vanished worktree.
+
+- Covered: the `lode-6wgc` failure, a launch worktree that vanishes mid-session and drops cwd onto the
+  main checkout on `trunk`. `trunk-write-guard.sh` (`PreToolUse(Edit|Write)`) and
+  `trunk-bash-guard.sh` (`lode-21sxk`, `PreToolUse(Bash)`, for commit, merge, push, rebase,
+  cherry-pick and `nox`) both ask when the checkout's branch is `trunk`. The step-5 re-assertion
+  guards the first `Edit`/`Write` and the step-6 one guards the first commit, so both are covered,
+  with no tool call.
+- Not covered: the hooks gate on the branch, `isolation-guard.sh` on the location. A cwd in the
+  main checkout on any branch other than `trunk` (a human left it on a feature branch, or a rebase
+  detached it) passes both hooks and fails the guard. File writes through Bash (python, sed, heredoc)
+  are outside `trunk-bash-guard.sh` by ruling. The hooks decide "ask", never "deny", so they stop a
+  dispatched subagent only because it cannot approve; that is the `lode-p8zl` ruling, not something
+  checked here.
+- Not covered, and not a re-assertion: the mandatory first call. No hook runs before the first tool
+  call, so that stays.
+
+**Proposed consolidation (each independent; the human picks)**
+
+1. **Drop the two mid-session `isolation-guard.sh` re-assertions** (at most about 550 calls) and rely
+   on the two trunk hooks. Closing the non-`trunk` gap needs a ruling first: either accept it, or
+   widen both hooks to ask whenever the toplevel is not under `.claude/worktrees/` (the main session
+   already gets an ask on trunk, so the added cost is asks on a non-trunk main-checkout branch).
+   Widening reverses `lode-p8zl` ruling 1 (gate on the branch), so it is the human's call.
+2. **One start-of-cycle call for the two start guards** (at most about 612 calls, every dispatch):
+   a wrapper that runs `isolation-guard.sh`, then `recycled-worktree-guard.sh`, and stops on the first
+   nonzero exit. Both scripts and their tests stay, so `lode-ska2`'s request that they remain
+   distinct siblings holds; only the call count changes. Not checked: whether every one of the 629
+   `recycled-worktree-guard.sh` calls directly follows an isolation call.
+3. **`handoff-sha.sh` gets a `--push` option that ends by running `bd-dolt-push.sh`** (at most about
+   298 calls). Needs its exit-code table extended with a push failure distinct from the write
+   failures 1 to 5, since a failed push after a successful write must not look like a write that
+   did not happen. The other `bd-dolt-push.sh` calls (about 20) are standalone pushes.
+4. **`checkout-land-branch.sh` runs `recycled-worktree-guard.sh` itself first** (at most about 199
+   calls, reviewer and rebase pickup). The guard already must precede the fetch there.
+
+Risks to weigh: a wrapper puts two guarantees behind one exit code, so the diagnostic must say which
+guard refused; and a guard folded into another script is no longer its own line in the prose, so the
+instruction files' "run X, read its status" text must be reworded in step. The upper bounds sum to
+about 1,650 calls, 5% of all tool calls. Proposal 1 is the largest and the only one with a guarantee
+in question.
+
+**Open (`lode-fg7w7.3`).** Which of proposals 1 to 4, if any, are built? For proposal 1: accept the
+non-`trunk` gap, or widen the hooks? The `human`-labelled ticket `lode-htkr3` asks for this approval.
