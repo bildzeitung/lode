@@ -64,8 +64,8 @@ _INDEX_SCRIPT_MARKER = "docs_index_query.py"
 _DIRECT_BASH_COMMANDS = frozenset({"grep", "sed", "head", "cat", "tail", "awk"})
 
 #: Separators that break one Bash command LINE into independent segments --
-#: ``;``, ``|``/``||``, ``&``/``&&``, and subshell grouping ``(``/``)`` (a
-#: newline is handled before this, by splitting the command into lines).
+#: ``;``, ``|``/``||``, ``&``/``&&``, and subshell grouping ``(``/``)`` (an
+#: unquoted newline is handled before this, by :func:`_logical_lines`).
 #: ``_classify`` used to judge a whole line at once (lode-wtk2): a genuine
 #: read piped into ``tee`` was excluded wholesale because the write check saw
 #: ``tee`` anywhere on the line, and a line merely pairing a docs path with
@@ -83,6 +83,11 @@ _DIRECT_BASH_COMMANDS = frozenset({"grep", "sed", "head", "cat", "tail", "awk"})
 #: :data:`_REDIRECT_TO_DOCS_RE` and the heredoc check need them to stay inside
 #: the segment they qualify.
 _SEGMENT_PUNCTUATION_CHARS = "();&|"
+
+#: A ``#`` opens a comment only at the start of a word: at the start of a
+#: line, or after whitespace or one of these separators. ``$#``, ``${x#y}``
+#: and ``a#b`` are not comments.
+_COMMENT_PRECEDERS = " \t" + _SEGMENT_PUNCTUATION_CHARS
 
 #: Argument-forwarding wrappers a real command name can follow -- same
 #: allowlist and same under-count-not-over-count rationale as lode-dozi's
@@ -110,7 +115,9 @@ def _split_line_segments(line: str) -> list[str]:
 
     A line shlex cannot tokenize at all (an unbalanced quote) is returned
     whole, which degrades that one line to the pre-``lode-wtk2`` line-level
-    behaviour rather than dropping it.
+    behaviour rather than dropping it. A line here is what
+    :func:`_split_segments` hands over, so it holds a newline wherever a
+    quoted argument spans one.
     """
     lexer = shlex.shlex(line, posix=False, punctuation_chars=_SEGMENT_PUNCTUATION_CHARS)
     lexer.whitespace_split = True
@@ -160,31 +167,37 @@ def _strip_heredoc_bodies(command: str) -> list[str]:
 
 def _split_segments(command: str) -> list[str]:
     """Split a Bash command into independent segments -- heredoc bodies
-    stripped first, then on newlines, then on the in-line shell separators --
-    dropping any segment with no non-whitespace content."""
+    stripped first, then on unquoted newlines, then on the in-line shell
+    separators -- dropping any segment with no non-whitespace content."""
     lines = _strip_heredoc_bodies(command)
-    joined = _newlines_to_separators("\n".join(lines))
     # A quote left open across the whole command cannot be honoured over
     # newlines; fall back to splitting per physical line.
-    chunks = [joined] if joined is not None else lines
+    logical = _logical_lines("\n".join(lines))
     segments: list[str] = []
-    for chunk in chunks:
-        segments.extend(_split_line_segments(chunk))
+    for line in lines if logical is None else logical:
+        segments.extend(_split_line_segments(line))
     return [seg for seg in segments if seg.strip()]
 
 
-def _newlines_to_separators(text: str) -> str | None:
-    """``text`` with every UNQUOTED newline replaced by ``;``, so a newline
-    inside a multi-line quoted argument stays part of that argument and the
-    closing quote is not misread as an opening one (lode-k813a). ``None`` if
-    a quote is still open at the end."""
-    out: list[str] = []
+def _logical_lines(text: str) -> list[str] | None:
+    """``text`` split at every UNQUOTED newline, so a newline inside a
+    multi-line quoted argument stays part of that argument and the closing
+    quote is not misread as an opening one (lode-k813a). ``None`` if a quote
+    is still open at the end.
+
+    The pieces stay separate lines, not one line joined with ``;``: shlex
+    drops everything from a ``#`` to the end of ITS line, so on one joined
+    line a comment -- or a mid-word ``#`` such as ``$#`` -- would discard
+    every command after it. A comment's own text is skipped here, as a shell
+    skips it: an apostrophe in a comment opens no quote.
+    """
+    lines: list[str] = []
+    start = 0
     quote = ""
     i = 0
     while i < len(text):
         char = text[i]
         if char == "\\" and quote != "'" and text[i + 1 : i + 2] not in ("", "\n"):
-            out.append(text[i : i + 2])
             i += 2
             continue
         if quote:
@@ -192,11 +205,18 @@ def _newlines_to_separators(text: str) -> str | None:
                 quote = ""
         elif char in "'\"":
             quote = char
+        elif char == "#" and (i == start or text[i - 1] in _COMMENT_PRECEDERS):
+            end = text.find("\n", i)
+            i = len(text) if end == -1 else end
+            continue
         elif char == "\n":
-            char = ";"
-        out.append(char)
+            lines.append(text[start:i])
+            start = i + 1
         i += 1
-    return None if quote else "".join(out)
+    if quote:
+        return None
+    lines.append(text[start:])
+    return lines
 
 
 def _segment_tokens(segment: str) -> list[str]:

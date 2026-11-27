@@ -6353,6 +6353,12 @@ entries below from being rewritten to chase the current tree.)
   before the fix and cannot be re-measured. See the entry "docs-index usage report: count each
   tool call once, and classify an index call by segment" (`lode-yt7q2`).
 
+  **Update (lode-k813a, 2026-11-26):** a newline now separates segments only outside quotes. This
+  entry's split cut the command into physical lines before it honoured quotes, so a quoted
+  argument that spans lines was broken at each newline. What that cost and what the fix changed
+  is in the `lode-k813a` marker under the entry "docs-index usage report: count each tool call
+  once, and classify an index call by segment" (`lode-yt7q2`).
+
 - **`scripts/` sibling loading keeps three short UNCACHED bootstraps, not one shared one
   (`lode-7l68`, 2026-09-14).** `lode-wtk2` consolidated the sibling-loader *body* into
   [`scripts/docs_index_loader.py`](../scripts/docs_index_loader.py)'s `load_sibling()`, but each of
@@ -8010,3 +8016,17 @@ Fixes the two defects `lode-2e6x` found in `scripts/docs_index_usage_report.py`,
   The `lode-dozi` and `lode-wtk2` entries each carry an Update marker saying so. The `lode-a55l6`
   entry needs none: its own text calls the report's figures wrong and gives its counts by
   distinct id.
+
+  **Update (lode-k813a, 2026-11-26):** the "Still missed" bullet is fixed in part.
+  `_split_segments` now splits at a newline only outside quotes. Measured by running the script
+  from before and after the fix over the same transcripts (2026-11-14 to 2026-11-27, default
+  scope) and comparing by `tool_use` id: 6 calls change class. 2 index runs behind the closing
+  quote of a multi-line argument are now counted.
+  So are 2 direct reads on a line that ended inside an open quote (a multi-line commit message):
+  such a line was judged whole, as its first command, an in-place `sed`. 1 index row and 1 direct
+  row that were never real are gone: a line of quoted `bd create` text that began with the
+  script's path, and a `grep` of a non-docs file whose line ended inside an open quote and so
+  took the docs path of the `git add` after it. The report printed 283 / 2,995 before and
+  284 / 2,996 after. The third of the 3 lost index runs is still missed, as is any command whose
+  quoted text holds an escaped quote or whose quote opens mid-word: the newline scan follows the
+  shell there and the `shlex` separator split does not (`lode-d3snk`).
