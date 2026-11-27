@@ -6247,6 +6247,11 @@ entries below from being rewritten to chase the current tree.)
   marker of the same id under the `lode-wtk2` entry below, and in the entry "docs-index: usage
   evaluation, verdict, and ranked agent-input alternatives" (`lode-a55l6`).
 
+  **Update (lode-yt7q2, 2026-11-26):** both defects behind the marker above are fixed in
+  `docs_index_usage_report.py`; the 2026-09 figures stay unreliable, since they were produced
+  before the fix and cannot be re-measured. See the entry "docs-index usage report: count each
+  tool call once, and classify an index call by segment" (`lode-yt7q2`).
+
 - **2026-09-14 (`lode-wtk2`) — CORRECTION: `_classify` now judges Bash SEGMENTS, not
   whole lines, and the baseline figure above is re-measured.** Appended, not rewritten in place, per
   this file's preamble. `_classify` used to run its write/version-control exclusion and its
@@ -6342,6 +6347,11 @@ entries below from being rewritten to chase the current tree.)
   in the `main` row. Whether the 2026-09 transcripts repeated calls the same way cannot be
   checked: they are gone from this machine. See the entry "docs-index: usage evaluation, verdict,
   and ranked agent-input alternatives" (`lode-a55l6`); the defects are filed as `lode-yt7q2`.
+
+  **Update (lode-yt7q2, 2026-11-26):** both defects the marker above names are fixed in
+  `docs_index_usage_report.py`; the 2026-09 figures stay unreliable, since they were produced
+  before the fix and cannot be re-measured. See the entry "docs-index usage report: count each
+  tool call once, and classify an index call by segment" (`lode-yt7q2`).
 
 - **`scripts/` sibling loading keeps three short UNCACHED bootstraps, not one shared one
   (`lode-7l68`, 2026-09-14).** `lode-wtk2` consolidated the sibling-loader *body* into
@@ -7960,3 +7970,43 @@ one is taken, B: the retire condition rests on it.
     evaluator's throwaway scripts, "those I re-ran" (the zero-hit ids bullet) means those re-run
     while writing this entry, and "I did not measure tokens" (proposal D) means tokens were not
     measured.
+
+## docs-index usage report: count each tool call once, and classify an index call by segment (lode-yt7q2)
+
+Fixes the two defects `lode-2e6x` found in `scripts/docs_index_usage_report.py`, independent of the
+`lode-a55l6` ruling. The mechanism is the ticket's, traced there in the code and measured on the
+2026-11 transcripts; this entry records the fix.
+
+- **Each tool call is counted once.** `scan()` now counts a `tool_use` id once. Claude Code
+  writes most assistant turns twice, an `assistant` line (timestamp, cwd)
+  and a timestamp-less, cwd-less `api-request-blob` line, so the timestamped copy is kept and with
+  it the correct day and main-versus-subagent role. A block with no id is never merged. Dedupe on
+  the id rather than on the line `type` so a further format change cannot bring the repeats back.
+  The dedupe spans every transcript the report scans rather than one file (changed at review):
+  one subagent transcript sits under three session directories on this machine, two of the
+  copies carry its calls only on `api-request-blob` lines, and a per-file dedupe left their 10
+  rows in the `unknown` day and the `main` role.
+- **`index` is judged per Bash segment.** A segment counts only when its command is the script
+  itself, or is `python*` or `uv` and the script is the word a `python*` word runs, with only
+  options between the two. `sed`, `grep`, `bd` and `cat` naming the script, and
+  `test_docs_index_query.py`, no longer count. Nor does the script handed as a file to what `uv
+  run` or `python` really runs (changed at review): the ticket's rule, "an interpreter or `uv`
+  with the script as an argument", still counted forms such as `uv run --frozen ruff format
+  scripts/docs_index_query.py` and `uv run --frozen python edit.py scripts/docs_index_query.py`,
+  5 of the 285 calls it matched, none of which runs the index. The narrower rule misses `python
+  -X importtime <script>` and `uv run <script>`; neither form is in the transcripts.
+- **Measured after the fix** (2026-11-27, transcripts 2026-11-14 to 2026-11-27, default scope):
+  280 index / 2,975 direct (9% index share), `main: index=19 direct=87`, `subagent: index=261
+  direct=2888`, and no `unknown` day row. The days up to 2026-11-26 sum to 276 / 2,914. The
+  `lode-a55l6` entry gives 273 / 2,838 by distinct id, measured during 2026-11-26 with the
+  ticket's wider index rule.
+- **Still missed (`lode-k813a`):** an index run on the same physical line as the closing quote of
+  a multi-line quoted argument (`python3 -c "<several lines>"; uv run --frozen python
+  scripts/docs_index_query.py "x"`). `_split_segments` splits on newlines before it honours
+  quotes, so that line starts with an unmatched quote and yields no command name. 3 index runs
+  in the same transcripts are lost this way, about 1%. A direct read behind such a quote is
+  lost the same way; a probe for that one shape found none.
+- Figures the report printed before this change are not comparable with ones printed after it.
+  The `lode-dozi` and `lode-wtk2` entries each carry an Update marker saying so. The `lode-a55l6`
+  entry needs none: its own text calls the report's figures wrong and gives its counts by
+  distinct id.

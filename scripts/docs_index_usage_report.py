@@ -168,6 +168,18 @@ def _split_segments(command: str) -> list[str]:
     return [seg for seg in segments if seg.strip()]
 
 
+def _segment_tokens(segment: str) -> list[str]:
+    """The shell words of a single (already-split) segment."""
+    try:
+        return shlex.split(segment)
+    except ValueError:
+        # An unbalanced quote (shlex's only failure) leaves the words before
+        # it readable, the command name among them. Approximate with
+        # whitespace splitting rather than discarding the segment, which
+        # would silently under-count the rows it should count (lode-wtk2).
+        return segment.split()
+
+
 def _segment_command_name(segment: str) -> str | None:
     """The one command name actually invoked by a single (already-split)
     segment, or ``None`` if it can't be determined.
@@ -181,16 +193,7 @@ def _segment_command_name(segment: str) -> str | None:
     argument-forwarding wrapper (see :data:`_WRAPPER_COMMANDS`) is skipped
     so the token after it is taken as the command name.
     """
-    try:
-        tokens = shlex.split(segment)
-    except ValueError:
-        # An unbalanced quote (shlex's only failure) leaves the command name
-        # itself perfectly readable -- it sits before the quote. Approximate
-        # with whitespace splitting rather than discarding the segment, which
-        # would silently under-count exactly the rows this narrowing exists to
-        # count (lode-wtk2).
-        tokens = segment.split()
-    for tok in tokens:
+    for tok in _segment_tokens(segment):
         if _ASSIGNMENT_RE.match(tok):
             continue
         base = tok.rsplit("/", 1)[-1]
@@ -215,6 +218,38 @@ def _is_write_form(segment: str) -> bool:
         or "<<" in segment
         or _SED_INPLACE_RE.search(segment)
     )
+
+
+_PYTHON_RE = re.compile(r"^python[\d.]*$")
+
+
+def _is_index_segment(segment: str) -> bool:
+    """Whether this SEGMENT runs the docs index: its command is the script
+    itself, or its command is ``python*`` or ``uv`` and the script is the word
+    a ``python*`` word runs (only options may sit between the two).
+
+    A segment that merely names the script is not an invocation: ``sed``,
+    ``grep`` or ``bd`` on it, a different file such as
+    ``test_docs_index_query.py``, or the script passed as a FILE to what
+    ``uv run`` or ``python`` really runs (``uv run ruff format <script>``,
+    ``python edit.py <script>``). A form this rule does not know is missed,
+    not counted: an interpreter option that takes a value (``python -X
+    importtime <script>``), or ``uv run <script>`` with no ``python`` word
+    (lode-yt7q2).
+    """
+    name = _segment_command_name(segment)
+    if name == _INDEX_SCRIPT_MARKER:
+        return True
+    if name is None or not (name == "uv" or _PYTHON_RE.match(name)):
+        return False
+    runner = ""
+    for tok in _segment_tokens(segment):
+        base = tok.rsplit("/", 1)[-1]
+        if base == _INDEX_SCRIPT_MARKER and _PYTHON_RE.match(runner):
+            return True
+        if not tok.startswith("-"):
+            runner = base
+    return False
 
 
 def _classify_bash_segment(segment: str) -> str | None:
@@ -279,16 +314,18 @@ def _classify(tool_name: str, tool_input: dict[str, Any]) -> str | None:
     """
     if tool_name == "Bash":
         command = str(tool_input.get("command", ""))
-        if _INDEX_SCRIPT_MARKER in command:
-            return "index"
-        # No segment can mention a docs path the whole line doesn't, so this
-        # is a safe superset test -- and it keeps the segment split, the only
-        # expensive step here, off the overwhelming majority of commands.
-        if not _mentions_docs_md(command):
+        names_index = _INDEX_SCRIPT_MARKER in command
+        # No segment can name the script or a docs path the whole line
+        # doesn't, so this is a safe superset test -- and it keeps the segment
+        # split, the only expensive step here, off the overwhelming majority
+        # of commands.
+        if not names_index and not _mentions_docs_md(command):
             return None
-        for segment in _split_segments(command):
-            if _classify_bash_segment(segment) == "direct":
-                return "direct"
+        segments = _split_segments(command)
+        if names_index and any(_is_index_segment(seg) for seg in segments):
+            return "index"
+        if any(_classify_bash_segment(seg) == "direct" for seg in segments):
+            return "direct"
         return None
     elif tool_name == "Read":
         if _mentions_docs_md(str(tool_input.get("file_path", ""))):
@@ -357,24 +394,40 @@ def project_scope_dirs(projects_dir: Path, cwd: Path) -> list[Path]:
     ]
 
 
-def scan(projects_dir: Path) -> list[dict[str, Any]]:
-    """Scan every transcript under ``projects_dir`` (at any depth) and return
-    one row per classified tool_use: ``{day, session, is_subagent, kind}``."""
-    rows: list[dict[str, Any]] = []
-    for transcript_path in sorted(projects_dir.rglob("*.jsonl")):
+def scan(*projects_dirs: Path) -> list[dict[str, Any]]:
+    """Scan every transcript under each of ``projects_dirs`` (at any depth)
+    and return one row per classified tool call: ``{day, session,
+    is_subagent, kind}``.
+
+    A tool call is one ``tool_use`` id, counted once across the whole scan
+    however many lines carry it. Claude Code records most assistant turns
+    twice -- an ``assistant`` line and a timestamp-less, cwd-less
+    ``api-request-blob`` line -- and the same subagent transcript can sit
+    under more than one session directory, a copy carrying a call only on
+    its ``api-request-blob`` line. The copy that carries a timestamp wins,
+    and with it the right day and role (lode-yt7q2).
+    """
+    rows: dict[object, dict[str, Any]] = {}
+    transcripts = sorted(p for d in projects_dirs for p in d.rglob("*.jsonl"))
+    for transcript_path in transcripts:
         for entry, tool_use in _iter_tool_uses(transcript_path):
             kind = _classify(tool_use.get("name", ""), tool_use.get("input") or {})
             if kind is None:
                 continue
-            rows.append(
-                {
-                    "day": _day(str(entry.get("timestamp", ""))),
-                    "session": transcript_path.stem,
-                    "is_subagent": _is_subagent(entry),
-                    "kind": kind,
-                }
-            )
-    return rows
+            row = {
+                "day": _day(str(entry.get("timestamp", ""))),
+                "session": transcript_path.stem,
+                "is_subagent": _is_subagent(entry),
+                "kind": kind,
+            }
+            tool_id = tool_use.get("id")
+            # A block with no id gets a key equal to nothing else, so it is
+            # never merged with another.
+            key = tool_id if isinstance(tool_id, str) and tool_id else object()
+            held = rows.get(key)
+            if held is None or (held["day"] == "unknown" and row["day"] != "unknown"):
+                rows[key] = row
+    return list(rows.values())
 
 
 def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -449,7 +502,7 @@ def report(
             "no transcripts for this project under "
             f"{resolved_projects_dir} -- pass --all-projects to widen"
         )
-    rows = [row for root in roots for row in scan(root)]
+    rows = scan(*roots)
     result = summarize(rows)
     totals = result["totals"]
     index_count = totals.get("index", 0)

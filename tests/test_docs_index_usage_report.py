@@ -4,7 +4,7 @@ baseline script (lode-dozi).
 Uses SYNTHETIC transcript fixtures under tmp_path -- never a real
 ~/.claude/projects transcript -- both to keep the test hermetic and because
 this script's whole point is to be pointed at a directory via
---projects-dir/`scan(projects_dir=...)`.
+--projects-dir/`scan(<dir>, ...)`.
 """
 
 import json
@@ -560,3 +560,90 @@ def test_scan_still_counts_a_read_after_a_heredoc_terminator(tmp_path: Path) -> 
     )
     rows = scan(tmp_path)
     assert [r["kind"] for r in rows] == ["direct"]
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        {"proj/s1.jsonl": ["blob", "assistant"]},
+        {"proj/s1.jsonl": ["assistant", "blob"]},
+        # The same subagent transcript under two session directories, one copy
+        # carrying the call only on its api-request-blob line.
+        {
+            "proj/s1/subagents/agent-a.jsonl": ["blob"],
+            "proj/s2/subagents/agent-a.jsonl": ["blob", "assistant"],
+        },
+        {
+            "proj/s1/subagents/agent-a.jsonl": ["assistant", "blob"],
+            "proj/s2/subagents/agent-a.jsonl": ["blob"],
+        },
+        {"proj/s1.jsonl": ["blob"], "proj--worktree/s1.jsonl": ["assistant"]},
+    ],
+    ids=[
+        "blob-first",
+        "assistant-first",
+        "session-copy-blob-only-first",
+        "session-copy-blob-only-last",
+        "two-scanned-directories",
+    ],
+)
+def test_scan_counts_a_tool_use_id_once_with_the_assistant_lines_day_and_role(
+    tmp_path: Path, layout: dict[str, list[str]]
+) -> None:
+    """Each top-level directory of ``layout`` is scanned as its own root, the
+    way ``report`` passes one per transcript directory in scope."""
+    block = {
+        "type": "tool_use",
+        "id": "toolu_1",
+        "name": "Read",
+        "input": {"file_path": "/repo/docs/design.md"},
+    }
+    lines = {
+        "blob": {"type": "api-request-blob", "message": {"content": [block]}},
+        "assistant": {
+            "type": "assistant",
+            "timestamp": "2026-11-20T10:00:00.000Z",
+            "isSidechain": False,
+            "cwd": "/repo/.claude/worktrees/agent-x",
+            "message": {"content": [block]},
+        },
+    }
+    for name, kinds in layout.items():
+        _write_transcript(tmp_path / name, [lines[k] for k in kinds])
+    rows = scan(*sorted(tmp_path.iterdir()))
+    assert len(rows) == 1
+    assert rows[0]["day"] == "2026-11-20"
+    assert rows[0]["is_subagent"] is True
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("sed -n 1,5p scripts/docs_index_query.py", False),
+        ("pytest tests/test_docs_index_query.py", False),
+        ("bd update lode-x --append-notes 'see scripts/docs_index_query.py'", False),
+        # The script as a FILE handed to what uv or python really runs.
+        ("uv run --frozen ruff format scripts/docs_index_query.py", False),
+        ("uv run --frozen python /tmp/edit.py scripts/docs_index_query.py", False),
+        ("python -m py_compile scripts/docs_index_query.py", False),
+        ('uv run --frozen python scripts/docs_index_query.py "x"', True),
+        ('.venv/bin/python scripts/docs_index_query.py "x"', True),
+        ('cd /r && python3 scripts/docs_index_query.py "x"', True),
+        ('scripts/docs_index_query.py "x"', True),
+    ],
+)
+def test_scan_index_marker_needs_an_invocation_not_a_mention(
+    tmp_path: Path, command: str, expected: bool
+) -> None:
+    _write_transcript(
+        tmp_path / "proj" / "s1.jsonl",
+        [
+            _tool_use_entry(
+                timestamp="2026-11-20T10:00:00.000Z",
+                is_subagent=False,
+                name="Bash",
+                tool_input={"command": command},
+            )
+        ],
+    )
+    assert [r["kind"] for r in scan(tmp_path)] == (["index"] if expected else [])
