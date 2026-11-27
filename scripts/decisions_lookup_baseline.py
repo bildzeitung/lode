@@ -12,9 +12,9 @@ tokens are estimated as bytes / 4.
   (``<path>:<lo>-<hi>``) into the record. A snippet that merely mentions the
   record is not one.
 - A *read* is a direct read of the record: the Read tool, a Grep tool call
-  scoped to it, or a grep/sed/head/cat/tail/awk Bash segment naming it. A
-  *follow-up* read comes after a lookup in the same session, or shares its
-  call.
+  scoped to it, or a grep/sed/head/cat/tail/awk Bash segment that names it
+  and does not write it. A *follow-up* read comes after a lookup in the same
+  session, or shares its call.
 - A *session* is one transcript file, so a subagent is its own session: each
   has its own context.
 
@@ -24,8 +24,8 @@ command that is one pipeline (:data:`_COMPOUND_RE`), whose whole output is
 that one lookup or read. Counts cover every call. Per-session bytes count a
 compound command's whole output, which makes them an upper bound.
 
-Not counted: a read that reaches the record through a directory or a glob
-(``grep -rn x docs/*.md``) without naming it.
+Not counted: a read that reaches the record without naming it, through a glob
+or a parent directory (``grep -rn x docs/*.md``, ``grep -rn x docs/``).
 
 Read-only and offline: reads ``~/.claude/projects``, writes nothing, calls no
 provider.
@@ -77,7 +77,7 @@ def _result_text(content: Any) -> str:
     return ""
 
 
-def _iter_results(transcript_path: Path) -> dict[str, str]:
+def _results_by_id(transcript_path: Path) -> dict[str, str]:
     """Map tool_use_id -> tool_result text for one transcript."""
     out: dict[str, str] = {}
     try:
@@ -114,14 +114,15 @@ def _kinds(name: str, tool_input: dict[str, Any], text: str) -> tuple[bool, bool
     if name != "Bash":
         return False, False
     command = str(tool_input.get("command", ""))
-    cited = bool(_POINTER_RE.search(text))
-    named = bool(_DECISIONS_RE.search(command))
-    if not cited and not named:
+    cited = _usage._INDEX_SCRIPT_MARKER in command and bool(_POINTER_RE.search(text))
+    if not cited and not _DECISIONS_RE.search(command):
         return False, False
     segments = _usage._split_segments(command)
     lookup = cited and any(_usage._is_index_segment(s) for s in segments)
-    read = named and any(
-        _usage._classify_bash_segment(s) == "direct" and _DECISIONS_RE.search(s)
+    read = any(
+        bool(_DECISIONS_RE.search(s))
+        and _usage._segment_command_name(s) in _usage._DIRECT_BASH_COMMANDS
+        and not _usage._is_write_form(s)
         for s in segments
     )
     return lookup, read
@@ -133,7 +134,7 @@ def scan(*roots: Path) -> list[dict[str, Any]]:
     id counts once, and takes its day from whichever copy carries a timestamp."""
     rows: dict[str, dict[str, Any]] = {}
     for path in sorted(p for d in roots for p in d.rglob("*.jsonl")):
-        results = _iter_results(path)
+        results = _results_by_id(path)
         looked_up = False
         for entry, tool_use in _usage._iter_tool_uses(path):
             tid = tool_use.get("id")
@@ -143,7 +144,6 @@ def scan(*roots: Path) -> list[dict[str, Any]]:
             held = rows.get(tid)
             if held is not None:
                 held["day"] = held["day"] or day
-                looked_up = looked_up or held["lookup"]
                 continue
             name = tool_use.get("name", "")
             tool_input = tool_use.get("input") or {}
@@ -155,13 +155,16 @@ def scan(*roots: Path) -> list[dict[str, Any]]:
             one_pipeline = name != "Bash" or not _COMPOUND_RE.search(
                 str(tool_input.get("command", ""))
             )
+            # A filter on the index's own output (``| grep docs/decisions.md``)
+            # names the record without reading it.
+            read = read and not (lookup and one_pipeline)
             rows[tid] = {
                 "day": day,
                 "session": path.stem,
                 "lookup": lookup,
                 "read": read,
                 "followup": read and looked_up,
-                "sole": one_pipeline and not (lookup and read),
+                "sole": one_pipeline,
                 "bytes": len(text.encode("utf-8")),
                 "lines": len(text.splitlines()),
             }

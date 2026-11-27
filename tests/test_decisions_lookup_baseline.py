@@ -39,8 +39,10 @@ def _result(tid: str, text: str) -> dict:
     }
 
 
-def _bash(tid: str, command: str, output: str, **kwargs: str | None) -> list[dict]:
-    return [_use(tid, "Bash", {"command": command}, **kwargs), _result(tid, output)]
+def _bash(
+    tid: str, command: str, output: str, day: str | None = "2026-11-27"
+) -> list[dict]:
+    return [_use(tid, "Bash", {"command": command}, day), _result(tid, output)]
 
 
 def _read(tid: str, file_path: str, output: str = "1\tone\n2\ttwo") -> list[dict]:
@@ -89,11 +91,38 @@ def test_a_bash_read_is_the_segment_that_names_the_record(tmp_path: Path) -> Non
         tmp_path,
         _bash("a", "sed -n 1,5p docs/stack.md; git log -- docs/decisions.md", "x\n"),
         _bash("b", "grep -n x docs/design.md | grep -v decisions.md", "x\n"),
-        _bash("c", "grep -n x docs/decisions.md | head -5", "12:x\n"),
-        _bash("d", "git status --short; sed -n 1,5p docs/decisions.md", "a\nb\n"),
+        _bash("c", "sed -i 's/a/b/' docs/decisions.md", ""),
+        _bash("d", "grep -n x docs/decisions.md | head -5", "12:x\n"),
+        _bash("e", "git status --short; sed -n 1,5p docs/decisions.md", "a\nb\n"),
     )
 
     assert [(r["read"], r["sole"]) for r in rows] == [(True, True), (True, False)]
+
+
+def test_filtering_the_index_output_by_the_record_is_not_a_read(tmp_path: Path) -> None:
+    (row,) = _scan(
+        tmp_path, _bash("a", f"{_INDEX} 'x' | grep docs/decisions.md", _POINTER)
+    )
+
+    assert (row["lookup"], row["read"], row["sole"]) == (True, False, True)
+
+
+@pytest.mark.parametrize(
+    ("tool_input", "read"),
+    [
+        ({"pattern": "x", "path": "docs/decisions.md"}, True),
+        ({"pattern": "x", "path": "docs/decisions/"}, True),
+        ({"pattern": "x", "path": "docs/", "glob": "decisions.md"}, True),
+        ({"pattern": "x", "glob": "docs/decisions/*.md"}, True),
+        ({"pattern": "x", "path": "docs"}, False),
+    ],
+)
+def test_a_grep_tool_call_is_a_read_when_scoped_to_the_record(
+    tmp_path: Path, tool_input: dict, read: bool
+) -> None:
+    rows = _scan(tmp_path, [_use("a", "Grep", tool_input), _result("a", "12:x\n")])
+
+    assert [r["read"] for r in rows] == ([True] if read else [])
 
 
 def test_a_call_that_looks_up_and_reads_is_both_and_not_sole(tmp_path: Path) -> None:
@@ -133,11 +162,13 @@ def test_scan_measures_the_per_entry_layout_too(tmp_path: Path) -> None:
         tmp_path,
         _bash("a", f"{_INDEX} 'x'", "/r/docs/decisions/ab12c-a-slug.md:1-9  entry\n"),
         _read("b", "/r/docs/decisions/ab12c-a-slug.md"),
-        _bash("c", "sed -n 1,9p docs/decisions/ab12c-a-slug.md", "x\n"),
+        _bash("c", "sed -n 1,9p /r/docs/decisions/ab12c-a-slug.md", "x\n"),
+        _bash("d", "grep -rn lode-abc docs/decisions/", "x\n"),
     )
 
     assert [(r["lookup"], r["read"]) for r in rows] == [
         (True, False),
+        (False, True),
         (False, True),
         (False, True),
     ]
