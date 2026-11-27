@@ -7984,16 +7984,28 @@ one is taken, B: the retire condition rests on it.
     next 5 tool calls in the same transcript (any tool; window set by `--window`) reads a range
     overlapping a cited `path:lo-hi`, the cited ranges parsed from the call's recorded result and
     paths normalized to `docs/<name>.md`. Counted reads: `Read` by offset/limit, and `cat`, `sed
-    -n a,bp`, `head`, `tail -n +K`, `awk NR` on a docs file; a `grep` has no range and does not
-    count, nor does an answer taken from the snippet. Zero-hit calls are outside the denominator.
-    An id query is one whose command contains a `lode-` word of 3-6 characters. On all projects'
-    transcripts, 2026-11 corpus: 290 index calls, 34 zero-hit; all queries 123 of 256 followed
-    (48%), **id-less queries 36 of 105 followed (34%)**, 14 more id-less calls zero-hit. Window 3
-    gives 31% and window 10 gives 38% for id-less. Of the 36, one is a whole-file read. A hand
-    read of 24 id-less cited calls found 6 followed, 18 not; of the 18 about 3 show use the metric
-    misses (a near-miss read of the same doc, a read in the same command as the query, a refined
-    re-query), so the rate undercounts by a few points, not 16. By the rule as ruled, 34% is below
-    50%: the retire condition is met. A `human` ticket carries the confirmation and any retire.
+    -n a,bp` (one range or several), `head`, `tail -n +K`, `awk NR` on a docs file; a `grep` has
+    no range and does not count, nor does an answer taken from the snippet. The denominator is
+    the calls whose result cites a range. An id query is one whose index command names a `lode-`
+    word of 3-6 characters; an id elsewhere in the same Bash call (`bd show lode-xxxx; <index>
+    "words"`) does not make it one, unless the query is a shell variable, when the whole call is
+    searched. On this project's transcripts, 2026-11-14 to 2026-11-27, run at review: 299 index
+    calls, 264 of them citing a range; all queries 129 of 264 followed (49%), **id-less queries
+    44 of 126 followed (35%)**. Window 3 gives 33% and window 10 gives 40% for id-less. Of the
+    44, one is a whole-file read. The 35 calls that cite nothing are 7 that answered `No
+    results.`, every one an id query, and 28 that failed, printed `--help` or had their output
+    filtered away; no id-less query came back empty. As built, the id rule
+    searched the whole Bash call and gave 36 of 105 (34%); 23 calls changed class when it was
+    narrowed at review, and 2 more gained a follow from a `sed` script with several ranges.
+    At build, a hand read of 24 id-less cited calls found 6 followed, 18 not; of the 18 about 3
+    show use the metric misses (a near-miss read of the same doc, a read in the same command as
+    the query, a refined re-query). At review, a read of the 76 not-followed calls whose window
+    names a cited doc found 3 follows still missed, 2 of them id-less: a `sed` fed by `git show
+    <ref>:docs/<name>.md`, and a path with no `docs/` in it after `cd docs`. So the rate
+    undercounts by a few points, not 15. Queries that test the index are in the corpus too:
+    without the transcripts that touch the index's own code or tests, id-less is 34 of 93 (37%).
+    By the rule as ruled, 35% is below 50%: the retire condition is met. A `human` ticket
+    (`lode-13i8j`) carries the confirmation and any retire.
 
 ## docs-index usage report: count each tool call once, and classify an index call by segment (lode-yt7q2)
 

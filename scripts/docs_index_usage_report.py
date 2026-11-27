@@ -315,39 +315,46 @@ def _classify_bash_segment(segment: str) -> str | None:
     return "direct"
 
 
-def _iter_tool_uses(
-    transcript_path: Path,
+def _iter_blocks(
+    transcript_path: Path, *types: str
 ) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
-    """Yield ``(entry, tool_use_block)`` pairs for every tool_use block in a
-    transcript file. ``entry`` is the outer JSON object (carries
-    ``timestamp``/``isSidechain``/``cwd``); ``tool_use_block`` is the inner
-    dict with ``name``/``input``."""
+    """Yield ``(entry, block)`` pairs for every content block of a transcript
+    file whose ``type`` is one of ``types``, in file order. ``entry`` is the
+    outer JSON object (carries ``timestamp``/``isSidechain``/``cwd``);
+    ``block`` is the inner dict."""
+    needles = [f'"{block_type}"' for block_type in types]
     try:
         handle = transcript_path.open(encoding="utf-8", errors="replace")
     except OSError:
         return
     with handle:
         for line in handle:
-            line = line.strip()
-            # A strict prefilter: any line carrying a tool_use block spells
-            # the literal. Skipping the rest unparsed is the difference
+            # A strict prefilter: any line carrying a block of a type spells
+            # that literal. Skipping the rest unparsed is the difference
             # between reading and json.loads-ing multi-MB transcripts whose
-            # tool_use turns are a small minority.
-            if not line or '"tool_use"' not in line:
+            # tool_use turns are a small minority -- so a caller that wants
+            # only ``tool_use`` must not ask for ``tool_result`` as well.
+            if not any(needle in line for needle in needles):
                 continue
             try:
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            message = entry.get("message")
-            if not isinstance(message, dict):
-                continue
-            content = message.get("content")
+            message = entry.get("message") if isinstance(entry, dict) else None
+            content = message.get("content") if isinstance(message, dict) else None
             if not isinstance(content, list):
                 continue
             for item in content:
-                if isinstance(item, dict) and item.get("type") == "tool_use":
+                if isinstance(item, dict) and item.get("type") in types:
                     yield entry, item
+
+
+def _iter_tool_uses(
+    transcript_path: Path,
+) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
+    """Yield ``(entry, tool_use_block)`` pairs for every tool_use block in a
+    transcript file; the block is a dict with ``name``/``input``."""
+    return _iter_blocks(transcript_path, "tool_use")
 
 
 def _mentions_docs_md(text: str) -> bool:
@@ -548,12 +555,13 @@ def _awk_ranges(program: str) -> list[_Range]:
     pair = _AWK_PAIR_RE.search(program)
     if pair:
         return [(int(pair.group(1)), int(pair.group(2)))]
-    lo: int | float = 1
+    comparisons = _AWK_CMP_RE.findall(program)
+    if not comparisons:
+        return []
+    lo = 1
     hi: int | float = math.inf
-    found = False
-    for op, num in _AWK_CMP_RE.findall(program):
+    for op, num in comparisons:
         n = int(num)
-        found = True
         if op in (">=", "=="):
             lo = max(lo, n)
         if op == ">":
@@ -562,15 +570,15 @@ def _awk_ranges(program: str) -> list[_Range]:
             hi = min(hi, n)
         if op == "<":
             hi = min(hi, n - 1)
-    return [(lo, hi)] if found else []
+    return [(lo, hi)]
 
 
 def _head_count(args: list[str]) -> int:
     for i, tok in enumerate(args):
         if tok == "-n" and i + 1 < len(args) and args[i + 1].isdigit():
             return int(args[i + 1])
-        if re.fullmatch(r"-n\d+|-\d+", tok):
-            return int(tok.lstrip("-n"))
+        if m := re.fullmatch(r"-n?(\d+)", tok):
+            return int(m.group(1))
     return 10
 
 
@@ -606,56 +614,29 @@ def _tool_reads(tool_name: str, tool_input: dict[str, Any]) -> list[tuple[str, _
     """``(docs path, line range)`` for every read of ``docs/*.md`` one tool
     call makes: a ``Read`` by its offset and limit (absent = to the end), a
     ``cat``/``sed``/``head``/``tail``/``awk`` segment by the range it names."""
-    reads: list[tuple[str, _Range]] = []
     if tool_name == "Read":
         rel = _docs_relpath(str(tool_input.get("file_path", "")))
-        if rel:
-            offset = tool_input.get("offset")
-            limit = tool_input.get("limit")
-            lo = offset if isinstance(offset, int) and offset > 0 else 1
-            hi = lo + limit - 1 if isinstance(limit, int) and limit > 0 else math.inf
-            reads.append((rel, (lo, hi)))
-    elif tool_name == "Bash":
-        command = str(tool_input.get("command", ""))
-        if not _mentions_docs_md(command):
-            return reads
-        for seg in _split_segments(command):
-            if _is_write_form(seg):
-                continue
-            tokens = _segment_tokens(seg)
-            paths = [rel for tok in tokens if (rel := _docs_relpath(tok))]
-            if not paths:
-                continue
-            ranges = _segment_line_ranges(_segment_command_name(seg), tokens)
-            reads.extend((p, r) for p in paths for r in ranges)
+        if not rel:
+            return []
+        offset = tool_input.get("offset")
+        limit = tool_input.get("limit")
+        lo = offset if isinstance(offset, int) and offset > 0 else 1
+        hi = lo + limit - 1 if isinstance(limit, int) and limit > 0 else math.inf
+        return [(rel, (lo, hi))]
+    command = str(tool_input.get("command", "")) if tool_name == "Bash" else ""
+    if not _mentions_docs_md(command):
+        return []
+    reads: list[tuple[str, _Range]] = []
+    for seg in _split_segments(command):
+        if _is_write_form(seg):
+            continue
+        tokens = _segment_tokens(seg)
+        paths = [rel for tok in tokens if (rel := _docs_relpath(tok))]
+        if not paths:
+            continue
+        ranges = _segment_line_ranges(_segment_command_name(seg), tokens)
+        reads.extend((p, r) for p in paths for r in ranges)
     return reads
-
-
-def _iter_blocks(transcript_path: Path) -> Iterator[dict[str, Any]]:
-    """Every ``tool_use`` and ``tool_result`` block of a transcript, in file
-    order."""
-    try:
-        handle = transcript_path.open(encoding="utf-8", errors="replace")
-    except OSError:
-        return
-    with handle:
-        for line in handle:
-            if '"tool_use' not in line and '"tool_result"' not in line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            message = entry.get("message") if isinstance(entry, dict) else None
-            content = message.get("content") if isinstance(message, dict) else None
-            if not isinstance(content, list):
-                continue
-            for item in content:
-                if isinstance(item, dict) and item.get("type") in (
-                    "tool_use",
-                    "tool_result",
-                ):
-                    yield item
 
 
 def _result_text(content: Any) -> str:
@@ -676,9 +657,9 @@ def _is_id_query(command: str) -> bool:
     """Whether an index call's query names a bd id. Only the segments that
     run the index are searched, so an id elsewhere in the command (``bd show
     lode-abc1; <index> "words"``) does not make it an id query. A query that
-    arrives through a shell variable (``for q in lode-abc1 ...; do <index>
-    "$q"; done``) cannot be read off its segment, so the whole command is
-    searched instead."""
+    arrives through a shell variable (``for q in lode-abc1 ...; do echo "$q";
+    <index> "$q"; done``) cannot be read off its segment, so the whole command
+    is searched instead."""
     segments = [seg for seg in _split_segments(command) if _is_index_segment(seg)]
     if any("$" in seg for seg in segments):
         return bool(_BD_ID_RE.search(command))
@@ -735,7 +716,7 @@ def scan_follow(
         index_calls: dict[str, tuple[int, bool]] = {}
         results: dict[str, str] = {}
         seen: set[str] = set()
-        for block in _iter_blocks(transcript_path):
+        for _, block in _iter_blocks(transcript_path, "tool_use", "tool_result"):
             if block["type"] == "tool_result":
                 tid = block.get("tool_use_id")
                 if isinstance(tid, str) and tid in index_calls:
@@ -773,7 +754,6 @@ def summarize_follow(rows: list[dict[str, Any]]) -> dict[str, Any]:
         counts = Counter(r["status"] for r in subset)
         cited = counts["followed"] + counts["not-followed"]
         return {
-            "calls": len(subset),
             "zero_hit": counts["zero-hit"],
             "uncited": counts["uncited"],
             "no_result": counts["no-result"],

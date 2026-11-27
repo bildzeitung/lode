@@ -723,9 +723,9 @@ _CITES = (
 )
 
 
-def _follow_rows(tmp_path: Path, entries: list[dict], window: int = 5) -> list[dict]:
+def _follow_rows(tmp_path: Path, entries: list[dict], **kwargs: int) -> list[dict]:
     _write_transcript(tmp_path / "proj" / "s.jsonl", entries)
-    return _report_module.scan_follow(tmp_path, window=window)
+    return _report_module.scan_follow(tmp_path, **kwargs)
 
 
 @pytest.mark.parametrize(
@@ -750,8 +750,16 @@ def _follow_rows(tmp_path: Path, entries: list[dict], window: int = 5) -> list[d
             ("Bash", {"command": "sed -n '10,20p;121,130p' docs/stack.md"}),
             "not-followed",
         ),
+        (("Bash", {"command": "sed -n 110p docs/stack.md"}), "followed"),
+        (("Bash", {"command": "sed -i 100,120p docs/stack.md"}), "not-followed"),
+        (("Bash", {"command": "cat docs/stack.md"}), "followed"),
+        (("Bash", {"command": "head docs/stack.md"}), "not-followed"),
         (("Bash", {"command": "head -n 50 docs/stack.md"}), "not-followed"),
         (("Bash", {"command": "head -n 105 docs/stack.md"}), "followed"),
+        (("Bash", {"command": "head -n105 docs/stack.md"}), "followed"),
+        (("Bash", {"command": "head -105 docs/stack.md"}), "followed"),
+        (("Bash", {"command": "awk 'NR==100,NR==120' docs/stack.md"}), "followed"),
+        (("Bash", {"command": "tail -n 20 docs/stack.md"}), "not-followed"),
         (("Bash", {"command": "awk 'NR>=118 && NR<=140' docs/stack.md"}), "followed"),
         (
             ("Bash", {"command": "awk 'NR>=121 && NR<=140' docs/stack.md"}),
@@ -812,24 +820,30 @@ def test_follow_window_and_row_kinds(tmp_path: Path) -> None:
     assert summary["idless"]["zero_hit"] == 1
 
 
-def test_follow_counts_a_duplicated_call_once(tmp_path: Path) -> None:
-    entries = _index_call("i1", "dup", _CITES)
-    _write_transcript(tmp_path / "a" / "s.jsonl", entries)
-    _write_transcript(tmp_path / "b" / "s.jsonl", entries)
-    assert len(_report_module.scan_follow(tmp_path)) == 1
+def test_follow_reads_a_result_recorded_as_a_list_of_text_blocks(
+    tmp_path: Path,
+) -> None:
+    entries = _index_call("i1", "x y", "")
+    entries[1]["message"]["content"][0]["content"] = [{"type": "text", "text": _CITES}]
+    entries.append(_use("c1", "Bash", {"command": "sed -n 100,110p docs/stack.md"}))
+    assert [r["status"] for r in _follow_rows(tmp_path, entries)] == ["followed"]
 
 
-@pytest.mark.parametrize("cut", [1, 2])
+@pytest.mark.parametrize("cut", [1, 2, 3])
 def test_follow_takes_the_copy_of_a_call_that_shows_the_most(
     tmp_path: Path, cut: int
 ) -> None:
-    """A copy that stops before the result, or before the read, sorts first
+    """A call held by two transcripts is one row. The copy that sorts first
+    may stop before the result (1) or before the read (2), or be whole (3),
     and must not fix the row."""
     entries = _index_call("i1", "dup", _CITES)
     entries.append(_use("c1", "Bash", {"command": "sed -n 100,110p docs/stack.md"}))
     _write_transcript(tmp_path / "a" / "s.jsonl", entries[:cut])
     _write_transcript(tmp_path / "b" / "s.jsonl", entries)
     assert [r["status"] for r in _report_module.scan_follow(tmp_path)] == ["followed"]
+
+
+_LOOP_BODY = 'do echo "= $q"; python scripts/docs_index_query.py "$q"; done'
 
 
 @pytest.mark.parametrize(
@@ -844,16 +858,8 @@ def test_follow_takes_the_copy_of_a_call_that_shows_the_most(
             'python scripts/docs_index_query.py "words"; grep -n lode-abc1 docs/stack.md',
             True,
         ),
-        (
-            'for q in lode-abc1 "two words"; do echo "= $q"; '
-            'uv run python scripts/docs_index_query.py "$q"; done',
-            False,
-        ),
-        (
-            'for q in one two; do echo "= $q"; '
-            'python scripts/docs_index_query.py "$q"; done',
-            True,
-        ),
+        (f'for q in lode-abc1 "two words"; {_LOOP_BODY}', False),
+        (f"for q in one two; {_LOOP_BODY}", True),
     ],
 )
 def test_id_query_is_judged_on_the_segment_that_runs_the_index(
