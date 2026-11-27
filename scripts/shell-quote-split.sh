@@ -130,23 +130,21 @@ strip_quoted_heredoc_bodies() {
 # quotes still separates segments.
 #
 # That join TRUSTS this scanner's quote state across a line break, and a wrong
-# "inside a quote" there hides a whole live line -- a false ALLOW. So the join
-# is abandoned for the WHOLE string, and every in-quote newline kept (each line
-# is a segment of its own), whenever the string holds a construct this flat
-# scanner does not model. Each one was probed hiding a `gh` write between two
-# stray quote characters:
-#   - `<<` anywhere: an unquoted heredoc body is free text, not shell quoting.
-#   - an unquoted `#`: an apostrophe in a comment opens no quote.
-#   - `$'`: ANSI-C quoting, where a backslash-escaped ' does not close the string.
-#   - `$(` or a backtick inside "...": a nested parse context with its own
-#     quotes and its own command-separating newlines.
-#   - the scan ENDING inside a quote (unbalanced).
-# Every test is deliberately loose (any `<<`, any unquoted `#`): a false trigger
-# only costs the join, never a segment start. Optional $2=keep forces the same.
-# With none of them present the scanner's quote state is the shell's, so a
-# joined line is one the shell does not run -- unless the whole quoted word is
-# handed to a shell (`bash -c "..."`), the quoted-indirection residual in
-# docs/agents-workflow.md.
+# "inside a quote" there hides a whole live line -- a false ALLOW. The scanner
+# is flat (quotes and backslash only), and the shell constructs that break a
+# flat quote state are an open set: comments, heredoc bodies, ANSI-C quoting,
+# nested substitutions, backslashes inside backticks. So the join is an
+# ALLOWLIST, not a list of those: it stands only if EVERY byte outside quotes
+# is a quote, a backslash escape, one of ; & |, or in `inert` below, AND no
+# unescaped $ or backtick sits inside "...", AND the scan ends outside a quote.
+# Anything else keeps every in-quote newline for the WHOLE string, each line a
+# segment of its own. A byte missing from `inert` only costs the join, never a
+# segment start; add one only with an argument that it cannot change how the
+# shell reads a later quote character. `<<` abandons it too, quoted or not.
+# The scan cannot know the join is off until it ends, so each join's offset in
+# the output is recorded and the newline put back there -- one pass, since the
+# join changes no other byte of the output. Why, the probes, and the
+# `bash -c "..."` residual: docs/agents-workflow.md.
 #
 # RESIDUAL (fail-OPEN, accepted): an UNBALANCED quote leaves the tail "inside"
 # a quote, so nothing after it splits at a control character -- the PERMISSIVE
@@ -164,8 +162,10 @@ strip_quoted_heredoc_bodies() {
 # [[:space:]] semantics -- pinned by a test.
 _split_unquoted() {
   local LC_ALL=C
-  local s="$1" out="" c state=none i=0 len keep="${2:-}" joined="" distrust=""
-  [[ "$s" == *'<<'* ]] && keep=keep
+  local s="$1" out="" c state=none i=0 len keep="" p prev=0 unjoined=""
+  local -a joins=()
+  local inert='[A-Za-z0-9_[:space:]./=:,@%+~^>-]'
+  [[ "$s" == *'<<'* ]] && keep=1
   len=${#s}
   while ((i < len)); do
     c="${s:i:1}"
@@ -176,7 +176,6 @@ _split_unquoted() {
     elif [[ "$state" == "none" && "$c" == "'" ]]; then
       state=single
       out+="$c"
-      [[ "$i" -gt 0 && "${s:i-1:1}" == '$' ]] && distrust=1
     elif [[ "$state" == "single" && "$c" == "'" ]]; then
       state=none
       out+="$c"
@@ -188,27 +187,35 @@ _split_unquoted() {
       out+="$c"
     elif [[ "$state" == "double" && "$c" == '`' ]]; then
       out+=$'\n'
-      distrust=1
-    elif [[ "$state" == "double" && "$c" == '$' && "${s:i+1:1}" == '(' ]]; then
-      out+=$'\n'
-      i=$((i + 1))
-      distrust=1
+      keep=1
+    elif [[ "$state" == "double" && "$c" == '$' ]]; then
+      keep=1
+      if [[ "${s:i+1:1}" == '(' ]]; then
+        out+=$'\n'
+        i=$((i + 1))
+      else
+        out+="$c"
+      fi
     elif [[ "$state" == "none" && ';&|(){}`' == *"$c"* ]]; then
       out+=$'\n'
-    elif [[ "$state" == "none" && "$c" == '#' ]]; then
-      out+="$c"
-      distrust=1
+      [[ ';&|' == *"$c"* ]] || keep=1
     elif [[ "$state" != "none" && "$c" == $'\n' && -z "$keep" ]]; then
+      joins+=("${#out}")
       out+=" "
-      joined=1
     else
+      # $inert is a glob pattern, so it must be matched unquoted.
+      # shellcheck disable=SC2053
+      [[ "$state" == "none" && "$c" != $inert ]] && keep=1
       out+="$c"
     fi
     i=$((i + 1))
   done
-  if [[ -n "$joined" && (-n "$distrust" || "$state" != "none") ]]; then
-    _split_unquoted "$1" keep
-    return
+  if ((${#joins[@]} > 0)) && [[ -n "$keep" || "$state" != "none" ]]; then
+    for p in "${joins[@]}"; do
+      unjoined+="${out:prev:p-prev}"$'\n'
+      prev=$((p + 1))
+    done
+    out="$unjoined${out:prev}"
   fi
   printf '%s' "$out"
 }

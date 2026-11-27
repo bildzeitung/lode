@@ -1975,29 +1975,40 @@ separates segments.
 Unlike the `lode-obox` fix, **this one is a narrowing**: it removes segment starts the guard used
 to check. It is safe only where the scanner's quote state is right, because a wrong "inside a
 quote" at a line break hides a whole live line. The scanner is flat: it tracks `'`, `"` and
-backslash and nothing else. So the join is **abandoned for the whole command**, and every in-quote
-newline is kept as a segment start, when the command holds any construct the scanner does not
-model:
+backslash and nothing else. Each of the following has a live `gh` write on its own line between two
+quote characters the shell does not read as a pair, and each was verified in real `bash` with a
+stand-in command name:
 
-- **`<<` anywhere.** An unquoted heredoc body is free text. In
+- **A heredoc body**, which is free text. In
   `cat > f <<EOF⏎don't⏎EOF⏎gh pr create …⏎cat >> f <<EOF⏎can't⏎EOF` the write is a top-level
-  command sitting between two apostrophes.
-- **An unquoted `#`.** An apostrophe in a comment opens no quote.
-- **`$'`.** In ANSI-C quoting a backslash-escaped `'` does not close the string.
-- **`$(` or a backtick inside double quotes.** The substitution is a nested parse context with its
-  own quotes, and a newline inside it separates commands.
-- **A scan that ends inside a quote.**
+  command between two apostrophes.
+- **A comment.** An apostrophe in it opens no quote.
+- **ANSI-C quoting.** In `$'a\'b'` the escaped apostrophe does not close the string.
+- **A substitution inside double quotes** (`$(…)` or backticks). It is a nested parse context with
+  its own quotes, and a newline inside it separates commands.
+- **Backticks.** Inside them the shell halves a doubled backslash before it parses, so in
+  `` `echo \\'a` `` the apostrophe is escaped, where the scanner sees an opening quote.
 
-The branch as built abandoned the join only for the last of these. The technical review probed the
-other four against `trunk`: each was denied there and allowed on the built branch. Each is now
-pinned in the `DENIED` table of `tests/test_gh_write_guard.py`, and removing any one trigger turns
-exactly its own cases to allowed. The tests are loose on purpose (any `<<`, any unquoted `#`,
-quoted prose included): a false trigger only brings back the old false deny, which a reword or
-`git commit -F <file>` gets around. With no trigger present the scanner's quote state is the
-shell's, so a joined line is text the shell does not run as a command. A differential fuzz against
-real `bash` checked this, using a stand-in command name, never `gh`: of 1,979 generated scripts
-in which `bash` ran the stand-in, the built branch's splitter hid it in 312 where `trunk`'s showed
-it, and the reviewed splitter in none.
+That list is not closed, so the join is an **allowlist, not a list of those constructs** — the same
+inversion `lode-9mbt` made for the verb list. The join stands only if every byte outside quotes is
+a quote character, a backslash escape, one of `;` `&` `|`, or a member of a short inert set
+(letters, digits, whitespace and `_ . / = : , @ % + ~ ^ > -`), no unescaped `$` or backtick sits
+inside double quotes, and the scan ends outside a quote. Anything else **abandons the join for the
+whole command**: every in-quote newline is kept as a segment start, exactly as before
+`lode-2ctid`. `<<` abandons it too, quoted or not. A byte missing from the inert set only brings
+back the old false deny, which a reword or `git commit -F <file>` gets around; add one only with an
+argument that it cannot change how the shell reads a later quote character. The first form of this
+fix listed constructs instead, and its review found the backtick case above still open, which is
+why the rule is stated as an allowlist.
+
+Each construct above is pinned in the `DENIED` table of `tests/test_gh_write_guard.py` and, with a
+neutral marker, in `tests/test_shell_quote_split_lib.py`. A differential fuzz against real `bash`
+checked the rule, using a stand-in command name, never `gh`. Each generated script numbered its
+stand-in calls, and every call `bash` ran had to start a line of the splitter's output. Over
+4,000 scripts built from the constructs above and others, `trunk`'s splitter hid a call that ran
+in 118 (the residuals already listed in this section) and this one hid a call in the same 118 and
+no others. Over 3,000 scripts built only from allowlisted shapes, the join stood in 1,658 and no
+call that ran was hidden.
 
 **What the join does widen is the quoted-indirection residual above.**
 `sh -c "true⏎gh issue create …"` used to be denied, because the in-quote newline started a
@@ -2007,10 +2018,10 @@ which this fix exists to let through, so the newline form joins the accepted res
 next to the `;` form in
 `test_quote_aware_real_invocation_wrapped_in_quotes_stays_the_same_accepted_residual`.
 
-Two false denies of this class remain, both in the conservative direction: a command that holds
-one of the triggers above (a double-quoted message containing a backtick, a comment line in the
-same command), and a backslash-newline inside double quotes, which is still copied through as a
-newline.
+Two false denies of this class remain, both in the conservative direction: a command with anything
+outside the allowlist (a `$` or backtick in a double-quoted message, a comment line, a `$(…)` or a
+glob anywhere in the same command), and a backslash-newline inside double quotes, which is still
+copied through as a newline.
 
 **If you hit this class again** — an otherwise-legitimate Bash call denied because a `gh` command
 name merely appears, quoted, inside unrelated prose or a search pattern — the correct response is
