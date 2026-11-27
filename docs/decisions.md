@@ -6366,6 +6366,14 @@ entries below from being rewritten to chase the current tree.)
   is in the `lode-k813a` marker under the entry "docs-index usage report: count each tool call
   once, and classify an index call by segment" (`lode-yt7q2`).
 
+  **Update (lode-d3snk, 2026-11-27):** this entry's `shlex` separator split is replaced. `shlex`
+  in non-POSIX mode has no backslash escapes and opens a quote only at the start of a token, so
+  it disagreed with the newline scan about an escaped or mid-word quote. One scan
+  (`_mask_line`) now decides what is quoted, and the heredoc, newline and separator splits all
+  read that mask. What it changed on real transcripts is in the `lode-d3snk` marker under the
+  entry "docs-index usage report: count each tool call once, and classify an index call by
+  segment" (`lode-yt7q2`).
+
 - **`scripts/` sibling loading keeps three short UNCACHED bootstraps, not one shared one
   (`lode-7l68`, 2026-09-14).** `lode-wtk2` consolidated the sibling-loader *body* into
   [`scripts/docs_index_loader.py`](../scripts/docs_index_loader.py)'s `load_sibling()`, but each of
@@ -8157,3 +8165,19 @@ destructive step to a path that does not run it today.
 **Open (`lode-fg7w7.3`).** Which of proposals 1 to 4, if any, are built? For proposal 1: accept the
 non-`trunk` gap, or widen the hooks, and what stops a commit in the live-lock window and a Bash file
 write once the checkpoints are gone? The `human`-labelled ticket `lode-htkr3` asks for this approval.
+  **Update (lode-d3snk, 2026-11-27):** the escaped-quote and mid-word-quote misses above are fixed.
+  The `shlex` separator split is gone; one scan decides what is quoted, and it also keeps a
+  `<<` inside a quoted argument from opening a heredoc. One `<<` inside a quote still opens
+  one: in a double quote after a `$(` on the same line, as in `git commit -m "$(cat <<'EOF'`,
+  whose body is dropped as before. Measured by running the script from before and after the fix
+  over the same transcripts (2026-11-14 to 2026-11-27, default scope) and comparing Bash calls
+  by `tool_use` id: 13 calls change class, and each command was read in full. 1 index run is
+  now counted (the third lost run). 9 direct rows are now counted: 8 are a `grep`, `sed`, `awk`
+  or `tail` of a docs file in a command that held an escaped or nested quote, and 1 is a
+  `grep -v` whose pattern names a docs path, which the classifier does not tell from a path it
+  reads. 3 direct rows are gone: 2 are `bd create --description="..."` text whose quote opened
+  mid-word, and 1 is a `python -c "..."` probe from this ticket's own review that held `grep`
+  commands as strings. The report printed 299 / 3,124 before and 300 / 3,130 after. Not fixed:
+  ANSI-C quoting is read as a single quote, so the `\'` in `$'it\'s'` closes it and a command
+  after it on the same line is missed. A scan that reads it changed no call on these
+  transcripts.
