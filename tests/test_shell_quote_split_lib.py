@@ -241,6 +241,89 @@ def test_split_does_not_leak_the_c_locale_to_its_caller() -> None:
     )
 
 
+def _split(text: str) -> str:
+    """`_split_unquoted`'s raw output, run under `set -euo pipefail` as both guards run it."""
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'set -euo pipefail; source "$1"; _split_unquoted "$2"',
+            "_",
+            str(LIB),
+            text,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_split_joins_a_newline_inside_a_quoted_argument() -> None:
+    """lode-2ctid: a newline inside '...' or "..." belongs to one argument, so it must not start
+    a segment; a newline outside quotes still does. The second pair pins what the join's
+    allowlist lets through outside the quotes: a backslash escape, a redirect, and ; & |."""
+    assert _split('a "b\nc" d\ne') == 'a "b c" d\ne'
+    assert _split("a 'b\nc' d\ne") == "a 'b c' d\ne"
+    assert _split('a \\\n -m "b\nc" 2>&1 | d; e') == 'a \\\n -m "b c" 2>\n1 \n d\n e'
+    assert _split("a 'b #\n$c `d`' e=f:g,h/i.j") == "a 'b # $c `d`' e=f:g,h/i.j"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat <<EOF\ndon't\nEOF\nMARK\ncat <<EOF\ncan't\nEOF",
+        "# don't\nMARK\n# that's it",
+        'echo "$(true\nMARK\n)"',
+        'echo "`true\nMARK\n`"',
+        "echo $'a\\'b'\nMARK\necho \\'",
+        "x=`echo \\\\'a\nMARK\n\\\\'`",
+        "echo 'a\nMARK",
+    ],
+    ids=[
+        "heredoc",
+        "comment",
+        "dollar-paren",
+        "backtick-in-double-quotes",
+        "ansi-c",
+        "backslash-in-backticks",
+        "unbalanced",
+    ],
+)
+def test_split_keeps_every_newline_where_its_quote_state_cannot_be_trusted(
+    command: str,
+) -> None:
+    """lode-2ctid: the join trusts the scanner's quote state across a line break. Each command
+    here holds one construct the scanner does not model, with `MARK` on a line the shell RUNS
+    while the scanner counts it as inside a quote. Joining would hide that line from both
+    guards' line-anchored greps -- a false ALLOW -- so it must stay a line of its own."""
+    assert "MARK" in _split(command).split("\n"), (
+        f"_split_unquoted joined a live line into a quoted argument: {command!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo "a\nb" # x',
+        'echo "a\nb" "$c"',
+        'echo "a\nb" *',
+        '(echo "a\nb")',
+        'echo "a\nb" \N{LATIN SMALL LETTER E WITH ACUTE}',
+    ],
+    ids=["comment", "dollar-in-quotes", "glob", "subshell", "non-ascii"],
+)
+def test_split_join_is_an_allowlist_and_is_undone_by_a_later_byte(command: str) -> None:
+    """lode-2ctid: the join stands only if every byte outside quotes is on the allowlist, so a
+    byte the list does not name abandons it -- and one that comes AFTER a newline was already
+    joined must undo that join too."""
+    assert '"a\nb"' in _split(command), (
+        f"_split_unquoted kept a join it had no grounds to trust: {command!r}"
+    )
+
+
 def test_scan_length_cap_is_declared_and_enforced_once_and_shared() -> None:
     """lode-rjqm: BOTH halves of the scan-length cap -- the value
     (`SHELL_QUOTE_SPLIT_MAX_LEN`) and its enforcement (`deny_if_over_scan_cap`) -- live exactly

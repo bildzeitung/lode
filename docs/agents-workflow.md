@@ -1832,7 +1832,8 @@ Residual gaps that remain — honest about what the inversion does **not** close
 - **Quoted indirection** — `sh -c "gh issue create …"`, or the command held in a shell variable.
   Closing this would mean treating a quote as a command boundary, which would false-deny this repo's
   own prose about the rule (`grep "gh issue create" docs/`, a commit message quoting the verb) — a
-  worse trade than the residual.
+  worse trade than the residual. The residual covers a `gh` call on a later line of the quoted
+  string too (`lode-2ctid`, below).
 - **`gh` reached from a command position the matcher does not recognize.** The *inversion* is
   default-deny on the **subcommand** — but the decision to look at a line at all still rests on
   matching `gh` at a command position, and that matcher is an enumeration: a leading `VAR=x`, a path
@@ -1962,6 +1963,65 @@ changed. `lode-obox`'s original framing was right that a regex *narrowing* here 
 must be separately argued with evidence it cannot open an under-deny hole — the fix above stayed
 inside that constraint by construction: it changes when a fragment starts, never what counts as a
 match once a fragment exists.
+
+**A newline inside a quoted argument does not start a segment (`lode-2ctid`).** `_split_unquoted`
+copied a literal newline inside `'…'` or `"…"` through unchanged, and both guards read its output
+line by line. So the second line of a multi-line commit message or `bd --notes` body was judged as
+a command of its own: `git commit -m "guard: x⏎⏎gh issue create is denied"` was denied, though
+nothing in it runs `gh`. The splitter now emits an in-quote newline as a space, which keeps the
+whole quoted argument in the segment of the command it belongs to. A newline outside quotes still
+separates segments.
+
+Unlike the `lode-obox` fix, **this one is a narrowing**: it removes segment starts the guard used
+to check. It is safe only where the scanner's quote state is right, because a wrong "inside a
+quote" at a line break hides a whole live line. The scanner is flat: it tracks `'`, `"` and
+backslash and nothing else. Each of the following has a live `gh` write on its own line between two
+quote characters the shell does not read as a pair, and each was verified in real `bash` with a
+stand-in command name:
+
+- **A heredoc body**, which is free text. In
+  `cat > f <<EOF⏎don't⏎EOF⏎gh pr create …⏎cat >> f <<EOF⏎can't⏎EOF` the write is a top-level
+  command between two apostrophes.
+- **A comment.** An apostrophe in it opens no quote.
+- **ANSI-C quoting.** In `$'a\'b'` the escaped apostrophe does not close the string.
+- **A substitution inside double quotes** (`$(…)` or backticks). It is a nested parse context with
+  its own quotes, and a newline inside it separates commands.
+- **Backticks.** Inside them the shell halves a doubled backslash before it parses, so in
+  `` `echo \\'a` `` the apostrophe is escaped, where the scanner sees an opening quote.
+
+That list is not closed, so the join is an **allowlist, not a list of those constructs** — the same
+inversion `lode-9mbt` made for the verb list. The join stands only if every byte outside quotes is
+a quote character, a backslash escape, one of `;` `&` `|`, or a member of a short inert set
+(letters, digits, whitespace and `_ . / = : , @ % + ~ ^ > -`), no unescaped `$` or backtick sits
+inside double quotes, and the scan ends outside a quote. Anything else **abandons the join for the
+whole command**: every in-quote newline is kept as a segment start, exactly as before
+`lode-2ctid`. `<<` abandons it too, quoted or not. A byte missing from the inert set only brings
+back the old false deny, which a reword or `git commit -F <file>` gets around; add one only with an
+argument that it cannot change how the shell reads a later quote character. The first form of this
+fix listed constructs instead, and its review found the backtick case above still open, which is
+why the rule is stated as an allowlist.
+
+Each construct above is pinned in the `DENIED` table of `tests/test_gh_write_guard.py` and, with a
+neutral marker, in `tests/test_shell_quote_split_lib.py`. A differential fuzz against real `bash`
+checked the rule, using a stand-in command name, never `gh`. Each generated script numbered its
+stand-in calls, and every call `bash` ran had to start a line of the splitter's output. Over
+4,000 scripts built from the constructs above and others, `trunk`'s splitter hid a call that ran
+in 118 (the residuals already listed in this section) and this one hid a call in the same 118 and
+no others. Over 3,000 scripts built only from allowlisted shapes, the join stood in 1,658 and no
+call that ran was hidden.
+
+**What the join does widen is the quoted-indirection residual above.**
+`sh -c "true⏎gh issue create …"` used to be denied, because the in-quote newline started a
+segment. It now falls through, as `sh -c "true; gh issue create …"` always has. A guard that reads
+only the command string cannot tell that command from `git commit -m "true⏎gh issue create …"`,
+which this fix exists to let through, so the newline form joins the accepted residual. It is pinned
+next to the `;` form in
+`test_quote_aware_real_invocation_wrapped_in_quotes_stays_the_same_accepted_residual`.
+
+Two false denies of this class remain, both in the conservative direction: a command with anything
+outside the allowlist (a `$` or backtick in a double-quoted message, a comment line, a `$(…)` or a
+glob anywhere in the same command), and a backslash-newline inside double quotes, which is still
+copied through as a newline.
 
 **If you hit this class again** — an otherwise-legitimate Bash call denied because a `gh` command
 name merely appears, quoted, inside unrelated prose or a search pattern — the correct response is
@@ -2193,6 +2253,16 @@ its own superset argument, since a pre-filter that skips a case `INVOKE_RE` woul
 silent narrowing of the deny surface), and `local LC_ALL=C` inside `_split_unquoted` — under a
 UTF-8 locale `${s:i:1}` is O(*i*), which is where the quadratic constant came from. Neither
 changes a single decision; both are pinned by tests.
+
+**A shared change that does change this guard's decisions (`lode-2ctid`).** The split now joins a
+newline inside a quoted argument (rule, and the constructs that abandon the join:
+[the `gh` guard's section](#false-positive-class-a-gh-command-name-merely-quoted-inside-unrelated-text-lode-obox)).
+For this guard that moves two things. A multi-line quoted argument of a `bd`/`git` command is
+scanned on every line, where before only its first line was, plus any later line that happened to
+begin with `bd` or `git`: `git commit -m "fix⏎⏎see <40-hex>"` is now denied when the value is not
+an object, the same accepted free-text over-match a one-line message already had. And a later line
+of *another* command's quoted argument that begins with `git` or `bd` is no longer taken for an
+invocation. Both are pinned in `tests/test_sha_fabrication_guard.py`.
 
 ### The residual `_split_unquoted` cost: a shared scan-length cap, fail-closed (lode-rjqm)
 

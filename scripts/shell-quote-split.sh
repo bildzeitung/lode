@@ -124,10 +124,33 @@ strip_quoted_heredoc_bodies() {
 # untouched -- EXCEPT `$(` and a bare backtick inside "...", which the shell
 # really does execute (command substitution is live inside double quotes).
 #
+# A literal newline INSIDE '...' or "..." is emitted as a space (lode-2ctid): it is
+# part of one quoted argument, and left as a newline it would start a fake
+# segment that line-anchored greps read as a command position. A newline OUTSIDE
+# quotes still separates segments.
+#
+# That join TRUSTS this scanner's quote state across a line break, and a wrong
+# "inside a quote" there hides a whole live line -- a false ALLOW. The scanner
+# is flat (quotes and backslash only), and the shell constructs that break a
+# flat quote state are an open set: comments, heredoc bodies, ANSI-C quoting,
+# nested substitutions, backslashes inside backticks. So the join is an
+# ALLOWLIST, not a list of those: it stands only if EVERY byte outside quotes
+# is a quote, a backslash escape, one of ; & |, or in `inert` below, AND no
+# unescaped $ or backtick sits inside "...", AND the scan ends outside a quote.
+# Anything else keeps every in-quote newline for the WHOLE string, each line a
+# segment of its own. A byte missing from `inert` only costs the join, never a
+# segment start; add one only with an argument that it cannot change how the
+# shell reads a later quote character. `<<` abandons it too, quoted or not.
+# The scan cannot know the join is off until it ends, so each join's offset in
+# the output is recorded and the newline put back there -- one pass, since the
+# join changes no other byte of the output. Why, the probes, and the
+# `bash -c "..."` residual: docs/agents-workflow.md.
+#
 # RESIDUAL (fail-OPEN, accepted): an UNBALANCED quote leaves the tail "inside"
-# a quote, so nothing after it splits -- the PERMISSIVE direction, not the
-# conservative one. Accepted rather than fixed; documented alongside the
-# other residuals in docs/agents-workflow.md.
+# a quote, so nothing after it splits at a control character -- the PERMISSIVE
+# direction, not the conservative one. Accepted rather than fixed; documented
+# alongside the other residuals in docs/agents-workflow.md.
+#
 # PERFORMANCE (review, lode-dia6). `local LC_ALL=C` is load-bearing, not a
 # micro-optimization. Under a UTF-8 locale bash must walk the string to find
 # CHARACTER i, so `${s:i:1}` is O(i) and this loop is O(n^2) -- measured 4.0s on
@@ -139,7 +162,10 @@ strip_quoted_heredoc_bodies() {
 # [[:space:]] semantics -- pinned by a test.
 _split_unquoted() {
   local LC_ALL=C
-  local s="$1" out="" c state=none i=0 len
+  local s="$1" out="" c state=none i=0 len keep="" p prev=0 unjoined=""
+  local -a joins=()
+  local inert='[A-Za-z0-9_[:space:]./=:,@%+~^>-]'
+  [[ "$s" == *'<<'* ]] && keep=1
   len=${#s}
   while ((i < len)); do
     c="${s:i:1}"
@@ -161,16 +187,36 @@ _split_unquoted() {
       out+="$c"
     elif [[ "$state" == "double" && "$c" == '`' ]]; then
       out+=$'\n'
-    elif [[ "$state" == "double" && "$c" == '$' && "${s:i+1:1}" == '(' ]]; then
-      out+=$'\n'
-      i=$((i + 1))
+      keep=1
+    elif [[ "$state" == "double" && "$c" == '$' ]]; then
+      keep=1
+      if [[ "${s:i+1:1}" == '(' ]]; then
+        out+=$'\n'
+        i=$((i + 1))
+      else
+        out+="$c"
+      fi
     elif [[ "$state" == "none" && ';&|(){}`' == *"$c"* ]]; then
       out+=$'\n'
+      [[ ';&|' == *"$c"* ]] || keep=1
+    elif [[ "$state" != "none" && "$c" == $'\n' && -z "$keep" ]]; then
+      joins+=("${#out}")
+      out+=" "
     else
+      # $inert is a glob pattern, so it must be matched unquoted.
+      # shellcheck disable=SC2053
+      [[ "$state" == "none" && "$c" != $inert ]] && keep=1
       out+="$c"
     fi
     i=$((i + 1))
   done
+  if ((${#joins[@]} > 0)) && [[ -n "$keep" || "$state" != "none" ]]; then
+    for p in "${joins[@]}"; do
+      unjoined+="${out:prev:p-prev}"$'\n'
+      prev=$((p + 1))
+    done
+    out="$unjoined${out:prev}"
+  fi
   printf '%s' "$out"
 }
 

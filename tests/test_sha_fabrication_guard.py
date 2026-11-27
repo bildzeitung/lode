@@ -437,6 +437,28 @@ def test_real_bd_invocation_after_quoted_control_chars_is_still_denied() -> None
     assert _script_decision(command) == "deny"
 
 
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (f'git commit -m "fix\n\nsee {FABRICATED_SHA}"', "deny"),
+        (f'bd update lode-1 --notes "a\nreview_head {FABRICATED_SHA}"', "deny"),
+        (f'echo "x\ngit show {FABRICATED_SHA}"', None),
+        # The join is abandoned where the quote state cannot be trusted: this `git show` is a
+        # live command between two comment apostrophes, not the inside of a quoted string.
+        (f"# don't\ngit show {FABRICATED_SHA}\n# that's it", "deny"),
+    ],
+    ids=["git-later-line", "bd-later-line", "other-command-later-line", "live-line"],
+)
+def test_multi_line_quoted_argument_is_scanned_with_its_own_command(
+    command: str, expected: str | None
+) -> None:
+    """lode-2ctid: the shared split joins a newline inside a quoted argument, so a multi-line
+    argument is one segment with the command it belongs to. Every line of a bd/git argument is
+    scanned (the accepted free-text over-match covers all of them, not only the first), and a
+    later line of another command's argument is not a bd/git invocation."""
+    assert _script_decision(command) == expected
+
+
 def test_split_admits_every_shape_invoke_re_recognizes() -> None:
     """SUPERSET invariant (review, lode-dia6) -- the load-bearing one.
 
