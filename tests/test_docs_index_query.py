@@ -10,9 +10,11 @@ sqlite3 error).
 
 import functools
 import sqlite3
+import subprocess
 from pathlib import Path
 
 import pytest
+from _gitrepo import _commit_file, _git
 from conftest import load_module_from_path
 from typer.testing import CliRunner
 
@@ -27,6 +29,7 @@ _query_module = load_module_from_path(
 )
 _escape_query = _query_module._escape_query
 query = _query_module.query
+_zero_hit_id_note = _query_module.zero_hit_id_note
 app = _query_module.app
 
 runner = CliRunner()
@@ -673,3 +676,155 @@ def test_split_entry_markers_in_an_oversized_h1_section_of_a_log_with_no_h2(
         assert _query_module.split_entry_markers(str(doc), u.line_lo, u.line_hi) == (
             [own_line] if u.line_hi <= own_line else []
         )
+
+
+#: What bd prints for an id it cannot resolve (exit 1).
+_BD_UNKNOWN = (1, '{"error": "no issues found matching the provided IDs"}')
+
+
+def _fake_run(
+    monkeypatch: pytest.MonkeyPatch,
+    grep: tuple[int, str] | None,
+    bd: tuple[int, str] | None,
+) -> list[list[str]]:
+    """Stub the id-check subprocesses and return the list their calls land in.
+
+    ``None`` for either tool simulates it being missing or timing out.
+    """
+    calls: list[list[str]] = []
+
+    def fake(args: list[str]) -> subprocess.CompletedProcess[str] | None:
+        calls.append(args)
+        outcome = grep if args[0] == "git" else bd
+        if outcome is None:
+            return None
+        return subprocess.CompletedProcess(args, outcome[0], outcome[1], "")
+
+    monkeypatch.setattr(_query_module, "_run", fake)
+    return calls
+
+
+def test_cli_prints_the_id_note_after_no_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_run(monkeypatch, (1, ""), (0, '[{"id": "lode-zzzzz"}]'))
+    result = runner.invoke(app, ["lode-zzzzz"])
+    assert result.stdout.splitlines() == [
+        "No results.",
+        "lode-zzzzz exists in bd but no docs/ entry mentions it; see `bd show lode-zzzzz`.",
+    ]
+
+
+def test_cli_prints_no_id_note_under_a_class_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _fake_run(monkeypatch, (1, ""), (0, '[{"id": "lode-zzzzz"}]'))
+    result = runner.invoke(app, ["lode-zzzzz", "--class", "decision-record"])
+    assert result.stdout.strip() == "No results."
+    assert calls == []
+
+
+def test_zero_hit_bare_id_missing_from_bd(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_run(monkeypatch, (1, ""), _BD_UNKNOWN)
+    assert (
+        _zero_hit_id_note("lode-zzzzz")
+        == "lode-zzzzz does not exist in the local bd database."
+    )
+
+
+def test_zero_hit_partial_id_is_not_reported_as_existing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bd resolves a unique partial id and exits 0 with the full id's issue."""
+    _fake_run(monkeypatch, (1, ""), (0, '[{"id": "lode-zzzzzq"}]'))
+    assert _zero_hit_id_note("lode-zzzzz") == (
+        "lode-zzzzz does not exist in the local bd database; "
+        "bd resolves it to lode-zzzzzq."
+    )
+
+
+def test_zero_hit_bare_id_on_origin_trunk(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _fake_run(
+        monkeypatch,
+        (0, "origin/trunk:docs/decisions.md\norigin/trunk:docs/a b.md\n"),
+        (0, '[{"id": "lode-zzzzz"}]'),
+    )
+    note = _zero_hit_id_note("lode-zzzzz")
+    assert note is not None
+    assert "origin/trunk (docs/decisions.md, docs/a b.md)" in note
+    assert [args[0] for args in calls] == ["git"]
+
+
+@pytest.mark.parametrize(
+    ("grep", "bd"),
+    [
+        pytest.param((1, ""), None, id="bd-unavailable"),
+        pytest.param((1, ""), (1, "database is locked"), id="bd-other-error"),
+        pytest.param((1, ""), (0, "not json"), id="bd-unparseable"),
+        pytest.param(
+            (128, ""), (0, '[{"id": "lode-zzzzz"}]'), id="no-origin-trunk-ref"
+        ),
+        pytest.param(None, (0, '[{"id": "lode-zzzzz"}]'), id="git-unavailable"),
+    ],
+)
+def test_zero_hit_bare_id_gets_no_note_when_a_probe_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    grep: tuple[int, str] | None,
+    bd: tuple[int, str] | None,
+) -> None:
+    _fake_run(monkeypatch, grep, bd)
+    assert _zero_hit_id_note("lode-zzzzz") is None
+
+
+@pytest.mark.parametrize("text", ["zzqx_nohit_a zzqx_nohit_b", "zzqx-nohit"])
+def test_a_query_that_is_not_a_bare_bd_id_runs_no_probe(
+    monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    calls = _fake_run(monkeypatch, (1, ""), (0, '[{"id": "lode-zzzzz"}]'))
+    assert _zero_hit_id_note(text) is None
+    assert calls == []
+
+
+def test_zero_hit_trunk_probe_matches_whole_ids_in_indexed_files_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real ``git grep``, against a throwaway repo: an id that is only a
+    prefix of a longer one, or that sits in a file the index does not chunk,
+    is not a docs entry on origin/trunk."""
+    repo = tmp_path / "repo"
+    _git(tmp_path, "init", "-q", "-b", "trunk", str(repo))
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "test")
+    _commit_file(repo, "docs/design.md", "See lode-zzzzzq and (lode-yyyyy.2).\n", "a")
+    _commit_file(repo, "docs/data.csv", "lode-zzzzz\n", "csv")
+    _commit_file(repo, "docs/how-to/README.md", "lode-zzzzz\n", "nested")
+    _git(repo, "update-ref", "refs/remotes/origin/trunk", "HEAD")
+    monkeypatch.setattr(_query_module._build, "REPO_ROOT", repo)
+    real_run = _query_module._run
+
+    def git_only(args: list[str]) -> subprocess.CompletedProcess[str] | None:
+        if args[0] == "git":
+            return real_run(args)
+        return subprocess.CompletedProcess(args, *_BD_UNKNOWN, "")
+
+    monkeypatch.setattr(_query_module, "_run", git_only)
+
+    assert "does not exist in the local bd database" in _zero_hit_id_note("lode-zzzzz")
+    assert "origin/trunk (docs/design.md)" in _zero_hit_id_note("lode-zzzzzq")
+    # The index matches a parent id inside a child's, and so does the probe.
+    assert "origin/trunk (docs/design.md)" in _zero_hit_id_note("lode-yyyyy")
+
+
+def test_run_returns_none_when_the_subprocess_hangs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def hang(*_a: object, **kw: object) -> None:
+        assert kw["timeout"] == _query_module._ID_CHECK_TIMEOUT_S
+        raise subprocess.TimeoutExpired("bd", 5)
+
+    monkeypatch.setattr(subprocess, "run", hang)
+    assert _query_module._run(["bd", "show", "x"]) is None
+
+
+def test_run_returns_none_when_the_tool_is_not_installed() -> None:
+    assert _query_module._run(["zzqx-no-such-binary-anywhere"]) is None

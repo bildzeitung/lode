@@ -28,5 +28,11 @@ section of `decisions.md` that ends in a bullet list, is split across several, s
 claim whose `**Update (` correction sits in a different chunk. Such a hit is followed by a `NOTE`
 line giving the line numbers of the Update markers that may correct it — read those lines too.
 
+**Zero-hit bd id (`lode-fg7w7.1`):** when the query is one bare bd id and nothing matches, a line
+after `No results.` says why, and in each case searching `docs/` further for that id is wasted: the
+id has an entry in `origin/trunk`'s docs that this checkout predates (the line gives the `git grep`
+that prints it), or it exists in bd with no docs entry, or it is not in the local bd database. When
+either check fails or times out, `No results.` is printed alone.
+
 Read the cited range yourself once you have the pointer. Reach for a doc directly only when the
 index turns up nothing relevant.
