@@ -721,7 +721,7 @@ def test_zero_hit_bare_id_falls_back_when_bd_unavailable(
 
 def test_zero_hit_non_id_query_gets_no_note(monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_run(monkeypatch, (1, ""), (0, "[{}]"))
-    result = runner.invoke(app, ["zzz not an id zzz"])
+    result = runner.invoke(app, ["zzqx_nohit_a zzqx_nohit_b"])
     assert result.stdout.strip() == "No results."
 
 
