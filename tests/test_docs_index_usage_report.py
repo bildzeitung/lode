@@ -562,8 +562,25 @@ def test_scan_still_counts_a_read_after_a_heredoc_terminator(tmp_path: Path) -> 
     assert [r["kind"] for r in rows] == ["direct"]
 
 
+@pytest.mark.parametrize(
+    "layout",
+    [
+        {"s1.jsonl": ["blob", "assistant"]},
+        {"s1.jsonl": ["assistant", "blob"]},
+        # The same subagent transcript under two session directories, one copy
+        # holding only the api-request-blob line; either may sort first.
+        {
+            "s1/subagents/agent-a.jsonl": ["blob"],
+            "s2/subagents/agent-a.jsonl": ["blob", "assistant"],
+        },
+        {
+            "s1/subagents/agent-a.jsonl": ["assistant", "blob"],
+            "s2/subagents/agent-a.jsonl": ["blob"],
+        },
+    ],
+)
 def test_scan_counts_a_tool_use_id_once_with_the_assistant_lines_day_and_role(
-    tmp_path: Path,
+    tmp_path: Path, layout: dict[str, list[str]]
 ) -> None:
     block = {
         "type": "tool_use",
@@ -571,16 +588,18 @@ def test_scan_counts_a_tool_use_id_once_with_the_assistant_lines_day_and_role(
         "name": "Read",
         "input": {"file_path": "/repo/docs/design.md"},
     }
-    blob = {"type": "api-request-blob", "message": {"content": [block]}}
-    assistant = {
-        "type": "assistant",
-        "timestamp": "2026-11-20T10:00:00.000Z",
-        "isSidechain": False,
-        "cwd": "/repo/.claude/worktrees/agent-x",
-        "message": {"content": [block]},
+    lines = {
+        "blob": {"type": "api-request-blob", "message": {"content": [block]}},
+        "assistant": {
+            "type": "assistant",
+            "timestamp": "2026-11-20T10:00:00.000Z",
+            "isSidechain": False,
+            "cwd": "/repo/.claude/worktrees/agent-x",
+            "message": {"content": [block]},
+        },
     }
-    # Blob first: the timestamped line must still win.
-    _write_transcript(tmp_path / "proj" / "s1.jsonl", [blob, assistant])
+    for name, kinds in layout.items():
+        _write_transcript(tmp_path / "proj" / name, [lines[k] for k in kinds])
     rows = scan(tmp_path)
     assert len(rows) == 1
     assert rows[0]["day"] == "2026-11-20"
@@ -593,6 +612,10 @@ def test_scan_counts_a_tool_use_id_once_with_the_assistant_lines_day_and_role(
         ("sed -n 1,5p scripts/docs_index_query.py", False),
         ("pytest tests/test_docs_index_query.py", False),
         ("bd update lode-x --append-notes 'see scripts/docs_index_query.py'", False),
+        # The script as a FILE handed to what uv or python really runs.
+        ("uv run --frozen ruff format scripts/docs_index_query.py", False),
+        ("uv run --frozen python /tmp/edit.py scripts/docs_index_query.py", False),
+        ("python -m py_compile scripts/docs_index_query.py", False),
         ('uv run --frozen python scripts/docs_index_query.py "x"', True),
         ('.venv/bin/python scripts/docs_index_query.py "x"', True),
         ('cd /r && python3 scripts/docs_index_query.py "x"', True),
