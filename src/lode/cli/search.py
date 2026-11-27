@@ -14,16 +14,22 @@ from lode.notes_read import search_notes
     name="search",
     help=(
         "Find live notes by the words they contain -- no AI, no cost.\n\n"
-        'Run this for a quick lookup by exact words. Unlike "lode ask", it '
-        "never calls a model or the network and never synthesizes an answer: "
-        "it lists matching notes best-match-first, in the same rows as "
-        '"lode notes", and matches the TUI Browse search for the same query.'
+        "Run this for a quick lookup by the literal words, or word beginnings, "
+        'a note contains. Unlike "lode ask", it never calls a model or the '
+        "network and never synthesizes an answer: it lists matching notes "
+        'best-match-first, in the same rows as "lode notes", and matches the '
+        "TUI Browse search for the same query."
     ),
 )
 def search_(
     text: Annotated[
         str,
-        typer.Argument(help="Words to look for; the last word matches as a prefix."),
+        typer.Argument(
+            help=(
+                "Words to look for (quote several). Each matches as a prefix; "
+                "a note matching any is listed."
+            )
+        ),
     ],
     db: _DbOption = None,
 ) -> None:

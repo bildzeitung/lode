@@ -4,24 +4,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+from test_notes_read import _seed_and_index as _seed
 from typer.testing import CliRunner
 
 from lode.cli import app
-from lode.lexical import LexicalCacheBackend
 from lode.notes_read import search_notes
-from lode.storage import init_db
-from lode.versions import save
 
 runner = CliRunner()
 
 
-def _seed(db_path: Path, note_id: str, body: str) -> None:
-    conn = init_db(db_path)
-    try:
-        result = save(conn, note_id, body)
-        LexicalCacheBackend(conn).index(note_id, result.version_id, body)
-    finally:
-        conn.close()
+def _listed_note_ids(stdout: str) -> list[str]:
+    """The note id leading each row ``lode search`` printed, in printed order."""
+    return [line.split()[0] for line in stdout.splitlines() if line.strip()]
 
 
 def test_search_lists_matches_best_first_and_matches_search_notes(
@@ -35,11 +29,24 @@ def test_search_lists_matches_best_first_and_matches_search_notes(
     result = runner.invoke(app, ["search", "widget", "--db", str(db_path)])
 
     assert result.exit_code == 0, result.output
+    # Browse's quick search renders exactly what search_notes returns, so
+    # equality with it is equality with the TUI for the same query and DB.
     expected = [row.note_id for row in search_notes(db_path, "widget")]
     assert expected == ["note-strong", "note-weak"]
-    out = result.stdout
-    assert out.index("note-strong") < out.index("note-weak")
-    assert "note-other" not in out
+    assert _listed_note_ids(result.stdout) == expected
+
+
+def test_search_matches_any_word_and_each_as_a_prefix(tmp_path: Path) -> None:
+    """Pins what the argument help promises: every word is a prefix, any one suffices."""
+    db_path = tmp_path / "lode.db"
+    _seed(db_path, "note-cat", "category theory")
+    _seed(db_path, "note-dog", "dogma and more")
+    _seed(db_path, "note-other", "grocery list")
+
+    result = runner.invoke(app, ["search", "cat dog", "--db", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert sorted(_listed_note_ids(result.stdout)) == ["note-cat", "note-dog"]
 
 
 def test_search_no_usable_token_says_no_matching_notes(tmp_path: Path) -> None:
