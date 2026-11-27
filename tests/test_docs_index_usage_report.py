@@ -594,7 +594,7 @@ def test_scan_counts_a_tool_use_id_once_with_the_assistant_lines_day_and_role(
         ("pytest tests/test_docs_index_query.py", False),
         ("bd update lode-x --append-notes 'see scripts/docs_index_query.py'", False),
         ('uv run --frozen python scripts/docs_index_query.py "x"', True),
-        (".venv/bin/python scripts/docs_index_query.py \"x\"", True),
+        ('.venv/bin/python scripts/docs_index_query.py "x"', True),
         ('cd /r && python3 scripts/docs_index_query.py "x"', True),
         ('scripts/docs_index_query.py "x"', True),
     ],
