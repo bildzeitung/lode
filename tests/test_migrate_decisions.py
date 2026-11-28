@@ -13,7 +13,8 @@ _mig = load_module_from_path(
     "migrate_decisions", REPO_ROOT / "scripts" / "migrate_decisions.py"
 )
 _gate = load_module_from_path(
-    "check_decisions_entries", REPO_ROOT / "scripts" / "check_decisions_entries.py"
+    "check_decisions_entries_for_migration",
+    REPO_ROOT / "scripts" / "check_decisions_entries.py",
 )
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "decisions_small.md"
 runner = CliRunner()
