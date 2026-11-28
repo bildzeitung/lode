@@ -34,8 +34,8 @@ assert properties about the *shell semantics* of that embedded bash, not about p
   shipped once for real (`lode-sfnb`: a populated `declare -A MSG` in one block, read back two blocks
   later, silently expanded to empty and broke `git merge -m ''` with no error output at all).
 - **`tests/test_fence_parsing.py`** — direct unit tests for the one shared, importable fence parser
-  (`src/lode/fence_parsing.py`) that `tests/conftest.py`'s own
-  `fence_scan` helper builds on, so "what counts as a fenced code block" is answered once, not
+  (`src/lode/fence_parsing.py`) that `tests/conftest.py`'s own `fence_scan` helper and the
+  production fence scanners build on, so "what counts as a fenced code block" is answered once, not
   reimplemented per gate. `tests/test_no_private_fence_state_machine.py` is the companion AST gate:
   no module may hand-roll a second, private fence-toggle state machine instead of importing this one.
   Several of the Markdown scanners below still carry private copies of similar parsing logic rather

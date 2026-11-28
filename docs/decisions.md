@@ -8121,15 +8121,14 @@ one is taken, B: the retire condition rests on it.
       point at files this removes. The entry is not edited; `scripts/check_links.py` excuses the
       two links by name (`HISTORICAL_DEAD_LINKS`), following the `lode-1dmu` paragraph of this
       file's preamble, which calls a reference to a since-deleted path expected. (2) The
-      `lode-v1gnv` and `lode-px81z` preamble paragraphs get an Update saying their gate is gone;
-      the indent rule itself is left standing. (3) The `lode-t6o1`, `lode-dozi`, `lode-7l68` and
-      `lode-funp` entries get a pointer Update to this one. The `lode-wtk2` and `lode-yt7q2`
-      entries, which correct the deleted usage report, do not.
+      `lode-t6o1`, `lode-dozi`, `lode-7l68` and `lode-funp` entries get a pointer Update to this
+      one. The `lode-wtk2` and `lode-yt7q2` entries, which correct the deleted usage report, do
+      not. (3) The indent rule the removed gate enforced is left standing, in an Update on this
+      file's preamble.
     - **Left open (`lode-811mk`).** `lode-ebayj`'s re-measure names
       `scripts/decisions_lookup_baseline.py`, and all but one of its thresholds measure index
-      lookups.
-      The script cannot run without the usage report, so it stays removed, and what replaces
-      the re-measure is the maintainer's to decide.
+      lookups. The script cannot run without the usage report, so it stays removed, and what
+      replaces the re-measure is the maintainer's to decide.
 
 ## docs-index usage report: count each tool call once, and classify an index call by segment (lode-yt7q2)
 

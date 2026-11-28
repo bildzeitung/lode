@@ -2,7 +2,7 @@ r"""Guards docs/decisions.md's supersession-marker convention (lode-ur6o).
 
 The convention itself is stated once, in that file's own preamble; this module
 deliberately does not restate it, so the two cannot drift. It pins two
-properties, because any one alone leaves a hole:
+properties, because either alone leaves a hole:
 
 *No off-pattern marker.* A stale-flag keyword opening a bold span, a
 blockquote, or a parenthetical, with no ``Update (`` on the line to make it

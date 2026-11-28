@@ -1,6 +1,5 @@
 """Direct unit tests for the ONE importable fence parser (lode-ee7b,
-src/lode/fence_parsing.py) -- the primitives
-``tests/conftest.py``'s ``fence_scan`` builds on."""
+src/lode/fence_parsing.py)."""
 
 from __future__ import annotations
 
