@@ -279,6 +279,13 @@ line, checked against `textual` 8.2.8); MD018 is dropped from v1; inline code sp
 indented code and block-quoted fences are accepted false positives; MD022 underlines the `#` run of
 a heading with no text, and a whitespace-only line counts as blank.
 
+**Decided (`lode-xq83g`, maintainer, 2026-11-28).** Two edges of the caret exemption stay as built;
+no code change. A bare `#` typed directly under a non-blank line is underlined by MD022 until the
+next keystroke makes it a non-heading; this is intended, since MD022 stays cursor-blind and only
+MD009 reads the caret (`lode-kgg0h`). MD009's caret exemption still applies while the body has no
+focus; this is intended, since the caret is still at the end of the run and typing resumes there
+(the reasoning `lode-o7pf.3`'s review applied to read-only areas).
+
 **Screen set.** `EditScreen` and `CaptureScreen` bodies only; the read-only `VersionViewScreen`
 and `SnapshotViewerScreen` bodies stay clean. Wiring: a `TextArea` subclass in its **own module**
 ([one-widget-per-module fiat](conventions.md#textual-one-screen-or-custom-widget-per-module)),
