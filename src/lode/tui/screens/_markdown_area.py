@@ -46,9 +46,10 @@ bug for a malformed widget id is ``textual.dom.BadIdentifier``, which derives
 directly from ``Exception`` and is **not** a ``ValueError``, so a genuine
 programming error still surfaces rather than being swallowed.
 
-Either way, fall back to a plain, uncoloured ``TextArea`` with everything else
-(text, read-only, id, placeholder) unchanged, so editing and scrolling keep
-working.
+Either way, fall back to an uncoloured area of the class asked for -- a plain
+``TextArea``, or the ``LintTextArea`` when ``lint=True``, whose underlines need
+no grammar -- with everything else (text, read-only, id, placeholder)
+unchanged, so editing and scrolling keep working.
 """
 
 from __future__ import annotations

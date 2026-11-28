@@ -2,7 +2,7 @@
 
 How the note body became a keyboard-first markdown authoring surface (`lode-ev5j`): the decisions
 behind it, the browser-safety guard on the open-link binding, and what was deliberately left
-unbuilt, plus the inline lint squiggles (designed in `lode-o7pf`, built as its children land). See
+unbuilt, plus the inline lint squiggles (designed and built in `lode-o7pf`). See
 [keybindings.md](keybindings.md) for the exact key and screen list of the open-link binding this
 doc describes, and [tui.md](tui.md) for layout/footer conventions. Companion doc, reachable from
 [design.md](design.md#map-of-the-docs).
@@ -190,8 +190,8 @@ Inline lint squiggles are plain underlines on markdown-lint-flagged character ra
 the rule engine (`src/lode/markdown_lint.py`, `lode-o7pf.2`), the widget (`LintTextArea` in
 `src/lode/tui/widgets/lint_text_area.py`, `lode-o7pf.3`) and the wiring (`lode-o7pf.4`:
 `_markdown_text_area(lint=True)`, passed by `EditScreen` and `CaptureScreen` only, on the grammar
-path and the grammar-less fallback) are built. The
-Textual behaviour it relies on is verified against `textual` 8.2.8 / `rich` 15.0.0.
+path and the grammar-less fallback) are built. The Textual behaviour it relies on is verified
+against `textual` 8.2.8 / `rich` 15.0.0.
 
 The feature was first deferred out of `lode-ev5j` into its own epic, `lode-o7pf`. This design
 replaces two earlier ones: injecting ranges into `TextArea`'s private `_highlights` map (unsupported
