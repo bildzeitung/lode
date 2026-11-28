@@ -8377,3 +8377,58 @@ file (probed at review: a missing doc path appended to it fails the session). Wh
 commit is the open decision `lode-3qi40`. The second: the `bd`-generated Session Completion block
 in `CLAUDE.md` and `AGENTS.md` says "Run quality gates (if code changed)"; `bd init` regenerates
 that block, and its own text puts it below repository instructions.
+## Decisions migration: how an entry's status is derived (decided, lode-m4rzt)
+
+Maintainer ruling 2026-11-28, option A of `lode-m4rzt`, raised at `/land`'s review of
+`lode-ebayj.3` and built as `lode-g311h`. The rule governs the one-time migration of this file by
+`scripts/migrate_decisions.py` (epic `lode-ebayj`), not the entry format after the cutover, so it is
+recorded here and not in `docs/decisions/README.md` (maintainer, same day, on `lode-g311h`; the
+README's 15-line cap stands).
+
+What it replaces. The script read only an entry's bold title and counted "deferred" as decided. The
+reason given, "a decision to defer is a decision", was a code comment and appeared nowhere in
+`docs/`. Run on this file before the change, the script gave 9 of 168 entries `open`, and the items
+of the original list at the top of this file (source lines 65 to 276 today) came out `decided`.
+`lode-ebayj.3`'s ticket had asked for the reverse: anything unclear defaults to open and is listed.
+
+The ruling. An entry that is deferred, leaning or to be revisited later is OPEN, a question title
+with a "Leaning" answer included. Status reads the entry's first paragraph as well as its bold
+title. The dry run lists every entry whose status differs from what its title alone gives, for a
+maintainer hand check. The costs are unequal: a committed entry file is never edited, so a wrong
+`decided` can be put right after the cutover only by a superseding full copy, and a wrong `open`
+costs one later close. Not taken: option B (keep deferred as decided and record that rule) and
+option C (set the status of about 15 entries by hand in the script).
+
+The rule as built. A clause marked (review) was added at technical review and is reviewer wording,
+not part of the ruling.
+
+- Open wording in a title is `open`, `leaning`, `undecided` or `unsettled`, as before, and now also
+  the deferral wording: `deferred`, `revisit`, `revisiting`, `tune when`, `tuning`,
+  `decide whether`, `untuned`, and `revisited` after `be`, `is` or `ever`, as in "must be
+  revisited". (review) Any other `revisited` does not count: an entry titled "X, revisited:
+  settled" is the revisit itself.
+- The first paragraph is read for the deferral wording only, never for the bare word `open`. A title
+  with decided wording wins over it: "DECIDED: X. Revisit only if Y" is decided. (review) A `## `
+  section's first paragraph is the one after its heading, and the paragraph is matched as one line,
+  so a phrase wrapped over two source lines is found.
+- A title's own open wording is never overruled. With decided wording beside it the entry is
+  UNCLEAR, gets `open` and is listed, as before.
+- "left open" after another word in a title names a gap that an entry closed. It is not open
+  wording.
+- (review) A word after `not`, `not merely` or `no longer` does not count: "rejected, not merely
+  deferred" does not defer, and "deferred, not built" is open without being UNCLEAR.
+- Unchanged: an Update marker that reads as a ruling turns an open entry `decided`, and Update
+  markers none of which does make it UNCLEAR.
+
+Result on this file on 2026-11-28, 168 entries, this one not counted: 35 open, 133 decided, 7 of the
+open ones UNCLEAR. The listing has 34 rows, each printing the wording that matched and whether it is
+in the title or the first paragraph. 30 are entries that the title alone reads as decided and that
+are now open. The reviewer read the head of each: 18 are open as the ruling intends, 4 are decisions
+that carry a "Revisit if" clause (open by the ruling's wording, a judgment call), and 8 look settled
+(the wording is about another item, or `deferred` is the bd status name). The other 4 go the other
+way and are right: each has "left open" in its title.
+
+The script cannot set one entry's status by hand: a row found wrong needs a change to the wording
+rules, or a table added for the purpose. The hand check, and how a row it finds wrong is corrected
+before the cutover (`lode-ebayj.4`), are tracked in `lode-zbcyn`, a `human`-labelled ticket that
+carries the reviewer's reading of each row and blocks the cutover.
