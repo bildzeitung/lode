@@ -798,6 +798,10 @@ def test_zero_hit_trunk_probe_matches_whole_ids_in_indexed_files_only(
     _commit_file(repo, "docs/design.md", "See lode-zzzzzq and (lode-yyyyy.2).\n", "a")
     _commit_file(repo, "docs/data.csv", "lode-zzzzz\n", "csv")
     _commit_file(repo, "docs/how-to/README.md", "lode-zzzzz\n", "nested")
+    # Joined rather than written out: linkcheck reads a literal docs/ path
+    # ending in .md as a citation of a page that has to exist.
+    entry = Path("docs", "decisions", "aaaaa-x.md").as_posix()
+    _commit_file(repo, entry, "lode-xxxxx\n", "entry")
     _git(repo, "update-ref", "refs/remotes/origin/trunk", "HEAD")
     monkeypatch.setattr(_query_module._build, "REPO_ROOT", repo)
     real_run = _query_module._run
@@ -813,6 +817,42 @@ def test_zero_hit_trunk_probe_matches_whole_ids_in_indexed_files_only(
     assert "origin/trunk (docs/design.md)" in _zero_hit_id_note("lode-zzzzzq")
     # The index matches a parent id inside a child's, and so does the probe.
     assert "origin/trunk (docs/design.md)" in _zero_hit_id_note("lode-yyyyy")
+    # The index chunks the per-entry decision files too.
+    assert f"origin/trunk ({entry})" in _zero_hit_id_note("lode-xxxxx")
+
+
+def test_cli_finds_a_decision_entry_and_names_the_head_of_a_superseded_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-ebayj.2: the per-entry decision files are indexed, and a hit on an
+    entry that a later one supersedes points at the head of its chain."""
+    docs_dir = tmp_path / "docs"
+    entries = docs_dir / "decisions"
+    entries.mkdir(parents=True)
+    (entries / "aaaaa-old.md").write_text(
+        "---\nid: aaaaa\ndate: 2026-01-01\n---\n# Old\n\nstale quuxlarb claim\n"
+    )
+    (entries / "bbbbb-new.md").write_text(
+        "---\nid: bbbbb\ndate: 2026-02-01\nsupersedes: [aaaaa]\n---\n"
+        "# New\n\nfresh claim\n"
+    )
+    monkeypatch.setattr(
+        _query_module._build,
+        "build_index",
+        functools.partial(_query_module._build.build_index, docs_dir=docs_dir),
+    )
+
+    result = runner.invoke(app, ["quuxlarb"])
+    assert result.exit_code == 0, result.output
+    assert f"{entries / 'aaaaa-old.md'}:1-" in result.stdout
+    assert (
+        f"NOTE: superseded; read the chain head instead: {entries / 'bbbbb-new.md'}"
+        in result.stdout
+    )
+
+    result = runner.invoke(app, ["fresh"])
+    assert f"{entries / 'bbbbb-new.md'}:1-" in result.stdout
+    assert "superseded" not in result.stdout
 
 
 def test_run_returns_none_when_the_subprocess_hangs(

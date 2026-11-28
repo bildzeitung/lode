@@ -33,6 +33,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -109,6 +110,7 @@ def _load_build() -> ModuleType:
 
 
 _build = _load_build()
+_entries = _load_sibling("_docs_index_query_entries_impl", "check_decisions_entries.py")
 
 
 def _load_log() -> ModuleType:
@@ -271,6 +273,26 @@ _ID_CHECK_TIMEOUT_S = 5
 _TRUNK_REF = "origin/trunk"
 
 
+def superseded_head(path: str, loaded: dict[Path, dict]) -> str | None:
+    """The path of the chain head when ``path`` is a superseded decision entry
+    file, else ``None`` (``lode-ebayj.2``).
+
+    ``loaded`` holds each entry directory already read, so that a run of hits
+    in one directory reads its files once.
+    """
+    entry_path = Path(path)
+    if not _build._chunker.is_entry_file(entry_path):
+        return None
+    if entry_path.parent not in loaded:
+        loaded[entry_path.parent] = _entries.load_entries(entry_path.parent)[0]
+    entries = loaded[entry_path.parent]
+    entry_id = entry_path.name.split("-", 1)[0]
+    if entry_id not in entries:
+        return None
+    head = _entries.chain_head(entries, entry_id)
+    return None if head == entry_id else str(entries[head]["path"])
+
+
 def _run(args: list[str]) -> subprocess.CompletedProcess[str] | None:
     """Run ``args`` in the repo with a hard timeout; ``None`` when the tool is
     missing, hangs, or cannot start, so every caller falls back quietly."""
@@ -299,11 +321,11 @@ def zero_hit_id_note(raw_query: str) -> str | None:
     bd_id = raw_query.strip()
     if not _BD_ID.fullmatch(bd_id):
         return None
-    # ``-w`` and the top-level ``*.md`` pathspec hold this probe to what the
-    # index matches: a whole id, in the files it chunks.
-    pathspec = ":(glob)docs/*.md"
+    # ``-w`` and the chunker's own globs hold this probe to what the index
+    # matches: a whole id, in the files it chunks.
+    pathspecs = [f":(glob)docs/{glob}" for glob in _build._chunker.CORPUS_GLOBS]
     grep = _run(
-        ["git", "grep", "-l", "-w", "-F", "-e", bd_id, _TRUNK_REF, "--", pathspec]
+        ["git", "grep", "-l", "-w", "-F", "-e", bd_id, _TRUNK_REF, "--", *pathspecs]
     )
     # Exit 1 is "no match"; any other failure (128: no such ref) says nothing
     # about trunk's docs, so the bd answer below would claim too much.
@@ -316,7 +338,7 @@ def zero_hit_id_note(raw_query: str) -> str | None:
         return (
             f"{bd_id} has a docs entry on {_TRUNK_REF} ({files}) that this "
             f"checkout predates; find its lines with "
-            f"`git grep -n -w -F {bd_id} {_TRUNK_REF} -- '{pathspec}'`."
+            f"`git grep -n -w -F {bd_id} {_TRUNK_REF} -- {shlex.join(pathspecs)}`."
         )
     # ``--readonly``: a lookup must never write bd state, and a bd killed at
     # the timeout must not be mid-write.
@@ -433,11 +455,15 @@ def main(
     elapsed_ms = (time.perf_counter() - start) * 1000
     fallback_fired = False
     if results:
+        entry_dirs: dict[Path, dict] = {}
         for path, line_lo, line_hi, first_line, snippet, used_fallback in results:
             fallback_fired = fallback_fired or used_fallback
             marker = " [fallback: OR match]" if used_fallback else ""
             print(f"{path}:{line_lo}-{line_hi}{marker}  {first_line}")
             print(f"    {snippet}")
+            head = superseded_head(path, entry_dirs)
+            if head:
+                print(f"    NOTE: superseded; read the chain head instead: {head}")
             markers = split_entry_markers(path, line_lo, line_hi)
             if markers:
                 where = ", ".join(str(n) for n in markers)

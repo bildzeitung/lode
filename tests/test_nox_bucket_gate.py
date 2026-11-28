@@ -115,12 +115,18 @@ def test_tests_bucket_has_both_the_full_and_fast_view() -> None:
         )
 
 
-def test_everything_else_bucket_covers_the_four_offline_default_sessions() -> None:
-    """The four default-set sessions besides fix/tests -- exactly the ones
-    lode-vvt1's shellcheck omission was about -- must all land in the
-    everything-else bucket."""
+def test_everything_else_bucket_covers_the_offline_default_sessions() -> None:
+    """The default-set sessions besides fix/tests -- the kind lode-vvt1's
+    shellcheck omission was about -- must all land in the everything-else
+    bucket."""
     covered = _covered_sessions()
-    expected = {"shellcheck", "linkcheck", "docstringcheck", "docs"}
+    expected = {
+        "shellcheck",
+        "linkcheck",
+        "docstringcheck",
+        "docs",
+        "decisions_entries",
+    }
     for name in expected:
         assert name in covered, f"expected a {name!r} nox session, none found"
         assert "everything-else" in covered[name], (
