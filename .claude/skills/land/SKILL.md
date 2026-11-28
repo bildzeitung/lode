@@ -1017,9 +1017,10 @@ an ordinary reported discovery, not a one-line patch: the repair is the human's 
 repaired with a pointer Update on the entry instead (`lode-tikr`). No gate or test checks this
 position.
 
-Re-gate the combined result (this is a Python-gated repo where code changed; a **docs-only** merge
-set has no Python gate — skip nox, run `scripts/validate-mermaid.sh` only if a merged diff touched a
-`docs/` diagram).
+Re-gate the combined result with the full command below, whatever file types the merge set touches
+(no docs-only exemption; lode-brbhf). When a merged diff touched a `docs/` diagram, also run
+`scripts/validate-mermaid.sh` as a separate call, outside the `&&` chain (its exit 2 is handled
+below).
 
 **If the batch above merged NOTHING — `$STATE_DIR/landed` is empty, the all-bounced /
 all-`needs-rebase` pass lode-0jan lets through — skip this re-gate entirely and go straight to

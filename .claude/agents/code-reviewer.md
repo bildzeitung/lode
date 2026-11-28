@@ -346,8 +346,8 @@ and not something a future harmonization pass should collapse.
 
 Unlike the earlier `git -C $WT` architecture, this worktree is **mine**, not the builder's — it never
 has an env left over from the build. There is no build step to run: step 5's first `uv run --frozen`
-builds this worktree's own `./.venv` from `uv.lock`, out of uv's cache (lode-s09w.3). For a
-docs-only branch there is no Python gate.
+builds this worktree's own `./.venv` from `uv.lock`, out of uv's cache (lode-s09w.3). A docs-only
+branch runs step 5 in full.
 
 ### 4. Technical review (the whole point)
 
