@@ -88,32 +88,30 @@ def test_open_status_passes(entries: Path) -> None:
     assert _gate.check_edges(entries) == []
 
 
-def test_a_fork_of_two_successors_is_flagged(entries: Path) -> None:
-    _entry(entries, "aaaaa")
-    _entry(entries, "bbbbb", supersedes="[aaaaa]", date="2026-02-01")
-    _entry(entries, "ccccc", supersedes="[aaaaa]", date="2026-03-01")
-    (problem,) = _gate.check_edges(entries)
-    assert problem == (
-        "aaaaa-x.md: superseded by 2 entries (bbbbb, ccccc);"
-        " the newer one must supersede the other instead"
-    )
-
-
-def test_superseding_an_entry_and_its_successor_is_a_fork(entries: Path) -> None:
-    """Every ``supersedes`` edge counts, so a correction names only the entry it
-    copies, not that entry's ancestors."""
+@pytest.mark.parametrize(
+    "later", ["[aaaaa]", "[aaaaa, bbbbb]"], ids=["sibling", "ancestor"]
+)
+def test_an_entry_superseded_by_two_entries_is_flagged(
+    entries: Path, later: str
+) -> None:
+    """Every ``supersedes`` edge counts (``ancestor``), so a correction names
+    only the entry it copies, not the entries that one superseded."""
     _entry(entries, "aaaaa")
     _entry(entries, "bbbbb", supersedes="[aaaaa]")
-    _entry(entries, "ccccc", supersedes="[aaaaa, bbbbb]")
-    assert [p.split(";")[0] for p in _gate.check_edges(entries)] == [
-        "aaaaa-x.md: superseded by 2 entries (bbbbb, ccccc)"
+    _entry(entries, "ccccc", supersedes=later)
+    assert _gate.check_edges(entries) == [
+        "aaaaa-x.md: superseded by 2 entries (bbbbb, ccccc); only one may supersede it"
     ]
 
 
-def test_an_id_listed_twice_by_one_entry_is_not_a_fork(entries: Path) -> None:
+def test_an_id_listed_twice_in_one_list_counts_once(entries: Path) -> None:
     _entry(entries, "aaaaa")
     _entry(entries, "bbbbb", supersedes="[aaaaa, aaaaa]")
     assert _gate.check_edges(entries) == []
+    _entry(entries, "ccccc", related="[nopqr, nopqr]")
+    assert _gate.check_edges(entries) == [
+        "ccccc-x.md: related target nopqr does not exist"
+    ]
 
 
 def test_duplicate_id_is_flagged(entries: Path) -> None:

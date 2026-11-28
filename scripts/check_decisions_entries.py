@@ -25,8 +25,8 @@ app = typer.Typer(add_completion=False)
 DEFAULT_DIR = Path(__file__).resolve().parent.parent / "docs" / "decisions"
 _NAME_RE = re.compile(r"^([0-9a-z]{5})-.+\.md$")
 _LIST_RE = re.compile(r"^\[(.*)\]$")
-# Month 01-12 and day 01-31, ASCII digits only (``\d`` also matches other
-# scripts' digits). A day past its month's end (02-31) still passes.
+# ``[0-9]``, not ``\d``, which also matches other scripts' digits. A day past
+# its month's end (02-31) still passes.
 _DATE_RE = re.compile(r"^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")
 _STATUSES = ("open", "decided")  # superseded is derived from edges, never stored
 
@@ -53,9 +53,8 @@ def parse_frontmatter(text: str) -> dict[str, str | list[str]]:
 
 
 def load_entries(directory: Path) -> tuple[dict[str, dict], list[str]]:
-    """``{id: {"path", "date", "supersedes", "related"}}`` plus the problems
-    found while loading (filename mismatch, duplicate id, a bad date or status,
-    an edge value that is not an inline list)."""
+    """``{id: {"path", "date", "supersedes", "related"}}`` plus the per-file
+    problems found while loading."""
     entries: dict[str, dict] = {}
     problems: list[str] = []
     for path in sorted(directory.glob("*.md")):
@@ -82,7 +81,8 @@ def load_entries(directory: Path) -> tuple[dict[str, dict], list[str]]:
                 # read: failing here keeps its edges from being dropped unseen.
                 problems.append(f"{path.name}: {key} must be an inline [id, ...] list")
                 value = []
-            entries[entry_id][key] = value
+            # An id listed twice in one list is one edge, for every reader.
+            entries[entry_id][key] = list(dict.fromkeys(value))
     return entries, problems
 
 
@@ -90,15 +90,14 @@ def successors(entries: dict[str, dict]) -> dict[str, list[str]]:
     """The derived ``superseded_by`` map: old id -> the ids that supersede it."""
     out: dict[str, list[str]] = {}
     for entry_id, entry in entries.items():
-        # An id listed twice in one entry's list is still one successor.
-        for old in dict.fromkeys(entry["supersedes"]):
+        for old in entry["supersedes"]:
             out.setdefault(old, []).append(entry_id)
     return out
 
 
 def chain_head(entries: dict[str, dict], entry_id: str) -> str:
     """Follow ``superseded_by`` from ``entry_id`` to an entry nothing supersedes. Stops
-    on a cycle; on a fork (the gate fails both) the newest by ``(date, id)`` wins."""
+    on a cycle; on a fork (which the gate fails) the newest by ``(date, id)`` wins."""
     nxt, seen = successors(entries), {entry_id}
     while entry_id in nxt:
         entry_id = max(nxt[entry_id], key=lambda i: (entries[i]["date"], i))
@@ -117,11 +116,11 @@ def check_edges(directory: Path) -> list[str]:
                 for t in entry[key]
                 if t not in entries
             ]
-    # A fork fails so that every chain stays linear: the later correction has to
-    # supersede the earlier one, and a chain's head never rests on a tie-break.
+    # A fork fails so that every chain stays linear and its head never rests on
+    # chain_head's tie-break.
     problems += [
         f"{entries[old]['path'].name}: superseded by {len(new)} entries"
-        f" ({', '.join(new)}); the newer one must supersede the other instead"
+        f" ({', '.join(new)}); only one may supersede it"
         for old, new in successors(entries).items()
         if len(new) > 1 and old in entries
     ]
