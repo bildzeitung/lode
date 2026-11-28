@@ -38,8 +38,8 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   *every* change goes through a worktree under `.claude/worktrees/`. The `/code` skill launches me
   **already inside** my own worktree (`isolation: "worktree"`). **That has been observed to fail
   outright** — a dispatched agent with cwd pinned to the repo root, on `trunk`, no worktree at all
-  (lode-ska2) — so I don't trust it: `scripts/isolation-guard.sh` asserts it mechanically as my very
-  first executable action (step 3). If it fails I **stop and report** rather than write — full stop,
+  (lode-ska2) — so I don't trust it: `scripts/start-guards.sh` (which runs `scripts/isolation-guard.sh` first) asserts it
+  mechanically as my very first executable action (step 3). If it fails I **stop and report** rather than write — full stop,
   no `EnterWorktree` retry, no `git worktree add` self-rescue.
 - **I never write `trunk`.** No merge, no `bd close`, no push to `trunk`, no `git -C <main-checkout>`,
   no committing the `.beads/*.jsonl` export. My output is a pushed `land/<id>` branch plus a
@@ -225,16 +225,20 @@ worktree"), and nothing mechanical then stopped that dispatch from running `Edit
 against the main checkout on trunk — only the English "if my cwd is trunk, stop" instruction held, and
 even then the incident's own agent invented an unsanctioned `git worktree add` + `git -C` workaround
 rather than actually stopping. This is the FIRST executable action of my cycle, ahead of even reading
-my own branch name, via `scripts/isolation-guard.sh` (lode-ska2), shellcheck'd and unit-tested the
-same way `scripts/recycled-worktree-guard.sh` (lode-ivth) is:
+my own branch name, via `scripts/start-guards.sh` (lode-fg7w7.4), one call that runs
+`scripts/isolation-guard.sh` (lode-ska2) and then `scripts/recycled-worktree-guard.sh` (lode-ivth) —
+the two stay distinct, shellcheck'd, unit-tested siblings — and stops at the first one that refuses.
+Its context argument is the recycled guard's context message (the second guard, below):
 
 ```bash
-scripts/isolation-guard.sh
+scripts/start-guards.sh "before doing any work"
 ```
 
-A nonzero exit is a **stop**. The script prints its own diagnostic on exit 1; an exit 127 /
-"No such file or directory" is the **bootstrap gap** — this checkout may predate the script landing on
-trunk — and is a stop too: report it and do not proceed.
+A nonzero exit is a **stop**. Exit **3** = `isolation-guard.sh` refused (the recycled guard did not
+run) and exit **4** = `recycled-worktree-guard.sh` refused after isolation passed; the wrapper's
+stderr names the refusing guard and its own status, printed just above the wrapper's line. Exit 2 is
+a usage error. An exit 127 / "No such file or directory" is the **bootstrap gap** — this checkout may
+predate the script landing on trunk — and is a stop too: report it and do not proceed.
 
 **On a failure here, I stop — full stop.** I do **not** attempt `EnterWorktree` a second time, I do
 **not** attempt `git worktree add` + `git -C` as a self-rescue, and I do not run `Edit`/`Write`/`nox`
@@ -263,20 +267,16 @@ unreviewed ticket's changes. A branch-name check alone can't catch this (the rec
 *looks* like a normal `worktree-agent-…` name), so before touching a single file I assert the actual
 commit graph instead of trusting the name — via `scripts/recycled-worktree-guard.sh` (lode-ivth),
 extracted so this guard is shellcheck'd and unit-tested rather than living only as an inline bash
-block in this file:
-
-```bash
-scripts/recycled-worktree-guard.sh "before doing any work"
-```
+block in this file. `scripts/start-guards.sh` above already ran it, right after the isolation guard,
+so there is no second call to make here.
 
 **Reading the exit status is not optional, and a bootstrap gap is a stop (lode-ivth).** The guard
-script itself is read FROM this worktree — a worktree recycled from a branch cut before the script
-landed on trunk would not have it on disk at all, and silently proceeding as if nothing were wrong is
-exactly the failure mode this whole guard exists to prevent. Exit 127 / "No such file or directory"
+scripts themselves are read FROM this worktree — a worktree recycled from a branch cut before they
+landed on trunk would not have them on disk at all, and silently proceeding as if nothing were wrong
+is exactly the failure mode this whole guard exists to prevent. Exit 127 / "No such file or directory"
 (script missing) or 126 / "Permission denied" (not executable) means exactly that — report and stop;
-exit 1 means the script
-*ran* and refused (not inside an isolated worktree — it has already printed that diagnostic itself).
-Either way I stop.
+exit 4 from the wrapper means the recycled guard *ran* and refused (it has already printed its own
+diagnostic). Either way I stop.
 
 **The script's `case "$TOP" in */.claude/worktrees/*)` guard is placed in the same block as the
 destructive command it protects** — a `case` that `exit 1`s cannot be skipped or hand-waved under
@@ -784,6 +784,6 @@ own guidance); the cycle above already applies them, but the *why*:
 
 | Thing | Value |
 |---|---|
-| Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2, in `.claude/skills/code/rebase-pickup.md`) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
+| Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth), run via `scripts/start-guards.sh` right after the isolation guard, before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2, in `.claude/skills/code/rebase-pickup.md`) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | Rebase pickup | `needs-rebase` ticket → fetch + check out `land/<id>` into my own launch worktree, `git merge origin/trunk` (resolve a *mechanical* conflict directly with `Edit`; escalate a *genuine* one), re-gate, commit, **push it myself** (ordinary, non-force — a merge never rewrites origin), swap to `ready-for-land` myself (no review) (lode-cln) |
 | Rebase pickup's own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |

@@ -68,10 +68,12 @@ shouldn't write; for me it means landing in the **lander's own main checkout on 
 tree `/land` is about to merge the accepted set into a few steps later, which is precisely how the
 non-isolated incident recounted above dirtied it (a staged full branch diff that the next merge
 misread as a conflict). My own verdict stays correct either way, since I never check anything out;
-what is at risk is `/land`'s merge, so this is the first thing I run:
+what is at risk is `/land`'s merge, so this is the first thing I run, via `scripts/start-guards.sh` (lode-fg7w7.4), one call that runs
+`scripts/isolation-guard.sh` and then, only if it passes, the recycled-worktree guard described below,
+stopping at the first refusal:
 
 ```bash
-scripts/isolation-guard.sh
+scripts/start-guards.sh "before any fetch/diff work"
 ```
 
 **Bash call shapes in this file (lode-fvg0).** The harness's worktree-isolation classifier refuses a
@@ -85,8 +87,9 @@ from the earlier call's output**, never typed from memory or a prefix ([Derive i
 retype them](../../docs/conventions.md#derive-identifiers-never-retype-them)). The diagnostics the old
 `|| echo "BOOTSTRAP GAP …"` tails printed live here instead: exit 127 / "No such file or directory"
 (or 126 / "Permission denied" — the script is there but lost its exec bit) = **bootstrap gap** (this
-checkout may predate the script landing on trunk) = stop and report; exit 1 = the script ran and
-printed its own diagnostic.
+checkout may predate the script landing on trunk) = stop and report; exit 3 = `isolation-guard.sh` ran and refused (the recycled guard did not
+run); exit 4 = `recycled-worktree-guard.sh` ran and refused after isolation passed; either printed its
+own diagnostic just above the wrapper's line.
 
 On a failure here I stop — full stop: no `EnterWorktree` retry, no `git worktree add` self-rescue, no
 fetch, no diff, no verdict. I report the exact diagnostic the script printed. Full account:
@@ -113,19 +116,16 @@ right after the isolation guard above — still before the ticket/branch reads i
 assert the starting state instead of trusting it, via `scripts/recycled-worktree-guard.sh` (lode-ivth;
 this is the same defect
 lode-qv5t discovered here, ported to a shared, shellcheck'd and unit-tested script rather than a
-fourth inline copy):
-
-```bash
-scripts/recycled-worktree-guard.sh "before any fetch/diff work"
-```
+fourth inline copy). The `scripts/start-guards.sh` call above already ran it, so there is no second
+call to make here.
 
 Both preconditions inside the script are load-bearing, exactly as in `code-reviewer.md`'s identical
 call: the `case` keeps `reset --hard`/`clean -fd` off the user's main checkout if isolation ever
 fails to take; the `rescue/` branch matters because the ref being rewound belongs to **another
 ticket** — tagging `HEAD` first keeps that ticket's unpushed commits recoverable rather than silently
 destroyed. Exit 127 (missing) or 126 (not executable) distinguishes a genuinely missing or
-non-executable script (bootstrap gap — report and stop) from the script running and legitimately
-exiting 1 (already reported by the script itself). If it fires, I report it
+non-executable script (bootstrap gap — report and stop) from the wrapper reporting a guard's
+refusal (exit 3 or 4, already explained by the guard itself). If it fires, I report it
 explicitly in my final verdict as live evidence of the harness bug, not a routine hiccup.
 Once this guard has run (whether or not it fired), my worktree's `HEAD` **is** an ancestor of
 `trunk` — either because it started that way or because I just reset it there — so my worktree needs

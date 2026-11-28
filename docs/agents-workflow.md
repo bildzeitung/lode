@@ -246,8 +246,8 @@ Each builder then runs its orderly cycle. The worktree is **handed to it by the 
 (`.claude/settings.json`'s `worktree.baseRef: "fresh"`, `lode-jzbz`; `origin/trunk` can lag local
 `trunk` by however long since `/land`'s last push — usually small, since `/land` pushes `trunk`
 immediately after every merge, but never measured). It works
-in-cwd with plain git, and its very first executable action is `scripts/isolation-guard.sh`
-(lode-ska2) — a tested assertion that it is inside `.claude/worktrees/` at all, since the harness has
+in-cwd with plain git, and its very first executable action is `scripts/start-guards.sh`
+(lode-fg7w7.4), which runs `scripts/isolation-guard.sh` (lode-ska2) first — a tested assertion that it is inside `.claude/worktrees/` at all, since the harness has
 been observed handing a dispatched agent no worktree whatsoever; on failure it **hard-stops and
 reports** rather than writing on `trunk`, and never self-provisions one ([full account
 below](#isolation-guard-lode-ska2--lode-jk44)). The worktree is already **locked by the harness**,
@@ -1132,6 +1132,21 @@ so a broken precondition is caught before it can do anything else.
   machine-vs-content distinction lode-9i2p draws for content gates, applied here to preconditions
   instead. Like exit 1, the caller STOPs AND REPORTs; unlike exit 1, nothing here is a claim about
   where the agent is or what state its worktree is in.
+
+**The start-of-cycle wrapper (lode-fg7w7.4, lode-htkr3 proposal 2).** The builder, reviewer and
+`land-review` each ran `isolation-guard.sh` and then `recycled-worktree-guard.sh` back to back as two
+tool calls. [`scripts/start-guards.sh`](../scripts/start-guards.sh) `<context-message>` is the one call
+that replaces the pair: it runs the isolation guard, then the recycled-worktree guard with the context
+message, and stops at the first nonzero exit. The two guards stay distinct siblings with their own
+tests (lode-ska2); the wrapper re-implements neither and weakens neither. Its exit status tells the two
+refusals apart even though both guards use 1 and 2: **3** = the isolation guard refused and the
+recycled guard never ran, **4** = isolation passed and the recycled guard refused, **2** = usage error;
+each refusal's own diagnostic precedes the wrapper's one-line `REFUSED (exit N)` message
+([`tests/test_start_guards.py`](../tests/test_start_guards.py)). The wrapper is a sequencer, not a
+fourth precondition guard, so it is not in the roster above. The mid-session `isolation-guard.sh`
+re-assertions (lode-6wgc) remain direct calls, and the `comment-auditor` and `comment-groomer` agents,
+which run only the isolation guard, still call it directly. The caller's response is unchanged:
+any nonzero exit is the same STOP AND REPORT.
 
 **The STOP-AND-REPORT rule is uniform: no caller distinguishes exit 1 from exit 2.** The rule, not a
 list — every call site collapses *any* non-zero exit to the same hard stop (`|| exit 1` where a
@@ -2758,7 +2773,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Default branch | `trunk` — **never** edit directly *and never landed by a producer*; `/land` owns every write to it |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured), pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
 | Worktree lock | the harness locks every launch worktree, closing the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr); the builder neither locks nor unlocks it (lode-t76f). The harness does not reliably clear the lock on agent exit: for a reviewer/pickup launch worktree, `/code`'s per-ticket reclaim (`scripts/code-reclaim-launch-worktree.sh`) unlocks it itself when the lock reason names that worktree's own directory, on the orchestrator's own completion evidence (lode-7ndi); a builder's worktree is outside that reclaim — [why, and what that costs, below](#the-builder-takes-no-worktree-lock-of-its-own-lode-t76f) |
-| Isolation guard | builder, reviewer, and `land-review` all run `scripts/isolation-guard.sh` (lode-ska2) as their FIRST action, before even the recycled-worktree guard — the harness has been observed handing a dispatched agent NO worktree at all (cwd on the main checkout, on `trunk`); a failure is a hard stop, never a self-provisioned `git worktree add` — [full account above](#isolation-guard-lode-ska2--lode-jk44) (lode-ska2, lode-jk44) |
+| Isolation guard | builder, reviewer, and `land-review` all run `scripts/isolation-guard.sh` (lode-ska2) as their FIRST action, via the `scripts/start-guards.sh` wrapper (lode-fg7w7.4) that then runs the recycled-worktree guard — the harness has been observed handing a dispatched agent NO worktree at all (cwd on the main checkout, on `trunk`); a failure is a hard stop, never a self-provisioned `git worktree add` — [full account above](#isolation-guard-lode-ska2--lode-jk44) (lode-ska2, lode-jk44) |
 | Isolation guard (mid-session) | builder and reviewer also re-run `scripts/isolation-guard.sh` immediately before their first mutating `Edit`/`Write`, and again before the builder's first `git commit` / the reviewer's gate loop — a worktree can pass both start-of-cycle guards and still be destroyed mid-session (observed under a resumed `SendMessage` turn), after which a `git commit` silently lands **on `trunk`**. Nothing is carried across calls in a shell variable (lode-lv04, lode-fvg0). A markdown checkpoint is a mitigation, not the structurally correct altitude — a `PreToolUse` hook is that altitude, and it now ships as `scripts/trunk-write-guard.sh` (lode-p8zl, [below](#isolation-guard-mid-session-re-assertion-lode-6wgc)) — [full account above](#isolation-guard-mid-session-re-assertion-lode-6wgc) (lode-6wgc) |
 | Recycled-worktree guard | **Canonical row (lode-zt62) — `coding.md`'s and `code-reviewer.md`'s quick cards link here rather than restate it.** Builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>` — the ref belongs to another ticket), resets onto `origin/trunk` HEAD (never bare local `trunk`, which `/land` can leave carrying un-pushed, un-gated merges for its whole merge window — lode-isl3) — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. `git clean -fd` then runs **unconditionally**, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef` was investigated (lode-r7ow) and its reuse semantics found to be a documented, mechanism-level match for the recycling; the human decision to switch it has since been made and applied — it is now the explicit `"fresh"` (lode-jzbz), not the harness default by omission — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow, lode-jzbz, lode-3v1p, lode-isl3, lode-ivth) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Fable** (review quality); neither reviews work it authored |

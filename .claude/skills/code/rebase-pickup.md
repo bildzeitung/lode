@@ -28,25 +28,29 @@ never kicked back), I stop and report — nothing to pick up.
 
 ### 2. Fetch `land/<id>` and check it out into my own launch worktree — never `EnterWorktree`, never the old build worktree
 
-**Isolation guard (lode-ska2 / lode-jk44) — before even the recycled-worktree guard below.** The same
+**Isolation guard (lode-ska2 / lode-jk44) — before even the recycled-worktree guard.** The same
 harness `isolation: "worktree"` hand-off this cycle's own launch worktree came through has been
 observed handing a dispatched agent NO worktree at all — cwd pinned to the main checkout at the repo
 root, on `trunk` — a distinct, more severe failure than the recycled-worktree case below. This is the
-first executable action of this cycle too, via `scripts/isolation-guard.sh` (lode-ska2):
+first executable action of this cycle too, via `scripts/start-guards.sh` (lode-fg7w7.4), which runs
+`scripts/isolation-guard.sh` (lode-ska2) and then, only if it passes, the recycled-worktree guard
+described after this block, stopping at the first refusal:
 
 ```bash
-scripts/isolation-guard.sh
+scripts/start-guards.sh "before my own fetch+checkout"
 ```
 
-A nonzero exit is a **stop**. The script prints its own diagnostic on exit 1; an exit 127 /
-"No such file or directory" is the **bootstrap gap** — this checkout may predate the script landing on
-trunk — and is a stop too: report it and do not proceed.
+A nonzero exit is a **stop**. Exit 3 = the isolation guard refused (the recycled guard did not run),
+exit 4 = the recycled guard refused after isolation passed; the refusing script printed its own
+diagnostic above the wrapper's line. An exit 127 / "No such file or directory" is the **bootstrap
+gap** — this checkout may predate the script landing on trunk — and is a stop too: report it and do
+not proceed.
 
 On a failure here I stop — full stop, same as the fresh-build cycle: no `EnterWorktree` retry, no
 `git worktree add` self-rescue, no fetch. See the fresh-build cycle's write-up of this same script for
 the full rationale (lode-ska2); it doesn't repeat here.
 
-**Recycled-worktree guard (lode-nt98) — next, before the fetch+checkout script below.** The same harness
+**Recycled-worktree guard (lode-nt98) — run by that same wrapper call, before the fetch+checkout script below.** The same harness
 `isolation: "worktree"` hand-off this cycle's own launch worktree came through has been observed
 handing a dispatched agent a **recycled** worktree still checked out on a *previous* ticket's build
 branch, carrying that ticket's commits, instead of a fresh branch off `origin/trunk` HEAD — confirmed in
@@ -57,15 +61,12 @@ account in
 makes the checkout correct. What it buys is a clean tree to work in: `checkout -B` carries **untracked**
 leftovers from a recycled worktree straight through, and those go on to pollute my `git status` and the
 `nox` run I gate on. So, before the fetch+checkout script, I assert this launch worktree actually started clean — via
-`scripts/recycled-worktree-guard.sh` (lode-ivth), the same script the fresh-build cycle above uses:
-
-```bash
-scripts/recycled-worktree-guard.sh "before my own fetch+checkout"
-```
+`scripts/recycled-worktree-guard.sh` (lode-ivth), the same script the fresh-build cycle above uses,
+which the wrapper call above already ran; there is no second call here.
 
 **Both preconditions inside the script are load-bearing.** The `case` is what keeps
 `reset --hard`/`clean -fd` off the user's main checkout if isolation ever fails to take — belt and
-suspenders alongside the `isolation-guard.sh` call just above, which already refused to let this cycle
+suspenders alongside the `isolation-guard.sh` run that the wrapper does first, which already refuses to let this cycle
 get this far if cwd weren't inside a worktree at all. The `rescue/` branch
 keeps another ticket's unpushed commits recoverable, since the ref being rewound is *theirs*, not mine
 (see the fresh-build cycle above). The script's `git clean -fd` now runs unconditionally right after
@@ -75,8 +76,8 @@ its untracked leftovers swept before they can pollute my `git status --short` as
 run; full reasoning in the script's own header and [docs/decisions.md](../../../docs/decisions.md)
 (`uv run --frozen python scripts/docs_index_query.py "lode-3v1p"`). Exit 127 (missing) or 126 (not
 executable) distinguishes a genuinely
-missing/non-executable script (bootstrap gap — report and stop) from the script running and
-legitimately exiting 1 (already reported by the script itself).
+missing/non-executable script (bootstrap gap — report and stop) from the wrapper reporting a guard's
+refusal (exit 3 or 4, already explained by the guard itself).
 
 This never conflicts with what step 2 does next — checking out `land/<id>` on purpose is exactly
 this cycle's job, and this guard only cleans up the *starting* state before that intentional checkout

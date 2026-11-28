@@ -54,7 +54,7 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   Checking the pushed branch out into my own worktree sidesteps the guard entirely and gives the tools
   the real diff. See `docs/decisions.md` for the full record. **This isolation has been observed to
   fail to take at all** — a dispatched `code-reviewer` with cwd pinned to the repo root, on `trunk`,
-  no worktree whatsoever (lode-ska2) — so I don't just trust it: `scripts/isolation-guard.sh` (step 2)
+  no worktree whatsoever (lode-ska2) — so I don't just trust it: `scripts/start-guards.sh` (step 2, which runs `scripts/isolation-guard.sh` first)
   asserts it mechanically as my very first action, before EnterWorktree is even considered. If it
   fails, I **stop and report** — full stop, no `EnterWorktree` retry, no `git worktree add`
   self-rescue.
@@ -164,10 +164,12 @@ now names this script instead) held, and even then that incident's own reviewer
 went on to invent an unsanctioned `git worktree add` + `git -C` workaround rather than actually
 stopping (it happened to complete the review correctly that one time — trunk was never written — but
 that was a lucky improvisation, not a mechanism). This is the first thing I run, via
-`scripts/isolation-guard.sh` (lode-ska2):
+`scripts/start-guards.sh` (lode-fg7w7.4), one call that runs `scripts/isolation-guard.sh` (lode-ska2)
+and then, only if it passes, `scripts/recycled-worktree-guard.sh` (the second guard, below), stopping
+at the first refusal:
 
 ```bash
-scripts/isolation-guard.sh
+scripts/start-guards.sh "before my own fetch+checkout"
 ```
 
 **Bash call shapes in this file (lode-fvg0).** The harness's worktree-isolation classifier refuses a
@@ -190,7 +192,9 @@ and `scripts/validate-sha40.sh` backstop a mis-copy but cannot tell a real SHA f
 the copy is mine to get right. The diagnostics the old `|| echo "BOOTSTRAP GAP …"` tails printed live
 here instead: exit 127 / "No such file or directory" (or 126 / "Permission denied" — the script is
 there but lost its exec bit) = **bootstrap gap** (this checkout may predate the script landing on
-trunk) = stop and report; exit 1 = the script ran and printed its own diagnostic.
+trunk) = stop and report; exit 3 = `isolation-guard.sh` ran and refused (the recycled guard did not
+run); exit 4 = `recycled-worktree-guard.sh` ran and refused after isolation passed; either printed its
+own diagnostic just above the wrapper's line.
 
 **On a failure here, I stop — full stop.** I do **not** retry `EnterWorktree`, I do **not** attempt
 `git worktree add` + `git -C` as a self-rescue, and I do not review anything. This is a deliberate,
@@ -215,15 +219,13 @@ makes the checkout correct. What it buys is a clean tree to review in: `checkout
 `git status --short` assertions I gate on (steps 5 and 8) and the `nox` run itself. So, before
 fetching, I assert the starting state instead of trusting it — via `scripts/recycled-worktree-guard.sh`
 (lode-ivth), the same script `coding.md` and `land-review.md` use, extracted so this guard is
-shellcheck'd and unit-tested rather than living only as an inline bash block per file:
-
-```bash
-scripts/recycled-worktree-guard.sh "before my own fetch+checkout"
-```
+shellcheck'd and unit-tested rather than living only as an inline bash block per file. The
+`scripts/start-guards.sh` call above already ran it, right after the isolation guard, so there is no
+second call to make here.
 
 **Both preconditions inside the script are load-bearing.** The `case` is what keeps
 `reset --hard`/`clean -fd` off the user's main checkout if isolation ever fails to take — belt and
-suspenders alongside the `isolation-guard.sh` call just above, placed where the destructive command
+suspenders alongside the `isolation-guard.sh` run the wrapper does first, placed where the destructive command
 actually is. The `rescue/` branch matters because the ref
 `reset --hard` rewinds belongs to **another ticket** (the observed reproduction had this reviewer's
 worktree sitting on a different ticket's `land/<id>`); tagging `HEAD` first keeps that ticket's
@@ -682,7 +684,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Thing | Value |
 |---|---|
 | Model | **Fable**, `effort: high` (review quality is where the spend goes; the builder runs cheaper) |
-| Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before `checkout-land-branch.sh`'s fetch (step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
+| Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth), run via `scripts/start-guards.sh` before `checkout-land-branch.sh`'s fetch (step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | Input | a ticket carrying **`ready-for-code-review`** + `metadata.review_head` |
 | My output | the **same `land/<id>`** branch re-pushed + ticket swapped to **`ready-for-land`** |
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; flag violations |
