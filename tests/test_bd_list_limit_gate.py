@@ -25,9 +25,14 @@ against the REAL file content to prove the gate would have caught it.
 
 ## Scan surface: fenced code, inline backtick commands, and .sh scripts -- not raw prose
 
-`SH_GLOB_DIRS` and `MD_GLOBS` (below) are the scan surface, chosen because between them
-they are every place a `bd list` in this repo can actually be EXECUTED; each carries the
-reason it is in scope, and a test pins that the globs really reach it. The one worth
+Every tracked `.sh` file (`conftest.tracked_paths("*.sh")`, recursive, the same listing the
+shellcheck session uses) and `MD_GLOBS` (below) are the scan surface, chosen because between
+them they are every place a `bd list` in this repo can actually be EXECUTED; each carries the
+reason it is in scope, and a test pins that the scan really reaches it. Shell files are
+selected by tracking, not by a hand-kept directory list: a new tracked `.sh` file anywhere is
+scanned with no edit here, and an untracked scratch script never enters the scan. A future
+tracked `tests/**/*.sh` fixture would be scanned too (none exists; accepted, since an
+operative `bd list` in a fixture needs `--limit` as much as anywhere). The one worth
 arguing here is `.claude/agents/*.md`: a subagent definition is not a skill, but it
 carries 20+ fenced-bash lines invoking `bd` (`bd show`, `bd update`, ...), so a
 `bd list` added there is exactly as operative as one in a SKILL.md -- scoping this gate
@@ -61,8 +66,9 @@ to `.claude/statusline.sh` in a trailing comment. It is not an operative call si
 is Python string data, never executed as a command) and its shape no longer matches the
 real script (no `--status=in_progress` there, and never did) -- lode-9bbq's reviewer
 flagged it as a confirmed false positive were this gate to scan `tests/*.py`. This gate
-never does: `tests/` is in neither glob, so that line is unreachable by construction --
-checked and excluded deliberately, not by accident of scope. `docs/` is out for the same
+never does: no `tests/*.py` file is in the scan (only tracked `.sh` files and the markdown
+globs are), so that line is unreachable by construction -- checked and excluded
+deliberately, not by accident of scope. `docs/` is out for the same
 reason plus one more: its only `bd list` mention
 (`docs/agents-workflow.md:1502`) is a citation of `/sweep`'s query, and `docs/` is where
 historical decision records deliberately quote pre-change commands.
@@ -184,14 +190,6 @@ from conftest import (
 from test_skill_bash_state import _bash_blocks, _strip_comment
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-
-# Every tracked `.sh` file in this repo lives directly under one of these
-# directories (pinned by `test_scan_scope_covers_every_tracked_sh_file`). Each is
-# globbed non-recursively, so the repo-root entry reaches top-level scripts only.
-# The `.claude` entry is lode-9bbq's scope correction: AC1's original scope
-# (`.claude/skills/**/SKILL.md` + `scripts/*.sh`) excluded `.claude/statusline.sh`
-# itself, the exact site that motivated this ticket.
-SH_GLOB_DIRS = [REPO_ROOT, REPO_ROOT / "scripts", REPO_ROOT / ".claude"]
 
 # Markdown that a Claude Code agent executes bash out of: skills and subagent
 # definitions alike (see the module docstring's scan-surface section). Local
@@ -462,10 +460,9 @@ def scan_text(rel: str, text: str, *, markdown: bool) -> list[Finding]:
 def _scan_corpus() -> list[Finding]:
     """`scan_text` over every file in scope."""
     findings: list[Finding] = []
-    for base in SH_GLOB_DIRS:
-        for path in sorted(base.glob("*.sh")):
-            rel = str(path.relative_to(REPO_ROOT))
-            findings += scan_text(rel, path.read_text(encoding="utf-8"), markdown=False)
+    for rel in sorted(tracked_paths("*.sh")):
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        findings += scan_text(rel, text, markdown=False)
     for base, pattern in MD_GLOBS:
         for path in sorted(base.glob(pattern)):
             rel = str(path.relative_to(REPO_ROOT))
@@ -736,26 +733,14 @@ def test_a_prose_skip_never_excuses_a_fenced_invocation() -> None:
         )
 
 
-def test_scan_scope_covers_every_tracked_sh_file() -> None:
-    """No tracked .sh file silently falls outside SH_GLOB_DIRS. If this ever fails, a
-    new .sh file was added somewhere this gate's globs don't reach -- widen
-    SH_GLOB_DIRS, don't just let it fail quietly. The named assert is AC1's
-    scope-widening correction: `.claude/statusline.sh` is the site lode-9bbq fixed and
-    the reason this ticket exists, so it gets a failure message of its own rather than
-    only showing up inside a set diff. The globs read the working tree, so an
-    untracked .sh file in a scanned directory fails this too; the message names both
-    sides."""
-    tracked = set(tracked_paths("*.sh"))
-    scanned = {
-        str(p.relative_to(REPO_ROOT))
-        for base in SH_GLOB_DIRS
-        for p in base.glob("*.sh")
-    }
-    assert ".claude/statusline.sh" in scanned
-    assert tracked == scanned, (
-        f"tracked but not scanned: {sorted(tracked - scanned)}; "
-        f"scanned but not tracked: {sorted(scanned - tracked)}"
-    )
+def test_scan_scope_reaches_tracked_sh_files() -> None:
+    """The scan reads `tracked_paths("*.sh")`, so membership needs no hand-kept list.
+    `.claude/statusline.sh` is the site lode-9bbq fixed and the reason this ticket
+    exists, so it gets an assert of its own; the non-vacuity assert keeps an empty
+    listing from turning the gate green by scanning nothing."""
+    tracked = tracked_paths("*.sh")
+    assert ".claude/statusline.sh" in tracked
+    assert len(tracked) > 1
 
 
 def test_scan_scope_covers_agent_definitions() -> None:
@@ -788,8 +773,8 @@ def test_scan_scope_covers_agent_definitions() -> None:
 def test_no_unguarded_bd_list_call_sites() -> None:
     """The actual gate. Every operative `bd ... list` call site in scope -- fenced
     bash/sh blocks and inline backtick spans in .claude/skills/*/SKILL.md and
-    .claude/agents/*.md, plus every line of the .sh files directly under
-    SH_GLOB_DIRS -- must carry --limit, unless the exact (file, snippet) pair is
+    .claude/agents/*.md, plus every line of every tracked
+    .sh file -- must carry --limit, unless the exact (file, snippet) pair is
     skip-listed with a reason."""
     violations = apply_skips(_scan_corpus())
     assert not violations, "\n".join(
