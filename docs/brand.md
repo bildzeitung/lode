@@ -97,9 +97,10 @@ a precedent for it, and this brief does not retroactively bind them. `lode.cli.C
 semantic names (`note_id`, `warn`, `danger`) onto *ANSI* colours — `cyan`, `yellow`, `bold red` —
 deliberately, because CLI status colour *should* follow whatever the user's terminal theme makes of
 those names; only `NOTE_BODY_THEME` moved into the 256-colour range (the lesson above), a syntax
-palette needing a predictable intensity. And `docs/decisions.md` records the current note-body
-values as chosen for a **dark** terminal, so lode is not today free of every light/dark assumption
-— that gap is `lode-5zxt`, not something this brief closes.
+palette needing a predictable intensity. And the default note-body values are still the
+ones chosen for a **dark** terminal, so lode's defaults are not free of every light/dark assumption;
+a user on a light terminal selects a light theme and overrides the note-body palette through
+`[tui.theme]` and `[tui.theme.syntax]` (`docs/configuration.md`), which this brief does not change.
 This brief does not introduce a third palette
 mechanism; a future TUI surface that wants the brand's primary or accent reaches for
 `slate_blue3` / `dark_goldenrod` by name, through whichever of the two existing mechanisms
@@ -110,12 +111,12 @@ never a new one.
 
 - Not a "brand blue" gradient, not a multi-stop scheme — two colours plus the two web-only
   neutrals is the whole palette. Nothing here needs a design-system's worth of tints and shades.
-- Not user-configurable. `docs/decisions.md` (`lode-dmbc`) records this as an explicitly deferred,
-  open question — lode currently has three unrelated styling surfaces (`CLI_STYLES`, a rich
-  `Theme`; `NOTE_BODY_THEME`, a Textual `TextAreaTheme`; `lode.tcss`, the app-wide stylesheet) that
-  share no code path, so a single "brand colour" setting would be a lie by omission until (or
-  unless) that's unified. This brief states the *intended* colours; it does not claim they are
-  configurable.
+- Not a single user setting. lode ships `[tui.theme]` (Textual theme name, `colors` and `syntax`
+  overrides) and `[cli.theme]` (`styles` overrides), both documented in `docs/configuration.md`, so
+  the styling surfaces are individually configurable. There is still no one "brand colour" setting:
+  `[tui.theme.colors]` overrides Textual's own theme variables, which are not these two brand
+  colours, so this brief states the *intended* brand colours and does not claim they are
+  configurable as such.
 
 ## 4. Typography
 
