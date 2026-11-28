@@ -180,10 +180,10 @@ items parked in editing.md") links to it and cannot be repointed. -->
 ## Inline lint squiggles — get_line underlines (see `lode-o7pf`)
 
 Inline lint squiggles are plain underlines on markdown-lint-flagged character ranges in the
-**editable** note bodies, updated as you type. **This section is the settled design, not shipped
-code:** the rule engine (`lode-o7pf.2`), the widget (`lode-o7pf.3`) and the wiring (`lode-o7pf.4`)
-are not built, so nothing under `src/lode/` implements it yet. The Textual behaviour it relies on
-is verified against `textual` 8.2.8 / `rich` 15.0.0.
+**editable** note bodies, updated as you type. **This section is the settled design, only partly
+shipped:** the rule engine is built (`src/lode/markdown_lint.py`, `lode-o7pf.2`), but the widget
+(`lode-o7pf.3`) and the wiring (`lode-o7pf.4`) are not, so no screen draws an underline yet. The
+Textual behaviour it relies on is verified against `textual` 8.2.8 / `rich` 15.0.0.
 
 The feature was first deferred out of `lode-ev5j` into its own epic, `lode-o7pf`. This design
 replaces two earlier ones: injecting ranges into `TextArea`'s private `_highlights` map (unsupported
@@ -234,8 +234,8 @@ leaves, so passing it needs no extra invalidation.
 | MD009 | trailing whitespace; exactly two trailing spaces is a markdown hard line break and is **not** flagged; a trailing run that ends at the cursor is **not** flagged (you are still typing it) | the trailing whitespace run |
 | MD010 | hard tab | each tab character |
 | MD019 | multiple spaces after the ATX heading marker | the extra spaces after the first |
-| MD022 | ATX heading not preceded or followed by a blank line (first line of the buffer needs no blank before, the last none after); a line that is empty or whitespace-only counts as blank | the heading text, or the `#` run when the heading has no text (a bare `##`) |
-| MD042 | empty link target (`[text]()`) | the whole link |
+| MD022 | ATX heading not preceded or followed by a blank line (first line of the buffer needs no blank before, the last none after); a line that is empty or whitespace-only counts as blank | the heading text (without a closing `##` sequence), or the `#` run when the heading has no text (a bare `##`) |
+| MD042 | empty link target (`[text]()`); an image (`![alt]()`) is not a link and is not flagged | the whole link |
 
 Excluded on purpose: MD012 and MD047 (nothing to underline — blank lines and a missing final
 newline have no characters), and MD034 bare URL and MD018 no space after `#` (each would flag most
@@ -244,7 +244,8 @@ not read as headings either).
 
 **Inline code spans are exempt too.** A range MD010 or MD042 would underline inside an inline code
 span is dropped. A span is a backtick run closed by a run of the same length **on the same line**;
-a span that crosses a line break is not recognized in v1. Indented code blocks and fences inside a
+a span that crosses a line break is not recognized in v1. A span inside a link's text does not hide
+the link (``[`f()`]()`` is still flagged). Indented code blocks and fences inside a
 block quote are **not** exempt in v1 (`fence_flags` reports neither as a fence), so a hard tab in an
 indented code block is underlined. That false positive is accepted.
 
