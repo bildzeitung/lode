@@ -2323,6 +2323,20 @@ ordinary bytes, and the ~30 μs/byte, ~500 ms-at-the-cap and 740 ms figures in t
 earlier measurements that now describe only input outside the plain set, give or take the few
 percent that extra test adds. The cap and the reasoning for it are unchanged.
 
+**Update (lode-5lv5e):** the plain-set branch now appends a whole run of plain bytes per loop
+iteration: it takes `${s:i:64}`, cuts it at the first byte matching `notplain`, appends the run and
+advances `i` by its length. `notplain` is the complement of `plain`, and both are built from one
+`plain_set` string, so they cannot drift apart. Output is byte-identical: a differential against the
+lode-4n0kf function on 8,553 strings (every byte value after five prefixes, random mixes of special,
+plain and non-ASCII bytes, runs straddling the 64-byte chunk edge) under a C and a C.UTF-8 caller
+locale, no mismatch. Measured at build (min of 5, user+sys CPU, 16 KiB inputs, a machine at load
+average ~15, so read the ratios and not the milliseconds): base64 656 → 26 ms, multi-line notes
+697 → 76 ms, a quoted commit command 749 → 205 ms; input of bytes outside the plain set
+(`#*()`) 981 → 1153 ms (+17%), one-byte plain runs between special bytes (`a;a;…`) 906 → 1280 ms
+(+40%), quote-dense (`a"b" …`) 906 → 973 ms (+7%). So the worst case at the cap rises by up to ~40%
+while ordinary traffic gets 3–25x cheaper; the ~500 ms-at-the-cap and 740 ms figures above are
+therefore no longer upper bounds. The cap is unchanged.
+
 **Three options were on the table, from the ticket:** (a) accept ~740 ms as a documented residual;
 (b) replace the char loop with a regex-driven scan that locates candidate operator characters
 first (via bash's C-level `=~`/`grep -o`) and only tracks quote state around *those* positions, so

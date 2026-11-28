@@ -3,18 +3,22 @@
 # SCAN LENGTH CAP (lode-rjqm). `_split_unquoted` below is a per-character bash
 # loop; `local LC_ALL=C` (lode-dia6 review) fixed its O(n^2) *indexing* under a
 # UTF-8 locale, but the loop itself is still O(n) iterations of bash's own
-# interpreter overhead per byte. Measured: ~17us for a byte its `plain` pattern
-# matches, which costs one test (lode-4n0kf), and ~25-30us for any other, which
-# walks the whole quote-state chain. Cost is UNBOUNDED in the input: a 200 KB
+# interpreter overhead per byte. A run of bytes its `plain` pattern matches is
+# appended in chunks of up to 64 (lode-5lv5e): at 16 KiB base64 costs ~25x
+# less than the ~17us/byte of lode-4n0kf and a quoted commit message ~4x less.
+# Any other byte walks the whole quote-state chain at ~25-30us, and a plain
+# byte BETWEEN two of those (`a;a;...`) also pays the chunk's substring and
+# pattern cut, so the worst case at the cap is ~40% above lode-4n0kf's. Cost is
+# UNBOUNDED in the input: a 200 KB
 # command (a file catted into a commit message, a giant heredoc) would cost
 # ~3-6s on a hot path both PreToolUse(Bash) guards run on EVERY Bash call.
 # Both guards cap the length of the string they hand to `_split_unquoted` and
 # FAIL CLOSED (deny) past the cap, rather than let cost grow without bound.
 #
 # 16 KiB. The cap is a COST ceiling, not a "nothing real ever gets this big"
-# claim -- 16 KiB already costs ~275ms of ordinary text and ~400-500ms of
-# bytes `plain` does not match, so raising it to clear every observed input
-# would defeat the point. Measured against this repo's own traffic
+# claim -- 16 KiB already costs up to ~275ms of ordinary text and ~400-650ms
+# of bytes `plain` does not match or alternates with, so raising it to clear
+# every observed input would defeat the point. Measured against this repo's own traffic
 # (review, lode-rjqm -- the pre-review figure here sampled only the ~20 OPEN bd
 # issues and read as far more headroom than there is): git commit messages sit
 # well under it (largest of the last 300: ~4.9 KB, >3x headroom), but across
@@ -171,7 +175,10 @@ _split_unquoted() {
   # in any state (so none of \ ' " $ ` ; & | ( ) { } and not newline, which the
   # in-quote join branch must see -- hence [:blank:]\r\f\v, not [:space:]), AND
   # it cannot change how the shell reads a later quote character.
-  local plain=$'[A-Za-z0-9_[:blank:]\r\f\v./=:,@%+~^>-]'
+  local plain_set=$'A-Za-z0-9_[:blank:]\r\f\v./=:,@%+~^>-'
+  # `plain` and its complement `notplain` are built from the one set, so they
+  # cannot drift apart.
+  local plain="[$plain_set]" notplain="[!$plain_set]" rest run
   [[ "$s" == *'<<'* ]] && keep=1
   len=${#s}
   while ((i < len)); do
@@ -180,8 +187,14 @@ _split_unquoted() {
     # its own, so the directive covers this one test and not the chain below.
     # shellcheck disable=SC2053
     if [[ "$c" == $plain ]]; then
-      out+="$c"
-      i=$((i + 1))
+      # The whole run of plain bytes (up to 64) is appended in one step: the
+      # plain branch only appends, so k bytes at once equal k iterations.
+      # `notplain` must stay unquoted here, as a pattern.
+      rest="${s:i:64}"
+      # shellcheck disable=SC2295
+      run="${rest%%$notplain*}"
+      out+="$run"
+      i=$((i + ${#run}))
       continue
     fi
     if [[ "$state" != "single" && "$c" == '\' ]]; then

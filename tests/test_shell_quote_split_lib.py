@@ -409,3 +409,21 @@ def test_every_consumer_denies_when_the_library_omits_a_scan_cap_name(
     _assert_denied_for_the_library(
         _run_isolated(copied, PROBES[script.name]), script.name
     )
+
+
+def test_split_plain_and_notplain_patterns_are_built_from_one_set() -> None:
+    """lode-5lv5e: the fast path cuts a run at the first byte NOT matching `plain`, so
+    `notplain` must be the exact complement. Both are derived from `plain_set`, never
+    written twice."""
+    text = LIB.read_text()
+    assert 'local plain="[$plain_set]" notplain="[!$plain_set]"' in text
+    assert text.count("plain_set=") == 1
+
+
+@pytest.mark.parametrize("pad", [0, 1, 62, 63, 64, 65, 127, 128, 129, 300])
+def test_split_plain_run_boundaries_leave_the_quote_state_intact(pad: int) -> None:
+    """lode-5lv5e: a run of plain bytes is appended up to 64 at a time; a special byte
+    landing just before, on or after a chunk edge must still be seen by the chain."""
+    text = "a" * pad + ";b'c;d'e;" + "a" * pad + '"x|y"|z'
+    expected = "a" * pad + "\nb'c;d'e\n" + "a" * pad + '"x|y"\nz'
+    assert _split(text) == expected
