@@ -121,9 +121,9 @@ def test_the_real_new_entry_list_gives_a_reason_per_row() -> None:
     assert all(prefix and reason for prefix, reason in REAL_NEW_ENTRY_BULLETS)
 
 
-# Reads the live file with the real tables, so it goes when the cutover
-# (lode-ebayj.4) removes docs/decisions.md. If the lode-sflg section stops
-# deriving decided, lode-pqhhx Q4 says to escalate, not to add an override.
+# Goes when the cutover (lode-ebayj.4) removes docs/decisions.md. If the
+# lode-sflg section stops deriving decided, lode-pqhhx Q4 says to escalate,
+# not to add an override.
 def test_the_real_tables_move_the_ucpu_update_and_sflg_stays_decided(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -131,11 +131,12 @@ def test_the_real_tables_move_the_ucpu_update_and_sflg_stays_decided(
     _, entries = _mig.split_entries(DECISIONS.read_text(encoding="utf-8"))
     _mig.apply_overrides(entries, _mig.OVERRIDES)
     sflg = _mig.find_entry(entries, "lode-sflg")
-    vlok = "".join(_mig.find_entry(entries, "lode-vlok").lines)
+    sflg_body = "".join(sflg.lines)
+    vlok_body = "".join(_mig.find_entry(entries, "lode-vlok").lines)
     moved = "  - **Update (lode-ucpu, 2026-11-20, maintainer):**"
-    assert vlok.count(moved) == 1
-    assert moved not in "".join(sflg.lines)
-    assert "  - **Update (lode-smpk, 2026-11-21):** both questions" in "".join(sflg.lines)
+    assert vlok_body.count(moved) == 1
+    assert moved not in sflg_body
+    assert "  - **Update (lode-smpk, 2026-11-21):** both questions" in sflg_body
     _mig.derive_status(sflg)
     assert sflg.status == "decided"
 
