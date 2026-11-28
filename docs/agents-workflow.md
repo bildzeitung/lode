@@ -2323,6 +2323,37 @@ ordinary bytes, and the ~30 μs/byte, ~500 ms-at-the-cap and 740 ms figures in t
 earlier measurements that now describe only input outside the plain set, give or take the few
 percent that extra test adds. The cap and the reasoning for it are unchanged.
 
+**Update (lode-5lv5e):** the plain-set branch now appends a whole run of plain bytes per loop
+iteration: it cuts a chunk of up to 64 bytes at the first byte outside the plain set, using a second
+pattern that is the complement of the first and is built from the same string. Output is
+byte-identical to the lode-4n0kf function: a differential of 8,553 strings at build, and at review
+34,345 strings under a C caller locale (every non-NUL byte value between 17 prefixes and 7 suffixes,
+plain runs of 63, 64 and 65 bytes among them, and 4,000 random mixes with runs straddling the chunk
+edge) and 31,845 under a C.UTF-8 one, with no mismatch. Of the 255 non-NUL byte values 80 match the
+plain pattern, and none matches both patterns or neither.
+
+Re-measured at review (16 KiB inputs, user+sys CPU, the two functions interleaved in one process,
+min of 9 and again min of 15, load average ~1): base64 290 → 10 ms, multi-line notes 295 → 25 ms, a
+quoted commit command 308 → 106 ms. Input made only of bytes outside the plain set never enters the
+branch and costs what it did (`#*` and non-ASCII: 400–437 ms before and after). A run of one plain
+byte between two such bytes now pays a whole step to append a single byte: `a;a;…` 323–353 →
+453–495 ms and `a#a#…` 339–365 → 467–506 ms (+37–40%), quote-dense `a"b" …` 293–320 → 345–375 ms
+(+17%). That makes `a#a#…` the costliest shape, ~15% above the all-non-plain input that was the
+costliest before. So the worst 16 KiB input, which is what the cap bounds, costs ~15% more and sits
+at the ~500 ms this section already cites for the cap, while ordinary traffic costs 3–30x less. The
+cap is unchanged.
+
+Two things follow that this ticket does not settle. The figures further down that price ordinary
+traffic at the old flat rate (the ~1.1 s for the ~36 KB notes observation in the lode-qzg4 decision,
+"a few hundred ms" for an 8–16 KB command) now describe only the costliest shapes: measured at
+36 KB, multi-line notes cost 89 ms and a quoted commit command 406 ms, against 1.5 s for `#*` and
+1.9 s for `a#a#…`. Whether that changes the lode-qzg4 trade is filed as lode-mxo0h. And cost per
+byte grows with the length of the string, so the scan is quadratic, not linear: one `${s:i:1}` costs
+2.8 μs on a 1 KiB string, 14 μs at 16 KiB, 37 μs at 36 KB and 315 μs at 200 KB (measured, bash
+5.2.21, C locale), and a 200 KB input measured 2 s (plain notes) to 48 s (`a#a#…`), not the ~6 s
+this section extrapolates. That was so before this change (`#*`, which the change does not touch,
+measured 33 s at 200 KB), and is filed as lode-snn5v.
+
 **Three options were on the table, from the ticket:** (a) accept ~740 ms as a documented residual;
 (b) replace the char loop with a regex-driven scan that locates candidate operator characters
 first (via bash's C-level `=~`/`grep -o`) and only tracks quote state around *those* positions, so

@@ -409,3 +409,39 @@ def test_every_consumer_denies_when_the_library_omits_a_scan_cap_name(
     _assert_denied_for_the_library(
         _run_isolated(copied, PROBES[script.name]), script.name
     )
+
+
+def test_split_plain_and_notplain_patterns_are_built_from_one_set() -> None:
+    """lode-5lv5e: the fast path cuts a run at the first byte NOT matching `plain`, so
+    `notplain` must be the exact complement. Both are derived from `plain_set`, never
+    written twice."""
+    code = "\n".join(_non_comment_lines(LIB.read_text()))
+    assert 'local plain="[$plain_set]" notplain="[!$plain_set]"' in code
+    assert code.count("plain_set=") == 1
+
+
+@pytest.mark.parametrize("pad", [0, 1, 62, 63, 64, 65, 127, 128, 129, 300])
+def test_split_plain_run_boundaries_leave_the_quote_state_intact(pad: int) -> None:
+    """lode-5lv5e: a run of plain bytes is appended up to 64 at a time; a special byte
+    landing just before, on or after a chunk edge must still be seen by the chain."""
+    text = "a" * pad + ";b'c;d'e;" + "a" * pad + '"x|y"|z'
+    expected = "a" * pad + "\nb'c;d'e\n" + "a" * pad + '"x|y"\nz'
+    assert _split(text) == expected
+
+
+@pytest.mark.parametrize("pad", [1, 63, 64, 65])
+def test_split_plain_run_stops_at_a_byte_of_every_other_chain_branch(pad: int) -> None:
+    """lode-5lv5e: the run must end before any byte the chain acts on, wherever in a chunk
+    that byte falls. One case per branch the boundary test above does not reach: `$(` and a
+    backtick inside double quotes, the in-quote newline join, then three the scan must hand
+    back unchanged -- a backslash escape, and a byte outside quotes that is not on the join's
+    allowlist (ASCII, then non-ASCII), which must still abandon the join."""
+    run = "a" * pad
+    assert _split(f'"{run}$({run}`{run}"') == f'"{run}\n{run}\n{run}"'
+    assert _split(f'"{run}\n{run}" {run}') == f'"{run} {run}" {run}'
+    for unchanged in (
+        f"{run}\\;{run}",
+        f'{run}#{run} "x\ny"',
+        f'{run}\N{LATIN SMALL LETTER E WITH ACUTE}{run} "x\ny"',
+    ):
+        assert _split(unchanged) == unchanged
