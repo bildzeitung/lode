@@ -25,14 +25,14 @@ against the REAL file content to prove the gate would have caught it.
 
 ## Scan surface: fenced code, inline backtick commands, and .sh scripts -- not raw prose
 
-Every tracked `.sh` file (`conftest.tracked_paths("*.sh")`, recursive, the same listing the
-shellcheck session uses) and `MD_GLOBS` (below) are the scan surface, chosen because between
-them they are every place a `bd list` in this repo can actually be EXECUTED; each carries the
-reason it is in scope, and a test pins that the scan really reaches it. Shell files are
-selected by tracking, not by a hand-kept directory list: a new tracked `.sh` file anywhere is
-scanned with no edit here, and an untracked scratch script never enters the scan. A future
-tracked `tests/**/*.sh` fixture would be scanned too (none exists; accepted, since an
-operative `bd list` in a fixture needs `--limit` as much as anywhere). The one worth
+Every tracked `.sh` file (`_tracked_sh_files`, below; the files the shellcheck session
+lints) and `MD_GLOBS` (below) are the scan surface, chosen because between them they are
+every place a `bd list` in this repo can actually be EXECUTED; a test pins that the scan
+really reaches each. Shell files are selected by tracking, so a tracked `.sh` file in any
+directory is scanned and an untracked one never is: a scratch script cannot fail the gate,
+and a new script is gated from its `git add`, not from the moment it is written. A tracked
+`tests/**/*.sh` fixture would be scanned too (none exists; accepted, since an operative
+`bd list` in a fixture needs `--limit` as much as anywhere). The one worth
 arguing here is `.claude/agents/*.md`: a subagent definition is not a skill, but it
 carries 20+ fenced-bash lines invoking `bd` (`bd show`, `bd update`, ...), so a
 `bd list` added there is exactly as operative as one in a SKILL.md -- scoping this gate
@@ -66,12 +66,11 @@ to `.claude/statusline.sh` in a trailing comment. It is not an operative call si
 is Python string data, never executed as a command) and its shape no longer matches the
 real script (no `--status=in_progress` there, and never did) -- lode-9bbq's reviewer
 flagged it as a confirmed false positive were this gate to scan `tests/*.py`. This gate
-never does: no `tests/*.py` file is in the scan (only tracked `.sh` files and the markdown
-globs are), so that line is unreachable by construction -- checked and excluded
-deliberately, not by accident of scope. `docs/` is out for the same
-reason plus one more: its only `bd list` mention
-(`docs/agents-workflow.md:1502`) is a citation of `/sweep`'s query, and `docs/` is where
-historical decision records deliberately quote pre-change commands.
+never does: no `.py` file is in the scan, so that line is unreachable by construction --
+checked and excluded deliberately, not by accident of scope. `docs/` is out for the same
+reason plus one more: its only `bd list` mention (`docs/agents-workflow.md:1502`) is a
+citation of `/sweep`'s query, and `docs/` is where historical decision records deliberately
+quote pre-change commands.
 
 ## Blockquoted fences: both paths normalize in one shared place
 
@@ -457,10 +456,17 @@ def scan_text(rel: str, text: str, *, markdown: bool) -> list[Finding]:
     ]
 
 
+def _tracked_sh_files() -> list[str]:
+    """Repo-relative path of every tracked `.sh` file: the shell half of the scan
+    surface. The one listing `_scan_corpus` reads and the scope test asserts on, so the
+    test cannot pass against a listing the scan does not use."""
+    return sorted(tracked_paths("*.sh"))
+
+
 def _scan_corpus() -> list[Finding]:
     """`scan_text` over every file in scope."""
     findings: list[Finding] = []
-    for rel in sorted(tracked_paths("*.sh")):
+    for rel in _tracked_sh_files():
         text = (REPO_ROOT / rel).read_text(encoding="utf-8")
         findings += scan_text(rel, text, markdown=False)
     for base, pattern in MD_GLOBS:
@@ -734,13 +740,13 @@ def test_a_prose_skip_never_excuses_a_fenced_invocation() -> None:
 
 
 def test_scan_scope_reaches_tracked_sh_files() -> None:
-    """The scan reads `tracked_paths("*.sh")`, so membership needs no hand-kept list.
-    `.claude/statusline.sh` is the site lode-9bbq fixed and the reason this ticket
-    exists, so it gets an assert of its own; the non-vacuity assert keeps an empty
-    listing from turning the gate green by scanning nothing."""
-    tracked = tracked_paths("*.sh")
-    assert ".claude/statusline.sh" in tracked
-    assert len(tracked) > 1
+    """The listing `_scan_corpus` reads holds every `.sh` site in SABOTAGE_SITES. The
+    sabotage tests scan each file's text directly, so this is what proves the gate
+    itself reads them -- an empty listing, or one narrowed to a single directory, would
+    otherwise turn the gate green by scanning less."""
+    sabotaged = {rel for rel, _, _ in SABOTAGE_SITES if rel.endswith(".sh")}
+    missing = sabotaged - set(_tracked_sh_files())
+    assert not missing, f"missing from the scanned listing: {sorted(missing)}"
 
 
 def test_scan_scope_covers_agent_definitions() -> None:
@@ -773,9 +779,8 @@ def test_scan_scope_covers_agent_definitions() -> None:
 def test_no_unguarded_bd_list_call_sites() -> None:
     """The actual gate. Every operative `bd ... list` call site in scope -- fenced
     bash/sh blocks and inline backtick spans in .claude/skills/*/SKILL.md and
-    .claude/agents/*.md, plus every line of every tracked
-    .sh file -- must carry --limit, unless the exact (file, snippet) pair is
-    skip-listed with a reason."""
+    .claude/agents/*.md, plus every line of every tracked .sh file -- must carry
+    --limit, unless the exact (file, snippet) pair is skip-listed with a reason."""
     violations = apply_skips(_scan_corpus())
     assert not violations, "\n".join(
         f"{path}:{lineno if lineno != -1 else '?'}: unguarded `bd ... list` call "

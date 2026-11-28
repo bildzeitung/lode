@@ -21,6 +21,11 @@ Newest first.
   tests` and `nox -t everything-else` on the merged result first, whatever file types it
   touches. The corpus-scan gates under `tests/` cover shell scripts and markdown, not only
   Python.
+  - **Update (lode-4xc9i, 2026-11-28):** `tests/test_bd_list_limit_gate.py` no longer keeps a
+    directory list. It scans every tracked `.sh` file, so the assertion and the test named
+    above are gone and a tracked `.sh` file in a new directory cannot turn it red this way.
+    The rule above is unchanged: other corpus-scan gates can still fail on a shell-only or
+    markdown-only change.
 
 ## 2026-11-23 — A memory-bound claim in docs/ could not be re-verified because the measurement script behind it was not kept
 
