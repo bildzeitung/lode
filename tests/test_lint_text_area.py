@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import ast
+import asyncio
 import functools
 import time
 from pathlib import Path
@@ -132,8 +132,7 @@ async def test_theme_syntax_colours_unchanged() -> None:
             area.cursor_location = (6, 0)
             await pilot.pause()
             return [
-                repr([(s.text, s.style) for s in area.render_line(y)])
-                for y in range(7)
+                repr([(s.text, s.style) for s in area.render_line(y)]) for y in range(7)
             ]
 
     assert await lines(LintTextArea) == await lines(TextArea)
