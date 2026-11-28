@@ -249,10 +249,13 @@ the link (``[`f()`]()`` is still flagged). Indented code blocks and fences insid
 block quote are **not** exempt in v1 (`fence_flags` reports neither as a fence), so a hard tab in an
 indented code block is underlined. That false positive is accepted.
 
-Recognition follows CommonMark for three inline cases (`lode-k7mr6`): a backslash-escaped
-backtick opens no code span (a backslash inside a span is literal); link text may hold one level of
-nested brackets (`[a[b]c]()` is flagged); and an escaped bracket (`\[`, `\]`) is literal text, not a
-link delimiter.
+**Escapes and nested brackets (`lode-k7mr6`).** A backslash escape outside a code span is
+honoured, as in CommonMark: an escaped backtick opens no span, an escaped bracket (`\[`, `\]`)
+delimits no link, and an escaped `!` marks no image (`\![x]()` is flagged). Inside a span a
+backslash is literal. Link text may hold one level of nested brackets: `[a[b]c]()` is flagged, and
+so is an image linked to nothing, `[![alt](src)]()`. A nested pair followed by `(` is read as a
+link of its own, because CommonMark lets no link hold another: `[a [b](url) c]()` is not flagged.
+Not recognized in v1: deeper nesting, and a backtick or bracket inside a link's destination.
 
 **Decided (`lode-kgg0h`, maintainer, 2026-11-27).** Four questions raised when this section was
 reviewed, now folded into the table and paragraphs above: MD009 skips the trailing run that ends at

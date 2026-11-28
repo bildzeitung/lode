@@ -101,7 +101,7 @@ def test_module_imports_nothing_from_textual():
 
 
 def test_escaped_backtick_opens_no_code_span():
-    # Backticks at 1 and 7 are literal, so the tab and empty link are outside any span.
+    # Backticks at 1 and 5 are literal, so the tab and empty link are outside any span.
     assert _lint(["\\`\tx\\` [b]()"], 0) == [("MD010", 2, 3), ("MD042", 7, 12)]
 
 
@@ -115,11 +115,31 @@ def test_backslash_inside_code_span_is_literal():
     assert _lint(["`\\` [x]()"], 0) == [("MD042", 4, 9)]
 
 
+def test_unclosed_backtick_run_tail_opens_no_span():
+    assert _lint(["``a\t`"], 0) == [("MD010", 3, 4)]
+
+
+def test_escaped_backslash_escapes_nothing_after_it():
+    # `\\` is a literal backslash, so the backtick or bracket after it is real.
+    assert _lint(["\\\\`[x]()`"], 0) == []
+    assert _lint(["\\\\[x]()"], 0) == [("MD042", 2, 7)]
+
+
 def test_link_text_with_nested_brackets_is_flagged():
     assert _lint(["[a[b]c]()"], 0) == [("MD042", 0, 9)]
     assert _lint(["[a[b]()"], 0) == [("MD042", 2, 7)]
+    assert _lint(["[![alt](src)]()"], 0) == [("MD042", 0, 15)]
 
 
-def test_escaped_open_bracket_is_not_a_link():
+def test_link_nested_in_link_text_is_the_link():
+    assert _lint(["[a [b](u) c]()"], 0) == []
+    assert _lint(["[a [b]() c]()"], 0) == [("MD042", 3, 8)]
+
+
+def test_escaped_bracket_delimits_no_link():
     assert _lint(["\\[x]()"], 0) == []
     assert _lint(["[a\\]b]()"], 0) == [("MD042", 0, 8)]
+
+
+def test_escaped_exclamation_mark_is_not_an_image_marker():
+    assert _lint(["\\![x]()"], 0) == [("MD042", 2, 7)]
