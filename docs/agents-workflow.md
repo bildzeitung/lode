@@ -2835,9 +2835,10 @@ miss it. Keep the decisions in the docs, and the two loops stay in agreement.
 The build/review/land story above is what happens to *one* task. Running the whole family — `/code`
 + `/land` + `/epic-audit` + `/sweep` — is intended to run **unattended**, each leg self-paced via
 `/loop` (`/loop 5m /land`, `/loop 30m /epic-audit`, `/loop 30m /sweep`), draining its own queue
-without a human present for the steady-state case (in practice the maintainer runs /sweep on demand rather than on a loop; the skill supports both). Most outputs already have a downstream consumer:
-a `needs-rebase` ticket is picked up by the next `/code` sweep, a `land-review` bounce re-enters `bd
-ready` as a fresh ticket, and `/epic-audit` runs itself as its own `/loop`.
+without a human present for the steady-state case (in practice the maintainer runs `/sweep` on
+demand rather than on a loop; the skill supports both). Most outputs already have a downstream
+consumer: a `needs-rebase` ticket is picked up by the next `/code` sweep, a `land-review` bounce
+re-enters `bd ready` as a fresh ticket, and `/epic-audit` runs itself as its own `/loop`.
 
 Two kinds of output had **no** consumer at all, and a third loop leg was needed to close that gap
 rather than any new prevention mechanism:
