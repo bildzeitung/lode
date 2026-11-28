@@ -222,12 +222,10 @@ not only an edit.
 whole-buffer O(n), so its result is memoized for **one render pass**: built on the first `get_line`
 call of the pass and dropped when the pass ends (a `render_lines` override brackets a pass), so a
 repaint served entirely from Textual's line cache, such as a cursor blink, does no scan. Only a
-pass keeps the memo. Textual also fetches a line outside one: its mouse hit-testing
-(`Compositor.get_widget_and_offset_at`, on mouse down, mouse up and a drag-select move) calls
-`render_line` directly and stores the result in the line cache. Such a `get_line` call scans the
-fences itself and keeps nothing (about 0.6 ms on a 2,000-line buffer), because it can come after an
-edit and before the repaint, and an edit that opens or closes a fence without changing the line
-count leaves nothing else to tell a kept memo it is stale. Lines
+pass keeps the memo: a `get_line` call outside one scans the fences itself and keeps nothing.
+Textual makes such calls (its mouse hit-testing calls `render_line` directly) and stores what they
+return in its line cache, and one can come after an edit and before the repaint, so flags kept from
+the last pass could put a wrong underline on screen until the next edit. Lines
 inside a fence and fence delimiter lines are exempt from every rule (`fence_flags` reports the
 opener as outside, so the opener is checked with `match_fence_marker`).
 

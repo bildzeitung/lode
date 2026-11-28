@@ -10,7 +10,10 @@ from pathlib import Path
 
 import pytest
 from rich.style import Style
+from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.geometry import Region
+from textual.strip import Strip
 from textual.widgets import TextArea
 
 from lode.fence_parsing import fence_flags
@@ -22,19 +25,19 @@ from lode.tui.widgets.lint_text_area import LintTextArea
 
 def _sync(fn):
     @functools.wraps(fn)
-    def run() -> None:
-        asyncio.run(fn())
+    def run(**fixtures) -> None:
+        asyncio.run(fn(**fixtures))
 
     return run
 
 
 class _App(App):
-    def __init__(self, **kw) -> None:
+    def __init__(self, cls: type[TextArea] = LintTextArea, *args, **kw) -> None:
         super().__init__()
-        self.kw = kw
+        self.make = functools.partial(cls, *args, id="ta", **kw)
 
     def compose(self) -> ComposeResult:
-        yield LintTextArea(id="ta", **self.kw)
+        yield self.make()
 
 
 def _underlined(area: LintTextArea, i: int) -> list[tuple[int, int]]:
@@ -50,6 +53,11 @@ def _expected(area: LintTextArea, i: int) -> list[tuple[int, int]]:
     return lint_line(lines, i, fence_flags(lines), area.cursor_location)
 
 
+def _cells(strip: Strip) -> list[tuple[str, Style]]:
+    """One ``(character, style)`` per character of a rendered row."""
+    return [(ch, s.style or Style()) for s in strip for ch in s.text]
+
+
 TEXT = "# Title\nbody\t\n\n```\nx\t\n```\n[a]()\ntrail  x  \n"
 
 
@@ -60,11 +68,8 @@ async def test_spans_match_rule_engine() -> None:
         area = app.query_one(LintTextArea)
         area.load_text(TEXT)
         await pilot.pause()
-        flagged = 0
         for i in range(len(area.document.lines)):
             assert _underlined(area, i) == _expected(area, i)
-            flagged += bool(_expected(area, i))
-        assert flagged >= 2
         assert _underlined(area, 0) == [(2, 7)]
         assert _underlined(area, 4) == []  # the tab inside the fence
         assert _underlined(area, 6) == [(0, 5)]
@@ -112,7 +117,41 @@ async def test_fence_toggle_between_render_passes() -> None:
         area.replace("```", (0, 0), (0, 2))
         area.render_line(1)
         await pilot.pause()
-        assert not any(s.style and s.style.underline for s in area.render_line(1))
+        assert not any(style.underline for _, style in _cells(area.render_line(1)))
+
+
+@_sync
+async def test_one_fence_scan_per_render_pass(monkeypatch) -> None:
+    fetched = scanned = 0
+    passes: list[tuple[int, int]] = []
+
+    def counting_fence_flags(lines: list[str]) -> list[bool]:
+        nonlocal scanned
+        scanned += 1
+        return fence_flags(lines)
+
+    monkeypatch.setattr(lint_text_area, "fence_flags", counting_fence_flags)
+
+    class Counting(LintTextArea):
+        def render_lines(self, crop: Region) -> list[Strip]:
+            before = fetched, scanned
+            try:
+                return super().render_lines(crop)
+            finally:
+                passes.append((fetched - before[0], scanned - before[1]))
+
+        def get_line(self, line_index: int) -> Text:
+            nonlocal fetched
+            fetched += 1
+            return super().get_line(line_index)
+
+    app = _App(Counting, "one\ntwo\nthree\n")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(Counting).insert("x", location=(0, 0))
+        await pilot.pause()
+    assert max(rows for rows, _ in passes) > 1
+    assert all(scans == min(rows, 1) for rows, scans in passes)
 
 
 @_sync
@@ -151,35 +190,27 @@ async def test_theme_syntax_colours_unchanged() -> None:
     sample = "# Head\nbody\tx\n\n- item\n\n```\ncode\n```\n"
     no_underline = Style(underline=False)
 
-    async def cells(cls: type[TextArea]) -> list[list[tuple[str, Style, bool]]]:
-        class A(App):
-            def compose(self) -> ComposeResult:
-                yield cls(sample, language="markdown", id="ta")
-
-        app = A()
+    async def rows(cls: type[TextArea]) -> list[list[tuple[str, Style]]]:
+        app = _App(cls, sample, language="markdown")
         async with app.run_test(size=(40, 12)) as pilot:
             area = app.query_one(TextArea)
             area.register_theme(NOTE_BODY_THEME)
             area.theme = NOTE_BODY_THEME.name
             area.cursor_location = (8, 0)
             await pilot.pause()
-            return [
-                [
-                    (ch, (s.style or Style()) + no_underline, bool(s.style.underline))
-                    for s in area.render_line(y)
-                    for ch in s.text
-                ]
-                for y in range(9)
-            ]
+            return [_cells(area.render_line(y)) for y in range(9)]
 
-    lint, plain = await cells(LintTextArea), await cells(TextArea)
-    assert [[c[:2] for c in row] for row in lint] == [
-        [c[:2] for c in row] for row in plain
+    def underlined(row: list[tuple[str, Style]]) -> str:
+        return "".join(ch for ch, style in row if style.underline)
+
+    lint, plain = await rows(LintTextArea), await rows(TextArea)
+    assert [[(ch, style + no_underline) for ch, style in row] for row in lint] == [
+        [(ch, style + no_underline) for ch, style in row] for row in plain
     ]
-    assert not any(c[2] for row in plain for c in row)
-    assert "".join(c[0] for c in lint[0] if c[2]) == "Head"
-    assert any(c[2] for c in lint[1])
-    assert not any(c[2] for row in lint[2:] for c in row)
+    assert not any(underlined(row) for row in plain)
+    assert underlined(lint[0]) == "Head"
+    assert underlined(lint[1])
+    assert not any(underlined(row) for row in lint[2:])
 
 
 def test_no_private_attribute_access() -> None:
@@ -216,4 +247,6 @@ async def test_perf_2000_lines() -> None:
             for i in range(n):
                 area.get_line(i)
             best = min(best, time.perf_counter() - t0)
-        assert best < 0.05
+        # About 7 ms unloaded. The cap is wide because `nox -s unit` runs this
+        # beside xdist workers; a fence scan per row costs over 800 ms.
+        assert best < 0.15
