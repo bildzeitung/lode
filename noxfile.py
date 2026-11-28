@@ -304,9 +304,9 @@ def tests(session: nox.Session) -> None:
 def shellcheck(session: nox.Session) -> None:
     """Lint every tracked shell script (shellcheck, --severity=warning).
 
-    A default gate for the repo's shell — ``.claude/statusline.sh`` and
-    ``scripts/*.sh``. The binary ships bundled via the ``shellcheck-py`` dev
-    dep (see ``pyproject.toml``), so this needs no system package. Gated at
+    A default gate for the repo's shell, wherever it lives. The binary ships
+    bundled via the ``shellcheck-py`` dev dep (see ``pyproject.toml``), so this
+    needs no system package. Gated at
     ``warning``: errors and warnings (real bugs — unquoted word-splitting, bad
     test operators) fail the gate; ``info``/``style`` notes do not, keeping the
     signal level in line with what ruff enforces for Python. Scoped to tracked
