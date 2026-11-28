@@ -21,7 +21,7 @@ ungated the way ``shellcheck`` did (lode-vvt1). Full fiat text: ``docs/conventio
                               not-slow-marked projection (lode-pql)          -- NEVER `-t tests`,
                                                                              which selects both
     everything-else (tag)   shellcheck + linkcheck +                 invoke: nox -t everything-else
-                              docstringcheck + docs
+                              docstringcheck + decisions_entries + docs
 
 **Staged gate policy (who runs what, lode-6ldh):**
 
@@ -32,8 +32,8 @@ ungated the way ``shellcheck`` did (lode-vvt1). Full fiat text: ``docs/conventio
                                      nox -t everything-else -- ALL buckets, since these are the
                                      last gates before trunk (resolves lode-87v7's gap)
 
-A bare ``nox`` invocation runs all SIX sessions in ``nox.options.sessions`` below (``fix``,
-``tests``, ``shellcheck``, ``linkcheck``, ``docstringcheck``, ``docs``) -- that default set is
+A bare ``nox`` invocation runs all SEVEN sessions in ``nox.options.sessions`` below (``fix``,
+``tests``, ``shellcheck``, ``linkcheck``, ``docstringcheck``, ``decisions_entries``, ``docs``) -- that default set is
 unaffected by the bucket scheme above, which only governs how instruction-file gate PROSE
 invokes a subset of them.
 
@@ -175,6 +175,7 @@ nox.options.sessions = [
     "shellcheck",
     "linkcheck",
     "docstringcheck",
+    "decisions_entries",
     "docs",
 ]
 
@@ -343,6 +344,18 @@ def linkcheck(session: nox.Session) -> None:
     an ambient interpreter would not have the project's deps (e.g. ``typer``).
     """
     session.run(_venv_tool(session, "python"), "scripts/check_links.py")
+
+
+@nox.session(tags=["everything-else"])
+def decisions_entries(session: nox.Session) -> None:
+    """Validate the per-entry decision files under ``docs/decisions/`` (lode-ebayj.2).
+
+    Duplicate ids, id/filename mismatches, dangling or cyclic edges, and any
+    edit or deletion of an entry already committed on ``origin/trunk``; see
+    ``scripts/check_decisions_entries.py``. Resolves ``python`` through
+    ``_venv_tool`` (lode-0yfn) for the project's ``typer``.
+    """
+    session.run(_venv_tool(session, "python"), "scripts/check_decisions_entries.py")
 
 
 @nox.session(tags=["everything-else"])

@@ -109,6 +109,7 @@ def _load_build() -> ModuleType:
 
 
 _build = _load_build()
+_entries = _load_sibling("_docs_index_query_entries_impl", "check_decisions_entries.py")
 
 
 def _load_log() -> ModuleType:
@@ -269,6 +270,20 @@ _ID_CHECK_TIMEOUT_S = 5
 
 #: The ref a new worktree is branched from, so the one a stale checkout lags.
 _TRUNK_REF = "origin/trunk"
+
+
+def superseded_head(path: str) -> str | None:
+    """The path of the chain head when ``path`` is a superseded decision entry
+    file under a ``decisions/`` directory, else ``None`` (``lode-ebayj.2``)."""
+    entry_path = Path(path)
+    if entry_path.parent.name != "decisions":
+        return None
+    entries, _ = _entries.load_entries(entry_path.parent)
+    entry_id = entry_path.name.split("-", 1)[0]
+    if entry_id not in entries:
+        return None
+    head = _entries.chain_head(entries, entry_id)
+    return None if head == entry_id else str(entries[head]["path"])
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess[str] | None:
@@ -438,6 +453,9 @@ def main(
             marker = " [fallback: OR match]" if used_fallback else ""
             print(f"{path}:{line_lo}-{line_hi}{marker}  {first_line}")
             print(f"    {snippet}")
+            head = superseded_head(path)
+            if head:
+                print(f"    NOTE: superseded; read the chain head instead: {head}")
             markers = split_entry_markers(path, line_lo, line_hi)
             if markers:
                 where = ", ".join(str(n) for n in markers)

@@ -69,6 +69,10 @@ _REFERENCE_PROCESS_STEMS = frozenset(
 #: bullet under a heading belongs to that heading's section.
 _ENTRY_LOG_STEM = "decisions"
 
+#: The directory of per-entry decision files (``lode-ebayj.2``): each file in it
+#: is one unit, and :func:`chunk_corpus` indexes it alongside ``docs/*.md``.
+_ENTRY_DIR_NAME = "decisions"
+
 #: The heading level of the entry log's sections: the cap on its split level
 #: (``lode-kys3``) and the level :func:`heading_sections` reports.
 _ENTRY_LOG_SECTION_LEVEL = 2
@@ -264,6 +268,9 @@ def _ranges(
     if n == 0:
         return [], []
     fence_flags = _fence_flags(lines)
+    if Path(path).parent.name == _ENTRY_DIR_NAME:
+        # One entry file is one retrievable unit, headings inside it included.
+        return _hard_split(lines, fence_flags, 1, n, try_bullet=False), []
     split_level = _deepest_heading_level(lines, fence_flags)
     is_entry_log = Path(path).stem == _ENTRY_LOG_STEM
     if is_entry_log:
@@ -388,9 +395,12 @@ def chunk_file(path: Path | str, text: str) -> list[Unit]:
 
 
 def chunk_corpus(docs_dir: Path | str) -> list[Unit]:
-    """Chunk every ``*.md`` file directly under ``docs_dir``, sorted by name."""
+    """Chunk every ``*.md`` file directly under ``docs_dir`` and under its
+    ``decisions/`` subdirectory, sorted by name."""
     docs_dir = Path(docs_dir)
     units: list[Unit] = []
-    for md_path in sorted(docs_dir.glob("*.md")):
+    for md_path in sorted(
+        [*docs_dir.glob("*.md"), *(docs_dir / _ENTRY_DIR_NAME).glob("*.md")]
+    ):
         units.extend(chunk_file(md_path, md_path.read_text(encoding="utf-8")))
     return units
