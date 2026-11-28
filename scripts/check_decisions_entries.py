@@ -1,6 +1,8 @@
 """Edge gate for the per-entry decision files under ``docs/decisions/`` (lode-ebayj.2).
 
-Fails (exit 1) on: a duplicate id, an id/filename mismatch, a ``supersedes`` or
+Fails (exit 1) on: a duplicate id, an id/filename mismatch, a missing or
+non-YYYY-MM-DD ``date``, a ``status`` outside open|decided, an entry superseded
+by 2+ entries, a ``supersedes`` or
 ``related`` value that is not an inline list or names a target that does not
 exist, a ``supersedes`` cycle, and any modification or deletion of an entry
 file that exists where ``HEAD`` forked from the base ref. Exit 2 means the gate
@@ -23,6 +25,8 @@ app = typer.Typer(add_completion=False)
 DEFAULT_DIR = Path(__file__).resolve().parent.parent / "docs" / "decisions"
 _NAME_RE = re.compile(r"^([0-9a-z]{5})-.+\.md$")
 _LIST_RE = re.compile(r"^\[(.*)\]$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_STATUSES = ("open", "decided")  # superseded is derived from edges, never stored
 
 
 def parse_frontmatter(text: str) -> dict[str, str | list[str]]:
@@ -65,6 +69,10 @@ def load_entries(directory: Path) -> tuple[dict[str, dict], list[str]]:
             problems.append(f"{path.name}: duplicate id {entry_id}")
             continue
         entries[entry_id] = {"path": path, "date": str(meta.get("date", ""))}
+        if not _DATE_RE.match(entries[entry_id]["date"]):
+            problems.append(f"{path.name}: date must be YYYY-MM-DD")
+        if meta.get("status") not in _STATUSES:
+            problems.append(f"{path.name}: status must be one of {'|'.join(_STATUSES)}")
         for key in ("supersedes", "related"):
             value = meta.get(key, [])
             if not isinstance(value, list):
@@ -106,6 +114,11 @@ def check_edges(directory: Path) -> list[str]:
                 for t in entry[key]
                 if t not in entries
             ]
+    problems += [
+        f"{old}: superseded by {len(new)} entries ({', '.join(new)}); supersede the later one"
+        for old, new in successors(entries).items()
+        if len(new) > 1 and old in entries
+    ]
     graph = {entry_id: entry["supersedes"] for entry_id, entry in entries.items()}
     try:
         graphlib.TopologicalSorter(graph).prepare()
